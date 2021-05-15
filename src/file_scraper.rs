@@ -1,9 +1,8 @@
-use std::{{ffi::OsString, path::Path}, collections::{HashMap as HashMap, btree_map::Keys}, env, ffi::OsStr, fs};
+use std::{{ffi::OsString, path::Path}, collections::{HashMap as HashMap, btree_map::Keys}, env, ffi::OsStr, fs, vec};
 
 use colored::*;
 
-use crate::domain::*;
-use crate::my_reader;
+use crate::{VecRef,BoolRef, my_reader, domain::*};
 
 pub enum ParseExtensionsError {
     UnavailableDirectory(String),
@@ -72,67 +71,6 @@ pub fn parse_supported_extensions_to_map() -> Result<(HashMap<String,Extension>,
     }
 }
 
-pub fn get_relevant_files(dir: &String, extensions: &HashMap<String,Extension>, exclude_dirs: &Option<Vec<String>>) -> (usize, Vec<String>) {
-    let path = Path::new(&dir); 
-    if path.is_file() {
-        if let Some(x) = path.extension(){
-            if let Some(y) = x.to_str() {
-                if extensions.contains_key(y) {
-                    return (1,vec![dir.to_owned()]);
-                }
-            }
-        }
-        return (0,Vec::new());
-    } else {
-        let mut total_files : usize = 0;
-        let mut relevant_dirs : Vec<String> = Vec::new();
-        add_files_recursively(dir, extensions, exclude_dirs, &mut relevant_dirs, &mut total_files);
-        return (total_files,relevant_dirs);
-    }
-} 
-
-
-
-fn add_files_recursively(dir: &String, extensions: &HashMap<String,Extension>, exclude_dirs: &Option<Vec<String>>, relevant_dirs: &mut Vec<String>, total_files: &mut usize) {
-    let dirs = match fs::read_dir(dir) {
-        Err(_) => return,
-        Ok(x) => x
-    };
-    
-    for entry in dirs {
-        let entry = match entry {
-            Ok(x) => x,
-            Err(_) => continue
-        };
-    
-        let path = entry.path();
-        let path_str = match path.to_str() {
-            Some(x) => x.to_owned(),
-            None => continue
-        };
-        if Path::new(&path).is_file() {
-            *total_files += 1;
-            let extension = match path.extension() {
-                Some(x) => match x.to_str() {
-                    Some(y) => y,
-                    None => continue
-                },
-                None => continue
-            };
-            if extensions.contains_key(extension) {
-                relevant_dirs.push(path_str);
-            }
-        } else {
-            if let Some(x) = exclude_dirs {
-                if !x.contains(&path_str){
-                    add_files_recursively(&path_str, extensions, exclude_dirs, relevant_dirs,total_files);
-                }
-            } else {
-                add_files_recursively(&path_str, extensions, exclude_dirs, relevant_dirs, total_files);
-            }
-        }
-    }
-}
 
 fn parse_file_to_extension(mut reader :my_reader::BufReader, buffer :&mut String) -> Result<Extension,()> {
     if !reader.read_line_and_compare(buffer, "Extension") {return Err(());}

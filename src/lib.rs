@@ -4,91 +4,199 @@ pub mod file_scraper;
 pub mod utils;
 mod conc_test;
 
-use std::{cmp::{max}, collections::HashMap, fmt::{self, Display}, fs::File, io::{self, BufRead, BufReader}, path::Path, time::{Duration, SystemTime}};
+use std::{collections::HashMap, fmt::{self, Display}, fs::{self, File}, io::{self, BufRead, BufReader}, path::Path, time::{Duration, SystemTime}};
+use std::{sync::{Arc, Mutex}, thread::JoinHandle};
+use std::thread;
 
-use domain::FileStats;
-use lazy_static::lazy_static;
 use colored::Colorize;
 use num_cpus;
 
-pub use domain::{Extension,Keyword,ExtensionStats};
-pub use fmt::{Formatter};
+use domain::{Extension,ExtensionStats, FileStats};
+use fmt::{Formatter};
 use cmd_arg_parser::ProgramArguments;
- 
+
+pub type VecRef    = Arc<Mutex<Vec<String>>>;
+pub type BoolRef   = Arc<Mutex<bool>>;
+pub type StatsRef  = Arc<Mutex<HashMap<String,ExtensionStats>>>;
+pub type ExtMapRef = Arc<HashMap<String,Extension>>;
+
 pub fn run(args :ProgramArguments, extensions_map :HashMap<String, Extension>) -> Result<(), ParseFilesError> {
+    let start = SystemTime::now();
     let thread_num = num_cpus::get();
-    // let start = SystemTime::now();
-    println!("\nSearching for files...");
-    let relevant_files_result = file_scraper::get_relevant_files(&args.path, &extensions_map, &args.exclude_dirs);
-    if relevant_files_result.0 == 0 {
+
+    let files_ref : VecRef = Arc::new(Mutex::new(Vec::new()));
+    let faulty_files_ref : VecRef = Arc::new(Mutex::new(Vec::new()));
+    let finish_condition_ref : BoolRef = Arc::new(Mutex::new(false));
+    let extensions_map_ref : ExtMapRef = Arc::new(extensions_map);
+    let extensions_stats_ref = Arc::new(Mutex::new(make_extension_stats(extensions_map_ref.clone())));
+    let mut handles = Vec::new(); 
+
+    println!("\nParsing files...");
+
+    for i in 0..thread_num-5 {
+        handles.push(start_consumer_thread(
+            i, files_ref.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(), extensions_stats_ref.clone(), extensions_map_ref.clone())
+        .unwrap());
+    }
+
+    let files_num = add_relevant_files(files_ref, finish_condition_ref, &args.path, extensions_map_ref, &args.exclude_dirs);
+    if files_num == 0 {
         return Err(ParseFilesError::NoRelevantFiles);
     }
-    let relevant_files = relevant_files_result.1;
-    // println!("{:?}",SystemTime::now().duration_since(start));
 
-    println!("Found {} files, {} of interest.\n",relevant_files_result.0, relevant_files.len());
+    for h in handles {
+        h.join().unwrap();
+    }
 
-    let mut extensions_stats = make_extension_stats(&extensions_map);
+    println!("Result: {:?}",extensions_stats_ref);
+    println!("Exec time: {:?}",SystemTime::now().duration_since(start).unwrap());
 
-    match calculate_stats(relevant_files, &extensions_map, &mut extensions_stats) {
-        Ok(_) => println!("success"),
-        Err(x) => return Err(x)
-    };
+    // println!("Found {} files, {} of interest.\n",files_num, relevant_files.len());
+
+
+    // match calculate_stats(relevant_files, &extensions_map, &mut extensions_stats) {
+    //     Ok(_) => println!("success"),
+    //     Err(x) => return Err(x)
+    // };
 
     Ok(())
 }
 
-fn calculate_stats(relevant_files: Vec<String>, extensions_map :&HashMap<String, Extension>, extensions_stats: &mut HashMap<String,ExtensionStats>) -> Result<(), ParseFilesError> {
-    let mut faulty_files :Vec<String> = Vec::new();
-    let print_interval = max(relevant_files.len() / 400, 1);
-    let mut buf = String::with_capacity(200);
-    let mut file_counter = 0;
-    let files_count = relevant_files.len();
+fn start_consumer_thread
+    (id: usize, files_ref: VecRef, faulty_files_ref: VecRef, finish_condition_ref: BoolRef,
+     extension_stats_ref: StatsRef, extension_map: ExtMapRef) 
+    -> Result<JoinHandle<()>,io::Error> 
+{
+    thread::Builder::new().name(id.to_string()).spawn(move || {
+        let mut buf = String::with_capacity(150);
+        let mut files_parsed = 0;
+        loop {
+            let mut files_guard = files_ref.lock().unwrap();
+            if files_guard.is_empty() {
+                if *finish_condition_ref.lock().unwrap() {
+                    break;
+                } else {
+                    drop(files_guard);
+                    thread::sleep(Duration::from_millis(4));
+                    continue;
+                }
+            }
+            files_parsed += 1;
 
-    println!("Parsing files...");
-    for file in relevant_files {
-        file_counter += 1;
-        let extension_str = match Path::new(&file).extension() {
-            Some(x) => match x.to_str() {
-                Some(y) => y,
-                None => continue
-            },
-            None => continue
-        };
-        let extension = match extensions_map.get(extension_str){
-            Some(x) => x,
-            None => continue
-        };
-        match parse_file(&file, &mut buf, extension) {
-            Ok(x) => extensions_stats.get_mut(extension_str).unwrap().append(x),
-            Err(_) => faulty_files.push(file)
+            let file_name = files_guard.remove(0);
+            let file_extension = match Path::new(&file_name).extension() {
+                Some(x) => match x.to_str() {
+                    Some(y) => y.to_owned(),
+                    None => {
+                        faulty_files_ref.lock().unwrap().push(file_name);
+                        continue;
+                    }
+                },
+                None => {
+                    faulty_files_ref.lock().unwrap().push(file_name);
+                    continue;
+                }
+            };
+            drop(files_guard);
+
+            match parse_file_t(&file_name, &mut buf, extension_map.clone()) {
+                Ok(x) => extension_stats_ref.lock().unwrap().get_mut(&file_extension).unwrap().add_stats(x),
+                Err(_) => faulty_files_ref.lock().unwrap().push(file_name)
+            }
         }
-
-        if file_counter % 400 == 0 {
-            println!("\t     ... ({}/{}) done",file_counter, files_count);
-        }
-    }
-
-    if file_counter % 400 != 0 {
-        println!("\t     ... ({}/{}) done\n",file_counter, files_count);
-    }
-
-    Err(ParseFilesError::PlaceholderError)
+        println!("Thread {} finished. Parsed {} files.",id,files_parsed);
+    })
 }
 
-fn parse_file(file: &String, buf: &mut String, extension: &Extension) -> io::Result<FileStats> {
+fn parse_file_t(file_name: &String, buf: &mut String, extension_map: ExtMapRef) -> Result<FileStats,ParseFilesError> {
+    let extension_str = match Path::new(&file_name).extension() {
+        Some(x) => match x.to_str() {
+            Some(y) => y,
+            None => return Err(ParseFilesError::FaultyFile)
+        },
+        None => return Err(ParseFilesError::FaultyFile)
+    };
+    let extension = extension_map.get(extension_str).unwrap();
     let mut file_stats = FileStats::default(&extension.keywords);
-    let mut reader = BufReader::new(File::open(file)?);
-    while reader.read_line(buf)? != 0 {
+
+    let mut reader = BufReader::new(match File::open(file_name){
+        Ok(f) => f,
+        Err(_) => return Err(ParseFilesError::FaultyFile)
+    });
+
+    loop {
+        match reader.read_line(buf) {
+            Ok(u) => if u == 0 {return Ok(file_stats)},
+            Err(_) => return Err(ParseFilesError::FaultyFile)
+        }
         file_stats.incr_lines();
-
-        
     }
-
-    Ok(file_stats)
 }
 
-fn make_extension_stats(extensions_map: &HashMap<String, Extension>) -> HashMap<String,ExtensionStats> {
+pub fn add_relevant_files(files_vec :VecRef, finish_condition: BoolRef, dir: &String, extensions: ExtMapRef, exclude_dirs: &Option<Vec<String>>) -> usize {
+    let path = Path::new(&dir); 
+    if path.is_file() {
+        if let Some(x) = path.extension(){
+            if let Some(y) = x.to_str() {
+                if extensions.contains_key(y) {
+                    files_vec.lock().unwrap().push(dir.clone());
+                    *finish_condition.lock().unwrap() = true;
+                    return 1;
+                }
+            }
+        }
+        *finish_condition.lock().unwrap() = true;
+        return 0;
+    } else {
+        let mut total_files : usize = 0;
+        add_files_recursively(files_vec, dir, extensions, exclude_dirs, &mut total_files);
+        *finish_condition.lock().unwrap() = true;
+        return total_files;
+    }
+} 
+
+fn add_files_recursively(files_vec: VecRef, dir: &String, extensions: ExtMapRef, exclude_dirs: &Option<Vec<String>>, total_files: &mut usize) {
+    let dirs = match fs::read_dir(dir) {
+        Err(_) => return,
+        Ok(x) => x
+    };
+    
+    for entry in dirs {
+        let entry = match entry {
+            Ok(x) => x,
+            Err(_) => continue
+        };
+    
+        let path = entry.path();
+        let path_str = match path.to_str() {
+            Some(x) => x.to_owned(),
+            None => continue
+        };
+        if Path::new(&path).is_file() {
+            *total_files += 1;
+            let extension = match path.extension() {
+                Some(x) => match x.to_str() {
+                    Some(y) => y,
+                    None => continue
+                },
+                None => continue
+            };
+            if extensions.contains_key(extension) {
+                files_vec.lock().unwrap().push(path_str);
+            }
+        } else {
+            if let Some(x) = exclude_dirs {
+                if !x.contains(&path_str){
+                    add_files_recursively(files_vec.clone(), &path_str, extensions.clone(), exclude_dirs, total_files);
+                }
+            } else {
+                add_files_recursively(files_vec.clone(), &path_str, extensions.clone(), exclude_dirs, total_files);
+            }
+        }
+    }
+}
+
+fn make_extension_stats(extensions_map: ExtMapRef) -> HashMap<String,ExtensionStats> {
     let mut map = HashMap::<String,ExtensionStats>::new();
     for (key, value) in extensions_map.iter() {
         map.insert(key.to_owned(), ExtensionStats::new(value));
@@ -99,14 +207,16 @@ fn make_extension_stats(extensions_map: &HashMap<String, Extension>) -> HashMap<
 
 pub enum ParseFilesError {
     NoRelevantFiles,
-    PlaceholderError
+    PlaceholderError,
+    FaultyFile
 } 
 
 impl ParseFilesError {
     pub fn formatted(&self) -> String {
         match self {
             Self::NoRelevantFiles => "\nNo relevant files found in the given directory.".yellow().to_string(),
-            Self::PlaceholderError => "\nPlaceholder error".yellow().to_string()
+            Self::PlaceholderError => "\nPlaceholder error".yellow().to_string(),
+            Self::FaultyFile => "\nFaulty file".yellow().to_string()
         }
     }
 }
@@ -215,7 +325,7 @@ pub mod domain {
             }
         }
 
-        pub fn append(&mut self, other: FileStats) {
+        pub fn add_stats(&mut self, other: FileStats) {
             self.files += 0;
             self.lines += other.lines;
             self.code_lines += other.code_lines;
@@ -263,95 +373,95 @@ pub mod domain {
 }
 
 
-lazy_static! {
-    static ref J_CLASS : Keyword = Keyword {
-        descriptive_name : "classes".to_owned(),
-        aliases : vec!["class".to_owned(),"record".to_owned()]
-    };
+// lazy_static! {
+//     static ref J_CLASS : Keyword = Keyword {
+//         descriptive_name : "classes".to_owned(),
+//         aliases : vec!["class".to_owned(),"record".to_owned()]
+//     };
 
-    static ref CLASS : Keyword = Keyword {
-        descriptive_name : "classes".to_owned(),
-        aliases : vec!["class".to_owned()]
-    };
+//     static ref CLASS : Keyword = Keyword {
+//         descriptive_name : "classes".to_owned(),
+//         aliases : vec!["class".to_owned()]
+//     };
 
-    static ref INTERFACE : Keyword = Keyword {
-        descriptive_name : "interfaces".to_owned(),
-        aliases : vec!["interface".to_owned()]
-    };
+//     static ref INTERFACE : Keyword = Keyword {
+//         descriptive_name : "interfaces".to_owned(),
+//         aliases : vec!["interface".to_owned()]
+//     };
 
-    static ref JAVA : Extension = Extension {
-        name : "java".to_owned(),
-        string_symbols : vec!["\"".to_owned()],
-        comment_symbol : "//".to_owned(),
-        mutliline_comment_start_symbol : Some("/*".to_owned()),
-        mutliline_comment_end_symbol : Some("*/".to_owned()),
-        keywords : vec![J_CLASS.clone(),INTERFACE.clone()]
-    };
+//     static ref JAVA : Extension = Extension {
+//         name : "java".to_owned(),
+//         string_symbols : vec!["\"".to_owned()],
+//         comment_symbol : "//".to_owned(),
+//         mutliline_comment_start_symbol : Some("/*".to_owned()),
+//         mutliline_comment_end_symbol : Some("*/".to_owned()),
+//         keywords : vec![J_CLASS.clone(),INTERFACE.clone()]
+//     };
 
-    static ref PYTHON : Extension = Extension {
-        name : "py".to_owned(),
-        string_symbols : vec!["\"".to_owned(),"'".to_owned()],
-        comment_symbol : "#".to_owned(),
-        mutliline_comment_start_symbol : None,
-        mutliline_comment_end_symbol : None,
-        keywords : vec![CLASS.clone()]
-    };
-}
+//     static ref PYTHON : Extension = Extension {
+//         name : "py".to_owned(),
+//         string_symbols : vec!["\"".to_owned(),"'".to_owned()],
+//         comment_symbol : "#".to_owned(),
+//         mutliline_comment_start_symbol : None,
+//         mutliline_comment_end_symbol : None,
+//         keywords : vec![CLASS.clone()]
+//     };
+// }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
 
-    #[test]
-    fn extensions_workflow() -> Result<(), String>{
-        let extensions_map = match file_scraper::parse_supported_extensions_to_map() {
-            Ok(it) => it.0,
-            _ => return Err("Cannot parse extensions to map".to_string())
-        };
-        let mut extensions_map_custom = HashMap::new();
-        extensions_map_custom.insert("java".to_owned(), JAVA.clone());
-        extensions_map_custom.insert("py".to_owned(), PYTHON.clone());
-        assert_eq!(extensions_map[&"java".to_owned()] , extensions_map_custom[&"java".to_owned()]);
-        assert_eq!(extensions_map[&"py".to_owned()] , extensions_map_custom[&"py".to_owned()]);
+//     #[test]
+//     fn extensions_workflow() -> Result<(), String>{
+//         let extensions_map = match file_scraper::parse_supported_extensions_to_map() {
+//             Ok(it) => it.0,
+//             _ => return Err("Cannot parse extensions to map".to_string())
+//         };
+//         let mut extensions_map_custom = HashMap::new();
+//         extensions_map_custom.insert("java".to_owned(), JAVA.clone());
+//         extensions_map_custom.insert("py".to_owned(), PYTHON.clone());
+//         assert_eq!(extensions_map[&"java".to_owned()] , extensions_map_custom[&"java".to_owned()]);
+//         assert_eq!(extensions_map[&"py".to_owned()] , extensions_map_custom[&"py".to_owned()]);
         
-        //----- Getting relevant files from test directory test
-        let relevant_files_result = file_scraper::get_relevant_files(&"test_dir".to_owned(), &extensions_map, &Some(vec!["dirb".to_owned()]));
-        //@TODO: fix this
-        assert_eq!((3,vec!["test_dir\\a.java".to_owned(),"test_dir\\b.py".to_owned(),"test_dir\\c.py".to_owned()]), relevant_files_result);
+//         //----- Getting relevant files from test directory test
+//         let relevant_files_result = file_scraper::get_relevant_files(&"test_dir".to_owned(), &extensions_map, &Some(vec!["dirb".to_owned()]));
+//         //@TODO: fix this
+//         assert_eq!((3,vec!["test_dir\\a.java".to_owned(),"test_dir\\b.py".to_owned(),"test_dir\\c.py".to_owned()]), relevant_files_result);
         
-        //----- Extensions stats testing
-        let mut java_keyword_occur_map  = HashMap::new();
-        java_keyword_occur_map.insert("classes".to_owned(), 0);
-        java_keyword_occur_map.insert("interfaces".to_owned(), 0);
-        let mut python_keyword_occur_map  = HashMap::new();
-        python_keyword_occur_map.insert("classes".to_owned(), 0);
+//         //----- Extensions stats testing
+//         let mut java_keyword_occur_map  = HashMap::new();
+//         java_keyword_occur_map.insert("classes".to_owned(), 0);
+//         java_keyword_occur_map.insert("interfaces".to_owned(), 0);
+//         let mut python_keyword_occur_map  = HashMap::new();
+//         python_keyword_occur_map.insert("classes".to_owned(), 0);
         
-        let java_extension_stats = ExtensionStats::new(&*JAVA);
-        let python_extension_stats = ExtensionStats::new(&*PYTHON);
-        let java_extension_stats_custom = ExtensionStats {
-            extension_name : "java".to_owned(),
-            files : 0,
-            lines : 0,
-            code_lines : 0,
-            keyword_occurences : java_keyword_occur_map
-        }; 
-        let python_extension_stats_custom = ExtensionStats {
-            extension_name : "py".to_owned(),
-            files : 0,
-            lines : 0,
-            code_lines : 0,
-            keyword_occurences : python_keyword_occur_map
-        }; 
-        assert_eq!(java_extension_stats,java_extension_stats_custom);
-        assert_eq!(python_extension_stats,python_extension_stats_custom);
+//         let java_extension_stats = ExtensionStats::new(&*JAVA);
+//         let python_extension_stats = ExtensionStats::new(&*PYTHON);
+//         let java_extension_stats_custom = ExtensionStats {
+//             extension_name : "java".to_owned(),
+//             files : 0,
+//             lines : 0,
+//             code_lines : 0,
+//             keyword_occurences : java_keyword_occur_map
+//         }; 
+//         let python_extension_stats_custom = ExtensionStats {
+//             extension_name : "py".to_owned(),
+//             files : 0,
+//             lines : 0,
+//             code_lines : 0,
+//             keyword_occurences : python_keyword_occur_map
+//         }; 
+//         assert_eq!(java_extension_stats,java_extension_stats_custom);
+//         assert_eq!(python_extension_stats,python_extension_stats_custom);
         
-        let extension_stats_map = make_extension_stats(&extensions_map);
-        let mut extension_stats_map_custom = HashMap::new();
-        extension_stats_map_custom.insert("java".to_owned(), java_extension_stats_custom);
-        extension_stats_map_custom.insert("py".to_owned(), python_extension_stats_custom);
-        //@TODO: add other extensions
-        //assert_eq!(extension_stats_map, extension_stats_map_custom);
+//         let extension_stats_map = make_extension_stats(&extensions_map);
+//         let mut extension_stats_map_custom = HashMap::new();
+//         extension_stats_map_custom.insert("java".to_owned(), java_extension_stats_custom);
+//         extension_stats_map_custom.insert("py".to_owned(), python_extension_stats_custom);
+//         //@TODO: add other extensions
+//         //assert_eq!(extension_stats_map, extension_stats_map_custom);
 
-        Ok(())
-    }
-}
+//         Ok(())
+//     }
+// }

@@ -27,7 +27,7 @@ fn main() {
 
     let args = cmd_arg_parser::read_args_cmd().unwrap_or_else(|_| {
         loop {
-            println!("\nPlease provide a file name or a root directory path, and optional exclude directories\n(e.g. C:\\users\\user\\Desktop\\project exclude_dir1 exclude_dir2)",);
+            println!("\nPlease provide a file name or a root directory path, and optional exclude directories\n(e.g. C:\\users\\user\\Desktop\\project --dirs exclude_dir1 exclude_dir2)",);
             if let Ok(x) = cmd_arg_parser::read_args_console() {
                 let path = Path::new(&x.path);
                 if path.is_dir() || path.is_file(){

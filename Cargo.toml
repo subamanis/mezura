@@ -4,9 +4,9 @@ version = "0.1.0"
 authors = ["subamanis <petrospapa21@gmail.com>"]
 edition = "2018"
 
-[[bin]]
-name = "threads"
-path = "src/conc_test.rs"
+#[[bin]]
+#name = "threads"
+#path = "src/conc_test.rs"
 
 [dependencies]
 colored = "2"
