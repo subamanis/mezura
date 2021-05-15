@@ -1,0 +1,14 @@
+Extension
+py
+
+String symbols
+" '
+
+Comment symbol
+#
+
+Keyword
+    NAME
+    classes
+    ALIASES
+    class

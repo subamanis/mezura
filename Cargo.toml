@@ -1,0 +1,14 @@
+[package]
+name = "code_stats"
+version = "0.1.0"
+authors = ["subamanis <petrospapa21@gmail.com>"]
+edition = "2018"
+
+[[bin]]
+name = "threads"
+path = "src/conc_test.rs"
+
+[dependencies]
+colored = "2"
+lazy_static = "1.4.0"
+num_cpus = "1.13.0"
