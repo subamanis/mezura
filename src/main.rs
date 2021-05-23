@@ -2,12 +2,12 @@ use std::{path::Path, process};
 
 use colored::*;
 
-use code_stats::{cmd_arg_parser, file_scraper, utils, ParseFilesError};
+use code_stats::{cmd_arg_parser, extension_reader, utils};
 
 fn main() {
     control::set_virtual_terminal(true).unwrap();
 
-    let extensions_map = match file_scraper::parse_supported_extensions_to_map() {
+    let extensions_map = match extension_reader::parse_supported_extensions_to_map() {
         Err(x) => {
             println!("{}", x.formatted());
             utils::wait_for_input();
@@ -47,3 +47,11 @@ fn main() {
 
     utils::wait_for_input();
 }
+
+
+
+//  [Extension]            [Files]                      [Lines]                       [Size]
+//  ________________________________________________________________________________________________________________________________
+//     java          [-||||||.....-58%]  47       [-||||||||...-78%]  494      [-|||||......-58%]  47 
+//       cs          [-|||||||||..-74%]  85       [-|||........- 9%]  63       [-||||.......-58%]  47
+//       py          [-|||........- 9%]  11       [-|||........- 9%]  51       [-|||||||||..-74%]  85

@@ -1,20 +1,23 @@
-pub mod cmd_arg_parser;
-pub mod my_reader;
-pub mod file_scraper;
-pub mod utils;
-mod conc_test;
+#![allow(warnings)] //@TODO: remove this and check
 
-use std::{collections::HashMap, fmt::{self, Display}, fs::{self, File}, io::{self, BufRead, BufReader}, path::Path, time::{Duration, SystemTime}};
+pub mod cmd_arg_parser;
+pub mod extension_reader;
+pub mod file_parser;
+pub mod utils;
+
+use std::{collections::{HashMap, LinkedList}, fmt::{self, Display}, fs::{self, File}, io::{self, BufRead, BufReader}, path::Path, time::{Duration, SystemTime}};
 use std::{sync::{Arc, Mutex}, thread::JoinHandle};
 use std::thread;
 
 use colored::Colorize;
 use num_cpus;
+pub use lazy_static::lazy_static;
 
-use domain::{Extension,ExtensionStats, FileStats};
+use domain::{Extension,Keyword,ExtensionStats, FileStats};
 use fmt::{Formatter};
 use cmd_arg_parser::ProgramArguments;
 
+pub type LLRef     = Arc<Mutex<LinkedList<String>>>;
 pub type VecRef    = Arc<Mutex<Vec<String>>>;
 pub type BoolRef   = Arc<Mutex<bool>>;
 pub type StatsRef  = Arc<Mutex<HashMap<String,ExtensionStats>>>;
@@ -24,8 +27,8 @@ pub fn run(args :ProgramArguments, extensions_map :HashMap<String, Extension>) -
     let start = SystemTime::now();
     let thread_num = num_cpus::get();
 
-    let files_ref : VecRef = Arc::new(Mutex::new(Vec::new()));
-    let faulty_files_ref : VecRef = Arc::new(Mutex::new(Vec::new()));
+    let files_ref : LLRef = Arc::new(Mutex::new(LinkedList::new()));
+    let faulty_files_ref : VecRef  = Arc::new(Mutex::new(Vec::new()));
     let finish_condition_ref : BoolRef = Arc::new(Mutex::new(false));
     let extensions_map_ref : ExtMapRef = Arc::new(extensions_map);
     let extensions_stats_ref = Arc::new(Mutex::new(make_extension_stats(extensions_map_ref.clone())));
@@ -33,7 +36,7 @@ pub fn run(args :ProgramArguments, extensions_map :HashMap<String, Extension>) -
 
     println!("\nParsing files...");
 
-    for i in 0..thread_num-5 {
+    for i in 0..thread_num-4 {
         handles.push(start_consumer_thread(
             i, files_ref.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(), extensions_stats_ref.clone(), extensions_map_ref.clone())
         .unwrap());
@@ -51,19 +54,11 @@ pub fn run(args :ProgramArguments, extensions_map :HashMap<String, Extension>) -
     println!("Result: {:?}",extensions_stats_ref);
     println!("Exec time: {:?}",SystemTime::now().duration_since(start).unwrap());
 
-    // println!("Found {} files, {} of interest.\n",files_num, relevant_files.len());
-
-
-    // match calculate_stats(relevant_files, &extensions_map, &mut extensions_stats) {
-    //     Ok(_) => println!("success"),
-    //     Err(x) => return Err(x)
-    // };
-
     Ok(())
 }
 
 fn start_consumer_thread
-    (id: usize, files_ref: VecRef, faulty_files_ref: VecRef, finish_condition_ref: BoolRef,
+    (id: usize, files_ref: LLRef, faulty_files_ref: VecRef, finish_condition_ref: BoolRef,
      extension_stats_ref: StatsRef, extension_map: ExtMapRef) 
     -> Result<JoinHandle<()>,io::Error> 
 {
@@ -72,6 +67,7 @@ fn start_consumer_thread
         let mut files_parsed = 0;
         loop {
             let mut files_guard = files_ref.lock().unwrap();
+            // println!("Thread {} , remaining: {}",id,files_guard.len());
             if files_guard.is_empty() {
                 if *finish_condition_ref.lock().unwrap() {
                     break;
@@ -83,7 +79,8 @@ fn start_consumer_thread
             }
             files_parsed += 1;
 
-            let file_name = files_guard.remove(0);
+            let file_name = files_guard.pop_front().unwrap();
+            drop(files_guard);
             let file_extension = match Path::new(&file_name).extension() {
                 Some(x) => match x.to_str() {
                     Some(y) => y.to_owned(),
@@ -97,9 +94,8 @@ fn start_consumer_thread
                     continue;
                 }
             };
-            drop(files_guard);
 
-            match parse_file_t(&file_name, &mut buf, extension_map.clone()) {
+            match file_parser::parse_file(&file_name, &mut buf, extension_map.clone()) {
                 Ok(x) => extension_stats_ref.lock().unwrap().get_mut(&file_extension).unwrap().add_stats(x),
                 Err(_) => faulty_files_ref.lock().unwrap().push(file_name)
             }
@@ -108,38 +104,13 @@ fn start_consumer_thread
     })
 }
 
-fn parse_file_t(file_name: &String, buf: &mut String, extension_map: ExtMapRef) -> Result<FileStats,ParseFilesError> {
-    let extension_str = match Path::new(&file_name).extension() {
-        Some(x) => match x.to_str() {
-            Some(y) => y,
-            None => return Err(ParseFilesError::FaultyFile)
-        },
-        None => return Err(ParseFilesError::FaultyFile)
-    };
-    let extension = extension_map.get(extension_str).unwrap();
-    let mut file_stats = FileStats::default(&extension.keywords);
-
-    let mut reader = BufReader::new(match File::open(file_name){
-        Ok(f) => f,
-        Err(_) => return Err(ParseFilesError::FaultyFile)
-    });
-
-    loop {
-        match reader.read_line(buf) {
-            Ok(u) => if u == 0 {return Ok(file_stats)},
-            Err(_) => return Err(ParseFilesError::FaultyFile)
-        }
-        file_stats.incr_lines();
-    }
-}
-
-pub fn add_relevant_files(files_vec :VecRef, finish_condition: BoolRef, dir: &String, extensions: ExtMapRef, exclude_dirs: &Option<Vec<String>>) -> usize {
+pub fn add_relevant_files(files_list :LLRef, finish_condition: BoolRef, dir: &String, extensions: ExtMapRef, exclude_dirs: &Option<Vec<String>>) -> usize {
     let path = Path::new(&dir); 
     if path.is_file() {
         if let Some(x) = path.extension(){
             if let Some(y) = x.to_str() {
                 if extensions.contains_key(y) {
-                    files_vec.lock().unwrap().push(dir.clone());
+                    files_list.lock().unwrap().push_front(dir.clone());
                     *finish_condition.lock().unwrap() = true;
                     return 1;
                 }
@@ -149,13 +120,13 @@ pub fn add_relevant_files(files_vec :VecRef, finish_condition: BoolRef, dir: &St
         return 0;
     } else {
         let mut total_files : usize = 0;
-        add_files_recursively(files_vec, dir, extensions, exclude_dirs, &mut total_files);
+        add_files_recursively(files_list, dir, extensions, exclude_dirs, &mut total_files);
         *finish_condition.lock().unwrap() = true;
         return total_files;
     }
 } 
 
-fn add_files_recursively(files_vec: VecRef, dir: &String, extensions: ExtMapRef, exclude_dirs: &Option<Vec<String>>, total_files: &mut usize) {
+fn add_files_recursively(files_list: LLRef, dir: &String, extensions: ExtMapRef, exclude_dirs: &Option<Vec<String>>, total_files: &mut usize) {
     let dirs = match fs::read_dir(dir) {
         Err(_) => return,
         Ok(x) => x
@@ -182,15 +153,15 @@ fn add_files_recursively(files_vec: VecRef, dir: &String, extensions: ExtMapRef,
                 None => continue
             };
             if extensions.contains_key(extension) {
-                files_vec.lock().unwrap().push(path_str);
+                files_list.lock().unwrap().push_front(path_str);
             }
         } else {
             if let Some(x) = exclude_dirs {
                 if !x.contains(&path_str){
-                    add_files_recursively(files_vec.clone(), &path_str, extensions.clone(), exclude_dirs, total_files);
+                    add_files_recursively(files_list.clone(), &path_str, extensions.clone(), exclude_dirs, total_files);
                 }
             } else {
-                add_files_recursively(files_vec.clone(), &path_str, extensions.clone(), exclude_dirs, total_files);
+                add_files_recursively(files_list.clone(), &path_str, extensions.clone(), exclude_dirs, total_files);
             }
         }
     }
@@ -272,6 +243,16 @@ pub mod domain {
         fn eq(&self, other: &Self) -> bool {
             self.descriptive_name == other.descriptive_name &&
             self.aliases == other.aliases
+        }
+    }
+
+    impl Extension {
+        pub fn multiline_len(&self) -> usize {
+            if let Some(x) = &self.mutliline_comment_start_symbol {
+                x.len()
+            } else {
+                0
+            }
         }
     }
     
@@ -373,40 +354,40 @@ pub mod domain {
 }
 
 
-// lazy_static! {
-//     static ref J_CLASS : Keyword = Keyword {
-//         descriptive_name : "classes".to_owned(),
-//         aliases : vec!["class".to_owned(),"record".to_owned()]
-//     };
+lazy_static! {
+    pub static ref J_CLASS : Keyword = Keyword {
+        descriptive_name : "classes".to_owned(),
+        aliases : vec!["class".to_owned(),"record".to_owned()]
+    };
 
-//     static ref CLASS : Keyword = Keyword {
-//         descriptive_name : "classes".to_owned(),
-//         aliases : vec!["class".to_owned()]
-//     };
+    static ref CLASS : Keyword = Keyword {
+        descriptive_name : "classes".to_owned(),
+        aliases : vec!["class".to_owned()]
+    };
 
-//     static ref INTERFACE : Keyword = Keyword {
-//         descriptive_name : "interfaces".to_owned(),
-//         aliases : vec!["interface".to_owned()]
-//     };
+    static ref INTERFACE : Keyword = Keyword {
+        descriptive_name : "interfaces".to_owned(),
+        aliases : vec!["interface".to_owned()]
+    };
 
-//     static ref JAVA : Extension = Extension {
-//         name : "java".to_owned(),
-//         string_symbols : vec!["\"".to_owned()],
-//         comment_symbol : "//".to_owned(),
-//         mutliline_comment_start_symbol : Some("/*".to_owned()),
-//         mutliline_comment_end_symbol : Some("*/".to_owned()),
-//         keywords : vec![J_CLASS.clone(),INTERFACE.clone()]
-//     };
+    static ref JAVA : Extension = Extension {
+        name : "java".to_owned(),
+        string_symbols : vec!["\"".to_owned()],
+        comment_symbol : "//".to_owned(),
+        mutliline_comment_start_symbol : Some("/*".to_owned()),
+        mutliline_comment_end_symbol : Some("*/".to_owned()),
+        keywords : vec![J_CLASS.clone(),INTERFACE.clone()]
+    };
 
-//     static ref PYTHON : Extension = Extension {
-//         name : "py".to_owned(),
-//         string_symbols : vec!["\"".to_owned(),"'".to_owned()],
-//         comment_symbol : "#".to_owned(),
-//         mutliline_comment_start_symbol : None,
-//         mutliline_comment_end_symbol : None,
-//         keywords : vec![CLASS.clone()]
-//     };
-// }
+    static ref PYTHON : Extension = Extension {
+        name : "py".to_owned(),
+        string_symbols : vec!["\"".to_owned(),"'".to_owned()],
+        comment_symbol : "#".to_owned(),
+        mutliline_comment_start_symbol : None,
+        mutliline_comment_end_symbol : None,
+        keywords : vec![CLASS.clone()]
+    };
+}
 
 // #[cfg(test)]
 // mod tests {
