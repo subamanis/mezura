@@ -1,9 +1,10 @@
-#![allow(warnings)] //@TODO: remove this and check
+#![allow(warnings)] 
+// #![allow(unused_must_use)]
 
 pub mod cmd_arg_parser;
 pub mod extension_reader;
 pub mod file_parser;
-pub mod utils;
+pub mod putils;
 
 use std::{collections::{HashMap, LinkedList}, fmt::{self, Display}, fs::{self, File}, io::{self, BufRead, BufReader}, path::Path, time::{Duration, SystemTime}};
 use std::{sync::{Arc, Mutex}, thread::JoinHandle};
@@ -13,6 +14,7 @@ use colored::Colorize;
 use num_cpus;
 pub use lazy_static::lazy_static;
 
+pub use putils::*;
 use domain::{Extension,Keyword,ExtensionStats, FileStats};
 use fmt::{Formatter};
 use cmd_arg_parser::ProgramArguments;
@@ -42,10 +44,11 @@ pub fn run(args :ProgramArguments, extensions_map :HashMap<String, Extension>) -
         .unwrap());
     }
 
-    let files_num = add_relevant_files(files_ref, finish_condition_ref, &args.path, extensions_map_ref, &args.exclude_dirs);
-    if files_num == 0 {
+    let (total_files_num, relevant_files) = add_relevant_files(files_ref, finish_condition_ref, &args.path, extensions_map_ref, &args.exclude_dirs);
+    if relevant_files == 0 {
         return Err(ParseFilesError::NoRelevantFiles);
     }
+    println!("{} files found. {} of interest.",total_files_num, relevant_files);
 
     for h in handles {
         h.join().unwrap();
@@ -104,29 +107,30 @@ fn start_consumer_thread
     })
 }
 
-pub fn add_relevant_files(files_list :LLRef, finish_condition: BoolRef, dir: &String, extensions: ExtMapRef, exclude_dirs: &Option<Vec<String>>) -> usize {
+pub fn add_relevant_files(files_list :LLRef, finish_condition: BoolRef, dir: &str, extensions: ExtMapRef, exclude_dirs: &Option<Vec<String>>) -> (usize,usize) {
     let path = Path::new(&dir); 
     if path.is_file() {
-        if let Some(x) = path.extension(){
+        if let Some(x) = path.extension() {
             if let Some(y) = x.to_str() {
                 if extensions.contains_key(y) {
-                    files_list.lock().unwrap().push_front(dir.clone());
+                    files_list.lock().unwrap().push_front(dir.to_string());
                     *finish_condition.lock().unwrap() = true;
-                    return 1;
+                    return (1,1);
                 }
             }
         }
         *finish_condition.lock().unwrap() = true;
-        return 0;
+        (0,0)
     } else {
         let mut total_files : usize = 0;
-        add_files_recursively(files_list, dir, extensions, exclude_dirs, &mut total_files);
+        let mut relevant_files : usize = 0;
+        add_files_recursively(files_list, dir, extensions, exclude_dirs, &mut total_files, &mut relevant_files);
         *finish_condition.lock().unwrap() = true;
-        return total_files;
+        (total_files,relevant_files)
     }
 } 
 
-fn add_files_recursively(files_list: LLRef, dir: &String, extensions: ExtMapRef, exclude_dirs: &Option<Vec<String>>, total_files: &mut usize) {
+fn add_files_recursively(files_list: LLRef, dir: &str, extensions: ExtMapRef, exclude_dirs: &Option<Vec<String>>, total_files: &mut usize, relevant_files: &mut usize) {
     let dirs = match fs::read_dir(dir) {
         Err(_) => return,
         Ok(x) => x
@@ -143,25 +147,30 @@ fn add_files_recursively(files_list: LLRef, dir: &String, extensions: ExtMapRef,
             Some(x) => x.to_owned(),
             None => continue
         };
-        if Path::new(&path).is_file() {
+        let path = Path::new(&path);
+
+        if path.is_file() {
             *total_files += 1;
-            let extension = match path.extension() {
-                Some(x) => match x.to_str() {
-                    Some(y) => y,
-                    None => continue
-                },
+            let extension = match utils::get_file_extension(path) {
+                Some(x) => x,
                 None => continue
             };
             if extensions.contains_key(extension) {
+                *relevant_files += 1;
                 files_list.lock().unwrap().push_front(path_str);
             }
         } else {
             if let Some(x) = exclude_dirs {
-                if !x.contains(&path_str){
-                    add_files_recursively(files_list.clone(), &path_str, extensions.clone(), exclude_dirs, total_files);
+                let dir_name = match utils::get_file_name(path) {
+                    Some(x) => x.to_owned(),
+                    None => continue
+                };
+
+                if !x.contains(&dir_name){
+                    add_files_recursively(files_list.clone(), &path_str, extensions.clone(), exclude_dirs, total_files, relevant_files);
                 }
             } else {
-                add_files_recursively(files_list.clone(), &path_str, extensions.clone(), exclude_dirs, total_files);
+                add_files_recursively(files_list.clone(), &path_str, extensions.clone(), exclude_dirs, total_files, relevant_files);
             }
         }
     }
@@ -315,7 +324,7 @@ pub mod domain {
     }
 
     impl FileStats {
-        pub fn default( keywords: &Vec<Keyword>) -> FileStats {
+        pub fn default( keywords: &[Keyword]) -> FileStats {
             FileStats {
                 lines : 0,
                 code_lines : 0,
@@ -331,7 +340,7 @@ pub mod domain {
             self.code_lines += 1;
         }
 
-        pub fn incr_keyword(&mut self, keyword_name:&String) {
+        pub fn incr_keyword(&mut self, keyword_name:&str) {
             *self.keyword_occurences.get_mut(keyword_name).unwrap() += 1;
         }
     }
@@ -344,7 +353,7 @@ pub mod domain {
         map
     }
 
-    fn get_stats_map(keywords: &Vec<Keyword>) -> HashMap<String,usize> {
+    fn get_stats_map(keywords: &[Keyword]) -> HashMap<String,usize> {
         let mut map = HashMap::<String,usize>::new();
         for k in keywords {
             map.insert(k.descriptive_name.to_owned(), 0);

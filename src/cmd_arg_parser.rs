@@ -46,11 +46,7 @@ pub fn read_args_console() -> Result<ProgramArguments,()> {
 }
 
 fn get_distinct_arguments(line: String) -> Vec<String> {
-    let dirs_pos = line.find("--dirs");
-    if dirs_pos.is_none() {
-        vec![line.trim().to_owned()]
-    } else {
-        let dirs_pos = dirs_pos.unwrap();
+    if let Some(dirs_pos) = line.find("--dirs") {
         let parts = line.split_at(dirs_pos);
         let mut args = vec![parts.0.trim().to_owned()];
         for dir in parts.1.split_whitespace() {
@@ -58,8 +54,9 @@ fn get_distinct_arguments(line: String) -> Vec<String> {
                 args.push(dir.to_owned());
             }
         }
-
         args
+    } else {
+        vec![line.trim().to_owned()]
     }
 }
 

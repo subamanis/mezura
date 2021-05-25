@@ -2,7 +2,7 @@ use std::{path::Path, process};
 
 use colored::*;
 
-use code_stats::{cmd_arg_parser, extension_reader, utils};
+use code_stats::{cmd_arg_parser::{self, ProgramArguments}, extension_reader, putils::*};
 
 fn main() {
     control::set_virtual_terminal(true).unwrap();
@@ -25,27 +25,33 @@ fn main() {
         }
     };
 
-    let args = cmd_arg_parser::read_args_cmd().unwrap_or_else(|_| {
-        loop {
-            println!("\nPlease provide a file name or a root directory path, and optional exclude directories\n(e.g. C:\\users\\user\\Desktop\\project --dirs exclude_dir1 exclude_dir2)",);
-            if let Ok(x) = cmd_arg_parser::read_args_console() {
-                let path = Path::new(&x.path);
-                if path.is_dir() || path.is_file(){
-                    break x
-                } else {
-                    println!("{}","\nPath provided is not a valid directory or file.".red());
-                }
-            } else {
-                println!("{}","No arguments provided.".red());
-            }
-        }
-    });
+    let args = match cmd_arg_parser::read_args_cmd() {
+        Ok(args) => args,
+        Err(_) => get_args_from_stdin()
+    };
 
     if let Err(x) = code_stats::run(args, extensions_map) {
         println!("{}",x.formatted());
     }
 
     utils::wait_for_input();
+}
+
+fn get_args_from_stdin() -> ProgramArguments {
+    loop {
+        println!("\nPlease provide a file name or a root directory path, and optional exclude directories\n(e.g. C:\\users\\user\\Desktop\\project --dirs exclude_dir1 exclude_dir2)",);
+        match cmd_arg_parser::read_args_console() {
+            Err(_) => println!("{}","No arguments provided.".red()),
+            Ok(args) => {
+                let path = Path::new(&args.path);
+                if path.is_dir() || path.is_file(){
+                    break args;
+                } else {
+                    println!("{}","\nPath provided is not a valid directory or file.".red());
+                }
+            }
+        }
+    }
 }
 
 

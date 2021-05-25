@@ -40,7 +40,6 @@ pub fn parse_supported_extensions_to_map() -> Result<(HashMap<String,Extension>,
         let path = entry.path();
         if !Path::new(&path).is_file() {continue;}
         
-        //@TODO: helper func that returns opt?
         let reader = match my_reader::BufReader::open(path) {
             Ok(x) => x,
             Err(_) => {
@@ -186,20 +185,12 @@ mod my_reader {
             
             true
         }
-        
-        pub fn read_lines(&mut self, num :usize, buffer: &mut String) -> Result<(),std::io::Error> {
-            for _ in 0..num {
-                if let Err(x) = self.read_line(buffer) {return Err(x);}
-            }
-            
-            Ok(())
-        }
 
         pub fn get_line_sliced(&mut self, buffer: &mut String) -> Result<Vec<String>, ()> {
             if self.read_line_exists(buffer) {
                 let buffer = buffer.trim_end();
                 let mut vec = buffer.split_whitespace().map(|s| s.to_string()).collect::<Vec<String>>();
-                if vec.len() == 0 {return Ok(vec![String::new()]);}
+                if vec.is_empty() {return Ok(vec![String::new()]);}
                 let last_index = vec.len()-1;
                 vec[last_index] = vec[last_index].trim_end().to_owned();
                 Ok(vec) 

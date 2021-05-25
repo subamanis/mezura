@@ -4,7 +4,7 @@ use crate::*;
 
 
 #[inline]
-pub fn parse_file(file_name: &String, buf: &mut String, extension_map: ExtMapRef) -> Result<FileStats,ParseFilesError> {
+pub fn parse_file(file_name: &str, buf: &mut String, extension_map: ExtMapRef) -> Result<FileStats,ParseFilesError> {
     let extension_str = match Path::new(&file_name).extension() {
         Some(x) => match x.to_str() {
             Some(y) => y,
@@ -12,7 +12,7 @@ pub fn parse_file(file_name: &String, buf: &mut String, extension_map: ExtMapRef
         },
         None => return Err(ParseFilesError::FaultyFile)
     };
-    
+
     let reader = BufReader::new(match File::open(file_name){
         Ok(f) => f,
         Err(_) => return Err(ParseFilesError::FaultyFile)
@@ -34,7 +34,7 @@ fn parse_lines(mut reader: BufReader<File>, buf: &mut String, extension: &Extens
         file_stats.incr_lines();
 
         let line = buf.trim();
-        if line.len() == 0 {
+        if line.is_empty() {
             continue;
         }
 
@@ -44,7 +44,7 @@ fn parse_lines(mut reader: BufReader<File>, buf: &mut String, extension: &Extens
     }
 }
 
-fn get_str_indices(line: &String, extension: &Extension, open_str_symbol: &Option<String>) -> Vec<usize> {
+fn get_str_indices(line: &str, extension: &Extension, open_str_symbol: &Option<String>) -> Vec<usize> {
     fn add_unescaped_indices(indices: &mut Vec<usize>, first_val: usize, bytes: &[u8], iter: &mut MatchIndices<&String>) {
         if first_val == 0 {
             indices.push(first_val);
@@ -53,7 +53,7 @@ fn get_str_indices(line: &String, extension: &Extension, open_str_symbol: &Optio
                 indices.push(first_val);
             }
         } 
-        while let Some(x) = iter.next() {
+        for x in iter {
             if bytes[x.0-1] != b'\\' {
                 indices.push(x.0);
             }
@@ -64,7 +64,7 @@ fn get_str_indices(line: &String, extension: &Extension, open_str_symbol: &Optio
          indices_1: &mut Vec<usize>, indices_2: &mut Vec<usize>, open_str_symbol: &Option<String>,
          merged_indices: &mut Vec<usize>, extension: &Extension) 
     {
-        let mut is_str_open = if open_str_symbol.is_some() {true} else {false};
+        let mut is_str_open = open_str_symbol.is_some();
         let (mut first, mut second) = {
             if let Some(x) = open_str_symbol {
                 if extension.string_symbols[0] == *x {
@@ -180,7 +180,7 @@ fn get_str_indices(line: &String, extension: &Extension, open_str_symbol: &Optio
     }
 }
 
-fn is_intersecting_with_multi_line_end_symbol(index: usize, symbol_len: usize, end_vec: &Vec<usize>) -> bool {
+fn is_intersecting_with_multi_line_end_symbol(index: usize, symbol_len: usize, end_vec: &[usize]) -> bool {
     for i in end_vec {
         if index < symbol_len {
             if *i == 0 {return true;}
@@ -192,7 +192,7 @@ fn is_intersecting_with_multi_line_end_symbol(index: usize, symbol_len: usize, e
     false
 }
 
-fn is_intersecting_with_comment_symbol(index: usize, comments_vec: &Vec<usize>) -> bool {
+fn is_intersecting_with_comment_symbol(index: usize, comments_vec: &[usize]) -> bool {
     for i in comments_vec {
         if *i == index + 1 {return true;} 
     }
@@ -265,7 +265,7 @@ impl LineInfo {
     }
 }
 
-fn get_bounds_only_single_line_comments(line: &String, extension: &Extension, open_str_symbol: &Option<String>) -> LineInfo {
+fn get_bounds_only_single_line_comments(line: &str, extension: &Extension, open_str_symbol: &Option<String>) -> LineInfo {
     let str_indices = get_str_indices(line, extension, open_str_symbol);
     if open_str_symbol.is_some() && str_indices.is_empty() {
         return LineInfo::none_str(false, open_str_symbol.to_owned());
@@ -319,7 +319,6 @@ fn get_bounds_only_single_line_comments(line: &String, extension: &Extension, op
                     }
                 }
                 
-                //@TODO: instead of contains, check with something like contains after the current index.
                 if str_indices.contains(&index_after) {
                     is_str_open_m = !is_str_open_m;
                     str_counter += 1;
@@ -369,7 +368,7 @@ fn get_bounds_only_single_line_comments(line: &String, extension: &Extension, op
 }
 
 
-fn get_bounds_w_multiline_comments(line: &String, extension: &Extension, is_comment_closed: bool,
+fn get_bounds_w_multiline_comments(line: &str, extension: &Extension, is_comment_closed: bool,
      open_str_symbol: &Option<String>) -> LineInfo
 {
     let com_end_indices = line.match_indices(extension.mutliline_comment_end_symbol.as_ref().unwrap()).map(|x| x.0).collect::<Vec<usize>>();
