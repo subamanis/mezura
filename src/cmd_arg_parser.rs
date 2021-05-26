@@ -6,7 +6,7 @@ pub struct ProgramArguments {
 
 impl ProgramArguments {
     pub fn new(mut list : Vec<String>) -> Result<ProgramArguments,()> {
-        if list.len() == 0 {
+        if list.is_empty() {
             Err(())
         }
         else {

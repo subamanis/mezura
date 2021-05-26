@@ -1,30 +1,23 @@
-use std::{collections::binary_heap::Iter, ops::{DerefMut, Index}, str::{self, MatchIndices}};
+use std::{str::{self, MatchIndices}};
 
 use crate::*;
 
 
 #[inline]
-pub fn parse_file(file_name: &str, buf: &mut String, extension_map: ExtMapRef) -> Result<FileStats,ParseFilesError> {
-    let extension_str = match Path::new(&file_name).extension() {
-        Some(x) => match x.to_str() {
-            Some(y) => y,
-            None => return Err(ParseFilesError::FaultyFile)
-        },
-        None => return Err(ParseFilesError::FaultyFile)
-    };
-
+pub fn parse_file(file_name: &str, file_extension: &str, buf: &mut String, extension_map: ExtMapRef) -> Result<FileStats,ParseFilesError> {
     let reader = BufReader::new(match File::open(file_name){
         Ok(f) => f,
         Err(_) => return Err(ParseFilesError::FaultyFile)
     });
 
-    parse_lines(reader, buf, &extension_map.get(extension_str).unwrap())
+    parse_lines(reader, buf, &extension_map.get(file_extension).unwrap(), file_extension)
 }
 
 #[inline]
-fn parse_lines(mut reader: BufReader<File>, buf: &mut String, extension: &Extension) -> Result<FileStats,ParseFilesError> {
+fn parse_lines(mut reader: BufReader<File>, buf: &mut String, extension: &Extension, file_extension: &str) -> Result<FileStats,ParseFilesError> {
     let mut file_stats = FileStats::default(&extension.keywords);
-    let (mut is_string_closed, mut is_comment_closed) = (true, true);
+    let mut is_comment_closed = true;
+    let mut open_str_symbol = None::<String>;
     loop {
         buf.clear();
         match reader.read_line(buf) {
@@ -34,171 +27,28 @@ fn parse_lines(mut reader: BufReader<File>, buf: &mut String, extension: &Extens
         file_stats.incr_lines();
 
         let line = buf.trim();
-        if line.is_empty() {
-            continue;
-        }
+        if line.is_empty() { continue; }
 
-        let words = buf.split_whitespace().collect::<Vec<&str>>();        
-        for word in words {
-        }
-    }
-}
-
-fn get_str_indices(line: &str, extension: &Extension, open_str_symbol: &Option<String>) -> Vec<usize> {
-    fn add_unescaped_indices(indices: &mut Vec<usize>, first_val: usize, bytes: &[u8], iter: &mut MatchIndices<&String>) {
-        if first_val == 0 {
-            indices.push(first_val);
+        let line_info = 
+        if extension.supports_multiline_comments() { //another way?
+            get_bounds_w_multiline_comments(line, extension, is_comment_closed, &open_str_symbol)
         } else {
-            if bytes[first_val-1] != b'\\' {
-                indices.push(first_val);
-            }
-        } 
-        for x in iter {
-            if bytes[x.0-1] != b'\\' {
-                indices.push(x.0);
-            }
-        }
-    }
-
-    fn add_non_intersecting(
-         indices_1: &mut Vec<usize>, indices_2: &mut Vec<usize>, open_str_symbol: &Option<String>,
-         merged_indices: &mut Vec<usize>, extension: &Extension) 
-    {
-        let mut is_str_open = open_str_symbol.is_some();
-        let (mut first, mut second) = {
-            if let Some(x) = open_str_symbol {
-                if extension.string_symbols[0] == *x {
-                    (indices_1, indices_2)
-                } else {
-                    (indices_2, indices_1)
-                }
-            } else {
-                if indices_1[0] < indices_2[0] {
-                    (indices_1, indices_2)
-                } else {
-                    (indices_2, indices_1)
-                }
-            }
+            get_bounds_only_single_line_comments(line, extension, &open_str_symbol)
         };
 
-        let (mut first_counter, mut second_counter) = (0,0);
-        let is_string_open = open_str_symbol.is_none();
-        loop {
-            if is_str_open {
-                if first_counter >= first.len() {
-                    return;
-                }
-                merged_indices.push(first[first_counter]);
-                while second_counter < second.len() && second[second_counter] < first[first_counter] {
-                    second_counter += 1;
-                } 
-                is_str_open = false;
-                first_counter += 1;
-            } else {
-                if second_counter >= second.len() {
-                    while first_counter < first.len() {
-                        merged_indices.push(first[first_counter]);
-                        first_counter += 1;
-                    }
-                    return;
-                } else if first_counter >= first.len() {
-                    while second_counter < second.len() {
-                        merged_indices.push(second[second_counter]);
-                        second_counter += 1;
-                    }
-                    return;
-                }
+        is_comment_closed = !line_info.is_comment_open_after;
+        open_str_symbol = line_info.open_str_sybol_after;
 
-                if second[second_counter] < first[first_counter] {
-                    let (temp, temp_counter) = (first, first_counter);
-                    first = second;
-                    first_counter = second_counter;
-                    second = temp;
-                    second_counter = temp_counter;
-                } 
-
-                merged_indices.push(first[first_counter]);
-                first_counter += 1;
-                is_str_open = true;
+        if let Some(x) = line_info.cleansed_string {
+            let cleansed = x.trim();
+            if cleansed != "{" && cleansed != "}" {
+                file_stats.incr_code_lines();
+                add_keywords_if_any(cleansed, &extension, &mut file_stats);
             }
         }
     }
-
-    if extension.string_symbols.len() == 2 {
-        let mut iter_1 = line.match_indices(&extension.string_symbols[0]);
-        let mut iter_2 = line.match_indices(&extension.string_symbols[1]);
-        let first_index_1 = iter_1.next();
-        let first_index_2 = iter_2.next();
-        let mut indices  = Vec::with_capacity(6);
-        let lines_bytes = line.as_bytes();
-        if first_index_1.is_none() && first_index_2.is_none() {
-            Vec::<usize>::new()
-        } else if first_index_1.is_none() {
-            if open_str_symbol.is_none() {
-                add_unescaped_indices(&mut indices, first_index_2.unwrap().0, lines_bytes, &mut iter_2);
-                indices
-            } else {
-                let open_str_symbol = open_str_symbol.as_ref().unwrap();
-                if *open_str_symbol == extension.string_symbols[1]{
-                    add_unescaped_indices(&mut indices, first_index_2.unwrap().0, lines_bytes, &mut iter_2);
-                    indices
-                } else {
-                    Vec::<usize>::new()
-                }
-            }
-        } else if first_index_2.is_none() {
-            if open_str_symbol.is_none() {
-                add_unescaped_indices(&mut indices, first_index_1.unwrap().0, lines_bytes, &mut iter_1);
-            indices
-            } else {
-                let open_str_symbol = open_str_symbol.as_ref().unwrap();
-                if *open_str_symbol == extension.string_symbols[0]{
-                    add_unescaped_indices(&mut indices, first_index_1.unwrap().0, lines_bytes, &mut iter_1);
-                    indices
-                } else {
-                    Vec::<usize>::new()
-                }
-            }
-        } else {
-            let mut indices_1 = Vec::<usize>::with_capacity(6);
-            let mut indices_2 = Vec::<usize>::with_capacity(6);
-            let first_index_1 = first_index_1.unwrap().0;
-            let first_index_2 = first_index_2.unwrap().0;
-            add_unescaped_indices(&mut indices_1, first_index_1, lines_bytes, &mut iter_1);
-            add_unescaped_indices(&mut indices_2, first_index_2, lines_bytes, &mut iter_2);
-            add_non_intersecting(&mut indices_1, &mut indices_2, open_str_symbol, &mut indices, extension);
-
-            // if first_index_1 < first_index_2 {
-            //     add_unescaped_indices(&mut indices, first_index_1, lines_bytes, &mut iter_1);
-            // } else {
-            //     add_unescaped_indices(&mut indices, first_index_2, lines_bytes, &mut iter_2);
-            // }
-            indices
-        }
-    } else {
-        line.match_indices(&extension.string_symbols[0]).map(|x| x.0).collect()
-    }
 }
 
-fn is_intersecting_with_multi_line_end_symbol(index: usize, symbol_len: usize, end_vec: &[usize]) -> bool {
-    for i in end_vec {
-        if index < symbol_len {
-            if *i == 0 {return true;}
-        } else {
-            if *i == index - symbol_len + 1 {return true;}    
-        }
-    }
-
-    false
-}
-
-fn is_intersecting_with_comment_symbol(index: usize, comments_vec: &[usize]) -> bool {
-    for i in comments_vec {
-        if *i == index + 1 {return true;} 
-    }
-
-    false
-}
 
 #[derive(Debug, PartialEq)]
 struct LineInfo {
@@ -212,7 +62,7 @@ impl LineInfo {
         LineInfo {
             cleansed_string: None,
             is_comment_open_after,
-            open_str_sybol_after: open_str_sybol_after
+            open_str_sybol_after
         }
     }
 
@@ -260,7 +110,7 @@ impl LineInfo {
         LineInfo {
             cleansed_string,
             is_comment_open_after,
-            open_str_sybol_after: open_str_sybol_after
+            open_str_sybol_after
         }
     }
 }
@@ -545,11 +395,279 @@ fn get_bounds_w_multiline_comments(line: &str, extension: &Extension, is_comment
     }
 }
 
+fn add_keywords_if_any(cleansed: &str, extension: &Extension, file_stats: &mut FileStats) {
+    fn is_acceptable_prefix(prefix: &str) -> bool {
+        prefix.is_empty() || prefix.ends_with(" ") || prefix.ends_with("}") || prefix.ends_with("{") || prefix.ends_with(",")
+    }
+
+    fn is_acceptable_suffix(suffix: &str) -> bool {
+        suffix.is_empty() || suffix.starts_with(" ") || suffix.starts_with("}") || suffix.starts_with("{") || suffix.starts_with(",")
+    }
+
+    for keyword in &extension.keywords {
+        for alias in &keyword.aliases {
+            let mut indices = cleansed.match_indices(alias).map(|x| x.0).collect::<Vec<usize>>();
+            if indices.is_empty() {continue;}
+            let alias_len = alias.len();
+
+            //ignore indices that are directly next to each other
+            let mut counter = 0;
+            while indices.len() > 0 && counter < indices.len()-1 {
+                if indices[counter] + alias_len == indices[counter+1] {
+                    indices.remove(counter);
+                    indices.remove(counter);
+                } 
+                counter += 1;
+            }
+            if indices.is_empty() {continue};
+
+            let mut surroundings = Vec::<&str>::new();
+            surroundings.push(&cleansed[0..indices[0]]);
+            for i in 1..indices.len() {
+                surroundings.push(&cleansed[indices[i-1]+alias_len..indices[i]]);
+            }
+            surroundings.push(&cleansed[indices[indices.len()-1]+alias_len..cleansed.len()]);
+            
+            let surroundings_len = surroundings.len();
+            let mut counter = 0;
+            while counter < surroundings_len-1 {
+                if is_acceptable_prefix(surroundings[counter]) && is_acceptable_suffix(surroundings[counter+1]) {
+                    file_stats.incr_keyword(&keyword.descriptive_name);
+                }
+                counter += 1;
+            }
+        }
+    }
+}
+
+fn get_str_indices(line: &str, extension: &Extension, open_str_symbol: &Option<String>) -> Vec<usize> {
+    fn add_unescaped_indices(indices: &mut Vec<usize>, first_val: usize, bytes: &[u8], iter: &mut MatchIndices<&String>) {
+        if first_val == 0 {
+            indices.push(first_val);
+        } else {
+            if bytes[first_val-1] != b'\\' {
+                indices.push(first_val);
+            }
+        } 
+        for x in iter {
+            if bytes[x.0-1] != b'\\' {
+                indices.push(x.0);
+            }
+        }
+    }
+
+    fn add_non_intersecting(
+         indices_1: &mut Vec<usize>, indices_2: &mut Vec<usize>, open_str_symbol: &Option<String>,
+         merged_indices: &mut Vec<usize>, extension: &Extension) 
+    {
+        let mut is_str_open = open_str_symbol.is_some();
+        let (mut first, mut second) = {
+            if let Some(x) = open_str_symbol {
+                if extension.string_symbols[0] == *x {
+                    (indices_1, indices_2)
+                } else {
+                    (indices_2, indices_1)
+                }
+            } else {
+                if indices_1[0] < indices_2[0] {
+                    (indices_1, indices_2)
+                } else {
+                    (indices_2, indices_1)
+                }
+            }
+        };
+
+        let (mut first_counter, mut second_counter) = (0,0);
+        let is_string_open = open_str_symbol.is_none();
+        loop {
+            if is_str_open {
+                if first_counter >= first.len() {
+                    return;
+                }
+                merged_indices.push(first[first_counter]);
+                while second_counter < second.len() && second[second_counter] < first[first_counter] {
+                    second_counter += 1;
+                } 
+                is_str_open = false;
+                first_counter += 1;
+            } else {
+                if second_counter >= second.len() {
+                    while first_counter < first.len() {
+                        merged_indices.push(first[first_counter]);
+                        first_counter += 1;
+                    }
+                    return;
+                } else if first_counter >= first.len() {
+                    while second_counter < second.len() {
+                        merged_indices.push(second[second_counter]);
+                        second_counter += 1;
+                    }
+                    return;
+                }
+
+                if second[second_counter] < first[first_counter] {
+                    let (temp, temp_counter) = (first, first_counter);
+                    first = second;
+                    first_counter = second_counter;
+                    second = temp;
+                    second_counter = temp_counter;
+                } 
+
+                merged_indices.push(first[first_counter]);
+                first_counter += 1;
+                is_str_open = true;
+            }
+        }
+    }
+
+    if extension.string_symbols.len() == 2 {
+        let mut iter_1 = line.match_indices(&extension.string_symbols[0]);
+        let mut iter_2 = line.match_indices(&extension.string_symbols[1]);
+        let first_index_1 = iter_1.next();
+        let first_index_2 = iter_2.next();
+        let mut indices  = Vec::with_capacity(6);
+        let lines_bytes = line.as_bytes();
+        if first_index_1.is_none() && first_index_2.is_none() {
+            Vec::<usize>::new()
+        } else if first_index_1.is_none() {
+            if open_str_symbol.is_none() {
+                add_unescaped_indices(&mut indices, first_index_2.unwrap().0, lines_bytes, &mut iter_2);
+                indices
+            } else {
+                let open_str_symbol = open_str_symbol.as_ref().unwrap();
+                if *open_str_symbol == extension.string_symbols[1]{
+                    add_unescaped_indices(&mut indices, first_index_2.unwrap().0, lines_bytes, &mut iter_2);
+                    indices
+                } else {
+                    Vec::<usize>::new()
+                }
+            }
+        } else if first_index_2.is_none() {
+            if open_str_symbol.is_none() {
+                add_unescaped_indices(&mut indices, first_index_1.unwrap().0, lines_bytes, &mut iter_1);
+            indices
+            } else {
+                let open_str_symbol = open_str_symbol.as_ref().unwrap();
+                if *open_str_symbol == extension.string_symbols[0]{
+                    add_unescaped_indices(&mut indices, first_index_1.unwrap().0, lines_bytes, &mut iter_1);
+                    indices
+                } else {
+                    Vec::<usize>::new()
+                }
+            }
+        } else {
+            let mut indices_1 = Vec::<usize>::with_capacity(6);
+            let mut indices_2 = Vec::<usize>::with_capacity(6);
+            let first_index_1 = first_index_1.unwrap().0;
+            let first_index_2 = first_index_2.unwrap().0;
+            add_unescaped_indices(&mut indices_1, first_index_1, lines_bytes, &mut iter_1);
+            add_unescaped_indices(&mut indices_2, first_index_2, lines_bytes, &mut iter_2);
+            add_non_intersecting(&mut indices_1, &mut indices_2, open_str_symbol, &mut indices, extension);
+            indices
+        }
+    } else {
+        line.match_indices(&extension.string_symbols[0]).map(|x| x.0).collect()
+    }
+}
+
+fn is_intersecting_with_multi_line_end_symbol(index: usize, symbol_len: usize, end_vec: &[usize]) -> bool {
+    for i in end_vec {
+        if index < symbol_len {
+            if *i == 0 {return true;}
+        } else {
+            if *i == index - symbol_len + 1 {return true;}    
+        }
+    }
+
+    false
+}
+
+fn is_intersecting_with_comment_symbol(index: usize, comments_vec: &[usize]) -> bool {
+    for i in comments_vec {
+        if *i == index + 1 {return true;} 
+    }
+
+    false
+}
+
 
 #[cfg(test)]
 mod tests {
     use crate::file_parser::get_str_indices;
     use super::*;
+    
+    #[test]
+    fn finds_keywords_correctly() {
+        let line = String::from("Hello world!");
+        let mut file_stats =  FileStats::default(&[J_CLASS.clone(),INTERFACE.clone()]);
+        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        assert_eq!(make_file_stats(0,0), file_stats);
+
+        let line = String::from("class");
+        let mut file_stats =  FileStats::default(&[J_CLASS.clone(),INTERFACE.clone()]);
+        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        assert_eq!(make_file_stats(1,0), file_stats);
+
+        let line = String::from("1class");
+        let mut file_stats =  FileStats::default(&[J_CLASS.clone(),INTERFACE.clone()]);
+        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        assert_eq!(make_file_stats(0,0), file_stats);
+
+        let line = String::from("hello class word!");
+        let mut file_stats =  FileStats::default(&[J_CLASS.clone(),INTERFACE.clone()]);
+        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        assert_eq!(make_file_stats(1,0), file_stats);
+
+        let line = String::from("class class class");
+        let mut file_stats =  FileStats::default(&[J_CLASS.clone(),INTERFACE.clone()]);
+        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        assert_eq!(make_file_stats(3,0), file_stats);
+
+        let line = String::from("classclass");
+        let mut file_stats =  FileStats::default(&[J_CLASS.clone(),INTERFACE.clone()]);
+        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        assert_eq!(make_file_stats(0,0), file_stats);
+
+        let line = String::from("hello,class{word!");
+        let mut file_stats =  FileStats::default(&[J_CLASS.clone(),INTERFACE.clone()]);
+        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        assert_eq!(make_file_stats(1,0), file_stats);
+        
+        let line = String::from("classe,");
+        let mut file_stats =  FileStats::default(&[J_CLASS.clone(),INTERFACE.clone()]);
+        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        assert_eq!(make_file_stats(0,0), file_stats);
+        
+        let line = String::from("class interfaceclass classinterface interface");
+        let mut file_stats =  FileStats::default(&[J_CLASS.clone(),INTERFACE.clone()]);
+        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        assert_eq!(make_file_stats(1,1), file_stats);
+        
+        let line = String::from("{class,interface}");
+        let mut file_stats =  FileStats::default(&[J_CLASS.clone(),INTERFACE.clone()]);
+        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        assert_eq!(make_file_stats(1,1), file_stats);
+        
+        let line = String::from("{class.interface}");
+        let mut file_stats =  FileStats::default(&[J_CLASS.clone(),INTERFACE.clone()]);
+        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        assert_eq!(make_file_stats(0,0), file_stats);
+    }
+
+    fn make_file_stats(class_occurances: usize, interface_occurances: usize) -> FileStats {
+        fn get_keyword_map(class_occurances: usize, interface_occurances: usize) -> HashMap<String,usize> {
+            let mut map = HashMap::<String,usize>::new();
+            map.insert(J_CLASS.descriptive_name.clone(), class_occurances);
+            map.insert(INTERFACE.descriptive_name.clone(), interface_occurances);
+            map
+        }
+
+        FileStats {
+            lines: 0,
+            code_lines: 0,
+            keyword_occurences : get_keyword_map(class_occurances, interface_occurances)
+        }
+    }
 
     #[test]
     fn get_str_indices_test() {
@@ -637,10 +755,7 @@ mod tests {
     
     #[test]
     fn gets_bounds_JAVA() {
-        let single_str_opt = &Some("'".to_owned());
         let double_str_opt = &Some("\"".to_owned());
-        let single_str_li = LineInfo::with_open_symbol("'".to_string());
-        let double_str_li = LineInfo::with_open_symbol("\"".to_string());
 
         let line = String::from("Hello world!");
         assert_eq!(LineInfo::with_open_comment(),get_bounds_w_multiline_comments(&line, &crate::JAVA, false, &None));

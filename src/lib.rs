@@ -1,12 +1,12 @@
-#![allow(warnings)] 
-// #![allow(unused_must_use)]
+// #![allow(warnings)] 
+#![allow(unused_must_use)]
 
 pub mod cmd_arg_parser;
 pub mod extension_reader;
 pub mod file_parser;
 pub mod putils;
 
-use std::{collections::{HashMap, LinkedList}, fmt::{self, Display}, fs::{self, File}, io::{self, BufRead, BufReader}, path::Path, time::{Duration, SystemTime}};
+use std::{collections::{HashMap, LinkedList}, fmt::{self, Display}, fs::{self, File}, io::{self, BufRead, BufReader, Write}, path::Path, time::{Duration, SystemTime}};
 use std::{sync::{Arc, Mutex}, thread::JoinHandle};
 use std::thread;
 
@@ -36,26 +36,37 @@ pub fn run(args :ProgramArguments, extensions_map :HashMap<String, Extension>) -
     let extensions_stats_ref = Arc::new(Mutex::new(make_extension_stats(extensions_map_ref.clone())));
     let mut handles = Vec::new(); 
 
-    println!("\nParsing files...");
+    println!("{}","\nAnalyzing directory...".bold());
 
-    for i in 0..thread_num-4 {
-        handles.push(start_consumer_thread(
-            i, files_ref.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(), extensions_stats_ref.clone(), extensions_map_ref.clone())
-        .unwrap());
+    for i in 0..1{
+        handles.push(
+            start_consumer_thread(
+                i, files_ref.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(), extensions_stats_ref.clone(), extensions_map_ref.clone())
+            .unwrap()
+        );
     }
+    // println!("here"); io::stdout().flush();
+
 
     let (total_files_num, relevant_files) = add_relevant_files(files_ref, finish_condition_ref, &args.path, extensions_map_ref, &args.exclude_dirs);
     if relevant_files == 0 {
         return Err(ParseFilesError::NoRelevantFiles);
     }
-    println!("{} files found. {} of interest.",total_files_num, relevant_files);
+
+    println!("{} files found. {} of interest.",with_seperators(total_files_num), with_seperators(relevant_files));
+    println!("{}","\nParsing files...".bold());
+    let _ = io::stdout().flush();
 
     for h in handles {
         h.join().unwrap();
     }
 
-    println!("Result: {:?}",extensions_stats_ref);
-    println!("Exec time: {:?}",SystemTime::now().duration_since(start).unwrap());
+    for (_,j) in extensions_stats_ref.lock().unwrap().iter() {
+        if j.lines != 0 {
+            println!("{}",j);
+        }
+    }
+    println!("\nExecution time: {:.2} secs.",SystemTime::now().duration_since(start).unwrap().as_secs_f32());
 
     Ok(())
 }
@@ -76,38 +87,44 @@ fn start_consumer_thread
                     break;
                 } else {
                     drop(files_guard);
+                    // println!("Thread {} Seeping...",id);
                     thread::sleep(Duration::from_millis(4));
                     continue;
                 }
             }
             files_parsed += 1;
-
-            let file_name = files_guard.pop_front().unwrap();
+            let file_path = files_guard.pop_front().unwrap();
             drop(files_guard);
-            let file_extension = match Path::new(&file_name).extension() {
+
+            let file_extension = match Path::new(&file_path).extension() {
                 Some(x) => match x.to_str() {
                     Some(y) => y.to_owned(),
                     None => {
-                        faulty_files_ref.lock().unwrap().push(file_name);
+                        faulty_files_ref.lock().unwrap().push(file_path);
                         continue;
                     }
                 },
                 None => {
-                    faulty_files_ref.lock().unwrap().push(file_name);
+                    faulty_files_ref.lock().unwrap().push(file_path);
                     continue;
                 }
             };
 
-            match file_parser::parse_file(&file_name, &mut buf, extension_map.clone()) {
-                Ok(x) => extension_stats_ref.lock().unwrap().get_mut(&file_extension).unwrap().add_stats(x),
-                Err(_) => faulty_files_ref.lock().unwrap().push(file_name)
+            match file_parser::parse_file(&file_path, &file_extension, &mut buf, extension_map.clone()) {
+                Ok(x) => {
+                    let mut extension_stats_guard =  extension_stats_ref.lock().unwrap();
+                    let mut extension_stats = extension_stats_guard.get_mut(&file_extension).unwrap();
+                    extension_stats.files += 1;
+                    extension_stats.add_stats(x);
+                },
+                Err(_) => faulty_files_ref.lock().unwrap().push(file_path)
             }
         }
-        println!("Thread {} finished. Parsed {} files.",id,files_parsed);
+        // println!("Thread {} finished. Parsed {} files.",id,files_parsed);
     })
 }
 
-pub fn add_relevant_files(files_list :LLRef, finish_condition: BoolRef, dir: &str, extensions: ExtMapRef, exclude_dirs: &Option<Vec<String>>) -> (usize,usize) {
+fn add_relevant_files(files_list :LLRef, finish_condition: BoolRef, dir: &str, extensions: ExtMapRef, exclude_dirs: &Option<Vec<String>>) -> (usize,usize) {
     let path = Path::new(&dir); 
     if path.is_file() {
         if let Some(x) = path.extension() {
@@ -157,7 +174,9 @@ fn add_files_recursively(files_list: LLRef, dir: &str, extensions: ExtMapRef, ex
             };
             if extensions.contains_key(extension) {
                 *relevant_files += 1;
+                // println!("Producer trying to push");
                 files_list.lock().unwrap().push_front(path_str);
+                // println!("Producer just pushed!");
             }
         } else {
             if let Some(x) = exclude_dirs {
@@ -187,7 +206,6 @@ fn make_extension_stats(extensions_map: ExtMapRef) -> HashMap<String,ExtensionSt
 
 pub enum ParseFilesError {
     NoRelevantFiles,
-    PlaceholderError,
     FaultyFile
 } 
 
@@ -195,7 +213,6 @@ impl ParseFilesError {
     pub fn formatted(&self) -> String {
         match self {
             Self::NoRelevantFiles => "\nNo relevant files found in the given directory.".yellow().to_string(),
-            Self::PlaceholderError => "\nPlaceholder error".yellow().to_string(),
             Self::FaultyFile => "\nFaulty file".yellow().to_string()
         }
     }
@@ -203,11 +220,11 @@ impl ParseFilesError {
 
 
 pub mod domain {
-    use std::usize;
+    use colored::ColoredString;
 
     use super::*;
     
-    #[derive(Debug)]
+    #[derive(Debug,PartialEq)]
     pub struct Extension{
         pub name : String,
         pub string_symbols : Vec<String>,
@@ -217,13 +234,13 @@ pub mod domain {
         pub keywords : Vec<Keyword>
     }
     
-    #[derive(Debug)]
+    #[derive(Debug,PartialEq)]
     pub struct Keyword{
         pub descriptive_name : String,
         pub aliases : Vec<String>
     }
     
-    #[derive(Debug)]
+    #[derive(Debug,PartialEq)]
     pub struct ExtensionStats {
         pub extension_name : String,
         pub files : usize,
@@ -232,7 +249,7 @@ pub mod domain {
         pub keyword_occurences : HashMap<String,usize>
     }
 
-    #[derive(Debug)]
+    #[derive(Debug,PartialEq)]
     pub struct FileStats {
         pub lines : usize,
         pub code_lines : usize,
@@ -248,13 +265,6 @@ pub mod domain {
         }
     }
 
-    impl PartialEq for Keyword {
-        fn eq(&self, other: &Self) -> bool {
-            self.descriptive_name == other.descriptive_name &&
-            self.aliases == other.aliases
-        }
-    }
-
     impl Extension {
         pub fn multiline_len(&self) -> usize {
             if let Some(x) = &self.mutliline_comment_start_symbol {
@@ -262,6 +272,10 @@ pub mod domain {
             } else {
                 0
             }
+        }
+
+        pub fn supports_multiline_comments(&self) -> bool {
+            self.mutliline_comment_start_symbol.is_some()
         }
     }
     
@@ -277,33 +291,7 @@ pub mod domain {
             }
         }
     }
-    
-    impl PartialEq for Extension { 
-        fn eq(&self, other: &Self) -> bool {
-            self.name == other.name &&
-            self.string_symbols == other.string_symbols &&
-            self.comment_symbol == other.comment_symbol &&
-            self.mutliline_comment_start_symbol == other.mutliline_comment_start_symbol &&
-            self.mutliline_comment_end_symbol == other.mutliline_comment_end_symbol &&
-            self.keywords == other.keywords
-        }
-    }
 
-    impl Display for ExtensionStats {
-        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-            write!(f, "\t\t-{} ({} files): {} , {}",self.extension_name, self.files, self.lines, self.code_lines)
-        }
-    }
-    
-    impl PartialEq for ExtensionStats {
-        fn eq(&self, other: &Self) -> bool {
-            self.extension_name == other.extension_name &&
-            self.files == other.files &&
-            self.code_lines == other.code_lines &&
-            self.keyword_occurences == other.keyword_occurences
-        }
-    }
-    
     impl ExtensionStats {
         pub fn new(extension: &Extension) -> ExtensionStats {
             ExtensionStats {
@@ -314,12 +302,41 @@ pub mod domain {
                 keyword_occurences : get_keyword_stats_map(extension)
             }
         }
-
+        
         pub fn add_stats(&mut self, other: FileStats) {
             self.files += 0;
             self.lines += other.lines;
             self.code_lines += other.code_lines;
             self.keyword_occurences.extend(other.keyword_occurences);
+        }
+    }
+    
+    impl Display for ExtensionStats {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            fn colored_word(word: &str) -> ColoredString {
+                word.italic().truecolor(181, 169, 138)
+            }
+
+            let title = format!("\t.{}{}{} {}  -> ",self.extension_name.green(), get_n_times(" ", 6-self.extension_name.len()),
+             with_seperators(self.files), colored_word("files"));
+            let code_lines_percentage = if self.lines > 0 {self.code_lines as f64 / self.lines as f64 * 100f64} else {0f64};
+            let info = format!("{} {} {{{} code ({:.2}%) + {} extra}}\n",colored_word("lines"), with_seperators(self.lines), with_seperators(self.code_lines),
+             code_lines_percentage, with_seperators(self.lines - self.code_lines));
+            
+            let mut keyword_info = String::new();
+            if !self.keyword_occurences.is_empty() {
+                let mut counter = 0;
+                for (keyword_name,occurancies) in &self.keyword_occurences {
+                    if counter == 0 {
+                        keyword_info.push_str(&format!("\t  {}{}: {}",get_n_times(" ", 6-self.extension_name.len() + 13), colored_word(keyword_name),occurancies));
+                    } else {
+                        keyword_info.push_str(&format!(" , {}: {}",colored_word(keyword_name),occurancies));
+                    }
+                    counter += 1;
+                }
+            }
+
+            write!(f,"{}{}{}", title, info, keyword_info)
         }
     }
 
@@ -397,61 +414,3 @@ lazy_static! {
         keywords : vec![CLASS.clone()]
     };
 }
-
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-
-//     #[test]
-//     fn extensions_workflow() -> Result<(), String>{
-//         let extensions_map = match file_scraper::parse_supported_extensions_to_map() {
-//             Ok(it) => it.0,
-//             _ => return Err("Cannot parse extensions to map".to_string())
-//         };
-//         let mut extensions_map_custom = HashMap::new();
-//         extensions_map_custom.insert("java".to_owned(), JAVA.clone());
-//         extensions_map_custom.insert("py".to_owned(), PYTHON.clone());
-//         assert_eq!(extensions_map[&"java".to_owned()] , extensions_map_custom[&"java".to_owned()]);
-//         assert_eq!(extensions_map[&"py".to_owned()] , extensions_map_custom[&"py".to_owned()]);
-        
-//         //----- Getting relevant files from test directory test
-//         let relevant_files_result = file_scraper::get_relevant_files(&"test_dir".to_owned(), &extensions_map, &Some(vec!["dirb".to_owned()]));
-//         //@TODO: fix this
-//         assert_eq!((3,vec!["test_dir\\a.java".to_owned(),"test_dir\\b.py".to_owned(),"test_dir\\c.py".to_owned()]), relevant_files_result);
-        
-//         //----- Extensions stats testing
-//         let mut java_keyword_occur_map  = HashMap::new();
-//         java_keyword_occur_map.insert("classes".to_owned(), 0);
-//         java_keyword_occur_map.insert("interfaces".to_owned(), 0);
-//         let mut python_keyword_occur_map  = HashMap::new();
-//         python_keyword_occur_map.insert("classes".to_owned(), 0);
-        
-//         let java_extension_stats = ExtensionStats::new(&*JAVA);
-//         let python_extension_stats = ExtensionStats::new(&*PYTHON);
-//         let java_extension_stats_custom = ExtensionStats {
-//             extension_name : "java".to_owned(),
-//             files : 0,
-//             lines : 0,
-//             code_lines : 0,
-//             keyword_occurences : java_keyword_occur_map
-//         }; 
-//         let python_extension_stats_custom = ExtensionStats {
-//             extension_name : "py".to_owned(),
-//             files : 0,
-//             lines : 0,
-//             code_lines : 0,
-//             keyword_occurences : python_keyword_occur_map
-//         }; 
-//         assert_eq!(java_extension_stats,java_extension_stats_custom);
-//         assert_eq!(python_extension_stats,python_extension_stats_custom);
-        
-//         let extension_stats_map = make_extension_stats(&extensions_map);
-//         let mut extension_stats_map_custom = HashMap::new();
-//         extension_stats_map_custom.insert("java".to_owned(), java_extension_stats_custom);
-//         extension_stats_map_custom.insert("py".to_owned(), python_extension_stats_custom);
-//         //@TODO: add other extensions
-//         //assert_eq!(extension_stats_map, extension_stats_map_custom);
-
-//         Ok(())
-//     }
-// }

@@ -30,10 +30,7 @@ pub fn get_contents<T>(vec: &[T]) -> String
 #[inline]
 pub fn get_file_name(path: &Path) -> Option<&str> {
     match path.file_name() {
-        Some(x) => match x.to_str() {
-            Some(y) => Some(y),
-            None => None
-        },
+        Some(x) => x.to_str(),
         None => None
     }
 }
@@ -41,17 +38,37 @@ pub fn get_file_name(path: &Path) -> Option<&str> {
 #[inline]
 pub fn get_file_extension(path: &Path) -> Option<&str> {
     match path.extension() {
-        Some(x) => match x.to_str() {
-            Some(y) => Some(y),
-            None => None
-        },
+        Some(x) => x.to_str(),
         None => None
     }
 }
 
+#[inline]
+pub fn get_n_times(symbol: &str, times: usize) -> String {
+    let mut str = String::with_capacity(times);
+    for _ in  0..times {
+        str.push_str(symbol);
+    }
+    str
+}
+
+#[inline]
+pub fn with_seperators(i: usize) -> String{
+    let mut s = String::new();
+    let i_str = i.to_string();
+    let a = i_str.chars().rev().enumerate();
+    for (idx, val) in a {
+        if idx != 0 && idx % 3 == 0 {
+            s.insert(0, ',');
+        }
+        s.insert(0, val);
+    }
+    s
+}
+
 pub fn wait_for_input() {
     print!("\nPress any key to continue...");
-    io::stdout().flush();
+    let _ = io::stdout().flush();
     let mut s = String::new();
-    io::stdin().read_line(&mut s);
+    let _ = io::stdin().read_line(&mut s);
 }
