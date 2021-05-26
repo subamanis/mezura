@@ -1,4 +1,4 @@
-use std::{path::Path, process};
+use std::{path::Path, process, time::SystemTime};
 
 use colored::*;
 
@@ -30,9 +30,13 @@ fn main() {
         Err(_) => get_args_from_stdin()
     };
 
+    let start = SystemTime::now();
+
     if let Err(x) = code_stats::run(args, extensions_map) {
         println!("{}",x.formatted());
     }
+
+    println!("Execution time: {:.2} secs.",SystemTime::now().duration_since(start).unwrap().as_secs_f32());
 
     utils::wait_for_input();
 }
@@ -61,3 +65,7 @@ fn get_args_from_stdin() -> ProgramArguments {
 //     java          [-||||||.....-58%]  47       [-||||||||...-78%]  494      [-|||||......-58%]  47 
 //       cs          [-|||||||||..-74%]  85       [-|||........- 9%]  63       [-||||.......-58%]  47
 //       py          [-|||........- 9%]  11       [-|||........- 9%]  51       [-|||||||||..-74%]  85
+
+// or we can make these bars bigger and unite them for all extensions, and seperate the lines by color, according to the 
+// extension that they belong. [red(|||||)green(||)yellow(||||)], where red = java, yellow = python, ..
+//

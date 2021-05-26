@@ -6,74 +6,110 @@ pub mod extension_reader;
 pub mod file_parser;
 pub mod putils;
 
-use std::{collections::{HashMap, LinkedList}, fmt::{self, Display}, fs::{self, File}, io::{self, BufRead, BufReader, Write}, path::Path, time::{Duration, SystemTime}};
+use std::{collections::{HashMap, LinkedList}, fs::{self, File}, io::{self, BufRead, BufReader}, path::Path, time::{Duration}};
 use std::{sync::{Arc, Mutex}, thread::JoinHandle};
 use std::thread;
 
-use colored::Colorize;
+use colored::{Colorize,ColoredString};
 use num_cpus;
 pub use lazy_static::lazy_static;
 
 pub use putils::*;
-use domain::{Extension,Keyword,ExtensionStats, FileStats};
-use fmt::{Formatter};
+use domain::{Extension, ExtensionContentInfo, ExtensionMetadata, FileStats, Keyword};
 use cmd_arg_parser::ProgramArguments;
 
-pub type LLRef     = Arc<Mutex<LinkedList<String>>>;
-pub type VecRef    = Arc<Mutex<Vec<String>>>;
-pub type BoolRef   = Arc<Mutex<bool>>;
-pub type StatsRef  = Arc<Mutex<HashMap<String,ExtensionStats>>>;
-pub type ExtMapRef = Arc<HashMap<String,Extension>>;
+pub type LLRef          = Arc<Mutex<LinkedList<String>>>;
+pub type VecRef         = Arc<Mutex<Vec<String>>>;
+pub type BoolRef        = Arc<Mutex<bool>>;
+pub type ContentInfoRef = Arc<Mutex<HashMap<String,ExtensionContentInfo>>>;
+pub type ExtMapRef      = Arc<HashMap<String,Extension>>;
 
 pub fn run(args :ProgramArguments, extensions_map :HashMap<String, Extension>) -> Result<(), ParseFilesError> {
-    let start = SystemTime::now();
     let thread_num = num_cpus::get();
 
     let files_ref : LLRef = Arc::new(Mutex::new(LinkedList::new()));
     let faulty_files_ref : VecRef  = Arc::new(Mutex::new(Vec::new()));
     let finish_condition_ref : BoolRef = Arc::new(Mutex::new(false));
     let extensions_map_ref : ExtMapRef = Arc::new(extensions_map);
-    let extensions_stats_ref = Arc::new(Mutex::new(make_extension_stats(extensions_map_ref.clone())));
+    let extensions_content_info_ref = Arc::new(Mutex::new(make_extension_stats(extensions_map_ref.clone())));
+    let mut extensions_metadata = make_extension_metadata(extensions_map_ref.clone());
     let mut handles = Vec::new(); 
 
     println!("{}","\nAnalyzing directory...".bold());
 
-    for i in 0..1{
+    for i in 0..5 {
         handles.push(
             start_consumer_thread(
-                i, files_ref.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(), extensions_stats_ref.clone(), extensions_map_ref.clone())
+                i, files_ref.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(), extensions_content_info_ref.clone(), extensions_map_ref.clone())
             .unwrap()
         );
     }
-    // println!("here"); io::stdout().flush();
 
 
-    let (total_files_num, relevant_files) = add_relevant_files(files_ref, finish_condition_ref, &args.path, extensions_map_ref, &args.exclude_dirs);
+    let (total_files_num, relevant_files) = add_relevant_files(files_ref, &mut extensions_metadata, finish_condition_ref, &args.path, extensions_map_ref, &args.exclude_dirs);
     if relevant_files == 0 {
         return Err(ParseFilesError::NoRelevantFiles);
     }
 
     println!("{} files found. {} of interest.",with_seperators(total_files_num), with_seperators(relevant_files));
     println!("{}","\nParsing files...".bold());
-    let _ = io::stdout().flush();
 
     for h in handles {
         h.join().unwrap();
     }
 
-    for (_,j) in extensions_stats_ref.lock().unwrap().iter() {
-        if j.lines != 0 {
-            println!("{}",j);
-        }
-    }
-    println!("\nExecution time: {:.2} secs.",SystemTime::now().duration_since(start).unwrap().as_secs_f32());
+    format_and_print_results(&extensions_content_info_ref, &extensions_metadata);
 
     Ok(())
 }
 
+fn format_and_print_results(extensions_content_info_ref: &ContentInfoRef, extensions_metadata_map: &HashMap<String, ExtensionMetadata>) {
+    fn colored_word(word: &str) -> ColoredString {
+        word.italic().truecolor(181, 169, 138)
+    }
+
+    let content_info_guard = extensions_content_info_ref.lock();
+    let mut content_info_iter = content_info_guard.as_deref().unwrap().iter();
+    let metadata_map = extensions_metadata_map;
+    loop {
+        let content_info = content_info_iter.next();
+        if let Some(content_info) = content_info {
+            let extension_name = content_info.0;
+            let content_info = content_info.1;
+            let metadata = metadata_map.get(extension_name).unwrap();
+
+            if metadata.files == 0 {continue;}
+
+            let title = format!("\t.{}{}{} {}  -> ",extension_name.green(), get_n_times(" ", 6-extension_name.len()),
+             with_seperators(metadata.files), colored_word("files"));
+            let code_lines_percentage = if content_info.lines > 0 {content_info.code_lines as f64 / content_info.lines as f64 * 100f64} else {0f64};
+            let info = format!("{} {} {{{} code ({:.2}%) + {} extra}}  |  {} {} - {} {}\n",colored_word("lines"), with_seperators(content_info.lines),
+             with_seperators(content_info.code_lines), code_lines_percentage, with_seperators(content_info.lines - content_info.code_lines),
+             with_seperators(metadata.kilobytes as usize), colored_word("KBs total"), with_seperators(metadata.kilobytes as usize / metadata.files), colored_word("KBs average"));
+            
+            let mut keyword_info = String::new();
+            if !content_info.keyword_occurences.is_empty() {
+                // let mut counter = 0;
+                for (mut counter,(keyword_name,occurancies)) in content_info.keyword_occurences.iter().enumerate() {
+                    if counter == 0 {
+                        keyword_info.push_str(&format!("{}{}: {}",get_n_times(" ", 31), colored_word(keyword_name),occurancies));
+                    } else {
+                        keyword_info.push_str(&format!(" , {}: {}",colored_word(keyword_name),occurancies));
+                    }
+                    counter += 1;
+                }
+            }
+            println!("{}",format!("{}{}{}\n",title, info, keyword_info));
+        } else {
+            break;
+        }
+    }
+
+}
+
 fn start_consumer_thread
     (id: usize, files_ref: LLRef, faulty_files_ref: VecRef, finish_condition_ref: BoolRef,
-     extension_stats_ref: StatsRef, extension_map: ExtMapRef) 
+     extension_stats_ref: ContentInfoRef, extension_map: ExtMapRef) 
     -> Result<JoinHandle<()>,io::Error> 
 {
     thread::Builder::new().name(id.to_string()).spawn(move || {
@@ -112,10 +148,7 @@ fn start_consumer_thread
 
             match file_parser::parse_file(&file_path, &file_extension, &mut buf, extension_map.clone()) {
                 Ok(x) => {
-                    let mut extension_stats_guard =  extension_stats_ref.lock().unwrap();
-                    let mut extension_stats = extension_stats_guard.get_mut(&file_extension).unwrap();
-                    extension_stats.files += 1;
-                    extension_stats.add_stats(x);
+                    extension_stats_ref.lock().unwrap().get_mut(&file_extension).unwrap().add_stats(x);
                 },
                 Err(_) => faulty_files_ref.lock().unwrap().push(file_path)
             }
@@ -124,12 +157,14 @@ fn start_consumer_thread
     })
 }
 
-fn add_relevant_files(files_list :LLRef, finish_condition: BoolRef, dir: &str, extensions: ExtMapRef, exclude_dirs: &Option<Vec<String>>) -> (usize,usize) {
+fn add_relevant_files(files_list :LLRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>, finish_condition: BoolRef, dir: &str, extensions: ExtMapRef, exclude_dirs: &Option<Vec<String>>) -> (usize,usize) {
     let path = Path::new(&dir); 
     if path.is_file() {
         if let Some(x) = path.extension() {
             if let Some(y) = x.to_str() {
                 if extensions.contains_key(y) {
+                    let kilobytes = path.metadata().map_or(0, |m|m.len() / 1000);//@TODO check this, is it always a KB?
+                    extensions_metadata_map.get_mut(y).unwrap().add_file_meta(kilobytes);
                     files_list.lock().unwrap().push_front(dir.to_string());
                     *finish_condition.lock().unwrap() = true;
                     return (1,1);
@@ -141,13 +176,13 @@ fn add_relevant_files(files_list :LLRef, finish_condition: BoolRef, dir: &str, e
     } else {
         let mut total_files : usize = 0;
         let mut relevant_files : usize = 0;
-        add_files_recursively(files_list, dir, extensions, exclude_dirs, &mut total_files, &mut relevant_files);
+        add_files_recursively(files_list, extensions_metadata_map, dir, extensions, exclude_dirs, &mut total_files, &mut relevant_files);
         *finish_condition.lock().unwrap() = true;
         (total_files,relevant_files)
     }
 } 
 
-fn add_files_recursively(files_list: LLRef, dir: &str, extensions: ExtMapRef, exclude_dirs: &Option<Vec<String>>, total_files: &mut usize, relevant_files: &mut usize) {
+fn add_files_recursively(files_list: LLRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>, dir: &str, extensions: ExtMapRef, exclude_dirs: &Option<Vec<String>>, total_files: &mut usize, relevant_files: &mut usize) {
     let dirs = match fs::read_dir(dir) {
         Err(_) => return,
         Ok(x) => x
@@ -168,12 +203,15 @@ fn add_files_recursively(files_list: LLRef, dir: &str, extensions: ExtMapRef, ex
 
         if path.is_file() {
             *total_files += 1;
-            let extension = match utils::get_file_extension(path) {
+            let extension_name = match utils::get_file_extension(path) {
                 Some(x) => x,
                 None => continue
             };
-            if extensions.contains_key(extension) {
+            if extensions.contains_key(extension_name) {
                 *relevant_files += 1;
+                let kilobytes = path.metadata().map_or(0, |m|m.len() / 1000);
+                extensions_metadata_map.get_mut(extension_name).unwrap().add_file_meta(kilobytes);
+
                 // println!("Producer trying to push");
                 files_list.lock().unwrap().push_front(path_str);
                 // println!("Producer just pushed!");
@@ -186,21 +224,29 @@ fn add_files_recursively(files_list: LLRef, dir: &str, extensions: ExtMapRef, ex
                 };
 
                 if !x.contains(&dir_name){
-                    add_files_recursively(files_list.clone(), &path_str, extensions.clone(), exclude_dirs, total_files, relevant_files);
+                    add_files_recursively(files_list.clone(), extensions_metadata_map, &path_str, extensions.clone(), exclude_dirs, total_files, relevant_files);
                 }
             } else {
-                add_files_recursively(files_list.clone(), &path_str, extensions.clone(), exclude_dirs, total_files, relevant_files);
+                add_files_recursively(files_list.clone(), extensions_metadata_map, &path_str, extensions.clone(), exclude_dirs, total_files, relevant_files);
             }
         }
     }
 }
 
-fn make_extension_stats(extensions_map: ExtMapRef) -> HashMap<String,ExtensionStats> {
-    let mut map = HashMap::<String,ExtensionStats>::new();
+fn make_extension_stats(extensions_map: ExtMapRef) -> HashMap<String,ExtensionContentInfo> {
+    let mut map = HashMap::<String,ExtensionContentInfo>::new();
     for (key, value) in extensions_map.iter() {
-        map.insert(key.to_owned(), ExtensionStats::new(value));
+        map.insert(key.to_owned(), ExtensionContentInfo::new(value));
     }
 
+    map
+}
+
+fn make_extension_metadata(extension_map: ExtMapRef) -> HashMap<String, ExtensionMetadata> {
+    let mut map = HashMap::<String,ExtensionMetadata>::new();
+    for (name,_) in extension_map.iter() {
+        map.insert(name.to_owned(), ExtensionMetadata::default());
+    }
     map
 }
 
@@ -220,8 +266,6 @@ impl ParseFilesError {
 
 
 pub mod domain {
-    use colored::ColoredString;
-
     use super::*;
     
     #[derive(Debug,PartialEq)]
@@ -240,13 +284,19 @@ pub mod domain {
         pub aliases : Vec<String>
     }
     
+    //Used during the file parsing, it needs to be synchronized 
     #[derive(Debug,PartialEq)]
-    pub struct ExtensionStats {
-        pub extension_name : String,
-        pub files : usize,
+    pub struct ExtensionContentInfo {
         pub lines : usize,
         pub code_lines : usize,
         pub keyword_occurences : HashMap<String,usize>
+    }
+
+    //Used in the file searching, doesn't need to be shared between threads.
+    #[derive(Debug,PartialEq,Default)]
+    pub struct ExtensionMetadata {
+        pub files: usize,
+        pub kilobytes: u64
     }
 
     #[derive(Debug,PartialEq)]
@@ -292,11 +342,9 @@ pub mod domain {
         }
     }
 
-    impl ExtensionStats {
-        pub fn new(extension: &Extension) -> ExtensionStats {
-            ExtensionStats {
-                extension_name : extension.name.to_owned(),
-                files : 0,
+    impl ExtensionContentInfo {
+        pub fn new(extension: &Extension) -> ExtensionContentInfo {
+            ExtensionContentInfo {
                 lines : 0,
                 code_lines : 0,
                 keyword_occurences : get_keyword_stats_map(extension)
@@ -304,39 +352,16 @@ pub mod domain {
         }
         
         pub fn add_stats(&mut self, other: FileStats) {
-            self.files += 0;
             self.lines += other.lines;
             self.code_lines += other.code_lines;
             self.keyword_occurences.extend(other.keyword_occurences);
         }
     }
-    
-    impl Display for ExtensionStats {
-        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-            fn colored_word(word: &str) -> ColoredString {
-                word.italic().truecolor(181, 169, 138)
-            }
 
-            let title = format!("\t.{}{}{} {}  -> ",self.extension_name.green(), get_n_times(" ", 6-self.extension_name.len()),
-             with_seperators(self.files), colored_word("files"));
-            let code_lines_percentage = if self.lines > 0 {self.code_lines as f64 / self.lines as f64 * 100f64} else {0f64};
-            let info = format!("{} {} {{{} code ({:.2}%) + {} extra}}\n",colored_word("lines"), with_seperators(self.lines), with_seperators(self.code_lines),
-             code_lines_percentage, with_seperators(self.lines - self.code_lines));
-            
-            let mut keyword_info = String::new();
-            if !self.keyword_occurences.is_empty() {
-                let mut counter = 0;
-                for (keyword_name,occurancies) in &self.keyword_occurences {
-                    if counter == 0 {
-                        keyword_info.push_str(&format!("\t  {}{}: {}",get_n_times(" ", 6-self.extension_name.len() + 13), colored_word(keyword_name),occurancies));
-                    } else {
-                        keyword_info.push_str(&format!(" , {}: {}",colored_word(keyword_name),occurancies));
-                    }
-                    counter += 1;
-                }
-            }
-
-            write!(f,"{}{}{}", title, info, keyword_info)
+    impl ExtensionMetadata {
+        pub fn add_file_meta(&mut self, kilobytes: u64) {
+            self.files += 1;
+            self.kilobytes += kilobytes;
         }
     }
 
@@ -377,40 +402,4 @@ pub mod domain {
         }
         map
     }
-}
-
-
-lazy_static! {
-    pub static ref J_CLASS : Keyword = Keyword {
-        descriptive_name : "classes".to_owned(),
-        aliases : vec!["class".to_owned(),"record".to_owned()]
-    };
-
-    static ref CLASS : Keyword = Keyword {
-        descriptive_name : "classes".to_owned(),
-        aliases : vec!["class".to_owned()]
-    };
-
-    static ref INTERFACE : Keyword = Keyword {
-        descriptive_name : "interfaces".to_owned(),
-        aliases : vec!["interface".to_owned()]
-    };
-
-    static ref JAVA : Extension = Extension {
-        name : "java".to_owned(),
-        string_symbols : vec!["\"".to_owned()],
-        comment_symbol : "//".to_owned(),
-        mutliline_comment_start_symbol : Some("/*".to_owned()),
-        mutliline_comment_end_symbol : Some("*/".to_owned()),
-        keywords : vec![J_CLASS.clone(),INTERFACE.clone()]
-    };
-
-    static ref PYTHON : Extension = Extension {
-        name : "py".to_owned(),
-        string_symbols : vec!["\"".to_owned(),"'".to_owned()],
-        comment_symbol : "#".to_owned(),
-        mutliline_comment_start_symbol : None,
-        mutliline_comment_end_symbol : None,
-        keywords : vec![CLASS.clone()]
-    };
 }

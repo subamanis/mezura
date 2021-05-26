@@ -397,11 +397,11 @@ fn get_bounds_w_multiline_comments(line: &str, extension: &Extension, is_comment
 
 fn add_keywords_if_any(cleansed: &str, extension: &Extension, file_stats: &mut FileStats) {
     fn is_acceptable_prefix(prefix: &str) -> bool {
-        prefix.is_empty() || prefix.ends_with(" ") || prefix.ends_with("}") || prefix.ends_with("{") || prefix.ends_with(",")
+        prefix.is_empty() || prefix.ends_with(' ') || prefix.ends_with('}') || prefix.ends_with('{') || prefix.ends_with(',')
     }
 
     fn is_acceptable_suffix(suffix: &str) -> bool {
-        suffix.is_empty() || suffix.starts_with(" ") || suffix.starts_with("}") || suffix.starts_with("{") || suffix.starts_with(",")
+        suffix.is_empty() || suffix.starts_with(' ') || suffix.starts_with('}') || suffix.starts_with('{') || suffix.starts_with(',')
     }
 
     for keyword in &extension.keywords {
@@ -412,7 +412,7 @@ fn add_keywords_if_any(cleansed: &str, extension: &Extension, file_stats: &mut F
 
             //ignore indices that are directly next to each other
             let mut counter = 0;
-            while indices.len() > 0 && counter < indices.len()-1 {
+            while !indices.is_empty() && counter < indices.len()-1 {
                 if indices[counter] + alias_len == indices[counter+1] {
                     indices.remove(counter);
                     indices.remove(counter);
@@ -421,8 +421,7 @@ fn add_keywords_if_any(cleansed: &str, extension: &Extension, file_stats: &mut F
             }
             if indices.is_empty() {continue};
 
-            let mut surroundings = Vec::<&str>::new();
-            surroundings.push(&cleansed[0..indices[0]]);
+            let mut surroundings = vec![&cleansed[0..indices[0]]];
             for i in 1..indices.len() {
                 surroundings.push(&cleansed[indices[i-1]+alias_len..indices[i]]);
             }
@@ -593,8 +592,42 @@ fn is_intersecting_with_comment_symbol(index: usize, comments_vec: &[usize]) -> 
 
 #[cfg(test)]
 mod tests {
-    use crate::file_parser::get_str_indices;
     use super::*;
+        
+    lazy_static! {
+        pub static ref J_CLASS : Keyword = Keyword {
+            descriptive_name : "classes".to_owned(),
+            aliases : vec!["class".to_owned(),"record".to_owned()]
+        };
+
+        static ref CLASS : Keyword = Keyword {
+            descriptive_name : "classes".to_owned(),
+            aliases : vec!["class".to_owned()]
+        };
+
+        static ref INTERFACE : Keyword = Keyword {
+            descriptive_name : "interfaces".to_owned(),
+            aliases : vec!["interface".to_owned()]
+        };
+
+        static ref JAVA : Extension = Extension {
+            name : "java".to_owned(),
+            string_symbols : vec!["\"".to_owned()],
+            comment_symbol : "//".to_owned(),
+            mutliline_comment_start_symbol : Some("/*".to_owned()),
+            mutliline_comment_end_symbol : Some("*/".to_owned()),
+            keywords : vec![J_CLASS.clone(),INTERFACE.clone()]
+        };
+
+        static ref PYTHON : Extension = Extension {
+            name : "py".to_owned(),
+            string_symbols : vec!["\"".to_owned(),"'".to_owned()],
+            comment_symbol : "#".to_owned(),
+            mutliline_comment_start_symbol : None,
+            mutliline_comment_end_symbol : None,
+            keywords : vec![CLASS.clone()]
+        };
+    }
     
     #[test]
     fn finds_keywords_correctly() {
@@ -674,22 +707,22 @@ mod tests {
         let single_str_opt = &Some("'".to_owned());
         let double_str_opt = &Some("\"".to_owned());
         let line = String::from("Hello");
-        assert_eq!(Vec::<usize>::new(),get_str_indices(&line, &crate::PYTHON, &None));
+        assert_eq!(Vec::<usize>::new(),get_str_indices(&line, &PYTHON, &None));
         let line = String::from("\"Hello\"");
-        assert_eq!(vec![0,6],get_str_indices(&line, &crate::PYTHON, &None));
+        assert_eq!(vec![0,6],get_str_indices(&line, &PYTHON, &None));
         let line = String::from("\"'\"Hello");
-        assert_eq!(vec![0,2],get_str_indices(&line, &crate::PYTHON, &None));
-        assert_eq!(vec![1,2],get_str_indices(&line, &crate::PYTHON, single_str_opt));
-        assert_eq!(vec![0,1],get_str_indices(&line, &crate::PYTHON, double_str_opt));
+        assert_eq!(vec![0,2],get_str_indices(&line, &PYTHON, &None));
+        assert_eq!(vec![1,2],get_str_indices(&line, &PYTHON, single_str_opt));
+        assert_eq!(vec![0,1],get_str_indices(&line, &PYTHON, double_str_opt));
         let line = String::from("''\"\"Hello");
-        assert_eq!(vec![0,1,2,3],get_str_indices(&line, &crate::PYTHON, &None));
-        assert_eq!(vec![0,1],get_str_indices(&line, &crate::PYTHON, single_str_opt));
-        assert_eq!(vec![2,3],get_str_indices(&line, &crate::PYTHON, double_str_opt));
+        assert_eq!(vec![0,1,2,3],get_str_indices(&line, &PYTHON, &None));
+        assert_eq!(vec![0,1],get_str_indices(&line, &PYTHON, single_str_opt));
+        assert_eq!(vec![2,3],get_str_indices(&line, &PYTHON, double_str_opt));
         let line = String::from("'\"'\"''\"He'l\"lo");
-        assert_eq!(vec![0,2,3,6,9],get_str_indices(&line, &crate::PYTHON, &None));
-        assert_eq!(vec![0,1,3,4,5,6,11],get_str_indices(&line, &crate::PYTHON, single_str_opt));
-        assert_eq!(vec![1,2,4,5,9,11],get_str_indices(&line, &crate::PYTHON, double_str_opt));
-        assert_eq!(vec![1,3,6,11],get_str_indices(&line, &crate::JAVA, double_str_opt));
+        assert_eq!(vec![0,2,3,6,9],get_str_indices(&line, &PYTHON, &None));
+        assert_eq!(vec![0,1,3,4,5,6,11],get_str_indices(&line, &PYTHON, single_str_opt));
+        assert_eq!(vec![1,2,4,5,9,11],get_str_indices(&line, &PYTHON, double_str_opt));
+        assert_eq!(vec![1,3,6,11],get_str_indices(&line, &JAVA, double_str_opt));
     }
 
     #[test]
@@ -700,57 +733,57 @@ mod tests {
         let double_str_li = LineInfo::with_open_symbol("\"".to_string());
 
         let line = String::from("Hello world!");
-        assert_eq!(LineInfo::from_slice("Hello world!"),get_bounds_only_single_line_comments(&line, &crate::PYTHON, &None));
-        assert_eq!(single_str_li,get_bounds_only_single_line_comments(&line, &crate::PYTHON, single_str_opt));
+        assert_eq!(LineInfo::from_slice("Hello world!"),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
+        assert_eq!(single_str_li,get_bounds_only_single_line_comments(&line, &PYTHON, single_str_opt));
         
         //testing comments
         let line = String::from("#Hello world!");
-        assert_eq!(single_str_li,get_bounds_only_single_line_comments(&line, &crate::PYTHON, single_str_opt));
+        assert_eq!(single_str_li,get_bounds_only_single_line_comments(&line, &PYTHON, single_str_opt));
         let line = String::from("Hello world!#");
-        assert_eq!(LineInfo::from_slice("Hello world!"),get_bounds_only_single_line_comments(&line, &crate::PYTHON, &None));
+        assert_eq!(LineInfo::from_slice("Hello world!"),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
         let line = String::from("Hello# world!");
-        assert_eq!(LineInfo::from_slice("Hello"),get_bounds_only_single_line_comments(&line, &crate::PYTHON, &None));
-        assert_eq!(single_str_li,get_bounds_only_single_line_comments(&line, &crate::PYTHON, single_str_opt));
+        assert_eq!(LineInfo::from_slice("Hello"),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
+        assert_eq!(single_str_li,get_bounds_only_single_line_comments(&line, &PYTHON, single_str_opt));
         let line = String::from("Hello## world!");
-        assert_eq!(LineInfo::from_slice("Hello"),get_bounds_only_single_line_comments(&line, &crate::PYTHON, &None));
+        assert_eq!(LineInfo::from_slice("Hello"),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
         let line = String::from("#Hello# world!");
-        assert_eq!(single_str_li,get_bounds_only_single_line_comments(&line, &crate::PYTHON, single_str_opt));
+        assert_eq!(single_str_li,get_bounds_only_single_line_comments(&line, &PYTHON, single_str_opt));
         
         //testing strings 
         let line = String::from("\"Hello world!#");
-        assert_eq!(double_str_li,get_bounds_only_single_line_comments(&line, &crate::PYTHON, &None));
+        assert_eq!(double_str_li,get_bounds_only_single_line_comments(&line, &PYTHON, &None));
         let line = String::from("\"Hello\" world!");
-        assert_eq!(LineInfo::from_slice(" world!"),get_bounds_only_single_line_comments(&line, &crate::PYTHON, &None));
-        assert_eq!(LineInfo::new(Some("Hello".to_owned()), false, Some("\"".to_owned())),get_bounds_only_single_line_comments(&line, &crate::PYTHON, double_str_opt));
+        assert_eq!(LineInfo::from_slice(" world!"),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
+        assert_eq!(LineInfo::new(Some("Hello".to_owned()), false, Some("\"".to_owned())),get_bounds_only_single_line_comments(&line, &PYTHON, double_str_opt));
         let line = String::from("Hello world!\"");
-        assert_eq!(LineInfo::new(Some("Hello world!".to_owned()), false, Some("\"".to_owned())),get_bounds_only_single_line_comments(&line, &crate::PYTHON, &None));
+        assert_eq!(LineInfo::new(Some("Hello world!".to_owned()), false, Some("\"".to_owned())),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
         let line = String::from("\"'Hello'\" world!");
-        assert_eq!(LineInfo::from_slice(" world!"),get_bounds_only_single_line_comments(&line, &crate::PYTHON, &None));
+        assert_eq!(LineInfo::from_slice(" world!"),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
         let line = String::from("'Hello' world!");
-        assert_eq!(LineInfo::from_slice(" world!"),get_bounds_only_single_line_comments(&line, &crate::PYTHON, &None));
+        assert_eq!(LineInfo::from_slice(" world!"),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
         let line = String::from("'\"He'llo'\" world!'");
-        assert_eq!(LineInfo::from_slice("llo"),get_bounds_only_single_line_comments(&line, &crate::PYTHON, &None));
-        assert_eq!(LineInfo::new(Some("He".to_owned()), false, Some("\"".to_owned())),get_bounds_only_single_line_comments(&line, &crate::PYTHON, double_str_opt));
+        assert_eq!(LineInfo::from_slice("llo"),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
+        assert_eq!(LineInfo::new(Some("He".to_owned()), false, Some("\"".to_owned())),get_bounds_only_single_line_comments(&line, &PYTHON, double_str_opt));
         
         //test mixed
         let line = String::from("'Hello#' world!'");
-        assert_eq!(LineInfo::new(Some(" world!".to_owned()), false, Some("'".to_owned())),get_bounds_only_single_line_comments(&line, &crate::PYTHON, &None));
-        assert_eq!(LineInfo::from_slice("Hello"),get_bounds_only_single_line_comments(&line, &crate::PYTHON, single_str_opt));
+        assert_eq!(LineInfo::new(Some(" world!".to_owned()), false, Some("'".to_owned())),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
+        assert_eq!(LineInfo::from_slice("Hello"),get_bounds_only_single_line_comments(&line, &PYTHON, single_str_opt));
         let line = String::from("'Hello'# world!'");
-        assert_eq!(LineInfo::none_all(),get_bounds_only_single_line_comments(&line, &crate::PYTHON, &None));
-        assert_eq!(LineInfo::from_slice("Hello"),get_bounds_only_single_line_comments(&line, &crate::PYTHON, single_str_opt));
+        assert_eq!(LineInfo::none_all(),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
+        assert_eq!(LineInfo::from_slice("Hello"),get_bounds_only_single_line_comments(&line, &PYTHON, single_str_opt));
         let line = String::from("'''#'''Hello world!'");
-        assert_eq!(LineInfo::new(Some("Hello world!".to_owned()), false, Some("'".to_owned())),get_bounds_only_single_line_comments(&line, &crate::PYTHON, &None));
-        assert_eq!(LineInfo::none_all(),get_bounds_only_single_line_comments(&line, &crate::PYTHON, single_str_opt));
-        assert_eq!(LineInfo::with_open_symbol("\"".to_owned()),get_bounds_only_single_line_comments(&line, &crate::PYTHON, double_str_opt));
+        assert_eq!(LineInfo::new(Some("Hello world!".to_owned()), false, Some("'".to_owned())),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
+        assert_eq!(LineInfo::none_all(),get_bounds_only_single_line_comments(&line, &PYTHON, single_str_opt));
+        assert_eq!(LineInfo::with_open_symbol("\"".to_owned()),get_bounds_only_single_line_comments(&line, &PYTHON, double_str_opt));
         let line = String::from("Hello'###'\"world!\"");
-        assert_eq!(LineInfo::from_slice("Hello"),get_bounds_only_single_line_comments(&line, &crate::PYTHON, &None));
-        assert_eq!(LineInfo::none_all(),get_bounds_only_single_line_comments(&line, &crate::PYTHON, single_str_opt));
-        assert_eq!(LineInfo::new(Some("world!".to_owned()), false, Some("\"".to_owned())),get_bounds_only_single_line_comments(&line, &crate::PYTHON, double_str_opt));
+        assert_eq!(LineInfo::from_slice("Hello"),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
+        assert_eq!(LineInfo::none_all(),get_bounds_only_single_line_comments(&line, &PYTHON, single_str_opt));
+        assert_eq!(LineInfo::new(Some("world!".to_owned()), false, Some("\"".to_owned())),get_bounds_only_single_line_comments(&line, &PYTHON, double_str_opt));
         let line = String::from("\"//'''\"Hello'\"world!");
-        assert_eq!(LineInfo::new(Some("Hello".to_owned()), false, Some("'".to_owned())),get_bounds_only_single_line_comments(&line, &crate::PYTHON, &None));
-        assert_eq!(LineInfo::from_slice("world!"),get_bounds_only_single_line_comments(&line, &crate::PYTHON, single_str_opt));
-        assert_eq!(LineInfo::new(Some("//".to_owned()), false, Some("\"".to_owned())),get_bounds_only_single_line_comments(&line, &crate::PYTHON, double_str_opt));
+        assert_eq!(LineInfo::new(Some("Hello".to_owned()), false, Some("'".to_owned())),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
+        assert_eq!(LineInfo::from_slice("world!"),get_bounds_only_single_line_comments(&line, &PYTHON, single_str_opt));
+        assert_eq!(LineInfo::new(Some("//".to_owned()), false, Some("\"".to_owned())),get_bounds_only_single_line_comments(&line, &PYTHON, double_str_opt));
     }
     
     #[test]
@@ -758,93 +791,93 @@ mod tests {
         let double_str_opt = &Some("\"".to_owned());
 
         let line = String::from("Hello world!");
-        assert_eq!(LineInfo::with_open_comment(),get_bounds_w_multiline_comments(&line, &crate::JAVA, false, &None));
-        assert_eq!(LineInfo::with_open_symbol("\"".to_string()),get_bounds_w_multiline_comments(&line, &crate::JAVA, true, double_str_opt));
-        assert_eq!(LineInfo::from_slice("Hello world!"),get_bounds_w_multiline_comments(&line, &crate::JAVA, true, &None));
+        assert_eq!(LineInfo::with_open_comment(),get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
+        assert_eq!(LineInfo::with_open_symbol("\"".to_string()),get_bounds_w_multiline_comments(&line, &JAVA, true, double_str_opt));
+        assert_eq!(LineInfo::from_slice("Hello world!"),get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         
         //testing only multiline comment combinations
         let line = String::from("*/Hello world!");
-        assert_eq!(LineInfo::from_slice("Hello world!"),get_bounds_w_multiline_comments(&line, &crate::JAVA, false, &None));
-        assert_eq!(LineInfo::from_slice("*/Hello world!"),get_bounds_w_multiline_comments(&line, &crate::JAVA, true, &None));
+        assert_eq!(LineInfo::from_slice("Hello world!"),get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
+        assert_eq!(LineInfo::from_slice("*/Hello world!"),get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line = String::from("Hello/* ffd /**//*erer */ world!");
-        assert_eq!(LineInfo::from_slice(" world!"),get_bounds_w_multiline_comments(&line, &crate::JAVA, false, &None));
-        assert_eq!(LineInfo::from_slice("Hello world!"),get_bounds_w_multiline_comments(&line, &crate::JAVA, true, &None));
+        assert_eq!(LineInfo::from_slice(" world!"),get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
+        assert_eq!(LineInfo::from_slice("Hello world!"),get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line = String::from("Hello*//**//**/ world!");
-        assert_eq!(LineInfo::from_slice(" world!"),get_bounds_w_multiline_comments(&line, &crate::JAVA, false, &None));
-        assert_eq!(LineInfo::from_slice("Hello*/ world!"),get_bounds_w_multiline_comments(&line, &crate::JAVA, true, &None));
+        assert_eq!(LineInfo::from_slice(" world!"),get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
+        assert_eq!(LineInfo::from_slice("Hello*/ world!"),get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line = String::from("*//*Hello/**/ world!");
-        assert_eq!(LineInfo::from_slice(" world!"),get_bounds_w_multiline_comments(&line, &crate::JAVA, false, &None));
-        assert_eq!(LineInfo::from_slice("*/ world!"),get_bounds_w_multiline_comments(&line, &crate::JAVA, true, &None));
+        assert_eq!(LineInfo::from_slice(" world!"),get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
+        assert_eq!(LineInfo::from_slice("*/ world!"),get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line = String::from("Hello world*/");
-        assert_eq!(LineInfo::none_all(), get_bounds_w_multiline_comments(&line, &crate::JAVA, false, &None));
+        assert_eq!(LineInfo::none_all(), get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
         let line = String::from("*/Hello world!/**/");
-        assert_eq!(LineInfo::from_slice("Hello world!"), get_bounds_w_multiline_comments(&line, &crate::JAVA, false, &None));
+        assert_eq!(LineInfo::from_slice("Hello world!"), get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
         let line = String::from("Hello world*//**/");
-        assert_eq!(LineInfo::none_all(), get_bounds_w_multiline_comments(&line, &crate::JAVA, false, &None));
+        assert_eq!(LineInfo::none_all(), get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
         let line = String::from("*/He/**//*llo world*/!/**/");
-        assert_eq!(LineInfo::from_slice("He!"), get_bounds_w_multiline_comments(&line, &crate::JAVA, false, &None));
+        assert_eq!(LineInfo::from_slice("He!"), get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
         let line = String::from("Hello world*/!");
-        assert_eq!(LineInfo::from_slice("!"), get_bounds_w_multiline_comments(&line, &crate::JAVA, false, &None));
+        assert_eq!(LineInfo::from_slice("!"), get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
         let line = String::from("/*H*/ello world/*!");
-        assert_eq!(LineInfo::new(Some("ello world".to_string()), true, None), get_bounds_w_multiline_comments(&line, &crate::JAVA, false, &None));
-        assert_eq!(LineInfo::new(Some("ello world".to_string()), true, None), get_bounds_w_multiline_comments(&line, &crate::JAVA, true, &None));
+        assert_eq!(LineInfo::new(Some("ello world".to_string()), true, None), get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
+        assert_eq!(LineInfo::new(Some("ello world".to_string()), true, None), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         
         //testing only string symbols
         let line = String::from("\"");
-        assert_eq!(LineInfo::with_open_symbol("\"".to_string()), get_bounds_w_multiline_comments(&line, &crate::JAVA, true, &None));
+        assert_eq!(LineInfo::with_open_symbol("\"".to_string()), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line = String::from("\"Hello\"");
-        assert_eq!(LineInfo::new(Some("Hello".to_string()), false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &crate::JAVA, true, double_str_opt));
-        assert_eq!(LineInfo::none_all(), get_bounds_w_multiline_comments(&line, &crate::JAVA, true, &None));
+        assert_eq!(LineInfo::new(Some("Hello".to_string()), false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &JAVA, true, double_str_opt));
+        assert_eq!(LineInfo::none_all(), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line = String::from("\"\"Hello");
-        assert_eq!(LineInfo::with_open_symbol("\"".to_string()), get_bounds_w_multiline_comments(&line, &crate::JAVA, true, double_str_opt));
-        assert_eq!(LineInfo::from_slice("Hello"), get_bounds_w_multiline_comments(&line, &crate::JAVA, true, &None));
+        assert_eq!(LineInfo::with_open_symbol("\"".to_string()), get_bounds_w_multiline_comments(&line, &JAVA, true, double_str_opt));
+        assert_eq!(LineInfo::from_slice("Hello"), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line = String::from("\"\"");
-        assert_eq!(LineInfo::with_open_symbol("\"".to_string()), get_bounds_w_multiline_comments(&line, &crate::JAVA, true, double_str_opt));
-        assert_eq!(LineInfo::none_all(), get_bounds_w_multiline_comments(&line, &crate::JAVA, true, &None));
+        assert_eq!(LineInfo::with_open_symbol("\"".to_string()), get_bounds_w_multiline_comments(&line, &JAVA, true, double_str_opt));
+        assert_eq!(LineInfo::none_all(), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line = String::from("\"\"Hello");
-        assert_eq!(LineInfo::from_slice("Hello"), get_bounds_w_multiline_comments(&line, &crate::JAVA, true, &None));
+        assert_eq!(LineInfo::from_slice("Hello"), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line  = String::from("Hel\"\"lo");
-        assert_eq!(LineInfo::from_slice("Hello"), get_bounds_w_multiline_comments(&line, &crate::JAVA, true, &None));
+        assert_eq!(LineInfo::from_slice("Hello"), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line = String::from("\"\"He\"\"\"ll\"o");
-        assert_eq!(LineInfo::from_slice("Heo"), get_bounds_w_multiline_comments(&line, &crate::JAVA, true, &None));
+        assert_eq!(LineInfo::from_slice("Heo"), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         
         //testing only comments
         let line = String::from("//");
-        assert_eq!(LineInfo::none_all(), get_bounds_w_multiline_comments(&line, &crate::JAVA, true, &None));
+        assert_eq!(LineInfo::none_all(), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line = String::from("Hello//");
-        assert_eq!(LineInfo::from_slice("Hello"), get_bounds_w_multiline_comments(&line, &crate::JAVA, true, &None));
-        assert_eq!(LineInfo::with_open_comment(), get_bounds_w_multiline_comments(&line, &crate::JAVA, false, &None));
-        assert_eq!(LineInfo::with_open_symbol("\"".to_string()), get_bounds_w_multiline_comments(&line, &crate::JAVA, true, double_str_opt));
+        assert_eq!(LineInfo::from_slice("Hello"), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
+        assert_eq!(LineInfo::with_open_comment(), get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
+        assert_eq!(LineInfo::with_open_symbol("\"".to_string()), get_bounds_w_multiline_comments(&line, &JAVA, true, double_str_opt));
         let line = String::from("//Hello");
-        assert_eq!(LineInfo::none_all(), get_bounds_w_multiline_comments(&line, &crate::JAVA, true, &None));
+        assert_eq!(LineInfo::none_all(), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line = String::from("////Hello");
-        assert_eq!(LineInfo::none_all(), get_bounds_w_multiline_comments(&line, &crate::JAVA, true, &None));
+        assert_eq!(LineInfo::none_all(), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line = String::from("He//llo//");
-        assert_eq!(LineInfo::from_slice("He"), get_bounds_w_multiline_comments(&line, &crate::JAVA, true, &None));
+        assert_eq!(LineInfo::from_slice("He"), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         
 //         //testing mixed
         let line = String::from("\"\"\"//\"\"\"Hello world!");
-        assert_eq!(LineInfo::from_slice("Hello world!"),get_bounds_w_multiline_comments(&line, &crate::JAVA, true, &None));
-        assert_eq!(LineInfo::none_all(),get_bounds_w_multiline_comments(&line, &crate::JAVA, true, double_str_opt));
+        assert_eq!(LineInfo::from_slice("Hello world!"),get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
+        assert_eq!(LineInfo::none_all(),get_bounds_w_multiline_comments(&line, &JAVA, true, double_str_opt));
         let line = String::from("\"\"one\"//\"\"\"Hello world!");
-        assert_eq!(LineInfo::from_slice("oneHello world!"),get_bounds_w_multiline_comments(&line, &crate::JAVA, true, &None));
+        assert_eq!(LineInfo::from_slice("oneHello world!"),get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line = String::from("\"He\"/*l*/lo//fd");
-        assert_eq!(LineInfo::from_slice("lo"), get_bounds_w_multiline_comments(&line, &crate::JAVA, true, &None));
-        assert_eq!(LineInfo::new(Some("He".to_string()), false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &crate::JAVA, true, double_str_opt));
-        assert_eq!(LineInfo::from_slice("lo"), get_bounds_w_multiline_comments(&line, &crate::JAVA, false, &None));
+        assert_eq!(LineInfo::from_slice("lo"), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
+        assert_eq!(LineInfo::new(Some("He".to_string()), false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &JAVA, true, double_str_opt));
+        assert_eq!(LineInfo::from_slice("lo"), get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
         let line = String::from("//\"/**/dfd\"");
-        assert_eq!(LineInfo::none_all(), get_bounds_w_multiline_comments(&line, &crate::JAVA, true, &None));
-        assert_eq!(LineInfo::new(Some("dfd".to_string()), false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &crate::JAVA, false, &None));
-        assert_eq!(LineInfo::new(Some("dfd".to_string()), false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &crate::JAVA, true, double_str_opt));
+        assert_eq!(LineInfo::none_all(), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
+        assert_eq!(LineInfo::new(Some("dfd".to_string()), false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
+        assert_eq!(LineInfo::new(Some("dfd".to_string()), false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &JAVA, true, double_str_opt));
         
         let line  = String::from(
             "Hello /* \
             mefm \" */ \" \
             //*/world!"
         );
-        assert_eq!(LineInfo::new(Some("Hello  ".to_string()), false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &crate::JAVA, true, &None));
-        assert_eq!(LineInfo::new(Some(" ".to_string()), false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &crate::JAVA, false, &None));
-        assert_eq!(LineInfo::new(Some(" */ ".to_string()), false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &crate::JAVA, true, double_str_opt));
+        assert_eq!(LineInfo::new(Some("Hello  ".to_string()), false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
+        assert_eq!(LineInfo::new(Some(" ".to_string()), false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
+        assert_eq!(LineInfo::new(Some(" */ ".to_string()), false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &JAVA, true, double_str_opt));
     }
 }
 
