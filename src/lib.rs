@@ -1,9 +1,10 @@
-// #![allow(warnings)] 
-#![allow(unused_must_use)]
+#![allow(warnings)] 
+// #![allow(unused_must_use)]
 
 pub mod cmd_arg_parser;
 pub mod extension_reader;
 pub mod file_parser;
+pub mod result_printer;
 pub mod putils;
 
 use std::{collections::{HashMap, LinkedList}, fs::{self, File}, io::{self, BufRead, BufReader}, path::Path, time::{Duration}};
@@ -31,12 +32,11 @@ pub fn run(args :ProgramArguments, extensions_map :HashMap<String, Extension>) -
     let faulty_files_ref : VecRef  = Arc::new(Mutex::new(Vec::new()));
     let finish_condition_ref : BoolRef = Arc::new(Mutex::new(false));
     let extensions_map_ref : ExtMapRef = Arc::new(extensions_map);
-    let extensions_content_info_ref = Arc::new(Mutex::new(make_extension_stats(extensions_map_ref.clone())));
+    let mut extensions_content_info_ref = Arc::new(Mutex::new(make_extension_stats(extensions_map_ref.clone())));
     let mut extensions_metadata = make_extension_metadata(extensions_map_ref.clone());
     let mut handles = Vec::new(); 
 
-    println!("{}","\nAnalyzing directory...".bold());
-
+    println!("\n{}...","Analyzing directory".underline().bold());
     for i in 0..5 {
         handles.push(
             start_consumer_thread(
@@ -45,66 +45,21 @@ pub fn run(args :ProgramArguments, extensions_map :HashMap<String, Extension>) -
         );
     }
 
-
     let (total_files_num, relevant_files) = add_relevant_files(files_ref, &mut extensions_metadata, finish_condition_ref, &args.path, extensions_map_ref, &args.exclude_dirs);
     if relevant_files == 0 {
         return Err(ParseFilesError::NoRelevantFiles);
     }
-
     println!("{} files found. {} of interest.",with_seperators(total_files_num), with_seperators(relevant_files));
-    println!("{}","\nParsing files...".bold());
 
+    println!("\n{}...","Parsing files".underline().bold());
     for h in handles {
         h.join().unwrap();
     }
+    println!("done.\n\n");
 
-    format_and_print_results(&extensions_content_info_ref, &extensions_metadata);
+    result_printer::format_and_print_results(&mut extensions_content_info_ref, &mut extensions_metadata);
 
     Ok(())
-}
-
-fn format_and_print_results(extensions_content_info_ref: &ContentInfoRef, extensions_metadata_map: &HashMap<String, ExtensionMetadata>) {
-    fn colored_word(word: &str) -> ColoredString {
-        word.italic().truecolor(181, 169, 138)
-    }
-
-    let content_info_guard = extensions_content_info_ref.lock();
-    let mut content_info_iter = content_info_guard.as_deref().unwrap().iter();
-    let metadata_map = extensions_metadata_map;
-    loop {
-        let content_info = content_info_iter.next();
-        if let Some(content_info) = content_info {
-            let extension_name = content_info.0;
-            let content_info = content_info.1;
-            let metadata = metadata_map.get(extension_name).unwrap();
-
-            if metadata.files == 0 {continue;}
-
-            let title = format!("\t.{}{}{} {}  -> ",extension_name.green(), get_n_times(" ", 6-extension_name.len()),
-             with_seperators(metadata.files), colored_word("files"));
-            let code_lines_percentage = if content_info.lines > 0 {content_info.code_lines as f64 / content_info.lines as f64 * 100f64} else {0f64};
-            let info = format!("{} {} {{{} code ({:.2}%) + {} extra}}  |  {} {} - {} {}\n",colored_word("lines"), with_seperators(content_info.lines),
-             with_seperators(content_info.code_lines), code_lines_percentage, with_seperators(content_info.lines - content_info.code_lines),
-             with_seperators(metadata.kilobytes as usize), colored_word("KBs total"), with_seperators(metadata.kilobytes as usize / metadata.files), colored_word("KBs average"));
-            
-            let mut keyword_info = String::new();
-            if !content_info.keyword_occurences.is_empty() {
-                // let mut counter = 0;
-                for (mut counter,(keyword_name,occurancies)) in content_info.keyword_occurences.iter().enumerate() {
-                    if counter == 0 {
-                        keyword_info.push_str(&format!("{}{}: {}",get_n_times(" ", 31), colored_word(keyword_name),occurancies));
-                    } else {
-                        keyword_info.push_str(&format!(" , {}: {}",colored_word(keyword_name),occurancies));
-                    }
-                    counter += 1;
-                }
-            }
-            println!("{}",format!("{}{}{}\n",title, info, keyword_info));
-        } else {
-            break;
-        }
-    }
-
 }
 
 fn start_consumer_thread
@@ -163,7 +118,7 @@ fn add_relevant_files(files_list :LLRef, extensions_metadata_map: &mut HashMap<S
         if let Some(x) = path.extension() {
             if let Some(y) = x.to_str() {
                 if extensions.contains_key(y) {
-                    let kilobytes = path.metadata().map_or(0, |m|m.len() / 1000);//@TODO check this, is it always a KB?
+                    let kilobytes = path.metadata().map_or(0, |m|m.len() / 1000);
                     extensions_metadata_map.get_mut(y).unwrap().add_file_meta(kilobytes);
                     files_list.lock().unwrap().push_front(dir.to_string());
                     *finish_condition.lock().unwrap() = true;
@@ -350,6 +305,14 @@ pub mod domain {
                 keyword_occurences : get_keyword_stats_map(extension)
             }
         }
+
+        pub fn dummy(lines: usize) -> ExtensionContentInfo {
+            ExtensionContentInfo {
+                lines,
+                code_lines: 0,
+                keyword_occurences: HashMap::new()
+            }
+        }
         
         pub fn add_stats(&mut self, other: FileStats) {
             self.lines += other.lines;
@@ -359,6 +322,13 @@ pub mod domain {
     }
 
     impl ExtensionMetadata {
+        pub fn new(files: usize, kilobytes: u64) ->  ExtensionMetadata {
+            ExtensionMetadata {
+                files,
+                kilobytes
+            }
+        }
+
         pub fn add_file_meta(&mut self, kilobytes: u64) {
             self.files += 1;
             self.kilobytes += kilobytes;

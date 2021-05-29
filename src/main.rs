@@ -36,7 +36,7 @@ fn main() {
         println!("{}",x.formatted());
     }
 
-    println!("Execution time: {:.2} secs.",SystemTime::now().duration_since(start).unwrap().as_secs_f32());
+    println!("\nExecution time: {:.2} secs.",SystemTime::now().duration_since(start).unwrap().as_secs_f32());
 
     utils::wait_for_input();
 }

@@ -67,7 +67,7 @@ pub fn with_seperators(i: usize) -> String{
 }
 
 pub fn wait_for_input() {
-    print!("\nPress any key to continue...");
+    print!("\nPress any key to exit...");
     let _ = io::stdout().flush();
     let mut s = String::new();
     let _ = io::stdin().read_line(&mut s);
