@@ -103,6 +103,7 @@ fn start_consumer_thread
 
             match file_parser::parse_file(&file_path, &file_extension, &mut buf, extension_map.clone()) {
                 Ok(x) => {
+                    //@TODO: add them to local and after finishing all the jobs add them to global
                     extension_stats_ref.lock().unwrap().get_mut(&file_extension).unwrap().add_stats(x);
                 },
                 Err(_) => faulty_files_ref.lock().unwrap().push(file_path)
@@ -188,16 +189,16 @@ fn add_files_recursively(files_list: LLRef, extensions_metadata_map: &mut HashMa
     }
 }
 
-fn make_extension_stats(extensions_map: ExtMapRef) -> HashMap<String,ExtensionContentInfo> {
+pub fn make_extension_stats(extensions_map: ExtMapRef) -> HashMap<String,ExtensionContentInfo> {
     let mut map = HashMap::<String,ExtensionContentInfo>::new();
     for (key, value) in extensions_map.iter() {
-        map.insert(key.to_owned(), ExtensionContentInfo::new(value));
+        map.insert(key.to_owned(), ExtensionContentInfo::from(value));
     }
 
     map
 }
 
-fn make_extension_metadata(extension_map: ExtMapRef) -> HashMap<String, ExtensionMetadata> {
+pub fn make_extension_metadata(extension_map: ExtMapRef) -> HashMap<String, ExtensionMetadata> {
     let mut map = HashMap::<String,ExtensionMetadata>::new();
     for (name,_) in extension_map.iter() {
         map.insert(name.to_owned(), ExtensionMetadata::default());
@@ -205,6 +206,7 @@ fn make_extension_metadata(extension_map: ExtMapRef) -> HashMap<String, Extensio
     map
 }
 
+#[derive(Debug)]
 pub enum ParseFilesError {
     NoRelevantFiles,
     FaultyFile
@@ -298,11 +300,11 @@ pub mod domain {
     }
 
     impl ExtensionContentInfo {
-        pub fn new(extension: &Extension) -> ExtensionContentInfo {
+        pub fn new(lines: usize, code_lines: usize, keyword_occurences: HashMap<String,usize>) -> ExtensionContentInfo {
             ExtensionContentInfo {
-                lines : 0,
-                code_lines : 0,
-                keyword_occurences : get_keyword_stats_map(extension)
+                lines,
+                code_lines,
+                keyword_occurences
             }
         }
 
@@ -317,7 +319,29 @@ pub mod domain {
         pub fn add_stats(&mut self, other: FileStats) {
             self.lines += other.lines;
             self.code_lines += other.code_lines;
-            self.keyword_occurences.extend(other.keyword_occurences);
+            for (k,v) in other.keyword_occurences.iter() {
+                *self.keyword_occurences.get_mut(k).unwrap() += *v;
+            }
+        }
+    }
+
+    impl From<&Extension> for ExtensionContentInfo {
+        fn from(ext: &Extension) -> Self {
+            ExtensionContentInfo {
+                lines : 0,
+                code_lines : 0,
+                keyword_occurences : get_keyword_stats_map(ext)
+            }
+        }
+    }
+
+    impl From<FileStats> for ExtensionContentInfo {
+        fn from(stats: FileStats) -> Self {
+            ExtensionContentInfo {
+                lines : stats.lines,
+                code_lines : stats.code_lines,
+                keyword_occurences : stats.keyword_occurences
+            }
         }
     }
 
@@ -336,7 +360,7 @@ pub mod domain {
     }
 
     impl FileStats {
-        pub fn default( keywords: &[Keyword]) -> FileStats {
+        pub fn default(keywords: &[Keyword]) -> FileStats {
             FileStats {
                 lines : 0,
                 code_lines : 0,

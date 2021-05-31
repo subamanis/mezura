@@ -4,6 +4,7 @@ use colored::*;
 
 use crate::domain::*;
 
+#[derive(Debug)]
 pub enum ParseExtensionsError {
     UnavailableDirectory(String),
     NoFilesFound,

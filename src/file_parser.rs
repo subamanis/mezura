@@ -595,7 +595,7 @@ mod tests {
     use super::*;
         
     lazy_static! {
-        pub static ref J_CLASS : Keyword = Keyword {
+        static ref J_CLASS : Keyword = Keyword {
             descriptive_name : "classes".to_owned(),
             aliases : vec!["class".to_owned(),"record".to_owned()]
         };
@@ -627,6 +627,21 @@ mod tests {
             mutliline_comment_end_symbol : None,
             keywords : vec![CLASS.clone()]
         };
+
+        static ref extension_map_ref : ExtMapRef = Arc::new(extension_reader::parse_supported_extensions_to_map().unwrap().0);
+    }
+
+    #[test]
+    fn test_correct_parsing_of_test_dir() {
+        let mut buf = String::with_capacity(150);
+        let result = parse_file("test_dir/a.java", "java", &mut buf, extension_map_ref.clone());
+        let result = ExtensionContentInfo::from(result.unwrap());
+        assert_eq!(ExtensionContentInfo::new(44, 13, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
+    }
+
+    fn set_occurances(map: &mut HashMap<String,usize>, classes: usize, interfaces: usize) {
+        map.insert("classes".to_owned(), classes);
+        map.insert("interfaces".to_owned(), interfaces);
     }
     
     #[test]
