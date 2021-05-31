@@ -1,0 +1,19 @@
+//19 lines 7 code_lines ,  5 classes
+
+void __internalAwake() //do class
+/*
+class
+*/aclass
+//class
+// class
+/*this is a class:*/public abstract class some    //ONE HERE
+{
+/*
+hi class
+jejr fje fj fgjf jf dj fj /* */class    //ONE HERE
+/* fjdfbd */class/* fdf                 //ONE HERE 
+ a class
+ another class
+ yet another */class                    //ONE HERE
+/*
+// bait comment */ class                //ONE HERE

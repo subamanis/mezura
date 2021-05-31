@@ -45,6 +45,8 @@ fn parse_lines(mut reader: BufReader<File>, buf: &mut String, extension: &Extens
                 file_stats.incr_code_lines();
                 add_keywords_if_any(cleansed, &extension, &mut file_stats);
             }
+        } else {
+            if line_info.has_string_literal {file_stats.incr_code_lines();}
         }
     }
 }
@@ -53,22 +55,25 @@ fn parse_lines(mut reader: BufReader<File>, buf: &mut String, extension: &Extens
 #[derive(Debug, PartialEq)]
 struct LineInfo {
     cleansed_string: Option<String>,
+    has_string_literal: bool,
     is_comment_open_after: bool,
     open_str_sybol_after: Option<String>
 }
 
 impl LineInfo {
-    pub fn none_str(is_comment_open_after: bool, open_str_sybol_after: Option<String>) -> LineInfo{
+    pub fn none_str(is_comment_open_after: bool, has_string_literal: bool, open_str_sybol_after: Option<String>) -> LineInfo{
         LineInfo {
             cleansed_string: None,
+            has_string_literal,
             is_comment_open_after,
             open_str_sybol_after
         }
     }
 
-    pub fn with_str(cleansed_string: String) -> LineInfo {
+    pub fn with_str(cleansed_string: String, has_string_literal: bool) -> LineInfo {
         LineInfo {
             cleansed_string: Some(cleansed_string),
+            has_string_literal,
             is_comment_open_after : false,
             open_str_sybol_after : None
         }
@@ -77,6 +82,7 @@ impl LineInfo {
     pub fn with_open_comment() -> LineInfo {
         LineInfo {
             cleansed_string: None,
+            has_string_literal: false,
             is_comment_open_after: true,
             open_str_sybol_after: None
         }
@@ -85,6 +91,7 @@ impl LineInfo {
     pub fn with_open_symbol(symbol: String) -> LineInfo {
         LineInfo {
             cleansed_string: None,
+            has_string_literal: true,
             is_comment_open_after: false,
             open_str_sybol_after : Some(symbol)
         }
@@ -93,22 +100,34 @@ impl LineInfo {
     pub fn from_slice(slice: &str) -> LineInfo {
         LineInfo {
             cleansed_string: Some(slice.to_owned()),
+            has_string_literal: false,
             is_comment_open_after : false,
             open_str_sybol_after : None
         }
     }
 
-    pub fn none_all() -> LineInfo {
+    pub fn from_slice_w_literal(slice: &str) -> LineInfo {
+        LineInfo {
+            cleansed_string: Some(slice.to_owned()),
+            has_string_literal: true,
+            is_comment_open_after : false,
+            open_str_sybol_after : None
+        }
+    }
+
+    pub fn none_all(has_string_literal: bool) -> LineInfo {
         LineInfo {
             cleansed_string: None,
+            has_string_literal,
             is_comment_open_after : false,
             open_str_sybol_after : None
         }
     }
 
-    pub fn new(cleansed_string: Option<String>, is_comment_open_after: bool, open_str_sybol_after: Option<String>) -> LineInfo {
+    pub fn new(cleansed_string: Option<String>, has_string_literal: bool, is_comment_open_after: bool, open_str_sybol_after: Option<String>) -> LineInfo {
         LineInfo {
             cleansed_string,
+            has_string_literal,
             is_comment_open_after,
             open_str_sybol_after
         }
@@ -118,12 +137,12 @@ impl LineInfo {
 fn get_bounds_only_single_line_comments(line: &str, extension: &Extension, open_str_symbol: &Option<String>) -> LineInfo {
     let str_indices = get_str_indices(line, extension, open_str_symbol);
     if open_str_symbol.is_some() && str_indices.is_empty() {
-        return LineInfo::none_str(false, open_str_symbol.to_owned());
+        return LineInfo::none_str(false, true, open_str_symbol.to_owned());
     }
 
     let comment_indices = line.match_indices(&extension.comment_symbol).map(|x| x.0).collect::<Vec<usize>>();
     if str_indices.is_empty() && comment_indices.is_empty() {
-        return LineInfo::with_str(line.to_owned());
+        return LineInfo::with_str(line.to_owned(), false);
     }
     
     let mut relevant = String::with_capacity(line.len());
@@ -149,6 +168,7 @@ fn get_bounds_only_single_line_comments(line: &str, extension: &Extension, open_
         }
     };
 
+    let mut has_string_literal = false;
     let mut slice_start_index = 0;
     let mut is_str_open_m = open_str_symbol.is_some();
     let (mut str_counter, mut comment_counter) = (0,0);
@@ -162,10 +182,10 @@ fn get_bounds_only_single_line_comments(line: &str, extension: &Extension, open_
                     if is_str_open_m {
                         let str_symbol = line.chars().nth(str_indices[str_indices.len()-1]).unwrap().to_string();
                         if relevant.is_empty() {return LineInfo::with_open_symbol(str_symbol)}
-                        else {return LineInfo::new(Some(relevant), false, Some(str_symbol));}
+                        else {return LineInfo::new(Some(relevant), true, false, Some(str_symbol));}
                     } else {
-                        if relevant.is_empty() {return LineInfo::none_all();}
-                        else {return LineInfo::with_str(relevant);}
+                        if relevant.is_empty() {return LineInfo::none_all(true);}
+                        else {return LineInfo::with_str(relevant, true);}
                     }
                 }
                 
@@ -174,8 +194,8 @@ fn get_bounds_only_single_line_comments(line: &str, extension: &Extension, open_
                     str_counter += 1;
                 } else if comment_indices.contains(&index_after) {
                     if !is_str_open_m {
-                        if relevant.is_empty() {return LineInfo::none_str(false, None);}
-                        else {return LineInfo::new(Some(relevant), false, None);}
+                        if relevant.is_empty() {return LineInfo::none_str(false, true, None);}
+                        else {return LineInfo::new(Some(relevant), true, false, None);}
                     } else {
                         comment_counter += 1;
                     }
@@ -184,15 +204,16 @@ fn get_bounds_only_single_line_comments(line: &str, extension: &Extension, open_
                 }
                 index_after += 1;
             }
-
+            
             if !has_more_strs(str_counter) && is_str_open_m {
                 if relevant.is_empty() {return LineInfo::with_open_symbol(line.chars().nth(str_indices[str_indices.len()-1]).unwrap().to_string());}
-                else {return LineInfo::new(Some(relevant), false, Some(line.chars().nth(str_indices[str_indices.len()-1]).unwrap().to_string()));}
+                else {return LineInfo::new(Some(relevant), true, false, Some(line.chars().nth(str_indices[str_indices.len()-1]).unwrap().to_string()));}
             }
-
+            
             advance_comment_counter_until(index_after, &mut comment_counter);
-
+            
             slice_start_index = index_after;
+            has_string_literal = true;
         } else {
             if next_symbol_is_string(comment_counter, str_counter) {
                 let this_index = str_indices[str_counter];
@@ -200,18 +221,19 @@ fn get_bounds_only_single_line_comments(line: &str, extension: &Extension, open_
                 str_counter += 1;
                 if !has_more_strs(str_counter) {
                     if relevant.is_empty() {return LineInfo::with_open_symbol(line.chars().nth(this_index).unwrap().to_string());}
-                    else {return LineInfo::new(Some(relevant), false, Some(line.chars().nth(this_index).unwrap().to_string()));}
+                    else {return LineInfo::new(Some(relevant), true, false, Some(line.chars().nth(this_index).unwrap().to_string()));}
                 }
                 
                 is_str_open_m = true;
+                has_string_literal = true;
             } else if next_symbol_is_comment(comment_counter, str_counter) {
                 relevant.push_str(&line[slice_start_index..comment_indices[comment_counter]]);
                 
-                if relevant.is_empty() {return LineInfo::none_str(false, None);}
-                else {return LineInfo::new(Some(relevant), false, None);}
+                if relevant.is_empty() {return LineInfo::none_str(false, has_string_literal, None);}
+                else {return LineInfo::new(Some(relevant), has_string_literal, false, None);}
             } else {
                 relevant.push_str(&line[slice_start_index..line.len()]);
-                return LineInfo::with_str(relevant);
+                return LineInfo::with_str(relevant, has_string_literal);
             }
         }
     }
@@ -226,7 +248,7 @@ fn get_bounds_w_multiline_comments(line: &str, extension: &Extension, is_comment
     
     if is_comment_closed {
         if open_str_symbol.is_some() && str_indices.is_empty() {
-            return LineInfo::none_str(false, open_str_symbol.to_owned());
+            return LineInfo::none_str(false, true, open_str_symbol.to_owned());
         } 
     } else {
         if com_end_indices.is_empty() {
@@ -254,7 +276,7 @@ fn get_bounds_w_multiline_comments(line: &str, extension: &Extension, is_comment
     .collect::<Vec<usize>>();
     
     if str_indices.is_empty() && comment_indices.is_empty() && com_start_indices.is_empty() && com_end_indices.is_empty() {
-        return LineInfo::with_str(line.to_owned());
+        return LineInfo::with_str(line.to_owned(), false);
     }
     
     let mut relevant = String::with_capacity(line.len());
@@ -318,6 +340,7 @@ fn get_bounds_w_multiline_comments(line: &str, extension: &Extension, is_comment
         has_more_ends(end_com_counter) && com_end_indices[end_com_counter] < cur_index && com_end_indices[end_com_counter] >= last_symbol_index
     };
 
+    let mut has_string_literal = false;
     let mut slice_start_index = 0;
     let mut last_symbol_index = 0;
     loop {
@@ -325,20 +348,21 @@ fn get_bounds_w_multiline_comments(line: &str, extension: &Extension, is_comment
             last_symbol_index = str_indices[str_counter];
             let index_after = last_symbol_index + 1;
             if index_after >= line.len() {
-                if relevant.is_empty() {return LineInfo::none_all();}
-                else {return LineInfo::with_str(relevant);}
+                if relevant.is_empty() {return LineInfo::none_all(true);}
+                else {return LineInfo::with_str(relevant,true);}
             } 
             is_str_open_m = false;
             progress_counters_after(last_symbol_index, &mut comment_counter, &mut str_counter,
                 &mut start_com_counter, &mut end_com_counter);
             str_counter += 1;
+            has_string_literal = true;
             slice_start_index = index_after;
         } else if is_com_open_m {
             last_symbol_index = com_end_indices[end_com_counter];
             let index_after = last_symbol_index + extension.multiline_len();
             if index_after >= line.len() {
-                if relevant.is_empty() {return LineInfo::none_all();}
-                else {return LineInfo::with_str(relevant);}
+                if relevant.is_empty() {return LineInfo::none_all(has_string_literal);}
+                else {return LineInfo::with_str(relevant,has_string_literal);}
             } 
 
             is_com_open_m = false;
@@ -356,8 +380,8 @@ fn get_bounds_w_multiline_comments(line: &str, extension: &Extension, is_comment
         } else {
             if next_symbol_is_comment(comment_counter, str_counter, start_com_counter) {
                 relevant.push_str(&line[slice_start_index..comment_indices[comment_counter]]);
-                if relevant.is_empty() {return LineInfo::none_all();}
-                else {return LineInfo::with_str(relevant);}
+                if relevant.is_empty() {return LineInfo::none_all(has_string_literal);}
+                else {return LineInfo::with_str(relevant,has_string_literal);}
             } else if next_symbol_is_string(comment_counter, str_counter, start_com_counter) {
                 let this_index = str_indices[str_counter];
                 if skipped_com_end_symbol(last_symbol_index, end_com_counter, this_index) {
@@ -368,10 +392,11 @@ fn get_bounds_w_multiline_comments(line: &str, extension: &Extension, is_comment
                 if !has_more_strs(str_counter) {
                     let str_symbol = line.chars().nth(this_index).unwrap().to_string();
                     if relevant.is_empty() {return LineInfo::with_open_symbol(str_symbol);}
-                    else {return LineInfo::new(Some(relevant),false, Some(str_symbol));}
+                    else {return LineInfo::new(Some(relevant), true, false, Some(str_symbol));}
                 }
                 
                 is_str_open_m = true;
+                has_string_literal = true;
                 last_symbol_index = this_index;
             } else if next_symbol_is_com_start(comment_counter, str_counter, start_com_counter) {
                 let this_index = com_start_indices[start_com_counter];
@@ -381,7 +406,7 @@ fn get_bounds_w_multiline_comments(line: &str, extension: &Extension, is_comment
                 relevant.push_str(&line[slice_start_index..this_index]);
                 if !has_more_ends(end_com_counter) {
                     if relevant.is_empty() {return LineInfo::with_open_comment();}
-                    else {return LineInfo::new(Some(relevant),true, None);}
+                    else {return LineInfo::new(Some(relevant), has_string_literal, true, None);}
                 }
                 
                 is_com_open_m = true;
@@ -389,7 +414,7 @@ fn get_bounds_w_multiline_comments(line: &str, extension: &Extension, is_comment
                 last_symbol_index = this_index;
             } else {
                 relevant.push_str(&line[slice_start_index..line.len()]);
-                return LineInfo::with_str(relevant);
+                return LineInfo::with_str(relevant, has_string_literal);
             }
         }
     }
@@ -634,9 +659,34 @@ mod tests {
     #[test]
     fn test_correct_parsing_of_test_dir() {
         let mut buf = String::with_capacity(150);
-        let result = parse_file("test_dir/a.java", "java", &mut buf, extension_map_ref.clone());
+
+        let result = parse_file("test_dir/a.txt", "java", &mut buf, extension_map_ref.clone());
         let result = ExtensionContentInfo::from(result.unwrap());
         assert_eq!(ExtensionContentInfo::new(44, 13, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
+        buf.clear();
+        let result = parse_file("test_dir/a.txt", "cs", &mut buf, extension_map_ref.clone());
+        let result = ExtensionContentInfo::from(result.unwrap());
+        assert_eq!(ExtensionContentInfo::new(44, 13, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
+        buf.clear();
+        
+        let result = parse_file("test_dir/d.txt", "cs", &mut buf, extension_map_ref.clone());
+        let result = ExtensionContentInfo::from(result.unwrap());
+        assert_eq!(ExtensionContentInfo::new(19, 7, hashmap!("classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
+        buf.clear();
+        let result = parse_file("test_dir/d.txt", "java", &mut buf, extension_map_ref.clone());
+        let result = ExtensionContentInfo::from(result.unwrap());
+        assert_eq!(ExtensionContentInfo::new(19, 7, hashmap!("classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
+        buf.clear();
+
+        let result = parse_file("test_dir/b.txt", "java", &mut buf, extension_map_ref.clone());
+        let result = ExtensionContentInfo::from(result.unwrap());
+        assert_eq!(ExtensionContentInfo::new(19, 11, hashmap!("classes".to_owned()=>7,"interfaces".to_owned()=>0)), result);
+        buf.clear();
+
+        let result = parse_file("test_dir/c.txt", "py", &mut buf, extension_map_ref.clone());
+        let result = ExtensionContentInfo::from(result.unwrap());
+        assert_eq!(ExtensionContentInfo::new(11, 6, hashmap!("classes".to_owned()=>2)), result);
+        buf.clear();
     }
 
     fn set_occurances(map: &mut HashMap<String,usize>, classes: usize, interfaces: usize) {
@@ -741,7 +791,7 @@ mod tests {
     }
 
     #[test]
-    fn get_bounds_PYTHON() {
+    fn gets_bounds_PYTHON() {
         let single_str_opt = &Some("'".to_owned());
         let double_str_opt = &Some("\"".to_owned());
         let single_str_li = LineInfo::with_open_symbol("'".to_string());
@@ -768,37 +818,37 @@ mod tests {
         let line = String::from("\"Hello world!#");
         assert_eq!(double_str_li,get_bounds_only_single_line_comments(&line, &PYTHON, &None));
         let line = String::from("\"Hello\" world!");
-        assert_eq!(LineInfo::from_slice(" world!"),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
-        assert_eq!(LineInfo::new(Some("Hello".to_owned()), false, Some("\"".to_owned())),get_bounds_only_single_line_comments(&line, &PYTHON, double_str_opt));
+        assert_eq!(LineInfo::from_slice_w_literal(" world!"),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
+        assert_eq!(LineInfo::new(Some("Hello".to_owned()), true, false, Some("\"".to_owned())),get_bounds_only_single_line_comments(&line, &PYTHON, double_str_opt));
         let line = String::from("Hello world!\"");
-        assert_eq!(LineInfo::new(Some("Hello world!".to_owned()), false, Some("\"".to_owned())),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
+        assert_eq!(LineInfo::new(Some("Hello world!".to_owned()), true, false, Some("\"".to_owned())),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
         let line = String::from("\"'Hello'\" world!");
-        assert_eq!(LineInfo::from_slice(" world!"),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
+        assert_eq!(LineInfo::from_slice_w_literal(" world!"),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
         let line = String::from("'Hello' world!");
-        assert_eq!(LineInfo::from_slice(" world!"),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
+        assert_eq!(LineInfo::from_slice_w_literal(" world!"),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
         let line = String::from("'\"He'llo'\" world!'");
-        assert_eq!(LineInfo::from_slice("llo"),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
-        assert_eq!(LineInfo::new(Some("He".to_owned()), false, Some("\"".to_owned())),get_bounds_only_single_line_comments(&line, &PYTHON, double_str_opt));
+        assert_eq!(LineInfo::from_slice_w_literal("llo"),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
+        assert_eq!(LineInfo::new(Some("He".to_owned()), true, false, Some("\"".to_owned())),get_bounds_only_single_line_comments(&line, &PYTHON, double_str_opt));
         
         //test mixed
         let line = String::from("'Hello#' world!'");
-        assert_eq!(LineInfo::new(Some(" world!".to_owned()), false, Some("'".to_owned())),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
-        assert_eq!(LineInfo::from_slice("Hello"),get_bounds_only_single_line_comments(&line, &PYTHON, single_str_opt));
+        assert_eq!(LineInfo::new(Some(" world!".to_owned()), true, false, Some("'".to_owned())),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
+        assert_eq!(LineInfo::from_slice_w_literal("Hello"),get_bounds_only_single_line_comments(&line, &PYTHON, single_str_opt));
         let line = String::from("'Hello'# world!'");
-        assert_eq!(LineInfo::none_all(),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
-        assert_eq!(LineInfo::from_slice("Hello"),get_bounds_only_single_line_comments(&line, &PYTHON, single_str_opt));
+        assert_eq!(LineInfo::none_all(true),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
+        assert_eq!(LineInfo::from_slice_w_literal("Hello"),get_bounds_only_single_line_comments(&line, &PYTHON, single_str_opt));
         let line = String::from("'''#'''Hello world!'");
-        assert_eq!(LineInfo::new(Some("Hello world!".to_owned()), false, Some("'".to_owned())),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
-        assert_eq!(LineInfo::none_all(),get_bounds_only_single_line_comments(&line, &PYTHON, single_str_opt));
+        assert_eq!(LineInfo::new(Some("Hello world!".to_owned()), true, false, Some("'".to_owned())),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
+        assert_eq!(LineInfo::none_all(true),get_bounds_only_single_line_comments(&line, &PYTHON, single_str_opt));
         assert_eq!(LineInfo::with_open_symbol("\"".to_owned()),get_bounds_only_single_line_comments(&line, &PYTHON, double_str_opt));
         let line = String::from("Hello'###'\"world!\"");
-        assert_eq!(LineInfo::from_slice("Hello"),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
-        assert_eq!(LineInfo::none_all(),get_bounds_only_single_line_comments(&line, &PYTHON, single_str_opt));
-        assert_eq!(LineInfo::new(Some("world!".to_owned()), false, Some("\"".to_owned())),get_bounds_only_single_line_comments(&line, &PYTHON, double_str_opt));
+        assert_eq!(LineInfo::from_slice_w_literal("Hello"),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
+        assert_eq!(LineInfo::none_all(true),get_bounds_only_single_line_comments(&line, &PYTHON, single_str_opt));
+        assert_eq!(LineInfo::new(Some("world!".to_owned()), true, false, Some("\"".to_owned())),get_bounds_only_single_line_comments(&line, &PYTHON, double_str_opt));
         let line = String::from("\"//'''\"Hello'\"world!");
-        assert_eq!(LineInfo::new(Some("Hello".to_owned()), false, Some("'".to_owned())),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
-        assert_eq!(LineInfo::from_slice("world!"),get_bounds_only_single_line_comments(&line, &PYTHON, single_str_opt));
-        assert_eq!(LineInfo::new(Some("//".to_owned()), false, Some("\"".to_owned())),get_bounds_only_single_line_comments(&line, &PYTHON, double_str_opt));
+        assert_eq!(LineInfo::new(Some("Hello".to_owned()), true, false, Some("'".to_owned())),get_bounds_only_single_line_comments(&line, &PYTHON, &None));
+        assert_eq!(LineInfo::from_slice_w_literal("world!"),get_bounds_only_single_line_comments(&line, &PYTHON, single_str_opt));
+        assert_eq!(LineInfo::new(Some("//".to_owned()), true, false, Some("\"".to_owned())),get_bounds_only_single_line_comments(&line, &PYTHON, double_str_opt));
     }
     
     #[test]
@@ -824,75 +874,74 @@ mod tests {
         assert_eq!(LineInfo::from_slice(" world!"),get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
         assert_eq!(LineInfo::from_slice("*/ world!"),get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line = String::from("Hello world*/");
-        assert_eq!(LineInfo::none_all(), get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
+        assert_eq!(LineInfo::none_all(false), get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
         let line = String::from("*/Hello world!/**/");
         assert_eq!(LineInfo::from_slice("Hello world!"), get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
         let line = String::from("Hello world*//**/");
-        assert_eq!(LineInfo::none_all(), get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
+        assert_eq!(LineInfo::none_all(false), get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
         let line = String::from("*/He/**//*llo world*/!/**/");
         assert_eq!(LineInfo::from_slice("He!"), get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
         let line = String::from("Hello world*/!");
         assert_eq!(LineInfo::from_slice("!"), get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
         let line = String::from("/*H*/ello world/*!");
-        assert_eq!(LineInfo::new(Some("ello world".to_string()), true, None), get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
-        assert_eq!(LineInfo::new(Some("ello world".to_string()), true, None), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
+        assert_eq!(LineInfo::new(Some("ello world".to_string()), false, true, None), get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
+        assert_eq!(LineInfo::new(Some("ello world".to_string()), false, true, None), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         
         //testing only string symbols
         let line = String::from("\"");
         assert_eq!(LineInfo::with_open_symbol("\"".to_string()), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line = String::from("\"Hello\"");
-        assert_eq!(LineInfo::new(Some("Hello".to_string()), false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &JAVA, true, double_str_opt));
-        assert_eq!(LineInfo::none_all(), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
+        assert_eq!(LineInfo::new(Some("Hello".to_string()), true, false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &JAVA, true, double_str_opt));
+        assert_eq!(LineInfo::none_all(true), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line = String::from("\"\"Hello");
         assert_eq!(LineInfo::with_open_symbol("\"".to_string()), get_bounds_w_multiline_comments(&line, &JAVA, true, double_str_opt));
-        assert_eq!(LineInfo::from_slice("Hello"), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
+        assert_eq!(LineInfo::from_slice_w_literal("Hello"), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line = String::from("\"\"");
         assert_eq!(LineInfo::with_open_symbol("\"".to_string()), get_bounds_w_multiline_comments(&line, &JAVA, true, double_str_opt));
-        assert_eq!(LineInfo::none_all(), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
+        assert_eq!(LineInfo::none_all(true), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line = String::from("\"\"Hello");
-        assert_eq!(LineInfo::from_slice("Hello"), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
+        assert_eq!(LineInfo::from_slice_w_literal("Hello"), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line  = String::from("Hel\"\"lo");
-        assert_eq!(LineInfo::from_slice("Hello"), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
+        assert_eq!(LineInfo::from_slice_w_literal("Hello"), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line = String::from("\"\"He\"\"\"ll\"o");
-        assert_eq!(LineInfo::from_slice("Heo"), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
+        assert_eq!(LineInfo::from_slice_w_literal("Heo"), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         
         //testing only comments
         let line = String::from("//");
-        assert_eq!(LineInfo::none_all(), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
+        assert_eq!(LineInfo::none_all(false), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line = String::from("Hello//");
         assert_eq!(LineInfo::from_slice("Hello"), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         assert_eq!(LineInfo::with_open_comment(), get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
         assert_eq!(LineInfo::with_open_symbol("\"".to_string()), get_bounds_w_multiline_comments(&line, &JAVA, true, double_str_opt));
         let line = String::from("//Hello");
-        assert_eq!(LineInfo::none_all(), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
+        assert_eq!(LineInfo::none_all(false), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line = String::from("////Hello");
-        assert_eq!(LineInfo::none_all(), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
+        assert_eq!(LineInfo::none_all(false), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line = String::from("He//llo//");
         assert_eq!(LineInfo::from_slice("He"), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         
-//         //testing mixed
+        //testing mixed
         let line = String::from("\"\"\"//\"\"\"Hello world!");
-        assert_eq!(LineInfo::from_slice("Hello world!"),get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
-        assert_eq!(LineInfo::none_all(),get_bounds_w_multiline_comments(&line, &JAVA, true, double_str_opt));
+        assert_eq!(LineInfo::from_slice_w_literal("Hello world!"),get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
+        assert_eq!(LineInfo::none_all(true),get_bounds_w_multiline_comments(&line, &JAVA, true, double_str_opt));
         let line = String::from("\"\"one\"//\"\"\"Hello world!");
-        assert_eq!(LineInfo::from_slice("oneHello world!"),get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
+        assert_eq!(LineInfo::from_slice_w_literal("oneHello world!"),get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line = String::from("\"He\"/*l*/lo//fd");
-        assert_eq!(LineInfo::from_slice("lo"), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
-        assert_eq!(LineInfo::new(Some("He".to_string()), false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &JAVA, true, double_str_opt));
+        assert_eq!(LineInfo::from_slice_w_literal("lo"), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
+        assert_eq!(LineInfo::new(Some("He".to_string()), true, false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &JAVA, true, double_str_opt));
         assert_eq!(LineInfo::from_slice("lo"), get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
         let line = String::from("//\"/**/dfd\"");
-        assert_eq!(LineInfo::none_all(), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
-        assert_eq!(LineInfo::new(Some("dfd".to_string()), false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
-        assert_eq!(LineInfo::new(Some("dfd".to_string()), false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &JAVA, true, double_str_opt));
+        assert_eq!(LineInfo::none_all(false), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
+        assert_eq!(LineInfo::new(Some("dfd".to_string()), true, false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
+        assert_eq!(LineInfo::new(Some("dfd".to_string()), true, false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &JAVA, true, double_str_opt));
         
         let line  = String::from(
             "Hello /* \
             mefm \" */ \" \
             //*/world!"
         );
-        assert_eq!(LineInfo::new(Some("Hello  ".to_string()), false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
-        assert_eq!(LineInfo::new(Some(" ".to_string()), false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
-        assert_eq!(LineInfo::new(Some(" */ ".to_string()), false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &JAVA, true, double_str_opt));
+        assert_eq!(LineInfo::new(Some("Hello  ".to_string()), true, false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
+        assert_eq!(LineInfo::new(Some(" ".to_string()), true, false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &JAVA, false, &None));
+        assert_eq!(LineInfo::new(Some(" */ ".to_string()), true, false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &JAVA, true, double_str_opt));
     }
 }
-

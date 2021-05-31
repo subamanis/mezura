@@ -1,0 +1,19 @@
+//code_lines: 11  classes:7
+
+public class A {} /*            
+class */                        
+/* "fdjf */ class " vdf"        
+public " class "                
+" /* */ class "                 
+class
+" "
+aclass
+/* class */ class               
+{
+# class                         
+//class
+class//                         
+// /* */ class                  
+/*
+// */ class                     
+}

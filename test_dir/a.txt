@@ -1,6 +1,6 @@
 //44 lines (13 code) , 3 classes
 
-public class Main
+public class Main									//ONE HERE
 {
 	public static void testKeywordClass() 
 	{
@@ -16,9 +16,9 @@ public class Main
 		println(i.class);
 		
 		//--- valids ---
-		class Point {int x = 0; int y = 0;}
+		class Point {int x = 0; int y = 0;}		   //ONE HERE
 		
-		/*" class */class//
+		/*" class */class//						   //ONE HERE
 	}
 	
 	pubic static void testCommentsAndCodeLines() 
