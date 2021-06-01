@@ -9,8 +9,6 @@ pub mod file_parser;
 pub mod result_printer;
 pub mod putils;
 
-// mod test;
-
 use std::{collections::{HashMap, LinkedList}, fs::{self, File}, io::{self, BufRead, BufReader}, path::Path, sync::atomic::{AtomicBool, Ordering}, time::{Duration}};
 use std::{sync::{Arc, Mutex}, thread::JoinHandle};
 use std::thread;
@@ -28,8 +26,6 @@ pub type ContentInfoRef = Arc<Mutex<HashMap<String,ExtensionContentInfo>>>;
 pub type ExtMapRef      = Arc<HashMap<String,Extension>>;
 
 pub fn run(args :ProgramArguments, extensions_map :HashMap<String, Extension>) -> Result<(), ParseFilesError> {
-    // test::test_fn();
-
     let files_ref : LinkedListRef = Arc::new(Mutex::new(LinkedList::new()));
     let faulty_files_ref : VecRef  = Arc::new(Mutex::new(Vec::new()));
     let finish_condition_ref : BoolRef = Arc::new(AtomicBool::new(false));
