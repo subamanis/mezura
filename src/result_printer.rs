@@ -1,5 +1,3 @@
-use colored::Color;
-
 use crate::*;
 
 static NUM_OF_VERTICALS : usize = 50;
@@ -112,7 +110,7 @@ fn print_overview(content_info_map: &mut HashMap<String, ExtensionContentInfo>, 
     println!("{}\n\n{}\n\n{}\n",files_line, lines_line, size_line);
 }
 
-fn get_num_of_verticals(percentages: &Vec<f64>) -> Vec<usize> {
+fn get_num_of_verticals(percentages: &[f64]) -> Vec<usize> {
     let mut verticals = Vec::<usize>::with_capacity(4);
     let mut sum = 0;
     for files_percent in percentages.iter(){
@@ -185,8 +183,8 @@ fn normalize_to_NUM_OF_VERTICALS(verticals: &mut Vec<usize>, sum: usize) {
     }
 }
 
-fn create_overview_line(prefix: &str, percentages: &Vec<f64>, verticals: &Vec<usize>,
-        extensions_name: &Vec<&String>, color_func_vec: &Vec<fn(&str) -> String>) -> String 
+fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize],
+        extensions_name: &[&String], color_func_vec: &[fn(&str) -> String]) -> String 
 {
     let mut line = String::with_capacity(150);
     line.push_str(&format!("{}    ",prefix));
@@ -203,7 +201,7 @@ fn create_overview_line(prefix: &str, percentages: &Vec<f64>, verticals: &Vec<us
     line
 }
 
-fn add_verticals_str(line: &mut String, files_verticals: &Vec<usize>, color_func_vec: &Vec<fn(&str) -> String>) {
+fn add_verticals_str(line: &mut String, files_verticals: &[usize], color_func_vec: &[fn(&str) -> String]) {
     line.push_str("    [-");
     for (i,verticals) in files_verticals.iter().enumerate() {
         line.push_str(&color_func_vec[i]("|").repeat(*verticals));
@@ -212,7 +210,7 @@ fn add_verticals_str(line: &mut String, files_verticals: &Vec<usize>, color_func
 }
 
 fn retain_most_relevant_and_add_others_field_for_rest(content_info_map: &mut HashMap<String, ExtensionContentInfo>, extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>) {
-    fn name_is_in_top_3(values_vec: &Vec<(&String, &usize)>, name: &str)  -> bool {
+    fn name_is_in_top_3(values_vec: &[(&String, &usize)], name: &str)  -> bool {
         name == values_vec[0].0 || name == values_vec[1].0 || name == values_vec[2].0
     }
 

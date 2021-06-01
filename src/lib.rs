@@ -1,5 +1,7 @@
-#![allow(warnings)] 
-// #![allow(unused_must_use)]
+// #![allow(warnings)] 
+#![allow(unused_must_use)]
+#![allow(dead_code)]
+#![allow(non_snake_case)]
 
 pub mod cmd_arg_parser;
 pub mod extension_reader;
@@ -14,7 +16,6 @@ use std::{sync::{Arc, Mutex}, thread::JoinHandle};
 use std::thread;
 
 use colored::{Colorize,ColoredString};
-use num_cpus;
 pub use lazy_static::lazy_static;
 
 pub use putils::*;
@@ -30,8 +31,6 @@ pub type ExtMapRef      = Arc<HashMap<String,Extension>>;
 pub fn run(args :ProgramArguments, extensions_map :HashMap<String, Extension>) -> Result<(), ParseFilesError> {
     // test::test_fn();
 
-    let thread_num = num_cpus::get();
-
     let files_ref : LLRef = Arc::new(Mutex::new(LinkedList::new()));
     let faulty_files_ref : VecRef  = Arc::new(Mutex::new(Vec::new()));
     let finish_condition_ref : BoolRef = Arc::new(Mutex::new(false));
@@ -41,7 +40,7 @@ pub fn run(args :ProgramArguments, extensions_map :HashMap<String, Extension>) -
     let mut handles = Vec::new(); 
 
     println!("\n{}...","Analyzing directory".underline().bold());
-    for i in 0..3 {
+    for i in 0..2 {
         handles.push(
             start_consumer_thread(
                 i, files_ref.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(), extensions_content_info_ref.clone(), extensions_map_ref.clone())
@@ -73,7 +72,6 @@ fn start_consumer_thread
 {
     thread::Builder::new().name(id.to_string()).spawn(move || {
         let mut buf = String::with_capacity(150);
-        let mut files_parsed = 0;
         loop {
             let mut files_guard = files_ref.lock().unwrap();
             // println!("Thread {} , remaining: {}",id,files_guard.len());
@@ -82,12 +80,11 @@ fn start_consumer_thread
                     break;
                 } else {
                     drop(files_guard);
-                    // println!("Thread {} Seeping...",id);
-                    thread::sleep(Duration::from_millis(4));
+                    //waiting for the list with the paths to be filled until trying again to pop a path.
+                    thread::sleep(Duration::from_millis(3));
                     continue;
                 }
             }
-            files_parsed += 1;
             let file_path = files_guard.pop_front().unwrap();
             drop(files_guard);
 
@@ -112,8 +109,6 @@ fn start_consumer_thread
                 Err(_) => faulty_files_ref.lock().unwrap().push(file_path)
             }
         }
-
-        // println!("Thread {} finished. Parsed {} files.",id,files_parsed);
     })
 }
 
@@ -136,51 +131,13 @@ fn add_relevant_files(files_list :LLRef, extensions_metadata_map: &mut HashMap<S
     } else {
         let mut total_files : usize = 0;
         let mut relevant_files : usize = 0;
-        // add_files_recursively(files_list, extensions_metadata_map, dir, extensions, exclude_dirs, &mut total_files, &mut relevant_files);
-        add_with_walk_dir(files_list, extensions_metadata_map, dir, extensions, exclude_dirs, &mut total_files, &mut relevant_files);
+        add_files_recursively(&files_list, extensions_metadata_map, dir, &extensions, exclude_dirs, &mut total_files, &mut relevant_files);
         *finish_condition.lock().unwrap() = true;
         (total_files,relevant_files)
     }
 } 
 
-fn add_with_walk_dir(files_list: LLRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>, dir: &str, extensions:ExtMapRef, exclude_dirs: &Option<Vec<String>>, total_files: &mut usize, relevant_files: &mut usize) {
-    let is_not_exclude_dir = |entry: &DirEntry| -> bool {
-        if let Some(dirs) = exclude_dirs {
-            dirs.contains(&entry.file_name().to_str().map(|x| x).unwrap_or("").to_owned())
-        } else {
-            true
-        }
-    };
-
-    let walker = WalkDir::new(dir).into_iter();
-    for res_entry in walker.filter_entry(|e| is_not_exclude_dir(e)) {
-        if let Ok(entry) = res_entry {
-            let path = entry.path();
-            let path_str = match path.to_str() {
-                Some(x) => x.to_owned(),
-                None => continue
-            };
-            let path = Path::new(&path);
-
-            if path.is_file() {
-                *total_files += 1;
-                let extension_name = match utils::get_file_extension(path) {
-                    Some(x) => x,
-                    None => continue
-                };
-                if extensions.contains_key(extension_name) {
-                    *relevant_files += 1;
-                    let kilobytes = path.metadata().map_or(0, |m|m.len() / 1000);
-                    extensions_metadata_map.get_mut(extension_name).unwrap().add_file_meta(kilobytes);
-    
-                    files_list.lock().unwrap().push_front(path_str);
-                }
-            } 
-        }
-    }
-}
-
-fn add_files_recursively(files_list: LLRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>, dir: &str, extensions: ExtMapRef, exclude_dirs: &Option<Vec<String>>, total_files: &mut usize, relevant_files: &mut usize) {
+fn add_files_recursively(files_list: &LLRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>, dir: &str, extensions: &ExtMapRef, exclude_dirs: &Option<Vec<String>>, total_files: &mut usize, relevant_files: &mut usize) {
     let dirs = match fs::read_dir(dir) {
         Err(_) => return,
         Ok(x) => x
@@ -222,10 +179,10 @@ fn add_files_recursively(files_list: LLRef, extensions_metadata_map: &mut HashMa
                 };
 
                 if !x.contains(&dir_name){
-                    add_files_recursively(files_list.clone(), extensions_metadata_map, &path_str, extensions.clone(), exclude_dirs, total_files, relevant_files);
+                    add_files_recursively(&files_list, extensions_metadata_map, &path_str, &extensions, exclude_dirs, total_files, relevant_files);
                 }
             } else {
-                add_files_recursively(files_list.clone(), extensions_metadata_map, &path_str, extensions.clone(), exclude_dirs, total_files, relevant_files);
+                add_files_recursively(&files_list, extensions_metadata_map, &path_str, &extensions, exclude_dirs, total_files, relevant_files);
             }
         }
     }

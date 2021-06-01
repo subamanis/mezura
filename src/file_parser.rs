@@ -502,7 +502,6 @@ fn get_str_indices(line: &str, extension: &Extension, open_str_symbol: &Option<S
         };
 
         let (mut first_counter, mut second_counter) = (0,0);
-        let is_string_open = open_str_symbol.is_none();
         loop {
             if is_str_open {
                 if first_counter >= first.len() {
