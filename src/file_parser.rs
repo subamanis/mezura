@@ -10,11 +10,11 @@ pub fn parse_file(file_name: &str, file_extension: &str, buf: &mut String, exten
         Err(_) => return Err(ParseFilesError::FaultyFile)
     });
 
-    parse_lines(reader, buf, &extension_map.get(file_extension).unwrap(), file_extension)
+    parse_lines(reader, buf, &extension_map.get(file_extension).unwrap())
 }
 
 #[inline]
-fn parse_lines(mut reader: BufReader<File>, buf: &mut String, extension: &Extension, file_extension: &str) -> Result<FileStats,ParseFilesError> {
+fn parse_lines(mut reader: BufReader<File>, buf: &mut String, extension: &Extension) -> Result<FileStats,ParseFilesError> {
     let mut file_stats = FileStats::default(&extension.keywords);
     let mut is_comment_closed = true;
     let mut open_str_symbol = None::<String>;

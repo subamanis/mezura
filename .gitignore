@@ -26,3 +26,5 @@ Cargo.lock
 
 # Custom
 roadmap.txt
+test.rs
+/benches/
