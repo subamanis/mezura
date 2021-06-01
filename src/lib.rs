@@ -7,6 +7,8 @@ pub mod file_parser;
 pub mod result_printer;
 pub mod putils;
 
+// mod test;
+
 use std::{collections::{HashMap, LinkedList}, fs::{self, File}, io::{self, BufRead, BufReader}, path::Path, time::{Duration}};
 use std::{sync::{Arc, Mutex}, thread::JoinHandle};
 use std::thread;
@@ -26,6 +28,8 @@ pub type ContentInfoRef = Arc<Mutex<HashMap<String,ExtensionContentInfo>>>;
 pub type ExtMapRef      = Arc<HashMap<String,Extension>>;
 
 pub fn run(args :ProgramArguments, extensions_map :HashMap<String, Extension>) -> Result<(), ParseFilesError> {
+    // test::test_fn();
+
     let thread_num = num_cpus::get();
 
     let files_ref : LLRef = Arc::new(Mutex::new(LinkedList::new()));
@@ -37,7 +41,7 @@ pub fn run(args :ProgramArguments, extensions_map :HashMap<String, Extension>) -
     let mut handles = Vec::new(); 
 
     println!("\n{}...","Analyzing directory".underline().bold());
-    for i in 0..5 {
+    for i in 0..3 {
         handles.push(
             start_consumer_thread(
                 i, files_ref.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(), extensions_content_info_ref.clone(), extensions_map_ref.clone())
@@ -64,7 +68,7 @@ pub fn run(args :ProgramArguments, extensions_map :HashMap<String, Extension>) -
 
 fn start_consumer_thread
     (id: usize, files_ref: LLRef, faulty_files_ref: VecRef, finish_condition_ref: BoolRef,
-     extension_stats_ref: ContentInfoRef, extension_map: ExtMapRef) 
+     extension_content_info_ref: ContentInfoRef, extension_map: ExtMapRef) 
     -> Result<JoinHandle<()>,io::Error> 
 {
     thread::Builder::new().name(id.to_string()).spawn(move || {
@@ -91,7 +95,7 @@ fn start_consumer_thread
                 Some(x) => match x.to_str() {
                     Some(y) => y.to_owned(),
                     None => {
-                        faulty_files_ref.lock().unwrap().push(file_path);
+                        faulty_files_ref.lock().unwrap().push(file_path); //@TODO: test this
                         continue;
                     }
                 },
@@ -103,12 +107,12 @@ fn start_consumer_thread
 
             match file_parser::parse_file(&file_path, &file_extension, &mut buf, extension_map.clone()) {
                 Ok(x) => {
-                    //@TODO: add them to local and after finishing all the jobs add them to global
-                    extension_stats_ref.lock().unwrap().get_mut(&file_extension).unwrap().add_stats(x);
+                    extension_content_info_ref.lock().unwrap().get_mut(&file_extension).unwrap().add_file_stats(x);
                 },
                 Err(_) => faulty_files_ref.lock().unwrap().push(file_path)
             }
         }
+
         // println!("Thread {} finished. Parsed {} files.",id,files_parsed);
     })
 }
@@ -132,11 +136,49 @@ fn add_relevant_files(files_list :LLRef, extensions_metadata_map: &mut HashMap<S
     } else {
         let mut total_files : usize = 0;
         let mut relevant_files : usize = 0;
-        add_files_recursively(files_list, extensions_metadata_map, dir, extensions, exclude_dirs, &mut total_files, &mut relevant_files);
+        // add_files_recursively(files_list, extensions_metadata_map, dir, extensions, exclude_dirs, &mut total_files, &mut relevant_files);
+        add_with_walk_dir(files_list, extensions_metadata_map, dir, extensions, exclude_dirs, &mut total_files, &mut relevant_files);
         *finish_condition.lock().unwrap() = true;
         (total_files,relevant_files)
     }
 } 
+
+fn add_with_walk_dir(files_list: LLRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>, dir: &str, extensions:ExtMapRef, exclude_dirs: &Option<Vec<String>>, total_files: &mut usize, relevant_files: &mut usize) {
+    let is_not_exclude_dir = |entry: &DirEntry| -> bool {
+        if let Some(dirs) = exclude_dirs {
+            dirs.contains(&entry.file_name().to_str().map(|x| x).unwrap_or("").to_owned())
+        } else {
+            true
+        }
+    };
+
+    let walker = WalkDir::new(dir).into_iter();
+    for res_entry in walker.filter_entry(|e| is_not_exclude_dir(e)) {
+        if let Ok(entry) = res_entry {
+            let path = entry.path();
+            let path_str = match path.to_str() {
+                Some(x) => x.to_owned(),
+                None => continue
+            };
+            let path = Path::new(&path);
+
+            if path.is_file() {
+                *total_files += 1;
+                let extension_name = match utils::get_file_extension(path) {
+                    Some(x) => x,
+                    None => continue
+                };
+                if extensions.contains_key(extension_name) {
+                    *relevant_files += 1;
+                    let kilobytes = path.metadata().map_or(0, |m|m.len() / 1000);
+                    extensions_metadata_map.get_mut(extension_name).unwrap().add_file_meta(kilobytes);
+    
+                    files_list.lock().unwrap().push_front(path_str);
+                }
+            } 
+        }
+    }
+}
 
 fn add_files_recursively(files_list: LLRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>, dir: &str, extensions: ExtMapRef, exclude_dirs: &Option<Vec<String>>, total_files: &mut usize, relevant_files: &mut usize) {
     let dirs = match fs::read_dir(dir) {
@@ -316,7 +358,15 @@ pub mod domain {
             }
         }
         
-        pub fn add_stats(&mut self, other: FileStats) {
+        pub fn add_file_stats(&mut self, other: FileStats) {
+            self.lines += other.lines;
+            self.code_lines += other.code_lines;
+            for (k,v) in other.keyword_occurences.iter() {
+                *self.keyword_occurences.get_mut(k).unwrap() += *v;
+            }
+        }
+        
+        pub fn add_content_info(&mut self, other: &ExtensionContentInfo) {
             self.lines += other.lines;
             self.code_lines += other.code_lines;
             for (k,v) in other.keyword_occurences.iter() {
