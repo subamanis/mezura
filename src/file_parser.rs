@@ -617,6 +617,7 @@ fn is_intersecting_with_comment_symbol(index: usize, comments_vec: &[usize]) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lazy_static::lazy_static;
         
     lazy_static! {
         static ref J_CLASS : Keyword = Keyword {

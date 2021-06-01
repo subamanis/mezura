@@ -11,29 +11,28 @@ pub mod putils;
 
 // mod test;
 
-use std::{collections::{HashMap, LinkedList}, fs::{self, File}, io::{self, BufRead, BufReader}, path::Path, time::{Duration}};
+use std::{collections::{HashMap, LinkedList}, fs::{self, File}, io::{self, BufRead, BufReader}, path::Path, sync::atomic::{AtomicBool, Ordering}, time::{Duration}};
 use std::{sync::{Arc, Mutex}, thread::JoinHandle};
 use std::thread;
 
 use colored::{Colorize,ColoredString};
-pub use lazy_static::lazy_static;
 
 pub use putils::*;
 use domain::{Extension, ExtensionContentInfo, ExtensionMetadata, FileStats, Keyword};
 use cmd_arg_parser::ProgramArguments;
 
-pub type LLRef          = Arc<Mutex<LinkedList<String>>>;
+pub type LinkedListRef  = Arc<Mutex<LinkedList<String>>>;
 pub type VecRef         = Arc<Mutex<Vec<String>>>;
-pub type BoolRef        = Arc<Mutex<bool>>;
+pub type BoolRef        = Arc<AtomicBool>;
 pub type ContentInfoRef = Arc<Mutex<HashMap<String,ExtensionContentInfo>>>;
 pub type ExtMapRef      = Arc<HashMap<String,Extension>>;
 
 pub fn run(args :ProgramArguments, extensions_map :HashMap<String, Extension>) -> Result<(), ParseFilesError> {
     // test::test_fn();
 
-    let files_ref : LLRef = Arc::new(Mutex::new(LinkedList::new()));
+    let files_ref : LinkedListRef = Arc::new(Mutex::new(LinkedList::new()));
     let faulty_files_ref : VecRef  = Arc::new(Mutex::new(Vec::new()));
-    let finish_condition_ref : BoolRef = Arc::new(Mutex::new(false));
+    let finish_condition_ref : BoolRef = Arc::new(AtomicBool::new(false));
     let extensions_map_ref : ExtMapRef = Arc::new(extensions_map);
     let mut extensions_content_info_ref = Arc::new(Mutex::new(make_extension_stats(extensions_map_ref.clone())));
     let mut extensions_metadata = make_extension_metadata(extensions_map_ref.clone());
@@ -66,7 +65,7 @@ pub fn run(args :ProgramArguments, extensions_map :HashMap<String, Extension>) -
 }
 
 fn start_consumer_thread
-    (id: usize, files_ref: LLRef, faulty_files_ref: VecRef, finish_condition_ref: BoolRef,
+    (id: usize, files_ref: LinkedListRef, faulty_files_ref: VecRef, finish_condition_ref: BoolRef,
      extension_content_info_ref: ContentInfoRef, extension_map: ExtMapRef) 
     -> Result<JoinHandle<()>,io::Error> 
 {
@@ -76,7 +75,7 @@ fn start_consumer_thread
             let mut files_guard = files_ref.lock().unwrap();
             // println!("Thread {} , remaining: {}",id,files_guard.len());
             if files_guard.is_empty() {
-                if *finish_condition_ref.lock().unwrap() {
+                if finish_condition_ref.load(Ordering::Relaxed) {
                     break;
                 } else {
                     drop(files_guard);
@@ -112,7 +111,7 @@ fn start_consumer_thread
     })
 }
 
-fn add_relevant_files(files_list :LLRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>, finish_condition: BoolRef, dir: &str, extensions: ExtMapRef, exclude_dirs: &Option<Vec<String>>) -> (usize,usize) {
+fn add_relevant_files(files_list :LinkedListRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>, finish_condition: BoolRef, dir: &str, extensions: ExtMapRef, exclude_dirs: &Option<Vec<String>>) -> (usize,usize) {
     let path = Path::new(&dir); 
     if path.is_file() {
         if let Some(x) = path.extension() {
@@ -121,23 +120,23 @@ fn add_relevant_files(files_list :LLRef, extensions_metadata_map: &mut HashMap<S
                     let kilobytes = path.metadata().map_or(0, |m|m.len() / 1000);
                     extensions_metadata_map.get_mut(y).unwrap().add_file_meta(kilobytes);
                     files_list.lock().unwrap().push_front(dir.to_string());
-                    *finish_condition.lock().unwrap() = true;
+                    finish_condition.store(true, Ordering::Relaxed);
                     return (1,1);
                 }
             }
         }
-        *finish_condition.lock().unwrap() = true;
+        finish_condition.store(true, Ordering::Relaxed);
         (0,0)
     } else {
         let mut total_files : usize = 0;
         let mut relevant_files : usize = 0;
         add_files_recursively(&files_list, extensions_metadata_map, dir, &extensions, exclude_dirs, &mut total_files, &mut relevant_files);
-        *finish_condition.lock().unwrap() = true;
+        finish_condition.store(true, Ordering::Relaxed);
         (total_files,relevant_files)
     }
 } 
 
-fn add_files_recursively(files_list: &LLRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>, dir: &str, extensions: &ExtMapRef, exclude_dirs: &Option<Vec<String>>, total_files: &mut usize, relevant_files: &mut usize) {
+fn add_files_recursively(files_list: &LinkedListRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>, dir: &str, extensions: &ExtMapRef, exclude_dirs: &Option<Vec<String>>, total_files: &mut usize, relevant_files: &mut usize) {
     let dirs = match fs::read_dir(dir) {
         Err(_) => return,
         Ok(x) => x
@@ -167,17 +166,18 @@ fn add_files_recursively(files_list: &LLRef, extensions_metadata_map: &mut HashM
                 let kilobytes = path.metadata().map_or(0, |m|m.len() / 1000);
                 extensions_metadata_map.get_mut(extension_name).unwrap().add_file_meta(kilobytes);
 
-                // println!("Producer trying to push");
                 files_list.lock().unwrap().push_front(path_str);
-                // println!("Producer just pushed!");
             }
         } else {
-            if let Some(x) = exclude_dirs {
-                let dir_name = match utils::get_file_name(path) {
-                    Some(x) => x.to_owned(),
-                    None => continue
-                };
+            let dir_name = match utils::get_file_name(path) {
+                Some(x) => {
+                    if x.starts_with('.') {continue;}
+                    else {x.to_owned()}
+                },
+                None => continue
+            };
 
+            if let Some(x) = exclude_dirs {
                 if !x.contains(&dir_name){
                     add_files_recursively(&files_list, extensions_metadata_map, &path_str, &extensions, exclude_dirs, total_files, relevant_files);
                 }
