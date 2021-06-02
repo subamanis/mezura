@@ -1,7 +1,7 @@
-// #![allow(warnings)] 
 #![allow(unused_must_use)]
 #![allow(dead_code)]
 #![allow(non_snake_case)]
+#![allow(unused_imports)]
 
 pub mod cmd_arg_parser;
 pub mod extension_reader;
@@ -48,16 +48,16 @@ pub fn run(args :ProgramArguments, extensions_map :HashMap<String, Extension>) -
     if relevant_files == 0 {
         return Err(ParseFilesError::NoRelevantFiles);
     }
-    println!("{} files found. {} of interest.",with_seperators(total_files_num), with_seperators(relevant_files));
+    println!("{} files found. {} of interest.\n",with_seperators(total_files_num), with_seperators(relevant_files));
 
-    println!("\n{}...","Parsing files".underline().bold());
+    println!("{}...","Parsing files".underline().bold());
     for h in handles {
         h.join().unwrap();
     }
-    println!("done.\n\n");
-
+    print_faulty_files_or_success(faulty_files_ref);
+    
     result_printer::format_and_print_results(&mut extensions_content_info_ref, &mut extensions_metadata);
-
+    
     Ok(())
 }
 
@@ -88,7 +88,7 @@ fn start_consumer_thread
                 Some(x) => match x.to_str() {
                     Some(y) => y.to_owned(),
                     None => {
-                        faulty_files_ref.lock().unwrap().push(file_path); //@TODO: test this
+                        faulty_files_ref.lock().unwrap().push(file_path); 
                         continue;
                     }
                 },
@@ -133,12 +133,13 @@ fn add_relevant_files(files_list :LinkedListRef, extensions_metadata_map: &mut H
 } 
 
 fn search_dir_and_add_files_to_list(files_list: &LinkedListRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>,
-    target_dir: &str, extensions: &ExtMapRef, exclude_dirs: &Option<Vec<String>>) -> (usize,usize) {
-   let mut total_files = 1;
-   let mut relevant_files = 1;
-   let mut dirs: Vec<PathBuf> = Vec::new();
-   dirs.push(Path::new(target_dir).to_path_buf());
-   while let Some(dir) = dirs.pop() {
+    target_dir: &str, extensions: &ExtMapRef, exclude_dirs: &Option<Vec<String>>) -> (usize,usize) 
+{
+    let mut total_files = 1;
+    let mut relevant_files = 1;
+    let mut dirs: LinkedList<PathBuf> = LinkedList::new();
+    dirs.push_front(Path::new(target_dir).to_path_buf());
+    while let Some(dir) = dirs.pop_front() {
        if let Ok(entries) = fs::read_dir(&dir) {
            for e in entries {
                if let Ok(e) = e {
@@ -169,7 +170,7 @@ fn search_dir_and_add_files_to_list(files_list: &LinkedListRef, extensions_metad
                                };
                                files_list.lock().unwrap().push_front(str_path);
                            }
-                       } else {
+                        } else { //is directory
                            let dir_name = match e.file_name().to_str() {
                                Some(x) => {
                                    if x.starts_with('.') {continue;}
@@ -180,18 +181,33 @@ fn search_dir_and_add_files_to_list(files_list: &LinkedListRef, extensions_metad
                 
                            if let Some(x) = exclude_dirs {
                                if !x.contains(&dir_name){
-                                   dirs.push(e.path());
+                                   dirs.push_front(e.path());
                                }
                            } else {
-                               dirs.push(e.path());
+                               dirs.push_front(e.path());
                            }
                        }
                    }
                }
            }
        }
-   }
-   (total_files,relevant_files)
+    }
+    (total_files,relevant_files)
+}
+
+fn print_faulty_files_or_success(faulty_files_ref: VecRef) {
+    let faulty_files = &mut *faulty_files_ref.as_ref().lock().unwrap();
+    if faulty_files.is_empty() {
+        println!("{}\n","success".bright_green());
+    } else {
+        //add verbose
+        println!("{} {}",format!("{}",faulty_files.len()).red(), "faulty files detected".red());
+        for f in faulty_files {
+            println!("-- {}",f);
+        }
+        println!();
+    }
+    
 }
 
 pub fn make_extension_stats(extensions_map: ExtMapRef) -> HashMap<String,ExtensionContentInfo> {

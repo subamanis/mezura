@@ -1,10 +1,29 @@
 use crate::*;
 
+//the total number of vertical lines ( | ) that appear in the [-|||...|-] in the overview section
 static NUM_OF_VERTICALS : usize = 50;
 
-pub fn format_and_print_results(extensions_content_info_ref: &mut ContentInfoRef, extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>) {
+pub fn format_and_print_results(extensions_content_info_ref: &mut ContentInfoRef,
+     extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>) 
+{
     let mut content_info_map_guard = extensions_content_info_ref.lock();
-    let content_info_map = content_info_map_guard.as_deref_mut().unwrap();
+    let mut content_info_map = content_info_map_guard.as_deref_mut().unwrap();
+    
+    remove_extensions_with_0_files(&mut content_info_map, extensions_metadata_map);
+
+    let sorted_extension_names = 
+        get_extension_names_as_sorted_vec_according_to_how_much_they_appeared(extensions_metadata_map);
+
+    print_individually(&sorted_extension_names, &content_info_map, extensions_metadata_map);
+
+    if extensions_metadata_map.len() > 1 {
+        print_overview(&sorted_extension_names, content_info_map, extensions_metadata_map);
+    }
+}
+
+fn remove_extensions_with_0_files(content_info_map: &mut HashMap<String,ExtensionContentInfo>,
+     extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>) 
+{
     let mut empty_extensions = Vec::new();
     for element in extensions_metadata_map.iter() {
         if element.1.files == 0 {
@@ -16,15 +35,28 @@ pub fn format_and_print_results(extensions_content_info_ref: &mut ContentInfoRef
         extensions_metadata_map.remove(&ext);
         content_info_map.remove(&ext);
     }
-
-    print_individually(&content_info_map, extensions_metadata_map);
-
-    if extensions_metadata_map.len() > 1 {
-        print_overview(content_info_map, extensions_metadata_map);
-    }
 }
 
-fn print_individually(content_info_map: &HashMap<String,ExtensionContentInfo>, extensions_metadata_map: &HashMap<String, ExtensionMetadata>) {
+fn get_extension_names_as_sorted_vec_according_to_how_much_they_appeared(
+    extensions_metadata_map: &HashMap<String, ExtensionMetadata>) -> Vec<String> 
+{
+    let mut value_map = HashMap::<String,usize>::new();
+    let mut sorted_extensions_vec = Vec::new();
+    for (ext_name,metadata) in extensions_metadata_map.iter() {
+        value_map.insert(ext_name.to_owned(), metadata.files * 10 + metadata.bytes as usize);
+        sorted_extensions_vec.push(ext_name.to_owned());
+    }
+
+    sorted_extensions_vec.sort_by(|a,b| {
+        value_map.get(b).unwrap().cmp(value_map.get(a).unwrap())
+    });
+
+    return sorted_extensions_vec
+}
+
+fn print_individually(sorted_extensions_map: &[String], content_info_map: &HashMap<String,ExtensionContentInfo>,
+     extensions_metadata_map: &HashMap<String, ExtensionMetadata>) 
+{
     fn colored_word(word: &str) -> ColoredString {
         word.italic().truecolor(181, 169, 138)
     }
@@ -32,9 +64,9 @@ fn print_individually(content_info_map: &HashMap<String,ExtensionContentInfo>, e
     fn get_size_text(metadata: &ExtensionMetadata) -> String {
         let (size, size_desc) = 
             if metadata.bytes > 1000000 
-                {(metadata.bytes as f64 / 1000000f64, colored_word("Mbs total"))}
+                {(metadata.bytes as f64 / 1000000f64, colored_word("MBs total"))}
             else if metadata.bytes > 1000 
-                {(metadata.bytes as f64 / 1000f64, colored_word("Kbs total"))}
+                {(metadata.bytes as f64 / 1000f64, colored_word("KBs total"))}
             else
                 {(metadata.bytes as f64, colored_word("Bytes total"))};
 
@@ -50,14 +82,13 @@ fn print_individually(content_info_map: &HashMap<String,ExtensionContentInfo>, e
     println!("{}\n", "Details".underline().bold());
     
     let max_files_num_size = extensions_metadata_map.values().map(|x| x.files).max().unwrap().to_string().len();
-    for content_info in content_info_map {
-        let extension_name = content_info.0;
-        let content_info = content_info.1;
+    for extension_name in sorted_extensions_map {
+        let content_info = content_info_map.get(extension_name).unwrap();
         let metadata = extensions_metadata_map.get(extension_name).unwrap();
 
         let spaces = get_n_times(" ", 6-extension_name.len());
         let files_str = with_seperators(metadata.files);
-        let title = format!(".{}{}{}{} {}  -> ",extension_name.bright_cyan(), spaces, get_n_times(" ", (max_files_num_size+1)-files_str.len()),
+        let title = format!(".{}{}{}{} {}  -> ",extension_name.green(), spaces, get_n_times(" ", (max_files_num_size+1)-files_str.len()),
          files_str, colored_word("files"));
         let code_lines_percentage = if content_info.lines > 0 {content_info.code_lines as f64 / content_info.lines as f64 * 100f64} else {0f64};
         let info = format!("{} {} {{{} code ({:.2}%) + {} extra}}  |  {}\n",colored_word("lines"), with_seperators(content_info.lines),
@@ -68,7 +99,7 @@ fn print_individually(content_info_map: &HashMap<String,ExtensionContentInfo>, e
         if !content_info.keyword_occurences.is_empty() {
             let mut keyword_iter = content_info.keyword_occurences.iter();
             let first_keyword = keyword_iter.next().unwrap();
-            keyword_info.push_str(&format!("{}{}: {}",get_n_times(" ", 27+max_files_num_size), colored_word(first_keyword.0),first_keyword.1));
+            keyword_info.push_str(&format!("{}{}: {}",get_n_times(" ", 19+max_files_num_size), colored_word(first_keyword.0),first_keyword.1));
             for (keyword_name,occurancies) in keyword_iter {
                 keyword_info.push_str(&format!(" , {}: {}",colored_word(keyword_name),occurancies));
             }
@@ -77,55 +108,48 @@ fn print_individually(content_info_map: &HashMap<String,ExtensionContentInfo>, e
     }
 }
 
-
-
-
-// If more that one extension exists, prints this:
-//
 //                                    OVERVIEW
 //
-// FILES:    47% java - 32% cs - 21% py        [-||||||||||||||||||||||||||||||||||||||||||||||||||] 
+// Files:    47% java - 32% cs - 21% py        [-||||||||||||||||||||||||||||||||||||||||||||||||||] 
 //
-// LINES: ...
+// Lines: ...
 //
-// SIZE : ...
-fn print_overview(content_info_map: &mut HashMap<String, ExtensionContentInfo>, extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>) {
-    fn make_red(str: &str) -> String {
-        str.red().to_string()
+// Size : ...
+fn print_overview(sorted_extension_vec: &[String], content_info_map: &mut HashMap<String, ExtensionContentInfo>,
+     extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>) 
+{
+    fn make_cyan(str: &str) -> String {
+        str.bright_cyan().to_string()
     }
-    fn make_green(str: &str) -> String {
-        str.green().to_string()
+    fn make_magenta(str: &str) -> String {
+        str.bright_magenta().to_string()
     }
-    fn make_blue(str: &str) -> String {
-        str.blue().to_string()
+    fn make_yellow(str: &str) -> String {
+        str.bright_yellow().to_string()
     }
     fn no_transformation(str: &str) -> String {
         str.to_owned()
     }
 
     if content_info_map.len() > 3 {
-        retain_most_relevant_and_add_others_field_for_rest(content_info_map, extensions_metadata_map);
+        retain_most_relevant_and_add_others_field_for_rest(sorted_extension_vec, content_info_map, extensions_metadata_map);
     }
 
-    println!("\n{}", "Overview".underline().bold());
-    println!();
+    println!("{}\n", "Overview".underline().bold());
 
-    let color_func_vec : Vec<fn(&str) -> String> = vec![make_red, make_green, make_blue, no_transformation];
+    let color_func_vec : Vec<fn(&str) -> String> = vec![make_cyan, make_magenta, make_yellow, no_transformation];
 
-    //hashmaps are unordered, so we lock an arbitrary order here to use for all our prints.
-    let extensions_name = extensions_metadata_map.keys().collect::<Vec<_>>();
-
-    let files_percentages = get_files_percentages(extensions_metadata_map, &extensions_name);
-    let lines_percentages = get_lines_percentages(content_info_map, &extensions_name);
-    let sizes_percentages = get_sizes_percentages(extensions_metadata_map, &extensions_name);
+    let files_percentages = get_files_percentages(extensions_metadata_map, sorted_extension_vec);
+    let lines_percentages = get_lines_percentages(content_info_map, sorted_extension_vec);
+    let sizes_percentages = get_sizes_percentages(extensions_metadata_map, sorted_extension_vec);
 
     let files_verticals = get_num_of_verticals(&files_percentages);
     let lines_verticals = get_num_of_verticals(&lines_percentages);
     let size_verticals = get_num_of_verticals(&sizes_percentages);
 
-    let files_line = create_overview_line("Files:", &files_percentages, &files_verticals, &extensions_name, &color_func_vec);
-    let lines_line = create_overview_line("Lines:", &lines_percentages, &lines_verticals, &extensions_name, &color_func_vec);
-    let size_line = create_overview_line("Size :", &sizes_percentages, &size_verticals, &extensions_name, &color_func_vec);
+    let files_line = create_overview_line("Files:", &files_percentages, &files_verticals, sorted_extension_vec, &color_func_vec);
+    let lines_line = create_overview_line("Lines:", &lines_percentages, &lines_verticals, sorted_extension_vec, &color_func_vec);
+    let size_line = create_overview_line("Size :", &sizes_percentages, &size_verticals, sorted_extension_vec, &color_func_vec);
 
     println!("{}\n\n{}\n\n{}\n",files_line, lines_line, size_line);
 }
@@ -204,12 +228,12 @@ fn normalize_to_NUM_OF_VERTICALS(verticals: &mut Vec<usize>, sum: usize) {
 }
 
 fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize],
-        extensions_name: &[&String], color_func_vec: &[fn(&str) -> String]) -> String 
+        extensions_name: &[String], color_func_vec: &[fn(&str) -> String]) -> String 
 {
     let mut line = String::with_capacity(150);
     line.push_str(&format!("{}    ",prefix));
     for (i,percent) in percentages.iter().enumerate() {
-        line.push_str(&format!("{:2.}% ",percent));
+        line.push_str(&format!("{:.1}% ",percent)); //make sure that 5 spaces have been accounted for every percentage
         line.push_str(&color_func_vec[i](&extensions_name[i]));
         if i < percentages.len() - 1{
             line.push_str(" - ")
@@ -229,31 +253,26 @@ fn add_verticals_str(line: &mut String, files_verticals: &[usize], color_func_ve
     line.push_str("-]");
 }
 
-fn retain_most_relevant_and_add_others_field_for_rest(content_info_map: &mut HashMap<String, ExtensionContentInfo>, extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>) {
-    fn name_is_in_top_3(values_vec: &[(&String, &usize)], name: &str)  -> bool {
-        name == values_vec[0].0 || name == values_vec[1].0 || name == values_vec[2].0
+fn retain_most_relevant_and_add_others_field_for_rest(sorted_extension_names: &[String],
+     content_info_map: &mut HashMap<String, ExtensionContentInfo>, extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>) 
+{
+    fn name_is_in_top_3(sorted_extension_names: &[String], name: &str)  -> bool {
+        name == sorted_extension_names[0] || name == sorted_extension_names[1] || name == sorted_extension_names[2]
     }
 
-    fn get_files_lines_size(content_info_map: &HashMap<String, ExtensionContentInfo>, extensions_metadata_map: &HashMap<String, ExtensionMetadata>) -> (usize,usize,usize) {
+    fn get_files_lines_size(content_info_map: &HashMap<String, ExtensionContentInfo>,
+         extensions_metadata_map: &HashMap<String, ExtensionMetadata>) -> (usize,usize,usize) 
+    {
         let (mut lines, mut files, mut size) = (0,0,0);
         content_info_map.iter().for_each(|x| lines += x.1.lines);
         extensions_metadata_map.iter().for_each(|x| {files += x.1.files; size += x.1.bytes});
         (files, lines, size as usize) 
     }
-
-    let mut value_map = HashMap::<String,usize>::new();
-    for (ext_name,metadata) in extensions_metadata_map.iter() {
-        value_map.insert(ext_name.to_owned(), metadata.files * 10 + metadata.bytes as usize);
-    }
-
+    
+    content_info_map.retain(|x,_| name_is_in_top_3(sorted_extension_names, x));
+    extensions_metadata_map.retain(|x,_| name_is_in_top_3(sorted_extension_names, x));
+    
     let (total_lines, total_files, total_size) = get_files_lines_size(content_info_map, extensions_metadata_map);
-
-    let mut values_vec = value_map.iter().collect::<Vec<_>>();
-    values_vec.sort_by(|a,b| a.1.cmp(b.1));
-
-    content_info_map.retain(|x,_| name_is_in_top_3(&values_vec, x));
-    extensions_metadata_map.retain(|x,_| name_is_in_top_3(&values_vec, x));
-
     let (relevant_files, relevant_lines, relevant_size) = get_files_lines_size(content_info_map, extensions_metadata_map);
     let (other_files, other_lines, other_size) = 
         (total_files - relevant_files, total_lines - relevant_lines, total_size - relevant_size);
@@ -262,75 +281,53 @@ fn retain_most_relevant_and_add_others_field_for_rest(content_info_map: &mut Has
     extensions_metadata_map.insert("other".to_string(), ExtensionMetadata::new(other_files, other_size));
 }
 
-fn get_files_percentages(extensions_metadata_map: &HashMap<String,ExtensionMetadata>, extensions_name: &[&String]) -> Vec<f64> {
+
+fn get_files_percentages(extensions_metadata_map: &HashMap<String,ExtensionMetadata>, sorted_extension_names: &[String]) -> Vec<f64> {
     let mut extensions_files = [0].repeat(extensions_metadata_map.len());
     extensions_metadata_map.iter().for_each(|e| {
-        let pos = extensions_name.iter().position(|&name| name == e.0).unwrap();
+        let pos = sorted_extension_names.iter().position(|name| name == e.0).unwrap();
         extensions_files[pos] = e.1.files;
     });
-
-    let total_files :usize = extensions_files.iter().sum();
-    let mut extension_percentages = Vec::with_capacity(4);
-    let mut sum = 0.0;
-    for (counter,files) in extensions_files.iter().enumerate() {
-        if counter == extensions_files.len() - 1 {
-            extension_percentages.push(100.0 - sum);
-        } else {
-            let percentage = *files as f64/total_files as f64;
-            let percentage = (percentage * 100.0).round() / 100.0;
-            sum += percentage;
-            extension_percentages.push(percentage);
-        }
-    }
-    extension_percentages
+    
+    get_percentages(&extensions_files)
 }
 
-fn get_lines_percentages(content_info_map: &HashMap<String,ExtensionContentInfo>, extensions_name: &[&String]) -> Vec<f64> {
+fn get_lines_percentages(content_info_map: &HashMap<String,ExtensionContentInfo>, extensions_name: &[String]) -> Vec<f64> {
     let mut extensions_lines = [0].repeat(content_info_map.len());
     content_info_map.iter().for_each(|e| {
-        let pos = extensions_name.iter().position(|&name| name == e.0).unwrap();
+        let pos = extensions_name.iter().position(|name| name == e.0).unwrap();
         extensions_lines[pos] = e.1.lines;
     });
 
-    let total_lines :usize = extensions_lines.iter().sum();
-    let mut extension_percentages = Vec::with_capacity(4);
-    let mut sum = 0.0;
-    for (counter,files) in extensions_lines.iter().enumerate() {
-        if counter == extensions_lines.len() - 1 {
-            extension_percentages.push(100.0 - sum);
-        } else {
-            let percentage = (*files as f64/total_lines as f64) * 100f64;
-            let percentage = (percentage * 100.0).round() / 100.0;
-            sum += percentage;
-            extension_percentages.push(percentage);
-        }
-    }
-    extension_percentages
+    get_percentages(&extensions_lines)
 }
 
-fn get_sizes_percentages(extensions_metadata_map: &HashMap<String,ExtensionMetadata>, extensions_name: &[&String]) -> Vec<f64> {
+fn get_sizes_percentages(extensions_metadata_map: &HashMap<String,ExtensionMetadata>, extensions_name: &[String]) -> Vec<f64> {
     let mut extensions_size = [0].repeat(extensions_metadata_map.len());
     extensions_metadata_map.iter().for_each(|e| {
-        let pos = extensions_name.iter().position(|&name| name == e.0).unwrap();
+        let pos = extensions_name.iter().position(|name| name == e.0).unwrap();
         extensions_size[pos] = e.1.bytes;
     });
+    
+    get_percentages(&extensions_size)
+}
 
-    let total_size :usize = extensions_size.iter().sum::<usize>();
+fn get_percentages(numbers: &[usize]) -> Vec<f64> {
+    let total_files :usize = numbers.iter().sum();
     let mut extension_percentages = Vec::with_capacity(4);
     let mut sum = 0.0;
-    for (counter,files) in extensions_size.iter().enumerate() {
-        if counter == extensions_size.len() - 1 {
+    for (counter,files) in numbers.iter().enumerate() {
+        if counter == numbers.len() - 1 {
             extension_percentages.push(100.0 - sum);
         } else {
-            let percentage = *files as f64/total_size as f64;
-            let percentage = (percentage * 100.0).round() / 100.0;
+            let percentage = *files as f64/total_files as f64;
+            let percentage = (percentage * 1000f64).round() / 10f64;
             sum += percentage;
             extension_percentages.push(percentage);
         }
     }
     extension_percentages
 }
-
 
 #[cfg(test)]
 mod tests {
