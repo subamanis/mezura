@@ -1,4 +1,4 @@
-use std::{str::{self, MatchIndices}};
+use std::str::{self, MatchIndices};
 
 use crate::*;
 

@@ -29,7 +29,26 @@ fn print_individually(content_info_map: &HashMap<String,ExtensionContentInfo>, e
         word.italic().truecolor(181, 169, 138)
     }
 
+    fn get_size_text(metadata: &ExtensionMetadata) -> String {
+        let (size, size_desc) = 
+            if metadata.bytes > 1000000 
+                {(metadata.bytes as f64 / 1000000f64, colored_word("Mbs total"))}
+            else if metadata.bytes > 1000 
+                {(metadata.bytes as f64 / 1000f64, colored_word("Kbs total"))}
+            else
+                {(metadata.bytes as f64, colored_word("Bytes total"))};
+
+        let (average_size, average_size_desc) =
+            if metadata.bytes / metadata.files > 1000 
+                {((metadata.bytes as f64 / metadata.files as f64) / 1000f64, colored_word("Kbs average"))}
+            else 
+                {(metadata.bytes as f64 / metadata.files as f64, colored_word("Bytes average"))};
+
+        format!("{:.1} {} - {:.1} {}",size, size_desc, average_size, average_size_desc)
+    }
+
     println!("{}\n", "Details".underline().bold());
+    
     let max_files_num_size = extensions_metadata_map.values().map(|x| x.files).max().unwrap().to_string().len();
     for content_info in content_info_map {
         let extension_name = content_info.0;
@@ -41,10 +60,9 @@ fn print_individually(content_info_map: &HashMap<String,ExtensionContentInfo>, e
         let title = format!(".{}{}{}{} {}  -> ",extension_name.bright_cyan(), spaces, get_n_times(" ", (max_files_num_size+1)-files_str.len()),
          files_str, colored_word("files"));
         let code_lines_percentage = if content_info.lines > 0 {content_info.code_lines as f64 / content_info.lines as f64 * 100f64} else {0f64};
-        let info = format!("{} {} {{{} code ({:.2}%) + {} extra}}  |  {} {} - {} {}\n",colored_word("lines"), with_seperators(content_info.lines),
+        let info = format!("{} {} {{{} code ({:.2}%) + {} extra}}  |  {}\n",colored_word("lines"), with_seperators(content_info.lines),
          with_seperators(content_info.code_lines), code_lines_percentage, with_seperators(content_info.lines - content_info.code_lines),
-         with_seperators(metadata.kilobytes as usize), colored_word("KBs total"), with_seperators(metadata.kilobytes as usize / metadata.files),
-         colored_word("KBs average"));
+         get_size_text(metadata));
         
         let mut keyword_info = String::new();
         if !content_info.keyword_occurences.is_empty() {
@@ -58,6 +76,8 @@ fn print_individually(content_info_map: &HashMap<String,ExtensionContentInfo>, e
         println!("{}",format!("{}{}{}\n",title, info, keyword_info));
     }
 }
+
+
 
 
 // If more that one extension exists, prints this:
@@ -217,13 +237,13 @@ fn retain_most_relevant_and_add_others_field_for_rest(content_info_map: &mut Has
     fn get_files_lines_size(content_info_map: &HashMap<String, ExtensionContentInfo>, extensions_metadata_map: &HashMap<String, ExtensionMetadata>) -> (usize,usize,usize) {
         let (mut lines, mut files, mut size) = (0,0,0);
         content_info_map.iter().for_each(|x| lines += x.1.lines);
-        extensions_metadata_map.iter().for_each(|x| {files += x.1.files; size += x.1.kilobytes});
+        extensions_metadata_map.iter().for_each(|x| {files += x.1.files; size += x.1.bytes});
         (files, lines, size as usize) 
     }
 
     let mut value_map = HashMap::<String,usize>::new();
     for (ext_name,metadata) in extensions_metadata_map.iter() {
-        value_map.insert(ext_name.to_owned(), metadata.files * 10 + metadata.kilobytes as usize);
+        value_map.insert(ext_name.to_owned(), metadata.files * 10 + metadata.bytes as usize);
     }
 
     let (total_lines, total_files, total_size) = get_files_lines_size(content_info_map, extensions_metadata_map);
@@ -239,7 +259,7 @@ fn retain_most_relevant_and_add_others_field_for_rest(content_info_map: &mut Has
         (total_files - relevant_files, total_lines - relevant_lines, total_size - relevant_size);
 
     content_info_map.insert("other".to_string(), ExtensionContentInfo::dummy(other_lines));
-    extensions_metadata_map.insert("other".to_string(), ExtensionMetadata::new(other_files, other_size as u64));
+    extensions_metadata_map.insert("other".to_string(), ExtensionMetadata::new(other_files, other_size));
 }
 
 fn get_files_percentages(extensions_metadata_map: &HashMap<String,ExtensionMetadata>, extensions_name: &[&String]) -> Vec<f64> {
@@ -292,10 +312,10 @@ fn get_sizes_percentages(extensions_metadata_map: &HashMap<String,ExtensionMetad
     let mut extensions_size = [0].repeat(extensions_metadata_map.len());
     extensions_metadata_map.iter().for_each(|e| {
         let pos = extensions_name.iter().position(|&name| name == e.0).unwrap();
-        extensions_size[pos] = e.1.kilobytes;
+        extensions_size[pos] = e.1.bytes;
     });
 
-    let total_size :usize = extensions_size.iter().sum::<u64>() as usize;
+    let total_size :usize = extensions_size.iter().sum::<usize>();
     let mut extension_percentages = Vec::with_capacity(4);
     let mut sum = 0.0;
     for (counter,files) in extensions_size.iter().enumerate() {

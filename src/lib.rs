@@ -8,8 +8,9 @@ pub mod extension_reader;
 pub mod file_parser;
 pub mod result_printer;
 pub mod putils;
+pub mod test;
 
-use std::{collections::{HashMap, LinkedList}, fs::{self, File}, io::{self, BufRead, BufReader}, path::Path, sync::atomic::{AtomicBool, Ordering}, time::{Duration}};
+use std::{collections::{HashMap, LinkedList}, fs::{self, File}, io::{self, BufRead, BufReader}, path::{Path, PathBuf}, sync::atomic::{AtomicBool, Ordering}, time::{Duration}};
 use std::{sync::{Arc, Mutex}, thread::JoinHandle};
 use std::thread;
 
@@ -35,7 +36,7 @@ pub fn run(args :ProgramArguments, extensions_map :HashMap<String, Extension>) -
     let mut handles = Vec::new(); 
 
     println!("\n{}...","Analyzing directory".underline().bold());
-    for i in 0..2 {
+    for i in 0..4 {
         handles.push(
             start_consumer_thread(
                 i, files_ref.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(), extensions_content_info_ref.clone(), extensions_map_ref.clone())
@@ -107,14 +108,15 @@ fn start_consumer_thread
     })
 }
 
-fn add_relevant_files(files_list :LinkedListRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>, finish_condition: BoolRef, dir: &str, extensions: ExtMapRef, exclude_dirs: &Option<Vec<String>>) -> (usize,usize) {
+fn add_relevant_files(files_list :LinkedListRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>, finish_condition: BoolRef, dir: &str,
+     extensions: ExtMapRef, exclude_dirs: &Option<Vec<String>>) -> (usize,usize) 
+{
     let path = Path::new(&dir); 
     if path.is_file() {
         if let Some(x) = path.extension() {
             if let Some(y) = x.to_str() {
                 if extensions.contains_key(y) {
-                    let kilobytes = path.metadata().map_or(0, |m|m.len() / 1000);
-                    extensions_metadata_map.get_mut(y).unwrap().add_file_meta(kilobytes);
+                    extensions_metadata_map.get_mut(y).unwrap().add_file_meta(path.metadata().map_or(0, |m| m.len() as usize));
                     files_list.lock().unwrap().push_front(dir.to_string());
                     finish_condition.store(true, Ordering::Relaxed);
                     return (1,1);
@@ -124,64 +126,72 @@ fn add_relevant_files(files_list :LinkedListRef, extensions_metadata_map: &mut H
         finish_condition.store(true, Ordering::Relaxed);
         (0,0)
     } else {
-        let mut total_files : usize = 0;
-        let mut relevant_files : usize = 0;
-        add_files_recursively(&files_list, extensions_metadata_map, dir, &extensions, exclude_dirs, &mut total_files, &mut relevant_files);
+        let (total_files, relevant_files) = search_dir_and_add_files_to_list(&files_list, extensions_metadata_map, dir, &extensions, exclude_dirs);
         finish_condition.store(true, Ordering::Relaxed);
         (total_files,relevant_files)
     }
 } 
 
-fn add_files_recursively(files_list: &LinkedListRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>, dir: &str, extensions: &ExtMapRef, exclude_dirs: &Option<Vec<String>>, total_files: &mut usize, relevant_files: &mut usize) {
-    let dirs = match fs::read_dir(dir) {
-        Err(_) => return,
-        Ok(x) => x
-    };
-    
-    for entry in dirs {
-        let entry = match entry {
-            Ok(x) => x,
-            Err(_) => continue
-        };
-    
-        let path = entry.path();
-        let path_str = match path.to_str() {
-            Some(x) => x.to_owned(),
-            None => continue
-        };
-        let path = Path::new(&path);
-
-        if path.is_file() {
-            *total_files += 1;
-            let extension_name = match utils::get_file_extension(path) {
-                Some(x) => x,
-                None => continue
-            };
-            if extensions.contains_key(extension_name) {
-                *relevant_files += 1;
-                let kilobytes = path.metadata().map_or(0, |m|m.len() / 1000);
-                extensions_metadata_map.get_mut(extension_name).unwrap().add_file_meta(kilobytes);
-
-                files_list.lock().unwrap().push_front(path_str);
-            }
-        } else {
-            let dir_name = match utils::get_file_name(path) {
-                Some(x) => {
-                    if x.starts_with('.') {continue;}
-                    else {x.to_owned()}
-                },
-                None => continue
-            };
-
-            if let Some(x) = exclude_dirs {
-                if !x.contains(&dir_name){
-                    add_files_recursively(&files_list, extensions_metadata_map, &path_str, &extensions, exclude_dirs, total_files, relevant_files);
-                }
-            } else {
-                add_files_recursively(&files_list, extensions_metadata_map, &path_str, &extensions, exclude_dirs, total_files, relevant_files);
-            }
-        }
-    }
+fn search_dir_and_add_files_to_list(files_list: &LinkedListRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>,
+    target_dir: &str, extensions: &ExtMapRef, exclude_dirs: &Option<Vec<String>>) -> (usize,usize) {
+   let mut total_files = 1;
+   let mut relevant_files = 1;
+   let mut dirs: Vec<PathBuf> = Vec::new();
+   dirs.push(Path::new(target_dir).to_path_buf());
+   while let Some(dir) = dirs.pop() {
+       if let Ok(entries) = fs::read_dir(&dir) {
+           for e in entries {
+               if let Ok(e) = e {
+                   if let Ok(ft) = e.file_type() {
+                       if ft.is_file() { 
+                           total_files += 1;
+                           let path_buf = e.path();
+                           let extension_name = match path_buf.extension() {
+                               Some(x) => {
+                                   match x.to_str() {
+                                       Some(x) => x.to_owned(),
+                                       None => continue
+                                    }
+                                },
+                                None => continue
+                            };
+                           if extensions.contains_key(&extension_name) {
+                               relevant_files += 1;
+                               let bytes = match path_buf.metadata() {
+                                   Ok(x) => x.len() as usize,
+                                   Err(_) => 0
+                               };
+                               extensions_metadata_map.get_mut(&extension_name).unwrap().add_file_meta(bytes);
+                
+                               let str_path = match path_buf.to_str() {
+                                   Some(y) => y.to_owned(),
+                                   None => continue
+                               };
+                               files_list.lock().unwrap().push_front(str_path);
+                           }
+                       } else {
+                           let dir_name = match e.file_name().to_str() {
+                               Some(x) => {
+                                   if x.starts_with('.') {continue;}
+                                   else {x.to_owned()}
+                               },
+                               None => continue
+                           };
+                
+                           if let Some(x) = exclude_dirs {
+                               if !x.contains(&dir_name){
+                                   dirs.push(e.path());
+                               }
+                           } else {
+                               dirs.push(e.path());
+                           }
+                       }
+                   }
+               }
+           }
+       }
+   }
+   (total_files,relevant_files)
 }
 
 pub fn make_extension_stats(extensions_map: ExtMapRef) -> HashMap<String,ExtensionContentInfo> {
@@ -189,7 +199,6 @@ pub fn make_extension_stats(extensions_map: ExtMapRef) -> HashMap<String,Extensi
     for (key, value) in extensions_map.iter() {
         map.insert(key.to_owned(), ExtensionContentInfo::from(value));
     }
-
     map
 }
 
@@ -248,7 +257,7 @@ pub mod domain {
     #[derive(Debug,PartialEq,Default)]
     pub struct ExtensionMetadata {
         pub files: usize,
-        pub kilobytes: u64
+        pub bytes: usize
     }
 
     #[derive(Debug,PartialEq)]
@@ -349,16 +358,16 @@ pub mod domain {
     }
 
     impl ExtensionMetadata {
-        pub fn new(files: usize, kilobytes: u64) ->  ExtensionMetadata {
+        pub fn new(files: usize, bytes: usize) ->  ExtensionMetadata {
             ExtensionMetadata {
                 files,
-                kilobytes
+                bytes
             }
         }
 
-        pub fn add_file_meta(&mut self, kilobytes: u64) {
+        pub fn add_file_meta(&mut self, bytes: usize) {
             self.files += 1;
-            self.kilobytes += kilobytes;
+            self.bytes += bytes;
         }
     }
 
