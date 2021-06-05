@@ -2,7 +2,7 @@ use std::{path::Path, process, time::SystemTime};
 
 use colored::*;
 
-use code_stats::{cmd_arg_parser::{self, ProgramArguments}, extension_reader, putils::*};
+use code_stats::{cmd_arg_parser::{self, Args}, extension_reader, putils::*};
 
 fn main() {
     control::set_virtual_terminal(true).unwrap();
@@ -27,7 +27,7 @@ fn main() {
 
     let args = match cmd_arg_parser::read_args_cmd() {
         Ok(args) => args,
-        Err(_) => get_args_from_stdin()
+        Err(e) => get_args_from_stdin()
     };
 
     let start = SystemTime::now();
@@ -41,11 +41,11 @@ fn main() {
     utils::wait_for_input();
 }
 
-fn get_args_from_stdin() -> ProgramArguments {
+fn get_args_from_stdin() -> Args {
     loop {
-        println!("\nPlease provide a file name or a root directory path, and optional exclude directories\n(e.g. C:\\users\\user\\Desktop\\project --dirs exclude_dir1 exclude_dir2)",);
+        println!("\nPlease provide a file name or a root directory path, and optional parameters.\nType --help for the parameter list ");
         match cmd_arg_parser::read_args_console() {
-            Err(_) => println!("{}","No arguments provided.".red()),
+            Err(e) => e.print_self(),
             Ok(args) => {
                 let path = Path::new(&args.path);
                 if path.is_dir() || path.is_file(){
@@ -57,15 +57,3 @@ fn get_args_from_stdin() -> ProgramArguments {
         }
     }
 }
-
-
-
-//  [Extension]            [Files]                      [Lines]                       [Size]
-//  ________________________________________________________________________________________________________________________________
-//     java          [-||||||.....-58%]  47       [-||||||||...-78%]  494      [-|||||......-58%]  47 
-//       cs          [-|||||||||..-74%]  85       [-|||........- 9%]  63       [-||||.......-58%]  47
-//       py          [-|||........- 9%]  11       [-|||........- 9%]  51       [-|||||||||..-74%]  85
-
-// or we can make these bars bigger and unite them for all extensions, and seperate the lines by color, according to the 
-// extension that they belong. [red(|||||)green(||)yellow(||||)], where red = java, yellow = python, ..
-//

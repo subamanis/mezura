@@ -71,4 +71,5 @@ pub fn wait_for_input() {
     let _ = io::stdout().flush();
     let mut s = String::new();
     let _ = io::stdin().read_line(&mut s);
+    println!();
 }

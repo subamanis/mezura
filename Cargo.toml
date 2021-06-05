@@ -4,6 +4,13 @@ version = "0.1.0"
 authors = ["subamanis <petrospapa21@gmail.com>"]
 edition = "2018"
 
+[[bin]]
+name = "test"
+path = "src/test.rs"
+[[bin]]
+name = "main"
+path = "src/main.rs"
+
 [dependencies]
 colored = "2"
 lazy_static = "1.4.0"

@@ -15,7 +15,7 @@ Keyword
     NAME
     classes
     ALIASES
-    class record
+    class
 Keyword
     NAME
     interfaces

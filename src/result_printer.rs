@@ -21,39 +21,6 @@ pub fn format_and_print_results(extensions_content_info_ref: &mut ContentInfoRef
     }
 }
 
-fn remove_extensions_with_0_files(content_info_map: &mut HashMap<String,ExtensionContentInfo>,
-     extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>) 
-{
-    let mut empty_extensions = Vec::new();
-    for element in extensions_metadata_map.iter() {
-        if element.1.files == 0 {
-            empty_extensions.push(element.0.to_owned());
-        }
-    }
-
-    for ext in empty_extensions {
-        extensions_metadata_map.remove(&ext);
-        content_info_map.remove(&ext);
-    }
-}
-
-fn get_extension_names_as_sorted_vec_according_to_how_much_they_appeared(
-    extensions_metadata_map: &HashMap<String, ExtensionMetadata>) -> Vec<String> 
-{
-    let mut value_map = HashMap::<String,usize>::new();
-    let mut sorted_extensions_vec = Vec::new();
-    for (ext_name,metadata) in extensions_metadata_map.iter() {
-        value_map.insert(ext_name.to_owned(), metadata.files * 10 + metadata.bytes as usize);
-        sorted_extensions_vec.push(ext_name.to_owned());
-    }
-
-    sorted_extensions_vec.sort_by(|a,b| {
-        value_map.get(b).unwrap().cmp(value_map.get(a).unwrap())
-    });
-
-    return sorted_extensions_vec
-}
-
 fn print_individually(sorted_extensions_map: &[String], content_info_map: &HashMap<String,ExtensionContentInfo>,
      extensions_metadata_map: &HashMap<String, ExtensionMetadata>) 
 {
@@ -131,7 +98,7 @@ fn print_overview(sorted_extension_vec: &[String], content_info_map: &mut HashMa
         str.to_owned()
     }
 
-    if content_info_map.len() > 3 {
+    if content_info_map.len() > 4 {
         retain_most_relevant_and_add_others_field_for_rest(sorted_extension_vec, content_info_map, extensions_metadata_map);
     }
 
@@ -152,6 +119,47 @@ fn print_overview(sorted_extension_vec: &[String], content_info_map: &mut HashMa
     let size_line = create_overview_line("Size :", &sizes_percentages, &size_verticals, sorted_extension_vec, &color_func_vec);
 
     println!("{}\n\n{}\n\n{}\n",files_line, lines_line, size_line);
+}
+
+
+fn remove_extensions_with_0_files(content_info_map: &mut HashMap<String,ExtensionContentInfo>,
+    extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>) 
+{
+   let mut empty_extensions = Vec::new();
+   for element in extensions_metadata_map.iter() {
+       if element.1.files == 0 {
+           empty_extensions.push(element.0.to_owned());
+       }
+   }
+
+   for ext in empty_extensions {
+       extensions_metadata_map.remove(&ext);
+       content_info_map.remove(&ext);
+   }
+}
+
+fn get_extension_names_as_sorted_vec_according_to_how_much_they_appeared(
+   extensions_metadata_map: &HashMap<String, ExtensionMetadata>) -> Vec<String> 
+{
+   let mut value_map = HashMap::<String,usize>::new();
+   let mut sorted_extensions_vec = Vec::new();
+   for (ext_name,metadata) in extensions_metadata_map.iter() {
+       value_map.insert(ext_name.to_owned(), metadata.files * 10 + metadata.bytes as usize);
+       sorted_extensions_vec.push(ext_name.to_owned());
+   }
+
+   sorted_extensions_vec.sort_by(|a,b| {
+       value_map.get(b).unwrap().cmp(value_map.get(a).unwrap())
+   });
+
+   if sorted_extensions_vec.len() > 4 {
+       for i in 3..sorted_extensions_vec.len()-1 {
+            sorted_extensions_vec.remove(i);
+       }
+       sorted_extensions_vec.push("others".to_owned());
+   }
+
+   return sorted_extensions_vec
 }
 
 fn get_num_of_verticals(percentages: &[f64]) -> Vec<usize> {
@@ -284,6 +292,7 @@ fn retain_most_relevant_and_add_others_field_for_rest(sorted_extension_names: &[
 
 fn get_files_percentages(extensions_metadata_map: &HashMap<String,ExtensionMetadata>, sorted_extension_names: &[String]) -> Vec<f64> {
     let mut extensions_files = [0].repeat(extensions_metadata_map.len());
+    // println!("extension_metadata_map: {:#?}\nsorted_extensions_names: {:#?}",extensions_metadata_map, sorted_extension_names);
     extensions_metadata_map.iter().for_each(|e| {
         let pos = sorted_extension_names.iter().position(|name| name == e.0).unwrap();
         extensions_files[pos] = e.1.files;
@@ -318,12 +327,13 @@ fn get_percentages(numbers: &[usize]) -> Vec<f64> {
     let mut sum = 0.0;
     for (counter,files) in numbers.iter().enumerate() {
         if counter == numbers.len() - 1 {
-            extension_percentages.push(100.0 - sum);
+            let rounded = ((100f64 - sum) * 10f64).round() / 10f64;
+            extension_percentages.push(rounded);
         } else {
             let percentage = *files as f64/total_files as f64;
-            let percentage = (percentage * 1000f64).round() / 10f64;
-            sum += percentage;
-            extension_percentages.push(percentage);
+            let canonicalized = (percentage * 1000f64).round() / 10f64;
+            sum += canonicalized;
+            extension_percentages.push(canonicalized);
         }
     }
     extension_percentages
@@ -363,11 +373,12 @@ mod tests {
 
     #[test]
     fn test_get_lines_percentages() {
-        let ext_names = [&"py".to_string(),&"java".to_string(),&"cs".to_string()];
+        let ext_names = ["py".to_string(),"java".to_string(),"cs".to_string()];
 
         let content_info_map = hashmap!("cs".to_string() => ExtensionContentInfo::dummy(100),
             "java".to_string() => ExtensionContentInfo::dummy(100), "py".to_string() => ExtensionContentInfo::dummy(0));
         assert_eq!(vec![0f64,50f64,50f64], get_lines_percentages(&content_info_map, &ext_names));
+        // let a = ext_names[..];
 
         let content_info_map = hashmap!("cs".to_string() => ExtensionContentInfo::dummy(0),
             "java".to_string() => ExtensionContentInfo::dummy(0), "py".to_string() => ExtensionContentInfo::dummy(1));
@@ -375,7 +386,7 @@ mod tests {
         
         let content_info_map = hashmap!("cs".to_string() => ExtensionContentInfo::dummy(20),
             "java".to_string() => ExtensionContentInfo::dummy(20), "py".to_string() => ExtensionContentInfo::dummy(20));
-        assert_eq!(vec![33.33f64,33.33f64,33.34f64], get_lines_percentages(&content_info_map, &ext_names));
+        assert_eq!(vec![33.3f64,33.3f64,33.4f64], get_lines_percentages(&content_info_map, &ext_names));
     }
 
     #[test]
