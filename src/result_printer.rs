@@ -11,13 +11,13 @@ pub fn format_and_print_results(extensions_content_info_ref: &mut ContentInfoRef
     
     remove_extensions_with_0_files(&mut content_info_map, extensions_metadata_map);
 
-    let sorted_extension_names = 
+    let mut sorted_extension_names = 
         get_extension_names_as_sorted_vec_according_to_how_much_they_appeared(extensions_metadata_map);
 
     print_individually(&sorted_extension_names, &content_info_map, extensions_metadata_map);
 
     if extensions_metadata_map.len() > 1 {
-        print_overview(&sorted_extension_names, content_info_map, extensions_metadata_map);
+        print_overview(&mut sorted_extension_names, content_info_map, extensions_metadata_map);
     }
 }
 
@@ -55,7 +55,7 @@ fn print_individually(sorted_extensions_map: &[String], content_info_map: &HashM
 
         let spaces = get_n_times(" ", 6-extension_name.len());
         let files_str = with_seperators(metadata.files);
-        let title = format!(".{}{}{}{} {}  -> ",extension_name.green(), spaces, get_n_times(" ", (max_files_num_size+1)-files_str.len()),
+        let title = format!(".{}{}{}{} {}  -> ",extension_name.bold(), spaces, get_n_times(" ", (max_files_num_size+1)-files_str.len()),
          files_str, colored_word("files"));
         let code_lines_percentage = if content_info.lines > 0 {content_info.code_lines as f64 / content_info.lines as f64 * 100f64} else {0f64};
         let info = format!("{} {} {{{} code ({:.2}%) + {} extra}}  |  {}\n",colored_word("lines"), with_seperators(content_info.lines),
@@ -82,7 +82,7 @@ fn print_individually(sorted_extensions_map: &[String], content_info_map: &HashM
 // Lines: ...
 //
 // Size : ...
-fn print_overview(sorted_extension_vec: &[String], content_info_map: &mut HashMap<String, ExtensionContentInfo>,
+fn print_overview(sorted_extension_vec: &mut Vec<String>, content_info_map: &mut HashMap<String, ExtensionContentInfo>,
      extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>) 
 {
     fn make_cyan(str: &str) -> String {
@@ -97,6 +97,12 @@ fn print_overview(sorted_extension_vec: &[String], content_info_map: &mut HashMa
     fn no_transformation(str: &str) -> String {
         str.to_owned()
     }
+    fn make_fourth_color(str: &str) -> String {
+        str.truecolor(106, 217, 189).to_string()
+    }
+    fn make_color_for_others(str: &str) -> String {
+        str.truecolor(215, 201, 240).to_string()
+    }
 
     if content_info_map.len() > 4 {
         retain_most_relevant_and_add_others_field_for_rest(sorted_extension_vec, content_info_map, extensions_metadata_map);
@@ -104,7 +110,13 @@ fn print_overview(sorted_extension_vec: &[String], content_info_map: &mut HashMa
 
     println!("{}\n", "Overview".underline().bold());
 
-    let color_func_vec : Vec<fn(&str) -> String> = vec![make_cyan, make_magenta, make_yellow, no_transformation];
+    let color_func_vec : Vec<fn(&str) -> String> = {
+        if sorted_extension_vec[sorted_extension_vec.len()-1] == "others" {
+            vec![make_cyan, make_magenta, make_yellow, make_color_for_others]
+        } else {
+            vec![make_cyan, make_magenta, make_yellow, make_fourth_color]
+        }
+    };
 
     let files_percentages = get_files_percentages(extensions_metadata_map, sorted_extension_vec);
     let lines_percentages = get_lines_percentages(content_info_map, sorted_extension_vec);
@@ -152,13 +164,6 @@ fn get_extension_names_as_sorted_vec_according_to_how_much_they_appeared(
        value_map.get(b).unwrap().cmp(value_map.get(a).unwrap())
    });
 
-   if sorted_extensions_vec.len() > 4 {
-       for i in 3..sorted_extensions_vec.len()-1 {
-            sorted_extensions_vec.remove(i);
-       }
-       sorted_extensions_vec.push("others".to_owned());
-   }
-
    return sorted_extensions_vec
 }
 
@@ -187,27 +192,51 @@ fn get_num_of_verticals(percentages: &[f64]) -> Vec<usize> {
     verticals
 }
 
+// A not very precise attempt to normalize the sum of verticals to the proper number that should appear 
+// in the [-|||...|-] block, but is it good enough.
 fn normalize_to_NUM_OF_VERTICALS(verticals: &mut Vec<usize>, sum: usize) {
-    fn swap_if_needed(sorted_verticals: &mut Vec<&mut usize>, index1: usize, index2: usize) {
-        if *sorted_verticals[index2] > *sorted_verticals[index1] {
-            let temp = *sorted_verticals[index1];
-            *sorted_verticals[index1] = *sorted_verticals[index2];
-            *sorted_verticals[index2] = temp;
-        }
-    }
-
     let mut sorted_verticals = Vec::new();
     for i in verticals.iter_mut() {
         sorted_verticals.push(i);
     }
-    sorted_verticals.sort_by(|a,b| b.cmp(a));
+
+    let comparator = |a: &&mut usize,b: &&mut usize| b.cmp(a);
+    sorted_verticals.sort_by(comparator);
 
     let is_over = if sum > NUM_OF_VERTICALS {true} else {false};
-    let difference = if is_over {sum - NUM_OF_VERTICALS} else {NUM_OF_VERTICALS - sum}; 
+    let mut difference = if is_over {sum - NUM_OF_VERTICALS} else {NUM_OF_VERTICALS - sum}; 
+
+    let same_num_of_verticals_indices = {
+        let mut temp = Vec::new();
+        let max_value = *sorted_verticals[0];
+        let mut counter = 0;
+        while counter < sorted_verticals.len() && *sorted_verticals[counter] == max_value {
+            temp.push(counter);
+            counter += 1;
+        }
+        temp
+    };
+
+    if same_num_of_verticals_indices.len() > 1 {
+        for i in same_num_of_verticals_indices.iter() {
+            if difference > 0 {
+                if is_over {
+                    *sorted_verticals[*i] -= 1
+                } else {
+                    *sorted_verticals[*i] += 1;
+                }
+                difference -= 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    if difference == 0 {return;}
 
     if is_over {
         *sorted_verticals[0] -= 1; 
-        swap_if_needed(&mut sorted_verticals, 0, 1);
+        sorted_verticals.sort_by(comparator);
     } else {
         *sorted_verticals[0] += 1;
     }
@@ -219,14 +248,15 @@ fn normalize_to_NUM_OF_VERTICALS(verticals: &mut Vec<usize>, sum: usize) {
             } else {
                 *sorted_verticals[1] -= 1;
                 if sorted_verticals.len() > 2 {
-                    swap_if_needed(&mut sorted_verticals, 1, 2);
+                    sorted_verticals.sort_by(comparator);
+
                 }
             }
         } else {
             if *sorted_verticals[0] > *sorted_verticals[1] + 5 {
                 *sorted_verticals[1] += 1;
                 if sorted_verticals.len() > 2 {
-                    swap_if_needed(&mut sorted_verticals, 0, 1);
+                    sorted_verticals.sort_by(comparator);
                 }
             } else {
                 *sorted_verticals[0] += 1;
@@ -241,7 +271,8 @@ fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize],
     let mut line = String::with_capacity(150);
     line.push_str(&format!("{}    ",prefix));
     for (i,percent) in percentages.iter().enumerate() {
-        line.push_str(&format!("{:.1}% ",percent)); //make sure that 5 spaces have been accounted for every percentage
+        let str_perc = format!("{:.1}",percent);
+        line.push_str(&format!("{}%{} ",str_perc, utils::get_n_times(" ", 4-str_perc.len())));
         line.push_str(&color_func_vec[i](&extensions_name[i]));
         if i < percentages.len() - 1{
             line.push_str(" - ")
@@ -261,32 +292,35 @@ fn add_verticals_str(line: &mut String, files_verticals: &[usize], color_func_ve
     line.push_str("-]");
 }
 
-fn retain_most_relevant_and_add_others_field_for_rest(sorted_extension_names: &[String],
+fn retain_most_relevant_and_add_others_field_for_rest(sorted_extension_names: &mut Vec<String>,
      content_info_map: &mut HashMap<String, ExtensionContentInfo>, extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>) 
 {
-    fn name_is_in_top_3(sorted_extension_names: &[String], name: &str)  -> bool {
-        name == sorted_extension_names[0] || name == sorted_extension_names[1] || name == sorted_extension_names[2]
-    }
-
     fn get_files_lines_size(content_info_map: &HashMap<String, ExtensionContentInfo>,
          extensions_metadata_map: &HashMap<String, ExtensionMetadata>) -> (usize,usize,usize) 
     {
-        let (mut lines, mut files, mut size) = (0,0,0);
+        let (mut files, mut lines, mut size) = (0,0,0);
         content_info_map.iter().for_each(|x| lines += x.1.lines);
         extensions_metadata_map.iter().for_each(|x| {files += x.1.files; size += x.1.bytes});
         (files, lines, size as usize) 
     }
+
+    let (total_files, total_lines, total_size) = get_files_lines_size(content_info_map, extensions_metadata_map);
+    if sorted_extension_names.len() > 4 {
+        for _ in 3..sorted_extension_names.len() {
+             sorted_extension_names.remove(sorted_extension_names.len()-1);
+        }
+        sorted_extension_names.push("others".to_owned());
+
+        content_info_map.retain(|x,_| sorted_extension_names.contains(x));
+        extensions_metadata_map.retain(|x,_| sorted_extension_names.contains(x));
+    }
     
-    content_info_map.retain(|x,_| name_is_in_top_3(sorted_extension_names, x));
-    extensions_metadata_map.retain(|x,_| name_is_in_top_3(sorted_extension_names, x));
-    
-    let (total_lines, total_files, total_size) = get_files_lines_size(content_info_map, extensions_metadata_map);
     let (relevant_files, relevant_lines, relevant_size) = get_files_lines_size(content_info_map, extensions_metadata_map);
     let (other_files, other_lines, other_size) = 
         (total_files - relevant_files, total_lines - relevant_lines, total_size - relevant_size);
 
-    content_info_map.insert("other".to_string(), ExtensionContentInfo::dummy(other_lines));
-    extensions_metadata_map.insert("other".to_string(), ExtensionMetadata::new(other_files, other_size));
+    content_info_map.insert("others".to_string(), ExtensionContentInfo::dummy(other_lines));
+    extensions_metadata_map.insert("others".to_string(), ExtensionMetadata::new(other_files, other_size));
 }
 
 
@@ -327,7 +361,13 @@ fn get_percentages(numbers: &[usize]) -> Vec<f64> {
     let mut sum = 0.0;
     for (counter,files) in numbers.iter().enumerate() {
         if counter == numbers.len() - 1 {
-            let rounded = ((100f64 - sum) * 10f64).round() / 10f64;
+            let rounded = {
+                if sum > 99.89 {
+                    0.0
+                } else {
+                    ((100f64 - sum) * 10f64).round() / 10f64
+                }
+            };
             extension_percentages.push(rounded);
         } else {
             let percentage = *files as f64/total_files as f64;
@@ -357,7 +397,7 @@ mod tests {
     
         let mut verticals = vec![16,15,16,1];
         normalize_to_NUM_OF_VERTICALS(&mut verticals, 48);
-        assert_eq!(vec![18,15,16,1], verticals);
+        assert_eq!(vec![17,15,17,1], verticals);
         assert!(verticals.iter().sum::<usize>() == 50);
     
         let mut verticals = vec![18,16,17];
@@ -378,21 +418,51 @@ mod tests {
         let content_info_map = hashmap!("cs".to_string() => ExtensionContentInfo::dummy(100),
             "java".to_string() => ExtensionContentInfo::dummy(100), "py".to_string() => ExtensionContentInfo::dummy(0));
         assert_eq!(vec![0f64,50f64,50f64], get_lines_percentages(&content_info_map, &ext_names));
-        // let a = ext_names[..];
-
         let content_info_map = hashmap!("cs".to_string() => ExtensionContentInfo::dummy(0),
-            "java".to_string() => ExtensionContentInfo::dummy(0), "py".to_string() => ExtensionContentInfo::dummy(1));
+        "java".to_string() => ExtensionContentInfo::dummy(0), "py".to_string() => ExtensionContentInfo::dummy(1));
         assert_eq!(vec![100f64,0f64,0f64], get_lines_percentages(&content_info_map, &ext_names));
-        
         let content_info_map = hashmap!("cs".to_string() => ExtensionContentInfo::dummy(20),
-            "java".to_string() => ExtensionContentInfo::dummy(20), "py".to_string() => ExtensionContentInfo::dummy(20));
+        "java".to_string() => ExtensionContentInfo::dummy(20), "py".to_string() => ExtensionContentInfo::dummy(20));
         assert_eq!(vec![33.3f64,33.3f64,33.4f64], get_lines_percentages(&content_info_map, &ext_names));
+        
+        let ext_names = ["py".to_string(),"java".to_string(),"cs".to_string(),"rs".to_string()];
+
+        let content_info_map = hashmap!("cs".to_string() => ExtensionContentInfo::dummy(100),
+            "java".to_string() => ExtensionContentInfo::dummy(100), "py".to_string() => ExtensionContentInfo::dummy(0),
+            "rs".to_string() => ExtensionContentInfo::dummy(0));
+        assert_eq!(vec![0f64,50f64,50f64,0f64], get_lines_percentages(&content_info_map, &ext_names));
+        let content_info_map = hashmap!("cs".to_string() => ExtensionContentInfo::dummy(100),
+            "java".to_string() => ExtensionContentInfo::dummy(100), "py".to_string() => ExtensionContentInfo::dummy(100),
+            "rs".to_string() => ExtensionContentInfo::dummy(0));
+        assert_eq!(vec![33.3f64,33.3f64,33.3f64,0f64], get_lines_percentages(&content_info_map, &ext_names));
+        let content_info_map = hashmap!("cs".to_string() => ExtensionContentInfo::dummy(201),
+            "java".to_string() => ExtensionContentInfo::dummy(200), "py".to_string() => ExtensionContentInfo::dummy(200),
+            "rs".to_string() => ExtensionContentInfo::dummy(0));
+        assert_eq!(vec![33.3f64,33.3f64,33.4f64,0f64], get_lines_percentages(&content_info_map, &ext_names));
+
+        let ext_names = ["py".to_string(),"java".to_string(),"cs".to_string(),"rs".to_string(),"cpp".to_string()];
+
+        let content_info_map = hashmap!("cs".to_string() => ExtensionContentInfo::dummy(100),
+            "java".to_string() => ExtensionContentInfo::dummy(100), "py".to_string() => ExtensionContentInfo::dummy(0),
+            "rs".to_string() => ExtensionContentInfo::dummy(0), "cpp".to_string() => ExtensionContentInfo::dummy(0));
+        assert_eq!(vec![0f64,50f64,50f64,0f64,0f64], get_lines_percentages(&content_info_map, &ext_names));
     }
 
     #[test]
     fn test_get_num_of_verticals() {
+        let percentages = vec![49.6,50.4];
+        let verticals = get_num_of_verticals(&percentages);
+        assert!(verticals.iter().sum::<usize>() == 50);
+        assert_eq!(vec![25,25], verticals);
+
+        let percentages = vec![0.0,100.0];
+        let verticals = get_num_of_verticals(&percentages);
+        assert!(verticals.iter().sum::<usize>() == 50);
+        assert_eq!(vec![0,50], verticals);
+
+
         let percentages = vec![33.33,33.33,33.34];
-        assert_eq!(vec![17,16,17], get_num_of_verticals(&percentages));
+        assert_eq!(vec![16,17,17], get_num_of_verticals(&percentages));
 
         let percentages = vec![0.3,65.67,34.3];
         let verticals = get_num_of_verticals(&percentages);
@@ -403,5 +473,23 @@ mod tests {
         let verticals = get_num_of_verticals(&percentages);
         assert!(verticals.iter().sum::<usize>() == 50);
         assert_eq!(vec![0,0,50], verticals);
+
+        let percentages = vec![0.2,49.9,49.9];
+        let verticals = get_num_of_verticals(&percentages);
+        assert!(verticals.iter().sum::<usize>() == 50);
+        assert_eq!(vec![1,24,25], verticals);
+
+
+        let percentages = vec![12.5,50.0,25.0,12.5];
+        let verticals = get_num_of_verticals(&percentages);
+        assert!(verticals.iter().sum::<usize>() == 50);
+        assert_eq!(vec![6,25,13,6], verticals);
+
+        let percentages = vec![0.1,0.1,49.9,49.9];
+        let verticals = get_num_of_verticals(&percentages);
+        assert!(verticals.iter().sum::<usize>() == 50);
+        assert_eq!(vec![1,1,24,24], verticals);
+
+        
     }
 }

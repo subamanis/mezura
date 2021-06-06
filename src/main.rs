@@ -2,7 +2,7 @@ use std::{path::Path, process, time::SystemTime};
 
 use colored::*;
 
-use code_stats::{cmd_arg_parser::{self, Args}, extension_reader, putils::*};
+use code_stats::{cmd_arg_parser::{self}, Args, extension_reader, putils::*};
 
 fn main() {
     control::set_virtual_terminal(true).unwrap();
@@ -27,7 +27,7 @@ fn main() {
 
     let args = match cmd_arg_parser::read_args_cmd() {
         Ok(args) => args,
-        Err(e) => get_args_from_stdin()
+        Err(_) => get_args_from_stdin()
     };
 
     let start = SystemTime::now();
