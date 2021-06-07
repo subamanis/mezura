@@ -31,7 +31,7 @@ fn parse_lines(file_name: &str, mut reader: BufReader<File>, buf: &mut String, e
 
         let line_info = 
         if extension.supports_multiline_comments() { //another way?
-            get_bounds_w_multiline_comments(line, extension, is_comment_closed, &open_str_symbol)
+            get_bounds_w_multiline_comments(file_name, line, extension, is_comment_closed, &open_str_symbol)
         } else {
             get_bounds_only_single_line_comments(file_name, line, extension, &open_str_symbol)
         };
@@ -270,11 +270,87 @@ fn get_bounds_only_single_line_comments(file_name: &str, line: &str, extension: 
     }
 }
 
+fn get_com_end_indices(line: &str, extension: &Extension) -> Vec<usize> {
+    line.match_indices(extension.mutliline_comment_end_symbol.as_ref().unwrap()).map(|x| x.0).collect::<Vec<usize>>()
+}
 
-fn get_bounds_w_multiline_comments(line: &str, extension: &Extension, is_comment_closed: bool,
+fn get_com_start_indices(line: &str, extension: &Extension, comment_indices: &[usize]) -> Vec<usize> {
+    line.match_indices(extension.mutliline_comment_start_symbol.as_ref().unwrap())
+    .filter_map(|x|{
+        if !is_intersecting_with_comment_symbol(x.0, comment_indices) {
+            Some(x.0)
+        } else {
+            None
+        }
+    })
+    .collect::<Vec<usize>>()
+}
+
+
+fn resolve_double_counting_of_adjacent_start_and_end_symbols(start_indices: &mut Vec<usize>,
+    end_indices: &mut Vec<usize>, is_comment_open: bool, multiline_len: usize) 
+{
+   fn resolve_collision(start_indices: &mut Vec<usize>, end_indices: &mut Vec<usize>, start_counter: &mut usize, 
+       end_counter: &mut usize, is_comment_open_m: &mut bool, multiline_len: usize)
+   {
+       if *is_comment_open_m {
+           start_indices.remove(*start_counter);
+           if *start_counter < start_indices.len() && start_indices[*start_counter] <
+                   end_indices[*end_counter] + multiline_len {
+               start_indices.remove(*start_counter);
+           }
+           *end_counter += 1;
+       } else {
+           end_indices.remove(*end_counter);
+           if *end_counter < end_indices.len() && end_indices[*end_counter] <
+                   start_indices[*start_counter] + multiline_len {
+               end_indices.remove(*end_counter);
+           }
+           *start_counter += 1;
+       }
+       *is_comment_open_m = !*is_comment_open_m;
+   }
+
+   let mut is_comment_open_m = is_comment_open;
+   let (mut start_counter, mut end_counter) = (0,0);
+   loop {
+       if start_counter == start_indices.len() || end_counter == end_indices.len() {break;}
+
+       let start_index = start_indices[start_counter];
+       let end_index = end_indices[end_counter];
+
+       if end_index > start_index && end_index < start_index + multiline_len ||
+                start_index > end_index && start_index < end_index + multiline_len {
+            resolve_collision(start_indices, end_indices, &mut start_counter, &mut end_counter, &mut is_comment_open_m, multiline_len);
+       } else {
+           if start_index < end_index {
+               start_counter += 1;
+               if start_counter < start_indices.len() {
+                   if start_indices[start_counter] > end_index {
+                       is_comment_open_m = true;
+                   }
+               } else {
+                   break;
+               }
+           }
+           else {
+               end_counter += 1;
+               if end_counter < end_indices.len() {
+                   if end_indices[end_counter] > start_counter {
+                       is_comment_open_m = false;
+                   }
+               } else {
+                   break;
+               }
+           }
+       }
+   }
+}
+
+fn get_bounds_w_multiline_comments(file_name:&str, line: &str, extension: &Extension, is_comment_closed: bool,
      open_str_symbol: &Option<String>) -> LineInfo
 {
-    let com_end_indices = line.match_indices(extension.mutliline_comment_end_symbol.as_ref().unwrap()).map(|x| x.0).collect::<Vec<usize>>();
+    let mut com_end_indices = get_com_end_indices(line, extension);
     let str_indices = get_str_indices(line, extension, open_str_symbol);
     
     if is_comment_closed {
@@ -287,24 +363,20 @@ fn get_bounds_w_multiline_comments(line: &str, extension: &Extension, is_comment
         }
     }
     
-    let comment_indices = line.match_indices(&extension.comment_symbol).
-    filter_map(|x| {
-        if !is_intersecting_with_multi_line_end_symbol(x.0, extension.multiline_len(), &com_end_indices) {
-            Some(x.0)
-        } else {
-            None
-        }
-    })
-    .collect::<Vec<usize>>();
-    let com_start_indices = line.match_indices(extension.mutliline_comment_start_symbol.as_ref().unwrap())
-    .filter_map(|x|{
-        if !is_intersecting_with_comment_symbol(x.0, &comment_indices) {
-            Some(x.0)
-        } else {
-            None
-        }
-    })
-    .collect::<Vec<usize>>();
+    let comment_indices = line.match_indices(&extension.comment_symbol)
+        .filter_map(|x| {
+            if !is_intersecting_with_multi_line_end_symbol(x.0, extension.multiline_len(), &com_end_indices) {
+                Some(x.0)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<usize>>();
+    let mut com_start_indices = get_com_start_indices(line, extension, &comment_indices);
+    if com_end_indices.len() > 1 && com_start_indices.len() > 1 {
+        resolve_double_counting_of_adjacent_start_and_end_symbols(&mut com_start_indices, &mut com_end_indices, !is_comment_closed,
+             extension.multiline_len());
+    }
     
     if str_indices.is_empty() && comment_indices.is_empty() && com_start_indices.is_empty() && com_end_indices.is_empty() {
         return LineInfo::with_str(line.to_owned(), false);
@@ -400,7 +472,7 @@ fn get_bounds_w_multiline_comments(line: &str, extension: &Extension, is_comment
                     &mut start_com_counter, &mut end_com_counter);
             end_com_counter += 1;
 
-             if has_more_strs(str_counter) && str_indices[str_counter] == index_after {
+            if has_more_strs(str_counter) && str_indices[str_counter] == index_after {
                 is_str_open_m = true;
             } else if has_more_starts(start_com_counter) && com_start_indices[start_com_counter] == index_after {
                 is_com_open_m = true;
@@ -433,7 +505,10 @@ fn get_bounds_w_multiline_comments(line: &str, extension: &Extension, is_comment
                 if skipped_com_end_symbol(last_symbol_index, end_com_counter, this_index) {
                     end_com_counter += 1;
                 }
-                relevant.push_str(&line[slice_start_index..this_index]);
+                if slice_start_index > this_index {
+                    println!("\nHEREEEE__ {} , {:?}\n",file_name, open_str_symbol);
+                }
+                relevant.push_str(&line[slice_start_index..this_index]); // panic 23 > 22
                 if !has_more_ends(end_com_counter) {
                     if relevant.is_empty() {return LineInfo::with_open_comment();}
                     else {return LineInfo::new(Some(relevant), has_string_literal, true, None);}
@@ -876,6 +951,56 @@ mod tests {
         assert_eq!(vec![8], get_str_indices(&line, &RUST, &None));
         assert_eq!(vec![8], get_str_indices(&line, &PYTHON, &None));
     }
+
+    #[test]
+    fn double_counting_resolution() {
+        // ----------normal cases: no resolution needed----------
+        // /*Hello*//* world*//*
+        let (mut start_indices, mut end_indices) = (vec![0,9,19],vec![7,17]);
+        resolve_double_counting_of_adjacent_start_and_end_symbols(&mut start_indices, &mut end_indices, false, 2);
+        assert_eq!((start_indices, end_indices), (vec![0,9,19],vec![7,17]));
+        // /**//**/
+        let (mut start_indices, mut end_indices) = (vec![0,4],vec![2,6]);
+        resolve_double_counting_of_adjacent_start_and_end_symbols(&mut start_indices, &mut end_indices, false, 2);
+        assert_eq!((start_indices, end_indices), (vec![0,4],vec![2,6]));
+        // /*/**/*/
+        let (mut start_indices, mut end_indices) = (vec![0,2],vec![4,6]);
+        resolve_double_counting_of_adjacent_start_and_end_symbols(&mut start_indices, &mut end_indices, false, 2);
+        assert_eq!((start_indices, end_indices), (vec![0,2],vec![4,6]));
+
+        // ----------resolution required-------------
+        // */* /*/
+        let (mut start_indices, mut end_indices) = (vec![1,4],vec![0,5]);
+        resolve_double_counting_of_adjacent_start_and_end_symbols(&mut start_indices, &mut end_indices, false, 2);
+        assert_eq!((start_indices, end_indices), (vec![1],vec![5]));
+        let (mut start_indices, mut end_indices) = (vec![1,4],vec![0,5]);
+        resolve_double_counting_of_adjacent_start_and_end_symbols(&mut start_indices, &mut end_indices, true, 2);
+        assert_eq!((start_indices, end_indices), (vec![4],vec![0]));
+
+        // /*/*/ */*/ /* */
+        let (mut start_indices, mut end_indices) = (vec![0,2,7,11],vec![1,3,6,8,14]);
+        resolve_double_counting_of_adjacent_start_and_end_symbols(&mut start_indices, &mut end_indices, false, 2);
+        assert_eq!((start_indices, end_indices), (vec![0,7,11],vec![3,14])); 
+        let (mut start_indices, mut end_indices) = (vec![0,2,7,11],vec![1,3,6,8,14]);
+        resolve_double_counting_of_adjacent_start_and_end_symbols(&mut start_indices, &mut end_indices, true, 2);
+        assert_eq!((start_indices, end_indices), (vec![7,11],vec![1,3,14])); 
+ 
+        // /*/*/ */*/
+        let (mut start_indices, mut end_indices) = (vec![0,2,7],vec![1,3,6,8]);
+        resolve_double_counting_of_adjacent_start_and_end_symbols(&mut start_indices, &mut end_indices, false, 2);
+        assert_eq!((start_indices, end_indices), (vec![0,7],vec![3])); 
+        let (mut start_indices, mut end_indices) = (vec![0,2,7],vec![1,3,6,8]);
+        resolve_double_counting_of_adjacent_start_and_end_symbols(&mut start_indices, &mut end_indices, true, 2);
+        assert_eq!((start_indices, end_indices), (vec![7],vec![1,3]));
+
+        // /* */*/*//*
+        let (mut start_indices, mut end_indices) = (vec![0,4,6,9],vec![3,5,7]);
+        resolve_double_counting_of_adjacent_start_and_end_symbols(&mut start_indices, &mut end_indices, false, 2);
+        assert_eq!((start_indices, end_indices), (vec![0,6,9],vec![3]));
+        let (mut start_indices, mut end_indices) = (vec![0,4,6,9],vec![3,5,7]);
+        resolve_double_counting_of_adjacent_start_and_end_symbols(&mut start_indices, &mut end_indices, true, 2);
+        assert_eq!((start_indices, end_indices), (vec![0,6,9],vec![3]));
+    }
     
     #[test]
     fn gets_bounds_PYTHON() {
@@ -887,7 +1012,9 @@ mod tests {
         let line = String::from("\'\\'\\'\\\''"); // '\'\'\''
         assert_eq!(LineInfo::new(None,true,false,None), get_bounds_only_single_line_comments("e",&line, &PYTHON, &None));
 
-        // this test fails: the line has non ASCII values and starts multiline string, but it is not taken into account.
+        //@Issue: This test fails: the line has non ASCII values and starts multiline string, but it is not taken into account.
+        // To solve this, we would probably need a crate like graphemes so we can get the graphemes of the line to find
+        // the str symbol that makes the line be open.
         // let line = String::from(r#"['⣯', '⣟"#); 
         // assert_eq!(LineInfo::new(Some("[, ".to_owned()),true,false,Some("\'".to_owned())), get_bounds_only_single_line_comments("e",&line, &PYTHON, &None));
         
