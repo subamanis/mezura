@@ -17,7 +17,7 @@ fn main() {
             if !x.1.is_empty(){
                 let mut err_msg : String = String::from("\nFormatting problems detected in extension files: ");
                 err_msg.push_str(&utils::get_contents(&x.1));
-                err_msg.push_str(". These files will not be taken into consideration.\n");
+                err_msg.push_str(". These files will not be taken into consideration.");
                 println!("{}",err_msg.yellow());
             }
 
@@ -26,16 +26,25 @@ fn main() {
     };
 
     let args = match cmd_arg_parser::read_args_cmd() {
-        Ok(args) => args,
-        Err(_) => get_args_from_stdin()
+        Ok(args) => {
+            if !Path::new(&args.path).exists() {
+                println!("{}","\nPath provided is not a valid directory or file.".red());
+                get_args_from_stdin()
+            } else {
+                args
+            }
+        },
+        Err(x) => {
+            println!();
+            x.print_self();
+            get_args_from_stdin()
+        } 
     };
 
     let start = SystemTime::now();
-
     if let Err(x) = code_stats::run(args, extensions_map) {
         println!("{}",x.formatted());
     }
-
     println!("\nExecution time: {:.2} secs.",SystemTime::now().duration_since(start).unwrap().as_secs_f32());
 
     utils::wait_for_input();

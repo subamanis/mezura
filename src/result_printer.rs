@@ -39,7 +39,7 @@ fn print_individually(sorted_extensions_map: &[String], content_info_map: &HashM
 
         let (average_size, average_size_desc) =
             if metadata.bytes / metadata.files > 1000 
-                {((metadata.bytes as f64 / metadata.files as f64) / 1000f64, colored_word("Kbs average"))}
+                {((metadata.bytes as f64 / metadata.files as f64) / 1000f64, colored_word("KBs average"))}
             else 
                 {(metadata.bytes as f64 / metadata.files as f64, colored_word("Bytes average"))};
 
@@ -66,9 +66,9 @@ fn print_individually(sorted_extensions_map: &[String], content_info_map: &HashM
         if !content_info.keyword_occurences.is_empty() {
             let mut keyword_iter = content_info.keyword_occurences.iter();
             let first_keyword = keyword_iter.next().unwrap();
-            keyword_info.push_str(&format!("{}{}: {}",get_n_times(" ", 19+max_files_num_size), colored_word(first_keyword.0),first_keyword.1));
+            keyword_info.push_str(&format!("{}{}: {}",get_n_times(" ", 19+max_files_num_size), colored_word(first_keyword.0),with_seperators(*first_keyword.1)));
             for (keyword_name,occurancies) in keyword_iter {
-                keyword_info.push_str(&format!(" , {}: {}",colored_word(keyword_name),occurancies));
+                keyword_info.push_str(&format!(" , {}: {}",colored_word(keyword_name),with_seperators(*occurancies)));
             }
         }
         println!("{}",format!("{}{}{}\n",title, info, keyword_info));

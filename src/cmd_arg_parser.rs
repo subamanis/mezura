@@ -86,7 +86,7 @@ fn new_get_arguments(line: &str) -> Result<Args, ArgParsingError> {
             }
         } else {
             //@TODO: -help?
-            return Err(ArgParsingError::UnrecognisedParameter(options[i].to_owned()));
+            return Err(ArgParsingError::UnrecognisedParameter(options[i].split(" ").next().unwrap_or(options[i]).trim().to_owned()));
         }
     }
     

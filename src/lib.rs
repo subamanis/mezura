@@ -55,7 +55,7 @@ pub fn run(args :Args, extensions_map :HashMap<String, Extension>) -> Result<(),
         h.join().unwrap();
     }
     print_faulty_files_or_success(faulty_files_ref);
-    
+
     result_printer::format_and_print_results(&mut extensions_content_info_ref, &mut extensions_metadata);
     
     Ok(())
@@ -135,8 +135,8 @@ fn add_relevant_files(files_list :LinkedListRef, extensions_metadata_map: &mut H
 fn search_dir_and_add_files_to_list(files_list: &LinkedListRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>,
     target_dir: &str, extensions: &ExtMapRef, exclude_dirs: &Option<Vec<String>>) -> (usize,usize) 
 {
-    let mut total_files = 1;
-    let mut relevant_files = 1;
+    let mut total_files = 0;
+    let mut relevant_files = 0;
     let mut dirs: LinkedList<PathBuf> = LinkedList::new();
     dirs.push_front(Path::new(target_dir).to_path_buf());
     while let Some(dir) = dirs.pop_front() {
