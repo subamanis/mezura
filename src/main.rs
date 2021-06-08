@@ -2,14 +2,14 @@ use std::{path::Path, process, time::SystemTime};
 
 use colored::*;
 
-use code_stats::{cmd_arg_parser::{self}, Args, extension_reader, putils::*};
+use code_stats::{cmd_arg_parser::{self}, ProgramArgs, extension_reader, putils::*};
 
 fn main() {
     control::set_virtual_terminal(true).unwrap();
 
     let extensions_map = match extension_reader::parse_supported_extensions_to_map() {
         Err(x) => {
-            println!("{}", x.formatted());
+            println!("{}", x.print_self());
             utils::wait_for_input();
             process::exit(1);
         },
@@ -50,7 +50,7 @@ fn main() {
     utils::wait_for_input();
 }
 
-fn get_args_from_stdin() -> Args {
+fn get_args_from_stdin() -> ProgramArgs {
     loop {
         println!("\nPlease provide a file name or a root directory path, and optional parameters.\nType --help for the parameter list ");
         match cmd_arg_parser::read_args_console() {

@@ -16,7 +16,7 @@ use std::thread;
 
 use colored::{Colorize,ColoredString};
 
-pub use cmd_arg_parser::Args;
+pub use cmd_arg_parser::ProgramArgs;
 pub use putils::*;
 use domain::{Extension, ExtensionContentInfo, ExtensionMetadata, FileStats, Keyword};
 
@@ -26,7 +26,7 @@ pub type BoolRef        = Arc<AtomicBool>;
 pub type ContentInfoRef = Arc<Mutex<HashMap<String,ExtensionContentInfo>>>;
 pub type ExtMapRef      = Arc<HashMap<String,Extension>>;
 
-pub fn run(args :Args, extensions_map :HashMap<String, Extension>) -> Result<(), ParseFilesError> {
+pub fn run(args :ProgramArgs, extensions_map :HashMap<String, Extension>) -> Result<(), ParseFilesError> {
     let files_ref : LinkedListRef = Arc::new(Mutex::new(LinkedList::new()));
     let faulty_files_ref : VecRef  = Arc::new(Mutex::new(Vec::new()));
     let finish_condition_ref : BoolRef = Arc::new(AtomicBool::new(false));

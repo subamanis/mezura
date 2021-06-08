@@ -37,11 +37,15 @@ fn print_individually(sorted_extensions_map: &[String], content_info_map: &HashM
             else
                 {(metadata.bytes as f64, colored_word("Bytes total"))};
 
-        let (average_size, average_size_desc) =
-            if metadata.bytes / metadata.files > 1000 
+        let (average_size, average_size_desc) = {
+            let div = metadata.bytes / metadata.files;
+            if div > 100000 
+                {((metadata.bytes as f64 / metadata.files as f64) / 1000000f64, colored_word("MBs average"))} 
+            else if div > 1000 
                 {((metadata.bytes as f64 / metadata.files as f64) / 1000f64, colored_word("KBs average"))}
             else 
-                {(metadata.bytes as f64 / metadata.files as f64, colored_word("Bytes average"))};
+                {(metadata.bytes as f64 / metadata.files as f64, colored_word("Bytes average"))}
+        };
 
         format!("{:.1} {} - {:.1} {}",size, size_desc, average_size, average_size_desc)
     }

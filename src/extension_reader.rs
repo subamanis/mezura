@@ -1,34 +1,61 @@
-use std::{{ffi::OsString, path::Path}, collections::{HashMap as HashMap}, env, fs};
+use std::{{ffi::OsString, path::Path}, collections::{HashMap as HashMap}, env, fs::{self, ReadDir}, path::PathBuf};
 
 use colored::*;
+use lazy_static::lazy_static;
 
 use crate::domain::*;
 
+
 #[derive(Debug)]
 pub enum ParseExtensionsError {
-    UnavailableDirectory(String),
+    DataDirNotFound,
+    DirNotFound,
     NoFilesFound,
     NoFilesFormattedProperly,
 }
 
+#[derive(Debug)]
+pub enum ParseConfigFileError {
+    DataDirNotFound
+}
+
 impl ParseExtensionsError {
-    pub fn formatted(&self) -> String {
+    pub fn print_self(&self) -> String {
         match self {
-            Self::UnavailableDirectory(x) => format!("\nError while trying to open the extensions` path (./extensions): {}",x).red().to_string(),
-            Self::NoFilesFormattedProperly => "\nError: No extension file is formatted properly, so none could be parsed.".red().to_string(),
-            Self::NoFilesFound => "\nError: No extension files found in directory.".red().to_string()
+            Self::DataDirNotFound => "\nData dir not found in any known location.".red().to_string(),
+            Self::DirNotFound => "\nExtensions dir not present.".red().to_string(),
+            Self::NoFilesFound => "\nError: No extension files found in directory.".red().to_string(),
+            Self::NoFilesFormattedProperly => "\nError: No extension file is formatted properly, so none could be parsed.".red().to_string()
         }
     }
 }
 
+impl ParseConfigFileError {
+    pub fn print_self(&self) -> String {
+        match self {
+            Self::DataDirNotFound => "\nData dir not found in any known location.".red().to_string(),
+        }
+    }
+}
+
+lazy_static! {
+    static ref DATA_DIR : Option<String> = try_find_data_dir();
+}
+
+
 
 pub fn parse_supported_extensions_to_map() -> Result<(HashMap<String,Extension>, Vec<OsString>), ParseExtensionsError> {
-    let mut extensions_map = HashMap::new();
-    let dirs = match fs::read_dir(get_extensions_path()) {
-        Err(x) => return Err(ParseExtensionsError::UnavailableDirectory(x.to_string())),
-        Ok(x) => x
+    let data_dir = match DATA_DIR.clone() {
+        Some(x) => x,
+        None => return Err(ParseExtensionsError::DataDirNotFound)
     };
     
+    let dirs = match fs::read_dir(data_dir + "/extensions") {
+        Ok(x) => x,
+        Err(_) => return Err(ParseExtensionsError::DirNotFound)
+    };
+    
+    let mut extensions_map = HashMap::new();
     let mut num_of_entries = 0;
     let mut faulty_files : Vec<OsString> = Vec::new();
     let mut buffer = String::with_capacity(200);
@@ -70,6 +97,7 @@ pub fn parse_supported_extensions_to_map() -> Result<(HashMap<String,Extension>,
         Ok((extensions_map, faulty_files))
     }
 }
+
 
 
 fn parse_file_to_extension(mut reader :my_reader::BufReader, buffer :&mut String) -> Result<Extension,()> {
@@ -139,6 +167,12 @@ fn get_extensions_path() -> String {
     curr.push_str("\\extensions\\");
 
     curr
+}
+
+fn try_find_data_dir() -> Option<String> {
+    if Path::new("data").is_dir() {return Some("data".to_string())}
+    if Path::new("../../data").is_dir() {return Some("../../data".to_string())}
+    return None
 }
 
 mod my_reader {

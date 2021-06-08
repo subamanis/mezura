@@ -1,7 +1,7 @@
 use colored::Colorize;
 
 #[derive(Debug,PartialEq)]
-pub struct Args {
+pub struct ProgramArgs {
     pub path: String,
     pub exclude_dirs: Option<Vec<String>>,
     pub dirs_of_interest: Option<Vec<String>>,
@@ -9,11 +9,11 @@ pub struct Args {
     pub threads: Option<usize>
 }
 
-impl Args {
+impl ProgramArgs {
     pub fn new(path: String, exclude_dirs: Option<Vec<String>>, dirs_of_interest: Option<Vec<String>>,
-        extensions_of_interest: Option<Vec<String>>, threads: Option<usize>) -> Args 
+        extensions_of_interest: Option<Vec<String>>, threads: Option<usize>) -> ProgramArgs 
     {
-        Args {path, exclude_dirs, dirs_of_interest, extensions_of_interest, threads}
+        ProgramArgs {path, exclude_dirs, dirs_of_interest, extensions_of_interest, threads}
     }
 }
 
@@ -32,7 +32,7 @@ impl ArgParsingError {
     }
 }
 
-pub fn read_args_cmd() -> Result<Args,ArgParsingError> {
+pub fn read_args_cmd() -> Result<ProgramArgs,ArgParsingError> {
     let args  = std::env::args().skip(1).collect::<Vec<String>>();
     if args.is_empty() {return Err(ArgParsingError::NoArgsProvided)}
     let line = args.join(" ");
@@ -42,7 +42,7 @@ pub fn read_args_cmd() -> Result<Args,ArgParsingError> {
     new_get_arguments(line)
 }
 
-pub fn read_args_console() -> Result<Args,ArgParsingError> {
+pub fn read_args_console() -> Result<ProgramArgs,ArgParsingError> {
     let mut line = String::with_capacity(30);
     std::io::stdin().read_line(&mut line).unwrap();
     if line.trim().is_empty() {
@@ -53,7 +53,7 @@ pub fn read_args_console() -> Result<Args,ArgParsingError> {
 }
 
 
-fn new_get_arguments(line: &str) -> Result<Args, ArgParsingError> {
+fn new_get_arguments(line: &str) -> Result<ProgramArgs, ArgParsingError> {
     fn get_if_not_empty(str: &str) -> Option<String> {
         if str.is_empty() {None}
         else {Some(str.to_owned())}
@@ -90,7 +90,7 @@ fn new_get_arguments(line: &str) -> Result<Args, ArgParsingError> {
         }
     }
     
-    Ok(Args::new(path, exclude_dirs, dirs_of_interest, extensions_of_interest, threads))
+    Ok(ProgramArgs::new(path, exclude_dirs, dirs_of_interest, extensions_of_interest, threads))
 }
 
 
@@ -117,13 +117,13 @@ mod tests {
     #[test]
     fn test_cmd_arg_parsing() {
         //@TODO: trim() and check for empty line
-        assert_eq!(Args::new("path".to_owned(),None,None,None,None),new_get_arguments("path").unwrap());
-        assert_eq!(Args::new("path path1 path2".to_owned(),None,None,None,None),new_get_arguments("path path1 path2").unwrap());
+        assert_eq!(ProgramArgs::new("path".to_owned(),None,None,None,None),new_get_arguments("path").unwrap());
+        assert_eq!(ProgramArgs::new("path path1 path2".to_owned(),None,None,None,None),new_get_arguments("path path1 path2").unwrap());
         assert!(new_get_arguments("path --something").is_err());
         assert!(new_get_arguments("path --threads 3 --dirs eh --something --exclude e").is_err());
-        assert_eq!(Args::new("path".to_owned(),Some(vec!["ex1".to_owned(),"ex2".to_owned()]),Some(vec!["dir1".to_owned(),"dir2".to_owned()]),
+        assert_eq!(ProgramArgs::new("path".to_owned(),Some(vec!["ex1".to_owned(),"ex2".to_owned()]),Some(vec!["dir1".to_owned(),"dir2".to_owned()]),
             Some(vec!["java".to_owned(),"cs".to_owned()]), Some(4)), new_get_arguments("path --threads 4 --exclude ex1 ex2 --dirs dir1 dir2 --extensions java cs").unwrap());
-        assert_eq!(Args::new("path".to_owned(),Some(vec!["ex2".to_owned()]), None, Some(vec!["java".to_owned(),"cs".to_owned()]), None),
+        assert_eq!(ProgramArgs::new("path".to_owned(),Some(vec!["ex2".to_owned()]), None, Some(vec!["java".to_owned(),"cs".to_owned()]), None),
             new_get_arguments("path   --exclude ex2  --extensions java    cs").unwrap());
     }
 }
