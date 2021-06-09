@@ -32,6 +32,7 @@ pub enum ParseConfigFileWarning {
 
 #[derive(Debug)]
 pub struct PersistentOptions {
+    pub path                     : Option<String>,
     pub exclude_dirs             : Option<Vec<String>>,
     pub extensions_of_interest   : Option<Vec<String>>,
     pub threads                  : Option<usize>,
@@ -128,8 +129,8 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<(PersistentOptions,b
         Err(_) => return Err(ParseConfigFileError::FileNotFound(file_name.to_owned()))
     });
 
-    let (mut braces_as_code, mut search_in_dotted, mut threads, mut exclude_dirs,
-         mut extensions_of_interest) = (None,None,None,None,None);
+    let (mut path, mut braces_as_code, mut search_in_dotted, mut threads, mut exclude_dirs,
+         mut extensions_of_interest) = (None,None,None,None,None,None);
     let mut buf = String::with_capacity(150); 
     let mut has_formatting_errors = false;
 
@@ -193,11 +194,19 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<(PersistentOptions,b
                     continue;
                 }
                 extensions_of_interest = Some(buf.split(" ").map(|x| x.trim().to_owned()).collect::<Vec<String>>());
+            } else if id == "path" {
+                reader.read_line(&mut buf);
+                let buf = buf.trim();
+                if buf.is_empty() {
+                    has_formatting_errors = true;
+                    continue;
+                }
+                path = Some(buf.to_owned());
             }
         }
     }
 
-    Ok((PersistentOptions::new(exclude_dirs, extensions_of_interest, threads, braces_as_code, search_in_dotted), has_formatting_errors))
+    Ok((PersistentOptions::new(path,exclude_dirs, extensions_of_interest, threads, braces_as_code, search_in_dotted), has_formatting_errors))
 }
 
 fn parse_file_to_extension(mut reader :my_reader::BufReader, buffer :&mut String) -> Result<Extension,()> {
@@ -282,9 +291,10 @@ impl ParseConfigFileError {
 }
 
 impl PersistentOptions {
-    pub fn new(exclude_dirs: Option<Vec<String>>, extensions_of_interest: Option<Vec<String>>,
+    pub fn new(path: Option<String>, exclude_dirs: Option<Vec<String>>, extensions_of_interest: Option<Vec<String>>,
         threads: Option<usize>, braces_as_code: Option<bool>, search_in_dotted: Option<bool>) -> PersistentOptions {
         PersistentOptions {
+            path,
             exclude_dirs,
             extensions_of_interest,
             braces_as_code,

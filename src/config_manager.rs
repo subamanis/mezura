@@ -1,8 +1,8 @@
-use std::path::Path;
+use std::{path::Path, process};
 
 use colored::Colorize;
 
-use crate::data_reader::{self, ParseConfigFileError, PersistentOptions};
+use crate::{data_reader::{self, ParseConfigFileError, PersistentOptions},utils};
 
 // default config values
 pub const DEF_BRACES_AS_CODE   : bool        = false;
@@ -23,6 +23,7 @@ pub struct Configuration {
 #[derive(Debug)]
 pub enum ArgParsingError {
     NoArgsProvided,
+    MissingTargetPath,
     InvalidPath,
     UnrecognisedParameter(String),
     IncorrectCommandArgs(String)
@@ -35,17 +36,29 @@ pub fn read_args_cmd() -> Result<Configuration,ArgParsingError> {
     let line = line.trim();
     if line.is_empty() {return Err(ArgParsingError::NoArgsProvided)}
 
+    if line == "--help" {print_help_message_and_exit()}
+
     create_config_from_args(line)
 }
 
 pub fn read_args_console() -> Result<Configuration,ArgParsingError> {
     let mut line = String::with_capacity(30);
     std::io::stdin().read_line(&mut line).unwrap();
-    if line.trim().is_empty() {
+    println!("it is:{}",line);
+    line = line.trim().to_owned();
+    if line.is_empty() {
         Err(ArgParsingError::NoArgsProvided)
     } else {
+        if line == "--help" {print_help_message_and_exit()} 
+
         create_config_from_args(&line)
     }
+}
+
+fn print_help_message_and_exit() {
+    println!("\nHELP\n");
+    utils::wait_for_input();
+    process::exit(0);
 }
 
 fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError> {
@@ -60,13 +73,27 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
             str
         }
     }
+    fn is_valid_path(str: &str) -> bool {
+        let path_str = str.trim();
     
-    let options = line.split("--").collect::<Vec<_>>();
-    let path_str = options[0].trim().to_owned();
+        let p = Path::new(path_str);
+        if !p.is_dir() && !p.is_file() {
+            false
+        } else {
+            true
+        }
+    }
 
-    let path = Path::new(&path_str);
-    if !path.is_dir() && !path.is_file() {
-        return Err(ArgParsingError::InvalidPath);
+    let mut path = None;
+    let options = line.split("--").collect::<Vec<_>>();
+
+    if !line.starts_with("--") {
+        let path_str = options[0].trim().to_owned();
+        if !is_valid_path(&path_str) {
+            return Err(ArgParsingError::InvalidPath);
+        }
+
+        path = Some(path_str);
     }
 
     let mut custom_config = None;
@@ -118,12 +145,23 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
                     continue;
                 }
             }
+        } else if options[i].starts_with("path") {
+            if options[i].len() < 5 {
+                return Err(ArgParsingError::IncorrectCommandArgs("--path".to_owned()))
+            }
+            
+            let path_str = options[i][4..].trim();
+            if path_str.is_empty() || !is_valid_path(path_str){
+                return Err(ArgParsingError::IncorrectCommandArgs("--path".to_owned()))
+            }
+
+            path = Some(path_str.to_owned());
         } else {
             return Err(ArgParsingError::UnrecognisedParameter(options[i].split(" ").next().unwrap_or(options[i]).trim().to_owned()));
         }
     }
 
-    let mut args_builder = ProgramArgsBuilder::new(path_str, exclude_dirs, extensions_of_interest, threads);
+    let mut args_builder = ProgramArgsBuilder::new(path, exclude_dirs, extensions_of_interest, threads);
     if let Some(x) = custom_config {
         args_builder.add_missing_fields(x);
     }
@@ -135,6 +173,10 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
             }
             args_builder.add_missing_fields(x.0);
         }
+    }
+
+    if args_builder.path.is_none() {
+        return Err(ArgParsingError::MissingTargetPath);
     }
     
     Ok(args_builder.build())
@@ -158,7 +200,7 @@ fn get_distinct_arguments(line: String) -> Vec<String> {
 
 #[derive(Debug)]
 struct ProgramArgsBuilder {
-    pub path: String,
+    pub path: Option<String>,
     pub exclude_dirs: Option<Vec<String>>,
     pub extensions_of_interest: Option<Vec<String>>,
     pub threads: Option<usize>,
@@ -167,7 +209,7 @@ struct ProgramArgsBuilder {
 }
 
 impl ProgramArgsBuilder {
-    pub fn new(path: String, exclude_dirs: Option<Vec<String>>, extensions_of_interest: Option<Vec<String>>,
+    pub fn new(path: Option<String>, exclude_dirs: Option<Vec<String>>, extensions_of_interest: Option<Vec<String>>,
          threads: Option<usize>) -> ProgramArgsBuilder {
         ProgramArgsBuilder {
             path,
@@ -195,7 +237,7 @@ impl ProgramArgsBuilder {
 
     pub fn build(&self) -> Configuration {
         Configuration {
-            path : self.path.clone(),
+            path : self.path.clone().unwrap(), //make sure the path is set
             exclude_dirs: (self.exclude_dirs).clone().unwrap_or(Vec::new()),
             extensions_of_interest: (self.extensions_of_interest).clone().unwrap_or(Vec::new()).clone(),
             threads: self.threads.unwrap_or(DEF_THREADS).clone(),
@@ -247,6 +289,7 @@ impl ArgParsingError {
     pub fn formatted(&self) -> String {
         match self {
             Self::NoArgsProvided => "No arguments provided.".red().to_string(),
+            Self::MissingTargetPath => "The target directory (--path) is not specified.".red().to_string(),
             Self::InvalidPath => "Path provided is not a valid directory or file.".red().to_string(),
             Self::UnrecognisedParameter(p) => format!("--{} is not recognised as a command.",p).red().to_string(),
             Self::IncorrectCommandArgs(p) => format!("Incorrect arguments provided for the command '--{}'.",p).red().to_string()

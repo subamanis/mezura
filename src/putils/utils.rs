@@ -7,8 +7,8 @@ pub fn print_contents<T>(vec :&[T]) where T : Debug {
     }
 
     print!("{:?}",vec[0]);
-    for i in 1..vec.len() {
-        print!(", \"{:?}\" ", vec[i]);
+    for item in vec.iter().skip(1) {
+        print!(", \"{:?}\" ", item);
     }
 }
 
@@ -20,8 +20,8 @@ pub fn get_contents<T>(vec: &[T]) -> String
 
     let mut s  = format!("{:?}",vec[0]);
     if vec.len() == 1 {return s;}
-    for i in 1..vec.len() {
-        s.push_str(&format!(", {:?}",vec[i]));
+    for item in vec.iter().skip(1) {
+        s.push_str(&format!(", {:?}",item));
     }
 
     s
