@@ -1,15 +1,23 @@
-use std::{path::Path, process, time::SystemTime};
+use std::{process, time::SystemTime};
 
 use colored::*;
 
-use code_stats::{cmd_arg_parser::{self}, ProgramArgs, extension_reader, putils::*};
+use code_stats::{config_manager::{self}, Configuration, data_reader, putils::*};
 
 fn main() {
     control::set_virtual_terminal(true).unwrap();
 
-    let extensions_map = match extension_reader::parse_supported_extensions_to_map() {
+    let config = match config_manager::read_args_cmd() {
+        Ok(config) => config,
         Err(x) => {
-            println!("{}", x.print_self());
+            println!("\n{}",x.formatted());
+            get_args_from_stdin()
+        } 
+    };
+
+    let extensions_map = match data_reader::parse_supported_extensions_to_map(&config.extensions_of_interest) {
+        Err(x) => {
+            println!("\n{}", x.formatted());
             utils::wait_for_input();
             process::exit(1);
         },
@@ -25,24 +33,8 @@ fn main() {
         }
     };
 
-    let args = match cmd_arg_parser::read_args_cmd() {
-        Ok(args) => {
-            if !Path::new(&args.path).exists() {
-                println!("{}","\nPath provided is not a valid directory or file.".red());
-                get_args_from_stdin()
-            } else {
-                args
-            }
-        },
-        Err(x) => {
-            println!();
-            x.print_self();
-            get_args_from_stdin()
-        } 
-    };
-
     let start = SystemTime::now();
-    if let Err(x) = code_stats::run(args, extensions_map) {
+    if let Err(x) = code_stats::run(config, extensions_map) {
         println!("{}",x.formatted());
     }
     println!("\nExecution time: {:.2} secs.",SystemTime::now().duration_since(start).unwrap().as_secs_f32());
@@ -50,19 +42,12 @@ fn main() {
     utils::wait_for_input();
 }
 
-fn get_args_from_stdin() -> ProgramArgs {
+fn get_args_from_stdin() -> Configuration {
     loop {
         println!("\nPlease provide a file name or a root directory path, and optional parameters.\nType --help for the parameter list ");
-        match cmd_arg_parser::read_args_console() {
-            Err(e) => e.print_self(),
-            Ok(args) => {
-                let path = Path::new(&args.path);
-                if path.is_dir() || path.is_file(){
-                    break args;
-                } else {
-                    println!("{}","\nPath provided is not a valid directory or file.".red());
-                }
-            }
+        match config_manager::read_args_console() {
+            Err(e) => println!("{}",e.formatted()),
+            Ok(config) => break config
         }
     }
 }

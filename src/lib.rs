@@ -3,8 +3,8 @@
 #![allow(non_snake_case)]
 #![allow(unused_imports)]
 
-pub mod cmd_arg_parser;
-pub mod extension_reader;
+pub mod config_manager;
+pub mod data_reader;
 pub mod file_parser;
 pub mod result_printer;
 pub mod putils;
@@ -16,7 +16,7 @@ use std::thread;
 
 use colored::{Colorize,ColoredString};
 
-pub use cmd_arg_parser::ProgramArgs;
+pub use config_manager::Configuration;
 pub use putils::*;
 use domain::{Extension, ExtensionContentInfo, ExtensionMetadata, FileStats, Keyword};
 
@@ -26,7 +26,7 @@ pub type BoolRef        = Arc<AtomicBool>;
 pub type ContentInfoRef = Arc<Mutex<HashMap<String,ExtensionContentInfo>>>;
 pub type ExtMapRef      = Arc<HashMap<String,Extension>>;
 
-pub fn run(args :ProgramArgs, extensions_map :HashMap<String, Extension>) -> Result<(), ParseFilesError> {
+pub fn run(config: Configuration, extensions_map: HashMap<String, Extension>) -> Result<(), ParseFilesError> {
     let files_ref : LinkedListRef = Arc::new(Mutex::new(LinkedList::new()));
     let faulty_files_ref : VecRef  = Arc::new(Mutex::new(Vec::new()));
     let finish_condition_ref : BoolRef = Arc::new(AtomicBool::new(false));
@@ -36,7 +36,7 @@ pub fn run(args :ProgramArgs, extensions_map :HashMap<String, Extension>) -> Res
     let mut handles = Vec::new(); 
 
     println!("\n{}...","Analyzing directory".underline().bold());
-    for i in 0..4 {
+    for i in 0..config.threads {
         handles.push(
             start_consumer_thread(
                 i, files_ref.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(), extensions_content_info_ref.clone(), extensions_map_ref.clone())
@@ -44,7 +44,7 @@ pub fn run(args :ProgramArgs, extensions_map :HashMap<String, Extension>) -> Res
         );
     }
 
-    let (total_files_num, relevant_files) = add_relevant_files(files_ref, &mut extensions_metadata, finish_condition_ref, &args.path, extensions_map_ref, &args.exclude_dirs);
+    let (total_files_num, relevant_files) = add_relevant_files(files_ref, &mut extensions_metadata, finish_condition_ref, extensions_map_ref, &config);
     if relevant_files == 0 {
         return Err(ParseFilesError::NoRelevantFiles);
     }
@@ -108,16 +108,16 @@ fn start_consumer_thread
     })
 }
 
-fn add_relevant_files(files_list :LinkedListRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>, finish_condition: BoolRef, dir: &str,
-     extensions: ExtMapRef, exclude_dirs: &Option<Vec<String>>) -> (usize,usize) 
+fn add_relevant_files(files_list :LinkedListRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>, finish_condition: BoolRef, 
+     extensions: ExtMapRef, config: &Configuration) -> (usize,usize) 
 {
-    let path = Path::new(&dir); 
+    let path = Path::new(&config.path); 
     if path.is_file() {
         if let Some(x) = path.extension() {
             if let Some(y) = x.to_str() {
                 if extensions.contains_key(y) {
                     extensions_metadata_map.get_mut(y).unwrap().add_file_meta(path.metadata().map_or(0, |m| m.len() as usize));
-                    files_list.lock().unwrap().push_front(dir.to_string());
+                    files_list.lock().unwrap().push_front(config.path.to_string());
                     finish_condition.store(true, Ordering::Relaxed);
                     return (1,1);
                 }
@@ -126,71 +126,71 @@ fn add_relevant_files(files_list :LinkedListRef, extensions_metadata_map: &mut H
         finish_condition.store(true, Ordering::Relaxed);
         (0,0)
     } else {
-        let (total_files, relevant_files) = search_dir_and_add_files_to_list(&files_list, extensions_metadata_map, dir, &extensions, exclude_dirs);
+        let (total_files, relevant_files) = search_dir_and_add_files_to_list(&files_list, extensions_metadata_map, &extensions, config);
         finish_condition.store(true, Ordering::Relaxed);
         (total_files,relevant_files)
     }
 } 
 
 fn search_dir_and_add_files_to_list(files_list: &LinkedListRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>,
-    target_dir: &str, extensions: &ExtMapRef, exclude_dirs: &Option<Vec<String>>) -> (usize,usize) 
+    extensions: &ExtMapRef, config: &Configuration) -> (usize,usize) 
 {
     let mut total_files = 0;
     let mut relevant_files = 0;
     let mut dirs: LinkedList<PathBuf> = LinkedList::new();
-    dirs.push_front(Path::new(target_dir).to_path_buf());
+    dirs.push_front(Path::new(&config.path).to_path_buf());
     while let Some(dir) = dirs.pop_front() {
-       if let Ok(entries) = fs::read_dir(&dir) {
-           for e in entries {
-               if let Ok(e) = e {
-                   if let Ok(ft) = e.file_type() {
-                       if ft.is_file() { 
-                           total_files += 1;
-                           let path_buf = e.path();
-                           let extension_name = match path_buf.extension() {
-                               Some(x) => {
-                                   match x.to_str() {
-                                       Some(x) => x.to_owned(),
-                                       None => continue
-                                    }
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for e in entries {
+                if let Ok(e) = e {
+                    if let Ok(ft) = e.file_type() {
+                        if ft.is_file() { 
+                            total_files += 1;
+                            let path_buf = e.path();
+                            let extension_name = match path_buf.extension() {
+                                Some(x) => {
+                                    match x.to_str() {
+                                        Some(x) => x.to_owned(),
+                                        None => continue
+                                        }
+                                    },
+                                    None => continue
+                                };
+                            if extensions.contains_key(&extension_name) {
+                                relevant_files += 1;
+                                let bytes = match path_buf.metadata() {
+                                    Ok(x) => x.len() as usize,
+                                    Err(_) => 0
+                                };
+                                extensions_metadata_map.get_mut(&extension_name).unwrap().add_file_meta(bytes);
+                    
+                                let str_path = match path_buf.to_str() {
+                                    Some(y) => y.to_owned(),
+                                    None => continue
+                                };
+                                files_list.lock().unwrap().push_front(str_path);
+                            }
+                        } else { //is directory
+                            let dir_name = match e.file_name().to_str() {
+                                Some(x) => {
+                                    if !config.should_search_in_dotted && x.starts_with('.') {continue;}
+                                    else {x.to_owned()}
                                 },
                                 None => continue
                             };
-                           if extensions.contains_key(&extension_name) {
-                               relevant_files += 1;
-                               let bytes = match path_buf.metadata() {
-                                   Ok(x) => x.len() as usize,
-                                   Err(_) => 0
-                               };
-                               extensions_metadata_map.get_mut(&extension_name).unwrap().add_file_meta(bytes);
-                
-                               let str_path = match path_buf.to_str() {
-                                   Some(y) => y.to_owned(),
-                                   None => continue
-                               };
-                               files_list.lock().unwrap().push_front(str_path);
-                           }
-                        } else { //is directory
-                           let dir_name = match e.file_name().to_str() {
-                               Some(x) => {
-                                   if x.starts_with('.') {continue;}
-                                   else {x.to_owned()}
-                               },
-                               None => continue
-                           };
-                
-                           if let Some(x) = exclude_dirs {
-                               if !x.contains(&dir_name){
-                                   dirs.push_front(e.path());
-                               }
-                           } else {
-                               dirs.push_front(e.path());
-                           }
-                       }
-                   }
-               }
-           }
-       }
+                    
+                            if !config.exclude_dirs.is_empty() {
+                                if !config.exclude_dirs.contains(&dir_name){
+                                    dirs.push_front(e.path());
+                                }
+                            } else {
+                                dirs.push_front(e.path());
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     (total_files,relevant_files)
 }
