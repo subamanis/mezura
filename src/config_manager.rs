@@ -67,8 +67,8 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
         else {Some(str.to_owned())}
     }
     fn remove_dot_prefix(str: &str) -> &str {
-        if str.starts_with('.') {
-            &str[1..]
+        if let Some(stripped) = str.strip_prefix('.') {
+            stripped
         } else {
             str
         }
@@ -77,11 +77,7 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
         let path_str = str.trim();
     
         let p = Path::new(path_str);
-        if !p.is_dir() && !p.is_file() {
-            false
-        } else {
-            true
-        }
+        p.is_dir() || p.is_file()
     }
 
     let mut path = None;
@@ -98,21 +94,21 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
 
     let mut custom_config = None;
     let (mut exclude_dirs, mut extensions_of_interest, mut threads) = (None, None, None);
-    for i in 1..options.len() {
-        if options[i].starts_with("exclude") {
-            let vec = options[i].split(" ").skip(1).filter_map(|x| get_if_not_empty(x.trim())).collect::<Vec<_>>();
-            if vec.len() == 0 {
-                return Err(ArgParsingError::IncorrectCommandArgs(options[i].to_owned()));
+    for command in options.into_iter().skip(1) {
+        if command.starts_with("exclude") {
+            let vec = command.split(' ').skip(1).filter_map(|x| get_if_not_empty(x.trim())).collect::<Vec<_>>();
+            if vec.is_empty() {
+                return Err(ArgParsingError::IncorrectCommandArgs(command.to_owned()));
             }
             exclude_dirs = Some(vec);
-        } else if options[i].starts_with("extensions"){
-            let vec = options[i].split(" ").skip(1).filter_map(|x| get_if_not_empty(remove_dot_prefix(x.trim()))).collect::<Vec<_>>();
-            if vec.len() == 0 {
+        } else if command.starts_with("extensions"){
+            let vec = command.split(' ').skip(1).filter_map(|x| get_if_not_empty(remove_dot_prefix(x.trim()))).collect::<Vec<_>>();
+            if vec.is_empty() {
                 return Err(ArgParsingError::IncorrectCommandArgs("--extensions".to_owned()));
             }    
             extensions_of_interest = Some(vec);
-        } else if options[i].starts_with("threads") {
-            let vec = options[i].split(" ").skip(1).filter_map(|x| get_if_not_empty(x.trim())).collect::<Vec<_>>();
+        } else if command.starts_with("threads") {
+            let vec = command.split(' ').skip(1).filter_map(|x| get_if_not_empty(x.trim())).collect::<Vec<_>>();
             if vec.len() != 1 {
                 return Err(ArgParsingError::IncorrectCommandArgs("--threads".to_owned()));
             }
@@ -125,11 +121,7 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
             } else {
                 return Err(ArgParsingError::IncorrectCommandArgs("--threads".to_owned()));
             }
-        } else if options[i].starts_with("load") {
-            if options[i].len() == 4 {
-                return Err(ArgParsingError::IncorrectCommandArgs("--load".to_owned()));
-            }
-            let config_name = options[i][4..].trim();
+        } else if let Some(config_name) = command.strip_prefix("load") {
             if config_name.is_empty() {
                 return Err(ArgParsingError::IncorrectCommandArgs("--load".to_owned()));
             }
@@ -145,19 +137,14 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
                     continue;
                 }
             }
-        } else if options[i].starts_with("path") {
-            if options[i].len() < 5 {
-                return Err(ArgParsingError::IncorrectCommandArgs("--path".to_owned()))
-            }
-            
-            let path_str = options[i][4..].trim();
-            if path_str.is_empty() || !is_valid_path(path_str){
+        } else if let Some(path_str) = command.strip_prefix("path") {
+            if path_str.is_empty() || !is_valid_path(path_str) {
                 return Err(ArgParsingError::IncorrectCommandArgs("--path".to_owned()))
             }
 
             path = Some(path_str.to_owned());
         } else {
-            return Err(ArgParsingError::UnrecognisedParameter(options[i].split(" ").next().unwrap_or(options[i]).trim().to_owned()));
+            return Err(ArgParsingError::UnrecognisedParameter(command.split(' ').next().unwrap_or(command).trim().to_owned()));
         }
     }
 
@@ -221,7 +208,7 @@ impl ProgramArgsBuilder {
         }
     }
 
-    pub fn add_missing_fields<'a>(&'a mut self, config: PersistentOptions) -> &'a mut ProgramArgsBuilder {
+    pub fn add_missing_fields(&mut self, config: PersistentOptions) -> &mut ProgramArgsBuilder {
         if self.exclude_dirs.is_none() {self.exclude_dirs = config.exclude_dirs};
         if self.extensions_of_interest.is_none() {self.extensions_of_interest = config.extensions_of_interest};
         if self.threads.is_none() {self.threads = config.threads};
@@ -238,11 +225,11 @@ impl ProgramArgsBuilder {
     pub fn build(&self) -> Configuration {
         Configuration {
             path : self.path.clone().unwrap(), //make sure the path is set
-            exclude_dirs: (self.exclude_dirs).clone().unwrap_or(Vec::new()),
-            extensions_of_interest: (self.extensions_of_interest).clone().unwrap_or(Vec::new()).clone(),
-            threads: self.threads.unwrap_or(DEF_THREADS).clone(),
-            braces_as_code: self.braces_as_code.unwrap_or(false).clone(),
-            should_search_in_dotted: self.should_search_in_dotted.unwrap_or(false).clone(),
+            exclude_dirs: (self.exclude_dirs).clone().unwrap_or_default(),
+            extensions_of_interest: (self.extensions_of_interest).clone().unwrap_or_default(),
+            threads: self.threads.unwrap_or(DEF_THREADS),
+            braces_as_code: self.braces_as_code.unwrap_or(false),
+            should_search_in_dotted: self.should_search_in_dotted.unwrap_or(false),
         }
     }
 }
@@ -259,27 +246,27 @@ impl Configuration {
         }
     }
 
-    pub fn set_exclude_dirs<'a>(&'a mut self, exclude_dirs: Vec<String>) -> &'a mut Configuration {
+    pub fn set_exclude_dirs(&mut self, exclude_dirs: Vec<String>) -> & mut Configuration {
         self.exclude_dirs = exclude_dirs;
         self
     }
 
-    pub fn set_extensions_of_interest<'a>(&'a mut self, extensions_of_interest: Vec<String>) -> &'a mut Configuration {
+    pub fn set_extensions_of_interest(&mut self, extensions_of_interest: Vec<String>) -> & mut Configuration {
         self.extensions_of_interest = extensions_of_interest;
         self
     }
 
-    pub fn set_threads<'a>(&'a mut self, threads: usize) -> &'a mut Configuration {
+    pub fn set_threads(&mut self, threads: usize) -> &mut Configuration {
         self.threads = threads;
         self
     }
 
-    pub fn set_braces_as_code<'a>(&'a mut self, braces_as_code: bool) -> &'a mut Configuration {
+    pub fn set_braces_as_code(&mut self, braces_as_code: bool) -> &mut Configuration {
         self.braces_as_code = braces_as_code;
         self
     }
 
-    pub fn set_should_search_in_dotted<'a>(&'a mut self, should_search_in_dotted: bool) -> &'a mut Configuration {
+    pub fn set_should_search_in_dotted(&mut self, should_search_in_dotted: bool) -> &mut Configuration {
         self.should_search_in_dotted = should_search_in_dotted;
         self
     }

@@ -4,17 +4,17 @@ use crate::*;
 
 
 #[inline]
-pub fn parse_file(file_name: &str, file_extension: &str, buf: &mut String, extension_map: ExtMapRef) -> Result<FileStats,ParseFilesError> {
-    let reader = BufReader::new(match File::open(file_name){
+pub fn parse_file(_file_name: &str, file_extension: &str, buf: &mut String, extension_map: ExtMapRef) -> Result<FileStats,ParseFilesError> {
+    let reader = BufReader::new(match File::open(_file_name){
         Ok(f) => f,
         Err(_) => return Err(ParseFilesError::FaultyFile)
     });
 
-    parse_lines(file_name, reader, buf, &extension_map.get(file_extension).unwrap())
+    parse_lines(_file_name, reader, buf, &extension_map.get(file_extension).unwrap())
 }
 
 #[inline]
-fn parse_lines(file_name: &str, mut reader: BufReader<File>, buf: &mut String, extension: &Extension) -> Result<FileStats,ParseFilesError> {
+fn parse_lines(_file_name: &str, mut reader: BufReader<File>, buf: &mut String, extension: &Extension) -> Result<FileStats,ParseFilesError> {
     let mut file_stats = FileStats::default(&extension.keywords);
     let mut is_comment_closed = true;
     let mut open_str_symbol = None::<String>;
@@ -31,9 +31,9 @@ fn parse_lines(file_name: &str, mut reader: BufReader<File>, buf: &mut String, e
 
         let line_info = 
         if extension.supports_multiline_comments() { //another way?
-            get_bounds_w_multiline_comments(file_name, line, extension, is_comment_closed, &open_str_symbol)
+            get_bounds_w_multiline_comments(_file_name, line, extension, is_comment_closed, &open_str_symbol)
         } else {
-            get_bounds_only_single_line_comments(file_name, line, extension, &open_str_symbol)
+            get_bounds_only_single_line_comments(_file_name, line, extension, &open_str_symbol)
         };
 
         is_comment_closed = !line_info.is_comment_open_after;
@@ -135,30 +135,30 @@ impl LineInfo {
 }
 
 //@Issue: if there are non ASCII chars in the line and the line starts a multiline string, it willnot be taken into account
-fn get_empty_LineInfo_with_str_symbol(file_name: &str, open_str_symbol: &Option<String>, line: &str, index: usize) -> LineInfo{
+fn get_empty_LineInfo_with_str_symbol(_file_name: &str, _open_str_symbol: &Option<String>, line: &str, index: usize) -> LineInfo{
     let char = line.chars().nth(index);
     if let Some(x) = char {
         LineInfo::with_open_symbol(x.to_string())
     } else {
-        // println!("1. File: {}\n line: {} __,__ str_symbol: {:?}",file_name, line, open_str_symbol); 
+        // println!("1. File: {}\n line: {} __,__ str_symbol: {:?}",_file_name, line, _open_str_symbol); 
         // println!("1 NON ASCII - has open string");
         LineInfo::none_all(true)
     }
 }
 
 //@Issue: if there are non ASCII chars in the line and the line starts a multiline string, it willnot be taken into account
-fn get_LineInfo_with_str_symbol(file_name: &str, open_str_symbol: &Option<String>, line: &str, relevant: String, index: usize) -> LineInfo {
+fn get_LineInfo_with_str_symbol(_file_name: &str, _open_str_symbol: &Option<String>, line: &str, relevant: String, index: usize) -> LineInfo {
     let char = line.chars().nth(index);
     if let Some(x) = char {
         LineInfo::new(Some(relevant), true, false, Some(x.to_string()))
     } else {
-        // println!("2. File: {}\n line: {} __,__ str_symbol: {:?}",file_name, line, open_str_symbol); 
+        // println!("2. File: {}\n line: {} __,__ str_symbol: {:?}",_file_name, line, _open_str_symbol); 
         // println!("2 NON ASCII - has open string");
         LineInfo::new(Some(relevant), true, false, None)
     }
 }
 
-fn get_bounds_only_single_line_comments(file_name: &str, line: &str, extension: &Extension, open_str_symbol: &Option<String>) -> LineInfo {
+fn get_bounds_only_single_line_comments(_file_name: &str, line: &str, extension: &Extension, open_str_symbol: &Option<String>) -> LineInfo {
     let str_indices = get_str_indices(line, extension, open_str_symbol);
     if open_str_symbol.is_some() && str_indices.is_empty() {
         return LineInfo::none_str(false, true, open_str_symbol.to_owned());
@@ -204,7 +204,7 @@ fn get_bounds_only_single_line_comments(file_name: &str, line: &str, extension: 
             loop {
                 if index_after >= line.len() {
                     if is_str_open_m {
-                        let str_symbol = line.chars().nth(str_indices[str_indices.len()-1]).unwrap().to_string();
+                        let str_symbol = line.chars().nth(str_indices[str_indices.len()-1]).unwrap().to_string();//@TODO: unwrap?
                         if relevant.is_empty() {return LineInfo::with_open_symbol(str_symbol)}
                         else {return LineInfo::new(Some(relevant), true, false, Some(str_symbol));}
                     } else {
@@ -231,9 +231,9 @@ fn get_bounds_only_single_line_comments(file_name: &str, line: &str, extension: 
             
             if !has_more_strs(str_counter) && is_str_open_m {
                 if relevant.is_empty() {
-                    return get_empty_LineInfo_with_str_symbol(file_name, open_str_symbol, line, str_indices[str_indices.len()-1]);
+                    return get_empty_LineInfo_with_str_symbol(_file_name, open_str_symbol, line, str_indices[str_indices.len()-1]);
                 } else {
-                    return get_LineInfo_with_str_symbol(file_name, open_str_symbol, line, relevant, str_indices[str_indices.len()-1]);
+                    return get_LineInfo_with_str_symbol(_file_name, open_str_symbol, line, relevant, str_indices[str_indices.len()-1]);
                 }
             }
             
@@ -248,10 +248,10 @@ fn get_bounds_only_single_line_comments(file_name: &str, line: &str, extension: 
                 str_counter += 1;
                 if !has_more_strs(str_counter) {
                     if relevant.is_empty() {
-                        return get_empty_LineInfo_with_str_symbol(file_name, open_str_symbol, line, this_index);
+                        return get_empty_LineInfo_with_str_symbol(_file_name, open_str_symbol, line, this_index);
                     }
                     else {
-                        return get_LineInfo_with_str_symbol(file_name, open_str_symbol, line, relevant, this_index);
+                        return get_LineInfo_with_str_symbol(_file_name, open_str_symbol, line, relevant, this_index);
                     }
                 }
                 
@@ -347,7 +347,7 @@ fn resolve_double_counting_of_adjacent_start_and_end_symbols(start_indices: &mut
    }
 }
 
-fn get_bounds_w_multiline_comments(file_name:&str, line: &str, extension: &Extension, is_comment_closed: bool,
+fn get_bounds_w_multiline_comments(_file_name:&str, line: &str, extension: &Extension, is_comment_closed: bool,
      open_str_symbol: &Option<String>) -> LineInfo
 {
     let mut com_end_indices = get_com_end_indices(line, extension);
@@ -373,7 +373,7 @@ fn get_bounds_w_multiline_comments(file_name:&str, line: &str, extension: &Exten
         })
         .collect::<Vec<usize>>();
     let mut com_start_indices = get_com_start_indices(line, extension, &comment_indices);
-    if com_end_indices.len() > 0 && com_start_indices.len() > 0 {
+    if !com_end_indices.is_empty() && !com_start_indices.is_empty() {
         resolve_double_counting_of_adjacent_start_and_end_symbols(&mut com_start_indices, &mut com_end_indices,
             !is_comment_closed, extension.multiline_len());
     }
@@ -492,7 +492,7 @@ fn get_bounds_w_multiline_comments(file_name:&str, line: &str, extension: &Exten
                 relevant.push_str(&line[slice_start_index..this_index]);
                 str_counter += 1;
                 if !has_more_strs(str_counter) {
-                    let str_symbol = line.chars().nth(this_index).unwrap().to_string();
+                    let str_symbol = line.chars().nth(this_index).unwrap().to_string(); //@TODO: unwrap?
                     if relevant.is_empty() {return LineInfo::with_open_symbol(str_symbol);}
                     else {return LineInfo::new(Some(relevant), true, false, Some(str_symbol));}
                 }
@@ -699,11 +699,11 @@ fn get_str_indices(line: &str, extension: &Extension, open_str_symbol: &Option<S
             add_unescaped_indices(&mut indices_1, first_index_1, line_bytes, &mut iter_1);
             add_unescaped_indices(&mut indices_2, first_index_2, line_bytes, &mut iter_2);
             if indices_1.is_empty() && indices_2.is_empty() {
-                return Vec::new();
+                Vec::new()
             } else if indices_2.is_empty() {
-                return indices_1;
+                indices_1
             } else if indices_1.is_empty() {
-                return indices_2;
+                indices_2
             } else {
                 add_non_intersecting(&mut indices_1, &mut indices_2, open_str_symbol, &mut indices, extension); //@TODO fix index 0 for size 0
                 indices

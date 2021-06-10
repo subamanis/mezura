@@ -157,18 +157,18 @@ fn remove_extensions_with_0_files(content_info_map: &mut HashMap<String,Extensio
 fn get_extension_names_as_sorted_vec_according_to_how_much_they_appeared(
    extensions_metadata_map: &HashMap<String, ExtensionMetadata>) -> Vec<String> 
 {
-   let mut value_map = HashMap::<String,usize>::new();
-   let mut sorted_extensions_vec = Vec::new();
-   for (ext_name,metadata) in extensions_metadata_map.iter() {
-       value_map.insert(ext_name.to_owned(), metadata.files * 10 + metadata.bytes as usize);
-       sorted_extensions_vec.push(ext_name.to_owned());
-   }
+    let mut value_map = HashMap::<String,usize>::new();
+    let mut sorted_extensions_vec = Vec::new();
+    for (ext_name,metadata) in extensions_metadata_map.iter() {
+        value_map.insert(ext_name.to_owned(), metadata.files * 10 + metadata.bytes as usize);
+        sorted_extensions_vec.push(ext_name.to_owned());
+    }
 
-   sorted_extensions_vec.sort_by(|a,b| {
-       value_map.get(b).unwrap().cmp(value_map.get(a).unwrap())
-   });
+    sorted_extensions_vec.sort_by(|a,b| {
+        value_map.get(b).unwrap().cmp(value_map.get(a).unwrap())
+    });
 
-   return sorted_extensions_vec
+    sorted_extensions_vec
 }
 
 fn get_num_of_verticals(percentages: &[f64]) -> Vec<usize> {
@@ -207,7 +207,7 @@ fn normalize_to_NUM_OF_VERTICALS(verticals: &mut Vec<usize>, sum: usize) {
     let comparator = |a: &&mut usize,b: &&mut usize| b.cmp(a);
     sorted_verticals.sort_by(comparator);
 
-    let is_over = if sum > NUM_OF_VERTICALS {true} else {false};
+    let is_over = sum > NUM_OF_VERTICALS;
     let mut difference = if is_over {sum - NUM_OF_VERTICALS} else {NUM_OF_VERTICALS - sum}; 
 
     let same_num_of_verticals_indices = {

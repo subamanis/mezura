@@ -5,7 +5,7 @@ use lazy_static::lazy_static;
 
 use crate::{config_manager, domain::*};
 
-const DEFAULT_CONFIG_FILE_NAME : &'static str = "default_config.txt";
+const DEFAULT_CONFIG_FILE_NAME : &str = "default_config.txt";
 
 #[derive(Debug)]
 pub enum ParseExtensionsError {
@@ -44,7 +44,7 @@ lazy_static! {
     static ref DATA_DIR : Option<String> = try_find_data_dir();
 }
 
-pub fn parse_supported_extensions_to_map(extensions_of_interest: &Vec<String>)
+pub fn parse_supported_extensions_to_map(extensions_of_interest: &[String])
         -> Result<(HashMap<String,Extension>, Vec<OsString>), ParseExtensionsError> 
 {
     let data_dir = match DATA_DIR.clone() {
@@ -138,7 +138,7 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<(PersistentOptions,b
         if size == 0 {break};
 
         if buf.starts_with("===>") {
-            let id = buf.split(" ").skip(1).next().unwrap_or("").trim();
+            let id = buf.split(' ').nth(1).unwrap_or("").trim();
 
             if id == "braces_as_code" {
                 reader.read_line(&mut buf);
@@ -185,7 +185,7 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<(PersistentOptions,b
                     has_formatting_errors = true;
                     continue;
                 }
-                exclude_dirs = Some(buf.split(" ").map(|x| x.trim().to_owned()).collect::<Vec<String>>());
+                exclude_dirs = Some(buf.split(' ').map(|x| x.trim().to_owned()).collect::<Vec<String>>());
             } else if id == "extensions" {
                 reader.read_line(&mut buf);
                 let buf = buf.trim();
@@ -193,7 +193,7 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<(PersistentOptions,b
                     has_formatting_errors = true;
                     continue;
                 }
-                extensions_of_interest = Some(buf.split(" ").map(|x| x.trim().to_owned()).collect::<Vec<String>>());
+                extensions_of_interest = Some(buf.split(' ').map(|x| x.trim().to_owned()).collect::<Vec<String>>());
             } else if id == "path" {
                 reader.read_line(&mut buf);
                 let buf = buf.trim();
@@ -265,7 +265,7 @@ fn parse_file_to_extension(mut reader :my_reader::BufReader, buffer :&mut String
 fn try_find_data_dir() -> Option<String> {
     if Path::new("data").is_dir() {return Some("data".to_string())}
     if Path::new("../../data").is_dir() {return Some("../../data".to_string())}
-    return None
+    None
 }
 
 impl ParseExtensionsError {
