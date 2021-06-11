@@ -17,7 +17,8 @@ pub struct Configuration {
     pub extensions_of_interest: Vec<String>,
     pub threads: usize,
     pub braces_as_code: bool,
-    pub should_search_in_dotted: bool
+    pub should_search_in_dotted: bool,
+    pub should_show_faulty_files: bool
 }
 
 #[derive(Debug)]
@@ -62,24 +63,6 @@ fn print_help_message_and_exit() {
 }
 
 fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError> {
-    fn get_if_not_empty(str: &str) -> Option<String> {
-        if str.is_empty() {None}
-        else {Some(str.to_owned())}
-    }
-    fn remove_dot_prefix(str: &str) -> &str {
-        if let Some(stripped) = str.strip_prefix('.') {
-            stripped
-        } else {
-            str
-        }
-    }
-    fn is_valid_path(str: &str) -> bool {
-        let path_str = str.trim();
-    
-        let p = Path::new(path_str);
-        p.is_dir() || p.is_file()
-    }
-
     let mut path = None;
     let options = line.split("--").collect::<Vec<_>>();
 
@@ -93,7 +76,8 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
     }
 
     let mut custom_config = None;
-    let (mut exclude_dirs, mut extensions_of_interest, mut threads) = (None, None, None);
+    let (mut exclude_dirs, mut extensions_of_interest, mut threads, mut braces_as_code,
+         mut search_in_dotted, mut show_faulty_files) = (None, None, None, None, None, None);
     for command in options.into_iter().skip(1) {
         if command.starts_with("exclude") {
             let vec = command.split(' ').skip(1).filter_map(|x| get_if_not_empty(x.trim())).collect::<Vec<_>>();
@@ -108,47 +92,98 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
             }    
             extensions_of_interest = Some(vec);
         } else if command.starts_with("threads") {
-            let vec = command.split(' ').skip(1).filter_map(|x| get_if_not_empty(x.trim())).collect::<Vec<_>>();
-            if vec.len() != 1 {
-                return Err(ArgParsingError::IncorrectCommandArgs("--threads".to_owned()));
-            }
-            if let Ok(x) = vec[0].parse::<usize>() {
-                if x >= 1 && x <= 8 {
-                    threads = Some(x);
-                } else {
-                    return Err(ArgParsingError::IncorrectCommandArgs("--threads".to_owned()));
-                }
-            } else {
-                return Err(ArgParsingError::IncorrectCommandArgs("--threads".to_owned()));
+            match parse_threads_command(command) {
+                Ok(x) => threads = x,
+                Err(x) => return Err(x)
             }
         } else if let Some(config_name) = command.strip_prefix("load") {
+            let config_name = config_name.trim();
             if config_name.is_empty() {
-                return Err(ArgParsingError::IncorrectCommandArgs("--load".to_owned()));
+                return Err(ArgParsingError::IncorrectCommandArgs("--braces-as-code".to_owned()))
             }
-            custom_config = match data_reader::parse_config_file(Some(config_name)) {
-                Ok(x) => {
-                    if x.1 {
-                        println!("{}",format!("Formatting problems detected in config file '{}', some default values may be used.",config_name).yellow());
-                    }
-                    Some(x.0)
-                },
-                Err(x) => {
-                    println!("\n{}",x.formatted());
-                    continue;
-                }
+            match parse_load_command(config_name) {
+                Ok(x) => custom_config = x,
+                Err(x) => return Err(x)
             }
         } else if let Some(path_str) = command.strip_prefix("path") {
             if path_str.is_empty() || !is_valid_path(path_str) {
                 return Err(ArgParsingError::IncorrectCommandArgs("--path".to_owned()))
             }
-
             path = Some(path_str.to_owned());
+        } else if command.starts_with("braces-as-code") {
+            let args = command.split(' ').skip(1).filter_map(|x| get_if_not_empty(x.trim())).count();
+            if args != 0 {
+                return Err(ArgParsingError::IncorrectCommandArgs("--braces-as-code".to_owned()))
+            }
+            braces_as_code = Some(true);
+        } else if command.starts_with("search-in-dotted") {
+            let args = command.split(' ').skip(1).filter_map(|x| get_if_not_empty(x.trim())).count();
+            if args != 0 {
+                return Err(ArgParsingError::IncorrectCommandArgs("--search-in-dotted".to_owned()))
+            }
+            search_in_dotted = Some(true);
+        } else if command.starts_with("show-faulty-files") {
+            let args = command.split(' ').skip(1).filter_map(|x| get_if_not_empty(x.trim())).count();
+            if args != 0 {
+                return Err(ArgParsingError::IncorrectCommandArgs("--show-faulty-files".to_owned()))
+            }
+            show_faulty_files = Some(true);
         } else {
             return Err(ArgParsingError::UnrecognisedParameter(command.split(' ').next().unwrap_or(command).trim().to_owned()));
         }
     }
 
-    let mut args_builder = ProgramArgsBuilder::new(path, exclude_dirs, extensions_of_interest, threads);
+    let args_builder = combine_specified_config_options(
+            custom_config, path, exclude_dirs, extensions_of_interest, threads, braces_as_code, search_in_dotted, show_faulty_files);
+
+    if args_builder.path.is_none() {
+        return Err(ArgParsingError::MissingTargetPath);
+    }
+    
+    Ok(args_builder.build())
+}
+
+fn parse_threads_command(command: &str) -> Result<Option<usize>,ArgParsingError> {
+    let vec = command.split(' ').skip(1).filter_map(|x| get_if_not_empty(x.trim())).collect::<Vec<_>>();
+    if vec.len() != 1 {
+        return Err(ArgParsingError::IncorrectCommandArgs("--threads".to_owned()));
+    }
+    if let Ok(x) = vec[0].parse::<usize>() {
+        if x >= 1 && x <= 8 {
+            Ok(Some(x))
+        } else {
+            Err(ArgParsingError::IncorrectCommandArgs("--threads".to_owned()))
+        }
+    } else {
+        Err(ArgParsingError::IncorrectCommandArgs("--threads".to_owned()))
+    }
+}
+
+fn parse_load_command(config_name: &str) -> Result<Option<PersistentOptions>,ArgParsingError> {
+    if config_name.is_empty() {
+        return Err(ArgParsingError::IncorrectCommandArgs("--load".to_owned()));
+    }
+    let result = match data_reader::parse_config_file(Some(config_name)) {
+        Ok(x) => {
+            if x.1 {
+                println!("{}",format!("Formatting problems detected in config file '{}', some default values may be used.",config_name).yellow());
+            }
+            Some(x.0)
+        },
+        Err(x) => {
+            println!("\n{}",x.formatted());
+            None
+        }
+    };
+
+    Ok(result)
+}
+
+fn combine_specified_config_options(custom_config: Option<PersistentOptions>, path: Option<String>, exclude_dirs: Option<Vec<String>>,
+        extensions_of_interest: Option<Vec<String>>, threads: Option<usize>, braces_as_code: Option<bool>, search_in_dotted: Option<bool>,
+        show_faulty_files: Option<bool>) -> ConfigurationBuilder {
+    let mut args_builder = ConfigurationBuilder::new(
+            path, exclude_dirs, extensions_of_interest, threads, braces_as_code, search_in_dotted, show_faulty_files);
     if let Some(x) = custom_config {
         args_builder.add_missing_fields(x);
     }
@@ -161,12 +196,7 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
             args_builder.add_missing_fields(x.0);
         }
     }
-
-    if args_builder.path.is_none() {
-        return Err(ArgParsingError::MissingTargetPath);
-    }
-    
-    Ok(args_builder.build())
+    args_builder
 }
 
 fn get_distinct_arguments(line: String) -> Vec<String> {
@@ -184,36 +214,62 @@ fn get_distinct_arguments(line: String) -> Vec<String> {
     }
 }
 
+fn get_if_not_empty(str: &str) -> Option<String> {
+    if str.is_empty() {None}
+    else {Some(str.to_owned())}
+}
+
+fn remove_dot_prefix(str: &str) -> &str {
+    if let Some(stripped) = str.strip_prefix('.') {
+        stripped
+    } else {
+        str
+    }
+}
+
+fn is_valid_path(str: &str) -> bool {
+    let path_str = str.trim();
+
+    let p = Path::new(path_str);
+    p.is_dir() || p.is_file()
+}
+
 
 #[derive(Debug)]
-struct ProgramArgsBuilder {
+struct ConfigurationBuilder {
     pub path: Option<String>,
     pub exclude_dirs: Option<Vec<String>>,
     pub extensions_of_interest: Option<Vec<String>>,
     pub threads: Option<usize>,
     pub braces_as_code: Option<bool>,
-    pub should_search_in_dotted: Option<bool>
+    pub should_search_in_dotted: Option<bool>,
+    pub should_show_faulty_files: Option<bool>
 }
 
-impl ProgramArgsBuilder {
+impl ConfigurationBuilder {
     pub fn new(path: Option<String>, exclude_dirs: Option<Vec<String>>, extensions_of_interest: Option<Vec<String>>,
-         threads: Option<usize>) -> ProgramArgsBuilder {
-        ProgramArgsBuilder {
+            threads: Option<usize>,braces_as_code: Option<bool>, search_in_dotted: Option<bool>,
+            show_faulty_files: Option<bool>) 
+    -> ConfigurationBuilder 
+    {
+        ConfigurationBuilder {
             path,
             exclude_dirs,
             extensions_of_interest,
             threads,
-            braces_as_code: None,
-            should_search_in_dotted: None
+            braces_as_code,
+            should_search_in_dotted: search_in_dotted,
+            should_show_faulty_files: show_faulty_files
         }
     }
 
-    pub fn add_missing_fields(&mut self, config: PersistentOptions) -> &mut ProgramArgsBuilder {
+    pub fn add_missing_fields(&mut self, config: PersistentOptions) -> &mut ConfigurationBuilder {
         if self.exclude_dirs.is_none() {self.exclude_dirs = config.exclude_dirs};
         if self.extensions_of_interest.is_none() {self.extensions_of_interest = config.extensions_of_interest};
         if self.threads.is_none() {self.threads = config.threads};
         if self.braces_as_code.is_none() {self.braces_as_code = config.braces_as_code};
         if self.should_search_in_dotted.is_none() {self.should_search_in_dotted = config.should_search_in_dotted};
+        if self.should_show_faulty_files.is_none() {self.should_search_in_dotted = config.should_show_faulty_files};
         self
     }
 
@@ -230,6 +286,7 @@ impl ProgramArgsBuilder {
             threads: self.threads.unwrap_or(DEF_THREADS),
             braces_as_code: self.braces_as_code.unwrap_or(false),
             should_search_in_dotted: self.should_search_in_dotted.unwrap_or(false),
+            should_show_faulty_files: self.should_show_faulty_files.unwrap_or(false)
         }
     }
 }
@@ -242,7 +299,8 @@ impl Configuration {
             extensions_of_interest: Vec::new(),
             threads: 4,
             braces_as_code: false,
-            should_search_in_dotted: false
+            should_search_in_dotted: false,
+            should_show_faulty_files: false
         }
     }
 

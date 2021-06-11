@@ -54,7 +54,7 @@ pub fn run(config: Configuration, extensions_map: HashMap<String, Extension>) ->
     for h in handles {
         h.join().unwrap();
     }
-    print_faulty_files_or_success(faulty_files_ref);
+    print_faulty_files_or_ok(faulty_files_ref, &config);
 
     result_printer::format_and_print_results(&mut extensions_content_info_ref, &mut extensions_metadata);
     
@@ -162,7 +162,7 @@ fn search_dir_and_add_files_to_list(files_list: &LinkedListRef, extensions_metad
                                 Err(_) => 0
                             };
                             extensions_metadata_map.get_mut(&extension_name).unwrap().add_file_meta(bytes);
-                
+                            
                             let str_path = match path_buf.to_str() {
                                 Some(y) => y.to_owned(),
                                 None => continue
@@ -188,20 +188,23 @@ fn search_dir_and_add_files_to_list(files_list: &LinkedListRef, extensions_metad
                     }
                 }
             }
-            //}
         }
     }
     (total_files,relevant_files)
 }
 
-fn print_faulty_files_or_success(faulty_files_ref: VecRef) {
+fn print_faulty_files_or_ok(faulty_files_ref: VecRef, config: &Configuration) {
     let faulty_files = &mut *faulty_files_ref.as_ref().lock().unwrap();
     if faulty_files.is_empty() {
-        println!("{}\n","success".bright_green());
+        println!("{}\n","ok".bright_green());
     } else {
-        println!("{} {}",format!("{}",faulty_files.len()).red(), "faulty files detected".red());
-        for f in faulty_files {
-            println!("-- {}",f);
+        println!("{} {}",format!("{}",faulty_files.len()).red(), "faulty files detected. Lines and keywords will not be counted for them.".red());
+        if config.should_show_faulty_files {
+            for f in faulty_files {
+                println!("-- {}",f);
+            }
+        } else {
+            println!("Run with command '--show-faulty-files' to get the paths.")
         }
         println!();
     }

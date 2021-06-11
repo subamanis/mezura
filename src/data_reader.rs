@@ -1,4 +1,4 @@
-use std::{{ffi::OsString, path::Path}, cmp::max, collections::{HashMap as HashMap}, env, fs::{self, ReadDir}, io::{BufRead, BufReader}, path::PathBuf};
+use std::{{ffi::OsString, path::Path}, cmp::max, collections::{HashMap as HashMap}, env, fs::{self, File, ReadDir}, io::{BufRead, BufReader}, path::PathBuf};
 
 use colored::*;
 use lazy_static::lazy_static;
@@ -9,8 +9,6 @@ const DEFAULT_CONFIG_FILE_NAME : &str = "default_config.txt";
 
 #[derive(Debug)]
 pub enum ParseExtensionsError {
-    DataDirNotFound,
-    DirNotFound,
     NoFilesFound,
     NoFilesFormattedProperly,
     ExtensionsOfInterestNotFound
@@ -18,14 +16,6 @@ pub enum ParseExtensionsError {
 
 #[derive(Debug)]
 pub enum ParseConfigFileError {
-    DataDirNotFound,
-    DirNotFound,
-    FileNotFound(String)
-}
-
-#[derive(Debug)]
-pub enum ParseConfigFileWarning {
-    DataDirNotFound,
     DirNotFound,
     FileNotFound(String)
 }
@@ -37,25 +27,18 @@ pub struct PersistentOptions {
     pub extensions_of_interest   : Option<Vec<String>>,
     pub threads                  : Option<usize>,
     pub braces_as_code           : Option<bool>,
-    pub should_search_in_dotted  : Option<bool>
+    pub should_search_in_dotted  : Option<bool>,
+    pub should_show_faulty_files : Option<bool>
 }
 
 lazy_static! {
-    static ref DATA_DIR : Option<String> = try_find_data_dir();
+    pub static ref DATA_DIR : Option<String> = try_find_data_dir();
 }
 
 pub fn parse_supported_extensions_to_map(extensions_of_interest: &[String])
         -> Result<(HashMap<String,Extension>, Vec<OsString>), ParseExtensionsError> 
 {
-    let data_dir = match DATA_DIR.clone() {
-        Some(x) => x,
-        None => return Err(ParseExtensionsError::DataDirNotFound)
-    };
-    
-    let dirs = match fs::read_dir(data_dir + "/extensions") {
-        Ok(x) => x,
-        Err(_) => return Err(ParseExtensionsError::DirNotFound)
-    };
+    let dirs = fs::read_dir(DATA_DIR.clone().unwrap() + "/extensions").unwrap();
     
     let mut extensions_map = HashMap::new();
     let mut num_of_entries = 0;
@@ -112,12 +95,7 @@ pub fn parse_supported_extensions_to_map(extensions_of_interest: &[String])
 }
 
 pub fn parse_config_file(file_name: Option<&str>) -> Result<(PersistentOptions,bool),ParseConfigFileError> {
-    let data_dir = match DATA_DIR.clone() {
-        Some(x) => x,
-        None => return Err(ParseConfigFileError::DataDirNotFound)
-    };
-
-    let dir_path = data_dir + "/config";
+    let dir_path = DATA_DIR.clone().unwrap() + "/config";
     if !Path::new(&dir_path).is_dir() {
         return Err(ParseConfigFileError::DirNotFound);
     }
@@ -130,7 +108,7 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<(PersistentOptions,b
     });
 
     let (mut path, mut braces_as_code, mut search_in_dotted, mut threads, mut exclude_dirs,
-         mut extensions_of_interest) = (None,None,None,None,None,None);
+         mut extensions_of_interest, mut show_faulty_files) = (None,None,None,None,None,None,None);
     let mut buf = String::with_capacity(150); 
     let mut has_formatting_errors = false;
 
@@ -141,59 +119,17 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<(PersistentOptions,b
             let id = buf.split(' ').nth(1).unwrap_or("").trim();
 
             if id == "braces_as_code" {
-                reader.read_line(&mut buf);
-                let buf = buf.trim();
-                if buf.is_empty() {
-                    has_formatting_errors = true;
-                    continue;
-                }
-                if buf == "yes" || buf ==  "true" {
-                    braces_as_code = Some(true);
-                } else {
-                    braces_as_code = Some(false);
-                }
+                braces_as_code = read_bool_value(&mut reader, &mut buf);
+            } else if id == "show-faulty-files" {
+                show_faulty_files = read_bool_value(&mut reader, &mut buf);
             } else if id == "search_in_dotted" {
-                reader.read_line(&mut buf);
-                let buf = buf.trim();
-                if buf.is_empty() {
-                    has_formatting_errors = true;
-                    continue;
-                }
-                if buf == "yes" || buf ==  "true" {
-                    search_in_dotted = Some(true);
-                } else {
-                    search_in_dotted = Some(false);
-                }
+                search_in_dotted = read_bool_value(&mut reader, &mut buf);
             } else if id == "threads" {
-                reader.read_line(&mut buf);
-                let buf = buf.trim();
-                if buf.is_empty() {
-                    has_formatting_errors = true;
-                    continue;
-                }
-                if let Ok(num) = buf.parse::<usize>() {
-                    if num <= 8 && num >= 1 {
-                        threads = Some(num);
-                    } else {
-                        has_formatting_errors = true;
-                    }
-                }
+                threads = read_usize_value(&mut reader, &mut buf);
             } else if id == "exclude" {
-                reader.read_line(&mut buf);
-                let buf = buf.trim();
-                if buf.is_empty() {
-                    has_formatting_errors = true;
-                    continue;
-                }
-                exclude_dirs = Some(buf.split(' ').map(|x| x.trim().to_owned()).collect::<Vec<String>>());
+                exclude_dirs = read_vec_value(&mut reader, &mut buf, Box::new(|x| x));
             } else if id == "extensions" {
-                reader.read_line(&mut buf);
-                let buf = buf.trim();
-                if buf.is_empty() {
-                    has_formatting_errors = true;
-                    continue;
-                }
-                extensions_of_interest = Some(buf.split(' ').map(|x| x.trim().to_owned()).collect::<Vec<String>>());
+                extensions_of_interest = read_vec_value(&mut reader, &mut buf, Box::new(remove_dot_prefix));
             } else if id == "path" {
                 reader.read_line(&mut buf);
                 let buf = buf.trim();
@@ -206,7 +142,74 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<(PersistentOptions,b
         }
     }
 
-    Ok((PersistentOptions::new(path,exclude_dirs, extensions_of_interest, threads, braces_as_code, search_in_dotted), has_formatting_errors))
+    Ok((PersistentOptions::new(path,exclude_dirs, extensions_of_interest, threads, braces_as_code,
+             search_in_dotted, show_faulty_files), has_formatting_errors))
+}
+
+fn read_bool_value(reader: &mut BufReader<File>, mut buf: &mut String) -> Option<bool> {
+    reader.read_line(&mut buf);
+    let buf = buf.trim();
+    if buf.is_empty() {
+        return None;
+    }
+    let buf = buf.to_ascii_lowercase();
+    if buf == "yes" || buf ==  "true" {
+        return Some(true);
+    } else {
+        return Some(false);
+    }
+}
+
+fn read_usize_value(reader: &mut BufReader<File>, mut buf: &mut String) -> Option<usize> {
+    reader.read_line(&mut buf);
+    let buf = buf.trim();
+    if buf.is_empty() {
+        return None;
+    }
+
+    if let Ok(num) = buf.parse::<usize>() {
+        if num <= 8 && num >= 1 {
+            Some(num)
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+fn read_vec_value(reader: &mut BufReader<File>, mut buf: &mut String, mut transformation: Box<dyn FnMut(&str) -> &str>) 
+-> Option<Vec<String>> 
+{
+    reader.read_line(&mut buf);
+    if buf.trim().is_empty() {
+        return None;
+    }
+    let mut lines = buf.clone();
+    loop {
+        reader.read_line(&mut buf);
+        if let Some(new_line) = buf.strip_prefix('+') {
+            if new_line.len() > 1 {
+                lines += new_line;
+            }
+        } else {
+            break;
+        }
+    }
+    Some(lines.split(' ').filter_map(|x| get_if_not_empty(transformation(x.trim()))).collect::<Vec<String>>())
+}
+
+fn get_if_not_empty(str: &str) -> Option<String> {
+    if str.is_empty() {None}
+    else {Some(str.to_owned())}
+}
+
+fn remove_dot_prefix(str: &str) -> &str {
+    if let Some(stripped) = str.strip_prefix('.') {
+        stripped
+    } else {
+        str
+    }
 }
 
 fn parse_file_to_extension(mut reader :my_reader::BufReader, buffer :&mut String) -> Result<Extension,()> {
@@ -271,8 +274,6 @@ fn try_find_data_dir() -> Option<String> {
 impl ParseExtensionsError {
     pub fn formatted(&self) -> String {
         match self {
-            Self::DataDirNotFound => "Data dir not found in any known location.".red().to_string(),
-            Self::DirNotFound => "Extensions dir not present.".red().to_string(),
             Self::NoFilesFound => "Error: No extension files found in directory.".red().to_string(),
             Self::NoFilesFormattedProperly => "Error: No extension file is formatted properly, so none could be parsed.".red().to_string(),
             Self::ExtensionsOfInterestNotFound => "Error: None of the provided extensions exists in the extensions directory".red().to_string()
@@ -283,7 +284,6 @@ impl ParseExtensionsError {
 impl ParseConfigFileError {
     pub fn formatted(&self) -> String {
         match self {
-            Self::DataDirNotFound => "Data dir not found in any known location.".red().to_string(),
             Self::DirNotFound => "No 'config' dir found, defaults will be used.".yellow().to_string(),
             Self::FileNotFound(x) => format!("'{}' config file not found, defaults will be used.", x).yellow().to_string()
         }
@@ -292,14 +292,16 @@ impl ParseConfigFileError {
 
 impl PersistentOptions {
     pub fn new(path: Option<String>, exclude_dirs: Option<Vec<String>>, extensions_of_interest: Option<Vec<String>>,
-        threads: Option<usize>, braces_as_code: Option<bool>, search_in_dotted: Option<bool>) -> PersistentOptions {
+        threads: Option<usize>, braces_as_code: Option<bool>, search_in_dotted: Option<bool>, should_show_faulty_files: Option<bool>) 
+    -> PersistentOptions {
         PersistentOptions {
             path,
             exclude_dirs,
             extensions_of_interest,
+            threads,
             braces_as_code,
             should_search_in_dotted: search_in_dotted,
-            threads,
+            should_show_faulty_files
         }
     }
 }

@@ -1,4 +1,4 @@
-use std::{process, time::SystemTime};
+use std::{path::Path, process, time::SystemTime};
 
 use colored::*;
 
@@ -6,6 +6,12 @@ use code_stats::{config_manager::{self}, Configuration, data_reader, putils::*};
 
 fn main() {
     control::set_virtual_terminal(true).unwrap();
+
+    if let Err(x) = verify_required_dirs() {
+        println!("{}",x);
+        utils::wait_for_input();
+        process::exit(1);
+    }
 
     let config = match config_manager::read_args_cmd() {
         Ok(config) => config,
@@ -49,5 +55,17 @@ fn get_args_from_stdin() -> Configuration {
             Err(e) => println!("{}",e.formatted()),
             Ok(config) => break config
         }
+    }
+}
+
+fn verify_required_dirs() -> Result<(),String> {
+    if let Some(data_dir) = data_reader::DATA_DIR.clone() {
+        if !Path::new(&(data_dir + "/extensions")).is_dir() {
+            return Err("'extensions' directory not found inside 'data'.".red().to_string())
+        } 
+        
+        Ok(())
+    } else {
+        return Err("'data' directory not found in any known location.".red().to_string())
     }
 }
