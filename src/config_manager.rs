@@ -10,7 +10,7 @@ pub const DEF_SEARCH_IN_DOTTED : bool        = false;
 pub const DEF_THREADS          : usize       = 4;
 pub const DEF_EXCLUDE_DIRS     : Vec<String> = Vec::new();
 
-#[derive(Debug,PartialEq)]
+#[derive(Debug,PartialEq,Clone)]
 pub struct Configuration {
     pub path: String,
     pub exclude_dirs: Vec<String>,
@@ -26,8 +26,9 @@ pub enum ArgParsingError {
     NoArgsProvided,
     MissingTargetPath,
     InvalidPath,
+    DoublePath,
     UnrecognisedParameter(String),
-    IncorrectCommandArgs(String)
+    IncorrectCommandArgs(String),
 }
 
 pub fn read_args_cmd() -> Result<Configuration,ArgParsingError> {
@@ -45,7 +46,6 @@ pub fn read_args_cmd() -> Result<Configuration,ArgParsingError> {
 pub fn read_args_console() -> Result<Configuration,ArgParsingError> {
     let mut line = String::with_capacity(30);
     std::io::stdin().read_line(&mut line).unwrap();
-    println!("it is:{}",line);
     line = line.trim().to_owned();
     if line.is_empty() {
         Err(ArgParsingError::NoArgsProvided)
@@ -66,7 +66,7 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
     let mut path = None;
     let options = line.split("--").collect::<Vec<_>>();
 
-    if !line.starts_with("--") {
+    if !line.trim().starts_with("--") {
         let path_str = options[0].trim().to_owned();
         if !is_valid_path(&path_str) {
             return Err(ArgParsingError::InvalidPath);
@@ -77,7 +77,7 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
 
     let mut custom_config = None;
     let (mut exclude_dirs, mut extensions_of_interest, mut threads, mut braces_as_code,
-         mut search_in_dotted, mut show_faulty_files) = (None, None, None, None, None, None);
+         mut search_in_dotted, mut show_faulty_files, mut config_name_for_save) = (None, None, None, None, None, None, None);
     for command in options.into_iter().skip(1) {
         if command.starts_with("exclude") {
             let vec = command.split(' ').skip(1).filter_map(|x| get_if_not_empty(x.trim())).collect::<Vec<_>>();
@@ -92,44 +92,45 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
             }    
             extensions_of_interest = Some(vec);
         } else if command.starts_with("threads") {
-            match parse_threads_command(command) {
+            match parse_usize_command(command) {
                 Ok(x) => threads = x,
-                Err(x) => return Err(x)
+                Err(_) => return Err(ArgParsingError::IncorrectCommandArgs("--threads".to_owned()))
             }
         } else if let Some(config_name) = command.strip_prefix("load") {
-            let config_name = config_name.trim();
-            if config_name.is_empty() {
-                return Err(ArgParsingError::IncorrectCommandArgs("--braces-as-code".to_owned()))
-            }
             match parse_load_command(config_name) {
                 Ok(x) => custom_config = x,
-                Err(x) => return Err(x)
+                Err(_) => return Err(ArgParsingError::IncorrectCommandArgs("--load".to_owned()))
             }
+        } else if let Some(name) = command.strip_prefix("save") {
+            let name = name.trim();
+            if name.is_empty() {
+                return Err(ArgParsingError::IncorrectCommandArgs("--save".to_owned()))
+            }
+            config_name_for_save = Some(name.to_owned());
         } else if let Some(path_str) = command.strip_prefix("path") {
+            if path.is_some() {
+                return Err(ArgParsingError::DoublePath);
+            }
+            let path_str = path_str.trim();
             if path_str.is_empty() || !is_valid_path(path_str) {
                 return Err(ArgParsingError::IncorrectCommandArgs("--path".to_owned()))
             }
             path = Some(path_str.to_owned());
         } else if command.starts_with("braces-as-code") {
-            let args = command.split(' ').skip(1).filter_map(|x| get_if_not_empty(x.trim())).count();
-            if args != 0 {
+            if has_any_args(command) {
                 return Err(ArgParsingError::IncorrectCommandArgs("--braces-as-code".to_owned()))
             }
-            braces_as_code = Some(true);
+            braces_as_code = Some(true)
         } else if command.starts_with("search-in-dotted") {
-            let args = command.split(' ').skip(1).filter_map(|x| get_if_not_empty(x.trim())).count();
-            if args != 0 {
+            if has_any_args(command) {
                 return Err(ArgParsingError::IncorrectCommandArgs("--search-in-dotted".to_owned()))
             }
-            search_in_dotted = Some(true);
+            search_in_dotted = Some(true)
         } else if command.starts_with("show-faulty-files") {
-            let args = command.split(' ').skip(1).filter_map(|x| get_if_not_empty(x.trim())).count();
-            if args != 0 {
+            if has_any_args(command) {
                 return Err(ArgParsingError::IncorrectCommandArgs("--show-faulty-files".to_owned()))
             }
             show_faulty_files = Some(true);
-        } else {
-            return Err(ArgParsingError::UnrecognisedParameter(command.split(' ').next().unwrap_or(command).trim().to_owned()));
         }
     }
 
@@ -139,29 +140,42 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
     if args_builder.path.is_none() {
         return Err(ArgParsingError::MissingTargetPath);
     }
-    
+
+    let config = args_builder.build();
+    if let Some(x) = config_name_for_save {
+        match data_reader::save_config_to_file(&x, &config) {
+            Err(_) => println!("\n{}","Error while trying to save config.".yellow()),
+            Ok(_) => println!("\nConfiguration '{}', saved successfully.",x)
+        }
+    }
+
     Ok(args_builder.build())
 }
 
-fn parse_threads_command(command: &str) -> Result<Option<usize>,ArgParsingError> {
+fn has_any_args(command: &str) -> bool {
+    command.split(' ').skip(1).filter_map(|x| get_if_not_empty(x.trim())).count() != 0
+}
+
+fn parse_usize_command(command: &str) -> Result<Option<usize>,()> {
     let vec = command.split(' ').skip(1).filter_map(|x| get_if_not_empty(x.trim())).collect::<Vec<_>>();
     if vec.len() != 1 {
-        return Err(ArgParsingError::IncorrectCommandArgs("--threads".to_owned()));
+        return Err(());
     }
     if let Ok(x) = vec[0].parse::<usize>() {
         if x >= 1 && x <= 8 {
             Ok(Some(x))
         } else {
-            Err(ArgParsingError::IncorrectCommandArgs("--threads".to_owned()))
+            Err(())
         }
     } else {
-        Err(ArgParsingError::IncorrectCommandArgs("--threads".to_owned()))
+        Err(())
     }
 }
 
-fn parse_load_command(config_name: &str) -> Result<Option<PersistentOptions>,ArgParsingError> {
+fn parse_load_command(config_name: &str) -> Result<Option<PersistentOptions>,()> {
+    let config_name = config_name.trim();
     if config_name.is_empty() {
-        return Err(ArgParsingError::IncorrectCommandArgs("--load".to_owned()));
+        return Err(());
     }
     let result = match data_reader::parse_config_file(Some(config_name)) {
         Ok(x) => {
@@ -181,7 +195,9 @@ fn parse_load_command(config_name: &str) -> Result<Option<PersistentOptions>,Arg
 
 fn combine_specified_config_options(custom_config: Option<PersistentOptions>, path: Option<String>, exclude_dirs: Option<Vec<String>>,
         extensions_of_interest: Option<Vec<String>>, threads: Option<usize>, braces_as_code: Option<bool>, search_in_dotted: Option<bool>,
-        show_faulty_files: Option<bool>) -> ConfigurationBuilder {
+        show_faulty_files: Option<bool>) 
+-> ConfigurationBuilder 
+{
     let mut args_builder = ConfigurationBuilder::new(
             path, exclude_dirs, extensions_of_interest, threads, braces_as_code, search_in_dotted, show_faulty_files);
     if let Some(x) = custom_config {
@@ -248,8 +264,8 @@ struct ConfigurationBuilder {
 
 impl ConfigurationBuilder {
     pub fn new(path: Option<String>, exclude_dirs: Option<Vec<String>>, extensions_of_interest: Option<Vec<String>>,
-            threads: Option<usize>,braces_as_code: Option<bool>, search_in_dotted: Option<bool>,
-            show_faulty_files: Option<bool>) 
+            threads: Option<usize>, braces_as_code: Option<bool>, should_search_in_dotted: Option<bool>,
+            should_show_faulty_files: Option<bool>) 
     -> ConfigurationBuilder 
     {
         ConfigurationBuilder {
@@ -258,18 +274,19 @@ impl ConfigurationBuilder {
             extensions_of_interest,
             threads,
             braces_as_code,
-            should_search_in_dotted: search_in_dotted,
-            should_show_faulty_files: show_faulty_files
+            should_search_in_dotted,
+            should_show_faulty_files
         }
     }
 
     pub fn add_missing_fields(&mut self, config: PersistentOptions) -> &mut ConfigurationBuilder {
+        if self.path.is_none() {self.path = config.path};
         if self.exclude_dirs.is_none() {self.exclude_dirs = config.exclude_dirs};
         if self.extensions_of_interest.is_none() {self.extensions_of_interest = config.extensions_of_interest};
         if self.threads.is_none() {self.threads = config.threads};
         if self.braces_as_code.is_none() {self.braces_as_code = config.braces_as_code};
         if self.should_search_in_dotted.is_none() {self.should_search_in_dotted = config.should_search_in_dotted};
-        if self.should_show_faulty_files.is_none() {self.should_search_in_dotted = config.should_show_faulty_files};
+        if self.should_show_faulty_files.is_none() {self.should_show_faulty_files = config.should_show_faulty_files};
         self
     }
 
@@ -336,6 +353,7 @@ impl ArgParsingError {
             Self::NoArgsProvided => "No arguments provided.".red().to_string(),
             Self::MissingTargetPath => "The target directory (--path) is not specified.".red().to_string(),
             Self::InvalidPath => "Path provided is not a valid directory or file.".red().to_string(),
+            Self::DoublePath => "Path already provided as first argument but --path command also found.".red().to_string(),
             Self::UnrecognisedParameter(p) => format!("--{} is not recognised as a command.",p).red().to_string(),
             Self::IncorrectCommandArgs(p) => format!("Incorrect arguments provided for the command '--{}'.",p).red().to_string()
         }

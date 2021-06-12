@@ -39,7 +39,8 @@ pub fn run(config: Configuration, extensions_map: HashMap<String, Extension>) ->
     for i in 0..config.threads {
         handles.push(
             start_consumer_thread(
-                i, files_ref.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(), extensions_content_info_ref.clone(), extensions_map_ref.clone())
+                i, files_ref.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
+                extensions_content_info_ref.clone(), extensions_map_ref.clone(), config.clone())
             .unwrap()
         );
     }
@@ -63,7 +64,7 @@ pub fn run(config: Configuration, extensions_map: HashMap<String, Extension>) ->
 
 fn start_consumer_thread
     (id: usize, files_ref: LinkedListRef, faulty_files_ref: VecRef, finish_condition_ref: BoolRef,
-     extension_content_info_ref: ContentInfoRef, extension_map: ExtMapRef) 
+     extension_content_info_ref: ContentInfoRef, extension_map: ExtMapRef, config: Configuration) 
     -> Result<JoinHandle<()>,io::Error> 
 {
     thread::Builder::new().name(id.to_string()).spawn(move || {
@@ -98,7 +99,7 @@ fn start_consumer_thread
                 }
             };
 
-            match file_parser::parse_file(&file_path, &file_extension, &mut buf, extension_map.clone()) {
+            match file_parser::parse_file(&file_path, &file_extension, &mut buf, extension_map.clone(), &config) {
                 Ok(x) => {
                     extension_content_info_ref.lock().unwrap().get_mut(&file_extension).unwrap().add_file_stats(x);
                 },

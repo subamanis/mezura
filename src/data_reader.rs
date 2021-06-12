@@ -1,11 +1,17 @@
-use std::{{ffi::OsString, path::Path}, cmp::max, collections::{HashMap as HashMap}, env, fs::{self, File, ReadDir}, io::{BufRead, BufReader}, path::PathBuf};
+use std::{{ffi::OsString, path::Path}, cmp::max, collections::{HashMap as HashMap}, env, fs::{self, File, ReadDir}, io::{BufRead, BufReader, BufWriter, Write}, path::PathBuf};
 
 use colored::*;
 use lazy_static::lazy_static;
 
-use crate::{config_manager, domain::*};
+use crate::{Configuration, config_manager, domain::*};
 
-const DEFAULT_CONFIG_FILE_NAME : &str = "default_config.txt";
+lazy_static! {
+    pub static ref DATA_DIR : Option<String> = try_find_data_dir();
+}
+
+const DEFAULT_CONFIG_FILE_NAME : &str = "default_config";
+const CONFIG_DIR_NAME : &str = "/config";
+const EXTENSIONS_DIR_NAME : &str = "/extensions";
 
 #[derive(Debug)]
 pub enum ParseExtensionsError {
@@ -17,7 +23,8 @@ pub enum ParseExtensionsError {
 #[derive(Debug)]
 pub enum ParseConfigFileError {
     DirNotFound,
-    FileNotFound(String)
+    FileNotFound(String),
+    IOError
 }
 
 #[derive(Debug)]
@@ -31,14 +38,11 @@ pub struct PersistentOptions {
     pub should_show_faulty_files : Option<bool>
 }
 
-lazy_static! {
-    pub static ref DATA_DIR : Option<String> = try_find_data_dir();
-}
 
 pub fn parse_supported_extensions_to_map(extensions_of_interest: &[String])
         -> Result<(HashMap<String,Extension>, Vec<OsString>), ParseExtensionsError> 
 {
-    let dirs = fs::read_dir(DATA_DIR.clone().unwrap() + "/extensions").unwrap();
+    let dirs = fs::read_dir(DATA_DIR.clone().unwrap() + EXTENSIONS_DIR_NAME).unwrap();
     
     let mut extensions_map = HashMap::new();
     let mut num_of_entries = 0;
@@ -95,13 +99,13 @@ pub fn parse_supported_extensions_to_map(extensions_of_interest: &[String])
 }
 
 pub fn parse_config_file(file_name: Option<&str>) -> Result<(PersistentOptions,bool),ParseConfigFileError> {
-    let dir_path = DATA_DIR.clone().unwrap() + "/config";
+    let dir_path = DATA_DIR.clone().unwrap() + CONFIG_DIR_NAME;
     if !Path::new(&dir_path).is_dir() {
         return Err(ParseConfigFileError::DirNotFound);
     }
 
     let file_name = if let Some(x) = file_name {x} else {DEFAULT_CONFIG_FILE_NAME};
-    let file_path = dir_path + file_name;
+    let file_path = dir_path + "/" + file_name + ".txt";
     let mut reader = BufReader::new(match fs::File::open(file_path){
         Ok(f) => f,
         Err(_) => return Err(ParseConfigFileError::FileNotFound(file_name.to_owned()))
@@ -114,23 +118,11 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<(PersistentOptions,b
 
     while let Ok(size) = reader.read_line(&mut buf) {
         if size == 0 {break};
-
-        if buf.starts_with("===>") {
+        if buf.trim().starts_with("===>") {
             let id = buf.split(' ').nth(1).unwrap_or("").trim();
 
-            if id == "braces_as_code" {
-                braces_as_code = read_bool_value(&mut reader, &mut buf);
-            } else if id == "show-faulty-files" {
-                show_faulty_files = read_bool_value(&mut reader, &mut buf);
-            } else if id == "search_in_dotted" {
-                search_in_dotted = read_bool_value(&mut reader, &mut buf);
-            } else if id == "threads" {
-                threads = read_usize_value(&mut reader, &mut buf);
-            } else if id == "exclude" {
-                exclude_dirs = read_vec_value(&mut reader, &mut buf, Box::new(|x| x));
-            } else if id == "extensions" {
-                extensions_of_interest = read_vec_value(&mut reader, &mut buf, Box::new(remove_dot_prefix));
-            } else if id == "path" {
+            if id == "path" {
+                buf.clear();
                 reader.read_line(&mut buf);
                 let buf = buf.trim();
                 if buf.is_empty() {
@@ -138,15 +130,57 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<(PersistentOptions,b
                     continue;
                 }
                 path = Some(buf.to_owned());
+            } else if id == "exclude" {
+                exclude_dirs = read_vec_value(&mut reader, &mut buf, Box::new(|x| x));
+            } else if id == "extensions" {
+                extensions_of_interest = read_vec_value(&mut reader, &mut buf, Box::new(remove_dot_prefix));
+            } else if id == "threads" {
+                threads = read_usize_value(&mut reader, &mut buf);
+            }else if id == "braces-as-code" {
+                braces_as_code = read_bool_value(&mut reader, &mut buf);
+            } else if id == "show-faulty-files" {
+                show_faulty_files = read_bool_value(&mut reader, &mut buf);
+            } else if id == "search-in-dotted" {
+                search_in_dotted = read_bool_value(&mut reader, &mut buf);
             }
+
         }
+        buf.clear();
     }
 
     Ok((PersistentOptions::new(path,exclude_dirs, extensions_of_interest, threads, braces_as_code,
              search_in_dotted, show_faulty_files), has_formatting_errors))
 }
 
+pub fn save_config_to_file(config_name: &str, config: &Configuration) -> std::io::Result<()> {
+    let file_name = DATA_DIR.clone().unwrap() + CONFIG_DIR_NAME + "/" + config_name + ".txt"; 
+    let mut writer = BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(file_name)?);
+
+    writer.write(b"Generated config file.");
+
+    writer.write(b"\n\n===> path\n");
+    writer.write(config.path.as_bytes());
+    writer.write(b"\n\n===> exclude\n");
+    writer.write(config.exclude_dirs.join(" ").as_bytes());
+    writer.write(b"\n\n===> extensions\n");
+    writer.write(config.extensions_of_interest.join(" ").as_bytes());
+    writer.write(b"\n\n===> threads\n");
+    writer.write(config.threads.to_string().as_bytes());
+    writer.write(b"\n\n===> braces-as-code\n");
+    writer.write(if config.braces_as_code {b"yes"} else {b"no"});
+    writer.write(b"\n\n===> search-in-dotted\n");
+    writer.write(if config.should_search_in_dotted {b"yes"} else {b"no"});
+    writer.write(b"\n\n===> show-faulty-files\n");
+    writer.write(if config.should_show_faulty_files {b"yes"} else {b"no"});
+
+    writer.write(b"\n");    
+    writer.flush();
+
+    Ok(())
+}
+
 fn read_bool_value(reader: &mut BufReader<File>, mut buf: &mut String) -> Option<bool> {
+    buf.clear();
     reader.read_line(&mut buf);
     let buf = buf.trim();
     if buf.is_empty() {
@@ -161,6 +195,7 @@ fn read_bool_value(reader: &mut BufReader<File>, mut buf: &mut String) -> Option
 }
 
 fn read_usize_value(reader: &mut BufReader<File>, mut buf: &mut String) -> Option<usize> {
+    buf.clear();
     reader.read_line(&mut buf);
     let buf = buf.trim();
     if buf.is_empty() {
@@ -181,6 +216,7 @@ fn read_usize_value(reader: &mut BufReader<File>, mut buf: &mut String) -> Optio
 fn read_vec_value(reader: &mut BufReader<File>, mut buf: &mut String, mut transformation: Box<dyn FnMut(&str) -> &str>) 
 -> Option<Vec<String>> 
 {
+    buf.clear();
     reader.read_line(&mut buf);
     if buf.trim().is_empty() {
         return None;
@@ -285,14 +321,15 @@ impl ParseConfigFileError {
     pub fn formatted(&self) -> String {
         match self {
             Self::DirNotFound => "No 'config' dir found, defaults will be used.".yellow().to_string(),
-            Self::FileNotFound(x) => format!("'{}' config file not found, defaults will be used.", x).yellow().to_string()
+            Self::FileNotFound(x) => format!("'{}' config file not found, defaults will be used.", x).yellow().to_string(),
+            Self::IOError => "Unexpected IO error while reading, defaults will be used".yellow().to_string()
         }
     }
 }
 
 impl PersistentOptions {
     pub fn new(path: Option<String>, exclude_dirs: Option<Vec<String>>, extensions_of_interest: Option<Vec<String>>,
-        threads: Option<usize>, braces_as_code: Option<bool>, search_in_dotted: Option<bool>, should_show_faulty_files: Option<bool>) 
+        threads: Option<usize>, braces_as_code: Option<bool>, should_search_in_dotted: Option<bool>, should_show_faulty_files: Option<bool>) 
     -> PersistentOptions {
         PersistentOptions {
             path,
@@ -300,7 +337,7 @@ impl PersistentOptions {
             extensions_of_interest,
             threads,
             braces_as_code,
-            should_search_in_dotted: search_in_dotted,
+            should_search_in_dotted,
             should_show_faulty_files
         }
     }
