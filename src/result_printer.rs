@@ -3,7 +3,7 @@ use crate::*;
 //the total number of vertical lines ( | ) that appear in the [-|||...|-] in the overview section
 static NUM_OF_VERTICALS : usize = 50;
 
-pub fn format_and_print_results(extensions_content_info_ref: &mut ContentInfoRef,
+pub fn format_and_print_results(extensions_content_info_ref: &mut ContentInfoMapRef,
      extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>) 
 {
     let mut content_info_map_guard = extensions_content_info_ref.lock();

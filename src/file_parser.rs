@@ -4,7 +4,7 @@ use crate::*;
 
 
 #[inline]
-pub fn parse_file(_file_name: &str, file_extension: &str, buf: &mut String, extension_map: ExtMapRef, config: &Configuration)
+pub fn parse_file(_file_name: &str, file_extension: &str, buf: &mut String, extension_map: ExtensionsMapRef, config: &Configuration)
 -> Result<FileStats,ParseFilesError> 
 {
     let reader = BufReader::new(match File::open(_file_name){
@@ -782,7 +782,7 @@ mod tests {
             keywords : vec![STRUCT.clone(),ENUM.clone(),TRAIT.clone()]
         };
 
-        static ref extension_map_ref : ExtMapRef = Arc::new(data_reader::parse_supported_extensions_to_map(&Vec::<String>::new()).unwrap().0);
+        static ref extension_map_ref : ExtensionsMapRef = Arc::new(data_reader::parse_supported_extensions_to_map(&Vec::<String>::new()).unwrap().0);
     }
 
     #[test]

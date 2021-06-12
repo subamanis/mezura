@@ -23,14 +23,14 @@ use domain::{Extension, ExtensionContentInfo, ExtensionMetadata, FileStats, Keyw
 pub type LinkedListRef  = Arc<Mutex<LinkedList<String>>>;
 pub type VecRef         = Arc<Mutex<Vec<String>>>;
 pub type BoolRef        = Arc<AtomicBool>;
-pub type ContentInfoRef = Arc<Mutex<HashMap<String,ExtensionContentInfo>>>;
-pub type ExtMapRef      = Arc<HashMap<String,Extension>>;
+pub type ContentInfoMapRef = Arc<Mutex<HashMap<String,ExtensionContentInfo>>>;
+pub type ExtensionsMapRef      = Arc<HashMap<String,Extension>>;
 
 pub fn run(config: Configuration, extensions_map: HashMap<String, Extension>) -> Result<(), ParseFilesError> {
     let files_ref : LinkedListRef = Arc::new(Mutex::new(LinkedList::new()));
     let faulty_files_ref : VecRef  = Arc::new(Mutex::new(Vec::new()));
     let finish_condition_ref : BoolRef = Arc::new(AtomicBool::new(false));
-    let extensions_map_ref : ExtMapRef = Arc::new(extensions_map);
+    let extensions_map_ref : ExtensionsMapRef = Arc::new(extensions_map);
     let mut extensions_content_info_ref = Arc::new(Mutex::new(make_extension_stats(extensions_map_ref.clone())));
     let mut extensions_metadata = make_extension_metadata(extensions_map_ref.clone());
     let mut handles = Vec::new(); 
@@ -64,7 +64,7 @@ pub fn run(config: Configuration, extensions_map: HashMap<String, Extension>) ->
 
 fn start_consumer_thread
     (id: usize, files_ref: LinkedListRef, faulty_files_ref: VecRef, finish_condition_ref: BoolRef,
-     extension_content_info_ref: ContentInfoRef, extension_map: ExtMapRef, config: Configuration) 
+     extension_content_info_ref: ContentInfoMapRef, extension_map: ExtensionsMapRef, config: Configuration) 
     -> Result<JoinHandle<()>,io::Error> 
 {
     thread::Builder::new().name(id.to_string()).spawn(move || {
@@ -110,7 +110,7 @@ fn start_consumer_thread
 }
 
 fn add_relevant_files(files_list :LinkedListRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>, finish_condition: BoolRef, 
-     extensions: ExtMapRef, config: &Configuration) -> (usize,usize) 
+     extensions: ExtensionsMapRef, config: &Configuration) -> (usize,usize) 
 {
     let path = Path::new(&config.path); 
     if path.is_file() {
@@ -134,7 +134,7 @@ fn add_relevant_files(files_list :LinkedListRef, extensions_metadata_map: &mut H
 } 
 
 fn search_dir_and_add_files_to_list(files_list: &LinkedListRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>,
-    extensions: &ExtMapRef, config: &Configuration) -> (usize,usize) 
+    extensions: &ExtensionsMapRef, config: &Configuration) -> (usize,usize) 
 {
     let mut total_files = 0;
     let mut relevant_files = 0;
@@ -212,7 +212,7 @@ fn print_faulty_files_or_ok(faulty_files_ref: VecRef, config: &Configuration) {
     
 }
 
-pub fn make_extension_stats(extensions_map: ExtMapRef) -> HashMap<String,ExtensionContentInfo> {
+pub fn make_extension_stats(extensions_map: ExtensionsMapRef) -> HashMap<String,ExtensionContentInfo> {
     let mut map = HashMap::<String,ExtensionContentInfo>::new();
     for (key, value) in extensions_map.iter() {
         map.insert(key.to_owned(), ExtensionContentInfo::from(value));
@@ -220,7 +220,7 @@ pub fn make_extension_stats(extensions_map: ExtMapRef) -> HashMap<String,Extensi
     map
 }
 
-pub fn make_extension_metadata(extension_map: ExtMapRef) -> HashMap<String, ExtensionMetadata> {
+pub fn make_extension_metadata(extension_map: ExtensionsMapRef) -> HashMap<String, ExtensionMetadata> {
     let mut map = HashMap::<String,ExtensionMetadata>::new();
     for (name,_) in extension_map.iter() {
         map.insert(name.to_owned(), ExtensionMetadata::default());

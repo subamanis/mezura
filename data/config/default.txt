@@ -1,13 +1,40 @@
-Generated config file.
+Configuration file that will always be loaded, with the lowest priority.
+after every ===> symbol is as command that can also be used from the cmd,
+and in the next line is the argument of the command.
+Do not modify the name of the commands and the name of this file.
 
+
+The directory or file names to be excluded from searching for files or parsing.
+Default: empty - none should be excuded
+===> exclude
+
+Specify only what extensions the program should generate stats for.
+The extensions specified here must already exist in the 'extensions' dir, meaning that
+the name of the extensions you specify here must match the 'Extension' field of one of the files
+in the 'extensions' dir.
+Default: empty - all extensions that are specified in the 'extensions' dir are relevant.
+===> extensions
+
+
+Valid range: 1-8, default: 4
 ===> threads
 4
 
+Whether or not to count braces '{' , '}' as lines of code.
+If used from cmd, dont use any arguments, just the name of the command
+'yes' or 'true' to activate or anything else to not activate, default: no (deactivated)
 ===> braces-as-code
-yes
+no
 
+Whether or not to parse files inside directories that start with a dot.
+If used from cmd, dont use any arguments, just the name of the command
+'yes' or 'true' to activate or anything else to not activate, default: no (deactivated)
 ===> search-in-dotted
 no
 
+Whether or not to show the paths of all the files that could not be parsed
+If used from cmd, dont use any arguments, just the name of the command
+(probably because they contain non UTF-8 characters).
+'yes' or 'true' to activate or anything else to not activate, default: no (deactivated)
 ===> show-faulty-files
 no
