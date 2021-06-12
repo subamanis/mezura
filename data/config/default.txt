@@ -1,0 +1,13 @@
+Generated config file.
+
+===> threads
+4
+
+===> braces-as-code
+yes
+
+===> search-in-dotted
+no
+
+===> show-faulty-files
+no

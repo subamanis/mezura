@@ -4,11 +4,23 @@ use colored::Colorize;
 
 use crate::{data_reader::{self, ParseConfigFileError, PersistentOptions},utils};
 
+// command flags
+pub const PATH               :&str   = "path";
+pub const EXCLUDE            :&str   = "exclude";
+pub const EXTENSIONS         :&str   = "extensions";
+pub const THREADS            :&str   = "threads";
+pub const BRACES_AS_CODE     :&str   = "braces-as-code";
+pub const SEARCH_IN_DOTTED   :&str   = "search-in-dotted";
+pub const SHOW_FAULTY_FILES  :&str   = "show-faulty-files";
+pub const SAVE               :&str   = "save";
+pub const LOAD               :&str   = "load";
+
 // default config values
-pub const DEF_BRACES_AS_CODE   : bool        = false;
-pub const DEF_SEARCH_IN_DOTTED : bool        = false;
-pub const DEF_THREADS          : usize       = 4;
-pub const DEF_EXCLUDE_DIRS     : Vec<String> = Vec::new();
+const DEF_BRACES_AS_CODE    : bool    = false;
+const DEF_SEARCH_IN_DOTTED  : bool    = false;
+const DEF_SHOW_FAULTY_FILES : bool    = false;
+const DEF_THREADS           : usize   = 4;
+
 
 #[derive(Debug,PartialEq,Clone)]
 pub struct Configuration {
@@ -79,56 +91,56 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
     let (mut exclude_dirs, mut extensions_of_interest, mut threads, mut braces_as_code,
          mut search_in_dotted, mut show_faulty_files, mut config_name_for_save) = (None, None, None, None, None, None, None);
     for command in options.into_iter().skip(1) {
-        if command.starts_with("exclude") {
+        if command.starts_with(EXCLUDE) {
             let vec = command.split(' ').skip(1).filter_map(|x| get_if_not_empty(x.trim())).collect::<Vec<_>>();
             if vec.is_empty() {
-                return Err(ArgParsingError::IncorrectCommandArgs(command.to_owned()));
+                return Err(ArgParsingError::IncorrectCommandArgs("--".to_owned() + EXCLUDE));
             }
             exclude_dirs = Some(vec);
-        } else if command.starts_with("extensions"){
+        } else if command.starts_with(EXTENSIONS){
             let vec = command.split(' ').skip(1).filter_map(|x| get_if_not_empty(remove_dot_prefix(x.trim()))).collect::<Vec<_>>();
             if vec.is_empty() {
-                return Err(ArgParsingError::IncorrectCommandArgs("--extensions".to_owned()));
+                return Err(ArgParsingError::IncorrectCommandArgs("--".to_owned() + EXTENSIONS));
             }    
             extensions_of_interest = Some(vec);
-        } else if command.starts_with("threads") {
+        } else if command.starts_with(THREADS) {
             match parse_usize_command(command) {
                 Ok(x) => threads = x,
-                Err(_) => return Err(ArgParsingError::IncorrectCommandArgs("--threads".to_owned()))
+                Err(_) => return Err(ArgParsingError::IncorrectCommandArgs("--".to_owned() + THREADS))
             }
-        } else if let Some(config_name) = command.strip_prefix("load") {
+        } else if let Some(config_name) = command.strip_prefix(LOAD) {
             match parse_load_command(config_name) {
                 Ok(x) => custom_config = x,
-                Err(_) => return Err(ArgParsingError::IncorrectCommandArgs("--load".to_owned()))
+                Err(_) => return Err(ArgParsingError::IncorrectCommandArgs("--".to_owned() + LOAD))
             }
-        } else if let Some(name) = command.strip_prefix("save") {
+        } else if let Some(name) = command.strip_prefix(SAVE) {
             let name = name.trim();
             if name.is_empty() {
-                return Err(ArgParsingError::IncorrectCommandArgs("--save".to_owned()))
+                return Err(ArgParsingError::IncorrectCommandArgs("--".to_owned() + SAVE))
             }
             config_name_for_save = Some(name.to_owned());
-        } else if let Some(path_str) = command.strip_prefix("path") {
+        } else if let Some(path_str) = command.strip_prefix(PATH) {
             if path.is_some() {
                 return Err(ArgParsingError::DoublePath);
             }
             let path_str = path_str.trim();
             if path_str.is_empty() || !is_valid_path(path_str) {
-                return Err(ArgParsingError::IncorrectCommandArgs("--path".to_owned()))
+                return Err(ArgParsingError::IncorrectCommandArgs("--".to_owned() + PATH ))
             }
             path = Some(path_str.to_owned());
-        } else if command.starts_with("braces-as-code") {
+        } else if command.starts_with(BRACES_AS_CODE) {
             if has_any_args(command) {
-                return Err(ArgParsingError::IncorrectCommandArgs("--braces-as-code".to_owned()))
+                return Err(ArgParsingError::IncorrectCommandArgs("--".to_owned() + BRACES_AS_CODE))
             }
             braces_as_code = Some(true)
-        } else if command.starts_with("search-in-dotted") {
+        } else if command.starts_with(SEARCH_IN_DOTTED) {
             if has_any_args(command) {
-                return Err(ArgParsingError::IncorrectCommandArgs("--search-in-dotted".to_owned()))
+                return Err(ArgParsingError::IncorrectCommandArgs("--".to_owned() + SEARCH_IN_DOTTED))
             }
             search_in_dotted = Some(true)
-        } else if command.starts_with("show-faulty-files") {
+        } else if command.starts_with(SHOW_FAULTY_FILES) {
             if has_any_args(command) {
-                return Err(ArgParsingError::IncorrectCommandArgs("--show-faulty-files".to_owned()))
+                return Err(ArgParsingError::IncorrectCommandArgs("--".to_owned() + SHOW_FAULTY_FILES))
             }
             show_faulty_files = Some(true);
         }
@@ -145,7 +157,7 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
     if let Some(x) = config_name_for_save {
         match data_reader::save_config_to_file(&x, &config) {
             Err(_) => println!("\n{}","Error while trying to save config.".yellow()),
-            Ok(_) => println!("\nConfiguration '{}', saved successfully.",x)
+            Ok(_) => println!("\nConfiguration '{}' saved successfully.",x)
         }
     }
 
@@ -297,13 +309,13 @@ impl ConfigurationBuilder {
 
     pub fn build(&self) -> Configuration {
         Configuration {
-            path : self.path.clone().unwrap(), //make sure the path is set
+            path : self.path.clone().unwrap(),
             exclude_dirs: (self.exclude_dirs).clone().unwrap_or_default(),
             extensions_of_interest: (self.extensions_of_interest).clone().unwrap_or_default(),
             threads: self.threads.unwrap_or(DEF_THREADS),
-            braces_as_code: self.braces_as_code.unwrap_or(false),
-            should_search_in_dotted: self.should_search_in_dotted.unwrap_or(false),
-            should_show_faulty_files: self.should_show_faulty_files.unwrap_or(false)
+            braces_as_code: self.braces_as_code.unwrap_or(DEF_BRACES_AS_CODE),
+            should_search_in_dotted: self.should_search_in_dotted.unwrap_or(DEF_SEARCH_IN_DOTTED),
+            should_show_faulty_files: self.should_show_faulty_files.unwrap_or(DEF_SHOW_FAULTY_FILES)
         }
     }
 }

@@ -1,7 +1,16 @@
 Generated config file.
 
+===> path
+../.././
+
+===> exclude
+
+
+===> extensions
+
+
 ===> threads
-4
+2
 
 ===> braces-as-code
 no

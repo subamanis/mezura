@@ -3,13 +3,13 @@ use std::{{ffi::OsString, path::Path}, cmp::max, collections::{HashMap as HashMa
 use colored::*;
 use lazy_static::lazy_static;
 
-use crate::{Configuration, config_manager, domain::*};
+use crate::{Configuration, config_manager::{self, BRACES_AS_CODE, EXCLUDE, EXTENSIONS, PATH, SEARCH_IN_DOTTED, SHOW_FAULTY_FILES, THREADS}, domain::*};
 
 lazy_static! {
     pub static ref DATA_DIR : Option<String> = try_find_data_dir();
 }
 
-const DEFAULT_CONFIG_FILE_NAME : &str = "default_config";
+const DEFAULT_CONFIG_FILE_NAME : &str = "default";
 const CONFIG_DIR_NAME : &str = "/config";
 const EXTENSIONS_DIR_NAME : &str = "/extensions";
 
@@ -121,7 +121,7 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<(PersistentOptions,b
         if buf.trim().starts_with("===>") {
             let id = buf.split(' ').nth(1).unwrap_or("").trim();
 
-            if id == "path" {
+            if id == config_manager::PATH {
                 buf.clear();
                 reader.read_line(&mut buf);
                 let buf = buf.trim();
@@ -130,17 +130,17 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<(PersistentOptions,b
                     continue;
                 }
                 path = Some(buf.to_owned());
-            } else if id == "exclude" {
+            } else if id == config_manager::EXCLUDE {
                 exclude_dirs = read_vec_value(&mut reader, &mut buf, Box::new(|x| x));
-            } else if id == "extensions" {
+            } else if id == config_manager::EXTENSIONS {
                 extensions_of_interest = read_vec_value(&mut reader, &mut buf, Box::new(remove_dot_prefix));
-            } else if id == "threads" {
+            } else if id == config_manager::THREADS {
                 threads = read_usize_value(&mut reader, &mut buf);
-            }else if id == "braces-as-code" {
+            }else if id == config_manager::BRACES_AS_CODE {
                 braces_as_code = read_bool_value(&mut reader, &mut buf);
-            } else if id == "show-faulty-files" {
+            } else if id == config_manager::SHOW_FAULTY_FILES {
                 show_faulty_files = read_bool_value(&mut reader, &mut buf);
-            } else if id == "search-in-dotted" {
+            } else if id == config_manager::SEARCH_IN_DOTTED {
                 search_in_dotted = read_bool_value(&mut reader, &mut buf);
             }
 
@@ -158,19 +158,19 @@ pub fn save_config_to_file(config_name: &str, config: &Configuration) -> std::io
 
     writer.write(b"Generated config file.");
 
-    writer.write(b"\n\n===> path\n");
+    writer.write(&[b"\n\n===> ",config_manager::PATH.as_bytes(),b"\n"].concat());
     writer.write(config.path.as_bytes());
-    writer.write(b"\n\n===> exclude\n");
+    writer.write(&[b"\n\n===> ",config_manager::EXCLUDE.as_bytes(),b"\n"].concat());
     writer.write(config.exclude_dirs.join(" ").as_bytes());
-    writer.write(b"\n\n===> extensions\n");
+    writer.write(&[b"\n\n===> ",config_manager::EXTENSIONS.as_bytes(),b"\n"].concat());
     writer.write(config.extensions_of_interest.join(" ").as_bytes());
-    writer.write(b"\n\n===> threads\n");
+    writer.write(&[b"\n\n===> ",config_manager::THREADS.as_bytes(),b"\n"].concat());
     writer.write(config.threads.to_string().as_bytes());
-    writer.write(b"\n\n===> braces-as-code\n");
+    writer.write(&[b"\n\n===> ",config_manager::BRACES_AS_CODE.as_bytes(),b"\n"].concat());
     writer.write(if config.braces_as_code {b"yes"} else {b"no"});
-    writer.write(b"\n\n===> search-in-dotted\n");
+    writer.write(&[b"\n\n===> ",config_manager::SEARCH_IN_DOTTED.as_bytes(),b"\n"].concat());
     writer.write(if config.should_search_in_dotted {b"yes"} else {b"no"});
-    writer.write(b"\n\n===> show-faulty-files\n");
+    writer.write(&[b"\n\n===> ",config_manager::SHOW_FAULTY_FILES.as_bytes(),b"\n"].concat());
     writer.write(if config.should_show_faulty_files {b"yes"} else {b"no"});
 
     writer.write(b"\n");    
