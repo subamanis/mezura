@@ -112,7 +112,7 @@ pub fn parse_supported_extensions_to_map(extensions_of_interest: &[String])
         return Err(ParseExtensionsError::NoFilesFormattedProperly);
     }
 
-    if non_existant_extensions_of_interest.len() == extensions_of_interest.len() {
+    if !extensions_of_interest.is_empty() && non_existant_extensions_of_interest.len() == extensions_of_interest.len() {
         return Err(ParseExtensionsError::ExtensionsOfInterestNotFound);
     }
 
@@ -279,19 +279,26 @@ fn parse_file_to_extension(mut reader :my_reader::BufReader, buffer :&mut String
         Ok(x) => x,
         Err(_) => return Err(())
     };
+    if string_symbols.is_empty() {return Err(());}
+
     if !reader.read_line_exists(buffer) {return Err(());}
     if !reader.read_line_and_compare(buffer, "Comment symbol") {return Err(());} 
     if !reader.read_line_exists(buffer) {return Err(());}
     let comment_symbol = buffer.trim_end().to_owned();
+    if comment_symbol.is_empty() {return Err(());}
     
     let mut multi_start :Option<String> = None;
     let mut multi_end :Option<String> = None;
     if reader.read_line_and_compare(buffer, "Multi line comment start") {
         if !reader.read_line_exists(buffer) {return Err(());}
-        multi_start = Some(buffer.trim_end().to_owned());
+        let symbol = buffer.trim_end().to_owned();
+        if symbol.is_empty() {return Err(());}
+        multi_start = Some(symbol);
         if !reader.read_line_and_compare(buffer, "Multi line comment end") {return Err(());}
         if !reader.read_line_exists(buffer) {return Err(());}
-        multi_end = Some(buffer.trim_end().to_owned());
+        let symbol = buffer.trim_end().to_owned();
+        if symbol.is_empty() {return Err(());}
+        multi_end = Some(symbol);
         if !reader.read_line_exists(buffer) {return Err(())}
     }
     
@@ -299,11 +306,13 @@ fn parse_file_to_extension(mut reader :my_reader::BufReader, buffer :&mut String
     while reader.read_line_exists(buffer) {
         if !reader.read_lines_exist(2, buffer) {return Err(());}
         let name = buffer.trim().to_string().clone();
+        if name.is_empty() {return Err(());}
         if !reader.read_line_exists(buffer) {return Err(());}
         let aliases = match reader.get_line_sliced(buffer) {
             Ok(x) => x,
             Err(_) => return Err(())
         };
+        if aliases.is_empty() {return Err(());}
         
         let keyword = Keyword {
             descriptive_name : name,

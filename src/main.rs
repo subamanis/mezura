@@ -35,8 +35,9 @@ fn main() {
                 warn_msg.push_str(". These files will not be taken into consideration.");
                 println!("{}",warn_msg.yellow());
             }
-
+            
             if !x.2.is_empty() {
+                config.extensions_of_interest.retain(|s| !x.2.contains(s));
                 let relevant = x.2.iter().filter_map(|s| if !x.1.contains(&(s.to_owned()+".txt")){Some(s.to_owned())} else {None}).collect::<Vec<_>>();
                 if !relevant.is_empty() {
                     let warn_msg = format!("\nThese extensions don't exist as extension files: {}",relevant.join(", "));
