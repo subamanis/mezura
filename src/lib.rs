@@ -48,7 +48,7 @@ pub fn run(config: Configuration, extensions_map: HashMap<String, Extension>) ->
     let (total_files_num, relevant_files_num) = 
             producer::add_relevant_files(files_ref, &mut extensions_metadata, finish_condition_ref, extensions_map_ref, &config);
     if relevant_files_num == 0 {
-        return Err(ParseFilesError::NoRelevantFiles);
+        return Err(ParseFilesError::NoRelevantFiles(get_activated_extensions_as_str(&config)));
     }
     println!("{} files found. {} of interest.\n",with_seperators(total_files_num), with_seperators(relevant_files_num));
 
@@ -99,6 +99,14 @@ fn remove_faulty_files_stats(faulty_files_ref: &FaultyFilesRef, extensions_metad
     }
 }
 
+fn get_activated_extensions_as_str(config: &Configuration) -> String {
+    if config.extensions_of_interest.is_empty() {
+        return String::new()
+    } else {
+        return String::from("\n(Activated extensions: ") + &config.extensions_of_interest.join(", ") + ")";
+    }
+}
+
 fn make_extension_stats(extensions_map: ExtensionsMapRef) -> HashMap<String,ExtensionContentInfo> {
     let mut map = HashMap::<String,ExtensionContentInfo>::new();
     for (key, value) in extensions_map.iter() {
@@ -117,14 +125,14 @@ fn make_extension_metadata(extension_map: ExtensionsMapRef) -> HashMap<String, E
 
 #[derive(Debug)]
 pub enum ParseFilesError {
-    NoRelevantFiles,
+    NoRelevantFiles(String),
     AllAreFaultyFiles
 } 
 
 impl ParseFilesError {
     pub fn formatted(&self) -> String {
         match self {
-            Self::NoRelevantFiles => "No relevant files found in the given directory.".yellow().to_string(),
+            Self::NoRelevantFiles(x) => "No relevant files found in the given directory.".yellow().to_string() + x,
             Self::AllAreFaultyFiles => "None of the files were able to be parsed".yellow().to_string()
         }
     }

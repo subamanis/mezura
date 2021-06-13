@@ -13,7 +13,7 @@ fn main() {
         process::exit(1);
     }
 
-    let config = match config_manager::read_args_cmd() {
+    let mut config = match config_manager::read_args_cmd() {
         Ok(config) => config,
         Err(x) => {
             println!("\n{}",x.formatted());
@@ -21,18 +21,27 @@ fn main() {
         } 
     };
 
-    let extensions_map = match data_reader::parse_supported_extensions_to_map(&config.extensions_of_interest) {
+    let extensions_map = match data_reader::parse_supported_extensions_to_map(&mut config.extensions_of_interest) {
         Err(x) => {
             println!("\n{}", x.formatted());
             utils::wait_for_input();
             process::exit(1);
         },
         Ok(x) => {
-            if !x.1.is_empty(){
-                let mut err_msg : String = String::from("\nFormatting problems detected in extension files: ");
-                err_msg.push_str(&utils::get_contents(&x.1));
-                err_msg.push_str(". These files will not be taken into consideration.");
-                println!("{}",err_msg.yellow());
+            if !x.1.is_empty() {
+                config.extensions_of_interest.retain(|s| !x.1.contains(&(s.to_owned()+".txt")));
+                let mut warn_msg = String::from("\nFormatting problems detected in extension files: ");
+                warn_msg.push_str(&utils::get_contents(&x.1));
+                warn_msg.push_str(". These files will not be taken into consideration.");
+                println!("{}",warn_msg.yellow());
+            }
+
+            if !x.2.is_empty() {
+                let relevant = x.2.iter().filter_map(|s| if !x.1.contains(&(s.to_owned()+".txt")){Some(s.to_owned())} else {None}).collect::<Vec<_>>();
+                if !relevant.is_empty() {
+                    let warn_msg = format!("\nThese extensions don't exist as extension files: {}",relevant.join(", "));
+                    println!("{}",warn_msg.yellow());
+                }
             }
 
             x.0

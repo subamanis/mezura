@@ -40,14 +40,19 @@ pub struct PersistentOptions {
 
 
 pub fn parse_supported_extensions_to_map(extensions_of_interest: &[String])
-        -> Result<(HashMap<String,Extension>, Vec<OsString>), ParseExtensionsError> 
+        -> Result<(HashMap<String,Extension>, Vec<String>, Vec<String>), ParseExtensionsError> 
 {
     let dirs = fs::read_dir(DATA_DIR.clone().unwrap() + EXTENSIONS_DIR_NAME).unwrap();
     
+    let mut extensions_of_interest_appearance = HashMap::<String,bool>::new();
+    for extension_name in extensions_of_interest.iter() {
+        extensions_of_interest_appearance.insert(extension_name.to_owned(), false);
+    }
+
     let mut extensions_map = HashMap::new();
     let mut num_of_entries = 0;
     let mut parsed_any_successfully = false;
-    let mut faulty_files : Vec<OsString> = Vec::new();
+    let mut faulty_files : Vec<String> = Vec::new();
     let mut buffer = String::with_capacity(200);
     for entry in dirs {
         let entry = match entry {
@@ -63,7 +68,8 @@ pub fn parse_supported_extensions_to_map(extensions_of_interest: &[String])
         let reader = match my_reader::BufReader::open(path) {
             Ok(x) => x,
             Err(_) => {
-                faulty_files.push(entry.file_name());
+                let file_name = entry.file_name().to_str().map_or(String::new(), |x| x.to_owned());
+                if !file_name.is_empty() {faulty_files.push(file_name)}
                 continue;
             }
         } ;
@@ -71,15 +77,20 @@ pub fn parse_supported_extensions_to_map(extensions_of_interest: &[String])
         let extension = match parse_file_to_extension(reader, &mut buffer) {
             Ok(x) => x,
             Err(_) => {
-                faulty_files.push(entry.file_name());
+                let file_name = entry.file_name().to_str().map_or(String::new(), |x| x.to_owned());
+                if !file_name.is_empty() {faulty_files.push(file_name)}
                 continue;
             }
         };
 
         parsed_any_successfully = true;
-        
+
         if !extensions_of_interest.is_empty() && !extensions_of_interest.contains(&extension.name) {
             continue;
+        }
+
+        if !extensions_of_interest.is_empty() {
+            *extensions_of_interest_appearance.get_mut(&extension.name).unwrap() = true;
         }
 
         extensions_map.insert(extension.name.to_owned(), extension);
@@ -87,15 +98,25 @@ pub fn parse_supported_extensions_to_map(extensions_of_interest: &[String])
     
     if num_of_entries == 0 {
         return Err(ParseExtensionsError::NoFilesFound);
-    }    
+    } 
+    
+    let mut non_existant_extensions_of_interest = Vec::new();
+    if !extensions_of_interest.is_empty() {
+        extensions_of_interest_appearance.iter().for_each(|x| 
+            if !x.1 && !faulty_files.contains(&(x.0.to_owned() + ".txt")) {
+                non_existant_extensions_of_interest.push(x.0.to_owned())
+            });
+    }
 
     if !parsed_any_successfully {
         return Err(ParseExtensionsError::NoFilesFormattedProperly);
-    } else if extensions_map.is_empty() {
-        return Err(ParseExtensionsError::ExtensionsOfInterestNotFound);
-    } 
+    }
 
-    Ok((extensions_map, faulty_files))
+    if non_existant_extensions_of_interest.len() == extensions_of_interest.len() {
+        return Err(ParseExtensionsError::ExtensionsOfInterestNotFound);
+    }
+
+    Ok((extensions_map, faulty_files, non_existant_extensions_of_interest))
 }
 
 pub fn parse_config_file(file_name: Option<&str>) -> Result<(PersistentOptions,bool),ParseConfigFileError> {

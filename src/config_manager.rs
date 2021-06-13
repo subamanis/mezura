@@ -153,6 +153,7 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
         return Err(ArgParsingError::MissingTargetPath);
     }
 
+
     let config = args_builder.build();
     if let Some(x) = config_name_for_save {
         match data_reader::save_config_to_file(&x, &config) {
