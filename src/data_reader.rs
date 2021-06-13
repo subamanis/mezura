@@ -39,7 +39,7 @@ pub struct PersistentOptions {
 }
 
 
-pub fn parse_supported_extensions_to_map(extensions_of_interest: &[String])
+pub fn parse_supported_extensions_to_map(extensions_of_interest: &mut Vec<String>)
         -> Result<(HashMap<String,Extension>, Vec<String>, Vec<String>), ParseExtensionsError> 
 {
     let dirs = fs::read_dir(DATA_DIR.clone().unwrap() + EXTENSIONS_DIR_NAME).unwrap();
@@ -115,6 +115,8 @@ pub fn parse_supported_extensions_to_map(extensions_of_interest: &[String])
     if !extensions_of_interest.is_empty() && non_existant_extensions_of_interest.len() == extensions_of_interest.len() {
         return Err(ParseExtensionsError::ExtensionsOfInterestNotFound);
     }
+
+    extensions_of_interest.retain(|x| !non_existant_extensions_of_interest.contains(x) && !faulty_files.contains(&(x.to_owned()+".txt")));
 
     Ok((extensions_map, faulty_files, non_existant_extensions_of_interest))
 }

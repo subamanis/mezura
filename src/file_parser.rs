@@ -417,7 +417,7 @@ fn get_bounds_w_multiline_comments(_file_name:&str, line: &str, extension: &Exte
                     end_com_counter += 1;
                 }
 
-                relevant.push_str(&line[slice_start_index..this_index]); //@TODO maybe check that this will not blow up?
+                relevant.push_str(&line[slice_start_index..this_index]);
                 if !has_more_ends(end_com_counter) {
                     if relevant.is_empty() {return LineInfo::with_open_comment();}
                     else {return LineInfo::new(Some(relevant), has_string_literal, true, None);}
@@ -617,7 +617,7 @@ fn get_str_indices(line: &str, extension: &Extension, open_str_symbol: &Option<S
             } else if indices_1.is_empty() {
                 indices_2
             } else {
-                add_non_intersecting(&mut indices_1, &mut indices_2, open_str_symbol, &mut indices, extension); //@TODO fix index 0 for size 0
+                add_non_intersecting(&mut indices_1, &mut indices_2, open_str_symbol, &mut indices, extension);
                 indices
             }
         }
@@ -782,37 +782,37 @@ mod tests {
             keywords : vec![STRUCT.clone(),ENUM.clone(),TRAIT.clone()]
         };
 
-        static ref extension_map_ref : ExtensionsMapRef = Arc::new(data_reader::parse_supported_extensions_to_map(&Vec::<String>::new()).unwrap().0);
+        static ref EXTENSION_MAP_REF : ExtensionsMapRef = Arc::new(data_reader::parse_supported_extensions_to_map(&mut Vec::<String>::new()).unwrap().0);
     }
 
     #[test]
     fn test_correct_parsing_of_test_dir() {
         let mut buf = String::with_capacity(150);
 
-        // let result = parse_file("test_dir/a.txt", "java", &mut buf, extension_map_ref.clone());
+        // let result = parse_file("test_dir/a.txt", "java", &mut buf, EXTENSION_MAP_REF.clone());
         // let result = ExtensionContentInfo::from(result.unwrap());
         // assert_eq!(ExtensionContentInfo::new(44, 13, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         // buf.clear();
-        // let result = parse_file("test_dir/a.txt", "cs", &mut buf, extension_map_ref.clone());
+        // let result = parse_file("test_dir/a.txt", "cs", &mut buf, EXTENSION_MAP_REF.clone());
         // let result = ExtensionContentInfo::from(result.unwrap());
         // assert_eq!(ExtensionContentInfo::new(44, 13, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         // buf.clear();
         
-        // let result = parse_file("test_dir/d.txt", "cs", &mut buf, extension_map_ref.clone());
+        // let result = parse_file("test_dir/d.txt", "cs", &mut buf, EXTENSION_MAP_REF.clone());
         // let result = ExtensionContentInfo::from(result.unwrap());
         // assert_eq!(ExtensionContentInfo::new(19, 7, hashmap!("classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         // buf.clear();
-        // let result = parse_file("test_dir/d.txt", "java", &mut buf, extension_map_ref.clone());
+        // let result = parse_file("test_dir/d.txt", "java", &mut buf, EXTENSION_MAP_REF.clone());
         // let result = ExtensionContentInfo::from(result.unwrap());
         // assert_eq!(ExtensionContentInfo::new(19, 7, hashmap!("classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         // buf.clear();
 
-        // let result = parse_file("test_dir/b.txt", "java", &mut buf, extension_map_ref.clone());
+        // let result = parse_file("test_dir/b.txt", "java", &mut buf, EXTENSION_MAP_REF.clone());
         // let result = ExtensionContentInfo::from(result.unwrap());
         // assert_eq!(ExtensionContentInfo::new(19, 11, hashmap!("classes".to_owned()=>7,"interfaces".to_owned()=>0)), result);
         // buf.clear();
 
-        // let result = parse_file("test_dir/c.txt", "py", &mut buf, extension_map_ref.clone());
+        // let result = parse_file("test_dir/c.txt", "py", &mut buf, EXTENSION_MAP_REF.clone());
         // let result = ExtensionContentInfo::from(result.unwrap());
         // assert_eq!(ExtensionContentInfo::new(11, 6, hashmap!("classes".to_owned()=>2)), result);
         // buf.clear();
