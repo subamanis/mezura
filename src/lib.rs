@@ -57,6 +57,10 @@ pub fn run(config: Configuration, extensions_map: HashMap<String, Extension>) ->
         h.join().unwrap();
     }
     print_faulty_files_or_ok(&faulty_files_ref, &config);
+
+    if faulty_files_ref.lock().unwrap().len() == relevant_files_num {
+        return Err(ParseFilesError::AllAreFaultyFiles);
+    }
     
     remove_faulty_files_stats(&faulty_files_ref, &mut extensions_metadata);
 
@@ -77,7 +81,7 @@ fn print_faulty_files_or_ok(faulty_files_ref: &FaultyFilesRef, config: &Configur
                 println!("-- Error: {} \n   for file: {}\n",f.1,f.0);
             }
         } else {
-            println!("Run with command '--{}' to get the paths.",config_manager::SHOW_FAULTY_FILES)
+            println!("Run with command '--{}' to get detailed info.",config_manager::SHOW_FAULTY_FILES)
         }
         println!();
     }
@@ -114,14 +118,14 @@ fn make_extension_metadata(extension_map: ExtensionsMapRef) -> HashMap<String, E
 #[derive(Debug)]
 pub enum ParseFilesError {
     NoRelevantFiles,
-    FaultyFile
+    AllAreFaultyFiles
 } 
 
 impl ParseFilesError {
     pub fn formatted(&self) -> String {
         match self {
-            Self::NoRelevantFiles => "\nNo relevant files found in the given directory.".yellow().to_string(),
-            Self::FaultyFile => "\nFaulty file".yellow().to_string()
+            Self::NoRelevantFiles => "No relevant files found in the given directory.".yellow().to_string(),
+            Self::AllAreFaultyFiles => "None of the files were able to be parsed".yellow().to_string()
         }
     }
 }

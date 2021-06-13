@@ -8,7 +8,7 @@ pub fn format_and_print_results(extensions_content_info_ref: &mut ContentInfoMap
 {
     let mut content_info_map_guard = extensions_content_info_ref.lock();
     let mut content_info_map = content_info_map_guard.as_deref_mut().unwrap();
-    
+
     remove_extensions_with_0_files(&mut content_info_map, extensions_metadata_map);
 
     let mut sorted_extension_names = 
