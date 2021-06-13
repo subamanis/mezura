@@ -25,19 +25,19 @@ Valid range: 1-8, default: 4
 
 Whether or not to count braces '{' , '}' as lines of code.
 If used from cmd, dont use any arguments, just the name of the command
-'yes' or 'true' to activate or anything else to not activate, default: no (deactivated)
+'yes' or 'true' to activate or anything else to deactivate, default: no (deactivated)
 ===> braces-as-code
 no
 
 Whether or not to parse files inside directories that start with a dot.
 If used from cmd, dont use any arguments, just the name of the command
-'yes' or 'true' to activate or anything else to not activate, default: no (deactivated)
+'yes' or 'true' to activate or anything else to deactivate, default: no (deactivated)
 ===> search-in-dotted
 no
 
-Whether or not to show the paths of all the files that could not be parsed
-If used from cmd, dont use any arguments, just the name of the command
+Whether or not to show the paths of all the files that could not be parsed, and the errors.
 (probably because they contain non UTF-8 characters).
-'yes' or 'true' to activate or anything else to not activate, default: no (deactivated)
+If used from cmd, dont use any arguments, just the name of the command
+'yes' or 'true' to activate or anything else to deactivate, default: no (deactivated)
 ===> show-faulty-files
 no

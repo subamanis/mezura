@@ -5,11 +5,11 @@ use crate::*;
 
 #[inline]
 pub fn parse_file(_file_name: &str, file_extension: &str, buf: &mut String, extension_map: ExtensionsMapRef, config: &Configuration)
--> Result<FileStats,ParseFilesError> 
+-> Result<FileStats,String> 
 {
     let reader = BufReader::new(match File::open(_file_name){
         Ok(f) => f,
-        Err(_) => return Err(ParseFilesError::FaultyFile)
+        Err(x) => return Err(x.to_string())
     });
 
     parse_lines(_file_name, reader, buf, &extension_map.get(file_extension).unwrap(), config)
@@ -17,7 +17,7 @@ pub fn parse_file(_file_name: &str, file_extension: &str, buf: &mut String, exte
 
 #[inline]
 fn parse_lines(_file_name: &str, mut reader: BufReader<File>, buf: &mut String, extension: &Extension, config: &Configuration)
--> Result<FileStats,ParseFilesError>
+-> Result<FileStats,String>
 {
     let mut file_stats = FileStats::default(&extension.keywords);
     let mut is_comment_closed = true;
@@ -26,7 +26,7 @@ fn parse_lines(_file_name: &str, mut reader: BufReader<File>, buf: &mut String, 
         buf.clear();
         match reader.read_line(buf) {
             Ok(u) => if u == 0 {return Ok(file_stats)},
-            Err(_) => return Err(ParseFilesError::FaultyFile)
+            Err(x) => return Err(x.to_string())
         }
         file_stats.incr_lines();
 

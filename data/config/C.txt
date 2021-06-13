@@ -1,0 +1,22 @@
+Generated config file.
+
+===> path
+C:/
+
+===> exclude
+
+
+===> extensions
+
+
+===> threads
+6
+
+===> braces-as-code
+no
+
+===> search-in-dotted
+no
+
+===> show-faulty-files
+yes

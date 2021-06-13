@@ -30,12 +30,14 @@ pub(crate) fn start_parser_thread(
                 Some(x) => match x.to_str() {
                     Some(y) => y.to_owned(),
                     None => {
-                        faulty_files_ref.lock().unwrap().push((file_path.clone().clone(),path.metadata().map_or(0, |m| m.len()))); 
+                        faulty_files_ref.lock().unwrap().push((file_path.clone().clone(),
+                                "could not get the file's extension".to_owned(), path.metadata().map_or(0, |m| m.len()))); 
                         continue;
                     }
                 },
                 None => {
-                    faulty_files_ref.lock().unwrap().push((file_path.clone(),path.metadata().map_or(0, |m| m.len())));
+                    faulty_files_ref.lock().unwrap().push((file_path.clone(),
+                        "could not get the file's extension".to_owned(), path.metadata().map_or(0, |m| m.len())));   
                     continue;
                 }
             };
@@ -44,7 +46,7 @@ pub(crate) fn start_parser_thread(
                 Ok(x) => {
                     extension_content_info_ref.lock().unwrap().get_mut(&file_extension).unwrap().add_file_stats(x);
                 },
-                Err(_) => faulty_files_ref.lock().unwrap().push((file_path.clone(),path.metadata().map_or(0, |m| m.len())))
+                Err(x) => faulty_files_ref.lock().unwrap().push((file_path.clone(),x,path.metadata().map_or(0, |m| m.len())))
             }
         }
     })

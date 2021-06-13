@@ -12,20 +12,19 @@ mod result_printer;
 mod consumer;
 mod producer;
 
-use std::{collections::{HashMap, LinkedList}, fs::{self, File}, io::{self, BufRead, BufReader}, path::{Path, PathBuf}, sync::atomic::{AtomicBool, Ordering}, time::{Duration}};
-use std::{sync::{Arc, Mutex}, thread::JoinHandle};
-use std::thread;
-
 pub use colored::{Colorize,ColoredString};
 pub use config_manager::Configuration;
 pub use putils::*;
 pub use domain::{Extension, ExtensionContentInfo, ExtensionMetadata, FileStats, Keyword};
 
 pub type LinkedListRef      = Arc<Mutex<LinkedList<String>>>;
-pub type FaultyFilesRef     = Arc<Mutex<Vec<(String,u64)>>>;
+pub type FaultyFilesRef     = Arc<Mutex<Vec<(String,String,u64)>>>;
 pub type BoolRef            = Arc<AtomicBool>;
 pub type ContentInfoMapRef  = Arc<Mutex<HashMap<String,ExtensionContentInfo>>>;
 pub type ExtensionsMapRef   = Arc<HashMap<String,Extension>>;
+
+use std::{collections::{HashMap, LinkedList}, error::Error, fs::{self, File}, io::{self, BufRead, BufReader}, path::{Path, PathBuf}, sync::atomic::{AtomicBool, Ordering}, time::{Duration}};
+use std::{sync::{Arc, Mutex}, thread::JoinHandle};
 
 pub fn run(config: Configuration, extensions_map: HashMap<String, Extension>) -> Result<(), ParseFilesError> {
     let files_ref : LinkedListRef = Arc::new(Mutex::new(LinkedList::new()));
@@ -72,10 +71,10 @@ fn print_faulty_files_or_ok(faulty_files_ref: &FaultyFilesRef, config: &Configur
     if faulty_files.is_empty() {
         println!("{}\n","ok".bright_green());
     } else {
-        println!("{} {}",format!("{}",faulty_files.len()).red(), "faulty files detected. Lines and keywords will not be counted for them.".red());
+        println!("{} {}",format!("{}",faulty_files.len()).red(), "faulty files detected. They will be ignored in stat calculation.".red());
         if config.should_show_faulty_files {
             for f in faulty_files {
-                println!("-- {}",f.0);
+                println!("-- Error: {} \n   for file: {}\n",f.1,f.0);
             }
         } else {
             println!("Run with command '--{}' to get the paths.",config_manager::SHOW_FAULTY_FILES)
@@ -91,7 +90,7 @@ fn remove_faulty_files_stats(faulty_files_ref: &FaultyFilesRef, extensions_metad
         if let Some(x) = extension {
             let extension_metadata = extensions_metadata_map.get_mut(x).unwrap();
             extension_metadata.files -= 1;
-            extension_metadata.bytes -= file.1 as usize;
+            extension_metadata.bytes -= file.2 as usize;
         }
     }
 }
