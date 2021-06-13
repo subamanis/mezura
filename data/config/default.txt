@@ -15,7 +15,10 @@ in the 'extensions' dir.
 Default: empty - all extensions that are specified in the 'extensions' dir are relevant.
 ===> extensions
 
-
+The number of consumer threads that will parse files in parallel.
+Increasing the number wont always improve performance, since if the files are scattered in
+deep and wide directories, the producer thread may not have enough time to find the next one
+before a consumer thread requests one for parsing.
 Valid range: 1-8, default: 4
 ===> threads
 4
