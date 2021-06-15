@@ -1,7 +1,14 @@
+use std::io::Write;
+
 use crate::*;
+
+use terminal_size;
 
 //the total number of vertical lines ( | ) that appear in the [-|||...|-] in the overview section
 static NUM_OF_VERTICALS : usize = 50;
+
+static KEYWORD_LINE_OFFSET : usize = 20;
+static STANDARD_LINE_STATS_LEN : usize = 33;
 
 pub fn format_and_print_results(extensions_content_info_ref: &mut ContentInfoMapRef,
      extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>) 
@@ -17,66 +24,105 @@ pub fn format_and_print_results(extensions_content_info_ref: &mut ContentInfoMap
     print_individually(&sorted_extension_names, &content_info_map, extensions_metadata_map);
 
     if extensions_metadata_map.len() > 1 {
-        print_overview(&mut sorted_extension_names, content_info_map, extensions_metadata_map);
+        print_sum(&content_info_map, &extensions_metadata_map);
+        print_visual_overview(&mut sorted_extension_names, content_info_map, extensions_metadata_map);
     }
 }
 
+
+
 fn print_individually(sorted_extensions_map: &[String], content_info_map: &HashMap<String,ExtensionContentInfo>,
-     extensions_metadata_map: &HashMap<String, ExtensionMetadata>) 
+     extensions_metadata_map: &HashMap<String, ExtensionMetadata>)
 {
-    fn colored_word(word: &str) -> ColoredString {
-        word.italic().truecolor(181, 169, 138)
-    }
-
     fn get_size_text(metadata: &ExtensionMetadata) -> String {
-        let (size, size_desc) = 
-            if metadata.bytes > 1000000 
-                {(metadata.bytes as f64 / 1000000f64, colored_word("MBs total"))}
-            else if metadata.bytes > 1000 
-                {(metadata.bytes as f64 / 1000f64, colored_word("KBs total"))}
-            else
-                {(metadata.bytes as f64, colored_word("Bytes total"))};
-
-        let (average_size, average_size_desc) = {
-            let div = metadata.bytes / metadata.files;
-            if div > 100000 
-                {((metadata.bytes as f64 / metadata.files as f64) / 1000000f64, colored_word("MBs average"))} 
-            else if div > 1000 
-                {((metadata.bytes as f64 / metadata.files as f64) / 1000f64, colored_word("KBs average"))}
-            else 
-                {(metadata.bytes as f64 / metadata.files as f64, colored_word("Bytes average"))}
-        };
+        let (size, size_desc) = get_size_and_formatted_size_text(metadata.bytes, "total");
+        let (average_size, average_size_desc) = get_size_and_formatted_size_text(
+                metadata.bytes / metadata.files, "average");
 
         format!("{:.1} {} - {:.1} {}",size, size_desc, average_size, average_size_desc)
     }
 
-    println!("{}\n", "Details".underline().bold());
+    fn reconstruct_line(i: usize, max_line_stats_len: usize, titles_vec: &Vec<String>, lines_stats_vec: &Vec<String>,
+         lines_stats_len_vec: &Vec<usize>, size_stats_vec: &Vec<String>, keywords_stats_vec: &Vec<String>) -> String
+    {
+        let spaces = max_line_stats_len+1 - lines_stats_len_vec[i];
+        titles_vec[i].clone() + &lines_stats_vec[i] + &" ".repeat(spaces) + "  |  " + &size_stats_vec[i] +
+                "\n" + &keywords_stats_vec[i]
+    }
+
+    println!("{}.\n", "Details".underline().bold());
     
     let max_files_num_size = extensions_metadata_map.values().map(|x| x.files).max().unwrap().to_string().len();
+    let mut max_line_stats_len = STANDARD_LINE_STATS_LEN;
+    let (mut titles_vec, mut lines_stats_vec, mut lines_stats_len_vec, mut size_stats_vec,
+            mut keywords_stats_vec) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for extension_name in sorted_extensions_map {
         let content_info = content_info_map.get(extension_name).unwrap();
         let metadata = extensions_metadata_map.get(extension_name).unwrap();
 
-        let spaces = get_n_times(" ", 6-extension_name.len());
         let files_str = with_seperators(metadata.files);
-        let title = format!(".{}{}{}{} {}  -> ",extension_name.bold(), spaces, get_n_times(" ", (max_files_num_size+1)-files_str.len()),
-         files_str, colored_word("files"));
+        let title = format!(".{}{}{}{} {}  -> ",extension_name.bold(), " ".repeat(7-extension_name.len()),
+                " ".repeat((max_files_num_size+1)-files_str.len()), files_str, colored_word("files"));
+        titles_vec.push(title);
+
         let code_lines_percentage = if content_info.lines > 0 {content_info.code_lines as f64 / content_info.lines as f64 * 100f64} else {0f64};
-        let info = format!("{} {} {{{} code ({:.2}%) + {} extra}}  |  {}\n",colored_word("lines"), with_seperators(content_info.lines),
-         with_seperators(content_info.code_lines), code_lines_percentage, with_seperators(content_info.lines - content_info.code_lines),
-         get_size_text(metadata));
-        
-        let mut keyword_info = String::new();
-        if !content_info.keyword_occurences.is_empty() {
-            let mut keyword_iter = content_info.keyword_occurences.iter();
-            let first_keyword = keyword_iter.next().unwrap();
-            keyword_info.push_str(&format!("{}{}: {}",get_n_times(" ", 19+max_files_num_size), colored_word(first_keyword.0),with_seperators(*first_keyword.1)));
-            for (keyword_name,occurancies) in keyword_iter {
-                keyword_info.push_str(&format!(" , {}: {}",colored_word(keyword_name),with_seperators(*occurancies)));
-            }
+        let lines_str = with_seperators(content_info.lines);
+        let code_lines_str = with_seperators(content_info.code_lines);
+        let extra_lines_str = with_seperators(content_info.lines - content_info.code_lines);
+        let curr_line_stats_len = STANDARD_LINE_STATS_LEN + lines_str.len() + code_lines_str.len() + extra_lines_str.len();
+        lines_stats_len_vec.push(curr_line_stats_len); 
+        if max_line_stats_len < curr_line_stats_len {
+            max_line_stats_len = curr_line_stats_len;
         }
-        println!("{}",format!("{}{}{}\n",title, info, keyword_info));
+        
+        lines_stats_vec.push(format!("{} {} {{{} code ({:.2}%) + {} extra}}", colored_word("lines"), lines_str, code_lines_str,
+                 code_lines_percentage, extra_lines_str));
+        size_stats_vec.push(get_size_text(metadata));
+        
+        keywords_stats_vec.push(get_keywords_as_str(&content_info.keyword_occurences, max_files_num_size));
     }
+
+    for i in 0..lines_stats_vec.len() {
+        let line = reconstruct_line(i, max_line_stats_len, &titles_vec, &lines_stats_vec,
+                &lines_stats_len_vec, &size_stats_vec, &keywords_stats_vec);
+                
+        if i == lines_stats_len_vec.len() - 1 {
+            println!("{}",line);
+        } else {
+            println!("{}\n",line);
+        }
+    }
+}
+
+
+fn print_sum(content_info_map: &HashMap<String,ExtensionContentInfo>, extensions_metadata_map: &HashMap<String,ExtensionMetadata>) 
+{
+    let (mut total_files, mut total_lines, mut total_code_lines, mut total_bytes) = (0, 0, 0,0);
+    extensions_metadata_map.values().for_each(|e| {total_files += e.files; total_bytes += e.bytes});
+    content_info_map.values().for_each(|c| {total_lines += c.lines; total_code_lines += c.code_lines});
+
+    let (total_files_str, total_lines_str, total_code_lines_str, total_extra_lines_str) = 
+            (with_seperators(total_files),with_seperators(total_lines),with_seperators(total_code_lines), with_seperators(total_lines-total_code_lines)); 
+    let (total_size, total_size_descr) = get_size_and_formatted_size_text(total_bytes, "total");
+    let (average_size, average_size_descr) = get_size_and_formatted_size_text(total_bytes / total_lines, "average");
+
+    let max_files_num_size = extensions_metadata_map.values().map(|x| x.files).max().unwrap().to_string().len();
+
+    let keywords_sum_map = create_keyword_sum_map(content_info_map);
+    let keywords_line = get_keywords_as_str(&keywords_sum_map, max_files_num_size);
+
+    let title = format!("{}   {}{} {}  -> ","total".bold()," ".repeat(max_files_num_size+1 -total_files_str.len()),total_files_str,colored_word("files"));
+    let code_lines_percentage = if total_lines > 0 {total_code_lines as f64 / total_lines as f64 * 100f64} else {0f64};
+    let size_text = format!("{:.1} {} - {:.1} {}",total_size,total_size_descr,average_size,average_size_descr);
+
+    let line_len = STANDARD_LINE_STATS_LEN + total_files_str.len() + total_code_lines_str.len() + total_extra_lines_str.len() +
+            total_size.to_string().len() + average_size.to_string().len() + 57;
+    println!("{}","-".repeat(line_len));
+    
+    let info = format!("{} {} {{{} code ({:.2}%) + {} extra}}   |  {}\n",colored_word("lines"), total_lines_str,total_code_lines_str,
+            code_lines_percentage, total_extra_lines_str, size_text);
+
+    println!("{}", format!("{}{}{}\n",title,info,keywords_line));
 }
 
 //                                    OVERVIEW
@@ -86,7 +132,7 @@ fn print_individually(sorted_extensions_map: &[String], content_info_map: &HashM
 // Lines: ...
 //
 // Size : ...
-fn print_overview(sorted_extension_vec: &mut Vec<String>, content_info_map: &mut HashMap<String, ExtensionContentInfo>,
+fn print_visual_overview(sorted_extension_vec: &mut Vec<String>, content_info_map: &mut HashMap<String, ExtensionContentInfo>,
      extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>) 
 {
     fn make_cyan(str: &str) -> String {
@@ -112,7 +158,7 @@ fn print_overview(sorted_extension_vec: &mut Vec<String>, content_info_map: &mut
         retain_most_relevant_and_add_others_field_for_rest(sorted_extension_vec, content_info_map, extensions_metadata_map);
     }
 
-    println!("{}\n", "Overview".underline().bold());
+    println!("{}.\n", "Overview".underline().bold());
 
     let color_func_vec : Vec<fn(&str) -> String> = {
         if sorted_extension_vec[sorted_extension_vec.len()-1] == "others" {
@@ -137,6 +183,49 @@ fn print_overview(sorted_extension_vec: &mut Vec<String>, content_info_map: &mut
     println!("{}\n\n{}\n\n{}\n",files_line, lines_line, size_line);
 }
 
+
+fn get_keywords_as_str(keyword_occurencies: &HashMap<String,usize>, max_files_num_size: usize) -> String {
+    let mut keyword_info = String::new();
+    if !keyword_occurencies.is_empty() {
+        let mut keyword_iter = keyword_occurencies.iter();
+        let first_keyword = keyword_iter.next().unwrap();
+        keyword_info.push_str(&format!("{}{}: {}"," ".repeat(KEYWORD_LINE_OFFSET + max_files_num_size),
+                colored_word(first_keyword.0),with_seperators(*first_keyword.1)));
+        for (keyword_name,occurancies) in keyword_iter {
+            keyword_info.push_str(&format!(" , {}: {}",colored_word(keyword_name),with_seperators(*occurancies)));
+        }
+    }
+    keyword_info
+}
+
+fn create_keyword_sum_map(content_info_map: &HashMap<String,ExtensionContentInfo>) -> HashMap<String,usize> {
+    let mut collective_keywords_map : HashMap<String,usize> = HashMap::new();
+    for content_info in content_info_map.values() {
+        for keyword in &content_info.keyword_occurences {
+            if *keyword.1 == 0 {continue;}
+            if let Some(x) = collective_keywords_map.get_mut(keyword.0) {
+                *x += *keyword.1;
+            } else {
+                collective_keywords_map.insert(keyword.0.to_owned(), *keyword.1);
+            }
+        }
+    }
+
+    collective_keywords_map
+}
+
+fn get_size_and_formatted_size_text(value: usize, suffix: &str) -> (f64,ColoredString) {
+    if value > 1000000 
+        {(value as f64 / 1000000f64, colored_word(&("MBs ".to_owned() + suffix)))}
+    else if value > 1000 
+        {(value as f64 / 1000f64, colored_word(&("KBs ".to_owned() + suffix)))}
+    else
+        {(value as f64, colored_word(&("Bytes ".to_owned() + suffix)))}
+}
+
+fn colored_word(word: &str) -> ColoredString {
+    word.italic().truecolor(181, 169, 138)
+}
 
 fn remove_extensions_with_0_files(content_info_map: &mut HashMap<String,ExtensionContentInfo>,
     extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>) 
@@ -276,7 +365,7 @@ fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize],
     line.push_str(&format!("{}    ",prefix));
     for (i,percent) in percentages.iter().enumerate() {
         let str_perc = format!("{:.1}",percent);
-        line.push_str(&format!("{}%{} ",str_perc, utils::get_n_times(" ", 4-str_perc.len())));
+        line.push_str(&format!("{}{}% ", " ".repeat(4-str_perc.len()), str_perc));
         line.push_str(&color_func_vec[i](&extensions_name[i]));
         if i < percentages.len() - 1{
             line.push_str(" - ")
@@ -330,7 +419,6 @@ fn retain_most_relevant_and_add_others_field_for_rest(sorted_extension_names: &m
 
 fn get_files_percentages(extensions_metadata_map: &HashMap<String,ExtensionMetadata>, sorted_extension_names: &[String]) -> Vec<f64> {
     let mut extensions_files = [0].repeat(extensions_metadata_map.len());
-    // println!("extension_metadata_map: {:#?}\nsorted_extensions_names: {:#?}",extensions_metadata_map, sorted_extension_names);
     extensions_metadata_map.iter().for_each(|e| {
         let pos = sorted_extension_names.iter().position(|name| name == e.0).unwrap();
         extensions_files[pos] = e.1.files;
@@ -493,7 +581,5 @@ mod tests {
         let verticals = get_num_of_verticals(&percentages);
         assert!(verticals.iter().sum::<usize>() == 50);
         assert_eq!(vec![1,1,24,24], verticals);
-
-        
     }
 }

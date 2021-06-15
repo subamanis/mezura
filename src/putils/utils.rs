@@ -44,15 +44,6 @@ pub fn get_file_extension(path: &Path) -> Option<&str> {
 }
 
 #[inline]
-pub fn get_n_times(symbol: &str, times: usize) -> String {
-    let mut str = String::with_capacity(times);
-    for _ in  0..times {
-        str.push_str(symbol);
-    }
-    str
-}
-
-#[inline]
 pub fn with_seperators(i: usize) -> String{
     let mut s = String::new();
     let i_str = i.to_string();
