@@ -4,7 +4,7 @@
 #![allow(unused_imports)]
 
 pub mod config_manager;
-pub mod data_reader;
+pub mod io_handler;
 pub mod putils;
 
 mod file_parser;

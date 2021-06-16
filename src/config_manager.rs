@@ -2,7 +2,7 @@ use std::{path::Path, process};
 
 use colored::Colorize;
 
-use crate::{data_reader::{self, ParseConfigFileError, PersistentOptions},utils};
+use crate::{io_handler::{self, ParseConfigFileError, PersistentOptions},utils};
 
 // command flags
 pub const PATH               :&str   = "path";
@@ -143,6 +143,8 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
                 return Err(ArgParsingError::IncorrectCommandArgs("--".to_owned() + SHOW_FAULTY_FILES))
             }
             show_faulty_files = Some(true);
+        } else {
+            return Err(ArgParsingError::UnrecognisedParameter(command.to_owned()));
         }
     }
 
@@ -156,7 +158,7 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
 
     let config = args_builder.build();
     if let Some(x) = config_name_for_save {
-        match data_reader::save_config_to_file(&x, &config) {
+        match io_handler::save_config_to_file(&x, &config) {
             Err(_) => println!("\n{}","Error while trying to save config.".yellow()),
             Ok(_) => println!("\nConfiguration '{}' saved successfully.",x)
         }
@@ -190,7 +192,7 @@ fn parse_load_command(config_name: &str) -> Result<Option<PersistentOptions>,()>
     if config_name.is_empty() {
         return Err(());
     }
-    let result = match data_reader::parse_config_file(Some(config_name)) {
+    let result = match io_handler::parse_config_file(Some(config_name)) {
         Ok(x) => {
             if x.1 {
                 println!("{}",format!("Formatting problems detected in config file '{}', some default values may be used.",config_name).yellow());
@@ -217,7 +219,7 @@ fn combine_specified_config_options(custom_config: Option<PersistentOptions>, pa
         args_builder.add_missing_fields(x);
     }
     if args_builder.has_missing_fields() {
-        let default_config = data_reader::parse_config_file(None);
+        let default_config = io_handler::parse_config_file(None);
         if let Ok(x) = default_config {
             if x.1 {
                 println!("{}","Formatting problems detected in the default config file, some default values may be used.".yellow());

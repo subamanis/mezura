@@ -782,7 +782,7 @@ mod tests {
             keywords : vec![STRUCT.clone(),ENUM.clone(),TRAIT.clone()]
         };
 
-        static ref EXTENSION_MAP_REF : ExtensionsMapRef = Arc::new(data_reader::parse_supported_extensions_to_map(&mut Vec::<String>::new()).unwrap().0);
+        static ref EXTENSION_MAP_REF : ExtensionsMapRef = Arc::new(io_handler::parse_supported_extensions_to_map(&mut Vec::<String>::new()).unwrap().0);
     }
 
     #[test]

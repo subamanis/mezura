@@ -2,7 +2,7 @@ use std::{path::Path, process, time::SystemTime};
 
 use colored::*;
 
-use code_stats::{config_manager::{self}, Configuration, data_reader, putils::*};
+use code_stats::{config_manager::{self}, Configuration, io_handler, putils::*};
 
 fn main() {
     control::set_virtual_terminal(true).unwrap();
@@ -21,7 +21,7 @@ fn main() {
         } 
     };
 
-    let extensions_map = match data_reader::parse_supported_extensions_to_map(&mut config.extensions_of_interest) {
+    let extensions_map = match io_handler::parse_supported_extensions_to_map(&mut config.extensions_of_interest) {
         Err(x) => {
             println!("\n{}", x.formatted());
             utils::wait_for_input();
@@ -67,7 +67,7 @@ fn get_args_from_stdin() -> Configuration {
 }
 
 fn verify_required_dirs() -> Result<(),String> {
-    if let Some(data_dir) = data_reader::DATA_DIR.clone() {
+    if let Some(data_dir) = io_handler::DATA_DIR.clone() {
         if !Path::new(&(data_dir + "/extensions")).is_dir() {
             return Err("'extensions' directory not found inside 'data'.".red().to_string())
         } 

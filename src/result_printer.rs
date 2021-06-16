@@ -135,7 +135,7 @@ fn print_visual_overview(sorted_extension_vec: &mut Vec<String>, content_info_ma
      extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>) 
 {
     fn make_cyan(str: &str) -> String {
-        str.bright_cyan().to_string()
+        str.cyan().to_string()
     }
     fn make_magenta(str: &str) -> String {
         str.bright_magenta().to_string()
