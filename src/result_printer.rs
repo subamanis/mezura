@@ -30,7 +30,6 @@ pub fn format_and_print_results(extensions_content_info_ref: &mut ContentInfoMap
 }
 
 
-
 fn print_individually(sorted_extensions_map: &[String], content_info_map: &HashMap<String,ExtensionContentInfo>,
      extensions_metadata_map: &HashMap<String, ExtensionMetadata>)
 {
@@ -117,7 +116,7 @@ fn print_sum(content_info_map: &HashMap<String,ExtensionContentInfo>, extensions
 
     let line_len = STANDARD_LINE_STATS_LEN + total_files_str.len() + total_code_lines_str.len() + total_extra_lines_str.len() +
             total_size.to_string().len() + average_size.to_string().len() + 57;
-    println!("{}","-".repeat(line_len));
+    println!("{} ","-".repeat(line_len));
     
     let info = format!("{} {} {{{} code ({:.2}%) + {} extra}}   |  {}\n",colored_word("lines"), total_lines_str,total_code_lines_str,
             code_lines_percentage, total_extra_lines_str, size_text);

@@ -29,60 +29,69 @@ pub(crate) fn add_relevant_files(files_list :LinkedListRef, extensions_metadata_
 fn search_dir_and_add_files_to_list(files_list: &LinkedListRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>,
    extensions: &ExtensionsMapRef, config: &Configuration) -> (usize,usize) 
 {
-   let mut total_files = 0;
-   let mut relevant_files = 0;
-   let mut dirs: LinkedList<PathBuf> = LinkedList::new();
-   dirs.push_front(Path::new(&config.path).to_path_buf());
-   while let Some(dir) = dirs.pop_front() {
-       if let Ok(entries) = fs::read_dir(&dir) {
-           for e in entries.flatten(){
-               if let Ok(ft) = e.file_type() {
-                   if ft.is_file() { 
-                       total_files += 1;
-                       let path_buf = e.path();
-                       let extension_name = match path_buf.extension() {
-                           Some(x) => {
-                               match x.to_str() {
-                                       Some(x) => x.to_owned(),
-                                       None => continue
-                                   }
-                               },
-                               None => continue
-                           };
-                       if extensions.contains_key(&extension_name) {
-                           relevant_files += 1;
-                           let bytes = match path_buf.metadata() {
-                               Ok(x) => x.len() as usize,
-                               Err(_) => 0
-                           };
-                           extensions_metadata_map.get_mut(&extension_name).unwrap().add_file_meta(bytes);
-                           
-                           let str_path = match path_buf.to_str() {
-                               Some(y) => y.to_owned(),
-                               None => continue
-                           };
-                           files_list.lock().unwrap().push_front(str_path);
-                       }
-                   } else { //is directory
-                       let dir_name = match e.file_name().to_str() {
-                           Some(x) => {
-                               if !config.should_search_in_dotted && x.starts_with('.') {continue;}
-                               else {x.to_owned()}
-                           },
-                           None => continue
-                       };
-               
-                       if !config.exclude_dirs.is_empty() {
-                           if !config.exclude_dirs.contains(&dir_name){
-                               dirs.push_front(e.path());
-                           }
-                       } else {
-                           dirs.push_front(e.path());
-                       }
-                   }
-               }
-           }
-       }
-   }
-   (total_files,relevant_files)
+    let mut total_files = 0;
+    let mut relevant_files = 0;
+    let mut dirs: LinkedList<PathBuf> = LinkedList::new();
+    dirs.push_front(Path::new(&config.path).to_path_buf());
+    while let Some(dir) = dirs.pop_front() {
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for e in entries.flatten(){
+                if let Ok(ft) = e.file_type() {
+                    if ft.is_file() { 
+                        total_files += 1;
+                        let path_buf = e.path();
+                        let extension_name = match path_buf.extension() {
+                            Some(x) => {
+                                match x.to_str() {
+                                        Some(x) => x.to_owned(),
+                                        None => continue
+                                    }
+                                },
+                                None => continue
+                            };
+                        if extensions.contains_key(&extension_name) {
+                            if !config.exclude_dirs.is_empty() {
+                                let file_name = path_buf.file_name().map_or("",|o| o.to_str().map_or("", |s|s));
+                                let mut is_excluded = false;
+                                //avoiding allocation of contains
+                                for dir in config.exclude_dirs.iter() {
+                                    if dir == file_name {
+                                        is_excluded = true;
+                                        break;
+                                    }
+                                }
+                                if is_excluded {continue;}
+                            }
+
+                            relevant_files += 1;
+                            let bytes = match path_buf.metadata() {
+                                Ok(x) => x.len() as usize,
+                                Err(_) => 0
+                            };
+                            extensions_metadata_map.get_mut(&extension_name).unwrap().add_file_meta(bytes);
+                            
+                            let str_path = match path_buf.to_str() {
+                                Some(y) => y.to_owned(),
+                                None => continue
+                            };
+                            files_list.lock().unwrap().push_front(str_path);
+                        }
+                    } else { //is directory
+                        let dir_name = match e.file_name().to_str() {
+                            Some(x) => {
+                                if !config.should_search_in_dotted && x.starts_with('.') {continue;}
+                                else {x.to_owned()}
+                            },
+                            None => continue
+                        };
+                
+                        if !config.exclude_dirs.contains(&dir_name){
+                            dirs.push_front(e.path());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (total_files,relevant_files)
 }
