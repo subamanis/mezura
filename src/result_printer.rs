@@ -41,8 +41,8 @@ fn print_individually(sorted_extensions_map: &[String], content_info_map: &HashM
         format!("{:.1} {} - {:.1} {}",size, size_desc, average_size, average_size_desc)
     }
 
-    fn reconstruct_line(i: usize, max_line_stats_len: usize, titles_vec: &Vec<String>, lines_stats_vec: &Vec<String>,
-         lines_stats_len_vec: &Vec<usize>, size_stats_vec: &Vec<String>, keywords_stats_vec: &Vec<String>) -> String
+    fn reconstruct_line(i: usize, max_line_stats_len: usize, titles_vec: &[String], lines_stats_vec: &[String],
+         lines_stats_len_vec: &[usize], size_stats_vec: &[String], keywords_stats_vec: &[String]) -> String
     {
         let spaces = max_line_stats_len+1 - lines_stats_len_vec[i];
         titles_vec[i].clone() + &lines_stats_vec[i] + &" ".repeat(spaces) + "  |  " + &size_stats_vec[i] +
@@ -103,7 +103,7 @@ fn print_sum(content_info_map: &HashMap<String,ExtensionContentInfo>, extensions
     let (total_files_str, total_lines_str, total_code_lines_str, total_extra_lines_str) = 
             (with_seperators(total_files),with_seperators(total_lines),with_seperators(total_code_lines), with_seperators(total_lines-total_code_lines)); 
     let (total_size, total_size_descr) = get_size_and_formatted_size_text(total_bytes, "total");
-    let (average_size, average_size_descr) = get_size_and_formatted_size_text(total_bytes / total_lines, "average");
+    let (average_size, average_size_descr) = get_size_and_formatted_size_text(total_bytes / total_files, "average");
 
     let max_files_num_size = extensions_metadata_map.values().map(|x| x.files).max().unwrap().to_string().len();
 

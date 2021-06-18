@@ -101,9 +101,9 @@ fn remove_faulty_files_stats(faulty_files_ref: &FaultyFilesRef, extensions_metad
 
 fn get_activated_extensions_as_str(config: &Configuration) -> String {
     if config.extensions_of_interest.is_empty() {
-        return String::new()
+        String::new()
     } else {
-        return String::from("\n(Activated extensions: ") + &config.extensions_of_interest.join(", ") + ")";
+        String::from("\n(Activated extensions: ") + &config.extensions_of_interest.join(", ") + ")"
     }
 }
 

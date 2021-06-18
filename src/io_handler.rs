@@ -211,9 +211,9 @@ fn read_bool_value(reader: &mut BufReader<File>, mut buf: &mut String) -> Option
     }
     let buf = buf.to_ascii_lowercase();
     if buf == "yes" || buf ==  "true" {
-        return Some(true);
+        Some(true)
     } else {
-        return Some(false);
+        Some(false)
     }
 }
 
