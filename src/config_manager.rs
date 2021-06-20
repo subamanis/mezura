@@ -68,100 +68,6 @@ pub fn read_args_console() -> Result<Configuration,ArgParsingError> {
     }
 }
 
-fn print_help_message_and_exit() {
-    println!("
-    Format of arguments: <path_here> --optional_command1 --optional_commandN
-
-    COMMANDS:
-
-    --path
-        The path to a directory or a single file, in this form: '--path <path_here>'
-        It can either be surrounded by quotes: \"path\" or not, even if the path has whitespace.
-
-        The path can also be given implicitely (in which case this command is not needed) with 2 ways:
-        1) as the first argument of the program directly
-        2) if it is present in a configuration file (see '--save' and '--load' commands).
-
-    --exclude 
-        1..n arguments, can be a folder name or a file name (including extension).
-
-        The program will ignore these dirs.
-    
-    --extensions 
-        1..n arguments, can either have a dot prefix or not (.java or java)
-
-        The given extension names must exist in any of the files in the 'data/extensions/' dir as the
-        parameter of the field 'Extension'.
-
-        Only the extensions specified here will be taken into account for the stats.
-
-    --threads
-        1 argument: a number between 1 and 8. Default: 4 
-
-        This reprisents the number of the consumer threads that parse files,
-        there is also always one producer thread that is traversing the given dir.
-
-        Increasing the number of consumers can help performance a bit in a situation where
-        there are a lot of big files, concentrated in not very deep directories.
-        
-    --braces-as-code
-        No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
-        or anything else to disable. Default: disabled
-
-        Specifies whether lines that only contain braces ( {{ or }} ), should be considered as code lines or not.
-
-        The default behaviour is to not count them as code, since it is silly for code of the same content
-        and substance to be counted differently, according to the programer's code style.
-        This helps to keep the stats clean when using code lines as a complexity and productivity metric.
-
-    --search-in-dotted
-        No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
-        or anything else to disable. Default: disabled
-
-        Specifies whether the program should traverse directories that are prefixed with a dot,
-        like .vscode or .git.
-
-    --show-faulty-files
-        No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
-        or anything else to disable. Default: disabled
-
-        Sometimes it happens that an error occurs when trying to parse a file, either while opening it,
-        or while reading it's contents. The default behavior when this happens is to count all of
-        the faulty files and display their count.
-
-        This flag specifies that their path, along with information about the exact error is displayed too.
-        The most common reason for this error is if a file contains non UTF-8 characters. 
-
-    --save
-        One argument in the form of a file name (whitespace allowed, without an extension)
-
-        If we plan to run the program many times for a project, it can be bothersome to specify,
-        all the flags every time, especially if they contain a lot of exclude dirs for example.
-        That's why you can specify all the flags once, and add this command to save them
-        as a configuration file. 
-
-        Doing so, will run the program and also create a .txt configuration file,
-        inside 'data/config/' with the specified name, that can later be loaded with the --load command.
-
-    --load
-        One argument in the form of a file name (whitespace allowed, without an extension)
-        
-        Assosiated with the '--save' command, this comman is used to load the flags of 
-        an existing configuration file from the 'data/config/' directory. 
-
-        There is already a configuration file named 'default.txt' that contains the default of the program,
-        and gets automatically loaded with each program run. You can modify it to add common flags
-        so you dont have to create the same configurations for different projects.
-
-        If you provide in the cmd a flag that exists also in the provided config file,
-        then the value of the cmd is used. The priority is cmd> custom config> default config. 
-        You can combine the '--load' and '--save' commands to modify a configuration file.
-    ");
-    
-    utils::wait_for_input();
-    process::exit(0);
-}
-
 fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError> {
     let mut path = None;
     let options = line.split("--").collect::<Vec<_>>();
@@ -351,6 +257,100 @@ fn is_valid_path(str: &str) -> bool {
 
     let p = Path::new(path_str);
     p.is_dir() || p.is_file()
+}
+
+fn print_help_message_and_exit() {
+    println!("
+    Format of arguments: <path_here> --optional_command1 --optional_commandN
+
+    COMMANDS:
+
+    --path
+        The path to a directory or a single file, in this form: '--path <path_here>'
+        It can either be surrounded by quotes: \"path\" or not, even if the path has whitespace.
+
+        The path can also be given implicitely (in which case this command is not needed) with 2 ways:
+        1) as the first argument of the program directly
+        2) if it is present in a configuration file (see '--save' and '--load' commands).
+
+    --exclude 
+        1..n arguments, can be a folder name or a file name (including extension).
+
+        The program will ignore these dirs.
+    
+    --extensions 
+        1..n arguments, can either have a dot prefix or not (.java or java)
+
+        The given extension names must exist in any of the files in the 'data/extensions/' dir as the
+        parameter of the field 'Extension'.
+
+        Only the extensions specified here will be taken into account for the stats.
+
+    --threads
+        1 argument: a number between 1 and 8. Default: 4 
+
+        This reprisents the number of the consumer threads that parse files,
+        there is also always one producer thread that is traversing the given dir.
+
+        Increasing the number of consumers can help performance a bit in a situation where
+        there are a lot of big files, concentrated in not very deep directories.
+        
+    --braces-as-code
+        No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
+        or anything else to disable. Default: disabled
+
+        Specifies whether lines that only contain braces ( {{ or }} ), should be considered as code lines or not.
+
+        The default behaviour is to not count them as code, since it is silly for code of the same content
+        and substance to be counted differently, according to the programer's code style.
+        This helps to keep the stats clean when using code lines as a complexity and productivity metric.
+
+    --search-in-dotted
+        No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
+        or anything else to disable. Default: disabled
+
+        Specifies whether the program should traverse directories that are prefixed with a dot,
+        like .vscode or .git.
+
+    --show-faulty-files
+        No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
+        or anything else to disable. Default: disabled
+
+        Sometimes it happens that an error occurs when trying to parse a file, either while opening it,
+        or while reading it's contents. The default behavior when this happens is to count all of
+        the faulty files and display their count.
+
+        This flag specifies that their path, along with information about the exact error is displayed too.
+        The most common reason for this error is if a file contains non UTF-8 characters. 
+
+    --save
+        One argument in the form of a file name (whitespace allowed, without an extension)
+
+        If we plan to run the program many times for a project, it can be bothersome to specify,
+        all the flags every time, especially if they contain a lot of exclude dirs for example.
+        That's why you can specify all the flags once, and add this command to save them
+        as a configuration file. 
+
+        Doing so, will run the program and also create a .txt configuration file,
+        inside 'data/config/' with the specified name, that can later be loaded with the --load command.
+
+    --load
+        One argument in the form of a file name (whitespace allowed, without an extension)
+        
+        Assosiated with the '--save' command, this comman is used to load the flags of 
+        an existing configuration file from the 'data/config/' directory. 
+
+        There is already a configuration file named 'default.txt' that contains the default of the program,
+        and gets automatically loaded with each program run. You can modify it to add common flags
+        so you dont have to create the same configurations for different projects.
+
+        If you provide in the cmd a flag that exists also in the provided config file,
+        then the value of the cmd is used. The priority is cmd> custom config> default config. 
+        You can combine the '--load' and '--save' commands to modify a configuration file.
+    ");
+    
+    utils::wait_for_input();
+    process::exit(0);
 }
 
 

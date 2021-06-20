@@ -2,8 +2,6 @@ use std::io::Write;
 
 use crate::*;
 
-use terminal_size;
-
 //the total number of vertical lines ( | ) that appear in the [-|||...|-] in the overview section
 static NUM_OF_VERTICALS : usize = 50;
 
@@ -45,7 +43,7 @@ fn print_individually(sorted_extensions_map: &[String], content_info_map: &HashM
          lines_stats_len_vec: &[usize], size_stats_vec: &[String], keywords_stats_vec: &[String]) -> String
     {
         let spaces = max_line_stats_len+1 - lines_stats_len_vec[i];
-        titles_vec[i].clone() + &lines_stats_vec[i] + &" ".repeat(spaces) + "  |  " + &size_stats_vec[i] +
+        titles_vec[i].clone() + &lines_stats_vec[i] + &" ".repeat(spaces) + " |  " + &size_stats_vec[i] +
                 "\n" + &keywords_stats_vec[i]
     }
 
@@ -115,10 +113,10 @@ fn print_sum(content_info_map: &HashMap<String,ExtensionContentInfo>, extensions
     let size_text = format!("{:.1} {} - {:.1} {}",total_size,total_size_descr,average_size,average_size_descr);
 
     let line_len = STANDARD_LINE_STATS_LEN + total_files_str.len() + total_code_lines_str.len() + total_extra_lines_str.len() +
-            total_size.to_string().len() + average_size.to_string().len() + 57;
+            total_size.to_string().len() + average_size.to_string().len() + 47;
     println!("{} ","-".repeat(line_len));
     
-    let info = format!("{} {} {{{} code ({:.2}%) + {} extra}}   |  {}\n",colored_word("lines"), total_lines_str,total_code_lines_str,
+    let info = format!("{} {} {{{} code ({:.2}%) + {} extra}}  |  {}\n",colored_word("lines"), total_lines_str,total_code_lines_str,
             code_lines_percentage, total_extra_lines_str, size_text);
 
     println!("{}", format!("{}{}{}\n",title,info,keywords_line));
