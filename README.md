@@ -17,9 +17,9 @@ Example run:
 
 ## How To Run
 You can run the project directly by dowloading the "executable/release" folder that contains the executable and the neccessary "data" folder.
-Alternatively, you can build the project yourself "cargo b --release".
+Alternatively, you can build the project yourself ```cargo b --release```
 
-Format of arguments: <path_here> --optional_command1 --optional_commandN
+Format of arguments: ```<path_here> --optional_command1 --optional_commandN```
 
 The program, expects a path to a directory or a code file, that can be provided as cmd argument, or if not, you will be prompted to provide it after running the program.
 The program also accepts a lot of optional flags to customize functionality, see the 
