@@ -1,7 +1,7 @@
 # code_stats
 
 ## About
-This is a fast, customizable and fairly accurate stats generator for programming projects, in the form of a CLI executable, written in Rust, with minimal dependencies. It is used for counting total lines, code lines, and user defined keywords like classes.
+This is a <b>fast</b>, <b>customizable</b> and fairly <b>accurate</b> stats generator for programming projects, in the form of a CLI executable, written in <b>Rust</b>, with <b>minimal dependencies</b>. It is used for counting total lines, code lines, and user defined <b>keywords</b> like classes.
 
 ## Table of contents
 * [How To Run](#how-to-run)
@@ -164,18 +164,9 @@ On a cold run, performance is mainly limited by how fast the producer thread can
 
 The performance will also vary depending depending on how deep and wide the directory structure is, how big the code files are and how many keywords are specified to be counted. 
 
-Here are some metrics for both hot and cold executions (2 keywords per language, 6 languages specified):
+Here are some metrics for both hot and cold executions on my laptop (i5-1035G1, 2 keywords per language, 6 languages specified):
 
-1) relatively deep and wide directory with average to small files (4 consumers)
-```
-3,824 files - lines 793,751 - average size 8.7 KBs
-
-Hot
- 0.29 secs 
-Cold
- 1.32 secs (Parsing: 2914 files/s | 604,993 lines/s)
-```
-2) reletively deep and wide directory with big files (6 consumers)
+1) reletively deep and wide directory with big files (6 consumers)
 ```
 4,066 files - lines 5,625,944 - average size 75 KBs
 
@@ -183,6 +174,15 @@ Hot
  1.13 secs (Parsing: 3649 files/s | 5,050,219 lines/s)
 Cold
  1.61 secs (Parsing: 2528 files/s | 3,498,721 lines/s)
+```
+2) relatively deep and wide directory with average to small files (4 consumers)
+```
+3,824 files - lines 793,751 - average size 8.7 KBs
+
+Hot
+ 0.29 secs 
+Cold
+ 1.23 secs (Parsing: 3106 files/s | 644,801 lines/s)
 ```
 3) very very deep and wide directory, my entire drive (4 consumers)
 ```
@@ -199,4 +199,4 @@ Cold
 
 - The program assumes that if a line contains any odd number of the same string symbols, then this is an open multiline string. This works for most cases but it may create inaccuracies, for example if a line in python has """ then the program will consider a multiline string everything until the next " symbol and not the next """ symbol. If a language doesn't support multiline strings, then you would not expect to see odd number of string symbols either way in a valid syntnax.
 
-- A language can only have either one or two string symbols not more.
+- A language can only have either one or two string symbols, not more.
