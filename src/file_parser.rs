@@ -895,11 +895,11 @@ mod tests {
         let line = String::from("Hello");
         assert_eq!(Vec::<usize>::new(),get_str_indices_and_symbols(&line, &PYTHON, &None).0);
         let line = String::from("\"Hello\"");
-        assert_eq!(vec![0,6],get_str_indices_and_symbols(&line, &PYTHON, &None).0);
+        assert_eq!((vec![0,6],vec!["\"".to_owned(),"\"".to_owned()]),get_str_indices_and_symbols(&line, &PYTHON, &None));
         let line = String::from("\"'\"Hello");
-        assert_eq!(vec![0,2],get_str_indices_and_symbols(&line, &PYTHON, &None).0);
-        assert_eq!(vec![1,2],get_str_indices_and_symbols(&line, &PYTHON, single_str_opt).0);
-        assert_eq!(vec![0,1],get_str_indices_and_symbols(&line, &PYTHON, double_str_opt).0);
+        assert_eq!((vec![0,2],vec!["\"".to_owned(),"\"".to_owned()]),get_str_indices_and_symbols(&line, &PYTHON, &None));
+        assert_eq!((vec![1,2],vec!["'".to_owned(),"\"".to_owned()]),get_str_indices_and_symbols(&line, &PYTHON, single_str_opt));
+        assert_eq!((vec![0,1],vec!["\"".to_owned(),"'".to_owned()]),get_str_indices_and_symbols(&line, &PYTHON, double_str_opt));
         let line = String::from("''\"\"Hello");
         assert_eq!(vec![0,1,2,3],get_str_indices_and_symbols(&line, &PYTHON, &None).0);
         assert_eq!(vec![0,1],get_str_indices_and_symbols(&line, &PYTHON, single_str_opt).0);
@@ -918,6 +918,9 @@ mod tests {
         let line = String::from(r#"[\'⣾\', '⣷', '⣯', '⣟', '⡿']"#); 
         assert!(get_str_indices_and_symbols(&line, &PYTHON, &None).0.len() == 8);
         assert!(get_str_indices_and_symbols(&line, &RUST, &None).0.len() == 0);
+        let line = String::from(r#"['⣾", '⣷", '⣯"]"#); 
+        assert_eq!(vec!["'".to_owned(),"'".to_owned(),"\"".to_owned(),"\"".to_owned()], 
+                get_str_indices_and_symbols(&line, &PYTHON, &None).1);
         let line = String::from(r#"'\'\'\''"#); 
         assert_eq!(vec![0,7], get_str_indices_and_symbols(&line, &PYTHON, &None).0);
         let line = String::from(r#""\"\\"""#); //  """\"""

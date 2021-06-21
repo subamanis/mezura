@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 
 use crate::*;
 
-pub(crate) fn add_relevant_files(files_list :LinkedListRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>, finish_condition: BoolRef, 
+pub fn add_relevant_files(files_list :LinkedListRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>, finish_condition: BoolRef, 
     extensions: ExtensionsMapRef, config: &Configuration) -> (usize,usize) 
 {
    let path = Path::new(&config.path); 
@@ -52,15 +52,7 @@ fn search_dir_and_add_files_to_list(files_list: &LinkedListRef, extensions_metad
                         if extensions.contains_key(&extension_name) {
                             if !config.exclude_dirs.is_empty() {
                                 let file_name = path_buf.file_name().map_or("",|o| o.to_str().map_or("", |s|s));
-                                let mut is_excluded = false;
-                                //avoiding allocation of contains
-                                for dir in config.exclude_dirs.iter() {
-                                    if dir == file_name {
-                                        is_excluded = true;
-                                        break;
-                                    }
-                                }
-                                if is_excluded {continue;}
+                                if config.exclude_dirs.iter().any(|x| x == file_name) {continue;}
                             }
 
                             relevant_files += 1;

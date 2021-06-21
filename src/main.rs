@@ -1,4 +1,4 @@
-use std::{path::Path, process, time::SystemTime};
+use std::{path::Path, process, time::{Instant}};
 
 use colored::*;
 
@@ -47,11 +47,18 @@ fn main() {
         }
     };
 
-    let start = SystemTime::now();
-    if let Err(x) = code_stats::run(config, extensions_map) {
-        println!("{}",x.formatted());
+    let instant = Instant::now();
+    match code_stats::run(config, extensions_map) {
+        Ok(x) => {
+            let perf = format!("\nExecution time: {:.2} secs ", instant.elapsed().as_secs_f32());
+            let metrics = match x {
+                Some(x) => format!("(Parsing: {} files/s, {} lines/s)", x.files_per_sec, with_seperators(x.lines_per_sec)),
+                None => String::new()
+            };
+            println!("{}",perf + &metrics);
+        },
+        Err(x) => println!("{}",x.formatted())
     }
-    println!("\nExecution time: {:.2} secs.",SystemTime::now().duration_since(start).unwrap().as_secs_f32());
 
     utils::wait_for_input();
 }

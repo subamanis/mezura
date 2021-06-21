@@ -8,13 +8,10 @@ static NUM_OF_VERTICALS : usize = 50;
 static KEYWORD_LINE_OFFSET : usize = 20;
 static STANDARD_LINE_STATS_LEN : usize = 33;
 
-pub fn format_and_print_results(extensions_content_info_ref: &mut ContentInfoMapRef,
+pub fn format_and_print_results(content_info_map: &mut HashMap<String, ExtensionContentInfo>,
      extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>) 
 {
-    let mut content_info_map_guard = extensions_content_info_ref.lock();
-    let mut content_info_map = content_info_map_guard.as_deref_mut().unwrap();
-
-    remove_extensions_with_0_files(&mut content_info_map, extensions_metadata_map);
+    remove_extensions_with_0_files(content_info_map, extensions_metadata_map);
 
     let mut sorted_extension_names = 
         get_extension_names_as_sorted_vec_according_to_how_much_they_appeared(extensions_metadata_map);

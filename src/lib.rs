@@ -23,15 +23,20 @@ pub type BoolRef            = Arc<AtomicBool>;
 pub type ContentInfoMapRef  = Arc<Mutex<HashMap<String,ExtensionContentInfo>>>;
 pub type ExtensionsMapRef   = Arc<HashMap<String,Extension>>;
 
-use std::{collections::{HashMap, LinkedList}, error::Error, fs::{self, File}, io::{self, BufRead, BufReader}, path::{Path, PathBuf}, sync::atomic::{AtomicBool, Ordering}, time::{Duration}};
+use std::{collections::{HashMap, LinkedList}, error::Error, fs::{self, File}, io::{self, BufRead, BufReader}, path::{Path, PathBuf}, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant}};
 use std::{sync::{Arc, Mutex}, thread::JoinHandle};
 
-pub fn run(config: Configuration, extensions_map: HashMap<String, Extension>) -> Result<(), ParseFilesError> {
+pub struct Metrics {
+    pub files_per_sec: usize,
+    pub lines_per_sec: usize
+}
+
+pub fn run(config: Configuration, extensions_map: HashMap<String, Extension>) -> Result<Option<Metrics>, ParseFilesError> {
     let files_ref : LinkedListRef = Arc::new(Mutex::new(LinkedList::new()));
     let faulty_files_ref : FaultyFilesRef  = Arc::new(Mutex::new(Vec::new()));
     let finish_condition_ref : BoolRef = Arc::new(AtomicBool::new(false));
     let extensions_map_ref : ExtensionsMapRef = Arc::new(extensions_map);
-    let mut extensions_content_info_ref = Arc::new(Mutex::new(make_extension_stats(extensions_map_ref.clone())));
+    let extensions_content_info_ref = Arc::new(Mutex::new(make_extension_stats(extensions_map_ref.clone())));
     let mut extensions_metadata = make_extension_metadata(extensions_map_ref.clone());
     let mut handles = Vec::new(); 
 
@@ -45,6 +50,8 @@ pub fn run(config: Configuration, extensions_map: HashMap<String, Extension>) ->
         );
     }
 
+    let instant = Instant::now();
+
     let (total_files_num, relevant_files_num) = 
             producer::add_relevant_files(files_ref, &mut extensions_metadata, finish_condition_ref, extensions_map_ref, &config);
     if relevant_files_num == 0 {
@@ -56,6 +63,9 @@ pub fn run(config: Configuration, extensions_map: HashMap<String, Extension>) ->
     for h in handles {
         h.join().unwrap();
     }
+
+    let parsing_duration_millis = instant.elapsed().as_millis();
+
     print_faulty_files_or_ok(&faulty_files_ref, &config);
 
     if faulty_files_ref.lock().unwrap().len() == relevant_files_num {
@@ -64,9 +74,36 @@ pub fn run(config: Configuration, extensions_map: HashMap<String, Extension>) ->
     
     remove_faulty_files_stats(&faulty_files_ref, &mut extensions_metadata);
 
-    result_printer::format_and_print_results(&mut extensions_content_info_ref, &mut extensions_metadata);
+    let mut content_info_map_guard = extensions_content_info_ref.lock();
+    let mut content_info_map = content_info_map_guard.as_deref_mut().unwrap();
+
+    let metrics = generate_metrics_if_parsing_took_more_than_one_sec(
+            parsing_duration_millis, relevant_files_num, content_info_map);
     
-    Ok(())
+    result_printer::format_and_print_results(&mut content_info_map, &mut extensions_metadata);
+    
+    Ok(metrics)
+}
+
+fn generate_metrics_if_parsing_took_more_than_one_sec(parsing_duration_millis: u128, relevant_files: usize,
+        content_info_map: &HashMap<String, ExtensionContentInfo>) -> Option<Metrics> 
+{
+    if parsing_duration_millis <= 1000 {
+        return None;
+    }
+
+    let duration_secs = parsing_duration_millis as f32/ 1000f32;
+    let mut total_lines = 0;
+    content_info_map.iter().for_each(|x| total_lines += x.1.lines);
+    let lines_per_sec = (total_lines as f32 / duration_secs) as usize;
+    let files_per_sec = (relevant_files as f32 / duration_secs) as usize;
+
+    Some(
+        Metrics {
+            files_per_sec,
+            lines_per_sec
+        }
+    )
 }
 
 
