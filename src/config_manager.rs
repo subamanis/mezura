@@ -269,17 +269,17 @@ fn print_help_message_and_exit() {
         The path to a directory or a single file, in this form: '--path <path_here>'
         It can either be surrounded by quotes: \"path\" or not, even if the path has whitespace.
 
-        The path can also be given implicitely (in which case this command is not needed) with 2 ways:
+        The path can also be given implicitly (in which case this command is not needed) with 2 ways:
         1) as the first argument of the program directly
         2) if it is present in a configuration file (see '--save' and '--load' commands).
 
     --exclude 
-        1..n arguments, can be a folder name or a file name (including extension).
+        1..n arguments separated with whitespace, can be a folder name or a file name (including extension).
 
         The program will ignore these dirs.
     
     --extensions 
-        1..n arguments, can either have a dot prefix or not (.java or java)
+        1..n arguments separated with whitespace, can either have a dot prefix or not (.java or java)
 
         The given extension names must exist in any of the files in the 'data/extensions/' dir as the
         parameter of the field 'Extension'.
@@ -293,7 +293,7 @@ fn print_help_message_and_exit() {
         there is also always one producer thread that is traversing the given dir.
 
         Increasing the number of consumers can help performance a bit in a situation where
-        there are a lot of big files, concentrated in not very deep directories.
+        there are a lot of big files, concentrated in a shallow directory structure.
         
     --braces-as-code
         No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,

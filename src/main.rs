@@ -52,7 +52,7 @@ fn main() {
         Ok(x) => {
             let perf = format!("\nExecution time: {:.2} secs ", instant.elapsed().as_secs_f32());
             let metrics = match x {
-                Some(x) => format!("(Parsing: {} files/s, {} lines/s)", x.files_per_sec, with_seperators(x.lines_per_sec)),
+                Some(x) => format!("(Parsing: {} files/s | {} lines/s)", x.files_per_sec, with_seperators(x.lines_per_sec)),
                 None => String::new()
             };
             println!("{}",perf + &metrics);
