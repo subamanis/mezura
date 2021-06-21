@@ -173,25 +173,25 @@ Here are some metrics for both hot and cold executions (2 keywords per language,
 Hot
  0.29 secs 
 Cold
- 1.32 secs (Parsing: 2914 files/s, 604,993 lines/s)
+ 1.32 secs (Parsing: 2914 files/s | 604,993 lines/s)
 ```
 2) reletively deep and wide directory with big files (6 consumers)
 ```
 4,066 files - lines 5,625,944 - average size 75 KBs
 
 Hot
- Execution time: 1.13 secs (Parsing: 3649 files/s | 5,050,219 lines/s)
+ 1.13 secs (Parsing: 3649 files/s | 5,050,219 lines/s)
 Cold
- 1.32 secs (Parsing: 2914 files/s, 604,993 lines/s)
+ 1.61 secs (Parsing: 2528 files/s | 3,498,721 lines/s)
 ```
 3) very very deep and wide directory, my entire drive (4 consumers)
 ```
 32,078 files - lines 15,101,949 - average size 21 KBs 
 
 Hot
- 11.59 secs (Parsing: 2807 files/s, 1,317,336 lines/s)
+ 11.59 secs (Parsing: 2807 files/s | 1,317,336 lines/s)
 Cold
- 36.21 secs (Parsing: 891 files/s, 418,475 lines/s)
+ 36.21 secs (Parsing: 891 files/s | 418,475 lines/s)
 ```
 	
 ## Limitations
