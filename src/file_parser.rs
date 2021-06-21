@@ -64,29 +64,16 @@ struct LineInfo {
     open_str_sybol_after: Option<String>
 }
 
-
-//@Issue: if there are non ASCII chars in the line and the line starts a multiline string, it willnot be taken into account
-fn get_empty_LineInfo_with_str_symbol(line: &str, index: usize) -> LineInfo{
-    let char = line.chars().nth(index);
-    if let Some(x) = char {
-        LineInfo::with_open_symbol(x.to_string())
+fn new_get_LineInfo_str_symbol22(relevant: String, str_symbol: &str) -> LineInfo {
+    if relevant.is_empty() {
+        LineInfo::with_open_symbol(str_symbol.to_owned())
     } else {
-        LineInfo::none_all(true)
-    }
-}
-
-//@Issue: if there are non ASCII chars in the line and the line starts a multiline string, it willnot be taken into account
-fn get_LineInfo_with_str_symbol(line: &str, relevant: String, index: usize) -> LineInfo {
-    let char = line.chars().nth(index);
-    if let Some(x) = char {
-        LineInfo::new(Some(relevant), true, false, Some(x.to_string()))
-    } else {
-        LineInfo::new(Some(relevant), true, false, None)
+        LineInfo::new(Some(relevant), true, false, Some(str_symbol.to_owned()))
     }
 }
 
 fn get_bounds_only_single_line_comments(line: &str, extension: &Extension, open_str_symbol: &Option<String>) -> LineInfo {
-    let str_indices = get_str_indices(line, extension, open_str_symbol);
+    let (str_indices, str_symbols) = get_str_indices_and_symbols(line, extension, open_str_symbol);
     if open_str_symbol.is_some() && str_indices.is_empty() {
         return LineInfo::none_str(false, true, open_str_symbol.to_owned());
     }
@@ -135,11 +122,7 @@ fn get_bounds_only_single_line_comments(line: &str, extension: &Extension, open_
             is_str_open_m = false;
             str_counter += 1;
             if !has_more_strs(str_counter) && is_str_open_m {
-                if relevant.is_empty() {
-                    return get_empty_LineInfo_with_str_symbol(line, str_indices[str_indices.len()-1]);
-                } else {
-                    return get_LineInfo_with_str_symbol(line, relevant, str_indices[str_indices.len()-1]);
-                }
+                return new_get_LineInfo_str_symbol22(relevant, &str_symbols[str_counter-1]);
             }
             
             advance_comment_counter_until(index_after, &mut comment_counter);
@@ -151,11 +134,7 @@ fn get_bounds_only_single_line_comments(line: &str, extension: &Extension, open_
                 relevant.push_str(&line[slice_start_index..this_index]);
                 str_counter += 1;
                 if !has_more_strs(str_counter) {
-                    if relevant.is_empty() {
-                        return get_empty_LineInfo_with_str_symbol(line, this_index);
-                    } else {
-                        return get_LineInfo_with_str_symbol(line, relevant, this_index);
-                    }
+                    return new_get_LineInfo_str_symbol22(relevant, &str_symbols[str_counter-1]);
                 }
                 
                 is_str_open_m = true;
@@ -254,7 +233,7 @@ fn get_bounds_w_multiline_comments(line: &str, extension: &Extension, is_comment
      open_str_symbol: &Option<String>) -> LineInfo
 {
     let mut com_end_indices = get_com_end_indices(line, extension);
-    let str_indices = get_str_indices(line, extension, open_str_symbol);
+    let (str_indices, str_symbols) = get_str_indices_and_symbols(line, extension, open_str_symbol);
     
     if is_comment_closed {
         if open_str_symbol.is_some() && str_indices.is_empty() {
@@ -397,11 +376,7 @@ fn get_bounds_w_multiline_comments(line: &str, extension: &Extension, is_comment
                 relevant.push_str(&line[slice_start_index..this_index]);
                 str_counter += 1;
                 if !has_more_strs(str_counter) {
-                    if relevant.is_empty() {
-                        return get_empty_LineInfo_with_str_symbol(line, str_indices[str_indices.len()-1]);
-                    } else {
-                        return get_LineInfo_with_str_symbol(line, relevant, str_indices[str_indices.len()-1]);
-                    }
+                    return new_get_LineInfo_str_symbol22(relevant, &str_symbols[str_counter-1]);
                 }
                 
                 is_str_open_m = true;
@@ -474,7 +449,7 @@ fn add_keywords_if_any(cleansed: &str, extension: &Extension, file_stats: &mut F
     }
 }
 
-fn get_str_indices(line: &str, extension: &Extension, open_str_symbol: &Option<String>) -> Vec<usize> {
+fn get_str_indices_and_symbols(line: &str, extension: &Extension, open_str_symbol: &Option<String>) -> (Vec<usize>,Vec<String>) {
     fn is_not_escaped(pos: usize, bytes: &[u8]) -> bool {
         let mut slashes = 0;
         let mut offset = 1;
@@ -485,38 +460,40 @@ fn get_str_indices(line: &str, extension: &Extension, open_str_symbol: &Option<S
         slashes % 2 == 0
     }
 
-    fn add_unescaped_indices(indices: &mut Vec<usize>, first_val: usize, bytes: &[u8], iter: &mut MatchIndices<&String>) {
+    fn add_unescaped_indices(indices: &mut Vec<usize>, symbols: &mut Vec<String>, first_symbol: &str, first_val: usize, bytes: &[u8], iter: &mut MatchIndices<&String>) {
         if first_val == 0 {
             indices.push(first_val);
+            symbols.push(first_symbol.to_owned());
         } else {
             if is_not_escaped(first_val, bytes) {
                 indices.push(first_val);
+                symbols.push(first_symbol.to_owned());
             }
         } 
         for x in iter {
             if is_not_escaped(x.0, bytes) {
                 indices.push(x.0);
+                symbols.push(x.1.to_owned());
             }
         }
     }
 
-    fn add_non_intersecting(
-         indices_1: &mut Vec<usize>, indices_2: &mut Vec<usize>, open_str_symbol: &Option<String>,
-         merged_indices: &mut Vec<usize>, extension: &Extension) 
+    fn add_non_intersecting(indices_1: &mut Vec<usize>, indices_2: &mut Vec<usize>, symbols_1: &mut Vec<String>, symbols_2: &mut Vec<String>,
+            open_str_symbol: &Option<String>, merged_indices: &mut Vec<usize>, merged_symbols: &mut Vec<String>, extension: &Extension) 
     {
         let mut is_str_open = open_str_symbol.is_some();
-        let (mut first, mut second) = {
+        let (mut first_indicies, mut second_indicies, mut first_symbols, mut second_symbols) = {
             if let Some(x) = open_str_symbol {
                 if extension.string_symbols[0] == *x {
-                    (indices_1, indices_2)
+                    (indices_1, indices_2, symbols_1, symbols_2)
                 } else {
-                    (indices_2, indices_1)
+                    (indices_2, indices_1, symbols_2, symbols_1)
                 }
             } else {
                 if indices_1[0] < indices_2[0] { 
-                    (indices_1, indices_2)
+                    (indices_1, indices_2, symbols_1, symbols_2)
                 } else {
-                    (indices_2, indices_1)
+                    (indices_2, indices_1, symbols_2, symbols_1)
                 }
             }
         };
@@ -524,39 +501,46 @@ fn get_str_indices(line: &str, extension: &Extension, open_str_symbol: &Option<S
         let (mut first_counter, mut second_counter) = (0,0);
         loop {
             if is_str_open {
-                if first_counter >= first.len() {
+                if first_counter >= first_indicies.len() {
                     return;
                 }
-                merged_indices.push(first[first_counter]);
-                while second_counter < second.len() && second[second_counter] < first[first_counter] {
+                merged_indices.push(first_indicies[first_counter]);
+                merged_symbols.push(first_symbols[first_counter].to_owned());
+                while second_counter < second_indicies.len() && second_indicies[second_counter] < first_indicies[first_counter] {
                     second_counter += 1;
                 } 
                 is_str_open = false;
                 first_counter += 1;
             } else {
-                if second_counter >= second.len() {
-                    while first_counter < first.len() {
-                        merged_indices.push(first[first_counter]);
+                if second_counter >= second_indicies.len() {
+                    while first_counter < first_indicies.len() {
+                        merged_indices.push(first_indicies[first_counter]);
+                        merged_symbols.push(first_symbols[first_counter].to_owned());
                         first_counter += 1;
                     }
                     return;
-                } else if first_counter >= first.len() {
-                    while second_counter < second.len() {
-                        merged_indices.push(second[second_counter]);
+                } else if first_counter >= first_indicies.len() {
+                    while second_counter < second_indicies.len() {
+                        merged_indices.push(second_indicies[second_counter]);
+                        merged_symbols.push(second_symbols[second_counter].to_owned());
+
                         second_counter += 1;
                     }
                     return;
                 }
 
-                if second[second_counter] < first[first_counter] {
-                    let (temp, temp_counter) = (first, first_counter);
-                    first = second;
+                if second_indicies[second_counter] < first_indicies[first_counter] {
+                    let (temp_indicies, temp_symbols, temp_counter) = (first_indicies, first_symbols, first_counter);
+                    first_indicies = second_indicies;
+                    first_symbols = second_symbols;
                     first_counter = second_counter;
-                    second = temp;
+                    second_indicies = temp_indicies;
+                    second_symbols = temp_symbols;
                     second_counter = temp_counter;
                 } 
 
-                merged_indices.push(first[first_counter]);
+                merged_indices.push(first_indicies[first_counter]);
+                merged_symbols.push(first_symbols[first_counter].to_owned());
                 first_counter += 1;
                 is_str_open = true;
             }
@@ -567,60 +551,72 @@ fn get_str_indices(line: &str, extension: &Extension, open_str_symbol: &Option<S
     if extension.string_symbols.len() == 2 {
         let mut iter_1 = line.match_indices(&extension.string_symbols[0]);
         let mut iter_2 = line.match_indices(&extension.string_symbols[1]);
-        let first_index_1 = iter_1.next();
-        let first_index_2 = iter_2.next();
+        let first_match_1 = iter_1.next();
+        let first_match_2 = iter_2.next();
         let mut indices  = Vec::with_capacity(6);
-        if first_index_1.is_none() && first_index_2.is_none() {
-            Vec::<usize>::new()
-        } else if first_index_1.is_none() {
+        let mut symbols  = Vec::with_capacity(6);
+        if first_match_1.is_none() && first_match_2.is_none() {
+            (vec![],vec![])
+        } else if first_match_1.is_none() {
             if open_str_symbol.is_none() {
-                let first_index = first_index_2.unwrap().0;
-                add_unescaped_indices(&mut indices, first_index, line_bytes, &mut iter_2);
-                indices
+                add_unescaped_indices(&mut indices, &mut symbols, first_match_2.unwrap().1,
+                        first_match_2.unwrap().0, line_bytes, &mut iter_2);
+                (indices,symbols)
             } else {
                 let open_str_symbol = open_str_symbol.as_ref().unwrap();
                 if *open_str_symbol == extension.string_symbols[1]{
-                    add_unescaped_indices(&mut indices, first_index_2.unwrap().0, line_bytes, &mut iter_2);
-                    indices
+                    add_unescaped_indices(&mut indices, &mut symbols, first_match_2.unwrap().1,
+                            first_match_2.unwrap().0, line_bytes, &mut iter_2);
+                    (indices,symbols)
                 } else {
-                    Vec::<usize>::new()
+                    (vec![],vec![])
                 }
             }
-        } else if first_index_2.is_none() {
+        } else if first_match_2.is_none() {
             if open_str_symbol.is_none() {
-                add_unescaped_indices(&mut indices, first_index_1.unwrap().0, line_bytes, &mut iter_1);
-            indices
+                add_unescaped_indices(&mut indices, &mut symbols, first_match_1.unwrap().1,
+                            first_match_1.unwrap().0, line_bytes, &mut iter_1);
+                (indices,symbols)
             } else {
                 let open_str_symbol = open_str_symbol.as_ref().unwrap();
                 if *open_str_symbol == extension.string_symbols[0]{
-                    add_unescaped_indices(&mut indices, first_index_1.unwrap().0, line_bytes, &mut iter_1);
-                    indices
+                    add_unescaped_indices(&mut indices, &mut symbols, first_match_1.unwrap().1,
+                            first_match_1.unwrap().0, line_bytes, &mut iter_1);
+                    (indices,symbols)
                 } else {
-                    Vec::<usize>::new()
+                    (vec![],vec![])
                 }
             }
         } else {
-            let mut indices_1 = Vec::<usize>::with_capacity(6);
-            let mut indices_2 = Vec::<usize>::with_capacity(6);
-            let first_index_1 = first_index_1.unwrap().0;
-            let first_index_2 = first_index_2.unwrap().0;
-            add_unescaped_indices(&mut indices_1, first_index_1, line_bytes, &mut iter_1);
-            add_unescaped_indices(&mut indices_2, first_index_2, line_bytes, &mut iter_2);
+            let mut indices_1 = Vec::with_capacity(6);
+            let mut symbols_1 = Vec::with_capacity(6);
+            let mut indices_2 = Vec::with_capacity(6);
+            let mut symbols_2 = Vec::with_capacity(6);
+            add_unescaped_indices(&mut indices_1, &mut symbols_1, first_match_1.unwrap().1,
+                    first_match_1.unwrap().0, line_bytes, &mut iter_1);
+            add_unescaped_indices(&mut indices_2, &mut symbols_2, first_match_2.unwrap().1,
+                    first_match_2.unwrap().0, line_bytes, &mut iter_2);
             if indices_1.is_empty() && indices_2.is_empty() {
-                Vec::new()
+                (vec![],vec![])
             } else if indices_2.is_empty() {
-                indices_1
+                (indices_1,symbols_1)
             } else if indices_1.is_empty() {
-                indices_2
+                (indices_2, symbols_2)
             } else {
-                add_non_intersecting(&mut indices_1, &mut indices_2, open_str_symbol, &mut indices, extension);
-                indices
+                add_non_intersecting(&mut indices_1, &mut indices_2, &mut symbols_1, &mut symbols_2,
+                        open_str_symbol, &mut indices, &mut symbols, extension);
+                (indices,symbols)
             }
         }
     } else {
-        line.match_indices(&extension.string_symbols[0])
-            .filter_map(|x| if is_not_escaped(x.0, line_bytes) {Some(x.0)} else {None})
-            .collect()
+        let mut indicies = Vec::new();
+        let mut symbols = Vec::new();
+        line.match_indices(&extension.string_symbols[0]).for_each(|x| {
+            if is_not_escaped(x.0, &line_bytes) {
+                indicies.push(x.0); symbols.push(x.1.to_owned());
+            }
+        });
+        (indicies, symbols)
     }
 }
 
@@ -893,43 +889,43 @@ mod tests {
     }
 
     #[test]
-    fn get_str_indices_test() {
+    fn get_str_indicies_test() {
         let single_str_opt = &Some("'".to_owned());
         let double_str_opt = &Some("\"".to_owned());
         let line = String::from("Hello");
-        assert_eq!(Vec::<usize>::new(),get_str_indices(&line, &PYTHON, &None));
+        assert_eq!(Vec::<usize>::new(),get_str_indices_and_symbols(&line, &PYTHON, &None).0);
         let line = String::from("\"Hello\"");
-        assert_eq!(vec![0,6],get_str_indices(&line, &PYTHON, &None));
+        assert_eq!(vec![0,6],get_str_indices_and_symbols(&line, &PYTHON, &None).0);
         let line = String::from("\"'\"Hello");
-        assert_eq!(vec![0,2],get_str_indices(&line, &PYTHON, &None));
-        assert_eq!(vec![1,2],get_str_indices(&line, &PYTHON, single_str_opt));
-        assert_eq!(vec![0,1],get_str_indices(&line, &PYTHON, double_str_opt));
+        assert_eq!(vec![0,2],get_str_indices_and_symbols(&line, &PYTHON, &None).0);
+        assert_eq!(vec![1,2],get_str_indices_and_symbols(&line, &PYTHON, single_str_opt).0);
+        assert_eq!(vec![0,1],get_str_indices_and_symbols(&line, &PYTHON, double_str_opt).0);
         let line = String::from("''\"\"Hello");
-        assert_eq!(vec![0,1,2,3],get_str_indices(&line, &PYTHON, &None));
-        assert_eq!(vec![0,1],get_str_indices(&line, &PYTHON, single_str_opt));
-        assert_eq!(vec![2,3],get_str_indices(&line, &PYTHON, double_str_opt));
+        assert_eq!(vec![0,1,2,3],get_str_indices_and_symbols(&line, &PYTHON, &None).0);
+        assert_eq!(vec![0,1],get_str_indices_and_symbols(&line, &PYTHON, single_str_opt).0);
+        assert_eq!(vec![2,3],get_str_indices_and_symbols(&line, &PYTHON, double_str_opt).0);
         let line = String::from("'\"'\"''\"He'l\"lo");
-        assert_eq!(vec![0,2,3,6,9],get_str_indices(&line, &PYTHON, &None));
-        assert_eq!(vec![0,1,3,4,5,6,11],get_str_indices(&line, &PYTHON, single_str_opt));
-        assert_eq!(vec![1,2,4,5,9,11],get_str_indices(&line, &PYTHON, double_str_opt));
-        assert_eq!(vec![1,3,6,11],get_str_indices(&line, &JAVA, double_str_opt));
+        assert_eq!(vec![0,2,3,6,9],get_str_indices_and_symbols(&line, &PYTHON, &None).0);
+        assert_eq!(vec![0,1,3,4,5,6,11],get_str_indices_and_symbols(&line, &PYTHON, single_str_opt).0);
+        assert_eq!(vec![1,2,4,5,9,11],get_str_indices_and_symbols(&line, &PYTHON, double_str_opt).0);
+        assert_eq!(vec![1,3,6,11],get_str_indices_and_symbols(&line, &JAVA, double_str_opt).0);
         let line = String::from(r#"\'\\'\\'\\\''"#);
-        assert_eq!(vec![4,7,12], get_str_indices(&line, &PYTHON, &None));
-        assert_eq!(vec![4,7,12], get_str_indices(&line, &PYTHON, single_str_opt));
+        assert_eq!(vec![4,7,12], get_str_indices_and_symbols(&line, &PYTHON, &None).0);
+        assert_eq!(vec![4,7,12], get_str_indices_and_symbols(&line, &PYTHON, single_str_opt).0);
         let line = String::from(r#"["❌🔤","💭🔜","📗","📘",]"#);
-        assert!(get_str_indices(&line, &PYTHON, &None).len() == 8);
-        assert!(get_str_indices(&line, &RUST, double_str_opt).len() == 8);
+        assert!(get_str_indices_and_symbols(&line, &PYTHON, &None).0.len() == 8);
+        assert!(get_str_indices_and_symbols(&line, &RUST, double_str_opt).0.len() == 8);
         let line = String::from(r#"[\'⣾\', '⣷', '⣯', '⣟', '⡿']"#); 
-        assert!(get_str_indices(&line, &PYTHON, &None).len() == 8);
-        assert!(get_str_indices(&line, &RUST, &None).len() == 0);
+        assert!(get_str_indices_and_symbols(&line, &PYTHON, &None).0.len() == 8);
+        assert!(get_str_indices_and_symbols(&line, &RUST, &None).0.len() == 0);
         let line = String::from(r#"'\'\'\''"#); 
-        assert_eq!(vec![0,7], get_str_indices(&line, &PYTHON, &None));
-        let line = String::from(r#""\"\\"""#); 
-        assert_eq!(vec![0,5,6], get_str_indices(&line, &RUST, &None));
-        assert_eq!(vec![0,5,6], get_str_indices(&line, &PYTHON, &None));
+        assert_eq!(vec![0,7], get_str_indices_and_symbols(&line, &PYTHON, &None).0);
+        let line = String::from(r#""\"\\"""#); //  """\"""
+        assert_eq!(vec![0,5,6], get_str_indices_and_symbols(&line, &RUST, &None).0);
+        assert_eq!(vec![0,5,6], get_str_indices_and_symbols(&line, &PYTHON, &None).0);
         let line = String::from(r#"\\\"\"\\""#); 
-        assert_eq!(vec![8], get_str_indices(&line, &RUST, &None));
-        assert_eq!(vec![8], get_str_indices(&line, &PYTHON, &None));
+        assert_eq!(vec![8], get_str_indices_and_symbols(&line, &RUST, &None).0);
+        assert_eq!(vec![8], get_str_indices_and_symbols(&line, &PYTHON, &None).0);
     }
 
     #[test]
@@ -992,15 +988,8 @@ mod tests {
         let line = String::from("\\''\''");
         assert_eq!(LineInfo::new(Some("\\\'".to_owned()),true,false,Some("\'".to_owned())), get_bounds_only_single_line_comments(&line, &PYTHON, &None));
         assert_eq!(LineInfo::none_all(true), get_bounds_only_single_line_comments(&line, &PYTHON, &Some("\'".to_owned())));
-        let line = String::from("\'\\'\\'\\\''"); // '\'\'\''
+        let line = String::from("\'\\'\\'\\\''"); 
         assert_eq!(LineInfo::new(None,true,false,None), get_bounds_only_single_line_comments(&line, &PYTHON, &None));
-
-        //@Issue: This test fails: the line has non ASCII values and starts multiline string, but it is not taken into account.
-        // To solve this, we would probably need a crate like graphemes so we can get the graphemes of the line to find
-        // the str symbol that makes the line be open.
-        // let line = String::from(r#"['⣯', '⣟"#); 
-        // assert_eq!(LineInfo::new(Some("[, ".to_owned()),true,false,Some("\'".to_owned())), get_bounds_only_single_line_comments(&line, &PYTHON, &None));
-        
         
         let single_str_opt = &Some("'".to_owned());
         let double_str_opt = &Some("\"".to_owned());
@@ -1042,7 +1031,8 @@ mod tests {
         let line = String::from(r#""""Hello""#);
         assert_eq!(LineInfo::new(None, true, false, None), get_bounds_only_single_line_comments(&line, &PYTHON, &None));
         assert_eq!(LineInfo::new(Some("Hello".to_owned()), true, false, Some("\"".to_owned())), get_bounds_only_single_line_comments(&line, &PYTHON, &double_str_opt));
-        
+        let line = String::from(r#"['⣯', '⣟"#); 
+        assert_eq!(LineInfo::new(Some("[, ".to_owned()),true,false,Some("\'".to_owned())), get_bounds_only_single_line_comments(&line, &PYTHON, &None));
         
         //test mixed
         let line = String::from("'Hello#' world!'");
