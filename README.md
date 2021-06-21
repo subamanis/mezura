@@ -160,7 +160,9 @@ Below there is a list with all the commands-flags that the program accepts.
 ```
 
 ## Performance
-The performance will vary depending between cold and hot runs, depending on how deep and wide the directory structure is, how big the code files are and how many keywords are specified to be counted. 
+On a cold run, performance is mainly limited by how fast the producer thread can traverse the directory and find relevant files, so the consumers can parse them.
+
+The performance will also vary depending depending on how deep and wide the directory structure is, how big the code files are and how many keywords are specified to be counted. 
 
 Here are some metrics for both hot and cold executions (2 keywords per language, 6 languages specified):
 
@@ -169,9 +171,9 @@ Here are some metrics for both hot and cold executions (2 keywords per language,
 3,824 files - lines 793,751 - average size 8.7 KBs
 
 Hot
- Execution time: 0.29 secs 
+ 0.29 secs 
 Cold
-
+ 1.32 secs (Parsing: 2914 files/s, 604,993 lines/s)
 ```
 2) reletively deep and wide directory with big files (6 consumers)
 ```
@@ -180,6 +182,7 @@ Cold
 Hot
  Execution time: 1.13 secs (Parsing: 3649 files/s | 5,050,219 lines/s)
 Cold
+ 1.32 secs (Parsing: 2914 files/s, 604,993 lines/s)
 ```
 3) very very deep and wide directory, my entire drive (4 consumers)
 ```
