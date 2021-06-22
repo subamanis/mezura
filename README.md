@@ -9,10 +9,12 @@ Example run:
 
 ## Table of contents
 * [How To Run](#how-to-run)
-* [Supported Languages](#supported-languages)
 * [Details](#details)
+* [Supported Languages](#supported-languages)
+* [Accuracy and Limitations](#accuracy-and-limitations)
 * [Performance](#performance)
-* [Limitations](#limitations)
+* [Similar Projects](#similar-projects)
+
 
 
 ## How To Run
@@ -22,57 +24,24 @@ Alternatively, you can build the project yourself ```cargo b --release```
 Format of arguments: ```<path_here> --optional_command1 --optional_commandN```
 
 The program, expects a path to a directory or a code file, that can be provided as cmd argument, or if not, you will be prompted to provide it after running the program.
-The program also accepts a lot of optional flags to customize functionality, see the 
-[Details](#details) section for more info or use the --help command.
+The program also accepts a lot of optional flags to customize functionality, see the next section for more info or use the --help command.
 
-
-## Supported Languages
-All the supported languages can be found in the folder "data/extensions" as seperate text files. 
-The user can easily specify a new language by replicating the format of the extension files and customizing it accordingly, either by following the rules below or by copy pasting an existing file.
-
-The format of the extensions is as follows(and should not be modified at all):
-
-```
-Extension
-<name of file extension like java or py>
-
-String symbols
-<either 1 or two string symbols seperated by space, like: " ' >
-
-Comment symbol
-<single line comment symbol like: //>
-
-```
-all the following lines are optional and can be omitted
-```
-Multiline comment start symbol
-<a symbol like: /*>
-
-Multiline comment end symbol
-<a symbol like: */>
-
-Keyword
-    name
-    <the name of the keyword to be shown in the results, like: classes>
-    aliases
-    <any word that constitutes an instance of this keyword, like: class, record>
-Keyword
-    name
-    <the name of the keyword to be shown in the results, like: classes>
-    aliases
-    <any word that constitutes an instance of this keyword, like: class, record>
-```
 	
 ## Details
+The generated stats are the following:
+- Number of files
+- Lines (code + others) and percentages
+- Size (total and average) 
+- Keyword occurances
+- Percentage comparisons between languages
+
 The program requires a "data" dir to be present on the same level as the executable(or 2 levels up in the folder hierarchy). In the "data" dir an "extensions" dir must be present, that contains the supported extensions. An optional "config" dir may be present too, where the user can specify persistent settings, more on that later.
 
 The program counts the lines of files in the specified directory. In order for a file to be considered for counting, it's extension must be supported, meaning that a .txt file specifying the details of the extension must be present in the "data/extensions" dir see [Supported Languages](#supported-languages). 
 
 The program distinguishes the total lines in code lines and "extra" lines (all the lines that are not code).
 <b>Note</b> that braces "{ }" are not considered as code by default, but this can be changed by using the --braces-as-code flag.
-Also, the program can search for user-defined <b>keywords</b> that are specified in the extensions files and count their occurances. 
-
-The program can identify keywords in <b>complex lines</b> correctly, meaning that it will check whether the keyword is inside a comment, a string, if it has a prefix or suffix and will not consider it.
+Also, the program can search for user-defined <b>keywords</b> that are specified in the extensions files and count their occurances, while identifying them correctly in <b>complex lines</b>, see [Accuracy and Limitations](#accuracy-and-limitations) for details.
 
 Below there is a list with all the commands-flags that the program accepts.
 ```
@@ -171,6 +140,59 @@ Below there is a list with all the commands-flags that the program accepts.
     You can combine the '--load' and '--save' commands to modify a configuration file.
 ```
 
+
+## Supported Languages
+All the supported languages can be found in the folder "data/extensions" as seperate text files. 
+The user can easily specify a new language by replicating the format of the extension files and customizing it accordingly, either by following the rules below or by copy pasting an existing file.
+
+The format of the extensions is as follows(and should not be modified at all):
+
+```
+Extension
+<name of file extension like java or py>
+
+String symbols
+<either 1 or two string symbols seperated by space, like: " ' >
+
+Comment symbol
+<single line comment symbol like: //>
+
+```
+all the following lines are optional and can be omitted
+```
+Multiline comment start symbol
+<a symbol like: /*>
+
+Multiline comment end symbol
+<a symbol like: */>
+
+Keyword
+    name
+    <the name of the keyword to be shown in the results, like: classes>
+    aliases
+    <any word that constitutes an instance of this keyword, like: class, record>
+Keyword
+    name
+    <the name of the keyword to be shown in the results, like: classes>
+    aliases
+    <any word that constitutes an instance of this keyword, like: class, record>
+```
+
+	
+## Accuracy and Limitations
+The program is able to understand and parse correctly arbitrarily complex code structures with intertwined strings and comments. This way it can identify if a line contains something other than a comment, even if the comment is partitioned in multiple positions and it can identify valid keywords, that are not inside strings or comments. For example in a line like ```/*class"*/" class" aclass```, it will not count "class" as a keyword since the first is inside a comment, the second inside a string and the third has a prefix.
+
+With that said, it is important to mention the following limitations:
+
+- The program cannot understand language specific syntax or details, this would require a handwritten, complex, language-specific parser for most different languages. For example, in a .php file that contains html or js, the destinction will not be made. Also, the keyword counting doesn't take any measures to ensure that a valid keyword has the user-intended meaning. For example the word "class" may also appear in the syntax of a programming language as a semantic different than declaring a class. This may lead to some false positives.
+
+- The program assumes that if a line contains any odd number of the same string symbols, then this is an open multiline string. This works for most cases but it may create inaccuracies, for example if a line in python has """ then the program will consider a multiline string everything until the next " symbol and not the next """ symbol. If a language doesn't support multiline strings, then you would not expect to see odd number of string symbols either way in a valid syntnax.
+
+- A language can only declare either one or two string symbols in the .txt, not more.
+
+- Right now, only one extension can be assosiated with a language
+
+
 ## Performance
 On a cold run, performance is mainly limited by how fast the producer thread can traverse the directory and find relevant files, so the consumers can parse them.
 
@@ -205,10 +227,14 @@ Hot
 Cold
  36.21 secs (Parsing: 891 files/s | 418,475 lines/s)
 ```
-	
-## Limitations
-- The program cannot understand language specific syntax or details, so for example a .php file that contains html will be counted as code. Also, although it can understand a complex line like: ```/*class"*/" "class" aclass``` and will not count "class" as a keyword since the first is inside a comment, the second inside a string and the third has a prefix. This may lead to some false positives if a keyword can be used in a language to have a different semantic meaning than its primary one.
 
-- The program assumes that if a line contains any odd number of the same string symbols, then this is an open multiline string. This works for most cases but it may create inaccuracies, for example if a line in python has """ then the program will consider a multiline string everything until the next " symbol and not the next """ symbol. If a language doesn't support multiline strings, then you would not expect to see odd number of string symbols either way in a valid syntnax.
 
-- A language can only have either one or two string symbols, not more.
+## Similar Projects
+
+If you don't require the keyword counting functionality of this program and the alternate-than-usual visualization, use the [scc](https://github.com/boyter/scc) project written in GO, that is honestly impressive.
+
+Other alternative projects you can check are:
+- [loc](https://github.com/cgag/loc)
+- [cloc](https://github.com/AlDanial/cloc)
+- [sloc](https://github.com/flosse/sloc)
+- [tokei](https://github.com/XAMPPRocky/tokei)
