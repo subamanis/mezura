@@ -41,3 +41,9 @@ If used from cmd, dont use any arguments, just the name of the command
 'yes' or 'true' to activate or anything else to deactivate, default: no (deactivated)
 ===> show-faulty-files
 no
+
+Whether or not to disable the colors and the vertical lines visualization in the "overview" section
+If used from cmd, dont use any arguments, just the name of the command
+'yes' or 'true' to activate or anything else to deactivate, default: no (deactivated)
+===> no-visual
+no

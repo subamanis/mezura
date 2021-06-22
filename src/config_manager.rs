@@ -12,6 +12,7 @@ pub const THREADS            :&str   = "threads";
 pub const BRACES_AS_CODE     :&str   = "braces-as-code";
 pub const SEARCH_IN_DOTTED   :&str   = "search-in-dotted";
 pub const SHOW_FAULTY_FILES  :&str   = "show-faulty-files";
+pub const NO_VISUAL          :&str   = "no-visual";
 pub const SAVE               :&str   = "save";
 pub const LOAD               :&str   = "load";
 
@@ -19,6 +20,7 @@ pub const LOAD               :&str   = "load";
 const DEF_BRACES_AS_CODE    : bool    = false;
 const DEF_SEARCH_IN_DOTTED  : bool    = false;
 const DEF_SHOW_FAULTY_FILES : bool    = false;
+const DEF_NO_VISUAL         : bool    = false;
 const DEF_THREADS           : usize   = 4;
 
 
@@ -30,7 +32,8 @@ pub struct Configuration {
     pub threads: usize,
     pub braces_as_code: bool,
     pub should_search_in_dotted: bool,
-    pub should_show_faulty_files: bool
+    pub should_show_faulty_files: bool,
+    pub no_visual: bool
 }
 
 #[derive(Debug)]
@@ -83,7 +86,8 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
 
     let mut custom_config = None;
     let (mut exclude_dirs, mut extensions_of_interest, mut threads, mut braces_as_code,
-         mut search_in_dotted, mut show_faulty_files, mut config_name_for_save) = (None, None, None, None, None, None, None);
+         mut search_in_dotted, mut show_faulty_files, mut config_name_for_save, mut no_visual) 
+         = (None, None, None, None, None, None, None, None);
     for command in options.into_iter().skip(1) {
         if command.starts_with(EXCLUDE) {
             let vec = command.split(' ').skip(1).filter_map(|x| get_if_not_empty(x.trim())).collect::<Vec<_>>();
@@ -137,13 +141,18 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
                 return Err(ArgParsingError::IncorrectCommandArgs(SHOW_FAULTY_FILES.to_owned()))
             }
             show_faulty_files = Some(true);
+        } else if command.starts_with(NO_VISUAL) {
+            if has_any_args(command) {
+                return Err(ArgParsingError::IncorrectCommandArgs(NO_VISUAL.to_owned()))
+            }
+            no_visual = Some(true);
         } else {
             return Err(ArgParsingError::UnrecognisedParameter(command.to_owned()));
         }
     }
 
-    let args_builder = combine_specified_config_options(
-            custom_config, path, exclude_dirs, extensions_of_interest, threads, braces_as_code, search_in_dotted, show_faulty_files);
+    let args_builder = combine_specified_config_options(custom_config, path, exclude_dirs,
+            extensions_of_interest, threads, braces_as_code, search_in_dotted, show_faulty_files, no_visual);
 
     if args_builder.path.is_none() {
         return Err(ArgParsingError::MissingTargetPath);
@@ -204,11 +213,11 @@ fn parse_load_command(config_name: &str) -> Result<Option<PersistentOptions>,()>
 
 fn combine_specified_config_options(custom_config: Option<PersistentOptions>, path: Option<String>, exclude_dirs: Option<Vec<String>>,
         extensions_of_interest: Option<Vec<String>>, threads: Option<usize>, braces_as_code: Option<bool>, search_in_dotted: Option<bool>,
-        show_faulty_files: Option<bool>) 
+        show_faulty_files: Option<bool>, no_visual: Option<bool>) 
 -> ConfigurationBuilder 
 {
-    let mut args_builder = ConfigurationBuilder::new(
-            path, exclude_dirs, extensions_of_interest, threads, braces_as_code, search_in_dotted, show_faulty_files);
+    let mut args_builder = ConfigurationBuilder::new(path, exclude_dirs, extensions_of_interest,
+            threads, braces_as_code, search_in_dotted, show_faulty_files, no_visual);
     if let Some(x) = custom_config {
         args_builder.add_missing_fields(x);
     }
@@ -323,6 +332,13 @@ fn print_help_message_and_exit() {
         This flag specifies that their path, along with information about the exact error is displayed too.
         The most common reason for this error is if a file contains non UTF-8 characters. 
 
+    --no-visual
+        No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
+        or anything else to disable. Default: disabled
+
+        Disables the colors in the \"overview\" section of the results, and disables the visualization with 
+        the vertical lines that reprisent the percentages.
+
     --save
         One argument in the form of a file name (whitespace allowed, without an extension)
 
@@ -362,13 +378,14 @@ struct ConfigurationBuilder {
     pub threads: Option<usize>,
     pub braces_as_code: Option<bool>,
     pub should_search_in_dotted: Option<bool>,
-    pub should_show_faulty_files: Option<bool>
+    pub should_show_faulty_files: Option<bool>,
+    pub no_visual: Option<bool>
 }
 
 impl ConfigurationBuilder {
     pub fn new(path: Option<String>, exclude_dirs: Option<Vec<String>>, extensions_of_interest: Option<Vec<String>>,
             threads: Option<usize>, braces_as_code: Option<bool>, should_search_in_dotted: Option<bool>,
-            should_show_faulty_files: Option<bool>) 
+            should_show_faulty_files: Option<bool>, no_visual: Option<bool>) 
     -> ConfigurationBuilder 
     {
         ConfigurationBuilder {
@@ -378,7 +395,8 @@ impl ConfigurationBuilder {
             threads,
             braces_as_code,
             should_search_in_dotted,
-            should_show_faulty_files
+            should_show_faulty_files,
+            no_visual
         }
     }
 
@@ -390,6 +408,7 @@ impl ConfigurationBuilder {
         if self.braces_as_code.is_none() {self.braces_as_code = config.braces_as_code};
         if self.should_search_in_dotted.is_none() {self.should_search_in_dotted = config.should_search_in_dotted};
         if self.should_show_faulty_files.is_none() {self.should_show_faulty_files = config.should_show_faulty_files};
+        if self.no_visual.is_none() {self.no_visual = config.no_visual};
         self
     }
 
@@ -406,7 +425,8 @@ impl ConfigurationBuilder {
             threads: self.threads.unwrap_or(DEF_THREADS),
             braces_as_code: self.braces_as_code.unwrap_or(DEF_BRACES_AS_CODE),
             should_search_in_dotted: self.should_search_in_dotted.unwrap_or(DEF_SEARCH_IN_DOTTED),
-            should_show_faulty_files: self.should_show_faulty_files.unwrap_or(DEF_SHOW_FAULTY_FILES)
+            should_show_faulty_files: self.should_show_faulty_files.unwrap_or(DEF_SHOW_FAULTY_FILES),
+            no_visual: self.no_visual.unwrap_or(DEF_NO_VISUAL)
         }
     }
 }
@@ -417,19 +437,20 @@ impl Configuration {
             path,
             exclude_dirs: Vec::new(),
             extensions_of_interest: Vec::new(),
-            threads: 4,
-            braces_as_code: false,
-            should_search_in_dotted: false,
-            should_show_faulty_files: false
+            threads: DEF_THREADS,
+            braces_as_code: DEF_BRACES_AS_CODE,
+            should_search_in_dotted: DEF_SEARCH_IN_DOTTED,
+            should_show_faulty_files: DEF_SHOW_FAULTY_FILES,
+            no_visual: DEF_NO_VISUAL
         }
     }
 
-    pub fn set_exclude_dirs(&mut self, exclude_dirs: Vec<String>) -> & mut Configuration {
+    pub fn set_exclude_dirs(&mut self, exclude_dirs: Vec<String>) -> &mut Configuration {
         self.exclude_dirs = exclude_dirs;
         self
     }
 
-    pub fn set_extensions_of_interest(&mut self, extensions_of_interest: Vec<String>) -> & mut Configuration {
+    pub fn set_extensions_of_interest(&mut self, extensions_of_interest: Vec<String>) -> &mut Configuration {
         self.extensions_of_interest = extensions_of_interest;
         self
     }

@@ -137,6 +137,13 @@ Below there is a list with all the commands-flags that the program accepts.
     This flag specifies that their path, along with information about the exact error is displayed too.
     The most common reason for this error is if a file contains non UTF-8 characters. 
 
+--no-visual
+    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
+    or anything else to disable. Default: disabled
+
+    Disables the colors in the "overview" section of the results, and disables the visualization with 
+    the vertical lines that reprisent the percentages.
+
 --save
     One argument in the form of a file name (whitespace allowed, without an extension)
 

@@ -35,7 +35,8 @@ pub struct PersistentOptions {
     pub threads                  : Option<usize>,
     pub braces_as_code           : Option<bool>,
     pub should_search_in_dotted  : Option<bool>,
-    pub should_show_faulty_files : Option<bool>
+    pub should_show_faulty_files : Option<bool>,
+    pub no_visual                : Option<bool>
 }
 
 
@@ -135,7 +136,7 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<(PersistentOptions,b
     });
 
     let (mut path, mut braces_as_code, mut search_in_dotted, mut threads, mut exclude_dirs,
-         mut extensions_of_interest, mut show_faulty_files) = (None,None,None,None,None,None,None);
+         mut extensions_of_interest, mut show_faulty_files, mut no_visual) = (None,None,None,None,None,None,None,None);
     let mut buf = String::with_capacity(150); 
     let mut has_formatting_errors = false;
 
@@ -165,6 +166,8 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<(PersistentOptions,b
                 show_faulty_files = read_bool_value(&mut reader, &mut buf);
             } else if id == config_manager::SEARCH_IN_DOTTED {
                 search_in_dotted = read_bool_value(&mut reader, &mut buf);
+            } else if id == config_manager::NO_VISUAL {
+                no_visual = read_bool_value(&mut reader, &mut buf);
             }
 
         }
@@ -172,7 +175,7 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<(PersistentOptions,b
     }
 
     Ok((PersistentOptions::new(path,exclude_dirs, extensions_of_interest, threads, braces_as_code,
-             search_in_dotted, show_faulty_files), has_formatting_errors))
+             search_in_dotted, show_faulty_files, no_visual), has_formatting_errors))
 }
 
 pub fn save_config_to_file(config_name: &str, config: &Configuration) -> std::io::Result<()> {
@@ -361,8 +364,10 @@ impl ParseConfigFileError {
 
 impl PersistentOptions {
     pub fn new(path: Option<String>, exclude_dirs: Option<Vec<String>>, extensions_of_interest: Option<Vec<String>>,
-            threads: Option<usize>, braces_as_code: Option<bool>, should_search_in_dotted: Option<bool>, should_show_faulty_files: Option<bool>) 
-    -> PersistentOptions {
+            threads: Option<usize>, braces_as_code: Option<bool>, should_search_in_dotted: Option<bool>,
+            should_show_faulty_files: Option<bool>, no_visual: Option<bool>) 
+    -> PersistentOptions 
+    {
         PersistentOptions {
             path,
             exclude_dirs,
@@ -370,7 +375,8 @@ impl PersistentOptions {
             threads,
             braces_as_code,
             should_search_in_dotted,
-            should_show_faulty_files
+            should_show_faulty_files,
+            no_visual
         }
     }
 }

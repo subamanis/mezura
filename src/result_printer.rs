@@ -9,7 +9,7 @@ static KEYWORD_LINE_OFFSET : usize = 20;
 static STANDARD_LINE_STATS_LEN : usize = 33;
 
 pub fn format_and_print_results(content_info_map: &mut HashMap<String, ExtensionContentInfo>,
-        extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>) 
+        extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>, config: &Configuration) 
 {
     remove_extensions_with_0_files(content_info_map, extensions_metadata_map);
 
@@ -20,7 +20,7 @@ pub fn format_and_print_results(content_info_map: &mut HashMap<String, Extension
 
     if extensions_metadata_map.len() > 1 {
         print_sum(&content_info_map, &extensions_metadata_map);
-        print_visual_overview(&mut sorted_extension_names, content_info_map, extensions_metadata_map);
+        print_visual_overview(&mut sorted_extension_names, content_info_map, extensions_metadata_map, config);
     }
 }
 
@@ -127,7 +127,7 @@ fn print_sum(content_info_map: &HashMap<String,ExtensionContentInfo>, extensions
 //
 // Size : ...
 fn print_visual_overview(sorted_extension_vec: &mut Vec<String>, content_info_map: &mut HashMap<String, ExtensionContentInfo>,
-     extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>) 
+        extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>, config: &Configuration) 
 {
     fn make_cyan(str: &str) -> String {
         str.cyan().to_string()
@@ -166,13 +166,16 @@ fn print_visual_overview(sorted_extension_vec: &mut Vec<String>, content_info_ma
     let lines_percentages = get_lines_percentages(content_info_map, sorted_extension_vec);
     let sizes_percentages = get_sizes_percentages(extensions_metadata_map, sorted_extension_vec);
 
-    let files_verticals = get_num_of_verticals(&files_percentages);
-    let lines_verticals = get_num_of_verticals(&lines_percentages);
-    let size_verticals = get_num_of_verticals(&sizes_percentages);
+    let files_verticals = if config.no_visual {vec![]} else{get_num_of_verticals(&files_percentages)};
+    let lines_verticals = if config.no_visual {vec![]} else{get_num_of_verticals(&lines_percentages)};
+    let size_verticals = if config.no_visual {vec![]} else{get_num_of_verticals(&sizes_percentages)};
 
-    let files_line = create_overview_line("Files:", &files_percentages, &files_verticals, sorted_extension_vec, &color_func_vec);
-    let lines_line = create_overview_line("Lines:", &lines_percentages, &lines_verticals, sorted_extension_vec, &color_func_vec);
-    let size_line = create_overview_line("Size :", &sizes_percentages, &size_verticals, sorted_extension_vec, &color_func_vec);
+    let files_line = create_overview_line("Files:", &files_percentages, &files_verticals,
+            sorted_extension_vec, &color_func_vec, config);
+    let lines_line = create_overview_line("Lines:", &lines_percentages, &lines_verticals,
+            sorted_extension_vec, &color_func_vec, config);
+    let size_line = create_overview_line("Size :", &sizes_percentages, &size_verticals,
+            sorted_extension_vec, &color_func_vec, config);
 
     println!("{}\n\n{}\n\n{}\n",files_line, lines_line, size_line);
 }
@@ -353,21 +356,27 @@ fn normalize_to_NUM_OF_VERTICALS(verticals: &mut Vec<usize>, sum: usize) {
     }
 }
 
-fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize],
-        extensions_name: &[String], color_func_vec: &[fn(&str) -> String]) -> String 
+fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize], extensions_name: &[String],
+        color_func_vec: &[fn(&str) -> String], config: &Configuration) -> String 
 {
     let mut line = String::with_capacity(150);
     line.push_str(&format!("{}    ",prefix));
     for (i,percent) in percentages.iter().enumerate() {
         let str_perc = format!("{:.1}",percent);
         line.push_str(&format!("{}{}% ", " ".repeat(4-str_perc.len()), str_perc));
-        line.push_str(&color_func_vec[i](&extensions_name[i]));
+        if config.no_visual {
+            line.push_str(&extensions_name[i]);
+        } else {
+            line.push_str(&color_func_vec[i](&extensions_name[i]));
+        }
         if i < percentages.len() - 1{
             line.push_str(" - ")
         }
     }
     
-    add_verticals_str(&mut line, verticals, color_func_vec);
+    if !config.no_visual {
+        add_verticals_str(&mut line, verticals, color_func_vec);
+    }
 
     line
 }

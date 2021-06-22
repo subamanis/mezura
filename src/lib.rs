@@ -80,7 +80,7 @@ pub fn run(config: Configuration, extensions_map: HashMap<String, Extension>) ->
     let metrics = generate_metrics_if_parsing_took_more_than_one_sec(
             parsing_duration_millis, relevant_files_num, content_info_map);
     
-    result_printer::format_and_print_results(&mut content_info_map, &mut extensions_metadata);
+    result_printer::format_and_print_results(&mut content_info_map, &mut extensions_metadata, &config);
     
     Ok(metrics)
 }
