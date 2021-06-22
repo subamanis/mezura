@@ -90,7 +90,7 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
          = (None, None, None, None, None, None, None, None);
     for command in options.into_iter().skip(1) {
         if command.starts_with(EXCLUDE) {
-            let vec = command.split(' ').skip(1).filter_map(|x| get_if_not_empty(x.trim())).collect::<Vec<_>>();
+            let vec = command.split(' ').skip(1).filter_map(|x| get_if_not_empty(&x.trim().replace("\\", "/"))).collect::<Vec<_>>();
             if vec.is_empty() {
                 return Err(ArgParsingError::IncorrectCommandArgs(EXCLUDE.to_owned()));
             }

@@ -51,8 +51,8 @@ fn search_dir_and_add_files_to_list(files_list: &LinkedListRef, extensions_metad
                             };
                         if extensions.contains_key(&extension_name) {
                             if !config.exclude_dirs.is_empty() {
-                                let file_name = path_buf.file_name().map_or("",|o| o.to_str().map_or("", |s|s));
-                                if config.exclude_dirs.iter().any(|x| x == file_name) {continue;}
+                                let full_path = &path_buf.to_str().unwrap_or("").replace('\\', "/");
+                                if config.exclude_dirs.iter().any(|x| full_path.ends_with(x) || x == full_path) {continue;}
                             }
 
                             relevant_files += 1;
@@ -69,15 +69,18 @@ fn search_dir_and_add_files_to_list(files_list: &LinkedListRef, extensions_metad
                             files_list.lock().unwrap().push_front(str_path);
                         }
                     } else { //is directory
-                        let dir_name = match e.file_name().to_str() {
+                        let file_name = e.file_name();
+                        let dir_name = match file_name.to_str() {
                             Some(x) => {
                                 if !config.should_search_in_dotted && x.starts_with('.') {continue;}
-                                else {x.to_owned()}
+                                else {x}
                             },
                             None => continue
                         };
+
+                        let full_path = &e.path().to_str().unwrap_or("").replace('\\', "/");
                 
-                        if !config.exclude_dirs.contains(&dir_name){
+                        if !config.exclude_dirs.iter().any(|x| x == dir_name || x == full_path) {
                             dirs.push_front(e.path());
                         }
                     }

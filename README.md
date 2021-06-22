@@ -88,7 +88,8 @@ Below there is a list with all the commands-flags that the program accepts.
     2) if it is present in a configuration file (see '--save' and '--load' commands).
 
 --exclude 
-    1..n arguments separated with whitespace, can be a folder name or a file name (including extension).
+    1..n arguments separated with whitespace, can be a folder name, a file name (including extension), 
+    or a full path to a folder or file (unfortunately whitespace in the path is not allowed here)
 
     The program will ignore these dirs.
 
