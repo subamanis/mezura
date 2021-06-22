@@ -9,12 +9,12 @@ static KEYWORD_LINE_OFFSET : usize = 20;
 static STANDARD_LINE_STATS_LEN : usize = 33;
 
 pub fn format_and_print_results(content_info_map: &mut HashMap<String, ExtensionContentInfo>,
-     extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>) 
+        extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>) 
 {
     remove_extensions_with_0_files(content_info_map, extensions_metadata_map);
 
     let mut sorted_extension_names = 
-        get_extension_names_as_sorted_vec_according_to_how_much_they_appeared(extensions_metadata_map);
+            get_extension_names_as_sorted_vec_according_to_how_much_they_appeared(extensions_metadata_map);
 
     print_individually(&sorted_extension_names, &content_info_map, extensions_metadata_map);
 
@@ -304,6 +304,7 @@ fn normalize_to_NUM_OF_VERTICALS(verticals: &mut Vec<usize>, sum: usize) {
         temp
     };
 
+    //ensures that if there are very close percentages, they wont have more than one vertical difference
     if same_num_of_verticals_indices.len() > 1 {
         for i in same_num_of_verticals_indices.iter() {
             if difference > 0 {

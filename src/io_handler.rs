@@ -237,7 +237,7 @@ fn read_usize_value(reader: &mut BufReader<File>, mut buf: &mut String) -> Optio
 }
 
 fn read_vec_value(reader: &mut BufReader<File>, mut buf: &mut String, mut transformation: Box<dyn FnMut(&str) -> &str>) 
--> Option<Vec<String>> 
+        -> Option<Vec<String>> 
 {
     buf.clear();
     reader.read_line(&mut buf);
@@ -361,7 +361,7 @@ impl ParseConfigFileError {
 
 impl PersistentOptions {
     pub fn new(path: Option<String>, exclude_dirs: Option<Vec<String>>, extensions_of_interest: Option<Vec<String>>,
-        threads: Option<usize>, braces_as_code: Option<bool>, should_search_in_dotted: Option<bool>, should_show_faulty_files: Option<bool>) 
+            threads: Option<usize>, braces_as_code: Option<bool>, should_search_in_dotted: Option<bool>, should_show_faulty_files: Option<bool>) 
     -> PersistentOptions {
         PersistentOptions {
             path,

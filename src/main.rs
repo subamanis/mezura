@@ -30,7 +30,8 @@ fn main() {
         Ok(x) => {
             if !x.1.is_empty() {
                 let mut warn_msg = String::from("\nFormatting problems detected in extension files: ");
-                warn_msg.push_str(&utils::get_contents(&x.1));
+
+                warn_msg.push_str(&x.1.join(", "));
                 warn_msg.push_str(". These files will not be taken into consideration.");
                 println!("{}",warn_msg.yellow());
             }

@@ -12,29 +12,6 @@ pub fn print_contents<T>(vec :&[T]) where T : Debug {
     }
 }
 
-pub fn get_contents<T>(vec: &[T]) -> String
-  where T : Debug,  {
-    if vec.is_empty() {
-        return "[]".to_string();
-    }
-
-    let mut s  = format!("{:?}",vec[0]);
-    if vec.len() == 1 {return s;}
-    for item in vec.iter().skip(1) {
-        s.push_str(&format!(", {:?}",item));
-    }
-
-    s
-}
-
-#[inline]
-pub fn get_file_name(path: &Path) -> Option<&str> {
-    match path.file_name() {
-        Some(x) => x.to_str(),
-        None => None
-    }
-}
-
 #[inline]
 pub fn get_file_extension(path: &Path) -> Option<&str> {
     match path.extension() {

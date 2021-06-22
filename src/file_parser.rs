@@ -64,13 +64,6 @@ struct LineInfo {
     open_str_sybol_after: Option<String>
 }
 
-fn new_get_LineInfo_str_symbol22(relevant: String, str_symbol: &str) -> LineInfo {
-    if relevant.is_empty() {
-        LineInfo::with_open_symbol(str_symbol.to_owned())
-    } else {
-        LineInfo::new(Some(relevant), true, false, Some(str_symbol.to_owned()))
-    }
-}
 
 fn get_bounds_only_single_line_comments(line: &str, extension: &Extension, open_str_symbol: &Option<String>) -> LineInfo {
     let (str_indices, str_symbols) = get_str_indices_and_symbols(line, extension, open_str_symbol);
@@ -122,7 +115,7 @@ fn get_bounds_only_single_line_comments(line: &str, extension: &Extension, open_
             is_str_open_m = false;
             str_counter += 1;
             if !has_more_strs(str_counter) && is_str_open_m {
-                return new_get_LineInfo_str_symbol22(relevant, &str_symbols[str_counter-1]);
+                return get_LineInfo_with_str_symbol(relevant, &str_symbols[str_counter-1]);
             }
             
             advance_comment_counter_until(index_after, &mut comment_counter);
@@ -134,7 +127,7 @@ fn get_bounds_only_single_line_comments(line: &str, extension: &Extension, open_
                 relevant.push_str(&line[slice_start_index..this_index]);
                 str_counter += 1;
                 if !has_more_strs(str_counter) {
-                    return new_get_LineInfo_str_symbol22(relevant, &str_symbols[str_counter-1]);
+                    return get_LineInfo_with_str_symbol(relevant, &str_symbols[str_counter-1]);
                 }
                 
                 is_str_open_m = true;
@@ -149,6 +142,190 @@ fn get_bounds_only_single_line_comments(line: &str, extension: &Extension, open_
                 return LineInfo::with_str(relevant, has_string_literal);
             }
         }
+    }
+}
+
+fn get_bounds_w_multiline_comments(line: &str, extension: &Extension, is_comment_closed: bool,
+    open_str_symbol: &Option<String>) -> LineInfo
+{
+   let mut com_end_indices = get_com_end_indices(line, extension);
+   let (str_indices, str_symbols) = get_str_indices_and_symbols(line, extension, open_str_symbol);
+   
+   if is_comment_closed {
+       if open_str_symbol.is_some() && str_indices.is_empty() {
+           return LineInfo::none_str(false, true, open_str_symbol.to_owned());
+       } 
+   } else {
+       if com_end_indices.is_empty() {
+           return LineInfo::with_open_comment();
+       }
+   }
+   
+   let comment_indices = line.match_indices(&extension.comment_symbol)
+       .filter_map(|x| {
+           if !is_intersecting_with_multi_line_end_symbol(x.0, extension.multiline_len(), &com_end_indices) {
+               Some(x.0)
+           } else {
+               None
+           }
+       })
+       .collect::<Vec<usize>>();
+   let mut com_start_indices = get_com_start_indices(line, extension, &comment_indices);
+   if !com_end_indices.is_empty() && !com_start_indices.is_empty() {
+       resolve_double_counting_of_adjacent_start_and_end_symbols(&mut com_start_indices, &mut com_end_indices,
+           !is_comment_closed, extension.multiline_len());
+   }
+   
+   if str_indices.is_empty() && comment_indices.is_empty() && com_start_indices.is_empty() && com_end_indices.is_empty() {
+       return LineInfo::with_str(line.to_owned(), false);
+   }
+   
+   let mut relevant = String::with_capacity(line.len());
+   let (mut start_com_counter, mut end_com_counter, mut str_counter, mut comment_counter) = (0,0,0,0); 
+   let (mut is_com_open_m, mut is_str_open_m) = (!is_comment_closed, open_str_symbol.is_some());
+
+   let has_more_comments = |counter| counter < comment_indices.len(); 
+   let has_more_strs = |counter| counter < str_indices.len();
+   let has_more_ends = |counter| counter < com_end_indices.len();
+   let has_more_starts = |counter| counter < com_start_indices.len();
+   let next_symbol_is_comment = |comment_counter: usize, str_counter: usize,
+        start_counter: usize| {
+       if !has_more_comments(comment_counter) {return false; }
+       if has_more_strs(str_counter) && comment_indices[comment_counter] > str_indices[str_counter] {
+           return false;
+       }
+       if has_more_starts(start_counter) && comment_indices[comment_counter] > com_start_indices[start_counter] {
+           return false;
+       }
+       true
+   };
+   let next_symbol_is_string = |comment_counter: usize, str_counter: usize,
+        start_counter: usize| {
+       if !has_more_strs(str_counter) {return false;}
+       if has_more_comments(comment_counter)  && str_indices[str_counter] > comment_indices[comment_counter] {
+           return false;
+       }
+       if has_more_starts(start_counter) && str_indices[str_counter] > com_start_indices[start_counter] {
+           return false;
+       }
+       true
+   };
+   let next_symbol_is_com_start = |comment_counter: usize, str_counter: usize,
+        start_counter: usize| {
+       if !has_more_starts(start_counter) {return false;}
+       if has_more_comments(comment_counter) && com_start_indices[start_counter] > comment_indices[comment_counter] {
+           return false;
+       }
+       if has_more_strs(str_counter) && com_start_indices[start_counter] > str_indices[str_counter] {
+           return false;
+       }
+       true
+   };
+   let progress_counters_after = |index, comment_counter: &mut usize, str_counter: &mut usize,
+       start_counter: &mut usize, end_counter: &mut usize| {
+       while *comment_counter < comment_indices.len() && comment_indices[*comment_counter] < index {
+           *comment_counter += 1;
+       }
+       while *str_counter < str_indices.len() && str_indices[*str_counter] < index {
+           *str_counter += 1;
+       }
+       while *start_counter < com_start_indices.len() && com_start_indices[*start_counter] < index {
+           *start_counter += 1;
+       }
+       while *end_counter < com_end_indices.len() && com_end_indices[*end_counter] < index {
+           *end_counter += 1;
+       }
+   };
+   let skipped_com_end_symbol = |last_symbol_index, end_com_counter, cur_index| {
+       has_more_ends(end_com_counter) && com_end_indices[end_com_counter] < cur_index && com_end_indices[end_com_counter] >= last_symbol_index
+   };
+
+   let mut has_string_literal = false;
+   let mut slice_start_index = 0;
+   let mut last_symbol_index = 0;
+   loop {
+       if is_str_open_m {
+           last_symbol_index = str_indices[str_counter];
+           let index_after = last_symbol_index + 1;
+           if index_after >= line.len() {
+               if relevant.is_empty() {return LineInfo::none_all(true);}
+               else {return LineInfo::with_str(relevant,true);}
+           } 
+           
+           progress_counters_after(last_symbol_index, &mut comment_counter, &mut str_counter,
+                   &mut start_com_counter, &mut end_com_counter);
+
+           is_str_open_m = false;
+           str_counter += 1;
+           has_string_literal = true;
+           slice_start_index = index_after;
+       } else if is_com_open_m {
+           last_symbol_index = com_end_indices[end_com_counter];
+           let index_after = last_symbol_index + extension.multiline_len();
+           if index_after >= line.len() {
+               if relevant.is_empty() {return LineInfo::none_all(has_string_literal);}
+               else {return LineInfo::with_str(relevant,has_string_literal);}
+           } 
+
+           is_com_open_m = false;
+           progress_counters_after(last_symbol_index, &mut comment_counter, &mut str_counter,
+                   &mut start_com_counter, &mut end_com_counter);
+           end_com_counter += 1;
+
+           if has_more_strs(str_counter) && str_indices[str_counter] == index_after {
+               is_str_open_m = true;
+           } else if has_more_starts(start_com_counter) && com_start_indices[start_com_counter] == index_after {
+               is_com_open_m = true;
+           } else {
+               slice_start_index = index_after; 
+           }
+       } else {
+           if next_symbol_is_comment(comment_counter, str_counter, start_com_counter) {
+               relevant.push_str(&line[slice_start_index..comment_indices[comment_counter]]);
+               if relevant.is_empty() {return LineInfo::none_all(has_string_literal);}
+               else {return LineInfo::with_str(relevant,has_string_literal);}
+           } else if next_symbol_is_string(comment_counter, str_counter, start_com_counter) {
+               let this_index = str_indices[str_counter];
+               if skipped_com_end_symbol(last_symbol_index, end_com_counter, this_index) {
+                   end_com_counter += 1;
+               }
+               relevant.push_str(&line[slice_start_index..this_index]);
+               str_counter += 1;
+               if !has_more_strs(str_counter) {
+                   return get_LineInfo_with_str_symbol(relevant, &str_symbols[str_counter-1]);
+               }
+               
+               is_str_open_m = true;
+               has_string_literal = true;
+               last_symbol_index = this_index;
+           } else if next_symbol_is_com_start(comment_counter, str_counter, start_com_counter) {
+               let this_index = com_start_indices[start_com_counter];
+               if skipped_com_end_symbol(last_symbol_index, end_com_counter, this_index) {
+                   end_com_counter += 1;
+               }
+
+               relevant.push_str(&line[slice_start_index..this_index]);
+               if !has_more_ends(end_com_counter) {
+                   if relevant.is_empty() {return LineInfo::with_open_comment();}
+                   else {return LineInfo::new(Some(relevant), has_string_literal, true, None);}
+               }
+               
+               is_com_open_m = true;
+               start_com_counter += 1;
+               last_symbol_index = this_index;
+           } else {
+               relevant.push_str(&line[slice_start_index..line.len()]);
+               return LineInfo::with_str(relevant, has_string_literal);
+           }
+       }
+   }
+}
+
+fn get_LineInfo_with_str_symbol(relevant: String, str_symbol: &str) -> LineInfo {
+    if relevant.is_empty() {
+        LineInfo::with_open_symbol(str_symbol.to_owned())
+    } else {
+        LineInfo::new(Some(relevant), true, false, Some(str_symbol.to_owned()))
     }
 }
 
@@ -167,7 +344,6 @@ fn get_com_start_indices(line: &str, extension: &Extension, comment_indices: &[u
     })
     .collect::<Vec<usize>>()
 }
-
 
 fn resolve_double_counting_of_adjacent_start_and_end_symbols(start_indices: &mut Vec<usize>,
     end_indices: &mut Vec<usize>, is_comment_open: bool, multiline_len: usize) 
@@ -229,181 +405,6 @@ fn resolve_double_counting_of_adjacent_start_and_end_symbols(start_indices: &mut
    }
 }
 
-fn get_bounds_w_multiline_comments(line: &str, extension: &Extension, is_comment_closed: bool,
-     open_str_symbol: &Option<String>) -> LineInfo
-{
-    let mut com_end_indices = get_com_end_indices(line, extension);
-    let (str_indices, str_symbols) = get_str_indices_and_symbols(line, extension, open_str_symbol);
-    
-    if is_comment_closed {
-        if open_str_symbol.is_some() && str_indices.is_empty() {
-            return LineInfo::none_str(false, true, open_str_symbol.to_owned());
-        } 
-    } else {
-        if com_end_indices.is_empty() {
-            return LineInfo::with_open_comment();
-        }
-    }
-    
-    let comment_indices = line.match_indices(&extension.comment_symbol)
-        .filter_map(|x| {
-            if !is_intersecting_with_multi_line_end_symbol(x.0, extension.multiline_len(), &com_end_indices) {
-                Some(x.0)
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<usize>>();
-    let mut com_start_indices = get_com_start_indices(line, extension, &comment_indices);
-    if !com_end_indices.is_empty() && !com_start_indices.is_empty() {
-        resolve_double_counting_of_adjacent_start_and_end_symbols(&mut com_start_indices, &mut com_end_indices,
-            !is_comment_closed, extension.multiline_len());
-    }
-    
-    if str_indices.is_empty() && comment_indices.is_empty() && com_start_indices.is_empty() && com_end_indices.is_empty() {
-        return LineInfo::with_str(line.to_owned(), false);
-    }
-    
-    let mut relevant = String::with_capacity(line.len());
-    let (mut start_com_counter, mut end_com_counter, mut str_counter, mut comment_counter) = (0,0,0,0); 
-    let (mut is_com_open_m, mut is_str_open_m) = (!is_comment_closed, open_str_symbol.is_some());
-
-    let has_more_comments = |counter| counter < comment_indices.len(); 
-    let has_more_strs = |counter| counter < str_indices.len();
-    let has_more_ends = |counter| counter < com_end_indices.len();
-    let has_more_starts = |counter| counter < com_start_indices.len();
-    let next_symbol_is_comment = |comment_counter: usize, str_counter: usize,
-         start_counter: usize| {
-        if !has_more_comments(comment_counter) {return false; }
-        if has_more_strs(str_counter) && comment_indices[comment_counter] > str_indices[str_counter] {
-            return false;
-        }
-        if has_more_starts(start_counter) && comment_indices[comment_counter] > com_start_indices[start_counter] {
-            return false;
-        }
-        true
-    };
-    let next_symbol_is_string = |comment_counter: usize, str_counter: usize,
-         start_counter: usize| {
-        if !has_more_strs(str_counter) {return false;}
-        if has_more_comments(comment_counter)  && str_indices[str_counter] > comment_indices[comment_counter] {
-            return false;
-        }
-        if has_more_starts(start_counter) && str_indices[str_counter] > com_start_indices[start_counter] {
-            return false;
-        }
-        true
-    };
-    let next_symbol_is_com_start = |comment_counter: usize, str_counter: usize,
-         start_counter: usize| {
-        if !has_more_starts(start_counter) {return false;}
-        if has_more_comments(comment_counter) && com_start_indices[start_counter] > comment_indices[comment_counter] {
-            return false;
-        }
-        if has_more_strs(str_counter) && com_start_indices[start_counter] > str_indices[str_counter] {
-            return false;
-        }
-        true
-    };
-    let progress_counters_after = |index, comment_counter: &mut usize, str_counter: &mut usize,
-        start_counter: &mut usize, end_counter: &mut usize| {
-        while *comment_counter < comment_indices.len() && comment_indices[*comment_counter] < index {
-            *comment_counter += 1;
-        }
-        while *str_counter < str_indices.len() && str_indices[*str_counter] < index {
-            *str_counter += 1;
-        }
-        while *start_counter < com_start_indices.len() && com_start_indices[*start_counter] < index {
-            *start_counter += 1;
-        }
-        while *end_counter < com_end_indices.len() && com_end_indices[*end_counter] < index {
-            *end_counter += 1;
-        }
-    };
-    let skipped_com_end_symbol = |last_symbol_index, end_com_counter, cur_index| {
-        has_more_ends(end_com_counter) && com_end_indices[end_com_counter] < cur_index && com_end_indices[end_com_counter] >= last_symbol_index
-    };
-
-    let mut has_string_literal = false;
-    let mut slice_start_index = 0;
-    let mut last_symbol_index = 0;
-    loop {
-        if is_str_open_m {
-            last_symbol_index = str_indices[str_counter];
-            let index_after = last_symbol_index + 1;
-            if index_after >= line.len() {
-                if relevant.is_empty() {return LineInfo::none_all(true);}
-                else {return LineInfo::with_str(relevant,true);}
-            } 
-            
-            progress_counters_after(last_symbol_index, &mut comment_counter, &mut str_counter,
-                    &mut start_com_counter, &mut end_com_counter);
-
-            is_str_open_m = false;
-            str_counter += 1;
-            has_string_literal = true;
-            slice_start_index = index_after;
-        } else if is_com_open_m {
-            last_symbol_index = com_end_indices[end_com_counter];
-            let index_after = last_symbol_index + extension.multiline_len();
-            if index_after >= line.len() {
-                if relevant.is_empty() {return LineInfo::none_all(has_string_literal);}
-                else {return LineInfo::with_str(relevant,has_string_literal);}
-            } 
-
-            is_com_open_m = false;
-            progress_counters_after(last_symbol_index, &mut comment_counter, &mut str_counter,
-                    &mut start_com_counter, &mut end_com_counter);
-            end_com_counter += 1;
-
-            if has_more_strs(str_counter) && str_indices[str_counter] == index_after {
-                is_str_open_m = true;
-            } else if has_more_starts(start_com_counter) && com_start_indices[start_com_counter] == index_after {
-                is_com_open_m = true;
-            } else {
-                slice_start_index = index_after; 
-            }
-        } else {
-            if next_symbol_is_comment(comment_counter, str_counter, start_com_counter) {
-                relevant.push_str(&line[slice_start_index..comment_indices[comment_counter]]);
-                if relevant.is_empty() {return LineInfo::none_all(has_string_literal);}
-                else {return LineInfo::with_str(relevant,has_string_literal);}
-            } else if next_symbol_is_string(comment_counter, str_counter, start_com_counter) {
-                let this_index = str_indices[str_counter];
-                if skipped_com_end_symbol(last_symbol_index, end_com_counter, this_index) {
-                    end_com_counter += 1;
-                }
-                relevant.push_str(&line[slice_start_index..this_index]);
-                str_counter += 1;
-                if !has_more_strs(str_counter) {
-                    return new_get_LineInfo_str_symbol22(relevant, &str_symbols[str_counter-1]);
-                }
-                
-                is_str_open_m = true;
-                has_string_literal = true;
-                last_symbol_index = this_index;
-            } else if next_symbol_is_com_start(comment_counter, str_counter, start_com_counter) {
-                let this_index = com_start_indices[start_com_counter];
-                if skipped_com_end_symbol(last_symbol_index, end_com_counter, this_index) {
-                    end_com_counter += 1;
-                }
-
-                relevant.push_str(&line[slice_start_index..this_index]);
-                if !has_more_ends(end_com_counter) {
-                    if relevant.is_empty() {return LineInfo::with_open_comment();}
-                    else {return LineInfo::new(Some(relevant), has_string_literal, true, None);}
-                }
-                
-                is_com_open_m = true;
-                start_com_counter += 1;
-                last_symbol_index = this_index;
-            } else {
-                relevant.push_str(&line[slice_start_index..line.len()]);
-                return LineInfo::with_str(relevant, has_string_literal);
-            }
-        }
-    }
-}
 
 fn add_keywords_if_any(cleansed: &str, extension: &Extension, file_stats: &mut FileStats) {
     fn is_acceptable_prefix(prefix: &str) -> bool {
