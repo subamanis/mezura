@@ -12,7 +12,7 @@ Example run:
 * [Supported Languages](#supported-languages)
 * [Details](#details)
 * [Performance](#performance)
-* [Limitations](#limitations)
+* [Accuracy and Limitations](#accuracy-and-limitations)
 
 
 ## How To Run
@@ -212,9 +212,13 @@ Cold
  36.21 secs (Parsing: 891 files/s | 418,475 lines/s)
 ```
 	
-## Limitations
-- The program cannot understand language specific syntax or details, so for example a .php file that contains html will be counted as code. Also, although it can understand a complex line like: ```/*class"*/" "class" aclass``` and will not count "class" as a keyword since the first is inside a comment, the second inside a string and the third has a prefix. This may lead to some false positives if a keyword can be used in a language to have a different semantic meaning than its primary one.
+## Accuracy and Limitations
+The program is able to understand and parse correctly arbitrarily complex code structures with intertwined strings and comments. This way it can identify if a line contains something other than a comment, even if the comment is partitioned in multiple positions and it can identify valid keywords, that are not inside strings or comments. For example in a line like ```/*class"*/" class" aclass```, it will not count "class" as a keyword since the first is inside a comment, the second inside a string and the third has a prefix.
+
+With that said, it is important to mention the following limitations:
+
+- The program cannot understand language specific syntax or details, this would require a handwritten, complex, language-specific parser for most different languages. For example, in a .php file that contains html or js, the destinction will not be made. Also, the keyword counting doesn't take any measures to ensure that a valid keyword has the user-intended meaning. For example the word "class" may also appear in the syntax of a programming language as a semantic different than declaring a class. This may lead to some false positives.
 
 - The program assumes that if a line contains any odd number of the same string symbols, then this is an open multiline string. This works for most cases but it may create inaccuracies, for example if a line in python has """ then the program will consider a multiline string everything until the next " symbol and not the next """ symbol. If a language doesn't support multiline strings, then you would not expect to see odd number of string symbols either way in a valid syntnax.
 
-- A language can only have either one or two string symbols, not more.
+- A language can only declare either one or two string symbols in the .txt, not more.
