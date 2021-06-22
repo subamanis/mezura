@@ -155,7 +155,7 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<(PersistentOptions,b
                 }
                 path = Some(buf.to_owned());
             } else if id == config_manager::EXCLUDE {
-                exclude_dirs = read_vec_value(&mut reader, &mut buf, Box::new(|x| x));
+                exclude_dirs = read_vec_value(&mut reader, &mut buf, Box::new(|x| x.replace("\\", "/")));
             } else if id == config_manager::EXTENSIONS {
                 extensions_of_interest = read_vec_value(&mut reader, &mut buf, Box::new(remove_dot_prefix));
             } else if id == config_manager::THREADS {
@@ -239,7 +239,7 @@ fn read_usize_value(reader: &mut BufReader<File>, mut buf: &mut String) -> Optio
     }
 }
 
-fn read_vec_value(reader: &mut BufReader<File>, mut buf: &mut String, mut transformation: Box<dyn FnMut(&str) -> &str>) 
+fn read_vec_value(reader: &mut BufReader<File>, mut buf: &mut String, mut transformation: Box<dyn FnMut(&str) -> String>) 
         -> Option<Vec<String>> 
 {
     buf.clear();
@@ -258,7 +258,7 @@ fn read_vec_value(reader: &mut BufReader<File>, mut buf: &mut String, mut transf
             break;
         }
     }
-    Some(lines.split(' ').filter_map(|x| get_if_not_empty(transformation(x.trim()))).collect::<Vec<String>>())
+    Some(lines.split(' ').filter_map(|x| get_if_not_empty(&transformation(x.trim()))).collect::<Vec<String>>())
 }
 
 fn get_if_not_empty(str: &str) -> Option<String> {
@@ -266,11 +266,11 @@ fn get_if_not_empty(str: &str) -> Option<String> {
     else {Some(str.to_owned())}
 }
 
-fn remove_dot_prefix(str: &str) -> &str {
+fn remove_dot_prefix(str: &str) -> String {
     if let Some(stripped) = str.strip_prefix('.') {
-        stripped
+        stripped.to_owned()
     } else {
-        str
+        str.to_owned()
     }
 }
 
