@@ -64,6 +64,13 @@ Keyword
 ```
 	
 ## Details
+The generated stats are the following:
+- Number of files
+- Lines (code + others) and percentages
+- Size (total and average) 
+- Keyword occurances
+- Percentage comparisons between languages
+
 The program requires a "data" dir to be present on the same level as the executable(or 2 levels up in the folder hierarchy). In the "data" dir an "extensions" dir must be present, that contains the supported extensions. An optional "config" dir may be present too, where the user can specify persistent settings, more on that later.
 
 The program counts the lines of files in the specified directory. In order for a file to be considered for counting, it's extension must be supported, meaning that a .txt file specifying the details of the extension must be present in the "data/extensions" dir see [Supported Languages](#supported-languages). 
