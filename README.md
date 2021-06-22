@@ -66,7 +66,7 @@ Keyword
 ## Details
 The program requires a "data" dir to be present on the same level as the executable(or 2 levels up in the folder hierarchy). In the "data" dir an "extensions" dir must be present, that contains the supported extensions. An optional "config" dir may be present too, where the user can specify persistent settings, more on that later.
 
-The program counts the lines of files in the specified directory. In order for a file to be considered for counting, it's extension must be supported, meaning that a .txt file specifying the details of the extension must be present in the "data/extensions" dir see [Supported Languages](#supported_languages). 
+The program counts the lines of files in the specified directory. In order for a file to be considered for counting, it's extension must be supported, meaning that a .txt file specifying the details of the extension must be present in the "data/extensions" dir see [Supported Languages](#supported-languages). 
 
 The program distinguishes the total lines in code lines and "extra" lines (all the lines that are not code).
 <b>Note</b> that braces "{ }" are not considered as code by default, but this can be changed by using the --braces-as-code flag.
