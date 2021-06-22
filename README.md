@@ -199,7 +199,7 @@ Cold
 ```
 	
 ## Limitations
-- Although the program can understand a complex line like: ```/*class"*/" "class" aclass``` and will not count "class" as a keyword since the first is inside a comment, the second inside a string and the third has a prefix, it cannot understant language specific syntax. This may lead to some false positives if a keyword can be used in a language to have a different semantic meaning than its primary one.
+- The program cannot understand language specific syntax or details, so for example a .php file that contains html will be counted as code. Also, although it can understand a complex line like: ```/*class"*/" "class" aclass``` and will not count "class" as a keyword since the first is inside a comment, the second inside a string and the third has a prefix. This may lead to some false positives if a keyword can be used in a language to have a different semantic meaning than its primary one.
 
 - The program assumes that if a line contains any odd number of the same string symbols, then this is an open multiline string. This works for most cases but it may create inaccuracies, for example if a line in python has """ then the program will consider a multiline string everything until the next " symbol and not the next """ symbol. If a language doesn't support multiline strings, then you would not expect to see odd number of string symbols either way in a valid syntnax.
 
