@@ -192,13 +192,15 @@ With that said, it is important to mention the following limitations:
 
 - Right now, only one extension can be assosiated with a language
 
+- The program doesn't take into account gitignore files, the unwanted dirs have to be added manually in a configuration file
+
 
 ## Performance
 On a cold run, performance is mainly limited by how fast the producer thread can traverse the directory and find relevant files, so the consumers can parse them.
 
-The performance will also vary depending depending on how deep and wide the directory structure is, how big the code files are and how many keywords are specified to be counted. 
+The performance will also vary depending on how deep and wide the directory structure is, how big the code files are and how many keywords are specified to be counted. 
 
-Here are some metrics for both hot and cold executions on my laptop (i5-1035G1, 2 keywords per language, 6 languages specified):
+Here are some metrics for both hot and cold executions on my laptop (i5-1035G1, 2 keywords per language):
 
 1) reletively deep and wide directory with big files (6 consumers)
 ```
