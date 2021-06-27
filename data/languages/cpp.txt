@@ -1,5 +1,8 @@
-Extension
-cpp
+Language
+C++
+
+Extensions
+cpp hpp
 
 String symbols
 "

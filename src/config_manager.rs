@@ -7,7 +7,7 @@ use crate::{io_handler::{self, ParseConfigFileError, PersistentOptions},utils};
 // command flags
 pub const PATH               :&str   = "path";
 pub const EXCLUDE            :&str   = "exclude";
-pub const EXTENSIONS         :&str   = "extensions";
+pub const LANGUAGES          :&str   = "languages";
 pub const THREADS            :&str   = "threads";
 pub const BRACES_AS_CODE     :&str   = "braces-as-code";
 pub const SEARCH_IN_DOTTED   :&str   = "search-in-dotted";
@@ -28,7 +28,7 @@ const DEF_THREADS           : usize   = 4;
 pub struct Configuration {
     pub path: String,
     pub exclude_dirs: Vec<String>,
-    pub extensions_of_interest: Vec<String>,
+    pub languages_of_interest: Vec<String>,
     pub threads: usize,
     pub braces_as_code: bool,
     pub should_search_in_dotted: bool,
@@ -85,7 +85,7 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
     }
 
     let mut custom_config = None;
-    let (mut exclude_dirs, mut extensions_of_interest, mut threads, mut braces_as_code,
+    let (mut exclude_dirs, mut languages_of_interest, mut threads, mut braces_as_code,
          mut search_in_dotted, mut show_faulty_files, mut config_name_for_save, mut no_visual) 
          = (None, None, None, None, None, None, None, None);
     for command in options.into_iter().skip(1) {
@@ -95,12 +95,12 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
                 return Err(ArgParsingError::IncorrectCommandArgs(EXCLUDE.to_owned()));
             }
             exclude_dirs = Some(vec);
-        } else if command.starts_with(EXTENSIONS){
-            let vec = command.split(' ').skip(1).filter_map(|x| get_if_not_empty(remove_dot_prefix(x.trim()))).collect::<Vec<_>>();
+        } else if command.starts_with(LANGUAGES){
+            let vec = command.split(' ').skip(1).filter_map(|x| get_if_not_empty(&remove_dot_prefix(x.trim()).to_lowercase())).collect::<Vec<_>>();
             if vec.is_empty() {
-                return Err(ArgParsingError::IncorrectCommandArgs(EXTENSIONS.to_owned()));
+                return Err(ArgParsingError::IncorrectCommandArgs(LANGUAGES.to_owned()));
             }    
-            extensions_of_interest = Some(vec);
+            languages_of_interest = Some(vec);
         } else if command.starts_with(THREADS) {
             match parse_usize_command(command) {
                 Ok(x) => threads = x,
@@ -152,7 +152,7 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
     }
 
     let args_builder = combine_specified_config_options(custom_config, path, exclude_dirs,
-            extensions_of_interest, threads, braces_as_code, search_in_dotted, show_faulty_files, no_visual);
+            languages_of_interest, threads, braces_as_code, search_in_dotted, show_faulty_files, no_visual);
 
     if args_builder.path.is_none() {
         return Err(ArgParsingError::MissingTargetPath);
@@ -212,11 +212,11 @@ fn parse_load_command(config_name: &str) -> Result<Option<PersistentOptions>,()>
 }
 
 fn combine_specified_config_options(custom_config: Option<PersistentOptions>, path: Option<String>, exclude_dirs: Option<Vec<String>>,
-        extensions_of_interest: Option<Vec<String>>, threads: Option<usize>, braces_as_code: Option<bool>, search_in_dotted: Option<bool>,
+        languages_of_interest: Option<Vec<String>>, threads: Option<usize>, braces_as_code: Option<bool>, search_in_dotted: Option<bool>,
         show_faulty_files: Option<bool>, no_visual: Option<bool>) 
 -> ConfigurationBuilder 
 {
-    let mut args_builder = ConfigurationBuilder::new(path, exclude_dirs, extensions_of_interest,
+    let mut args_builder = ConfigurationBuilder::new(path, exclude_dirs, languages_of_interest,
             threads, braces_as_code, search_in_dotted, show_faulty_files, no_visual);
     if let Some(x) = custom_config {
         args_builder.add_missing_fields(x);
@@ -287,13 +287,13 @@ fn print_help_message_and_exit() {
 
         The program will ignore these dirs.
     
-    --extensions 
-        1..n arguments separated with whitespace, can either have a dot prefix or not (.java or java)
+    --languages 
+        1..n arguments separated with whitespace, case-insensitive
 
-        The given extension names must exist in any of the files in the 'data/extensions/' dir as the
-        parameter of the field 'Extension'.
+        The given language names must exist in any of the files in the 'data/languages/' dir as the
+        parameter of the field 'Language'.
 
-        Only the extensions specified here will be taken into account for the stats.
+        Only the languages specified here will be taken into account for the stats.
 
     --threads
         1 argument: a number between 1 and 8. Default: 4 
@@ -374,7 +374,7 @@ fn print_help_message_and_exit() {
 struct ConfigurationBuilder {
     pub path: Option<String>,
     pub exclude_dirs: Option<Vec<String>>,
-    pub extensions_of_interest: Option<Vec<String>>,
+    pub languages_of_interest: Option<Vec<String>>,
     pub threads: Option<usize>,
     pub braces_as_code: Option<bool>,
     pub should_search_in_dotted: Option<bool>,
@@ -383,7 +383,7 @@ struct ConfigurationBuilder {
 }
 
 impl ConfigurationBuilder {
-    pub fn new(path: Option<String>, exclude_dirs: Option<Vec<String>>, extensions_of_interest: Option<Vec<String>>,
+    pub fn new(path: Option<String>, exclude_dirs: Option<Vec<String>>, languages_of_interest: Option<Vec<String>>,
             threads: Option<usize>, braces_as_code: Option<bool>, should_search_in_dotted: Option<bool>,
             should_show_faulty_files: Option<bool>, no_visual: Option<bool>) 
     -> ConfigurationBuilder 
@@ -391,7 +391,7 @@ impl ConfigurationBuilder {
         ConfigurationBuilder {
             path,
             exclude_dirs,
-            extensions_of_interest,
+            languages_of_interest,
             threads,
             braces_as_code,
             should_search_in_dotted,
@@ -403,7 +403,7 @@ impl ConfigurationBuilder {
     pub fn add_missing_fields(&mut self, config: PersistentOptions) -> &mut ConfigurationBuilder {
         if self.path.is_none() {self.path = config.path};
         if self.exclude_dirs.is_none() {self.exclude_dirs = config.exclude_dirs};
-        if self.extensions_of_interest.is_none() {self.extensions_of_interest = config.extensions_of_interest};
+        if self.languages_of_interest.is_none() {self.languages_of_interest = config.languages_of_interest};
         if self.threads.is_none() {self.threads = config.threads};
         if self.braces_as_code.is_none() {self.braces_as_code = config.braces_as_code};
         if self.should_search_in_dotted.is_none() {self.should_search_in_dotted = config.should_search_in_dotted};
@@ -413,7 +413,7 @@ impl ConfigurationBuilder {
     }
 
     pub fn has_missing_fields(&self) -> bool {
-        self.exclude_dirs.is_none() || self.extensions_of_interest.is_none() ||
+        self.exclude_dirs.is_none() || self.languages_of_interest.is_none() ||
         self.threads.is_none() || self.braces_as_code.is_none() || self.should_search_in_dotted.is_none()
     } 
 
@@ -421,7 +421,7 @@ impl ConfigurationBuilder {
         Configuration {
             path : self.path.clone().unwrap(),
             exclude_dirs: (self.exclude_dirs).clone().unwrap_or_default(),
-            extensions_of_interest: (self.extensions_of_interest).clone().unwrap_or_default(),
+            languages_of_interest: (self.languages_of_interest).clone().unwrap_or_default(),
             threads: self.threads.unwrap_or(DEF_THREADS),
             braces_as_code: self.braces_as_code.unwrap_or(DEF_BRACES_AS_CODE),
             should_search_in_dotted: self.should_search_in_dotted.unwrap_or(DEF_SEARCH_IN_DOTTED),
@@ -436,7 +436,7 @@ impl Configuration {
         Configuration {
             path,
             exclude_dirs: Vec::new(),
-            extensions_of_interest: Vec::new(),
+            languages_of_interest: Vec::new(),
             threads: DEF_THREADS,
             braces_as_code: DEF_BRACES_AS_CODE,
             should_search_in_dotted: DEF_SEARCH_IN_DOTTED,
@@ -450,8 +450,8 @@ impl Configuration {
         self
     }
 
-    pub fn set_extensions_of_interest(&mut self, extensions_of_interest: Vec<String>) -> &mut Configuration {
-        self.extensions_of_interest = extensions_of_interest;
+    pub fn set_languages_of_interest(&mut self, languages_of_interest: Vec<String>) -> &mut Configuration {
+        self.languages_of_interest = languages_of_interest;
         self
     }
 
@@ -491,9 +491,9 @@ mod tests {
 
     #[test]
     fn test_cmd_arg_parsing() {
-        assert!(create_config_from_args("path --exclude   --extensions .java    .cs").is_err());
-        assert!(create_config_from_args("path --exclude--extensions .java    .cs").is_err());
-        assert!(create_config_from_args("path --extensions .java .cs --exclude").is_err());
+        assert!(create_config_from_args("path --exclude   --languages .java    .cs").is_err());
+        assert!(create_config_from_args("path --exclude--languages .java    .cs").is_err());
+        assert!(create_config_from_args("path --languages .java .cs --exclude").is_err());
         assert!(create_config_from_args("path --something").is_err());
         assert!(create_config_from_args("path --threads 3 --something --exclude e").is_err());
 
@@ -501,21 +501,21 @@ mod tests {
 
         assert_eq!(*Configuration::new("./".to_owned())
             .set_exclude_dirs(vec!["ex1".to_owned(),"ex2".to_owned()])
-            .set_extensions_of_interest(vec!["java".to_owned(),"cs".to_owned()])
+            .set_languages_of_interest(vec!["java".to_owned(),"cs".to_owned()])
             .set_threads(4),
-            create_config_from_args("./ --threads 4 --exclude ex1 ex2 --extensions java cs").unwrap()
+            create_config_from_args("./ --threads 4 --exclude ex1 ex2 --languages java cs").unwrap()
         );
 
         assert_eq!(*Configuration::new("./".to_owned())
             .set_exclude_dirs(vec!["ex2".to_owned()]) 
-            .set_extensions_of_interest(vec!["java".to_owned(),"cs".to_owned()]),
-            create_config_from_args("./   --exclude ex2  --extensions java    cs").unwrap()
+            .set_languages_of_interest(vec!["java".to_owned(),"cs".to_owned()]),
+            create_config_from_args("./   --exclude ex2  --languages java    cs").unwrap()
         );
 
         assert_eq!(*Configuration::new("./".to_owned())
             .set_exclude_dirs(vec!["ex2".to_owned()]) 
-            .set_extensions_of_interest(vec!["java".to_owned(),"cs".to_owned()]),
-            create_config_from_args("./   --exclude ex2  --extensions .java    .cs").unwrap()
+            .set_languages_of_interest(vec!["java".to_owned(),"cs".to_owned()]),
+            create_config_from_args("./   --exclude ex2  --languages .java    .cs").unwrap()
         );
     }
 }

@@ -1,4 +1,7 @@
-Extension
+Language
+Rust
+
+Extensions
 rs
 
 String symbols

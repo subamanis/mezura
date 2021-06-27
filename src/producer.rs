@@ -2,15 +2,15 @@ use std::sync::atomic::Ordering;
 
 use crate::*;
 
-pub fn add_relevant_files(files_list :LinkedListRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>, finish_condition: BoolRef, 
-    extensions: ExtensionsMapRef, config: &Configuration) -> (usize,usize) 
+pub fn add_relevant_files(files_list :LinkedListRef, languages_metadata_map: &mut HashMap<String,LanguageMetadata>, finish_condition: BoolRef, 
+    languages: &LanguageMapRef, config: &Configuration) -> (usize,usize) 
 {
    let path = Path::new(&config.path); 
    if path.is_file() {
        if let Some(x) = path.extension() {
            if let Some(y) = x.to_str() {
-               if extensions.contains_key(y) {
-                   extensions_metadata_map.get_mut(y).unwrap().add_file_meta(path.metadata().map_or(0, |m| m.len() as usize));
+               if languages.contains_key(y) {
+                   languages_metadata_map.get_mut(y).unwrap().add_file_meta(path.metadata().map_or(0, |m| m.len() as usize));
                    files_list.lock().unwrap().push_front(config.path.to_string());
                    finish_condition.store(true, Ordering::Relaxed);
                    return (1,1);
@@ -20,14 +20,14 @@ pub fn add_relevant_files(files_list :LinkedListRef, extensions_metadata_map: &m
        finish_condition.store(true, Ordering::Relaxed);
        (0,0)
    } else {
-       let (total_files, relevant_files) = search_dir_and_add_files_to_list(&files_list, extensions_metadata_map, &extensions, config);
+       let (total_files, relevant_files) = search_dir_and_add_files_to_list(&files_list, languages_metadata_map, &languages, config);
        finish_condition.store(true, Ordering::Relaxed);
        (total_files,relevant_files)
    }
 } 
 
-fn search_dir_and_add_files_to_list(files_list: &LinkedListRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>,
-   extensions: &ExtensionsMapRef, config: &Configuration) -> (usize,usize) 
+fn search_dir_and_add_files_to_list(files_list: &LinkedListRef, languages_metadata_map: &mut HashMap<String,LanguageMetadata>,
+   languages: &LanguageMapRef, config: &Configuration) -> (usize,usize) 
 {
     let mut total_files = 0;
     let mut relevant_files = 0;
@@ -49,7 +49,7 @@ fn search_dir_and_add_files_to_list(files_list: &LinkedListRef, extensions_metad
                                 },
                                 None => continue
                             };
-                        if extensions.contains_key(&extension_name) {
+                        if let Some(lang_name) = find_lang_with_this_identifier(languages, &extension_name) {
                             if !config.exclude_dirs.is_empty() {
                                 let full_path = &path_buf.to_str().unwrap_or("").replace('\\', "/");
                                 if config.exclude_dirs.iter().any(|x| full_path.ends_with(x) || x == full_path) {continue;}
@@ -60,7 +60,7 @@ fn search_dir_and_add_files_to_list(files_list: &LinkedListRef, extensions_metad
                                 Ok(x) => x.len() as usize,
                                 Err(_) => 0
                             };
-                            extensions_metadata_map.get_mut(&extension_name).unwrap().add_file_meta(bytes);
+                            languages_metadata_map.get_mut(&lang_name).unwrap().add_file_meta(bytes);
                             
                             let str_path = match path_buf.to_str() {
                                 Some(y) => y.to_owned(),

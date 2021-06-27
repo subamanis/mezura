@@ -4,7 +4,7 @@ use crate::*;
 
 
 #[inline]
-pub fn parse_file(file_name: &str, file_extension: &str, buf: &mut String, extension_map: ExtensionsMapRef, config: &Configuration)
+pub fn parse_file(file_name: &str, lang_name: &str, buf: &mut String, language_map: LanguageMapRef, config: &Configuration)
 -> Result<FileStats,String> 
 {
     let reader = BufReader::new(match File::open(file_name){
@@ -12,14 +12,14 @@ pub fn parse_file(file_name: &str, file_extension: &str, buf: &mut String, exten
         Err(x) => return Err(x.to_string())
     });
 
-    parse_lines(reader, buf, &extension_map.get(file_extension).unwrap(), config)
+    parse_lines(reader, buf, &language_map.get(lang_name).unwrap(), config)
 }
 
 #[inline]
-fn parse_lines(mut reader: BufReader<File>, buf: &mut String, extension: &Extension, config: &Configuration)
+fn parse_lines(mut reader: BufReader<File>, buf: &mut String, language: &Language, config: &Configuration)
 -> Result<FileStats,String>
 {
-    let mut file_stats = FileStats::default(&extension.keywords);
+    let mut file_stats = FileStats::default(&language.keywords);
     let mut is_comment_closed = true;
     let mut open_str_symbol = None::<String>;
     loop {
@@ -34,10 +34,10 @@ fn parse_lines(mut reader: BufReader<File>, buf: &mut String, extension: &Extens
         if line.is_empty() { continue; }
 
         let line_info = 
-        if extension.supports_multiline_comments() { 
-            get_bounds_w_multiline_comments(line, extension, is_comment_closed, &open_str_symbol)
+        if language.supports_multiline_comments() { 
+            get_bounds_w_multiline_comments(line, language, is_comment_closed, &open_str_symbol)
         } else {
-            get_bounds_only_single_line_comments(line, extension, &open_str_symbol)
+            get_bounds_only_single_line_comments(line, language, &open_str_symbol)
         };
 
         is_comment_closed = !line_info.is_comment_open_after;
@@ -47,7 +47,7 @@ fn parse_lines(mut reader: BufReader<File>, buf: &mut String, extension: &Extens
             let cleansed = x.trim();
             if config.braces_as_code || (cleansed != "{" && cleansed != "}") {
                 file_stats.incr_code_lines();
-                add_keywords_if_any(cleansed, &extension, &mut file_stats);
+                add_keywords_if_any(cleansed, &language, &mut file_stats);
             }
         } else {
             if line_info.has_string_literal {file_stats.incr_code_lines();}
@@ -65,13 +65,13 @@ struct LineInfo {
 }
 
 
-fn get_bounds_only_single_line_comments(line: &str, extension: &Extension, open_str_symbol: &Option<String>) -> LineInfo {
-    let (str_indices, str_symbols) = get_str_indices_and_symbols(line, extension, open_str_symbol);
+fn get_bounds_only_single_line_comments(line: &str, language: &Language, open_str_symbol: &Option<String>) -> LineInfo {
+    let (str_indices, str_symbols) = get_str_indices_and_symbols(line, language, open_str_symbol);
     if open_str_symbol.is_some() && str_indices.is_empty() {
         return LineInfo::none_str(false, true, open_str_symbol.to_owned());
     }
 
-    let comment_indices = line.match_indices(&extension.comment_symbol).map(|x| x.0).collect::<Vec<usize>>();
+    let comment_indices = line.match_indices(&language.comment_symbol).map(|x| x.0).collect::<Vec<usize>>();
     if str_indices.is_empty() && comment_indices.is_empty() {
         return LineInfo::with_str(line.to_owned(), false);
     }
@@ -145,11 +145,11 @@ fn get_bounds_only_single_line_comments(line: &str, extension: &Extension, open_
     }
 }
 
-fn get_bounds_w_multiline_comments(line: &str, extension: &Extension, is_comment_closed: bool,
+fn get_bounds_w_multiline_comments(line: &str, language: &Language, is_comment_closed: bool,
     open_str_symbol: &Option<String>) -> LineInfo
 {
-   let mut com_end_indices = get_com_end_indices(line, extension);
-   let (str_indices, str_symbols) = get_str_indices_and_symbols(line, extension, open_str_symbol);
+   let mut com_end_indices = get_com_end_indices(line, language);
+   let (str_indices, str_symbols) = get_str_indices_and_symbols(line, language, open_str_symbol);
    
    if is_comment_closed {
        if open_str_symbol.is_some() && str_indices.is_empty() {
@@ -161,19 +161,19 @@ fn get_bounds_w_multiline_comments(line: &str, extension: &Extension, is_comment
        }
    }
    
-   let comment_indices = line.match_indices(&extension.comment_symbol)
+   let comment_indices = line.match_indices(&language.comment_symbol)
        .filter_map(|x| {
-           if !is_intersecting_with_multi_line_end_symbol(x.0, extension.multiline_len(), &com_end_indices) {
+           if !is_intersecting_with_multi_line_end_symbol(x.0, language.multiline_len(), &com_end_indices) {
                Some(x.0)
            } else {
                None
            }
        })
        .collect::<Vec<usize>>();
-   let mut com_start_indices = get_com_start_indices(line, extension, &comment_indices);
+   let mut com_start_indices = get_com_start_indices(line, language, &comment_indices);
    if !com_end_indices.is_empty() && !com_start_indices.is_empty() {
        resolve_double_counting_of_adjacent_start_and_end_symbols(&mut com_start_indices, &mut com_end_indices,
-           !is_comment_closed, extension.multiline_len());
+           !is_comment_closed, language.multiline_len());
    }
    
    if str_indices.is_empty() && comment_indices.is_empty() && com_start_indices.is_empty() && com_end_indices.is_empty() {
@@ -261,7 +261,7 @@ fn get_bounds_w_multiline_comments(line: &str, extension: &Extension, is_comment
            slice_start_index = index_after;
        } else if is_com_open_m {
            last_symbol_index = com_end_indices[end_com_counter];
-           let index_after = last_symbol_index + extension.multiline_len();
+           let index_after = last_symbol_index + language.multiline_len();
            if index_after >= line.len() {
                if relevant.is_empty() {return LineInfo::none_all(has_string_literal);}
                else {return LineInfo::with_str(relevant,has_string_literal);}
@@ -329,12 +329,12 @@ fn get_LineInfo_with_str_symbol(relevant: String, str_symbol: &str) -> LineInfo 
     }
 }
 
-fn get_com_end_indices(line: &str, extension: &Extension) -> Vec<usize> {
-    line.match_indices(extension.mutliline_comment_end_symbol.as_ref().unwrap()).map(|x| x.0).collect::<Vec<usize>>()
+fn get_com_end_indices(line: &str, language: &Language) -> Vec<usize> {
+    line.match_indices(language.mutliline_comment_end_symbol.as_ref().unwrap()).map(|x| x.0).collect::<Vec<usize>>()
 }
 
-fn get_com_start_indices(line: &str, extension: &Extension, comment_indices: &[usize]) -> Vec<usize> {
-    line.match_indices(extension.mutliline_comment_start_symbol.as_ref().unwrap())
+fn get_com_start_indices(line: &str, language: &Language, comment_indices: &[usize]) -> Vec<usize> {
+    line.match_indices(language.mutliline_comment_start_symbol.as_ref().unwrap())
     .filter_map(|x|{
         if !is_intersecting_with_comment_symbol(x.0, comment_indices) {
             Some(x.0)
@@ -406,7 +406,7 @@ fn resolve_double_counting_of_adjacent_start_and_end_symbols(start_indices: &mut
 }
 
 
-fn add_keywords_if_any(cleansed: &str, extension: &Extension, file_stats: &mut FileStats) {
+fn add_keywords_if_any(cleansed: &str, language: &Language, file_stats: &mut FileStats) {
     fn is_acceptable_prefix(prefix: &str) -> bool {
         prefix.is_empty() || prefix.ends_with(' ') || prefix.ends_with('}') || prefix.ends_with('{') || prefix.ends_with(',')
     }
@@ -415,7 +415,7 @@ fn add_keywords_if_any(cleansed: &str, extension: &Extension, file_stats: &mut F
         suffix.is_empty() || suffix.starts_with(' ') || suffix.starts_with('}') || suffix.starts_with('{') || suffix.starts_with(',')
     }
 
-    for keyword in &extension.keywords {
+    for keyword in &language.keywords {
         for alias in &keyword.aliases {
             let mut indices = cleansed.match_indices(alias).map(|x| x.0).collect::<Vec<usize>>();
             if indices.is_empty() {continue;}
@@ -450,7 +450,7 @@ fn add_keywords_if_any(cleansed: &str, extension: &Extension, file_stats: &mut F
     }
 }
 
-fn get_str_indices_and_symbols(line: &str, extension: &Extension, open_str_symbol: &Option<String>) -> (Vec<usize>,Vec<String>) {
+fn get_str_indices_and_symbols(line: &str, language: &Language, open_str_symbol: &Option<String>) -> (Vec<usize>,Vec<String>) {
     fn is_not_escaped(pos: usize, bytes: &[u8]) -> bool {
         let mut slashes = 0;
         let mut offset = 1;
@@ -480,12 +480,12 @@ fn get_str_indices_and_symbols(line: &str, extension: &Extension, open_str_symbo
     }
 
     fn add_non_intersecting(indices_1: &mut Vec<usize>, indices_2: &mut Vec<usize>, symbols_1: &mut Vec<String>, symbols_2: &mut Vec<String>,
-            open_str_symbol: &Option<String>, merged_indices: &mut Vec<usize>, merged_symbols: &mut Vec<String>, extension: &Extension) 
+            open_str_symbol: &Option<String>, merged_indices: &mut Vec<usize>, merged_symbols: &mut Vec<String>, language: &Language) 
     {
         let mut is_str_open = open_str_symbol.is_some();
         let (mut first_indicies, mut second_indicies, mut first_symbols, mut second_symbols) = {
             if let Some(x) = open_str_symbol {
-                if extension.string_symbols[0] == *x {
+                if language.string_symbols[0] == *x {
                     (indices_1, indices_2, symbols_1, symbols_2)
                 } else {
                     (indices_2, indices_1, symbols_2, symbols_1)
@@ -549,9 +549,9 @@ fn get_str_indices_and_symbols(line: &str, extension: &Extension, open_str_symbo
     }
 
     let line_bytes = line.as_bytes();
-    if extension.string_symbols.len() == 2 {
-        let mut iter_1 = line.match_indices(&extension.string_symbols[0]);
-        let mut iter_2 = line.match_indices(&extension.string_symbols[1]);
+    if language.string_symbols.len() == 2 {
+        let mut iter_1 = line.match_indices(&language.string_symbols[0]);
+        let mut iter_2 = line.match_indices(&language.string_symbols[1]);
         let first_match_1 = iter_1.next();
         let first_match_2 = iter_2.next();
         let mut indices  = Vec::with_capacity(6);
@@ -565,7 +565,7 @@ fn get_str_indices_and_symbols(line: &str, extension: &Extension, open_str_symbo
                 (indices,symbols)
             } else {
                 let open_str_symbol = open_str_symbol.as_ref().unwrap();
-                if *open_str_symbol == extension.string_symbols[1]{
+                if *open_str_symbol == language.string_symbols[1]{
                     add_unescaped_indices(&mut indices, &mut symbols, first_match_2.unwrap().1,
                             first_match_2.unwrap().0, line_bytes, &mut iter_2);
                     (indices,symbols)
@@ -580,7 +580,7 @@ fn get_str_indices_and_symbols(line: &str, extension: &Extension, open_str_symbo
                 (indices,symbols)
             } else {
                 let open_str_symbol = open_str_symbol.as_ref().unwrap();
-                if *open_str_symbol == extension.string_symbols[0]{
+                if *open_str_symbol == language.string_symbols[0]{
                     add_unescaped_indices(&mut indices, &mut symbols, first_match_1.unwrap().1,
                             first_match_1.unwrap().0, line_bytes, &mut iter_1);
                     (indices,symbols)
@@ -605,14 +605,14 @@ fn get_str_indices_and_symbols(line: &str, extension: &Extension, open_str_symbo
                 (indices_2, symbols_2)
             } else {
                 add_non_intersecting(&mut indices_1, &mut indices_2, &mut symbols_1, &mut symbols_2,
-                        open_str_symbol, &mut indices, &mut symbols, extension);
+                        open_str_symbol, &mut indices, &mut symbols, language);
                 (indices,symbols)
             }
         }
     } else {
         let mut indicies = Vec::new();
         let mut symbols = Vec::new();
-        line.match_indices(&extension.string_symbols[0]).for_each(|x| {
+        line.match_indices(&language.string_symbols[0]).for_each(|x| {
             if is_not_escaped(x.0, &line_bytes) {
                 indicies.push(x.0); symbols.push(x.1.to_owned());
             }
@@ -748,8 +748,9 @@ mod tests {
             aliases : vec!["trait".to_owned()]
         };
 
-        static ref JAVA : Extension = Extension {
+        static ref JAVA : Language = Language {
             name : "java".to_owned(),
+            extensions : vec!["java".to_owned()],
             string_symbols : vec!["\"".to_owned()],
             comment_symbol : "//".to_owned(),
             mutliline_comment_start_symbol : Some("/*".to_owned()),
@@ -757,8 +758,9 @@ mod tests {
             keywords : vec![CLASS.clone(),INTERFACE.clone()]
         };
 
-        static ref PYTHON : Extension = Extension {
+        static ref PYTHON : Language = Language {
             name : "py".to_owned(),
+            extensions : vec!["py".to_owned()],
             string_symbols : vec!["\"".to_owned(),"'".to_owned()],
             comment_symbol : "#".to_owned(),
             mutliline_comment_start_symbol : None,
@@ -766,8 +768,9 @@ mod tests {
             keywords : vec![CLASS.clone()]
         };
 
-        static ref RUST : Extension = Extension {
-            name : "rs".to_owned(),
+        static ref RUST : Language = Language {
+            name : "rust".to_owned(),
+            extensions : vec!["rs".to_owned()],
             string_symbols : vec!["\"".to_owned()],
             comment_symbol : "//".to_owned(),
             mutliline_comment_start_symbol : None,
@@ -775,39 +778,39 @@ mod tests {
             keywords : vec![STRUCT.clone(),ENUM.clone(),TRAIT.clone()]
         };
 
-        static ref EXTENSION_MAP_REF : ExtensionsMapRef = Arc::new(io_handler::parse_supported_extensions_to_map(&mut Vec::<String>::new()).unwrap().0);
+        static ref LANGUAGE_MAP_REF : LanguageMapRef = Arc::new(io_handler::parse_supported_languages_to_map(&mut Vec::<String>::new()).unwrap().0);
     }
 
     #[test]
     fn test_correct_parsing_of_test_dir() {
         let mut buf = String::with_capacity(150);
 
-        let result = parse_file("test_dir/a.txt", "java", &mut buf, EXTENSION_MAP_REF.clone(), &Configuration::new("a".to_owned()));
-        let result = ExtensionContentInfo::from(result.unwrap());
-        assert_eq!(ExtensionContentInfo::new(44, 13, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
+        let result = parse_file("test_dir/a.txt", "Java", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new("a".to_owned()));
+        let result = LanguageContentInfo::from(result.unwrap());
+        assert_eq!(LanguageContentInfo::new(44, 13, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         buf.clear();
-        let result = parse_file("test_dir/a.txt", "cs", &mut buf, EXTENSION_MAP_REF.clone(), &Configuration::new("a".to_owned()));
-        let result = ExtensionContentInfo::from(result.unwrap());
-        assert_eq!(ExtensionContentInfo::new(44, 13, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
+        let result = parse_file("test_dir/a.txt", "C#", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new("a".to_owned()));
+        let result = LanguageContentInfo::from(result.unwrap());
+        assert_eq!(LanguageContentInfo::new(44, 13, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         buf.clear();
         
-        let result = parse_file("test_dir/d.txt", "cs", &mut buf, EXTENSION_MAP_REF.clone(), &Configuration::new("a".to_owned()));
-        let result = ExtensionContentInfo::from(result.unwrap());
-        assert_eq!(ExtensionContentInfo::new(19, 7, hashmap!("classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
+        let result = parse_file("test_dir/d.txt", "C#", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new("a".to_owned()));
+        let result = LanguageContentInfo::from(result.unwrap());
+        assert_eq!(LanguageContentInfo::new(19, 7, hashmap!("classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         buf.clear();
-        let result = parse_file("test_dir/d.txt", "java", &mut buf, EXTENSION_MAP_REF.clone(), &Configuration::new("a".to_owned()));
-        let result = ExtensionContentInfo::from(result.unwrap());
-        assert_eq!(ExtensionContentInfo::new(19, 7, hashmap!("classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
-        buf.clear();
-
-        let result = parse_file("test_dir/b.txt", "java", &mut buf, EXTENSION_MAP_REF.clone(), &Configuration::new("a".to_owned()));
-        let result = ExtensionContentInfo::from(result.unwrap());
-        assert_eq!(ExtensionContentInfo::new(19, 11, hashmap!("classes".to_owned()=>7,"interfaces".to_owned()=>0)), result);
+        let result = parse_file("test_dir/d.txt", "Java", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new("a".to_owned()));
+        let result = LanguageContentInfo::from(result.unwrap());
+        assert_eq!(LanguageContentInfo::new(19, 7, hashmap!("classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         buf.clear();
 
-        let result = parse_file("test_dir/c.txt", "py", &mut buf, EXTENSION_MAP_REF.clone(), &Configuration::new("a".to_owned()));
-        let result = ExtensionContentInfo::from(result.unwrap());
-        assert_eq!(ExtensionContentInfo::new(11, 6, hashmap!("classes".to_owned()=>2)), result);
+        let result = parse_file("test_dir/b.txt", "Java", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new("a".to_owned()));
+        let result = LanguageContentInfo::from(result.unwrap());
+        assert_eq!(LanguageContentInfo::new(19, 11, hashmap!("classes".to_owned()=>7,"interfaces".to_owned()=>0)), result);
+        buf.clear();
+
+        let result = parse_file("test_dir/c.txt", "Python", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new("a".to_owned()));
+        let result = LanguageContentInfo::from(result.unwrap());
+        assert_eq!(LanguageContentInfo::new(11, 6, hashmap!("classes".to_owned()=>2)), result);
         buf.clear();
     }
 

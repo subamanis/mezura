@@ -15,13 +15,13 @@ mod producer;
 pub use colored::{Colorize,ColoredString};
 pub use config_manager::Configuration;
 pub use putils::*;
-pub use domain::{Extension, ExtensionContentInfo, ExtensionMetadata, FileStats, Keyword};
+pub use domain::{Language, LanguageContentInfo, LanguageMetadata, FileStats, Keyword};
 
 pub type LinkedListRef      = Arc<Mutex<LinkedList<String>>>;
 pub type FaultyFilesRef     = Arc<Mutex<Vec<(String,String,u64)>>>;
 pub type BoolRef            = Arc<AtomicBool>;
-pub type ContentInfoMapRef  = Arc<Mutex<HashMap<String,ExtensionContentInfo>>>;
-pub type ExtensionsMapRef   = Arc<HashMap<String,Extension>>;
+pub type ContentInfoMapRef  = Arc<Mutex<HashMap<String,LanguageContentInfo>>>;
+pub type LanguageMapRef     = Arc<HashMap<String,Language>>;
 
 use std::{collections::{HashMap, LinkedList}, error::Error, fs::{self, File}, io::{self, BufRead, BufReader}, path::{Path, PathBuf}, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant}};
 use std::{sync::{Arc, Mutex}, thread::JoinHandle};
@@ -31,13 +31,13 @@ pub struct Metrics {
     pub lines_per_sec: usize
 }
 
-pub fn run(config: Configuration, extensions_map: HashMap<String, Extension>) -> Result<Option<Metrics>, ParseFilesError> {
+pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Result<Option<Metrics>, ParseFilesError> {
     let files_ref : LinkedListRef = Arc::new(Mutex::new(LinkedList::new()));
     let faulty_files_ref : FaultyFilesRef  = Arc::new(Mutex::new(Vec::new()));
     let finish_condition_ref : BoolRef = Arc::new(AtomicBool::new(false));
-    let extensions_map_ref : ExtensionsMapRef = Arc::new(extensions_map);
-    let extensions_content_info_ref = Arc::new(Mutex::new(make_extension_stats(extensions_map_ref.clone())));
-    let mut extensions_metadata = make_extension_metadata(extensions_map_ref.clone());
+    let language_map_ref : LanguageMapRef = Arc::new(language_map);
+    let languages_content_info_ref = Arc::new(Mutex::new(make_language_stats(language_map_ref.clone())));
+    let mut languages_metadata = make_language_metadata(language_map_ref.clone());
     let mut handles = Vec::new(); 
 
     println!("\n{}...","Analyzing directory".underline().bold());
@@ -45,7 +45,7 @@ pub fn run(config: Configuration, extensions_map: HashMap<String, Extension>) ->
         handles.push(
             consumer::start_parser_thread(
                 i, files_ref.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
-                extensions_content_info_ref.clone(), extensions_map_ref.clone(), config.clone())
+                languages_content_info_ref.clone(), language_map_ref.clone(), config.clone())
             .unwrap()
         );
     }
@@ -53,9 +53,9 @@ pub fn run(config: Configuration, extensions_map: HashMap<String, Extension>) ->
     let instant = Instant::now();
 
     let (total_files_num, relevant_files_num) = 
-            producer::add_relevant_files(files_ref, &mut extensions_metadata, finish_condition_ref, extensions_map_ref, &config);
+            producer::add_relevant_files(files_ref, &mut languages_metadata, finish_condition_ref, &language_map_ref, &config);
     if relevant_files_num == 0 {
-        return Err(ParseFilesError::NoRelevantFiles(get_activated_extensions_as_str(&config)));
+        return Err(ParseFilesError::NoRelevantFiles(get_activated_languages_as_str(&config)));
     }
     println!("{} files found. {} of interest.\n",with_seperators(total_files_num), with_seperators(relevant_files_num));
 
@@ -72,21 +72,30 @@ pub fn run(config: Configuration, extensions_map: HashMap<String, Extension>) ->
         return Err(ParseFilesError::AllAreFaultyFiles);
     }
     
-    remove_faulty_files_stats(&faulty_files_ref, &mut extensions_metadata);
+    remove_faulty_files_stats(&faulty_files_ref, &mut languages_metadata, &language_map_ref);
 
-    let mut content_info_map_guard = extensions_content_info_ref.lock();
+    let mut content_info_map_guard = languages_content_info_ref.lock();
     let mut content_info_map = content_info_map_guard.as_deref_mut().unwrap();
 
     let metrics = generate_metrics_if_parsing_took_more_than_one_sec(
             parsing_duration_millis, relevant_files_num, content_info_map);
     
-    result_printer::format_and_print_results(&mut content_info_map, &mut extensions_metadata, &config);
+    result_printer::format_and_print_results(&mut content_info_map, &mut languages_metadata, &config);
     
     Ok(metrics)
 }
 
+pub fn find_lang_with_this_identifier(extensions: &LanguageMapRef, wanted_identifier: &str) -> Option<String> {
+    for ext in extensions.iter() {
+        if ext.1.extensions.iter().any(|x| x == wanted_identifier) {
+            return Some(ext.0.to_owned());
+        }
+    }
+    None
+}
+
 fn generate_metrics_if_parsing_took_more_than_one_sec(parsing_duration_millis: u128, relevant_files: usize,
-        content_info_map: &HashMap<String, ExtensionContentInfo>) -> Option<Metrics> 
+        content_info_map: &HashMap<String, LanguageContentInfo>) -> Option<Metrics> 
 {
     if parsing_duration_millis <= 1000 {
         return None;
@@ -124,38 +133,40 @@ fn print_faulty_files_or_ok(faulty_files_ref: &FaultyFilesRef, config: &Configur
     }
 }
 
-fn remove_faulty_files_stats(faulty_files_ref: &FaultyFilesRef, extensions_metadata_map: &mut HashMap<String,ExtensionMetadata>) {
+fn remove_faulty_files_stats(faulty_files_ref: &FaultyFilesRef, languages_metadata_map: &mut HashMap<String,LanguageMetadata>,
+        language_map: &LanguageMapRef) {
     let faulty_files = &*faulty_files_ref.as_ref().lock().unwrap();
     for file in faulty_files {
         let extension = utils::get_file_extension(Path::new(&file.0));
         if let Some(x) = extension {
-            let extension_metadata = extensions_metadata_map.get_mut(x).unwrap();
-            extension_metadata.files -= 1;
-            extension_metadata.bytes -= file.2 as usize;
+            let lang_name = find_lang_with_this_identifier(&language_map, x).unwrap();
+            let language_metadata = languages_metadata_map.get_mut(&lang_name).unwrap();
+            language_metadata.files -= 1;
+            language_metadata.bytes -= file.2 as usize;
         }
     }
 }
 
-fn get_activated_extensions_as_str(config: &Configuration) -> String {
-    if config.extensions_of_interest.is_empty() {
+fn get_activated_languages_as_str(config: &Configuration) -> String {
+    if config.languages_of_interest.is_empty() {
         String::new()
     } else {
-        String::from("\n(Activated extensions: ") + &config.extensions_of_interest.join(", ") + ")"
+        String::from("\n(Activated languages: ") + &config.languages_of_interest.join(", ") + ")"
     }
 }
 
-fn make_extension_stats(extensions_map: ExtensionsMapRef) -> HashMap<String,ExtensionContentInfo> {
-    let mut map = HashMap::<String,ExtensionContentInfo>::new();
-    for (key, value) in extensions_map.iter() {
-        map.insert(key.to_owned(), ExtensionContentInfo::from(value));
+fn make_language_stats(languages_map: LanguageMapRef) -> HashMap<String,LanguageContentInfo> {
+    let mut map = HashMap::<String,LanguageContentInfo>::new();
+    for (key, value) in languages_map.iter() {
+        map.insert(key.to_owned(), LanguageContentInfo::from(value));
     }
     map
 }
 
-fn make_extension_metadata(extension_map: ExtensionsMapRef) -> HashMap<String, ExtensionMetadata> {
-    let mut map = HashMap::<String,ExtensionMetadata>::new();
-    for (name,_) in extension_map.iter() {
-        map.insert(name.to_owned(), ExtensionMetadata::default());
+fn make_language_metadata(language_map: LanguageMapRef) -> HashMap<String, LanguageMetadata> {
+    let mut map = HashMap::<String,LanguageMetadata>::new();
+    for (name,_) in language_map.iter() {
+        map.insert(name.to_owned(), LanguageMetadata::default());
     }
     map
 }
@@ -179,9 +190,10 @@ impl ParseFilesError {
 pub mod domain {
     use super::*;
     
-    #[derive(Debug,PartialEq)]
-    pub struct Extension{
-        pub name : String,
+    #[derive(Debug,PartialEq, Clone)]
+    pub struct Language {
+        pub name: String,
+        pub extensions : Vec<String>,
         pub string_symbols : Vec<String>,
         pub comment_symbol : String,
         pub mutliline_comment_start_symbol : Option<String>,
@@ -197,7 +209,7 @@ pub mod domain {
     
     //Used during the file parsing, it needs to be synchronized 
     #[derive(Debug,PartialEq)]
-    pub struct ExtensionContentInfo {
+    pub struct LanguageContentInfo {
         pub lines : usize,
         pub code_lines : usize,
         pub keyword_occurences : HashMap<String,usize>
@@ -205,7 +217,7 @@ pub mod domain {
 
     //Used in the file searching, doesn't need to be shared between threads.
     #[derive(Debug,PartialEq,Default)]
-    pub struct ExtensionMetadata {
+    pub struct LanguageMetadata {
         pub files: usize,
         pub bytes: usize
     }
@@ -226,7 +238,7 @@ pub mod domain {
         }
     }
 
-    impl Extension {
+    impl Language {
         pub fn multiline_len(&self) -> usize {
             if let Some(x) = &self.mutliline_comment_start_symbol {
                 x.len()
@@ -239,31 +251,18 @@ pub mod domain {
             self.mutliline_comment_start_symbol.is_some()
         }
     }
-    
-    impl Clone for Extension {
-        fn clone(&self) -> Self {
-            Extension {
-                name : self.name.to_owned(),
-                string_symbols : self.string_symbols.to_owned(),
-                comment_symbol : self.comment_symbol.to_owned(),
-                mutliline_comment_start_symbol : self.mutliline_comment_start_symbol.to_owned(),
-                mutliline_comment_end_symbol : self.mutliline_comment_end_symbol.to_owned(),
-                keywords : self.keywords.to_owned()
-            }
-        }
-    }
 
-    impl ExtensionContentInfo {
-        pub fn new(lines: usize, code_lines: usize, keyword_occurences: HashMap<String,usize>) -> ExtensionContentInfo {
-            ExtensionContentInfo {
+    impl LanguageContentInfo {
+        pub fn new(lines: usize, code_lines: usize, keyword_occurences: HashMap<String,usize>) -> LanguageContentInfo {
+            LanguageContentInfo {
                 lines,
                 code_lines,
                 keyword_occurences
             }
         }
 
-        pub fn dummy(lines: usize) -> ExtensionContentInfo {
-            ExtensionContentInfo {
+        pub fn dummy(lines: usize) -> LanguageContentInfo {
+            LanguageContentInfo {
                 lines,
                 code_lines: 0,
                 keyword_occurences: HashMap::new()
@@ -278,7 +277,7 @@ pub mod domain {
             }
         }
         
-        pub fn add_content_info(&mut self, other: &ExtensionContentInfo) {
+        pub fn add_content_info(&mut self, other: &LanguageContentInfo) {
             self.lines += other.lines;
             self.code_lines += other.code_lines;
             for (k,v) in other.keyword_occurences.iter() {
@@ -287,9 +286,9 @@ pub mod domain {
         }
     }
 
-    impl From<&Extension> for ExtensionContentInfo {
-        fn from(ext: &Extension) -> Self {
-            ExtensionContentInfo {
+    impl From<&Language> for LanguageContentInfo {
+        fn from(ext: &Language) -> Self {
+            LanguageContentInfo {
                 lines : 0,
                 code_lines : 0,
                 keyword_occurences : get_keyword_stats_map(ext)
@@ -297,9 +296,9 @@ pub mod domain {
         }
     }
 
-    impl From<FileStats> for ExtensionContentInfo {
+    impl From<FileStats> for LanguageContentInfo {
         fn from(stats: FileStats) -> Self {
-            ExtensionContentInfo {
+            LanguageContentInfo {
                 lines : stats.lines,
                 code_lines : stats.code_lines,
                 keyword_occurences : stats.keyword_occurences
@@ -307,9 +306,9 @@ pub mod domain {
         }
     }
 
-    impl ExtensionMetadata {
-        pub fn new(files: usize, bytes: usize) ->  ExtensionMetadata {
-            ExtensionMetadata {
+    impl LanguageMetadata {
+        pub fn new(files: usize, bytes: usize) ->  LanguageMetadata {
+            LanguageMetadata {
                 files,
                 bytes
             }
@@ -343,7 +342,7 @@ pub mod domain {
         }
     }
     
-    fn get_keyword_stats_map(extension: &Extension) -> HashMap<String,usize> {
+    fn get_keyword_stats_map(extension: &Language) -> HashMap<String,usize> {
         let mut map = HashMap::<String,usize>::new();
         for k in &extension.keywords {
             map.insert(k.descriptive_name.to_owned(), 0);

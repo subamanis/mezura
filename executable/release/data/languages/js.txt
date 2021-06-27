@@ -1,8 +1,11 @@
-Extension
-go
+Language
+JS
+
+Extensions
+js
 
 String symbols
-"
+" '
 
 Comment symbol
 //
@@ -13,6 +16,6 @@ Multi line comment end
 
 Keyword
     NAME
-    structs
+    classes
     ALIASES
-    struct
+    class

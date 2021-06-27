@@ -21,7 +21,7 @@ fn main() {
         } 
     };
 
-    let extensions_map = match io_handler::parse_supported_extensions_to_map(&mut config.extensions_of_interest) {
+    let languages_map = match io_handler::parse_supported_languages_to_map(&mut config.languages_of_interest) {
         Err(x) => {
             println!("\n{}", x.formatted());
             utils::wait_for_input();
@@ -29,7 +29,7 @@ fn main() {
         },
         Ok(x) => {
             if !x.1.is_empty() {
-                let mut warn_msg = String::from("\nFormatting problems detected in extension files: ");
+                let mut warn_msg = String::from("\nFormatting problems detected in language files: ");
 
                 warn_msg.push_str(&x.1.join(", "));
                 warn_msg.push_str(". These files will not be taken into consideration.");
@@ -39,7 +39,7 @@ fn main() {
             if !x.2.is_empty() {
                 let relevant = x.2.iter().filter_map(|s| if !x.1.contains(&(s.to_owned()+".txt")){Some(s.to_owned())} else {None}).collect::<Vec<_>>();
                 if !relevant.is_empty() {
-                    let warn_msg = format!("\nThese extensions don't exist as extension files: {}",relevant.join(", "));
+                    let warn_msg = format!("\nThese languages don't exist as language files: {}",relevant.join(", "));
                     println!("{}",warn_msg.yellow());
                 }
             }
@@ -48,8 +48,10 @@ fn main() {
         }
     };
 
+    // println!("{:#?}", languages_map);
+
     let instant = Instant::now();
-    match code_stats::run(config, extensions_map) {
+    match code_stats::run(config, languages_map) {
         Ok(x) => {
             let perf = format!("\nExecution time: {:.2} secs ", instant.elapsed().as_secs_f32());
             let metrics = match x {
@@ -76,8 +78,8 @@ fn get_args_from_stdin() -> Configuration {
 
 fn verify_required_dirs() -> Result<(),String> {
     if let Some(data_dir) = io_handler::DATA_DIR.clone() {
-        if !Path::new(&(data_dir + "/extensions")).is_dir() {
-            return Err("'extensions' directory not found inside 'data'.".red().to_string())
+        if !Path::new(&(data_dir + "/languages")).is_dir() {
+            return Err("'languages' directory not found inside 'data'.".red().to_string())
         } 
         
         Ok(())

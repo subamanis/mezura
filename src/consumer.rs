@@ -4,7 +4,7 @@ use crate::*;
 
 pub(crate) fn start_parser_thread(
         id: usize, files_ref: LinkedListRef, faulty_files_ref: FaultyFilesRef, finish_condition_ref: BoolRef,
-        extension_content_info_ref: ContentInfoMapRef, extension_map: ExtensionsMapRef, config: Configuration) 
+        language_content_info_ref: ContentInfoMapRef, language_map: LanguageMapRef, config: Configuration) 
 -> Result<JoinHandle<()>,io::Error> 
 {
     thread::Builder::new().name(id.to_string()).spawn(move || {
@@ -41,10 +41,11 @@ pub(crate) fn start_parser_thread(
                     continue;
                 }
             };
+            let lang_name = find_lang_with_this_identifier(&language_map, &file_extension).unwrap();
 
-            match file_parser::parse_file(&file_path, &file_extension, &mut buf, extension_map.clone(), &config) {
+            match file_parser::parse_file(&file_path, &lang_name, &mut buf, language_map.clone(), &config) {
                 Ok(x) => {
-                    extension_content_info_ref.lock().unwrap().get_mut(&file_extension).unwrap().add_file_stats(x);
+                    language_content_info_ref.lock().unwrap().get_mut(&lang_name).unwrap().add_file_stats(x);
                 },
                 Err(x) => faulty_files_ref.lock().unwrap().push((file_path.clone(),x,path.metadata().map_or(0, |m| m.len())))
             }

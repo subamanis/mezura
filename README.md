@@ -35,13 +35,13 @@ The generated stats are the following:
 - Keyword occurances
 - Percentage comparisons between languages
 
-The program requires a "data" dir to be present on the same level as the executable(or 2 levels up in the folder hierarchy). In the "data" dir an "extensions" dir must be present, that contains the supported extensions. An optional "config" dir may be present too, where the user can specify persistent settings, more on that later.
+The program requires a "data" dir to be present on the same level as the executable(or 2 levels up in the folder hierarchy). In the "data" dir, a"languages" dir must be present, that contains the supported languages as seperate txt files. An optional "config" dir may be present too, where the user can specify persistent settings, more on that later.
 
-The program counts the lines of files in the specified directory. In order for a file to be considered for counting, it's extension must be supported, meaning that a .txt file specifying the details of the extension must be present in the "data/extensions" dir see [Supported Languages](#supported-languages). 
+The program counts the lines of files in the specified directory. In order for a file to be considered for counting, its extension must be supported, meaning that a .txt language file specifying the particular extension as an entry in its 'Extensions' field must be present in the "data/languages" dir see [Supported Languages](#supported-languages). 
 
 The program distinguishes the total lines in code lines and "extra" lines (all the lines that are not code).
 <b>Note</b> that braces "{ }" are not considered as code by default, but this can be changed by using the --braces-as-code flag.
-Also, the program can search for user-defined <b>keywords</b> that are specified in the extensions files and count their occurances, while identifying them correctly in <b>complex lines</b>, see [Accuracy and Limitations](#accuracy-and-limitations) for details.
+Also, the program can search for user-defined <b>keywords</b> that are specified in the language files and count their occurances, while identifying them correctly in <b>complex lines</b>, see [Accuracy and Limitations](#accuracy-and-limitations) for details.
 
 Below there is a list with all the commands-flags that the program accepts.
 ```
@@ -62,13 +62,13 @@ Below there is a list with all the commands-flags that the program accepts.
 
     The program will ignore these dirs.
 
---extensions 
-    1..n arguments separated with whitespace, can either have a dot prefix or not (.java or java)
+--languages 
+    1..n arguments separated with whitespace, case-insensitive
 
-    The given extension names must exist in any of the files in the 'data/extensions/' dir as the
-    parameter of the field 'Extension'.
+    The given language names must exist in any of the files in the 'data/languages/' dir as the
+    parameter of the field 'Language'.
 
-    Only the extensions specified here will be taken into account for the stats.
+    Only the languages specified here will be taken into account for the stats.
 
 --threads
     1 argument: a number between 1 and 8. Default: 4 
@@ -142,14 +142,17 @@ Below there is a list with all the commands-flags that the program accepts.
 
 
 ## Supported Languages
-All the supported languages can be found in the folder "data/extensions" as seperate text files. 
-The user can easily specify a new language by replicating the format of the extension files and customizing it accordingly, either by following the rules below or by copy pasting an existing file.
+All the supported languages can be found in the folder "data/languages" as seperate text files. 
+The user can easily specify a new language by replicating the format of the language files and customizing it accordingly, either by following the rules below or by copy pasting an existing file.
 
-The format of the extensions is as follows(and should not be modified at all):
+The format of the languages is as follows(and should not be modified at all):
 
 ```
-Extension
-<name of file extension like java or py>
+Language
+<name of the language>
+
+Extensions
+<name of file extensions like cpp hpp or py>
 
 String symbols
 <either 1 or two string symbols seperated by space, like: " ' >
@@ -193,8 +196,6 @@ With that said, it is important to mention the following limitations:
 - The program assumes that if a line contains any odd number of the same string symbols, then this is an open multiline string. This works for most cases but it may create inaccuracies, for example if a line in python has """ then the program will consider a multiline string everything until the next " symbol and not the next """ symbol. If a language doesn't support multiline strings, then you would not expect to see odd number of string symbols either way in a valid syntnax.
 
 - A language can only declare either one or two string symbols in the .txt, not more.
-
-- Right now, only one extension can be assosiated with a language
 
 - The program doesn't take into account gitignore files, the unwanted dirs have to be added manually in a configuration file
 

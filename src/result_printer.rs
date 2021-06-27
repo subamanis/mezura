@@ -5,30 +5,30 @@ use crate::*;
 //the total number of vertical lines ( | ) that appear in the [-|||...|-] in the overview section
 static NUM_OF_VERTICALS : usize = 50;
 
-static KEYWORD_LINE_OFFSET : usize = 20;
+static KEYWORD_LINE_OFFSET : usize = 19;
 static STANDARD_LINE_STATS_LEN : usize = 33;
 
-pub fn format_and_print_results(content_info_map: &mut HashMap<String, ExtensionContentInfo>,
-        extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>, config: &Configuration) 
+pub fn format_and_print_results(content_info_map: &mut HashMap<String, LanguageContentInfo>,
+        languages_metadata_map: &mut HashMap<String, LanguageMetadata>, config: &Configuration) 
 {
-    remove_extensions_with_0_files(content_info_map, extensions_metadata_map);
+    remove_languages_with_0_files(content_info_map, languages_metadata_map);
 
-    let mut sorted_extension_names = 
-            get_extension_names_as_sorted_vec_according_to_how_much_they_appeared(extensions_metadata_map);
+    let mut sorted_language_names = 
+            get_language_names_as_sorted_vec_according_to_how_much_they_appeared(languages_metadata_map);
 
-    print_individually(&sorted_extension_names, &content_info_map, extensions_metadata_map);
+    print_individually(&sorted_language_names, &content_info_map, languages_metadata_map);
 
-    if extensions_metadata_map.len() > 1 {
-        print_sum(&content_info_map, &extensions_metadata_map);
-        print_visual_overview(&mut sorted_extension_names, content_info_map, extensions_metadata_map, config);
+    if languages_metadata_map.len() > 1 {
+        print_sum(&content_info_map, &languages_metadata_map);
+        print_visual_overview(&mut sorted_language_names, content_info_map, languages_metadata_map, config);
     }
 }
 
 
-fn print_individually(sorted_extensions_map: &[String], content_info_map: &HashMap<String,ExtensionContentInfo>,
-     extensions_metadata_map: &HashMap<String, ExtensionMetadata>)
+fn print_individually(sorted_languages_map: &[String], content_info_map: &HashMap<String,LanguageContentInfo>,
+     languages_metadata_map: &HashMap<String, LanguageMetadata>)
 {
-    fn get_size_text(metadata: &ExtensionMetadata) -> String {
+    fn get_size_text(metadata: &LanguageMetadata) -> String {
         let (size, size_desc) = get_size_and_formatted_size_text(metadata.bytes, "total");
         let (average_size, average_size_desc) = get_size_and_formatted_size_text(
                 metadata.bytes / metadata.files, "average");
@@ -46,16 +46,16 @@ fn print_individually(sorted_extensions_map: &[String], content_info_map: &HashM
 
     println!("{}.\n", "Details".underline().bold());
     
-    let max_files_num_size = extensions_metadata_map.values().map(|x| x.files).max().unwrap().to_string().len();
+    let max_files_num_size = languages_metadata_map.values().map(|x| x.files).max().unwrap().to_string().len();
     let mut max_line_stats_len = STANDARD_LINE_STATS_LEN;
     let (mut titles_vec, mut lines_stats_vec, mut lines_stats_len_vec, mut size_stats_vec,
             mut keywords_stats_vec) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
-    for extension_name in sorted_extensions_map {
-        let content_info = content_info_map.get(extension_name).unwrap();
-        let metadata = extensions_metadata_map.get(extension_name).unwrap();
+    for lang_name in sorted_languages_map {
+        let content_info = content_info_map.get(lang_name).unwrap();
+        let metadata = languages_metadata_map.get(lang_name).unwrap();
 
         let files_str = with_seperators(metadata.files);
-        let title = format!(".{}{}{}{} {}  -> ",extension_name.bold(), " ".repeat(7-extension_name.len()),
+        let title = format!("{}{}{}{} {}  -> ",lang_name.bold(), " ".repeat(7-lang_name.len()),
                 " ".repeat((max_files_num_size+1)-files_str.len()), files_str, colored_word("files"));
         titles_vec.push(title);
 
@@ -89,10 +89,10 @@ fn print_individually(sorted_extensions_map: &[String], content_info_map: &HashM
 }
 
 
-fn print_sum(content_info_map: &HashMap<String,ExtensionContentInfo>, extensions_metadata_map: &HashMap<String,ExtensionMetadata>) 
+fn print_sum(content_info_map: &HashMap<String,LanguageContentInfo>, languages_metadata_map: &HashMap<String,LanguageMetadata>) 
 {
     let (mut total_files, mut total_lines, mut total_code_lines, mut total_bytes) = (0, 0, 0,0);
-    extensions_metadata_map.values().for_each(|e| {total_files += e.files; total_bytes += e.bytes});
+    languages_metadata_map.values().for_each(|e| {total_files += e.files; total_bytes += e.bytes});
     content_info_map.values().for_each(|c| {total_lines += c.lines; total_code_lines += c.code_lines});
 
     let (total_files_str, total_lines_str, total_code_lines_str, total_extra_lines_str) = 
@@ -100,7 +100,7 @@ fn print_sum(content_info_map: &HashMap<String,ExtensionContentInfo>, extensions
     let (total_size, total_size_descr) = get_size_and_formatted_size_text(total_bytes, "total");
     let (average_size, average_size_descr) = get_size_and_formatted_size_text(total_bytes / total_files, "average");
 
-    let max_files_num_size = extensions_metadata_map.values().map(|x| x.files).max().unwrap().to_string().len();
+    let max_files_num_size = languages_metadata_map.values().map(|x| x.files).max().unwrap().to_string().len();
 
     let keywords_sum_map = create_keyword_sum_map(content_info_map);
     let keywords_line = get_keywords_as_str(&keywords_sum_map, max_files_num_size);
@@ -126,8 +126,8 @@ fn print_sum(content_info_map: &HashMap<String,ExtensionContentInfo>, extensions
 // Lines: ...
 //
 // Size : ...
-fn print_visual_overview(sorted_extension_vec: &mut Vec<String>, content_info_map: &mut HashMap<String, ExtensionContentInfo>,
-        extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>, config: &Configuration) 
+fn print_visual_overview(sorted_language_vec: &mut Vec<String>, content_info_map: &mut HashMap<String, LanguageContentInfo>,
+        languages_metadata_map: &mut HashMap<String, LanguageMetadata>, config: &Configuration) 
 {
     fn make_cyan(str: &str) -> String {
         str.cyan().to_string()
@@ -149,33 +149,33 @@ fn print_visual_overview(sorted_extension_vec: &mut Vec<String>, content_info_ma
     }
 
     if content_info_map.len() > 4 {
-        retain_most_relevant_and_add_others_field_for_rest(sorted_extension_vec, content_info_map, extensions_metadata_map);
+        retain_most_relevant_and_add_others_field_for_rest(sorted_language_vec, content_info_map, languages_metadata_map);
     }
 
     println!("{}.\n", "Overview".underline().bold());
 
     let color_func_vec : Vec<fn(&str) -> String> = {
-        if sorted_extension_vec[sorted_extension_vec.len()-1] == "others" {
+        if sorted_language_vec[sorted_language_vec.len()-1] == "others" {
             vec![make_cyan, make_magenta, make_yellow, make_color_for_others]
         } else {
             vec![make_cyan, make_magenta, make_yellow, make_fourth_color]
         }
     };
 
-    let files_percentages = get_files_percentages(extensions_metadata_map, sorted_extension_vec);
-    let lines_percentages = get_lines_percentages(content_info_map, sorted_extension_vec);
-    let sizes_percentages = get_sizes_percentages(extensions_metadata_map, sorted_extension_vec);
+    let files_percentages = get_files_percentages(languages_metadata_map, sorted_language_vec);
+    let lines_percentages = get_lines_percentages(content_info_map, sorted_language_vec);
+    let sizes_percentages = get_sizes_percentages(languages_metadata_map, sorted_language_vec);
 
     let files_verticals = if config.no_visual {vec![]} else{get_num_of_verticals(&files_percentages)};
     let lines_verticals = if config.no_visual {vec![]} else{get_num_of_verticals(&lines_percentages)};
     let size_verticals = if config.no_visual {vec![]} else{get_num_of_verticals(&sizes_percentages)};
 
     let files_line = create_overview_line("Files:", &files_percentages, &files_verticals,
-            sorted_extension_vec, &color_func_vec, config);
+            sorted_language_vec, &color_func_vec, config);
     let lines_line = create_overview_line("Lines:", &lines_percentages, &lines_verticals,
-            sorted_extension_vec, &color_func_vec, config);
+            sorted_language_vec, &color_func_vec, config);
     let size_line = create_overview_line("Size :", &sizes_percentages, &size_verticals,
-            sorted_extension_vec, &color_func_vec, config);
+            sorted_language_vec, &color_func_vec, config);
 
     println!("{}\n\n{}\n\n{}\n",files_line, lines_line, size_line);
 }
@@ -195,7 +195,7 @@ fn get_keywords_as_str(keyword_occurencies: &HashMap<String,usize>, max_files_nu
     keyword_info
 }
 
-fn create_keyword_sum_map(content_info_map: &HashMap<String,ExtensionContentInfo>) -> HashMap<String,usize> {
+fn create_keyword_sum_map(content_info_map: &HashMap<String,LanguageContentInfo>) -> HashMap<String,usize> {
     let mut collective_keywords_map : HashMap<String,usize> = HashMap::new();
     for content_info in content_info_map.values() {
         for keyword in &content_info.keyword_occurences {
@@ -224,37 +224,37 @@ fn colored_word(word: &str) -> ColoredString {
     word.italic().truecolor(181, 169, 138)
 }
 
-fn remove_extensions_with_0_files(content_info_map: &mut HashMap<String,ExtensionContentInfo>,
-    extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>) 
+fn remove_languages_with_0_files(content_info_map: &mut HashMap<String,LanguageContentInfo>,
+    languages_metadata_map: &mut HashMap<String, LanguageMetadata>) 
 {
-   let mut empty_extensions = Vec::new();
-   for element in extensions_metadata_map.iter() {
+   let mut empty_languages = Vec::new();
+   for element in languages_metadata_map.iter() {
        if element.1.files == 0 {
-           empty_extensions.push(element.0.to_owned());
+           empty_languages.push(element.0.to_owned());
        }
    }
 
-   for ext in empty_extensions {
-       extensions_metadata_map.remove(&ext);
+   for ext in empty_languages {
+       languages_metadata_map.remove(&ext);
        content_info_map.remove(&ext);
    }
 }
 
-fn get_extension_names_as_sorted_vec_according_to_how_much_they_appeared(
-   extensions_metadata_map: &HashMap<String, ExtensionMetadata>) -> Vec<String> 
+fn get_language_names_as_sorted_vec_according_to_how_much_they_appeared(
+   languages_metadata_map: &HashMap<String, LanguageMetadata>) -> Vec<String> 
 {
     let mut value_map = HashMap::<String,usize>::new();
-    let mut sorted_extensions_vec = Vec::new();
-    for (ext_name,metadata) in extensions_metadata_map.iter() {
+    let mut sorted_languages_vec = Vec::new();
+    for (ext_name,metadata) in languages_metadata_map.iter() {
         value_map.insert(ext_name.to_owned(), metadata.files * 10 + metadata.bytes as usize);
-        sorted_extensions_vec.push(ext_name.to_owned());
+        sorted_languages_vec.push(ext_name.to_owned());
     }
 
-    sorted_extensions_vec.sort_by(|a,b| {
+    sorted_languages_vec.sort_by(|a,b| {
         value_map.get(b).unwrap().cmp(value_map.get(a).unwrap())
     });
 
-    sorted_extensions_vec
+    sorted_languages_vec
 }
 
 fn get_num_of_verticals(percentages: &[f64]) -> Vec<usize> {
@@ -356,7 +356,7 @@ fn normalize_to_NUM_OF_VERTICALS(verticals: &mut Vec<usize>, sum: usize) {
     }
 }
 
-fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize], extensions_name: &[String],
+fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize], languages_name: &[String],
         color_func_vec: &[fn(&str) -> String], config: &Configuration) -> String 
 {
     let mut line = String::with_capacity(150);
@@ -365,9 +365,9 @@ fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize], 
         let str_perc = format!("{:.1}",percent);
         line.push_str(&format!("{}{}% ", " ".repeat(4-str_perc.len()), str_perc));
         if config.no_visual {
-            line.push_str(&extensions_name[i]);
+            line.push_str(&languages_name[i]);
         } else {
-            line.push_str(&color_func_vec[i](&extensions_name[i]));
+            line.push_str(&color_func_vec[i](&languages_name[i]));
         }
         if i < percentages.len() - 1{
             line.push_str(" - ")
@@ -389,71 +389,71 @@ fn add_verticals_str(line: &mut String, files_verticals: &[usize], color_func_ve
     line.push_str("-]");
 }
 
-fn retain_most_relevant_and_add_others_field_for_rest(sorted_extension_names: &mut Vec<String>,
-     content_info_map: &mut HashMap<String, ExtensionContentInfo>, extensions_metadata_map: &mut HashMap<String, ExtensionMetadata>) 
+fn retain_most_relevant_and_add_others_field_for_rest(sorted_language_names: &mut Vec<String>,
+     content_info_map: &mut HashMap<String, LanguageContentInfo>, languages_metadata_map: &mut HashMap<String, LanguageMetadata>) 
 {
-    fn get_files_lines_size(content_info_map: &HashMap<String, ExtensionContentInfo>,
-         extensions_metadata_map: &HashMap<String, ExtensionMetadata>) -> (usize,usize,usize) 
+    fn get_files_lines_size(content_info_map: &HashMap<String, LanguageContentInfo>,
+         languages_metadata_map: &HashMap<String, LanguageMetadata>) -> (usize,usize,usize) 
     {
         let (mut files, mut lines, mut size) = (0,0,0);
         content_info_map.iter().for_each(|x| lines += x.1.lines);
-        extensions_metadata_map.iter().for_each(|x| {files += x.1.files; size += x.1.bytes});
+        languages_metadata_map.iter().for_each(|x| {files += x.1.files; size += x.1.bytes});
         (files, lines, size as usize) 
     }
 
-    let (total_files, total_lines, total_size) = get_files_lines_size(content_info_map, extensions_metadata_map);
-    if sorted_extension_names.len() > 4 {
-        for _ in 3..sorted_extension_names.len() {
-             sorted_extension_names.remove(sorted_extension_names.len()-1);
+    let (total_files, total_lines, total_size) = get_files_lines_size(content_info_map, languages_metadata_map);
+    if sorted_language_names.len() > 4 {
+        for _ in 3..sorted_language_names.len() {
+             sorted_language_names.remove(sorted_language_names.len()-1);
         }
-        sorted_extension_names.push("others".to_owned());
+        sorted_language_names.push("others".to_owned());
 
-        content_info_map.retain(|x,_| sorted_extension_names.contains(x));
-        extensions_metadata_map.retain(|x,_| sorted_extension_names.contains(x));
+        content_info_map.retain(|x,_| sorted_language_names.contains(x));
+        languages_metadata_map.retain(|x,_| sorted_language_names.contains(x));
     }
     
-    let (relevant_files, relevant_lines, relevant_size) = get_files_lines_size(content_info_map, extensions_metadata_map);
+    let (relevant_files, relevant_lines, relevant_size) = get_files_lines_size(content_info_map, languages_metadata_map);
     let (other_files, other_lines, other_size) = 
         (total_files - relevant_files, total_lines - relevant_lines, total_size - relevant_size);
 
-    content_info_map.insert("others".to_string(), ExtensionContentInfo::dummy(other_lines));
-    extensions_metadata_map.insert("others".to_string(), ExtensionMetadata::new(other_files, other_size));
+    content_info_map.insert("others".to_string(), LanguageContentInfo::dummy(other_lines));
+    languages_metadata_map.insert("others".to_string(), LanguageMetadata::new(other_files, other_size));
 }
 
 
-fn get_files_percentages(extensions_metadata_map: &HashMap<String,ExtensionMetadata>, sorted_extension_names: &[String]) -> Vec<f64> {
-    let mut extensions_files = [0].repeat(extensions_metadata_map.len());
-    extensions_metadata_map.iter().for_each(|e| {
-        let pos = sorted_extension_names.iter().position(|name| name == e.0).unwrap();
-        extensions_files[pos] = e.1.files;
+fn get_files_percentages(languages_metadata_map: &HashMap<String,LanguageMetadata>, sorted_language_names: &[String]) -> Vec<f64> {
+    let mut language_files = [0].repeat(languages_metadata_map.len());
+    languages_metadata_map.iter().for_each(|e| {
+        let pos = sorted_language_names.iter().position(|name| name == e.0).unwrap();
+        language_files[pos] = e.1.files;
     });
     
-    get_percentages(&extensions_files)
+    get_percentages(&language_files)
 }
 
-fn get_lines_percentages(content_info_map: &HashMap<String,ExtensionContentInfo>, extensions_name: &[String]) -> Vec<f64> {
-    let mut extensions_lines = [0].repeat(content_info_map.len());
+fn get_lines_percentages(content_info_map: &HashMap<String,LanguageContentInfo>, languages_name: &[String]) -> Vec<f64> {
+    let mut language_lines = [0].repeat(content_info_map.len());
     content_info_map.iter().for_each(|e| {
-        let pos = extensions_name.iter().position(|name| name == e.0).unwrap();
-        extensions_lines[pos] = e.1.lines;
+        let pos = languages_name.iter().position(|name| name == e.0).unwrap();
+        language_lines[pos] = e.1.lines;
     });
 
-    get_percentages(&extensions_lines)
+    get_percentages(&language_lines)
 }
 
-fn get_sizes_percentages(extensions_metadata_map: &HashMap<String,ExtensionMetadata>, extensions_name: &[String]) -> Vec<f64> {
-    let mut extensions_size = [0].repeat(extensions_metadata_map.len());
-    extensions_metadata_map.iter().for_each(|e| {
-        let pos = extensions_name.iter().position(|name| name == e.0).unwrap();
-        extensions_size[pos] = e.1.bytes;
+fn get_sizes_percentages(languages_metadata_map: &HashMap<String,LanguageMetadata>, languages_name: &[String]) -> Vec<f64> {
+    let mut language_size = [0].repeat(languages_metadata_map.len());
+    languages_metadata_map.iter().for_each(|e| {
+        let pos = languages_name.iter().position(|name| name == e.0).unwrap();
+        language_size[pos] = e.1.bytes;
     });
     
-    get_percentages(&extensions_size)
+    get_percentages(&language_size)
 }
 
 fn get_percentages(numbers: &[usize]) -> Vec<f64> {
     let total_files :usize = numbers.iter().sum();
-    let mut extension_percentages = Vec::with_capacity(4);
+    let mut language_percentages = Vec::with_capacity(4);
     let mut sum = 0.0;
     for (counter,files) in numbers.iter().enumerate() {
         if counter == numbers.len() - 1 {
@@ -464,15 +464,15 @@ fn get_percentages(numbers: &[usize]) -> Vec<f64> {
                     ((100f64 - sum) * 10f64).round() / 10f64
                 }
             };
-            extension_percentages.push(rounded);
+            language_percentages.push(rounded);
         } else {
             let percentage = *files as f64/total_files as f64;
             let canonicalized = (percentage * 1000f64).round() / 10f64;
             sum += canonicalized;
-            extension_percentages.push(canonicalized);
+            language_percentages.push(canonicalized);
         }
     }
-    extension_percentages
+    language_percentages
 }
 
 #[cfg(test)]
@@ -511,36 +511,36 @@ mod tests {
     fn test_get_lines_percentages() {
         let ext_names = ["py".to_string(),"java".to_string(),"cs".to_string()];
 
-        let content_info_map = hashmap!("cs".to_string() => ExtensionContentInfo::dummy(100),
-            "java".to_string() => ExtensionContentInfo::dummy(100), "py".to_string() => ExtensionContentInfo::dummy(0));
+        let content_info_map = hashmap!("cs".to_string() => LanguageContentInfo::dummy(100),
+            "java".to_string() => LanguageContentInfo::dummy(100), "py".to_string() => LanguageContentInfo::dummy(0));
         assert_eq!(vec![0f64,50f64,50f64], get_lines_percentages(&content_info_map, &ext_names));
-        let content_info_map = hashmap!("cs".to_string() => ExtensionContentInfo::dummy(0),
-        "java".to_string() => ExtensionContentInfo::dummy(0), "py".to_string() => ExtensionContentInfo::dummy(1));
+        let content_info_map = hashmap!("cs".to_string() => LanguageContentInfo::dummy(0),
+        "java".to_string() => LanguageContentInfo::dummy(0), "py".to_string() => LanguageContentInfo::dummy(1));
         assert_eq!(vec![100f64,0f64,0f64], get_lines_percentages(&content_info_map, &ext_names));
-        let content_info_map = hashmap!("cs".to_string() => ExtensionContentInfo::dummy(20),
-        "java".to_string() => ExtensionContentInfo::dummy(20), "py".to_string() => ExtensionContentInfo::dummy(20));
+        let content_info_map = hashmap!("cs".to_string() => LanguageContentInfo::dummy(20),
+        "java".to_string() => LanguageContentInfo::dummy(20), "py".to_string() => LanguageContentInfo::dummy(20));
         assert_eq!(vec![33.3f64,33.3f64,33.4f64], get_lines_percentages(&content_info_map, &ext_names));
         
         let ext_names = ["py".to_string(),"java".to_string(),"cs".to_string(),"rs".to_string()];
 
-        let content_info_map = hashmap!("cs".to_string() => ExtensionContentInfo::dummy(100),
-            "java".to_string() => ExtensionContentInfo::dummy(100), "py".to_string() => ExtensionContentInfo::dummy(0),
-            "rs".to_string() => ExtensionContentInfo::dummy(0));
+        let content_info_map = hashmap!("cs".to_string() => LanguageContentInfo::dummy(100),
+            "java".to_string() => LanguageContentInfo::dummy(100), "py".to_string() => LanguageContentInfo::dummy(0),
+            "rs".to_string() => LanguageContentInfo::dummy(0));
         assert_eq!(vec![0f64,50f64,50f64,0f64], get_lines_percentages(&content_info_map, &ext_names));
-        let content_info_map = hashmap!("cs".to_string() => ExtensionContentInfo::dummy(100),
-            "java".to_string() => ExtensionContentInfo::dummy(100), "py".to_string() => ExtensionContentInfo::dummy(100),
-            "rs".to_string() => ExtensionContentInfo::dummy(0));
+        let content_info_map = hashmap!("cs".to_string() => LanguageContentInfo::dummy(100),
+            "java".to_string() => LanguageContentInfo::dummy(100), "py".to_string() => LanguageContentInfo::dummy(100),
+            "rs".to_string() => LanguageContentInfo::dummy(0));
         assert_eq!(vec![33.3f64,33.3f64,33.3f64,0f64], get_lines_percentages(&content_info_map, &ext_names));
-        let content_info_map = hashmap!("cs".to_string() => ExtensionContentInfo::dummy(201),
-            "java".to_string() => ExtensionContentInfo::dummy(200), "py".to_string() => ExtensionContentInfo::dummy(200),
-            "rs".to_string() => ExtensionContentInfo::dummy(0));
+        let content_info_map = hashmap!("cs".to_string() => LanguageContentInfo::dummy(201),
+            "java".to_string() => LanguageContentInfo::dummy(200), "py".to_string() => LanguageContentInfo::dummy(200),
+            "rs".to_string() => LanguageContentInfo::dummy(0));
         assert_eq!(vec![33.3f64,33.3f64,33.4f64,0f64], get_lines_percentages(&content_info_map, &ext_names));
 
         let ext_names = ["py".to_string(),"java".to_string(),"cs".to_string(),"rs".to_string(),"cpp".to_string()];
 
-        let content_info_map = hashmap!("cs".to_string() => ExtensionContentInfo::dummy(100),
-            "java".to_string() => ExtensionContentInfo::dummy(100), "py".to_string() => ExtensionContentInfo::dummy(0),
-            "rs".to_string() => ExtensionContentInfo::dummy(0), "cpp".to_string() => ExtensionContentInfo::dummy(0));
+        let content_info_map = hashmap!("cs".to_string() => LanguageContentInfo::dummy(100),
+            "java".to_string() => LanguageContentInfo::dummy(100), "py".to_string() => LanguageContentInfo::dummy(0),
+            "rs".to_string() => LanguageContentInfo::dummy(0), "cpp".to_string() => LanguageContentInfo::dummy(0));
         assert_eq!(vec![0f64,50f64,50f64,0f64,0f64], get_lines_percentages(&content_info_map, &ext_names));
     }
 

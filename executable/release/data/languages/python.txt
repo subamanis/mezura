@@ -1,4 +1,7 @@
-Extension
+Language
+Python
+
+Extensions
 py
 
 String symbols

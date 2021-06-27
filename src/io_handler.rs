@@ -3,7 +3,7 @@ use std::{{ffi::OsString, path::Path}, cmp::max, collections::{HashMap as HashMa
 use colored::*;
 use lazy_static::lazy_static;
 
-use crate::{Configuration, config_manager::{self, BRACES_AS_CODE, EXCLUDE, EXTENSIONS, PATH, SEARCH_IN_DOTTED, SHOW_FAULTY_FILES, THREADS}, domain::*};
+use crate::{Configuration, config_manager::{self, BRACES_AS_CODE, EXCLUDE, LANGUAGES, PATH, SEARCH_IN_DOTTED, SHOW_FAULTY_FILES, THREADS}, domain::*};
 
 lazy_static! {
     pub static ref DATA_DIR : Option<String> = try_find_data_dir();
@@ -11,13 +11,13 @@ lazy_static! {
 
 const DEFAULT_CONFIG_FILE_NAME : &str = "default";
 const CONFIG_DIR_NAME : &str = "/config";
-const EXTENSIONS_DIR_NAME : &str = "/extensions";
+const LANGUAGE_DIR_NAME : &str = "/languages";
 
 #[derive(Debug)]
-pub enum ParseExtensionsError {
+pub enum ParseLanguageError {
     NoFilesFound,
     NoFilesFormattedProperly,
-    ExtensionsOfInterestNotFound
+    LanguagesOfInterestNotFound
 }
 
 #[derive(Debug)]
@@ -31,7 +31,7 @@ pub enum ParseConfigFileError {
 pub struct PersistentOptions {
     pub path                     : Option<String>,
     pub exclude_dirs             : Option<Vec<String>>,
-    pub extensions_of_interest   : Option<Vec<String>>,
+    pub languages_of_interest   : Option<Vec<String>>,
     pub threads                  : Option<usize>,
     pub braces_as_code           : Option<bool>,
     pub should_search_in_dotted  : Option<bool>,
@@ -40,17 +40,17 @@ pub struct PersistentOptions {
 }
 
 
-pub fn parse_supported_extensions_to_map(extensions_of_interest: &mut Vec<String>)
-        -> Result<(HashMap<String,Extension>, Vec<String>, Vec<String>), ParseExtensionsError> 
+pub fn parse_supported_languages_to_map(languages_of_interest: &mut Vec<String>)
+        -> Result<(HashMap<String,Language>, Vec<String>, Vec<String>), ParseLanguageError> 
 {
-    let dirs = fs::read_dir(DATA_DIR.clone().unwrap() + EXTENSIONS_DIR_NAME).unwrap();
+    let dirs = fs::read_dir(DATA_DIR.clone().unwrap() + LANGUAGE_DIR_NAME).unwrap();
     
-    let mut extensions_of_interest_appearance = HashMap::<String,bool>::new();
-    for extension_name in extensions_of_interest.iter() {
-        extensions_of_interest_appearance.insert(extension_name.to_owned(), false);
+    let mut languages_of_interest_appearance = HashMap::<String,bool>::new();
+    for lang_name in languages_of_interest.iter() {
+        languages_of_interest_appearance.insert(lang_name.to_owned(), false);
     }
 
-    let mut extensions_map = HashMap::new();
+    let mut language_map = HashMap::new();
     let mut num_of_entries = 0;
     let mut parsed_any_successfully = false;
     let mut faulty_files : Vec<String> = Vec::new();
@@ -70,56 +70,56 @@ pub fn parse_supported_extensions_to_map(extensions_of_interest: &mut Vec<String
             Ok(x) => x,
             Err(_) => {
                 let file_name = entry.file_name().to_str().map_or(String::new(), |x| x.to_owned());
-                if !file_name.is_empty() {faulty_files.push(file_name)}
+                if !file_name.is_empty() {faulty_files.push(file_name.to_lowercase())}
                 continue;
             }
         } ;
         
-        let extension = match parse_file_to_extension(reader, &mut buffer) {
+        let language = match parse_file_to_language(reader, &mut buffer) {
             Ok(x) => x,
             Err(_) => {
                 let file_name = entry.file_name().to_str().map_or(String::new(), |x| x.to_owned());
-                if !file_name.is_empty() {faulty_files.push(file_name)}
+                if !file_name.is_empty() {faulty_files.push(file_name.to_lowercase())}
                 continue;
             }
         };
 
         parsed_any_successfully = true;
 
-        if !extensions_of_interest.is_empty() && !extensions_of_interest.contains(&extension.name) {
-            continue;
+        if !languages_of_interest.is_empty() {
+            if !languages_of_interest.contains(&language.name.to_lowercase()) {
+                continue;
+            }
+
+            *languages_of_interest_appearance.get_mut(&language.name.to_lowercase()).unwrap() = true;
         }
 
-        if !extensions_of_interest.is_empty() {
-            *extensions_of_interest_appearance.get_mut(&extension.name).unwrap() = true;
-        }
-
-        extensions_map.insert(extension.name.to_owned(), extension);
+        language_map.insert(language.name.to_owned(), language);
     }
     
     if num_of_entries == 0 {
-        return Err(ParseExtensionsError::NoFilesFound);
+        return Err(ParseLanguageError::NoFilesFound);
     } 
     
-    let mut non_existant_extensions_of_interest = Vec::new();
-    if !extensions_of_interest.is_empty() {
-        extensions_of_interest_appearance.iter().for_each(|x| 
+    let mut non_existant_languages_of_interest = Vec::new();
+    if !languages_of_interest.is_empty() {
+        languages_of_interest_appearance.iter().for_each(|x| 
             if !x.1 && !faulty_files.contains(&(x.0.to_owned() + ".txt")) {
-                non_existant_extensions_of_interest.push(x.0.to_owned())
+                non_existant_languages_of_interest.push(x.0.to_owned())
             });
     }
 
     if !parsed_any_successfully {
-        return Err(ParseExtensionsError::NoFilesFormattedProperly);
+        return Err(ParseLanguageError::NoFilesFormattedProperly);
     }
 
-    if !extensions_of_interest.is_empty() && non_existant_extensions_of_interest.len() == extensions_of_interest.len() {
-        return Err(ParseExtensionsError::ExtensionsOfInterestNotFound);
+    if !languages_of_interest.is_empty() && non_existant_languages_of_interest.len() == languages_of_interest.len() {
+        return Err(ParseLanguageError::LanguagesOfInterestNotFound);
     }
 
-    extensions_of_interest.retain(|x| !non_existant_extensions_of_interest.contains(x) && !faulty_files.contains(&(x.to_owned()+".txt")));
+    languages_of_interest.retain(|x| !non_existant_languages_of_interest.contains(x) && !faulty_files.contains(&(x.to_owned()+".txt")));
 
-    Ok((extensions_map, faulty_files, non_existant_extensions_of_interest))
+    Ok((language_map, faulty_files, non_existant_languages_of_interest))
 }
 
 pub fn parse_config_file(file_name: Option<&str>) -> Result<(PersistentOptions,bool),ParseConfigFileError> {
@@ -136,7 +136,7 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<(PersistentOptions,b
     });
 
     let (mut path, mut braces_as_code, mut search_in_dotted, mut threads, mut exclude_dirs,
-         mut extensions_of_interest, mut show_faulty_files, mut no_visual) = (None,None,None,None,None,None,None,None);
+         mut languages_of_interest, mut show_faulty_files, mut no_visual) = (None,None,None,None,None,None,None,None);
     let mut buf = String::with_capacity(150); 
     let mut has_formatting_errors = false;
 
@@ -156,8 +156,8 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<(PersistentOptions,b
                 path = Some(buf.to_owned());
             } else if id == config_manager::EXCLUDE {
                 exclude_dirs = read_vec_value(&mut reader, &mut buf, Box::new(|x| x.replace("\\", "/")));
-            } else if id == config_manager::EXTENSIONS {
-                extensions_of_interest = read_vec_value(&mut reader, &mut buf, Box::new(remove_dot_prefix));
+            } else if id == config_manager::LANGUAGES {
+                languages_of_interest = read_vec_value(&mut reader, &mut buf, Box::new(remove_dot_prefix));
             } else if id == config_manager::THREADS {
                 threads = read_usize_value(&mut reader, &mut buf);
             }else if id == config_manager::BRACES_AS_CODE {
@@ -174,7 +174,7 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<(PersistentOptions,b
         buf.clear();
     }
 
-    Ok((PersistentOptions::new(path,exclude_dirs, extensions_of_interest, threads, braces_as_code,
+    Ok((PersistentOptions::new(path,exclude_dirs, languages_of_interest, threads, braces_as_code,
              search_in_dotted, show_faulty_files, no_visual), has_formatting_errors))
 }
 
@@ -188,8 +188,8 @@ pub fn save_config_to_file(config_name: &str, config: &Configuration) -> std::io
     writer.write(config.path.as_bytes());
     writer.write(&[b"\n\n===> ",config_manager::EXCLUDE.as_bytes(),b"\n"].concat());
     writer.write(config.exclude_dirs.join(" ").as_bytes());
-    writer.write(&[b"\n\n===> ",config_manager::EXTENSIONS.as_bytes(),b"\n"].concat());
-    writer.write(config.extensions_of_interest.join(" ").as_bytes());
+    writer.write(&[b"\n\n===> ",config_manager::LANGUAGES.as_bytes(),b"\n"].concat());
+    writer.write(config.languages_of_interest.join(" ").as_bytes());
     writer.write(&[b"\n\n===> ",config_manager::THREADS.as_bytes(),b"\n"].concat());
     writer.write(config.threads.to_string().as_bytes());
     writer.write(&[b"\n\n===> ",config_manager::BRACES_AS_CODE.as_bytes(),b"\n"].concat());
@@ -274,11 +274,19 @@ fn remove_dot_prefix(str: &str) -> String {
     }
 }
 
-fn parse_file_to_extension(mut reader :my_reader::BufReader, buffer :&mut String) -> Result<Extension,()> {
-    if !reader.read_line_and_compare(buffer, "Extension") {return Err(());}
+fn parse_file_to_language(mut reader :my_reader::BufReader, buffer :&mut String) -> Result<Language,()> {
+    if !reader.read_line_and_compare(buffer, "Language") {return Err(());}
     if !reader.read_line_exists(buffer) {return Err(());}
-    let extension_name = buffer.trim_end().to_owned();
+    let lang_name = buffer.trim_end().to_owned();
     if !reader.read_line_exists(buffer) {return Err(());}
+
+    if !reader.read_line_and_compare(buffer, "Extensions") {return Err(());}
+    let identifiers = match reader.get_line_sliced(buffer) {
+        Ok(x) => x,
+        Err(_) => return Err(())
+    };
+    if !reader.read_line_exists(buffer) {return Err(());}
+
     if !reader.read_line_and_compare(buffer, "String symbols") {return Err(());}
     let string_symbols = match reader.get_line_sliced(buffer) {
         Ok(x) => x,
@@ -326,8 +334,9 @@ fn parse_file_to_extension(mut reader :my_reader::BufReader, buffer :&mut String
         keywords.push(keyword);
     }
     
-    Ok(Extension {
-        name : extension_name,
+    Ok(Language {
+        name: lang_name,
+        extensions: identifiers,
         string_symbols,
         comment_symbol,
         mutliline_comment_start_symbol : multi_start,
@@ -342,12 +351,12 @@ fn try_find_data_dir() -> Option<String> {
     None
 }
 
-impl ParseExtensionsError {
+impl ParseLanguageError {
     pub fn formatted(&self) -> String {
         match self {
-            Self::NoFilesFound => "Error: No extension files found in directory.".red().to_string(),
-            Self::NoFilesFormattedProperly => "Error: No extension file is formatted properly, so none could be parsed.".red().to_string(),
-            Self::ExtensionsOfInterestNotFound => "Error: None of the provided extensions exists in the extensions directory".red().to_string()
+            Self::NoFilesFound => "Error: No language files found in directory.".red().to_string(),
+            Self::NoFilesFormattedProperly => "Error: No language file is formatted properly, so none could be parsed.".red().to_string(),
+            Self::LanguagesOfInterestNotFound => "Error: None of the provided languages exists in the languages directory".red().to_string()
         }
     }
 }
@@ -363,7 +372,7 @@ impl ParseConfigFileError {
 }
 
 impl PersistentOptions {
-    pub fn new(path: Option<String>, exclude_dirs: Option<Vec<String>>, extensions_of_interest: Option<Vec<String>>,
+    pub fn new(path: Option<String>, exclude_dirs: Option<Vec<String>>, languages_of_interest: Option<Vec<String>>,
             threads: Option<usize>, braces_as_code: Option<bool>, should_search_in_dotted: Option<bool>,
             should_show_faulty_files: Option<bool>, no_visual: Option<bool>) 
     -> PersistentOptions 
@@ -371,7 +380,7 @@ impl PersistentOptions {
         PersistentOptions {
             path,
             exclude_dirs,
-            extensions_of_interest,
+            languages_of_interest,
             threads,
             braces_as_code,
             should_search_in_dotted,
@@ -430,7 +439,8 @@ mod my_reader {
         pub fn get_line_sliced(&mut self, buffer: &mut String) -> Result<Vec<String>, ()> {
             if self.read_line_exists(buffer) {
                 let buffer = buffer.trim_end();
-                let mut vec = buffer.split_whitespace().map(|s| s.to_string()).collect::<Vec<String>>();
+                let mut vec = buffer.split_whitespace().filter_map(|s| if s.is_empty() {None} else {Some(s.to_string())})
+                    .collect::<Vec<String>>();
                 if vec.is_empty() {return Ok(vec![String::new()]);}
                 let last_index = vec.len()-1;
                 vec[last_index] = vec[last_index].trim_end().to_owned();
