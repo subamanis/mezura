@@ -346,8 +346,26 @@ fn parse_file_to_language(mut reader :my_reader::BufReader, buffer :&mut String)
 }
 
 fn try_find_data_dir() -> Option<String> {
-    if Path::new("data").is_dir() {return Some("data".to_string())}
-    if Path::new("../../data").is_dir() {return Some("../../data".to_string())}
+    let abs_path = try_get_folder_of_exe().clone().unwrap_or("".to_owned());
+    let data_in_current = &(abs_path.clone() + "\\data");
+    let data_in_parent = &(abs_path + "\\..\\..\\data");
+    if Path::new(data_in_current).is_dir() {return Some(data_in_current.to_owned())}
+    if Path::new(data_in_parent).is_dir() {return Some(data_in_parent.to_owned())}
+    None
+}
+
+fn try_get_folder_of_exe() -> Option<String> {
+    if let Ok(path) = std::env::current_exe() {
+        let str_path = path.to_str().map_or("", |x| x);
+        if str_path.is_empty() {
+            return None;
+        }
+
+        if let Some(last_backslash) = str_path.match_indices("\\").last() {
+            return Some(str_path[..last_backslash.0].to_owned());
+        } 
+    }
+
     None
 }
 
