@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::{cmp::max, io::Write};
 
 use crate::*;
 
@@ -13,20 +13,20 @@ pub fn format_and_print_results(content_info_map: &mut HashMap<String, LanguageC
 {
     remove_languages_with_0_files(content_info_map, languages_metadata_map);
 
-    let mut sorted_language_names = 
-            get_language_names_as_sorted_vec_according_to_how_much_they_appeared(languages_metadata_map);
+    let mut sorted_language_names = get_language_names_as_sorted_vec_according_to_how_much_they_appeared(languages_metadata_map);
+    let biggest_prefix_standard_spaces = get_biggest_prefix_standard_spaces(&sorted_language_names, &languages_metadata_map);
 
-    print_individually(&sorted_language_names, &content_info_map, languages_metadata_map);
+    print_individually(&sorted_language_names, &content_info_map, languages_metadata_map, biggest_prefix_standard_spaces);
 
     if languages_metadata_map.len() > 1 {
-        print_sum(&content_info_map, &languages_metadata_map);
+        print_sum(&content_info_map, &languages_metadata_map, biggest_prefix_standard_spaces);
         print_visual_overview(&mut sorted_language_names, content_info_map, languages_metadata_map, config);
     }
 }
 
 
-fn print_individually(sorted_languages_map: &[String], content_info_map: &HashMap<String,LanguageContentInfo>,
-     languages_metadata_map: &HashMap<String, LanguageMetadata>)
+fn print_individually(sorted_languages: &[String], content_info_map: &HashMap<String,LanguageContentInfo>,
+     languages_metadata_map: &HashMap<String, LanguageMetadata>, biggest_prefix_standard_spaces: usize)
 {
     fn get_size_text(metadata: &LanguageMetadata) -> String {
         let (size, size_desc) = get_size_and_formatted_size_text(metadata.bytes, "total");
@@ -46,17 +46,19 @@ fn print_individually(sorted_languages_map: &[String], content_info_map: &HashMa
 
     println!("{}.\n", "Details".underline().bold());
     
-    let max_files_num_size = languages_metadata_map.values().map(|x| x.files).max().unwrap().to_string().len();
     let mut max_line_stats_len = STANDARD_LINE_STATS_LEN;
     let (mut titles_vec, mut lines_stats_vec, mut lines_stats_len_vec, mut size_stats_vec,
             mut keywords_stats_vec) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
-    for lang_name in sorted_languages_map {
+
+    for lang_name in sorted_languages {
         let content_info = content_info_map.get(lang_name).unwrap();
         let metadata = languages_metadata_map.get(lang_name).unwrap();
 
         let files_str = with_seperators(metadata.files);
-        let title = format!("{}{}{}{} {}  -> ",lang_name.bold(), " ".repeat(7-lang_name.len()),
-                " ".repeat((max_files_num_size+1)-files_str.len()), files_str, colored_word("files"));
+        let prefix_standard_spaces = lang_name.chars().count() + metadata.files.to_string().chars().count() +
+                 utils::num_of_seperators(metadata.files); 
+        let title = format!("{}   {}{} {}  -> ",lang_name.bold(), " ".repeat(biggest_prefix_standard_spaces - prefix_standard_spaces),
+                 files_str, colored_word("files"));
         titles_vec.push(title);
 
         let code_lines_percentage = if content_info.lines > 0 {content_info.code_lines as f64 / content_info.lines as f64 * 100f64} else {0f64};
@@ -73,7 +75,7 @@ fn print_individually(sorted_languages_map: &[String], content_info_map: &HashMa
                  code_lines_percentage, extra_lines_str));
         size_stats_vec.push(get_size_text(metadata));
         
-        keywords_stats_vec.push(get_keywords_as_str(&content_info.keyword_occurences, max_files_num_size));
+        keywords_stats_vec.push(get_keywords_as_str(&content_info.keyword_occurences, biggest_prefix_standard_spaces));
     }
 
     for i in 0..lines_stats_vec.len() {
@@ -89,7 +91,8 @@ fn print_individually(sorted_languages_map: &[String], content_info_map: &HashMa
 }
 
 
-fn print_sum(content_info_map: &HashMap<String,LanguageContentInfo>, languages_metadata_map: &HashMap<String,LanguageMetadata>) 
+fn print_sum(content_info_map: &HashMap<String,LanguageContentInfo>, languages_metadata_map: &HashMap<String,LanguageMetadata>,
+    biggest_prefix_standard_spaces: usize) 
 {
     let (mut total_files, mut total_lines, mut total_code_lines, mut total_bytes) = (0, 0, 0,0);
     languages_metadata_map.values().for_each(|e| {total_files += e.files; total_bytes += e.bytes});
@@ -100,19 +103,18 @@ fn print_sum(content_info_map: &HashMap<String,LanguageContentInfo>, languages_m
     let (total_size, total_size_descr) = get_size_and_formatted_size_text(total_bytes, "total");
     let (average_size, average_size_descr) = get_size_and_formatted_size_text(total_bytes / total_files, "average");
 
-    let max_files_num_size = languages_metadata_map.values().map(|x| x.files).max().unwrap().to_string().len();
-
     let keywords_sum_map = create_keyword_sum_map(content_info_map);
-    let keywords_line = get_keywords_as_str(&keywords_sum_map, max_files_num_size);
+    let keywords_line = get_keywords_as_str(&keywords_sum_map, biggest_prefix_standard_spaces);
 
-    let title = format!("{}   {}{} {}  -> ","total".bold()," ".repeat(max_files_num_size+1 -total_files_str.len()),total_files_str,colored_word("files"));
+    let spaces = biggest_prefix_standard_spaces - (5 + total_files_str.len());
+    let title = format!("{}   {}{} {}  -> ","total".bold()," ".repeat(spaces),total_files_str,colored_word("files"));
     let code_lines_percentage = if total_lines > 0 {total_code_lines as f64 / total_lines as f64 * 100f64} else {0f64};
     let size_text = format!("{:.1} {} - {:.1} {}",total_size,total_size_descr,average_size,average_size_descr);
 
     let line_len = STANDARD_LINE_STATS_LEN + total_files_str.len() + total_code_lines_str.len() + total_extra_lines_str.len() +
             total_size.to_string().len() + average_size.to_string().len() + 47;
     println!("{} ","-".repeat(line_len));
-    
+
     let info = format!("{} {} {{{} code ({:.2}%) + {} extra}}  |  {}\n",colored_word("lines"), total_lines_str,total_code_lines_str,
             code_lines_percentage, total_extra_lines_str, size_text);
 
@@ -362,8 +364,8 @@ fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize], 
     let mut line = String::with_capacity(150);
     line.push_str(&format!("{}    ",prefix));
     for (i,percent) in percentages.iter().enumerate() {
-        let str_perc = format!("{:.1}",percent);
-        line.push_str(&format!("{}{}% ", " ".repeat(4-str_perc.len()), str_perc));
+        let str_perc = format!("{:.2}",percent);
+        line.push_str(&format!("{}{}% ", " ".repeat(5-str_perc.len()), str_perc));
         if config.no_visual {
             line.push_str(&languages_name[i]);
         } else {
@@ -457,23 +459,27 @@ fn get_percentages(numbers: &[usize]) -> Vec<f64> {
     let mut sum = 0.0;
     for (counter,files) in numbers.iter().enumerate() {
         if counter == numbers.len() - 1 {
-            let rounded = {
-                if sum > 99.89 {
-                    0.0
-                } else {
-                    ((100f64 - sum) * 10f64).round() / 10f64
-                }
-            };
+            let rounded = ((100f64 - sum) * 100f64).round() / 100f64; 
             language_percentages.push(rounded);
         } else {
             let percentage = *files as f64/total_files as f64;
-            let canonicalized = (percentage * 1000f64).round() / 10f64;
+            let canonicalized = (percentage * 10000f64).round() / 100f64;
             sum += canonicalized;
             language_percentages.push(canonicalized);
         }
     }
     language_percentages
 }
+
+fn get_biggest_prefix_standard_spaces(sorted_language_names: &[String], languages_metadata_map: &HashMap<String, LanguageMetadata>) -> usize {
+    let longest_lang_name = sorted_language_names.iter().map(|x| x.chars().count()).max().unwrap();
+    let longest_lang_name = max(longest_lang_name,5);
+    let total_files: usize = languages_metadata_map.iter().map(|meta| meta.1.files).sum();
+    let total_files_digits = total_files.to_string().chars().count();
+    let biggest_prefix_standard_spaces = longest_lang_name + total_files_digits + utils::num_of_seperators(total_files);
+    biggest_prefix_standard_spaces
+}
+
 
 #[cfg(test)]
 mod tests {
