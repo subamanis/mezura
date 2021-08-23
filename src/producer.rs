@@ -5,25 +5,25 @@ use crate::*;
 pub fn add_relevant_files(files_list :LinkedListRef, languages_metadata_map: &mut HashMap<String,LanguageMetadata>, finish_condition: BoolRef, 
     languages: &LanguageMapRef, config: &Configuration) -> (usize,usize) 
 {
-   let path = Path::new(&config.path); 
-   if path.is_file() {
-       if let Some(x) = path.extension() {
-           if let Some(y) = x.to_str() {
-               if languages.contains_key(y) {
-                   languages_metadata_map.get_mut(y).unwrap().add_file_meta(path.metadata().map_or(0, |m| m.len() as usize));
-                   files_list.lock().unwrap().push_front(config.path.to_string());
-                   finish_condition.store(true, Ordering::Relaxed);
-                   return (1,1);
-               }
-           }
-       }
-       finish_condition.store(true, Ordering::Relaxed);
-       (0,0)
-   } else {
-       let (total_files, relevant_files) = search_dir_and_add_files_to_list(&files_list, languages_metadata_map, &languages, config);
-       finish_condition.store(true, Ordering::Relaxed);
-       (total_files,relevant_files)
-   }
+    let path = Path::new(&config.path); 
+    if path.is_file() {
+        if let Some(x) = path.extension() {
+            if let Some(y) = x.to_str() {
+                if let Some(lang_name) = find_lang_with_this_identifier(languages, y) {
+                    languages_metadata_map.get_mut(&lang_name).unwrap().add_file_meta(path.metadata().map_or(0, |m| m.len() as usize));
+                    files_list.lock().unwrap().push_front(config.path.to_string());
+                    finish_condition.store(true, Ordering::Relaxed);
+                    return (1,1);
+                }
+            }
+        }
+        finish_condition.store(true, Ordering::Relaxed);
+        (0,0)
+    } else {
+        let (total_files, relevant_files) = search_dir_and_add_files_to_list(&files_list, languages_metadata_map, &languages, config);
+        finish_condition.store(true, Ordering::Relaxed);
+        (total_files,relevant_files)
+    }
 } 
 
 fn search_dir_and_add_files_to_list(files_list: &LinkedListRef, languages_metadata_map: &mut HashMap<String,LanguageMetadata>,

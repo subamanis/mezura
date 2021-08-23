@@ -85,10 +85,10 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     Ok(metrics)
 }
 
-pub fn find_lang_with_this_identifier(extensions: &LanguageMapRef, wanted_identifier: &str) -> Option<String> {
-    for ext in extensions.iter() {
-        if ext.1.extensions.iter().any(|x| x == wanted_identifier) {
-            return Some(ext.0.to_owned());
+pub fn find_lang_with_this_identifier(languages: &LanguageMapRef, wanted_identifier: &str) -> Option<String> {
+    for lang in languages.iter() {
+        if lang.1.extensions.iter().any(|x| x == wanted_identifier) {
+            return Some(lang.0.to_owned());
         }
     }
     None
