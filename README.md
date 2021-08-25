@@ -125,7 +125,7 @@ Below there is a list with all the commands-flags that the program accepts.
     Doing so, will run the program and also create a .txt configuration file,
     inside 'data/config/' with the specified name, that can later be loaded with the '--load' command.
 
-<b>--load</b>
+--load
     One argument in the form of a file name (whitespace allowed, without an extension)
     
     Assosiated with the '--save' command, this comman is used to load the flags of 
@@ -191,7 +191,7 @@ Additionally:
 
 With that said, it is important to mention the following limitations:
 
-- The program cannot understand language specific syntax or details, this would require a handwritten, complex, language-specific parser for most different languages. For example, in a .php file that contains html or js, the destinction will not be made. Also, the keyword counting doesn't take any measures to ensure that a valid keyword has the user-intended meaning. For example the word "class" may also appear in the syntax of a programming language as a semantic different than declaring a class. This may lead to some false positives.
+- The program cannot understand language specific syntax or details, this would require a handwritten, complex, language-specific parser for most different languages. For example, in a .php file that contains html or js, the destinction will not be made. Also, the keyword counting doesn't take any measures to ensure that a valid keyword has the user-intended meaning. For example, the word "class" may appear in the syntax of a programming language with an additional use than declaring a class. This may lead to some false positives.
 
 - The program assumes that if a line contains any odd number of the same string symbols, then this is an open multiline string. This works for most cases but it may create inaccuracies, for example if a line in python has """ then the program will consider a multiline string everything until the next " symbol and not the next """ symbol. If a language doesn't support multiline strings, then you would not expect to see odd number of string symbols either way in a valid syntnax.
 
