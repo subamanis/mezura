@@ -459,8 +459,12 @@ fn get_percentages(numbers: &[usize]) -> Vec<f64> {
     let mut sum = 0.0;
     for (counter,files) in numbers.iter().enumerate() {
         if counter == numbers.len() - 1 {
-            let rounded = ((100f64 - sum) * 100f64).round() / 100f64; 
-            language_percentages.push(rounded);
+            if sum > 99.99 {
+                language_percentages.push(0.0);
+            } else {
+                let rounded = ((100f64 - sum) * 100f64).round() / 100f64; 
+                language_percentages.push(rounded);
+            }
         } else {
             let percentage = *files as f64/total_files as f64;
             let canonicalized = (percentage * 10000f64).round() / 100f64;
@@ -525,7 +529,7 @@ mod tests {
         assert_eq!(vec![100f64,0f64,0f64], get_lines_percentages(&content_info_map, &ext_names));
         let content_info_map = hashmap!("cs".to_string() => LanguageContentInfo::dummy(20),
         "java".to_string() => LanguageContentInfo::dummy(20), "py".to_string() => LanguageContentInfo::dummy(20));
-        assert_eq!(vec![33.3f64,33.3f64,33.4f64], get_lines_percentages(&content_info_map, &ext_names));
+        assert_eq!(vec![33.33f64,33.33f64,33.34f64], get_lines_percentages(&content_info_map, &ext_names));
         
         let ext_names = ["py".to_string(),"java".to_string(),"cs".to_string(),"rs".to_string()];
 
@@ -536,18 +540,18 @@ mod tests {
         let content_info_map = hashmap!("cs".to_string() => LanguageContentInfo::dummy(100),
             "java".to_string() => LanguageContentInfo::dummy(100), "py".to_string() => LanguageContentInfo::dummy(100),
             "rs".to_string() => LanguageContentInfo::dummy(0));
-        assert_eq!(vec![33.3f64,33.3f64,33.3f64,0f64], get_lines_percentages(&content_info_map, &ext_names));
+        assert_eq!(vec![33.33,33.33,33.33,0.01], get_lines_percentages(&content_info_map, &ext_names));
         let content_info_map = hashmap!("cs".to_string() => LanguageContentInfo::dummy(201),
             "java".to_string() => LanguageContentInfo::dummy(200), "py".to_string() => LanguageContentInfo::dummy(200),
             "rs".to_string() => LanguageContentInfo::dummy(0));
-        assert_eq!(vec![33.3f64,33.3f64,33.4f64,0f64], get_lines_percentages(&content_info_map, &ext_names));
+        assert_eq!(vec![33.28,33.28,33.44,0.0], get_lines_percentages(&content_info_map, &ext_names));
 
         let ext_names = ["py".to_string(),"java".to_string(),"cs".to_string(),"rs".to_string(),"cpp".to_string()];
 
         let content_info_map = hashmap!("cs".to_string() => LanguageContentInfo::dummy(100),
             "java".to_string() => LanguageContentInfo::dummy(100), "py".to_string() => LanguageContentInfo::dummy(0),
             "rs".to_string() => LanguageContentInfo::dummy(0), "cpp".to_string() => LanguageContentInfo::dummy(0));
-        assert_eq!(vec![0f64,50f64,50f64,0f64,0f64], get_lines_percentages(&content_info_map, &ext_names));
+        assert_eq!(vec![0.0,50f64,50f64,0f64,0f64], get_lines_percentages(&content_info_map, &ext_names));
     }
 
     #[test]

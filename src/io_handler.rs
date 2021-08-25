@@ -124,6 +124,7 @@ pub fn parse_supported_languages_to_map(languages_of_interest: &mut Vec<String>)
 
 pub fn parse_config_file(file_name: Option<&str>) -> Result<(PersistentOptions,bool),ParseConfigFileError> {
     let dir_path = DATA_DIR.clone().unwrap() + CONFIG_DIR_NAME;
+
     if !Path::new(&dir_path).is_dir() {
         return Err(ParseConfigFileError::DirNotFound);
     }
@@ -346,12 +347,16 @@ fn parse_file_to_language(mut reader :my_reader::BufReader, buffer :&mut String)
 }
 
 fn try_find_data_dir() -> Option<String> {
-    let abs_path = try_get_folder_of_exe().clone().unwrap_or("".to_owned());
-    let data_in_current = &(abs_path.clone() + "\\data");
-    let data_in_parent = &(abs_path + "\\..\\..\\data");
-    if Path::new(data_in_current).is_dir() {return Some(data_in_current.to_owned())}
-    if Path::new(data_in_parent).is_dir() {return Some(data_in_parent.to_owned())}
-    None
+    if cfg!(test) {
+        return Some(env!("CARGO_MANIFEST_DIR").to_owned() + "\\data")
+    } else {
+        let abs_path = try_get_folder_of_exe().clone().unwrap_or("".to_owned());
+        let data_in_current = &(abs_path.clone() + "\\data");
+        let data_in_parent = &(abs_path + "\\..\\..\\data");
+        if Path::new(data_in_current).is_dir() {return Some(data_in_current.to_owned())}
+        if Path::new(data_in_parent).is_dir() {return Some(data_in_parent.to_owned())}
+        None
+    }
 }
 
 fn try_get_folder_of_exe() -> Option<String> {
