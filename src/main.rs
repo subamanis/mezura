@@ -2,7 +2,7 @@ use std::{path::Path, process, time::{Instant}};
 
 use colored::*;
 
-use code_stats::{config_manager::{self}, Configuration, io_handler, putils::*};
+use mezura::{config_manager::{self}, Configuration, io_handler, putils::*};
 
 fn main() {
     control::set_virtual_terminal(true).unwrap();
@@ -51,7 +51,7 @@ fn main() {
     // println!("{:#?}", languages_map);
 
     let instant = Instant::now();
-    match code_stats::run(config, languages_map) {
+    match mezura::run(config, languages_map) {
         Ok(x) => {
             let perf = format!("\nExecution time: {:.2} secs ", instant.elapsed().as_secs_f32());
             let metrics = match x {

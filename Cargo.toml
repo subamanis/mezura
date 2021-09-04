@@ -1,5 +1,5 @@
 [package]
-name = "code_stats"
+name = "mezura"
 version = "0.1.0"
 authors = ["subamanis <petrospapa21@gmail.com>"]
 edition = "2018"
