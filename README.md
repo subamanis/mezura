@@ -115,18 +115,19 @@ Below there is a list with all the commands-flags that the program accepts.
     the vertical lines that reprisent the percentages.
 
 --save
-    One argument in the form of a file name (whitespace allowed, without an extension)
+    One argument as the file name (whitespace allowed, without an extension, case-insensitive)
 
     If we plan to run the program many times for a project, it can be bothersome to specify,
     all the flags every time, especially if they contain a lot of exclude dirs for example.
     That's why you can specify all the flags once, and add this command to save them
-    as a configuration file. 
+    as a configuration file. If you specify a '--path' command, it will save the absolute
+    version of the specified path, otherwise, no path will be specified.
 
     Doing so, will run the program and also create a .txt configuration file,
     inside 'data/config/' with the specified name, that can later be loaded with the '--load' command.
 
 --load
-    One argument in the form of a file name (whitespace allowed, without an extension)
+    One argument as the file name (whitespace allowed, without an extension, case-insensitive)
     
     Assosiated with the '--save' command, this comman is used to load the flags of 
     an existing configuration file from the 'data/config/' directory. 

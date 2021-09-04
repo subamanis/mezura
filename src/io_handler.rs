@@ -31,7 +31,7 @@ pub enum ParseConfigFileError {
 pub struct PersistentOptions {
     pub path                     : Option<String>,
     pub exclude_dirs             : Option<Vec<String>>,
-    pub languages_of_interest   : Option<Vec<String>>,
+    pub languages_of_interest    : Option<Vec<String>>,
     pub threads                  : Option<usize>,
     pub braces_as_code           : Option<bool>,
     pub should_search_in_dotted  : Option<bool>,

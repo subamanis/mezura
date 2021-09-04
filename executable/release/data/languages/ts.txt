@@ -1,8 +1,8 @@
 Language
-JS
+TS
 
 Extensions
-js
+ts
 
 String symbols
 " '
@@ -19,3 +19,8 @@ Keyword
     classes
     ALIASES
     class
+Keyword
+    NAME
+    enums
+    ALIASES
+    enum

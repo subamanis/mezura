@@ -26,3 +26,4 @@ Cargo.lock
 
 # Custom
 roadmap.txt
+data/config/*

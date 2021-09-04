@@ -1,4 +1,4 @@
-use std::{path::Path, process};
+use std::{path::{Path, PathBuf}, process};
 
 use colored::Colorize;
 
@@ -81,7 +81,7 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
             return Err(ArgParsingError::InvalidPath);
         }
 
-        path = Some(path_str);
+        path = Some(convert_to_absolute(&path_str));
     }
 
     let mut custom_config = None;
@@ -125,7 +125,8 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
             if path_str.is_empty() || !is_valid_path(path_str) {
                 return Err(ArgParsingError::IncorrectCommandArgs(PATH.to_owned()))
             }
-            path = Some(path_str.to_owned());
+
+            path = Some(convert_to_absolute(path_str));
         } else if command.starts_with(BRACES_AS_CODE) {
             if has_any_args(command) {
                 return Err(ArgParsingError::IncorrectCommandArgs(BRACES_AS_CODE.to_owned()))
@@ -261,12 +262,28 @@ fn remove_dot_prefix(str: &str) -> &str {
     }
 }
 
-fn is_valid_path(str: &str) -> bool {
-    let path_str = str.trim();
+fn is_valid_path(s: &str) -> bool {
+    let path_str = s.trim();
 
     let p = Path::new(path_str);
     p.is_dir() || p.is_file()
 }
+
+fn convert_to_absolute(s: &str) -> String {
+    let path_str = s.trim();
+
+    let p = Path::new(path_str);
+    if p.is_absolute() {
+        return path_str.to_owned();
+    }
+
+    if let Ok(buf) = std::fs::canonicalize(p) {
+        return buf.to_str().unwrap().to_owned();
+    } else {
+        return path_str.to_owned();
+    }
+}
+
 
 fn print_help_message_and_exit() {
     println!("
@@ -340,18 +357,19 @@ fn print_help_message_and_exit() {
         the vertical lines that reprisent the percentages.
 
     --save
-        One argument in the form of a file name (whitespace allowed, without an extension)
+        One argument as the file name (whitespace allowed, without an extension, case-insensitive)
 
         If we plan to run the program many times for a project, it can be bothersome to specify,
         all the flags every time, especially if they contain a lot of exclude dirs for example.
         That's why you can specify all the flags once, and add this command to save them
-        as a configuration file. 
+        as a configuration file. If you specify a '--path' command, it will save the absolute
+        version of the specified path, otherwise, no path will be specified.
 
         Doing so, will run the program and also create a .txt configuration file,
         inside 'data/config/' with the specified name, that can later be loaded with the --load command.
 
     --load
-        One argument in the form of a file name (whitespace allowed, without an extension)
+        One argument as the file name (whitespace allowed, without an extension, case-insensitive)
         
         Assosiated with the '--save' command, this comman is used to load the flags of 
         an existing configuration file from the 'data/config/' directory. 
@@ -517,6 +535,34 @@ mod tests {
             .set_languages_of_interest(vec!["java".to_owned(),"cs".to_owned()]),
             create_config_from_args("./   --exclude ex2  --languages .java    .cs").unwrap()
         );
+    }
+
+    #[test]
+    fn test_absolute_conversion() {
+        let path = "./";
+        let abs = convert_to_absolute(path);
+        assert!(Path::new(path).is_relative());
+        assert!(Path::new(&abs).is_absolute());
+
+        let path = "./src";
+        let abs = convert_to_absolute(path);
+        assert!(Path::new(path).is_relative());
+        assert!(Path::new(&abs).is_absolute());
+
+        let path = "./src/../src";
+        let abs = convert_to_absolute(path);
+        assert!(Path::new(path).is_relative());
+        assert!(Path::new(&abs).is_absolute());
+
+        let path = "src";
+        let abs = convert_to_absolute(path);
+        assert!(Path::new(path).is_relative());
+        assert!(Path::new(&abs).is_absolute());
+
+        let path = "src/putils";
+        let abs = convert_to_absolute(path);
+        assert!(Path::new(path).is_relative());
+        assert!(Path::new(&abs).is_absolute());
     }
 }
 
