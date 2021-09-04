@@ -171,14 +171,14 @@ Multiline comment end symbol
 <a symbol like: */>
 
 Keyword
-    name
+    NAME
     <the name of the keyword to be shown in the results, like: classes>
-    aliases
+    ALIASES
     <any word that constitutes an instance of this keyword, like: class, record>
 Keyword
-    name
+    NAME
     <the name of the keyword to be shown in the results, like: classes>
-    aliases
+    ALIASES
     <any word that constitutes an instance of this keyword, like: class, record>
 ```
 
