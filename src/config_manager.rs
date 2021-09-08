@@ -36,7 +36,7 @@ pub struct Configuration {
     pub no_visual: bool
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ArgParsingError {
     NoArgsProvided,
     MissingTargetPath,
@@ -50,28 +50,27 @@ pub fn read_args_cmd() -> Result<Configuration,ArgParsingError> {
     let args  = std::env::args().skip(1).collect::<Vec<String>>();
     if args.is_empty() {return Err(ArgParsingError::NoArgsProvided)}
     let line = args.join(" ");
-    let line = line.trim();
-    if line.is_empty() {return Err(ArgParsingError::NoArgsProvided)}
 
-    if line == "--help" {print_help_message_and_exit()}
-
-    create_config_from_args(line)
+    create_config_from_args(&line)
 }
 
 pub fn read_args_console() -> Result<Configuration,ArgParsingError> {
     let mut line = String::with_capacity(30);
     std::io::stdin().read_line(&mut line).unwrap();
-    line = line.trim().to_owned();
-    if line.is_empty() {
-        Err(ArgParsingError::NoArgsProvided)
-    } else {
-        if line == "--help" {print_help_message_and_exit()} 
 
-        create_config_from_args(&line)
-    }
+    create_config_from_args(&line)
 }
 
 fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError> {
+    let line = line.trim();
+    if line.is_empty() {
+        return Err(ArgParsingError::NoArgsProvided)
+    }
+
+    if line == "--help" {
+        print_help_message_and_exit()
+    }
+
     let mut path = None;
     let options = line.split("--").collect::<Vec<_>>();
 
@@ -102,7 +101,7 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
             }    
             languages_of_interest = Some(vec);
         } else if command.starts_with(THREADS) {
-            match parse_usize_command(command) {
+            match parse_threads_command(command) {
                 Ok(x) => threads = x,
                 Err(_) => return Err(ArgParsingError::IncorrectCommandArgs(THREADS.to_owned()))
             }
@@ -175,7 +174,7 @@ fn has_any_args(command: &str) -> bool {
     command.split(' ').skip(1).filter_map(|x| get_if_not_empty(x.trim())).count() != 0
 }
 
-fn parse_usize_command(command: &str) -> Result<Option<usize>,()> {
+fn parse_threads_command(command: &str) -> Result<Option<usize>,()> {
     let vec = command.split(' ').skip(1).filter_map(|x| get_if_not_empty(x.trim())).collect::<Vec<_>>();
     if vec.len() != 1 {
         return Err(());
@@ -234,21 +233,6 @@ fn combine_specified_config_options(custom_config: Option<PersistentOptions>, pa
     args_builder
 }
 
-fn get_distinct_arguments(line: String) -> Vec<String> {
-    if let Some(dirs_pos) = line.find("--exclude") {
-        let parts = line.split_at(dirs_pos);
-        let mut args = vec![parts.0.trim().to_owned()];
-        for dir in parts.1.split_whitespace() {
-            if dir != "--dirs"{
-                args.push(dir.to_owned());
-            }
-        }
-        args
-    } else {
-        vec![line.trim().to_owned()]
-    }
-}
-
 fn get_if_not_empty(str: &str) -> Option<String> {
     if str.is_empty() {None}
     else {Some(str.to_owned())}
@@ -278,9 +262,9 @@ fn convert_to_absolute(s: &str) -> String {
     }
 
     if let Ok(buf) = std::fs::canonicalize(p) {
-        return buf.to_str().unwrap().to_owned();
+        buf.to_str().unwrap().to_owned()
     } else {
-        return path_str.to_owned();
+        path_str.to_owned()
     }
 }
 
@@ -450,7 +434,7 @@ impl ConfigurationBuilder {
 }
 
 impl Configuration {
-    pub fn new(path: String) -> Configuration {
+    pub fn new(path: String) -> Self {
         Configuration {
             path,
             exclude_dirs: Vec::new(),
@@ -463,28 +447,38 @@ impl Configuration {
         }
     }
 
-    pub fn set_exclude_dirs(&mut self, exclude_dirs: Vec<String>) -> &mut Configuration {
+    pub fn set_exclude_dirs(&mut self, exclude_dirs: Vec<String>) -> &mut Self {
         self.exclude_dirs = exclude_dirs;
         self
     }
 
-    pub fn set_languages_of_interest(&mut self, languages_of_interest: Vec<String>) -> &mut Configuration {
+    pub fn set_languages_of_interest(&mut self, languages_of_interest: Vec<String>) -> &mut Self {
         self.languages_of_interest = languages_of_interest;
         self
     }
 
-    pub fn set_threads(&mut self, threads: usize) -> &mut Configuration {
+    pub fn set_threads(&mut self, threads: usize) -> &mut Self {
         self.threads = threads;
         self
     }
 
-    pub fn set_braces_as_code(&mut self, braces_as_code: bool) -> &mut Configuration {
+    pub fn set_braces_as_code(&mut self, braces_as_code: bool) -> &mut Self {
         self.braces_as_code = braces_as_code;
         self
     }
 
-    pub fn set_should_search_in_dotted(&mut self, should_search_in_dotted: bool) -> &mut Configuration {
+    pub fn set_should_search_in_dotted(&mut self, should_search_in_dotted: bool) -> &mut Self {
         self.should_search_in_dotted = should_search_in_dotted;
+        self
+    }
+    
+    pub fn set_should_show_faulty_files(&mut self, should_show_faulty_files: bool) -> &mut Self {
+        self.should_show_faulty_files = should_show_faulty_files;
+        self
+    }
+
+    pub fn set_should_enable_visuals(&mut self, should_enable_visuals: bool) -> &mut Self {
+        self.no_visual = should_enable_visuals;
         self
     }
 }
@@ -509,32 +503,68 @@ mod tests {
 
     #[test]
     fn test_cmd_arg_parsing() {
-        assert!(create_config_from_args("path --exclude   --languages .java    .cs").is_err());
-        assert!(create_config_from_args("path --exclude--languages .java    .cs").is_err());
-        assert!(create_config_from_args("path --languages .java .cs --exclude").is_err());
-        assert!(create_config_from_args("path --something").is_err());
-        assert!(create_config_from_args("path --threads 3 --something --exclude e").is_err());
+        assert_eq!(Err(ArgParsingError::NoArgsProvided), create_config_from_args(""));
+        assert_eq!(Err(ArgParsingError::NoArgsProvided), create_config_from_args("   "));
+        assert_eq!(Err(ArgParsingError::InvalidPath), create_config_from_args("random"));
+        assert_eq!(Err(ArgParsingError::InvalidPath), create_config_from_args("./ random"));
+        assert_eq!(Err(ArgParsingError::UnrecognisedParameter("random".to_owned())), create_config_from_args("--random"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("path".to_owned())), create_config_from_args("--path"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("path".to_owned())), create_config_from_args("--path   "));
+        assert_eq!(Err(ArgParsingError::UnrecognisedParameter("random".to_owned())), create_config_from_args("--path ./ --random"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("path".to_owned())), create_config_from_args("--path ./ -show-faulty-files"));
+        assert_eq!(Err(ArgParsingError::DoublePath), create_config_from_args("./ --path ./"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 0"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 9"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 2 2"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads A"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("show-faulty-files".to_owned())), create_config_from_args("./ --threads 1 --show-faulty-files 1"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("show-faulty-files".to_owned())), create_config_from_args("./ --threads 1 --show-faulty-files a"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("search-in-dotted".to_owned())), create_config_from_args("./ --threads 1 --search-in-dotted a"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("no-visual".to_owned())), create_config_from_args("./ --threads 1 --no-visual a"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("braces-as-code".to_owned())), create_config_from_args("./ --threads 1 --braces-as-code a"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned())), create_config_from_args("./ --exclude"));
 
-        assert_eq!(Configuration::new("./".to_owned()),create_config_from_args("./").unwrap());
+        assert_eq!(Configuration::new(convert_to_absolute("./")), create_config_from_args("./").unwrap());
+        assert_eq!(Configuration::new(convert_to_absolute("./")), create_config_from_args("--path ./").unwrap());
+        assert_eq!(*Configuration::new(convert_to_absolute("./")).set_threads(1), create_config_from_args("./ --threads 1").unwrap());
+        assert_eq!(*Configuration::new(convert_to_absolute("./")).set_threads(1), create_config_from_args("./ --threads   1   ").unwrap());
+        assert_eq!(*Configuration::new(convert_to_absolute("./")).set_threads(1).set_braces_as_code(true),
+                create_config_from_args("./ --threads 1 --braces-as-code").unwrap());
+        assert_eq!(*Configuration::new(convert_to_absolute("./")).set_should_search_in_dotted(true),
+                create_config_from_args("./ --search-in-dotted").unwrap());
+        assert_eq!(*Configuration::new(convert_to_absolute("./")).set_should_enable_visuals(true),
+                create_config_from_args("./ --no-visual").unwrap());
+        assert_eq!(*Configuration::new(convert_to_absolute("./")).set_should_show_faulty_files(true),
+                create_config_from_args("./ --show-faulty-files").unwrap());
+        assert_eq!(*Configuration::new(convert_to_absolute("./")).set_exclude_dirs(vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]),
+                create_config_from_args("./ --exclude a b c").unwrap());
+        assert_eq!(*Configuration::new(convert_to_absolute("./")).set_languages_of_interest(vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]),
+                create_config_from_args("./ --languages a b c").unwrap());
+    }
 
-        assert_eq!(*Configuration::new("./".to_owned())
-            .set_exclude_dirs(vec!["ex1".to_owned(),"ex2".to_owned()])
-            .set_languages_of_interest(vec!["java".to_owned(),"cs".to_owned()])
-            .set_threads(4),
-            create_config_from_args("./ --threads 4 --exclude ex1 ex2 --languages java cs").unwrap()
-        );
+    #[test]
+    fn test_has_any_args() {
+        assert!(has_any_args("cmnd a"));
+        assert!(has_any_args("cmnd    a"));
+        assert!(has_any_args("cmnd    a   "));
+        assert!(has_any_args("cmnd a a"));
 
-        assert_eq!(*Configuration::new("./".to_owned())
-            .set_exclude_dirs(vec!["ex2".to_owned()]) 
-            .set_languages_of_interest(vec!["java".to_owned(),"cs".to_owned()]),
-            create_config_from_args("./   --exclude ex2  --languages java    cs").unwrap()
-        );
+        assert!(!has_any_args("cmnd"));
+        assert!(!has_any_args("cmnd    "));
+    }
 
-        assert_eq!(*Configuration::new("./".to_owned())
-            .set_exclude_dirs(vec!["ex2".to_owned()]) 
-            .set_languages_of_interest(vec!["java".to_owned(),"cs".to_owned()]),
-            create_config_from_args("./   --exclude ex2  --languages .java    .cs").unwrap()
-        );
+    #[test]
+    fn test_parse_threads_command() {
+        assert_eq!(Ok(Some(1)), parse_threads_command("cmnd 1"));
+        assert_eq!(Ok(Some(1)), parse_threads_command("cmnd    1"));
+        assert_eq!(Ok(Some(1)), parse_threads_command("cmnd    1   "));
+
+        assert_eq!(Err(()), parse_threads_command("cmnd 1 3 3"));
+        assert_eq!(Err(()), parse_threads_command("cmnd -1 0"));
+        assert_eq!(Err(()), parse_threads_command("cmnd"));
+        assert_eq!(Err(()), parse_threads_command("cmnd    "));
+        assert_eq!(Err(()), parse_threads_command("cmnd A"));
     }
 
     #[test]

@@ -48,8 +48,6 @@ fn main() {
         }
     };
 
-    // println!("{:#?}", languages_map);
-
     let instant = Instant::now();
     match mezura::run(config, languages_map) {
         Ok(x) => {

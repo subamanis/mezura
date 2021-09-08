@@ -39,7 +39,7 @@ pub fn num_of_seperators(i: usize) -> usize {
     let mut input = i;
     let mut commas = 0;
     loop {
-        input = input / 1000;
+        input /= 1000;
         if input == 0 {break;}
         commas += 1;
     }

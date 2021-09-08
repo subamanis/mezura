@@ -480,8 +480,8 @@ fn get_biggest_prefix_standard_spaces(sorted_language_names: &[String], language
     let longest_lang_name = max(longest_lang_name,5);
     let total_files: usize = languages_metadata_map.iter().map(|meta| meta.1.files).sum();
     let total_files_digits = total_files.to_string().chars().count();
-    let biggest_prefix_standard_spaces = longest_lang_name + total_files_digits + utils::num_of_seperators(total_files);
-    biggest_prefix_standard_spaces
+
+    longest_lang_name + total_files_digits + utils::num_of_seperators(total_files)
 }
 
 
