@@ -10,8 +10,9 @@ lazy_static! {
 }
 
 const DEFAULT_CONFIG_FILE_NAME : &str = "default";
-const CONFIG_DIR_NAME : &str = "/config";
-const LANGUAGE_DIR_NAME : &str = "/languages";
+const CONFIG_DIR : &str = "/config/";
+const LANGUAGE_DIR : &str = "/languages/";
+const TEST_CONFIG_DIR : &str = "/test_dir/config/";
 
 #[derive(Debug)]
 pub enum ParseLanguageError {
@@ -27,8 +28,7 @@ pub enum ParseConfigFileError {
     IOError
 }
 
-//It is a different struct that ConfigurationBuilder, since we need the ability to distinguish flags
-//given as arguments and configuration flags (like save and load are not available as config flags)
+//It is a different struct that ConfigurationBuilder, since we could want ability to seperate cmd and config flags
 #[derive(Debug)]
 pub struct PersistentOptions {
     pub dirs                     : Option<Vec<String>>,
@@ -45,7 +45,7 @@ pub struct PersistentOptions {
 pub fn parse_supported_languages_to_map(languages_of_interest: &mut Vec<String>)
         -> Result<(HashMap<String,Language>, Vec<String>, Vec<String>), ParseLanguageError> 
 {
-    let dirs = fs::read_dir(DATA_DIR.clone().unwrap() + LANGUAGE_DIR_NAME).unwrap();
+    let dirs = fs::read_dir(DATA_DIR.clone().unwrap() + LANGUAGE_DIR).unwrap();
     
     let mut languages_of_interest_appearance = HashMap::<String,bool>::new();
     for lang_name in languages_of_interest.iter() {
@@ -127,9 +127,9 @@ pub fn parse_supported_languages_to_map(languages_of_interest: &mut Vec<String>)
 pub fn parse_config_file(file_name: Option<&str>) -> Result<PersistentOptions,ParseConfigFileError> {
     let dir_path = {
         if cfg!(test) {
-            env!("CARGO_MANIFEST_DIR").to_owned() + "/test_dir/config"
+            env!("CARGO_MANIFEST_DIR").to_owned() + TEST_CONFIG_DIR
         } else {
-            DATA_DIR.clone().unwrap() + CONFIG_DIR_NAME
+            DATA_DIR.clone().unwrap() + CONFIG_DIR
         }
     };
 
@@ -138,7 +138,7 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<PersistentOptions,Pa
     }
 
     let file_name = if let Some(x) = file_name {x} else {DEFAULT_CONFIG_FILE_NAME};
-    let file_path = (dir_path + "/" + file_name + ".txt").replace("\\", "/");
+    let file_path = (dir_path + file_name + ".txt").replace("\\", "/");
     let mut reader = BufReader::new(match fs::File::open(file_path){
         Ok(f) => f,
         Err(_) => return Err(ParseConfigFileError::FileNotFound(file_name.to_owned()))
@@ -193,9 +193,9 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<PersistentOptions,Pa
 pub fn save_config_to_file(config_name: &str, config: &Configuration) -> std::io::Result<()> {
     let file_name = {
         if cfg!(test) {
-            (env!("CARGO_MANIFEST_DIR").to_owned() + "/test_dir/config/" + config_name + ".txt").replace("\\", "/")
+            (env!("CARGO_MANIFEST_DIR").to_owned() + TEST_CONFIG_DIR + config_name + ".txt").replace("\\", "/")
         } else {
-            (DATA_DIR.clone().unwrap() + CONFIG_DIR_NAME + "/" + config_name + ".txt").replace("\\", "/")
+            (DATA_DIR.clone().unwrap() + CONFIG_DIR  + config_name + ".txt").replace("\\", "/")
         }
     };
     let mut writer = BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(file_name)?);

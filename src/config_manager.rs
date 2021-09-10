@@ -347,27 +347,15 @@ fn print_help_message_and_exit() {
     --save
         One argument as the file name (whitespace allowed, without an extension, case-insensitive)
 
-        If we plan to run the program many times for a project, it can be bothersome to specify,
-        all the flags every time, especially if they contain a lot of target and exclude dirs for example.
-        That's why you can specify all the flags once, and add this command to save them
-        as a configuration file. If you specify a '--dirs' command, it will save the absolute
-        version of the specified path in the config file, otherwise, no path will be specified.
-
         Doing so, will run the program and also create a .txt configuration file,
         inside 'data/config/' with the specified name, that can later be loaded with the --load command.
 
     --load
         One argument as the file name (whitespace allowed, without an extension, case-insensitive)
-        
+
         Assosiated with the '--save' command, this command is used to load the flags of 
         an existing configuration file from the 'data/config/' directory. 
 
-        There is already a configuration file named 'default.txt' that contains the default of the program,
-        and gets automatically loaded with each program run. You can modify it to add common flags
-        so you dont have to create the same configurations for different projects.
-
-        If you provide in the cmd a flag that exists also in the specified config file,
-        then the value of the cmd is used. The priority is cmd> custom config> default config. 
         You can combine the '--load' and '--save' commands to modify a configuration file.
     ");
     
@@ -378,14 +366,14 @@ fn print_help_message_and_exit() {
 
 #[derive(Debug)]
 struct ConfigurationBuilder {
-    pub dirs: Option<Vec<String>>,
-    pub exclude_dirs: Option<Vec<String>>,
-    pub languages_of_interest: Option<Vec<String>>,
-    pub threads: Option<usize>,
-    pub braces_as_code: Option<bool>,
-    pub should_search_in_dotted: Option<bool>,
+    pub dirs:                     Option<Vec<String>>,
+    pub exclude_dirs:             Option<Vec<String>>,
+    pub languages_of_interest:    Option<Vec<String>>,
+    pub threads:                  Option<usize>,
+    pub braces_as_code:           Option<bool>,
+    pub should_search_in_dotted:  Option<bool>,
     pub should_show_faulty_files: Option<bool>,
-    pub no_visual: Option<bool>
+    pub no_visual:                Option<bool>
 }
 
 impl ConfigurationBuilder {
@@ -523,9 +511,7 @@ mod tests {
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 9"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 2 2"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads A"));
-
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("show-faulty-files".to_owned())), create_config_from_args("./ --threads 1 --show-faulty-files 1"));
-
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("show-faulty-files".to_owned())), create_config_from_args("./ --threads 1 --show-faulty-files a"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("search-in-dotted".to_owned())), create_config_from_args("./ --threads 1 --search-in-dotted a"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("no-visual".to_owned())), create_config_from_args("./ --threads 1 --no-visual a"));
