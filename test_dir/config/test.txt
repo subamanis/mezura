@@ -1,0 +1,26 @@
+Auto-generated config file.
+
+===> dirs
+C:/Some/Path/a,
+C:/Some/Path/b
+C:/Some/Path/c,C:/Some/Path/d
+
+===> exclude
+a,b,
+c.txt
+d.txt
+
+===> threads
+4
+
+===> braces-as-code
+yes
+
+===> search-in-dotted
+no
+
+===> show-faulty-files
+no
+
+===> no-visual
+no

@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 #![allow(unused_must_use)]
 #![allow(dead_code)]
 #![allow(non_snake_case)]
@@ -5,7 +7,7 @@
 
 pub mod config_manager;
 pub mod io_handler;
-pub mod putils;
+pub mod utils;
 
 mod file_parser;
 mod result_printer;
@@ -14,7 +16,7 @@ mod producer;
 
 pub use colored::{Colorize,ColoredString};
 pub use config_manager::Configuration;
-pub use putils::*;
+pub use utils::*;
 pub use domain::{Language, LanguageContentInfo, LanguageMetadata, FileStats, Keyword};
 
 pub type LinkedListRef      = Arc<Mutex<LinkedList<String>>>;

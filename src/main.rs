@@ -2,7 +2,7 @@ use std::{path::Path, process, time::{Instant}};
 
 use colored::*;
 
-use mezura::{config_manager::{self}, Configuration, io_handler, putils::*};
+use mezura::{config_manager, io_handler, *, self};
 
 fn main() {
     control::set_virtual_terminal(true).unwrap();
@@ -68,7 +68,7 @@ fn get_args_from_stdin() -> Configuration {
     loop {
         println!("\nPlease provide a file name or a root directory path, and optional parameters.\nType --help for the parameter list ");
         match config_manager::read_args_console() {
-            Err(e) => println!("{}",e.formatted()),
+            Err(e) => println!("\n{}",e.formatted()),
             Ok(config) => break config
         }
     }

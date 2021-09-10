@@ -33,6 +33,8 @@ fn parse_lines(mut reader: BufReader<File>, buf: &mut String, language: &Languag
         let line = buf.trim();
         if line.is_empty() { continue; }
 
+        // Two different parsing functions to skip the unnecessary checks for langs that don't support multiline comments
+        // for performance reasons
         let line_info = 
         if language.supports_multiline_comments() { 
             get_bounds_w_multiline_comments(line, language, is_comment_closed, &open_str_symbol)
@@ -45,7 +47,7 @@ fn parse_lines(mut reader: BufReader<File>, buf: &mut String, language: &Languag
 
         if let Some(x) = line_info.cleansed_string {
             let cleansed = x.trim();
-            if config.braces_as_code || (cleansed != "{" && cleansed != "}") {
+            if config.braces_as_code || cleansed.len() > 2 || (cleansed != "{" && cleansed != "}" && cleansed != "};") {
                 file_stats.incr_code_lines();
                 add_keywords_if_any(cleansed, &language, &mut file_stats);
             }
@@ -785,30 +787,30 @@ mod tests {
     fn test_correct_parsing_of_test_dir() {
         let mut buf = String::with_capacity(150);
 
-        let result = parse_file("test_dir/a.txt", "Java", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new("a".to_owned()));
+        let result = parse_file("test_dir/lang_files/a.txt", "Java", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new(vec!["a".to_owned()]));
         let result = LanguageContentInfo::from(result.unwrap());
         assert_eq!(LanguageContentInfo::new(44, 13, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         buf.clear();
-        let result = parse_file("test_dir/a.txt", "C#", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new("a".to_owned()));
+        let result = parse_file("test_dir/lang_files/a.txt", "C#", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new(vec!["a".to_owned()]));
         let result = LanguageContentInfo::from(result.unwrap());
         assert_eq!(LanguageContentInfo::new(44, 13, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         buf.clear();
         
-        let result = parse_file("test_dir/d.txt", "C#", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new("a".to_owned()));
+        let result = parse_file("test_dir/lang_files/d.txt", "C#", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new(vec!["a".to_owned()]));
         let result = LanguageContentInfo::from(result.unwrap());
         assert_eq!(LanguageContentInfo::new(19, 7, hashmap!("classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         buf.clear();
-        let result = parse_file("test_dir/d.txt", "Java", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new("a".to_owned()));
+        let result = parse_file("test_dir/lang_files/d.txt", "Java", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new(vec!["a".to_owned()]));
         let result = LanguageContentInfo::from(result.unwrap());
         assert_eq!(LanguageContentInfo::new(19, 7, hashmap!("classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         buf.clear();
 
-        let result = parse_file("test_dir/b.txt", "Java", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new("a".to_owned()));
+        let result = parse_file("test_dir/lang_files/b.txt", "Java", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new(vec!["a".to_owned()]));
         let result = LanguageContentInfo::from(result.unwrap());
         assert_eq!(LanguageContentInfo::new(19, 11, hashmap!("classes".to_owned()=>7,"interfaces".to_owned()=>0)), result);
         buf.clear();
 
-        let result = parse_file("test_dir/c.txt", "Python", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new("a".to_owned()));
+        let result = parse_file("test_dir/lang_files/c.txt", "Python", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new(vec!["a".to_owned()]));
         let result = LanguageContentInfo::from(result.unwrap());
         assert_eq!(LanguageContentInfo::new(11, 6, hashmap!("classes".to_owned()=>2)), result);
         buf.clear();

@@ -3,7 +3,7 @@ use std::{{ffi::OsString, path::Path}, cmp::max, collections::{HashMap as HashMa
 use colored::*;
 use lazy_static::lazy_static;
 
-use crate::{Configuration, config_manager::{self, BRACES_AS_CODE, EXCLUDE, LANGUAGES, PATH, SEARCH_IN_DOTTED, SHOW_FAULTY_FILES, THREADS}, domain::*};
+use crate::{Configuration, utils, config_manager::{self, BRACES_AS_CODE, EXCLUDE, LANGUAGES, DIRS, SEARCH_IN_DOTTED, SHOW_FAULTY_FILES, THREADS}, domain::*};
 
 lazy_static! {
     pub static ref DATA_DIR : Option<String> = try_find_data_dir();
@@ -27,9 +27,11 @@ pub enum ParseConfigFileError {
     IOError
 }
 
+//It is a different struct that ConfigurationBuilder, since we need the ability to distinguish flags
+//given as arguments and configuration flags (like save and load are not available as config flags)
 #[derive(Debug)]
 pub struct PersistentOptions {
-    pub path                     : Option<String>,
+    pub dirs                     : Option<Vec<String>>,
     pub exclude_dirs             : Option<Vec<String>>,
     pub languages_of_interest    : Option<Vec<String>>,
     pub threads                  : Option<usize>,
@@ -122,45 +124,54 @@ pub fn parse_supported_languages_to_map(languages_of_interest: &mut Vec<String>)
     Ok((language_map, faulty_files, non_existant_languages_of_interest))
 }
 
-pub fn parse_config_file(file_name: Option<&str>) -> Result<(PersistentOptions,bool),ParseConfigFileError> {
-    let dir_path = DATA_DIR.clone().unwrap() + CONFIG_DIR_NAME;
+pub fn parse_config_file(file_name: Option<&str>) -> Result<PersistentOptions,ParseConfigFileError> {
+    let dir_path = {
+        if cfg!(test) {
+            env!("CARGO_MANIFEST_DIR").to_owned() + "/test_dir/config"
+        } else {
+            DATA_DIR.clone().unwrap() + CONFIG_DIR_NAME
+        }
+    };
 
     if !Path::new(&dir_path).is_dir() {
         return Err(ParseConfigFileError::DirNotFound);
     }
 
     let file_name = if let Some(x) = file_name {x} else {DEFAULT_CONFIG_FILE_NAME};
-    let file_path = dir_path + "/" + file_name + ".txt";
+    let file_path = (dir_path + "/" + file_name + ".txt").replace("\\", "/");
     let mut reader = BufReader::new(match fs::File::open(file_path){
         Ok(f) => f,
         Err(_) => return Err(ParseConfigFileError::FileNotFound(file_name.to_owned()))
     });
 
-    let (mut path, mut braces_as_code, mut search_in_dotted, mut threads, mut exclude_dirs,
+    let (mut dirs, mut braces_as_code, mut search_in_dotted, mut threads, mut exclude_dirs,
          mut languages_of_interest, mut show_faulty_files, mut no_visual) = (None,None,None,None,None,None,None,None);
     let mut buf = String::with_capacity(150); 
-    let mut has_formatting_errors = false;
 
     while let Ok(size) = reader.read_line(&mut buf) {
         if size == 0 {break};
         if buf.trim().starts_with("===>") {
             let id = buf.split(' ').nth(1).unwrap_or("").trim();
 
-            if id == config_manager::PATH {
+            if id == config_manager::DIRS {
+                let paths = read_lines_to_vec(&mut reader, &mut buf, utils::parse_paths_to_vec);
+                if !paths.is_empty() {
+                    dirs = Some(paths);
+                }
+            } else if id == config_manager::EXCLUDE {
+                let paths = read_lines_to_vec(&mut reader, &mut buf, utils::parse_paths_to_vec);
+                if !paths.is_empty() {
+                    exclude_dirs = Some(paths);
+                }
+            } else if id == config_manager::LANGUAGES {
+                let langs = read_lines_to_vec(&mut reader, &mut buf, utils::parse_languages_to_vec);
+                if !langs.is_empty() {
+                    languages_of_interest = Some(langs);
+                }
+            } else if id == config_manager::THREADS {
                 buf.clear();
                 reader.read_line(&mut buf);
-                let buf = buf.trim();
-                if buf.is_empty() {
-                    has_formatting_errors = true;
-                    continue;
-                }
-                path = Some(buf.to_owned());
-            } else if id == config_manager::EXCLUDE {
-                exclude_dirs = read_vec_value(&mut reader, &mut buf, Box::new(|x| x.replace("\\", "/")));
-            } else if id == config_manager::LANGUAGES {
-                languages_of_interest = read_vec_value(&mut reader, &mut buf, Box::new(remove_dot_prefix));
-            } else if id == config_manager::THREADS {
-                threads = read_usize_value(&mut reader, &mut buf);
+                threads = utils::parse_threads_value(&buf);
             }else if id == config_manager::BRACES_AS_CODE {
                 braces_as_code = read_bool_value(&mut reader, &mut buf);
             } else if id == config_manager::SHOW_FAULTY_FILES {
@@ -175,22 +186,34 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<(PersistentOptions,b
         buf.clear();
     }
 
-    Ok((PersistentOptions::new(path,exclude_dirs, languages_of_interest, threads, braces_as_code,
-             search_in_dotted, show_faulty_files, no_visual), has_formatting_errors))
+    Ok(PersistentOptions::new(dirs,exclude_dirs, languages_of_interest, threads, braces_as_code,
+             search_in_dotted, show_faulty_files, no_visual))
 }
 
 pub fn save_config_to_file(config_name: &str, config: &Configuration) -> std::io::Result<()> {
-    let file_name = DATA_DIR.clone().unwrap() + CONFIG_DIR_NAME + "/" + config_name + ".txt"; 
+    let file_name = {
+        if cfg!(test) {
+            (env!("CARGO_MANIFEST_DIR").to_owned() + "/test_dir/config/" + config_name + ".txt").replace("\\", "/")
+        } else {
+            (DATA_DIR.clone().unwrap() + CONFIG_DIR_NAME + "/" + config_name + ".txt").replace("\\", "/")
+        }
+    };
     let mut writer = BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(file_name)?);
 
-    writer.write(b"Generated config file.");
+    writer.write(b"Auto-generated config file.");
 
-    writer.write(&[b"\n\n===> ",config_manager::PATH.as_bytes(),b"\n"].concat());
-    writer.write(config.path.as_bytes());
-    writer.write(&[b"\n\n===> ",config_manager::EXCLUDE.as_bytes(),b"\n"].concat());
-    writer.write(config.exclude_dirs.join(" ").as_bytes());
-    writer.write(&[b"\n\n===> ",config_manager::LANGUAGES.as_bytes(),b"\n"].concat());
-    writer.write(config.languages_of_interest.join(" ").as_bytes());
+    if !config.exclude_dirs.is_empty() {
+        writer.write(&[b"\n\n===> ",config_manager::DIRS.as_bytes(),b"\n"].concat());
+        writer.write(config.dirs.join(",").as_bytes());
+    }
+    if !config.exclude_dirs.is_empty() {
+        writer.write(&[b"\n\n===> ",config_manager::EXCLUDE.as_bytes(),b"\n"].concat());
+        writer.write(config.exclude_dirs.join(",").as_bytes());
+    }
+    if !config.languages_of_interest.is_empty() {
+        writer.write(&[b"\n\n===> ",config_manager::LANGUAGES.as_bytes(),b"\n"].concat());
+        writer.write(config.languages_of_interest.join(",").as_bytes());
+    }
     writer.write(&[b"\n\n===> ",config_manager::THREADS.as_bytes(),b"\n"].concat());
     writer.write(config.threads.to_string().as_bytes());
     writer.write(&[b"\n\n===> ",config_manager::BRACES_AS_CODE.as_bytes(),b"\n"].concat());
@@ -199,6 +222,8 @@ pub fn save_config_to_file(config_name: &str, config: &Configuration) -> std::io
     writer.write(if config.should_search_in_dotted {b"yes"} else {b"no"});
     writer.write(&[b"\n\n===> ",config_manager::SHOW_FAULTY_FILES.as_bytes(),b"\n"].concat());
     writer.write(if config.should_show_faulty_files {b"yes"} else {b"no"});
+    writer.write(&[b"\n\n===> ",config_manager::NO_VISUAL.as_bytes(),b"\n"].concat());
+    writer.write(if config.no_visual {b"yes"} else {b"no"});
 
     writer.write(b"\n");    
     writer.flush();
@@ -206,74 +231,6 @@ pub fn save_config_to_file(config_name: &str, config: &Configuration) -> std::io
     Ok(())
 }
 
-fn read_bool_value(reader: &mut BufReader<File>, mut buf: &mut String) -> Option<bool> {
-    buf.clear();
-    reader.read_line(&mut buf);
-    let buf = buf.trim();
-    if buf.is_empty() {
-        return None;
-    }
-    let buf = buf.to_ascii_lowercase();
-    if buf == "yes" || buf ==  "true" {
-        Some(true)
-    } else {
-        Some(false)
-    }
-}
-
-fn read_usize_value(reader: &mut BufReader<File>, mut buf: &mut String) -> Option<usize> {
-    buf.clear();
-    reader.read_line(&mut buf);
-    let buf = buf.trim();
-    if buf.is_empty() {
-        return None;
-    }
-
-    if let Ok(num) = buf.parse::<usize>() {
-        if num <= 8 && num >= 1 {
-            Some(num)
-        } else {
-            None
-        }
-    } else {
-        None
-    }
-}
-
-fn read_vec_value(reader: &mut BufReader<File>, mut buf: &mut String, mut transformation: Box<dyn FnMut(&str) -> String>) 
-        -> Option<Vec<String>> 
-{
-    buf.clear();
-    reader.read_line(&mut buf);
-    if buf.trim().is_empty() {
-        return None;
-    }
-    let mut lines = buf.clone();
-    loop {
-        reader.read_line(&mut buf);
-        if let Some(new_line) = buf.strip_prefix('+') {
-            if new_line.len() > 1 {
-                lines += new_line;
-            }
-        } else {
-            break;
-        }
-    }
-    Some(lines.split(' ').filter_map(|x| get_if_not_empty(&transformation(x.trim()))).collect::<Vec<String>>())
-}
-
-fn get_if_not_empty(str: &str) -> Option<String> {
-    if str.is_empty() {None}
-    else {Some(str.to_owned())}
-}
-
-fn remove_dot_prefix(str: &str) -> String {
-    if let Some(stripped) = str.strip_prefix('.') {
-        stripped.to_owned()
-    } else {
-        str.to_owned()
-    }
-}
 
 fn parse_file_to_language(mut reader :my_reader::BufReader, buffer :&mut String) -> Result<Language,()> {
     if !reader.read_line_and_compare(buffer, "Language") {return Err(());}
@@ -346,6 +303,35 @@ fn parse_file_to_language(mut reader :my_reader::BufReader, buffer :&mut String)
     })
 }
 
+fn read_bool_value(reader: &mut BufReader<File>, mut buf: &mut String) -> Option<bool> {
+    buf.clear();
+    reader.read_line(&mut buf);
+    let buf = buf.trim();
+    if buf.is_empty() {
+        return None;
+    }
+    let buf = buf.to_ascii_lowercase();
+    if buf == "yes" || buf ==  "true" {
+        Some(true)
+    } else {
+        Some(false)
+    }
+}
+
+fn read_lines_to_vec(reader: &mut BufReader<File>, mut buf: &mut String, parser_func: fn(&str) -> Vec<String>) -> Vec<String> {
+    let mut vec = Vec::new();
+    loop {
+        buf.clear();
+        reader.read_line(&mut buf);
+        if buf.trim().is_empty() {
+            break;
+        }
+        let new_vec = parser_func(buf);
+        vec.extend(new_vec);
+    }
+    vec
+}
+
 fn try_find_data_dir() -> Option<String> {
     if cfg!(test) {
         Some(env!("CARGO_MANIFEST_DIR").to_owned() + "\\data")
@@ -395,13 +381,13 @@ impl ParseConfigFileError {
 }
 
 impl PersistentOptions {
-    pub fn new(path: Option<String>, exclude_dirs: Option<Vec<String>>, languages_of_interest: Option<Vec<String>>,
+    pub fn new(dirs: Option<Vec<String>>, exclude_dirs: Option<Vec<String>>, languages_of_interest: Option<Vec<String>>,
             threads: Option<usize>, braces_as_code: Option<bool>, should_search_in_dotted: Option<bool>,
             should_show_faulty_files: Option<bool>, no_visual: Option<bool>) 
     -> PersistentOptions 
     {
         PersistentOptions {
-            path,
+            dirs,
             exclude_dirs,
             languages_of_interest,
             threads,
@@ -472,5 +458,55 @@ mod my_reader {
                 Err(())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{Configuration, io_handler::{parse_config_file, save_config_to_file}};
+
+    use super::PersistentOptions;
+
+    #[test]
+    fn test_save_config_file_and_then_parse_it() -> std::io::Result<()> {
+        let mut config = Configuration::new(vec!["C:/Some/Path/a".to_owned(),"C:/Some/Path/b".to_owned(),"C:/Some/Path/c".to_owned(),"C:/Some/Path/d".to_owned()]);
+        config
+            .set_exclude_dirs(vec!["a".to_owned(), "b".to_owned(), "c.txt".to_owned(), "d.txt".to_owned()])
+            .set_threads(4)
+            .set_braces_as_code(true);
+
+        save_config_to_file("auto-generated", &config);
+
+        let options = parse_config_file(Some("auto-generated")).unwrap();
+        assert_eq!(config.dirs, options.dirs.unwrap());
+        assert_eq!(config.exclude_dirs, options.exclude_dirs.unwrap());
+        assert_eq!(config.threads, options.threads.unwrap());
+        assert_eq!(config.braces_as_code, options.braces_as_code.unwrap());
+        assert_eq!(config.should_show_faulty_files, options.should_show_faulty_files.unwrap());
+        assert_eq!(config.should_search_in_dotted, options.should_search_in_dotted.unwrap());
+        assert_eq!(config.no_visual, options.no_visual.unwrap());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_config_file() -> std::io::Result<()> {
+        let mut config = Configuration::new(vec!["C:/Some/Path/a".to_owned(),"C:/Some/Path/b".to_owned(),"C:/Some/Path/c".to_owned(),"C:/Some/Path/d".to_owned()]);
+        config
+            .set_exclude_dirs(vec!["a".to_owned(), "b".to_owned(), "c.txt".to_owned(), "d.txt".to_owned()])
+            .set_threads(4)
+            .set_braces_as_code(true);
+
+
+        let options = parse_config_file(Some("test")).unwrap();
+        assert_eq!(config.dirs, options.dirs.unwrap());
+        assert_eq!(config.exclude_dirs, options.exclude_dirs.unwrap());
+        assert_eq!(config.threads, options.threads.unwrap());
+        assert_eq!(config.braces_as_code, options.braces_as_code.unwrap());
+        assert_eq!(config.should_show_faulty_files, options.should_show_faulty_files.unwrap());
+        assert_eq!(config.should_search_in_dotted, options.should_search_in_dotted.unwrap());
+        assert_eq!(config.no_visual, options.no_visual.unwrap());
+
+        Ok(())
     }
 }

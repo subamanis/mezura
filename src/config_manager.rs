@@ -5,7 +5,7 @@ use colored::Colorize;
 use crate::{io_handler::{self, ParseConfigFileError, PersistentOptions},utils};
 
 // command flags
-pub const PATH               :&str   = "path";
+pub const DIRS               :&str   = "dirs";
 pub const EXCLUDE            :&str   = "exclude";
 pub const LANGUAGES          :&str   = "languages";
 pub const THREADS            :&str   = "threads";
@@ -15,6 +15,9 @@ pub const SHOW_FAULTY_FILES  :&str   = "show-faulty-files";
 pub const NO_VISUAL          :&str   = "no-visual";
 pub const SAVE               :&str   = "save";
 pub const LOAD               :&str   = "load";
+
+pub const MAX_THREADS_VALUE : usize = 8;
+pub const MIN_THREADS_VALUE : usize = 1;
 
 // default config values
 const DEF_BRACES_AS_CODE    : bool    = false;
@@ -26,7 +29,7 @@ const DEF_THREADS           : usize   = 4;
 
 #[derive(Debug,PartialEq,Clone)]
 pub struct Configuration {
-    pub path: String,
+    pub dirs: Vec<String>,
     pub exclude_dirs: Vec<String>,
     pub languages_of_interest: Vec<String>,
     pub threads: usize,
@@ -39,10 +42,11 @@ pub struct Configuration {
 #[derive(Debug, PartialEq)]
 pub enum ArgParsingError {
     NoArgsProvided,
-    MissingTargetPath,
-    InvalidPath,
+    MissingTargetDirs,
+    InvalidPath(String),
+    InvalidPathInConfig(String,String),
     DoublePath,
-    UnrecognisedParameter(String),
+    UnrecognisedCommand(String),
     IncorrectCommandArgs(String),
 }
 
@@ -61,6 +65,7 @@ pub fn read_args_console() -> Result<Configuration,ArgParsingError> {
     create_config_from_args(&line)
 }
 
+
 fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError> {
     let line = line.trim();
     if line.is_empty() {
@@ -71,16 +76,19 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
         print_help_message_and_exit()
     }
 
-    let mut path = None;
+    let mut dirs = None;
     let options = line.split("--").collect::<Vec<_>>();
 
     if !line.trim().starts_with("--") {
-        let path_str = options[0].trim().to_owned();
-        if !is_valid_path(&path_str) {
-            return Err(ArgParsingError::InvalidPath);
+        let parse_result = parse_dirs(options[0]);
+        if let Ok(x) = parse_result {
+            if x.is_empty() {
+                return Err(ArgParsingError::IncorrectCommandArgs(DIRS.to_owned()));
+            }
+            dirs = Some(x)
+        } else {
+            return Err(parse_result.err().unwrap());
         }
-
-        path = Some(convert_to_absolute(&path_str));
     }
 
     let mut custom_config = None;
@@ -88,27 +96,56 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
          mut search_in_dotted, mut show_faulty_files, mut config_name_for_save, mut no_visual) 
          = (None, None, None, None, None, None, None, None);
     for command in options.into_iter().skip(1) {
-        if command.starts_with(EXCLUDE) {
-            let vec = command.split(' ').skip(1).filter_map(|x| get_if_not_empty(&x.trim().replace("\\", "/"))).collect::<Vec<_>>();
+         if let Some(_dirs) = command.strip_prefix(DIRS) {
+            if dirs.is_some() {
+                return Err(ArgParsingError::DoublePath);
+            }
+
+            let parse_result = parse_dirs(_dirs);
+            if let Ok(x) = parse_result {
+                if x.is_empty() {
+                    return Err(ArgParsingError::IncorrectCommandArgs(DIRS.to_owned()));
+                }
+                dirs = Some(x)
+            } else {
+                return Err(parse_result.err().unwrap());
+            }
+        } else if let Some(excluded) = command.strip_prefix(EXCLUDE) {
+            let vec = utils::parse_paths_to_vec(excluded);
             if vec.is_empty() {
                 return Err(ArgParsingError::IncorrectCommandArgs(EXCLUDE.to_owned()));
             }
             exclude_dirs = Some(vec);
-        } else if command.starts_with(LANGUAGES){
-            let vec = command.split(' ').skip(1).filter_map(|x| get_if_not_empty(&remove_dot_prefix(x.trim()).to_lowercase())).collect::<Vec<_>>();
+        } else if let Some(langs) = command.strip_prefix(LANGUAGES) {
+            let vec = utils::parse_languages_to_vec(langs);
             if vec.is_empty() {
                 return Err(ArgParsingError::IncorrectCommandArgs(LANGUAGES.to_owned()));
             }    
             languages_of_interest = Some(vec);
-        } else if command.starts_with(THREADS) {
-            match parse_threads_command(command) {
-                Ok(x) => threads = x,
-                Err(_) => return Err(ArgParsingError::IncorrectCommandArgs(THREADS.to_owned()))
+        } else if let Some(value) = command.strip_prefix(THREADS) {
+            let threads_value = utils::parse_threads_value(value);
+            if threads_value.is_none() {
+                return Err(ArgParsingError::IncorrectCommandArgs(THREADS.to_owned()))
+            } else {
+                threads = threads_value
             }
         } else if let Some(config_name) = command.strip_prefix(LOAD) {
-            match parse_load_command(config_name) {
-                Ok(x) => custom_config = x,
-                Err(_) => return Err(ArgParsingError::IncorrectCommandArgs(LOAD.to_owned()))
+            let config_name = config_name.trim();
+            if config_name.is_empty() {
+                return Err(ArgParsingError::IncorrectCommandArgs(LOAD.to_owned()));
+            }
+
+            if let Some(options) = parse_load_command(config_name) {
+                if let Some(dirs) = &options.dirs {
+                    for dir in dirs.iter() {
+                        if !utils::is_valid_path(dir) {
+                            return Err(ArgParsingError::InvalidPathInConfig(dir.to_owned(), config_name.to_owned()));
+                        }
+                    }
+                }
+                custom_config = Some(options);
+            } else {
+                return Err(ArgParsingError::IncorrectCommandArgs(LOAD.to_owned()));
             }
         } else if let Some(name) = command.strip_prefix(SAVE) {
             let name = name.trim();
@@ -116,16 +153,6 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
                 return Err(ArgParsingError::IncorrectCommandArgs(SAVE.to_owned()))
             }
             config_name_for_save = Some(name.to_owned());
-        } else if let Some(path_str) = command.strip_prefix(PATH) {
-            if path.is_some() {
-                return Err(ArgParsingError::DoublePath);
-            }
-            let path_str = path_str.trim();
-            if path_str.is_empty() || !is_valid_path(path_str) {
-                return Err(ArgParsingError::IncorrectCommandArgs(PATH.to_owned()))
-            }
-
-            path = Some(convert_to_absolute(path_str));
         } else if command.starts_with(BRACES_AS_CODE) {
             if has_any_args(command) {
                 return Err(ArgParsingError::IncorrectCommandArgs(BRACES_AS_CODE.to_owned()))
@@ -147,17 +174,16 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
             }
             no_visual = Some(true);
         } else {
-            return Err(ArgParsingError::UnrecognisedParameter(command.to_owned()));
+            return Err(ArgParsingError::UnrecognisedCommand(command.to_owned()));
         }
     }
 
-    let args_builder = combine_specified_config_options(custom_config, path, exclude_dirs,
+    let args_builder = combine_specified_config_options(custom_config, dirs, exclude_dirs,
             languages_of_interest, threads, braces_as_code, search_in_dotted, show_faulty_files, no_visual);
 
-    if args_builder.path.is_none() {
-        return Err(ArgParsingError::MissingTargetPath);
+    if args_builder.dirs.is_none() {
+        return Err(ArgParsingError::MissingTargetDirs);
     }
-
 
     let config = args_builder.build();
     if let Some(x) = config_name_for_save {
@@ -171,52 +197,67 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
 }
 
 fn has_any_args(command: &str) -> bool {
-    command.split(' ').skip(1).filter_map(|x| get_if_not_empty(x.trim())).count() != 0
+    command.split(' ').skip(1).filter_map(|x| utils::get_if_not_empty(x.trim())).count() != 0
 }
 
-fn parse_threads_command(command: &str) -> Result<Option<usize>,()> {
-    let vec = command.split(' ').skip(1).filter_map(|x| get_if_not_empty(x.trim())).collect::<Vec<_>>();
-    if vec.len() != 1 {
-        return Err(());
-    }
-    if let Ok(x) = vec[0].parse::<usize>() {
-        if x >= 1 && x <= 8 {
-            Ok(Some(x))
-        } else {
-            Err(())
-        }
-    } else {
-        Err(())
-    }
-}
-
-fn parse_load_command(config_name: &str) -> Result<Option<PersistentOptions>,()> {
+fn parse_load_command(config_name: &str) -> Option<PersistentOptions> {
     let config_name = config_name.trim();
     if config_name.is_empty() {
-        return Err(());
+        return None;
     }
-    let result = match io_handler::parse_config_file(Some(config_name)) {
+    match io_handler::parse_config_file(Some(config_name)) {
         Ok(x) => {
-            if x.1 {
-                println!("{}",format!("Formatting problems detected in config file '{}', some default values may be used.",config_name).yellow());
-            }
-            Some(x.0)
+            Some(x)
         },
         Err(x) => {
             println!("\n{}",x.formatted());
             None
         }
-    };
-
-    Ok(result)
+    }
 }
 
-fn combine_specified_config_options(custom_config: Option<PersistentOptions>, path: Option<String>, exclude_dirs: Option<Vec<String>>,
+fn parse_dirs(s: &str) -> Result<Vec<String>, ArgParsingError> {
+    let mut _dirs = utils::parse_paths_to_vec(s);
+
+    for dir in _dirs.iter_mut() {
+        let trimmed_dir =  dir.trim();
+        if !utils::is_valid_path(dir) {
+            return Err(ArgParsingError::InvalidPath(trimmed_dir.to_owned()))
+        } else {
+            *dir = convert_to_absolute(trimmed_dir);
+        }
+    }
+
+    Ok(_dirs)
+}
+
+// The "canonicalize" function from the std that this function uses, seems to put the weird prefix
+// "\\?\" before the path and it also puts forward slashes that we want to convert for compatibility.  
+fn convert_to_absolute(s: &str) -> String {
+    let p = Path::new(s);
+    if p.is_absolute() {
+        return s.replace("\\", "/");
+    }
+
+    if let Ok(buf) = std::fs::canonicalize(p) {
+        let str_path = buf.to_str().unwrap();
+        str_path.strip_prefix(r"\\?\").unwrap_or(str_path).replace("\\", "/")
+    } else {
+        s.replace("\\", "/")
+    }
+}
+
+// Fill the missing arguments that the user didn't specify when he run the program with 
+// 1) The arguments saved in the given config (if he gave any)
+// 2) The default config file
+// 3) Default values
+// In this order of importance.
+fn combine_specified_config_options(custom_config: Option<PersistentOptions>, dirs: Option<Vec<String>>, exclude_dirs: Option<Vec<String>>,
         languages_of_interest: Option<Vec<String>>, threads: Option<usize>, braces_as_code: Option<bool>, search_in_dotted: Option<bool>,
         show_faulty_files: Option<bool>, no_visual: Option<bool>) 
 -> ConfigurationBuilder 
 {
-    let mut args_builder = ConfigurationBuilder::new(path, exclude_dirs, languages_of_interest,
+    let mut args_builder = ConfigurationBuilder::new(dirs, exclude_dirs, languages_of_interest,
             threads, braces_as_code, search_in_dotted, show_faulty_files, no_visual);
     if let Some(x) = custom_config {
         args_builder.add_missing_fields(x);
@@ -224,72 +265,35 @@ fn combine_specified_config_options(custom_config: Option<PersistentOptions>, pa
     if args_builder.has_missing_fields() {
         let default_config = io_handler::parse_config_file(None);
         if let Ok(x) = default_config {
-            if x.1 {
-                println!("{}","Formatting problems detected in the default config file, some default values may be used.".yellow());
-            }
-            args_builder.add_missing_fields(x.0);
+            args_builder.add_missing_fields(x);
         }
     }
     args_builder
 }
 
-fn get_if_not_empty(str: &str) -> Option<String> {
-    if str.is_empty() {None}
-    else {Some(str.to_owned())}
-}
-
-fn remove_dot_prefix(str: &str) -> &str {
-    if let Some(stripped) = str.strip_prefix('.') {
-        stripped
-    } else {
-        str
-    }
-}
-
-fn is_valid_path(s: &str) -> bool {
-    let path_str = s.trim();
-
-    let p = Path::new(path_str);
-    p.is_dir() || p.is_file()
-}
-
-fn convert_to_absolute(s: &str) -> String {
-    let path_str = s.trim();
-
-    let p = Path::new(path_str);
-    if p.is_absolute() {
-        return path_str.to_owned();
-    }
-
-    if let Ok(buf) = std::fs::canonicalize(p) {
-        buf.to_str().unwrap().to_owned()
-    } else {
-        path_str.to_owned()
-    }
-}
-
-
+// This needs to maintained along the README, I am not sure how else to make a help message without duplication
 fn print_help_message_and_exit() {
     println!("
     Format of arguments: <path_here> --optional_command1 --optional_commandN
 
     COMMANDS:
 
-    --path
-        The path to a directory or a single file, in this form: '--path <path_here>'
-        It can either be surrounded by quotes: \"path\" or not, even if the path has whitespace.
+    --dirs
+        The paths to the directories or files, seperated by commas if more than 1, in this form: '--dirs <path1, path2>'
+        They can either be surrounded by quotes: \"path\" or not, even if the paths have whitespace.
 
-        The path can also be given implicitly (in which case this command is not needed) with 2 ways:
-        1) as the first argument of the program directly
-        2) if it is present in a configuration file (see '--save' and '--load' commands).
+        The target directories can also be given implicitly (in which case this command is not needed) with 2 ways:
+        1) as the first arguments of the program directly
+        2) if they are present in a configuration file (see '--save' and '--load' commands).
 
     --exclude 
-        1..n arguments separated with whitespace, can be a folder name or a file name (including extension).
+        1..n arguments separated by commas, can be a folder name, a file name (including extension), 
+        or a full path to a folder or file. The paths can be surrounded by quotes or not, even if they have whitespace.
 
         The program will ignore these dirs.
     
     --languages 
-        1..n arguments separated with whitespace, case-insensitive
+        1..n arguments separated by commas, case-insensitive
 
         The given language names must exist in any of the files in the 'data/languages/' dir as the
         parameter of the field 'Language'.
@@ -344,10 +348,10 @@ fn print_help_message_and_exit() {
         One argument as the file name (whitespace allowed, without an extension, case-insensitive)
 
         If we plan to run the program many times for a project, it can be bothersome to specify,
-        all the flags every time, especially if they contain a lot of exclude dirs for example.
+        all the flags every time, especially if they contain a lot of target and exclude dirs for example.
         That's why you can specify all the flags once, and add this command to save them
-        as a configuration file. If you specify a '--path' command, it will save the absolute
-        version of the specified path, otherwise, no path will be specified.
+        as a configuration file. If you specify a '--dirs' command, it will save the absolute
+        version of the specified path in the config file, otherwise, no path will be specified.
 
         Doing so, will run the program and also create a .txt configuration file,
         inside 'data/config/' with the specified name, that can later be loaded with the --load command.
@@ -355,14 +359,14 @@ fn print_help_message_and_exit() {
     --load
         One argument as the file name (whitespace allowed, without an extension, case-insensitive)
         
-        Assosiated with the '--save' command, this comman is used to load the flags of 
+        Assosiated with the '--save' command, this command is used to load the flags of 
         an existing configuration file from the 'data/config/' directory. 
 
         There is already a configuration file named 'default.txt' that contains the default of the program,
         and gets automatically loaded with each program run. You can modify it to add common flags
         so you dont have to create the same configurations for different projects.
 
-        If you provide in the cmd a flag that exists also in the provided config file,
+        If you provide in the cmd a flag that exists also in the specified config file,
         then the value of the cmd is used. The priority is cmd> custom config> default config. 
         You can combine the '--load' and '--save' commands to modify a configuration file.
     ");
@@ -374,7 +378,7 @@ fn print_help_message_and_exit() {
 
 #[derive(Debug)]
 struct ConfigurationBuilder {
-    pub path: Option<String>,
+    pub dirs: Option<Vec<String>>,
     pub exclude_dirs: Option<Vec<String>>,
     pub languages_of_interest: Option<Vec<String>>,
     pub threads: Option<usize>,
@@ -385,13 +389,13 @@ struct ConfigurationBuilder {
 }
 
 impl ConfigurationBuilder {
-    pub fn new(path: Option<String>, exclude_dirs: Option<Vec<String>>, languages_of_interest: Option<Vec<String>>,
+    pub fn new(dirs: Option<Vec<String>>, exclude_dirs: Option<Vec<String>>, languages_of_interest: Option<Vec<String>>,
             threads: Option<usize>, braces_as_code: Option<bool>, should_search_in_dotted: Option<bool>,
             should_show_faulty_files: Option<bool>, no_visual: Option<bool>) 
     -> ConfigurationBuilder 
     {
         ConfigurationBuilder {
-            path,
+            dirs,
             exclude_dirs,
             languages_of_interest,
             threads,
@@ -403,7 +407,7 @@ impl ConfigurationBuilder {
     }
 
     pub fn add_missing_fields(&mut self, config: PersistentOptions) -> &mut ConfigurationBuilder {
-        if self.path.is_none() {self.path = config.path};
+        if self.dirs.is_none() {self.dirs = config.dirs};
         if self.exclude_dirs.is_none() {self.exclude_dirs = config.exclude_dirs};
         if self.languages_of_interest.is_none() {self.languages_of_interest = config.languages_of_interest};
         if self.threads.is_none() {self.threads = config.threads};
@@ -421,7 +425,7 @@ impl ConfigurationBuilder {
 
     pub fn build(&self) -> Configuration {
         Configuration {
-            path : self.path.clone().unwrap(),
+            dirs : self.dirs.clone().unwrap(),
             exclude_dirs: (self.exclude_dirs).clone().unwrap_or_default(),
             languages_of_interest: (self.languages_of_interest).clone().unwrap_or_default(),
             threads: self.threads.unwrap_or(DEF_THREADS),
@@ -434,9 +438,9 @@ impl ConfigurationBuilder {
 }
 
 impl Configuration {
-    pub fn new(path: String) -> Self {
+    pub fn new(dirs: Vec<String>) -> Self {
         Configuration {
-            path,
+            dirs,
             exclude_dirs: Vec::new(),
             languages_of_interest: Vec::new(),
             threads: DEF_THREADS,
@@ -487,10 +491,11 @@ impl ArgParsingError {
     pub fn formatted(&self) -> String {
         match self {
             Self::NoArgsProvided => "No arguments provided.".red().to_string(),
-            Self::MissingTargetPath => "The target directory (--path) is not specified.".red().to_string(),
-            Self::InvalidPath => "Path provided is not a valid directory or file.".red().to_string(),
-            Self::DoublePath => "Path already provided as first argument but --path command also found.".red().to_string(),
-            Self::UnrecognisedParameter(p) => format!("--{} is not recognised as a command.",p).red().to_string(),
+            Self::MissingTargetDirs => "The target directories (--dirs) are not specified.".red().to_string(),
+            Self::InvalidPath(p) => format!("Path provided is not a valid directory or file:\n'{}'.",p).red().to_string(),
+            Self::InvalidPathInConfig(dir,name) => format!("Specified path '{}', in config '{}', doesn't exist anymore.",dir,name).red().to_string(),
+            Self::DoublePath => "Directories already provided as first argument, but --dirs command also found.".red().to_string(),
+            Self::UnrecognisedCommand(p) => format!("--{} is not recognised as a command.",p).red().to_string(),
             Self::IncorrectCommandArgs(p) => format!("Incorrect arguments provided for the command '--{}'. Type '--help'",p).red().to_string()
         }
     }
@@ -505,42 +510,53 @@ mod tests {
     fn test_cmd_arg_parsing() {
         assert_eq!(Err(ArgParsingError::NoArgsProvided), create_config_from_args(""));
         assert_eq!(Err(ArgParsingError::NoArgsProvided), create_config_from_args("   "));
-        assert_eq!(Err(ArgParsingError::InvalidPath), create_config_from_args("random"));
-        assert_eq!(Err(ArgParsingError::InvalidPath), create_config_from_args("./ random"));
-        assert_eq!(Err(ArgParsingError::UnrecognisedParameter("random".to_owned())), create_config_from_args("--random"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("path".to_owned())), create_config_from_args("--path"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("path".to_owned())), create_config_from_args("--path   "));
-        assert_eq!(Err(ArgParsingError::UnrecognisedParameter("random".to_owned())), create_config_from_args("--path ./ --random"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("path".to_owned())), create_config_from_args("--path ./ -show-faulty-files"));
-        assert_eq!(Err(ArgParsingError::DoublePath), create_config_from_args("./ --path ./"));
+        assert_eq!(Err(ArgParsingError::InvalidPath("random".to_owned())), create_config_from_args("random"));
+        assert_eq!(Err(ArgParsingError::InvalidPath("./ random".to_owned())), create_config_from_args("./ random"));
+        assert_eq!(Err(ArgParsingError::InvalidPath("./ -show-faulty-files".to_owned())), create_config_from_args("--dirs ./ -show-faulty-files"));
+        assert_eq!(Err(ArgParsingError::UnrecognisedCommand("random".to_owned())), create_config_from_args("--random"));
+        assert_eq!(Err(ArgParsingError::UnrecognisedCommand("random".to_owned())), create_config_from_args("--dirs ./ --random"));
+        assert_eq!(Err(ArgParsingError::DoublePath), create_config_from_args("./ --dirs ./"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("dirs".to_owned())), create_config_from_args("--dirs"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("dirs".to_owned())), create_config_from_args("--dirs   "));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 0"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 9"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 2 2"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads A"));
+
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("show-faulty-files".to_owned())), create_config_from_args("./ --threads 1 --show-faulty-files 1"));
+
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("show-faulty-files".to_owned())), create_config_from_args("./ --threads 1 --show-faulty-files a"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("search-in-dotted".to_owned())), create_config_from_args("./ --threads 1 --search-in-dotted a"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("no-visual".to_owned())), create_config_from_args("./ --threads 1 --no-visual a"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("braces-as-code".to_owned())), create_config_from_args("./ --threads 1 --braces-as-code a"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned())), create_config_from_args("./ --exclude"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned())), create_config_from_args("./ --exclude   --threads 4"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("load".to_owned())), create_config_from_args("./ --load"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("load".to_owned())), create_config_from_args("./ --load   "));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("save".to_owned())), create_config_from_args("./ --save"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("save".to_owned())), create_config_from_args("./ --save   "));
 
-        assert_eq!(Configuration::new(convert_to_absolute("./")), create_config_from_args("./").unwrap());
-        assert_eq!(Configuration::new(convert_to_absolute("./")), create_config_from_args("--path ./").unwrap());
-        assert_eq!(*Configuration::new(convert_to_absolute("./")).set_threads(1), create_config_from_args("./ --threads 1").unwrap());
-        assert_eq!(*Configuration::new(convert_to_absolute("./")).set_threads(1), create_config_from_args("./ --threads   1   ").unwrap());
-        assert_eq!(*Configuration::new(convert_to_absolute("./")).set_threads(1).set_braces_as_code(true),
+        assert_eq!(Configuration::new(vec![convert_to_absolute("./")]), create_config_from_args("./").unwrap());
+        assert_eq!(Configuration::new(vec![convert_to_absolute("./")]), create_config_from_args("--dirs ./").unwrap());
+        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_threads(1), create_config_from_args("./ --threads 1").unwrap());
+        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_threads(1), create_config_from_args("./ --threads   1   ").unwrap());
+        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_threads(1).set_braces_as_code(true),
                 create_config_from_args("./ --threads 1 --braces-as-code").unwrap());
-        assert_eq!(*Configuration::new(convert_to_absolute("./")).set_should_search_in_dotted(true),
+        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_should_search_in_dotted(true),
                 create_config_from_args("./ --search-in-dotted").unwrap());
-        assert_eq!(*Configuration::new(convert_to_absolute("./")).set_should_enable_visuals(true),
+        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_should_enable_visuals(true),
                 create_config_from_args("./ --no-visual").unwrap());
-        assert_eq!(*Configuration::new(convert_to_absolute("./")).set_should_show_faulty_files(true),
+        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_should_show_faulty_files(true),
                 create_config_from_args("./ --show-faulty-files").unwrap());
-        assert_eq!(*Configuration::new(convert_to_absolute("./")).set_exclude_dirs(vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]),
-                create_config_from_args("./ --exclude a b c").unwrap());
-        assert_eq!(*Configuration::new(convert_to_absolute("./")).set_languages_of_interest(vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]),
-                create_config_from_args("./ --languages a b c").unwrap());
+        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_exclude_dirs(vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]),
+                create_config_from_args("./ --exclude a,b ,  c ").unwrap());
+        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_exclude_dirs(vec!["a/path".to_owned(),"b/path".to_owned()]),
+                create_config_from_args("./ --exclude \"a\\path\", \"b\\path\"").unwrap());
+        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_languages_of_interest(vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]),
+                create_config_from_args("./ --languages a,b,c").unwrap());
+        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_languages_of_interest(vec!["a".to_owned()]),
+                create_config_from_args("./ --languages a, ").unwrap());
     }
 
     #[test]
@@ -556,15 +572,15 @@ mod tests {
 
     #[test]
     fn test_parse_threads_command() {
-        assert_eq!(Ok(Some(1)), parse_threads_command("cmnd 1"));
-        assert_eq!(Ok(Some(1)), parse_threads_command("cmnd    1"));
-        assert_eq!(Ok(Some(1)), parse_threads_command("cmnd    1   "));
+        assert_eq!(Some(1), utils::parse_threads_value("1"));
+        assert_eq!(Some(1), utils::parse_threads_value("   1"));
+        assert_eq!(Some(1), utils::parse_threads_value("   1   "));
 
-        assert_eq!(Err(()), parse_threads_command("cmnd 1 3 3"));
-        assert_eq!(Err(()), parse_threads_command("cmnd -1 0"));
-        assert_eq!(Err(()), parse_threads_command("cmnd"));
-        assert_eq!(Err(()), parse_threads_command("cmnd    "));
-        assert_eq!(Err(()), parse_threads_command("cmnd A"));
+        assert_eq!(None, utils::parse_threads_value("1 3 3"));
+        assert_eq!(None, utils::parse_threads_value("-1 0"));
+        assert_eq!(None, utils::parse_threads_value("cmnd"));
+        assert_eq!(None, utils::parse_threads_value("   "));
+        assert_eq!(None, utils::parse_threads_value("A"));
     }
 
     #[test]
@@ -589,10 +605,19 @@ mod tests {
         assert!(Path::new(path).is_relative());
         assert!(Path::new(&abs).is_absolute());
 
-        let path = "src/putils";
+        let path = "src/utils.rs";
         let abs = convert_to_absolute(path);
         assert!(Path::new(path).is_relative());
         assert!(Path::new(&abs).is_absolute());
+    }
+
+    #[test]
+    fn test_parse_dirs() {
+        assert!(parse_dirs("a").is_err());
+        assert!(parse_dirs("a b c").is_err());
+
+        assert_eq!(vec![convert_to_absolute("./"), convert_to_absolute(".././")], parse_dirs("./, .././").unwrap());
+        assert_eq!(vec![convert_to_absolute("./"), convert_to_absolute(".././")], parse_dirs("./, \".././\"").unwrap());
     }
 }
 

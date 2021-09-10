@@ -21,9 +21,9 @@ Example run:
 You can run the project directly by dowloading the "executable/release" folder that contains the executable and the neccessary "data" folder.
 Alternatively, you can build the project yourself ```cargo b --release```
 
-Format of arguments: ```<path_here> --optional_command1 --optional_commandN```
+Format of arguments: ```<path> --optional_command1 --optional_commandN```
 
-The program, expects a path to a directory or a code file, that can be provided as cmd argument, or if not, you will be prompted to provide it after running the program.
+The program, expects a path to a directory or a code file (they can be many different ones, seperated by comma), that can be provided as cmd argument, or if not, you will be prompted to provide it after running the program.
 The program also accepts a lot of optional flags to customize functionality, see the next section for more info or use the --help command.
 
 	
@@ -35,12 +35,12 @@ The generated stats are the following:
 - Keyword occurances
 - Percentage comparisons between languages
 
-The program requires a "data" dir to be present on the same level as the executable(or 2 levels up in the folder hierarchy). In the "data" dir, a"languages" dir must be present, that contains the supported languages as seperate txt files. An optional "config" dir may be present too, where the user can specify persistent settings, more on that later.
+The program requires a "data" dir to be present on the same level as the executable. In the "data" dir, a "languages" dir must be present, that contains the supported languages as seperate txt files. An optional "config" dir may be present too, where the user can specify persistent settings (more on that later).
 
-The program counts the lines of files in the specified directory. In order for a file to be considered for counting, its extension must be supported, meaning that a .txt language file specifying the particular extension as an entry in its 'Extensions' field must be present in the "data/languages" dir see [Supported Languages](#supported-languages). 
+The program counts the lines of files in the specified director(y/ies). In order for a file to be considered for counting, its extension must be supported, meaning that a .txt language file specifying the particular extension as an entry in its 'Extensions' field, must be present in the "data/languages" dir see [Supported Languages](#supported-languages). 
 
 The program distinguishes the total lines in code lines and "extra" lines (all the lines that are not code).
-<b>Note</b> that braces "{ }" are not considered as code by default, but this can be changed by using the --braces-as-code flag.
+<b>Note</b> that braces "{ }" are not considered as code by default, but this can be changed either by using the --braces-as-code flag during a particular run of the program, or enabling it in the "default" config file to use globally always.
 Also, the program can search for user-defined <b>keywords</b> that are specified in the language files and count their occurances, while identifying them correctly in <b>complex lines</b>, see [Accuracy and Limitations](#accuracy-and-limitations) for details.
 
 Below there is a list with all the commands-flags that the program accepts.
@@ -48,22 +48,22 @@ Below there is a list with all the commands-flags that the program accepts.
 --help
     Display this message on the terminal. No other arguments or commands are required.
     
---path
-    The path to a directory or a single file, in this form: '--path <path_here>'
-    It can either be surrounded by quotes: "path" or not, even if the path has whitespace.
+ --dirs
+    The paths to the directories or files, seperated by commas if more than 1, in this form: '--dirs <path1, path2>'
+    They can either be surrounded by quotes: \"path\" or not, even if the paths have whitespace.
 
-    The path can also be given implicitly (in which case this command is not needed) with 2 ways:
-    1) as the first argument of the program directly
-    2) if it is present in a configuration file (see '--save' and '--load' commands).
+    The target directories can also be given implicitly (in which case this command is not needed) with 2 ways:
+    1) as the first arguments of the program directly
+    2) if they are present in a configuration file (see '--save' and '--load' commands).
 
 --exclude 
-    1..n arguments separated with whitespace, can be a folder name, a file name (including extension), 
-    or a full path to a folder or file (unfortunately whitespace in the path is not allowed here)
+    1..n arguments separated by commas, can be a folder name, a file name (including extension), 
+    or a full path to a folder or file. The paths can be surrounded by quotes or not, even if they have whitespace.
 
     The program will ignore these dirs.
 
 --languages 
-    1..n arguments separated with whitespace, case-insensitive
+    1..n arguments separated by commas, case-insensitive
 
     The given language names must exist in any of the files in the 'data/languages/' dir as the
     parameter of the field 'Language'.
@@ -118,25 +118,25 @@ Below there is a list with all the commands-flags that the program accepts.
     One argument as the file name (whitespace allowed, without an extension, case-insensitive)
 
     If we plan to run the program many times for a project, it can be bothersome to specify,
-    all the flags every time, especially if they contain a lot of exclude dirs for example.
+    all the flags every time, especially if they contain a lot of target and exclude dirs for example.
     That's why you can specify all the flags once, and add this command to save them
-    as a configuration file. If you specify a '--path' command, it will save the absolute
-    version of the specified path, otherwise, no path will be specified.
+    as a configuration file. If you specify a '--dirs' command, it will save the absolute
+    version of the specified path in the config file, otherwise, no path will be specified.
 
     Doing so, will run the program and also create a .txt configuration file,
-    inside 'data/config/' with the specified name, that can later be loaded with the '--load' command.
+    inside 'data/config/' with the specified name, that can later be loaded with the --load command.
 
 --load
     One argument as the file name (whitespace allowed, without an extension, case-insensitive)
     
-    Assosiated with the '--save' command, this comman is used to load the flags of 
+    Assosiated with the '--save' command, this command is used to load the flags of 
     an existing configuration file from the 'data/config/' directory. 
 
     There is already a configuration file named 'default.txt' that contains the default of the program,
     and gets automatically loaded with each program run. You can modify it to add common flags
     so you dont have to create the same configurations for different projects.
 
-    If you provide in the cmd a flag that exists also in the provided config file,
+    If you provide in the cmd a flag that exists also in the specified config file,
     then the value of the cmd is used. The priority is cmd> custom config> default config. 
     You can combine the '--load' and '--save' commands to modify a configuration file.
 ```
@@ -153,10 +153,10 @@ Language
 <name of the language>
 
 Extensions
-<name of file extensions like cpp hpp or py>
+<name of file extensions like cpp hpp or py, seperated by whitespace>
 
 String symbols
-<either 1 or two string symbols seperated by space, like: " ' >
+<either 1 or 2 string symbols seperated by whitespace, like: " ' >
 
 Comment symbol
 <single line comment symbol like: //>
