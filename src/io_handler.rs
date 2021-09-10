@@ -3,7 +3,7 @@ use std::{{ffi::OsString, path::Path}, cmp::max, collections::{HashMap as HashMa
 use colored::*;
 use lazy_static::lazy_static;
 
-use crate::{Configuration, utils, config_manager::{self, BRACES_AS_CODE, EXCLUDE, LANGUAGES, DIRS, SEARCH_IN_DOTTED, SHOW_FAULTY_FILES, THREADS}, domain::*};
+use crate::{Configuration, utils, config_manager::{self, ConfigurationBuilder, BRACES_AS_CODE, EXCLUDE, LANGUAGES, DIRS, SEARCH_IN_DOTTED, SHOW_FAULTY_FILES, THREADS}, domain::*};
 
 lazy_static! {
     pub static ref DATA_DIR : Option<String> = try_find_data_dir();
@@ -26,19 +26,6 @@ pub enum ParseConfigFileError {
     DirNotFound,
     FileNotFound(String),
     IOError
-}
-
-//It is a different struct that ConfigurationBuilder, since we could want ability to seperate cmd and config flags
-#[derive(Debug)]
-pub struct PersistentOptions {
-    pub dirs                     : Option<Vec<String>>,
-    pub exclude_dirs             : Option<Vec<String>>,
-    pub languages_of_interest    : Option<Vec<String>>,
-    pub threads                  : Option<usize>,
-    pub braces_as_code           : Option<bool>,
-    pub should_search_in_dotted  : Option<bool>,
-    pub should_show_faulty_files : Option<bool>,
-    pub no_visual                : Option<bool>
 }
 
 
@@ -124,7 +111,7 @@ pub fn parse_supported_languages_to_map(languages_of_interest: &mut Vec<String>)
     Ok((language_map, faulty_files, non_existant_languages_of_interest))
 }
 
-pub fn parse_config_file(file_name: Option<&str>) -> Result<PersistentOptions,ParseConfigFileError> {
+pub fn parse_config_file(file_name: Option<&str>) -> Result<ConfigurationBuilder,ParseConfigFileError> {
     let dir_path = {
         if cfg!(test) {
             env!("CARGO_MANIFEST_DIR").to_owned() + TEST_CONFIG_DIR
@@ -186,7 +173,7 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<PersistentOptions,Pa
         buf.clear();
     }
 
-    Ok(PersistentOptions::new(dirs,exclude_dirs, languages_of_interest, threads, braces_as_code,
+    Ok(ConfigurationBuilder::new(dirs,exclude_dirs, languages_of_interest, threads, braces_as_code,
              search_in_dotted, show_faulty_files, no_visual))
 }
 
@@ -380,24 +367,6 @@ impl ParseConfigFileError {
     }
 }
 
-impl PersistentOptions {
-    pub fn new(dirs: Option<Vec<String>>, exclude_dirs: Option<Vec<String>>, languages_of_interest: Option<Vec<String>>,
-            threads: Option<usize>, braces_as_code: Option<bool>, should_search_in_dotted: Option<bool>,
-            should_show_faulty_files: Option<bool>, no_visual: Option<bool>) 
-    -> PersistentOptions 
-    {
-        PersistentOptions {
-            dirs,
-            exclude_dirs,
-            languages_of_interest,
-            threads,
-            braces_as_code,
-            should_search_in_dotted,
-            should_show_faulty_files,
-            no_visual
-        }
-    }
-}
 
 mod my_reader {
     use std::{fs::File, io::{self, prelude::*}};
@@ -464,8 +433,6 @@ mod my_reader {
 #[cfg(test)]
 mod tests {
     use crate::{Configuration, io_handler::{parse_config_file, save_config_to_file}};
-
-    use super::PersistentOptions;
 
     #[test]
     fn test_save_config_file_and_then_parse_it() -> std::io::Result<()> {

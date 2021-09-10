@@ -2,7 +2,7 @@ use std::{path::{Path, PathBuf}, process};
 
 use colored::Colorize;
 
-use crate::{io_handler::{self, ParseConfigFileError, PersistentOptions},utils};
+use crate::{io_handler::{self, ParseConfigFileError},utils};
 
 // command flags
 pub const DIRS               :&str   = "dirs";
@@ -200,7 +200,7 @@ fn has_any_args(command: &str) -> bool {
     command.split(' ').skip(1).filter_map(|x| utils::get_if_not_empty(x.trim())).count() != 0
 }
 
-fn parse_load_command(config_name: &str) -> Option<PersistentOptions> {
+fn parse_load_command(config_name: &str) -> Option<ConfigurationBuilder> {
     let config_name = config_name.trim();
     if config_name.is_empty() {
         return None;
@@ -252,7 +252,7 @@ fn convert_to_absolute(s: &str) -> String {
 // 2) The default config file
 // 3) Default values
 // In this order of importance.
-fn combine_specified_config_options(custom_config: Option<PersistentOptions>, dirs: Option<Vec<String>>, exclude_dirs: Option<Vec<String>>,
+fn combine_specified_config_options(custom_config: Option<ConfigurationBuilder>, dirs: Option<Vec<String>>, exclude_dirs: Option<Vec<String>>,
         languages_of_interest: Option<Vec<String>>, threads: Option<usize>, braces_as_code: Option<bool>, search_in_dotted: Option<bool>,
         show_faulty_files: Option<bool>, no_visual: Option<bool>) 
 -> ConfigurationBuilder 
@@ -365,7 +365,7 @@ fn print_help_message_and_exit() {
 
 
 #[derive(Debug)]
-struct ConfigurationBuilder {
+pub struct ConfigurationBuilder {
     pub dirs:                     Option<Vec<String>>,
     pub exclude_dirs:             Option<Vec<String>>,
     pub languages_of_interest:    Option<Vec<String>>,
@@ -394,7 +394,7 @@ impl ConfigurationBuilder {
         }
     }
 
-    pub fn add_missing_fields(&mut self, config: PersistentOptions) -> &mut ConfigurationBuilder {
+    pub fn add_missing_fields(&mut self, config: Self) -> &mut Self {
         if self.dirs.is_none() {self.dirs = config.dirs};
         if self.exclude_dirs.is_none() {self.exclude_dirs = config.exclude_dirs};
         if self.languages_of_interest.is_none() {self.languages_of_interest = config.languages_of_interest};
