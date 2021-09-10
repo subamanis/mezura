@@ -49,7 +49,8 @@ Below there is a list with all the commands-flags that the program accepts.
     Display this message on the terminal. No other arguments or commands are required.
     
  --dirs
-    The paths to the directories or files, seperated by commas if more than 1, in this form: '--dirs <path1, path2>'
+    The paths to the directories or files, seperated by commas if more than 1,
+    in this form: '--dirs <path1, path2>'
     They can either be surrounded by quotes: \"path\" or not, even if the paths have whitespace.
 
     The target directories can also be given implicitly (in which case this command is not needed) with 2 ways:
@@ -58,7 +59,8 @@ Below there is a list with all the commands-flags that the program accepts.
 
 --exclude 
     1..n arguments separated by commas, can be a folder name, a file name (including extension), 
-    or a full path to a folder or file. The paths can be surrounded by quotes or not, even if they have whitespace.
+    or a full path to a folder or file. The paths can be surrounded by quotes or not,
+    even if they have whitespace.
 
     The program will ignore these dirs.
 
