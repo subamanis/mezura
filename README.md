@@ -10,6 +10,7 @@ Example run:
 ## Table of contents
 * [How To Run](#how-to-run)
 * [Details](#details)
+* [Configuration Files](#configuration-files)
 * [Supported Languages](#supported-languages)
 * [Accuracy and Limitations](#accuracy-and-limitations)
 * [Performance](#performance)
@@ -119,12 +120,6 @@ Below there is a list with all the commands-flags that the program accepts.
 --save
     One argument as the file name (whitespace allowed, without an extension, case-insensitive)
 
-    If we plan to run the program many times for a project, it can be bothersome to specify,
-    all the flags every time, especially if they contain a lot of target and exclude dirs for example.
-    That's why you can specify all the flags once, and add this command to save them
-    as a configuration file. If you specify a '--dirs' command, it will save the absolute
-    version of the specified path in the config file, otherwise, no path will be specified.
-
     Doing so, will run the program and also create a .txt configuration file,
     inside 'data/config/' with the specified name, that can later be loaded with the --load command.
 
@@ -134,14 +129,25 @@ Below there is a list with all the commands-flags that the program accepts.
     Assosiated with the '--save' command, this command is used to load the flags of 
     an existing configuration file from the 'data/config/' directory. 
 
-    There is already a configuration file named 'default.txt' that contains the default of the program,
-    and gets automatically loaded with each program run. You can modify it to add common flags
-    so you dont have to create the same configurations for different projects.
-
-    If you provide in the cmd a flag that exists also in the specified config file,
-    then the value of the cmd is used. The priority is cmd> custom config> default config. 
     You can combine the '--load' and '--save' commands to modify a configuration file.
 ```
+
+
+## Configuration Files
+If we plan to run the program many times for a project, it can be bothersome to specify all the flags every time, especially if they contain a lot of target and exclude dirs.
+That's why you can specify many flags in a <b>*configuration file*</b>, and have the program just load that file (see the --load command). <br>
+
+Configurations can be created automatically by specifying all the flags once, along with the command "--save". Then the program, along with its normal execution, will automatically create a config file with the name you specified, and dump all the flags in there. 
+The next time you want to run the program on this project, you can do it like this: ```mezura --load <config_name>``` <br>
+
+By default, there is a configuration file name "default" already present in the "data/config" dir, that gets loaded with every run. There, you can customize your preferences and they will apply to all runs, except if overriden by explicitely providing a different flag in the cmd, or by loading a specific configuration. For example, if you prefer counting braces as code, you can specify it there, because the default behaviour is to not regard them as code. <br>
+
+The priorities of the specified flags are:
+1) cmd
+2) Specific config file
+3) Default config file
+4) Internal defaults
+
 
 
 ## Supported Languages
