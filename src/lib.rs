@@ -14,7 +14,6 @@ mod result_printer;
 mod consumer;
 mod producer;
 
-use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, Offset};
 pub use colored::{Colorize,ColoredString};
 pub use config_manager::Configuration;
 pub use utils::*;
@@ -26,8 +25,10 @@ pub type BoolRef            = Arc<AtomicBool>;
 pub type ContentInfoMapRef  = Arc<Mutex<HashMap<String,LanguageContentInfo>>>;
 pub type LanguageMapRef     = Arc<HashMap<String,Language>>;
 
+use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, Offset};
 use std::{borrow::Borrow, collections::{HashMap, LinkedList}, error::Error, fs::{self, File}, io::{self, BufRead, BufReader, BufWriter, Read, Write}, path::{Path, PathBuf}, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant}};
 use std::{sync::{Arc, Mutex}, thread::JoinHandle};
+
 
 pub struct Metrics {
     pub files_per_sec: usize,

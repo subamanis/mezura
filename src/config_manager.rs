@@ -306,7 +306,8 @@ fn print_help_message_and_exit() {
     COMMANDS:
 
     --dirs
-        The paths to the directories or files, seperated by commas if more than 1, in this form: '--dirs <path1, path2>'
+        The paths to the directories or files, seperated by commas if more than 1,
+        in this form: '--dirs <path1>, <path2>'
         They can either be surrounded by quotes: \"path\" or not, even if the paths have whitespace.
 
         The target directories can also be given implicitly (in which case this command is not needed) with 2 ways:
@@ -330,15 +331,15 @@ fn print_help_message_and_exit() {
     --threads
         1 argument: a number between 1 and 8. Default: 4 
 
-        This reprisents the number of the consumer threads that parse files,
-        there is also always one producer thread that is traversing the given dir.
+        This represents the number of the consumer threads that will parse files.
+        (there is also always one producer thread that is traversing the given dir).
 
         Increasing the number of consumers can help performance a bit in a situation where
         there are a lot of big files, concentrated in a shallow directory structure.
         
     --braces-as-code
-        No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
-        or anything else to disable. Default: disabled
+        No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable, or 'no'
+        to disable. Default: no 
 
         Specifies whether lines that only contain braces ( {{ or }} ), should be considered as code lines or not.
 
@@ -348,14 +349,14 @@ fn print_help_message_and_exit() {
 
     --search-in-dotted
         No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
-        or anything else to disable. Default: disabled
+        or 'no' to disable. Default: no 
 
         Specifies whether the program should traverse directories that are prefixed with a dot,
         like .vscode or .git.
 
     --show-faulty-files
         No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
-        or anything else to disable. Default: disabled
+        or 'no' to disable. Default: no 
 
         Sometimes it happens that an error occurs when trying to parse a file, either while opening it,
         or while reading it's contents. The default behavior when this happens is to count all of
@@ -366,10 +367,24 @@ fn print_help_message_and_exit() {
 
     --no-visual
         No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
-        or anything else to disable. Default: disabled
+        or 'no' to disable. Default: no 
 
         Disables the colors in the \"overview\" section of the results, and disables the visualization with 
         the vertical lines that reprisent the percentages.
+
+    --log 
+        No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
+        or 'no' to disable. Default: no 
+    
+        This flag only works if a configuration file is loaded. Specifies that a new log entry should be made
+        with the stats of this program execution, inside the appropriate file in the 'data/logs' directory.
+        If not log file exists for this configuration, one is created.
+    
+    --compare
+        1 argument: a number between 0 and 10. Default: 1
+    
+        This flag only works if a configuration file is loaded. Specifies with how many previous logs this
+        program execution should be compared to (see '--save' and '--load' commands).
 
     --save
         One argument as the file name (whitespace allowed, without an extension, case-insensitive)

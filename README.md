@@ -9,8 +9,9 @@ Example run:
 
 ## Table of contents
 * [How To Run](#how-to-run)
-* [Details](#details)
+* [Details and Flags](#details-and-flags)
 * [Configuration Files](#configuration-files)
+* [Logs and Progress](#logs-and-progress)
 * [Supported Languages](#supported-languages)
 * [Accuracy and Limitations](#accuracy-and-limitations)
 * [Performance](#performance)
@@ -28,7 +29,7 @@ The program, expects a path to a directory or a code file (they can be many diff
 The program also accepts a lot of optional flags to customize functionality, see the next section for more info or use the --help command.
 
 	
-## Details
+## Details and Flags
 The generated stats are the following:
 - Number of files
 - Lines (code + others) and percentages
@@ -49,14 +50,14 @@ Below there is a list with all the commands-flags that the program accepts.
 --help
     Display this message on the terminal. No other arguments or commands are required.
     
- --dirs
+--dirs
     The paths to the directories or files, seperated by commas if more than 1,
-    in this form: '--dirs <path1, path2>'
+    in this form: '--dirs <path1>, <path2>'
     They can either be surrounded by quotes: \"path\" or not, even if the paths have whitespace.
 
     The target directories can also be given implicitly (in which case this command is not needed) with 2 ways:
     1) as the first arguments of the program directly
-    2) if they are present in a configuration file (see '--save' and '--load' commands).
+    2) if they are present in a configuration file (see [Configuration Files](#configuration-files)).
 
 --exclude 
     1..n arguments separated by commas, can be a folder name, a file name (including extension), 
@@ -76,15 +77,15 @@ Below there is a list with all the commands-flags that the program accepts.
 --threads
     1 argument: a number between 1 and 8. Default: 4 
 
-    This reprisents the number of the consumer threads that parse files,
-    there is also always one producer thread that is traversing the given dir.
+    This represents the number of the consumer threads that will parse files.
+    (there is also always one producer thread that is traversing the given dir).
 
     Increasing the number of consumers can help performance a bit in a situation where
     there are a lot of big files, concentrated in a shallow directory structure.
     
 --braces-as-code
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
-    or anything else to disable. Default: disabled
+    or 'no' to disable. Default: no 
 
     Specifies whether lines that only contain braces, should be considered as code lines or not.
 
@@ -94,28 +95,42 @@ Below there is a list with all the commands-flags that the program accepts.
 
 --search-in-dotted
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
-    or anything else to disable. Default: disabled
+    or 'no' to disable. Default: no 
 
     Specifies whether the program should traverse directories that are prefixed with a dot,
     like .vscode or .git.
 
 --show-faulty-files
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
-    or anything else to disable. Default: disabled
+    or 'no' to disable. Default: no 
 
     Sometimes it happens that an error occurs when trying to parse a file, either while opening it,
     or while reading it's contents. The default behavior when this happens is to count all of
     the faulty files and display their count.
 
-    This flag specifies that their path, along with information about the exact error is displayed too.
+    Specifies that their path, along with information about the exact error is displayed too.
     The most common reason for this error is if a file contains non UTF-8 characters. 
 
 --no-visual
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
-    or anything else to disable. Default: disabled
+    or 'no' to disable. Default: no 
 
     Disables the colors in the "overview" section of the results, and disables the visualization with 
     the vertical lines that reprisent the percentages.
+
+--log 
+    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
+    or 'no' to disable. Default: no 
+
+    This flag only works if a configuration file is loaded. Specifies that a new log entry should be made
+    with the stats of this program execution, inside the appropriate file in the 'data/logs' directory.
+    If not log file exists for this configuration, one is created.
+
+--compare
+    1 argument: a number between 0 and 10. Default: 1
+
+    This flag only works if a configuration file is loaded. Specifies with how many previous logs this
+    program execution should be compared to (see [Logs and Progress](#logs-and-progress)).
 
 --save
     One argument as the file name (whitespace allowed, without an extension, case-insensitive)
@@ -133,6 +148,7 @@ Below there is a list with all the commands-flags that the program accepts.
 ```
 
 
+
 ## Configuration Files
 If we plan to run the program many times for a project, it can be bothersome to specify all the flags every time, especially if they contain a lot of target and exclude dirs.
 That's why you can specify many flags in a <b>*configuration file*</b>, and have the program just load that file (see the --load command). <br>
@@ -147,6 +163,20 @@ The priorities of the specified flags are:
 2) Specific config file
 3) Default config file
 4) Internal defaults
+
+
+
+## Logs and Progress
+Inside the 'data/logs' folder, the program will save log files that correspond to saved configurations everytime the '--log' flag is used. <br>
+Inside the log files, the date and time of the execution is saved, along with information about the current configuration (like the target directories,
+whether braces should be considered code, etc, so you can see if at some point the configuration got modified), and also the total files, lines, code lines,
+extra lines, size and average size of the execution. They are in an easy to parse format for external use also. <br>
+
+By using the '--compare <N>' flag, the (N) previous logged executions will be retrieved from the file and will be compared and printed to the screen. For example
+for N = 3, it would look like this:
+![](screenshots/compare-logs.PNG)
+
+Note that a configuration file must be loaded for both of these flags to work
 
 
 
@@ -212,7 +242,8 @@ With that said, it is important to mention the following limitations:
 ## Performance
 On a cold run, performance is mainly limited by how fast the producer thread can traverse the directory and find relevant files, so the consumers can parse them.
 
-The performance will also vary depending on how deep and wide the directory structure is, how big the code files are and how many keywords are specified to be counted. 
+The performance will also vary depending on how deep and wide the directory structure is, how big the code files are, the ratio of relevant to irrelevant files, 
+and how many keywords are specified to be counted. 
 
 Here are some metrics for both hot and cold executions on my laptop (i5-1035G1, 2 keywords per language):
 
