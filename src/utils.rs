@@ -58,6 +58,16 @@ pub fn print_contents<T>(vec :&[T]) where T : Debug {
     }
 }
 
+pub fn extract_file_contents(file_path: &str) -> Option<String> {
+    if Path::new(&file_path).exists() {
+        let mut contents = String::with_capacity(700);
+        File::open(&file_path).unwrap().read_to_string(&mut contents);
+        return Some(contents)
+    } else {
+        return Some(String::new());
+    }
+}
+
 #[inline]
 pub fn get_file_extension(path: &Path) -> Option<&str> {
     match path.extension() {

@@ -1,13 +1,15 @@
-use std::{{ffi::OsString, path::Path}, cmp::max, collections::{HashMap as HashMap}, env, fs::{self, File, ReadDir}, io::{BufRead, BufReader, BufWriter, Write}, path::PathBuf};
+use std::{{ffi::OsString, path::Path}, cmp::max, collections::{HashMap as HashMap}, env, fs::{self, File, ReadDir}, io::{self, BufRead, BufReader, BufWriter, Write}, path::PathBuf};
 
+use chrono::{DateTime, Local};
 use colored::*;
 use lazy_static::lazy_static;
 
-use crate::{Configuration, utils,config_manager::{self, ConfigurationBuilder,BRACES_AS_CODE, EXCLUDE, LANGUAGES, DIRS, SEARCH_IN_DOTTED,
-     SHOW_FAULTY_FILES, THREADS, MIN_THREADS_VALUE, MAX_THREADS_VALUE, MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL},domain::*};
+use crate::{Configuration, FinalStats, config_manager::{self, ConfigurationBuilder,BRACES_AS_CODE, EXCLUDE, LANGUAGES, DIRS, SEARCH_IN_DOTTED,
+     SHOW_FAULTY_FILES, THREADS, MIN_THREADS_VALUE, MAX_THREADS_VALUE, MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL}, domain::*, utils};
 
 lazy_static! {
     pub static ref DATA_DIR : Option<String> = try_find_data_dir();
+    pub static ref LOG_DIR  : String = find_or_create_log_dir(); 
 }
 
 const DEFAULT_CONFIG_FILE_NAME : &str = "default";
@@ -132,8 +134,8 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<ConfigurationBuilder
         Err(_) => return Err(ParseConfigFileError::FileNotFound(file_name.to_owned()))
     });
 
-    let (mut dirs, mut braces_as_code, mut search_in_dotted, mut threads, mut exclude_dirs, mut languages_of_interest,
-         mut show_faulty_files, mut no_visual, mut compare_level) = (None,None,None,None,None,None,None,None,None);
+    let (mut dirs, mut braces_as_code, mut should_search_in_dotted, mut threads, mut exclude_dirs, mut languages_of_interest,
+         mut should_show_faulty_files, mut no_visual, mut log, mut compare_level) = (None,None,None,None,None,None,None,None,None,None);
     let mut buf = String::with_capacity(150); 
 
     while let Ok(size) = reader.read_line(&mut buf) {
@@ -163,23 +165,24 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<ConfigurationBuilder
             }else if id == config_manager::BRACES_AS_CODE {
                 braces_as_code = read_bool_value(&mut reader, &mut buf);
             } else if id == config_manager::SHOW_FAULTY_FILES {
-                show_faulty_files = read_bool_value(&mut reader, &mut buf);
+                should_show_faulty_files = read_bool_value(&mut reader, &mut buf);
             } else if id == config_manager::SEARCH_IN_DOTTED {
-                search_in_dotted = read_bool_value(&mut reader, &mut buf);
+                should_search_in_dotted = read_bool_value(&mut reader, &mut buf);
             } else if id == config_manager::NO_VISUAL {
                 no_visual = read_bool_value(&mut reader, &mut buf);
+            } else if id == config_manager::LOG {
+                log = read_bool_value(&mut reader, &mut buf);
             } else if id == config_manager::COMPRARE_LEVEL {
                 buf.clear();
                 reader.read_line(&mut buf);
                 compare_level = utils::parse_usize_value(&buf,MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL);
             }
-
         }
         buf.clear();
     }
 
-    Ok(ConfigurationBuilder::new(dirs,exclude_dirs, languages_of_interest, threads, braces_as_code,
-             search_in_dotted, show_faulty_files, no_visual, compare_level))
+    Ok(ConfigurationBuilder::new(dirs,exclude_dirs, languages_of_interest, threads, braces_as_code,should_search_in_dotted,
+             should_show_faulty_files, no_visual, log, compare_level))
 }
 
 pub fn save_config_to_file(config_name: &str, config: &Configuration) -> std::io::Result<()> {
@@ -216,6 +219,10 @@ pub fn save_config_to_file(config_name: &str, config: &Configuration) -> std::io
     writer.write(if config.should_show_faulty_files {b"yes"} else {b"no"});
     writer.write(&[b"\n\n===> ",config_manager::NO_VISUAL.as_bytes(),b"\n"].concat());
     writer.write(if config.no_visual {b"yes"} else {b"no"});
+    writer.write(&[b"\n\n===> ",config_manager::LOG.as_bytes(),b"\n"].concat());
+    writer.write(if config.log {b"yes"} else {b"no"});
+    writer.write(&[b"\n\n===> ",config_manager::COMPRARE_LEVEL.as_bytes(),b"\n"].concat());
+    writer.write(config.compare_level.to_string().as_bytes());
 
     writer.write(b"\n");    
     writer.flush();
@@ -223,6 +230,39 @@ pub fn save_config_to_file(config_name: &str, config: &Configuration) -> std::io
     Ok(())
 }
 
+pub fn log_stats(path: &str, contents: &Option<String>, final_stats: &FinalStats, datetime_now: &DateTime<Local>, config: &Configuration) -> io::Result<()> {
+    let mut writer = std::io::BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(path)?);
+
+    write_current_log(&mut writer, config, datetime_now, final_stats);
+
+    if let Some(contents) = contents {
+        writer.write(contents.as_bytes());
+    }
+    writer.flush();
+
+    Ok(())
+}
+
+
+fn write_current_log(writer: &mut BufWriter<File>, config: &Configuration, datetime_now: &DateTime<Local>, final_stats: &FinalStats) {
+    writer.write(b"===>Entry\n");
+    writer.write(datetime_now.format("%Y-%m-%d %H:%M:%S %z").to_string().as_bytes());
+    writer.write(b"\n");
+    writer.write(b"Configuration:\n");
+    writer.write(format!("    dirs: {}\n",config.dirs.join(",")).as_bytes());
+    writer.write(format!("    exclude: {}\n",config.exclude_dirs.join(",")).as_bytes());
+    writer.write(format!("    languages: {}\n",config.languages_of_interest.join(",")).as_bytes());
+    writer.write(format!("    braces-as-code: {}\n",if config.braces_as_code{"yes"} else {"no"}).as_bytes());
+    writer.write(format!("    search-in-dotted: {}\n",if config.should_search_in_dotted{"yes"} else {"no"}).as_bytes());
+    writer.write(b"Stats:\n");
+    writer.write(format!("    Files: {}\n",final_stats.files).as_bytes());
+    writer.write(format!("    Lines: {}\n",final_stats.lines).as_bytes());
+    writer.write(format!("        Code: {}\n",final_stats.code_lines).as_bytes());
+    writer.write(format!("        Extra: {}\n",final_stats.extra_lines).as_bytes());
+    writer.write(format!("    Total Size: {} {}\n",final_stats.size, final_stats.size_measurement).as_bytes());
+    writer.write(format!("        Average Size: {} {}\n\n\n",final_stats.average_size, final_stats.average_size_measurement).as_bytes());
+    writer.write(b"--------------------------------------------------------------------------------------------\n\n\n");
+}
 
 fn parse_file_to_language(mut reader :my_reader::BufReader, buffer :&mut String) -> Result<Language,()> {
     if !reader.read_line_and_compare(buffer, "Language") {return Err(());}
@@ -350,6 +390,14 @@ fn try_get_folder_of_exe() -> Option<String> {
     }
 
     None
+}
+
+fn find_or_create_log_dir() -> String {
+    let path = DATA_DIR.clone().unwrap() + "/logs/";
+    if !Path::new(&path).exists() {
+        fs::create_dir(&path).unwrap();
+    }
+    path
 }
 
 impl ParseLanguageError {

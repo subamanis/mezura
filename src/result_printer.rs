@@ -21,8 +21,8 @@ pub fn format_and_print_results(content_info_map: &mut HashMap<String, LanguageC
     print_individually(&sorted_language_names, &content_info_map, languages_metadata_map, biggest_prefix_standard_spaces);
 
     if languages_metadata_map.len() > 1 {
-        print_sum(&content_info_map, &languages_metadata_map, biggest_prefix_standard_spaces);
-        print_visual_overview(&mut sorted_language_names, content_info_map, languages_metadata_map, config);
+        print_sum(&content_info_map, final_stats, biggest_prefix_standard_spaces);
+        print_visual_overview(&mut sorted_language_names, content_info_map, languages_metadata_map, final_stats, config);
     }
 
     if let Some(content) = existing_log_content {
@@ -30,101 +30,6 @@ pub fn format_and_print_results(content_info_map: &mut HashMap<String, LanguageC
             print_comparison_to_previous_runs(final_stats, content,  config.compare_level, datetime_now);
         }    
     }
-}
-
-fn split_minutes_to_D_H_M(mut minutes: i64) -> (i64, i64, i64) {
-    let minutes_in_day = 60 * 24;
-    let minutes_in_hour = 60;
-    let days = minutes / minutes_in_day;
-    minutes = minutes - days * minutes_in_day;
-    let hours = minutes / minutes_in_hour;
-    minutes = minutes - hours * minutes_in_hour;
-
-    (days, hours, minutes)
-}
-
-fn difference_as_signed_percentage_str_of_usize(older: usize, newer: usize) -> String {
-    let (difference, sign) = if newer > older {(newer-older, "+".to_owned())} else if older > newer {(older-newer, "-".to_owned())} else {(0,String::new())};
-    let percentage = (difference as f64 / newer as f64) * 100.0;
-
-    sign + &round_2(percentage).to_string()
-}
-
-fn difference_as_signed_percentage_str_of_f64(older: f64, newer: f64) -> String {
-    let (difference, sign) = if newer > older {(newer-older, "+".to_owned())} else if older > newer {(older-newer, "-".to_owned())} else {(0.0,String::new())};
-    let percentage = (difference as f64 / newer as f64) * 100.0;
-
-    sign + &round_2(percentage).to_string()
-}
-
-fn print_comparison_to_previous_runs(final_stats: &FinalStats, log_content: &String, num_of_entries: usize, datetime_now: &DateTime<Local>) {
-    println!("\n{}.\n", "Progress Report".underline().bold());
-
-    let (stat_entries, dates) = read_N_previous_entries(log_content, num_of_entries);
-
-    let mut comparison_str = String::with_capacity(200);
-    for (i,entry) in stat_entries.iter().enumerate() {
-        let then = (&dates[i]).to_owned();
-        let then_str = then.naive_local().to_string();
-        let duration = datetime_now.signed_duration_since(then);
-        let (days, hours, minutes) = split_minutes_to_D_H_M(duration.num_minutes());
-        comparison_str.push_str(&format!("--> {} ({} days, {} hours and {} minutes ago)\n",then_str, days, hours, minutes));
-        comparison_str.push_str(&format!("    Files: {}({}%) Lines:{}({}%) {{Code: {}({}%), Extra: {}({}%)}}  |  Size: {}({}%) - Average: {}({}%)\n\n",
-                entry.files, difference_as_signed_percentage_str_of_usize(entry.files, final_stats.files),
-                entry.lines, difference_as_signed_percentage_str_of_usize(entry.lines, final_stats.lines),
-                entry.code_lines, difference_as_signed_percentage_str_of_usize(entry.code_lines, final_stats.code_lines),
-                entry.extra_lines, difference_as_signed_percentage_str_of_usize(entry.extra_lines, final_stats.extra_lines),
-                entry.size, difference_as_signed_percentage_str_of_f64(entry.size, final_stats.size), 
-                entry.average_size, difference_as_signed_percentage_str_of_f64(entry.average_size, final_stats.average_size)
-        ));
-    }
-    println!("{}", comparison_str);
-}
-
-fn read_N_previous_entries(log_content: &String, n: usize) -> (Vec<FinalStats>, Vec<DateTime<Local>>) {
-    let mut entries = Vec::new();
-    let mut dates = Vec::new();
-    let (mut files, mut lines, mut code_lines, mut extra_lines, mut size, mut size_measurement) =
-            (0, 0, 0, 0, 0f64, String::new());
-    let mut counter = 0;
-    let mut is_expecting_date = false;
-
-    for line in log_content.lines() {
-        let line = line.trim_start();
-        if is_expecting_date {
-            let datetime = chrono::DateTime::parse_from_str(line, "%Y-%m-%d %H:%M:%S%.3f %z").unwrap();
-            dates.push(datetime.with_timezone(&Local));
-            is_expecting_date = false;
-        }
-
-        if line.starts_with("===>") {
-            is_expecting_date = true;
-        } else if let Some(value) = line.strip_prefix("Files:") {
-            files = value.trim().parse::<usize>().unwrap();
-        } else if let Some(value) = line.strip_prefix("Lines:") {
-            lines = value.trim().parse::<usize>().unwrap();
-        } else if let Some(value) = line.strip_prefix("Code:") {
-            code_lines = value.trim().parse::<usize>().unwrap();
-        } else if let Some(value) = line.strip_prefix("Extra:") {
-            extra_lines = value.trim().parse::<usize>().unwrap();
-        } else if let Some(value) = line.strip_prefix("Total Size:") {
-            let pieces = value.split_whitespace().into_iter().filter_map(|x| utils::get_if_not_empty(x.trim())).collect::<Vec<_>>();
-            if pieces.len() < 2 {};
-            size = pieces[0].parse::<f64>().unwrap();
-            size_measurement = pieces[1].clone();
-        } else if let Some(value) = line.strip_prefix("Average Size:") {
-            let pieces = value.split_whitespace().into_iter().filter_map(|x| utils::get_if_not_empty(x.trim())).collect::<Vec<_>>();
-            if pieces.len() < 2 {};
-            let average_size = pieces[0].parse::<f64>().unwrap();
-            let average_size_measurement = pieces[1].clone();
-
-            counter += 1;
-            entries.push(FinalStats::new(files, lines, code_lines, extra_lines, size, size_measurement.clone(), average_size, average_size_measurement.clone()));
-            if counter == n {return (entries, dates)}
-        }
-    }
-
-    (entries, dates)
 }
 
 
@@ -194,28 +99,22 @@ fn print_individually(sorted_languages: &[String], content_info_map: &HashMap<St
 }
 
 
-fn print_sum(content_info_map: &HashMap<String,LanguageContentInfo>, languages_metadata_map: &HashMap<String,LanguageMetadata>,
-    biggest_prefix_standard_spaces: usize) 
+fn print_sum(content_info_map: &HashMap<String,LanguageContentInfo>, final_stats: &FinalStats, biggest_prefix_standard_spaces: usize) 
 {
-    let (mut total_files, mut total_lines, mut total_code_lines, mut total_bytes) = (0, 0, 0,0);
-    languages_metadata_map.values().for_each(|e| {total_files += e.files; total_bytes += e.bytes});
-    content_info_map.values().for_each(|c| {total_lines += c.lines; total_code_lines += c.code_lines});
-
     let (total_files_str, total_lines_str, total_code_lines_str, total_extra_lines_str) = 
-            (with_seperators(total_files),with_seperators(total_lines),with_seperators(total_code_lines), with_seperators(total_lines-total_code_lines)); 
-    let (total_size, total_size_descr) = get_size_and_formatted_size_text(total_bytes, "total");
-    let (average_size, average_size_descr) = get_size_and_formatted_size_text(total_bytes / total_files, "average");
+            (with_seperators(final_stats.files),with_seperators(final_stats.lines),with_seperators(final_stats.code_lines), with_seperators(final_stats.extra_lines)); 
 
     let keywords_sum_map = create_keyword_sum_map(content_info_map);
     let keywords_line = get_keywords_as_str(&keywords_sum_map, biggest_prefix_standard_spaces);
 
     let spaces = biggest_prefix_standard_spaces - (5 + total_files_str.len());
     let title = format!("{}   {}{} {}  -> ","total".bold()," ".repeat(spaces),total_files_str,colored_word("files"));
-    let code_lines_percentage = if total_lines > 0 {total_code_lines as f64 / total_lines as f64 * 100f64} else {0f64};
-    let size_text = format!("{:.1} {} - {:.1} {}",total_size,total_size_descr,average_size,average_size_descr);
+    let code_lines_percentage = if final_stats.lines > 0 {final_stats.code_lines as f64 / final_stats.lines as f64 * 100f64} else {0f64};
+    let size_text = format!("{:.1} {} total - {:.1} {} average",final_stats.size,final_stats.size_measurement,
+            final_stats.average_size,final_stats.average_size_measurement);
 
     let line_len = STANDARD_LINE_STATS_LEN + total_files_str.len() + total_code_lines_str.len() + total_extra_lines_str.len() +
-            total_size.to_string().len() + average_size.to_string().len() + 47;
+            final_stats.size.to_string().len() + final_stats.average_size.to_string().len() + 47;
     println!("{} ","-".repeat(line_len));
 
     let info = format!("{} {} {{{} code ({:.2}%) + {} extra}}  |  {}\n",colored_word("lines"), total_lines_str,total_code_lines_str,
@@ -232,7 +131,7 @@ fn print_sum(content_info_map: &HashMap<String,LanguageContentInfo>, languages_m
 //
 // Size : ...
 fn print_visual_overview(sorted_language_vec: &mut Vec<String>, content_info_map: &mut HashMap<String, LanguageContentInfo>,
-        languages_metadata_map: &mut HashMap<String, LanguageMetadata>, config: &Configuration) 
+        languages_metadata_map: &mut HashMap<String, LanguageMetadata>, final_stats: &FinalStats, config: &Configuration) 
 {
     fn make_cyan(str: &str) -> String {
         str.cyan().to_string()
@@ -254,7 +153,7 @@ fn print_visual_overview(sorted_language_vec: &mut Vec<String>, content_info_map
     }
 
     if content_info_map.len() > 4 {
-        retain_most_relevant_and_add_others_field_for_rest(sorted_language_vec, content_info_map, languages_metadata_map);
+        retain_most_relevant_and_add_others_field_for_rest(sorted_language_vec, content_info_map, languages_metadata_map, final_stats);
     }
 
     println!("{}.\n", "Overview".underline().bold());
@@ -285,6 +184,111 @@ fn print_visual_overview(sorted_language_vec: &mut Vec<String>, content_info_map
     println!("{}\n\n{}\n\n{}\n",files_line, lines_line, size_line);
 }
 
+fn print_comparison_to_previous_runs(final_stats: &FinalStats, log_content: &String, num_of_entries: usize, datetime_now: &DateTime<Local>) {
+    println!("\n{}.\n", "Progress".underline().bold());
+
+    let (stat_entries, dates) = parse_N_previous_entries(log_content, num_of_entries);
+
+    let mut comparison_str = String::with_capacity(200);
+    for (i,entry) in stat_entries.iter().enumerate() {
+        let then = (&dates[i]).to_owned();
+        let then_str = then.naive_local().to_string();
+        let duration = datetime_now.signed_duration_since(then);
+        let (days, hours, minutes) = split_minutes_to_D_H_M(duration.num_minutes());
+        comparison_str.push_str(&format!("{} {} ({} days, {} hours and {} minutes ago)\n","->".bold(), then_str, days, hours, minutes));
+        comparison_str.push_str(&format!("    Files: {}({}%) Lines: {}({}%) {{Code: {}({}%), Extra: {}({}%)}}  |  Size: {} {}({}%) - Average: {} {}({}%)\n\n",
+                entry.files, color_percentage(&difference_as_signed_percentage_str_of_usize(entry.files, final_stats.files)),
+                entry.lines, color_percentage(&difference_as_signed_percentage_str_of_usize(entry.lines, final_stats.lines)),
+                entry.code_lines, color_percentage(&difference_as_signed_percentage_str_of_usize(entry.code_lines, final_stats.code_lines)),
+                entry.extra_lines, color_percentage(&difference_as_signed_percentage_str_of_usize(entry.extra_lines, final_stats.extra_lines)),
+                entry.size, entry.size_measurement, color_percentage(&difference_as_signed_percentage_str_of_f64(entry.size, final_stats.size)),
+                entry.average_size, entry.average_size_measurement, color_percentage(&difference_as_signed_percentage_str_of_f64(entry.average_size, final_stats.average_size))
+        ));
+    }
+    println!("{}", comparison_str);
+
+    fn color_percentage(percentage: &str) -> ColoredString {
+        if percentage.starts_with("+") {
+            percentage.truecolor(201, 255, 189)
+        } else if percentage.starts_with("-") {
+            percentage.truecolor(219, 129, 129)
+        } else {
+            percentage.truecolor(255, 255, 255)
+        }
+    }   
+}
+
+
+fn split_minutes_to_D_H_M(mut minutes: i64) -> (i64, i64, i64) {
+    let minutes_in_day = 60 * 24;
+    let minutes_in_hour = 60;
+    let days = minutes / minutes_in_day;
+    minutes = minutes - days * minutes_in_day;
+    let hours = minutes / minutes_in_hour;
+    minutes = minutes - hours * minutes_in_hour;
+
+    (days, hours, minutes)
+}
+
+fn difference_as_signed_percentage_str_of_usize(older: usize, newer: usize) -> String {
+    let (difference, sign) = if newer > older {(newer-older, "+".to_owned())} else if older > newer {(older-newer, "-".to_owned())} else {(0,String::new())};
+    let percentage = (difference as f64 / older as f64) * 100.0;
+
+    sign + &round_2(percentage).to_string()
+}
+
+fn difference_as_signed_percentage_str_of_f64(older: f64, newer: f64) -> String {
+    let (difference, sign) = if newer > older {(newer-older, "+".to_owned())} else if older > newer {(older-newer, "-".to_owned())} else {(0.0,String::new())};
+    let percentage = (difference as f64 / older as f64) * 100.0;
+
+    sign + &round_2(percentage).to_string()
+}
+
+fn parse_N_previous_entries(log_content: &String, n: usize) -> (Vec<FinalStats>, Vec<DateTime<Local>>) {
+    let mut entries = Vec::new();
+    let mut dates = Vec::new();
+    let (mut files, mut lines, mut code_lines, mut extra_lines, mut size, mut size_measurement) =
+            (0, 0, 0, 0, 0f64, String::new());
+    let mut counter = 0;
+    let mut is_expecting_date = false;
+
+    for line in log_content.lines() {
+        let line = line.trim_start();
+        if is_expecting_date {
+            let datetime = chrono::DateTime::parse_from_str(line, "%Y-%m-%d %H:%M:%S %z").unwrap();
+            dates.push(datetime.with_timezone(&Local));
+            is_expecting_date = false;
+        }
+
+        if line.starts_with("===>") {
+            is_expecting_date = true;
+        } else if let Some(value) = line.strip_prefix("Files:") {
+            files = value.trim().parse::<usize>().unwrap();
+        } else if let Some(value) = line.strip_prefix("Lines:") {
+            lines = value.trim().parse::<usize>().unwrap();
+        } else if let Some(value) = line.strip_prefix("Code:") {
+            code_lines = value.trim().parse::<usize>().unwrap();
+        } else if let Some(value) = line.strip_prefix("Extra:") {
+            extra_lines = value.trim().parse::<usize>().unwrap();
+        } else if let Some(value) = line.strip_prefix("Total Size:") {
+            let pieces = value.split_whitespace().into_iter().filter_map(|x| utils::get_if_not_empty(x.trim())).collect::<Vec<_>>();
+            if pieces.len() < 2 {};
+            size = pieces[0].parse::<f64>().unwrap();
+            size_measurement = pieces[1].clone();
+        } else if let Some(value) = line.strip_prefix("Average Size:") {
+            let pieces = value.split_whitespace().into_iter().filter_map(|x| utils::get_if_not_empty(x.trim())).collect::<Vec<_>>();
+            if pieces.len() < 2 {};
+            let average_size = pieces[0].parse::<f64>().unwrap();
+            let average_size_measurement = pieces[1].clone();
+
+            counter += 1;
+            entries.push(FinalStats::new(files, lines, code_lines, extra_lines, size, size_measurement.clone(), average_size, average_size_measurement.clone()));
+            if counter == n {return (entries, dates)}
+        }
+    }
+
+    (entries, dates)
+} 
 
 fn get_keywords_as_str(keyword_occurencies: &HashMap<String,usize>, max_files_num_size: usize) -> String {
     let mut keyword_info = String::new();
@@ -495,18 +499,19 @@ fn add_verticals_str(line: &mut String, files_verticals: &[usize], color_func_ve
 }
 
 fn retain_most_relevant_and_add_others_field_for_rest(sorted_language_names: &mut Vec<String>,
-     content_info_map: &mut HashMap<String, LanguageContentInfo>, languages_metadata_map: &mut HashMap<String, LanguageMetadata>) 
+        content_info_map: &mut HashMap<String, LanguageContentInfo>,
+        languages_metadata_map: &mut HashMap<String, LanguageMetadata>,
+        final_stats: &FinalStats) 
 {
     fn get_files_lines_size(content_info_map: &HashMap<String, LanguageContentInfo>,
-         languages_metadata_map: &HashMap<String, LanguageMetadata>) -> (usize,usize,usize) 
-    {
-        let (mut files, mut lines, mut size) = (0,0,0);
-        content_info_map.iter().for_each(|x| lines += x.1.lines);
-        languages_metadata_map.iter().for_each(|x| {files += x.1.files; size += x.1.bytes});
-        (files, lines, size as usize) 
-    }
+        languages_metadata_map: &HashMap<String, LanguageMetadata>) -> (usize,usize,usize) 
+   {
+       let (mut files, mut lines, mut size) = (0,0,0);
+       content_info_map.iter().for_each(|x| lines += x.1.lines);
+       languages_metadata_map.iter().for_each(|x| {files += x.1.files; size += x.1.bytes});
+       (files, lines, size as usize) 
+   }
 
-    let (total_files, total_lines, total_size) = get_files_lines_size(content_info_map, languages_metadata_map);
     if sorted_language_names.len() > 4 {
         for _ in 3..sorted_language_names.len() {
              sorted_language_names.remove(sorted_language_names.len()-1);
@@ -519,7 +524,7 @@ fn retain_most_relevant_and_add_others_field_for_rest(sorted_language_names: &mu
     
     let (relevant_files, relevant_lines, relevant_size) = get_files_lines_size(content_info_map, languages_metadata_map);
     let (other_files, other_lines, other_size) = 
-        (total_files - relevant_files, total_lines - relevant_lines, total_size - relevant_size);
+        (final_stats.files - relevant_files, final_stats.lines - relevant_lines, final_stats.size as usize - relevant_size);
 
     content_info_map.insert("others".to_string(), LanguageContentInfo::dummy(other_lines));
     languages_metadata_map.insert("others".to_string(), LanguageMetadata::new(other_files, other_size));
@@ -590,6 +595,8 @@ fn get_biggest_prefix_standard_spaces(sorted_language_names: &[String], language
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use super::*;
 
     #[test]
@@ -698,5 +705,66 @@ mod tests {
         let verticals = get_num_of_verticals(&percentages);
         assert!(verticals.iter().sum::<usize>() == 50);
         assert_eq!(vec![1,1,24,24], verticals);
+    }
+
+    #[test]
+    fn test_time_split_from_minutes() {
+        assert_eq!((0,0,0),split_minutes_to_D_H_M(0));
+        assert_eq!((0,0,59),split_minutes_to_D_H_M(59));
+        assert_eq!((0,1,0),split_minutes_to_D_H_M(60));
+        assert_eq!((0,1,1),split_minutes_to_D_H_M(61));
+        assert_eq!((1,0,0),split_minutes_to_D_H_M(1440));
+        assert_eq!((1,0,1),split_minutes_to_D_H_M(1441));
+        assert_eq!((1,1,1),split_minutes_to_D_H_M(1501));
+    }
+
+    #[test]
+    fn test_difference_as_percentages() {
+        assert_eq!("0",difference_as_signed_percentage_str_of_usize(100, 100));
+        assert_eq!("-10",difference_as_signed_percentage_str_of_usize(100, 90));
+        assert_eq!("+100",difference_as_signed_percentage_str_of_usize(100, 200));
+
+        assert_eq!("0",difference_as_signed_percentage_str_of_f64(100.0, 100.0));
+        assert_eq!("-10",difference_as_signed_percentage_str_of_f64(100.0, 90.0));
+        assert_eq!("+100",difference_as_signed_percentage_str_of_f64(100.0, 200.0));
+    }
+
+    #[test]
+    fn test_parse_N_previous_entries() {
+        let contents = utils::extract_file_contents(&(io_handler::DATA_DIR.to_owned().unwrap()+"/../test_dir/logs/test")).unwrap();
+        let (entries, dates) = parse_N_previous_entries(&contents, 3);
+
+        assert_eq!(10, entries[0].files);
+        assert_eq!(1000, entries[0].lines);
+        assert_eq!(100, entries[0].code_lines);
+        assert_eq!(100, entries[0].extra_lines);
+        assert_eq!(100.0, entries[0].size);
+        assert_eq!("KBs".to_owned(), entries[0].size_measurement);
+        assert_eq!(10.0, entries[0].average_size);
+        assert_eq!("KBs".to_owned(), entries[0].average_size_measurement);
+        let datetime: DateTime<Local> = chrono::DateTime::from_str("2021-09-12 16:42:00 +0300").unwrap();
+        assert_eq!(datetime, dates[0]);
+
+        assert_eq!(11, entries[1].files);
+        assert_eq!(1111, entries[1].lines);
+        assert_eq!(111, entries[1].code_lines);
+        assert_eq!(111, entries[1].extra_lines);
+        assert_eq!(111.1, entries[1].size);
+        assert_eq!("KBs".to_owned(), entries[1].size_measurement);
+        assert_eq!(11.1, entries[1].average_size);
+        assert_eq!("KBs".to_owned(), entries[1].average_size_measurement);
+        let datetime: DateTime<Local> = chrono::DateTime::from_str("2021-09-12 16:23:50 +03:00").unwrap();
+        assert_eq!(datetime, dates[1]);
+
+        assert_eq!(12, entries[2].files);
+        assert_eq!(1222, entries[2].lines);
+        assert_eq!(122, entries[2].code_lines);
+        assert_eq!(122, entries[2].extra_lines);
+        assert_eq!(122.2, entries[2].size);
+        assert_eq!("KBs".to_owned(), entries[2].size_measurement);
+        assert_eq!(12.2, entries[2].average_size);
+        assert_eq!("KBs".to_owned(), entries[2].average_size_measurement);
+        let datetime: DateTime<Local> = chrono::DateTime::from_str("2021-09-12 04:01:56 +03:00").unwrap();
+        assert_eq!(datetime, dates[2]);
     }
 }

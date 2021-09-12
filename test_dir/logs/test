@@ -1,0 +1,59 @@
+===>Entry
+2021-09-12 16:42:00 +0300
+Configuration:
+    dirs: ./
+    exclude: 
+    languages: 
+    braces-as-code: no
+    search-in-dotted: no
+Stats:
+    Files: 10
+    Lines: 1000
+        Code: 100
+        Extra: 100
+    Total Size: 100.0 KBs
+        Average Size: 10.0 KBs
+
+
+--------------------------------------------------------------------------------------------
+
+
+===>Entry
+2021-09-12 16:23:50 +03:00
+Configuration:
+    dirs: ./
+    exclude: 
+    languages: 
+    braces-as-code: no
+    search-in-dotted: no
+Stats:
+    Files: 11
+    Lines: 1111
+        Code: 111
+        Extra: 111
+    Total Size: 111.1 KBs
+        Average Size: 11.1 KBs
+
+
+--------------------------------------------------------------------------------------------
+
+
+===>Entry
+2021-09-12 04:01:56 +03:00
+Configuration:
+    dirs: ./
+    exclude: 
+    languages: 
+    braces-as-code: no
+    search-in-dotted: no
+Stats:
+    Files: 12
+    Lines: 1222
+        Code: 122
+        Extra: 122
+    Total Size: 122.2 KBs
+        Average Size: 12.2 KBs
+
+
+--------------------------------------------------------------------------------------------
+

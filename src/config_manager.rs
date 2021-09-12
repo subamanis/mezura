@@ -13,6 +13,7 @@ pub const BRACES_AS_CODE     :&str   = "braces-as-code";
 pub const SEARCH_IN_DOTTED   :&str   = "search-in-dotted";
 pub const SHOW_FAULTY_FILES  :&str   = "show-faulty-files";
 pub const NO_VISUAL          :&str   = "no-visual";
+pub const LOG                :&str   = "log";
 pub const COMPRARE_LEVEL     :&str   = "compare";
 pub const SAVE               :&str   = "save";
 pub const LOAD               :&str   = "load";
@@ -27,6 +28,7 @@ const DEF_BRACES_AS_CODE    : bool    = false;
 const DEF_SEARCH_IN_DOTTED  : bool    = false;
 const DEF_SHOW_FAULTY_FILES : bool    = false;
 const DEF_NO_VISUAL         : bool    = false;
+const DEF_LOG               : bool    = false;
 const DEF_THREADS           : usize   = 4;
 const DEF_COMPARE_LEVEL     : usize   = 1;
 
@@ -41,6 +43,7 @@ pub struct Configuration {
     pub should_search_in_dotted: bool,
     pub should_show_faulty_files: bool,
     pub no_visual: bool,
+    pub log: bool,
     pub compare_level: usize,
     pub config_name_to_save: Option<String>,
     pub config_name_to_load: Option<String>
@@ -55,6 +58,7 @@ pub enum ArgParsingError {
     DoublePath,
     UnrecognisedCommand(String),
     IncorrectCommandArgs(String),
+    UnexpectedCommandArgs(String)
 }
 
 pub fn read_args_cmd() -> Result<Configuration,ArgParsingError> {
@@ -101,8 +105,8 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
     let mut custom_config = None;
     let (mut exclude_dirs, mut languages_of_interest, mut threads, mut braces_as_code,
          mut search_in_dotted, mut show_faulty_files, mut config_name_to_save, mut no_visual,
-         mut compare_level, mut config_name_to_load) 
-         = (None, None, None, None, None, None, None, None, None, None);
+         mut log, mut compare_level, mut config_name_to_load) 
+         = (None, None, None, None, None, None, None, None, None, None, None);
     for command in options.into_iter().skip(1) {
          if let Some(_dirs) = command.strip_prefix(DIRS) {
             if dirs.is_some() {
@@ -164,24 +168,29 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
             config_name_to_save = Some(name.to_owned());
         } else if command.starts_with(BRACES_AS_CODE) {
             if has_any_args(command) {
-                return Err(ArgParsingError::IncorrectCommandArgs(BRACES_AS_CODE.to_owned()))
+                return Err(ArgParsingError::UnexpectedCommandArgs(BRACES_AS_CODE.to_owned()))
             }
             braces_as_code = Some(true)
         } else if command.starts_with(SEARCH_IN_DOTTED) {
             if has_any_args(command) {
-                return Err(ArgParsingError::IncorrectCommandArgs(SEARCH_IN_DOTTED.to_owned()))
+                return Err(ArgParsingError::UnexpectedCommandArgs(SEARCH_IN_DOTTED.to_owned()))
             }
             search_in_dotted = Some(true)
         } else if command.starts_with(SHOW_FAULTY_FILES) {
             if has_any_args(command) {
-                return Err(ArgParsingError::IncorrectCommandArgs(SHOW_FAULTY_FILES.to_owned()))
+                return Err(ArgParsingError::UnexpectedCommandArgs(SHOW_FAULTY_FILES.to_owned()))
             }
             show_faulty_files = Some(true);
         } else if command.starts_with(NO_VISUAL) {
             if has_any_args(command) {
-                return Err(ArgParsingError::IncorrectCommandArgs(NO_VISUAL.to_owned()))
+                return Err(ArgParsingError::UnexpectedCommandArgs(NO_VISUAL.to_owned()))
             }
             no_visual = Some(true);
+        } else if command.starts_with(LOG) {
+            if has_any_args(command) {
+                return Err(ArgParsingError::UnexpectedCommandArgs(LOG.to_owned()))
+            }
+            log = Some(true);
         } else if let Some(value) = command.strip_prefix(COMPRARE_LEVEL) {
             let compare_num = utils::parse_usize_value(value, MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL);
             if compare_num.is_none() {
@@ -195,7 +204,7 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
     }
 
     let args_builder = combine_specified_config_options(custom_config, dirs, exclude_dirs, languages_of_interest,
-         threads, braces_as_code, search_in_dotted, show_faulty_files, no_visual, compare_level);
+         threads, braces_as_code, search_in_dotted, show_faulty_files, no_visual, log, compare_level);
 
     if args_builder.dirs.is_none() {
         return Err(ArgParsingError::MissingTargetDirs);
@@ -272,11 +281,11 @@ fn convert_to_absolute(s: &str) -> String {
 // In this order of importance.
 fn combine_specified_config_options(custom_config: Option<ConfigurationBuilder>, dirs: Option<Vec<String>>, exclude_dirs: Option<Vec<String>>,
         languages_of_interest: Option<Vec<String>>, threads: Option<usize>, braces_as_code: Option<bool>, search_in_dotted: Option<bool>,
-        show_faulty_files: Option<bool>, no_visual: Option<bool>, compare_level: Option<usize>) 
+        show_faulty_files: Option<bool>, no_visual: Option<bool>, log: Option<bool>, compare_level: Option<usize>) 
 -> ConfigurationBuilder 
 {
-    let mut args_builder = ConfigurationBuilder::new(dirs, exclude_dirs, languages_of_interest, threads,
-            braces_as_code, search_in_dotted, show_faulty_files, no_visual, compare_level);
+    let mut args_builder = ConfigurationBuilder::new(dirs, exclude_dirs, languages_of_interest, threads, braces_as_code,
+         search_in_dotted, show_faulty_files, no_visual, log, compare_level);
     if let Some(x) = custom_config {
         args_builder.add_missing_fields(x);
     }
@@ -392,13 +401,14 @@ pub struct ConfigurationBuilder {
     pub should_search_in_dotted:  Option<bool>,
     pub should_show_faulty_files: Option<bool>,
     pub no_visual:                Option<bool>,
+    pub log:                      Option<bool>,
     pub compare_level:            Option<usize>,
 }
 
 impl ConfigurationBuilder {
     pub fn new(dirs: Option<Vec<String>>, exclude_dirs: Option<Vec<String>>, languages_of_interest: Option<Vec<String>>,
             threads: Option<usize>, braces_as_code: Option<bool>, should_search_in_dotted: Option<bool>,
-            should_show_faulty_files: Option<bool>, no_visual: Option<bool>, compare_level: Option<usize>) 
+            should_show_faulty_files: Option<bool>, no_visual: Option<bool>, log: Option<bool>, compare_level: Option<usize>) 
     -> ConfigurationBuilder 
     {
         ConfigurationBuilder {
@@ -410,6 +420,7 @@ impl ConfigurationBuilder {
             should_search_in_dotted,
             should_show_faulty_files,
             no_visual,
+            log,
             compare_level
         }
     }
@@ -423,12 +434,15 @@ impl ConfigurationBuilder {
         if self.should_search_in_dotted.is_none() {self.should_search_in_dotted = config.should_search_in_dotted};
         if self.should_show_faulty_files.is_none() {self.should_show_faulty_files = config.should_show_faulty_files};
         if self.no_visual.is_none() {self.no_visual = config.no_visual};
+        if self.compare_level.is_none() {self.compare_level = config.compare_level};
+        if self.log.is_none() {self.log = config.log};
         self
     }
 
     pub fn has_missing_fields(&self) -> bool {
         self.exclude_dirs.is_none() || self.languages_of_interest.is_none() ||
-        self.threads.is_none() || self.braces_as_code.is_none() || self.should_search_in_dotted.is_none()
+        self.threads.is_none() || self.braces_as_code.is_none() || self.should_search_in_dotted.is_none() ||
+        self.should_show_faulty_files.is_none() || self.no_visual.is_none() || self.log.is_none() || self.compare_level.is_none()
     } 
 
     pub fn build(&self) -> Configuration {
@@ -441,6 +455,7 @@ impl ConfigurationBuilder {
             should_search_in_dotted: self.should_search_in_dotted.unwrap_or(DEF_SEARCH_IN_DOTTED),
             should_show_faulty_files: self.should_show_faulty_files.unwrap_or(DEF_SHOW_FAULTY_FILES),
             no_visual: self.no_visual.unwrap_or(DEF_NO_VISUAL),
+            log: self.log.unwrap_or(DEF_LOG),
             compare_level: self.compare_level.unwrap_or(DEF_COMPARE_LEVEL),
             config_name_to_save: None,
             config_name_to_load: None
@@ -459,6 +474,7 @@ impl Configuration {
             should_search_in_dotted: DEF_SEARCH_IN_DOTTED,
             should_show_faulty_files: DEF_SHOW_FAULTY_FILES,
             no_visual: DEF_NO_VISUAL,
+            log: DEF_LOG,
             compare_level: DEF_COMPARE_LEVEL,
             config_name_to_save: None,
             config_name_to_load: None
@@ -516,7 +532,8 @@ impl ArgParsingError {
             Self::InvalidPathInConfig(dir,name) => format!("Specified path '{}', in config '{}', doesn't exist anymore.",dir,name).red().to_string(),
             Self::DoublePath => "Directories already provided as first argument, but --dirs command also found.".red().to_string(),
             Self::UnrecognisedCommand(p) => format!("--{} is not recognised as a command.",p).red().to_string(),
-            Self::IncorrectCommandArgs(p) => format!("Incorrect arguments provided for the command '--{}'. Type '--help'",p).red().to_string()
+            Self::IncorrectCommandArgs(p) => format!("Incorrect arguments provided for the command '--{}'. Type '--help'",p).red().to_string(),
+            Self::UnexpectedCommandArgs(p) => format!("Command '--{}' does not expect any arguments.",p).red().to_string()
         }
     }
 }
@@ -543,11 +560,11 @@ mod tests {
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 9"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 2 2"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads A"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("show-faulty-files".to_owned())), create_config_from_args("./ --threads 1 --show-faulty-files 1"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("show-faulty-files".to_owned())), create_config_from_args("./ --threads 1 --show-faulty-files a"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("search-in-dotted".to_owned())), create_config_from_args("./ --threads 1 --search-in-dotted a"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("no-visual".to_owned())), create_config_from_args("./ --threads 1 --no-visual a"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("braces-as-code".to_owned())), create_config_from_args("./ --threads 1 --braces-as-code a"));
+        assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("show-faulty-files".to_owned())), create_config_from_args("./ --threads 1 --show-faulty-files 1"));
+        assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("show-faulty-files".to_owned())), create_config_from_args("./ --threads 1 --show-faulty-files a"));
+        assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("search-in-dotted".to_owned())), create_config_from_args("./ --threads 1 --search-in-dotted a"));
+        assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("no-visual".to_owned())), create_config_from_args("./ --threads 1 --no-visual a"));
+        assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("braces-as-code".to_owned())), create_config_from_args("./ --threads 1 --braces-as-code a"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned())), create_config_from_args("./ --exclude"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned())), create_config_from_args("./ --exclude   --threads 4"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("load".to_owned())), create_config_from_args("./ --load"));

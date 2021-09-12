@@ -20,3 +20,9 @@ no
 
 ===> no-visual
 no
+
+===> log
+no
+
+===> compare
+1
