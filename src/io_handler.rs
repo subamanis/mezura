@@ -3,7 +3,8 @@ use std::{{ffi::OsString, path::Path}, cmp::max, collections::{HashMap as HashMa
 use colored::*;
 use lazy_static::lazy_static;
 
-use crate::{Configuration, utils, config_manager::{self, ConfigurationBuilder, BRACES_AS_CODE, EXCLUDE, LANGUAGES, DIRS, SEARCH_IN_DOTTED, SHOW_FAULTY_FILES, THREADS}, domain::*};
+use crate::{Configuration, utils,config_manager::{self, ConfigurationBuilder,BRACES_AS_CODE, EXCLUDE, LANGUAGES, DIRS, SEARCH_IN_DOTTED,
+     SHOW_FAULTY_FILES, THREADS, MIN_THREADS_VALUE, MAX_THREADS_VALUE, MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL},domain::*};
 
 lazy_static! {
     pub static ref DATA_DIR : Option<String> = try_find_data_dir();
@@ -131,8 +132,8 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<ConfigurationBuilder
         Err(_) => return Err(ParseConfigFileError::FileNotFound(file_name.to_owned()))
     });
 
-    let (mut dirs, mut braces_as_code, mut search_in_dotted, mut threads, mut exclude_dirs,
-         mut languages_of_interest, mut show_faulty_files, mut no_visual) = (None,None,None,None,None,None,None,None);
+    let (mut dirs, mut braces_as_code, mut search_in_dotted, mut threads, mut exclude_dirs, mut languages_of_interest,
+         mut show_faulty_files, mut no_visual, mut compare_level) = (None,None,None,None,None,None,None,None,None);
     let mut buf = String::with_capacity(150); 
 
     while let Ok(size) = reader.read_line(&mut buf) {
@@ -158,7 +159,7 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<ConfigurationBuilder
             } else if id == config_manager::THREADS {
                 buf.clear();
                 reader.read_line(&mut buf);
-                threads = utils::parse_threads_value(&buf);
+                threads = utils::parse_usize_value(&buf,MIN_THREADS_VALUE, MAX_THREADS_VALUE);
             }else if id == config_manager::BRACES_AS_CODE {
                 braces_as_code = read_bool_value(&mut reader, &mut buf);
             } else if id == config_manager::SHOW_FAULTY_FILES {
@@ -167,6 +168,10 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<ConfigurationBuilder
                 search_in_dotted = read_bool_value(&mut reader, &mut buf);
             } else if id == config_manager::NO_VISUAL {
                 no_visual = read_bool_value(&mut reader, &mut buf);
+            } else if id == config_manager::COMPRARE_LEVEL {
+                buf.clear();
+                reader.read_line(&mut buf);
+                compare_level = utils::parse_usize_value(&buf,MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL);
             }
 
         }
@@ -174,7 +179,7 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<ConfigurationBuilder
     }
 
     Ok(ConfigurationBuilder::new(dirs,exclude_dirs, languages_of_interest, threads, braces_as_code,
-             search_in_dotted, show_faulty_files, no_visual))
+             search_in_dotted, show_faulty_files, no_visual, compare_level))
 }
 
 pub fn save_config_to_file(config_name: &str, config: &Configuration) -> std::io::Result<()> {
@@ -189,7 +194,7 @@ pub fn save_config_to_file(config_name: &str, config: &Configuration) -> std::io
 
     writer.write(b"Auto-generated config file.");
 
-    if !config.exclude_dirs.is_empty() {
+    if !config.dirs.is_empty() {
         writer.write(&[b"\n\n===> ",config_manager::DIRS.as_bytes(),b"\n"].concat());
         writer.write(config.dirs.join(",").as_bytes());
     }
@@ -432,15 +437,13 @@ mod my_reader {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Configuration, io_handler::{parse_config_file, save_config_to_file}};
+    use crate::{Configuration, config_manager, io_handler::{parse_config_file, save_config_to_file}};
 
     #[test]
     fn test_save_config_file_and_then_parse_it() -> std::io::Result<()> {
-        let mut config = Configuration::new(vec!["C:/Some/Path/a".to_owned(),"C:/Some/Path/b".to_owned(),"C:/Some/Path/c".to_owned(),"C:/Some/Path/d".to_owned()]);
-        config
-            .set_exclude_dirs(vec!["a".to_owned(), "b".to_owned(), "c.txt".to_owned(), "d.txt".to_owned()])
-            .set_threads(4)
-            .set_braces_as_code(true);
+        let working_dir = env!("CARGO_MANIFEST_DIR").to_owned() + "/data";
+        let command = format!("{}/config, {}/languages --exclude a,b,c.txt,d.txt, --braces-as-code --threads 4", working_dir, working_dir);
+        let config = config_manager::create_config_from_args(&command).unwrap();
 
         save_config_to_file("auto-generated", &config);
 

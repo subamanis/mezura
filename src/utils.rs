@@ -1,6 +1,15 @@
 use crate::*;
 use std::{fmt::Debug, io::Write};
 
+
+pub fn round_1(num: f64) -> f64 {
+    (num * 10.0).round() / 10.0
+}
+
+pub fn round_2(num: f64) -> f64 {
+    (num * 100.0).round() / 100.0
+}
+
 pub fn parse_languages_to_vec(s: &str) -> Vec<String> {
     s.split(',').filter_map(|x| get_if_not_empty(&remove_dot_prefix(x.trim()).to_lowercase())).collect::<Vec<_>>()
 }
@@ -15,9 +24,9 @@ pub fn parse_paths_to_vec(s: &str) -> Vec<String> {
     .collect::<Vec<_>>()
 }
 
-pub fn parse_threads_value(s: &str) -> Option<usize> {
+pub fn parse_usize_value(s: &str, min: usize, max: usize) -> Option<usize> {
     if let Ok(num) = s.trim().parse::<usize>() {
-        if num <= crate::config_manager::MAX_THREADS_VALUE && num >= crate::config_manager::MIN_THREADS_VALUE {
+        if num <= max && num >= min {
             Some(num)
         } else {
             None
@@ -61,6 +70,19 @@ pub fn get_file_extension(path: &Path) -> Option<&str> {
 pub fn with_seperators(i: usize) -> String {
     let mut s = String::new();
     let i_str = i.to_string();
+    let a = i_str.chars().rev().enumerate();
+    for (idx, val) in a {
+        if idx != 0 && idx % 3 == 0 {
+            s.insert(0, ',');
+        }
+        s.insert(0, val);
+    }
+    s
+}
+
+#[inline]
+pub fn with_seperators_str(i_str: &str) -> String {
+    let mut s = String::new();
     let a = i_str.chars().rev().enumerate();
     for (idx, val) in a {
         if idx != 0 && idx % 3 == 0 {
@@ -153,15 +175,15 @@ mod Tests{
 
     #[test]
     pub fn test_parse_threads_value() {
-        assert_eq!(None,parse_threads_value("0"));
-        assert_eq!(None,parse_threads_value("9"));
-        assert_eq!(None,parse_threads_value("0.2"));
-        assert_eq!(None,parse_threads_value("-1"));
-        assert_eq!(None,parse_threads_value(""));
-        assert_eq!(None,parse_threads_value(" "));
-        assert_eq!(None,parse_threads_value("A"));
+        assert_eq!(None,parse_usize_value("0", 1, 8));
+        assert_eq!(None,parse_usize_value("9", 1, 8));
+        assert_eq!(None,parse_usize_value("0.2", 1, 8));
+        assert_eq!(None,parse_usize_value("-1", 1, 8));
+        assert_eq!(None,parse_usize_value("", 1, 8));
+        assert_eq!(None,parse_usize_value(" ", 1, 8));
+        assert_eq!(None,parse_usize_value("A", 1, 8));
 
-        assert_eq!(Some(1),parse_threads_value("1"));
-        assert_eq!(Some(8),parse_threads_value("   8 "));
+        assert_eq!(Some(1),parse_usize_value("1", 1, 8));
+        assert_eq!(Some(8),parse_usize_value("   8 ", 1, 8));
     }
 }

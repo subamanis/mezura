@@ -13,11 +13,14 @@ pub const BRACES_AS_CODE     :&str   = "braces-as-code";
 pub const SEARCH_IN_DOTTED   :&str   = "search-in-dotted";
 pub const SHOW_FAULTY_FILES  :&str   = "show-faulty-files";
 pub const NO_VISUAL          :&str   = "no-visual";
+pub const COMPRARE_LEVEL     :&str   = "compare";
 pub const SAVE               :&str   = "save";
 pub const LOAD               :&str   = "load";
 
 pub const MAX_THREADS_VALUE : usize = 8;
 pub const MIN_THREADS_VALUE : usize = 1;
+pub const MIN_COMPARE_LEVEL : usize = 0;
+pub const MAX_COMPARE_LEVEL : usize = 10;
 
 // default config values
 const DEF_BRACES_AS_CODE    : bool    = false;
@@ -25,6 +28,7 @@ const DEF_SEARCH_IN_DOTTED  : bool    = false;
 const DEF_SHOW_FAULTY_FILES : bool    = false;
 const DEF_NO_VISUAL         : bool    = false;
 const DEF_THREADS           : usize   = 4;
+const DEF_COMPARE_LEVEL     : usize   = 1;
 
 
 #[derive(Debug,PartialEq,Clone)]
@@ -36,7 +40,10 @@ pub struct Configuration {
     pub braces_as_code: bool,
     pub should_search_in_dotted: bool,
     pub should_show_faulty_files: bool,
-    pub no_visual: bool
+    pub no_visual: bool,
+    pub compare_level: usize,
+    pub config_name_to_save: Option<String>,
+    pub config_name_to_load: Option<String>
 }
 
 #[derive(Debug, PartialEq)]
@@ -66,7 +73,7 @@ pub fn read_args_console() -> Result<Configuration,ArgParsingError> {
 }
 
 
-fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError> {
+pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError> {
     let line = line.trim();
     if line.is_empty() {
         return Err(ArgParsingError::NoArgsProvided)
@@ -93,8 +100,9 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
 
     let mut custom_config = None;
     let (mut exclude_dirs, mut languages_of_interest, mut threads, mut braces_as_code,
-         mut search_in_dotted, mut show_faulty_files, mut config_name_for_save, mut no_visual) 
-         = (None, None, None, None, None, None, None, None);
+         mut search_in_dotted, mut show_faulty_files, mut config_name_to_save, mut no_visual,
+         mut compare_level, mut config_name_to_load) 
+         = (None, None, None, None, None, None, None, None, None, None);
     for command in options.into_iter().skip(1) {
          if let Some(_dirs) = command.strip_prefix(DIRS) {
             if dirs.is_some() {
@@ -123,7 +131,7 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
             }    
             languages_of_interest = Some(vec);
         } else if let Some(value) = command.strip_prefix(THREADS) {
-            let threads_value = utils::parse_threads_value(value);
+            let threads_value = utils::parse_usize_value(value, MIN_THREADS_VALUE, MAX_THREADS_VALUE);
             if threads_value.is_none() {
                 return Err(ArgParsingError::IncorrectCommandArgs(THREADS.to_owned()))
             } else {
@@ -144,6 +152,7 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
                     }
                 }
                 custom_config = Some(options);
+                config_name_to_load = Some(config_name.to_owned());
             } else {
                 return Err(ArgParsingError::IncorrectCommandArgs(LOAD.to_owned()));
             }
@@ -152,7 +161,7 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
             if name.is_empty() {
                 return Err(ArgParsingError::IncorrectCommandArgs(SAVE.to_owned()))
             }
-            config_name_for_save = Some(name.to_owned());
+            config_name_to_save = Some(name.to_owned());
         } else if command.starts_with(BRACES_AS_CODE) {
             if has_any_args(command) {
                 return Err(ArgParsingError::IncorrectCommandArgs(BRACES_AS_CODE.to_owned()))
@@ -173,27 +182,36 @@ fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError>
                 return Err(ArgParsingError::IncorrectCommandArgs(NO_VISUAL.to_owned()))
             }
             no_visual = Some(true);
+        } else if let Some(value) = command.strip_prefix(COMPRARE_LEVEL) {
+            let compare_num = utils::parse_usize_value(value, MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL);
+            if compare_num.is_none() {
+                return Err(ArgParsingError::IncorrectCommandArgs(COMPRARE_LEVEL.to_owned()))
+            } else {
+                compare_level = compare_num
+            }
         } else {
             return Err(ArgParsingError::UnrecognisedCommand(command.to_owned()));
         }
     }
 
-    let args_builder = combine_specified_config_options(custom_config, dirs, exclude_dirs,
-            languages_of_interest, threads, braces_as_code, search_in_dotted, show_faulty_files, no_visual);
+    let args_builder = combine_specified_config_options(custom_config, dirs, exclude_dirs, languages_of_interest,
+         threads, braces_as_code, search_in_dotted, show_faulty_files, no_visual, compare_level);
 
     if args_builder.dirs.is_none() {
         return Err(ArgParsingError::MissingTargetDirs);
     }
 
-    let config = args_builder.build();
-    if let Some(x) = config_name_for_save {
+    let mut config = args_builder.build();
+    config.set_config_names_to_save_and_load(config_name_to_save.clone(), config_name_to_load);
+
+    if let Some(x) = config_name_to_save {
         match io_handler::save_config_to_file(&x, &config) {
             Err(_) => println!("\n{}","Error while trying to save config.".yellow()),
             Ok(_) => println!("\nConfiguration '{}' saved successfully.",x)
         }
     }
 
-    Ok(args_builder.build())
+    Ok(config)
 }
 
 fn has_any_args(command: &str) -> bool {
@@ -254,11 +272,11 @@ fn convert_to_absolute(s: &str) -> String {
 // In this order of importance.
 fn combine_specified_config_options(custom_config: Option<ConfigurationBuilder>, dirs: Option<Vec<String>>, exclude_dirs: Option<Vec<String>>,
         languages_of_interest: Option<Vec<String>>, threads: Option<usize>, braces_as_code: Option<bool>, search_in_dotted: Option<bool>,
-        show_faulty_files: Option<bool>, no_visual: Option<bool>) 
+        show_faulty_files: Option<bool>, no_visual: Option<bool>, compare_level: Option<usize>) 
 -> ConfigurationBuilder 
 {
-    let mut args_builder = ConfigurationBuilder::new(dirs, exclude_dirs, languages_of_interest,
-            threads, braces_as_code, search_in_dotted, show_faulty_files, no_visual);
+    let mut args_builder = ConfigurationBuilder::new(dirs, exclude_dirs, languages_of_interest, threads,
+            braces_as_code, search_in_dotted, show_faulty_files, no_visual, compare_level);
     if let Some(x) = custom_config {
         args_builder.add_missing_fields(x);
     }
@@ -373,13 +391,14 @@ pub struct ConfigurationBuilder {
     pub braces_as_code:           Option<bool>,
     pub should_search_in_dotted:  Option<bool>,
     pub should_show_faulty_files: Option<bool>,
-    pub no_visual:                Option<bool>
+    pub no_visual:                Option<bool>,
+    pub compare_level:            Option<usize>,
 }
 
 impl ConfigurationBuilder {
     pub fn new(dirs: Option<Vec<String>>, exclude_dirs: Option<Vec<String>>, languages_of_interest: Option<Vec<String>>,
             threads: Option<usize>, braces_as_code: Option<bool>, should_search_in_dotted: Option<bool>,
-            should_show_faulty_files: Option<bool>, no_visual: Option<bool>) 
+            should_show_faulty_files: Option<bool>, no_visual: Option<bool>, compare_level: Option<usize>) 
     -> ConfigurationBuilder 
     {
         ConfigurationBuilder {
@@ -390,7 +409,8 @@ impl ConfigurationBuilder {
             braces_as_code,
             should_search_in_dotted,
             should_show_faulty_files,
-            no_visual
+            no_visual,
+            compare_level
         }
     }
 
@@ -420,7 +440,10 @@ impl ConfigurationBuilder {
             braces_as_code: self.braces_as_code.unwrap_or(DEF_BRACES_AS_CODE),
             should_search_in_dotted: self.should_search_in_dotted.unwrap_or(DEF_SEARCH_IN_DOTTED),
             should_show_faulty_files: self.should_show_faulty_files.unwrap_or(DEF_SHOW_FAULTY_FILES),
-            no_visual: self.no_visual.unwrap_or(DEF_NO_VISUAL)
+            no_visual: self.no_visual.unwrap_or(DEF_NO_VISUAL),
+            compare_level: self.compare_level.unwrap_or(DEF_COMPARE_LEVEL),
+            config_name_to_save: None,
+            config_name_to_load: None
         }
     }
 }
@@ -435,8 +458,17 @@ impl Configuration {
             braces_as_code: DEF_BRACES_AS_CODE,
             should_search_in_dotted: DEF_SEARCH_IN_DOTTED,
             should_show_faulty_files: DEF_SHOW_FAULTY_FILES,
-            no_visual: DEF_NO_VISUAL
+            no_visual: DEF_NO_VISUAL,
+            compare_level: DEF_COMPARE_LEVEL,
+            config_name_to_save: None,
+            config_name_to_load: None
         }
+    }
+
+    pub fn set_config_names_to_save_and_load(&mut self, to_save: Option<String>, to_load: Option<String>) -> &mut Self {
+        self.config_name_to_save = to_save;
+        self.config_name_to_load = to_load;
+        self
     }
 
     pub fn set_exclude_dirs(&mut self, exclude_dirs: Vec<String>) -> &mut Self {
@@ -558,15 +590,15 @@ mod tests {
 
     #[test]
     fn test_parse_threads_command() {
-        assert_eq!(Some(1), utils::parse_threads_value("1"));
-        assert_eq!(Some(1), utils::parse_threads_value("   1"));
-        assert_eq!(Some(1), utils::parse_threads_value("   1   "));
+        assert_eq!(Some(1), utils::parse_usize_value("1", MIN_THREADS_VALUE, MAX_THREADS_VALUE));
+        assert_eq!(Some(1), utils::parse_usize_value("   1", MIN_THREADS_VALUE, MAX_THREADS_VALUE));
+        assert_eq!(Some(1), utils::parse_usize_value("   1   ", MIN_THREADS_VALUE, MAX_THREADS_VALUE));
 
-        assert_eq!(None, utils::parse_threads_value("1 3 3"));
-        assert_eq!(None, utils::parse_threads_value("-1 0"));
-        assert_eq!(None, utils::parse_threads_value("cmnd"));
-        assert_eq!(None, utils::parse_threads_value("   "));
-        assert_eq!(None, utils::parse_threads_value("A"));
+        assert_eq!(None, utils::parse_usize_value("1 3 3", MIN_THREADS_VALUE, MAX_THREADS_VALUE));
+        assert_eq!(None, utils::parse_usize_value("-1 0", MIN_THREADS_VALUE, MAX_THREADS_VALUE));
+        assert_eq!(None, utils::parse_usize_value("cmnd", MIN_THREADS_VALUE, MAX_THREADS_VALUE));
+        assert_eq!(None, utils::parse_usize_value("   ", MIN_THREADS_VALUE, MAX_THREADS_VALUE));
+        assert_eq!(None, utils::parse_usize_value("A", MIN_THREADS_VALUE, MAX_THREADS_VALUE));
     }
 
     #[test]

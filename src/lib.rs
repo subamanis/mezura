@@ -14,6 +14,7 @@ mod result_printer;
 mod consumer;
 mod producer;
 
+use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, Offset};
 pub use colored::{Colorize,ColoredString};
 pub use config_manager::Configuration;
 pub use utils::*;
@@ -25,7 +26,7 @@ pub type BoolRef            = Arc<AtomicBool>;
 pub type ContentInfoMapRef  = Arc<Mutex<HashMap<String,LanguageContentInfo>>>;
 pub type LanguageMapRef     = Arc<HashMap<String,Language>>;
 
-use std::{collections::{HashMap, LinkedList}, error::Error, fs::{self, File}, io::{self, BufRead, BufReader}, path::{Path, PathBuf}, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant}};
+use std::{borrow::Borrow, collections::{HashMap, LinkedList}, error::Error, fs::{self, File}, io::{self, BufRead, BufReader, BufWriter, Read, Write}, path::{Path, PathBuf}, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant}};
 use std::{sync::{Arc, Mutex}, thread::JoinHandle};
 
 pub struct Metrics {
@@ -54,8 +55,8 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
 
     let instant = Instant::now();
 
-    let (total_files_num, relevant_files_num) = 
-            producer::add_relevant_files(files_ref, &mut languages_metadata, finish_condition_ref, &language_map_ref, &config);
+    let (total_files_num, relevant_files_num) = producer::add_relevant_files(
+            files_ref, &mut languages_metadata, finish_condition_ref, &language_map_ref, &config);
     if relevant_files_num == 0 {
         return Err(ParseFilesError::NoRelevantFiles(get_activated_languages_as_str(&config)));
     }
@@ -81,10 +82,141 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
 
     let metrics = generate_metrics_if_parsing_took_more_than_one_sec(
             parsing_duration_millis, relevant_files_num, content_info_map);
-    
-    result_printer::format_and_print_results(&mut content_info_map, &mut languages_metadata, &config);
-    
+
+    let final_stats = FinalStats::calculate(&content_info_map, &languages_metadata);
+    let log_file_path = get_specified_config_file_path(&config);
+    let existing_log_contents = {
+        if let Some(path) = &log_file_path {
+            get_appropriate_log_file_contents(path)
+        } else {
+            None
+        }
+    };
+
+    // 2021-09-11 21:03:51.542346700 +03:00
+
+    let datetime_now = chrono::Local::now();
+
+    result_printer::format_and_print_results(&mut content_info_map, &mut languages_metadata, &final_stats, 
+        &existing_log_contents, &datetime_now, &config);
+
+    if let Some(path) = log_file_path {
+        log_stats(&path, &existing_log_contents, &final_stats, &datetime_now, &config);
+    }
+
     Ok(metrics)
+}
+
+const LOG_DIR: &str = "data/logs/";
+
+fn log_stats(path: &str, contents: &Option<String>, final_stats: &FinalStats, datetime_now: &DateTime<Local>, config: &Configuration) -> io::Result<()> {
+    let mut writer = std::io::BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(path)?);
+
+    write_current_log(&mut writer, config, datetime_now, final_stats);
+
+    if let Some(contents) = contents {
+        writer.write(contents.as_bytes());
+    }
+    writer.flush();
+
+    Ok(())
+}
+
+pub struct FinalStats {
+    files: usize,
+    lines: usize,
+    code_lines: usize,
+    extra_lines: usize,
+    size: f64,
+    size_measurement: String, 
+    average_size: f64,
+    average_size_measurement: String
+}
+
+impl FinalStats {
+    pub fn new(files: usize, lines: usize, code_lines: usize, extra_lines: usize, size: f64, size_measurement: String,
+            average_size: f64, average_size_measurement: String) -> Self
+    {
+        FinalStats {
+            files,
+            lines,
+            code_lines,
+            extra_lines,
+            size,
+            size_measurement,
+            average_size,
+            average_size_measurement
+        }
+    }
+
+    pub fn calculate(content_info_map: &HashMap<String,LanguageContentInfo>, languages_metadata_map: &HashMap<String,LanguageMetadata>) -> Self {
+        let (mut total_files, mut total_lines, mut total_code_lines, mut total_bytes) = (0, 0, 0,0);
+        languages_metadata_map.values().for_each(|e| {total_files += e.files; total_bytes += e.bytes});
+        content_info_map.values().for_each(|c| {total_lines += c.lines; total_code_lines += c.code_lines});
+        let (total_size, size_measurement) = get_formatted_size_and_measurement(total_bytes);
+        let (average_size, average_size_measurement) = get_formatted_size_and_measurement(total_bytes / total_files);
+        let total_size = round_1(total_size);
+        let average_size = round_1(average_size);
+
+
+        FinalStats {
+            files: total_files,
+            lines: total_lines,
+            code_lines: total_code_lines,
+            extra_lines: total_lines - total_code_lines,
+            size: total_size,
+            size_measurement,
+            average_size,
+            average_size_measurement
+        }
+    }
+}
+
+fn get_formatted_size_and_measurement(value: usize) -> (f64, String) {
+    if value > 1000000 {(value as f64 / 1000000f64, "MBs".to_owned())}
+    else if value > 1000 {(value as f64 / 1000f64, "KBs".to_owned())}
+    else {(value as f64, "Bs".to_owned())}
+}
+
+fn write_current_log(writer: &mut BufWriter<File>, config: &Configuration, datetime_now: &DateTime<Local>, final_stats: &FinalStats) {
+    writer.write(b"===>Entry\n");
+    writer.write(datetime_now.to_string().as_bytes());
+    writer.write(b"\n");
+    writer.write(b"Configuration:\n");
+    writer.write(format!("    dirs: {}\n",config.dirs.join(",")).as_bytes());
+    writer.write(format!("    exclude: {}\n",config.exclude_dirs.join(",")).as_bytes());
+    writer.write(format!("    languages: {}\n",config.languages_of_interest.join(",")).as_bytes());
+    writer.write(format!("    braces-as-code: {}\n",if config.braces_as_code{"yes"} else {"no"}).as_bytes());
+    writer.write(format!("    search-in-dotted: {}\n",if config.should_search_in_dotted{"yes"} else {"no"}).as_bytes());
+    writer.write(b"Stats:\n");
+    writer.write(format!("    Files: {}\n",final_stats.files).as_bytes());
+    writer.write(format!("    Lines: {}\n",final_stats.lines).as_bytes());
+    writer.write(format!("        Code: {}\n",final_stats.code_lines).as_bytes());
+    writer.write(format!("        Extra: {}\n",final_stats.extra_lines).as_bytes());
+    writer.write(format!("    Total Size: {} {}\n",final_stats.size, final_stats.size_measurement).as_bytes());
+    writer.write(format!("        Average Size: {} {}\n\n\n",final_stats.average_size, final_stats.average_size_measurement).as_bytes());
+    writer.write(b"--------------------------------------------------------------------------------------------\n\n\n");
+    
+}
+
+fn get_specified_config_file_path(config: &Configuration) -> Option<String> {
+    if let Some(name) = &config.config_name_to_save {
+        return Some(LOG_DIR.to_owned() + name)
+    } else if let Some(name) = &config.config_name_to_load {
+        return Some(LOG_DIR.to_owned() + name)
+    } else {
+        None
+    }
+}
+
+fn get_appropriate_log_file_contents(file_path: &str) -> Option<String> {
+    if Path::new(&file_path).exists() {
+        let mut contents = String::with_capacity(700);
+        File::open(&file_path).unwrap().read_to_string(&mut contents);
+        return Some(contents)
+    } else {
+        return Some(String::new());
+    }
 }
 
 pub fn find_lang_with_this_identifier(languages: &LanguageMapRef, wanted_identifier: &str) -> Option<String> {
