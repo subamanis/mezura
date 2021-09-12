@@ -82,6 +82,6 @@ fn verify_required_dirs() -> Result<(),String> {
         
         Ok(())
     } else {
-        Err("'data' directory not found in any known location.".red().to_string())
+        Err("'data' directory not found in the current folder.".red().to_string())
     }
 }
