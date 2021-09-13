@@ -259,8 +259,8 @@ fn write_current_log(writer: &mut BufWriter<File>, config: &Configuration, datet
     writer.write(format!("    Lines: {}\n",final_stats.lines).as_bytes());
     writer.write(format!("        Code: {}\n",final_stats.code_lines).as_bytes());
     writer.write(format!("        Extra: {}\n",final_stats.extra_lines).as_bytes());
-    writer.write(format!("    Total Size: {} {}\n",final_stats.size, final_stats.size_measurement).as_bytes());
-    writer.write(format!("        Average Size: {} {}\n\n\n",final_stats.average_size, final_stats.average_size_measurement).as_bytes());
+    writer.write(format!("    Total Size: {}\n",final_stats.bytes_size.to_string()).as_bytes());
+    writer.write(format!("        Average Size: {}\n\n\n",final_stats.bytes_average_size.to_string()).as_bytes());
     writer.write(b"--------------------------------------------------------------------------------------------\n\n\n");
 }
 

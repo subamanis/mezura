@@ -1,3 +1,5 @@
+Numerical inaccuracies don't matter here
+
 ===>Entry
 2021-09-12 16:42:00 +0300
 Configuration:
@@ -11,8 +13,8 @@ Stats:
     Lines: 1000
         Code: 100
         Extra: 100
-    Total Size: 100.0 KBs
-        Average Size: 10.0 KBs
+    Total Size: 100000
+        Average Size: 10000
 
 
 --------------------------------------------------------------------------------------------
@@ -31,8 +33,8 @@ Stats:
     Lines: 1111
         Code: 111
         Extra: 111
-    Total Size: 111.1 KBs
-        Average Size: 11.1 KBs
+    Total Size: 111100
+        Average Size: 11100
 
 
 --------------------------------------------------------------------------------------------
@@ -51,8 +53,8 @@ Stats:
     Lines: 1222
         Code: 122
         Extra: 122
-    Total Size: 122.2 KBs
-        Average Size: 12.2 KBs
+    Total Size: 122200
+        Average Size: 12200
 
 
 --------------------------------------------------------------------------------------------

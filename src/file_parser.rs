@@ -3,7 +3,6 @@ use std::{io::{BufRead, BufReader}, str::{self, MatchIndices}};
 use crate::*;
 
 
-#[inline]
 pub fn parse_file(file_name: &str, lang_name: &str, buf: &mut String, language_map: LanguageMapRef, config: &Configuration)
 -> Result<FileStats,String> 
 {
@@ -15,7 +14,6 @@ pub fn parse_file(file_name: &str, lang_name: &str, buf: &mut String, language_m
     parse_lines(reader, buf, &language_map.get(lang_name).unwrap(), config)
 }
 
-#[inline]
 fn parse_lines(mut reader: BufReader<File>, buf: &mut String, language: &Language, config: &Configuration)
 -> Result<FileStats,String>
 {

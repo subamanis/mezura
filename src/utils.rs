@@ -62,13 +62,16 @@ pub fn extract_file_contents(file_path: &str) -> Option<String> {
     if Path::new(&file_path).is_file() {
         let mut contents = String::with_capacity(700);
         File::open(&file_path).unwrap().read_to_string(&mut contents);
-        return Some(contents)
+        if contents.trim().is_empty() {
+            return None;
+        } else {
+            return Some(contents)
+        }
     } else {
         return None;
     }
 }
 
-#[inline]
 pub fn get_file_extension(path: &Path) -> Option<&str> {
     match path.extension() {
         Some(x) => x.to_str(),
@@ -76,7 +79,6 @@ pub fn get_file_extension(path: &Path) -> Option<&str> {
     }
 }
 
-#[inline]
 pub fn with_seperators(i: usize) -> String {
     let mut s = String::new();
     let i_str = i.to_string();
@@ -90,7 +92,6 @@ pub fn with_seperators(i: usize) -> String {
     s
 }
 
-#[inline]
 pub fn with_seperators_str(i_str: &str) -> String {
     let mut s = String::new();
     let a = i_str.chars().rev().enumerate();
@@ -103,7 +104,6 @@ pub fn with_seperators_str(i_str: &str) -> String {
     s
 }
 
-#[inline]
 pub fn num_of_seperators(i: usize) -> usize {
     let mut input = i;
     let mut commas = 0;
@@ -127,9 +127,10 @@ pub fn wait_for_input() {
 #[macro_export]
 macro_rules! hashmap {
     ($( $key: expr => $val: expr ),*) => {{
-         let mut map = ::std::collections::HashMap::new();
-         $( map.insert($key, $val); )*
-         map
+        #[allow(unused_mut)]
+        let mut map = ::std::collections::HashMap::new();
+        $( map.insert($key, $val); )*
+        map
     }}
 }
 

@@ -26,7 +26,7 @@ pub type ContentInfoMapRef  = Arc<Mutex<HashMap<String,LanguageContentInfo>>>;
 pub type LanguageMapRef     = Arc<HashMap<String,Language>>;
 
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, Offset};
-use std::{borrow::Borrow, collections::{HashMap, LinkedList}, error::Error, fs::{self, File}, io::{self, BufRead, BufReader, BufWriter, Read, Write}, path::{Path, PathBuf}, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant}};
+use std::{borrow::Borrow, collections::{HashMap, LinkedList}, error::Error, fs::{self, File}, io::{self, BufRead, BufReader, BufWriter, Read, Write}, os::raw, path::{Path, PathBuf}, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant}};
 use std::{sync::{Arc, Mutex}, thread::JoinHandle};
 
 
@@ -35,11 +35,14 @@ pub struct Metrics {
     pub lines_per_sec: usize
 }
 
+#[derive(Debug, PartialEq)]
 pub struct FinalStats {
     files: usize,
     lines: usize,
     code_lines: usize,
     extra_lines: usize,
+    bytes_size: usize,
+    bytes_average_size: usize,
     size: f64,
     size_measurement: String, 
     average_size: f64,
@@ -110,7 +113,6 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
             None
         }
     };
-
     let datetime_now = chrono::Local::now();
 
     result_printer::format_and_print_results(&mut content_info_map, &mut languages_metadata, &final_stats, 
@@ -214,9 +216,9 @@ fn make_language_metadata(language_map: LanguageMapRef) -> HashMap<String, Langu
 
 fn get_specified_config_file_path(config: &Configuration) -> Option<String> {
     if let Some(name) = &config.config_name_to_save {
-        return Some(io_handler::LOG_DIR.clone() + name)
+        Some(io_handler::LOG_DIR.clone() + name)
     } else if let Some(name) = &config.config_name_to_load {
-        return Some(io_handler::LOG_DIR.clone() + name)
+        Some(io_handler::LOG_DIR.clone() + name)
     } else {
         None
     }
@@ -233,33 +235,55 @@ impl ParseFilesError {
 }
 
 impl FinalStats {
-    pub fn new(files: usize, lines: usize, code_lines: usize, extra_lines: usize, size: f64, size_measurement: String,
-            average_size: f64, average_size_measurement: String) -> Self
+    pub fn new(files: usize, lines: usize, code_lines: usize, bytes_size: usize) -> Self
     {
+        let bytes_average_size = bytes_size / files;
+        let (size, size_measurement) = FinalStats::get_formatted_size_and_measurement(bytes_size);
+        let size = round_1(size);
+        let (average_size, average_size_measurement) = Self::get_formatted_size_and_measurement(bytes_average_size);
+        let average_size = round_1(average_size);
+        FinalStats {
+            files,
+            lines,
+            code_lines,
+            extra_lines: lines - code_lines,
+            bytes_size,
+            bytes_average_size,
+            size,
+            size_measurement,
+            average_size,
+            average_size_measurement,
+        }
+    }
+
+    pub fn new_extended(files: usize, lines: usize, code_lines: usize, extra_lines: usize, bytes_size: usize, bytes_average_size: usize) -> Self {
+        let (size, size_measurement) = FinalStats::get_formatted_size_and_measurement(bytes_size);
+        let size = round_1(size);
+        let (average_size, average_size_measurement) = Self::get_formatted_size_and_measurement(bytes_average_size);
+        let average_size = round_1(average_size);
+
         FinalStats {
             files,
             lines,
             code_lines,
             extra_lines,
+            bytes_size,
+            bytes_average_size,
             size,
             size_measurement,
             average_size,
-            average_size_measurement
+            average_size_measurement,
         }
     }
 
     pub fn calculate(content_info_map: &HashMap<String,LanguageContentInfo>, languages_metadata_map: &HashMap<String,LanguageMetadata>) -> Self {
-        fn get_formatted_size_and_measurement(value: usize) -> (f64, String) {
-            if value > 1000000 {(value as f64 / 1000000f64, "MBs".to_owned())}
-            else if value > 1000 {(value as f64 / 1000f64, "KBs".to_owned())}
-            else {(value as f64, "Bs".to_owned())}
-        }
-        
         let (mut total_files, mut total_lines, mut total_code_lines, mut total_bytes) = (0, 0, 0,0);
         languages_metadata_map.values().for_each(|e| {total_files += e.files; total_bytes += e.bytes});
         content_info_map.values().for_each(|c| {total_lines += c.lines; total_code_lines += c.code_lines});
-        let (total_size, size_measurement) = get_formatted_size_and_measurement(total_bytes);
-        let (average_size, average_size_measurement) = get_formatted_size_and_measurement(total_bytes / total_files);
+        let bytes_size = total_bytes;
+        let bytes_average_size = total_bytes / total_files;
+        let (total_size, size_measurement) = Self::get_formatted_size_and_measurement(total_bytes);
+        let (average_size, average_size_measurement) = Self::get_formatted_size_and_measurement(bytes_average_size);
         let total_size = round_1(total_size);
         let average_size = round_1(average_size);
 
@@ -269,11 +293,19 @@ impl FinalStats {
             lines: total_lines,
             code_lines: total_code_lines,
             extra_lines: total_lines - total_code_lines,
+            bytes_size: bytes_size,
+            bytes_average_size: bytes_average_size,
             size: total_size,
             size_measurement,
             average_size,
             average_size_measurement
         }
+    }
+
+    fn get_formatted_size_and_measurement(value: usize) -> (f64, String) {
+        if value >= 1000000 {(value as f64 / 1000000f64, "MBs".to_owned())}
+        else if value >= 1000 {(value as f64 / 1000f64, "KBs".to_owned())}
+        else {(value as f64, "Bs".to_owned())}
     }
 }
 
@@ -445,5 +477,72 @@ pub mod domain {
             map.insert(k.descriptive_name.to_owned(), 0);
         }
         map
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_FinalStats_creation() {
+        let content_info_map = hashmap![
+            "a".to_owned() => LanguageContentInfo::new(2000, 1400, hashmap![]),
+            "b".to_owned() => LanguageContentInfo::new(1000, 800, hashmap![]),
+            "c".to_owned() => LanguageContentInfo::new(1000, 800, hashmap![])
+        ];
+        let languages_metadata_map = hashmap![
+            "a".to_owned() => LanguageMetadata::new(20, 100000),
+            "b".to_owned() => LanguageMetadata::new(10, 50000),
+            "c".to_owned() => LanguageMetadata::new(10, 50000)
+        ];
+        let f = FinalStats::new(40, 4000, 3000, 200000);
+        let ef = FinalStats::new_extended(40, 4000, 3000, 1000, 200000, 5000);
+        let cf = FinalStats::calculate(&content_info_map, &languages_metadata_map);
+        let customf = FinalStats {
+            files: 40,
+            lines: 4000,
+            code_lines: 3000,
+            extra_lines: 1000,
+            bytes_size: 200000,
+            bytes_average_size: 5000,
+            size: 200.0,
+            size_measurement: "KBs".to_owned(),
+            average_size: 5.0,
+            average_size_measurement: "KBs".to_owned()
+        };
+        assert_eq!(customf, f);
+        assert_eq!(customf, ef);
+        assert_eq!(customf, cf);
+
+
+        let content_info_map = hashmap![
+            "a".to_owned() => LanguageContentInfo::new(2000, 1400, hashmap![]),
+            "b".to_owned() => LanguageContentInfo::new(1000, 800, hashmap![]),
+            "c".to_owned() => LanguageContentInfo::new(1000, 800, hashmap![])
+        ];
+        let languages_metadata_map = hashmap![
+            "a".to_owned() => LanguageMetadata::new(25, 1417403),
+            "b".to_owned() => LanguageMetadata::new(12, 500000),
+            "c".to_owned() => LanguageMetadata::new(12, 500000)
+        ];
+        let f = FinalStats::new(49, 4000, 3000, 2417403);
+        let ef = FinalStats::new_extended(49, 4000, 3000, 1000, 2417403, 49334);
+        let cf = FinalStats::calculate(&content_info_map, &languages_metadata_map);
+        let customf = FinalStats {
+            files: 49,
+            lines: 4000,
+            code_lines: 3000,
+            extra_lines: 1000,
+            bytes_size: 2417403,
+            bytes_average_size: 49334,
+            size: 2.4,
+            size_measurement: "MBs".to_owned(),
+            average_size: 49.3,
+            average_size_measurement: "KBs".to_owned()
+        };
+        assert_eq!(customf, f);
+        assert_eq!(customf, ef);
+        assert_eq!(customf, cf);
     }
 }
