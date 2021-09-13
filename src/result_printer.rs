@@ -197,15 +197,15 @@ fn print_comparison_to_previous_runs(final_stats: &FinalStats, log_content: &Str
         let (days, hours, minutes) = split_minutes_to_D_H_M(duration.num_minutes());
         comparison_str.push_str(&format!("{} {} ({} days, {} hours and {} minutes ago)\n","->".bold(), then_str, days, hours, minutes));
         comparison_str.push_str(&format!("    Files: {}({}%) Lines: {}({}%) {{Code: {}({}%), Extra: {}({}%)}}  |  Size: {} {}({}%) - Average: {} {}({}%)\n\n",
-                entry.files, color_percentage(&difference_as_signed_percentage_str_of_usize(entry.files, final_stats.files)),
-                entry.lines, color_percentage(&difference_as_signed_percentage_str_of_usize(entry.lines, final_stats.lines)),
-                entry.code_lines, color_percentage(&difference_as_signed_percentage_str_of_usize(entry.code_lines, final_stats.code_lines)),
-                entry.extra_lines, color_percentage(&difference_as_signed_percentage_str_of_usize(entry.extra_lines, final_stats.extra_lines)),
+                with_seperators(entry.files), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.files, final_stats.files)),
+                with_seperators(entry.lines), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.lines, final_stats.lines)),
+                with_seperators(entry.code_lines), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.code_lines, final_stats.code_lines)),
+                with_seperators(entry.extra_lines), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.extra_lines, final_stats.extra_lines)),
                 entry.size, entry.size_measurement, color_percentage(&difference_as_signed_percentage_str_of_f64(entry.size, final_stats.size)),
                 entry.average_size, entry.average_size_measurement, color_percentage(&difference_as_signed_percentage_str_of_f64(entry.average_size, final_stats.average_size))
         ));
     }
-    println!("{}", comparison_str);
+    print!("{}", comparison_str);
 
     fn color_percentage(percentage: &str) -> ColoredString {
         if percentage.starts_with("+") {

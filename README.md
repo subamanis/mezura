@@ -133,6 +133,8 @@ Below there is a list with all the commands-flags that the program accepts.
     This flag only works if a configuration file is loaded. Specifies with how many previous logs this
     program execution should be compared to (see [Logs and Progress](#logs-and-progress)).
 
+    Providing 0 as argument will disable the progress report (comparison).
+
 --save
     One argument as the file name (whitespace allowed, without an extension, case-insensitive)
 

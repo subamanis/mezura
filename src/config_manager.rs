@@ -386,6 +386,8 @@ fn print_help_message_and_exit() {
         This flag only works if a configuration file is loaded. Specifies with how many previous logs this
         program execution should be compared to (see '--save' and '--load' commands).
 
+        Providing 0 as argument will disable the progress report (comparison).
+
     --save
         One argument as the file name (whitespace allowed, without an extension, case-insensitive)
 
