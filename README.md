@@ -36,6 +36,7 @@ The generated stats are the following:
 - Size (total and average) 
 - Keyword occurances
 - Percentage comparisons between languages
+- Difference of stats between executions 
 
 The program requires a "data" dir to be present on the same level as the executable. In the "data" dir, a "languages" dir must be present, that contains the supported languages as seperate txt files. An optional "config" dir may be present too, where the user can specify persistent settings (more on that later).
 
