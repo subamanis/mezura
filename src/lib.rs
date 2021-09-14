@@ -20,7 +20,7 @@ pub use utils::*;
 pub use domain::{Language, LanguageContentInfo, LanguageMetadata, FileStats, Keyword};
 
 pub type LinkedListRef      = Arc<Mutex<LinkedList<String>>>;
-pub type FaultyFilesRef     = Arc<Mutex<Vec<(String,String,u64)>>>;
+pub type FaultyFilesRef     = Arc<Mutex<Vec<FaultyFileDetails>>>;
 pub type BoolRef            = Arc<AtomicBool>;
 pub type ContentInfoMapRef  = Arc<Mutex<HashMap<String,LanguageContentInfo>>>;
 pub type LanguageMapRef     = Arc<HashMap<String,Language>>;
@@ -47,6 +47,12 @@ pub struct FinalStats {
     size_measurement: String, 
     average_size: f64,
     average_size_measurement: String
+}
+
+pub struct FaultyFileDetails {
+    path: String,
+    error_msg: String,
+    size: u64
 }
 
 #[derive(Debug)]
@@ -167,7 +173,7 @@ fn print_faulty_files_or_ok(faulty_files_ref: &FaultyFilesRef, config: &Configur
         println!("{} {}",format!("{}",faulty_files.len()).red(), "faulty files detected. They will be ignored in stat calculation.".red());
         if config.should_show_faulty_files {
             for f in faulty_files {
-                println!("-- Error: {} \n   for file: {}\n",f.1,f.0);
+                println!("-- Error: {} \n   for file: {}\n",f.error_msg,f.path);
             }
         } else {
             println!("Run with command '--{}' to get detailed info.",config_manager::SHOW_FAULTY_FILES)
@@ -180,12 +186,12 @@ fn remove_faulty_files_stats(faulty_files_ref: &FaultyFilesRef, languages_metada
         language_map: &LanguageMapRef) {
     let faulty_files = &*faulty_files_ref.as_ref().lock().unwrap();
     for file in faulty_files {
-        let extension = utils::get_file_extension(Path::new(&file.0));
+        let extension = utils::get_file_extension(Path::new(&file.path));
         if let Some(x) = extension {
             let lang_name = find_lang_with_this_identifier(&language_map, x).unwrap();
             let language_metadata = languages_metadata_map.get_mut(&lang_name).unwrap();
             language_metadata.files -= 1;
-            language_metadata.bytes -= file.2 as usize;
+            language_metadata.bytes -= file.size as usize;
         }
     }
 }
@@ -306,6 +312,16 @@ impl FinalStats {
         if value >= 1000000 {(value as f64 / 1000000f64, "MBs".to_owned())}
         else if value >= 1000 {(value as f64 / 1000f64, "KBs".to_owned())}
         else {(value as f64, "Bs".to_owned())}
+    }
+}
+
+impl FaultyFileDetails {
+    pub fn new(path: String, error_msg: String, size: u64) -> Self {
+        FaultyFileDetails {
+            path,
+            error_msg,
+            size
+        }
     }
 }
 

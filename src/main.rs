@@ -5,6 +5,7 @@ use colored::*;
 use mezura::{config_manager, io_handler, *, self};
 
 fn main() {
+    #[cfg(target_os = "windows")]
     control::set_virtual_terminal(true).unwrap();
 
     if let Err(x) = verify_required_dirs() {

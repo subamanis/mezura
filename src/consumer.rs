@@ -30,13 +30,13 @@ pub(crate) fn start_parser_thread(
                 Some(x) => match x.to_str() {
                     Some(y) => y.to_owned(),
                     None => {
-                        faulty_files_ref.lock().unwrap().push((file_path.clone().clone(),
+                        faulty_files_ref.lock().unwrap().push(FaultyFileDetails::new(file_path.clone().clone(),
                                 "could not get the file's extension".to_owned(), path.metadata().map_or(0, |m| m.len()))); 
                         continue;
                     }
                 },
                 None => {
-                    faulty_files_ref.lock().unwrap().push((file_path.clone(),
+                    faulty_files_ref.lock().unwrap().push(FaultyFileDetails::new(file_path.clone(),
                         "could not get the file's extension".to_owned(), path.metadata().map_or(0, |m| m.len())));   
                     continue;
                 }
@@ -44,10 +44,9 @@ pub(crate) fn start_parser_thread(
             let lang_name = find_lang_with_this_identifier(&language_map, &file_extension).unwrap();
 
             match file_parser::parse_file(&file_path, &lang_name, &mut buf, language_map.clone(), &config) {
-                Ok(x) => {
-                    language_content_info_ref.lock().unwrap().get_mut(&lang_name).unwrap().add_file_stats(x);
-                },
-                Err(x) => faulty_files_ref.lock().unwrap().push((file_path.clone(),x,path.metadata().map_or(0, |m| m.len())))
+                Ok(x) => language_content_info_ref.lock().unwrap().get_mut(&lang_name).unwrap().add_file_stats(x),
+                Err(x) => faulty_files_ref.lock().unwrap().push(
+                        FaultyFileDetails::new(file_path.clone(),x,path.metadata().map_or(0, |m| m.len())))
             }
         }
     })

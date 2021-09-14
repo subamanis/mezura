@@ -366,11 +366,11 @@ fn read_lines_to_vec(reader: &mut BufReader<File>, mut buf: &mut String, parser_
 
 fn try_find_data_dir() -> Option<String> {
     if cfg!(test) {
-        Some(env!("CARGO_MANIFEST_DIR").to_owned() + "\\data")
+        Some(env!("CARGO_MANIFEST_DIR").to_owned() + "/data")
     } else {
         let abs_path = try_get_folder_of_exe().unwrap_or_else(|| "".to_owned());
-        let data_in_current = &(abs_path.clone() + "\\data");
-        let data_in_parent = &(abs_path + "\\..\\..\\data");
+        let data_in_current = &(abs_path.clone() + "/data");
+        let data_in_parent = &(abs_path + "/../../data");
         if Path::new(data_in_current).is_dir() {return Some(data_in_current.to_owned())}
         if Path::new(data_in_parent).is_dir() {return Some(data_in_parent.to_owned())}
         None
@@ -379,12 +379,12 @@ fn try_find_data_dir() -> Option<String> {
 
 fn try_get_folder_of_exe() -> Option<String> {
     if let Ok(path) = std::env::current_exe() {
-        let str_path = path.to_str().map_or("", |x| x);
+        let str_path = path.to_str().map_or("", |x| x).replace('\\',"/");
         if str_path.is_empty() {
             return None;
         }
 
-        if let Some(last_backslash) = str_path.match_indices('\\').last() {
+        if let Some(last_backslash) = str_path.match_indices("/").last() {
             return Some(str_path[..last_backslash.0].to_owned());
         } 
     }
