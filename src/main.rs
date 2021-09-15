@@ -5,6 +5,7 @@ use colored::*;
 use mezura::{config_manager, io_handler, *, self};
 
 fn main() {
+    // Only in windows, it is required to enable a virtual terminal environment, so that the colors will display correctly
     #[cfg(target_os = "windows")]
     control::set_virtual_terminal(true).unwrap();
 

@@ -1,0 +1,26 @@
+Language
+C#
+
+Extensions
+cs
+
+String symbols
+"
+
+Comment symbol
+//
+Multi line comment start
+/*
+Multi line comment end
+*/
+
+Keyword
+    NAME
+    classes
+    ALIASES
+    class
+Keyword
+    NAME
+    interfaces
+    ALIASES
+    interface

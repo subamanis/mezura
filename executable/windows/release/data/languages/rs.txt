@@ -1,0 +1,27 @@
+Language
+Rust
+
+Extensions
+rs
+
+String symbols
+"
+
+Comment symbol
+//
+
+Keyword
+    NAME
+    structs
+    ALIASES
+    struct
+Keyword
+    NAME
+    enums
+    ALIASES
+    enum
+Keyword
+    NAME
+    traits
+    ALIASES
+    trait
