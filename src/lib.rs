@@ -8,11 +8,11 @@
 pub mod config_manager;
 pub mod io_handler;
 pub mod utils;
+pub mod consumer;
+pub mod producer;
 
 mod file_parser;
 mod result_printer;
-mod consumer;
-mod producer;
 
 pub use colored::{Colorize,ColoredString};
 pub use config_manager::Configuration;
@@ -204,7 +204,7 @@ fn get_activated_languages_as_str(config: &Configuration) -> String {
     }
 }
 
-fn make_language_stats(languages_map: LanguageMapRef) -> HashMap<String,LanguageContentInfo> {
+pub fn make_language_stats(languages_map: LanguageMapRef) -> HashMap<String,LanguageContentInfo> {
     let mut map = HashMap::<String,LanguageContentInfo>::new();
     for (key, value) in languages_map.iter() {
         map.insert(key.to_owned(), LanguageContentInfo::from(value));
@@ -212,7 +212,7 @@ fn make_language_stats(languages_map: LanguageMapRef) -> HashMap<String,Language
     map
 }
 
-fn make_language_metadata(language_map: LanguageMapRef) -> HashMap<String, LanguageMetadata> {
+pub fn make_language_metadata(language_map: LanguageMapRef) -> HashMap<String, LanguageMetadata> {
     let mut map = HashMap::<String,LanguageMetadata>::new();
     for (name,_) in language_map.iter() {
         map.insert(name.to_owned(), LanguageMetadata::default());

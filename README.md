@@ -2,6 +2,7 @@
 
 ## About
 This is a <b>fast</b>, <b>customizable</b> and fairly <b>accurate</b> stats generator for programming projects, in the form of a CLI executable, written in <b>Rust</b>, with <b>minimal dependencies</b>. It is used for counting total lines, code lines, user defined <b>keywords</b> like classes, enums, etc., and to track the growth of codebases.
+It is maintained primarily on Windows, but it is also being validated that it works on Linux (Ubuntu)
 
 Example run:
 ![](screenshots/example.PNG)

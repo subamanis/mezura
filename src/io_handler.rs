@@ -8,14 +8,14 @@ use crate::{Configuration, FinalStats, config_manager::{self, ConfigurationBuild
      SHOW_FAULTY_FILES, THREADS, MIN_THREADS_VALUE, MAX_THREADS_VALUE, MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL}, domain::*, utils};
 
 lazy_static! {
-    pub static ref DATA_DIR : Option<String> = try_find_data_dir();
+    pub static ref DATA_DIR : String = get_working_dir() + "/data";
     pub static ref LOG_DIR  : String = find_or_create_log_dir(); 
 }
 
 const DEFAULT_CONFIG_FILE_NAME : &str = "default";
 const CONFIG_DIR : &str = "/config/";
 const LANGUAGE_DIR : &str = "/languages/";
-const TEST_CONFIG_DIR : &str = "/test_dir/config/";
+const TEST_DIR : &str = "/test_dir/";
 
 #[derive(Debug)]
 pub enum ParseLanguageError {
@@ -26,7 +26,6 @@ pub enum ParseLanguageError {
 
 #[derive(Debug)]
 pub enum ParseConfigFileError {
-    DirNotFound,
     FileNotFound(String),
     IOError
 }
@@ -35,7 +34,7 @@ pub enum ParseConfigFileError {
 pub fn parse_supported_languages_to_map(languages_of_interest: &mut Vec<String>)
         -> Result<(HashMap<String,Language>, Vec<String>, Vec<String>), ParseLanguageError> 
 {
-    let dirs = fs::read_dir(DATA_DIR.clone().unwrap() + LANGUAGE_DIR).unwrap();
+    let dirs = fs::read_dir(DATA_DIR.clone() + LANGUAGE_DIR).unwrap();
     
     let mut languages_of_interest_appearance = HashMap::<String,bool>::new();
     for lang_name in languages_of_interest.iter() {
@@ -114,18 +113,9 @@ pub fn parse_supported_languages_to_map(languages_of_interest: &mut Vec<String>)
     Ok((language_map, faulty_files, non_existant_languages_of_interest))
 }
 
-pub fn parse_config_file(file_name: Option<&str>) -> Result<ConfigurationBuilder,ParseConfigFileError> {
-    let dir_path = {
-        if cfg!(test) {
-            env!("CARGO_MANIFEST_DIR").to_owned() + TEST_CONFIG_DIR
-        } else {
-            DATA_DIR.clone().unwrap() + CONFIG_DIR
-        }
-    };
-
-    if !Path::new(&dir_path).is_dir() {
-        return Err(ParseConfigFileError::DirNotFound);
-    }
+pub fn parse_config_file(file_name: Option<&str>, data_dir: Option<String>) -> Result<ConfigurationBuilder,ParseConfigFileError> {
+    let data_dir = if let Some(dir) = data_dir {dir} else {DATA_DIR.clone()};
+    let dir_path = data_dir + CONFIG_DIR;
 
     let file_name = if let Some(x) = file_name {x} else {DEFAULT_CONFIG_FILE_NAME};
     let file_path = (dir_path + file_name + ".txt").replace("\\", "/");
@@ -185,14 +175,10 @@ pub fn parse_config_file(file_name: Option<&str>) -> Result<ConfigurationBuilder
              should_show_faulty_files, no_visual, log, compare_level))
 }
 
-pub fn save_config_to_file(config_name: &str, config: &Configuration) -> std::io::Result<()> {
-    let file_name = {
-        if cfg!(test) {
-            (env!("CARGO_MANIFEST_DIR").to_owned() + TEST_CONFIG_DIR + config_name + ".txt").replace("\\", "/")
-        } else {
-            (DATA_DIR.clone().unwrap() + CONFIG_DIR  + config_name + ".txt").replace("\\", "/")
-        }
-    };
+pub fn save_config_to_file(config_name: &str, config: &Configuration, config_dir: Option<String>) -> std::io::Result<()> {
+    let config_dir = if let Some(dir) = config_dir {dir} else {DATA_DIR.clone() + CONFIG_DIR};
+    let file_name = config_dir + config_name + ".txt";
+
     let mut writer = BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(file_name)?);
 
     writer.write(b"Auto-generated config file.");
@@ -364,17 +350,13 @@ fn read_lines_to_vec(reader: &mut BufReader<File>, mut buf: &mut String, parser_
     vec
 }
 
-fn try_find_data_dir() -> Option<String> {
-    if cfg!(test) {
-        Some(env!("CARGO_MANIFEST_DIR").to_owned() + "/data")
-    } else {
-        let abs_path = try_get_folder_of_exe().unwrap_or_else(|| "".to_owned());
-        let data_in_current = &(abs_path.clone() + "/data");
-        let data_in_parent = &(abs_path + "/../../data");
-        if Path::new(data_in_current).is_dir() {return Some(data_in_current.to_owned())}
-        if Path::new(data_in_parent).is_dir() {return Some(data_in_parent.to_owned())}
-        None
+fn get_working_dir() -> String {
+    let mut base_path = String::from(std::env::current_exe().expect("Failed to find executable path.")
+            .parent().expect("Failed to get parent directory of the executable.").to_str().unwrap());
+    if base_path.contains("target/") || base_path.contains("target\\"){
+        base_path = String::from(".");
     }
+    base_path
 }
 
 fn try_get_folder_of_exe() -> Option<String> {
@@ -393,7 +375,7 @@ fn try_get_folder_of_exe() -> Option<String> {
 }
 
 fn find_or_create_log_dir() -> String {
-    let path = DATA_DIR.clone().unwrap() + "/logs/";
+    let path = DATA_DIR.clone() + "/logs/";
     if !Path::new(&path).exists() {
         fs::create_dir(&path).unwrap();
     }
@@ -413,7 +395,6 @@ impl ParseLanguageError {
 impl ParseConfigFileError {
     pub fn formatted(&self) -> String {
         match self {
-            Self::DirNotFound => "No 'config' dir found, defaults will be used.".yellow().to_string(),
             Self::FileNotFound(x) => format!("'{}' config file not found, defaults will be used.", x).yellow().to_string(),
             Self::IOError => "Unexpected IO error while reading, defaults will be used".yellow().to_string()
         }
@@ -485,17 +466,18 @@ mod my_reader {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Configuration, config_manager, io_handler::{parse_config_file, save_config_to_file}};
+    use crate::{Configuration, config_manager, io_handler::{TEST_DIR, parse_config_file, save_config_to_file}};
 
     #[test]
     fn test_save_config_file_and_then_parse_it() -> std::io::Result<()> {
-        let working_dir = env!("CARGO_MANIFEST_DIR").to_owned() + "/data";
-        let command = format!("{}/config, {}/languages --exclude a,b,c.txt,d.txt, --braces-as-code --threads 4", working_dir, working_dir);
+        let data_dir = env!("CARGO_MANIFEST_DIR").to_owned() + "/data";
+        let command = format!("{}/config, {}/languages --exclude a,b,c.txt,d.txt, --braces-as-code --threads 4", data_dir, data_dir);
         let config = config_manager::create_config_from_args(&command).unwrap();
 
-        save_config_to_file("auto-generated", &config);
+        let test_config_dir = Some(env!("CARGO_MANIFEST_DIR").to_owned() + TEST_DIR + "config/");
+        save_config_to_file("auto-generated", &config, test_config_dir);
 
-        let options = parse_config_file(Some("auto-generated")).unwrap();
+        let options = parse_config_file(Some("auto-generated"), Some(env!("CARGO_MANIFEST_DIR").to_owned() + TEST_DIR)).unwrap();
         assert_eq!(config.dirs, options.dirs.unwrap());
         assert_eq!(config.exclude_dirs, options.exclude_dirs.unwrap());
         assert_eq!(config.threads, options.threads.unwrap());
@@ -516,7 +498,7 @@ mod tests {
             .set_braces_as_code(true);
 
 
-        let options = parse_config_file(Some("test")).unwrap();
+        let options = parse_config_file(Some("test"), Some(env!("CARGO_MANIFEST_DIR").to_owned() + "/test_dir")).unwrap();
         assert_eq!(config.dirs, options.dirs.unwrap());
         assert_eq!(config.exclude_dirs, options.exclude_dirs.unwrap());
         assert_eq!(config.threads, options.threads.unwrap());

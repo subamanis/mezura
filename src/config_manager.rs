@@ -214,7 +214,7 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
     config.set_config_names_to_save_and_load(config_name_to_save.clone(), config_name_to_load);
 
     if let Some(x) = config_name_to_save {
-        match io_handler::save_config_to_file(&x, &config) {
+        match io_handler::save_config_to_file(&x, &config, None) {
             Err(_) => println!("\n{}","Error while trying to save config.".yellow()),
             Ok(_) => println!("\nConfiguration '{}' saved successfully.",x)
         }
@@ -232,7 +232,7 @@ fn parse_load_command(config_name: &str) -> Option<ConfigurationBuilder> {
     if config_name.is_empty() {
         return None;
     }
-    match io_handler::parse_config_file(Some(config_name)) {
+    match io_handler::parse_config_file(Some(config_name), None) {
         Ok(x) => {
             Some(x)
         },
@@ -290,7 +290,7 @@ fn combine_specified_config_options(custom_config: Option<ConfigurationBuilder>,
         args_builder.add_missing_fields(x);
     }
     if args_builder.has_missing_fields() {
-        let default_config = io_handler::parse_config_file(None);
+        let default_config = io_handler::parse_config_file(None, None);
         if let Ok(x) = default_config {
             args_builder.add_missing_fields(x);
         }

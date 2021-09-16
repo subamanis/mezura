@@ -2,7 +2,7 @@ use std::{io, sync::atomic::Ordering, thread, time::Duration};
 
 use crate::*;
 
-pub(crate) fn start_parser_thread(
+pub fn start_parser_thread(
         id: usize, files_ref: LinkedListRef, faulty_files_ref: FaultyFilesRef, finish_condition_ref: BoolRef,
         language_content_info_ref: ContentInfoMapRef, language_map: LanguageMapRef, config: Configuration) 
 -> Result<JoinHandle<()>,io::Error> 

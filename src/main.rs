@@ -77,13 +77,16 @@ fn get_args_from_stdin() -> Configuration {
 }
 
 fn verify_required_dirs() -> Result<(),String> {
-    if let Some(data_dir) = io_handler::DATA_DIR.clone() {
-        if !Path::new(&(data_dir + "/languages")).is_dir() {
-            return Err("'languages' directory not found inside 'data'.".red().to_string())
-        } 
-        
-        Ok(())
-    } else {
-        Err("'data' directory not found in the current folder.".red().to_string())
+    let data_dir = io_handler::DATA_DIR.clone();
+    if !Path::new(&data_dir).is_dir() {
+        return Err("'data' directory not found".red().to_string());
     }
+    if !Path::new(&(io_handler::DATA_DIR.clone() + "/languages")).is_dir() {
+        return Err("'languages' directory not found inside 'data'.".red().to_string())
+    } 
+    if !Path::new(&(io_handler::DATA_DIR.clone() + "/config")).is_dir() {
+        return Err("'config' directory not found inside 'data'.".red().to_string())
+    } 
+    
+    Ok(())
 }

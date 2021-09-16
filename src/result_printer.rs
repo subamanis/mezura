@@ -192,7 +192,7 @@ fn print_visual_overview(sorted_language_vec: &mut Vec<String>, content_info_map
     println!("{}\n\n{}\n\n{}\n",files_line, lines_line, size_line);
 }
 
-fn print_comparison_to_previous_runs(final_stats: &FinalStats, log_content: &String, num_of_entries: usize, datetime_now: &DateTime<Local>) {
+fn print_comparison_to_previous_runs(final_stats: &FinalStats, log_content: &str, num_of_entries: usize, datetime_now: &DateTime<Local>) {
     println!("\n{}.\n", "Progress".underline().bold());
 
     let (stat_entries, dates) = parse_N_previous_entries(log_content, num_of_entries);
@@ -217,9 +217,9 @@ fn print_comparison_to_previous_runs(final_stats: &FinalStats, log_content: &Str
     print!("{}", comparison_str);
 
     fn color_percentage(percentage: &str) -> ColoredString {
-        if percentage.starts_with("+") {
+        if percentage.starts_with('+') {
             percentage.truecolor(201, 255, 189)
-        } else if percentage.starts_with("-") {
+        } else if percentage.starts_with('-') {
             percentage.truecolor(219, 129, 129)
         } else {
             percentage.truecolor(255, 255, 255)
@@ -232,28 +232,34 @@ fn split_minutes_to_D_H_M(mut minutes: i64) -> (i64, i64, i64) {
     let minutes_in_day = 60 * 24;
     let minutes_in_hour = 60;
     let days = minutes / minutes_in_day;
-    minutes = minutes - days * minutes_in_day;
+    minutes -= days * minutes_in_day;
     let hours = minutes / minutes_in_hour;
-    minutes = minutes - hours * minutes_in_hour;
+    minutes -= hours * minutes_in_hour;
 
     (days, hours, minutes)
 }
 
 fn difference_as_signed_percentage_str_of_usize(older: usize, newer: usize) -> String {
     let (difference, sign) = if newer > older {(newer-older, "+".to_owned())} else if older > newer {(older-newer, "-".to_owned())} else {(0,String::new())};
-    let percentage = (difference as f64 / older as f64) * 100.0;
+    let mut percentage = (difference as f64 / older as f64) * 100.0;
+    if percentage > 0.0 && percentage < 0.01 {
+        percentage = 0.01;
+    }
 
     sign + &round_2(percentage).to_string()
 }
 
 fn difference_as_signed_percentage_str_of_f64(older: f64, newer: f64) -> String {
     let (difference, sign) = if newer > older {(newer-older, "+".to_owned())} else if older > newer {(older-newer, "-".to_owned())} else {(0.0,String::new())};
-    let percentage = (difference as f64 / older as f64) * 100.0;
+    let mut percentage = (difference as f64 / older as f64) * 100.0;
+    if percentage > 0.0 && percentage < 0.01 {
+        percentage = 0.01;
+    }
 
     sign + &round_2(percentage).to_string()
 }
 
-fn parse_N_previous_entries(log_content: &String, n: usize) -> (Vec<FinalStats>, Vec<DateTime<Local>>) {
+fn parse_N_previous_entries(log_content: &str, n: usize) -> (Vec<FinalStats>, Vec<DateTime<Local>>) {
     let mut entries = Vec::new();
     let mut dates = Vec::new();
     let (mut files, mut lines, mut code_lines, mut extra_lines, mut bytes_size) = (0, 0, 0, 0, 0);
@@ -763,15 +769,17 @@ mod tests {
         assert_eq!("0",difference_as_signed_percentage_str_of_usize(100, 100));
         assert_eq!("-10",difference_as_signed_percentage_str_of_usize(100, 90));
         assert_eq!("+100",difference_as_signed_percentage_str_of_usize(100, 200));
-
+        assert_eq!("+0.01",difference_as_signed_percentage_str_of_usize(22819, 22820));
+        
         assert_eq!("0",difference_as_signed_percentage_str_of_f64(100.0, 100.0));
         assert_eq!("-10",difference_as_signed_percentage_str_of_f64(100.0, 90.0));
         assert_eq!("+100",difference_as_signed_percentage_str_of_f64(100.0, 200.0));
+        assert_eq!("+0.01",difference_as_signed_percentage_str_of_f64(22819.0, 22820.0));
     }
 
     #[test]
     fn test_parse_N_previous_entries() {
-        let contents = utils::extract_file_contents(&(io_handler::DATA_DIR.to_owned().unwrap()+"/../test_dir/logs/test")).unwrap();
+        let contents = utils::extract_file_contents(&(io_handler::DATA_DIR.to_owned()+"/../test_dir/logs/test")).unwrap();
         let (entries, dates) = parse_N_previous_entries(&contents, 3);
 
         assert_eq!(10, entries[0].files);
