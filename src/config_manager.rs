@@ -58,7 +58,8 @@ pub enum ArgParsingError {
     DoublePath,
     UnrecognisedCommand(String),
     IncorrectCommandArgs(String),
-    UnexpectedCommandArgs(String)
+    UnexpectedCommandArgs(String),
+    NonExistantConfig(String)
 }
 
 pub fn read_args_cmd() -> Result<Configuration,ArgParsingError> {
@@ -147,7 +148,7 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
                 return Err(ArgParsingError::IncorrectCommandArgs(LOAD.to_owned()));
             }
 
-            if let Some(options) = parse_load_command(config_name) {
+            if let Ok(options) = io_handler::parse_config_file(Some(config_name), None) {
                 if let Some(dirs) = &options.dirs {
                     for dir in dirs.iter() {
                         if !utils::is_valid_path(dir) {
@@ -158,7 +159,7 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
                 custom_config = Some(options);
                 config_name_to_load = Some(config_name.to_owned());
             } else {
-                return Err(ArgParsingError::IncorrectCommandArgs(LOAD.to_owned()));
+                return Err(ArgParsingError::NonExistantConfig(config_name.to_owned()))
             }
         } else if let Some(name) = command.strip_prefix(SAVE) {
             let name = name.trim();
@@ -225,22 +226,6 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
 
 fn has_any_args(command: &str) -> bool {
     command.split(' ').skip(1).filter_map(|x| utils::get_if_not_empty(x.trim())).count() != 0
-}
-
-fn parse_load_command(config_name: &str) -> Option<ConfigurationBuilder> {
-    let config_name = config_name.trim();
-    if config_name.is_empty() {
-        return None;
-    }
-    match io_handler::parse_config_file(Some(config_name), None) {
-        Ok(x) => {
-            Some(x)
-        },
-        Err(x) => {
-            println!("\n{}",x.formatted());
-            None
-        }
-    }
 }
 
 fn parse_dirs(s: &str) -> Result<Vec<String>, ArgParsingError> {
@@ -550,7 +535,8 @@ impl ArgParsingError {
             Self::DoublePath => "Directories already provided as first argument, but --dirs command also found.".red().to_string(),
             Self::UnrecognisedCommand(p) => format!("--{} is not recognised as a command.",p).red().to_string(),
             Self::IncorrectCommandArgs(p) => format!("Incorrect arguments provided for the command '--{}'. Type '--help'",p).red().to_string(),
-            Self::UnexpectedCommandArgs(p) => format!("Command '--{}' does not expect any arguments.",p).red().to_string()
+            Self::UnexpectedCommandArgs(p) => format!("Command '--{}' does not expect any arguments.",p).red().to_string(),
+            Self::NonExistantConfig(p) => format!("Configuration '{}' does not exist.",p).red().to_string()
         }
     }
 }
