@@ -22,7 +22,7 @@ Example run:
 
 
 ## How To Run
-You can run the project directly by dowloading the "executable/release" folder that contains the executable and the neccessary "data" folder.
+You can run the project directly by dowloading the "executable" folder that contains the executable and the neccessary "data" folder.
 Alternatively, you can build the project yourself ```cargo b --release```
 
 Format of arguments: ```<path> --optional_command1 --optional_commandN```
