@@ -211,6 +211,12 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
         return Err(ArgParsingError::MissingTargetDirs);
     }
 
+    if let Some(_log) = log {
+        if config_name_to_save.is_none() && config_name_to_load.is_none() && _log {
+            println!("\n{}","Logging will be ignored, since no config file was specified.".yellow());
+        }
+    }
+
     let mut config = args_builder.build();
     config.set_config_names_to_save_and_load(config_name_to_save.clone(), config_name_to_load);
 

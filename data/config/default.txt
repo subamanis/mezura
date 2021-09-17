@@ -1,19 +1,9 @@
-Configuration file that will always be loaded, with the lowest priority.
-after every "===>" symbol is as command that can also be used from the cmd,
+Configuration file that will always be loaded.
+After every "===>" symbol, there is as command that can also be used from the cmd,
 and in the next line is the argument of the command.
 Do not modify the name of the commands and the name of this file.
 
 
-The directory or file names to be excluded from searching for files or parsing.
-Default: empty - none should be excuded
-===> exclude
-
-Specify only what languages the program should generate stats for.
-The languages specified here must already exist in the 'languages' dir (inside 'data'), meaning that
-the name of the languages you specify here must match the 'Language' field of one of the files
-in the 'languages' dir.
-Default: empty - all languages that are specified in the 'languages' dir are relevant.
-===> languages
 
 The number of consumer threads that will parse files in parallel.
 Increasing the number wont always improve performance, since if the files are scattered in
@@ -47,3 +37,8 @@ If used from cmd, dont use any arguments, just the name of the command
 'yes' or 'true' to activate or anything else to deactivate, default: no (deactivated)
 ===> no-visual
 no
+
+The number of previous runs of a configuration, that every subsequent run should be compared to,
+showing differences between stats. Use value of 0 to disable.
+===> compare 
+1
