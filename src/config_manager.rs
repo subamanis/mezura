@@ -2,7 +2,7 @@ use std::{path::{Path, PathBuf}, process};
 
 use colored::Colorize;
 
-use crate::{io_handler::{self, ParseConfigFileError},utils};
+use crate::{io_handler::{self, ConfigFileParseError},utils};
 
 // command flags
 pub const DIRS               :&str   = "dirs";

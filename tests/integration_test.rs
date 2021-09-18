@@ -7,7 +7,7 @@ use mezura::*;
 fn test_whole_workflow () {
     let current_dir = env!("CARGO_MANIFEST_DIR").replace("\\", "/");
     let mut config = config_manager::create_config_from_args(&format!("{}/src,{}/tests --threads 3 ",current_dir, current_dir)).unwrap();
-    let language_map = io_handler::parse_supported_languages_to_map(&mut config.languages_of_interest).unwrap().0;
+    let language_map = io_handler::parse_supported_languages_to_map(&mut config.languages_of_interest).unwrap().language_map;
     let language_map_len = language_map.len(); 
 
     assert_eq!(3, config.threads);

@@ -9,6 +9,7 @@ const NUM_OF_VERTICALS : usize = 50;
 
 const KEYWORD_LINE_OFFSET : usize = 19;
 const STANDARD_LINE_STATS_LEN : usize = 33;
+const DASH_LINE_OFFSET : usize = 47;
 
 //log file keys
 const FILES         : &str  = "Files:";
@@ -122,7 +123,7 @@ fn print_sum(content_info_map: &HashMap<String,LanguageContentInfo>, final_stats
             final_stats.average_size,colored_word(&format!("{} average", final_stats.average_size_measurement)));
 
     let line_len = STANDARD_LINE_STATS_LEN + total_files_str.len() + total_code_lines_str.len() + total_extra_lines_str.len() +
-            final_stats.size.to_string().len() + final_stats.average_size.to_string().len() + 47;
+            final_stats.size.to_string().len() + final_stats.average_size.to_string().len() + DASH_LINE_OFFSET;
     println!("{} ","-".repeat(line_len));
 
     let info = format!("{} {} {{{} code ({:.2}%) + {} extra}}  |  {}\n",colored_word("lines"), total_lines_str,total_code_lines_str,

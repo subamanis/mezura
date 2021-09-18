@@ -30,32 +30,32 @@ fn main() {
             process::exit(1);
         },
         Ok(x) => {
-            if !x.1.is_empty() {
+            if !x.faulty_files.is_empty() {
                 let mut warn_msg = String::from("\nFormatting problems detected in language files: ");
 
-                warn_msg.push_str(&x.1.join(", "));
+                warn_msg.push_str(&x.faulty_files.join(", "));
                 warn_msg.push_str(". These files will not be taken into consideration.");
                 println!("{}",warn_msg.yellow());
             }
             
-            if !x.2.is_empty() {
-                let relevant = x.2.iter().filter_map(|s| if !x.1.contains(&(s.to_owned()+".txt")){Some(s.to_owned())} else {None}).collect::<Vec<_>>();
+            if !x.non_existant_languages.is_empty() {
+                let relevant = x.non_existant_languages.iter().filter_map(|s| if !x.faulty_files.contains(&(s.to_owned()+".txt")){Some(s.to_owned())} else {None}).collect::<Vec<_>>();
                 if !relevant.is_empty() {
                     let warn_msg = format!("\nThese languages don't exist as language files: {}",relevant.join(", "));
                     println!("{}",warn_msg.yellow());
                 }
             }
 
-            x.0
+            x.language_map
         }
     };
 
     let instant = Instant::now();
     match mezura::run(config, languages_map) {
         Ok(x) => {
-            let perf = format!("\nExecution time: {:.2} secs ", instant.elapsed().as_secs_f32());
+            let perf = format!("\nParsing time: {:.2} secs ", instant.elapsed().as_secs_f32());
             let metrics = match x {
-                Some(x) => format!("(Parsing: {} files/s | {} lines/s)", with_seperators(x.files_per_sec), with_seperators(x.lines_per_sec)),
+                Some(x) => format!("({} files/s | {} lines/s)", with_seperators(x.files_per_sec), with_seperators(x.lines_per_sec)),
                 None => String::new()
             };
             println!("{}",perf + &metrics);

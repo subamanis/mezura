@@ -7,32 +7,41 @@ use lazy_static::lazy_static;
 use crate::{Configuration, FinalStats, config_manager::{self, ConfigurationBuilder,BRACES_AS_CODE, EXCLUDE, LANGUAGES, DIRS, SEARCH_IN_DOTTED,
      SHOW_FAULTY_FILES, THREADS, MIN_THREADS_VALUE, MAX_THREADS_VALUE, MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL}, domain::*, utils};
 
-lazy_static! {
-    pub static ref DATA_DIR : String = get_working_dir() + "/data";
-    pub static ref LOG_DIR  : String = find_or_create_log_dir(); 
-}
 
 const DEFAULT_CONFIG_FILE_NAME : &str = "default";
 const CONFIG_DIR : &str = "/config/";
 const LANGUAGE_DIR : &str = "/languages/";
 const TEST_DIR : &str = "/test_dir/";
 
+lazy_static! {
+    pub static ref DATA_DIR : String = get_working_dir() + "/data";
+    pub static ref LOG_DIR  : String = find_or_create_log_dir(); 
+}
+
+
 #[derive(Debug)]
-pub enum ParseLanguageError {
+pub struct LanguageDirParseInfo {
+    pub language_map: HashMap<String,Language>,
+    pub faulty_files: Vec<String>,
+    pub non_existant_languages:  Vec<String>
+}
+
+#[derive(Debug)]
+pub enum LanguageDirParseError {
     NoFilesFound,
     NoFilesFormattedProperly,
     LanguagesOfInterestNotFound
 }
 
 #[derive(Debug)]
-pub enum ParseConfigFileError {
+pub enum ConfigFileParseError {
     FileNotFound(String),
     IOError
 }
 
 
 pub fn parse_supported_languages_to_map(languages_of_interest: &mut Vec<String>)
-        -> Result<(HashMap<String,Language>, Vec<String>, Vec<String>), ParseLanguageError> 
+        -> Result<LanguageDirParseInfo, LanguageDirParseError> 
 {
     let dirs = fs::read_dir(DATA_DIR.clone() + LANGUAGE_DIR).unwrap();
     
@@ -89,7 +98,7 @@ pub fn parse_supported_languages_to_map(languages_of_interest: &mut Vec<String>)
     }
     
     if num_of_entries == 0 {
-        return Err(ParseLanguageError::NoFilesFound);
+        return Err(LanguageDirParseError::NoFilesFound);
     } 
     
     let mut non_existant_languages_of_interest = Vec::new();
@@ -101,19 +110,19 @@ pub fn parse_supported_languages_to_map(languages_of_interest: &mut Vec<String>)
     }
 
     if !parsed_any_successfully {
-        return Err(ParseLanguageError::NoFilesFormattedProperly);
+        return Err(LanguageDirParseError::NoFilesFormattedProperly);
     }
 
     if !languages_of_interest.is_empty() && non_existant_languages_of_interest.len() == languages_of_interest.len() {
-        return Err(ParseLanguageError::LanguagesOfInterestNotFound);
+        return Err(LanguageDirParseError::LanguagesOfInterestNotFound);
     }
 
     languages_of_interest.retain(|x| !non_existant_languages_of_interest.contains(x) && !faulty_files.contains(&(x.to_owned()+".txt")));
 
-    Ok((language_map, faulty_files, non_existant_languages_of_interest))
+    Ok(LanguageDirParseInfo::new(language_map, faulty_files, non_existant_languages_of_interest))
 }
 
-pub fn parse_config_file(file_name: Option<&str>, data_dir: Option<String>) -> Result<ConfigurationBuilder,ParseConfigFileError> {
+pub fn parse_config_file(file_name: Option<&str>, data_dir: Option<String>) -> Result<ConfigurationBuilder,ConfigFileParseError> {
     let data_dir = if let Some(dir) = data_dir {dir} else {DATA_DIR.clone()};
     let dir_path = data_dir + CONFIG_DIR;
 
@@ -121,7 +130,7 @@ pub fn parse_config_file(file_name: Option<&str>, data_dir: Option<String>) -> R
     let file_path = (dir_path + file_name + ".txt").replace("\\", "/");
     let mut reader = BufReader::new(match fs::File::open(file_path){
         Ok(f) => f,
-        Err(_) => return Err(ParseConfigFileError::FileNotFound(file_name.to_owned()))
+        Err(_) => return Err(ConfigFileParseError::FileNotFound(file_name.to_owned()))
     });
 
     let (mut dirs, mut braces_as_code, mut should_search_in_dotted, mut threads, mut exclude_dirs, mut languages_of_interest,
@@ -382,7 +391,18 @@ fn find_or_create_log_dir() -> String {
     path
 }
 
-impl ParseLanguageError {
+
+impl LanguageDirParseInfo {
+    pub fn new(language_map: HashMap<String, Language>, faulty_files: Vec<String>, non_existant_languages: Vec<String>) -> Self {
+        LanguageDirParseInfo {
+            language_map,
+            faulty_files,
+            non_existant_languages
+        }
+    }
+}
+
+impl LanguageDirParseError {
     pub fn formatted(&self) -> String {
         match self {
             Self::NoFilesFound => "Error: No language files found in directory.".red().to_string(),
@@ -392,7 +412,7 @@ impl ParseLanguageError {
     }
 }
 
-impl ParseConfigFileError {
+impl ConfigFileParseError {
     pub fn formatted(&self) -> String {
         match self {
             Self::FileNotFound(x) => format!("'{}' config file not found, defaults will be used.", x).yellow().to_string(),

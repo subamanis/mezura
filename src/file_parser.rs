@@ -778,7 +778,7 @@ mod tests {
             keywords : vec![STRUCT.clone(),ENUM.clone(),TRAIT.clone()]
         };
 
-        static ref LANGUAGE_MAP_REF : LanguageMapRef = Arc::new(io_handler::parse_supported_languages_to_map(&mut Vec::<String>::new()).unwrap().0);
+        static ref LANGUAGE_MAP_REF : LanguageMapRef = Arc::new(io_handler::parse_supported_languages_to_map(&mut Vec::<String>::new()).unwrap().language_map);
     }
 
     #[test]
