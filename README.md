@@ -1,8 +1,9 @@
 # mezura
 
 ## About
-This is a <b>fast</b>, <b>customizable</b> and fairly <b>accurate</b> stats generator for programming projects, in the form of a CLI executable, written in <b>Rust</b>, with <b>minimal dependencies</b>. It is used for counting total lines, code lines, user defined <b>keywords</b> like classes, enums, etc., and to track the growth of codebases.
-It is maintained primarily on Windows, but it is also being validated that it works on Linux (Ubuntu)
+This is a <b>fast</b>, <b>customizable</b> and fairly <b>accurate</b> stats generator for programming projects, in the form of a CLI executable, written in <b>Rust</b>, with <b>minimal dependencies</b>.
+It is used for counting total lines, code lines, user defined <b>keywords</b> like classes, enums, etc., and to track the growth of codebases.<br><br>
+It is maintained primarily on <b>Windows</b>, but it is also being validated that it works on <b>Linux</b> (Ubuntu)
 
 Example run:
 ![](screenshots/example.PNG)
@@ -21,7 +22,7 @@ Example run:
 
 
 ## How To Run
-You can run the project directly by dowloading the "executable/release" folder that contains the executable and the neccessary "data" folder.
+You can run the project directly by dowloading the "executable" folder that contains the executable and the neccessary "data" folder.
 Alternatively, you can build the project yourself ```cargo b --release```
 
 Format of arguments: ```<path> --optional_command1 --optional_commandN```
