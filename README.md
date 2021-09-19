@@ -283,7 +283,7 @@ Cold
 
 ## Similar Projects
 
-If you don't require the keyword counting functionality of this program and the alternate-than-usual visualization, use the [scc](https://github.com/boyter/scc) project written in GO, that is honestly impressive.
+If you don't require the keyword counting functionality of this program, the progress tracking feature, or the alternate-than-usual visualization, use the [scc](https://github.com/boyter/scc) project written in GO, that is honestly impressive.
 
 Other alternative projects you can check are:
 - [loc](https://github.com/cgag/loc)
