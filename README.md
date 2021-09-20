@@ -1,8 +1,8 @@
 # mezura
 
 ## About
-This is a <b>fast</b>, <b>customizable</b> and fairly <b>accurate</b> stats generator for programming projects, in the form of a CLI executable, written in <b>Rust</b>, with <b>minimal dependencies</b>.
-It is used for counting total lines, code lines, user defined <b>keywords</b> like classes, enums, etc., and to track the growth of codebases.<br><br>
+This is a fairly <b>fast</b>, fairly <b>accurate</b>, very <b>customizable</b> stats generator for programming projects, in the form of a CLI executable, written in <b>Rust</b>, with <b>minimal dependencies</b>. <br>
+It is used for counting total lines, code lines, user defined <b>keywords</b> like classes, enums, etc., visualize the statistics, and to track the growth of codebases.<br><br>
 It is maintained primarily on <b>Windows</b>, but it is also being validated that it works on <b>Linux</b> (Ubuntu)
 
 Example run:
@@ -22,8 +22,12 @@ Example run:
 
 
 ## How To Run
-You can run the project directly by dowloading the "executable" folder that contains the executable and the neccessary "data" folder.
-Alternatively, you can build the project yourself ```cargo b --release```
+If you are using <b>Windows</b>, you can use the prebuilt executable directly, either by cloning the project to get the "executable" folder that contains the binary and the necessary "data" folder, or by downloading the folder provided with the latest <b>release</b>, in the Releases section of the repository's page. 
+
+You can also download and build the project yourself, either by downloading it as a .zip from GitHub or by running: <br>
+`git clone <repo_path>   &&   cd mezura   &&   cargo build --release`
+
+<b>Note</b> that if you download the project by running `cargo install --git`, you will need to manually place the "data" folder provided with the repository, in the same directory of the executable.<br><br>
 
 Format of arguments: ```<path> --optional_command1 --optional_commandN```
 
@@ -283,7 +287,7 @@ Cold
 
 ## Similar Projects
 
-If you don't require the keyword counting functionality of this program and the alternate-than-usual visualization, use the [scc](https://github.com/boyter/scc) project written in GO, that is honestly impressive.
+If you don't require the keyword counting functionality of this program, the progress tracking feature, or the alternate-than-usual visualization, use the [scc](https://github.com/boyter/scc) project written in GO, that is honestly impressive.
 
 Other alternative projects you can check are:
 - [loc](https://github.com/cgag/loc)
