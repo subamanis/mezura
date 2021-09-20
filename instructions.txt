@@ -1,9 +1,0 @@
--------- When you want to add a new command/flag follow these steps:
-
-1) Add a constant str with the command name on top of config_manager  
-2) Add an else if case for the command when creating the configuration
-3) Add the command to the Configuration and ConfigurationBuilder structs and to their "new" methods
-4) Add the command as argument to methods "combine_specified_config_options", "has_missing_field", "add_missing_field"
-5) Add and else if case for the command for the reading of it from a config file ("parse_config_file")
-6) Write the command when creating a config file ("save_config_to_file")
-7) Add code to handle the functionality of the command wherever applicable

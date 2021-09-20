@@ -5,13 +5,18 @@ use colored::*;
 use mezura::{config_manager, io_handler, *, self};
 
 fn main() {
-    // Only in windows, it is required to enable a virtual terminal environment, so that the colors will display correctly
+    // Only on windows, it is required to enable a virtual terminal environment, so that the colors will display correctly
     #[cfg(target_os = "windows")]
     control::set_virtual_terminal(true).unwrap();
 
+    let cmd_args_str = std::env::args().skip(1).collect::<Vec<String>>().join(" ");
+    let was_run_from_cmd = !cmd_args_str.trim().is_empty();
+
     if let Err(x) = verify_required_dirs() {
         println!("{}",x);
-        utils::wait_for_input();
+        if !was_run_from_cmd {
+            utils::wait_for_input();
+        }
         process::exit(1);
     }
 
@@ -26,7 +31,9 @@ fn main() {
     let languages_map = match io_handler::parse_supported_languages_to_map(&mut config.languages_of_interest) {
         Err(x) => {
             println!("\n{}", x.formatted());
-            utils::wait_for_input();
+            if !was_run_from_cmd {
+                utils::wait_for_input();
+            }
             process::exit(1);
         },
         Ok(x) => {
@@ -63,7 +70,10 @@ fn main() {
         Err(x) => println!("{}",x.formatted())
     }
 
-    utils::wait_for_input();
+
+    if !was_run_from_cmd {
+        utils::wait_for_input();
+    }
 }
 
 fn get_args_from_stdin() -> Configuration {
@@ -79,13 +89,13 @@ fn get_args_from_stdin() -> Configuration {
 fn verify_required_dirs() -> Result<(),String> {
     let data_dir = io_handler::DATA_DIR.clone();
     if !Path::new(&data_dir).is_dir() {
-        return Err("'data' directory not found".red().to_string());
+        return Err("'data' folder not found in the directory of the exe.".red().to_string());
     }
     if !Path::new(&(io_handler::DATA_DIR.clone() + "/languages")).is_dir() {
-        return Err("'languages' directory not found inside 'data'.".red().to_string())
+        return Err("'languages' folder not found inside 'data'.".red().to_string())
     } 
     if !Path::new(&(io_handler::DATA_DIR.clone() + "/config")).is_dir() {
-        return Err("'config' directory not found inside 'data'.".red().to_string())
+        return Err("'config' folder not found inside 'data'.".red().to_string())
     } 
     
     Ok(())

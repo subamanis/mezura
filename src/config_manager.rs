@@ -394,7 +394,6 @@ fn print_help_message_and_exit() {
         You can combine the '--load' and '--save' commands to modify a configuration file.
     ");
     
-    utils::wait_for_input();
     process::exit(0);
 }
 
