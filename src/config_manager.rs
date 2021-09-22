@@ -2,7 +2,7 @@ use std::{path::{Path, PathBuf}, process};
 
 use colored::Colorize;
 
-use crate::{io_handler::{self, ConfigFileParseError},utils};
+use crate::{help_message_printer, io_handler::{self, ConfigFileParseError}, utils};
 
 // command flags
 pub const DIRS               :&str   = "dirs";
@@ -17,6 +17,7 @@ pub const LOG                :&str   = "log";
 pub const COMPRARE_LEVEL     :&str   = "compare";
 pub const SAVE               :&str   = "save";
 pub const LOAD               :&str   = "load";
+pub const HELP               :&str   = "help";
 
 pub const MAX_THREADS_VALUE : usize = 8;
 pub const MIN_THREADS_VALUE : usize = 1;
@@ -77,15 +78,15 @@ pub fn read_args_console() -> Result<Configuration,ArgParsingError> {
     create_config_from_args(&line)
 }
 
-
 pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError> {
     let line = line.trim();
     if line.is_empty() {
         return Err(ArgParsingError::NoArgsProvided)
     }
 
-    if line == "--help" {
-        print_help_message_and_exit()
+    if line.contains("--help") {
+        help_message_printer::print_appropriate_help_message(line);
+        process::exit(0);
     }
 
     let mut dirs = None;
@@ -287,114 +288,6 @@ fn combine_specified_config_options(custom_config: Option<ConfigurationBuilder>,
         }
     }
     args_builder
-}
-
-// This needs to maintained along the README, I am not sure how else to make a help message without duplication
-fn print_help_message_and_exit() {
-    println!("
-    Format of arguments: <path_here> --optional_command1 --optional_commandN
-
-    COMMANDS:
-
-    --dirs
-        The paths to the directories or files, seperated by commas if more than 1,
-        in this form: '--dirs <path1>, <path2>'
-        They can either be surrounded by quotes: \"path\" or not, even if the paths have whitespace.
-
-        The target directories can also be given implicitly (in which case this command is not needed) with 2 ways:
-        1) as the first arguments of the program directly
-        2) if they are present in a configuration file (see '--save' and '--load' commands).
-
-    --exclude 
-        1..n arguments separated by commas, can be a folder name, a file name (including extension), 
-        or a full path to a folder or file. The paths can be surrounded by quotes or not, even if they have whitespace.
-
-        The program will ignore these dirs.
-    
-    --languages 
-        1..n arguments separated by commas, case-insensitive
-
-        The given language names must exist in any of the files in the 'data/languages/' dir as the
-        parameter of the field 'Language'.
-
-        Only the languages specified here will be taken into account for the stats.
-
-    --threads
-        1 argument: a number between 1 and 8. Default: 4 
-
-        This represents the number of the consumer threads that will parse files.
-        (there is also always one producer thread that is traversing the given dir).
-
-        Increasing the number of consumers can help performance a bit in a situation where
-        there are a lot of big files, concentrated in a shallow directory structure.
-        
-    --braces-as-code
-        No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable, or 'no'
-        to disable. Default: no 
-
-        Specifies whether lines that only contain braces ( {{ or }} ), should be considered as code lines or not.
-
-        The default behaviour is to not count them as code, since it is silly for code of the same content
-        and substance to be counted differently, according to the programer's code style.
-        This helps to keep the stats clean when using code lines as a complexity and productivity metric.
-
-    --search-in-dotted
-        No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
-        or 'no' to disable. Default: no 
-
-        Specifies whether the program should traverse directories that are prefixed with a dot,
-        like .vscode or .git.
-
-    --show-faulty-files
-        No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
-        or 'no' to disable. Default: no 
-
-        Sometimes it happens that an error occurs when trying to parse a file, either while opening it,
-        or while reading it's contents. The default behavior when this happens is to count all of
-        the faulty files and display their count.
-
-        This flag specifies that their path, along with information about the exact error is displayed too.
-        The most common reason for this error is if a file contains non UTF-8 characters. 
-
-    --no-visual
-        No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
-        or 'no' to disable. Default: no 
-
-        Disables the colors in the \"overview\" section of the results, and disables the visualization with 
-        the vertical lines that reprisent the percentages.
-
-    --log 
-        No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
-        or 'no' to disable. Default: no 
-    
-        This flag only works if a configuration file is loaded. Specifies that a new log entry should be made
-        with the stats of this program execution, inside the appropriate file in the 'data/logs' directory.
-        If not log file exists for this configuration, one is created.
-    
-    --compare
-        1 argument: a number between 0 and 10. Default: 1
-    
-        This flag only works if a configuration file is loaded. Specifies with how many previous logs this
-        program execution should be compared to (see '--save' and '--load' commands).
-
-        Providing 0 as argument will disable the progress report (comparison).
-
-    --save
-        One argument as the file name (whitespace allowed, without an extension, case-insensitive)
-
-        Doing so, will run the program and also create a .txt configuration file,
-        inside 'data/config/' with the specified name, that can later be loaded with the --load command.
-
-    --load
-        One argument as the file name (whitespace allowed, without an extension, case-insensitive)
-
-        Assosiated with the '--save' command, this command is used to load the flags of 
-        an existing configuration file from the 'data/config/' directory. 
-
-        You can combine the '--load' and '--save' commands to modify a configuration file.
-    ");
-    
-    process::exit(0);
 }
 
 
