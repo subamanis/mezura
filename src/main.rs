@@ -9,14 +9,8 @@ fn main() {
     #[cfg(target_os = "windows")]
     control::set_virtual_terminal(true).unwrap();
 
-    let cmd_args_str = std::env::args().skip(1).collect::<Vec<String>>().join(" ");
-    let was_run_from_cmd = !cmd_args_str.trim().is_empty();
-
     if let Err(x) = verify_required_dirs() {
         println!("{}",x);
-        if !was_run_from_cmd {
-            utils::wait_for_input();
-        }
         process::exit(1);
     }
 
@@ -24,16 +18,13 @@ fn main() {
         Ok(config) => config,
         Err(x) => {
             println!("\n{}",x.formatted());
-            get_args_from_stdin()
+            process::exit(1);
         } 
     };
 
     let languages_map = match io_handler::parse_supported_languages_to_map(&mut config.languages_of_interest) {
         Err(x) => {
             println!("\n{}", x.formatted());
-            if !was_run_from_cmd {
-                utils::wait_for_input();
-            }
             process::exit(1);
         },
         Ok(x) => {
@@ -68,21 +59,6 @@ fn main() {
             println!("{}",perf + &metrics);
         },
         Err(x) => println!("{}",x.formatted())
-    }
-
-
-    if !was_run_from_cmd {
-        utils::wait_for_input();
-    }
-}
-
-fn get_args_from_stdin() -> Configuration {
-    loop {
-        println!("\nPlease provide a file name or a root directory path, and optional parameters.\nType --help for the parameter list ");
-        match config_manager::read_args_console() {
-            Err(e) => println!("\n{}",e.formatted()),
-            Ok(config) => break config
-        }
     }
 }
 

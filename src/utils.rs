@@ -116,14 +116,6 @@ pub fn num_of_seperators(i: usize) -> usize {
     commas
 }
 
-pub fn wait_for_input() {
-    print!("\nPress any key to exit...");
-    let _ = io::stdout().flush();
-    let mut s = String::new();
-    let _ = io::stdin().read_line(&mut s);
-    println!();
-}
-
 #[macro_export]
 macro_rules! hashmap {
     ($( $key: expr => $val: expr ),*) => {{

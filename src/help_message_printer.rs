@@ -149,7 +149,7 @@ COMMANDS:
 }
 
 pub fn print_appropriate_help_message(args_line: &str) {
-    let options = args_line.split("--").collect::<Vec<_>>();
+    let options = args_line.split("--").skip(1).collect::<Vec<_>>();
     if options.len() == 1 {
         print_whole_help_message();
         return;
