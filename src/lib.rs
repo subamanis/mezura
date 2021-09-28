@@ -69,31 +69,27 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let language_map_ref : LanguageMapRef = Arc::new(language_map);
     let languages_content_info_ref = Arc::new(Mutex::new(make_language_stats(language_map_ref.clone())));
     let mut languages_metadata = make_language_metadata(language_map_ref.clone());
-    let mut handles = Vec::new(); 
 
     println!("\n{}...","Analyzing directory".underline().bold());
     for i in 0..config.threads {
-        handles.push(
-            consumer::start_parser_thread(
-                i, files_ref.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
-                languages_content_info_ref.clone(), language_map_ref.clone(), config.clone())
-            .unwrap()
-        );
+        consumer::start_parser_thread(i, files_ref.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
+            languages_content_info_ref.clone(), language_map_ref.clone(), config.clone())
     }
 
     let instant = Instant::now();
 
-    let (total_files_num, relevant_files_num) = producer::add_relevant_files(
-            files_ref, &mut languages_metadata, finish_condition_ref, &language_map_ref, &config);
+    let (total_files_num, relevant_files_num) = producer::add_relevant_files(files_ref.clone(),
+         &mut languages_metadata, finish_condition_ref.clone(), &language_map_ref, &config);
     if relevant_files_num == 0 {
         return Err(ParseFilesError::NoRelevantFiles(get_activated_languages_as_str(&config)));
     }
     println!("{} files found. {} of interest.\n",with_seperators(total_files_num), with_seperators(relevant_files_num));
 
     println!("{}...","Parsing files".underline().bold());
-    for h in handles {
-        h.join().unwrap();
-    }
+
+    // When main thread is done with traversing the directories to add the files, as a producer, it then acts as a consumer too
+    // and helps the other consumer threads parse the remaining files.
+    consumer::start_parsing_files(files_ref, faulty_files_ref.clone(), finish_condition_ref, languages_content_info_ref.clone(), language_map_ref.clone(), &config);
 
     let parsing_duration_millis = instant.elapsed().as_millis();
 
@@ -108,8 +104,7 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let mut content_info_map_guard = languages_content_info_ref.lock();
     let mut content_info_map = content_info_map_guard.as_deref_mut().unwrap();
 
-    let metrics = generate_metrics_if_parsing_took_more_than_one_sec(
-            parsing_duration_millis, relevant_files_num, content_info_map);
+    let metrics = generate_metrics_if_parsing_took_more_than_one_sec(parsing_duration_millis, relevant_files_num, content_info_map);
 
     let final_stats = FinalStats::calculate(&content_info_map, &languages_metadata);
     let log_file_path = get_specified_config_file_path(&config);

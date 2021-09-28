@@ -610,14 +610,14 @@ fn get_str_indices_and_symbols(line: &str, language: &Language, open_str_symbol:
             }
         }
     } else {
-        let mut indicies = Vec::new();
-        let mut symbols = Vec::new();
+        let mut indices = Vec::with_capacity(6);
+        let mut symbols = Vec::with_capacity(6);
         line.match_indices(&language.string_symbols[0]).for_each(|x| {
             if is_not_escaped(x.0, &line_bytes) {
-                indicies.push(x.0); symbols.push(x.1.to_owned());
+                indices.push(x.0); symbols.push(x.1.to_owned());
             }
         });
-        (indicies, symbols)
+        (indices, symbols)
     }
 }
 

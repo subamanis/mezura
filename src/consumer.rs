@@ -2,13 +2,18 @@ use std::{io, sync::atomic::Ordering, thread, time::Duration};
 
 use crate::*;
 
-pub fn start_parser_thread(
-        id: usize, files_ref: LinkedListRef, faulty_files_ref: FaultyFilesRef, finish_condition_ref: BoolRef,
+pub fn start_parser_thread(id: usize, files_ref: LinkedListRef, faulty_files_ref: FaultyFilesRef, finish_condition_ref: BoolRef,
         language_content_info_ref: ContentInfoMapRef, language_map: LanguageMapRef, config: Configuration) 
--> Result<JoinHandle<()>,io::Error> 
 {
     thread::Builder::new().name(id.to_string()).spawn(move || {
-        let mut buf = String::with_capacity(150);
+        start_parsing_files(files_ref, faulty_files_ref, finish_condition_ref, language_content_info_ref, language_map, &config);
+    });
+}
+
+pub fn start_parsing_files(files_ref: LinkedListRef, faulty_files_ref: FaultyFilesRef, finish_condition_ref: BoolRef,
+    languages_content_info_ref: ContentInfoMapRef, languages_map_ref: LanguageMapRef, config: &Configuration) 
+{
+    let mut buf = String::with_capacity(150);
         loop {
             let mut files_guard = files_ref.lock().unwrap();
             // println!("Thread {} , remaining: {}",id,files_guard.len());
@@ -41,13 +46,12 @@ pub fn start_parser_thread(
                     continue;
                 }
             };
-            let lang_name = find_lang_with_this_identifier(&language_map, &file_extension).unwrap();
+            let lang_name = find_lang_with_this_identifier(&languages_map_ref, &file_extension).unwrap();
 
-            match file_parser::parse_file(&file_path, &lang_name, &mut buf, language_map.clone(), &config) {
-                Ok(x) => language_content_info_ref.lock().unwrap().get_mut(&lang_name).unwrap().add_file_stats(x),
+            match file_parser::parse_file(&file_path, &lang_name, &mut buf, languages_map_ref.clone(), &config) {
+                Ok(x) => languages_content_info_ref.lock().unwrap().get_mut(&lang_name).unwrap().add_file_stats(x),
                 Err(x) => faulty_files_ref.lock().unwrap().push(
                         FaultyFileDetails::new(file_path.clone(),x,path.metadata().map_or(0, |m| m.len())))
             }
         }
-    })
 }

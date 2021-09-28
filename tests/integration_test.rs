@@ -23,17 +23,12 @@ fn test_whole_workflow () {
 
     assert!(languages_metadata.len() == language_map_len);
 
-    let handle = 
-            consumer::start_parser_thread(
-                1, files_ref.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
-                languages_content_info_ref.clone(), language_map_ref.clone(), config.clone())
-            .unwrap();
-    
     let (total_files_num, relevant_files_num) = producer::add_relevant_files(
-        files_ref, &mut languages_metadata, finish_condition_ref, &language_map_ref, &config);
+        files_ref.clone(), &mut languages_metadata, finish_condition_ref.clone(), &language_map_ref, &config);
 
-    handle.join().unwrap();
-
+    consumer::start_parsing_files(files_ref, faulty_files_ref.clone(), finish_condition_ref, languages_content_info_ref.clone(),
+         language_map_ref.clone(), &config);
+    
     let mut content_info_map_guard = languages_content_info_ref.lock();
     let content_info_map = content_info_map_guard.as_deref_mut().unwrap();
 
