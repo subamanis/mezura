@@ -10,16 +10,6 @@ pub fn round_2(num: f64) -> f64 {
     (num * 100.0).round() / 100.0
 }
 
-pub fn trim_in_place(this: &mut String){
-    let trimmed: &str = this.trim();
-    let trim_start= (trimmed.as_ptr() as usize) - (this.as_ptr() as usize);
-    let trim_len  =trimmed.len();
-    if trim_start!=0{
-        this.drain(..trim_start);
-    }
-    this.truncate(trim_len);
-}
-
 pub fn parse_languages_to_vec(s: &str) -> Vec<String> {
     s.split(',').filter_map(|x| get_if_not_empty(&remove_dot_prefix(x.trim()).to_lowercase())).collect::<Vec<_>>()
 }
