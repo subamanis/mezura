@@ -29,3 +29,5 @@ roadmap.txt
 data/config/*
 data/logs/*
 mezura.exe
+src/benchmarks.rs
+bench_dir

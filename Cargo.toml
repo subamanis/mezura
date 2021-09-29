@@ -3,6 +3,15 @@ name = "mezura"
 version = "0.9.2"
 authors = ["subamanis <petrospapa21@gmail.com>"]
 edition = "2018"
+default-run = "mezura"
+
+[[bin]]
+name = "mezura"
+path = "src/main.rs"
+
+[[bin]]
+name = "bench"
+path = "src/benchmarks.rs"
 
 [dependencies]
 colored = "2"

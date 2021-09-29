@@ -11,8 +11,8 @@ pub mod utils;
 pub mod consumer;
 pub mod producer;
 pub mod help_message_printer;
+pub mod file_parser;
 
-mod file_parser;
 mod result_printer;
 
 pub use colored::{Colorize,ColoredString};
