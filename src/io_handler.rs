@@ -133,8 +133,9 @@ pub fn parse_config_file(file_name: Option<&str>, data_dir: Option<String>) -> R
         Err(_) => return Err(ConfigFileParseError::FileNotFound(file_name.to_owned()))
     });
 
-    let (mut dirs, mut braces_as_code, mut should_search_in_dotted, mut threads, mut exclude_dirs, mut languages_of_interest,
-         mut should_show_faulty_files, mut no_visual, mut log, mut compare_level) = (None,None,None,None,None,None,None,None,None,None);
+    let (mut dirs, mut braces_as_code, mut should_search_in_dotted, mut threads, mut exclude_dirs,
+         mut languages_of_interest, mut should_show_faulty_files, mut no_keywords, mut no_visual,
+         mut log, mut compare_level) = (None,None,None,None,None,None,None,None,None,None,None);
     let mut buf = String::with_capacity(150); 
 
     while let Ok(size) = reader.read_line(&mut buf) {
@@ -167,6 +168,8 @@ pub fn parse_config_file(file_name: Option<&str>, data_dir: Option<String>) -> R
                 should_show_faulty_files = read_bool_value(&mut reader, &mut buf);
             } else if id == config_manager::SEARCH_IN_DOTTED {
                 should_search_in_dotted = read_bool_value(&mut reader, &mut buf);
+            } else if id == config_manager::NO_KEYWORDS {
+                no_keywords = read_bool_value(&mut reader, &mut buf);
             } else if id == config_manager::NO_VISUAL {
                 no_visual = read_bool_value(&mut reader, &mut buf);
             } else if id == config_manager::LOG {
@@ -181,7 +184,7 @@ pub fn parse_config_file(file_name: Option<&str>, data_dir: Option<String>) -> R
     }
 
     Ok(ConfigurationBuilder::new(dirs,exclude_dirs, languages_of_interest, threads, braces_as_code,should_search_in_dotted,
-             should_show_faulty_files, no_visual, log, compare_level))
+             should_show_faulty_files, no_keywords, no_visual, log, compare_level))
 }
 
 pub fn save_config_to_file(config_name: &str, config: &Configuration, config_dir: Option<String>) -> std::io::Result<()> {
@@ -206,16 +209,25 @@ pub fn save_config_to_file(config_name: &str, config: &Configuration, config_dir
     }
     writer.write(&[b"\n\n===> ",config_manager::THREADS.as_bytes(),b"\n"].concat());
     writer.write(config.threads.to_string().as_bytes());
+
     writer.write(&[b"\n\n===> ",config_manager::BRACES_AS_CODE.as_bytes(),b"\n"].concat());
     writer.write(if config.braces_as_code {b"yes"} else {b"no"});
+
     writer.write(&[b"\n\n===> ",config_manager::SEARCH_IN_DOTTED.as_bytes(),b"\n"].concat());
     writer.write(if config.should_search_in_dotted {b"yes"} else {b"no"});
+
     writer.write(&[b"\n\n===> ",config_manager::SHOW_FAULTY_FILES.as_bytes(),b"\n"].concat());
     writer.write(if config.should_show_faulty_files {b"yes"} else {b"no"});
+
+    writer.write(&[b"\n\n===> ",config_manager::NO_KEYWORDS.as_bytes(),b"\n"].concat());
+    writer.write(if config.no_keywords {b"yes"} else {b"no"});
+
     writer.write(&[b"\n\n===> ",config_manager::NO_VISUAL.as_bytes(),b"\n"].concat());
     writer.write(if config.no_visual {b"yes"} else {b"no"});
+
     writer.write(&[b"\n\n===> ",config_manager::LOG.as_bytes(),b"\n"].concat());
     writer.write(if config.log {b"yes"} else {b"no"});
+
     writer.write(&[b"\n\n===> ",config_manager::COMPRARE_LEVEL.as_bytes(),b"\n"].concat());
     writer.write(config.compare_level.to_string().as_bytes());
 

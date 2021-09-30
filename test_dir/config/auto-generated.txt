@@ -18,6 +18,9 @@ no
 ===> show-faulty-files
 no
 
+===> no-keywords
+no
+
 ===> no-visual
 no
 

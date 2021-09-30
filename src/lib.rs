@@ -67,7 +67,7 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let faulty_files_ref : FaultyFilesRef  = Arc::new(Mutex::new(Vec::new()));
     let finish_condition_ref : BoolRef = Arc::new(AtomicBool::new(false));
     let language_map_ref : LanguageMapRef = Arc::new(language_map);
-    let languages_content_info_ref = Arc::new(Mutex::new(make_language_stats(language_map_ref.clone())));
+    let languages_content_info_ref : ContentInfoMapRef = Arc::new(Mutex::new(make_language_stats(language_map_ref.clone())));
     let mut languages_metadata = make_language_metadata(language_map_ref.clone());
 
     println!("\n{}...","Analyzing directory".underline().bold());
