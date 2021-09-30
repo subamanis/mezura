@@ -3,11 +3,11 @@ use std::{io, sync::atomic::Ordering, thread, time::Duration};
 use crate::*;
 
 pub fn start_parser_thread(id: usize, files_ref: LinkedListRef, faulty_files_ref: FaultyFilesRef, finish_condition_ref: BoolRef,
-        language_content_info_ref: ContentInfoMapRef, language_map: LanguageMapRef, config: Configuration) 
+        language_content_info_ref: ContentInfoMapRef, language_map: LanguageMapRef, config: Configuration) -> JoinHandle<()>
 {
     thread::Builder::new().name(id.to_string()).spawn(move || {
         start_parsing_files(files_ref, faulty_files_ref, finish_condition_ref, language_content_info_ref, language_map, &config);
-    });
+    }).unwrap()
 }
 
 pub fn start_parsing_files(files_ref: LinkedListRef, faulty_files_ref: FaultyFilesRef, finish_condition_ref: BoolRef,

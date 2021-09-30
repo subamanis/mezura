@@ -70,10 +70,13 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let languages_content_info_ref : ContentInfoMapRef = Arc::new(Mutex::new(make_language_stats(language_map_ref.clone())));
     let mut languages_metadata = make_language_metadata(language_map_ref.clone());
 
+    let mut handles = Vec::new();
     println!("\n{}...","Analyzing directory".underline().bold());
     for i in 0..config.threads {
-        consumer::start_parser_thread(i, files_ref.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
-            languages_content_info_ref.clone(), language_map_ref.clone(), config.clone())
+        handles.push(
+            consumer::start_parser_thread(i, files_ref.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
+                languages_content_info_ref.clone(), language_map_ref.clone(), config.clone())
+        );
     }
 
     let instant = Instant::now();
@@ -90,6 +93,10 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     // When main thread is done with traversing the directories to add the files, as a producer, it then acts as a consumer too
     // and helps the other consumer threads parse the remaining files.
     consumer::start_parsing_files(files_ref, faulty_files_ref.clone(), finish_condition_ref, languages_content_info_ref.clone(), language_map_ref.clone(), &config);
+    
+    for handle in handles {
+        handle.join();
+    }
 
     let parsing_duration_millis = instant.elapsed().as_millis();
 
