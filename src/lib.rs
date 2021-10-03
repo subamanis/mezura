@@ -70,6 +70,8 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let languages_content_info_ref : ContentInfoMapRef = Arc::new(Mutex::new(make_language_stats(language_map_ref.clone())));
     let mut languages_metadata = make_language_metadata(language_map_ref.clone());
 
+    println!("EE");
+
     let mut handles = Vec::new();
     println!("\n{}...","Analyzing directory".underline().bold());
     for i in 0..config.threads {
