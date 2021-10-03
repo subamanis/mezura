@@ -86,34 +86,35 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let consumers_num = 3;
 
     let instant = Instant::now();
+    let before_producer_instant = Instant::now();
     for i in 0..producers_num {
         producer_handles.push(producer::start_producer_thread(i, global_languages_metadata_map.clone(), local_languages_metadata_map.clone(), termination_states.clone(), files_list.clone(), global_dir_list.clone(),
              language_map_ref.clone(), config_ref.clone(), files_stats.clone()));
     }
+    for handle in producer_handles {
+        handle.join();
+    }
+    let producers_ms = before_producer_instant.elapsed().as_millis();
+    println!("\nProducers took: {:.2} secs",producers_ms as f64 / 1000.0);
+    finish_condition_ref.store(true,Ordering::Relaxed);
+
+    let after_producer_instant = Instant::now();
     for i in 0..consumers_num {
         consumer_handles.push(consumer::start_parser_thread(i, files_list.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
         languages_content_info_ref.clone(), language_map_ref.clone(), config_ref.clone()));
     }
 
-    let mut first_producer_join_instant = Instant::now();
-    let mut first = true;
-    for handle in producer_handles {
-        handle.join();
-        if first {
-            first_producer_join_instant = Instant::now();
-            first = false;
-        } else {
-            println!("{} ms passed between producer terminations.",with_seperators(first_producer_join_instant.elapsed().as_millis() as usize));
-        }
-    }
-    // let all_producers_joined_instant = Instant::now();
-    // consumer_handles.push(consumer::start_parser_thread(3, files_list.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
-    // languages_content_info_ref.clone(), language_map_ref.clone(), config_ref.clone()));
-    finish_condition_ref.store(true,Ordering::Relaxed);
-    // println!("Remaining files in list: {}",files_list.lock().unwrap().len());
     for handle in consumer_handles {
         handle.join();
     }
+    let consumer_ms = after_producer_instant.elapsed().as_millis();
+    println!("Consumers took: {:.2} secs\n",consumer_ms as f64 / 1000.0);
+
+    // let all_producers_joined_instant = Instant::now();
+    // consumer_handles.push(consumer::start_parser_thread(3, files_list.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
+    // languages_content_info_ref.clone(), language_map_ref.clone(), config_ref.clone()));
+    // println!("Remaining files in list: {}",files_list.lock().unwrap().len());
+  
     // println!("{} ms passed between producers end and consumers end",all_producers_joined_instant.elapsed().as_millis());
 
     let parsing_duration_millis = instant.elapsed().as_millis();
