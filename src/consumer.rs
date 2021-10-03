@@ -2,20 +2,20 @@ use std::{io, sync::atomic::Ordering, thread, time::Duration};
 
 use crate::*;
 
-pub fn start_parser_thread(id: usize, files_ref: LinkedListRef, faulty_files_ref: FaultyFilesRef, finish_condition_ref: BoolRef,
-        language_content_info_ref: ContentInfoMapRef, language_map: LanguageMapRef, config: Configuration) -> JoinHandle<()>
+pub fn start_parser_thread(id: usize, files_list: Arc<Mutex<Vec<String>>>, faulty_files_ref: FaultyFilesRef, finish_condition_ref: BoolRef,
+        language_content_info_ref: ContentInfoMapRef, language_map: LanguageMapRef, config: Arc<Configuration>) -> JoinHandle<()>
 {
     thread::Builder::new().name(id.to_string()).spawn(move || {
-        start_parsing_files(files_ref, faulty_files_ref, finish_condition_ref, language_content_info_ref, language_map, &config);
+        start_parsing_files(files_list, faulty_files_ref, finish_condition_ref, language_content_info_ref, language_map, config);
     }).unwrap()
 }
 
-pub fn start_parsing_files(files_ref: LinkedListRef, faulty_files_ref: FaultyFilesRef, finish_condition_ref: BoolRef,
-    languages_content_info_ref: ContentInfoMapRef, languages_map_ref: LanguageMapRef, config: &Configuration) 
+pub fn start_parsing_files(files_list: Arc<Mutex<Vec<String>>>, faulty_files_ref: FaultyFilesRef, finish_condition_ref: BoolRef,
+    languages_content_info_ref: ContentInfoMapRef, languages_map_ref: LanguageMapRef, config: Arc<Configuration>) 
 {
     let mut buf = String::with_capacity(150);
         loop {
-            let mut files_guard = files_ref.lock().unwrap();
+            let mut files_guard = files_list.lock().unwrap();
             // println!("Thread {} , remaining: {}",id,files_guard.len());
             if files_guard.is_empty() {
                 if finish_condition_ref.load(Ordering::Relaxed) {
@@ -27,7 +27,7 @@ pub fn start_parsing_files(files_ref: LinkedListRef, faulty_files_ref: FaultyFil
                     continue;
                 }
             }
-            let file_path = files_guard.pop_front().unwrap();
+            let file_path = files_guard.pop().unwrap();
             drop(files_guard);
 
             let path = Path::new(&file_path);
