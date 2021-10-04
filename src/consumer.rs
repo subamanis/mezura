@@ -14,22 +14,10 @@ pub fn start_parsing_files(files_list: Arc<Mutex<Vec<String>>>, faulty_files_ref
     languages_content_info_ref: ContentInfoMapRef, languages_map_ref: LanguageMapRef, config: Arc<Configuration>) 
 {
     let mut buf = String::with_capacity(150);
-        loop {
-            let mut files_guard = files_list.lock().unwrap();
-            // println!("Thread {} , remaining: {}",id,files_guard.len());
-            if files_guard.is_empty() {
-                if finish_condition_ref.load(Ordering::Relaxed) {
-                    break;
-                } else {
-                    drop(files_guard);
-                    //waiting for the list with the paths to be filled until trying again to pop a path.
-                    thread::sleep(Duration::from_millis(3));
-                    continue;
-                }
-            }
-            let file_path = files_guard.pop().unwrap();
-            drop(files_guard);
-
+    loop {
+        let mut files_list_guard = files_list.lock().unwrap();
+        if let Some(file_path) = files_list_guard.pop() {
+            drop(files_list_guard);
             let path = Path::new(&file_path);
             let file_extension = match path.extension() {
                 Some(x) => match x.to_str() {
@@ -53,5 +41,12 @@ pub fn start_parsing_files(files_list: Arc<Mutex<Vec<String>>>, faulty_files_ref
                 Err(x) => faulty_files_ref.lock().unwrap().push(
                         FaultyFileDetails::new(file_path.clone(),x,path.metadata().map_or(0, |m| m.len())))
             }
+        } else {
+            if finish_condition_ref.load(Ordering::Relaxed) {
+                break;
+            } 
+            
+            thread::sleep(Duration::from_millis(3));
         }
+    }
 }

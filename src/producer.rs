@@ -127,44 +127,41 @@ fn print_thread_colored_msg(id: usize, msg: String) {
 pub fn produce(id: usize, termination_states: Arc<Mutex<Vec<bool>>>, mut files_list: Arc<Mutex<Vec<String>>>, mut global_dir_list: Arc<Mutex<Vec<PathBuf>>>,
         languages: LanguageMapRef, global_languages_metadata_map: Arc<Mutex<HashMap<String, LanguageMetadata>>>, mut local_languages_metadata_map: HashMap<String,LanguageMetadata>, config: Arc<Configuration>) -> (usize,usize)
 {
-    let producers_num = config.threads;
-
     let mut total_files = 0;
     let mut relevant_files = 0;
-    let mut local_dir_list: Vec<PathBuf> = Vec::with_capacity(250);
     let mut should_terminate = false;
     let mut times_slept = 0;
 
     loop {
-        while let Some(dir) = get_next_directory_for_traversal(id, producers_num, &mut local_dir_list, &mut global_dir_list) {
-            if should_terminate {
+        let mut guard = global_dir_list.lock().unwrap();
+        let dir_pop = guard.pop();
+        drop(guard);
+
+        if let Some(dir) = &dir_pop {
+           if should_terminate {
                 should_terminate = false;
                 termination_states.lock().unwrap()[id] = false;
             }
 
             if let Ok(entries) = fs::read_dir(&dir) {
-                traverse_dir(id, entries, &mut files_list, &mut local_dir_list, &mut global_dir_list, &languages, &config, &mut local_languages_metadata_map, &mut total_files, &mut relevant_files)
+                traverse_dir(id, entries, &mut files_list, &mut global_dir_list, &languages, &config, &mut local_languages_metadata_map,
+                        &mut total_files, &mut relevant_files)
             }
-        } 
+        } else {
+            should_terminate = true;
+            let mut termination_states_guard = termination_states.lock().unwrap();
+            termination_states_guard[id] = true;
+            if termination_states_guard.iter().all(|x| *x==true) {
+                break;
+            }
+            drop(termination_states_guard);
 
-        should_terminate = true;
-        let mut termination_states_guard = termination_states.lock().unwrap();
-        termination_states_guard[id] = true;
-        if termination_states_guard.iter().all(|x| *x==true) {
-            break;
+            thread::sleep(Duration::from_micros(50));
+            times_slept += 1;
         }
-        drop(termination_states_guard);
-
-        if cfg!(debug_assertions) {
-            print_thread_colored_msg(id, format!("Thread {} |  will sleep for 300 μs.",id));
-        }
-        thread::sleep(Duration::from_micros(50));
-        times_slept += 1;
     }
 
-    // if cfg!(debug_assertions) {
-        print_thread_colored_msg(id, format!("Thread {} |  Exits with findings: {:?}",id,(total_files,relevant_files)));
-    // }
+    print_thread_colored_msg(id, format!("Thread {} |  Exits with findings: {:?}",id,(total_files,relevant_files)));
 
     let mut global_guard = global_languages_metadata_map.lock().unwrap();
     global_guard.iter_mut().for_each(|(s, metadata)| metadata.add_metadata(local_languages_metadata_map.get(s).unwrap()));
@@ -213,13 +210,12 @@ fn get_next_directory_for_traversal(id: usize, producers_num: usize, local_dir_l
     }
 }
 
-fn traverse_dir(id: usize, entries: ReadDir, files_list: &mut Arc<Mutex<Vec<String>>>, local_dir_list: &mut Vec<PathBuf>, global_dir_list: &mut Arc<Mutex<Vec<PathBuf>>>,
+fn traverse_dir(id: usize, entries: ReadDir, files_list: &mut Arc<Mutex<Vec<String>>>, global_dir_list: &mut Arc<Mutex<Vec<PathBuf>>>,
         languages: &LanguageMapRef, config: &Configuration, languages_metadata_map: &mut HashMap<String,LanguageMetadata>,
         total_files: &mut usize, relevant_files: &mut usize)  
 {
     let mut local_total_files = 0;
     let mut local_relevant_files = 0;
-    let mut iter_counter = 0;
     for e in entries.flatten(){
         if let Ok(ft) = e.file_type() {
             if ft.is_file() { 
@@ -270,19 +266,8 @@ fn traverse_dir(id: usize, entries: ReadDir, files_list: &mut Arc<Mutex<Vec<Stri
                 let full_path = &pathbuf.to_str().unwrap_or("").replace('\\', "/");
         
                 if !config.exclude_dirs.iter().any(|x| x == dir_name || x == full_path) {
-                    if iter_counter == 0 {
-                        if cfg!(debug_assertions) {
-                            print_thread_colored_msg(id, format!("Thread {} |  Adding the dir '{}' in the GLOBAL list",id,full_path));
-                        }
-                        global_dir_list.lock().unwrap().push(pathbuf);
-                    } else {
-                        if cfg!(debug_assertions) {
-                            print_thread_colored_msg(id, format!("Thread {} |  Adding the dir '{}' in the LOCAL list",id,full_path));
-                        }
-                        local_dir_list.push(pathbuf);
-                    }
+                    global_dir_list.lock().unwrap().push(pathbuf);
                 }
-                iter_counter += 1;
             }
         }
     }
