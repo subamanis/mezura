@@ -1,23 +1,38 @@
 use std::{io, sync::atomic::Ordering, thread, time::Duration};
 
+use crossbeam_deque::Steal;
+
 use crate::*;
 
-pub fn start_parser_thread(id: usize, files_list: Arc<Mutex<Vec<String>>>, faulty_files_ref: FaultyFilesRef, finish_condition_ref: BoolRef,
+pub fn start_parser_thread(id: usize, injector: Arc<Injector<String>>, worker: Worker<String>, faulty_files_ref: FaultyFilesRef, finish_condition_ref: BoolRef,
         language_content_info_ref: ContentInfoMapRef, language_map: LanguageMapRef, config: Arc<Configuration>) -> JoinHandle<()>
 {
     thread::Builder::new().name(id.to_string()).spawn(move || {
-        start_parsing_files(files_list, faulty_files_ref, finish_condition_ref, language_content_info_ref, language_map, config);
+        start_parsing_files(injector, worker, faulty_files_ref, finish_condition_ref, language_content_info_ref, language_map, config);
     }).unwrap()
 }
 
-pub fn start_parsing_files(files_list: Arc<Mutex<Vec<String>>>, faulty_files_ref: FaultyFilesRef, finish_condition_ref: BoolRef,
+pub fn start_parsing_files(injector: Arc<Injector<String>>, worker: Worker<String>, faulty_files_ref: FaultyFilesRef, finish_condition_ref: BoolRef,
     languages_content_info_ref: ContentInfoMapRef, languages_map_ref: LanguageMapRef, config: Arc<Configuration>) 
 {
     let mut buf = String::with_capacity(150);
     loop {
-        let mut files_list_guard = files_list.lock().unwrap();
-        if let Some(file_path) = files_list_guard.pop() {
-            drop(files_list_guard);
+        // let mut files_list_guard = files_list.lock().unwrap();
+        // let path = files_list_guard.pop();
+        // drop(files_list_guard);
+
+        let a  = {
+            if worker.is_empty() {
+                match injector.steal_batch_and_pop(&worker) {
+                    Steal::Success(path) => Some(path),
+                    _ => None
+                }
+            } else {
+                worker.pop()
+            }
+        };
+        
+        if let Some(file_path) = &a {
             let path = Path::new(&file_path);
             let file_extension = match path.extension() {
                 Some(x) => match x.to_str() {
@@ -45,8 +60,8 @@ pub fn start_parsing_files(files_list: Arc<Mutex<Vec<String>>>, faulty_files_ref
             if finish_condition_ref.load(Ordering::Relaxed) {
                 break;
             } 
-            
-            thread::sleep(Duration::from_millis(3));
+
+            thread::sleep(Duration::from_millis(2));
         }
     }
 }

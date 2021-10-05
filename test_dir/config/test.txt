@@ -11,7 +11,7 @@ c.txt
 d.txt
 
 ===> threads
-4
+1 1
 
 ===> braces-as-code
 yes

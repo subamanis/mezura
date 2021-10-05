@@ -1,13 +1,13 @@
 Auto-generated config file.
 
 ===> dirs
-C:/dev/Rusty/mezura/data/config,C:/dev/Rusty/mezura/data/languages
+C:/Users/petro/Desktop/mezura-new/data/config,C:/Users/petro/Desktop/mezura-new/data/languages
 
 ===> exclude
 a,b,c.txt,d.txt
 
 ===> threads
-4
+1 1
 
 ===> braces-as-code
 yes

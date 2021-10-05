@@ -17,6 +17,8 @@ mod result_printer;
 
 pub use colored::{Colorize,ColoredString};
 pub use config_manager::Configuration;
+pub use crossbeam_deque::Injector;
+use crossbeam_deque::Worker;
 pub use utils::*;
 pub use domain::{Language, LanguageContentInfo, LanguageMetadata, FileStats, Keyword};
 
@@ -27,7 +29,7 @@ pub type ContentInfoMapRef  = Arc<Mutex<HashMap<String,LanguageContentInfo>>>;
 pub type LanguageMapRef     = Arc<HashMap<String,Language>>;
 
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, Offset};
-use std::{borrow::Borrow, cell::Cell, collections::{HashMap, LinkedList}, error::Error, fs::{self, File}, io::{self, BufRead, BufReader, BufWriter, Read, Write}, ops::{Deref,DerefMut}, os::raw, path::{Path, PathBuf}, str::FromStr, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant}};
+use std::{borrow::Borrow, cell::Cell, cmp::min, collections::{HashMap, LinkedList}, error::Error, fs::{self, File}, io::{self, BufRead, BufReader, BufWriter, Read, Write}, ops::{Deref,DerefMut}, os::raw, path::{Path, PathBuf}, str::FromStr, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant}};
 use std::{sync::{Arc, Mutex}, thread::JoinHandle};
 
 
@@ -72,50 +74,64 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let languages_content_info_ref : ContentInfoMapRef = Arc::new(Mutex::new(make_language_stats(language_map_ref.clone())));
     let global_languages_metadata_map = Arc::new(Mutex::new(make_language_metadata(language_map_ref.clone())));
 
+    let producers_num = 2;
+    let consumers_num = 3;
+
     let files_stats = Arc::new(Mutex::new(ProduceResults(0,0)));
-    let termination_states = Arc::new(Mutex::new(vec![false,false]));
-    let files_list  = Arc::new(Mutex::new(Vec::with_capacity(100)));
-    let global_dir_list = Arc::new(Mutex::new(config.dirs.iter().map(|x| PathBuf::from_str(x).unwrap()).collect::<Vec<_>>()));
+    let mut term_states = Vec::with_capacity(3);
+    for _ in 0..producers_num {
+        term_states.push(false);
+    }
+    let termination_states = Arc::new(Mutex::new(term_states));
+    // let files_list  = Arc::new(Mutex::new(Vec::with_capacity(100)));
+    // let global_dir_list = Arc::new(Mutex::new(config.dirs.iter().map(|x| PathBuf::from_str(x).unwrap()).collect::<Vec<_>>()));
     let config_ref = Arc::new(config.clone());
     let mut producer_handles = Vec::with_capacity(4);
     let mut consumer_handles = Vec::with_capacity(4);
 
+    let files_injector = Arc::new(Injector::<String>::new());
+    let dirs_injector = Arc::new(Injector::<PathBuf>::new());
+    config.dirs.iter().for_each(|x| dirs_injector.push(PathBuf::from_str(x).unwrap()));
+    println!("IS: {:?}",dirs_injector);
+    // println!("IS: {:?}",dirs_injector.steal().success());
+
     let local_languages_metadata_map = make_language_metadata(language_map_ref.clone());
 
-    let producers_num = 2;
-    let consumers_num = 3;
-
     let instant = Instant::now();
-    let before_producer_instant = Instant::now();
     for i in 0..producers_num {
-        producer_handles.push(producer::start_producer_thread(i, global_languages_metadata_map.clone(), local_languages_metadata_map.clone(), termination_states.clone(), files_list.clone(), global_dir_list.clone(),
-             language_map_ref.clone(), config_ref.clone(), files_stats.clone()));
+        producer_handles.push(producer::start_producer_thread(i, files_injector.clone(), dirs_injector.clone(), Worker::new_fifo(), global_languages_metadata_map.clone(), local_languages_metadata_map.clone(),
+            termination_states.clone(),language_map_ref.clone(), config_ref.clone(), files_stats.clone()));
     }
-    for handle in producer_handles {
-        handle.join();
-    }
-    let producers_ms = before_producer_instant.elapsed().as_millis();
-    println!("\nProducers took: {:.2} secs",producers_ms as f64 / 1000.0);
-    finish_condition_ref.store(true,Ordering::Relaxed);
-
-    let after_producer_instant = Instant::now();
     for i in 0..consumers_num {
-        consumer_handles.push(consumer::start_parser_thread(i, files_list.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
+        consumer_handles.push(consumer::start_parser_thread(i, files_injector.clone(), Worker::new_fifo(), faulty_files_ref.clone(), finish_condition_ref.clone(),
         languages_content_info_ref.clone(), language_map_ref.clone(), config_ref.clone()));
     }
 
+    for handle in producer_handles {
+        handle.join();
+    }
+    println!("Producers finished after {} secs",instant.elapsed().as_millis() as f64/1000.0);
+
+
+    // let guard = files_list.lock().unwrap();
+    // let lenn = guard.len();
+    // drop(guard);
+    // for i in consumers_num..min(2,lenn/4000) {
+    //     consumer_handles.push(consumer::start_parser_thread(i, files_list.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
+    //     languages_content_info_ref.clone(), language_map_ref.clone(), config_ref.clone()));
+    // }
+    let len = files_injector.len();
+    println!("Remaining files in list: {}",len);
+    if len > 800 {
+        consumer_handles.push(consumer::start_parser_thread(consumers_num, files_injector.clone(), Worker::new_fifo(), faulty_files_ref.clone(), finish_condition_ref.clone(),
+        languages_content_info_ref.clone(), language_map_ref.clone(), config_ref.clone()));
+    }
+    // consumer_handles.push(consumer::start_parser_thread(4, injector.clone(),files_list.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
+    // languages_content_info_ref.clone(), language_map_ref.clone(), config_ref.clone()));
+    finish_condition_ref.store(true,Ordering::Relaxed);
     for handle in consumer_handles {
         handle.join();
     }
-    let consumer_ms = after_producer_instant.elapsed().as_millis();
-    println!("Consumers took: {:.2} secs\n",consumer_ms as f64 / 1000.0);
-
-    // let all_producers_joined_instant = Instant::now();
-    // consumer_handles.push(consumer::start_parser_thread(3, files_list.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
-    // languages_content_info_ref.clone(), language_map_ref.clone(), config_ref.clone()));
-    // println!("Remaining files in list: {}",files_list.lock().unwrap().len());
-  
-    // println!("{} ms passed between producers end and consumers end",all_producers_joined_instant.elapsed().as_millis());
 
     let parsing_duration_millis = instant.elapsed().as_millis();
 

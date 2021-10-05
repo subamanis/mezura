@@ -2,6 +2,8 @@
 
 use std::{cell::RefCell, cmp::max, fs::ReadDir, sync::atomic::Ordering, thread};
 
+use crossbeam_deque::Steal;
+
 use crate::*;
 
 pub fn add_relevant_files(files_list :LinkedListRef, languages_metadata_map: &mut HashMap<String,LanguageMetadata>, finish_condition: BoolRef, 
@@ -100,13 +102,13 @@ fn search_dir_and_add_files_to_list(current_dir: &str, files_list: &LinkedListRe
 
 
 //doesnt work for single file, what if some are dirs other files in dirs of config??
-pub fn start_producer_thread(id: usize, global_languages_metadata_map: Arc<Mutex<HashMap<String, LanguageMetadata>>>, local_languages_metadata_map: HashMap<String,LanguageMetadata>,
-        termination_states: Arc<Mutex<Vec<bool>>>, files_list: Arc<Mutex<Vec<String>>>, global_dir_list: Arc<Mutex<Vec<PathBuf>>>, languages: LanguageMapRef,
+pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<String>>, dirs_injector: Arc<Injector<PathBuf>>, worker: Worker<PathBuf>, global_languages_metadata_map: Arc<Mutex<HashMap<String, LanguageMetadata>>>,
+        local_languages_metadata_map: HashMap<String,LanguageMetadata>,termination_states: Arc<Mutex<Vec<bool>>>, languages: LanguageMapRef,
         config: Arc<Configuration>, files_stats: Arc<Mutex<ProduceResults>>)
 -> JoinHandle<()>
 {
     thread::Builder::new().name(id.to_string()).spawn(move || {
-        let product = produce(id, termination_states, files_list, global_dir_list, languages, global_languages_metadata_map, local_languages_metadata_map, config);
+        let product = produce(id, files_injector, dirs_injector, worker, termination_states, languages, global_languages_metadata_map, local_languages_metadata_map, config);
         let mut file_stats_guard = files_stats.lock().unwrap(); 
         file_stats_guard.0 += product.0;
         file_stats_guard.1 += product.1;
@@ -124,8 +126,8 @@ fn print_thread_colored_msg(id: usize, msg: String) {
     }
 }
 
-pub fn produce(id: usize, termination_states: Arc<Mutex<Vec<bool>>>, mut files_list: Arc<Mutex<Vec<String>>>, mut global_dir_list: Arc<Mutex<Vec<PathBuf>>>,
-        languages: LanguageMapRef, global_languages_metadata_map: Arc<Mutex<HashMap<String, LanguageMetadata>>>, mut local_languages_metadata_map: HashMap<String,LanguageMetadata>, config: Arc<Configuration>) -> (usize,usize)
+pub fn produce(id: usize, injector: Arc<Injector<String>>,dirs_injector: Arc<Injector<PathBuf>>,  worker: Worker<PathBuf>, termination_states: Arc<Mutex<Vec<bool>>>, languages: LanguageMapRef,
+        global_languages_metadata_map: Arc<Mutex<HashMap<String, LanguageMetadata>>>, mut local_languages_metadata_map: HashMap<String,LanguageMetadata>, config: Arc<Configuration>) -> (usize,usize)
 {
     let mut total_files = 0;
     let mut relevant_files = 0;
@@ -133,18 +135,25 @@ pub fn produce(id: usize, termination_states: Arc<Mutex<Vec<bool>>>, mut files_l
     let mut times_slept = 0;
 
     loop {
-        let mut guard = global_dir_list.lock().unwrap();
-        let dir_pop = guard.pop();
-        drop(guard);
+        let a  = {
+            if worker.is_empty() {
+                match dirs_injector.steal_batch_and_pop(&worker) {
+                    Steal::Success(path) => Some(path),
+                    _ => None
+                }
+            } else {
+                worker.pop()
+            }
+        };
 
-        if let Some(dir) = &dir_pop {
+        if let Some(dir) = &a {
            if should_terminate {
                 should_terminate = false;
                 termination_states.lock().unwrap()[id] = false;
             }
 
             if let Ok(entries) = fs::read_dir(&dir) {
-                traverse_dir(id, entries, &mut files_list, &mut global_dir_list, &languages, &config, &mut local_languages_metadata_map,
+                traverse_dir(id, &injector, entries, &dirs_injector, &languages, &config, &mut local_languages_metadata_map,
                         &mut total_files, &mut relevant_files)
             }
         } else {
@@ -170,47 +179,7 @@ pub fn produce(id: usize, termination_states: Arc<Mutex<Vec<bool>>>, mut files_l
     (total_files,relevant_files)
 }
 
-fn get_next_directory_for_traversal(id: usize, producers_num: usize, local_dir_list: &mut Vec<PathBuf>, global_dir_list: &mut Arc<Mutex<Vec<PathBuf>>>) -> Option<PathBuf> {
-    if local_dir_list.is_empty() {
-        let mut global_dir_list_guard = global_dir_list.lock().unwrap();
-        let global_len = global_dir_list_guard.len(); 
-        if global_len == 0 {
-            if cfg!(debug_assertions) {
-                print_thread_colored_msg(id, format!("Thread {} |  Couldn't find a dir from anywhere...",id));
-            }
-            return None
-        }
-        let work_share = max(1, global_len / producers_num);
-        if work_share == 1 {
-            if cfg!(debug_assertions) {
-                let dir = global_dir_list_guard.pop().unwrap();
-                print_thread_colored_msg(id, format!("Thread {} |  Got dir '{}' from GLOBAL ({} remaining), without adding to local....",id,dir.to_str().unwrap(),global_dir_list_guard.len()));
-                return Some(dir)
-            } else {
-                return global_dir_list_guard.pop()
-            }
-        } else {
-            local_dir_list.extend(global_dir_list_guard.drain(global_len-work_share-1..global_len));
-            if cfg!(debug_assertions) {
-                let dir = global_dir_list_guard.pop().unwrap();
-                print_thread_colored_msg(id, format!("Thread {} |  Got dir '{}' from GLOBAL ({} remaining), and added {} to local...",id,dir.to_str().unwrap(),global_dir_list_guard.len()-local_dir_list.len(),local_dir_list.len()));
-                return Some(dir)
-            } else {
-                return global_dir_list_guard.pop()
-            }
-        }
-    } else {
-        if cfg!(debug_assertions) {
-            let dir = local_dir_list.pop().unwrap();
-            print_thread_colored_msg(id, format!("Thread {} |  Got dir '{}' from LOCAL ({} remaining)",id,dir.to_str().unwrap(),local_dir_list.len()));
-            return Some(dir)
-        } else {
-            return local_dir_list.pop()
-        }
-    }
-}
-
-fn traverse_dir(id: usize, entries: ReadDir, files_list: &mut Arc<Mutex<Vec<String>>>, global_dir_list: &mut Arc<Mutex<Vec<PathBuf>>>,
+fn traverse_dir(id: usize, files_injector: &Arc<Injector<String>>, entries: ReadDir, dirs_injector: &Arc<Injector<PathBuf>>,
         languages: &LanguageMapRef, config: &Configuration, languages_metadata_map: &mut HashMap<String,LanguageMetadata>,
         total_files: &mut usize, relevant_files: &mut usize)  
 {
@@ -250,7 +219,8 @@ fn traverse_dir(id: usize, entries: ReadDir, files_list: &mut Arc<Mutex<Vec<Stri
                     if cfg!(debug_assertions) {
                         print_thread_colored_msg(id, format!("Thread {} |  Adding the file '{}' in the files list",id,str_path));
                     }
-                    files_list.lock().unwrap().push(str_path);
+                    // files_list.lock().unwrap().push(str_path);
+                    files_injector.push(str_path);
                 }
             } else { //is directory
                 let file_name = e.file_name();
@@ -266,7 +236,7 @@ fn traverse_dir(id: usize, entries: ReadDir, files_list: &mut Arc<Mutex<Vec<Stri
                 let full_path = &pathbuf.to_str().unwrap_or("").replace('\\', "/");
         
                 if !config.exclude_dirs.iter().any(|x| x == dir_name || x == full_path) {
-                    global_dir_list.lock().unwrap().push(pathbuf);
+                    dirs_injector.push(pathbuf);
                 }
             }
         }
