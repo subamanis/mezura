@@ -163,6 +163,7 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     };
     let datetime_now = chrono::Local::now();
 
+    remove_languages_with_0_files(content_info_map, languages_metadata_map);
     result_printer::format_and_print_results(&mut content_info_map, &mut languages_metadata_map, &final_stats, 
         &existing_log_contents, &datetime_now, &config);
 
@@ -175,7 +176,8 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     Ok(metrics)
 }
 
-fn calculate_single_file_stats_or_add_to_injector(config: &Configuration, dirs_injector: &Arc<Injector<PathBuf>>, files_injector: &Arc<Injector<ParsableFile>>,
+//pub for integration tests
+pub fn calculate_single_file_stats_or_add_to_injector(config: &Configuration, dirs_injector: &Arc<Injector<PathBuf>>, files_injector: &Arc<Injector<ParsableFile>>,
         files_present: &mut FilesPresent, languages: &Arc<HashMap<String,Language>>, languages_metadata_map: &MetadataMapMut)
 {
     config.dirs.iter().for_each(|dir| {
@@ -196,6 +198,23 @@ fn calculate_single_file_stats_or_add_to_injector(config: &Configuration, dirs_i
             dirs_injector.push(dir_path.to_path_buf());
         }
     })
+}
+
+//pub for integration tests
+pub fn remove_languages_with_0_files(content_info_map: &mut HashMap<String,LanguageContentInfo>,
+    languages_metadata_map: &mut HashMap<String, LanguageMetadata>) 
+{
+   let mut empty_languages = Vec::new();
+   for element in languages_metadata_map.iter() {
+       if element.1.files == 0 {
+           empty_languages.push(element.0.to_owned());
+       }
+   }
+
+   for ext in empty_languages {
+       languages_metadata_map.remove(&ext);
+       content_info_map.remove(&ext);
+   }
 }
 
 pub fn find_lang_with_this_identifier(languages: &Arc<HashMap<String,Language>>, wanted_identifier: &str) -> Option<String> {

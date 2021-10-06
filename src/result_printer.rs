@@ -21,8 +21,6 @@ const AVERAGE_SIZE  : &str  = "Average Size:";
 pub fn format_and_print_results(content_info_map: &mut HashMap<String, LanguageContentInfo>, languages_metadata_map: &mut HashMap<String, LanguageMetadata>,
         final_stats: &FinalStats, existing_log_content: &Option<String>, datetime_now: &DateTime<Local>, config: &Configuration) 
 {
-    remove_languages_with_0_files(content_info_map, languages_metadata_map);
-
     let mut sorted_language_names = get_language_names_as_sorted_vec_according_to_how_much_they_appeared(languages_metadata_map);
     let biggest_prefix_standard_spaces = get_biggest_prefix_standard_spaces(&sorted_language_names, languages_metadata_map);
 
@@ -335,21 +333,6 @@ fn colored_word(word: &str) -> ColoredString {
     word.italic().truecolor(181, 169, 138)
 }
 
-fn remove_languages_with_0_files(content_info_map: &mut HashMap<String,LanguageContentInfo>,
-    languages_metadata_map: &mut HashMap<String, LanguageMetadata>) 
-{
-   let mut empty_languages = Vec::new();
-   for element in languages_metadata_map.iter() {
-       if element.1.files == 0 {
-           empty_languages.push(element.0.to_owned());
-       }
-   }
-
-   for ext in empty_languages {
-       languages_metadata_map.remove(&ext);
-       content_info_map.remove(&ext);
-   }
-}
 
 fn get_language_names_as_sorted_vec_according_to_how_much_they_appeared(
    languages_metadata_map: &HashMap<String, LanguageMetadata>) -> Vec<String> 
