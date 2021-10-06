@@ -60,7 +60,8 @@ Below there is a list with all the commands-flags that the program accepts.
 --dirs
     The paths to the directories or files, seperated by commas if more than 1,
     in this form: '--dirs <path1>, <path2>'
-    They can either be surrounded by quotes: \"path\" or not, even if the paths have whitespace.
+    If you are using Windows Powershell, you will need to escape the commas with a backtick: ` , or surround all the arguments with quatation marks
+    like this: <path1>`, <path2>`, <path3>   or   "<path1>, <path2>, <path3>"
 
     The target directories can also be given implicitly (in which case this command is not needed) with 2 ways:
     1) as the first arguments of the program directly
@@ -68,8 +69,9 @@ Below there is a list with all the commands-flags that the program accepts.
 
 --exclude 
     1..n arguments separated by commas, can be a folder name, a file name (including extension), 
-    or a full path to a folder or file. The paths can be surrounded by quotes or not,
-    even if they have whitespace.
+    or a full path to a folder or file.
+    If you are using Windows Powershell, you will need to escape the commas with a backtick: ` , or surround all the arguments with quatation marks
+    like this: <arg1>`, <arg2>`, <arg3>   or   "<arg1>, <arg2>, <arg3>"
 
     The program will ignore these dirs.
 
@@ -191,7 +193,7 @@ Note that a configuration file must be loaded for both of these flags to work
 
 
 ## Supported Languages
-All the supported languages can be found in the folder "data/languages" as seperate text files. 
+Note that the default supported languages are very incomplete, but they can be easily expanded by the user. All the supported languages can be found in the folder "data/languages" as seperate text files. 
 The user can easily specify a new language by replicating the format of the language files and customizing it accordingly, either by following the rules below or by copy pasting an existing file.
 
 The format of the languages is as follows(and should not be modified at all):
@@ -250,39 +252,43 @@ With that said, it is important to mention the following limitations:
 
 
 ## Performance
-On a cold run, performance is mainly limited by how fast the producer thread can traverse the directory and find relevant files, so the consumers can parse them.
+The performance of the program will scale with the available logical cores (threads) of the machine. The default behaviour, if the '--threads' command
+is not specified, is to detect the available threads of the machine and choose accordingly how many producers and consumers it will spawn, so
+by default the program will run close to maximum performance. You can try to manually tweek the number of threads and the producer to consumer ratio though.
 
 The performance will also vary depending on how deep and wide the directory structure is, how big the code files are, the ratio of relevant to irrelevant files, 
 and how many keywords are specified to be counted. 
 
-Here are some metrics for both hot and cold executions on my laptop (i5-1035G1, 2 keywords per language):
+Here are some metrics for both hot and cold executions on my laptop (Sata3 SSD, i5-1035G1 (4 cores - 8 threads)):
 
-1) reletively deep and wide directory with big files (6 consumers)
+1) shallow directory with small files (1 consumers 3 producers)
 ```
-4,066 files - lines 5,625,944 - average size 75 KBs
-
-Hot
- 1.13 secs (Parsing: 3649 files/s | 5,050,219 lines/s)
-Cold
- 1.61 secs (Parsing: 2528 files/s | 3,498,721 lines/s)
-```
-2) relatively deep and wide directory with average to small files (4 consumers)
-```
-3,824 files - lines 793,751 - average size 8.7 KBs
+3,247 total / 125 relevant files - lines 16,298 - average size 4.5 KBs
 
 Hot
- 0.29 secs 
+ 0.02 secs
 Cold
- 1.23 secs (Parsing: 3106 files/s | 644,801 lines/s)
+ 0.06 secs
 ```
-3) very very deep and wide directory, my entire drive (4 consumers)
+
+2) reletively deep and wide directory with big files (3 consumers 6 producers)
 ```
-32,078 files - lines 15,101,949 - average size 21 KBs 
+30,121 total / 4,066 relevant files - lines 5,625,944 - average size 75 KBs
 
 Hot
- 11.59 secs (Parsing: 2807 files/s | 1,317,336 lines/s)
+ 1.05 secs (Parsing: 3939 files/s | 5,451,219 lines/s)
 Cold
- 36.21 secs (Parsing: 891 files/s | 418,475 lines/s)
+ 2.67 secs (Parsing: 1526 files/s | 2,121,721 lines/s)
+```
+
+3) very very deep and wide directory, my entire drive (3 producers - 6 consumers)
+```
+615,302 total / 40,156  relevant files - lines 16,819,949 - average size 25 KBs 
+
+Hot
+ 8.92 secs (Parsing: 4520 files/s | 1,893,336 lines/s)
+Cold
+ 22.11 secs (Parsing: 1817 files/s | 761,475 lines/s)
 ```
 
 

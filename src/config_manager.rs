@@ -5,7 +5,7 @@ use colored::Colorize;
 use crate::{help_message_printer, io_handler, utils};
 
 // Application version, to be displayed at startup and with --help command
-pub const VERSION_ID : &str = "mezura  v1.0.0-beta1"; 
+pub const VERSION_ID : &str = "v1.0.0-beta1"; 
 
 // command flags
 pub const DIRS               :&str   = "dirs";

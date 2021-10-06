@@ -5,7 +5,8 @@ pub const DIRS_HELP  :  &str =
 "--dirs
     The paths to the directories or files, seperated by commas if more than 1,
     in this form: '--dirs <path1>, <path2>'
-    They can either be surrounded by quotes: \"path\" or not, even if the paths have whitespace.
+    If you are using Windows Powershell, you will need to escape the commas with a backtick: ` , or surround all the arguments with quatation marks
+    like this: <path1>`, <path2>`, <path3>   or   \"<path1>, <path2>, <path3>\"
 
     The target directories can also be given implicitly (in which case this command is not needed) with 2 ways:
     1) as the first arguments of the program directly
@@ -15,7 +16,9 @@ pub const DIRS_HELP  :  &str =
 pub const EXCLUDE_HELP  :  &str = 
 "--exclude 
     1..n arguments separated by commas, can be a folder name, a file name (including extension), 
-    or a full path to a folder or file. The paths can be surrounded by quotes or not, even if they have whitespace.
+    or a full path to a folder or file.
+    If you are using Windows Powershell, you will need to escape the commas with a backtick: ` , or surround all the arguments with quatation marks
+    like this: <arg1>`, <arg2>`, <arg3>   or   \"<arg1>, <arg2>, <arg3>\"
 
     The program will ignore these dirs.
 
