@@ -5,7 +5,7 @@ use crossbeam_deque::Steal;
 use crate::*;
 
 
-pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<String>>, dirs_injector: Arc<Injector<PathBuf>>, worker: Worker<PathBuf>,
+pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<PathBuf>>, worker: Worker<PathBuf>,
         languages_metadata_map: MetadataMapMut, termination_states: Arc<Mutex<Vec<bool>>>, languages: Arc<HashMap<String,Language>>, config: Arc<Configuration>,
         files_stats: Arc<Mutex<FilesPresent>>)
 -> JoinHandle<()>
@@ -19,7 +19,7 @@ pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<String>>, d
     }).unwrap()
 }
 
-pub fn produce(id: usize, files_injector: Arc<Injector<String>>, dirs_injector: Arc<Injector<PathBuf>>, worker: Worker<PathBuf>, termination_states: Arc<Mutex<Vec<bool>>>,
+pub fn produce(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<PathBuf>>, worker: Worker<PathBuf>, termination_states: Arc<Mutex<Vec<bool>>>,
         languages: Arc<HashMap<String,Language>>, languages_metadata_map: MetadataMapMut, config: Arc<Configuration>) 
 -> (usize,usize) 
 {
@@ -70,7 +70,7 @@ pub fn produce(id: usize, files_injector: Arc<Injector<String>>, dirs_injector: 
     (total_files,relevant_files)
 }
 
-fn traverse_dir(files_injector: &Arc<Injector<String>>, entries: ReadDir, dirs_injector: &Arc<Injector<PathBuf>>,
+fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, dirs_injector: &Arc<Injector<PathBuf>>,
         languages: &Arc<HashMap<String,Language>>, config: &Configuration, languages_metadata_map: &MetadataMapMut,
         total_files: &mut usize, relevant_files: &mut usize)  
 {
@@ -89,7 +89,7 @@ fn traverse_dir(files_injector: &Arc<Injector<String>>, entries: ReadDir, dirs_i
                             }
                         },
                         None => continue
-                    };
+                };
                 if let Some(lang_name) = find_lang_with_this_identifier(languages, &extension_name) {
                     if !config.exclude_dirs.is_empty() {
                         let full_path = &path_buf.to_str().unwrap_or("").replace('\\', "/");
@@ -101,15 +101,10 @@ fn traverse_dir(files_injector: &Arc<Injector<String>>, entries: ReadDir, dirs_i
                         Ok(x) => x.len() as usize,
                         Err(_) => 0
                     };
-                    languages_metadata_map.lock().unwrap().get_mut(&lang_name).unwrap().add_file_meta(bytes);
-                    // local_languages_metadata_map.get_mut(&lang_name).unwrap().add_file_meta(bytes);
-                    
-                    let str_path = match path_buf.to_str() {
-                        Some(y) => y.to_owned(),
-                        None => continue
-                    };
 
-                    files_injector.push(str_path);
+                    languages_metadata_map.lock().unwrap().get_mut(&lang_name).unwrap().add_file_meta(bytes);
+                    
+                    files_injector.push(ParsableFile::new(path_buf, lang_name));
                 }
             } else { //is directory
                 let file_name = e.file_name();

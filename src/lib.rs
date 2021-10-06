@@ -30,6 +30,7 @@ use std::{collections::HashMap, fs::{self, File}, io::Read, path::{Path, PathBuf
 use std::{sync::{Arc, Mutex}, thread::JoinHandle};
 
 
+#[derive(Debug)]
 pub struct Metrics {
     pub files_per_sec: usize,
     pub lines_per_sec: usize
@@ -49,6 +50,7 @@ pub struct FinalStats {
     average_size_measurement: String
 }
 
+#[derive(Debug)]
 pub struct FaultyFileDetails {
     path: String,
     error_msg: String,
@@ -67,6 +69,13 @@ pub struct FilesPresent {
     pub relevant_files: usize
 }
 
+#[derive(Debug,Clone)]
+pub struct ParsableFile {
+    pub path: PathBuf,
+    pub language_name: String 
+}
+
+
 pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Result<Option<Metrics>, ParseFilesError> {
     let config = Arc::new(config);
     let faulty_files_ref : FaultyFilesListMut  = Arc::new(Mutex::new(Vec::with_capacity(10)));
@@ -77,7 +86,7 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     
     let mut files_present = FilesPresent::new(0,0);
     let producer_termination_states = Arc::new(Mutex::new(vec![false; config.threads.producers]));
-    let files_injector = Arc::new(Injector::<String>::new());
+    let files_injector = Arc::new(Injector::<ParsableFile>::new());
     let dirs_injector = Arc::new(Injector::<PathBuf>::new());
     calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector, &mut files_present, 
             &language_map_ref, &global_languages_metadata_map);
@@ -166,7 +175,7 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     Ok(metrics)
 }
 
-fn calculate_single_file_stats_or_add_to_injector(config: &Configuration, dirs_injector: &Arc<Injector<PathBuf>>, files_injector: &Arc<Injector<String>>,
+fn calculate_single_file_stats_or_add_to_injector(config: &Configuration, dirs_injector: &Arc<Injector<PathBuf>>, files_injector: &Arc<Injector<ParsableFile>>,
         files_present: &mut FilesPresent, languages: &Arc<HashMap<String,Language>>, languages_metadata_map: &MetadataMapMut)
 {
     config.dirs.iter().for_each(|dir| {
@@ -177,7 +186,7 @@ fn calculate_single_file_stats_or_add_to_injector(config: &Configuration, dirs_i
                     if let Some(lang_name) = find_lang_with_this_identifier(languages, extension) {
                         languages_metadata_map.lock().unwrap().get_mut(&lang_name).unwrap().add_file_meta(
                                 dir_path.metadata().map_or(0, |m| m.len() as usize));
-                        files_injector.push(dir.to_owned());
+                        files_injector.push(ParsableFile::new(dir_path.to_path_buf(),lang_name));
                         files_present.total_files += 1;
                         files_present.relevant_files += 1;
                     }
@@ -386,6 +395,15 @@ impl FilesPresent {
         FilesPresent {
             total_files,
             relevant_files
+        }
+    }
+}
+
+impl ParsableFile {
+    pub fn new(path: PathBuf, language_name: String) -> Self {
+        ParsableFile {
+            path,
+            language_name
         }
     }
 }
