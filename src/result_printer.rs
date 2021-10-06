@@ -24,10 +24,10 @@ pub fn format_and_print_results(content_info_map: &mut HashMap<String, LanguageC
     let mut sorted_language_names = get_language_names_as_sorted_vec_according_to_how_much_they_appeared(languages_metadata_map);
     let biggest_prefix_standard_spaces = get_biggest_prefix_standard_spaces(&sorted_language_names, languages_metadata_map);
 
-    print_individually(&sorted_language_names, content_info_map, languages_metadata_map, biggest_prefix_standard_spaces);
+    print_individually(&sorted_language_names, content_info_map, languages_metadata_map, biggest_prefix_standard_spaces, !config.no_keywords);
 
     if languages_metadata_map.len() > 1 {
-        print_sum(content_info_map, final_stats, biggest_prefix_standard_spaces);
+        print_sum(content_info_map, final_stats, biggest_prefix_standard_spaces, !config.no_keywords);
         print_visual_overview(&mut sorted_language_names, content_info_map, languages_metadata_map, final_stats, config);
     }
 
@@ -40,7 +40,7 @@ pub fn format_and_print_results(content_info_map: &mut HashMap<String, LanguageC
 
 
 fn print_individually(sorted_languages: &[String], content_info_map: &HashMap<String,LanguageContentInfo>,
-     languages_metadata_map: &HashMap<String, LanguageMetadata>, biggest_prefix_standard_spaces: usize)
+     languages_metadata_map: &HashMap<String, LanguageMetadata>, biggest_prefix_standard_spaces: usize, should_print_keywords: bool)
 {
     fn get_size_text(metadata: &LanguageMetadata) -> String {
         let (size, size_desc) = get_size_and_formatted_size_text(metadata.bytes, "total");
@@ -54,8 +54,12 @@ fn print_individually(sorted_languages: &[String], content_info_map: &HashMap<St
          lines_stats_len_vec: &[usize], size_stats_vec: &[String], keywords_stats_vec: &[String]) -> String
     {
         let spaces = max_line_stats_len+1 - lines_stats_len_vec[i];
-        titles_vec[i].clone() + &lines_stats_vec[i] + &" ".repeat(spaces) + " |  " + &size_stats_vec[i] +
-                "\n" + &keywords_stats_vec[i]
+        let mut line = titles_vec[i].clone() + &lines_stats_vec[i] + &" ".repeat(spaces) + " |  " + &size_stats_vec[i];
+        //if run with --no-keywords
+        if !keywords_stats_vec.is_empty(){
+            line = line + "\n" + &keywords_stats_vec[i];
+        } 
+        line
     }
 
     println!("{}.\n", "Details".underline().bold());
@@ -89,7 +93,9 @@ fn print_individually(sorted_languages: &[String], content_info_map: &HashMap<St
                  code_lines_percentage, extra_lines_str));
         size_stats_vec.push(get_size_text(metadata));
         
-        keywords_stats_vec.push(get_keywords_as_str(&content_info.keyword_occurences, biggest_prefix_standard_spaces));
+        if should_print_keywords {
+            keywords_stats_vec.push(get_keywords_as_str(&content_info.keyword_occurences, biggest_prefix_standard_spaces));
+        }
     }
 
     for i in 0..lines_stats_vec.len() {
@@ -105,7 +111,8 @@ fn print_individually(sorted_languages: &[String], content_info_map: &HashMap<St
 }
 
 
-fn print_sum(content_info_map: &HashMap<String,LanguageContentInfo>, final_stats: &FinalStats, biggest_prefix_standard_spaces: usize) 
+fn print_sum(content_info_map: &HashMap<String,LanguageContentInfo>, final_stats: &FinalStats, biggest_prefix_standard_spaces: usize,
+        should_print_keywords: bool) 
 {
     let (total_files_str, total_lines_str, total_code_lines_str, total_extra_lines_str) = 
             (with_seperators(final_stats.files),with_seperators(final_stats.lines),with_seperators(final_stats.code_lines), with_seperators(final_stats.extra_lines)); 
@@ -126,7 +133,9 @@ fn print_sum(content_info_map: &HashMap<String,LanguageContentInfo>, final_stats
     let info = format!("{} {} {{{} code ({:.2}%) + {} extra}}  |  {}\n",colored_word("lines"), total_lines_str,total_code_lines_str,
             code_lines_percentage, total_extra_lines_str, size_text);
 
-    println!("{}", format!("{}{}{}\n",title,info,keywords_line));
+    if should_print_keywords {
+        println!("{}", format!("{}{}{}\n",title,info,keywords_line));
+    }
 }
 
 //                                    OVERVIEW
