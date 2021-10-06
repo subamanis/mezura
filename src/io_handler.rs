@@ -1,11 +1,11 @@
-use std::{{ffi::OsString, path::Path}, cmp::max, collections::{HashMap as HashMap}, env, fs::{self, File, ReadDir}, io::{self, BufRead, BufReader, BufWriter, Write}, path::PathBuf};
+use std::{path::Path, collections::{HashMap as HashMap}, fs::{self, File}, io::{self, BufRead, BufReader, BufWriter, Write}};
 
 use chrono::{DateTime, Local};
 use colored::*;
 use lazy_static::lazy_static;
 
-use crate::{Configuration, FinalStats, config_manager::{self, ConfigurationBuilder,BRACES_AS_CODE, EXCLUDE, LANGUAGES, DIRS, SEARCH_IN_DOTTED,
-     SHOW_FAULTY_FILES, THREADS, MIN_THREADS_VALUE, MAX_THREADS_VALUE, MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL}, domain::*, utils};
+use crate::{Configuration, FinalStats, config_manager::{self, ConfigurationBuilder, MAX_COMPARE_LEVEL, MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE,
+     MIN_COMPARE_LEVEL, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE, Threads}, domain::*, utils};
 
 
 const DEFAULT_CONFIG_FILE_NAME : &str = "default";
@@ -161,7 +161,8 @@ pub fn parse_config_file(file_name: Option<&str>, data_dir: Option<String>) -> R
             } else if id == config_manager::THREADS {
                 buf.clear();
                 reader.read_line(&mut buf);
-                threads = utils::parse_usize_value(&buf,MIN_THREADS_VALUE, MAX_THREADS_VALUE);
+                threads = Some(Threads::from(utils::parse_two_usize_values(&buf,MIN_PRODUCERS_VALUE, MAX_PRODUCERS_VALUE,
+                        MIN_CONSUMERS_VALUE, MAX_CONSUMERS_VALUE).unwrap()));
             }else if id == config_manager::BRACES_AS_CODE {
                 braces_as_code = read_bool_value(&mut reader, &mut buf);
             } else if id == config_manager::SHOW_FAULTY_FILES {
@@ -208,7 +209,7 @@ pub fn save_config_to_file(config_name: &str, config: &Configuration, config_dir
         writer.write(config.languages_of_interest.join(",").as_bytes());
     }
     writer.write(&[b"\n\n===> ",config_manager::THREADS.as_bytes(),b"\n"].concat());
-    writer.write(config.threads.to_string().as_bytes());
+    writer.write((config.threads.producers.to_string() + " " + &config.threads.consumers.to_string()).as_bytes());
 
     writer.write(&[b"\n\n===> ",config_manager::BRACES_AS_CODE.as_bytes(),b"\n"].concat());
     writer.write(if config.braces_as_code {b"yes"} else {b"no"});
@@ -387,7 +388,7 @@ fn try_get_folder_of_exe() -> Option<String> {
             return None;
         }
 
-        if let Some(last_backslash) = str_path.match_indices("/").last() {
+        if let Some(last_backslash) = str_path.match_indices('/').last() {
             return Some(str_path[..last_backslash.0].to_owned());
         } 
     }
@@ -503,7 +504,7 @@ mod tests {
     #[test]
     fn test_save_config_file_and_then_parse_it() -> std::io::Result<()> {
         let data_dir = env!("CARGO_MANIFEST_DIR").to_owned() + "/data";
-        let command = format!("{}/config, {}/languages --exclude a,b,c.txt,d.txt, --braces-as-code --threads 4", data_dir, data_dir);
+        let command = format!("{}/config, {}/languages --exclude a,b,c.txt,d.txt, --braces-as-code --threads 1 1", data_dir, data_dir);
         let config = config_manager::create_config_from_args(&command).unwrap();
 
         let test_config_dir = Some(env!("CARGO_MANIFEST_DIR").to_owned() + TEST_DIR + "config/");
@@ -526,7 +527,7 @@ mod tests {
         let mut config = Configuration::new(vec!["C:/Some/Path/a".to_owned(),"C:/Some/Path/b".to_owned(),"C:/Some/Path/c".to_owned(),"C:/Some/Path/d".to_owned()]);
         config
             .set_exclude_dirs(vec!["a".to_owned(), "b".to_owned(), "c.txt".to_owned(), "d.txt".to_owned()])
-            .set_threads(4)
+            .set_threads(1,1)
             .set_braces_as_code(true);
 
 

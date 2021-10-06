@@ -1,7 +1,7 @@
 Auto-generated config file.
 
 ===> dirs
-C:/Users/petro/Desktop/mezura-new/data/config,C:/Users/petro/Desktop/mezura-new/data/languages
+C:/dev/Rusty/mezura/data/config,C:/dev/Rusty/mezura/data/languages
 
 ===> exclude
 a,b,c.txt,d.txt

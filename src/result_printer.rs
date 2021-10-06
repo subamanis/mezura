@@ -1,6 +1,5 @@
-use std::{cmp::max, io::Write};
+use std::cmp::max;
 
-use chrono::{FixedOffset, NaiveDateTime, TimeZone};
 
 use crate::*;
 
@@ -25,12 +24,12 @@ pub fn format_and_print_results(content_info_map: &mut HashMap<String, LanguageC
     remove_languages_with_0_files(content_info_map, languages_metadata_map);
 
     let mut sorted_language_names = get_language_names_as_sorted_vec_according_to_how_much_they_appeared(languages_metadata_map);
-    let biggest_prefix_standard_spaces = get_biggest_prefix_standard_spaces(&sorted_language_names, &languages_metadata_map);
+    let biggest_prefix_standard_spaces = get_biggest_prefix_standard_spaces(&sorted_language_names, languages_metadata_map);
 
-    print_individually(&sorted_language_names, &content_info_map, languages_metadata_map, biggest_prefix_standard_spaces);
+    print_individually(&sorted_language_names, content_info_map, languages_metadata_map, biggest_prefix_standard_spaces);
 
     if languages_metadata_map.len() > 1 {
-        print_sum(&content_info_map, final_stats, biggest_prefix_standard_spaces);
+        print_sum(content_info_map, final_stats, biggest_prefix_standard_spaces);
         print_visual_overview(&mut sorted_language_names, content_info_map, languages_metadata_map, final_stats, config);
     }
 
@@ -150,9 +149,6 @@ fn print_visual_overview(sorted_language_vec: &mut Vec<String>, content_info_map
     }
     fn make_yellow(str: &str) -> String {
         str.bright_yellow().to_string()
-    }
-    fn no_transformation(str: &str) -> String {
-        str.to_owned()
     }
     fn make_fourth_color(str: &str) -> String {
         str.truecolor(106, 217, 189).to_string()

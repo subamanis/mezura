@@ -82,13 +82,14 @@ Below there is a list with all the commands-flags that the program accepts.
     Only the languages specified here will be taken into account for the stats.
 
 --threads
-    1 argument: a number between 1 and 8. Default: 4 
+    2 numbers: the first between 1 and 4 and the seconds between 1 and 12. 
 
-    This represents the number of the consumer threads that will parse files.
+    This represents the number of the producers (threads that will traverse the given directories),
+    and consumers (threads that will parse whatever files the producers found).
     (there is also always one producer thread that is traversing the given dir).
 
-    Increasing the number of consumers can help performance a bit in a situation where
-    there are a lot of big files, concentrated in a shallow directory structure.
+    If this command is not provided, the numbers will be chosen based on the available threads
+    on your machine. Generally, a good ratio of producers-consumers is 1:3
     
 --braces-as-code
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,

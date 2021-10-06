@@ -1,4 +1,4 @@
-use crate::config_manager::*;
+use crate::config_manager::{*, self};
 
 // These constants need to be maintained along with the readme's commands
 pub const DIRS_HELP  :  &str = 
@@ -32,14 +32,14 @@ pub const LANGUAGES_HELP  :  &str =
 "; 
 pub const THREADS_HELP  :  &str = 
 "--threads
-    1 argument: a number between 1 and 8. Default: 4 
+    2 numbers: the first between 1 and 4 and the seconds between 1 and 12. 
 
-    This represents the number of the consumer threads that will parse files.
+    This represents the number of the producers (threads that will traverse the given directories),
+    and consumers (threads that will parse whatever files the producers found).
     (there is also always one producer thread that is traversing the given dir).
 
-    Increasing the number of consumers can help performance a bit in a situation where
-    there are a lot of big files, concentrated in a shallow directory structure.
-
+    If this command is not provided, the numbers will be chosen based on the available threads
+    on your machine. Generally, a good ratio of producers-consumers is 1:3
 "; 
 pub const BRACES_AS_CODE_HELP  :  &str = 
 "--braces-as-code
@@ -125,12 +125,8 @@ pub const LOAD_HELP  :  &str =
 
 
 pub fn print_whole_help_message() {
-    let mut msg = "
-Format of arguments: <path_here> --optional_command1 --optional_commandN
-
-COMMANDS:
-
-".to_string();
+    let mut msg = format!("\n{}\n",config_manager::VERSION_ID);
+    msg += "Format of arguments: <path_here> --optional_command1 --optional_commandN\n\nCOMMANDS:\n\n";
 
     msg += DIRS_HELP;
     msg += EXCLUDE_HELP;
@@ -156,7 +152,8 @@ pub fn print_appropriate_help_message(args_line: &str) {
     }
 
     println!();
-    let mut msg = String::with_capacity(200);
+    let mut msg = format!("\n{}\n\n",config_manager::VERSION_ID);
+
 
     for option in options {
         if option.trim().is_empty() {continue;}

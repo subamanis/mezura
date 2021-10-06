@@ -1,8 +1,11 @@
-use std::{path::{Path, PathBuf}, process};
+use std::{path::Path, process};
 
 use colored::Colorize;
 
-use crate::{help_message_printer, io_handler::{self, ConfigFileParseError}, utils};
+use crate::{help_message_printer, io_handler, utils};
+
+// Application version, to be displayed at startup and with --help command
+pub const VERSION_ID : &str = "mezura  v1.0.0-beta1"; 
 
 // command flags
 pub const DIRS               :&str   = "dirs";
@@ -20,10 +23,12 @@ pub const SAVE               :&str   = "save";
 pub const LOAD               :&str   = "load";
 pub const HELP               :&str   = "help";
 
-pub const MAX_THREADS_VALUE : usize = 8;
-pub const MIN_THREADS_VALUE : usize = 1;
-pub const MIN_COMPARE_LEVEL : usize = 0;
-pub const MAX_COMPARE_LEVEL : usize = 10;
+pub const MAX_PRODUCERS_VALUE : usize = 4;
+pub const MIN_PRODUCERS_VALUE : usize = 1;
+pub const MAX_CONSUMERS_VALUE : usize = 12;
+pub const MIN_CONSUMERS_VALUE : usize = 1;
+pub const MIN_COMPARE_LEVEL   : usize = 0;
+pub const MAX_COMPARE_LEVEL   : usize = 10;
 
 // default config values
 const DEF_BRACES_AS_CODE    : bool    = false;
@@ -32,16 +37,16 @@ const DEF_SHOW_FAULTY_FILES : bool    = false;
 const DEF_NO_VISUAL         : bool    = false;
 const DEF_LOG               : bool    = false;
 const DEF_NO_KEYWORDS       : bool    = false;
-const DEF_THREADS           : usize   = 4;
 const DEF_COMPARE_LEVEL     : usize   = 1;
 
 
 #[derive(Debug,PartialEq,Clone)]
 pub struct Configuration {
+    pub version: &'static str,
     pub dirs: Vec<String>,
     pub exclude_dirs: Vec<String>,
     pub languages_of_interest: Vec<String>,
-    pub threads: usize,
+    pub threads: Threads,
     pub braces_as_code: bool,
     pub should_search_in_dotted: bool,
     pub should_show_faulty_files: bool,
@@ -51,6 +56,12 @@ pub struct Configuration {
     pub compare_level: usize,
     pub config_name_to_save: Option<String>,
     pub config_name_to_load: Option<String>
+}
+
+#[derive(Debug,PartialEq,Clone)]
+pub struct Threads {
+    pub producers: usize,
+    pub consumers: usize
 }
 
 #[derive(Debug, PartialEq)]
@@ -140,11 +151,12 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
             }    
             languages_of_interest = Some(vec);
         } else if let Some(value) = command.strip_prefix(THREADS) {
-            let threads_value = utils::parse_usize_value(value, MIN_THREADS_VALUE, MAX_THREADS_VALUE);
-            if threads_value.is_none() {
-                return Err(ArgParsingError::IncorrectCommandArgs(THREADS.to_owned()))
+            let threads_values = utils::parse_two_usize_values(value,
+                    MIN_PRODUCERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE, MAX_CONSUMERS_VALUE);
+            if let Some(_threads) = threads_values {
+                threads = Some(Threads::from(_threads));
             } else {
-                threads = threads_value
+                return Err(ArgParsingError::IncorrectCommandArgs(THREADS.to_owned()))
             }
         } else if command.starts_with(BRACES_AS_CODE) {
             if has_any_args(command) {
@@ -280,7 +292,7 @@ fn convert_to_absolute(s: &str) -> String {
 // 3) Default values
 // In this order of importance.
 fn combine_specified_config_options(custom_config: Option<ConfigurationBuilder>, dirs: Option<Vec<String>>, exclude_dirs: Option<Vec<String>>,
-        languages_of_interest: Option<Vec<String>>, threads: Option<usize>, braces_as_code: Option<bool>, search_in_dotted: Option<bool>,
+        languages_of_interest: Option<Vec<String>>, threads: Option<Threads>, braces_as_code: Option<bool>, search_in_dotted: Option<bool>,
         show_faulty_files: Option<bool>, no_keywords: Option<bool>, no_visual: Option<bool>, log: Option<bool>, compare_level: Option<usize>) 
 -> ConfigurationBuilder 
 {
@@ -304,7 +316,7 @@ pub struct ConfigurationBuilder {
     pub dirs:                     Option<Vec<String>>,
     pub exclude_dirs:             Option<Vec<String>>,
     pub languages_of_interest:    Option<Vec<String>>,
-    pub threads:                  Option<usize>,
+    pub threads:                  Option<Threads>,
     pub braces_as_code:           Option<bool>,
     pub should_search_in_dotted:  Option<bool>,
     pub should_show_faulty_files: Option<bool>,
@@ -315,7 +327,7 @@ pub struct ConfigurationBuilder {
 }
 
 impl ConfigurationBuilder {
-    pub fn new(dirs: Option<Vec<String>>, exclude_dirs: Option<Vec<String>>, languages_of_interest: Option<Vec<String>>, threads: Option<usize>,
+    pub fn new(dirs: Option<Vec<String>>, exclude_dirs: Option<Vec<String>>, languages_of_interest: Option<Vec<String>>, threads: Option<Threads>,
              braces_as_code: Option<bool>, should_search_in_dotted: Option<bool>, should_show_faulty_files: Option<bool>,
              no_keywords: Option<bool>, no_visual: Option<bool>, log: Option<bool>, compare_level: Option<usize>) 
     -> ConfigurationBuilder 
@@ -358,10 +370,11 @@ impl ConfigurationBuilder {
 
     pub fn build(&self) -> Configuration {
         Configuration {
-            dirs : self.dirs.clone().unwrap(),
+            version: VERSION_ID,
+            dirs: self.dirs.clone().unwrap(),
             exclude_dirs: (self.exclude_dirs).clone().unwrap_or_default(),
             languages_of_interest: (self.languages_of_interest).clone().unwrap_or_default(),
-            threads: self.threads.unwrap_or(DEF_THREADS),
+            threads: self.threads.clone().unwrap_or(Threads::default()),
             braces_as_code: self.braces_as_code.unwrap_or(DEF_BRACES_AS_CODE),
             should_search_in_dotted: self.should_search_in_dotted.unwrap_or(DEF_SEARCH_IN_DOTTED),
             should_show_faulty_files: self.should_show_faulty_files.unwrap_or(DEF_SHOW_FAULTY_FILES),
@@ -378,10 +391,11 @@ impl ConfigurationBuilder {
 impl Configuration {
     pub fn new(dirs: Vec<String>) -> Self {
         Configuration {
+            version: VERSION_ID,
             dirs,
             exclude_dirs: Vec::new(),
             languages_of_interest: Vec::new(),
-            threads: DEF_THREADS,
+            threads: Threads::default(),
             braces_as_code: DEF_BRACES_AS_CODE,
             should_search_in_dotted: DEF_SEARCH_IN_DOTTED,
             should_show_faulty_files: DEF_SHOW_FAULTY_FILES,
@@ -410,8 +424,8 @@ impl Configuration {
         self
     }
 
-    pub fn set_threads(&mut self, threads: usize) -> &mut Self {
-        self.threads = threads;
+    pub fn set_threads(&mut self, producers: usize, consumers: usize) -> &mut Self {
+        self.threads = Threads::new(producers, consumers);
         self
     }
 
@@ -438,6 +452,43 @@ impl Configuration {
     pub fn set_should_enable_visuals(&mut self, should_enable_visuals: bool) -> &mut Self {
         self.no_visual = should_enable_visuals;
         self
+    }
+}
+
+impl Threads {
+    pub fn new(producers: usize, consumers: usize) -> Self {
+        Threads {
+            producers,
+            consumers
+        }
+    }
+
+    pub fn from(threads: (usize,usize)) -> Self {
+        Threads {
+            producers: threads.0,
+            consumers: threads.1
+        }
+    }
+
+    pub fn default() -> Self {
+        let threads = num_cpus::get();
+        // We may actually use one more thread than the available ones, it seems to help a bit
+        if threads <= 4 {
+            Threads {
+                producers: 2,
+                consumers: 3
+            }
+        } else if threads <= 8 {
+            Threads {
+                producers: 3,
+                consumers: 6
+            }
+        } else {
+            Threads {
+                producers: 3,
+                consumers: 8
+            }
+        }
     }
 }
 
@@ -475,15 +526,15 @@ mod tests {
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("dirs".to_owned())), create_config_from_args("--dirs"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("dirs".to_owned())), create_config_from_args("--dirs   "));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 0"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 5 10"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 2 13"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 9"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 2 2"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads A"));
-        assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("show-faulty-files".to_owned())), create_config_from_args("./ --threads 1 --show-faulty-files 1"));
-        assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("show-faulty-files".to_owned())), create_config_from_args("./ --threads 1 --show-faulty-files a"));
-        assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("search-in-dotted".to_owned())), create_config_from_args("./ --threads 1 --search-in-dotted a"));
-        assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("no-visual".to_owned())), create_config_from_args("./ --threads 1 --no-visual a"));
-        assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("braces-as-code".to_owned())), create_config_from_args("./ --threads 1 --braces-as-code a"));
+        assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("show-faulty-files".to_owned())), create_config_from_args("./ --threads 1 1 --show-faulty-files 1"));
+        assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("show-faulty-files".to_owned())), create_config_from_args("./ --threads 1 1 --show-faulty-files a"));
+        assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("search-in-dotted".to_owned())), create_config_from_args("./ --threads 1 1 --search-in-dotted a"));
+        assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("no-visual".to_owned())), create_config_from_args("./ --no-visual a"));
+        assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("braces-as-code".to_owned())), create_config_from_args("./ --braces-as-code a"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned())), create_config_from_args("./ --exclude"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned())), create_config_from_args("./ --exclude   --threads 4"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("load".to_owned())), create_config_from_args("./ --load"));
@@ -493,10 +544,10 @@ mod tests {
 
         assert_eq!(Configuration::new(vec![convert_to_absolute("./")]), create_config_from_args("./").unwrap());
         assert_eq!(Configuration::new(vec![convert_to_absolute("./")]), create_config_from_args("--dirs ./").unwrap());
-        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_threads(1), create_config_from_args("./ --threads 1").unwrap());
-        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_threads(1), create_config_from_args("./ --threads   1   ").unwrap());
-        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_threads(1).set_braces_as_code(true),
-                create_config_from_args("./ --threads 1 --braces-as-code").unwrap());
+        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_threads(1,1), create_config_from_args("./ --threads 1 1").unwrap());
+        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_threads(1,1), create_config_from_args("./ --threads   1   1 ").unwrap());
+        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_threads(1,1).set_braces_as_code(true),
+                create_config_from_args("./ --threads 1 1 --braces-as-code").unwrap());
         assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_should_search_in_dotted(true),
                 create_config_from_args("./ --search-in-dotted").unwrap());
         assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_should_enable_visuals(true),
@@ -522,19 +573,6 @@ mod tests {
 
         assert!(!has_any_args("cmnd"));
         assert!(!has_any_args("cmnd    "));
-    }
-
-    #[test]
-    fn test_parse_threads_command() {
-        assert_eq!(Some(1), utils::parse_usize_value("1", MIN_THREADS_VALUE, MAX_THREADS_VALUE));
-        assert_eq!(Some(1), utils::parse_usize_value("   1", MIN_THREADS_VALUE, MAX_THREADS_VALUE));
-        assert_eq!(Some(1), utils::parse_usize_value("   1   ", MIN_THREADS_VALUE, MAX_THREADS_VALUE));
-
-        assert_eq!(None, utils::parse_usize_value("1 3 3", MIN_THREADS_VALUE, MAX_THREADS_VALUE));
-        assert_eq!(None, utils::parse_usize_value("-1 0", MIN_THREADS_VALUE, MAX_THREADS_VALUE));
-        assert_eq!(None, utils::parse_usize_value("cmnd", MIN_THREADS_VALUE, MAX_THREADS_VALUE));
-        assert_eq!(None, utils::parse_usize_value("   ", MIN_THREADS_VALUE, MAX_THREADS_VALUE));
-        assert_eq!(None, utils::parse_usize_value("A", MIN_THREADS_VALUE, MAX_THREADS_VALUE));
     }
 
     #[test]

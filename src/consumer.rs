@@ -1,38 +1,24 @@
-use std::{io, sync::atomic::Ordering, thread, time::Duration};
+use std::{sync::atomic::Ordering, thread, time::Duration};
 
 use crossbeam_deque::Steal;
 
 use crate::*;
 
-pub fn start_parser_thread(id: usize, injector: Arc<Injector<String>>, worker: Worker<String>, faulty_files_ref: FaultyFilesRef, finish_condition_ref: BoolRef,
-        language_content_info_ref: ContentInfoMapRef, language_map: LanguageMapRef, config: Arc<Configuration>) -> JoinHandle<()>
+pub fn start_parser_thread(id: usize, injector: Arc<Injector<String>>, faulty_files_ref: FaultyFilesListMut, finish_condition_ref: Arc<AtomicBool>,
+        languages_content_info_ref: ContentInfoMapMut, language_map: Arc<HashMap<String,Language>>, config: Arc<Configuration>) -> JoinHandle<()>
 {
     thread::Builder::new().name(id.to_string()).spawn(move || {
-        start_parsing_files(injector, worker, faulty_files_ref, finish_condition_ref, language_content_info_ref, language_map, config);
+        start_parsing_files(id, injector, faulty_files_ref, finish_condition_ref, languages_content_info_ref, language_map, config);
     }).unwrap()
 }
 
-pub fn start_parsing_files(injector: Arc<Injector<String>>, worker: Worker<String>, faulty_files_ref: FaultyFilesRef, finish_condition_ref: BoolRef,
-    languages_content_info_ref: ContentInfoMapRef, languages_map_ref: LanguageMapRef, config: Arc<Configuration>) 
+pub fn start_parsing_files(_id: usize, injector: Arc<Injector<String>>, faulty_files_ref: FaultyFilesListMut, finish_condition_ref: Arc<AtomicBool>,
+    languages_content_info_ref: ContentInfoMapMut, languages_map_ref: Arc<HashMap<String,Language>>, config: Arc<Configuration>) 
 {
     let mut buf = String::with_capacity(150);
+    // let mut share = 0;
     loop {
-        // let mut files_list_guard = files_list.lock().unwrap();
-        // let path = files_list_guard.pop();
-        // drop(files_list_guard);
-
-        let a  = {
-            if worker.is_empty() {
-                match injector.steal_batch_and_pop(&worker) {
-                    Steal::Success(path) => Some(path),
-                    _ => None
-                }
-            } else {
-                worker.pop()
-            }
-        };
-        
-        if let Some(file_path) = &a {
+        if let Steal::Success(file_path) = &injector.steal() {
             let path = Path::new(&file_path);
             let file_extension = match path.extension() {
                 Some(x) => match x.to_str() {
@@ -51,7 +37,8 @@ pub fn start_parsing_files(injector: Arc<Injector<String>>, worker: Worker<Strin
             };
             let lang_name = find_lang_with_this_identifier(&languages_map_ref, &file_extension).unwrap();
 
-            match file_parser::parse_file(&file_path, &lang_name, &mut buf, languages_map_ref.clone(), &config) {
+            // share += 1;
+            match file_parser::parse_file(file_path, &lang_name, &mut buf, languages_map_ref.clone(), &config) {
                 Ok(x) => languages_content_info_ref.lock().unwrap().get_mut(&lang_name).unwrap().add_file_stats(x),
                 Err(x) => faulty_files_ref.lock().unwrap().push(
                         FaultyFileDetails::new(file_path.clone(),x,path.metadata().map_or(0, |m| m.len())))
@@ -64,4 +51,5 @@ pub fn start_parsing_files(injector: Arc<Injector<String>>, worker: Worker<Strin
             thread::sleep(Duration::from_millis(2));
         }
     }
+    // println!("Thread {} finished, having done {} files.",_id,share);
 }

@@ -3,7 +3,7 @@ use std::{io::{BufRead, BufReader}, str::{self, MatchIndices}};
 use crate::*;
 
 
-pub fn parse_file(file_name: &str, lang_name: &str, buf: &mut String, language_map: LanguageMapRef, config: &Configuration)
+pub fn parse_file(file_name: &str, lang_name: &str, buf: &mut String, language_map: Arc<HashMap<String,Language>>, config: &Configuration)
 -> Result<FileStats,String> 
 {
     let reader = BufReader::new(match File::open(file_name){
@@ -48,7 +48,7 @@ fn parse_lines(mut reader: BufReader<File>, buf: &mut String, language: &Languag
             if config.braces_as_code || cleansed.len() > 2 || (cleansed != "{" && cleansed != "}" && cleansed != "};") {
                 file_stats.incr_code_lines();
                 if !config.no_keywords {
-                    add_keywords_if_any(cleansed, &language, &mut file_stats);
+                    add_keywords_if_any(cleansed, language, &mut file_stats);
                 }
             }
         } else {
@@ -787,7 +787,7 @@ pub fn get_str_indices_and_symbols1(line: &str, language: &Language, open_str_sy
         let mut indices = Vec::with_capacity(6);
         let mut symbols = Vec::with_capacity(6);
         line.match_indices(&language.string_symbols[0]).for_each(|x| {
-            if is_not_escaped(x.0, &line_bytes) {
+            if is_not_escaped(x.0, line_bytes) {
                 indices.push(x.0); symbols.push(x.1.to_owned());
             }
         });
@@ -952,7 +952,7 @@ mod tests {
             keywords : vec![STRUCT.clone(),ENUM.clone(),TRAIT.clone()]
         };
 
-        static ref LANGUAGE_MAP_REF : LanguageMapRef = Arc::new(io_handler::parse_supported_languages_to_map(&mut Vec::<String>::new()).unwrap().language_map);
+        static ref LANGUAGE_MAP_REF : Arc<HashMap<String,Language>> = Arc::new(io_handler::parse_supported_languages_to_map(&mut Vec::<String>::new()).unwrap().language_map);
     }
 
     #[test]
@@ -994,11 +994,6 @@ mod tests {
         buf.clear();
     }
 
-    fn set_occurances(map: &mut HashMap<String,usize>, classes: usize, interfaces: usize) {
-        map.insert("classes".to_owned(), classes);
-        map.insert("interfaces".to_owned(), interfaces);
-    }
-    
     #[test]
     fn finds_keywords_correctly() {
         let line = String::from("Hello world!");

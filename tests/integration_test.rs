@@ -1,33 +1,38 @@
 // use std::collections::{HashMap, LinkedList};
 // use std::sync::atomic::AtomicBool;
 // use std::sync::{Arc, Mutex};
+// use crossbeam_deque::Worker;
 // use mezura::*;
+// use mezura::config_manager::Threads;
 
 // #[test]
 // fn test_whole_workflow () {
 //     let current_dir = env!("CARGO_MANIFEST_DIR").replace("\\", "/");
-//     let mut config = config_manager::create_config_from_args(&format!("{}/src,{}/tests --threads 3 ",current_dir, current_dir)).unwrap();
+//     let mut config = config_manager::create_config_from_args(&format!("{}/src,{}/tests --threads 1 3 ",current_dir, current_dir)).unwrap();
 //     let language_map = io_handler::parse_supported_languages_to_map(&mut config.languages_of_interest).unwrap().language_map;
 //     let language_map_len = language_map.len(); 
 
-//     assert_eq!(3, config.threads);
+//     assert_eq!(Threads::new(1,3), config.threads);
 //     assert_eq!(vec![format!("{}/src",current_dir), format!("{}/tests", current_dir)], config.dirs);
 //     assert!(language_map.len() != 0);
 
-//     let files_ref : LinkedListRef = Arc::new(Mutex::new(LinkedList::new()));
 //     let faulty_files_ref : FaultyFilesRef  = Arc::new(Mutex::new(Vec::new()));
-//     let finish_condition_ref : BoolRef = Arc::new(AtomicBool::new(false));
+//     let finish_condition_ref = Arc::new(AtomicBool::new(false));
 //     let language_map_ref : LanguageMapRef = Arc::new(language_map);
 //     let languages_content_info_ref = Arc::new(Mutex::new(make_language_stats(language_map_ref.clone())));
-//     let mut languages_metadata = make_language_metadata(language_map_ref.clone());
+//     let files_injector = Arc::new(Injector::new());
+//     let dirs_injector = Arc::new(Injector::new());
+//     let producer_termination_states = Arc::new(Mutex::new(vec![false]));
+//     let mut languages_metadata = make_language_metadata(&language_map_ref);
 
 //     assert!(languages_metadata.len() == language_map_len);
 
-//     let (total_files_num, relevant_files_num) = producer::add_relevant_files(
-//         files_ref.clone(), &mut languages_metadata, finish_condition_ref.clone(), &language_map_ref, &config);
+//     let (total_files_num, relevant_files_num) = producer::produce(0,
+//             files_injector.clone(), dirs_injector.clone(), Worker::new_fifo(), producer_termination_states,
+//             &mut languages_metadata, finish_condition_ref.clone(), &language_map_ref, &config);
 
-//     consumer::start_parsing_files(files_ref, faulty_files_ref.clone(), finish_condition_ref, languages_content_info_ref.clone(),
-//          language_map_ref.clone(), &config);
+//     consumer::start_parsing_files(0, files_injector, faulty_files_ref.clone(), finish_condition_ref, languages_content_info_ref.clone(),
+//          language_map_ref.clone(), Arc::new(config));
     
 //     let mut content_info_map_guard = languages_content_info_ref.lock();
 //     let content_info_map = content_info_map_guard.as_deref_mut().unwrap();

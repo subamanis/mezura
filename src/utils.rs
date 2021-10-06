@@ -1,5 +1,5 @@
 use crate::*;
-use std::{fmt::Debug, io::Write};
+use std::{fmt::Debug};
 
 
 pub fn round_1(num: f64) -> f64 {
@@ -36,6 +36,23 @@ pub fn parse_usize_value(s: &str, min: usize, max: usize) -> Option<usize> {
     }
 }
 
+pub fn parse_two_usize_values(s: &str, min1: usize, max1: usize, min2: usize, max2: usize) -> Option<(usize,usize)> {
+    let elements = s.split_whitespace().filter_map(|x| get_if_not_empty(x.trim())).collect::<Vec<_>>();
+    if elements.len() != 2 {
+        return None
+    }
+
+    if let Ok(val1) = elements[0].parse::<usize>() {
+        if let Ok(val2) = elements[1].parse::<usize>() {
+            if val1 >= min1 && val1 <= max1 && val2 >= min2 && val2 <= max2 {
+                return Some((val1,val2));
+            }
+        }
+    }
+    
+    None
+}
+
 pub fn is_valid_path(s: &str) -> bool {
     let p = Path::new(s.trim());
     p.is_dir() || p.is_file()
@@ -63,12 +80,12 @@ pub fn extract_file_contents(file_path: &str) -> Option<String> {
         let mut contents = String::with_capacity(700);
         File::open(&file_path).unwrap().read_to_string(&mut contents);
         if contents.trim().is_empty() {
-            return None;
+            None
         } else {
-            return Some(contents)
+            Some(contents)
         }
     } else {
-        return None;
+        None
     }
 }
 
@@ -177,7 +194,7 @@ mod Tests{
     }
 
     #[test]
-    pub fn test_parse_threads_value() {
+    pub fn test_parse_usize_values() {
         assert_eq!(None,parse_usize_value("0", 1, 8));
         assert_eq!(None,parse_usize_value("9", 1, 8));
         assert_eq!(None,parse_usize_value("0.2", 1, 8));
@@ -185,8 +202,19 @@ mod Tests{
         assert_eq!(None,parse_usize_value("", 1, 8));
         assert_eq!(None,parse_usize_value(" ", 1, 8));
         assert_eq!(None,parse_usize_value("A", 1, 8));
-
         assert_eq!(Some(1),parse_usize_value("1", 1, 8));
         assert_eq!(Some(8),parse_usize_value("   8 ", 1, 8));
+        
+        
+        assert_eq!(None,parse_two_usize_values("A", 1, 4, 1, 12));
+        assert_eq!(None,parse_two_usize_values("A A", 1, 4, 1, 12));
+        assert_eq!(None,parse_two_usize_values("1 A", 1, 4, 1, 12));
+        assert_eq!(None,parse_two_usize_values("1 0", 1, 4, 1, 12));
+        assert_eq!(None,parse_two_usize_values("5 12", 1, 4, 1, 12));
+        assert_eq!(None,parse_two_usize_values("4 13", 1, 4, 1, 12));
+        assert_eq!(Some((1,1)),parse_two_usize_values("1 1", 1, 4, 1, 12));
+        assert_eq!(Some((1,1)),parse_two_usize_values("     1       1  ", 1, 4, 1, 12));
+        assert_eq!(Some((4,12)),parse_two_usize_values("4 12", 1, 4, 1, 12));
+        assert_eq!(Some((2,6)),parse_two_usize_values("2 6", 1, 4, 1, 12));
     }
 }

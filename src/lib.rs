@@ -3,7 +3,6 @@
 #![allow(unused_must_use)]
 #![allow(dead_code)]
 #![allow(non_snake_case)]
-#![allow(unused_imports)]
 
 pub mod config_manager;
 pub mod io_handler;
@@ -18,18 +17,16 @@ mod result_printer;
 pub use colored::{Colorize,ColoredString};
 pub use config_manager::Configuration;
 pub use crossbeam_deque::Injector;
-use crossbeam_deque::Worker;
 pub use utils::*;
 pub use domain::{Language, LanguageContentInfo, LanguageMetadata, FileStats, Keyword};
 
-pub type LinkedListRef      = Arc<Mutex<LinkedList<String>>>;
-pub type FaultyFilesRef     = Arc<Mutex<Vec<FaultyFileDetails>>>;
-pub type BoolRef            = Arc<AtomicBool>;
-pub type ContentInfoMapRef  = Arc<Mutex<HashMap<String,LanguageContentInfo>>>;
-pub type LanguageMapRef     = Arc<HashMap<String,Language>>;
+pub type FaultyFilesListMut = Arc<Mutex<Vec<FaultyFileDetails>>>;
+pub type ContentInfoMapMut  = Arc<Mutex<HashMap<String,LanguageContentInfo>>>;
+pub type MetadataMapMut     = Arc<Mutex<HashMap<String,LanguageMetadata>>>;
 
-use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, Offset};
-use std::{borrow::Borrow, cell::Cell, cmp::min, collections::{HashMap, LinkedList}, error::Error, fs::{self, File}, io::{self, BufRead, BufReader, BufWriter, Read, Write}, ops::{Deref,DerefMut}, os::raw, path::{Path, PathBuf}, str::FromStr, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant}};
+use crossbeam_deque::Worker;
+use chrono::{DateTime, Local};
+use std::{collections::HashMap, fs::{self, File}, io::Read, path::{Path, PathBuf}, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant}};
 use std::{sync::{Arc, Mutex}, thread::JoinHandle};
 
 
@@ -65,78 +62,65 @@ pub enum ParseFilesError {
 } 
 
 #[derive(Debug,Clone)]
-pub struct ProduceResults(usize,usize);
+pub struct FilesPresent {
+    pub total_files: usize,
+    pub relevant_files: usize
+}
 
 pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Result<Option<Metrics>, ParseFilesError> {
-    let faulty_files_ref : FaultyFilesRef  = Arc::new(Mutex::new(Vec::new()));
-    let finish_condition_ref : BoolRef = Arc::new(AtomicBool::new(false));
-    let language_map_ref : LanguageMapRef = Arc::new(language_map);
-    let languages_content_info_ref : ContentInfoMapRef = Arc::new(Mutex::new(make_language_stats(language_map_ref.clone())));
-    let global_languages_metadata_map = Arc::new(Mutex::new(make_language_metadata(language_map_ref.clone())));
-
-    let producers_num = 2;
-    let consumers_num = 3;
-
-    let files_stats = Arc::new(Mutex::new(ProduceResults(0,0)));
-    let mut term_states = Vec::with_capacity(3);
-    for _ in 0..producers_num {
-        term_states.push(false);
-    }
-    let termination_states = Arc::new(Mutex::new(term_states));
-    // let files_list  = Arc::new(Mutex::new(Vec::with_capacity(100)));
-    // let global_dir_list = Arc::new(Mutex::new(config.dirs.iter().map(|x| PathBuf::from_str(x).unwrap()).collect::<Vec<_>>()));
-    let config_ref = Arc::new(config.clone());
-    let mut producer_handles = Vec::with_capacity(4);
-    let mut consumer_handles = Vec::with_capacity(4);
-
+    let config = Arc::new(config);
+    let faulty_files_ref : FaultyFilesListMut  = Arc::new(Mutex::new(Vec::with_capacity(10)));
+    let finish_condition_ref = Arc::new(AtomicBool::new(false));
+    let language_map_ref = Arc::new(language_map);
+    let languages_content_info_ref : ContentInfoMapMut = Arc::new(Mutex::new(make_language_stats(language_map_ref.clone())));
+    let global_languages_metadata_map = Arc::new(Mutex::new(make_language_metadata(&language_map_ref)));
+    
+    let mut files_present = FilesPresent::new(0,0);
+    let producer_termination_states = Arc::new(Mutex::new(vec![false; config.threads.producers]));
     let files_injector = Arc::new(Injector::<String>::new());
     let dirs_injector = Arc::new(Injector::<PathBuf>::new());
-    config.dirs.iter().for_each(|x| dirs_injector.push(PathBuf::from_str(x).unwrap()));
-    println!("IS: {:?}",dirs_injector);
-    // println!("IS: {:?}",dirs_injector.steal().success());
+    calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector, &mut files_present, 
+            &language_map_ref, &global_languages_metadata_map);
 
-    let local_languages_metadata_map = make_language_metadata(language_map_ref.clone());
+    let files_stats = Arc::new(Mutex::new(files_present));
 
-    let instant = Instant::now();
-    for i in 0..producers_num {
-        producer_handles.push(producer::start_producer_thread(i, files_injector.clone(), dirs_injector.clone(), Worker::new_fifo(), global_languages_metadata_map.clone(), local_languages_metadata_map.clone(),
-            termination_states.clone(),language_map_ref.clone(), config_ref.clone(), files_stats.clone()));
+    let mut producer_handles = Vec::with_capacity(config.threads.producers);
+    let mut consumer_handles = Vec::with_capacity(config.threads.consumers);
+
+    println!("\n{}",config.version);
+    println!("{}...","Analyzing directories".underline().bold());
+
+    let parsing_started_instant = Instant::now();
+    for i in 0..config.threads.producers {
+        producer_handles.push(producer::start_producer_thread(i, files_injector.clone(), dirs_injector.clone(), Worker::new_fifo(),
+            global_languages_metadata_map.clone(), producer_termination_states.clone(),language_map_ref.clone(), config.clone(), files_stats.clone()));
     }
-    for i in 0..consumers_num {
-        consumer_handles.push(consumer::start_parser_thread(i, files_injector.clone(), Worker::new_fifo(), faulty_files_ref.clone(), finish_condition_ref.clone(),
-        languages_content_info_ref.clone(), language_map_ref.clone(), config_ref.clone()));
+    //local content info here too?
+    for i in 0..config.threads.consumers {
+        consumer_handles.push(consumer::start_parser_thread(i, files_injector.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
+        languages_content_info_ref.clone(), language_map_ref.clone(), config.clone()));
     }
 
     for handle in producer_handles {
         handle.join();
     }
-    println!("Producers finished after {} secs",instant.elapsed().as_millis() as f64/1000.0);
+    println!("Producers finished after {} secs",parsing_started_instant.elapsed().as_millis() as f64/1000.0);
 
-
-    // let guard = files_list.lock().unwrap();
-    // let lenn = guard.len();
-    // drop(guard);
-    // for i in consumers_num..min(2,lenn/4000) {
-    //     consumer_handles.push(consumer::start_parser_thread(i, files_list.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
-    //     languages_content_info_ref.clone(), language_map_ref.clone(), config_ref.clone()));
-    // }
+    //If there are a lot of files remaining after producers finish, it makes sense to start another consumer.
     let len = files_injector.len();
     println!("Remaining files in list: {}",len);
-    if len > 800 {
-        consumer_handles.push(consumer::start_parser_thread(consumers_num, files_injector.clone(), Worker::new_fifo(), faulty_files_ref.clone(), finish_condition_ref.clone(),
-        languages_content_info_ref.clone(), language_map_ref.clone(), config_ref.clone()));
+    if len > 1200 {
+        consumer_handles.push(consumer::start_parser_thread(config.threads.consumers, files_injector, faulty_files_ref.clone(), finish_condition_ref.clone(),
+        languages_content_info_ref.clone(), language_map_ref.clone(), config.clone()));
     }
-    // consumer_handles.push(consumer::start_parser_thread(4, injector.clone(),files_list.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
-    // languages_content_info_ref.clone(), language_map_ref.clone(), config_ref.clone()));
     finish_condition_ref.store(true,Ordering::Relaxed);
     for handle in consumer_handles {
         handle.join();
     }
+    let parsing_duration_millis = parsing_started_instant.elapsed().as_millis();
 
-    let parsing_duration_millis = instant.elapsed().as_millis();
-
-    let guard = files_stats.lock().unwrap();
-    let (total_files_num, relevant_files_num) = (guard.0, guard.1);
+    let file_stats_guard = files_stats.lock().unwrap();
+    let (total_files_num, relevant_files_num) = (file_stats_guard.total_files, file_stats_guard.relevant_files);
     if relevant_files_num == 0 {
         return Err(ParseFilesError::NoRelevantFiles(get_activated_languages_as_str(&config)));
     }
@@ -145,7 +129,6 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     println!("{}...","Parsing files".underline().bold());
 
     print_faulty_files_or_ok(&faulty_files_ref, &config);
-
     if faulty_files_ref.lock().unwrap().len() == relevant_files_num {
         return Err(ParseFilesError::AllAreFaultyFiles);
     }
@@ -160,7 +143,7 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
 
     let metrics = generate_metrics_if_parsing_took_more_than_one_sec(parsing_duration_millis, relevant_files_num, content_info_map);
 
-    let final_stats = FinalStats::calculate(&content_info_map, &languages_metadata_map);
+    let final_stats = FinalStats::calculate(content_info_map, languages_metadata_map);
     let log_file_path = get_specified_config_file_path(&config);
     let existing_log_contents = {
         if let Some(path) = &log_file_path {
@@ -183,7 +166,30 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     Ok(metrics)
 }
 
-pub fn find_lang_with_this_identifier(languages: &LanguageMapRef, wanted_identifier: &str) -> Option<String> {
+fn calculate_single_file_stats_or_add_to_injector(config: &Configuration, dirs_injector: &Arc<Injector<PathBuf>>, files_injector: &Arc<Injector<String>>,
+        files_present: &mut FilesPresent, languages: &Arc<HashMap<String,Language>>, languages_metadata_map: &MetadataMapMut)
+{
+    config.dirs.iter().for_each(|dir| {
+        let dir_path = Path::new(dir);
+        if dir_path.is_file() {
+            if let Some(x) = dir_path.extension() {
+                if let Some(extension) = x.to_str() {
+                    if let Some(lang_name) = find_lang_with_this_identifier(languages, extension) {
+                        languages_metadata_map.lock().unwrap().get_mut(&lang_name).unwrap().add_file_meta(
+                                dir_path.metadata().map_or(0, |m| m.len() as usize));
+                        files_injector.push(dir.to_owned());
+                        files_present.total_files += 1;
+                        files_present.relevant_files += 1;
+                    }
+                }
+            }
+        } else if dir_path.is_dir() {
+            dirs_injector.push(dir_path.to_path_buf());
+        }
+    })
+}
+
+pub fn find_lang_with_this_identifier(languages: &Arc<HashMap<String,Language>>, wanted_identifier: &str) -> Option<String> {
     for lang in languages.iter() {
         if lang.1.extensions.iter().any(|x| x == wanted_identifier) {
             return Some(lang.0.to_owned());
@@ -215,7 +221,7 @@ fn generate_metrics_if_parsing_took_more_than_one_sec(parsing_duration_millis: u
 }
 
 
-fn print_faulty_files_or_ok(faulty_files_ref: &FaultyFilesRef, config: &Configuration) {
+fn print_faulty_files_or_ok(faulty_files_ref: &FaultyFilesListMut, config: &Configuration) {
     let faulty_files = &*faulty_files_ref.as_ref().lock().unwrap();
     if faulty_files.is_empty() {
         println!("{}\n","ok".bright_green());
@@ -232,13 +238,13 @@ fn print_faulty_files_or_ok(faulty_files_ref: &FaultyFilesRef, config: &Configur
     }
 }
 
-fn remove_faulty_files_stats(faulty_files_ref: &FaultyFilesRef, languages_metadata_map: &mut HashMap<String,LanguageMetadata>,
-        language_map: &LanguageMapRef) {
+fn remove_faulty_files_stats(faulty_files_ref: &FaultyFilesListMut, languages_metadata_map: &mut HashMap<String,LanguageMetadata>,
+        language_map: &Arc<HashMap<String,Language>>) {
     let faulty_files = &*faulty_files_ref.as_ref().lock().unwrap();
     for file in faulty_files {
         let extension = utils::get_file_extension(Path::new(&file.path));
         if let Some(x) = extension {
-            let lang_name = find_lang_with_this_identifier(&language_map, x).unwrap();
+            let lang_name = find_lang_with_this_identifier(language_map, x).unwrap();
             let language_metadata = languages_metadata_map.get_mut(&lang_name).unwrap();
             language_metadata.files -= 1;
             language_metadata.bytes -= file.size as usize;
@@ -254,7 +260,7 @@ fn get_activated_languages_as_str(config: &Configuration) -> String {
     }
 }
 
-pub fn make_language_stats(languages_map: LanguageMapRef) -> HashMap<String,LanguageContentInfo> {
+pub fn make_language_stats(languages_map: Arc<HashMap<String,Language>>) -> HashMap<String,LanguageContentInfo> {
     let mut map = HashMap::<String,LanguageContentInfo>::new();
     for (key, value) in languages_map.iter() {
         map.insert(key.to_owned(), LanguageContentInfo::from(value));
@@ -262,7 +268,7 @@ pub fn make_language_stats(languages_map: LanguageMapRef) -> HashMap<String,Lang
     map
 }
 
-pub fn make_language_metadata(language_map: LanguageMapRef) -> HashMap<String, LanguageMetadata> {
+pub fn make_language_metadata(language_map: &Arc<HashMap<String,Language>>) -> HashMap<String, LanguageMetadata> {
     let mut map = HashMap::<String,LanguageMetadata>::new();
     for (name,_) in language_map.iter() {
         map.insert(name.to_owned(), LanguageMetadata::default());
@@ -349,8 +355,8 @@ impl FinalStats {
             lines: total_lines,
             code_lines: total_code_lines,
             extra_lines: total_lines - total_code_lines,
-            bytes_size: bytes_size,
-            bytes_average_size: bytes_average_size,
+            bytes_size,
+            bytes_average_size,
             size: total_size,
             size_measurement,
             average_size,
@@ -371,6 +377,15 @@ impl FaultyFileDetails {
             path,
             error_msg,
             size
+        }
+    }
+}
+
+impl FilesPresent {
+    pub fn new(total_files: usize, relevant_files: usize) -> Self {
+        FilesPresent {
+            total_files,
+            relevant_files
         }
     }
 }
@@ -517,7 +532,7 @@ pub mod domain {
             FileStats {
                 lines : 0,
                 code_lines : 0,
-                keyword_occurences : get_stats_map(&keywords)
+                keyword_occurences : get_stats_map(keywords)
             }
         }
 
