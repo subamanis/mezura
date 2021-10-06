@@ -9,11 +9,6 @@ fn main() {
     #[cfg(target_os = "windows")]
     control::set_virtual_terminal(true).unwrap();
 
-    if let Err(x) = verify_required_dirs() {
-        println!("{}",x);
-        process::exit(1);
-    }
-
     let mut config = match config_manager::read_args_cmd() {
         Ok(config) => config,
         Err(x) => {
@@ -21,6 +16,13 @@ fn main() {
             process::exit(1);
         } 
     };
+
+    if let Err(x) = verify_required_dirs() {
+        println!("{}",x);
+        process::exit(1);
+    }
+
+  
 
     let languages_map = match io_handler::parse_supported_languages_to_map(&mut config.languages_of_interest) {
         Err(x) => {
@@ -51,9 +53,9 @@ fn main() {
     let instant = Instant::now();
     match mezura::run(config, languages_map) {
         Ok(x) => {
-            let perf = format!("\nParsing time: {:.2} secs ", instant.elapsed().as_secs_f32());
+            let perf = format!("\nExec time: {:.2} secs ", instant.elapsed().as_secs_f32());
             let metrics = match x {
-                Some(x) => format!("({} files/s | {} lines/s)", with_seperators(x.files_per_sec), with_seperators(x.lines_per_sec)),
+                Some(x) => format!("(Parsing {} files/s | {} lines/s)", with_seperators(x.files_per_sec), with_seperators(x.lines_per_sec)),
                 None => String::new()
             };
             println!("{}",perf + &metrics);
