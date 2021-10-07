@@ -1,0 +1,20 @@
+===> test name
+2021-10-07 10:52:57 +0300
+Configuration:
+    dirs: ./
+    exclude: 
+    languages: 
+    braces-as-code: no
+    search-in-dotted: no
+Stats:
+    Files: 10
+    Lines: 1000
+        Code: 100
+        Extra: 900
+    Total Size: 100
+        Average Size: 10
+
+
+--------------------------------------------------------------------------------------------
+
+

@@ -91,12 +91,14 @@ pub const NO_VISUAL_HELP  :  &str =
 "; 
 pub const LOG_HELP  :  &str = 
 "--log 
-    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
+    Can take 0..n words as arguments in the cmd.
+    If specified in a configuration file use 'true' or 'yes' to enable,
     or 'no' to disable. Default: no 
 
     This flag only works if a configuration file is loaded. Specifies that a new log entry should be made
     with the stats of this program execution, inside the appropriate file in the 'data/logs' directory.
     If not log file exists for this configuration, one is created.
+    All the provided arguments are used as a description of the log entry.
 
 "; 
 pub const COMPRARE_LEVEL_HELP  :  &str = 

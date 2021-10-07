@@ -35,7 +35,6 @@ const DEF_BRACES_AS_CODE    : bool    = false;
 const DEF_SEARCH_IN_DOTTED  : bool    = false;
 const DEF_SHOW_FAULTY_FILES : bool    = false;
 const DEF_NO_VISUAL         : bool    = false;
-const DEF_LOG               : bool    = false;
 const DEF_NO_KEYWORDS       : bool    = false;
 const DEF_COMPARE_LEVEL     : usize   = 1;
 
@@ -52,10 +51,16 @@ pub struct Configuration {
     pub should_show_faulty_files: bool,
     pub no_keywords: bool,
     pub no_visual: bool,
-    pub log: bool,
+    pub log: LogOption,
     pub compare_level: usize,
     pub config_name_to_save: Option<String>,
     pub config_name_to_load: Option<String>
+}
+
+#[derive(Debug,PartialEq,Clone)]
+pub struct LogOption {
+    pub should_log: bool,
+    pub name: Option<String>
 }
 
 #[derive(Debug,PartialEq,Clone)]
@@ -183,11 +188,13 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
                 return Err(ArgParsingError::UnexpectedCommandArgs(NO_VISUAL.to_owned()))
             }
             no_visual = Some(true);
-        } else if command.starts_with(LOG) {
-            if has_any_args(command) {
-                return Err(ArgParsingError::UnexpectedCommandArgs(LOG.to_owned()))
+        } else if let Some(value) = command.strip_prefix(LOG) {
+            let value = value.trim();
+            if value.is_empty() {
+                log = Some(LogOption::new(None));
+            } else {
+                log = Some(LogOption::new(Some(value.to_owned())));
             }
-            log = Some(true);
         } else if let Some(value) = command.strip_prefix(COMPRARE_LEVEL) {
             let compare_num = utils::parse_usize_value(value, MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL);
             if compare_num.is_none() {
@@ -232,8 +239,8 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
         return Err(ArgParsingError::MissingTargetDirs);
     }
 
-    if let Some(_log) = log {
-        if config_name_to_save.is_none() && config_name_to_load.is_none() && _log {
+    if let Some(log) = &args_builder.log {
+        if config_name_to_save.is_none() && config_name_to_load.is_none() && log.should_log {
             println!("\n{}","Logging will be ignored, since no config file was specified.".yellow());
         }
     }
@@ -293,9 +300,12 @@ fn convert_to_absolute(s: &str) -> String {
 // In this order of importance.
 fn combine_specified_config_options(custom_config: Option<ConfigurationBuilder>, dirs: Option<Vec<String>>, exclude_dirs: Option<Vec<String>>,
         languages_of_interest: Option<Vec<String>>, threads: Option<Threads>, braces_as_code: Option<bool>, search_in_dotted: Option<bool>,
-        show_faulty_files: Option<bool>, no_keywords: Option<bool>, no_visual: Option<bool>, log: Option<bool>, compare_level: Option<usize>) 
+        show_faulty_files: Option<bool>, no_keywords: Option<bool>, no_visual: Option<bool>, log: Option<LogOption>, compare_level: Option<usize>) 
 -> ConfigurationBuilder 
 {
+    if log.is_some() {
+        println!("gtx");
+    }
     let mut args_builder = ConfigurationBuilder::new(dirs, exclude_dirs, languages_of_interest, threads, braces_as_code,
          search_in_dotted, show_faulty_files, no_keywords, no_visual, log, compare_level);
     if let Some(x) = custom_config {
@@ -322,14 +332,14 @@ pub struct ConfigurationBuilder {
     pub should_show_faulty_files: Option<bool>,
     pub no_keywords:              Option<bool>,
     pub no_visual:                Option<bool>,
-    pub log:                      Option<bool>,
+    pub log:                      Option<LogOption>,
     pub compare_level:            Option<usize>,
 }
 
 impl ConfigurationBuilder {
     pub fn new(dirs: Option<Vec<String>>, exclude_dirs: Option<Vec<String>>, languages_of_interest: Option<Vec<String>>, threads: Option<Threads>,
              braces_as_code: Option<bool>, should_search_in_dotted: Option<bool>, should_show_faulty_files: Option<bool>,
-             no_keywords: Option<bool>, no_visual: Option<bool>, log: Option<bool>, compare_level: Option<usize>) 
+             no_keywords: Option<bool>, no_visual: Option<bool>, log: Option<LogOption>, compare_level: Option<usize>) 
     -> ConfigurationBuilder 
     {
         ConfigurationBuilder {
@@ -380,7 +390,7 @@ impl ConfigurationBuilder {
             should_show_faulty_files: self.should_show_faulty_files.unwrap_or(DEF_SHOW_FAULTY_FILES),
             no_keywords: self.no_keywords.unwrap_or(DEF_NO_KEYWORDS),
             no_visual: self.no_visual.unwrap_or(DEF_NO_VISUAL),
-            log: self.log.unwrap_or(DEF_LOG),
+            log: self.log.clone().unwrap_or(LogOption::default()),
             compare_level: self.compare_level.unwrap_or(DEF_COMPARE_LEVEL),
             config_name_to_save: None,
             config_name_to_load: None
@@ -401,7 +411,7 @@ impl Configuration {
             should_show_faulty_files: DEF_SHOW_FAULTY_FILES,
             no_keywords: DEF_NO_KEYWORDS,
             no_visual: DEF_NO_VISUAL,
-            log: DEF_LOG,
+            log: LogOption::default(),
             compare_level: DEF_COMPARE_LEVEL,
             config_name_to_save: None,
             config_name_to_load: None
@@ -453,6 +463,11 @@ impl Configuration {
         self.no_visual = should_enable_visuals;
         self
     }
+
+    pub fn set_log_option(&mut self, log: LogOption) -> &mut Self {
+        self.log = log;
+        self
+    }
 }
 
 impl Threads {
@@ -475,12 +490,12 @@ impl Threads {
         // We may actually use one more thread than the available ones, it seems to help a bit
         if threads <= 4 {
             Threads {
-                producers: 2,
+                producers: 1,
                 consumers: 3
             }
         } else if threads <= 8 {
             Threads {
-                producers: 3,
+                producers: 2,
                 consumers: 6
             }
         } else {
@@ -488,6 +503,22 @@ impl Threads {
                 producers: 3,
                 consumers: 8
             }
+        }
+    }
+}
+
+impl LogOption {
+    pub fn new(log_name: Option<String>) -> Self {
+        LogOption {
+            should_log: true,
+            name: log_name,
+        }
+    }
+
+    pub fn default() -> Self {
+        LogOption {
+            should_log: false,
+            name: None
         }
     }
 }
@@ -562,6 +593,10 @@ mod tests {
                 create_config_from_args("./ --languages a,b,c").unwrap());
         assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_languages_of_interest(vec!["a".to_owned()]),
                 create_config_from_args("./ --languages a, ").unwrap());
+        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_log_option(LogOption::new(Some("this is a test".to_owned()))),
+                create_config_from_args("./ --log   this is a test ").unwrap());
+        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_log_option(LogOption::new(None)),
+                create_config_from_args("./ --log  ").unwrap());
     }
 
     #[test]

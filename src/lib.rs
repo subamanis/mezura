@@ -167,7 +167,7 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     result_printer::format_and_print_results(&mut content_info_map, &mut languages_metadata_map, &final_stats, 
         &existing_log_contents, &datetime_now, &config);
 
-    if config.log {
+    if config.log.should_log {
         if let Some(path) = log_file_path {
             io_handler::log_stats(&path, &existing_log_contents, &final_stats, &datetime_now, &config);
         }

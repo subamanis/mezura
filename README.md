@@ -129,12 +129,14 @@ Below there is a list with all the commands-flags that the program accepts.
     the vertical lines that reprisent the percentages.
 
 --log 
-    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
+    Can take 0..n words as arguments in the cmd.
+    If specified in a configuration file use 'true' or 'yes' to enable,
     or 'no' to disable. Default: no 
 
     This flag only works if a configuration file is loaded. Specifies that a new log entry should be made
     with the stats of this program execution, inside the appropriate file in the 'data/logs' directory.
     If not log file exists for this configuration, one is created.
+    All the provided arguments are used as a description of the log entry.
 
 --compare
     1 argument: a number between 0 and 10. Default: 1

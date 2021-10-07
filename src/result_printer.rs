@@ -199,20 +199,23 @@ fn print_visual_overview(sorted_language_vec: &mut Vec<String>, content_info_map
 fn print_comparison_to_previous_runs(final_stats: &FinalStats, log_content: &str, num_of_entries: usize, datetime_now: &DateTime<Local>) {
     println!("\n{}.\n", "Progress".underline().bold());
 
-    let (stat_entries, dates) = parse_N_previous_entries(log_content, num_of_entries);
+    let log_entries = parse_N_previous_entries(log_content, num_of_entries);
 
     let mut comparison_str = String::with_capacity(200);
-    for (i,entry) in stat_entries.iter().enumerate() {
-        let then = (&dates[i]).to_owned();
-        let then_str = then.naive_local().to_string();
-        let duration = datetime_now.signed_duration_since(then);
+    for entry in log_entries.iter() {
+        let duration = datetime_now.signed_duration_since(entry.datetime);
         let (days, hours, minutes) = split_minutes_to_D_H_M(duration.num_minutes());
-        comparison_str.push_str(&format!("{} {} ({} days, {} hours and {} minutes ago)\n","->".bold(), then_str, days, hours, minutes));
+        if let Some(name) = &entry.name {
+            comparison_str.push_str(&format!("{} \"{}\" ({} days, {} hours and {} minutes ago)\n","->".bold(), name, days, hours, minutes));
+        } else {
+            let then_str = entry.datetime.naive_local().to_string();
+            comparison_str.push_str(&format!("{} {} ({} days, {} hours and {} minutes ago)\n","->".bold(), then_str, days, hours, minutes));
+        }
         comparison_str.push_str(&format!("     Files: {}({}%) Lines: {}({}%) {{Code: {}({}%), Extra: {}({}%)}}\n\n",
-                with_seperators(entry.files), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.files, final_stats.files)),
-                with_seperators(entry.lines), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.lines, final_stats.lines)),
-                with_seperators(entry.code_lines), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.code_lines, final_stats.code_lines)),
-                with_seperators(entry.extra_lines), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.extra_lines, final_stats.extra_lines)),
+                with_seperators(entry.stats.files), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.files, final_stats.files)),
+                with_seperators(entry.stats.lines), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.lines, final_stats.lines)),
+                with_seperators(entry.stats.code_lines), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.code_lines, final_stats.code_lines)),
+                with_seperators(entry.stats.extra_lines), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.extra_lines, final_stats.extra_lines)),
         ));
     }
     print!("{}", comparison_str);
@@ -260,23 +263,37 @@ fn difference_as_signed_percentage_str_of_f64(older: f64, newer: f64) -> String 
     sign + &round_2(percentage).to_string()
 }
 
-fn parse_N_previous_entries(log_content: &str, n: usize) -> (Vec<FinalStats>, Vec<DateTime<Local>>) {
-    let mut entries = Vec::new();
-    let mut dates = Vec::new();
+#[derive(Debug)]
+struct LogEntry {
+    name: Option<String>,
+    stats: FinalStats,
+    datetime: DateTime<Local>,
+}
+
+fn parse_N_previous_entries(log_content: &str, n: usize) -> Vec<LogEntry> {
+    let mut log_entries = Vec::with_capacity(15);
     let (mut files, mut lines, mut code_lines, mut extra_lines, mut bytes_size) = (0, 0, 0, 0, 0);
     let mut counter = 0;
     let mut is_expecting_date = false;
+    let mut entry_name = None;
+    let mut datetime = chrono::Local::now();
 
     for line in log_content.lines() {
         let line = line.trim_start();
         if is_expecting_date {
-            let datetime = chrono::DateTime::parse_from_str(line, "%Y-%m-%d %H:%M:%S %z").unwrap();
-            dates.push(datetime.with_timezone(&Local));
+            let fixed_datetime = chrono::DateTime::parse_from_str(line, "%Y-%m-%d %H:%M:%S %z").unwrap();
+            datetime = fixed_datetime.with_timezone(&Local);
             is_expecting_date = false;
         }
 
-        if line.starts_with("===>") {
+        if let Some(entry) = line.strip_prefix("===>") {
             is_expecting_date = true;
+            let _entry = entry.trim();
+            if !_entry.is_empty() {
+                entry_name = Some(_entry.to_owned());
+            } else {
+                entry_name = None;
+            }
         } else if let Some(value) = line.strip_prefix(FILES) {
             files = value.trim().parse::<usize>().unwrap();
         } else if let Some(value) = line.strip_prefix(LINES) {
@@ -289,14 +306,15 @@ fn parse_N_previous_entries(log_content: &str, n: usize) -> (Vec<FinalStats>, Ve
             bytes_size = value.trim().parse::<usize>().unwrap();
         } else if let Some(value) = line.strip_prefix(AVERAGE_SIZE) {
             let bytes_average_size = value.trim().parse::<usize>().unwrap();
-            entries.push(FinalStats::new_extended(files, lines, code_lines, extra_lines, bytes_size, bytes_average_size));
+            let stats = FinalStats::new_extended(files, lines, code_lines, extra_lines, bytes_size, bytes_average_size);
+            log_entries.push(LogEntry{name: entry_name.clone(), stats, datetime: datetime.clone()});
 
             counter += 1;
-            if counter == n {return (entries, dates)}
+            if counter == n {return log_entries}
         }
     }
 
-    (entries, dates)
+    log_entries
 } 
 
 fn get_keywords_as_str(keyword_occurencies: &HashMap<String,usize>, max_files_num_size: usize) -> String {
@@ -593,6 +611,8 @@ fn get_biggest_prefix_standard_spaces(sorted_language_names: &[String], language
 mod tests {
     use std::str::FromStr;
 
+    use crate::{config_manager::LogOption, io_handler::log_stats};
+
     use super::*;
 
     #[test]
@@ -765,46 +785,80 @@ mod tests {
 
     #[test]
     fn test_parse_N_previous_entries() {
-        let contents = utils::extract_file_contents(&(io_handler::DATA_DIR.to_owned()+"/../test_dir/logs/test")).unwrap();
-        let (entries, dates) = parse_N_previous_entries(&contents, 3);
+        let contents = utils::extract_file_contents(&(io_handler::DATA_DIR.to_owned()+"/../test_dir/logs/test1")).unwrap();
+        let log_entries = parse_N_previous_entries(&contents, 3);
 
-        assert_eq!(10, entries[0].files);
-        assert_eq!(1000, entries[0].lines);
-        assert_eq!(100, entries[0].code_lines);
-        assert_eq!(100, entries[0].extra_lines);
-        assert_eq!(100000, entries[0].bytes_size);
-        assert_eq!(100.0, entries[0].size);
-        assert_eq!("KBs".to_owned(), entries[0].size_measurement);
-        assert_eq!(10000, entries[0].bytes_average_size);
-        assert_eq!(10.0, entries[0].average_size);
-        assert_eq!("KBs".to_owned(), entries[0].average_size_measurement);
+        assert_eq!(10, log_entries[0].stats.files);
+        assert_eq!(1000, log_entries[0].stats.lines);
+        assert_eq!(100, log_entries[0].stats.code_lines);
+        assert_eq!(100, log_entries[0].stats.extra_lines);
+        assert_eq!(100000, log_entries[0].stats.bytes_size);
+        assert_eq!(100.0, log_entries[0].stats.size);
+        assert_eq!("KBs".to_owned(), log_entries[0].stats.size_measurement);
+        assert_eq!(10000, log_entries[0].stats.bytes_average_size);
+        assert_eq!(10.0, log_entries[0].stats.average_size);
+        assert_eq!("KBs".to_owned(), log_entries[0].stats.average_size_measurement);
         let datetime: DateTime<Local> = chrono::DateTime::from_str("2021-09-12 16:42:00 +0300").unwrap();
-        assert_eq!(datetime, dates[0]);
+        assert_eq!(datetime, log_entries[0].datetime);
+        assert_eq!(Some("entry one".to_owned()),log_entries[0].name);
 
-        assert_eq!(11, entries[1].files);
-        assert_eq!(1111, entries[1].lines);
-        assert_eq!(111, entries[1].code_lines);
-        assert_eq!(111, entries[1].extra_lines);
-        assert_eq!(111100, entries[1].bytes_size);
-        assert_eq!(111.1, entries[1].size);
-        assert_eq!("KBs".to_owned(), entries[1].size_measurement);
-        assert_eq!(11100, entries[1].bytes_average_size);
-        assert_eq!(11.1, entries[1].average_size);
-        assert_eq!("KBs".to_owned(), entries[1].average_size_measurement);
+        assert_eq!(11, log_entries[1].stats.files);
+        assert_eq!(1111, log_entries[1].stats.lines);
+        assert_eq!(111, log_entries[1].stats.code_lines);
+        assert_eq!(111, log_entries[1].stats.extra_lines);
+        assert_eq!(111100, log_entries[1].stats.bytes_size);
+        assert_eq!(111.1, log_entries[1].stats.size);
+        assert_eq!("KBs".to_owned(), log_entries[1].stats.size_measurement);
+        assert_eq!(11100, log_entries[1].stats.bytes_average_size);
+        assert_eq!(11.1, log_entries[1].stats.average_size);
+        assert_eq!("KBs".to_owned(), log_entries[1].stats.average_size_measurement);
         let datetime: DateTime<Local> = chrono::DateTime::from_str("2021-09-12 16:23:50 +03:00").unwrap();
-        assert_eq!(datetime, dates[1]);
+        assert_eq!(datetime, log_entries[1].datetime);
+        assert_eq!(None,log_entries[1].name);
 
-        assert_eq!(12, entries[2].files);
-        assert_eq!(1222, entries[2].lines);
-        assert_eq!(122, entries[2].code_lines);
-        assert_eq!(122, entries[2].extra_lines);
-        assert_eq!(122200, entries[2].bytes_size);
-        assert_eq!(122.2, entries[2].size);
-        assert_eq!("KBs".to_owned(), entries[2].size_measurement);
-        assert_eq!(12200, entries[2].bytes_average_size);
-        assert_eq!(12.2, entries[2].average_size);
-        assert_eq!("KBs".to_owned(), entries[2].average_size_measurement);
+        assert_eq!(12, log_entries[2].stats.files);
+        assert_eq!(1222, log_entries[2].stats.lines);
+        assert_eq!(122, log_entries[2].stats.code_lines);
+        assert_eq!(122, log_entries[2].stats.extra_lines);
+        assert_eq!(122200, log_entries[2].stats.bytes_size);
+        assert_eq!(122.2, log_entries[2].stats.size);
+        assert_eq!("KBs".to_owned(), log_entries[2].stats.size_measurement);
+        assert_eq!(12200, log_entries[2].stats.bytes_average_size);
+        assert_eq!(12.2, log_entries[2].stats.average_size);
+        assert_eq!("KBs".to_owned(), log_entries[2].stats.average_size_measurement);
         let datetime: DateTime<Local> = chrono::DateTime::from_str("2021-09-12 04:01:56 +03:00").unwrap();
-        assert_eq!(datetime, dates[2]);
+        assert_eq!(datetime, log_entries[2].datetime);
+        assert_eq!(Some("entry three".to_owned()),log_entries[2].name);
+    }
+
+    #[test]
+    fn test_log_creation_and_reading() -> std::io::Result<()> {
+        let test_log_dir = env!("CARGO_MANIFEST_DIR").to_owned() + "/test_dir/" + "logs/test2";
+        if Path::new(&test_log_dir).exists() {
+            std::fs::remove_dir(&test_log_dir);
+        }
+
+        let mut config = Configuration::new(vec!["./".to_owned()]);
+        config.set_log_option(LogOption::new(Some("test name".to_owned())));
+        let final_stats = FinalStats::new(10, 1000, 100, 100);
+
+        log_stats(&test_log_dir, &None, &final_stats, &chrono::Local::now(), &config);
+
+        let contents = utils::extract_file_contents(&test_log_dir).unwrap();
+        let log_entries = parse_N_previous_entries(&contents, 1);
+
+        assert_eq!(10, log_entries[0].stats.files);
+        assert_eq!(1000, log_entries[0].stats.lines);
+        assert_eq!(100, log_entries[0].stats.code_lines);
+        assert_eq!(900, log_entries[0].stats.extra_lines);
+        assert_eq!(100, log_entries[0].stats.bytes_size);
+        assert_eq!(100.0, log_entries[0].stats.size);
+        assert_eq!("Bs".to_owned(), log_entries[0].stats.size_measurement);
+        assert_eq!(10, log_entries[0].stats.bytes_average_size);
+        assert_eq!(10.0, log_entries[0].stats.average_size);
+        assert_eq!("Bs".to_owned(), log_entries[0].stats.average_size_measurement);
+        assert_eq!(Some("test name".to_owned()),log_entries[0].name);
+
+        Ok(())
     }
 }

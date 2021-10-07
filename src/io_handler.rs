@@ -4,8 +4,7 @@ use chrono::{DateTime, Local};
 use colored::*;
 use lazy_static::lazy_static;
 
-use crate::{Configuration, FinalStats, config_manager::{self, ConfigurationBuilder, MAX_COMPARE_LEVEL, MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE,
-     MIN_COMPARE_LEVEL, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE, Threads}, domain::*, utils};
+use crate::{Configuration, FinalStats, config_manager::{self, ConfigurationBuilder, LogOption, MAX_COMPARE_LEVEL, MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_COMPARE_LEVEL, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE, Threads}, domain::*, utils};
 
 
 const DEFAULT_CONFIG_FILE_NAME : &str = "default";
@@ -174,7 +173,14 @@ pub fn parse_config_file(file_name: Option<&str>, data_dir: Option<String>) -> R
             } else if id == config_manager::NO_VISUAL {
                 no_visual = read_bool_value(&mut reader, &mut buf);
             } else if id == config_manager::LOG {
-                log = read_bool_value(&mut reader, &mut buf);
+                buf.clear();
+                reader.read_line(&mut buf);
+                let name = &buf.trim().to_lowercase();
+                if name == "yes" || name == "true" {
+                    log = Some(LogOption::new(None));
+                } else if name != "no" && name != "false"{
+                    log = Some(LogOption::new(Some(name.to_owned())));
+                }
             } else if id == config_manager::COMPRARE_LEVEL {
                 buf.clear();
                 reader.read_line(&mut buf);
@@ -227,7 +233,15 @@ pub fn save_config_to_file(config_name: &str, config: &Configuration, config_dir
     writer.write(if config.no_visual {b"yes"} else {b"no"});
 
     writer.write(&[b"\n\n===> ",config_manager::LOG.as_bytes(),b"\n"].concat());
-    writer.write(if config.log {b"yes"} else {b"no"});
+    if config.log.should_log {
+        if let Some(name) = &config.log.name {
+            writer.write(name.as_bytes());
+        } else {
+            writer.write(b"yes");
+        }
+    } else {
+        writer.write(b"no");
+    }
 
     writer.write(&[b"\n\n===> ",config_manager::COMPRARE_LEVEL.as_bytes(),b"\n"].concat());
     writer.write(config.compare_level.to_string().as_bytes());
@@ -253,7 +267,7 @@ pub fn log_stats(path: &str, contents: &Option<String>, final_stats: &FinalStats
 
 
 fn write_current_log(writer: &mut BufWriter<File>, config: &Configuration, datetime_now: &DateTime<Local>, final_stats: &FinalStats) {
-    writer.write(b"===>Entry\n");
+    writer.write(format!("===>{}\n",config.log.name.clone().unwrap_or(String::new())).as_bytes());
     writer.write(datetime_now.format("%Y-%m-%d %H:%M:%S %z").to_string().as_bytes());
     writer.write(b"\n");
     writer.write(b"Configuration:\n");
@@ -542,4 +556,5 @@ mod tests {
 
         Ok(())
     }
+
 }
