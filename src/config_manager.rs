@@ -1,8 +1,8 @@
-use std::{path::Path, process};
+use std::{path::Path};
 
 use colored::Colorize;
 
-use crate::{help_message_printer, io_handler, utils};
+use crate::{io_handler, utils};
 
 // Application version, to be displayed at startup and with --help command
 pub const VERSION_ID : &str = "v1.0.0-beta1"; 
@@ -82,37 +82,14 @@ pub enum ArgParsingError {
     NonExistantConfig(String)
 }
 
-pub fn read_args_cmd() -> Result<Configuration,ArgParsingError> {
-    let args  = std::env::args().skip(1).collect::<Vec<String>>();
-    if args.is_empty() {return Err(ArgParsingError::NoArgsProvided)}
-    let line = args.join(" ");
 
-    create_config_from_args(&line)
-}
-
-pub fn read_args_console() -> Result<Configuration,ArgParsingError> {
-    let mut line = String::with_capacity(30);
-    std::io::stdin().read_line(&mut line).unwrap();
-
-    create_config_from_args(&line)
-}
-
+// Empty line argument is not supposed to be allowed, since this check is being performed in main
 pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError> {
-    let line = line.trim();
-    if line.is_empty() {
-        return Err(ArgParsingError::NoArgsProvided)
-    }
-
-    if line.contains("--help") {
-        help_message_printer::print_appropriate_help_message(line);
-        process::exit(0);
-    }
-
     let mut dirs = None;
     let mut options = line.split("--");
 
     if line.trim().starts_with("--") {
-        //ignoring the empty first element
+        //ignoring the empty first element that is caused by splitting
         options.next();
     } else {
         let parse_result = parse_dirs(options.next().unwrap());
@@ -262,7 +239,7 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
 }
 
 fn has_any_args(command: &str) -> bool {
-    command.split(' ').skip(1).filter_map(|x| utils::get_if_not_empty(x.trim())).count() != 0
+    command.split(' ').skip(1).filter_map(|x| utils::get_trimmed_if_not_empty(x)).count() != 0
 }
 
 fn parse_dirs(s: &str) -> Result<Vec<String>, ArgParsingError> {
@@ -549,8 +526,8 @@ mod tests {
 
     #[test]
     fn test_cmd_arg_parsing() {
-        assert_eq!(Err(ArgParsingError::NoArgsProvided), create_config_from_args(""));
-        assert_eq!(Err(ArgParsingError::NoArgsProvided), create_config_from_args("   "));
+        // assert_eq!(Err(ArgParsingError::NoArgsProvided), create_config_from_args(""));
+        // assert_eq!(Err(ArgParsingError::NoArgsProvided), create_config_from_args("   "));
         assert_eq!(Err(ArgParsingError::InvalidPath("random".to_owned())), create_config_from_args("random"));
         assert_eq!(Err(ArgParsingError::InvalidPath("./ random".to_owned())), create_config_from_args("./ random"));
         assert_eq!(Err(ArgParsingError::InvalidPath("./ -show-faulty-files".to_owned())), create_config_from_args("--dirs ./ -show-faulty-files"));

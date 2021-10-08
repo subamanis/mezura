@@ -2,14 +2,26 @@ use std::{path::Path, process, time::{Instant}};
 
 use colored::*;
 
-use mezura::{config_manager, io_handler, *, self};
+use mezura::{*, self, config_manager::{self, ArgParsingError}, io_handler};
 
 fn main() {
     // Only on windows, it is required to enable a virtual terminal environment, so that the colors will display correctly
     #[cfg(target_os = "windows")]
     control::set_virtual_terminal(true).unwrap();
 
-    let mut config = match config_manager::read_args_cmd() {
+    let args_str = read_args_as_str();
+    if let Err(x) = args_str {
+        println!("\n{}",x.formatted());
+        return;
+    }
+
+    let args_str = args_str.unwrap();
+    if args_str.contains("--help") {
+        help_message_printer::print_appropriate_help_message(&args_str);
+        return;
+    }
+
+    let mut config = match config_manager::create_config_from_args(&args_str) {
         Ok(config) => config,
         Err(x) => {
             println!("\n{}",x.formatted());
@@ -21,8 +33,6 @@ fn main() {
         println!("{}",x);
         process::exit(1);
     }
-
-  
 
     let languages_map = match io_handler::parse_supported_languages_to_map(&mut config.languages_of_interest) {
         Err(x) => {
@@ -77,4 +87,12 @@ fn verify_required_dirs() -> Result<(),String> {
     } 
     
     Ok(())
+}
+
+fn read_args_as_str() -> Result<String,ArgParsingError> {
+    let args = std::env::args().skip(1)
+            .filter_map(|arg| get_trimmed_if_not_empty(&arg))
+            .collect::<Vec<String>>();
+    if args.is_empty() {return Err(ArgParsingError::NoArgsProvided)}
+    Ok(args.join(" ").trim().to_owned())
 }

@@ -11,7 +11,7 @@ pub fn round_2(num: f64) -> f64 {
 }
 
 pub fn parse_languages_to_vec(s: &str) -> Vec<String> {
-    s.split(',').filter_map(|x| get_if_not_empty(&remove_dot_prefix(x.trim()).to_lowercase())).collect::<Vec<_>>()
+    s.split(',').filter_map(|x| get_trimmed_if_not_empty(&remove_dot_prefix(x.trim()).to_lowercase())).collect::<Vec<_>>()
 }
 
 pub fn parse_paths_to_vec(s: &str) -> Vec<String> {
@@ -19,7 +19,7 @@ pub fn parse_paths_to_vec(s: &str) -> Vec<String> {
     .split(',')
     .filter_map(|x| {
         let cleansed = &x.trim().replace("\\", "/");
-        get_if_not_empty(cleansed.strip_prefix('"').unwrap_or(cleansed).strip_suffix('"').unwrap_or(cleansed))
+        get_trimmed_if_not_empty(cleansed.strip_prefix('"').unwrap_or(cleansed).strip_suffix('"').unwrap_or(cleansed))
     })
     .collect::<Vec<_>>()
 }
@@ -37,7 +37,7 @@ pub fn parse_usize_value(s: &str, min: usize, max: usize) -> Option<usize> {
 }
 
 pub fn parse_two_usize_values(s: &str, min1: usize, max1: usize, min2: usize, max2: usize) -> Option<(usize,usize)> {
-    let elements = s.split_whitespace().filter_map(|x| get_if_not_empty(x.trim())).collect::<Vec<_>>();
+    let elements = s.split_whitespace().filter_map(|x| get_trimmed_if_not_empty(x)).collect::<Vec<_>>();
     if elements.len() != 2 {
         return None
     }
@@ -58,7 +58,8 @@ pub fn is_valid_path(s: &str) -> bool {
     p.is_dir() || p.is_file()
 }
 
-pub fn get_if_not_empty(str: &str) -> Option<String> {
+pub fn get_trimmed_if_not_empty(str: &str) -> Option<String> {
+    let str = str.trim();
     if str.is_empty() {None}
     else {Some(str.to_owned())}
 }
