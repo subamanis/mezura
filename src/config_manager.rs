@@ -109,10 +109,13 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
     }
 
     let mut dirs = None;
-    let options = line.split("--").collect::<Vec<_>>();
+    let mut options = line.split("--");
 
-    if !line.trim().starts_with("--") {
-        let parse_result = parse_dirs(options[0]);
+    if line.trim().starts_with("--") {
+        //ignoring the empty first element
+        options.next();
+    } else {
+        let parse_result = parse_dirs(options.next().unwrap());
         if let Ok(x) = parse_result {
             if x.is_empty() {
                 return Err(ArgParsingError::IncorrectCommandArgs(DIRS.to_owned()));
@@ -128,7 +131,7 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
          mut search_in_dotted, mut show_faulty_files, mut config_name_to_save, mut no_visual,
          mut log, mut compare_level, mut config_name_to_load, mut no_keywords) 
          = (None, None, None, None, None, None, None, None, None, None, None, None);
-    for command in options.into_iter().skip(1) {
+    for command in options {
          if let Some(_dirs) = command.strip_prefix(DIRS) {
             if dirs.is_some() {
                 return Err(ArgParsingError::DoublePath);
