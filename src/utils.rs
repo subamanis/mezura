@@ -1,5 +1,15 @@
 use crate::*;
-use std::{fmt::Debug};
+
+
+#[macro_export]
+macro_rules! hashmap {
+    ($( $key: expr => $val: expr ),*) => {{
+        #[allow(unused_mut)]
+        let mut map = ::std::collections::HashMap::new();
+        $( map.insert($key, $val); )*
+        map
+    }}
+}
 
 
 pub fn round_1(num: f64) -> f64 {
@@ -10,13 +20,23 @@ pub fn round_2(num: f64) -> f64 {
     (num * 100.0).round() / 100.0
 }
 
+
 pub fn parse_languages_to_vec(s: &str) -> Vec<String> {
-    s.split(',').filter_map(|x| get_trimmed_if_not_empty(&remove_dot_prefix(x.trim()).to_lowercase())).collect::<Vec<_>>()
+    fn remove_dot_prefix(str: &str) -> &str {
+        if let Some(stripped) = str.strip_prefix('.') {
+            stripped
+        } else {
+            str
+        }
+    }
+
+    s.split(',')
+    .filter_map(|x| get_trimmed_if_not_empty(&remove_dot_prefix(x.trim()).to_lowercase()))
+    .collect::<Vec<_>>()
 }
 
 pub fn parse_paths_to_vec(s: &str) -> Vec<String> {
-    s
-    .split(',')
+    s.split(',')
     .filter_map(|x| {
         let cleansed = &x.trim().replace("\\", "/");
         get_trimmed_if_not_empty(cleansed.strip_prefix('"').unwrap_or(cleansed).strip_suffix('"').unwrap_or(cleansed))
@@ -53,27 +73,20 @@ pub fn parse_two_usize_values(s: &str, min1: usize, max1: usize, min2: usize, ma
     None
 }
 
-pub fn is_valid_path(s: &str) -> bool {
-    let p = Path::new(s.trim());
-    p.is_dir() || p.is_file()
-}
-
 pub fn get_trimmed_if_not_empty(str: &str) -> Option<String> {
     let str = str.trim();
     if str.is_empty() {None}
     else {Some(str.to_owned())}
 }
 
-pub fn print_contents<T>(vec :&[T]) where T : Debug {
-    if vec.is_empty() {
-        println!("[]");
-        return;
-    }
+pub fn split_line_on_whitespace(line: &str) -> Vec<String> {
+    line.split_whitespace().filter_map(|x| get_trimmed_if_not_empty(x)).collect::<Vec<_>>()
+}
 
-    print!("{:?}",vec[0]);
-    for item in vec.iter().skip(1) {
-        print!(", \"{:?}\" ", item);
-    }
+
+pub fn is_valid_path(s: &str) -> bool {
+    let p = Path::new(s.trim());
+    p.is_dir() || p.is_file()
 }
 
 pub fn extract_file_contents(file_path: &str) -> Option<String> {
@@ -96,6 +109,7 @@ pub fn get_file_extension(path: &Path) -> Option<&str> {
         None => None
     }
 }
+
 
 pub fn with_seperators(i: usize) -> String {
     let mut s = String::new();
@@ -134,24 +148,6 @@ pub fn num_of_seperators(i: usize) -> usize {
     commas
 }
 
-#[macro_export]
-macro_rules! hashmap {
-    ($( $key: expr => $val: expr ),*) => {{
-        #[allow(unused_mut)]
-        let mut map = ::std::collections::HashMap::new();
-        $( map.insert($key, $val); )*
-        map
-    }}
-}
-
-
-fn remove_dot_prefix(str: &str) -> &str {
-    if let Some(stripped) = str.strip_prefix('.') {
-        stripped
-    } else {
-        str
-    }
-}
 
 
 #[cfg(test)]

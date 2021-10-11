@@ -398,6 +398,8 @@ impl Configuration {
         }
     }
 
+    //Setters used mainly in tests, for the ability to chain many config changes
+
     pub fn set_config_names_to_save_and_load(&mut self, to_save: Option<String>, to_load: Option<String>) -> &mut Self {
         self.config_name_to_save = to_save;
         self.config_name_to_load = to_load;
@@ -470,12 +472,12 @@ impl Threads {
         // We may actually use one more thread than the available ones, it seems to help a bit
         if threads <= 4 {
             Threads {
-                producers: 1,
+                producers: 2,
                 consumers: 3
             }
         } else if threads <= 8 {
             Threads {
-                producers: 2,
+                producers: 3,
                 consumers: 6
             }
         } else {
@@ -526,8 +528,6 @@ mod tests {
 
     #[test]
     fn test_cmd_arg_parsing() {
-        // assert_eq!(Err(ArgParsingError::NoArgsProvided), create_config_from_args(""));
-        // assert_eq!(Err(ArgParsingError::NoArgsProvided), create_config_from_args("   "));
         assert_eq!(Err(ArgParsingError::InvalidPath("random".to_owned())), create_config_from_args("random"));
         assert_eq!(Err(ArgParsingError::InvalidPath("./ random".to_owned())), create_config_from_args("./ random"));
         assert_eq!(Err(ArgParsingError::InvalidPath("./ -show-faulty-files".to_owned())), create_config_from_args("--dirs ./ -show-faulty-files"));

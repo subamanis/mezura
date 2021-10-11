@@ -349,7 +349,7 @@ pub struct ParsableFile {
 
 
 impl PersistentAppPaths {
-    //Persistent path: 
+    //Persistent paths: 
     // Windows:  C:/Users/<user_name>/AppData/Roaming/mezura
     // Linux:    /home/<user_name>/.local/share/mezura
     // MacOs:    /Users/<user_name>/Library/Application Support/mezura

@@ -66,9 +66,6 @@ fn main() {
 }
 
 
-
-
-
 fn read_baked_in_languages_dir() -> HashMap<String, Language> {
     let mut lang_files = HashMap::with_capacity(20);
     for file in include_dir!("data/languages").files.iter() {

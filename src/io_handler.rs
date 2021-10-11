@@ -1,21 +1,11 @@
-use std::{borrow::Cow, collections::{HashMap as HashMap}, fs::{self, File}, io::{self, BufRead, BufReader, BufWriter, Write}, path::Path};
+use std::{borrow::Cow, collections::HashMap, fs::{self, File}, io::{self, BufRead, BufReader, BufWriter, Write}, path::Path};
 
 use chrono::{DateTime, Local};
 use colored::*;
 
 use crate::{Configuration, DEFAULT_CONFIG_NAME, FinalStats, PERSISTENT_APP_PATHS, config_manager::{self, ConfigurationBuilder, LogOption,
-     MAX_COMPARE_LEVEL, MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_COMPARE_LEVEL, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE, Threads}, domain::*, utils};
-
-
-// const DEFAULT_CONFIG_FILE_NAME : &str = "default";
-// const CONFIG_DIR : &str = "/config/";
-// const LANGUAGE_DIR : &str = "/languages/";
-// const TEST_DIR : &str = "/test_dir/";
-
-// lazy_static! {
-//     pub static ref DATA_DIR : String = get_working_dir() + "/data";
-//     pub static ref LOG_DIR  : String = find_or_create_log_dir(); 
-// }
+     MAX_COMPARE_LEVEL, MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_COMPARE_LEVEL, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE, Threads}, domain::*,
+     split_line_on_whitespace, utils};
 
 
 #[derive(Debug)]
@@ -38,6 +28,8 @@ pub enum ConfigFileParseError {
     IOError
 }
 
+
+// --------------------- Languages handling -------------------------
 
 pub fn parse_supported_languages_to_map(target_path: &str, languages_of_interest: &mut Vec<String>)
         -> Result<LanguageDirParseInfo, LanguageDirParseError> 
@@ -121,6 +113,163 @@ pub fn parse_supported_languages_to_map(target_path: &str, languages_of_interest
     Ok(LanguageDirParseInfo::new(language_map, faulty_files, non_existant_languages_of_interest))
 }
 
+fn parse_file_to_language(mut reader :my_reader::BufReader, buffer :&mut String) -> Result<Language,()> {
+    if !reader.read_line_and_compare(buffer, "Language") {return Err(());}
+    if !reader.read_line_exists(buffer) {return Err(());}
+    let lang_name = buffer.trim_end().to_owned();
+    if !reader.read_line_exists(buffer) {return Err(());}
+
+    if !reader.read_line_and_compare(buffer, "Extensions") {return Err(());}
+    let identifiers = match reader.get_line_sliced(buffer) {
+        Ok(x) => x,
+        Err(_) => return Err(())
+    };
+    if !reader.read_line_exists(buffer) {return Err(());}
+
+    if !reader.read_line_and_compare(buffer, "String symbols") {return Err(());}
+    let string_symbols = match reader.get_line_sliced(buffer) {
+        Ok(x) => x,
+        Err(_) => return Err(())
+    };
+    if string_symbols.is_empty() {return Err(());}
+
+    if !reader.read_line_exists(buffer) {return Err(());}
+    if !reader.read_line_and_compare(buffer, "Comment symbol") {return Err(());} 
+    if !reader.read_line_exists(buffer) {return Err(());}
+    let comment_symbol = buffer.trim_end().to_owned();
+    if comment_symbol.is_empty() {return Err(());}
+    
+    let mut multi_start :Option<String> = None;
+    let mut multi_end :Option<String> = None;
+    if reader.read_line_and_compare(buffer, "Multi line comment start") {
+        if !reader.read_line_exists(buffer) {return Err(());}
+        let symbol = buffer.trim_end().to_owned();
+        if symbol.is_empty() {return Err(());}
+        multi_start = Some(symbol);
+        if !reader.read_line_and_compare(buffer, "Multi line comment end") {return Err(());}
+        if !reader.read_line_exists(buffer) {return Err(());}
+        let symbol = buffer.trim_end().to_owned();
+        if symbol.is_empty() {return Err(());}
+        multi_end = Some(symbol);
+        if !reader.read_line_exists(buffer) {return Err(())}
+    }
+    
+    let mut keywords = Vec::new();
+    while reader.read_line_exists(buffer) {
+        if !reader.read_lines_exist(2, buffer) {return Err(());}
+        let name = buffer.trim().to_string().clone();
+        if name.is_empty() {return Err(());}
+        if !reader.read_line_exists(buffer) {return Err(());}
+        let aliases = match reader.get_line_sliced(buffer) {
+            Ok(x) => x,
+            Err(_) => return Err(())
+        };
+        if aliases.is_empty() {return Err(());}
+        
+        let keyword = Keyword {
+            descriptive_name : name,
+            aliases
+        };
+        keywords.push(keyword);
+    }
+    
+    Ok(Language {
+        name: lang_name,
+        extensions: identifiers,
+        string_symbols,
+        comment_symbol,
+        multiline_comment_start_symbol : multi_start,
+        multiline_comment_end_symbol : multi_end,
+        keywords
+    })
+}
+
+pub fn parse_string_to_language(contents: Cow<str>) -> Language {
+    let mut lines = (&contents).lines();
+
+    let (mut mult_start, mut mult_end) = (None, None);
+
+    lines.next();
+    let lang_name = lines.next().unwrap().trim().to_owned();
+    lines.next();
+    lines.next();
+    let extensions = split_line_on_whitespace(lines.next().unwrap());
+    lines.next();
+    lines.next();
+    let string_symbols = split_line_on_whitespace(lines.next().unwrap());
+    lines.next();
+    lines.next();
+    let comment_symbol = lines.next().unwrap().trim().to_owned();
+    if lines.next().unwrap().trim() == "Multi line comment start" {
+        mult_start = Some(lines.next().unwrap().trim().to_owned());
+        lines.next();
+        mult_end = Some(lines.next().unwrap().trim().to_owned());
+    }
+    lines.next();
+
+    let mut keywords = Vec::new();
+    while let Some(x) = lines.next() {
+        if x != "Keyword" {break;} 
+
+        lines.next();
+        let k_name = lines.next().unwrap().trim().to_owned();
+        lines.next();
+        let k_aliases = split_line_on_whitespace(lines.next().unwrap());
+        keywords.push(Keyword{
+            descriptive_name: k_name,
+            aliases: k_aliases
+        });
+    }
+
+    Language::new(lang_name, extensions, string_symbols, comment_symbol, mult_start, mult_end, keywords)
+}
+
+pub fn serialize_language(lang: &Language, path: &str) -> Result<(), io::Error> {
+    let file_path = path.to_string() + "/" + &lang.name + ".txt";
+    let mut writer = BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).open(file_path)?);
+
+    writer.write(b"Language\n");
+    writer.write(lang.name.as_bytes());
+    writer.write(b"\n\n");
+
+    writer.write(b"Extensions\n");
+    writer.write(lang.extensions.join(" ").as_bytes());
+    writer.write(b"\n\n");
+
+    writer.write(b"String symbols\n");
+    writer.write(lang.string_symbols.join(" ").as_bytes());
+    writer.write(b"\n\n");
+
+    writer.write(b"Comment symbol\n");
+    writer.write(lang.comment_symbol.as_bytes());
+    writer.write(b"\n");
+    
+    if let Some(symbol) = &lang.multiline_comment_start_symbol {
+        writer.write(b"Multi line comment start\n");
+        writer.write(symbol.as_bytes());
+        writer.write(b"\n");
+        writer.write(b"Multi line comment end\n");
+        writer.write(lang.multiline_comment_end_symbol.as_ref().unwrap().as_bytes());
+        writer.write(b"\n");
+    }
+    writer.write(b"\n");
+    
+    for keyword in lang.keywords.iter() {
+        writer.write(b"Keyword\n");
+        writer.write(b"    NAME\n    ");
+        writer.write(keyword.descriptive_name.as_bytes());
+        writer.write(b"\n");
+        writer.write(b"    ALIASES\n    ");
+        writer.write(keyword.aliases.join(" ").as_bytes());
+        writer.write(b"\n");
+    }
+
+    Ok(())
+}
+
+
+// ------------------------------ Config handling ------------------------------
+
 pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String>) -> Result<ConfigurationBuilder,ConfigFileParseError> {
     let config_path = if let Some(dir) = config_dir_path {dir} else {PERSISTENT_APP_PATHS.config_dir.clone()};
     let file_name = if let Some(x) = file_name {x} else {DEFAULT_CONFIG_NAME};
@@ -141,17 +290,17 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
             let id = buf.split(' ').nth(1).unwrap_or("").trim();
 
             if id == config_manager::DIRS {
-                let paths = read_lines_to_vec(&mut reader, &mut buf, utils::parse_paths_to_vec);
+                let paths = read_lines_from_file_to_vec(&mut reader, &mut buf, utils::parse_paths_to_vec);
                 if !paths.is_empty() {
                     dirs = Some(paths);
                 }
             } else if id == config_manager::EXCLUDE {
-                let paths = read_lines_to_vec(&mut reader, &mut buf, utils::parse_paths_to_vec);
+                let paths = read_lines_from_file_to_vec(&mut reader, &mut buf, utils::parse_paths_to_vec);
                 if !paths.is_empty() {
                     exclude_dirs = Some(paths);
                 }
             } else if id == config_manager::LANGUAGES {
-                let langs = read_lines_to_vec(&mut reader, &mut buf, utils::parse_languages_to_vec);
+                let langs = read_lines_from_file_to_vec(&mut reader, &mut buf, utils::parse_languages_to_vec);
                 if !langs.is_empty() {
                     languages_of_interest = Some(langs);
                 }
@@ -161,15 +310,15 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                 threads = Some(Threads::from(utils::parse_two_usize_values(&buf,MIN_PRODUCERS_VALUE, MAX_PRODUCERS_VALUE,
                         MIN_CONSUMERS_VALUE, MAX_CONSUMERS_VALUE).unwrap()));
             }else if id == config_manager::BRACES_AS_CODE {
-                braces_as_code = read_bool_value(&mut reader, &mut buf);
+                braces_as_code = read_bool_value_from_file(&mut reader, &mut buf);
             } else if id == config_manager::SHOW_FAULTY_FILES {
-                should_show_faulty_files = read_bool_value(&mut reader, &mut buf);
+                should_show_faulty_files = read_bool_value_from_file(&mut reader, &mut buf);
             } else if id == config_manager::SEARCH_IN_DOTTED {
-                should_search_in_dotted = read_bool_value(&mut reader, &mut buf);
+                should_search_in_dotted = read_bool_value_from_file(&mut reader, &mut buf);
             } else if id == config_manager::NO_KEYWORDS {
-                no_keywords = read_bool_value(&mut reader, &mut buf);
+                no_keywords = read_bool_value_from_file(&mut reader, &mut buf);
             } else if id == config_manager::NO_VISUAL {
-                no_visual = read_bool_value(&mut reader, &mut buf);
+                no_visual = read_bool_value_from_file(&mut reader, &mut buf);
             } else if id == config_manager::LOG {
                 buf.clear();
                 reader.read_line(&mut buf);
@@ -250,6 +399,17 @@ pub fn save_config_to_file(config_name: &str, config: &Configuration, config_pat
     Ok(())
 }
 
+pub fn write_default_config(contents: String) -> Result<(), io::Error> {
+    let file_path = PERSISTENT_APP_PATHS.config_dir.clone() + DEFAULT_CONFIG_NAME;
+    let mut writer = BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).open(file_path)?);
+    writer.write_all(contents.as_bytes());
+
+    Ok(())
+}
+
+
+// ----------------------------------- Log handling ------------------------------------------
+
 pub fn log_stats(path: &str, contents: &Option<String>, final_stats: &FinalStats, datetime_now: &DateTime<Local>, config: &Configuration) -> io::Result<()> {
     let mut writer = std::io::BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(path)?);
 
@@ -262,7 +422,6 @@ pub fn log_stats(path: &str, contents: &Option<String>, final_stats: &FinalStats
 
     Ok(())
 }
-
 
 fn write_current_log(writer: &mut BufWriter<File>, config: &Configuration, datetime_now: &DateTime<Local>, final_stats: &FinalStats) {
     writer.write(format!("===>{}\n",config.log.name.clone().unwrap_or(String::new())).as_bytes());
@@ -285,183 +444,7 @@ fn write_current_log(writer: &mut BufWriter<File>, config: &Configuration, datet
 }
 
 
-fn get_line_as_vec(line: &str) -> Vec<String> {
-    line.split_whitespace()
-    .filter_map(|x| {
-        let x = x.trim();
-        if x.is_empty() {
-            None
-        } else {
-            Some(x.to_owned())
-        }
-    }).collect::<Vec<_>>()
-}
-
-
-pub fn write_default_config(contents: String) -> Result<(), io::Error> {
-    let file_path = PERSISTENT_APP_PATHS.config_dir.clone() + DEFAULT_CONFIG_NAME;
-    let mut writer = BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).open(file_path)?);
-    writer.write_all(contents.as_bytes());
-
-    Ok(())
-}
-
-pub fn serialize_language(lang: &Language, path: &str) -> Result<(), io::Error> {
-    let file_path = path.to_string() + "/" + &lang.name + ".txt";
-    let mut writer = BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).open(file_path)?);
-
-    writer.write(b"Language\n");
-    writer.write(lang.name.as_bytes());
-    writer.write(b"\n\n");
-
-    writer.write(b"Extensions\n");
-    writer.write(lang.extensions.join(" ").as_bytes());
-    writer.write(b"\n\n");
-
-    writer.write(b"String symbols\n");
-    writer.write(lang.string_symbols.join(" ").as_bytes());
-    writer.write(b"\n\n");
-
-    writer.write(b"Comment symbol\n");
-    writer.write(lang.comment_symbol.as_bytes());
-    writer.write(b"\n");
-    
-    if let Some(symbol) = &lang.multiline_comment_start_symbol {
-        writer.write(b"Multi line comment start\n");
-        writer.write(symbol.as_bytes());
-        writer.write(b"\n");
-        writer.write(b"Multi line comment end\n");
-        writer.write(lang.multiline_comment_end_symbol.as_ref().unwrap().as_bytes());
-        writer.write(b"\n");
-    }
-    writer.write(b"\n");
-    
-    for keyword in lang.keywords.iter() {
-        writer.write(b"Keyword\n");
-        writer.write(b"    NAME\n    ");
-        writer.write(keyword.descriptive_name.as_bytes());
-        writer.write(b"\n");
-        writer.write(b"    ALIASES\n    ");
-        writer.write(keyword.aliases.join(" ").as_bytes());
-        writer.write(b"\n");
-    }
-
-    Ok(())
-}
-
-pub fn parse_string_to_language(contents: Cow<str>) -> Language {
-    let mut lines = (&contents).lines();
-
-    let (mut mult_start, mut mult_end) = (None, None);
-
-    lines.next();
-    let lang_name = lines.next().unwrap().trim().to_owned();
-    lines.next();
-    lines.next();
-    let extensions = get_line_as_vec(lines.next().unwrap());
-    lines.next();
-    lines.next();
-    let string_symbols = get_line_as_vec(lines.next().unwrap());
-    lines.next();
-    lines.next();
-    let comment_symbol = lines.next().unwrap().trim().to_owned();
-    if lines.next().unwrap().trim() == "Multi line comment start" {
-        mult_start = Some(lines.next().unwrap().trim().to_owned());
-        lines.next();
-        mult_end = Some(lines.next().unwrap().trim().to_owned());
-    }
-    lines.next();
-
-    let mut keywords = Vec::new();
-    while let Some(x) = lines.next() {
-        if x != "Keyword" {break;} 
-
-        lines.next();
-        let k_name = lines.next().unwrap().trim().to_owned();
-        lines.next();
-        let k_aliases = get_line_as_vec(lines.next().unwrap());
-        keywords.push(Keyword{
-            descriptive_name: k_name,
-            aliases: k_aliases
-        });
-    }
-
-    Language::new(lang_name, extensions, string_symbols, comment_symbol, mult_start, mult_end, keywords)
-}
-
-
-fn parse_file_to_language(mut reader :my_reader::BufReader, buffer :&mut String) -> Result<Language,()> {
-    if !reader.read_line_and_compare(buffer, "Language") {return Err(());}
-    if !reader.read_line_exists(buffer) {return Err(());}
-    let lang_name = buffer.trim_end().to_owned();
-    if !reader.read_line_exists(buffer) {return Err(());}
-
-    if !reader.read_line_and_compare(buffer, "Extensions") {return Err(());}
-    let identifiers = match reader.get_line_sliced(buffer) {
-        Ok(x) => x,
-        Err(_) => return Err(())
-    };
-    if !reader.read_line_exists(buffer) {return Err(());}
-
-    if !reader.read_line_and_compare(buffer, "String symbols") {return Err(());}
-    let string_symbols = match reader.get_line_sliced(buffer) {
-        Ok(x) => x,
-        Err(_) => return Err(())
-    };
-    if string_symbols.is_empty() {return Err(());}
-
-    if !reader.read_line_exists(buffer) {return Err(());}
-    if !reader.read_line_and_compare(buffer, "Comment symbol") {return Err(());} 
-    if !reader.read_line_exists(buffer) {return Err(());}
-    let comment_symbol = buffer.trim_end().to_owned();
-    if comment_symbol.is_empty() {return Err(());}
-    
-    let mut multi_start :Option<String> = None;
-    let mut multi_end :Option<String> = None;
-    if reader.read_line_and_compare(buffer, "Multi line comment start") {
-        if !reader.read_line_exists(buffer) {return Err(());}
-        let symbol = buffer.trim_end().to_owned();
-        if symbol.is_empty() {return Err(());}
-        multi_start = Some(symbol);
-        if !reader.read_line_and_compare(buffer, "Multi line comment end") {return Err(());}
-        if !reader.read_line_exists(buffer) {return Err(());}
-        let symbol = buffer.trim_end().to_owned();
-        if symbol.is_empty() {return Err(());}
-        multi_end = Some(symbol);
-        if !reader.read_line_exists(buffer) {return Err(())}
-    }
-    
-    let mut keywords = Vec::new();
-    while reader.read_line_exists(buffer) {
-        if !reader.read_lines_exist(2, buffer) {return Err(());}
-        let name = buffer.trim().to_string().clone();
-        if name.is_empty() {return Err(());}
-        if !reader.read_line_exists(buffer) {return Err(());}
-        let aliases = match reader.get_line_sliced(buffer) {
-            Ok(x) => x,
-            Err(_) => return Err(())
-        };
-        if aliases.is_empty() {return Err(());}
-        
-        let keyword = Keyword {
-            descriptive_name : name,
-            aliases
-        };
-        keywords.push(keyword);
-    }
-    
-    Ok(Language {
-        name: lang_name,
-        extensions: identifiers,
-        string_symbols,
-        comment_symbol,
-        multiline_comment_start_symbol : multi_start,
-        multiline_comment_end_symbol : multi_end,
-        keywords
-    })
-}
-
-fn read_bool_value(reader: &mut BufReader<File>, mut buf: &mut String) -> Option<bool> {
+fn read_bool_value_from_file(reader: &mut BufReader<File>, mut buf: &mut String) -> Option<bool> {
     buf.clear();
     reader.read_line(&mut buf);
     let buf = buf.trim();
@@ -476,7 +459,8 @@ fn read_bool_value(reader: &mut BufReader<File>, mut buf: &mut String) -> Option
     }
 }
 
-fn read_lines_to_vec(reader: &mut BufReader<File>, mut buf: &mut String, parser_func: fn(&str) -> Vec<String>) -> Vec<String> {
+//Keep parsing new lines as relevant, until an empty one appears.
+fn read_lines_from_file_to_vec(reader: &mut BufReader<File>, mut buf: &mut String, parser_func: fn(&str) -> Vec<String>) -> Vec<String> {
     let mut vec = Vec::new();
     loop {
         buf.clear();
