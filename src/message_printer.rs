@@ -1,4 +1,4 @@
-use crate::{config_manager::{*, self}, PERSISTENT_APP_PATHS};
+use crate::{config_manager::{*, self}, PERSISTENT_APP_PATHS, CHANGELOG_BYTES};
 
 // These constants need to be maintained along with the readme's commands
 pub const DIRS_HELP  :  &str = 
@@ -129,10 +129,16 @@ pub const LOAD_HELP  :  &str =
     You can combine the '--load' and '--save' commands to modify a configuration file.
 
 "; 
+pub const CHANGELOG_HELP  :  &str =
+"--changelog
+    A summary of the changes of every previous version of the program
+    
+";
+    
 
 
 pub fn print_whole_help_message() {
-    let mut msg = get_standard_help_prefix();
+    let mut msg = get_standard_prefix();
     msg += "Format of arguments: <path_here> --optional_command1 --optional_commandN\n\nCOMMANDS:\n\n";
 
     msg += DIRS_HELP;
@@ -147,6 +153,7 @@ pub fn print_whole_help_message() {
     msg += COMPRARE_LEVEL_HELP;
     msg += SAVE_HELP;
     msg += LOAD_HELP;
+    msg += CHANGELOG_HELP;
 
     println!("{}",msg);
 }
@@ -159,7 +166,7 @@ pub fn print_appropriate_help_message(args_line: &str) {
     }
 
     println!();
-    let mut msg = get_standard_help_prefix();
+    let mut msg = get_standard_prefix();
 
     for option in options {
         if option.trim().is_empty() {continue;}
@@ -188,6 +195,8 @@ pub fn print_appropriate_help_message(args_line: &str) {
             msg += SAVE_HELP;
         } else if sliced[0] == LOAD {
             msg += LOAD_HELP;
+        } else if sliced[0] == CHANGELOG {
+            msg += CHANGELOG_HELP;
         } else {
             if sliced[0].trim() != HELP {
                 msg += &format!("'--{}' not recognised as a command\n\n",sliced[0]);
@@ -202,6 +211,11 @@ pub fn print_appropriate_help_message(args_line: &str) {
     }
 }
 
-fn get_standard_help_prefix() -> String {
+pub fn print_changelog() {
+    println!("\n{}", String::from_utf8_lossy(&CHANGELOG_BYTES));
+}
+
+
+fn get_standard_prefix() -> String {
     format!("\n{}\n\nData dir path: {}\n\n",config_manager::VERSION_ID, PERSISTENT_APP_PATHS.data_dir)
 }

@@ -1,12 +1,12 @@
 v0.9.2  -  22/9/2021  
 
-4,260 Total lines - 3,098 code lines
+  4,260 Total lines - 3,098 code lines
 
-- Added mutliline comments in the Rust language file, that were missing by mistake
+  - Added mutliline comments in the Rust language file, that were missing by mistake
 
-- Running the program with the --help command, shows information about the other provided commands, 
-  or if none were provided, shows the information of all the commands.
+  - Running the program with the --help command, shows information about the other provided commands, 
+    or if none were provided, shows the information of all the commands.
 
-- Running the program by double clicking on the exe is no longer supported.
+  - Running the program by double clicking on the exe is no longer supported.
 
-- The program will now terminate after execution at all times (no longer accepting inputs from stdin on error).
+  - The program will now terminate after execution at all times (no longer accepting inputs from stdin on error).

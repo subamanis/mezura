@@ -9,7 +9,7 @@ pub mod io_handler;
 pub mod utils;
 pub mod consumer;
 pub mod producer;
-pub mod help_message_printer;
+pub mod message_printer;
 pub mod file_parser;
 
 mod result_printer;
@@ -41,6 +41,7 @@ pub const DEFAULT_CONFIG_NAME : &str = "default.txt";
 lazy_static! {
     pub static ref PERSISTENT_APP_PATHS : PersistentAppPaths = PersistentAppPaths::get();
     pub static ref LOCAL_APP_PATHS : LocalAppPaths = LocalAppPaths::get();
+    pub static ref CHANGELOG_BYTES : &'static [u8] = include_bytes!("../Changelog");
 }
 
 

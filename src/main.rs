@@ -23,20 +23,18 @@ fn main() {
             std::fs::remove_dir_all(&PERSISTENT_APP_PATHS.project_path).unwrap();
         }
     } 
-    
+
 
     let args_str = read_args_as_str();
     if let Err(x) = args_str {
         println!("\n{}",x.formatted());
         process::exit(1);
     }
-
     let args_str = args_str.unwrap();
-    if args_str.contains("--help") {
-        help_message_printer::print_appropriate_help_message(&args_str);
+
+    if handle_message_only_command(&args_str) {
         return;
     }
-
     
     let mut config = match config_manager::create_config_from_args(&args_str) {
         Ok(config) => config,
@@ -132,4 +130,16 @@ fn read_args_as_str() -> Result<String,ArgParsingError> {
             .collect::<Vec<String>>();
     if args.is_empty() {return Err(ArgParsingError::NoArgsProvided)}
     Ok(args.join(" ").trim().to_owned())
+}
+
+fn handle_message_only_command(args_str: &str) -> bool {
+    if args_str.contains("--help") {
+        message_printer::print_appropriate_help_message(&args_str);
+        return true; 
+    } else if args_str.contains("--changelog") {
+        message_printer::print_changelog();
+        return true;
+    }
+
+    false
 }
