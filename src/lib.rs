@@ -16,7 +16,6 @@ mod result_printer;
 
 pub use colored::{Colorize,ColoredString};
 pub use config_manager::Configuration;
-pub use crossbeam_deque::Injector;
 pub use utils::*;
 pub use domain::{Language, LanguageContentInfo, LanguageMetadata, FileStats, Keyword};
 
@@ -24,55 +23,24 @@ pub type FaultyFilesListMut = Arc<Mutex<Vec<FaultyFileDetails>>>;
 pub type ContentInfoMapMut  = Arc<Mutex<HashMap<String,LanguageContentInfo>>>;
 pub type MetadataMapMut     = Arc<Mutex<HashMap<String,LanguageMetadata>>>;
 
-use crossbeam_deque::Worker;
+use lazy_static::lazy_static;
+use directories::{BaseDirs,ProjectDirs};
+use crossbeam_deque::{Worker,Injector};
 use chrono::{DateTime, Local};
 use std::{collections::HashMap, fs::{self, File}, io::Read, path::{Path, PathBuf}, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant}};
 use std::{sync::{Arc, Mutex}, thread::JoinHandle};
 
 
-#[derive(Debug)]
-pub struct Metrics {
-    pub files_per_sec: usize,
-    pub lines_per_sec: usize
-}
+pub const APP_NAME : &str = "mezura";
+pub const LANGUAGES_DIR_NAME : &str = "languages";
+pub const CONFIG_DIR_NAME : &str = "config";
+pub const LOGS_DIR_NAME : &str = "logs";
+pub const TEST_DIR_NAME : &str = "test_dir";
+pub const DEFAULT_CONFIG_NAME : &str = "default.txt";
 
-#[derive(Debug, PartialEq)]
-pub struct FinalStats {
-    files: usize,
-    lines: usize,
-    code_lines: usize,
-    extra_lines: usize,
-    bytes_size: usize,
-    bytes_average_size: usize,
-    size: f64,
-    size_measurement: String, 
-    average_size: f64,
-    average_size_measurement: String
-}
-
-#[derive(Debug)]
-pub struct FaultyFileDetails {
-    path: String,
-    error_msg: String,
-    size: u64
-}
-
-#[derive(Debug)]
-pub enum ParseFilesError {
-    NoRelevantFiles(String),
-    AllAreFaultyFiles
-} 
-
-#[derive(Debug,Clone)]
-pub struct FilesPresent {
-    pub total_files: usize,
-    pub relevant_files: usize
-}
-
-#[derive(Debug,Clone)]
-pub struct ParsableFile {
-    pub path: PathBuf,
-    pub language_name: String 
+lazy_static! {
+    pub static ref PERSISTENT_APP_PATHS : PersistentAppPaths = PersistentAppPaths::get();
+    pub static ref LOCAL_APP_PATHS : LocalAppPaths = LocalAppPaths::get();
 }
 
 
@@ -104,7 +72,6 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
         producer_handles.push(producer::start_producer_thread(i, files_injector.clone(), dirs_injector.clone(), Worker::new_fifo(),
             global_languages_metadata_map.clone(), producer_termination_states.clone(),language_map_ref.clone(), config.clone(), files_stats.clone()));
     }
-    //local content info here too?
     for i in 0..config.threads.consumers {
         consumer_handles.push(consumer::start_parser_thread(i, files_injector.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
         languages_content_info_ref.clone(), language_map_ref.clone(), config.clone()));
@@ -306,14 +273,128 @@ pub fn make_language_metadata(language_map: &Arc<HashMap<String,Language>>) -> H
 
 fn get_specified_config_file_path(config: &Configuration) -> Option<String> {
     if let Some(name) = &config.config_name_to_save {
-        Some(io_handler::LOG_DIR.clone() + name)
+        Some(PERSISTENT_APP_PATHS.logs_dir.clone() + name)
     } else if let Some(name) = &config.config_name_to_load {
-        Some(io_handler::LOG_DIR.clone() + name)
+        Some(PERSISTENT_APP_PATHS.logs_dir.clone() + name)
     } else {
         None
     }
 }
 
+
+#[derive(Debug)]
+pub struct PersistentAppPaths {
+    pub project_path: String,
+    pub data_dir: String,
+    pub languages_dir: String,
+    pub config_dir: String,
+    pub logs_dir: String,
+    pub are_initialized: bool
+}
+
+#[derive(Debug)]
+pub struct LocalAppPaths {
+    pub data_dir: String,
+    pub languages_dir: String,
+    pub config_dir: String,
+    pub test_dir: String,
+    pub test_config_dir: String,
+    pub test_log_dir: String,
+}
+
+#[derive(Debug)]
+pub struct Metrics {
+    pub files_per_sec: usize,
+    pub lines_per_sec: usize
+}
+
+#[derive(Debug, PartialEq)]
+pub struct FinalStats {
+    files: usize,
+    lines: usize,
+    code_lines: usize,
+    extra_lines: usize,
+    bytes_size: usize,
+    bytes_average_size: usize,
+    size: f64,
+    size_measurement: String, 
+    average_size: f64,
+    average_size_measurement: String
+}
+
+#[derive(Debug)]
+pub struct FaultyFileDetails {
+    path: String,
+    error_msg: String,
+    size: u64
+}
+
+#[derive(Debug)]
+pub enum ParseFilesError {
+    NoRelevantFiles(String),
+    AllAreFaultyFiles
+} 
+
+#[derive(Debug,Clone)]
+pub struct FilesPresent {
+    pub total_files: usize,
+    pub relevant_files: usize
+}
+
+#[derive(Debug,Clone)]
+pub struct ParsableFile {
+    pub path: PathBuf,
+    pub language_name: String 
+}
+
+
+impl PersistentAppPaths {
+    //Persistent path: 
+    // Windows:  C:/Users/<user_name>/AppData/Roaming/mezura
+    // Linux:    /home/<user_name>/.local/share/mezura
+    // MacOs:    /Users/<user_name>/Library/Application Support/mezura
+    pub fn get() -> Self {
+        let mut are_initialized = true;
+        let proj_dirs = ProjectDirs::from("", "",  APP_NAME).unwrap();
+        let project_path_str = BaseDirs::new().unwrap().data_dir().to_str().unwrap().to_owned() + "/" + APP_NAME;
+        let project_path = Path::new(&project_path_str);
+        let data_dir = proj_dirs.data_dir().to_str().unwrap().to_owned() + "/";
+        if !project_path.exists() {
+            are_initialized = false;
+            std::fs::create_dir_all(&data_dir).unwrap();
+        }
+        return PersistentAppPaths {
+            project_path: project_path.to_str().unwrap().to_owned(),
+            data_dir: data_dir.clone(),
+            config_dir: data_dir.clone() + CONFIG_DIR_NAME +"/",
+            languages_dir: data_dir.clone() + LANGUAGES_DIR_NAME + "/",
+            logs_dir: data_dir + LOGS_DIR_NAME + "/",
+            are_initialized
+        }
+    }
+}
+
+impl LocalAppPaths {
+    // Paths that exist inside the repository folder
+    pub fn get() -> Self {
+        let mut working_dir = String::from(std::env::current_exe().expect("Failed to find executable path.")
+            .parent().expect("Failed to get parent directory of the executable.").to_str().unwrap());
+        if working_dir.contains("target/") || working_dir.contains("target\\"){
+            working_dir = String::from(".");
+        }
+        
+        let data_dir =  working_dir.clone() + "/data/";
+
+        LocalAppPaths {
+            data_dir: data_dir.clone(),
+            languages_dir: data_dir.clone() + LANGUAGES_DIR_NAME + "/",
+            config_dir: data_dir.clone() + CONFIG_DIR_NAME + "/",
+            test_dir: data_dir.clone() + "../" + TEST_DIR_NAME + "/",
+            test_config_dir: data_dir.clone() + "../" + TEST_DIR_NAME + "/config/",
+            test_log_dir: data_dir + "../" + TEST_DIR_NAME + "/logs/"
+        }
+    }
+}
 
 impl ParseFilesError {
     pub fn formatted(&self) -> String {
@@ -437,8 +518,8 @@ pub mod domain {
         pub extensions : Vec<String>,
         pub string_symbols : Vec<String>,
         pub comment_symbol : String,
-        pub mutliline_comment_start_symbol : Option<String>,
-        pub mutliline_comment_end_symbol : Option<String>,
+        pub multiline_comment_start_symbol : Option<String>,
+        pub multiline_comment_end_symbol : Option<String>,
         pub keywords : Vec<Keyword>
     }
     
@@ -478,8 +559,22 @@ pub mod domain {
     }
 
     impl Language {
+        pub fn new(name: String, extensions: Vec<String>, string_symbols: Vec<String>, comment_symbol: String,
+            multiline_comment_start_symbol: Option<String>, multiline_comment_end_symbol: Option<String>,
+            keywords: Vec<Keyword>) -> Self 
+        {
+            Language {
+                name,
+                extensions,string_symbols,
+                comment_symbol,
+                multiline_comment_start_symbol,
+                multiline_comment_end_symbol,
+                keywords 
+            }
+        }
+
         pub fn multiline_len(&self) -> usize {
-            if let Some(x) = &self.mutliline_comment_start_symbol {
+            if let Some(x) = &self.multiline_comment_start_symbol {
                 x.len()
             } else {
                 0
@@ -487,7 +582,7 @@ pub mod domain {
         }
 
         pub fn supports_multiline_comments(&self) -> bool {
-            self.mutliline_comment_start_symbol.is_some()
+            self.multiline_comment_start_symbol.is_some()
         }
     }
 

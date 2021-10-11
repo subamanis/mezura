@@ -1,6 +1,5 @@
 use std::cmp::max;
 
-
 use crate::*;
 
 //the total number of vertical lines ( | ) that appear in the [-|||...|-] in the overview section
@@ -249,9 +248,10 @@ fn difference_as_signed_percentage_str_of_usize(older: usize, newer: usize) -> S
     if percentage > 0.0 && percentage < 0.01 {
         percentage = 0.01;
     }
-
+    
     sign + &round_2(percentage).to_string()
 }
+
 
 fn difference_as_signed_percentage_str_of_f64(older: f64, newer: f64) -> String {
     let (difference, sign) = if newer > older {(newer-older, "+".to_owned())} else if older > newer {(older-newer, "-".to_owned())} else {(0.0,String::new())};
@@ -785,7 +785,7 @@ mod tests {
 
     #[test]
     fn test_parse_N_previous_entries() {
-        let contents = utils::extract_file_contents(&(io_handler::DATA_DIR.to_owned()+"/../test_dir/logs/test1")).unwrap();
+        let contents = utils::extract_file_contents(&(LOCAL_APP_PATHS.test_dir.clone()+"logs/test1")).unwrap();
         let log_entries = parse_N_previous_entries(&contents, 3);
 
         assert_eq!(10, log_entries[0].stats.files);
@@ -833,7 +833,7 @@ mod tests {
 
     #[test]
     fn test_log_creation_and_reading() -> std::io::Result<()> {
-        let test_log_dir = env!("CARGO_MANIFEST_DIR").to_owned() + "/test_dir/" + "logs/test2";
+        let test_log_dir = LOCAL_APP_PATHS.test_log_dir.clone() + "test2";
         if Path::new(&test_log_dir).exists() {
             std::fs::remove_dir(&test_log_dir);
         }

@@ -333,11 +333,11 @@ fn get_LineInfo_with_str_symbol(relevant: String, str_symbol: &str) -> LineInfo 
 }
 
 fn get_com_end_indices(line: &str, language: &Language) -> Vec<usize> {
-    line.match_indices(language.mutliline_comment_end_symbol.as_ref().unwrap()).map(|x| x.0).collect::<Vec<usize>>()
+    line.match_indices(language.multiline_comment_end_symbol.as_ref().unwrap()).map(|x| x.0).collect::<Vec<usize>>()
 }
 
 fn get_com_start_indices(line: &str, language: &Language, comment_indices: &[usize]) -> Vec<usize> {
-    line.match_indices(language.mutliline_comment_start_symbol.as_ref().unwrap())
+    line.match_indices(language.multiline_comment_start_symbol.as_ref().unwrap())
     .filter_map(|x|{
         if !is_intersecting_with_comment_symbol(x.0, comment_indices) {
             Some(x.0)
@@ -927,8 +927,8 @@ mod tests {
             extensions : vec!["java".to_owned()],
             string_symbols : vec!["\"".to_owned()],
             comment_symbol : "//".to_owned(),
-            mutliline_comment_start_symbol : Some("/*".to_owned()),
-            mutliline_comment_end_symbol : Some("*/".to_owned()),
+            multiline_comment_start_symbol : Some("/*".to_owned()),
+            multiline_comment_end_symbol : Some("*/".to_owned()),
             keywords : vec![CLASS.clone(),INTERFACE.clone()]
         };
 
@@ -937,8 +937,8 @@ mod tests {
             extensions : vec!["py".to_owned()],
             string_symbols : vec!["\"".to_owned(),"'".to_owned()],
             comment_symbol : "#".to_owned(),
-            mutliline_comment_start_symbol : None,
-            mutliline_comment_end_symbol : None,
+            multiline_comment_start_symbol : None,
+            multiline_comment_end_symbol : None,
             keywords : vec![CLASS.clone()]
         };
 
@@ -947,12 +947,13 @@ mod tests {
             extensions : vec!["rs".to_owned()],
             string_symbols : vec!["\"".to_owned()],
             comment_symbol : "//".to_owned(),
-            mutliline_comment_start_symbol : None,
-            mutliline_comment_end_symbol : None,
+            multiline_comment_start_symbol : None,
+            multiline_comment_end_symbol : None,
             keywords : vec![STRUCT.clone(),ENUM.clone(),TRAIT.clone()]
         };
 
-        static ref LANGUAGE_MAP_REF : Arc<HashMap<String,Language>> = Arc::new(io_handler::parse_supported_languages_to_map(&mut Vec::<String>::new()).unwrap().language_map);
+        static ref LANGUAGE_MAP_REF : Arc<HashMap<String,Language>> =
+                Arc::new(io_handler::parse_supported_languages_to_map(&LOCAL_APP_PATHS.languages_dir, &mut Vec::<String>::new()).unwrap().language_map);
     }
 
     #[test]
