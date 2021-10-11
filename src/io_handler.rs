@@ -3,9 +3,8 @@ use std::{borrow::Cow, collections::HashMap, fs::{self, File}, io::{self, BufRea
 use chrono::{DateTime, Local};
 use colored::*;
 
-use crate::{Configuration, DEFAULT_CONFIG_NAME, FinalStats, PERSISTENT_APP_PATHS, config_manager::{self, ConfigurationBuilder, LogOption,
-     MAX_COMPARE_LEVEL, MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_COMPARE_LEVEL, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE, Threads}, domain::*,
-     split_line_on_whitespace, utils};
+use crate::{Configuration, DEFAULT_CONFIG_NAME, FinalStats, Formatted, PERSISTENT_APP_PATHS, config_manager::{self, ConfigurationBuilder, LogOption,
+     MAX_COMPARE_LEVEL, MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_COMPARE_LEVEL, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE, Threads}, domain::*, split_line_on_whitespace, utils};
 
 
 #[derive(Debug)]
@@ -485,21 +484,21 @@ impl LanguageDirParseInfo {
     }
 }
 
-impl LanguageDirParseError {
-    pub fn formatted(&self) -> String {
+impl Formatted for LanguageDirParseError {
+    fn formatted(&self) -> ColoredString {
         match self {
-            Self::NoFilesFound => "Error: No language files found in directory.".red().to_string(),
-            Self::NoFilesFormattedProperly => "Error: No language file is formatted properly, so none could be parsed.".red().to_string(),
-            Self::LanguagesOfInterestNotFound => "Error: None of the provided languages exists in the languages directory".red().to_string()
+            Self::NoFilesFound => "Error: No language files found in directory.".red(),
+            Self::NoFilesFormattedProperly => "Error: No language file is formatted properly, so none could be parsed.".red(),
+            Self::LanguagesOfInterestNotFound => "Error: None of the provided languages exists in the languages directory".red()
         }
     }
 }
 
-impl ConfigFileParseError {
-    pub fn formatted(&self) -> String {
+impl Formatted for ConfigFileParseError {
+    fn formatted(&self) -> ColoredString {
         match self {
-            Self::FileNotFound(x) => format!("'{}' config file not found, defaults will be used.", x).yellow().to_string(),
-            Self::IOError => "Unexpected IO error while reading, defaults will be used".yellow().to_string()
+            Self::FileNotFound(x) => format!("'{}' config file not found, defaults will be used.", x).yellow(),
+            Self::IOError => "Unexpected IO error while reading, defaults will be used".yellow()
         }
     }
 }

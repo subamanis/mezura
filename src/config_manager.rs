@@ -1,8 +1,8 @@
 use std::{path::Path};
 
-use colored::Colorize;
+use colored::{ColoredString, Colorize};
 
-use crate::{io_handler, utils};
+use crate::{Formatted, io_handler, utils};
 
 // Application version, to be displayed at startup and with --help command
 pub const VERSION_ID : &str = "v1.0.0-beta1"; 
@@ -506,20 +506,23 @@ impl LogOption {
     }
 }
 
-impl ArgParsingError {
-    pub fn formatted(&self) -> String {
+impl Formatted for ArgParsingError {
+    fn formatted(&self) -> ColoredString {
         match self {
-            Self::NoArgsProvided => "No arguments provided.".red().to_string(),
-            Self::MissingTargetDirs => "The target directories (--dirs) are not specified.".red().to_string(),
-            Self::InvalidPath(p) => format!("Path provided is not a valid directory or file:\n'{}'.",p).red().to_string(),
-            Self::InvalidPathInConfig(dir,name) => format!("Specified path '{}', in config '{}', doesn't exist anymore.",dir,name).red().to_string(),
-            Self::DoublePath => "Directories already provided as first argument, but --dirs command also found.".red().to_string(),
-            Self::UnrecognisedCommand(p) => format!("--{} is not recognised as a command.",p).red().to_string(),
-            Self::IncorrectCommandArgs(p) => format!("Incorrect arguments provided for the command '--{}'. Type '--help'",p).red().to_string(),
-            Self::UnexpectedCommandArgs(p) => format!("Command '--{}' does not expect any arguments.",p).red().to_string(),
-            Self::NonExistantConfig(p) => format!("Configuration '{}' does not exist.",p).red().to_string()
+            Self::NoArgsProvided => "No arguments provided.".red(),
+            Self::MissingTargetDirs => "The target directories (--dirs) are not specified.".red(),
+            Self::InvalidPath(p) => format!("Path provided is not a valid directory or file:\n'{}'.",p).red(),
+            Self::InvalidPathInConfig(dir,name) => format!("Specified path '{}', in config '{}', doesn't exist anymore.",dir,name).red(),
+            Self::DoublePath => "Directories already provided as first argument, but --dirs command also found.".red(),
+            Self::UnrecognisedCommand(p) => format!("--{} is not recognised as a command.",p).red(),
+            Self::IncorrectCommandArgs(p) => format!("Incorrect arguments provided for the command '--{}'. Type '--help'",p).red(),
+            Self::UnexpectedCommandArgs(p) => format!("Command '--{}' does not expect any arguments.",p).red(),
+            Self::NonExistantConfig(p) => format!("Configuration '{}' does not exist.",p).red()
         }
     }
+}
+
+impl ArgParsingError {
 }
 
 

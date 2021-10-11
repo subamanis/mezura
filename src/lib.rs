@@ -282,6 +282,10 @@ fn get_specified_config_file_path(config: &Configuration) -> Option<String> {
     }
 }
 
+// Used to display colorful errors and warnings, by implementing it on Error enums.
+pub trait Formatted {
+    fn formatted(&self) -> ColoredString;
+} 
 
 #[derive(Debug)]
 pub struct PersistentAppPaths {
@@ -397,11 +401,11 @@ impl LocalAppPaths {
     }
 }
 
-impl ParseFilesError {
-    pub fn formatted(&self) -> String {
+impl Formatted for ParseFilesError {
+    fn formatted(&self) -> ColoredString {
         match self {
-            Self::NoRelevantFiles(x) => "No relevant files found in the given directory.".yellow().to_string() + x,
-            Self::AllAreFaultyFiles => "None of the files were able to be parsed".yellow().to_string()
+            Self::NoRelevantFiles(x) => format!("{} {}","No relevant files found in the given directory.", x).yellow(),
+            Self::AllAreFaultyFiles => "None of the files were able to be parsed".yellow()
         }
     }
 }
