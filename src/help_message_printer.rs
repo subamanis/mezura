@@ -1,4 +1,4 @@
-use crate::config_manager::{*, self};
+use crate::{config_manager::{*, self}, PERSISTENT_APP_PATHS};
 
 // These constants need to be maintained along with the readme's commands
 pub const DIRS_HELP  :  &str = 
@@ -132,7 +132,7 @@ pub const LOAD_HELP  :  &str =
 
 
 pub fn print_whole_help_message() {
-    let mut msg = format!("\n{}\n",config_manager::VERSION_ID);
+    let mut msg = get_standard_help_prefix();
     msg += "Format of arguments: <path_here> --optional_command1 --optional_commandN\n\nCOMMANDS:\n\n";
 
     msg += DIRS_HELP;
@@ -159,8 +159,7 @@ pub fn print_appropriate_help_message(args_line: &str) {
     }
 
     println!();
-    let mut msg = format!("\n{}\n\n",config_manager::VERSION_ID);
-
+    let mut msg = get_standard_help_prefix();
 
     for option in options {
         if option.trim().is_empty() {continue;}
@@ -201,4 +200,8 @@ pub fn print_appropriate_help_message(args_line: &str) {
     } else {
         println!("{}",msg);
     }
+}
+
+fn get_standard_help_prefix() -> String {
+    format!("\n{}\n\nData dir path: {}\n\n",config_manager::VERSION_ID, PERSISTENT_APP_PATHS.data_dir)
 }

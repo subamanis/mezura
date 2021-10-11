@@ -23,14 +23,21 @@ fn main() {
             std::fs::remove_dir_all(&PERSISTENT_APP_PATHS.project_path).unwrap();
         }
     } 
+    
 
     let args_str = read_args_as_str();
     if let Err(x) = args_str {
         println!("\n{}",x.formatted());
         process::exit(1);
     }
-    
+
     let args_str = args_str.unwrap();
+    if args_str.contains("--help") {
+        help_message_printer::print_appropriate_help_message(&args_str);
+        return;
+    }
+
+    
     let mut config = match config_manager::create_config_from_args(&args_str) {
         Ok(config) => config,
         Err(x) => {
