@@ -24,7 +24,6 @@ fn main() {
         }
     } 
 
-
     let args_str = read_args_as_str();
     if let Err(x) = args_str {
         println!("\n{}",x.formatted());

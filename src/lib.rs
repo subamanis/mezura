@@ -570,7 +570,8 @@ pub mod domain {
         {
             Language {
                 name,
-                extensions,string_symbols,
+                extensions,
+                string_symbols,
                 comment_symbol,
                 multiline_comment_start_symbol,
                 multiline_comment_end_symbol,

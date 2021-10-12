@@ -568,7 +568,7 @@ mod my_reader {
 
 #[cfg(test)]
 mod tests {
-    use crate::{LOCAL_APP_PATHS, Configuration, config_manager, io_handler::{parse_config_file, save_config_to_file}};
+    use crate::{Configuration, LOCAL_APP_PATHS, config_manager, io_handler::{parse_config_file, parse_supported_languages_to_map, save_config_to_file}};
 
     #[test]
     fn test_save_config_file_and_then_parse_it() -> std::io::Result<()> {
@@ -611,4 +611,14 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_parse_supported_languages_to_map() {
+        // let mut language_map = hashmap![
+        //     "C++".to_owned() => Language::new("C++".to_owned(), vec![],)]
+        let target_path = LOCAL_APP_PATHS.test_dir.clone() + "languages/";
+        let mut languages_of_interest = vec!["C++".to_owned(), "Java".to_owned(), "Rust".to_owned()];
+        let result = parse_supported_languages_to_map(&target_path, &mut languages_of_interest).unwrap();
+        assert!(languages_of_interest.len() == 3);
+        assert!(&result.faulty_files[0] == "C++.txt");
+    }
 }
