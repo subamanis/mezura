@@ -953,7 +953,7 @@ mod tests {
         };
 
         static ref LANGUAGE_MAP_REF : Arc<HashMap<String,Language>> =
-                Arc::new(io_handler::parse_supported_languages_to_map(&LOCAL_APP_PATHS.languages_dir, &mut Vec::<String>::new()).unwrap().language_map);
+                Arc::new(io_handler::parse_supported_languages_to_map(&LOCAL_APP_PATHS.languages_dir).unwrap().0);
     }
 
     #[test]

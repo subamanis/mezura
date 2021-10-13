@@ -7,9 +7,8 @@ use mezura::config_manager::Threads;
 #[test]
 fn test_whole_workflow () {
     let current_dir = env!("CARGO_MANIFEST_DIR").replace("\\", "/");
-    let mut config = config_manager::create_config_from_args(&format!("{}/src,{}/tests --threads 1 3 ",current_dir, current_dir)).unwrap();
-    let language_map = io_handler::parse_supported_languages_to_map(
-            &LOCAL_APP_PATHS.languages_dir, &mut config.languages_of_interest).unwrap().language_map;
+    let config = config_manager::create_config_from_args(&format!("{}/src,{}/tests --threads 1 3 ",current_dir, current_dir)).unwrap();
+    let language_map = io_handler::parse_supported_languages_to_map(&LOCAL_APP_PATHS.languages_dir).unwrap().0;
     let language_map_len = language_map.len(); 
 
     assert_eq!(Threads::new(1,3), config.threads);

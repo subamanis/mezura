@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, fs::{self, File}, io::{self, BufRead, BufReader, BufWriter, Write}, path::Path};
+use std::{borrow::Cow, collections::HashMap, fs::{self, DirEntry, File}, io::{self, BufRead, BufReader, BufWriter, Write}, path::Path};
 
 use chrono::{DateTime, Local};
 use colored::*;
@@ -30,21 +30,17 @@ pub enum ConfigFileParseError {
 
 // --------------------- Languages handling -------------------------
 
-pub fn parse_supported_languages_to_map(target_path: &str, languages_of_interest: &mut Vec<String>)
-        -> Result<LanguageDirParseInfo, LanguageDirParseError> 
-{
-    let entries = fs::read_dir(target_path).unwrap();
-    
-    let mut languages_of_interest_appearance = HashMap::<String,bool>::new();
-    for lang_name in languages_of_interest.iter() {
-        languages_of_interest_appearance.insert(lang_name.to_owned(), false);
+pub fn parse_supported_languages_to_map(target_path: &str) -> Result<(HashMap<String, Language>, Vec<String>), LanguageDirParseError> {
+    fn add_file_name_to_faulty_files(entry: &DirEntry, faulty_files: &mut Vec<String>) {
+        let file_name = entry.file_name().to_str().map_or(String::new(), |x| x.to_owned());
+        if !file_name.is_empty() {faulty_files.push(file_name.to_lowercase())}
     }
 
-    let mut language_map = HashMap::new();
-    let mut num_of_entries = 0;
-    let mut parsed_any_successfully = false;
+    let mut language_map = HashMap::with_capacity(30);
     let mut faulty_files : Vec<String> = Vec::new();
     let mut buffer = String::with_capacity(200);
+    
+    let entries = fs::read_dir(target_path).unwrap();
     for entry in entries {
         let entry = match entry {
             Ok(x) => x,
@@ -54,13 +50,10 @@ pub fn parse_supported_languages_to_map(target_path: &str, languages_of_interest
         let path = entry.path();
         if !Path::new(&path).is_file() {continue;}
         
-        num_of_entries += 1;
-        
         let reader = match my_reader::BufReader::open(path) {
             Ok(x) => x,
             Err(_) => {
-                let file_name = entry.file_name().to_str().map_or(String::new(), |x| x.to_owned());
-                if !file_name.is_empty() {faulty_files.push(file_name.to_lowercase())}
+                add_file_name_to_faulty_files(&entry, &mut faulty_files);
                 continue;
             }
         } ;
@@ -68,48 +61,21 @@ pub fn parse_supported_languages_to_map(target_path: &str, languages_of_interest
         let language = match parse_file_to_language(reader, &mut buffer) {
             Ok(x) => x,
             Err(_) => {
-                let file_name = entry.file_name().to_str().map_or(String::new(), |x| x.to_owned());
-                if !file_name.is_empty() {faulty_files.push(file_name.to_lowercase())}
+                add_file_name_to_faulty_files(&entry, &mut faulty_files);
                 continue;
             }
         };
 
-        parsed_any_successfully = true;
-
-        if !languages_of_interest.is_empty() {
-            if !languages_of_interest.contains(&language.name.to_lowercase()) {
-                continue;
-            }
-
-            *languages_of_interest_appearance.get_mut(&language.name.to_lowercase()).unwrap() = true;
-        }
-
         language_map.insert(language.name.to_owned(), language);
     }
-    
-    if num_of_entries == 0 {
-        return Err(LanguageDirParseError::NoFilesFound);
-    } 
-    
-    let mut non_existant_languages_of_interest = Vec::new();
-    if !languages_of_interest.is_empty() {
-        languages_of_interest_appearance.iter().for_each(|x| 
-            if !x.1 && !faulty_files.contains(&(x.0.to_owned() + ".txt")) {
-                non_existant_languages_of_interest.push(x.0.to_owned())
-            });
+
+    if language_map.is_empty() && faulty_files.is_empty() {
+        Err(LanguageDirParseError::NoFilesFound)
+    } else if language_map.is_empty() {
+        Err(LanguageDirParseError::NoFilesFormattedProperly)
+    } else {
+        Ok((language_map, faulty_files))
     }
-
-    if !parsed_any_successfully {
-        return Err(LanguageDirParseError::NoFilesFormattedProperly);
-    }
-
-    if !languages_of_interest.is_empty() && non_existant_languages_of_interest.len() == languages_of_interest.len() {
-        return Err(LanguageDirParseError::LanguagesOfInterestNotFound);
-    }
-
-    languages_of_interest.retain(|x| !non_existant_languages_of_interest.contains(x) && !faulty_files.contains(&(x.to_owned()+".txt")));
-
-    Ok(LanguageDirParseInfo::new(language_map, faulty_files, non_existant_languages_of_interest))
 }
 
 fn parse_file_to_language(mut reader :my_reader::BufReader, buffer :&mut String) -> Result<Language,()> {
@@ -489,7 +455,7 @@ impl Formatted for LanguageDirParseError {
         match self {
             Self::NoFilesFound => "Error: No language files found in directory.".red(),
             Self::NoFilesFormattedProperly => "Error: No language file is formatted properly, so none could be parsed.".red(),
-            Self::LanguagesOfInterestNotFound => "Error: None of the provided languages exists in the languages directory".red()
+            Self::LanguagesOfInterestNotFound => "Error: None of the provided languages exist in the languages directory".red()
         }
     }
 }
@@ -613,12 +579,9 @@ mod tests {
 
     #[test]
     fn test_parse_supported_languages_to_map() {
-        // let mut language_map = hashmap![
-        //     "C++".to_owned() => Language::new("C++".to_owned(), vec![],)]
-        let target_path = LOCAL_APP_PATHS.test_dir.clone() + "languages/";
-        let mut languages_of_interest = vec!["C++".to_owned(), "Java".to_owned(), "Rust".to_owned()];
-        let result = parse_supported_languages_to_map(&target_path, &mut languages_of_interest).unwrap();
-        assert!(languages_of_interest.len() == 3);
-        assert!(&result.faulty_files[0] == "C++.txt");
+        let (lang_map, faulty_files) = 
+                parse_supported_languages_to_map(&(LOCAL_APP_PATHS.test_dir.clone() + "languages/")).unwrap();
+        assert!(lang_map.len() == 2);
+        assert!(faulty_files.len() == 1);
     }
 }

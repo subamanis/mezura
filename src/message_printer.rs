@@ -1,4 +1,6 @@
-use crate::{config_manager::{*, self}, PERSISTENT_APP_PATHS, CHANGELOG_BYTES};
+use std::collections::HashMap;
+
+use crate::{CHANGELOG_BYTES, Language, PERSISTENT_APP_PATHS, config_manager::*};
 
 // These constants need to be maintained along with the readme's commands
 pub const DIRS_HELP  :  &str = 
@@ -134,11 +136,16 @@ pub const CHANGELOG_HELP  :  &str =
     A summary of the changes of every previous version of the program
     
 ";
+pub const SHOW_LANGUAGES_HELP  :  &str =
+"--show-languages
+    A sorted list with all the supported languages that were detected, along
+    with the persistent data path of the application where you can add more. 
     
+";
 
 
 pub fn print_whole_help_message() {
-    let mut msg = get_standard_prefix();
+    let mut msg = get_data_dir_str();
     msg += "Format of arguments: <path_here> --optional_command1 --optional_commandN\n\nCOMMANDS:\n\n";
 
     msg += DIRS_HELP;
@@ -154,49 +161,26 @@ pub fn print_whole_help_message() {
     msg += SAVE_HELP;
     msg += LOAD_HELP;
     msg += CHANGELOG_HELP;
+    msg += SHOW_LANGUAGES_HELP;
 
     println!("{}",msg);
 }
 
-pub fn print_appropriate_help_message(args_line: &str) {
+pub fn print_help_message_for_given_args(args_line: &str) {
     let options = args_line.split("--").skip(1).collect::<Vec<_>>();
     if options.len() == 1 {
         print_whole_help_message();
         return;
     }
 
-    println!();
-    let mut msg = get_standard_prefix();
+    let mut msg = get_data_dir_str();
 
     for option in options {
         if option.trim().is_empty() {continue;}
         let sliced = option.split_whitespace().collect::<Vec<_>>();
-        if sliced[0] == DIRS {
-            msg += DIRS_HELP;
-        } else if sliced[0] == EXCLUDE {
-            msg += EXCLUDE_HELP;
-        } else if sliced[0] == LANGUAGES {
-            msg += LANGUAGES_HELP;
-        } else if sliced[0] == THREADS {
-            msg += THREADS_HELP;
-        } else if sliced[0] == BRACES_AS_CODE {
-            msg += BRACES_AS_CODE_HELP;
-        } else if sliced[0] == SEARCH_IN_DOTTED {
-            msg += SEARCH_IN_DOTTED_HELP;
-        } else if sliced[0] == SHOW_FAULTY_FILES {
-            msg += SHOW_FAULTY_FILES_HELP;
-        } else if sliced[0] == NO_VISUAL {
-            msg += NO_VISUAL_HELP;
-        } else if sliced[0] == LOG {
-            msg += LOG_HELP;
-        } else if sliced[0] == COMPRARE_LEVEL {
-            msg += COMPRARE_LEVEL_HELP;
-        } else if sliced[0] == SAVE {
-            msg += SAVE_HELP;
-        } else if sliced[0] == LOAD {
-            msg += LOAD_HELP;
-        } else if sliced[0] == CHANGELOG {
-            msg += CHANGELOG_HELP;
+
+        if let Some(x) = get_help_msg_of_command(sliced[0]) {
+            msg += x;
         } else {
             if sliced[0].trim() != HELP {
                 msg += &format!("'--{}' not recognised as a command\n\n",sliced[0]);
@@ -211,11 +195,56 @@ pub fn print_appropriate_help_message(args_line: &str) {
     }
 }
 
+pub fn print_help_message_for_command(arg: &str) {
+    if let Some(x) = get_help_msg_of_command(arg) {
+        println!("\n{}",x);
+    } 
+}
+
 pub fn print_changelog() {
-    println!("\n{}", String::from_utf8_lossy(&CHANGELOG_BYTES));
+    println!("\n{}\n", String::from_utf8_lossy(&CHANGELOG_BYTES));
+}
+
+pub fn print_supported_languages(languages_map: &HashMap<String,Language>) {
+    let mut lang_names = languages_map.keys().map(|x| x.to_owned()).collect::<Vec<_>>();
+    lang_names.sort();
+    let prefix = get_data_dir_str();
+    println!("{}The supported languages found are:\n  {}\n",prefix,lang_names.join("\n  "));
 }
 
 
-fn get_standard_prefix() -> String {
-    format!("\n{}\n\nData dir path: {}\n\n",config_manager::VERSION_ID, PERSISTENT_APP_PATHS.data_dir)
+fn get_data_dir_str() -> String {
+    format!("\nData dir path: {}\n\n", PERSISTENT_APP_PATHS.data_dir)
+}
+
+fn get_help_msg_of_command(command: &str) -> Option<&str> {
+    if command == DIRS {
+        Some(DIRS_HELP)
+    } else if command == EXCLUDE {
+        Some(EXCLUDE_HELP)
+    } else if command == LANGUAGES {
+        Some(LANGUAGES_HELP)
+    } else if command == THREADS {
+        Some(THREADS_HELP)
+    } else if command == BRACES_AS_CODE {
+        Some(BRACES_AS_CODE_HELP)
+    } else if command == SEARCH_IN_DOTTED {
+        Some(SEARCH_IN_DOTTED_HELP)
+    } else if command == SHOW_FAULTY_FILES {
+        Some(SHOW_FAULTY_FILES_HELP)
+    } else if command == NO_VISUAL {
+        Some(NO_VISUAL_HELP)
+    } else if command == LOG {
+        Some(LOG_HELP)
+    } else if command == COMPRARE_LEVEL {
+        Some(COMPRARE_LEVEL_HELP)
+    } else if command == SAVE {
+        Some(SAVE_HELP)
+    } else if command == LOAD {
+        Some(LOAD_HELP)
+    } else if command == CHANGELOG {
+        Some(CHANGELOG_HELP)
+    } else {
+        None
+    }
 }

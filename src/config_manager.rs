@@ -2,7 +2,7 @@ use std::{path::Path};
 
 use colored::{ColoredString, Colorize};
 
-use crate::{Formatted, io_handler, utils};
+use crate::{Formatted, io_handler, message_printer, utils};
 
 // Application version, to be displayed at startup and with --help command
 pub const VERSION_ID : &str = "v1.0.0-beta1"; 
@@ -23,6 +23,7 @@ pub const SAVE               :&str   = "save";
 pub const LOAD               :&str   = "load";
 pub const HELP               :&str   = "help";
 pub const CHANGELOG          :&str   = "changelog";
+pub const SHOW_LANGUAGES     :&str   = "show-languages";
 
 pub const MAX_PRODUCERS_VALUE : usize = 4;
 pub const MIN_PRODUCERS_VALUE : usize = 1;
@@ -118,6 +119,7 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
             let parse_result = parse_dirs(_dirs);
             if let Ok(x) = parse_result {
                 if x.is_empty() {
+                    message_printer::print_help_message_for_command(DIRS);
                     return Err(ArgParsingError::IncorrectCommandArgs(DIRS.to_owned()));
                 }
                 dirs = Some(x)
@@ -127,12 +129,14 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
         } else if let Some(excluded) = command.strip_prefix(EXCLUDE) {
             let vec = utils::parse_paths_to_vec(excluded);
             if vec.is_empty() {
+                message_printer::print_help_message_for_command(EXCLUDE);
                 return Err(ArgParsingError::IncorrectCommandArgs(EXCLUDE.to_owned()));
             }
             exclude_dirs = Some(vec);
         } else if let Some(langs) = command.strip_prefix(LANGUAGES) {
             let vec = utils::parse_languages_to_vec(langs);
             if vec.is_empty() {
+                message_printer::print_help_message_for_command(LANGUAGES);
                 return Err(ArgParsingError::IncorrectCommandArgs(LANGUAGES.to_owned()));
             }    
             languages_of_interest = Some(vec);
@@ -142,30 +146,36 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
             if let Some(_threads) = threads_values {
                 threads = Some(Threads::from(_threads));
             } else {
+                message_printer::print_help_message_for_command(THREADS);
                 return Err(ArgParsingError::IncorrectCommandArgs(THREADS.to_owned()))
             }
         } else if command.starts_with(BRACES_AS_CODE) {
             if has_any_args(command) {
+                message_printer::print_help_message_for_command(BRACES_AS_CODE);
                 return Err(ArgParsingError::UnexpectedCommandArgs(BRACES_AS_CODE.to_owned()))
             }
             braces_as_code = Some(true)
         } else if command.starts_with(SEARCH_IN_DOTTED) {
             if has_any_args(command) {
+                message_printer::print_help_message_for_command(SEARCH_IN_DOTTED);
                 return Err(ArgParsingError::UnexpectedCommandArgs(SEARCH_IN_DOTTED.to_owned()))
             }
             search_in_dotted = Some(true)
         } else if command.starts_with(SHOW_FAULTY_FILES) {
             if has_any_args(command) {
+                message_printer::print_help_message_for_command(SHOW_FAULTY_FILES);
                 return Err(ArgParsingError::UnexpectedCommandArgs(SHOW_FAULTY_FILES.to_owned()))
             }
             show_faulty_files = Some(true);
         } else if command.starts_with(NO_KEYWORDS) {
             if has_any_args(command) {
+                message_printer::print_help_message_for_command(NO_VISUAL);
                 return Err(ArgParsingError::UnexpectedCommandArgs(NO_KEYWORDS.to_owned()))
             }
             no_keywords = Some(true);
         } else if command.starts_with(NO_VISUAL) {
             if has_any_args(command) {
+                message_printer::print_help_message_for_command(NO_VISUAL);
                 return Err(ArgParsingError::UnexpectedCommandArgs(NO_VISUAL.to_owned()))
             }
             no_visual = Some(true);
@@ -179,6 +189,7 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
         } else if let Some(value) = command.strip_prefix(COMPRARE_LEVEL) {
             let compare_num = utils::parse_usize_value(value, MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL);
             if compare_num.is_none() {
+                message_printer::print_help_message_for_command(COMPRARE_LEVEL);
                 return Err(ArgParsingError::IncorrectCommandArgs(COMPRARE_LEVEL.to_owned()))
             } else {
                 compare_level = compare_num
@@ -186,6 +197,7 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
         } else if let Some(config_name) = command.strip_prefix(LOAD) {
             let config_name = config_name.trim();
             if config_name.is_empty() {
+                message_printer::print_help_message_for_command(LOAD);
                 return Err(ArgParsingError::IncorrectCommandArgs(LOAD.to_owned()));
             }
 
@@ -205,6 +217,7 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
         } else if let Some(name) = command.strip_prefix(SAVE) {
             let name = name.trim();
             if name.is_empty() {
+                message_printer::print_help_message_for_command(SAVE);
                 return Err(ArgParsingError::IncorrectCommandArgs(SAVE.to_owned()))
             }
             config_name_to_save = Some(name.to_owned());
@@ -284,9 +297,6 @@ fn combine_specified_config_options(custom_config: Option<ConfigurationBuilder>,
         show_faulty_files: Option<bool>, no_keywords: Option<bool>, no_visual: Option<bool>, log: Option<LogOption>, compare_level: Option<usize>) 
 -> ConfigurationBuilder 
 {
-    if log.is_some() {
-        println!("gtx");
-    }
     let mut args_builder = ConfigurationBuilder::new(dirs, exclude_dirs, languages_of_interest, threads, braces_as_code,
          search_in_dotted, show_faulty_files, no_keywords, no_visual, log, compare_level);
     if let Some(x) = custom_config {
@@ -515,14 +525,11 @@ impl Formatted for ArgParsingError {
             Self::InvalidPathInConfig(dir,name) => format!("Specified path '{}', in config '{}', doesn't exist anymore.",dir,name).red(),
             Self::DoublePath => "Directories already provided as first argument, but --dirs command also found.".red(),
             Self::UnrecognisedCommand(p) => format!("--{} is not recognised as a command.",p).red(),
-            Self::IncorrectCommandArgs(p) => format!("Incorrect arguments provided for the command '--{}'. Type '--help'",p).red(),
+            Self::IncorrectCommandArgs(p) => format!("Incorrect arguments provided for the command '--{}'.",p).red(),
             Self::UnexpectedCommandArgs(p) => format!("Command '--{}' does not expect any arguments.",p).red(),
             Self::NonExistantConfig(p) => format!("Configuration '{}' does not exist.",p).red()
         }
     }
-}
-
-impl ArgParsingError {
 }
 
 

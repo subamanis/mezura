@@ -9,10 +9,6 @@ default-run = "mezura"
 name = "mezura"
 path = "src/main.rs"
 
-[[bin]]
-name = "bench"
-path = "src/benchmarks.rs"
-
 [dependencies]
 colored = "2"
 lazy_static = "1.4.0"
