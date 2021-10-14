@@ -12,7 +12,7 @@ fn main() {
     #[cfg(target_os = "windows")]
     control::set_virtual_terminal(true).unwrap();
 
-    println!("\n{}",VERSION_ID);
+    println!("\n{}\n",VERSION_ID);
 
     let mut language_map: HashMap<String, Language>;
 

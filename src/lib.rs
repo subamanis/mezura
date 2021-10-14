@@ -80,15 +80,14 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     for handle in producer_handles {
         handle.join();
     }
-    println!("Producers finished after {} secs",parsing_started_instant.elapsed().as_millis() as f64/1000.0);
 
     //If there are a lot of files remaining after producers finish, it makes sense to start another consumer.
     let len = files_injector.len();
-    println!("Remaining files in list: {}",len);
     if len > 1200 {
         consumer_handles.push(consumer::start_parser_thread(config.threads.consumers, files_injector, faulty_files_ref.clone(), finish_condition_ref.clone(),
         languages_content_info_ref.clone(), language_map_ref.clone(), config.clone()));
     }
+
     finish_condition_ref.store(true,Ordering::Relaxed);
     for handle in consumer_handles {
         handle.join();
