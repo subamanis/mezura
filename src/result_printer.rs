@@ -835,14 +835,14 @@ mod tests {
     fn test_log_creation_and_reading() -> std::io::Result<()> {
         let test_log_dir = LOCAL_APP_PATHS.test_log_dir.clone() + "test2";
         if Path::new(&test_log_dir).exists() {
-            std::fs::remove_dir(&test_log_dir);
+            std::fs::remove_file(&test_log_dir).unwrap();
         }
 
         let mut config = Configuration::new(vec!["./".to_owned()]);
         config.set_log_option(LogOption::new(Some("test name".to_owned())));
         let final_stats = FinalStats::new(10, 1000, 100, 100);
 
-        log_stats(&test_log_dir, &None, &final_stats, &chrono::DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap(), &config);
+        log_stats(&test_log_dir, &None, &final_stats, &chrono::DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap(), &config).unwrap();
 
         let contents = utils::extract_file_contents(&test_log_dir).unwrap();
         let log_entries = parse_N_previous_entries(&contents, 1);

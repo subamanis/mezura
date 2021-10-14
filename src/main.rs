@@ -54,7 +54,7 @@ fn main() {
         return;
     }
     
-    let mut config = match config_manager::create_config_from_args(&args_str) {
+    let config = match config_manager::create_config_from_args(&args_str) {
         Ok(config) => config,
         Err(x) => {
             println!("\n{}\n",x.formatted());
@@ -63,7 +63,7 @@ fn main() {
     };
 
     if !config.languages_of_interest.is_empty() {
-        match retain_only_languages_of_interest(&mut language_map, &mut config.languages_of_interest) {
+        match retain_only_languages_of_interest(&mut language_map, &config.languages_of_interest) {
             Ok(x) => {
                 if let Some(msg) = x {
                     println!("\n {}",msg);
@@ -157,12 +157,12 @@ fn read_args_as_str() -> Result<String,ArgParsingError> {
 fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Language>) -> bool {
     let prefix = "--".to_owned();
     if args_str.contains(&(prefix.clone() + HELP)) {
-        message_printer::print_help_message_for_given_args(&args_str);
+        message_printer::print_help_message_for_given_args(args_str);
         return true; 
     } else if args_str.contains(&(prefix.clone() + CHANGELOG)) {
         message_printer::print_changelog();
         return true;
-    } else if args_str.contains(&(prefix.clone() + SHOW_LANGUAGES)) {
+    } else if args_str.contains(&(prefix + SHOW_LANGUAGES)) {
         message_printer::print_supported_languages(language_map);
         return true;
     }

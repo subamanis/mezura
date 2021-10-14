@@ -387,7 +387,7 @@ impl LocalAppPaths {
             working_dir = String::from(".");
         }
         
-        let data_dir =  working_dir.clone() + "/data/";
+        let data_dir =  working_dir + "/data/";
 
         LocalAppPaths {
             data_dir: data_dir.clone(),
