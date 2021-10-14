@@ -18,7 +18,6 @@ pub struct LanguageDirParseInfo {
 pub enum LanguageDirParseError {
     NoFilesFound,
     NoFilesFormattedProperly,
-    LanguagesOfInterestNotFound
 }
 
 #[derive(Debug)]
@@ -455,7 +454,6 @@ impl Formatted for LanguageDirParseError {
         match self {
             Self::NoFilesFound => "Error: No language files found in directory.".red(),
             Self::NoFilesFormattedProperly => "Error: No language file is formatted properly, so none could be parsed.".red(),
-            Self::LanguagesOfInterestNotFound => "Error: None of the provided languages exist in the languages directory".red()
         }
     }
 }

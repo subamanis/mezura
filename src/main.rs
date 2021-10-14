@@ -4,7 +4,7 @@ use colored::*;
 #[macro_use]
 extern crate include_dir;
 
-use mezura::{*, self, config_manager::{self, ArgParsingError, CHANGELOG, HELP, SHOW_LANGUAGES, VERSION_ID}, io_handler::{self, LanguageDirParseError}};
+use mezura::{*, self, config_manager::{self, ArgParsingError, CHANGELOG, HELP, SHOW_LANGUAGES, VERSION_ID}, io_handler};
 
 
 fn main() {
@@ -30,7 +30,7 @@ fn main() {
                 if !faulty_files.is_empty() {
                     let mut warn_msg = String::from("\nFormatting problems detected in language files: ");
                     warn_msg.push_str(&faulty_files.join(", "));
-                    warn_msg.push_str(". These files will not be taken into consideration.");
+                    warn_msg.push_str(".\nThese files will not be taken into consideration.\n");
                     println!("{}",warn_msg.yellow());
                 }
 
@@ -45,7 +45,7 @@ fn main() {
 
     let args_str = read_args_as_str();
     if let Err(x) = args_str {
-        println!("\n{}",x.formatted());
+        println!("\n{}\n",x.formatted());
         process::exit(1);
     }
     let args_str = args_str.unwrap();
@@ -69,8 +69,8 @@ fn main() {
                     println!("\n {}",msg);
                 }
             },
-            Err(x) => {
-                println!("\n{}",x.formatted());
+            Err(_) => {
+                println!("\n{}\n","Error: None of the provided language names map to valid supported languages".red());
                 process::exit(1);
             }
         }
@@ -91,13 +91,12 @@ fn main() {
 }
 
 
-fn retain_only_languages_of_interest(language_map: &mut HashMap<String, Language>, languages_of_interest: &[String])
--> Result<Option<ColoredString>,LanguageDirParseError> 
+fn retain_only_languages_of_interest(language_map: &mut HashMap<String, Language>, languages_of_interest: &[String]) -> Result<Option<ColoredString>,()> 
 {
     language_map.retain(|s, _| languages_of_interest.iter().any(|x| x.to_lowercase() == s.to_lowercase()));
 
     if language_map.is_empty() {
-        return Err(LanguageDirParseError::LanguagesOfInterestNotFound);
+        return Err(());
     }
 
     let mut non_existant_lang_names = String::with_capacity(60);// "\nThese languages don't exist as language files:\n".to_owned();
