@@ -12,7 +12,7 @@ fn main() {
     #[cfg(target_os = "windows")]
     control::set_virtual_terminal(true).unwrap();
 
-    println!("\n{}\n",VERSION_ID);
+    println!("\n{}",VERSION_ID);
 
     let mut language_map: HashMap<String, Language>;
 
@@ -21,7 +21,7 @@ fn main() {
         // and save the baked-in info, to a persistent path for future uses and user modification.
         language_map = read_baked_in_languages_dir();
         if let Err(x) = init_persistent_paths(&language_map, read_baked_in_default_config_contents()) {
-            println!("{}",format!("Unable to initialize persistent directories:{}\n",x.to_string()).yellow());
+            println!("{}",format!("\nUnable to initialize persistent directories:{}\n",x.to_string()).yellow());
             std::fs::remove_dir_all(&PERSISTENT_APP_PATHS.project_path).unwrap();
         }
     } else {
@@ -30,7 +30,7 @@ fn main() {
                 if !faulty_files.is_empty() {
                     let mut warn_msg = String::from("\nFormatting problems detected in language files: ");
                     warn_msg.push_str(&faulty_files.join(", "));
-                    warn_msg.push_str(".\nThese files will not be taken into consideration.\n");
+                    warn_msg.push_str(".\nThese files will not be taken into consideration.");
                     println!("{}",warn_msg.yellow());
                 }
 

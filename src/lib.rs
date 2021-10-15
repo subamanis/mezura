@@ -65,7 +65,7 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let mut producer_handles = Vec::with_capacity(config.threads.producers);
     let mut consumer_handles = Vec::with_capacity(config.threads.consumers);
 
-    println!("{}...","Analyzing directories".underline().bold());
+    println!("\n{}...","Analyzing directories".underline().bold());
 
     let parsing_started_instant = Instant::now();
     for i in 0..config.threads.producers {

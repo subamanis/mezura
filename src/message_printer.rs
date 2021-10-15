@@ -47,6 +47,7 @@ pub const THREADS_HELP  :  &str =
 
     If this command is not provided, the numbers will be chosen based on the available threads
     on your machine. Generally, a good ratio of producers-consumers is 1:3
+    
 "; 
 pub const BRACES_AS_CODE_HELP  :  &str = 
 "--braces-as-code
@@ -133,13 +134,19 @@ pub const LOAD_HELP  :  &str =
 "; 
 pub const CHANGELOG_HELP  :  &str =
 "--changelog
-    A summary of the changes of every previous version of the program
+    No arguments.
+
+    Overrides normal program execution and just prints a summary of the changes
+    of every previous version of the program
     
 ";
 pub const SHOW_LANGUAGES_HELP  :  &str =
 "--show-languages
-    A sorted list with all the supported languages that were detected, along
-    with the persistent data path of the application where you can add more. 
+    No arguments.
+
+    Overrides normal program execution and just prints a sorted list with the names of
+    all the supported languages, that were detected in the persistent data path
+    of the application, where you can add more. 
     
 ";
 
@@ -183,7 +190,7 @@ pub fn print_help_message_for_given_args(args_line: &str) {
             msg += x;
         } else {
             if sliced[0].trim() != HELP {
-                msg += &format!("'--{}' not recognised as a command\n\n",sliced[0]);
+                msg += &format!("'--{}' is not recognised as a command\n\n",sliced[0]);
             }
         }
     }
@@ -244,6 +251,8 @@ fn get_help_msg_of_command(command: &str) -> Option<&str> {
         Some(LOAD_HELP)
     } else if command == CHANGELOG {
         Some(CHANGELOG_HELP)
+    } else if command == SHOW_LANGUAGES {
+        Some(SHOW_LANGUAGES_HELP)
     } else {
         None
     }

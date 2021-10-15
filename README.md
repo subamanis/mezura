@@ -1,7 +1,7 @@
 # mezura
 
 ## About
-This is a fairly <b>fast</b>, fairly <b>accurate</b>, very <b>customizable</b> stats generator for programming projects, in the form of a CLI executable, written in <b>Rust</b>, with <b>minimal dependencies</b>. <br>
+This is a fairly <b>fast</b>, fairly <b>accurate</b>, very <b>customizable</b> stats generator for programming projects, in the form of a CLI executable, written in <b>Rust</b>.
 It is used for counting total lines, code lines, user defined <b>keywords</b> like classes, enums, etc., visualize the statistics, and to track the growth of codebases.<br><br>
 It is maintained primarily on <b>Windows</b>, but it is also being validated that it works on <b>Linux</b> (Ubuntu)
 
@@ -22,7 +22,7 @@ Example run:
 
 
 ## How To Run
-If you are using <b>Windows</b>, you can use the prebuilt executable directly, either by cloning the project to get the "executable" folder that contains the binary and the necessary "data" folder, or by downloading the folder provided with the latest <b>release</b>, in the Releases section of the repository's page. 
+If you are using <b>Windows</b>, you can use the prebuilt executable directly, either by cloning the project to get the "executable" folder that contains the binary or by downloading the folder provided with the latest <b>release</b>, in the Releases section of the repository's page. 
 
 You can also download and build the project yourself, either by downloading it as a .zip from GitHub or by running: <br>
 `git clone <repo_path>   &&   cd mezura   &&   cargo build --release`
@@ -44,6 +44,17 @@ The generated stats are the following:
 - Percentage comparisons between languages
 - Difference of stats between executions 
 
+There is a "data" folder in the repository, that contains some already provided supported languages and the default configuration file.
+The program, at compile time, includes the "data" folder in the binary, and during the first execution, it saves it with the same structure in a persistent path inside the user's computer, according to the platfrom's specification. More specifically, the paths per operating system are:
+```
+    Windows:  C:/Users/<user_name>/AppData/Roaming/mezura
+    Linux:    /home/<user_name>/.local/share/mezura
+    MacOs:    /Users/<user_name>/Library/Application Support/mezura
+```
+
+After every subsequent execution, the required information, like languages and configurations, are read from these folders, so the user can have easy access and modify them,
+like add more languages of his choice, or modify the default configuration.
+
 The program requires a "data" dir to be present on the same level as the executable. In the "data" dir, a "languages" dir must be present, that contains the supported languages as seperate txt files. An optional "config" dir may be present too, where the user can specify persistent settings (more on that later).
 
 The program counts the lines of files in the specified director(y/ies). In order for a file to be considered for counting, its extension must be supported, meaning that a .txt language file specifying the particular extension as an entry in its 'Extensions' field, must be present in the "data/languages" dir see [Supported Languages](#supported-languages). 
@@ -55,7 +66,7 @@ Also, the program can search for user-defined <b>keywords</b> that are specified
 Below there is a list with all the commands-flags that the program accepts.
 ```
 --help
-    Display this message on the terminal. No other arguments or commands are required.
+    Display this message on the terminal. If more commands are provided, information will be displayed specifically about them.
     
 --dirs
     The paths to the directories or files, seperated by commas if more than 1,
@@ -159,6 +170,17 @@ Below there is a list with all the commands-flags that the program accepts.
     an existing configuration file from the 'data/config/' directory. 
 
     You can combine the '--load' and '--save' commands to modify a configuration file.
+    
+--changelog
+    No arguments.
+
+    Overrides normal program execution and just prints a summary of the changes of every previous version of the program
+
+--show-languages
+    No arguments.
+
+    Overrides normal program execution and just prints a sorted list with the names of all the supported languages,
+    that were detected in the persistent data path of the application, where you can add more.
 ```
 
 
@@ -167,10 +189,10 @@ Below there is a list with all the commands-flags that the program accepts.
 If we plan to run the program many times for a project, it can be bothersome to specify all the flags every time, especially if they contain a lot of target and exclude dirs.
 That's why you can specify many flags in a <b>*configuration file*</b>, and have the program just load that file (see the --load command). <br>
 
-Configurations can be created automatically by specifying all the flags once, along with the command "--save". Then the program, along with its normal execution, will automatically create a config file with the name you specified, and dump all the flags in there. 
+Configurations can be created automatically by specifying all the flags once, along with the command "--save", and a name for the configuration. Then the program, along with its normal execution, will automatically create a config file with the name you specified, and dump all the flags in there. 
 The next time you want to run the program on this project, you can do it like this: ```mezura --load <config_name>``` <br>
 
-By default, there is a configuration file name "default" already present in the "data/config" dir, that gets loaded with every run. There, you can customize your preferences and they will apply to all runs, except if overriden by explicitely providing a different flag in the cmd, or by loading a specific configuration. For example, if you prefer counting braces as code, you can specify it there, because the default behaviour is to not regard them as code. <br>
+By default, there is a configuration file name "default" already present in the "data/config" dir, that gets loaded on every run. There, you can customize your preferences and they will apply to all runs, except if overriden by explicitely providing a different flag in the cmd, or by loading a specific configuration. For example, if you prefer counting braces as code, you can specify it there, because the default behaviour is to not regard them as code. <br>
 
 The priorities of the specified flags are:
 1) cmd
@@ -182,20 +204,20 @@ The priorities of the specified flags are:
 
 ## Logs and Progress
 Inside the 'data/logs' folder, the program will save log files that correspond to saved configurations everytime the '--log' flag is used. <br>
-Inside the log files, the date and time of the execution is saved, along with information about the current configuration (like the target directories,
-whether braces should be considered code, etc, so you can see if at some point the configuration got modified), and also the total files, lines, code lines,
+Inside the log files, the date and time of the execution and the name of the log (if specified) are saved, along with information about the current configuration (like the target directories, whether braces should be considered code, etc, so you can see if at some point the configuration got modified), and also the total files, lines, code lines,
 extra lines, size and average size of the execution. They are in an easy to parse format for external use also. <br>
 
 By using the '--compare <N>' flag, the (N) previous logged executions will be retrieved from the file and will be compared and printed to the screen. For example
 for N = 3, it would look like this:
 ![](screenshots/compare-logs.PNG)
 
-Note that a configuration file must be loaded for both of these flags to work
+Note that a configuration file must be loaded for both '--log' and '--compare' to work.
 
 
 
 ## Supported Languages
-Note that the default supported languages are very incomplete, but they can be easily expanded by the user. All the supported languages can be found in the folder "data/languages" as seperate text files. 
+Note that the default supported languages are very incomplete, but they can be easily expanded by the user. All the supported languages can be found in the folder "data/languages"
+as seperate text files, in the persistent data path of the application. 
 The user can easily specify a new language by replicating the format of the language files and customizing it accordingly, either by following the rules below or by copy pasting an existing file.
 
 The format of the languages is as follows(and should not be modified at all):
@@ -214,7 +236,7 @@ Comment symbol
 <single line comment symbol like: //>
 
 ```
-all the following lines are optional and can be omitted
+All the following lines are optional and can be omitted. You can also specify an arbitrary amount of keywords.
 ```
 Multiline comment start symbol
 <a symbol like: /*>

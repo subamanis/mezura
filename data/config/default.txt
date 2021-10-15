@@ -1,6 +1,9 @@
 Configuration file that will always be loaded.
-After every "===>" symbol, there is as command that can also be used from the cmd,
-and in the next line is the argument of the command.
+
+After every "===>" symbol, there is as command and in the next line there is the argument of the command.
+You can add any other command-argument pair to use as default in every program execution.
+For all the possible commands, run the '--help' command.
+
 Do not modify the name of the commands and the name of this file.
 
 
