@@ -2,7 +2,7 @@ Language
 C++
 
 Extensions
-cpp hpp
+cpp hpp h
 
 String symbols
 "
