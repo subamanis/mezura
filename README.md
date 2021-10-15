@@ -75,8 +75,14 @@ Below there is a list with all the commands-flags that the program accepts.
 --show-languages
     No arguments.
 
-    Overrides normal program execution and just prints a sorted list with the names of all the supported languages,
+    Overrides normal program execution and just prints a sorted list with the names of all the supported languages
     that were detected in the persistent data path of the application, where you can add more.
+
+--show-configs
+    No arguments.
+
+    Overrides normal program execution and just prints a sorted list with the names of all the configuration files
+    that were detected in the persistent data path of the application. 
 
 --dirs
     The paths to the directories or files, seperated by commas if more than 1,

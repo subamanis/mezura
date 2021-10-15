@@ -24,6 +24,7 @@ pub const LOAD               :&str   = "load";
 pub const HELP               :&str   = "help";
 pub const CHANGELOG          :&str   = "changelog";
 pub const SHOW_LANGUAGES     :&str   = "show-languages";
+pub const SHOW_CONFIGS       :&str   = "show-configs";
 
 pub const MAX_PRODUCERS_VALUE : usize = 4;
 pub const MIN_PRODUCERS_VALUE : usize = 1;

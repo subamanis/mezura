@@ -1,4 +1,6 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fs};
+
+use colored::Colorize;
 
 use crate::{CHANGELOG_BYTES, Language, PERSISTENT_APP_PATHS, config_manager::*};
 
@@ -145,8 +147,17 @@ pub const SHOW_LANGUAGES_HELP  :  &str =
     No arguments.
 
     Overrides normal program execution and just prints a sorted list with the names of
-    all the supported languages, that were detected in the persistent data path
+    all the supported languages that were detected in the persistent data path
     of the application, where you can add more. 
+    
+";
+pub const SHOW_CONFIGS_HELP  :  &str =
+"--show-configs
+    No arguments.
+
+    Overrides normal program execution and just prints a sorted list with the names of
+    all the configuration files that were detected in the persistent data path
+    of the application. 
     
 ";
 
@@ -155,6 +166,9 @@ pub fn print_whole_help_message() {
     let mut msg = get_data_dir_str();
     msg += "Format of arguments: <path_here> --optional_command1 --optional_commandN\n\nCOMMANDS:\n\n";
 
+    msg += CHANGELOG_HELP;
+    msg += SHOW_LANGUAGES_HELP;
+    msg += SHOW_CONFIGS_HELP;
     msg += DIRS_HELP;
     msg += EXCLUDE_HELP;
     msg += LANGUAGES_HELP;
@@ -167,8 +181,6 @@ pub fn print_whole_help_message() {
     msg += COMPRARE_LEVEL_HELP;
     msg += SAVE_HELP;
     msg += LOAD_HELP;
-    msg += CHANGELOG_HELP;
-    msg += SHOW_LANGUAGES_HELP;
 
     println!("{}",msg);
 }
@@ -219,6 +231,38 @@ pub fn print_supported_languages(languages_map: &HashMap<String,Language>) {
     println!("{}The supported languages found are:\n  {}\n",prefix,lang_names.join("\n  "));
 }
 
+pub fn print_existing_configs() {
+    let mut config_names = Vec::with_capacity(10);
+
+    let config_dir = match fs::read_dir(&PERSISTENT_APP_PATHS.config_dir) {
+        Ok(x) => x,
+        Err(_) => {
+            println!("{}","Could not read the config dir".yellow());
+            return;
+        }
+    };
+    for path in config_dir {
+        if let Ok(x) = path {
+            if let Ok(f) = x.file_type() {
+                if f.is_file() {
+                    config_names.push(x.file_name())
+                }
+            }
+        }
+    }
+    let mut config_names = config_names.iter().filter_map(|x| {
+        let str = x.to_str().unwrap();
+        if str != "default.txt" {
+            Some(str)
+        } else {
+            None
+        }
+    }).collect::<Vec<_>>();
+    config_names.sort();
+    let prefix = get_data_dir_str();
+    println!("{}Found these configurations:\n  {}\n",prefix,config_names.join("\n  "));
+}
+
 
 fn get_data_dir_str() -> String {
     format!("\nData dir path: {}\n\n", PERSISTENT_APP_PATHS.data_dir)
@@ -253,6 +297,8 @@ fn get_help_msg_of_command(command: &str) -> Option<&str> {
         Some(CHANGELOG_HELP)
     } else if command == SHOW_LANGUAGES {
         Some(SHOW_LANGUAGES_HELP)
+    } else if command == SHOW_CONFIGS {
+        Some(SHOW_CONFIGS_HELP)
     } else {
         None
     }

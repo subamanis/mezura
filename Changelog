@@ -42,6 +42,7 @@ New commands:
   -> Added the --no-keywords flag, that disables keyword counting and printing.
   -> Added the --changelog command, that displays the changelog history and terminates execution.
   -> Added the --show-languages command, that displays the language files that were found.
+  -> Added the --show-configs commands, that displays the configuration files that were found.
 
 Change in commands:
   -> (Breaking: update config files) Change on the --threads command's arguments, to reflect the ability

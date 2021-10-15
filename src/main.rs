@@ -4,7 +4,7 @@ use colored::*;
 #[macro_use]
 extern crate include_dir;
 
-use mezura::{*, self, config_manager::{self, CHANGELOG, HELP, SHOW_LANGUAGES, VERSION_ID}, io_handler};
+use mezura::{*, self, config_manager::{self, CHANGELOG, HELP, SHOW_CONFIGS, SHOW_LANGUAGES, VERSION_ID}, io_handler};
 
 
 fn main() {
@@ -164,8 +164,11 @@ fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Lan
     } else if args_str.contains(&(prefix.clone() + CHANGELOG)) {
         message_printer::print_changelog();
         return true;
-    } else if args_str.contains(&(prefix + SHOW_LANGUAGES)) {
+    } else if args_str.contains(&(prefix.clone() + SHOW_LANGUAGES)) {
         message_printer::print_supported_languages(language_map);
+        return true;
+    } else if args_str.contains(&(prefix + SHOW_CONFIGS)) {
+        message_printer::print_existing_configs();
         return true;
     }
 
