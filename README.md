@@ -3,7 +3,7 @@
 ## About
 This is a fairly <b>fast</b>, fairly <b>accurate</b>, very <b>customizable</b> stats generator for programming projects, in the form of a CLI executable, written in <b>Rust</b>.
 It is used for counting total lines, code lines, user defined <b>keywords</b> like classes, enums, etc., visualize the statistics, and to track the growth of codebases.<br><br>
-It is maintained primarily on <b>Windows</b>, but it is also being validated that it works on <b>Linux</b> (Ubuntu)
+It is maintained primarily on <b>Windows</b>, it is also being validated that it works on <b>Linux</b> (Ubuntu), and it probably also works on MacOS (although I cannot personally verify).
 
 Example run:
 ![](screenshots/example.PNG)
@@ -11,7 +11,8 @@ Example run:
 
 ## Table of contents
 * [How To Run](#how-to-run)
-* [Details and Flags](#details-and-flags)
+* [Details](#details)
+* [Flags / Commands](#flags-commands)
 * [Configuration Files](#configuration-files)
 * [Logs and Progress](#logs-and-progress)
 * [Supported Languages](#supported-languages)
@@ -20,22 +21,21 @@ Example run:
 * [Similar Projects](#similar-projects)
 
 
-
 ## How To Run
-If you are using <b>Windows</b>, you can use the prebuilt executable directly, either by cloning the project to get the "executable" folder that contains the binary or by downloading the folder provided with the latest <b>release</b>, in the Releases section of the repository's page. 
+The only thing you need is the binary. You can either:
+1) ```cargo install mezura```
+2) Build yourself by cloning or downloading the repo (```cargo build --release```),
+3) For Windows only, grab the prebuilt binary from the "executable" folder.
 
-You can also download and build the project yourself, either by downloading it as a .zip from GitHub or by running: <br>
-`git clone <repo_path>   &&   cd mezura   &&   cargo build --release`
+And to run it:
+```mezura <path> --optional_command1 --optional_commandN```
 
-<b>Note</b> that if you download the project by running `cargo install --git`, you will need to manually place the "data" folder provided with the repository, in the same directory of the executable.<br><br>
+The program, expects one or many paths to some directories or a code files, seperated by comma if more than one.
 
-Format of arguments: ```<path> --optional_command1 --optional_commandN```
-
-The program, expects a path to a directory or a code file (they can be many different ones, seperated by comma), that can be provided as cmd argument, or if not, you will be prompted to provide it after running the program.
-The program also accepts a lot of optional flags to customize functionality, see the next section for more info or use the --help command.
+The program also accepts a lot of optional flags to customize functionality, see [Flags / Commands](#flags-commands) for more info or use the --help command.
 
 	
-## Details and Flags
+## Details
 The generated stats are the following:
 - Number of files
 - Lines (code + others) and percentages
@@ -45,29 +45,39 @@ The generated stats are the following:
 - Difference of stats between executions 
 
 There is a "data" folder in the repository, that contains some already provided supported languages and the default configuration file.
-The program, at compile time, includes the "data" folder in the binary, and during the first execution, it saves it with the same structure in a persistent path inside the user's computer, according to the platfrom's specification. More specifically, the paths per operating system are:
+The program, at compile time, includes the "data" folder in the binary, and during the first execution, it saves it with the same structure in a persistent path, inside the user's computer, according to the platfrom's specification. More specifically, the paths per operating system are:
 ```
     Windows:  C:/Users/<user_name>/AppData/Roaming/mezura
     Linux:    /home/<user_name>/.local/share/mezura
     MacOs:    /Users/<user_name>/Library/Application Support/mezura
 ```
 
-After every subsequent execution, the required information, like languages and configurations, are read from these folders, so the user can have easy access and modify them,
+After every subsequent execution, the languages, configurations and logs, are read from these folders, so the user can have easy access and modify them,
 like add more languages of his choice, or modify the default configuration.
 
-The program requires a "data" dir to be present on the same level as the executable. In the "data" dir, a "languages" dir must be present, that contains the supported languages as seperate txt files. An optional "config" dir may be present too, where the user can specify persistent settings (more on that later).
+In order for a file to be considered for counting, its extension must be supported, meaning that a .txt language file specifying the particular extension as an entry in its 'Extensions' field, must be present in the "data/languages" dir see [Supported Languages](#supported-languages). 
 
-The program counts the lines of files in the specified director(y/ies). In order for a file to be considered for counting, its extension must be supported, meaning that a .txt language file specifying the particular extension as an entry in its 'Extensions' field, must be present in the "data/languages" dir see [Supported Languages](#supported-languages). 
 
-The program distinguishes the total lines in code lines and "extra" lines (all the lines that are not code).
-<b>Note</b> that braces "{ }" are not considered as code by default, but this can be changed either by using the --braces-as-code flag during a particular run of the program, or enabling it in the "default" config file to use globally always.
-Also, the program can search for user-defined <b>keywords</b> that are specified in the language files and count their occurances, while identifying them correctly in <b>complex lines</b>, see [Accuracy and Limitations](#accuracy-and-limitations) for details.
-
+## Flags / Commands
 Below there is a list with all the commands-flags that the program accepts.
 ```
 --help
-    Display this message on the terminal. If more commands are provided, information will be displayed specifically about them.
-    
+    No arguments or any number of existing other commands.
+
+    Overrides normal program execution and just displays this message on the terminal.
+    If more commands are provided, information will be displayed specifically about them.
+
+--changelog
+    No arguments.
+
+    Overrides normal program execution and just prints a summary of the changes of every previous version of the program
+
+--show-languages
+    No arguments.
+
+    Overrides normal program execution and just prints a sorted list with the names of all the supported languages,
+    that were detected in the persistent data path of the application, where you can add more.
+
 --dirs
     The paths to the directories or files, seperated by commas if more than 1,
     in this form: '--dirs <path1>, <path2>'
@@ -139,8 +149,22 @@ Below there is a list with all the commands-flags that the program accepts.
     Disables the colors in the "overview" section of the results, and disables the visualization with 
     the vertical lines that reprisent the percentages.
 
+--save
+    One argument as the file name (whitespace allowed, without an extension, case-insensitive)
+
+    Doing so, will run the program and also create a .txt configuration file,
+    inside 'data/config/' with the specified name, that can later be loaded with the --load command.
+
+--load
+    One argument as the file name (whitespace allowed, without an extension, case-insensitive)
+    
+    Assosiated with the '--save' command, this command is used to load the flags of 
+    an existing configuration file from the 'data/config/' directory. 
+
+    You can combine the '--load' and '--save' commands to modify a configuration file.
+
 --log 
-    Can take 0..n words as arguments in the cmd.
+    0..n words as arguments in the cmd.
     If specified in a configuration file use 'true' or 'yes' to enable,
     or 'no' to disable. Default: no 
 
@@ -156,33 +180,7 @@ Below there is a list with all the commands-flags that the program accepts.
     program execution should be compared to (see [Logs and Progress](#logs-and-progress)).
 
     Providing 0 as argument will disable the progress report (comparison).
-
---save
-    One argument as the file name (whitespace allowed, without an extension, case-insensitive)
-
-    Doing so, will run the program and also create a .txt configuration file,
-    inside 'data/config/' with the specified name, that can later be loaded with the --load command.
-
---load
-    One argument as the file name (whitespace allowed, without an extension, case-insensitive)
-    
-    Assosiated with the '--save' command, this command is used to load the flags of 
-    an existing configuration file from the 'data/config/' directory. 
-
-    You can combine the '--load' and '--save' commands to modify a configuration file.
-    
---changelog
-    No arguments.
-
-    Overrides normal program execution and just prints a summary of the changes of every previous version of the program
-
---show-languages
-    No arguments.
-
-    Overrides normal program execution and just prints a sorted list with the names of all the supported languages,
-    that were detected in the persistent data path of the application, where you can add more.
 ```
-
 
 
 ## Configuration Files
