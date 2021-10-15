@@ -11,21 +11,3 @@ a,b,c.txt,d.txt
 
 ===> braces-as-code
 yes
-
-===> search-in-dotted
-no
-
-===> show-faulty-files
-no
-
-===> no-keywords
-no
-
-===> no-visual
-no
-
-===> log
-no
-
-===> compare
-1

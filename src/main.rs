@@ -44,9 +44,9 @@ fn main() {
     }
 
     let args_str = read_args_as_str();
-    if let Err(x) = args_str {
-        println!("\n{}\n",x.formatted());
-        process::exit(1);
+    if args_str.is_none() {
+        message_printer::print_whole_help_message();
+        return;
     }
     let args_str = args_str.unwrap();
 
@@ -145,12 +145,15 @@ fn init_persistent_paths(languages: &HashMap<String,Language>, default_config_co
     Ok(())
 }
 
-fn read_args_as_str() -> Result<String,ArgParsingError> {
+fn read_args_as_str() -> Option<String> {
     let args = std::env::args().skip(1)
             .filter_map(|arg| get_trimmed_if_not_empty(&arg))
             .collect::<Vec<String>>();
-    if args.is_empty() {return Err(ArgParsingError::NoArgsProvided)}
-    Ok(args.join(" ").trim().to_owned())
+    if args.is_empty() {
+        None
+    } else {
+        Some(args.join(" ").trim().to_owned())
+    }
 }
 
 fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Language>) -> bool {

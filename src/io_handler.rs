@@ -305,7 +305,10 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
              should_show_faulty_files, no_keywords, no_visual, log, compare_level))
 }
 
-pub fn save_config_to_file(config_name: &str, config: &Configuration, config_path: Option<String>) -> std::io::Result<()> {
+// Dirs must be specified (is checked before calling this function)
+pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<String>, config_name: &str, config_builder: &ConfigurationBuilder) 
+-> std::io::Result<()> 
+{
     let config_dir = if let Some(dir) = config_path {dir} else {PERSISTENT_APP_PATHS.config_dir.clone()};
     let file_name = config_dir + config_name + ".txt";
 
@@ -313,49 +316,57 @@ pub fn save_config_to_file(config_name: &str, config: &Configuration, config_pat
 
     writer.write(b"Auto-generated config file.");
 
-    if !config.dirs.is_empty() {
-        writer.write(&[b"\n\n===> ",config_manager::DIRS.as_bytes(),b"\n"].concat());
-        writer.write(config.dirs.join(",").as_bytes());
-    }
-    if !config.exclude_dirs.is_empty() {
+    writer.write(&[b"\n\n===> ",config_manager::DIRS.as_bytes(),b"\n"].concat());
+    writer.write(config_builder.dirs.as_ref().unwrap().join(",").as_bytes());
+
+    if let Some(exclude_dirs) = &config_builder.exclude_dirs {
         writer.write(&[b"\n\n===> ",config_manager::EXCLUDE.as_bytes(),b"\n"].concat());
-        writer.write(config.exclude_dirs.join(",").as_bytes());
+        writer.write(exclude_dirs.join(",").as_bytes());
     }
-    if !config.languages_of_interest.is_empty() {
+    if let Some(languages_of_interest) = &config_builder.languages_of_interest {
         writer.write(&[b"\n\n===> ",config_manager::LANGUAGES.as_bytes(),b"\n"].concat());
-        writer.write(config.languages_of_interest.join(",").as_bytes());
+        writer.write(languages_of_interest.join(",").as_bytes());
     }
-    writer.write(&[b"\n\n===> ",config_manager::THREADS.as_bytes(),b"\n"].concat());
-    writer.write((config.threads.producers.to_string() + " " + &config.threads.consumers.to_string()).as_bytes());
-
-    writer.write(&[b"\n\n===> ",config_manager::BRACES_AS_CODE.as_bytes(),b"\n"].concat());
-    writer.write(if config.braces_as_code {b"yes"} else {b"no"});
-
-    writer.write(&[b"\n\n===> ",config_manager::SEARCH_IN_DOTTED.as_bytes(),b"\n"].concat());
-    writer.write(if config.should_search_in_dotted {b"yes"} else {b"no"});
-
-    writer.write(&[b"\n\n===> ",config_manager::SHOW_FAULTY_FILES.as_bytes(),b"\n"].concat());
-    writer.write(if config.should_show_faulty_files {b"yes"} else {b"no"});
-
-    writer.write(&[b"\n\n===> ",config_manager::NO_KEYWORDS.as_bytes(),b"\n"].concat());
-    writer.write(if config.no_keywords {b"yes"} else {b"no"});
-
-    writer.write(&[b"\n\n===> ",config_manager::NO_VISUAL.as_bytes(),b"\n"].concat());
-    writer.write(if config.no_visual {b"yes"} else {b"no"});
-
-    writer.write(&[b"\n\n===> ",config_manager::LOG.as_bytes(),b"\n"].concat());
-    if config.log.should_log {
-        if let Some(name) = &config.log.name {
-            writer.write(name.as_bytes());
+    if let Some(threads) = &config_builder.threads {
+        writer.write(&[b"\n\n===> ",config_manager::THREADS.as_bytes(),b"\n"].concat());
+        writer.write((threads.producers.to_string() + " " + &threads.consumers.to_string()).as_bytes());
+    }
+    if let Some(braces_as_code) = &config_builder.braces_as_code {
+        writer.write(&[b"\n\n===> ",config_manager::BRACES_AS_CODE.as_bytes(),b"\n"].concat());
+        writer.write(if *braces_as_code {b"yes"} else {b"no"});
+    }
+    if let Some(should_search_in_dotted) = &config_builder.should_search_in_dotted {
+        writer.write(&[b"\n\n===> ",config_manager::SEARCH_IN_DOTTED.as_bytes(),b"\n"].concat());
+        writer.write(if *should_search_in_dotted {b"yes"} else {b"no"});
+    }
+    if let Some(should_show_faulty_files) = &config_builder.should_show_faulty_files {
+        writer.write(&[b"\n\n===> ",config_manager::SHOW_FAULTY_FILES.as_bytes(),b"\n"].concat());
+        writer.write(if *should_show_faulty_files {b"yes"} else {b"no"});
+    }
+    if let Some(no_keywords) = &config_builder.no_keywords {
+        writer.write(&[b"\n\n===> ",config_manager::NO_KEYWORDS.as_bytes(),b"\n"].concat());
+        writer.write(if *no_keywords {b"yes"} else {b"no"});
+    }
+    if let Some(no_visual) = &config_builder.no_visual {
+        writer.write(&[b"\n\n===> ",config_manager::NO_VISUAL.as_bytes(),b"\n"].concat());
+        writer.write(if *no_visual {b"yes"} else {b"no"});
+    }
+    if let Some(log) = &config_builder.log {
+        writer.write(&[b"\n\n===> ",config_manager::LOG.as_bytes(),b"\n"].concat());
+        if log.should_log {
+            if let Some(name) = &log.name {
+                writer.write(name.as_bytes());
+            } else {
+                writer.write(b"yes");
+            }
         } else {
-            writer.write(b"yes");
+            writer.write(b"no");
         }
-    } else {
-        writer.write(b"no");
     }
-
-    writer.write(&[b"\n\n===> ",config_manager::COMPRARE_LEVEL.as_bytes(),b"\n"].concat());
-    writer.write(config.compare_level.to_string().as_bytes());
+    if let Some(compare_level) = &config_builder.compare_level {
+        writer.write(&[b"\n\n===> ",config_manager::COMPRARE_LEVEL.as_bytes(),b"\n"].concat());
+        writer.write(compare_level.to_string().as_bytes());
+    }
 
     writer.write(b"\n");    
     writer.flush();
@@ -532,24 +543,24 @@ mod my_reader {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Configuration, LOCAL_APP_PATHS, config_manager, io_handler::{parse_config_file, parse_supported_languages_to_map, save_config_to_file}};
+    use crate::*;
 
     #[test]
     fn test_save_config_file_and_then_parse_it() -> std::io::Result<()> {
         let command = format!("C:/ --exclude a,b,c.txt,d.txt, --braces-as-code --threads 1 1");
-        let config = config_manager::create_config_from_args(&command).unwrap();
+        let config_builder = config_manager::create_config_builder_from_args(&command).unwrap();
 
         let test_config_dir = Some(LOCAL_APP_PATHS.test_config_dir.clone());
-        save_config_to_file("auto-generated", &config, test_config_dir);
+        io_handler::save_existing_commands_from_config_builder_to_file(test_config_dir, "auto-generated", &config_builder);
 
-        let options = parse_config_file(Some("auto-generated"), Some(LOCAL_APP_PATHS.test_config_dir.clone())).unwrap();
-        assert_eq!(config.dirs, options.dirs.unwrap());
-        assert_eq!(config.exclude_dirs, options.exclude_dirs.unwrap());
-        assert_eq!(config.threads, options.threads.unwrap());
-        assert_eq!(config.braces_as_code, options.braces_as_code.unwrap());
-        assert_eq!(config.should_show_faulty_files, options.should_show_faulty_files.unwrap());
-        assert_eq!(config.should_search_in_dotted, options.should_search_in_dotted.unwrap());
-        assert_eq!(config.no_visual, options.no_visual.unwrap());
+        let options = io_handler::parse_config_file(Some("auto-generated"), Some(LOCAL_APP_PATHS.test_config_dir.clone())).unwrap();
+        assert_eq!(config_builder.dirs, options.dirs);
+        assert_eq!(config_builder.exclude_dirs, options.exclude_dirs);
+        assert_eq!(config_builder.threads, options.threads);
+        assert_eq!(config_builder.braces_as_code, options.braces_as_code);
+        assert_eq!(config_builder.should_show_faulty_files, options.should_show_faulty_files);
+        assert_eq!(config_builder.should_search_in_dotted, options.should_search_in_dotted);
+        assert_eq!(config_builder.no_visual, options.no_visual);
 
         Ok(())
     }
@@ -563,7 +574,7 @@ mod tests {
             .set_braces_as_code(true);
 
 
-        let options = parse_config_file(Some("test"), Some(LOCAL_APP_PATHS.test_config_dir.clone())).unwrap();
+        let options = io_handler::parse_config_file(Some("test"), Some(LOCAL_APP_PATHS.test_config_dir.clone())).unwrap();
         assert_eq!(config.dirs, options.dirs.unwrap());
         assert_eq!(config.exclude_dirs, options.exclude_dirs.unwrap());
         assert_eq!(config.threads, options.threads.unwrap());
@@ -577,8 +588,8 @@ mod tests {
 
     #[test]
     fn test_parse_supported_languages_to_map() {
-        let (lang_map, faulty_files) = 
-                parse_supported_languages_to_map(&(LOCAL_APP_PATHS.test_dir.clone() + "languages/")).unwrap();
+        let (lang_map, faulty_files) = io_handler::parse_supported_languages_to_map(
+                &(LOCAL_APP_PATHS.test_dir.clone() + "languages/")).unwrap();
         assert!(lang_map.len() == 2);
         assert!(faulty_files.len() == 1);
     }

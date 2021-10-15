@@ -1,14 +1,42 @@
+v0.9.2  -  22/9/2021  
+
+  4,260 Total lines - 3,098 code lines
+
+Bugfixes:
+  -> Added mutliline comments in the Rust language file, that were missing by mistake
+
+Major/Functionality changes:
+  -> Running the program by double clicking on the exe is no longer supported.
+  -> The program will now terminate after execution at all times 
+      (no longer accepting inputs from stdin on error).
+
+Change in commands:
+  -> Running the program with the --help command, shows information about the other provided commands, 
+      or if none were provided, shows the information of all the commands.
+
+
+
+-----------------------------------------------------------------------------------------------------------
+
+
+
 v1.0.0-beta1  -  15/10/2021  
 
   5,240 (+23%) Total lines   -   3,668 (+18.4%) code lines 
 
-Major/Functionality changes:
-  -> The necessary "data" folder, gets now baked in the executable, at compile time. On the first execution,
-      the folder gets written on a persistent path in the user's machine, according to platform specifications,
-      and for every other execution, the necessary data is read from there,
-      so the user can manually modify the languages.
-  -> The producer (the part that traverses the given dirs to find relevant files) is now paralellized. Performance
-      may increase on cold runs, specifically on machines with logical core count > 4.
+Bugfixes:
+  -> Saving a configuration will now only save the specified flags, and not the rest with
+      default values, so that they can be overriden by the default configuration.
+
+Main changes:
+  -> The necessary "data" folder, gets now baked in the executable, at compile time.
+      It is no longer necessary for the "data" folder and the executable to be in the same directory
+      when running the program. On the first execution, the folder gets written on a persistent path
+      in the user's machine, according to platform specifications, and for every other execution,
+      the necessary data is read from there, so the user can manually modify the languages.
+  -> The producer (the part that traverses the given dirs to find relevant files) is now paralellized.
+      Performance may increase on cold runs, specifically on machines with logical core count > 4.
+  -> Running the program with no arguments will now just display the help message.
 
 New commands:
   -> Added the --no-keywords flag, that disables keyword counting and printing.
@@ -22,11 +50,12 @@ Change in commands:
       that describes the state of the codebase at the time the logging was done. 
   -> Normal program executions and --help command, will now display the version ID of the program.
   -> Running the --help command will now work even if there is no data dir.
-  -> If a command was provided with invalid arguments, the help message for this command will also be displayed.
+  -> If a command was provided with invalid arguments, the help message for this command
+      will also be displayed.
 
 Dependencies: 
-  -> num_cpus = "1.13.0"  was introduced, so that the program can automatically detect an optimal number of threads
-      for producers and consumers.
+  -> num_cpus = "1.13.0"  was introduced, so that the program can automatically detect
+      an optimal number of threads for producers and consumers.
   -> directories = "4.0.1"  was introduced, so that platform-specific and suitable paths can be chosen for
       saving the persistent data of the application in the user machine.
   -> include_dir = "0.6.2"  was introduced, so that the "data" folder provided with the repository can be
@@ -34,22 +63,3 @@ Dependencies:
 
 Other:
   -> Added the .h extension in the C++ language file, along the .cpp and .hpp extensions.
-
-
---------------------------------------------------------------------------------------------------------------------
-
-
-v0.9.2  -  22/9/2021  
-
-  4,260 Total lines - 3,098 code lines
-
-Bugfixes:
-  -> Added mutliline comments in the Rust language file, that were missing by mistake
-
-Major/Functionality changes:
-  -> Running the program by double clicking on the exe is no longer supported.
-  -> The program will now terminate after execution at all times (no longer accepting inputs from stdin on error).
-
-Change in commands:
-  -> Running the program with the --help command, shows information about the other provided commands, 
-      or if none were provided, shows the information of all the commands.

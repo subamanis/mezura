@@ -84,9 +84,15 @@ pub enum ArgParsingError {
     NonExistantConfig(String)
 }
 
-
 // Empty line argument is not supposed to be allowed, since this check is being performed in main
 pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError> {
+    match create_config_builder_from_args(line) {
+        Ok(config_builder) => Ok(config_builder.build()),
+        Err(x) => Err(x)
+    }
+}
+
+pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilder, ArgParsingError> {
     let mut dirs = None;
     let mut options = line.split("--");
 
@@ -226,30 +232,56 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
         }
     }
 
-    let args_builder = combine_specified_config_options(custom_config, dirs, exclude_dirs, languages_of_interest,
-         threads, braces_as_code, search_in_dotted, show_faulty_files, no_keywords, no_visual, log, compare_level);
-
-    if args_builder.dirs.is_none() {
-        return Err(ArgParsingError::MissingTargetDirs);
-    }
-
-    if let Some(log) = &args_builder.log {
-        if config_name_to_save.is_none() && config_name_to_load.is_none() && log.should_log {
-            println!("\n{}","Logging will be ignored, since no config file was specified.".yellow());
+    if dirs.is_none() {
+        if let Some(options) = &custom_config {
+            if options.dirs.is_none() {
+                return Err(ArgParsingError::MissingTargetDirs);
+            }
+        } else {
+            return Err(ArgParsingError::MissingTargetDirs);
         }
     }
 
-    let mut config = args_builder.build();
-    config.set_config_names_to_save_and_load(config_name_to_save.clone(), config_name_to_load);
+    print_warnings_for_commands_that_need_a_loaded_configuration(&config_name_to_save, &config_name_to_load, &log, &compare_level);
+    
+    let mut config_builder = ConfigurationBuilder::new(dirs, exclude_dirs, languages_of_interest, threads, braces_as_code,
+        search_in_dotted, show_faulty_files, no_keywords, no_visual, log, compare_level);
 
-    if let Some(x) = config_name_to_save {
-        match io_handler::save_config_to_file(&x, &config, None) {
+    if let Some(name) = config_name_to_save {
+        match io_handler::save_existing_commands_from_config_builder_to_file(None, &name, &config_builder) {
             Err(_) => println!("\n{}","Error while trying to save config.".yellow()),
-            Ok(_) => println!("\nConfiguration '{}' saved successfully.",x)
+            Ok(_) => println!("\nConfiguration '{}' saved successfully.",name)
         }
     }
 
-    Ok(config)
+    if let Some(x) = custom_config {
+        config_builder.add_missing_fields(x);
+    }
+    if config_builder.has_missing_fields() {
+        let default_config = io_handler::parse_config_file(None, None);
+        if let Ok(x) = default_config {
+            config_builder.add_missing_fields(x);
+        }
+    }
+
+    Ok(config_builder)
+}
+
+
+fn print_warnings_for_commands_that_need_a_loaded_configuration(config_name_to_save: &Option<String>, config_name_to_load: &Option<String>,
+        log: &Option<LogOption>, compare_level: &Option<usize>) 
+{
+    if config_name_to_load.is_none() {
+        if let Some(log) = log {
+            if config_name_to_save.is_none() && log.should_log {
+                println!("\n{}","'--log' command will be ignored, since no config file was specified.".yellow());
+            }
+        }
+
+        if compare_level.is_some() {
+            println!("\n{}","'--compare' command will be ignored, since no config file was specified for loading.".yellow());
+        }
+    }
 }
 
 fn has_any_args(command: &str) -> bool {
