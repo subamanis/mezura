@@ -4,7 +4,7 @@ use colored::*;
 #[macro_use]
 extern crate include_dir;
 
-use mezura::{*, self, config_manager::{self, ArgParsingError, CHANGELOG, HELP, SHOW_LANGUAGES, VERSION_ID}, io_handler};
+use mezura::{*, self, config_manager::{self, CHANGELOG, HELP, SHOW_LANGUAGES, VERSION_ID}, io_handler};
 
 
 fn main() {

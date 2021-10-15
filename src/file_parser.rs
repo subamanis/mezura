@@ -11,7 +11,7 @@ pub fn parse_file(path: &Path, lang_name: &str, buf: &mut String, language_map: 
         Err(x) => return Err(x.to_string())
     });
 
-    parse_lines(reader, buf, &language_map.get(lang_name).unwrap(), config)
+    parse_lines(reader, buf, language_map.get(lang_name).unwrap(), config)
 }
 
 fn parse_lines(mut reader: BufReader<File>, buf: &mut String, language: &Language, config: &Configuration)
@@ -616,7 +616,7 @@ pub fn get_str_indices_and_symbols(line: &str, language: &Language, open_str_sym
         let mut indices = Vec::with_capacity(6);
         let mut symbols = Vec::with_capacity(6);
         line.match_indices(&language.string_symbols[0]).for_each(|x| {
-            if is_not_escaped(x.0, &line_bytes) {
+            if is_not_escaped(x.0, line_bytes) {
                 indices.push(x.0); symbols.push(x.1.to_owned());
             }
         });
