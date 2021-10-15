@@ -17,7 +17,10 @@ pub fn parse_file(path: &Path, lang_name: &str, buf: &mut String, language_map: 
 fn parse_lines(mut reader: BufReader<File>, buf: &mut String, language: &Language, config: &Configuration)
 -> Result<FileStats,String>
 {
-    let mut file_stats = FileStats::default(&language.keywords);
+    let mut file_stats = match config.no_keywords {
+        true => FileStats::default(),
+        false => FileStats::with_keywords(&language.keywords)
+    };
     let mut is_comment_closed = true;
     let mut open_str_symbol = None;
     loop {
@@ -998,57 +1001,57 @@ mod tests {
     #[test]
     fn finds_keywords_correctly() {
         let line = String::from("Hello world!");
-        let mut file_stats =  FileStats::default(&[CLASS.clone(),INTERFACE.clone()]);
+        let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
         add_keywords_if_any(&line, &JAVA, &mut file_stats);
         assert_eq!(make_file_stats(0,0), file_stats);
 
         let line = String::from("class");
-        let mut file_stats =  FileStats::default(&[CLASS.clone(),INTERFACE.clone()]);
+        let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
         add_keywords_if_any(&line, &JAVA, &mut file_stats);
         assert_eq!(make_file_stats(1,0), file_stats);
 
         let line = String::from("1class");
-        let mut file_stats =  FileStats::default(&[CLASS.clone(),INTERFACE.clone()]);
+        let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
         add_keywords_if_any(&line, &JAVA, &mut file_stats);
         assert_eq!(make_file_stats(0,0), file_stats);
 
         let line = String::from("hello class word!");
-        let mut file_stats =  FileStats::default(&[CLASS.clone(),INTERFACE.clone()]);
+        let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
         add_keywords_if_any(&line, &JAVA, &mut file_stats);
         assert_eq!(make_file_stats(1,0), file_stats);
 
         let line = String::from("class class class");
-        let mut file_stats =  FileStats::default(&[CLASS.clone(),INTERFACE.clone()]);
+        let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
         add_keywords_if_any(&line, &JAVA, &mut file_stats);
         assert_eq!(make_file_stats(3,0), file_stats);
 
         let line = String::from("classclass");
-        let mut file_stats =  FileStats::default(&[CLASS.clone(),INTERFACE.clone()]);
+        let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
         add_keywords_if_any(&line, &JAVA, &mut file_stats);
         assert_eq!(make_file_stats(0,0), file_stats);
 
         let line = String::from("hello,class{word!");
-        let mut file_stats =  FileStats::default(&[CLASS.clone(),INTERFACE.clone()]);
+        let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
         add_keywords_if_any(&line, &JAVA, &mut file_stats);
         assert_eq!(make_file_stats(1,0), file_stats);
         
         let line = String::from("classe,");
-        let mut file_stats =  FileStats::default(&[CLASS.clone(),INTERFACE.clone()]);
+        let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
         add_keywords_if_any(&line, &JAVA, &mut file_stats);
         assert_eq!(make_file_stats(0,0), file_stats);
         
         let line = String::from("class interfaceclass classinterface interface");
-        let mut file_stats =  FileStats::default(&[CLASS.clone(),INTERFACE.clone()]);
+        let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
         add_keywords_if_any(&line, &JAVA, &mut file_stats);
         assert_eq!(make_file_stats(1,1), file_stats);
         
         let line = String::from("{class,interface}");
-        let mut file_stats =  FileStats::default(&[CLASS.clone(),INTERFACE.clone()]);
+        let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
         add_keywords_if_any(&line, &JAVA, &mut file_stats);
         assert_eq!(make_file_stats(1,1), file_stats);
         
         let line = String::from("{class.interface}");
-        let mut file_stats =  FileStats::default(&[CLASS.clone(),INTERFACE.clone()]);
+        let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
         add_keywords_if_any(&line, &JAVA, &mut file_stats);
         assert_eq!(make_file_stats(0,0), file_stats);
     }

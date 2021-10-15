@@ -591,7 +591,7 @@ pub mod domain {
     }
 
     impl LanguageContentInfo {
-        pub fn new(lines: usize, code_lines: usize, keyword_occurences: HashMap<String,usize>) -> LanguageContentInfo {
+        pub fn new(lines: usize, code_lines: usize, keyword_occurences: HashMap<String,usize>) -> Self {
             LanguageContentInfo {
                 lines,
                 code_lines,
@@ -645,7 +645,7 @@ pub mod domain {
     }
 
     impl LanguageMetadata {
-        pub fn new(files: usize, bytes: usize) ->  LanguageMetadata {
+        pub fn new(files: usize, bytes: usize) ->  Self {
             LanguageMetadata {
                 files,
                 bytes
@@ -664,7 +664,15 @@ pub mod domain {
     }
 
     impl FileStats {
-        pub fn default(keywords: &[Keyword]) -> FileStats {
+        pub fn default() -> Self {
+            FileStats {
+                lines : 0,
+                code_lines : 0,
+                keyword_occurences : hashmap![]
+            }
+        }
+
+        pub fn with_keywords(keywords: &[Keyword]) -> Self {
             FileStats {
                 lines : 0,
                 code_lines : 0,

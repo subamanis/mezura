@@ -120,7 +120,7 @@ fn print_sum(content_info_map: &HashMap<String,LanguageContentInfo>, final_stats
     let keywords_line = get_keywords_as_str(&keywords_sum_map, biggest_prefix_standard_spaces);
 
     let spaces = biggest_prefix_standard_spaces - (5 + total_files_str.len());
-    let title = format!("{}   {}{} {}  -> ","total".bold()," ".repeat(spaces),total_files_str,colored_word("files"));
+    let title = format!("{}   {}{} {}  -> ","Total".bold()," ".repeat(spaces),total_files_str,colored_word("files"));
     let code_lines_percentage = if final_stats.lines > 0 {final_stats.code_lines as f64 / final_stats.lines as f64 * 100f64} else {0f64};
     let size_text = format!("{} {} - {} {}",final_stats.size, colored_word(&format!("{} total", final_stats.size_measurement)),
             final_stats.average_size,colored_word(&format!("{} average", final_stats.average_size_measurement)));
@@ -134,6 +134,8 @@ fn print_sum(content_info_map: &HashMap<String,LanguageContentInfo>, final_stats
 
     if should_print_keywords {
         println!("{}", format!("{}{}{}\n",title,info,keywords_line));
+    } else {
+        println!("{}", format!("{}{}",title,info));
     }
 }
 
