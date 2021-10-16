@@ -278,6 +278,8 @@ With that said, it is important to mention the following limitations:
 
 - The program doesn't take into account gitignore files, the unwanted dirs have to be added manually in a configuration file
 
+- Bug: If a file contains Unicode Strings, there is a possibility that a parser thread will panic, due to trying to slice a line in a non-valid way. (byte index is not a char boundary)
+
 
 ## Performance
 The performance of the program will scale with the available logical cores (threads) of the machine. The default behaviour, if the '--threads' command

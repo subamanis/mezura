@@ -177,7 +177,7 @@ pub fn parse_string_to_language(contents: Cow<str>) -> Language {
     let comment_symbols = split_line_on_whitespace(lines.next().unwrap());
     let next_line = lines.next();
     if let Some(line) = next_line {
-        if line == "Multi line comment start" {
+        if line == MULTILINE_COMMENT_START {
             mult_start = Some(lines.next().unwrap().trim().to_owned());
             lines.next();
             mult_end = Some(lines.next().unwrap().trim().to_owned());
@@ -187,7 +187,7 @@ pub fn parse_string_to_language(contents: Cow<str>) -> Language {
 
     let mut keywords = Vec::new();
     while let Some(x) = lines.next() {
-        if x != "Keyword" {break;} 
+        if x != KEYWORD {break;} 
 
         lines.next();
         let k_name = lines.next().unwrap().trim().to_owned();
