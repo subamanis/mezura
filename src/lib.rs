@@ -523,7 +523,7 @@ pub mod domain {
         pub name: String,
         pub extensions : Vec<String>,
         pub string_symbols : Vec<String>,
-        pub comment_symbol : String,
+        pub comment_symbols : Vec<String>,
         pub multiline_comment_start_symbol : Option<String>,
         pub multiline_comment_end_symbol : Option<String>,
         pub keywords : Vec<Keyword>
@@ -565,7 +565,7 @@ pub mod domain {
     }
 
     impl Language {
-        pub fn new(name: String, extensions: Vec<String>, string_symbols: Vec<String>, comment_symbol: String,
+        pub fn new(name: String, extensions: Vec<String>, string_symbols: Vec<String>, comment_symbols: Vec<String>,
             multiline_comment_start_symbol: Option<String>, multiline_comment_end_symbol: Option<String>,
             keywords: Vec<Keyword>) -> Self 
         {
@@ -573,7 +573,7 @@ pub mod domain {
                 name,
                 extensions,
                 string_symbols,
-                comment_symbol,
+                comment_symbols,
                 multiline_comment_start_symbol,
                 multiline_comment_end_symbol,
                 keywords 

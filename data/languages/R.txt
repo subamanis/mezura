@@ -1,0 +1,11 @@
+Language
+R
+
+Extensions
+r
+
+String symbols
+"
+
+Comment symbols
+#

@@ -1,13 +1,13 @@
 Language
-TS
+Swift
 
 Extensions
-ts
+swift
 
 String symbols
-" '
+"
 
-Comment symbol
+Comment symbols
 //
 Multi line comment start
 /*
@@ -21,6 +21,6 @@ Keyword
     class
 Keyword
     NAME
-    enums
+    structs
     ALIASES
-    enum
+    struct

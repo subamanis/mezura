@@ -7,6 +7,17 @@ use crate::{Configuration, DEFAULT_CONFIG_NAME, FinalStats, Formatted, PERSISTEN
      MAX_COMPARE_LEVEL, MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_COMPARE_LEVEL, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE, Threads}, domain::*, split_line_on_whitespace, utils};
 
 
+const LANGUAGE                 : &str = "Language";     
+const EXTENSIONS               : &str = "Extensions";     
+const STRING_SYMBOLS           : &str = "String symbols";     
+const COMMENT_SYMBOLS          : &str = "Comment symbols";     
+const MULTILINE_COMMENT_START  : &str = "Multi line comment start";     
+const MULTILINE_COMMENT_END    : &str = "Multi line comment end";     
+const KEYWORD                  : &str = "Keyword";     
+const KEYWORD_NAME             : &str = "NAME";     
+const KEYWORD_ALIASES          : &str = "ALIASES";     
+
+
 #[derive(Debug)]
 pub struct LanguageDirParseInfo {
     pub language_map: HashMap<String,Language>,
@@ -78,19 +89,19 @@ pub fn parse_supported_languages_to_map(target_path: &str) -> Result<(HashMap<St
 }
 
 fn parse_file_to_language(mut reader :my_reader::BufReader, buffer :&mut String) -> Result<Language,()> {
-    if !reader.read_line_and_compare(buffer, "Language") {return Err(());}
+    if !reader.read_line_and_compare(buffer, LANGUAGE) {return Err(());}
     if !reader.read_line_exists(buffer) {return Err(());}
     let lang_name = buffer.trim_end().to_owned();
     if !reader.read_line_exists(buffer) {return Err(());}
 
-    if !reader.read_line_and_compare(buffer, "Extensions") {return Err(());}
+    if !reader.read_line_and_compare(buffer, EXTENSIONS) {return Err(());}
     let identifiers = match reader.get_line_sliced(buffer) {
         Ok(x) => x,
         Err(_) => return Err(())
     };
     if !reader.read_line_exists(buffer) {return Err(());}
 
-    if !reader.read_line_and_compare(buffer, "String symbols") {return Err(());}
+    if !reader.read_line_and_compare(buffer, STRING_SYMBOLS) {return Err(());}
     let string_symbols = match reader.get_line_sliced(buffer) {
         Ok(x) => x,
         Err(_) => return Err(())
@@ -98,19 +109,20 @@ fn parse_file_to_language(mut reader :my_reader::BufReader, buffer :&mut String)
     if string_symbols.is_empty() {return Err(());}
 
     if !reader.read_line_exists(buffer) {return Err(());}
-    if !reader.read_line_and_compare(buffer, "Comment symbol") {return Err(());} 
-    if !reader.read_line_exists(buffer) {return Err(());}
-    let comment_symbol = buffer.trim_end().to_owned();
-    if comment_symbol.is_empty() {return Err(());}
+    if !reader.read_line_and_compare(buffer, COMMENT_SYMBOLS) {return Err(());} 
+    let comment_symbols = match reader.get_line_sliced(buffer) {
+        Ok(x) => x,
+        Err(_) => return Err(())
+    };
     
     let mut multi_start :Option<String> = None;
     let mut multi_end :Option<String> = None;
-    if reader.read_line_and_compare(buffer, "Multi line comment start") {
+    if reader.read_line_and_compare(buffer, MULTILINE_COMMENT_START) {
         if !reader.read_line_exists(buffer) {return Err(());}
         let symbol = buffer.trim_end().to_owned();
         if symbol.is_empty() {return Err(());}
         multi_start = Some(symbol);
-        if !reader.read_line_and_compare(buffer, "Multi line comment end") {return Err(());}
+        if !reader.read_line_and_compare(buffer, MULTILINE_COMMENT_END) {return Err(());}
         if !reader.read_line_exists(buffer) {return Err(());}
         let symbol = buffer.trim_end().to_owned();
         if symbol.is_empty() {return Err(());}
@@ -141,7 +153,7 @@ fn parse_file_to_language(mut reader :my_reader::BufReader, buffer :&mut String)
         name: lang_name,
         extensions: identifiers,
         string_symbols,
-        comment_symbol,
+        comment_symbols,
         multiline_comment_start_symbol : multi_start,
         multiline_comment_end_symbol : multi_end,
         keywords
@@ -150,7 +162,6 @@ fn parse_file_to_language(mut reader :my_reader::BufReader, buffer :&mut String)
 
 pub fn parse_string_to_language(contents: Cow<str>) -> Language {
     let mut lines = (&contents).lines();
-
     let (mut mult_start, mut mult_end) = (None, None);
 
     lines.next();
@@ -163,13 +174,13 @@ pub fn parse_string_to_language(contents: Cow<str>) -> Language {
     let string_symbols = split_line_on_whitespace(lines.next().unwrap());
     lines.next();
     lines.next();
-    let comment_symbol = lines.next().unwrap().trim().to_owned();
+    let comment_symbols = split_line_on_whitespace(lines.next().unwrap());
     if lines.next().unwrap().trim() == "Multi line comment start" {
         mult_start = Some(lines.next().unwrap().trim().to_owned());
         lines.next();
         mult_end = Some(lines.next().unwrap().trim().to_owned());
+        lines.next();
     }
-    lines.next();
 
     let mut keywords = Vec::new();
     while let Some(x) = lines.next() {
@@ -185,45 +196,45 @@ pub fn parse_string_to_language(contents: Cow<str>) -> Language {
         });
     }
 
-    Language::new(lang_name, extensions, string_symbols, comment_symbol, mult_start, mult_end, keywords)
+    Language::new(lang_name, extensions, string_symbols, comment_symbols, mult_start, mult_end, keywords)
 }
 
 pub fn serialize_language(lang: &Language, path: &str) -> Result<(), io::Error> {
     let file_path = path.to_string() + "/" + &lang.name + ".txt";
     let mut writer = BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).open(file_path)?);
 
-    writer.write(b"Language\n");
+    writer.write(format!("{}\n",LANGUAGE).as_bytes());
     writer.write(lang.name.as_bytes());
     writer.write(b"\n\n");
 
-    writer.write(b"Extensions\n");
+    writer.write(format!("{}\n",EXTENSIONS).as_bytes());
     writer.write(lang.extensions.join(" ").as_bytes());
     writer.write(b"\n\n");
 
-    writer.write(b"String symbols\n");
+    writer.write(format!("{}\n",STRING_SYMBOLS).as_bytes());
     writer.write(lang.string_symbols.join(" ").as_bytes());
     writer.write(b"\n\n");
 
-    writer.write(b"Comment symbol\n");
-    writer.write(lang.comment_symbol.as_bytes());
+    writer.write(format!("{}\n",COMMENT_SYMBOLS).as_bytes());
+    writer.write(lang.comment_symbols.join(" ").as_bytes());
     writer.write(b"\n");
     
     if let Some(symbol) = &lang.multiline_comment_start_symbol {
-        writer.write(b"Multi line comment start\n");
+        writer.write(format!("{}\n",MULTILINE_COMMENT_START).as_bytes());
         writer.write(symbol.as_bytes());
         writer.write(b"\n");
-        writer.write(b"Multi line comment end\n");
+        writer.write(format!("{}\n",MULTILINE_COMMENT_END).as_bytes());
         writer.write(lang.multiline_comment_end_symbol.as_ref().unwrap().as_bytes());
         writer.write(b"\n");
     }
     writer.write(b"\n");
     
     for keyword in lang.keywords.iter() {
-        writer.write(b"Keyword\n");
-        writer.write(b"    NAME\n    ");
+        writer.write(format!("{}\n",KEYWORD).as_bytes());
+        writer.write(format!("{}\n",KEYWORD_NAME).as_bytes());
         writer.write(keyword.descriptive_name.as_bytes());
         writer.write(b"\n");
-        writer.write(b"    ALIASES\n    ");
+        writer.write(format!("{}\n",KEYWORD_ALIASES).as_bytes());
         writer.write(keyword.aliases.join(" ").as_bytes());
         writer.write(b"\n");
     }

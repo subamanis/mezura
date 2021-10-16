@@ -220,7 +220,7 @@ Note that a configuration file must be loaded for both '--log' and '--compare' t
 
 
 ## Supported Languages
-Note that the default supported languages are very incomplete, but they can be easily expanded by the user. All the supported languages can be found in the folder "data/languages"
+Note that the default supported languages are incomplete, but they can be easily expanded by the user. All the supported languages can be found in the folder "data/languages"
 as seperate text files, in the persistent data path of the application. 
 The user can easily specify a new language by replicating the format of the language files and customizing it accordingly, either by following the rules below or by copy pasting an existing file.
 
@@ -234,10 +234,10 @@ Extensions
 <name of file extensions like cpp hpp or py, seperated by whitespace>
 
 String symbols
-<either 1 or 2 string symbols seperated by whitespace, like: " ' >
+<either 1 or 2 string symbols, seperated by whitespace, like: " ' >
 
-Comment symbol
-<single line comment symbol like: //>
+Comment symbols
+<either 1 or 2 single line comment symbols, seperated by whitespace, like: // # >
 
 ```
 All the following lines are optional and can be omitted. You can also specify an arbitrary amount of keywords.

@@ -185,8 +185,8 @@ mod tests {
     fn test_retain_only_languages_of_interest() {
         let languages_of_interest = vec!["java".to_owned()];
         let mut language_map = hashmap![
-                "Java".to_owned() => Language::new("Java".to_owned(),vec![],vec![],"\"".to_owned(),None,None,vec![]),
-                "C#".to_owned() => Language::new("C#".to_owned(),vec![],vec![],"\"".to_owned(),None,None,vec![])];
+                "Java".to_owned() => Language::new("Java".to_owned(),vec![],vec![],vec!["\"".to_owned()],None,None,vec![]),
+                "C#".to_owned() => Language::new("C#".to_owned(),vec![],vec![],vec!["\"".to_owned()],None,None,vec![])];
 
         let result = retain_only_languages_of_interest(&mut language_map, &languages_of_interest);
         assert!(result.unwrap().is_none());
@@ -194,8 +194,8 @@ mod tests {
         
         let languages_of_interest = vec!["java".to_owned(),"c++".to_owned(),"Rust".to_owned()];
         let mut language_map = hashmap![
-                "Java".to_owned() => Language::new("Java".to_owned(),vec![],vec![],"\"".to_owned(),None,None,vec![]),
-                "C#".to_owned() => Language::new("C#".to_owned(),vec![],vec![],"\"".to_owned(),None,None,vec![])];
+                "Java".to_owned() => Language::new("Java".to_owned(),vec![],vec![],vec!["\"".to_owned()],None,None,vec![]),
+                "C#".to_owned() => Language::new("C#".to_owned(),vec![],vec![],vec!["\"".to_owned()],None,None,vec![])];
 
         let result = retain_only_languages_of_interest(&mut language_map, &languages_of_interest);
         assert!(result.unwrap().is_some());
@@ -203,8 +203,8 @@ mod tests {
         
         let languages_of_interest = vec!["c++".to_owned(),"Rust".to_owned()];
         let mut language_map = hashmap![
-                "Java".to_owned() => Language::new("Java".to_owned(),vec![],vec![],"\"".to_owned(),None,None,vec![]),
-                "C#".to_owned() => Language::new("C#".to_owned(),vec![],vec![],"\"".to_owned(),None,None,vec![])];
+                "Java".to_owned() => Language::new("Java".to_owned(),vec![],vec![],vec!["\"".to_owned()],None,None,vec![]),
+                "C#".to_owned() => Language::new("C#".to_owned(),vec![],vec![],vec!["\"".to_owned()],None,None,vec![])];
 
         let result = retain_only_languages_of_interest(&mut language_map, &languages_of_interest);
         assert!(result.is_err());

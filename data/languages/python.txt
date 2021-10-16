@@ -7,6 +7,11 @@ py
 String symbols
 " '
 
-Comment symbol
+Comment symbols
 #
 
+Keyword
+    NAME
+    classes
+    ALIASES
+    class

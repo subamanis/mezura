@@ -1,21 +1,15 @@
 Language
-JS
+HTML
 
 Extensions
-js
+html htm
 
 String symbols
 " '
 
-Comment symbol
-//
+Comment symbols
+&none/
 Multi line comment start
-/*
+<!--
 Multi line comment end
-*/
-
-Keyword
-    NAME
-    classes
-    ALIASES
-    class
+-->

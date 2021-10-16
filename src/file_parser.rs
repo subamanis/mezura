@@ -77,7 +77,8 @@ fn get_bounds_only_single_line_comments(line: &str, language: &Language, open_st
         return LineInfo::none_str(false, true, open_str_symbol.to_owned());
     }
 
-    let comment_indices = line.match_indices(&language.comment_symbol).map(|x| x.0).collect::<Vec<usize>>();
+    let comment_indices = find_comment_indicies_without_multiline(line, language);
+    
     if str_indices.is_empty() && comment_indices.is_empty() {
         return LineInfo::with_str(line.to_owned(), false);
     }
@@ -167,15 +168,8 @@ fn get_bounds_w_multiline_comments(line: &str, language: &Language, is_comment_c
        }
    }
    
-   let comment_indices = line.match_indices(&language.comment_symbol)
-       .filter_map(|x| {
-           if !is_intersecting_with_multi_line_end_symbol(x.0, language.multiline_len(), &com_end_indices) {
-               Some(x.0)
-           } else {
-               None
-           }
-       })
-       .collect::<Vec<usize>>();
+   let comment_indices = find_comment_indicies_w_multiline(line, language, &com_end_indices);
+
    let mut com_start_indices = get_com_start_indices(line, language, &comment_indices);
    if !com_end_indices.is_empty() && !com_start_indices.is_empty() {
        resolve_double_counting_of_adjacent_start_and_end_symbols(&mut com_start_indices, &mut com_end_indices,
@@ -325,6 +319,44 @@ fn get_bounds_w_multiline_comments(line: &str, language: &Language, is_comment_c
            }
        }
    }
+}
+
+fn find_comment_indicies_without_multiline(line: &str, language: &Language) -> Vec<usize> {
+    if language.comment_symbols.len() > 1 {
+        let mut matches = line.match_indices(&language.comment_symbols[0]).map(|x| x.0)
+            .chain(line.match_indices(&language.comment_symbols[1]).map(|x| x.0))
+            .collect::<Vec<usize>>();
+        matches.sort();
+        matches
+    } else {
+        line.match_indices(&language.comment_symbols[0]).map(|x| x.0).collect::<Vec<usize>>()
+    } 
+}
+
+fn find_comment_indicies_w_multiline(line: &str, language: &Language, com_end_indices: &Vec<usize>) -> Vec<usize> {
+    if language.comment_symbols.len() > 1 {
+        line.match_indices(&language.comment_symbols[0])
+        .filter_map(|x| filter_comment_end_indicies(x.0, language, &com_end_indices))
+            .chain(
+                line.match_indices(&language.comment_symbols[1])
+                .filter_map(|x|  filter_comment_end_indicies(x.0, language, &com_end_indices))
+            )
+        .collect::<Vec<_>>()
+    } else {
+        line.match_indices(&language.comment_symbols[0])
+            .filter_map(|x| {
+                filter_comment_end_indicies(x.0, language, &com_end_indices)
+            })
+            .collect::<Vec<_>>()
+    }
+}
+
+fn filter_comment_end_indicies(x: usize, language: &Language, indicies: &Vec<usize>) -> Option<usize> {
+    if !is_intersecting_with_multi_line_end_symbol(x, language.multiline_len(), indicies) {
+        Some(x) 
+    } else {
+         None 
+    }
 }
 
 fn get_LineInfo_with_str_symbol(relevant: String, str_symbol: &str) -> LineInfo {
@@ -929,17 +961,27 @@ mod tests {
             name : "java".to_owned(),
             extensions : vec!["java".to_owned()],
             string_symbols : vec!["\"".to_owned()],
-            comment_symbol : "//".to_owned(),
+            comment_symbols : vec!["//".to_owned()],
             multiline_comment_start_symbol : Some("/*".to_owned()),
             multiline_comment_end_symbol : Some("*/".to_owned()),
             keywords : vec![CLASS.clone(),INTERFACE.clone()]
+        };
+
+        static ref PHP : Language = Language {
+            name : "PHP".to_owned(),
+            extensions : vec!["php".to_owned()],
+            string_symbols : vec!["\"".to_owned(),"'".to_owned()],
+            comment_symbols : vec!["//".to_owned(),"#".to_owned()],
+            multiline_comment_start_symbol : Some("/*".to_owned()),
+            multiline_comment_end_symbol : Some("*/".to_owned()),
+            keywords : vec![CLASS.clone()]
         };
 
         static ref PYTHON : Language = Language {
             name : "py".to_owned(),
             extensions : vec!["py".to_owned()],
             string_symbols : vec!["\"".to_owned(),"'".to_owned()],
-            comment_symbol : "#".to_owned(),
+            comment_symbols : vec!["#".to_owned()],
             multiline_comment_start_symbol : None,
             multiline_comment_end_symbol : None,
             keywords : vec![CLASS.clone()]
@@ -949,7 +991,7 @@ mod tests {
             name : "rust".to_owned(),
             extensions : vec!["rs".to_owned()],
             string_symbols : vec!["\"".to_owned()],
-            comment_symbol : "//".to_owned(),
+            comment_symbols : vec!["//".to_owned()],
             multiline_comment_start_symbol : None,
             multiline_comment_end_symbol : None,
             keywords : vec![STRUCT.clone(),ENUM.clone(),TRAIT.clone()]
@@ -971,8 +1013,9 @@ mod tests {
         config.set_should_not_count_keywords(true);
         let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), &config);
         let result = LanguageContentInfo::from(result.unwrap());
-        assert_eq!(LanguageContentInfo::new(44, 13, hashmap!("classes".to_owned()=>0,"interfaces".to_owned()=>0)), result);
+        assert_eq!(LanguageContentInfo::new(44, 13, hashmap!()), result);
         buf.clear();
+        config.set_should_not_count_keywords(false);
         let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "C#", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new(vec!["a".to_owned()]));
         let result = LanguageContentInfo::from(result.unwrap());
         assert_eq!(LanguageContentInfo::new(44, 13, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
@@ -1165,6 +1208,33 @@ mod tests {
         let (mut start_indices, mut end_indices) = (vec![0,4,6,9],vec![3,5,7]);
         resolve_double_counting_of_adjacent_start_and_end_symbols(&mut start_indices, &mut end_indices, true, 2);
         assert_eq!((start_indices, end_indices), (vec![0,6,9],vec![3]));
+    }
+
+    #[test]
+    fn test_find_comment_indicies() {
+        let line = "";
+        assert_eq!(Vec::<usize>::new(), find_comment_indicies_without_multiline(line, &PHP));
+        let line = "Hello world!";
+        assert_eq!(Vec::<usize>::new(), find_comment_indicies_without_multiline(line, &PHP));
+        let line = "//Hello world!";
+        assert_eq!(vec![0], find_comment_indicies_without_multiline(line, &PHP));
+        let line = "////Hello world!";
+        assert_eq!(vec![0,2], find_comment_indicies_without_multiline(line, &PHP));
+        let line = "//#//#Hello world!";
+        assert_eq!(vec![0,2,3,5], find_comment_indicies_without_multiline(line, &PHP));
+        let line = "//Hello# world!";
+        assert_eq!(vec![0,7], find_comment_indicies_without_multiline(line, &PHP));
+
+        let line = "Hello world!";
+        assert_eq!(Vec::<usize>::new(), find_comment_indicies_w_multiline(line, &PHP, &vec![]));
+        let line = "//Hello*/ world!";
+        assert_eq!(vec![0], find_comment_indicies_w_multiline(line, &PHP, &vec![7]));
+        let line = "///*Hello world!";
+        assert_eq!(vec![0], find_comment_indicies_w_multiline(line, &PHP, &vec![]));
+        let line = "//*//Hello world!";
+        assert_eq!(vec![0], find_comment_indicies_w_multiline(line, &PHP, &vec![2]));
+        let line = "//*/#Hello world!";
+        assert_eq!(vec![0,4], find_comment_indicies_w_multiline(line, &PHP, &vec![2]));
     }
     
     #[test]

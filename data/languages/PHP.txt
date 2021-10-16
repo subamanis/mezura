@@ -1,14 +1,14 @@
 Language
-C++
+PHP
 
 Extensions
-cpp hpp
+php
 
 String symbols
-"
+" '
 
-Comment symbol
-//
+Comment symbols
+// #
 Multi line comment start
 /*
 Multi line comment end
@@ -19,8 +19,3 @@ Keyword
     classes
     ALIASES
     class
-Keyword
-    NAME
-    structs
-    ALIASES
-    struct

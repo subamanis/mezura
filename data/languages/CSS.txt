@@ -1,11 +1,11 @@
 Language
-GO
+CSS
 
 Extensions
-go
+css scss sass
 
 String symbols
-"
+" '
 
 Comment symbols
 //
@@ -13,9 +13,3 @@ Multi line comment start
 /*
 Multi line comment end
 */
-
-Keyword
-    NAME
-    structs
-    ALIASES
-    struct

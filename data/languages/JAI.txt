@@ -1,13 +1,13 @@
 Language
-Java
+JAI
 
 Extensions
-java
+jai
 
 String symbols
 "
 
-Comment symbol
+Comment symbols
 //
 Multi line comment start
 /*
@@ -16,11 +16,6 @@ Multi line comment end
 
 Keyword
     NAME
-    classes
+    structs
     ALIASES
-    class
-Keyword
-    NAME
-    interfaces
-    ALIASES
-    interface
+    struct

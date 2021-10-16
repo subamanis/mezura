@@ -1,13 +1,13 @@
 Language
-GO
+Kotlin
 
 Extensions
-go
+kt kts
 
 String symbols
 "
 
-Comment symbol
+Comment symbols
 //
 Multi line comment start
 /*
@@ -16,6 +16,11 @@ Multi line comment end
 
 Keyword
     NAME
-    structs
+    classes
     ALIASES
-    struct
+    class
+Keyword
+    NAME
+    interfaces
+    ALIASES
+    interface

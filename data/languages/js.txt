@@ -7,7 +7,7 @@ js
 String symbols
 " '
 
-Comment symbol
+Comment symbols
 //
 Multi line comment start
 /*
