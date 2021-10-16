@@ -175,11 +175,14 @@ pub fn parse_string_to_language(contents: Cow<str>) -> Language {
     lines.next();
     lines.next();
     let comment_symbols = split_line_on_whitespace(lines.next().unwrap());
-    if lines.next().unwrap().trim() == "Multi line comment start" {
-        mult_start = Some(lines.next().unwrap().trim().to_owned());
-        lines.next();
-        mult_end = Some(lines.next().unwrap().trim().to_owned());
-        lines.next();
+    let next_line = lines.next();
+    if let Some(line) = next_line {
+        if line == "Multi line comment start" {
+            mult_start = Some(lines.next().unwrap().trim().to_owned());
+            lines.next();
+            mult_end = Some(lines.next().unwrap().trim().to_owned());
+            lines.next();
+        }
     }
 
     let mut keywords = Vec::new();
