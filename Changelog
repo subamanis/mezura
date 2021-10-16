@@ -37,6 +37,7 @@ Main changes:
   -> The producer (the part that traverses the given dirs to find relevant files) is now paralellized.
       Performance may increase on cold runs, specifically on machines with logical core count > 4.
   -> Running the program with no arguments will now just display the help message.
+  -> The program will now also display how many files it ignored due to the '--exclude' command.
 
 New commands:
   -> Added the --no-keywords flag, that disables keyword counting and printing.

@@ -16,7 +16,7 @@ fn test_whole_workflow () {
     assert!(language_map.len() != 0);
 
     let config = Arc::new(config);
-    let mut files_present = FilesPresent::new(0,0);
+    let mut files_present = FilesPresent::default();
     let faulty_files_ref : FaultyFilesListMut  = Arc::new(Mutex::new(Vec::new()));
     let finish_condition_ref = Arc::new(AtomicBool::new(false));
     let language_map = Arc::new(language_map);
@@ -30,8 +30,8 @@ fn test_whole_workflow () {
 
     calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector, &mut files_present, &language_map, &languages_metadata_map);
 
-    let (total_files_num, relevant_files_num) = producer::produce(0, files_injector.clone(), dirs_injector.clone(), Worker::new_fifo(),
-            producer_termination_states, language_map.clone(), languages_metadata_map.clone(), config.clone());
+    let (total_files_num, relevant_files_num, _) = producer::search_for_files(0, files_injector.clone(), dirs_injector.clone(),
+         Worker::new_fifo(), producer_termination_states, language_map.clone(), languages_metadata_map.clone(), config.clone());
 
     finish_condition_ref.store(true, Ordering::Relaxed);
     consumer::start_parsing_files(0, files_injector, faulty_files_ref.clone(), finish_condition_ref, languages_content_info_ref.clone(),

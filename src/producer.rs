@@ -11,20 +11,23 @@ pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFil
 -> JoinHandle<()>
 {
     thread::Builder::new().name(id.to_string()).spawn(move || {
-        let product = produce(id, files_injector, dirs_injector, worker, termination_states, languages, languages_metadata_map, config);
+        let (total_files, relevant_files, excluded_files) = 
+                search_for_files(id, files_injector, dirs_injector, worker, termination_states, languages, languages_metadata_map, config);
         let mut file_stats_guard = files_stats.lock().unwrap(); 
-        file_stats_guard.total_files += product.0;
-        file_stats_guard.relevant_files += product.1;
+        file_stats_guard.total_files += total_files;
+        file_stats_guard.relevant_files += relevant_files;
+        file_stats_guard.excluded_files += excluded_files;
 
     }).unwrap()
 }
 
-pub fn produce(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<PathBuf>>, worker: Worker<PathBuf>, termination_states: Arc<Mutex<Vec<bool>>>,
+pub fn search_for_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<PathBuf>>, worker: Worker<PathBuf>, termination_states: Arc<Mutex<Vec<bool>>>,
         languages: Arc<HashMap<String,Language>>, languages_metadata_map: MetadataMapMut, config: Arc<Configuration>) 
--> (usize,usize) 
+-> (usize,usize,usize) 
 {
     let mut total_files = 0;
     let mut relevant_files = 0;
+    let mut excluded_files = 0;
     let mut should_terminate = false;
     // let mut times_slept = 0;
 
@@ -48,7 +51,7 @@ pub fn produce(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_inje
 
             if let Ok(entries) = fs::read_dir(&dir) {
                 traverse_dir(&files_injector, entries, &dirs_injector, &languages, &config, &languages_metadata_map,
-                        &mut total_files, &mut relevant_files)
+                        &mut total_files, &mut relevant_files, &mut excluded_files)
             }
         } else {
             should_terminate = true;
@@ -67,15 +70,16 @@ pub fn produce(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_inje
     // print_thread_colored_msg(id, format!("Thread {} |  Exits with findings: {:?}",id,(total_files,relevant_files)));
     // print_thread_colored_msg(id, format!("Thread {} |  Slept {} times. ",id,times_slept));
 
-    (total_files,relevant_files)
+    (total_files,relevant_files,excluded_files)
 }
 
 fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, dirs_injector: &Arc<Injector<PathBuf>>,
         languages: &Arc<HashMap<String,Language>>, config: &Configuration, languages_metadata_map: &MetadataMapMut,
-        total_files: &mut usize, relevant_files: &mut usize)  
+        total_files: &mut usize, relevant_files: &mut usize, excluded_files: &mut usize)  
 {
     let mut local_total_files = 0;
     let mut local_relevant_files = 0;
+    let mut local_excluded_files = 0;
     for e in entries.flatten(){
         if let Ok(ft) = e.file_type() {
             if ft.is_file() { 
@@ -93,7 +97,10 @@ fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, 
                 if let Some(lang_name) = find_lang_with_this_identifier(languages, &extension_name) {
                     if !config.exclude_dirs.is_empty() {
                         let full_path = &path_buf.to_str().unwrap_or("").replace('\\', "/");
-                        if config.exclude_dirs.iter().any(|x| full_path.ends_with(x) || x == full_path) {continue;}
+                        if config.exclude_dirs.iter().any(|x| full_path.ends_with(x) || x == full_path) {
+                            local_excluded_files += 1;
+                            continue;
+                        }
                     }
 
                     local_relevant_files += 1;
@@ -128,6 +135,7 @@ fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, 
 
     *total_files += local_total_files;
     *relevant_files += local_relevant_files;
+    *excluded_files += local_excluded_files;
 }
 
 #[cfg(debug_assertions)]

@@ -53,7 +53,7 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let languages_content_info_ref : ContentInfoMapMut = Arc::new(Mutex::new(make_language_stats(language_map_ref.clone())));
     let global_languages_metadata_map = Arc::new(Mutex::new(make_language_metadata(&language_map_ref)));
     
-    let mut files_present = FilesPresent::new(0,0);
+    let mut files_present = FilesPresent::default();
     let producer_termination_states = Arc::new(Mutex::new(vec![false; config.threads.producers]));
     let files_injector = Arc::new(Injector::<ParsableFile>::new());
     let dirs_injector = Arc::new(Injector::<PathBuf>::new());
@@ -95,11 +95,12 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let parsing_duration_millis = parsing_started_instant.elapsed().as_millis();
 
     let file_stats_guard = files_stats.lock().unwrap();
-    let (total_files_num, relevant_files_num) = (file_stats_guard.total_files, file_stats_guard.relevant_files);
+    let (total_files_num, relevant_files_num, excluded_files_num) = 
+            (file_stats_guard.total_files, file_stats_guard.relevant_files, file_stats_guard.excluded_files);
     if relevant_files_num == 0 {
         return Err(ParseFilesError::NoRelevantFiles(get_activated_languages_as_str(&config)));
     }
-    println!("{} files found. {} of interest.\n",with_seperators(total_files_num), with_seperators(relevant_files_num));
+    println!("{} files found. {} of interest. {} excluded.\n",with_seperators(total_files_num), with_seperators(relevant_files_num), with_seperators(excluded_files_num));
 
     println!("{}...","Parsing files".underline().bold());
 
@@ -338,10 +339,11 @@ pub enum ParseFilesError {
     AllAreFaultyFiles
 } 
 
-#[derive(Debug,Clone)]
+#[derive(Debug,Default,Clone)]
 pub struct FilesPresent {
     pub total_files: usize,
-    pub relevant_files: usize
+    pub relevant_files: usize,
+    pub excluded_files: usize
 }
 
 #[derive(Debug,Clone)]
@@ -494,10 +496,11 @@ impl FaultyFileDetails {
 }
 
 impl FilesPresent {
-    pub fn new(total_files: usize, relevant_files: usize) -> Self {
+    pub fn new(total_files: usize, relevant_files: usize, excluded_files: usize) -> Self {
         FilesPresent {
             total_files,
-            relevant_files
+            relevant_files,
+            excluded_files
         }
     }
 }
