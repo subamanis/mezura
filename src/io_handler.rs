@@ -413,7 +413,7 @@ pub fn log_stats(path: &str, contents: &Option<String>, final_stats: &FinalStats
 }
 
 fn write_current_log(writer: &mut BufWriter<File>, config: &Configuration, datetime_now: &DateTime<Local>, final_stats: &FinalStats) {
-    writer.write(format!("===>{}\n",config.log.name.clone().unwrap_or(String::new())).as_bytes());
+    writer.write(format!("===>{}\n",config.log.name.clone().unwrap_or_default()).as_bytes());
     writer.write(datetime_now.format("%Y-%m-%d %H:%M:%S %z").to_string().as_bytes());
     writer.write(b"\n");
     writer.write(b"Configuration:\n");

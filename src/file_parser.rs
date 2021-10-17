@@ -326,32 +326,32 @@ fn find_comment_indicies_without_multiline(line: &str, language: &Language) -> V
         let mut matches = line.match_indices(&language.comment_symbols[0]).map(|x| x.0)
             .chain(line.match_indices(&language.comment_symbols[1]).map(|x| x.0))
             .collect::<Vec<usize>>();
-        matches.sort();
+        matches.sort_unstable();
         matches
     } else {
         line.match_indices(&language.comment_symbols[0]).map(|x| x.0).collect::<Vec<usize>>()
     } 
 }
 
-fn find_comment_indicies_w_multiline(line: &str, language: &Language, com_end_indices: &Vec<usize>) -> Vec<usize> {
+fn find_comment_indicies_w_multiline(line: &str, language: &Language, com_end_indices: &[usize]) -> Vec<usize> {
     if language.comment_symbols.len() > 1 {
         line.match_indices(&language.comment_symbols[0])
-        .filter_map(|x| filter_comment_end_indicies(x.0, language, &com_end_indices))
+        .filter_map(|x| filter_comment_end_indicies(x.0, language, com_end_indices))
             .chain(
                 line.match_indices(&language.comment_symbols[1])
-                .filter_map(|x|  filter_comment_end_indicies(x.0, language, &com_end_indices))
+                .filter_map(|x|  filter_comment_end_indicies(x.0, language, com_end_indices))
             )
         .collect::<Vec<_>>()
     } else {
         line.match_indices(&language.comment_symbols[0])
             .filter_map(|x| {
-                filter_comment_end_indicies(x.0, language, &com_end_indices)
+                filter_comment_end_indicies(x.0, language, com_end_indices)
             })
             .collect::<Vec<_>>()
     }
 }
 
-fn filter_comment_end_indicies(x: usize, language: &Language, indicies: &Vec<usize>) -> Option<usize> {
+fn filter_comment_end_indicies(x: usize, language: &Language, indicies: &[usize]) -> Option<usize> {
     if !is_intersecting_with_multi_line_end_symbol(x, language.multiline_len(), indicies) {
         Some(x) 
     } else {

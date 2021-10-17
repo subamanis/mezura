@@ -250,7 +250,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         config_name_to_save, config_name_to_load);
 
     if let Some(name) = &config_builder.config_name_to_save {
-        match io_handler::save_existing_commands_from_config_builder_to_file(None, &name, &config_builder) {
+        match io_handler::save_existing_commands_from_config_builder_to_file(None, name, &config_builder) {
             Err(_) => println!("\n{}","Error while trying to save config.".yellow()),
             Ok(_) => println!("\nConfiguration '{}' saved successfully.",name)
         }

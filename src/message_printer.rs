@@ -258,7 +258,7 @@ pub fn print_existing_configs() {
             None
         }
     }).collect::<Vec<_>>();
-    config_names.sort();
+    config_names.sort_unstable();
     let prefix = get_data_dir_str();
     println!("{}Found these configurations:\n  {}\n",prefix,config_names.join("\n  "));
 }

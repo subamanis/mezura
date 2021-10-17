@@ -311,7 +311,7 @@ fn parse_N_previous_entries(log_content: &str, n: usize) -> Vec<LogEntry> {
         } else if let Some(value) = line.strip_prefix(AVERAGE_SIZE) {
             let bytes_average_size = value.trim().parse::<usize>().unwrap();
             let stats = FinalStats::new_extended(files, lines, code_lines, extra_lines, bytes_size, bytes_average_size);
-            log_entries.push(LogEntry{name: entry_name.clone(), stats, datetime: datetime.clone()});
+            log_entries.push(LogEntry{name: entry_name.clone(), stats, datetime});
 
             counter += 1;
             if counter == n {return log_entries}
@@ -779,7 +779,7 @@ mod tests {
         assert_eq!("0",difference_as_signed_percentage_str_of_usize(100, 100));
         assert_eq!("-10",difference_as_signed_percentage_str_of_usize(100, 90));
         assert_eq!("+100",difference_as_signed_percentage_str_of_usize(100, 200));
-        assert_eq!("+0.01",difference_as_signed_percentage_str_of_usize(22819, 22820));
+        assert_eq!("+ <0.01",difference_as_signed_percentage_str_of_usize(22819, 22820));
         
         assert_eq!("0",difference_as_signed_percentage_str_of_f64(100.0, 100.0));
         assert_eq!("-10",difference_as_signed_percentage_str_of_f64(100.0, 90.0));
