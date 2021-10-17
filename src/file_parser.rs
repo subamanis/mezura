@@ -1018,12 +1018,12 @@ mod tests {
         config.set_should_not_count_keywords(false);
         let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "C#", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new(vec!["a".to_owned()]));
         let result = LanguageContentInfo::from(result.unwrap());
-        assert_eq!(LanguageContentInfo::new(44, 13, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
+        assert_eq!(LanguageContentInfo::new(44, 13, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         buf.clear();
         
         let result = parse_file(Path::new("test_dir/lang_files/d.txt"), "C#", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new(vec!["a".to_owned()]));
         let result = LanguageContentInfo::from(result.unwrap());
-        assert_eq!(LanguageContentInfo::new(19, 7, hashmap!("classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
+        assert_eq!(LanguageContentInfo::new(19, 7, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         buf.clear();
         let result = parse_file(Path::new("test_dir/lang_files/d.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new(vec!["a".to_owned()]));
         let result = LanguageContentInfo::from(result.unwrap());

@@ -561,7 +561,7 @@ mod tests {
 
     #[test]
     fn test_save_config_file_and_then_parse_it() -> std::io::Result<()> {
-        let command = format!("C:/ --exclude a,b,c.txt,d.txt, --braces-as-code --threads 1 1");
+        let command = format!("./ --exclude a,b,c.txt,d.txt, --braces-as-code --threads 1 1");
         let config_builder = config_manager::create_config_builder_from_args(&command).unwrap();
 
         let test_config_dir = Some(LOCAL_APP_PATHS.test_config_dir.clone());

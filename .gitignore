@@ -20,3 +20,4 @@ data/logs/*
 mezura.exe
 src/benchmarks.rs
 bench_dir
+test_dir/config/auto-generated.txt
