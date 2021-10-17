@@ -3,7 +3,7 @@
 ## About
 This is a fairly <b>fast</b>, fairly <b>accurate</b>, very <b>customizable</b> stats generator for programming projects, in the form of a CLI executable, written in <b>Rust</b>.
 It is used for counting total lines, code lines, user defined <b>keywords</b> like classes, enums, etc., visualize the statistics, and to track the growth of codebases.<br><br>
-It is maintained primarily on <b>Windows</b>, it is also being validated that it works on <b>Linux</b> (Ubuntu), and it probably also works on MacOS (although I cannot personally verify).
+It is maintained primarily on <b>Windows</b>, it is also being validated that it works on <b>Linux</b> (Ubuntu), and it probably also works on <b>MacOS</b> (although I cannot personally verify).
 
 Example run:
 ![](screenshots/example.PNG)
@@ -12,7 +12,7 @@ Example run:
 ## Table of contents
 * [How To Run](#how-to-run)
 * [Details](#details)
-* [Flags / Commands](#flags-commands)
+* [Cmd Commands](#cmd-commands)
 * [Configuration Files](#configuration-files)
 * [Logs and Progress](#logs-and-progress)
 * [Supported Languages](#supported-languages)
@@ -30,9 +30,9 @@ The only thing you need is the binary. You can either:
 And to run it:
 ```mezura <path> --optional_command1 --optional_commandN```
 
-The program, expects one or many paths to some directories or a code files, seperated by comma if more than one.
+The program, expects one or many paths to some directories or code files, seperated by comma if more than one.
 
-The program also accepts a lot of optional flags to customize functionality, see [Flags / Commands](#flags-commands) for more info or use the --help command.
+The program also accepts a lot of optional flags to customize functionality, see [Cmd Commands](#cmd-commands) for more info or use the --help command.
 
 	
 ## Details
@@ -44,7 +44,7 @@ The generated stats are the following:
 - Percentage comparisons between languages
 - Difference of stats between executions 
 
-There is a "data" folder in the repository, that contains some already provided supported languages and the default configuration file.
+There is a "data" folder in the repository, that contains some already provided language files and the default configuration file.
 The program, at compile time, includes the "data" folder in the binary, and during the first execution, it saves it with the same structure in a persistent path, inside the user's computer, according to the platfrom's specification. More specifically, the paths per operating system are:
 ```
     Windows:  C:/Users/<user_name>/AppData/Roaming/mezura
@@ -58,7 +58,7 @@ like add more languages of his choice, or modify the default configuration.
 In order for a file to be considered for counting, its extension must be supported, meaning that a .txt language file specifying the particular extension as an entry in its 'Extensions' field, must be present in the "data/languages" dir see [Supported Languages](#supported-languages). 
 
 
-## Flags / Commands
+## Cmd Commands
 Below there is a list with all the commands-flags that the program accepts.
 ```
 --help
@@ -87,8 +87,9 @@ Below there is a list with all the commands-flags that the program accepts.
 --dirs
     The paths to the directories or files, seperated by commas if more than 1,
     in this form: '--dirs <path1>, <path2>'
-    If you are using Windows Powershell, you will need to escape the commas with a backtick: ` , or surround all the arguments with quatation marks
-    like this: <path1>`, <path2>`, <path3>   or   "<path1>, <path2>, <path3>"
+    If you are using Windows Powershell, you will need to escape the commas with a backtick: ` 
+    or surround all the arguments with quatation marks like this:
+    <path1>`, <path2>`, <path3>   or   "<path1>, <path2>, <path3>"
 
     The target directories can also be given implicitly (in which case this command is not needed) with 2 ways:
     1) as the first arguments of the program directly
@@ -97,8 +98,9 @@ Below there is a list with all the commands-flags that the program accepts.
 --exclude 
     1..n arguments separated by commas, can be a folder name, a file name (including extension), 
     or a full path to a folder or file.
-    If you are using Windows Powershell, you will need to escape the commas with a backtick: ` , or surround all the arguments with quatation marks
-    like this: <arg1>`, <arg2>`, <arg3>   or   "<arg1>, <arg2>, <arg3>"
+    If you are using Windows Powershell, you will need to escape the commas with a backtick: ` 
+    or surround all the arguments with quatation marks like this:
+    <arg1>`, <arg2>`, <arg3>   or   "<arg1>, <arg2>, <arg3>"
 
     The program will ignore these dirs.
 
@@ -193,8 +195,9 @@ Below there is a list with all the commands-flags that the program accepts.
 If we plan to run the program many times for a project, it can be bothersome to specify all the flags every time, especially if they contain a lot of target and exclude dirs.
 That's why you can specify many flags in a <b>*configuration file*</b>, and have the program just load that file (see the --load command). <br>
 
-Configurations can be created automatically by specifying all the flags once, along with the command "--save", and a name for the configuration. Then the program, along with its normal execution, will automatically create a config file with the name you specified, and dump all the flags in there. 
-The next time you want to run the program on this project, you can do it like this: ```mezura --load <config_name>``` <br>
+Configurations can be created automatically by specifying all the flags once, along with the command "--save", and a name for the configuration. Then the program, along with its normal execution, will automatically create a config file with the name you specified, and dump all the flags in there. <br>
+The next time you want to run the program on this project, you can do it like this: 
+```mezura --load <config_name>``` <br>
 
 By default, there is a configuration file name "default" already present in the "data/config" dir, that gets loaded on every run. There, you can customize your preferences and they will apply to all runs, except if overriden by explicitely providing a different flag in the cmd, or by loading a specific configuration. For example, if you prefer counting braces as code, you can specify it there, because the default behaviour is to not regard them as code. <br>
 
