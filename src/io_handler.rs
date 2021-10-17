@@ -316,7 +316,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
     }
 
     Ok(ConfigurationBuilder::new(dirs,exclude_dirs, languages_of_interest, threads, braces_as_code,should_search_in_dotted,
-             should_show_faulty_files, no_keywords, no_visual, log, compare_level))
+             should_show_faulty_files, no_keywords, no_visual, log, compare_level, None, None))
 }
 
 // Dirs must be specified (is checked before calling this function)

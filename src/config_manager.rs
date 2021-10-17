@@ -246,9 +246,10 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     print_warnings_for_commands_that_need_a_loaded_configuration(&config_name_to_save, &config_name_to_load, &log, &compare_level);
     
     let mut config_builder = ConfigurationBuilder::new(dirs, exclude_dirs, languages_of_interest, threads, braces_as_code,
-        search_in_dotted, show_faulty_files, no_keywords, no_visual, log, compare_level);
+        search_in_dotted, show_faulty_files, no_keywords, no_visual, log, compare_level,
+        config_name_to_save, config_name_to_load);
 
-    if let Some(name) = config_name_to_save {
+    if let Some(name) = &config_builder.config_name_to_save {
         match io_handler::save_existing_commands_from_config_builder_to_file(None, &name, &config_builder) {
             Err(_) => println!("\n{}","Error while trying to save config.".yellow()),
             Ok(_) => println!("\nConfiguration '{}' saved successfully.",name)
@@ -320,30 +321,6 @@ fn convert_to_absolute(s: &str) -> String {
     }
 }
 
-// Fill the missing arguments that the user didn't specify when he run the program with 
-// 1) The arguments saved in the given config (if he gave any)
-// 2) The default config file
-// 3) Default values
-// In this order of importance.
-fn combine_specified_config_options(custom_config: Option<ConfigurationBuilder>, dirs: Option<Vec<String>>, exclude_dirs: Option<Vec<String>>,
-        languages_of_interest: Option<Vec<String>>, threads: Option<Threads>, braces_as_code: Option<bool>, search_in_dotted: Option<bool>,
-        show_faulty_files: Option<bool>, no_keywords: Option<bool>, no_visual: Option<bool>, log: Option<LogOption>, compare_level: Option<usize>) 
--> ConfigurationBuilder 
-{
-    let mut args_builder = ConfigurationBuilder::new(dirs, exclude_dirs, languages_of_interest, threads, braces_as_code,
-         search_in_dotted, show_faulty_files, no_keywords, no_visual, log, compare_level);
-    if let Some(x) = custom_config {
-        args_builder.add_missing_fields(x);
-    }
-    if args_builder.has_missing_fields() {
-        let default_config = io_handler::parse_config_file(None, None);
-        if let Ok(x) = default_config {
-            args_builder.add_missing_fields(x);
-        }
-    }
-    args_builder
-}
-
 
 #[derive(Debug)]
 pub struct ConfigurationBuilder {
@@ -358,12 +335,14 @@ pub struct ConfigurationBuilder {
     pub no_visual:                Option<bool>,
     pub log:                      Option<LogOption>,
     pub compare_level:            Option<usize>,
+    pub config_name_to_save:      Option<String>,
+    pub config_name_to_load:      Option<String>
 }
 
 impl ConfigurationBuilder {
     pub fn new(dirs: Option<Vec<String>>, exclude_dirs: Option<Vec<String>>, languages_of_interest: Option<Vec<String>>, threads: Option<Threads>,
-             braces_as_code: Option<bool>, should_search_in_dotted: Option<bool>, should_show_faulty_files: Option<bool>,
-             no_keywords: Option<bool>, no_visual: Option<bool>, log: Option<LogOption>, compare_level: Option<usize>) 
+             braces_as_code: Option<bool>, should_search_in_dotted: Option<bool>, should_show_faulty_files: Option<bool>, no_keywords: Option<bool>,
+             no_visual: Option<bool>, log: Option<LogOption>, compare_level: Option<usize>, config_name_to_save: Option<String>, config_name_to_load: Option<String>) 
     -> ConfigurationBuilder 
     {
         ConfigurationBuilder {
@@ -377,7 +356,9 @@ impl ConfigurationBuilder {
             no_keywords,
             no_visual,
             log,
-            compare_level
+            compare_level,
+            config_name_to_save,
+            config_name_to_load
         }
     }
 
@@ -416,8 +397,8 @@ impl ConfigurationBuilder {
             no_visual: self.no_visual.unwrap_or(DEF_NO_VISUAL),
             log: self.log.clone().unwrap_or_else(LogOption::default),
             compare_level: self.compare_level.unwrap_or(DEF_COMPARE_LEVEL),
-            config_name_to_save: None,
-            config_name_to_load: None
+            config_name_to_save: self.config_name_to_save.clone(),
+            config_name_to_load: self.config_name_to_load.clone()
         }
     }
 }

@@ -247,11 +247,13 @@ fn split_minutes_to_D_H_M(mut minutes: i64) -> (i64, i64, i64) {
 fn difference_as_signed_percentage_str_of_usize(older: usize, newer: usize) -> String {
     let (difference, sign) = if newer > older {(newer-older, "+".to_owned())} else if older > newer {(older-newer, "-".to_owned())} else {(0,String::new())};
     let mut percentage = (difference as f64 / older as f64) * 100.0;
+    let mut prefix_symbol = "";
     if percentage > 0.0 && percentage < 0.01 {
+        prefix_symbol = " <";
         percentage = 0.01;
     }
     
-    sign + &round_2(percentage).to_string()
+    sign + prefix_symbol + &round_2(percentage).to_string()
 }
 
 
