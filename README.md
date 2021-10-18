@@ -281,6 +281,8 @@ With that said, it is important to mention the following limitations:
 
 - The program doesn't take into account gitignore files, the unwanted dirs have to be added manually in a configuration file
 
+- Regural expressions are not handled in a special way, so if a regex contains a string or comment symbol, it may create some inaccurancies for the file.
+
 - Bug: If a file contains Unicode Strings, there is a possibility that a parser thread will panic, due to trying to slice a line in a non-valid way. (byte index is not a char boundary)
 
 

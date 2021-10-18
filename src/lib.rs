@@ -580,8 +580,16 @@ pub mod domain {
             }
         }
 
-        pub fn multiline_len(&self) -> usize {
+        pub fn multiline_start_len(&self) -> usize {
             if let Some(x) = &self.multiline_comment_start_symbol {
+                x.len()
+            } else {
+                0
+            }
+        }
+
+        pub fn multiline_end_len(&self) -> usize {
+            if let Some(x) = &self.multiline_comment_end_symbol {
                 x.len()
             } else {
                 0

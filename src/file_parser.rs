@@ -173,7 +173,7 @@ fn get_bounds_w_multiline_comments(line: &str, language: &Language, is_comment_c
    let mut com_start_indices = get_com_start_indices(line, language, &comment_indices);
    if !com_end_indices.is_empty() && !com_start_indices.is_empty() {
        resolve_double_counting_of_adjacent_start_and_end_symbols(&mut com_start_indices, &mut com_end_indices,
-           !is_comment_closed, language.multiline_len());
+           !is_comment_closed, language.multiline_start_len());
    }
    
    if str_indices.is_empty() && comment_indices.is_empty() && com_start_indices.is_empty() && com_end_indices.is_empty() {
@@ -261,7 +261,7 @@ fn get_bounds_w_multiline_comments(line: &str, language: &Language, is_comment_c
            slice_start_index = index_after;
        } else if is_com_open_m {
            last_symbol_index = com_end_indices[end_com_counter];
-           let index_after = last_symbol_index + language.multiline_len();
+           let index_after = last_symbol_index + language.multiline_end_len();
            if index_after >= line.len() {
                if relevant.is_empty() {return LineInfo::none_all(has_string_literal);}
                else {return LineInfo::with_str(relevant,has_string_literal);}
@@ -352,7 +352,7 @@ fn find_comment_indicies_w_multiline(line: &str, language: &Language, com_end_in
 }
 
 fn filter_comment_end_indicies(x: usize, language: &Language, indicies: &[usize]) -> Option<usize> {
-    if !is_intersecting_with_multi_line_end_symbol(x, language.multiline_len(), indicies) {
+    if !is_intersecting_with_multi_line_end_symbol(x, language.multiline_end_len(), indicies) {
         Some(x) 
     } else {
          None 
