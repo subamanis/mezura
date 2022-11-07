@@ -23,14 +23,15 @@ Example run:
 
 ## How To Run
 The only thing you need is the binary. You can either:
-1) ```cargo install mezura```
+1) ```cargo install --git https://github.com/subamanis/mezura --branch main```
 2) Build yourself by cloning or downloading the repo (```cargo build --release```),
 3) For Windows only, grab the prebuilt binary from the "executable" folder.
 
 And to run it:
-```mezura <path> --optional_command1 --optional_commandN```
+```mezura <optional_path> --optional_command1 --optional_commandN``` 
 
-The program, expects one or many paths to some directories or code files, seperated by comma if more than one.
+The program, expects none or many paths to some directories or code files, seperated by comma, if more than one.
+If no path is provided, the current working dirrectory will be assumed as target directory.
 
 The program also accepts a lot of optional flags to customize functionality, see [Cmd Commands](#cmd-commands) for more info or use the --help command.
 
@@ -279,6 +280,8 @@ With that said, it is important to mention the following limitations:
 - A language can only declare either one or two string and comment symbols and only one multiline comment start symbol + multiline comment end symbol in the .txt, not more.
 
 - The program doesn't take into account gitignore files, the unwanted dirs have to be added manually in a configuration file or using the ```--exclude``` command. 
+
+- Regural expressions are not handled in a special way, so if a regex contains a string or comment symbol, it may create some inaccurancies for the file.
 
 - Bug: If a file contains Unicode Strings, there is a possibility that a parser thread will panic, due to trying to slice a line in a non-valid way, thus creating
 non-valid unicode characters. (byte index is not a char boundary)
