@@ -66,4 +66,21 @@ Other:
   -> Running the program with no arguments will now just display the help message.
   -> The program will now also display how many files it ignored due to the '--exclude' command.
   -> 7 more language files bundled by default.  
-  -> Added the .h extension in the C++ language file, along the .cpp and .hpp extensions.
+  -> Added the .h extension in the C++ language file, along with the .cpp and .hpp extensions.
+
+
+
+-----------------------------------------------------------------------------------------------------------
+
+
+
+v1.0.0 - <enter date>
+
+- Main changes:
+
+
+Other: 
+  -> Running the program with no target dir provided (either explicitly, or through a configuration file),
+  will now assume the current working dir as the target dir, in contrast to printing the --help message.
+  -> Added some tests
+  -> Minor help message and readme changes

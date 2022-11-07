@@ -88,7 +88,7 @@ Below there is a list with all the commands-flags that the program accepts.
     The paths to the directories or files, seperated by commas if more than 1,
     in this form: '--dirs <path1>, <path2>'
     If you are using Windows Powershell, you will need to escape the commas with a backtick: ` 
-    or surround all the arguments with quatation marks like this:
+    or surround all the arguments with quatation marks:
     <path1>`, <path2>`, <path3>   or   "<path1>, <path2>, <path3>"
 
     The target directories can also be given implicitly (in which case this command is not needed) with 2 ways:
@@ -99,7 +99,7 @@ Below there is a list with all the commands-flags that the program accepts.
     1..n arguments separated by commas, can be a folder name, a file name (including extension), 
     or a full path to a folder or file.
     If you are using Windows Powershell, you will need to escape the commas with a backtick: ` 
-    or surround all the arguments with quatation marks like this:
+    or surround all the arguments with quatation marks:
     <arg1>`, <arg2>`, <arg3>   or   "<arg1>, <arg2>, <arg3>"
 
     The program will ignore these dirs.
@@ -117,7 +117,6 @@ Below there is a list with all the commands-flags that the program accepts.
 
     This represents the number of the producers (threads that will traverse the given directories),
     and consumers (threads that will parse whatever files the producers found).
-    (there is also always one producer thread that is traversing the given dir).
 
     If this command is not provided, the numbers will be chosen based on the available threads
     on your machine. Generally, a good ratio of producers-consumers is 1:3
@@ -277,11 +276,12 @@ With that said, it is important to mention the following limitations:
 
 - The program assumes that if a line contains any odd number of the same string symbols, then this is an open multiline string. This works for most cases but it may create inaccuracies, for example if a line in python has """ then the program will consider a multiline string everything until the next " symbol and not the next """ symbol. If a language doesn't support multiline strings, then you would not expect to see odd number of string symbols either way in a valid syntnax.
 
-- A language can only declare either one or two string symbols in the .txt, not more.
+- A language can only declare either one or two string and comment symbols and only one multiline comment start symbol + multiline comment end symbol in the .txt, not more.
 
-- The program doesn't take into account gitignore files, the unwanted dirs have to be added manually in a configuration file
+- The program doesn't take into account gitignore files, the unwanted dirs have to be added manually in a configuration file or using the ```--exclude``` command. 
 
-- Bug: If a file contains Unicode Strings, there is a possibility that a parser thread will panic, due to trying to slice a line in a non-valid way. (byte index is not a char boundary)
+- Bug: If a file contains Unicode Strings, there is a possibility that a parser thread will panic, due to trying to slice a line in a non-valid way, thus creating
+non-valid unicode characters. (byte index is not a char boundary)
 
 
 ## Performance

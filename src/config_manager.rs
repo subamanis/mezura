@@ -5,7 +5,7 @@ use colored::{ColoredString, Colorize};
 use crate::{Formatted, io_handler, message_printer, utils};
 
 // Application version, to be displayed at startup and with --help command
-pub const VERSION_ID : &str = "v1.0.0-beta1"; 
+pub const VERSION_ID : &str = "v1.0.0"; 
 
 // command flags
 pub const DIRS               :&str   = "dirs";
@@ -75,6 +75,7 @@ pub struct Threads {
 #[derive(Debug, PartialEq)]
 pub enum ArgParsingError {
     NoArgsProvided,
+    UnparsableWorkingDir,
     MissingTargetDirs,
     InvalidPath(String),
     InvalidPathInConfig(String,String),
@@ -101,14 +102,15 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         //ignoring the empty first element that is caused by splitting
         options.next();
     } else {
-        let parse_result = parse_dirs(options.next().unwrap());
-        if let Ok(x) = parse_result {
-            if x.is_empty() {
-                return Err(ArgParsingError::IncorrectCommandArgs(DIRS.to_owned()));
+        match parse_dirs(options.next().unwrap()) {
+            Ok(x) => {
+                if !x.is_empty() {
+                    dirs = Some(x);
+                }
+            },
+            Err(x) => {
+                return Err(x);
             }
-            dirs = Some(x)
-        } else {
-            return Err(parse_result.err().unwrap());
         }
     }
 
@@ -233,16 +235,6 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         }
     }
 
-    if dirs.is_none() {
-        if let Some(options) = &custom_config {
-            if options.dirs.is_none() {
-                return Err(ArgParsingError::MissingTargetDirs);
-            }
-        } else {
-            return Err(ArgParsingError::MissingTargetDirs);
-        }
-    }
-
     print_warnings_for_commands_that_need_a_loaded_configuration(&config_name_to_save, &config_name_to_load, &log, &compare_level);
     
     let mut config_builder = ConfigurationBuilder::new(dirs, exclude_dirs, languages_of_interest, threads, braces_as_code,
@@ -263,6 +255,13 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         let default_config = io_handler::parse_config_file(None, None);
         if let Ok(x) = default_config {
             config_builder.add_missing_fields(x);
+        }
+    }
+
+    if config_builder.dirs.is_none() {
+        match parse_working_dir_as_target_dir() {
+            Ok(x) => {config_builder.dirs = Some(x)},
+            Err(x) => {return Err(x)}
         }
     }
 
@@ -305,7 +304,19 @@ fn parse_dirs(s: &str) -> Result<Vec<String>, ArgParsingError> {
     Ok(_dirs)
 }
 
-// The "canonicalize" function from the std that this function uses, seems to put the weird prefix
+fn parse_working_dir_as_target_dir() -> Result<Vec<String>, ArgParsingError> {
+    if let Ok(path_buf) = std::env::current_dir() {
+        if let Some(path_str) = path_buf.to_str() {
+            if let Ok(x) = parse_dirs(path_str) {
+                return Ok(x);
+            }
+        }
+    }
+
+    Err(ArgParsingError::UnparsableWorkingDir)
+}
+
+// The "canonicalize" function from the std that this function uses, (at least on window) seems to put the weird prefix
 // "\\?\" before the path and it also puts forward slashes that we want to convert for compatibility.  
 fn convert_to_absolute(s: &str) -> String {
     let p = Path::new(s);
@@ -534,6 +545,7 @@ impl Formatted for ArgParsingError {
     fn formatted(&self) -> ColoredString {
         match self {
             Self::NoArgsProvided => "No arguments provided.".red(),
+            Self::UnparsableWorkingDir => "The current working dir could not be parsed as target dir, try inputing it manually.".red(),
             Self::MissingTargetDirs => "The target directories (--dirs) are not specified.".red(),
             Self::InvalidPath(p) => format!("Path provided is not a valid directory or file:\n'{}'.",p).red(),
             Self::InvalidPathInConfig(dir,name) => format!("Specified path '{}', in config '{}', doesn't exist anymore.",dir,name).red(),
@@ -577,6 +589,9 @@ mod tests {
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("load".to_owned())), create_config_from_args("./ --load   "));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("save".to_owned())), create_config_from_args("./ --save"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("save".to_owned())), create_config_from_args("./ --save   "));
+
+        assert_ne!(Configuration::new(vec![convert_to_absolute("../")]), create_config_from_args(std::env::current_dir().unwrap().to_str().unwrap()).unwrap());
+        assert_eq!(Configuration::new(vec![convert_to_absolute("./")]), create_config_from_args(std::env::current_dir().unwrap().to_str().unwrap()).unwrap());
 
         assert_eq!(Configuration::new(vec![convert_to_absolute("./")]), create_config_from_args("./").unwrap());
         assert_eq!(Configuration::new(vec![convert_to_absolute("./")]), create_config_from_args("--dirs ./").unwrap());

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, process, time::Instant};
+use std::{collections::HashMap, time::Instant};
 
 use colored::*;
 #[macro_use]
@@ -38,27 +38,29 @@ fn main() {
             },
             Err(x) => {
                 println!("\n{}", x.formatted());
-                process::exit(1);
+                return;
             }
         }
     }
 
-    let args_str = read_args_as_str();
-    if args_str.is_none() {
-        message_printer::print_whole_help_message();
-        return;
-    }
-    let args_str = args_str.unwrap();
+    let args_str = match read_args_as_str() {
+        Some(args) => {
+            args
+        },
+        None => {
+            String::from("./")
+        }
+    };
 
     if handle_message_only_command(&args_str, &language_map) {
         return;
     }
-    
+
     let config = match config_manager::create_config_from_args(&args_str) {
         Ok(config) => config,
         Err(x) => {
             println!("\n{}\n",x.formatted());
-            process::exit(1);
+            return;
         } 
     };
 
@@ -71,7 +73,7 @@ fn main() {
             },
             Err(_) => {
                 println!("\n{}\n","Error: None of the provided language names map to valid supported languages".red());
-                process::exit(1);
+                return;
             }
         }
     }
@@ -157,17 +159,16 @@ fn read_args_as_str() -> Option<String> {
 }
 
 fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Language>) -> bool {
-    let prefix = "--".to_owned();
-    if args_str.contains(&(prefix.clone() + HELP)) {
+    if args_str.contains(&(String::from("--") + HELP)) {
         message_printer::print_help_message_for_given_args(args_str);
         return true; 
-    } else if args_str.contains(&(prefix.clone() + CHANGELOG)) {
+    } else if args_str.contains(&(String::from("--") + CHANGELOG)) {
         message_printer::print_changelog();
         return true;
-    } else if args_str.contains(&(prefix.clone() + SHOW_LANGUAGES)) {
+    } else if args_str.contains(&(String::from("--") + SHOW_LANGUAGES)) {
         message_printer::print_supported_languages(language_map);
         return true;
-    } else if args_str.contains(&(prefix + SHOW_CONFIGS)) {
+    } else if args_str.contains(&(String::from("--") + SHOW_CONFIGS)) {
         message_printer::print_existing_configs();
         return true;
     }

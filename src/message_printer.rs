@@ -9,8 +9,8 @@ pub const DIRS_HELP  :  &str =
 "--dirs
     The paths to the directories or files, seperated by commas if more than 1,
     in this form: '--dirs <path1>, <path2>'
-    If you are using Windows Powershell, you will need to escape the commas with a backtick: ` ,
-    or surround all the arguments with quatation marks like this:
+    If you are using Windows Powershell, you will need to escape the commas with a backtick: ` 
+    or surround all the arguments with quatation marks:
     <path1>`, <path2>`, <path3>   or   \"<path1>, <path2>, <path3>\"
 
     The target directories can also be given implicitly (in which case this command is not needed) with 2 ways:
@@ -22,8 +22,8 @@ pub const EXCLUDE_HELP  :  &str =
 "--exclude 
     1..n arguments separated by commas, can be a folder name, a file name (including extension), 
     or a full path to a folder or file.
-    If you are using Windows Powershell, you will need to escape the commas with a backtick: ` ,
-    or surround all the arguments with quatation marks like this:
+    If you are using Windows Powershell, you will need to escape the commas with a backtick: ` 
+    or surround all the arguments with quatation marks:
     <arg1>`, <arg2>`, <arg3>   or   \"<arg1>, <arg2>, <arg3>\"
 
     The program will ignore these dirs.
@@ -45,7 +45,6 @@ pub const THREADS_HELP  :  &str =
 
     This represents the number of the producers (threads that will traverse the given directories),
     and consumers (threads that will parse whatever files the producers found).
-    (there is also always one producer thread that is traversing the given dir).
 
     If this command is not provided, the numbers will be chosen based on the available threads
     on your machine. Generally, a good ratio of producers-consumers is 1:3
