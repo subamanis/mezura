@@ -241,16 +241,24 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         search_in_dotted, show_faulty_files, no_keywords, no_visual, log, compare_level,
         config_name_to_save, config_name_to_load);
 
+    if let Some(x) = custom_config {
+        config_builder.add_missing_fields(x);
+    }
+
     if let Some(name) = &config_builder.config_name_to_save {
+        if config_builder.dirs.is_none() {
+            match parse_working_dir_as_target_dir() {
+                Ok(x) => {config_builder.dirs = Some(x)},
+                Err(x) => {return Err(x)}
+            }
+        }
+
         match io_handler::save_existing_commands_from_config_builder_to_file(None, name, &config_builder) {
             Err(_) => println!("\n{}","Error while trying to save config.".yellow()),
             Ok(_) => println!("\nConfiguration '{}' saved successfully.",name)
         }
     }
 
-    if let Some(x) = custom_config {
-        config_builder.add_missing_fields(x);
-    }
     if config_builder.has_missing_fields() {
         let default_config = io_handler::parse_config_file(None, None);
         if let Ok(x) = default_config {
@@ -333,7 +341,7 @@ fn convert_to_absolute(s: &str) -> String {
 }
 
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ConfigurationBuilder {
     pub dirs:                     Option<Vec<String>>,
     pub exclude_dirs:             Option<Vec<String>>,
@@ -561,6 +569,10 @@ impl Formatted for ArgParsingError {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Add;
+
+    use crate::PERSISTENT_APP_PATHS;
+
     use super::*;
 
     #[test]
@@ -665,6 +677,33 @@ mod tests {
 
         assert_eq!(vec![convert_to_absolute("./"), convert_to_absolute(".././")], parse_dirs("./, .././").unwrap());
         assert_eq!(vec![convert_to_absolute("./"), convert_to_absolute(".././")], parse_dirs("./, \".././\"").unwrap());
+    }
+    
+    #[test]
+    fn test_save_load_configs() {
+        let test_file_path = &PERSISTENT_APP_PATHS.config_dir.clone().add("/test000.txt");
+        assert!(!Path::new(test_file_path).exists());
+
+        let mut saved_config = create_config_builder_from_args("--threads 1 5 --languages lang1, lang2 --save test000").unwrap();
+        assert!(Path::new(test_file_path).exists());
+        assert_eq!(saved_config.dirs.clone().unwrap()[0], convert_to_absolute("./"));
+        assert_eq!(saved_config.threads.clone().unwrap(), Threads::new(1, 5));
+        assert_eq!(saved_config.languages_of_interest.clone().unwrap(), vec!["lang1", "lang2"]);
+
+        let mut loaded_config = create_config_builder_from_args("--load test000").unwrap();
+        saved_config.config_name_to_save = None;
+        loaded_config.config_name_to_load = None;
+        assert_eq!(saved_config, loaded_config);
+        
+        loaded_config = create_config_builder_from_args("--load test000 --threads 1 4 --dirs ./").unwrap();
+        assert_eq!(saved_config.dirs, loaded_config.dirs);
+        assert_ne!(saved_config.threads, loaded_config.threads);
+
+        saved_config = create_config_builder_from_args("--load test000 --threads 1 4 --dirs ./ --save test000").unwrap();
+        saved_config.config_name_to_save = None;
+        assert_eq!(saved_config, loaded_config);
+
+        std::fs::remove_file(test_file_path).unwrap();
     }
 }
 
