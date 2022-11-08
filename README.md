@@ -283,6 +283,8 @@ With that said, it is important to mention the following limitations:
 
 - Regural expressions are not handled in a special way, so if a regex contains a string or comment symbol, it may create some inaccurancies for the file.
 
+- The program is not able to ignore duplicate files and directories.
+
 - Bug: If a file contains Unicode Strings, there is a possibility that a parser thread will panic, due to trying to slice a line in a non-valid way, thus creating
 non-valid unicode characters. (byte index is not a char boundary)
 
