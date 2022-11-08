@@ -275,15 +275,17 @@ With that said, it is important to mention the following limitations:
 
 - The program cannot understand language specific syntax or details, this would require a handwritten, complex, language-specific parser for most different languages. For example, in a .php file that contains html or js, the destinction will not be made. Also, the keyword counting doesn't take any measures to ensure that a valid keyword has the user-intended meaning. For example, the word "class" may appear in the syntax of a programming language with an additional use than declaring a class. This may lead to some false positives.
 
+- The program is not able to detect and ignore duplicate files and directories.
+
+- The program is not able to understand any regular expressions (for example in paths or file names). 
+
+- The program doesn't take into account gitignore files, the unwanted dirs have to be added manually in a configuration file or using the ```--exclude``` command. 
+
 - The program assumes that if a line contains any odd number of the same string symbols, then this is an open multiline string. This works for most cases but it may create inaccuracies, for example if a line in python has """ then the program will consider a multiline string everything until the next " symbol and not the next """ symbol. If a language doesn't support multiline strings, then you would not expect to see odd number of string symbols either way in a valid syntnax.
 
 - A language can only declare either one or two string and comment symbols and only one multiline comment start symbol + multiline comment end symbol in the .txt, not more.
 
-- The program doesn't take into account gitignore files, the unwanted dirs have to be added manually in a configuration file or using the ```--exclude``` command. 
-
 - Regural expressions are not handled in a special way, so if a regex contains a string or comment symbol, it may create some inaccurancies for the file.
-
-- The program is not able to ignore duplicate files and directories.
 
 - Bug: If a file contains Unicode Strings, there is a possibility that a parser thread will panic, due to trying to slice a line in a non-valid way, thus creating
 non-valid unicode characters. (byte index is not a char boundary)
@@ -291,7 +293,7 @@ non-valid unicode characters. (byte index is not a char boundary)
 
 ## Performance
 The performance of the program will scale with the available logical cores (threads) of the machine. The default behaviour, if the '--threads' command
-is not specified, is to detect the available threads of the machine and choose accordingly how many producers and consumers it will spawn, so
+is not specified, is to detect the available threads of the machine and choose automatically how many producers and consumers it will spawn, so
 by default the program will run close to maximum performance. You can try to manually tweek the number of threads and the producer to consumer ratio though.
 
 The performance will also vary depending on how deep and wide the directory structure is, how big the code files are, the ratio of relevant to irrelevant files, 
