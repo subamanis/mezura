@@ -82,9 +82,6 @@ Bugfixes:
   -> Fixed a bug where saving and loading a config file in the same program execution was producting a panic
   -> Fixed a runtime panic related to the file parser
 
-- Main changes:
-
-
 Other: 
   -> Running the program with no target dir provided (either explicitly, or through a configuration file),
   will now assume the current working dir as the target dir, in contrast to printing the --help message.
