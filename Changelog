@@ -74,7 +74,13 @@ Other:
 
 
 
-v1.0.0 - <enter date>
+v1.0.0 - 25/11/2022
+
+  5,315 Total lines  -  3,847 Code lines
+
+Bugfixes:
+  -> Fixed a bug where saving and loading a config file in the same program execution was producting a panic
+  -> Fixed a runtime panic related to the file parser
 
 - Main changes:
 
