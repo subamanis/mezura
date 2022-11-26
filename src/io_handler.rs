@@ -29,6 +29,7 @@ pub struct LanguageDirParseInfo {
 pub enum LanguageDirParseError {
     NoFilesFound,
     NoFilesFormattedProperly,
+    PathMissing(String)
 }
 
 #[derive(Debug)]
@@ -50,8 +51,11 @@ pub fn parse_supported_languages_to_map(target_path: &str) -> Result<(HashMap<St
     let mut faulty_files : Vec<String> = Vec::new();
     let mut buffer = String::with_capacity(200);
     
-    let entries = fs::read_dir(target_path).unwrap();
-    for entry in entries {
+    let entries = fs::read_dir(target_path);
+    if entries.is_err() {
+        return Err(LanguageDirParseError::PathMissing(target_path.to_owned()));
+    }
+    for entry in entries.unwrap() {
         let entry = match entry {
             Ok(x) => x,
             Err(_) => continue
@@ -479,6 +483,9 @@ impl Formatted for LanguageDirParseError {
         match self {
             Self::NoFilesFound => "Error: No language files found in directory.".red(),
             Self::NoFilesFormattedProperly => "Error: No language file is formatted properly, so none could be parsed.".red(),
+            Self::PathMissing(path) => format!("Error: It seems that the language dir ({}) has been deleted.
+Please delete the \"mezura\" folder and it will be generated again.
+Make sure to backup the \"configs\" and \"logs\" folders because they will be overwritten.", path).red(),
         }
     }
 }
