@@ -37,7 +37,6 @@ Main changes:
       Performance may increase on cold runs, especially on machines with logical core count > 4.
   -> Language files now support up to 2 comment symbols.
 
-
 New commands:
   -> Added the --no-keywords flag, that disables keyword counting and printing.
   -> Added the --changelog command, that displays the changelog history and terminates execution.
@@ -74,15 +73,16 @@ Other:
 
 
 
-v1.0.0 - 25/11/2022
+v1.0.0 - 16/12/2022
 
-  5,315 Total lines  -  3,847 Code lines
+  5,322 Total lines  -  3,853 Code lines
 
 Bugfixes:
   -> Fixed a bug where saving and loading a config file in the same program execution was producting a panic
   -> Fixed a runtime panic related to the file parser
 
 Other: 
+  -> Added C language file
   -> Running the program with no target dir provided (either explicitly, or through a configuration file),
   will now assume the current working dir as the target dir, in contrast to printing the --help message.
   -> Added some tests

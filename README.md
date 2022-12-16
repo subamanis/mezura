@@ -273,6 +273,11 @@ Additionally:
 
 With that said, it is important to mention the following limitations:
 
+- The program counting has undefined behaviour when two or more language files are associated with the same file extension, and the program is run on a directory
+that contains this extension. For example, both the default C and C++ language files contain the `.h` extension. If the program is run on a directory that has `.h` files,
+it is unclear whether these files will be counted as a C file or a C++ file. This cannot be solved easily, since the program does not associate whole directories with languages, only individual files, so it has no way of knowing whether a particular `.h` file should be counted as a C or C++ file. You can remove the `.h` extension from
+either the C or C++ language file from the persistent files' path (see [Details](#details) for path), to eliminate this behaviour as a workaround.
+
 - The program cannot understand language specific syntax or details, this would require a handwritten, complex, language-specific parser for most different languages. For example, in a .php file that contains html or js, the destinction will not be made. Also, the keyword counting doesn't take any measures to ensure that a valid keyword has the user-intended meaning. For example, the word "class" may appear in the syntax of a programming language with an additional use than declaring a class. This may lead to some false positives.
 
 - The program is not able to detect and ignore duplicate files and directories.
