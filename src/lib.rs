@@ -481,7 +481,7 @@ impl FinalStats {
     fn get_formatted_size_and_measurement(value: usize) -> (f64, String) {
         if value >= 1000000 {(value as f64 / 1000000f64, "MBs".to_owned())}
         else if value >= 1000 {(value as f64 / 1000f64, "KBs".to_owned())}
-        else {(value as f64, "Bs".to_owned())}
+        else {(value as f64, "Bytes".to_owned())}
     }
 }
 
