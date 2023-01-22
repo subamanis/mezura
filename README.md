@@ -23,7 +23,7 @@ Example run:
 
 ## How To Run
 The only thing you need is the binary. You can either:
-1) ```cargo install --git https://github.com/subamanis/mezura --branch main```
+1) ```cargo install --git https://github.com/subamanis/mezura```
 2) Build yourself by cloning or downloading the repo (```cargo build --release```),
 3) For Windows only, grab the prebuilt binary from the "executable" folder.
 
