@@ -71,19 +71,20 @@ Below there is a list with all the commands-flags that the program accepts.
 --changelog
     No arguments.
 
-    Overrides normal program execution and just prints a summary of the changes of every previous version of the program
+    Overrides normal program execution and just prints a summary of the changes of every previous version of
+    the program.
 
 --show-languages
     No arguments.
 
-    Overrides normal program execution and just prints a sorted list with the names of all the supported languages
-    that were detected in the persistent data path of the application, where you can add more.
+    Overrides normal program execution and just prints a sorted list with the names of all the supported
+    languages that were detected in the persistent data path of the application, where you can add more.
 
 --show-configs
     No arguments.
 
-    Overrides normal program execution and just prints a sorted list with the names of all the configuration files
-    that were detected in the persistent data path of the application. 
+    Overrides normal program execution and just prints a sorted list with the names of all the configuration
+    files that were detected in the persistent data path of the application. 
 
 --dirs
     The paths to the directories or files, seperated by commas if more than 1,
@@ -92,7 +93,8 @@ Below there is a list with all the commands-flags that the program accepts.
     or surround all the arguments with quatation marks:
     <path1>`, <path2>`, <path3>   or   "<path1>, <path2>, <path3>"
 
-    The target directories can also be given implicitly (in which case this command is not needed) with 2 ways:
+    The target directories can also be given implicitly (in which case this command is not needed)
+    with 2 ways:
     1) as the first arguments of the program directly
     2) if they are present in a configuration file (see [Configuration Files](#configuration-files)).
 
