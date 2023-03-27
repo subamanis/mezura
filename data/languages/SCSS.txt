@@ -1,8 +1,8 @@
 Language
-CSS
+SCSS
 
 Extensions
-css
+scss sass
 
 String symbols
 " '
