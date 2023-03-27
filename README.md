@@ -48,9 +48,9 @@ The generated stats are the following:
 There is a "data" folder in the repository, that contains some already provided language files and the default configuration file.
 The program, at compile time, includes the "data" folder in the binary, and during the first execution, it saves it with the same structure in a persistent path, inside the user's computer, according to the platfrom's specification. More specifically, the paths per operating system are:
 ```
-    Windows:  C:/Users/<user_name>/AppData/Roaming/mezura
-    Linux:    /home/<user_name>/.local/share/mezura
-    MacOs:    /Users/<user_name>/Library/Application Support/mezura
+    Windows:  %APPDATA%\mezura
+    Linux:    /home/$USER/.local/share/mezura
+    MacOs:    /Users/$USER/Library/Application Support/mezura
 ```
 
 After every subsequent execution, the languages, configurations and logs, are read from these folders, so the user can have easy access and modify them,
