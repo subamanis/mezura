@@ -4,6 +4,7 @@ Configuration:
     dirs: ./
     exclude: 
     languages: 
+    excluded-languages: 
     braces-as-code: no
     search-in-dotted: no
 Stats:

@@ -5,12 +5,13 @@ use colored::{ColoredString, Colorize};
 use crate::{Formatted, io_handler, message_printer, utils};
 
 // Application version, to be displayed at startup and with --help command
-pub const VERSION_ID : &str = "v1.0.0"; 
+pub const VERSION_ID : &str = "v1.0.1"; 
 
 // command flags
 pub const DIRS               :&str   = "dirs";
 pub const EXCLUDE            :&str   = "exclude";
 pub const LANGUAGES          :&str   = "languages";
+pub const EXCLUDE_LANGUAGES  :&str   = "exclude-languages";
 pub const THREADS            :&str   = "threads";
 pub const BRACES_AS_CODE     :&str   = "braces-as-code";
 pub const SEARCH_IN_DOTTED   :&str   = "search-in-dotted";
@@ -48,6 +49,7 @@ pub struct Configuration {
     pub dirs: Vec<String>,
     pub exclude_dirs: Vec<String>,
     pub languages_of_interest: Vec<String>,
+    pub excluded_languages: Vec<String>,
     pub threads: Threads,
     pub braces_as_code: bool,
     pub should_search_in_dotted: bool,
@@ -115,17 +117,21 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     }
 
     let mut custom_config = None;
-    let (mut exclude_dirs, mut languages_of_interest, mut threads, mut braces_as_code,
-         mut search_in_dotted, mut show_faulty_files, mut config_name_to_save, mut no_visual,
-         mut log, mut compare_level, mut config_name_to_load, mut no_keywords) 
-         = (None, None, None, None, None, None, None, None, None, None, None, None);
+    let (mut exclude_dirs, mut languages_of_interest, mut excluded_languages, mut threads, mut braces_as_code,
+         mut search_in_dotted, mut show_faulty_files, mut config_name_to_save, mut no_visual, mut log, 
+         mut compare_level, mut config_name_to_load, mut no_keywords) 
+         = (None, None, None, None, None, None, None, None, None, None, None, None, None);
     for command in options {
-         if let Some(_dirs) = command.strip_prefix(DIRS) {
+        let (command_name, arguments) = match command.find(" ") {
+            Some(index) => command.split_at(index),
+            None => (command.trim(), "")
+        };
+        if command_name == DIRS {
             if dirs.is_some() {
                 return Err(ArgParsingError::DoublePath);
             }
 
-            let parse_result = parse_dirs(_dirs);
+            let parse_result = parse_dirs(arguments);
             if let Ok(x) = parse_result {
                 if x.is_empty() {
                     message_printer::print_help_message_for_command(DIRS);
@@ -135,22 +141,29 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             } else {
                 return Err(parse_result.err().unwrap());
             }
-        } else if let Some(excluded) = command.strip_prefix(EXCLUDE) {
-            let vec = utils::parse_paths_to_vec(excluded);
+        } else if command_name == EXCLUDE {
+            let vec = utils::parse_paths_to_vec(arguments);
             if vec.is_empty() {
                 message_printer::print_help_message_for_command(EXCLUDE);
                 return Err(ArgParsingError::IncorrectCommandArgs(EXCLUDE.to_owned()));
             }
             exclude_dirs = Some(vec);
-        } else if let Some(langs) = command.strip_prefix(LANGUAGES) {
-            let vec = utils::parse_languages_to_vec(langs);
+        } else if command_name == LANGUAGES {
+            let vec = utils::parse_languages_to_vec(arguments);
             if vec.is_empty() {
                 message_printer::print_help_message_for_command(LANGUAGES);
                 return Err(ArgParsingError::IncorrectCommandArgs(LANGUAGES.to_owned()));
             }    
             languages_of_interest = Some(vec);
-        } else if let Some(value) = command.strip_prefix(THREADS) {
-            let threads_values = utils::parse_two_usize_values(value,
+        } else if command_name == EXCLUDE_LANGUAGES {
+            let vec = utils::parse_languages_to_vec(arguments);
+            if vec.is_empty() {
+                message_printer::print_help_message_for_command(EXCLUDE_LANGUAGES);
+                return Err(ArgParsingError::IncorrectCommandArgs(EXCLUDE_LANGUAGES.to_owned()));
+            }    
+            excluded_languages = Some(vec);
+        } else if command_name == THREADS {
+            let threads_values = utils::parse_two_usize_values(arguments,
                     MIN_PRODUCERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE, MAX_CONSUMERS_VALUE);
             if let Some(_threads) = threads_values {
                 threads = Some(Threads::from(_threads));
@@ -158,53 +171,53 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 message_printer::print_help_message_for_command(THREADS);
                 return Err(ArgParsingError::IncorrectCommandArgs(THREADS.to_owned()))
             }
-        } else if command.starts_with(BRACES_AS_CODE) {
+        } else if command_name == BRACES_AS_CODE {
             if has_any_args(command) {
                 message_printer::print_help_message_for_command(BRACES_AS_CODE);
                 return Err(ArgParsingError::UnexpectedCommandArgs(BRACES_AS_CODE.to_owned()))
             }
             braces_as_code = Some(true)
-        } else if command.starts_with(SEARCH_IN_DOTTED) {
+        } else if command_name == SEARCH_IN_DOTTED {
             if has_any_args(command) {
                 message_printer::print_help_message_for_command(SEARCH_IN_DOTTED);
                 return Err(ArgParsingError::UnexpectedCommandArgs(SEARCH_IN_DOTTED.to_owned()))
             }
             search_in_dotted = Some(true)
-        } else if command.starts_with(SHOW_FAULTY_FILES) {
+        } else if command_name == SHOW_FAULTY_FILES {
             if has_any_args(command) {
                 message_printer::print_help_message_for_command(SHOW_FAULTY_FILES);
                 return Err(ArgParsingError::UnexpectedCommandArgs(SHOW_FAULTY_FILES.to_owned()))
             }
             show_faulty_files = Some(true);
-        } else if command.starts_with(NO_KEYWORDS) {
+        } else if command_name == NO_KEYWORDS {
             if has_any_args(command) {
                 message_printer::print_help_message_for_command(NO_VISUAL);
                 return Err(ArgParsingError::UnexpectedCommandArgs(NO_KEYWORDS.to_owned()))
             }
             no_keywords = Some(true);
-        } else if command.starts_with(NO_VISUAL) {
+        } else if command_name == NO_VISUAL {
             if has_any_args(command) {
                 message_printer::print_help_message_for_command(NO_VISUAL);
                 return Err(ArgParsingError::UnexpectedCommandArgs(NO_VISUAL.to_owned()))
             }
             no_visual = Some(true);
-        } else if let Some(value) = command.strip_prefix(LOG) {
-            let value = value.trim();
+        } else if command_name == LOG {
+            let value = arguments.trim();
             if value.is_empty() {
                 log = Some(LogOption::new(None));
             } else {
                 log = Some(LogOption::new(Some(value.to_owned())));
             }
-        } else if let Some(value) = command.strip_prefix(COMPRARE_LEVEL) {
-            let compare_num = utils::parse_usize_value(value, MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL);
+        } else if command_name == COMPRARE_LEVEL {
+            let compare_num = utils::parse_usize_value(arguments, MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL);
             if compare_num.is_none() {
                 message_printer::print_help_message_for_command(COMPRARE_LEVEL);
                 return Err(ArgParsingError::IncorrectCommandArgs(COMPRARE_LEVEL.to_owned()))
             } else {
                 compare_level = compare_num
             }
-        } else if let Some(config_name) = command.strip_prefix(LOAD) {
-            let config_name = config_name.trim();
+        } else if command_name == LOAD {
+            let config_name = arguments.trim();
             if config_name.is_empty() {
                 message_printer::print_help_message_for_command(LOAD);
                 return Err(ArgParsingError::IncorrectCommandArgs(LOAD.to_owned()));
@@ -223,8 +236,8 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             } else {
                 return Err(ArgParsingError::NonExistantConfig(config_name.to_owned()))
             }
-        } else if let Some(name) = command.strip_prefix(SAVE) {
-            let name = name.trim();
+        } else if command_name == SAVE {
+            let name = arguments.trim();
             if name.is_empty() {
                 message_printer::print_help_message_for_command(SAVE);
                 return Err(ArgParsingError::IncorrectCommandArgs(SAVE.to_owned()))
@@ -237,7 +250,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
 
     print_warnings_for_commands_that_need_a_loaded_configuration(&config_name_to_save, &config_name_to_load, &log, &compare_level);
     
-    let mut config_builder = ConfigurationBuilder::new(dirs, exclude_dirs, languages_of_interest, threads, braces_as_code,
+    let mut config_builder = ConfigurationBuilder::new(dirs, exclude_dirs, languages_of_interest, excluded_languages, threads, braces_as_code,
         search_in_dotted, show_faulty_files, no_keywords, no_visual, log, compare_level,
         config_name_to_save, config_name_to_load);
 
@@ -346,6 +359,7 @@ pub struct ConfigurationBuilder {
     pub dirs:                     Option<Vec<String>>,
     pub exclude_dirs:             Option<Vec<String>>,
     pub languages_of_interest:    Option<Vec<String>>,
+    pub excluded_languages:       Option<Vec<String>>,
     pub threads:                  Option<Threads>,
     pub braces_as_code:           Option<bool>,
     pub should_search_in_dotted:  Option<bool>,
@@ -359,8 +373,8 @@ pub struct ConfigurationBuilder {
 }
 
 impl ConfigurationBuilder {
-    pub fn new(dirs: Option<Vec<String>>, exclude_dirs: Option<Vec<String>>, languages_of_interest: Option<Vec<String>>, threads: Option<Threads>,
-             braces_as_code: Option<bool>, should_search_in_dotted: Option<bool>, should_show_faulty_files: Option<bool>, no_keywords: Option<bool>,
+    pub fn new(dirs: Option<Vec<String>>, exclude_dirs: Option<Vec<String>>, languages_of_interest: Option<Vec<String>>, excluded_languages: Option<Vec<String>>,
+             threads: Option<Threads>, braces_as_code: Option<bool>, should_search_in_dotted: Option<bool>, should_show_faulty_files: Option<bool>, no_keywords: Option<bool>,
              no_visual: Option<bool>, log: Option<LogOption>, compare_level: Option<usize>, config_name_to_save: Option<String>, config_name_to_load: Option<String>) 
     -> ConfigurationBuilder 
     {
@@ -368,6 +382,7 @@ impl ConfigurationBuilder {
             dirs,
             exclude_dirs,
             languages_of_interest,
+            excluded_languages,
             threads,
             braces_as_code,
             should_search_in_dotted,
@@ -385,6 +400,7 @@ impl ConfigurationBuilder {
         if self.dirs.is_none() {self.dirs = config.dirs};
         if self.exclude_dirs.is_none() {self.exclude_dirs = config.exclude_dirs};
         if self.languages_of_interest.is_none() {self.languages_of_interest = config.languages_of_interest};
+        if self.excluded_languages.is_none() {self.excluded_languages = config.excluded_languages};
         if self.threads.is_none() {self.threads = config.threads};
         if self.braces_as_code.is_none() {self.braces_as_code = config.braces_as_code};
         if self.should_search_in_dotted.is_none() {self.should_search_in_dotted = config.should_search_in_dotted};
@@ -408,6 +424,7 @@ impl ConfigurationBuilder {
             dirs: self.dirs.clone().unwrap(),
             exclude_dirs: (self.exclude_dirs).clone().unwrap_or_default(),
             languages_of_interest: (self.languages_of_interest).clone().unwrap_or_default(),
+            excluded_languages: (self.excluded_languages).clone().unwrap_or_default(),
             threads: self.threads.clone().unwrap_or_else(Threads::default),
             braces_as_code: self.braces_as_code.unwrap_or(DEF_BRACES_AS_CODE),
             should_search_in_dotted: self.should_search_in_dotted.unwrap_or(DEF_SEARCH_IN_DOTTED),
@@ -429,6 +446,7 @@ impl Configuration {
             dirs,
             exclude_dirs: Vec::new(),
             languages_of_interest: Vec::new(),
+            excluded_languages: Vec::new(),
             threads: Threads::default(),
             braces_as_code: DEF_BRACES_AS_CODE,
             should_search_in_dotted: DEF_SEARCH_IN_DOTTED,

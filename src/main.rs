@@ -64,6 +64,12 @@ fn main() {
         } 
     };
 
+    if (config.languages_of_interest.len() == config.excluded_languages.len() && !config.excluded_languages.is_empty()) &&
+     config.languages_of_interest.iter().all(|lang| config.excluded_languages.contains(lang)) {
+        println!("{}",format!("\nIncluded and excluded languages are mutually exclusive.\n").red());
+        return;
+    }
+
     if !config.languages_of_interest.is_empty() {
         match retain_only_languages_of_interest(&mut language_map, &config.languages_of_interest) {
             Ok(x) => {
@@ -76,6 +82,14 @@ fn main() {
                 return;
             }
         }
+    }
+
+    if !config.excluded_languages.is_empty() {
+        config.excluded_languages.iter().for_each(|x| {
+            language_map.retain(|k, _| {
+                k.to_lowercase() != x.to_lowercase()
+            });
+        });
     }
 
     let instant = Instant::now();
@@ -101,7 +115,7 @@ fn retain_only_languages_of_interest(language_map: &mut HashMap<String, Language
         return Err(());
     }
 
-    let mut non_existant_lang_names = String::with_capacity(60);// "\nThese languages don't exist as language files:\n".to_owned();
+    let mut non_existant_lang_names = String::with_capacity(60);
     let mut has_any_relevant_languages = false;
     languages_of_interest.iter().for_each(|x| {
         if !language_map.iter().any(|(s,_)| s.to_lowercase() == x.to_lowercase()) {

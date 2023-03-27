@@ -857,10 +857,10 @@ mod tests {
         assert_eq!(900, log_entries[0].stats.extra_lines);
         assert_eq!(100, log_entries[0].stats.bytes_size);
         assert_eq!(100.0, log_entries[0].stats.size);
-        assert_eq!("Bs".to_owned(), log_entries[0].stats.size_measurement);
+        assert_eq!("Bytes".to_owned(), log_entries[0].stats.size_measurement);
         assert_eq!(10, log_entries[0].stats.bytes_average_size);
         assert_eq!(10.0, log_entries[0].stats.average_size);
-        assert_eq!("Bs".to_owned(), log_entries[0].stats.average_size_measurement);
+        assert_eq!("Bytes".to_owned(), log_entries[0].stats.average_size_measurement);
         assert_eq!(Some("test name".to_owned()),log_entries[0].name);
 
         Ok(())

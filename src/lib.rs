@@ -248,11 +248,20 @@ fn remove_faulty_files_stats(faulty_files_ref: &FaultyFilesListMut, languages_me
 }
 
 fn get_activated_languages_as_str(config: &Configuration) -> String {
-    if config.languages_of_interest.is_empty() {
+    let mut msg = if config.languages_of_interest.is_empty() {
         String::new()
     } else {
         String::from("\n(Activated languages: ") + &config.languages_of_interest.join(", ") + ")"
     }
+    ;
+    let other = if config.excluded_languages.is_empty() {
+        String::new()
+    } else {
+        String::from("\n(Excluded languages: ") + &config.excluded_languages.join(", ") + ")"
+    };
+
+    msg += &other;
+    msg
 }
 
 pub fn make_language_stats(languages_map: Arc<HashMap<String,Language>>) -> HashMap<String,LanguageContentInfo> {

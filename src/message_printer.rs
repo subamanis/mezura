@@ -39,6 +39,16 @@ pub const LANGUAGES_HELP  :  &str =
     Only the languages specified here will be taken into account for the stats.
 
 "; 
+pub const EXCLUDE_LANGUAGES_HELP  :  &str = 
+"--exclude-languages 
+    1..n arguments separated by commas, case-insensitive
+
+    The given language names should exist in any of the files in the 'data/languages/' dir as the
+    parameter of the field 'Language'.
+
+    The given language names will be ignored from the stats calculation, if they exist.
+
+"; 
 pub const THREADS_HELP  :  &str = 
 "--threads
     2 numbers: the first between 1 and 4 and the seconds between 1 and 12. 
@@ -103,6 +113,8 @@ pub const LOG_HELP  :  &str =
     with the stats of this program execution, inside the appropriate file in the 'data/logs' directory.
     If not log file exists for this configuration, one is created.
     All the provided arguments are used as a description of the log entry.
+
+    This flag will not be saved in a configuration file automatically, but it can be added manually.
 
 "; 
 pub const COMPRARE_LEVEL_HELP  :  &str = 
@@ -171,6 +183,7 @@ pub fn print_whole_help_message() {
     msg += DIRS_HELP;
     msg += EXCLUDE_HELP;
     msg += LANGUAGES_HELP;
+    msg += EXCLUDE_LANGUAGES_HELP;
     msg += THREADS_HELP;
     msg += BRACES_AS_CODE_HELP;
     msg += SEARCH_IN_DOTTED_HELP;
@@ -274,6 +287,8 @@ fn get_help_msg_of_command(command: &str) -> Option<&str> {
         Some(EXCLUDE_HELP)
     } else if command == LANGUAGES {
         Some(LANGUAGES_HELP)
+    } else if command == EXCLUDE_LANGUAGES {
+        Some(EXCLUDE_LANGUAGES_HELP)
     } else if command == THREADS {
         Some(THREADS_HELP)
     } else if command == BRACES_AS_CODE {

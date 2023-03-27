@@ -20,7 +20,7 @@ Change in commands:
 
 
 
-v1.0.0-beta1  -  17/10/2021  
+v0.9.9 (v1.0.0-beta1)  -  17/10/2021  
 
   4,766 Total lines  -  3,464 Code lines
 
@@ -87,3 +87,25 @@ Other:
   will now assume the current working dir as the target dir, in contrast to printing the --help message.
   -> Added some tests
   -> Minor help message and readme changes
+
+
+
+-----------------------------------------------------------------------------------------------------------
+
+
+
+v1.0.1 - 27/3/2022
+
+  5,375 Total lines  -  3,895 Code lines
+
+New commands:
+-> Added the --exclude-languages command, that specifies languages to be ignored
+
+Change in commands:
+-> --log command is no longer automatically saved to a configuration file, if it is specified along
+  with the --save command, but can be still added manually in configuration files
+
+Other: 
+  -> Added SCSS language file
+  -> Removed sass and scss file extensions from css file
+  -> Changed paths to application's files to contain platform specific envioronment variables

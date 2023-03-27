@@ -113,6 +113,14 @@ Below there is a list with all the commands-flags that the program accepts.
     The given language names must exist in any of the files in the 'data/languages/' dir as the
     parameter of the field 'Language'.
 
+    The given language names will be ignored from the stats calculation, if they exist.
+
+--exclude-languages 
+    1..n arguments separated by commas, case-insensitive
+
+    The given language names must exist in any of the files in the 'data/languages/' dir as the
+    parameter of the field 'Language'.
+
     Only the languages specified here will be taken into account for the stats.
 
 --threads
@@ -182,6 +190,8 @@ Below there is a list with all the commands-flags that the program accepts.
     with the stats of this program execution, inside the appropriate file in the 'data/logs' directory.
     If not log file exists for this configuration, one is created.
     All the provided arguments are used as a description of the log entry.
+
+    This flag will not be saved in a configuration file automatically, but it can be added manually.
 
 --compare
     1 argument: a number between 0 and 10. Default: 1

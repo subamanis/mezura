@@ -262,8 +262,8 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
     });
 
     let (mut dirs, mut braces_as_code, mut should_search_in_dotted, mut threads, mut exclude_dirs,
-         mut languages_of_interest, mut should_show_faulty_files, mut no_keywords, mut no_visual,
-         mut log, mut compare_level) = (None,None,None,None,None,None,None,None,None,None,None);
+         mut languages_of_interest, mut excluded_languages, mut should_show_faulty_files, mut no_keywords, mut no_visual,
+         mut log, mut compare_level) = (None,None,None,None,None,None,None,None,None,None,None,None);
     let mut buf = String::with_capacity(150); 
 
     while let Ok(size) = reader.read_line(&mut buf) {
@@ -285,6 +285,11 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                 let langs = read_lines_from_file_to_vec(&mut reader, &mut buf, utils::parse_languages_to_vec);
                 if !langs.is_empty() {
                     languages_of_interest = Some(langs);
+                }
+            } else if id == config_manager::EXCLUDE_LANGUAGES {
+                let langs = read_lines_from_file_to_vec(&mut reader, &mut buf, utils::parse_languages_to_vec);
+                if !langs.is_empty() {
+                    excluded_languages = Some(langs);
                 }
             } else if id == config_manager::THREADS {
                 buf.clear();
@@ -319,7 +324,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
         buf.clear();
     }
 
-    Ok(ConfigurationBuilder::new(dirs,exclude_dirs, languages_of_interest, threads, braces_as_code,should_search_in_dotted,
+    Ok(ConfigurationBuilder::new(dirs,exclude_dirs, languages_of_interest, excluded_languages, threads, braces_as_code,should_search_in_dotted,
              should_show_faulty_files, no_keywords, no_visual, log, compare_level, None, None))
 }
 
@@ -345,6 +350,10 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
         writer.write(&[b"\n\n===> ",config_manager::LANGUAGES.as_bytes(),b"\n"].concat());
         writer.write(languages_of_interest.join(",").as_bytes());
     }
+    if let Some(exclude_languages) = &config_builder.excluded_languages {
+        writer.write(&[b"\n\n===> ",config_manager::EXCLUDE_LANGUAGES.as_bytes(),b"\n"].concat());
+        writer.write(exclude_languages.join(",").as_bytes());
+    }
     if let Some(threads) = &config_builder.threads {
         writer.write(&[b"\n\n===> ",config_manager::THREADS.as_bytes(),b"\n"].concat());
         writer.write((threads.producers.to_string() + " " + &threads.consumers.to_string()).as_bytes());
@@ -368,18 +377,6 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
     if let Some(no_visual) = &config_builder.no_visual {
         writer.write(&[b"\n\n===> ",config_manager::NO_VISUAL.as_bytes(),b"\n"].concat());
         writer.write(if *no_visual {b"yes"} else {b"no"});
-    }
-    if let Some(log) = &config_builder.log {
-        writer.write(&[b"\n\n===> ",config_manager::LOG.as_bytes(),b"\n"].concat());
-        if log.should_log {
-            if let Some(name) = &log.name {
-                writer.write(name.as_bytes());
-            } else {
-                writer.write(b"yes");
-            }
-        } else {
-            writer.write(b"no");
-        }
     }
     if let Some(compare_level) = &config_builder.compare_level {
         writer.write(&[b"\n\n===> ",config_manager::COMPRARE_LEVEL.as_bytes(),b"\n"].concat());
@@ -424,6 +421,7 @@ fn write_current_log(writer: &mut BufWriter<File>, config: &Configuration, datet
     writer.write(format!("    dirs: {}\n",config.dirs.join(",")).as_bytes());
     writer.write(format!("    exclude: {}\n",config.exclude_dirs.join(",")).as_bytes());
     writer.write(format!("    languages: {}\n",config.languages_of_interest.join(",")).as_bytes());
+    writer.write(format!("    excluded-languages: {}\n",config.excluded_languages.join(",")).as_bytes());
     writer.write(format!("    braces-as-code: {}\n",if config.braces_as_code{"yes"} else {"no"}).as_bytes());
     writer.write(format!("    search-in-dotted: {}\n",if config.should_search_in_dotted{"yes"} else {"no"}).as_bytes());
     writer.write(b"Stats:\n");
