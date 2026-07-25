@@ -31,21 +31,21 @@ fn finders_of(language: &Language) -> &LanguageFinders {
 }
 
 pub struct KeywordMatcher {
-    aliases_with_names: Vec<(memmem::Finder<'static>, usize, String)>,
+    aliases_with_indices: Vec<(memmem::Finder<'static>, usize, usize)>,
 }
 
 impl KeywordMatcher {
     pub fn build(language: &Language) -> Option<KeywordMatcher> {
-        let mut aliases_with_names = Vec::new();
-        for keyword in &language.keywords {
+        let mut aliases_with_indices = Vec::new();
+        for (keyword_index, keyword) in language.keywords.iter().enumerate() {
             for alias in &keyword.aliases {
-                aliases_with_names.push((memmem::Finder::new(alias.as_str()).into_owned(), alias.len(), keyword.descriptive_name.clone()));
+                aliases_with_indices.push((memmem::Finder::new(alias.as_str()).into_owned(), alias.len(), keyword_index));
             }
         }
-        if aliases_with_names.is_empty() {
+        if aliases_with_indices.is_empty() {
             None
         } else {
-            Some(KeywordMatcher { aliases_with_names })
+            Some(KeywordMatcher { aliases_with_indices })
         }
     }
 }
@@ -511,12 +511,12 @@ fn resolve_double_counting_of_adjacent_start_and_end_symbols(start_indices: &mut
 
 
 fn add_keywords_if_any(cleansed: &str, matcher: &KeywordMatcher, file_stats: &mut FileStats) {
-    for (alias_finder, alias_len, keyword_name) in &matcher.aliases_with_names {
-        count_alias_occurrences(cleansed, alias_finder, *alias_len, keyword_name, file_stats);
+    for (alias_finder, alias_len, keyword_index) in &matcher.aliases_with_indices {
+        count_alias_occurrences(cleansed, alias_finder, *alias_len, *keyword_index, file_stats);
     }
 }
 
-fn count_alias_occurrences(cleansed: &str, alias_finder: &memmem::Finder<'_>, alias_len: usize, keyword_name: &str, file_stats: &mut FileStats) {
+fn count_alias_occurrences(cleansed: &str, alias_finder: &memmem::Finder<'_>, alias_len: usize, keyword_index: usize, file_stats: &mut FileStats) {
     fn is_acceptable_prefix(prefix: &str) -> bool {
         prefix.is_empty() || prefix.ends_with(' ') || prefix.ends_with('}') || prefix.ends_with('{') || prefix.ends_with(',')
     }
@@ -549,7 +549,7 @@ fn count_alias_occurrences(cleansed: &str, alias_finder: &memmem::Finder<'_>, al
     let mut counter = 0;
     while counter < surroundings_len-1 {
         if is_acceptable_prefix(surroundings[counter]) && is_acceptable_suffix(surroundings[counter+1]) {
-            file_stats.incr_keyword(keyword_name);
+            file_stats.incr_keyword(keyword_index);
         }
         counter += 1;
     }
@@ -917,42 +917,46 @@ mod tests {
         KeywordMatcher::build(LANGUAGE_MAP_REF.get(lang_name).unwrap())
     }
 
+    fn content_info_of(stats: FileStats, lang_name: &str) -> LanguageContentInfo {
+        LanguageContentInfo::from_file_stats(stats, &LANGUAGE_MAP_REF.get(lang_name).unwrap().keywords)
+    }
+
     #[test]
     fn test_correct_parsing_of_test_dir() {
         let mut buf = String::with_capacity(150);
 
         let mut config = Configuration::new(vec!["a".to_owned()]);
         let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("Java").as_ref(), &config);
-        let result = LanguageContentInfo::from(result.unwrap());
+        let result = content_info_of(result.unwrap(), "Java");
         assert_eq!(LanguageContentInfo::new(44, 13, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         buf.clear();
         config.set_should_not_count_keywords(true);
         let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("Java").as_ref(), &config);
-        let result = LanguageContentInfo::from(result.unwrap());
+        let result = content_info_of(result.unwrap(), "Java");
         assert_eq!(LanguageContentInfo::new(44, 13, hashmap!()), result);
         buf.clear();
         config.set_should_not_count_keywords(false);
         let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "C#", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("C#").as_ref(), &Configuration::new(vec!["a".to_owned()]));
-        let result = LanguageContentInfo::from(result.unwrap());
+        let result = content_info_of(result.unwrap(), "C#");
         assert_eq!(LanguageContentInfo::new(44, 13, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         buf.clear();
         
         let result = parse_file(Path::new("test_dir/lang_files/d.txt"), "C#", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("C#").as_ref(), &Configuration::new(vec!["a".to_owned()]));
-        let result = LanguageContentInfo::from(result.unwrap());
+        let result = content_info_of(result.unwrap(), "C#");
         assert_eq!(LanguageContentInfo::new(19, 7, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         buf.clear();
         let result = parse_file(Path::new("test_dir/lang_files/d.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("Java").as_ref(), &Configuration::new(vec!["a".to_owned()]));
-        let result = LanguageContentInfo::from(result.unwrap());
+        let result = content_info_of(result.unwrap(), "Java");
         assert_eq!(LanguageContentInfo::new(19, 7, hashmap!("classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         buf.clear();
 
         let result = parse_file(Path::new("test_dir/lang_files/b.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("Java").as_ref(), &Configuration::new(vec!["a".to_owned()]));
-        let result = LanguageContentInfo::from(result.unwrap());
+        let result = content_info_of(result.unwrap(), "Java");
         assert_eq!(LanguageContentInfo::new(19, 11, hashmap!("classes".to_owned()=>7,"interfaces".to_owned()=>0)), result);
         buf.clear();
 
         let result = parse_file(Path::new("test_dir/lang_files/c.txt"), "Python", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("Python").as_ref(), &Configuration::new(vec!["a".to_owned()]));
-        let result = LanguageContentInfo::from(result.unwrap());
+        let result = content_info_of(result.unwrap(), "Python");
         assert_eq!(LanguageContentInfo::new(11, 6, hashmap!("classes".to_owned()=>2)), result);
         buf.clear();
     }
@@ -1016,11 +1020,8 @@ mod tests {
     }
 
     fn make_file_stats(class_occurances: usize, interface_occurances: usize) -> FileStats {
-        fn get_keyword_map(class_occurances: usize, interface_occurances: usize) -> HashMap<String,usize> {
-            let mut map = HashMap::<String,usize>::new();
-            map.insert(CLASS.descriptive_name.clone(), class_occurances);
-            map.insert(INTERFACE.descriptive_name.clone(), interface_occurances);
-            map
+        fn get_keyword_map(class_occurances: usize, interface_occurances: usize) -> Vec<usize> {
+            vec![class_occurances, interface_occurances]
         }
 
         FileStats {

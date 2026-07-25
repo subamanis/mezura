@@ -6,13 +6,13 @@ use crate::*;
 
 
 pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<PathBuf>>, worker: Worker<PathBuf>,
-        languages_metadata_map: MetadataMapMut, termination_states: Arc<Mutex<Vec<bool>>>, extension_lang_map: ExtensionLangMap, config: Arc<Configuration>,
+        languages_metadata_map: MetadataMapMut, idle_producers: Arc<AtomicUsize>, extension_lang_map: ExtensionLangMap, config: Arc<Configuration>,
         files_stats: Arc<Mutex<FilesPresent>>)
 -> JoinHandle<()>
 {
     thread::Builder::new().name(id.to_string()).spawn(move || {
         let (total_files, relevant_files, excluded_files) =
-                search_for_files(id, files_injector, dirs_injector, worker, termination_states, extension_lang_map, languages_metadata_map, config);
+                search_for_files(id, files_injector, dirs_injector, worker, idle_producers, extension_lang_map, languages_metadata_map, config);
         let mut file_stats_guard = files_stats.lock().unwrap(); 
         file_stats_guard.total_files += total_files;
         file_stats_guard.relevant_files += relevant_files;
@@ -21,7 +21,7 @@ pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFil
     }).unwrap()
 }
 
-pub fn search_for_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<PathBuf>>, worker: Worker<PathBuf>, termination_states: Arc<Mutex<Vec<bool>>>,
+pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<PathBuf>>, worker: Worker<PathBuf>, idle_producers: Arc<AtomicUsize>,
         extension_lang_map: ExtensionLangMap, languages_metadata_map: MetadataMapMut, config: Arc<Configuration>)
 -> (usize,usize,usize)
 {
@@ -51,7 +51,7 @@ pub fn search_for_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, 
         if let Some(dir) = &next_dir {
            if should_terminate {
                 should_terminate = false;
-                termination_states.lock().unwrap()[id] = false;
+                idle_producers.fetch_sub(1, Ordering::SeqCst);
             }
 
             if let Ok(entries) = fs::read_dir(&dir) {
@@ -59,13 +59,13 @@ pub fn search_for_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, 
                         &mut total_files, &mut relevant_files, &mut excluded_files)
             }
         } else {
-            should_terminate = true;
-            let mut termination_states_guard = termination_states.lock().unwrap();
-            termination_states_guard[id] = true;
-            if termination_states_guard.iter().all(|x| *x) {
+            if !should_terminate {
+                should_terminate = true;
+                idle_producers.fetch_add(1, Ordering::SeqCst);
+            }
+            if idle_producers.load(Ordering::SeqCst) == config.threads.producers {
                 break;
             }
-            drop(termination_states_guard);
 
             thread::sleep(Duration::from_micros(50));
             // times_slept += 1;

@@ -36,9 +36,10 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                 let keyword_matcher = keyword_matchers.get(lang_name).unwrap().as_ref();
                 match file_parser::parse_file(&parsable_file.path, lang_name, &mut buf, language_map.clone(), keyword_matcher, &config) {
                     Ok(x) => {
+                        let keywords = &language_map.get(lang_name).unwrap().keywords;
                         match local_content_info.get_mut(lang_name) {
-                            Some(info) => info.add_file_stats(x),
-                            None => { local_content_info.insert(lang_name.to_owned(), LanguageContentInfo::from(x)); }
+                            Some(info) => info.add_file_stats(x, keywords),
+                            None => { local_content_info.insert(lang_name.to_owned(), LanguageContentInfo::from_file_stats(x, keywords)); }
                         }
                     },
                     Err(x) => faulty_files.lock().unwrap().push(FaultyFileDetails::new(

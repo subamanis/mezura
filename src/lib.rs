@@ -28,7 +28,7 @@ use lazy_static::lazy_static;
 use directories::{BaseDirs,ProjectDirs};
 use crossbeam_deque::{Worker,Injector};
 use chrono::{DateTime, Local};
-use std::{collections::HashMap, fs::{self, File}, io::Read, path::{Path, PathBuf}, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant}};
+use std::{collections::HashMap, fs::{self, File}, io::Read, path::{Path, PathBuf}, sync::atomic::{AtomicBool, AtomicUsize, Ordering}, time::{Duration, Instant}};
 use std::{sync::{Arc, Mutex, OnceLock}, thread::JoinHandle};
 
 
@@ -56,7 +56,7 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let global_languages_metadata_map = Arc::new(Mutex::new(make_language_metadata(&language_map_ref)));
     
     let mut files_present = FilesPresent::default();
-    let producer_termination_states = Arc::new(Mutex::new(vec![false; config.threads.producers]));
+    let idle_producers = Arc::new(AtomicUsize::new(0));
     let files_injector = Arc::new(Injector::<ParsableFile>::new());
     let dirs_injector = Arc::new(Injector::<PathBuf>::new());
     calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector, &mut files_present,
@@ -72,7 +72,7 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let parsing_started_instant = Instant::now();
     for i in 0..config.threads.producers {
         producer_handles.push(producer::start_producer_thread(i, files_injector.clone(), dirs_injector.clone(), Worker::new_fifo(),
-            global_languages_metadata_map.clone(), producer_termination_states.clone(), extension_lang_map.clone(), config.clone(), files_stats.clone()));
+            global_languages_metadata_map.clone(), idle_producers.clone(), extension_lang_map.clone(), config.clone(), files_stats.clone()));
     }
     for i in 0..config.threads.consumers {
         consumer_handles.push(consumer::start_parser_thread(i, files_injector.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
@@ -590,7 +590,7 @@ pub mod domain {
     pub struct FileStats {
         pub lines : usize,
         pub code_lines : usize,
-        pub keyword_occurences : HashMap<String,usize> 
+        pub keyword_occurences : Vec<usize>
     }
 
     impl Clone for Keyword {
@@ -657,11 +657,25 @@ pub mod domain {
             }
         }
         
-        pub fn add_file_stats(&mut self, other: FileStats) {
+        pub fn add_file_stats(&mut self, other: FileStats, keywords: &[Keyword]) {
             self.lines += other.lines;
             self.code_lines += other.code_lines;
-            for (k,v) in other.keyword_occurences.iter() {
-                *self.keyword_occurences.get_mut(k).unwrap() += *v;
+            for (keyword_index, occurrences) in other.keyword_occurences.iter().enumerate() {
+                if *occurrences > 0 {
+                    *self.keyword_occurences.get_mut(&keywords[keyword_index].descriptive_name).unwrap() += *occurrences;
+                }
+            }
+        }
+
+        pub fn from_file_stats(stats: FileStats, keywords: &[Keyword]) -> LanguageContentInfo {
+            let mut keyword_occurences = HashMap::<String,usize>::new();
+            for (keyword_index, occurrences) in stats.keyword_occurences.iter().enumerate() {
+                keyword_occurences.insert(keywords[keyword_index].descriptive_name.clone(), *occurrences);
+            }
+            LanguageContentInfo {
+                lines : stats.lines,
+                code_lines : stats.code_lines,
+                keyword_occurences
             }
         }
         
@@ -680,16 +694,6 @@ pub mod domain {
                 lines : 0,
                 code_lines : 0,
                 keyword_occurences : get_keyword_stats_map(ext)
-            }
-        }
-    }
-
-    impl From<FileStats> for LanguageContentInfo {
-        fn from(stats: FileStats) -> Self {
-            LanguageContentInfo {
-                lines : stats.lines,
-                code_lines : stats.code_lines,
-                keyword_occurences : stats.keyword_occurences
             }
         }
     }
@@ -718,7 +722,7 @@ pub mod domain {
             FileStats {
                 lines : 0,
                 code_lines : 0,
-                keyword_occurences : hashmap![]
+                keyword_occurences : Vec::new()
             }
         }
 
@@ -726,7 +730,7 @@ pub mod domain {
             FileStats {
                 lines : 0,
                 code_lines : 0,
-                keyword_occurences : get_stats_map(keywords)
+                keyword_occurences : vec![0; keywords.len()]
             }
         }
 
@@ -738,8 +742,8 @@ pub mod domain {
             self.code_lines += 1;
         }
 
-        pub fn incr_keyword(&mut self, keyword_name:&str) {
-            *self.keyword_occurences.get_mut(keyword_name).unwrap() += 1;
+        pub fn incr_keyword(&mut self, keyword_index: usize) {
+            self.keyword_occurences[keyword_index] += 1;
         }
     }
     
@@ -751,13 +755,6 @@ pub mod domain {
         map
     }
 
-    fn get_stats_map(keywords: &[Keyword]) -> HashMap<String,usize> {
-        let mut map = HashMap::<String,usize>::new();
-        for k in keywords {
-            map.insert(k.descriptive_name.to_owned(), 0);
-        }
-        map
-    }
 }
 
 #[cfg(test)]
