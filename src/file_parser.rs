@@ -1,20 +1,53 @@
 use std::{io::{BufRead, BufReader}, str::{self, MatchIndices}};
 
+use aho_corasick::AhoCorasick;
+
 use crate::*;
 
+pub struct KeywordMatcher {
+    automaton: AhoCorasick,
+    keyword_names: Vec<String>,
+    alias_lens: Vec<usize>,
+}
 
-pub fn parse_file(path: &Path, lang_name: &str, buf: &mut String, language_map: Arc<HashMap<String,Language>>, config: &Configuration)
--> Result<FileStats,String> 
+impl KeywordMatcher {
+    pub fn build(language: &Language) -> Option<KeywordMatcher> {
+        let mut patterns: Vec<&String> = Vec::new();
+        let mut keyword_names = Vec::new();
+        let mut alias_lens = Vec::new();
+        for keyword in &language.keywords {
+            for alias in &keyword.aliases {
+                patterns.push(alias);
+                keyword_names.push(keyword.descriptive_name.clone());
+                alias_lens.push(alias.len());
+            }
+        }
+        if patterns.is_empty() {
+            return None;
+        }
+        let automaton = AhoCorasick::new(patterns).ok()?;
+        Some(KeywordMatcher {
+            automaton,
+            keyword_names,
+            alias_lens,
+        })
+    }
+}
+
+
+pub fn parse_file(path: &Path, lang_name: &str, buf: &mut String, language_map: Arc<HashMap<String,Language>>,
+    keyword_matcher: Option<&KeywordMatcher>, config: &Configuration)
+-> Result<FileStats,String>
 {
     let reader = BufReader::new(match File::open(path){
         Ok(f) => f,
         Err(x) => return Err(x.to_string())
     });
 
-    parse_lines(reader, buf, language_map.get(lang_name).unwrap(), config)
+    parse_lines(reader, buf, language_map.get(lang_name).unwrap(), keyword_matcher, config)
 }
 
-fn parse_lines(mut reader: BufReader<File>, buf: &mut String, language: &Language, config: &Configuration)
+fn parse_lines(mut reader: BufReader<File>, buf: &mut String, language: &Language, keyword_matcher: Option<&KeywordMatcher>, config: &Configuration)
 -> Result<FileStats,String>
 {
     let mut file_stats = match config.no_keywords {
@@ -51,7 +84,9 @@ fn parse_lines(mut reader: BufReader<File>, buf: &mut String, language: &Languag
             if config.braces_as_code || cleansed.len() > 2 || (cleansed != "{" && cleansed != "}" && cleansed != "};") {
                 file_stats.incr_code_lines();
                 if !config.no_keywords {
-                    add_keywords_if_any(cleansed, language, &mut file_stats);
+                    if let Some(matcher) = keyword_matcher {
+                        add_keywords_if_any(cleansed, matcher, &mut file_stats);
+                    }
                 }
             }
         } else {
@@ -447,7 +482,7 @@ fn resolve_double_counting_of_adjacent_start_and_end_symbols(start_indices: &mut
 }
 
 
-fn add_keywords_if_any(cleansed: &str, language: &Language, file_stats: &mut FileStats) {
+fn add_keywords_if_any(cleansed: &str, matcher: &KeywordMatcher, file_stats: &mut FileStats) {
     fn is_acceptable_prefix(prefix: &str) -> bool {
         prefix.is_empty() || prefix.ends_with(' ') || prefix.ends_with('}') || prefix.ends_with('{') || prefix.ends_with(',')
     }
@@ -456,37 +491,56 @@ fn add_keywords_if_any(cleansed: &str, language: &Language, file_stats: &mut Fil
         suffix.is_empty() || suffix.starts_with(' ') || suffix.starts_with('}') || suffix.starts_with('{') || suffix.starts_with(',')
     }
 
-    for keyword in &language.keywords {
-        for alias in &keyword.aliases {
-            let mut indices = cleansed.match_indices(alias).map(|x| x.0).collect::<Vec<usize>>();
-            if indices.is_empty() {continue;}
-            let alias_len = alias.len();
+    let mut matches: Vec<(u32, usize)> = Vec::new();
+    for m in matcher.automaton.find_overlapping_iter(cleansed) {
+        matches.push((m.pattern().as_u32(), m.start()));
+    }
+    if matches.is_empty() {
+        return;
+    }
+    matches.sort_unstable();
 
-            //ignore indices that are directly next to each other
-            let mut counter = 0;
-            while !indices.is_empty() && counter < indices.len()-1 {
-                if indices[counter] + alias_len == indices[counter+1] {
-                    indices.remove(counter);
-                    indices.remove(counter);
-                } 
-                counter += 1;
-            }
-            if indices.is_empty() {continue};
+    let mut match_pos = 0;
+    while match_pos < matches.len() {
+        let pattern_id = matches[match_pos].0;
+        let alias_len = matcher.alias_lens[pattern_id as usize];
 
-            let mut surroundings = vec![&cleansed[0..indices[0]]];
-            for i in 1..indices.len() {
-                surroundings.push(&cleansed[indices[i-1]+alias_len..indices[i]]);
+        //keep only non-overlapping occurrences of this alias, greedily from the left
+        let mut indices: Vec<usize> = Vec::new();
+        let mut last_end = 0;
+        while match_pos < matches.len() && matches[match_pos].0 == pattern_id {
+            let start = matches[match_pos].1;
+            if indices.is_empty() || start >= last_end {
+                indices.push(start);
+                last_end = start + alias_len;
             }
-            surroundings.push(&cleansed[indices[indices.len()-1]+alias_len..cleansed.len()]);
-            
-            let surroundings_len = surroundings.len();
-            let mut counter = 0;
-            while counter < surroundings_len-1 {
-                if is_acceptable_prefix(surroundings[counter]) && is_acceptable_suffix(surroundings[counter+1]) {
-                    file_stats.incr_keyword(&keyword.descriptive_name);
-                }
-                counter += 1;
+            match_pos += 1;
+        }
+
+        //ignore indices that are directly next to each other
+        let mut counter = 0;
+        while !indices.is_empty() && counter < indices.len()-1 {
+            if indices[counter] + alias_len == indices[counter+1] {
+                indices.remove(counter);
+                indices.remove(counter);
             }
+            counter += 1;
+        }
+        if indices.is_empty() {continue};
+
+        let mut surroundings = vec![&cleansed[0..indices[0]]];
+        for i in 1..indices.len() {
+            surroundings.push(&cleansed[indices[i-1]+alias_len..indices[i]]);
+        }
+        surroundings.push(&cleansed[indices[indices.len()-1]+alias_len..cleansed.len()]);
+
+        let surroundings_len = surroundings.len();
+        let mut counter = 0;
+        while counter < surroundings_len-1 {
+            if is_acceptable_prefix(surroundings[counter]) && is_acceptable_suffix(surroundings[counter+1]) {
+                file_stats.incr_keyword(&matcher.keyword_names[pattern_id as usize]);
+            }
+            counter += 1;
         }
     }
 }
@@ -831,6 +885,12 @@ mod tests {
 
         static ref LANGUAGE_MAP_REF : Arc<HashMap<String,Language>> =
                 Arc::new(io_handler::parse_supported_languages_to_map(&LOCAL_APP_PATHS.languages_dir).unwrap().0);
+
+        static ref JAVA_MATCHER : KeywordMatcher = KeywordMatcher::build(&JAVA).unwrap();
+    }
+
+    fn matcher_for(lang_name: &str) -> Option<KeywordMatcher> {
+        KeywordMatcher::build(LANGUAGE_MAP_REF.get(lang_name).unwrap())
     }
 
     #[test]
@@ -838,36 +898,36 @@ mod tests {
         let mut buf = String::with_capacity(150);
 
         let mut config = Configuration::new(vec!["a".to_owned()]);
-        let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), &config);
+        let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("Java").as_ref(), &config);
         let result = LanguageContentInfo::from(result.unwrap());
         assert_eq!(LanguageContentInfo::new(44, 13, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         buf.clear();
         config.set_should_not_count_keywords(true);
-        let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), &config);
+        let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("Java").as_ref(), &config);
         let result = LanguageContentInfo::from(result.unwrap());
         assert_eq!(LanguageContentInfo::new(44, 13, hashmap!()), result);
         buf.clear();
         config.set_should_not_count_keywords(false);
-        let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "C#", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new(vec!["a".to_owned()]));
+        let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "C#", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("C#").as_ref(), &Configuration::new(vec!["a".to_owned()]));
         let result = LanguageContentInfo::from(result.unwrap());
         assert_eq!(LanguageContentInfo::new(44, 13, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         buf.clear();
         
-        let result = parse_file(Path::new("test_dir/lang_files/d.txt"), "C#", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new(vec!["a".to_owned()]));
+        let result = parse_file(Path::new("test_dir/lang_files/d.txt"), "C#", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("C#").as_ref(), &Configuration::new(vec!["a".to_owned()]));
         let result = LanguageContentInfo::from(result.unwrap());
         assert_eq!(LanguageContentInfo::new(19, 7, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         buf.clear();
-        let result = parse_file(Path::new("test_dir/lang_files/d.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new(vec!["a".to_owned()]));
+        let result = parse_file(Path::new("test_dir/lang_files/d.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("Java").as_ref(), &Configuration::new(vec!["a".to_owned()]));
         let result = LanguageContentInfo::from(result.unwrap());
         assert_eq!(LanguageContentInfo::new(19, 7, hashmap!("classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         buf.clear();
 
-        let result = parse_file(Path::new("test_dir/lang_files/b.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new(vec!["a".to_owned()]));
+        let result = parse_file(Path::new("test_dir/lang_files/b.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("Java").as_ref(), &Configuration::new(vec!["a".to_owned()]));
         let result = LanguageContentInfo::from(result.unwrap());
         assert_eq!(LanguageContentInfo::new(19, 11, hashmap!("classes".to_owned()=>7,"interfaces".to_owned()=>0)), result);
         buf.clear();
 
-        let result = parse_file(Path::new("test_dir/lang_files/c.txt"), "Python", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new(vec!["a".to_owned()]));
+        let result = parse_file(Path::new("test_dir/lang_files/c.txt"), "Python", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("Python").as_ref(), &Configuration::new(vec!["a".to_owned()]));
         let result = LanguageContentInfo::from(result.unwrap());
         assert_eq!(LanguageContentInfo::new(11, 6, hashmap!("classes".to_owned()=>2)), result);
         buf.clear();
@@ -877,57 +937,57 @@ mod tests {
     fn finds_keywords_correctly() {
         let line = String::from("Hello world!");
         let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
-        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        add_keywords_if_any(&line, &JAVA_MATCHER, &mut file_stats);
         assert_eq!(make_file_stats(0,0), file_stats);
 
         let line = String::from("class");
         let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
-        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        add_keywords_if_any(&line, &JAVA_MATCHER, &mut file_stats);
         assert_eq!(make_file_stats(1,0), file_stats);
 
         let line = String::from("1class");
         let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
-        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        add_keywords_if_any(&line, &JAVA_MATCHER, &mut file_stats);
         assert_eq!(make_file_stats(0,0), file_stats);
 
         let line = String::from("hello class word!");
         let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
-        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        add_keywords_if_any(&line, &JAVA_MATCHER, &mut file_stats);
         assert_eq!(make_file_stats(1,0), file_stats);
 
         let line = String::from("class class class");
         let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
-        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        add_keywords_if_any(&line, &JAVA_MATCHER, &mut file_stats);
         assert_eq!(make_file_stats(3,0), file_stats);
 
         let line = String::from("classclass");
         let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
-        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        add_keywords_if_any(&line, &JAVA_MATCHER, &mut file_stats);
         assert_eq!(make_file_stats(0,0), file_stats);
 
         let line = String::from("hello,class{word!");
         let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
-        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        add_keywords_if_any(&line, &JAVA_MATCHER, &mut file_stats);
         assert_eq!(make_file_stats(1,0), file_stats);
         
         let line = String::from("classe,");
         let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
-        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        add_keywords_if_any(&line, &JAVA_MATCHER, &mut file_stats);
         assert_eq!(make_file_stats(0,0), file_stats);
         
         let line = String::from("class interfaceclass classinterface interface");
         let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
-        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        add_keywords_if_any(&line, &JAVA_MATCHER, &mut file_stats);
         assert_eq!(make_file_stats(1,1), file_stats);
         
         let line = String::from("{class,interface}");
         let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
-        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        add_keywords_if_any(&line, &JAVA_MATCHER, &mut file_stats);
         assert_eq!(make_file_stats(1,1), file_stats);
         
         let line = String::from("{class.interface}");
         let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
-        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        add_keywords_if_any(&line, &JAVA_MATCHER, &mut file_stats);
         assert_eq!(make_file_stats(0,0), file_stats);
     }
 

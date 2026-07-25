@@ -17,12 +17,23 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
 {
     let mut buf = String::with_capacity(150);
     let mut idle_iterations = 0u32;
+    let mut keyword_matchers: HashMap<String, Option<file_parser::KeywordMatcher>> = HashMap::new();
     // let mut share = 0;
     loop {
         if let Steal::Success(parsable_file) = &files_injector.steal()
         {
             idle_iterations = 0;
-            match file_parser::parse_file(&parsable_file.path, &parsable_file.language_name, &mut buf, language_map.clone(), &config) {
+            let lang_name = parsable_file.language_name.as_ref();
+            if !keyword_matchers.contains_key(lang_name) {
+                let built = if config.no_keywords {
+                    None
+                } else {
+                    file_parser::KeywordMatcher::build(language_map.get(lang_name).unwrap())
+                };
+                keyword_matchers.insert(lang_name.to_owned(), built);
+            }
+            let keyword_matcher = keyword_matchers.get(lang_name).unwrap().as_ref();
+            match file_parser::parse_file(&parsable_file.path, lang_name, &mut buf, language_map.clone(), keyword_matcher, &config) {
                 Ok(x) => languages_content_info.lock().unwrap().get_mut(parsable_file.language_name.as_ref()).unwrap().add_file_stats(x),
                 Err(x) => faulty_files.lock().unwrap().push(FaultyFileDetails::new(
                         parsable_file.path.to_str().unwrap().to_owned(),x,parsable_file.path.metadata().map_or(0, |m| m.len())))
