@@ -136,5 +136,5 @@ Bugfixes:
   -> Fixed a race condition in the parallel directory traversal and file parsing, that could slow down
       the end of a run and, in rare cases, skip files entirely.
 
-Other:
-  -> Significant performance improvements, especially when analyzing large directory trees.
+Dependencies:
+  -> memchr = "2" was introduced for more efficient substring matching
