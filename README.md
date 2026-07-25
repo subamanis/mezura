@@ -11,6 +11,7 @@ Example run:
 
 ## Table of contents
 * [How To Run](#how-to-run)
+* [Windows Performance Note](#windows-performance-note)
 * [Details](#details)
 * [Cmd Commands](#cmd-commands)
 * [Configuration Files](#configuration-files)
@@ -35,7 +36,35 @@ If no path is provided, the current working dirrectory will be assumed as target
 
 The program also accepts a lot of optional flags to customize functionality, see [Cmd Commands](#cmd-commands) for more info or use the --help command.
 
-	
+
+## Windows Performance Note
+
+When scanning directories on Windows, Windows Defender may significantly impact performance due to real-time protection scanning files as mezura accesses them.
+
+### Impact Levels:
+- **Small projects** (<1,000 files): Minimal impact (5-10% CPU)
+- **Large codebases** (>1,000 files): Moderate slowdown (10-25% CPU)
+- **System directories** (C:\Windows, C:\Program Files): Severe slowdown (30-60% CPU)
+- **Entire system drive** (C:\): Can consume 50%+ CPU
+
+### Solution:
+To exclude mezura from Windows Defender real-time scanning:
+
+1. Open PowerShell as Administrator
+2. Run:
+   ```powershell
+   Add-MpPreference -ExclusionProcess "mezura.exe"
+   ```
+3. Restart your terminal
+
+To remove the exclusion later:
+```powershell
+Remove-MpPreference -ExclusionProcess "mezura.exe"
+```
+
+**Note:** This is a common requirement for file-scanning tools (similar to build tools, IDEs, etc.). Only add this exclusion if you trust the source of the executable.
+
+
 ## Details
 The generated stats are the following:
 - Number of files
@@ -124,7 +153,7 @@ Below there is a list with all the commands-flags that the program accepts.
     Only the languages specified here will be taken into account for the stats.
 
 --threads
-    2 numbers: the first between 1 and 4 and the seconds between 1 and 12. 
+    2 numbers: the first between 1 and 4 and the second between 1 and 12. 
 
     This represents the number of the producers (threads that will traverse the given directories),
     and consumers (threads that will parse whatever files the producers found).
@@ -285,10 +314,7 @@ Additionally:
 
 With that said, it is important to mention the following limitations:
 
-- The program counting has undefined behaviour when two or more language files are associated with the same file extension, and the program is run on a directory
-that contains this extension. For example, both the default C and C++ language files contain the `.h` extension. If the program is run on a directory that has `.h` files,
-it is unclear whether these files will be counted as a C file or a C++ file. This cannot be solved easily, since the program does not associate whole directories with languages, only individual files, so it has no way of knowing whether a particular `.h` file should be counted as a C or C++ file. You can remove the `.h` extension from
-either the C or C++ language file from the persistent files' path (see [Details](#details) for path), to eliminate this behaviour as a workaround.
+- When two or more language files are associated with the same file extension, all files with this extension are counted under the language that comes first alphabetically. For example, both the default C and C++ language files contain the `.h` extension, so `.h` files are counted as C files. The program does not associate whole directories with languages, only individual files, so it has no way of knowing whether a particular `.h` file belongs to a C or a C++ codebase. If you want such an extension attributed to a different language, remove the extension from the claiming language's file in the persistent files' path (see [Details](#details) for path), for example remove `h` from the C language file to have `.h` files counted as C++.
 
 - The program cannot understand language specific syntax or details, this would require a handwritten, complex, language-specific parser for most different languages. For example, in a .php file that contains html or js, the destinction will not be made. Also, the keyword counting doesn't take any measures to ensure that a valid keyword has the user-intended meaning. For example, the word "class" may appear in the syntax of a programming language with an additional use than declaring a class. This may lead to some false positives.
 

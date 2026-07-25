@@ -5,7 +5,7 @@ use colored::{ColoredString, Colorize};
 use crate::{Formatted, io_handler, message_printer, utils};
 
 // Application version, to be displayed at startup and with --help command
-pub const VERSION_ID : &str = "v1.0.1"; 
+pub const VERSION_ID : &str = "v1.1.0";
 
 // command flags
 pub const DIRS               :&str   = "dirs";

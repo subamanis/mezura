@@ -324,7 +324,9 @@ fn parse_N_previous_entries(log_content: &str, n: usize) -> Vec<LogEntry> {
 fn get_keywords_as_str(keyword_occurencies: &HashMap<String,usize>, max_files_num_size: usize) -> String {
     let mut keyword_info = String::new();
     if !keyword_occurencies.is_empty() {
-        let mut keyword_iter = keyword_occurencies.iter();
+        let mut sorted_keywords = keyword_occurencies.iter().collect::<Vec<_>>();
+        sorted_keywords.sort_unstable_by_key(|(name,_)| name.as_str());
+        let mut keyword_iter = sorted_keywords.into_iter();
         let first_keyword = keyword_iter.next().unwrap();
         keyword_info.push_str(&format!("{}{}: {}"," ".repeat(KEYWORD_LINE_OFFSET + max_files_num_size),
                 colored_word(first_keyword.0),with_seperators(*first_keyword.1)));

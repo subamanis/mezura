@@ -6,13 +6,13 @@ use crate::*;
 
 
 pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<PathBuf>>, worker: Worker<PathBuf>,
-        languages_metadata_map: MetadataMapMut, termination_states: Arc<Mutex<Vec<bool>>>, languages: Arc<HashMap<String,Language>>, config: Arc<Configuration>,
+        languages_metadata_map: MetadataMapMut, termination_states: Arc<Mutex<Vec<bool>>>, extension_lang_map: ExtensionLangMap, config: Arc<Configuration>,
         files_stats: Arc<Mutex<FilesPresent>>)
 -> JoinHandle<()>
 {
     thread::Builder::new().name(id.to_string()).spawn(move || {
-        let (total_files, relevant_files, excluded_files) = 
-                search_for_files(id, files_injector, dirs_injector, worker, termination_states, languages, languages_metadata_map, config);
+        let (total_files, relevant_files, excluded_files) =
+                search_for_files(id, files_injector, dirs_injector, worker, termination_states, extension_lang_map, languages_metadata_map, config);
         let mut file_stats_guard = files_stats.lock().unwrap(); 
         file_stats_guard.total_files += total_files;
         file_stats_guard.relevant_files += relevant_files;
@@ -22,8 +22,8 @@ pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFil
 }
 
 pub fn search_for_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<PathBuf>>, worker: Worker<PathBuf>, termination_states: Arc<Mutex<Vec<bool>>>,
-        languages: Arc<HashMap<String,Language>>, languages_metadata_map: MetadataMapMut, config: Arc<Configuration>) 
--> (usize,usize,usize) 
+        extension_lang_map: ExtensionLangMap, languages_metadata_map: MetadataMapMut, config: Arc<Configuration>)
+-> (usize,usize,usize)
 {
     let mut total_files = 0;
     let mut relevant_files = 0;
@@ -50,7 +50,7 @@ pub fn search_for_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, 
             }
 
             if let Ok(entries) = fs::read_dir(&dir) {
-                traverse_dir(&files_injector, entries, &dirs_injector, &languages, &config, &languages_metadata_map,
+                traverse_dir(&files_injector, entries, &dirs_injector, &extension_lang_map, &config, &languages_metadata_map,
                         &mut total_files, &mut relevant_files, &mut excluded_files)
             }
         } else {
@@ -74,8 +74,8 @@ pub fn search_for_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, 
 }
 
 fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, dirs_injector: &Arc<Injector<PathBuf>>,
-        languages: &Arc<HashMap<String,Language>>, config: &Configuration, languages_metadata_map: &MetadataMapMut,
-        total_files: &mut usize, relevant_files: &mut usize, excluded_files: &mut usize)  
+        extension_lang_map: &HashMap<String, Arc<str>>, config: &Configuration, languages_metadata_map: &MetadataMapMut,
+        total_files: &mut usize, relevant_files: &mut usize, excluded_files: &mut usize)
 {
     let mut local_total_files = 0;
     let mut local_relevant_files = 0;
@@ -88,13 +88,13 @@ fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, 
                 let extension_name = match path_buf.extension() {
                     Some(x) => {
                         match x.to_str() {
-                                Some(x) => x.to_owned(),
+                                Some(x) => x,
                                 None => continue
                             }
                         },
                         None => continue
                 };
-                if let Some(lang_name) = find_lang_with_this_identifier(languages, &extension_name) {
+                if let Some(lang_name) = find_language_of_extension(extension_lang_map, extension_name) {
                     if !config.exclude_dirs.is_empty() {
                         let full_path = &path_buf.to_str().unwrap_or("").replace('\\', "/");
                         if config.exclude_dirs.iter().any(|x| full_path.ends_with(x) || x == full_path) {
@@ -109,7 +109,7 @@ fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, 
                         Err(_) => 0
                     };
 
-                    languages_metadata_map.lock().unwrap().get_mut(&lang_name).unwrap().add_file_meta(bytes);
+                    languages_metadata_map.lock().unwrap().get_mut(lang_name.as_ref()).unwrap().add_file_meta(bytes);
                     
                     files_injector.push(ParsableFile::new(path_buf, lang_name));
                 }
