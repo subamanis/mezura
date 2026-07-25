@@ -104,7 +104,7 @@ fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, 
                     }
 
                     local_relevant_files += 1;
-                    let bytes = match path_buf.metadata() {
+                    let bytes = match e.metadata() {
                         Ok(x) => x.len() as usize,
                         Err(_) => 0
                     };
@@ -124,9 +124,11 @@ fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, 
                 };
 
                 let pathbuf = e.path();
-                let full_path = &pathbuf.to_str().unwrap_or("").replace('\\', "/");
-        
-                if !config.exclude_dirs.iter().any(|x| x == dir_name || x == full_path) {
+                let is_excluded = !config.exclude_dirs.is_empty() && {
+                    let full_path = pathbuf.to_str().unwrap_or("").replace('\\', "/");
+                    config.exclude_dirs.iter().any(|x| x == dir_name || *x == full_path)
+                };
+                if !is_excluded {
                     dirs_injector.push(pathbuf);
                 }
             }
