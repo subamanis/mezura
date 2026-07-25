@@ -2,7 +2,7 @@ Language
 C
 
 Extensions
-c h
+c
 
 String symbols
 "

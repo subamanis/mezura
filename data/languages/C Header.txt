@@ -1,8 +1,8 @@
 Language
-C++
+C Header
 
 Extensions
-cpp
+h
 
 String symbols
 "
@@ -15,12 +15,7 @@ Multi line comment end
 */
 
 Keyword
-    NAME
-    classes
-    ALIASES
-    class
-Keyword
-    NAME
-    structs
-    ALIASES
-    struct
+NAME
+structs
+ALIASES
+struct
