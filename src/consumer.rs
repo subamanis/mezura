@@ -16,10 +16,12 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
     languages_content_info: ContentInfoMapMut, language_map: Arc<HashMap<String,Language>>, config: Arc<Configuration>) 
 {
     let mut buf = String::with_capacity(150);
+    let mut idle_iterations = 0u32;
     // let mut share = 0;
     loop {
-        if let Steal::Success(parsable_file) = &files_injector.steal() 
+        if let Steal::Success(parsable_file) = &files_injector.steal()
         {
+            idle_iterations = 0;
             match file_parser::parse_file(&parsable_file.path, &parsable_file.language_name, &mut buf, language_map.clone(), &config) {
                 Ok(x) => languages_content_info.lock().unwrap().get_mut(parsable_file.language_name.as_ref()).unwrap().add_file_stats(x),
                 Err(x) => faulty_files.lock().unwrap().push(FaultyFileDetails::new(
@@ -28,9 +30,14 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
         } else {
             if finish_condition.load(Ordering::Relaxed) {
                 break;
-            } 
+            }
 
-            thread::sleep(Duration::from_millis(2));
+            idle_iterations += 1;
+            if idle_iterations < 10 {
+                thread::yield_now();
+            } else {
+                thread::sleep(Duration::from_millis(1));
+            }
         }
     }
     // println!("Thread {} finished, having done {} files.",_id,share);
