@@ -1,7 +1,34 @@
 use std::borrow::Cow;
-use std::{io::{BufRead, BufReader}, str::{self, MatchIndices}};
+use std::{io::Read as IoRead, str};
+
+use memchr::memmem;
 
 use crate::*;
+
+const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
+
+#[derive(Debug, Clone)]
+pub struct LanguageFinders {
+    string_finders: Vec<memmem::Finder<'static>>,
+    comment_finders: Vec<memmem::Finder<'static>>,
+    multiline_start_finder: Option<memmem::Finder<'static>>,
+    multiline_end_finder: Option<memmem::Finder<'static>>,
+}
+
+impl LanguageFinders {
+    pub fn build(language: &Language) -> LanguageFinders {
+        LanguageFinders {
+            string_finders: language.string_symbols.iter().map(|s| memmem::Finder::new(s.as_str()).into_owned()).collect(),
+            comment_finders: language.comment_symbols.iter().map(|s| memmem::Finder::new(s.as_str()).into_owned()).collect(),
+            multiline_start_finder: language.multiline_comment_start_symbol.as_ref().map(|s| memmem::Finder::new(s.as_str()).into_owned()),
+            multiline_end_finder: language.multiline_comment_end_symbol.as_ref().map(|s| memmem::Finder::new(s.as_str()).into_owned()),
+        }
+    }
+}
+
+fn finders_of(language: &Language) -> &LanguageFinders {
+    language.finders.get_or_init(|| LanguageFinders::build(language))
+}
 
 pub struct KeywordMatcher {
     aliases_with_names: Vec<(String, String)>,
@@ -28,16 +55,27 @@ pub fn parse_file(path: &Path, lang_name: &str, buf: &mut String, language_map: 
     keyword_matcher: Option<&KeywordMatcher>, config: &Configuration)
 -> Result<FileStats,String>
 {
-    let reader = BufReader::new(match File::open(path){
+    let mut file = match File::open(path){
         Ok(f) => f,
         Err(x) => return Err(x.to_string())
-    });
+    };
 
-    parse_lines(reader, buf, language_map.get(lang_name).unwrap(), keyword_matcher, config)
+    buf.clear();
+    if let Err(x) = file.read_to_string(buf) {
+        return Err(x.to_string());
+    }
+
+    let file_stats = parse_lines(buf, language_map.get(lang_name).unwrap(), keyword_matcher, config);
+
+    if buf.capacity() > MAX_RETAINED_FILE_BUFFER_BYTES {
+        *buf = String::new();
+    }
+
+    Ok(file_stats)
 }
 
-fn parse_lines(mut reader: BufReader<File>, buf: &mut String, language: &Language, keyword_matcher: Option<&KeywordMatcher>, config: &Configuration)
--> Result<FileStats,String>
+fn parse_lines(contents: &str, language: &Language, keyword_matcher: Option<&KeywordMatcher>, config: &Configuration)
+-> FileStats
 {
     let mut file_stats = match config.no_keywords {
         true => FileStats::default(),
@@ -45,15 +83,10 @@ fn parse_lines(mut reader: BufReader<File>, buf: &mut String, language: &Languag
     };
     let mut is_comment_closed = true;
     let mut open_str_symbol = None;
-    loop {
-        buf.clear();
-        match reader.read_line(buf) {
-            Ok(u) => if u == 0 {return Ok(file_stats)},
-            Err(x) => return Err(x.to_string())
-        }
+    for raw_line in contents.lines() {
         file_stats.incr_lines();
 
-        let line = buf.trim();
+        let line = raw_line.trim();
         if line.is_empty() { continue; }
 
         // Two different parsing functions to skip the unnecessary checks for langs that don't support multiline comments
@@ -82,6 +115,8 @@ fn parse_lines(mut reader: BufReader<File>, buf: &mut String, language: &Languag
             if line_info.has_string_literal {file_stats.incr_code_lines();}
         }
     }
+
+    file_stats
 }
 
 
@@ -349,30 +384,34 @@ fn get_bounds_w_multiline_comments<'a>(line: &'a str, language: &Language, is_co
 }
 
 fn find_comment_indicies_without_multiline(line: &str, language: &Language) -> Vec<usize> {
+    let finders = finders_of(language);
+    let line_bytes = line.as_bytes();
     if language.comment_symbols.len() > 1 {
-        let mut matches = line.match_indices(&language.comment_symbols[0]).map(|x| x.0)
-            .chain(line.match_indices(&language.comment_symbols[1]).map(|x| x.0))
+        let mut matches = finders.comment_finders[0].find_iter(line_bytes)
+            .chain(finders.comment_finders[1].find_iter(line_bytes))
             .collect::<Vec<usize>>();
         matches.sort_unstable();
         matches
     } else {
-        line.match_indices(&language.comment_symbols[0]).map(|x| x.0).collect::<Vec<usize>>()
-    } 
+        finders.comment_finders[0].find_iter(line_bytes).collect::<Vec<usize>>()
+    }
 }
 
 fn find_comment_indicies_w_multiline(line: &str, language: &Language, com_end_indices: &[usize]) -> Vec<usize> {
+    let finders = finders_of(language);
+    let line_bytes = line.as_bytes();
     if language.comment_symbols.len() > 1 {
-        line.match_indices(&language.comment_symbols[0])
-        .filter_map(|x| filter_comment_end_indicies(x.0, language, com_end_indices))
+        finders.comment_finders[0].find_iter(line_bytes)
+        .filter_map(|x| filter_comment_end_indicies(x, language, com_end_indices))
             .chain(
-                line.match_indices(&language.comment_symbols[1])
-                .filter_map(|x|  filter_comment_end_indicies(x.0, language, com_end_indices))
+                finders.comment_finders[1].find_iter(line_bytes)
+                .filter_map(|x|  filter_comment_end_indicies(x, language, com_end_indices))
             )
         .collect::<Vec<_>>()
     } else {
-        line.match_indices(&language.comment_symbols[0])
+        finders.comment_finders[0].find_iter(line_bytes)
             .filter_map(|x| {
-                filter_comment_end_indicies(x.0, language, com_end_indices)
+                filter_comment_end_indicies(x, language, com_end_indices)
             })
             .collect::<Vec<_>>()
     }
@@ -395,14 +434,14 @@ fn get_LineInfo_with_str_symbol<'a>(relevant: String, str_symbol: &str) -> LineI
 }
 
 fn get_com_end_indices(line: &str, language: &Language) -> Vec<usize> {
-    line.match_indices(language.multiline_comment_end_symbol.as_ref().unwrap()).map(|x| x.0).collect::<Vec<usize>>()
+    finders_of(language).multiline_end_finder.as_ref().unwrap().find_iter(line.as_bytes()).collect::<Vec<usize>>()
 }
 
 fn get_com_start_indices(line: &str, language: &Language, comment_indices: &[usize]) -> Vec<usize> {
-    line.match_indices(language.multiline_comment_start_symbol.as_ref().unwrap())
+    finders_of(language).multiline_start_finder.as_ref().unwrap().find_iter(line.as_bytes())
     .filter_map(|x|{
-        if !is_intersecting_with_comment_symbol(x.0, comment_indices) {
-            Some(x.0)
+        if !is_intersecting_with_comment_symbol(x, comment_indices) {
+            Some(x)
         } else {
             None
         }
@@ -528,7 +567,7 @@ pub fn get_str_indices_and_symbols(line: &str, language: &Language, open_str_sym
         slashes % 2 == 0
     }
 
-    fn add_unescaped_indices(indices: &mut Vec<usize>, symbols: &mut Vec<u8>, symbol_index: u8, first_val: usize, bytes: &[u8], iter: &mut MatchIndices<&String>) {
+    fn add_unescaped_indices(indices: &mut Vec<usize>, symbols: &mut Vec<u8>, symbol_index: u8, first_val: usize, bytes: &[u8], iter: &mut memmem::FindIter<'_, '_>) {
         if first_val == 0 {
             indices.push(first_val);
             symbols.push(symbol_index);
@@ -539,8 +578,8 @@ pub fn get_str_indices_and_symbols(line: &str, language: &Language, open_str_sym
             }
         }
         for x in iter {
-            if is_not_escaped(x.0, bytes) {
-                indices.push(x.0);
+            if is_not_escaped(x, bytes) {
+                indices.push(x);
                 symbols.push(symbol_index);
             }
         }
@@ -616,9 +655,10 @@ pub fn get_str_indices_and_symbols(line: &str, language: &Language, open_str_sym
     }
 
     let line_bytes = line.as_bytes();
+    let finders = finders_of(language);
     if language.string_symbols.len() == 2 {
-        let mut iter_1 = line.match_indices(&language.string_symbols[0]);
-        let mut iter_2 = line.match_indices(&language.string_symbols[1]);
+        let mut iter_1 = finders.string_finders[0].find_iter(line_bytes);
+        let mut iter_2 = finders.string_finders[1].find_iter(line_bytes);
         let first_match_1 = iter_1.next();
         let first_match_2 = iter_2.next();
         let mut indices  = Vec::new();
@@ -628,13 +668,13 @@ pub fn get_str_indices_and_symbols(line: &str, language: &Language, open_str_sym
         } else if first_match_1.is_none() {
             if open_str_symbol.is_none() {
                 add_unescaped_indices(&mut indices, &mut symbols, 1,
-                        first_match_2.unwrap().0, line_bytes, &mut iter_2);
+                        first_match_2.unwrap(), line_bytes, &mut iter_2);
                 (indices,symbols)
             } else {
                 let open_str_symbol = open_str_symbol.as_ref().unwrap();
                 if *open_str_symbol == language.string_symbols[1]{
                     add_unescaped_indices(&mut indices, &mut symbols, 1,
-                            first_match_2.unwrap().0, line_bytes, &mut iter_2);
+                            first_match_2.unwrap(), line_bytes, &mut iter_2);
                     (indices,symbols)
                 } else {
                     (vec![],vec![])
@@ -643,13 +683,13 @@ pub fn get_str_indices_and_symbols(line: &str, language: &Language, open_str_sym
         } else if first_match_2.is_none() {
             if open_str_symbol.is_none() {
                 add_unescaped_indices(&mut indices, &mut symbols, 0,
-                            first_match_1.unwrap().0, line_bytes, &mut iter_1);
+                            first_match_1.unwrap(), line_bytes, &mut iter_1);
                 (indices,symbols)
             } else {
                 let open_str_symbol = open_str_symbol.as_ref().unwrap();
                 if *open_str_symbol == language.string_symbols[0]{
                     add_unescaped_indices(&mut indices, &mut symbols, 0,
-                            first_match_1.unwrap().0, line_bytes, &mut iter_1);
+                            first_match_1.unwrap(), line_bytes, &mut iter_1);
                     (indices,symbols)
                 } else {
                     (vec![],vec![])
@@ -661,9 +701,9 @@ pub fn get_str_indices_and_symbols(line: &str, language: &Language, open_str_sym
             let mut indices_2 = Vec::new();
             let mut symbols_2 = Vec::new();
             add_unescaped_indices(&mut indices_1, &mut symbols_1, 0,
-                    first_match_1.unwrap().0, line_bytes, &mut iter_1);
+                    first_match_1.unwrap(), line_bytes, &mut iter_1);
             add_unescaped_indices(&mut indices_2, &mut symbols_2, 1,
-                    first_match_2.unwrap().0, line_bytes, &mut iter_2);
+                    first_match_2.unwrap(), line_bytes, &mut iter_2);
             if indices_1.is_empty() && indices_2.is_empty() {
                 (vec![],vec![])
             } else if indices_2.is_empty() {
@@ -679,9 +719,9 @@ pub fn get_str_indices_and_symbols(line: &str, language: &Language, open_str_sym
     } else {
         let mut indices = Vec::new();
         let mut symbols = Vec::new();
-        line.match_indices(&language.string_symbols[0]).for_each(|x| {
-            if is_not_escaped(x.0, line_bytes) {
-                indices.push(x.0); symbols.push(0);
+        finders.string_finders[0].find_iter(line_bytes).for_each(|x| {
+            if is_not_escaped(x, line_bytes) {
+                indices.push(x); symbols.push(0);
             }
         });
         (indices, symbols)
@@ -831,7 +871,8 @@ mod tests {
             comment_symbols : vec!["//".to_owned()],
             multiline_comment_start_symbol : Some("/*".to_owned()),
             multiline_comment_end_symbol : Some("*/".to_owned()),
-            keywords : vec![CLASS.clone(),INTERFACE.clone()]
+            keywords : vec![CLASS.clone(),INTERFACE.clone()],
+            finders : std::sync::OnceLock::new()
         };
 
         static ref PHP : Language = Language {
@@ -841,7 +882,8 @@ mod tests {
             comment_symbols : vec!["//".to_owned(),"#".to_owned()],
             multiline_comment_start_symbol : Some("/*".to_owned()),
             multiline_comment_end_symbol : Some("*/".to_owned()),
-            keywords : vec![CLASS.clone()]
+            keywords : vec![CLASS.clone()],
+            finders : std::sync::OnceLock::new()
         };
 
         static ref PYTHON : Language = Language {
@@ -851,7 +893,8 @@ mod tests {
             comment_symbols : vec!["#".to_owned()],
             multiline_comment_start_symbol : None,
             multiline_comment_end_symbol : None,
-            keywords : vec![CLASS.clone()]
+            keywords : vec![CLASS.clone()],
+            finders : std::sync::OnceLock::new()
         };
 
         static ref RUST : Language = Language {
@@ -861,7 +904,8 @@ mod tests {
             comment_symbols : vec!["//".to_owned()],
             multiline_comment_start_symbol : Some("/*".to_owned()),
             multiline_comment_end_symbol : Some("*/".to_owned()),
-            keywords : vec![STRUCT.clone(),ENUM.clone(),TRAIT.clone()]
+            keywords : vec![STRUCT.clone(),ENUM.clone(),TRAIT.clone()],
+            finders : std::sync::OnceLock::new()
         };
 
         static ref LANGUAGE_MAP_REF : Arc<HashMap<String,Language>> =

@@ -543,7 +543,7 @@ impl ParsableFile {
 pub mod domain {
     use super::*;
     
-    #[derive(Debug,PartialEq, Clone)]
+    #[derive(Debug, Clone)]
     pub struct Language {
         pub name: String,
         pub extensions : Vec<String>,
@@ -551,7 +551,20 @@ pub mod domain {
         pub comment_symbols : Vec<String>,
         pub multiline_comment_start_symbol : Option<String>,
         pub multiline_comment_end_symbol : Option<String>,
-        pub keywords : Vec<Keyword>
+        pub keywords : Vec<Keyword>,
+        pub finders : OnceLock<crate::file_parser::LanguageFinders>
+    }
+
+    impl PartialEq for Language {
+        fn eq(&self, other: &Self) -> bool {
+            self.name == other.name
+                && self.extensions == other.extensions
+                && self.string_symbols == other.string_symbols
+                && self.comment_symbols == other.comment_symbols
+                && self.multiline_comment_start_symbol == other.multiline_comment_start_symbol
+                && self.multiline_comment_end_symbol == other.multiline_comment_end_symbol
+                && self.keywords == other.keywords
+        }
     }
     
     #[derive(Debug,PartialEq)]
@@ -601,7 +614,8 @@ pub mod domain {
                 comment_symbols,
                 multiline_comment_start_symbol,
                 multiline_comment_end_symbol,
-                keywords 
+                keywords,
+                finders : OnceLock::new()
             }
         }
 
