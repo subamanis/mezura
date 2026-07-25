@@ -1,0 +1,31 @@
+Language
+Odin
+
+Extensions
+odin
+
+String symbols
+",',`
+
+Comment symbols
+//
+Multi line comment start
+/*
+Multi line comment end
+*/
+
+Keyword
+NAME
+structs
+ALIASES
+struct
+Keyword
+NAME
+enums
+ALIASES
+enum
+Keyword
+NAME
+unions
+ALIASES
+union
