@@ -29,6 +29,7 @@ pub fn search_for_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, 
     let mut relevant_files = 0;
     let mut excluded_files = 0;
     let mut should_terminate = false;
+    let mut local_metadata: HashMap<String, LanguageMetadata> = HashMap::new();
     // let mut times_slept = 0;
 
     loop {
@@ -36,7 +37,11 @@ pub fn search_for_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, 
             if worker.is_empty() {
                 match dirs_injector.steal_batch_and_pop(&worker) {
                     Steal::Success(path) => Some(path),
-                    _ => None
+                    Steal::Retry => {
+                        thread::yield_now();
+                        continue;
+                    },
+                    Steal::Empty => None
                 }
             } else {
                 worker.pop()
@@ -50,7 +55,7 @@ pub fn search_for_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, 
             }
 
             if let Ok(entries) = fs::read_dir(&dir) {
-                traverse_dir(&files_injector, entries, &dirs_injector, &extension_lang_map, &config, &languages_metadata_map,
+                traverse_dir(&files_injector, entries, &dirs_injector, &extension_lang_map, &config, &mut local_metadata,
                         &mut total_files, &mut relevant_files, &mut excluded_files)
             }
         } else {
@@ -70,11 +75,18 @@ pub fn search_for_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, 
     // print_thread_colored_msg(id, format!("Thread {} |  Exits with findings: {:?}",id,(total_files,relevant_files)));
     // print_thread_colored_msg(id, format!("Thread {} |  Slept {} times. ",id,times_slept));
 
+    if !local_metadata.is_empty() {
+        let mut global_metadata_guard = languages_metadata_map.lock().unwrap();
+        for (lang_name, metadata) in local_metadata.iter() {
+            global_metadata_guard.get_mut(lang_name).unwrap().add_metadata(metadata);
+        }
+    }
+
     (total_files,relevant_files,excluded_files)
 }
 
 fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, dirs_injector: &Arc<Injector<PathBuf>>,
-        extension_lang_map: &HashMap<String, Arc<str>>, config: &Configuration, languages_metadata_map: &MetadataMapMut,
+        extension_lang_map: &HashMap<String, Arc<str>>, config: &Configuration, local_metadata: &mut HashMap<String, LanguageMetadata>,
         total_files: &mut usize, relevant_files: &mut usize, excluded_files: &mut usize)
 {
     let mut local_total_files = 0;
@@ -109,7 +121,10 @@ fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, 
                         Err(_) => 0
                     };
 
-                    languages_metadata_map.lock().unwrap().get_mut(lang_name.as_ref()).unwrap().add_file_meta(bytes);
+                    match local_metadata.get_mut(lang_name.as_ref()) {
+                        Some(metadata) => metadata.add_file_meta(bytes),
+                        None => { local_metadata.insert(lang_name.as_ref().to_owned(), LanguageMetadata::new(1, bytes)); }
+                    }
                     
                     files_injector.push(ParsableFile::new(path_buf, lang_name));
                 }
