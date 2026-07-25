@@ -1,4 +1,4 @@
-v0.9.2  -  22/9/2021  
+v0.9.2  -  22/9/2021
 
   4,260 Total lines  -  3,098 Code lines
 
@@ -7,11 +7,11 @@ Bugfixes:
 
 Major/Functionality changes:
   -> Running the program by double clicking on the exe is no longer supported.
-  -> The program will now terminate after execution at all times 
+  -> The program will now terminate after execution at all times
       (no longer accepting inputs from stdin on error).
 
 Change in commands:
-  -> Running the program with the --help command, shows information about the other provided commands, 
+  -> Running the program with the --help command, shows information about the other provided commands,
       or if none were provided, shows the information of all the commands.
 
 
@@ -20,7 +20,7 @@ Change in commands:
 
 
 
-v0.9.9 (v1.0.0-beta1)  -  17/10/2021  
+v0.9.9 (v1.0.0-beta1)  -  17/10/2021
 
   4,766 Total lines  -  3,464 Code lines
 
@@ -47,13 +47,13 @@ Change in commands:
   -> (Breaking: update config files) Change on the --threads command's arguments, to reflect the ability
       to specify the amount of producers and consumers, separately.
   -> Added support for log descriptions. Now, after the '--log' command, you can write a word or a sentence
-      that describes the state of the codebase at the time the logging was done. 
+      that describes the state of the codebase at the time the logging was done.
   -> Normal program executions and --help command, will now display the version ID of the program.
   -> Running the --help command will now work even if there is no data dir.
   -> If a command was provided with invalid arguments, the help message for this command
       will also be displayed.
 
-Dependencies: 
+Dependencies:
   -> num_cpus = "1.13.0"  was introduced, so that the program can automatically detect
       an optimal number of threads for producers and consumers.
   -> directories = "4.0.1"  was introduced, so that platform-specific and suitable paths can be chosen for
@@ -64,7 +64,7 @@ Dependencies:
 Other:
   -> Running the program with no arguments will now just display the help message.
   -> The program will now also display how many files it ignored due to the '--exclude' command.
-  -> 7 more language files bundled by default.  
+  -> 7 more language files bundled by default.
   -> Added the .h extension in the C++ language file, along with the .cpp and .hpp extensions.
 
 
@@ -81,7 +81,7 @@ Bugfixes:
   -> Fixed a bug where saving and loading a config file in the same program execution was producting a panic
   -> Fixed a runtime panic related to the file parser
 
-Other: 
+Other:
   -> Added C language file
   -> Running the program with no target dir provided (either explicitly, or through a configuration file),
   will now assume the current working dir as the target dir, in contrast to printing the --help message.
@@ -105,7 +105,36 @@ Change in commands:
 -> --log command is no longer automatically saved to a configuration file, if it is specified along
   with the --save command, but can be still added manually in configuration files
 
-Other: 
+Other:
   -> Added SCSS language file
   -> Removed sass and scss file extensions from css file
   -> Changed paths to application's files to contain platform specific envioronment variables
+
+
+
+-----------------------------------------------------------------------------------------------------------
+
+
+
+v1.1.0 - 25/7/2026
+
+  5,375 Total lines  -  3,881 Code lines
+
+Performance:
+-> Various optimizations that yielded significant performance improvements,
+   especially when analyzing large directory trees.
+   You can expect a ~2x performance increase on hot runs.
+
+Bugfixes:
+  -> Fixed nondeterministic language attribution for extensions claimed by multiple language files,
+      for example '.h' which is claimed by both C and C++. Each run could previously assign such
+      files to a different language, changing the reported stats between identical runs on the same
+      directory. Files are now always counted under the alphabetically first language that claims
+      the extension (so '.h' counts as C with the default language files).
+  -> Fixed nondeterministic ordering of keyword occurrences in the results. Keywords are now
+      printed in alphabetical order, stable across runs.
+  -> Fixed a race condition in the parallel directory traversal and file parsing, that could slow down
+      the end of a run and, in rare cases, skip files entirely.
+
+Other:
+  -> Significant performance improvements, especially when analyzing large directory trees.
