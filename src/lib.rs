@@ -82,6 +82,7 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     for handle in producer_handles {
         handle.join();
     }
+    let producers_done_millis = parsing_started_instant.elapsed().as_millis();
 
     //If there are a lot of files remaining after producers finish, it makes sense to start another consumer.
     let len = files_injector.len();
@@ -95,6 +96,11 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
         handle.join();
     }
     let parsing_duration_millis = parsing_started_instant.elapsed().as_millis();
+
+    if std::env::var_os("MEZURA_PHASE_TIMING").is_some() {
+        eprintln!("[phase] producers alive: {} ms | drain after producers: {} ms | queue size at producer exit: {}",
+            producers_done_millis, parsing_duration_millis - producers_done_millis, len);
+    }
 
     let file_stats_guard = files_stats.lock().unwrap();
     let (total_files_num, relevant_files_num, excluded_files_num) = 

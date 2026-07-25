@@ -57,7 +57,7 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                 if idle_iterations < 10 {
                     thread::yield_now();
                 } else {
-                    thread::sleep(Duration::from_millis(1));
+                    thread::sleep(Duration::from_millis(2));
                 }
             }
         }
