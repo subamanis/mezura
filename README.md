@@ -153,7 +153,7 @@ Below there is a list with all the commands-flags that the program accepts.
     Only the languages specified here will be taken into account for the stats.
 
 --threads
-    2 numbers: the first between 1 and 4 and the second between 1 and 12. 
+    2 numbers: the first between 1 and 8 and the second between 1 and 30. 
 
     This represents the number of the producers (threads that will traverse the given directories),
     and consumers (threads that will parse whatever files the producers found).

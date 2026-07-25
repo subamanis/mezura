@@ -29,7 +29,7 @@ use directories::{BaseDirs,ProjectDirs};
 use crossbeam_deque::{Worker,Injector};
 use chrono::{DateTime, Local};
 use std::{collections::HashMap, fs::{self, File}, io::Read, path::{Path, PathBuf}, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant}};
-use std::{sync::{Arc, Mutex}, thread::JoinHandle};
+use std::{sync::{Arc, Mutex, OnceLock}, thread::JoinHandle};
 
 
 pub const APP_NAME : &str = "mezura";

@@ -27,9 +27,9 @@ pub const CHANGELOG          :&str   = "changelog";
 pub const SHOW_LANGUAGES     :&str   = "show-languages";
 pub const SHOW_CONFIGS       :&str   = "show-configs";
 
-pub const MAX_PRODUCERS_VALUE : usize = 4;
+pub const MAX_PRODUCERS_VALUE : usize = 8;
 pub const MIN_PRODUCERS_VALUE : usize = 1;
-pub const MAX_CONSUMERS_VALUE : usize = 12;
+pub const MAX_CONSUMERS_VALUE : usize = 30;
 pub const MIN_CONSUMERS_VALUE : usize = 1;
 pub const MIN_COMPARE_LEVEL   : usize = 0;
 pub const MAX_COMPARE_LEVEL   : usize = 10;
@@ -531,21 +531,22 @@ impl Threads {
 
     pub fn default() -> Self {
         let threads = num_cpus::get();
-        // We may actually use one more thread than the available ones, it seems to help a bit
+        // Consumers are deliberately oversubscribed relative to the core count, so that
+        // blocking file opens overlap instead of idling cores.
         if threads <= 4 {
             Threads {
                 producers: 2,
-                consumers: 3
+                consumers: (threads * 2).clamp(3, MAX_CONSUMERS_VALUE)
             }
         } else if threads <= 8 {
             Threads {
-                producers: 3,
-                consumers: 6
+                producers: (threads / 2).clamp(2, MAX_PRODUCERS_VALUE),
+                consumers: (threads * 2).clamp(3, MAX_CONSUMERS_VALUE)
             }
         } else {
             Threads {
-                producers: 3,
-                consumers: 8
+                producers: (threads / 2).clamp(2, MAX_PRODUCERS_VALUE),
+                consumers: (threads * 2).clamp(3, MAX_CONSUMERS_VALUE)
             }
         }
     }
@@ -604,8 +605,8 @@ mod tests {
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("dirs".to_owned())), create_config_from_args("--dirs"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("dirs".to_owned())), create_config_from_args("--dirs   "));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 5 10"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 2 13"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 9 10"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 2 31"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 9"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads A"));
         assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("show-faulty-files".to_owned())), create_config_from_args("./ --threads 1 1 --show-faulty-files 1"));

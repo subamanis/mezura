@@ -31,7 +31,7 @@ fn finders_of(language: &Language) -> &LanguageFinders {
 }
 
 pub struct KeywordMatcher {
-    aliases_with_names: Vec<(String, String)>,
+    aliases_with_names: Vec<(memmem::Finder<'static>, usize, String)>,
 }
 
 impl KeywordMatcher {
@@ -39,7 +39,7 @@ impl KeywordMatcher {
         let mut aliases_with_names = Vec::new();
         for keyword in &language.keywords {
             for alias in &keyword.aliases {
-                aliases_with_names.push((alias.clone(), keyword.descriptive_name.clone()));
+                aliases_with_names.push((memmem::Finder::new(alias.as_str()).into_owned(), alias.len(), keyword.descriptive_name.clone()));
             }
         }
         if aliases_with_names.is_empty() {
@@ -511,12 +511,12 @@ fn resolve_double_counting_of_adjacent_start_and_end_symbols(start_indices: &mut
 
 
 fn add_keywords_if_any(cleansed: &str, matcher: &KeywordMatcher, file_stats: &mut FileStats) {
-    for (alias, keyword_name) in &matcher.aliases_with_names {
-        count_alias_occurrences(cleansed, alias, keyword_name, file_stats);
+    for (alias_finder, alias_len, keyword_name) in &matcher.aliases_with_names {
+        count_alias_occurrences(cleansed, alias_finder, *alias_len, keyword_name, file_stats);
     }
 }
 
-fn count_alias_occurrences(cleansed: &str, alias: &str, keyword_name: &str, file_stats: &mut FileStats) {
+fn count_alias_occurrences(cleansed: &str, alias_finder: &memmem::Finder<'_>, alias_len: usize, keyword_name: &str, file_stats: &mut FileStats) {
     fn is_acceptable_prefix(prefix: &str) -> bool {
         prefix.is_empty() || prefix.ends_with(' ') || prefix.ends_with('}') || prefix.ends_with('{') || prefix.ends_with(',')
     }
@@ -525,9 +525,8 @@ fn count_alias_occurrences(cleansed: &str, alias: &str, keyword_name: &str, file
         suffix.is_empty() || suffix.starts_with(' ') || suffix.starts_with('}') || suffix.starts_with('{') || suffix.starts_with(',')
     }
 
-    let mut indices = cleansed.match_indices(alias).map(|x| x.0).collect::<Vec<usize>>();
+    let mut indices = alias_finder.find_iter(cleansed.as_bytes()).collect::<Vec<usize>>();
     if indices.is_empty() {return;}
-    let alias_len = alias.len();
 
     //ignore indices that are directly next to each other
     let mut counter = 0;

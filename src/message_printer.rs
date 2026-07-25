@@ -51,7 +51,7 @@ pub const EXCLUDE_LANGUAGES_HELP  :  &str =
 ";
 pub const THREADS_HELP  :  &str =
 "--threads
-    2 numbers: the first between 1 and 4 and the second between 1 and 12.
+    2 numbers: the first between 1 and 8 and the second between 1 and 30.
 
     This represents the number of the producers (threads that will traverse the given directories),
     and consumers (threads that will parse whatever files the producers found).
