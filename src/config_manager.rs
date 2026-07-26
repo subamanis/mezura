@@ -2,7 +2,7 @@ use std::{path::Path};
 
 use colored::{ColoredString, Colorize};
 
-use crate::{Formatted, io_handler, message_printer, utils};
+use crate::{Color, Formatted, io_handler, message_printer, utils};
 
 // Application version, to be displayed at startup and with --help command
 pub const VERSION_ID : &str = "v2.0.0";
@@ -19,6 +19,7 @@ pub const SHOW_FAULTY_FILES  :&str   = "show-faulty-files";
 pub const NO_KEYWORDS        :&str   = "no-keywords";
 pub const NO_VISUAL          :&str   = "no-visual";
 pub const NO_GITIGNORE       :&str   = "no-gitignore";
+pub const COLORS             :&str   = "colors";
 pub const LOG                :&str   = "log";
 pub const COMPRARE_LEVEL     :&str   = "compare";
 pub const SAVE               :&str   = "save";
@@ -59,6 +60,7 @@ pub struct Configuration {
     pub no_keywords: bool,
     pub no_visual: bool,
     pub no_gitignore: bool,
+    pub colors: Vec<Color>,
     pub log: LogOption,
     pub compare_level: usize,
     pub config_name_to_save: Option<String>,
@@ -123,8 +125,8 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     let mut custom_config = None;
     let (mut exclude_dirs, mut languages_of_interest, mut excluded_languages, mut threads, mut braces_as_code,
          mut search_in_dotted, mut show_faulty_files, mut config_name_to_save, mut no_visual, mut log,
-         mut compare_level, mut config_name_to_load, mut no_keywords, mut no_gitignore)
-         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None);
+         mut compare_level, mut config_name_to_load, mut no_keywords, mut no_gitignore, mut colors)
+         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
     for command in options {
         let (command_name, arguments) = match command.find(" ") {
             Some(index) => command.split_at(index),
@@ -211,6 +213,14 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 return Err(ArgParsingError::UnexpectedCommandArgs(NO_GITIGNORE.to_owned()))
             }
             no_gitignore = Some(true);
+        } else if command_name == COLORS {
+            match utils::parse_colors_to_vec(arguments) {
+                Some(x) => colors = Some(x),
+                None => {
+                    message_printer::print_help_message_for_command(COLORS);
+                    return Err(ArgParsingError::IncorrectCommandArgs(COLORS.to_owned()))
+                }
+            }
         } else if command_name == LOG {
             let value = arguments.trim();
             if value.is_empty() {
@@ -261,7 +271,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     print_warnings_for_commands_that_need_a_loaded_configuration(&config_name_to_save, &config_name_to_load, &log, &compare_level);
     
     let mut config_builder = ConfigurationBuilder::new(dirs, exclude_dirs, languages_of_interest, excluded_languages, threads, braces_as_code,
-        search_in_dotted, show_faulty_files, no_keywords, no_visual, no_gitignore, log, compare_level,
+        search_in_dotted, show_faulty_files, no_keywords, no_visual, no_gitignore, colors, log, compare_level,
         config_name_to_save, config_name_to_load);
 
     if let Some((custom, invalid_fields)) = custom_config {
@@ -307,6 +317,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             NO_VISUAL => config_builder.no_visual.is_some(),
             NO_GITIGNORE => config_builder.no_gitignore.is_some(),
             EXCLUDE => config_builder.exclude_dirs.is_some(),
+            COLORS => config_builder.colors.is_some(),
             _ => false
         };
 
@@ -394,6 +405,7 @@ pub struct ConfigurationBuilder {
     pub no_keywords:              Option<bool>,
     pub no_visual:                Option<bool>,
     pub no_gitignore:             Option<bool>,
+    pub colors:                   Option<Vec<Color>>,
     pub log:                      Option<LogOption>,
     pub compare_level:            Option<usize>,
     pub config_name_to_save:      Option<String>,
@@ -403,8 +415,8 @@ pub struct ConfigurationBuilder {
 impl ConfigurationBuilder {
     pub fn new(dirs: Option<Vec<String>>, exclude_dirs: Option<Vec<String>>, languages_of_interest: Option<Vec<String>>, excluded_languages: Option<Vec<String>>,
              threads: Option<Threads>, braces_as_code: Option<bool>, should_search_in_dotted: Option<bool>, should_show_faulty_files: Option<bool>, no_keywords: Option<bool>,
-             no_visual: Option<bool>, no_gitignore: Option<bool>, log: Option<LogOption>, compare_level: Option<usize>, config_name_to_save: Option<String>,
-             config_name_to_load: Option<String>)
+             no_visual: Option<bool>, no_gitignore: Option<bool>, colors: Option<Vec<Color>>, log: Option<LogOption>, compare_level: Option<usize>,
+             config_name_to_save: Option<String>, config_name_to_load: Option<String>)
     -> ConfigurationBuilder
     {
         ConfigurationBuilder {
@@ -419,6 +431,7 @@ impl ConfigurationBuilder {
             no_keywords,
             no_visual,
             no_gitignore,
+            colors,
             log,
             compare_level,
             config_name_to_save,
@@ -438,6 +451,7 @@ impl ConfigurationBuilder {
         if self.no_keywords.is_none() {self.no_keywords = config.no_keywords};
         if self.no_visual.is_none() {self.no_visual = config.no_visual};
         if self.no_gitignore.is_none() {self.no_gitignore = config.no_gitignore};
+        if self.colors.is_none() {self.colors = config.colors};
         if self.compare_level.is_none() {self.compare_level = config.compare_level};
         if self.log.is_none() {self.log = config.log};
         self
@@ -447,7 +461,7 @@ impl ConfigurationBuilder {
         self.exclude_dirs.is_none() || self.languages_of_interest.is_none() ||
         self.threads.is_none() || self.braces_as_code.is_none() || self.should_search_in_dotted.is_none() ||
         self.should_show_faulty_files.is_none() || self.no_visual.is_none() || self.no_gitignore.is_none() ||
-        self.log.is_none() || self.compare_level.is_none()
+        self.colors.is_none() || self.log.is_none() || self.compare_level.is_none()
     }
 
     pub fn build(&self) -> Configuration {
@@ -464,6 +478,7 @@ impl ConfigurationBuilder {
             no_keywords: self.no_keywords.unwrap_or(DEF_NO_KEYWORDS),
             no_visual: self.no_visual.unwrap_or(DEF_NO_VISUAL),
             no_gitignore: self.no_gitignore.unwrap_or(DEF_NO_GITIGNORE),
+            colors: self.colors.clone().unwrap_or_default(),
             log: self.log.clone().unwrap_or_default(),
             compare_level: self.compare_level.unwrap_or(DEF_COMPARE_LEVEL),
             config_name_to_save: self.config_name_to_save.clone(),
@@ -487,6 +502,7 @@ impl Configuration {
             no_keywords: DEF_NO_KEYWORDS,
             no_visual: DEF_NO_VISUAL,
             no_gitignore: DEF_NO_GITIGNORE,
+            colors: Vec::new(),
             log: LogOption::default(),
             compare_level: DEF_COMPARE_LEVEL,
             config_name_to_save: None,
@@ -544,6 +560,11 @@ impl Configuration {
 
     pub fn set_no_gitignore(&mut self, no_gitignore: bool) -> &mut Self {
         self.no_gitignore = no_gitignore;
+        self
+    }
+
+    pub fn set_colors(&mut self, colors: Vec<Color>) -> &mut Self {
+        self.colors = colors;
         self
     }
 
@@ -626,7 +647,7 @@ mod tests {
 
     fn new_conf(dir: &str) -> Configuration {
         let mut builder = ConfigurationBuilder::new(Some(vec![convert_to_absolute(dir)]), None, None, None, None, None,
-                None, None, None, None, None, None, None, None, None);
+                None, None, None, None, None, None, None, None, None, None);
         if let Ok((default_config, _)) = io_handler::parse_config_file(None, None) {
             builder.add_missing_fields(default_config);
         }
@@ -657,6 +678,9 @@ mod tests {
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned())), create_config_from_args("./ --exclude   --threads 4"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned())), create_config_from_args("./ --exclude [invalid"));
         assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("no-gitignore".to_owned())), create_config_from_args("./ --no-gitignore a"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("colors".to_owned())), create_config_from_args("./ --colors"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("colors".to_owned())), create_config_from_args("./ --colors kaka"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("colors".to_owned())), create_config_from_args("./ --colors ff0000 ff0000 ff0000 ff0000 ff0000"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("load".to_owned())), create_config_from_args("./ --load"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("load".to_owned())), create_config_from_args("./ --load   "));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("save".to_owned())), create_config_from_args("./ --save"));
@@ -677,6 +701,8 @@ mod tests {
                 create_config_from_args("./ --no-visual").unwrap());
         assert_eq!(*new_conf("./").set_no_gitignore(true),
                 create_config_from_args("./ --no-gitignore").unwrap());
+        assert_eq!(*new_conf("./").set_colors(vec![(255,136,0),(0,255,0)]),
+                create_config_from_args("./ --colors ff8800 #00FF00").unwrap());
         assert_eq!(*new_conf("./").set_should_show_faulty_files(true),
                 create_config_from_args("./ --show-faulty-files").unwrap());
         assert_eq!(*new_conf("./").set_exclude_dirs(vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]),

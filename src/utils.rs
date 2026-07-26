@@ -87,6 +87,26 @@ pub fn is_valid_path(s: &str) -> bool {
     p.is_dir() || p.is_file()
 }
 
+pub fn parse_colors_to_vec(s: &str) -> Option<Vec<Color>> {
+    let entries = s.split_whitespace().collect::<Vec<_>>();
+    if entries.is_empty() || entries.len() > 4 {
+        return None;
+    }
+
+    let mut colors = Vec::with_capacity(4);
+    for entry in entries {
+        let hex = entry.trim_start_matches('#');
+        if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
+        colors.push((u8::from_str_radix(&hex[0..2], 16).ok()?,
+                u8::from_str_radix(&hex[2..4], 16).ok()?,
+                u8::from_str_radix(&hex[4..6], 16).ok()?));
+    }
+
+    Some(colors)
+}
+
 pub fn build_exclude_matcher(exclude_patterns: &[String]) -> Result<globset::GlobSet, globset::Error> {
     let mut builder = globset::GlobSetBuilder::new();
     for pattern in exclude_patterns {
@@ -260,6 +280,22 @@ mod exclude_matcher_tests {
 
         assert!(matcher.is_match("D:/dev/Rusty/mezura/bench"));
         assert!(matcher.is_match("D:/dev/proj/target"));
+    }
+
+    #[test]
+    fn test_parse_colors_to_vec() {
+        assert_eq!(Some(vec![(255,0,0)]), parse_colors_to_vec("ff0000"));
+        assert_eq!(Some(vec![(255,0,0)]), parse_colors_to_vec("#FF0000"));
+        assert_eq!(Some(vec![(0,255,128),(1,2,3),(255,255,255),(0,0,0)]),
+                parse_colors_to_vec("00ff80 #010203 ffffff 000000"));
+
+        assert_eq!(None, parse_colors_to_vec(""));
+        assert_eq!(None, parse_colors_to_vec("   "));
+        assert_eq!(None, parse_colors_to_vec("a b c d e"));
+        assert_eq!(None, parse_colors_to_vec("ff000"));
+        assert_eq!(None, parse_colors_to_vec("ff00000"));
+        assert_eq!(None, parse_colors_to_vec("ff00zz"));
+        assert_eq!(None, parse_colors_to_vec("ff0000 kaka"));
     }
 
     #[test]

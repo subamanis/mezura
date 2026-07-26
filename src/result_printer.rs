@@ -2,6 +2,8 @@ use std::cmp::max;
 
 use crate::*;
 
+type ColorFunc = Box<dyn Fn(&str) -> String>;
+
 //the total number of vertical lines ( | ) that appear in the [-|||...|-] in the overview section
 const NUM_OF_VERTICALS : usize = 50;
 
@@ -169,13 +171,20 @@ fn print_visual_overview(sorted_language_vec: &mut Vec<String>, content_info_map
 
     println!("{}.\n", "Overview".underline().bold());
 
-    let color_func_vec : Vec<fn(&str) -> String> = {
+    let default_funcs : Vec<fn(&str) -> String> = {
         if sorted_language_vec[sorted_language_vec.len()-1] == "others" {
             vec![make_cyan, make_magenta, make_yellow, make_color_for_others]
         } else {
             vec![make_cyan, make_magenta, make_yellow, make_fourth_color]
         }
     };
+    let color_func_vec : Vec<ColorFunc> = default_funcs.into_iter().enumerate()
+        .map(|(i, default_func)| {
+            match config.colors.get(i) {
+                Some(&(r,g,b)) => Box::new(move |s: &str| s.truecolor(r,g,b).to_string()) as ColorFunc,
+                None => Box::new(default_func) as ColorFunc
+            }
+        }).collect();
 
     let files_percentages = get_files_percentages(languages_metadata_map, sorted_language_vec);
     let lines_percentages = get_lines_percentages(content_info_map, sorted_language_vec);
@@ -482,7 +491,7 @@ fn normalize_to_NUM_OF_VERTICALS(verticals: &mut [usize], sum: usize) {
 }
 
 fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize], languages_name: &[String],
-        color_func_vec: &[fn(&str) -> String], config: &Configuration) -> String 
+        color_func_vec: &[ColorFunc], config: &Configuration) -> String
 {
     let mut line = String::with_capacity(150);
     line.push_str(&format!("{prefix}    "));
@@ -506,7 +515,7 @@ fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize], 
     line
 }
 
-fn add_verticals_str(line: &mut String, files_verticals: &[usize], color_func_vec: &[fn(&str) -> String]) {
+fn add_verticals_str(line: &mut String, files_verticals: &[usize], color_func_vec: &[ColorFunc]) {
     line.push_str("    [-");
     for (i,verticals) in files_verticals.iter().enumerate() {
         line.push_str(&color_func_vec[i]("|").repeat(*verticals));

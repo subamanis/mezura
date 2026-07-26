@@ -123,6 +123,19 @@ pub const NO_VISUAL_HELP  :  &str =
     the vertical lines that reprisent the percentages.
 
 ";
+pub const COLORS_HELP  :  &str =
+"--colors
+    1 to 4 hex colors separated by spaces, with or without a leading '#' (e.g. ff8800 #00ff00).
+
+    Overrides the colors used in the \"overview\" section of the results: the first three colors
+    are used for the three most relevant languages, and the fourth for the 'others' entry.
+    If fewer than 4 colors are provided, the remaining ones keep their default color.
+
+    The colors are rendered with 24-bit ANSI codes, so the terminal must support truecolor.
+    If you are using Windows Powershell, either omit the '#' or surround the color with
+    quotation marks (\"#ff8800\"), since an unquoted '#' starts a comment.
+
+";
 pub const LOG_HELP  :  &str =
 "--log
     Can take 0..n words as arguments in the cmd.
@@ -211,6 +224,7 @@ pub fn print_whole_help_message() {
     msg += SHOW_FAULTY_FILES_HELP;
     msg += NO_VISUAL_HELP;
     msg += NO_GITIGNORE_HELP;
+    msg += COLORS_HELP;
     msg += LOG_HELP;
     msg += COMPRARE_LEVEL_HELP;
     msg += SAVE_HELP;
@@ -322,6 +336,8 @@ fn get_help_msg_of_command(command: &str) -> Option<&str> {
         Some(NO_VISUAL_HELP)
     } else if command == NO_GITIGNORE {
         Some(NO_GITIGNORE_HELP)
+    } else if command == COLORS {
+        Some(COLORS_HELP)
     } else if command == LOG {
         Some(LOG_HELP)
     } else if command == COMPRARE_LEVEL {

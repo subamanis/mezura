@@ -18,6 +18,7 @@ pub use config_manager::Configuration;
 pub use utils::*;
 pub use domain::{Language, LanguageContentInfo, LanguageMetadata, FileStats, Keyword};
 
+pub type Color = (u8, u8, u8);
 pub type FaultyFilesListMut = Arc<Mutex<Vec<FaultyFileDetails>>>;
 pub type ExtensionLangMap = Arc<HashMap<String, Arc<str>>>;
 pub type ContentInfoMapMut  = Arc<Mutex<HashMap<String,LanguageContentInfo>>>;

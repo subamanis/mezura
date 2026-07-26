@@ -243,7 +243,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
 
     let (mut dirs, mut braces_as_code, mut should_search_in_dotted, mut threads, mut exclude_dirs,
          mut languages_of_interest, mut excluded_languages, mut should_show_faulty_files, mut no_keywords, mut no_visual,
-         mut no_gitignore, mut log, mut compare_level) = (None,None,None,None,None,None,None,None,None,None,None,None,None);
+         mut no_gitignore, mut colors, mut log, mut compare_level) = (None,None,None,None,None,None,None,None,None,None,None,None,None,None);
     let mut invalid_fields: Vec<&'static str> = Vec::new();
     let mut buf = String::with_capacity(150);
 
@@ -312,6 +312,13 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                     Ok(x) => no_gitignore = x,
                     Err(()) => invalid_fields.push(config_manager::NO_GITIGNORE)
                 }
+            } else if id == config_manager::COLORS {
+                buf.clear();
+                let _ = reader.read_line(&mut buf);
+                match utils::parse_colors_to_vec(&buf) {
+                    Some(x) => colors = Some(x),
+                    None => invalid_fields.push(config_manager::COLORS)
+                }
             } else if id == config_manager::LOG {
                 buf.clear();
                 let _ = reader.read_line(&mut buf);
@@ -334,7 +341,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
     }
 
     Ok((ConfigurationBuilder::new(dirs,exclude_dirs, languages_of_interest, excluded_languages, threads, braces_as_code,should_search_in_dotted,
-             should_show_faulty_files, no_keywords, no_visual, no_gitignore, log, compare_level, None, None), invalid_fields))
+             should_show_faulty_files, no_keywords, no_visual, no_gitignore, colors, log, compare_level, None, None), invalid_fields))
 }
 
 // Dirs must be specified (is checked before calling this function)
@@ -390,6 +397,11 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
     if let Some(no_gitignore) = &config_builder.no_gitignore {
         writer.write_all(&[b"\n\n===> ",config_manager::NO_GITIGNORE.as_bytes(),b"\n"].concat())?;
         writer.write_all(if *no_gitignore {b"yes"} else {b"no"})?;
+    }
+    if let Some(colors) = &config_builder.colors {
+        writer.write_all(&[b"\n\n===> ",config_manager::COLORS.as_bytes(),b"\n"].concat())?;
+        writer.write_all(colors.iter().map(|(r,g,b)| format!("{r:02x}{g:02x}{b:02x}"))
+                .collect::<Vec<_>>().join(" ").as_bytes())?;
     }
     if let Some(compare_level) = &config_builder.compare_level {
         writer.write_all(&[b"\n\n===> ",config_manager::COMPRARE_LEVEL.as_bytes(),b"\n"].concat())?;
