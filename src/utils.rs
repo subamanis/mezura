@@ -89,22 +89,58 @@ pub fn is_valid_path(s: &str) -> bool {
 
 pub fn parse_colors_to_vec(s: &str) -> Option<Vec<Color>> {
     let entries = s.split_whitespace().collect::<Vec<_>>();
-    if entries.is_empty() || entries.len() > 4 {
+    if entries.is_empty() || entries.len() > 5 {
         return None;
     }
 
-    let mut colors = Vec::with_capacity(4);
+    let mut colors = Vec::with_capacity(5);
     for entry in entries {
-        let hex = entry.trim_start_matches('#');
-        if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
-            return None;
-        }
-        colors.push((u8::from_str_radix(&hex[0..2], 16).ok()?,
-                u8::from_str_radix(&hex[2..4], 16).ok()?,
-                u8::from_str_radix(&hex[4..6], 16).ok()?));
+        colors.push(parse_single_color(entry)?);
     }
 
     Some(colors)
+}
+
+fn parse_single_color(token: &str) -> Option<Color> {
+    match token.to_lowercase().replace('_', "-").as_str() {
+        "black" => Some(Color::Black),
+        "red" => Some(Color::Red),
+        "green" => Some(Color::Green),
+        "yellow" => Some(Color::Yellow),
+        "blue" => Some(Color::Blue),
+        "magenta" => Some(Color::Magenta),
+        "cyan" => Some(Color::Cyan),
+        "white" => Some(Color::White),
+        "bright-black" => Some(Color::BrightBlack),
+        "bright-red" => Some(Color::BrightRed),
+        "bright-green" => Some(Color::BrightGreen),
+        "bright-yellow" => Some(Color::BrightYellow),
+        "bright-blue" => Some(Color::BrightBlue),
+        "bright-magenta" => Some(Color::BrightMagenta),
+        "bright-cyan" => Some(Color::BrightCyan),
+        "bright-white" => Some(Color::BrightWhite),
+        other => {
+            let hex = other.strip_prefix('#').unwrap_or(other);
+            if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+                return None;
+            }
+            Some(Color::TrueColor {
+                r: u8::from_str_radix(&hex[0..2], 16).ok()?,
+                g: u8::from_str_radix(&hex[2..4], 16).ok()?,
+                b: u8::from_str_radix(&hex[4..6], 16).ok()?
+            })
+        }
+    }
+}
+
+pub fn color_to_config_string(color: &Color) -> String {
+    match color {
+        Color::TrueColor {r, g, b} => format!("{r:02x}{g:02x}{b:02x}"),
+        named => format!("{:?}", named).chars().enumerate().flat_map(|(i, c)| {
+            if i > 0 && c.is_ascii_uppercase() { vec!['-', c.to_ascii_lowercase()] }
+            else { vec![c.to_ascii_lowercase()] }
+        }).collect()
+    }
 }
 
 pub fn build_exclude_matcher(exclude_patterns: &[String]) -> Result<globset::GlobSet, globset::Error> {
@@ -284,18 +320,28 @@ mod exclude_matcher_tests {
 
     #[test]
     fn test_parse_colors_to_vec() {
-        assert_eq!(Some(vec![(255,0,0)]), parse_colors_to_vec("ff0000"));
-        assert_eq!(Some(vec![(255,0,0)]), parse_colors_to_vec("#FF0000"));
-        assert_eq!(Some(vec![(0,255,128),(1,2,3),(255,255,255),(0,0,0)]),
-                parse_colors_to_vec("00ff80 #010203 ffffff 000000"));
+        assert_eq!(Some(vec![Color::TrueColor{r:255,g:0,b:0}]), parse_colors_to_vec("ff0000"));
+        assert_eq!(Some(vec![Color::TrueColor{r:255,g:0,b:0}]), parse_colors_to_vec("#FF0000"));
+        assert_eq!(Some(vec![Color::Cyan, Color::BrightMagenta, Color::TrueColor{r:1,g:2,b:3}]),
+                parse_colors_to_vec("cyan BRIGHT-MAGENTA #010203"));
+        assert_eq!(Some(vec![Color::BrightYellow]), parse_colors_to_vec("bright_yellow"));
+        assert_eq!(5, parse_colors_to_vec("cyan magenta yellow 6ad9bd d7c9f0").unwrap().len());
 
         assert_eq!(None, parse_colors_to_vec(""));
         assert_eq!(None, parse_colors_to_vec("   "));
-        assert_eq!(None, parse_colors_to_vec("a b c d e"));
+        assert_eq!(None, parse_colors_to_vec("a b c d e f"));
         assert_eq!(None, parse_colors_to_vec("ff000"));
         assert_eq!(None, parse_colors_to_vec("ff00000"));
         assert_eq!(None, parse_colors_to_vec("ff00zz"));
         assert_eq!(None, parse_colors_to_vec("ff0000 kaka"));
+        assert_eq!(None, parse_colors_to_vec("brightest-yellow"));
+    }
+
+    #[test]
+    fn test_color_to_config_string() {
+        assert_eq!("cyan", color_to_config_string(&Color::Cyan));
+        assert_eq!("bright-magenta", color_to_config_string(&Color::BrightMagenta));
+        assert_eq!("ff0080", color_to_config_string(&Color::TrueColor{r:255,g:0,b:128}));
     }
 
     #[test]

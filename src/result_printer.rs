@@ -149,41 +149,24 @@ fn print_sum(content_info_map: &HashMap<String,LanguageContentInfo>, final_stats
 fn print_visual_overview(sorted_language_vec: &mut Vec<String>, content_info_map: &mut HashMap<String, LanguageContentInfo>,
         languages_metadata_map: &mut HashMap<String, LanguageMetadata>, final_stats: &FinalStats, config: &Configuration) 
 {
-    fn make_cyan(str: &str) -> String {
-        str.cyan().to_string()
-    }
-    fn make_magenta(str: &str) -> String {
-        str.bright_magenta().to_string()
-    }
-    fn make_yellow(str: &str) -> String {
-        str.bright_yellow().to_string()
-    }
-    fn make_fourth_color(str: &str) -> String {
-        str.truecolor(106, 217, 189).to_string()
-    }
-    fn make_color_for_others(str: &str) -> String {
-        str.truecolor(215, 201, 240).to_string()
-    }
-
     if content_info_map.len() > 4 {
         retain_most_relevant_and_add_others_field_for_rest(sorted_language_vec, content_info_map, languages_metadata_map, final_stats);
     }
 
     println!("{}.\n", "Overview".underline().bold());
 
-    let default_funcs : Vec<fn(&str) -> String> = {
-        if sorted_language_vec[sorted_language_vec.len()-1] == "others" {
-            vec![make_cyan, make_magenta, make_yellow, make_color_for_others]
-        } else {
-            vec![make_cyan, make_magenta, make_yellow, make_fourth_color]
-        }
-    };
-    let color_func_vec : Vec<ColorFunc> = default_funcs.into_iter().enumerate()
-        .map(|(i, default_func)| {
-            match config.colors.get(i) {
-                Some(&(r,g,b)) => Box::new(move |s: &str| s.truecolor(r,g,b).to_string()) as ColorFunc,
-                None => Box::new(default_func) as ColorFunc
-            }
+    let has_others = sorted_language_vec[sorted_language_vec.len()-1] == "others";
+    let default_colors : [Color; 4] = [Color::Cyan, Color::BrightMagenta, Color::BrightYellow,
+            if has_others { Color::TrueColor{r:215,g:201,b:240} } else { Color::TrueColor{r:106,g:217,b:189} }];
+    let color_func_vec : Vec<ColorFunc> = (0..4).map(|i| {
+            let color = if i == 3 && has_others && config.colors.len() >= 5 {
+                config.colors[4]
+            } else if let Some(&c) = config.colors.get(i) {
+                c
+            } else {
+                default_colors[i]
+            };
+            Box::new(move |s: &str| s.color(color).to_string()) as ColorFunc
         }).collect();
 
     let files_percentages = get_files_percentages(languages_metadata_map, sorted_language_vec);

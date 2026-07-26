@@ -3,7 +3,7 @@ use std::{collections::HashMap, time::Instant};
 use colored::*;
 use include_dir::include_dir;
 
-use mezura::{*, self, config_manager::{self, CHANGELOG, HELP, SHOW_CONFIGS, SHOW_LANGUAGES, VERSION_ID}, io_handler};
+use mezura::{*, self, config_manager::{self, CHANGELOG, HELP, PALETTE_PREVIEW, SHOW_CONFIGS, SHOW_LANGUAGES, SHOW_PALETTES, VERSION_ID}, io_handler};
 
 
 fn main() {
@@ -40,6 +40,11 @@ fn main() {
                 return;
             }
         }
+    }
+
+    if PERSISTENT_APP_PATHS.are_initialized && palettes_dir_is_missing_or_empty()
+        && let Err(x) = write_baked_in_palettes() {
+        println!("{}",format!("\nUnable to initialize the color palettes directory: {x}\n").yellow());
     }
 
     let args_str = match read_args_as_str() {
@@ -156,6 +161,37 @@ fn init_persistent_paths(languages: &HashMap<String,Language>, default_config_co
     }
 
     io_handler::write_default_config(default_config_contents)?;
+    write_baked_in_palettes()?;
+
+    Ok(())
+}
+
+fn open_in_browser(path: &str) {
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("cmd").args(["/C", "start", "", path]).spawn();
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open").arg(path).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let result = std::process::Command::new("xdg-open").arg(path).spawn();
+
+    if result.is_err() {
+        println!("(the page could not be opened in a browser automatically)");
+    }
+}
+
+fn palettes_dir_is_missing_or_empty() -> bool {
+    match std::fs::read_dir(&PERSISTENT_APP_PATHS.palettes_dir) {
+        Ok(mut entries) => entries.next().is_none(),
+        Err(_) => true
+    }
+}
+
+fn write_baked_in_palettes() -> Result<(),std::io::Error> {
+    std::fs::create_dir_all(&PERSISTENT_APP_PATHS.palettes_dir)?;
+    for file in include_dir!("data/palettes").files.iter() {
+        let file_name = std::path::Path::new(file.path).file_name().and_then(|x| x.to_str()).unwrap_or(file.path);
+        std::fs::write(PERSISTENT_APP_PATHS.palettes_dir.clone() + file_name, file.contents)?;
+    }
 
     Ok(())
 }
@@ -190,6 +226,18 @@ fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Lan
         return true;
     } else if args_str.contains(&(String::from("--") + SHOW_CONFIGS)) {
         message_printer::print_existing_configs();
+        return true;
+    } else if args_str.contains(&(String::from("--") + PALETTE_PREVIEW)) {
+        match io_handler::generate_palette_preview() {
+            Ok(path) => {
+                println!("\nPalette preview page generated at:\n{path}");
+                open_in_browser(&path);
+            },
+            Err(x) => println!("\n{}", format!("Unable to generate the palette preview page: {x}").red())
+        }
+        return true;
+    } else if args_str.contains(&(String::from("--") + SHOW_PALETTES)) {
+        message_printer::print_existing_palettes();
         return true;
     }
 

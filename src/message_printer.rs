@@ -125,15 +125,51 @@ pub const NO_VISUAL_HELP  :  &str =
 ";
 pub const COLORS_HELP  :  &str =
 "--colors
-    1 to 4 hex colors separated by spaces, with or without a leading '#' (e.g. ff8800 #00ff00).
+    1 to 5 colors separated by spaces. A color is either a hex value, with or without a leading
+    '#' (e.g. ff8800 #00ff00), or one of the 16 standard terminal color names (black, red, green,
+    yellow, blue, magenta, cyan, white and their bright- variants, e.g. bright-magenta).
 
     Overrides the colors used in the \"overview\" section of the results: the first three colors
-    are used for the three most relevant languages, and the fourth for the 'others' entry.
-    If fewer than 4 colors are provided, the remaining ones keep their default color.
+    are used for the three most relevant languages, the fourth for a fourth language, and the
+    optional fifth for the 'others' entry (if omitted, the fourth is used for 'others' too).
+    If fewer colors are provided, the remaining ones keep their default color.
 
-    The colors are rendered with 24-bit ANSI codes, so the terminal must support truecolor.
+    Named colors follow the terminal's color scheme; hex colors are rendered with 24-bit ANSI
+    codes, so the terminal must support truecolor.
     If you are using Windows Powershell, either omit the '#' or surround the color with
     quotation marks (\"#ff8800\"), since an unquoted '#' starts a comment.
+
+";
+pub const COLOR_PALETTE_HELP  :  &str =
+"--color-palette
+    One argument, the name of a palette (case-insensitive).
+
+    Applies a named color palette to the \"overview\" section of the results. Palettes are .txt
+    files in the 'data/palettes' dir, in the persistent data path of the application: the file
+    name is the palette name, and the first line contains 1 to 5 colors in the same format as
+    the '--colors' command. You can add your own palettes there.
+    Use the '--show-palettes' command to list the available palettes.
+
+    If the '--colors' command is also provided, it takes precedence over the palette.
+
+";
+pub const PALETTE_PREVIEW_HELP  :  &str =
+"--palette-preview
+    No arguments.
+
+    Overrides normal program execution: generates an interactive HTML page with all the color
+    palettes found in the persistent data path of the application, and opens it in the default
+    browser. There, every palette can be previewed on a mock overview, tuned with live
+    contrast metrics, and turned into a ready '--colors' command.
+
+";
+pub const SHOW_PALETTES_HELP  :  &str =
+"--show-palettes
+    No arguments.
+
+    Overrides normal program execution and just prints a sorted list with the names of
+    all the color palettes that were detected in the persistent data path
+    of the application, where you can add more.
 
 ";
 pub const LOG_HELP  :  &str =
@@ -208,12 +244,26 @@ pub const SHOW_CONFIGS_HELP  :  &str =
 
 
 pub fn print_whole_help_message() {
-    let mut msg = get_data_dir_str();
+
+    let mut msg ="
+    │  ╲     ╱  ╲
+    │ $$╲   ╱  $$  ______   ________  __    __   ______   ______
+    │ $$$╲ ╱  $$$ ╱      ╲ │        ╲│  ╲  │  ╲ ╱      ╲ │      ╲
+    │ $$$$╲  $$$$│  $$$$$$╲ ╲$$$$$$$$│ $$  │ $$│  $$$$$$╲ ╲$$$$$$╲
+    │ $$╲$$ $$ $$│ $$    $$  ╱    $$ │ $$  │ $$│ $$   ╲$$╱      $$
+    │ $$ ╲$$$│ $$│ $$$$$$$$ ╱  $$$$_ │ $$__╱ $$│ $$     │  $$$$$$$
+    │ $$  ╲$ │ $$ ╲$$     ╲│  $$    ╲ ╲$$    $$│ $$      ╲$$    $$
+     ╲$$      ╲$$  ╲$$$$$$$ ╲$$$$$$$$  ╲$$$$$$  ╲$$       ╲$$$$$$$\n\n".to_owned();
+
+
+    msg += get_data_dir_str().as_str();
     msg += "Format of arguments: <path_here> --optional_command1 --optional_commandN\n\nCOMMANDS:\n\n";
 
     msg += CHANGELOG_HELP;
     msg += SHOW_LANGUAGES_HELP;
     msg += SHOW_CONFIGS_HELP;
+    msg += SHOW_PALETTES_HELP;
+    msg += PALETTE_PREVIEW_HELP;
     msg += DIRS_HELP;
     msg += EXCLUDE_HELP;
     msg += LANGUAGES_HELP;
@@ -225,6 +275,7 @@ pub fn print_whole_help_message() {
     msg += NO_VISUAL_HELP;
     msg += NO_GITIGNORE_HELP;
     msg += COLORS_HELP;
+    msg += COLOR_PALETTE_HELP;
     msg += LOG_HELP;
     msg += COMPRARE_LEVEL_HELP;
     msg += SAVE_HELP;
@@ -276,6 +327,23 @@ pub fn print_changelog(full: bool) {
         let latest = changelog.split("-----").next().unwrap().trim_end();
         println!("\n{latest}\n\n(run with '--changelog full' to see the full version history)\n");
     }
+}
+
+pub fn print_existing_palettes() {
+    let mut palette_names = Vec::with_capacity(10);
+    let Ok(palettes_dir) = fs::read_dir(&PERSISTENT_APP_PATHS.palettes_dir) else {
+        println!("{}","Could not read the palettes dir".yellow());
+        return;
+    };
+    for path in palettes_dir.flatten() {
+        if let Ok(f) = path.file_type() && f.is_file()
+            && let Some(stem) = path.path().file_stem().and_then(|x| x.to_str()) {
+            palette_names.push(stem.to_owned());
+        }
+    }
+    palette_names.sort_unstable();
+    let prefix = get_data_dir_str();
+    println!("{}Found these color palettes:\n  {}\n",prefix,palette_names.join("\n  "));
 }
 
 pub fn print_supported_languages(languages_map: &HashMap<String,Language>) {
@@ -338,6 +406,12 @@ fn get_help_msg_of_command(command: &str) -> Option<&str> {
         Some(NO_GITIGNORE_HELP)
     } else if command == COLORS {
         Some(COLORS_HELP)
+    } else if command == COLOR_PALETTE {
+        Some(COLOR_PALETTE_HELP)
+    } else if command == SHOW_PALETTES {
+        Some(SHOW_PALETTES_HELP)
+    } else if command == PALETTE_PREVIEW {
+        Some(PALETTE_PREVIEW_HELP)
     } else if command == LOG {
         Some(LOG_HELP)
     } else if command == COMPRARE_LEVEL {

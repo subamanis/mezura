@@ -13,12 +13,11 @@ pub mod file_parser;
 
 mod result_printer;
 
-pub use colored::{Colorize,ColoredString};
+pub use colored::{Color,Colorize,ColoredString};
 pub use config_manager::Configuration;
 pub use utils::*;
 pub use domain::{Language, LanguageContentInfo, LanguageMetadata, FileStats, Keyword};
 
-pub type Color = (u8, u8, u8);
 pub type FaultyFilesListMut = Arc<Mutex<Vec<FaultyFileDetails>>>;
 pub type ExtensionLangMap = Arc<HashMap<String, Arc<str>>>;
 pub type ContentInfoMapMut  = Arc<Mutex<HashMap<String,LanguageContentInfo>>>;
@@ -33,6 +32,7 @@ use std::{sync::{Arc, LazyLock, Mutex, OnceLock}, thread::JoinHandle};
 
 pub const APP_NAME : &str = "mezura";
 pub const LANGUAGES_DIR_NAME : &str = "languages";
+pub const PALETTES_DIR_NAME : &str = "palettes";
 pub const CONFIG_DIR_NAME : &str = "config";
 pub const LOGS_DIR_NAME : &str = "logs";
 pub const TEST_DIR_NAME : &str = "test_dir";
@@ -51,7 +51,7 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let extension_lang_map: ExtensionLangMap = Arc::new(make_extension_language_map(&language_map_ref));
     let languages_content_info_ref : ContentInfoMapMut = Arc::new(Mutex::new(make_language_stats(language_map_ref.clone())));
     let global_languages_metadata_map = Arc::new(Mutex::new(make_language_metadata(&language_map_ref)));
-    
+
     let mut files_present = FilesPresent::default();
     let idle_producers = Arc::new(AtomicUsize::new(0));
     let files_injector = Arc::new(Injector::<ParsableFile>::new());
@@ -103,7 +103,7 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     }
 
     let file_stats_guard = files_stats.lock().unwrap();
-    let (total_files_num, relevant_files_num, excluded_files_num) = 
+    let (total_files_num, relevant_files_num, excluded_files_num) =
             (file_stats_guard.total_files, file_stats_guard.relevant_files, file_stats_guard.excluded_files);
     if relevant_files_num == 0 {
         return Err(ParseFilesError::NoRelevantFiles(get_activated_languages_as_str(&config)));
@@ -119,7 +119,7 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
 
     let mut global_languages_metadata_map_guard = global_languages_metadata_map.lock();
     let languages_metadata_map = global_languages_metadata_map_guard.as_deref_mut().unwrap();
-    
+
     remove_faulty_files_stats(&faulty_files_ref, languages_metadata_map, &extension_lang_map);
 
     let mut content_info_map_guard = languages_content_info_ref.lock();
@@ -139,7 +139,7 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let datetime_now = chrono::Local::now();
 
     remove_languages_with_0_files(content_info_map, languages_metadata_map);
-    result_printer::format_and_print_results(content_info_map, languages_metadata_map, &final_stats, 
+    result_printer::format_and_print_results(content_info_map, languages_metadata_map, &final_stats,
         &existing_log_contents, &datetime_now, &config);
 
     if config.log.should_log && let Some(path) = log_file_path
@@ -175,7 +175,7 @@ pub fn calculate_single_file_stats_or_add_to_injector(config: &Configuration, di
 
 //pub for integration tests
 pub fn remove_languages_with_0_files(content_info_map: &mut HashMap<String,LanguageContentInfo>,
-    languages_metadata_map: &mut HashMap<String, LanguageMetadata>) 
+    languages_metadata_map: &mut HashMap<String, LanguageMetadata>)
 {
    let mut empty_languages = Vec::new();
    for element in languages_metadata_map.iter() {
@@ -209,7 +209,7 @@ pub fn find_language_of_extension(extension_lang_map: &HashMap<String, Arc<str>>
 
 
 fn generate_metrics_if_parsing_took_more_than_one_sec(parsing_duration_millis: u128, relevant_files: usize,
-        content_info_map: &HashMap<String, LanguageContentInfo>) -> Option<Metrics> 
+        content_info_map: &HashMap<String, LanguageContentInfo>) -> Option<Metrics>
 {
     if parsing_duration_millis <= 1000 {
         return None;
@@ -303,13 +303,14 @@ fn get_specified_config_file_path(config: &Configuration) -> Option<String> {
 // Used to display colorful errors and warnings, by implementing it on Error enums.
 pub trait Formatted {
     fn formatted(&self) -> ColoredString;
-} 
+}
 
 #[derive(Debug)]
 pub struct PersistentAppPaths {
     pub project_path: String,
     pub data_dir: String,
     pub languages_dir: String,
+    pub palettes_dir: String,
     pub config_dir: String,
     pub logs_dir: String,
     pub are_initialized: bool
@@ -340,7 +341,7 @@ pub struct FinalStats {
     bytes_size: usize,
     bytes_average_size: usize,
     size: f64,
-    size_measurement: String, 
+    size_measurement: String,
     average_size: f64,
     average_size_measurement: String
 }
@@ -356,7 +357,7 @@ pub struct FaultyFileDetails {
 pub enum ParseFilesError {
     NoRelevantFiles(String),
     AllAreFaultyFiles
-} 
+}
 
 #[derive(Debug,Default,Clone)]
 pub struct FilesPresent {
@@ -385,7 +386,7 @@ pub struct GitignoreStack {
 
 
 impl PersistentAppPaths {
-    //Persistent paths: 
+    //Persistent paths:
     // Windows:  C:/Users/<user_name>/AppData/Roaming/mezura
     // Linux:    /home/<user_name>/.local/share/mezura
     // MacOs:    /Users/<user_name>/Library/Application Support/mezura
@@ -404,6 +405,7 @@ impl PersistentAppPaths {
             data_dir: data_dir.clone(),
             config_dir: data_dir.clone() + CONFIG_DIR_NAME +"/",
             languages_dir: data_dir.clone() + LANGUAGES_DIR_NAME + "/",
+            palettes_dir: data_dir.clone() + PALETTES_DIR_NAME + "/",
             logs_dir: data_dir + LOGS_DIR_NAME + "/",
             are_initialized
         }
@@ -418,7 +420,7 @@ impl LocalAppPaths {
         if working_dir.contains("target/") || working_dir.contains("target\\"){
             working_dir = String::from(".");
         }
-        
+
         let data_dir =  working_dir + "/data/";
 
         LocalAppPaths {
@@ -611,7 +613,7 @@ impl GitignoreStack {
 
 pub mod domain {
     use super::*;
-    
+
     #[derive(Debug, Clone)]
     pub struct Language {
         pub name: String,
@@ -635,13 +637,13 @@ pub mod domain {
                 && self.keywords == other.keywords
         }
     }
-    
+
     #[derive(Debug,PartialEq)]
     pub struct Keyword{
         pub descriptive_name : String,
         pub aliases : Vec<String>
     }
-    
+
     #[derive(Debug,PartialEq)]
     pub struct LanguageContentInfo {
         pub lines : usize,
@@ -674,7 +676,7 @@ pub mod domain {
     impl Language {
         pub fn new(name: String, extensions: Vec<String>, string_symbols: Vec<String>, comment_symbols: Vec<String>,
             multiline_comment_start_symbol: Option<String>, multiline_comment_end_symbol: Option<String>,
-            keywords: Vec<Keyword>) -> Self 
+            keywords: Vec<Keyword>) -> Self
         {
             Language {
                 name,
@@ -725,7 +727,7 @@ pub mod domain {
                 keyword_occurences: HashMap::new()
             }
         }
-        
+
         pub fn add_file_stats(&mut self, other: FileStats, keywords: &[Keyword]) {
             self.lines += other.lines;
             self.code_lines += other.code_lines;
@@ -747,7 +749,7 @@ pub mod domain {
                 keyword_occurences
             }
         }
-        
+
         pub fn add_content_info(&mut self, other: &LanguageContentInfo) {
             self.lines += other.lines;
             self.code_lines += other.code_lines;
@@ -807,7 +809,7 @@ pub mod domain {
             self.keyword_occurences[keyword_index] += 1;
         }
     }
-    
+
     fn get_keyword_stats_map(extension: &Language) -> HashMap<String,usize> {
         let mut map = HashMap::<String,usize>::new();
         for k in &extension.keywords {

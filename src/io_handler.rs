@@ -230,6 +230,66 @@ pub fn serialize_language(lang: &Language, path: &str) -> Result<(), io::Error> 
 }
 
 
+// ------------------------------ Palette handling ------------------------------
+
+pub fn load_palette(name: &str, palettes_dir: &str) -> Option<Vec<Color>> {
+    let entries = fs::read_dir(palettes_dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|x| x.to_str()) else { continue };
+        if !stem.eq_ignore_ascii_case(name.trim()) {
+            continue;
+        }
+
+        let contents = fs::read_to_string(&path).ok()?;
+        let colors_line = contents.lines().find(|l| !l.trim().is_empty())?;
+        return utils::parse_colors_to_vec(colors_line);
+    }
+
+    None
+}
+
+
+pub fn generate_palette_preview() -> io::Result<String> {
+    fn js_escape(s: &str) -> String {
+        s.replace('\\', "\\\\").replace('"', "\\\"").replace('<', "\\u003c")
+    }
+
+    let template = include_str!("../docs/palette-tuner/index.html");
+
+    let mut entries: Vec<(String, Vec<String>)> = Vec::new();
+    for entry in fs::read_dir(&PERSISTENT_APP_PATHS.palettes_dir)?.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|x| x.to_str()) else { continue };
+        let Ok(contents) = fs::read_to_string(&path) else { continue };
+        let Some(colors_line) = contents.lines().find(|l| !l.trim().is_empty()) else { continue };
+        if utils::parse_colors_to_vec(colors_line).is_none() {
+            continue;
+        }
+        entries.push((stem.to_owned(), colors_line.split_whitespace().map(|x| x.to_owned()).collect()));
+    }
+    entries.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+
+    let palettes_js = entries.iter().map(|(name, tokens)| {
+        format!("{{name:\"{}\",tokens:[{}]}}", js_escape(name),
+            tokens.iter().map(|t| format!("\"{}\"", js_escape(t))).collect::<Vec<_>>().join(","))
+    }).collect::<Vec<_>>().join(",");
+
+    let page = template.replace("/*MEZURA_SYSTEM_PALETTES*/", &format!("SYSTEM_PALETTES = [{palettes_js}];"));
+
+    let out_path = PERSISTENT_APP_PATHS.data_dir.clone() + "palette-preview.html";
+    fs::write(&out_path, page)?;
+
+    Ok(out_path)
+}
+
+
 // ------------------------------ Config handling ------------------------------
 
 pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String>) -> Result<(ConfigurationBuilder, Vec<&'static str>),ConfigFileParseError> {
@@ -243,7 +303,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
 
     let (mut dirs, mut braces_as_code, mut should_search_in_dotted, mut threads, mut exclude_dirs,
          mut languages_of_interest, mut excluded_languages, mut should_show_faulty_files, mut no_keywords, mut no_visual,
-         mut no_gitignore, mut colors, mut log, mut compare_level) = (None,None,None,None,None,None,None,None,None,None,None,None,None,None);
+         mut no_gitignore, mut colors, mut color_palette, mut log, mut compare_level) = (None,None,None,None,None,None,None,None,None,None,None,None,None,None,None);
     let mut invalid_fields: Vec<&'static str> = Vec::new();
     let mut buf = String::with_capacity(150);
 
@@ -319,6 +379,15 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                     Some(x) => colors = Some(x),
                     None => invalid_fields.push(config_manager::COLORS)
                 }
+            } else if id == config_manager::COLOR_PALETTE {
+                buf.clear();
+                let _ = reader.read_line(&mut buf);
+                let name = buf.trim();
+                if name.is_empty() || load_palette(name, &PERSISTENT_APP_PATHS.palettes_dir).is_none() {
+                    invalid_fields.push(config_manager::COLOR_PALETTE);
+                } else {
+                    color_palette = Some(name.to_owned());
+                }
             } else if id == config_manager::LOG {
                 buf.clear();
                 let _ = reader.read_line(&mut buf);
@@ -341,7 +410,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
     }
 
     Ok((ConfigurationBuilder::new(dirs,exclude_dirs, languages_of_interest, excluded_languages, threads, braces_as_code,should_search_in_dotted,
-             should_show_faulty_files, no_keywords, no_visual, no_gitignore, colors, log, compare_level, None, None), invalid_fields))
+             should_show_faulty_files, no_keywords, no_visual, no_gitignore, colors, color_palette, log, compare_level, None, None), invalid_fields))
 }
 
 // Dirs must be specified (is checked before calling this function)
@@ -400,8 +469,12 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
     }
     if let Some(colors) = &config_builder.colors {
         writer.write_all(&[b"\n\n===> ",config_manager::COLORS.as_bytes(),b"\n"].concat())?;
-        writer.write_all(colors.iter().map(|(r,g,b)| format!("{r:02x}{g:02x}{b:02x}"))
+        writer.write_all(colors.iter().map(utils::color_to_config_string)
                 .collect::<Vec<_>>().join(" ").as_bytes())?;
+    }
+    if let Some(color_palette) = &config_builder.color_palette {
+        writer.write_all(&[b"\n\n===> ",config_manager::COLOR_PALETTE.as_bytes(),b"\n"].concat())?;
+        writer.write_all(color_palette.as_bytes())?;
     }
     if let Some(compare_level) = &config_builder.compare_level {
         writer.write_all(&[b"\n\n===> ",config_manager::COMPRARE_LEVEL.as_bytes(),b"\n"].concat())?;
@@ -643,6 +716,24 @@ mod tests {
                 &(LOCAL_APP_PATHS.test_dir.clone() + "languages/")).unwrap();
         assert!(lang_map.len() == 2);
         assert!(faulty_files.len() == 1);
+    }
+
+    #[test]
+    fn test_load_palette() {
+        let dir = std::env::temp_dir().join("mezura_palette_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Mypalette.txt"), "cyan bright-magenta ff0080\n").unwrap();
+        std::fs::write(dir.join("Broken.txt"), "kaka\n").unwrap();
+        let dir_str = dir.to_str().unwrap();
+
+        assert_eq!(Some(vec![Color::Cyan, Color::BrightMagenta, Color::TrueColor{r:255,g:0,b:128}]),
+                io_handler::load_palette("mypalette", dir_str));
+        assert_eq!(Some(vec![Color::Cyan, Color::BrightMagenta, Color::TrueColor{r:255,g:0,b:128}]),
+                io_handler::load_palette("MYPALETTE", dir_str));
+        assert_eq!(None, io_handler::load_palette("nonexistant", dir_str));
+        assert_eq!(None, io_handler::load_palette("broken", dir_str));
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

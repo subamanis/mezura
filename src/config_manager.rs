@@ -20,6 +20,7 @@ pub const NO_KEYWORDS        :&str   = "no-keywords";
 pub const NO_VISUAL          :&str   = "no-visual";
 pub const NO_GITIGNORE       :&str   = "no-gitignore";
 pub const COLORS             :&str   = "colors";
+pub const COLOR_PALETTE      :&str   = "color-palette";
 pub const LOG                :&str   = "log";
 pub const COMPRARE_LEVEL     :&str   = "compare";
 pub const SAVE               :&str   = "save";
@@ -28,6 +29,8 @@ pub const HELP               :&str   = "help";
 pub const CHANGELOG          :&str   = "changelog";
 pub const SHOW_LANGUAGES     :&str   = "show-languages";
 pub const SHOW_CONFIGS       :&str   = "show-configs";
+pub const SHOW_PALETTES      :&str   = "show-palettes";
+pub const PALETTE_PREVIEW    :&str   = "palette-preview";
 
 pub const MAX_PRODUCERS_VALUE : usize = 8;
 pub const MIN_PRODUCERS_VALUE : usize = 1;
@@ -125,8 +128,8 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     let mut custom_config = None;
     let (mut exclude_dirs, mut languages_of_interest, mut excluded_languages, mut threads, mut braces_as_code,
          mut search_in_dotted, mut show_faulty_files, mut config_name_to_save, mut no_visual, mut log,
-         mut compare_level, mut config_name_to_load, mut no_keywords, mut no_gitignore, mut colors)
-         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
+         mut compare_level, mut config_name_to_load, mut no_keywords, mut no_gitignore, mut colors, mut color_palette)
+         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
     for command in options {
         let (command_name, arguments) = match command.find(" ") {
             Some(index) => command.split_at(index),
@@ -221,6 +224,13 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                     return Err(ArgParsingError::IncorrectCommandArgs(COLORS.to_owned()))
                 }
             }
+        } else if command_name == COLOR_PALETTE {
+            let name = arguments.trim();
+            if name.is_empty() || io_handler::load_palette(name, &crate::PERSISTENT_APP_PATHS.palettes_dir).is_none() {
+                message_printer::print_help_message_for_command(COLOR_PALETTE);
+                return Err(ArgParsingError::IncorrectCommandArgs(COLOR_PALETTE.to_owned()))
+            }
+            color_palette = Some(name.to_owned());
         } else if command_name == LOG {
             let value = arguments.trim();
             if value.is_empty() {
@@ -271,7 +281,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     print_warnings_for_commands_that_need_a_loaded_configuration(&config_name_to_save, &config_name_to_load, &log, &compare_level);
     
     let mut config_builder = ConfigurationBuilder::new(dirs, exclude_dirs, languages_of_interest, excluded_languages, threads, braces_as_code,
-        search_in_dotted, show_faulty_files, no_keywords, no_visual, no_gitignore, colors, log, compare_level,
+        search_in_dotted, show_faulty_files, no_keywords, no_visual, no_gitignore, colors, color_palette, log, compare_level,
         config_name_to_save, config_name_to_load);
 
     if let Some((custom, invalid_fields)) = custom_config {
@@ -297,6 +307,14 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         config_builder.add_missing_fields(default_config);
     }
 
+    if config_builder.colors.is_none()
+        && let Some(name) = &config_builder.color_palette {
+        match io_handler::load_palette(name, &crate::PERSISTENT_APP_PATHS.palettes_dir) {
+            Some(x) => config_builder.colors = Some(x),
+            None => println!("\n{}", format!("Color palette '{name}' could not be loaded, the default colors will be used.").yellow())
+        }
+    }
+
     if config_builder.dirs.is_none() {
         config_builder.dirs = Some(parse_working_dir_as_target_dir()?);
     }
@@ -318,6 +336,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             NO_GITIGNORE => config_builder.no_gitignore.is_some(),
             EXCLUDE => config_builder.exclude_dirs.is_some(),
             COLORS => config_builder.colors.is_some(),
+            COLOR_PALETTE => config_builder.color_palette.is_some(),
             _ => false
         };
 
@@ -406,6 +425,7 @@ pub struct ConfigurationBuilder {
     pub no_visual:                Option<bool>,
     pub no_gitignore:             Option<bool>,
     pub colors:                   Option<Vec<Color>>,
+    pub color_palette:            Option<String>,
     pub log:                      Option<LogOption>,
     pub compare_level:            Option<usize>,
     pub config_name_to_save:      Option<String>,
@@ -415,8 +435,8 @@ pub struct ConfigurationBuilder {
 impl ConfigurationBuilder {
     pub fn new(dirs: Option<Vec<String>>, exclude_dirs: Option<Vec<String>>, languages_of_interest: Option<Vec<String>>, excluded_languages: Option<Vec<String>>,
              threads: Option<Threads>, braces_as_code: Option<bool>, should_search_in_dotted: Option<bool>, should_show_faulty_files: Option<bool>, no_keywords: Option<bool>,
-             no_visual: Option<bool>, no_gitignore: Option<bool>, colors: Option<Vec<Color>>, log: Option<LogOption>, compare_level: Option<usize>,
-             config_name_to_save: Option<String>, config_name_to_load: Option<String>)
+             no_visual: Option<bool>, no_gitignore: Option<bool>, colors: Option<Vec<Color>>, color_palette: Option<String>, log: Option<LogOption>,
+             compare_level: Option<usize>, config_name_to_save: Option<String>, config_name_to_load: Option<String>)
     -> ConfigurationBuilder
     {
         ConfigurationBuilder {
@@ -432,6 +452,7 @@ impl ConfigurationBuilder {
             no_visual,
             no_gitignore,
             colors,
+            color_palette,
             log,
             compare_level,
             config_name_to_save,
@@ -452,6 +473,7 @@ impl ConfigurationBuilder {
         if self.no_visual.is_none() {self.no_visual = config.no_visual};
         if self.no_gitignore.is_none() {self.no_gitignore = config.no_gitignore};
         if self.colors.is_none() {self.colors = config.colors};
+        if self.color_palette.is_none() {self.color_palette = config.color_palette};
         if self.compare_level.is_none() {self.compare_level = config.compare_level};
         if self.log.is_none() {self.log = config.log};
         self
@@ -461,7 +483,7 @@ impl ConfigurationBuilder {
         self.exclude_dirs.is_none() || self.languages_of_interest.is_none() ||
         self.threads.is_none() || self.braces_as_code.is_none() || self.should_search_in_dotted.is_none() ||
         self.should_show_faulty_files.is_none() || self.no_visual.is_none() || self.no_gitignore.is_none() ||
-        self.colors.is_none() || self.log.is_none() || self.compare_level.is_none()
+        self.colors.is_none() || self.color_palette.is_none() || self.log.is_none() || self.compare_level.is_none()
     }
 
     pub fn build(&self) -> Configuration {
@@ -647,7 +669,7 @@ mod tests {
 
     fn new_conf(dir: &str) -> Configuration {
         let mut builder = ConfigurationBuilder::new(Some(vec![convert_to_absolute(dir)]), None, None, None, None, None,
-                None, None, None, None, None, None, None, None, None, None);
+                None, None, None, None, None, None, None, None, None, None, None);
         if let Ok((default_config, _)) = io_handler::parse_config_file(None, None) {
             builder.add_missing_fields(default_config);
         }
@@ -680,7 +702,7 @@ mod tests {
         assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("no-gitignore".to_owned())), create_config_from_args("./ --no-gitignore a"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("colors".to_owned())), create_config_from_args("./ --colors"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("colors".to_owned())), create_config_from_args("./ --colors kaka"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("colors".to_owned())), create_config_from_args("./ --colors ff0000 ff0000 ff0000 ff0000 ff0000"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("colors".to_owned())), create_config_from_args("./ --colors ff0000 ff0000 ff0000 ff0000 ff0000 ff0000"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("load".to_owned())), create_config_from_args("./ --load"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("load".to_owned())), create_config_from_args("./ --load   "));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("save".to_owned())), create_config_from_args("./ --save"));
@@ -701,8 +723,8 @@ mod tests {
                 create_config_from_args("./ --no-visual").unwrap());
         assert_eq!(*new_conf("./").set_no_gitignore(true),
                 create_config_from_args("./ --no-gitignore").unwrap());
-        assert_eq!(*new_conf("./").set_colors(vec![(255,136,0),(0,255,0)]),
-                create_config_from_args("./ --colors ff8800 #00FF00").unwrap());
+        assert_eq!(*new_conf("./").set_colors(vec![Color::TrueColor{r:255,g:136,b:0}, Color::BrightCyan]),
+                create_config_from_args("./ --colors ff8800 bright-cyan").unwrap());
         assert_eq!(*new_conf("./").set_should_show_faulty_files(true),
                 create_config_from_args("./ --show-faulty-files").unwrap());
         assert_eq!(*new_conf("./").set_exclude_dirs(vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]),
@@ -792,6 +814,27 @@ mod tests {
         assert_eq!(saved_config, loaded_config);
 
         std::fs::remove_file(test_file_path).unwrap();
+    }
+
+    #[test]
+    fn test_color_palette_arg_parsing() {
+        std::fs::create_dir_all(&PERSISTENT_APP_PATHS.palettes_dir).unwrap();
+        let test_palette_path = &PERSISTENT_APP_PATHS.palettes_dir.clone().add("test-palette000.txt");
+        assert!(!Path::new(test_palette_path).exists());
+        std::fs::write(test_palette_path, "cyan ff0080\n").unwrap();
+
+        let config = create_config_from_args("./ --color-palette Test-Palette000").unwrap();
+        assert_eq!(vec![Color::Cyan, Color::TrueColor{r:255,g:0,b:128}], config.colors);
+
+        let overridden = create_config_from_args("./ --color-palette test-palette000 --colors bright-blue").unwrap();
+        assert_eq!(vec![Color::BrightBlue], overridden.colors);
+
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("color-palette".to_owned())),
+                create_config_from_args("./ --color-palette definitely-not-a-palette000"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("color-palette".to_owned())),
+                create_config_from_args("./ --color-palette"));
+
+        std::fs::remove_file(test_palette_path).unwrap();
     }
 
     #[test]
