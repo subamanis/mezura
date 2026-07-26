@@ -64,7 +64,7 @@ fn main() {
         } 
     };
 
-    if (config.languages_of_interest.len() == config.excluded_languages.len() && !config.excluded_languages.is_empty()) &&
+    if !config.languages_of_interest.is_empty() &&
      config.languages_of_interest.iter().all(|lang| config.excluded_languages.contains(lang)) {
         println!("{}",format!("\nIncluded and excluded languages are mutually exclusive.\n").red());
         return;
