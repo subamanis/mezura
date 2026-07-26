@@ -2,15 +2,17 @@ use std::{collections::HashMap, fs};
 
 use colored::Colorize;
 
-use crate::{CHANGELOG_BYTES, Language, PERSISTENT_APP_PATHS, config_manager::*};
+use crate::{CHANGELOG_BYTES, Language, PERSISTENT_APP_PATHS, config_manager::*, io_handler};
 
 // These constants need to be maintained along with the readme's commands
 pub const DIRS_HELP  :  &str =
 "--dirs
-    The paths to the directories or files, seperated by commas if more than 1,
+    The paths to the directories or files, separated by commas if more than 1,
     in this form: '--dirs <path1>, <path2>'
+    The paths must point to directories or files that exist; unlike the '--exclude' command,
+    glob patterns are not supported here.
     If you are using Windows Powershell, you will need to escape the commas with a backtick: `
-    or surround all the arguments with quatation marks:
+    or surround all the arguments with quotation marks:
     <path1>`, <path2>`, <path3>   or   \"<path1>, <path2>, <path3>\"
 
     The target directories can also be given implicitly (in which case this command is not needed) with 2 ways:
@@ -30,7 +32,7 @@ pub const EXCLUDE_HELP  :  &str =
     are not included in the reported count of excluded files.
 
     If you are using Windows Powershell, you will need to escape the commas with a backtick: `
-    or surround all the arguments with quatation marks:
+    or surround all the arguments with quotation marks:
     <arg1>`, <arg2>`, <arg3>   or   \"<arg1>, <arg2>, <arg3>\"
 
 ";
@@ -88,7 +90,7 @@ pub const BRACES_AS_CODE_HELP  :  &str =
     Specifies whether lines that only contain braces ( {{ or }} ), should be considered as code lines or not.
 
     The default behaviour is to not count them as code, since it is silly for code of the same content
-    and substance to be counted differently, according to the programer's code style.
+    and substance to be counted differently, according to the programmer's code style.
     This helps to keep the stats clean when using code lines as a complexity and productivity metric.
 
 ";
@@ -107,7 +109,7 @@ pub const SHOW_FAULTY_FILES_HELP  :  &str =
     or 'no' to disable. Default: no
 
     Sometimes it happens that an error occurs when trying to parse a file, either while opening it,
-    or while reading it's contents. The default behavior when this happens is to count all of
+    or while reading its contents. The default behavior when this happens is to count all of
     the faulty files and display their count.
 
     This flag specifies that their path, along with information about the exact error is displayed too.
@@ -120,7 +122,7 @@ pub const NO_VISUAL_HELP  :  &str =
     or 'no' to disable. Default: no
 
     Disables the colors in the \"overview\" section of the results, and disables the visualization with
-    the vertical lines that reprisent the percentages.
+    the vertical lines that represent the percentages.
 
 ";
 pub const COLORS_HELP  :  &str =
@@ -153,14 +155,15 @@ pub const COLOR_PALETTE_HELP  :  &str =
     If the '--colors' command is also provided, it takes precedence over the palette.
 
 ";
-pub const PALETTE_PREVIEW_HELP  :  &str =
-"--palette-preview
+pub const TUNE_PALETTES_HELP  :  &str =
+"--tune-palettes
     No arguments.
 
     Overrides normal program execution: generates an interactive HTML page with all the color
     palettes found in the persistent data path of the application, and opens it in the default
-    browser. There, every palette can be previewed on a mock overview, tuned with live
-    contrast metrics, and turned into a ready '--colors' command.
+    browser. There, every color of every palette can be adjusted, with live contrast metrics
+    and a mock overview, and the result is turned into a ready '--colors' command that you can
+    use directly or save in a palette file.
 
 ";
 pub const SHOW_PALETTES_HELP  :  &str =
@@ -208,7 +211,7 @@ pub const LOAD_HELP  :  &str =
 "--load
     One argument as the file name (whitespace allowed, without an extension, case-insensitive)
 
-    Assosiated with the '--save' command, this command is used to load the flags of
+    Associated with the '--save' command, this command is used to load the flags of
     an existing configuration file from the 'data/config/' directory.
 
     You can combine the '--load' and '--save' commands to modify a configuration file.
@@ -263,7 +266,7 @@ pub fn print_whole_help_message() {
     msg += SHOW_LANGUAGES_HELP;
     msg += SHOW_CONFIGS_HELP;
     msg += SHOW_PALETTES_HELP;
-    msg += PALETTE_PREVIEW_HELP;
+    msg += TUNE_PALETTES_HELP;
     msg += DIRS_HELP;
     msg += EXCLUDE_HELP;
     msg += LANGUAGES_HELP;
@@ -330,6 +333,10 @@ pub fn print_changelog(full: bool) {
 }
 
 pub fn print_existing_palettes() {
+    // The percentages of a mock "overview" line, used to preview every palette
+    const MOCK_PERCENTAGES : [(&str, f64, usize); 4] =
+            [("first", 40.0, 20), ("second", 30.0, 15), ("third", 20.0, 10), ("fourth", 10.0, 5)];
+
     let mut palette_names = Vec::with_capacity(10);
     let Ok(palettes_dir) = fs::read_dir(&PERSISTENT_APP_PATHS.palettes_dir) else {
         println!("{}","Could not read the palettes dir".yellow());
@@ -341,9 +348,33 @@ pub fn print_existing_palettes() {
             palette_names.push(stem.to_owned());
         }
     }
-    palette_names.sort_unstable();
-    let prefix = get_data_dir_str();
-    println!("{}Found these color palettes:\n  {}\n",prefix,palette_names.join("\n  "));
+    palette_names.sort_by_key(|x| x.to_lowercase());
+
+    let mut msg = get_data_dir_str();
+    msg.push_str("Found these color palettes:\n");
+    for name in palette_names.iter() {
+        msg.push_str(&format!("\n  {}\n     ", name.bold()));
+
+        let Some(colors) = io_handler::load_palette(name, &PERSISTENT_APP_PATHS.palettes_dir) else {
+            msg.push_str(&format!("{}\n","(the colors of this palette could not be parsed)".yellow()));
+            continue;
+        };
+
+        for (i, (lang, percentage, _)) in MOCK_PERCENTAGES.iter().enumerate() {
+            let color = colors[i.min(colors.len()-1)];
+            msg.push_str(&format!("{:>5.2}% {}", percentage, lang.color(color)));
+            if i < MOCK_PERCENTAGES.len()-1 {msg.push_str(" - ")}
+        }
+
+        msg.push_str("    [-");
+        for (i, (_, _, verticals)) in MOCK_PERCENTAGES.iter().enumerate() {
+            let color = colors[i.min(colors.len()-1)];
+            msg.push_str(&"|".repeat(*verticals).color(color).to_string());
+        }
+        msg.push_str("-]\n");
+    }
+
+    println!("{msg}");
 }
 
 pub fn print_supported_languages(languages_map: &HashMap<String,Language>) {
@@ -410,8 +441,8 @@ fn get_help_msg_of_command(command: &str) -> Option<&str> {
         Some(COLOR_PALETTE_HELP)
     } else if command == SHOW_PALETTES {
         Some(SHOW_PALETTES_HELP)
-    } else if command == PALETTE_PREVIEW {
-        Some(PALETTE_PREVIEW_HELP)
+    } else if command == TUNE_PALETTES {
+        Some(TUNE_PALETTES_HELP)
     } else if command == LOG {
         Some(LOG_HELP)
     } else if command == COMPRARE_LEVEL {

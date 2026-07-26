@@ -30,7 +30,7 @@ pub const CHANGELOG          :&str   = "changelog";
 pub const SHOW_LANGUAGES     :&str   = "show-languages";
 pub const SHOW_CONFIGS       :&str   = "show-configs";
 pub const SHOW_PALETTES      :&str   = "show-palettes";
-pub const PALETTE_PREVIEW    :&str   = "palette-preview";
+pub const TUNE_PALETTES      :&str   = "tune-palettes";
 
 pub const MAX_PRODUCERS_VALUE : usize = 8;
 pub const MIN_PRODUCERS_VALUE : usize = 1;

@@ -253,7 +253,7 @@ pub fn load_palette(name: &str, palettes_dir: &str) -> Option<Vec<Color>> {
 }
 
 
-pub fn generate_palette_preview() -> io::Result<String> {
+pub fn generate_palette_tuner_page() -> io::Result<String> {
     fn js_escape(s: &str) -> String {
         s.replace('\\', "\\\\").replace('"', "\\\"").replace('<', "\\u003c")
     }
@@ -283,7 +283,7 @@ pub fn generate_palette_preview() -> io::Result<String> {
 
     let page = template.replace("/*MEZURA_SYSTEM_PALETTES*/", &format!("SYSTEM_PALETTES = [{palettes_js}];"));
 
-    let out_path = PERSISTENT_APP_PATHS.data_dir.clone() + "palette-preview.html";
+    let out_path = PERSISTENT_APP_PATHS.data_dir.clone() + "palette-tuner.html";
     fs::write(&out_path, page)?;
 
     Ok(out_path)

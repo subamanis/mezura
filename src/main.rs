@@ -3,7 +3,7 @@ use std::{collections::HashMap, time::Instant};
 use colored::*;
 use include_dir::include_dir;
 
-use mezura::{*, self, config_manager::{self, CHANGELOG, HELP, PALETTE_PREVIEW, SHOW_CONFIGS, SHOW_LANGUAGES, SHOW_PALETTES, VERSION_ID}, io_handler};
+use mezura::{*, self, config_manager::{self, CHANGELOG, HELP, SHOW_CONFIGS, SHOW_LANGUAGES, SHOW_PALETTES, TUNE_PALETTES, VERSION_ID}, io_handler};
 
 
 fn main() {
@@ -227,13 +227,13 @@ fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Lan
     } else if args_str.contains(&(String::from("--") + SHOW_CONFIGS)) {
         message_printer::print_existing_configs();
         return true;
-    } else if args_str.contains(&(String::from("--") + PALETTE_PREVIEW)) {
-        match io_handler::generate_palette_preview() {
+    } else if args_str.contains(&(String::from("--") + TUNE_PALETTES)) {
+        match io_handler::generate_palette_tuner_page() {
             Ok(path) => {
-                println!("\nPalette preview page generated at:\n{path}");
+                println!("\nPalette tuner page generated at:\n{path}");
                 open_in_browser(&path);
             },
-            Err(x) => println!("\n{}", format!("Unable to generate the palette preview page: {x}").red())
+            Err(x) => println!("\n{}", format!("Unable to generate the palette tuner page: {x}").red())
         }
         return true;
     } else if args_str.contains(&(String::from("--") + SHOW_PALETTES)) {
