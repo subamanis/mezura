@@ -69,8 +69,11 @@ jobs:
           cp artifacts/mezura-macos-arm64/mezura    release/mezura-macos-arm64
           chmod +x release/mezura-linux-x86_64 release/mezura-macos-arm64
 
-      - name: Create the release
+      # Attaches the binaries to the release of this tag. If the release was already created
+      # by hand from the github UI, only the files are added to it and the notes that were
+      # written there are left untouched. If it does not exist yet, it is created.
+      - name: Attach the binaries to the release
         uses: softprops/action-gh-release@v2
         with:
           files: release/*
-          generate_release_notes: true
+          fail_on_unmatched_files: true
