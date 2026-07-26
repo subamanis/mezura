@@ -5,7 +5,7 @@ use colored::{ColoredString, Colorize};
 use crate::{Color, Formatted, GitignoreStack, io_handler, message_printer, utils};
 
 // Application version, to be displayed at startup and with --help command
-pub const VERSION_ID : &str = "v2.0.0";
+pub const VERSION_ID : &str = "v2.0.1";
 
 // command flags
 pub const DIRS               :&str   = "dirs";
@@ -908,6 +908,9 @@ mod tests {
     
     #[test]
     fn test_save_load_configs() {
+        // The saving and loading of configs always goes through the persistent config dir, which doesn't
+        // exist yet on a machine where the program has never been executed.
+        std::fs::create_dir_all(&PERSISTENT_APP_PATHS.config_dir).unwrap();
         let test_file_path = &PERSISTENT_APP_PATHS.config_dir.clone().add("/test000.txt");
         assert!(!Path::new(test_file_path).exists());
 
@@ -956,6 +959,7 @@ mod tests {
 
     #[test]
     fn test_load_config_with_invalid_value() {
+        std::fs::create_dir_all(&PERSISTENT_APP_PATHS.config_dir).unwrap();
         let test_file_path = &PERSISTENT_APP_PATHS.config_dir.clone().add("/test001.txt");
         assert!(!Path::new(test_file_path).exists());
         std::fs::write(test_file_path, "===> threads\n3343 45534\n").unwrap();

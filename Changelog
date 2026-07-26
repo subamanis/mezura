@@ -1,3 +1,31 @@
+v2.0.1 - 27/7/2026
+
+  6,320 Total lines  -  4,531 Code lines
+
+Bugfixes:
+  -> Fixed the program refusing to start on a machine where it had never been executed before, but
+      where the test suite had, reporting that the language dir "has been deleted". Merely reading
+      the persistent paths used to create the application folder as a side effect, so the test suite
+      created an empty one, which every subsequent run then mistook for a complete installation.
+      The paths are now created only during the actual initialization, and an installation counts as
+      complete only when the language, config and log dirs are really there.
+  -> An incomplete application folder is now completed on the next execution, instead of the program
+      either failing or wiping the whole folder. A missing or emptied "languages" dir is regenerated
+      in place, leaving the "config" and "logs" folders untouched, and a failure in the middle of the
+      initialization no longer deletes the saved configurations and logs.
+  -> Fixed two tests that only passed on a machine with an already initialized application folder,
+      since they wrote to the persistent config dir without creating it.
+
+Other:
+  -> The error messages about unreadable language files now suggest deleting only the "languages"
+      folder, which is regenerated automatically, instead of the whole application folder.
+
+
+
+-----------------------------------------------------------------------------------------------------------
+
+
+
 v2.0.0 - 26/7/2026
 
   6,312 Total lines  -  4,534 Code lines

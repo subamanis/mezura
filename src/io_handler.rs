@@ -579,14 +579,15 @@ impl LanguageDirParseInfo {
     }
 }
 
+const REGENERATE_LANGUAGES_HINT : &str =
+        "Delete the \"languages\" folder and it will be generated again on the next execution.\nThe \"config\" and \"logs\" folders will not be affected.";
+
 impl Formatted for LanguageDirParseError {
     fn formatted(&self) -> ColoredString {
         match self {
-            Self::NoFilesFound => "Error: No language files found in directory.".red(),
-            Self::NoFilesFormattedProperly => "Error: No language file is formatted properly, so none could be parsed.".red(),
-            Self::PathMissing(path) => format!("Error: It seems that the language dir ({path}) has been deleted.
-Please delete the \"mezura\" folder and it will be generated again.
-Make sure to backup the \"configs\" and \"logs\" folders because they will be overwritten.").red(),
+            Self::NoFilesFound => format!("Error: No language files found in directory.\n{REGENERATE_LANGUAGES_HINT}").red(),
+            Self::NoFilesFormattedProperly => format!("Error: No language file is formatted properly, so none could be parsed.\n{REGENERATE_LANGUAGES_HINT}").red(),
+            Self::PathMissing(path) => format!("Error: It seems that the language dir ({path}) has been deleted.\n{REGENERATE_LANGUAGES_HINT}").red(),
         }
     }
 }

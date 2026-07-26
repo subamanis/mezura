@@ -20,8 +20,9 @@ fn main() {
         // and save the baked-in info, to a persistent path for future uses and user modification.
         language_map = read_baked_in_languages_dir();
         if let Err(x) = init_persistent_paths(&language_map, read_baked_in_default_config_contents()) {
-            println!("{}",format!("\nUnable to initialize persistent directories:{x}\n").yellow());
-            std::fs::remove_dir_all(&PERSISTENT_APP_PATHS.project_path).unwrap();
+            // Whatever was created stays on disk. It is not considered a valid installation anyway,
+            // so the next execution will detect that and try to complete it again.
+            println!("{}",format!("\nUnable to initialize persistent directories: {x}\n").yellow());
         }
     } else {
         match io_handler::parse_supported_languages_to_map(&PERSISTENT_APP_PATHS.languages_dir) {
@@ -42,7 +43,7 @@ fn main() {
         }
     }
 
-    if PERSISTENT_APP_PATHS.are_initialized && palettes_dir_is_missing_or_empty()
+    if PERSISTENT_APP_PATHS.are_initialized && !dir_contains_entries(&PERSISTENT_APP_PATHS.palettes_dir)
         && let Err(x) = write_baked_in_palettes() {
         println!("{}",format!("\nUnable to initialize the color palettes directory: {x}\n").yellow());
     }
@@ -152,9 +153,10 @@ fn read_baked_in_default_config_contents() -> String {
 }
 
 fn init_persistent_paths(languages: &HashMap<String,Language>, default_config_contents: String) -> Result<(),std::io::Error> {
-    std::fs::create_dir(&PERSISTENT_APP_PATHS.languages_dir).unwrap();
-    std::fs::create_dir(&PERSISTENT_APP_PATHS.config_dir).unwrap();
-    std::fs::create_dir(&PERSISTENT_APP_PATHS.logs_dir).unwrap();
+    // create_dir_all, so that an incomplete dir left behind by a previous failed attempt gets completed
+    std::fs::create_dir_all(&PERSISTENT_APP_PATHS.languages_dir)?;
+    std::fs::create_dir_all(&PERSISTENT_APP_PATHS.config_dir)?;
+    std::fs::create_dir_all(&PERSISTENT_APP_PATHS.logs_dir)?;
 
     for language in languages.values() {
         io_handler::serialize_language(language, &PERSISTENT_APP_PATHS.languages_dir)?;
@@ -176,13 +178,6 @@ fn open_in_browser(path: &str) {
 
     if result.is_err() {
         println!("(the page could not be opened in a browser automatically)");
-    }
-}
-
-fn palettes_dir_is_missing_or_empty() -> bool {
-    match std::fs::read_dir(&PERSISTENT_APP_PATHS.palettes_dir) {
-        Ok(mut entries) => entries.next().is_none(),
-        Err(_) => true
     }
 }
 
