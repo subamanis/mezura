@@ -1,9 +1,9 @@
 v2.0.0 - 26/7/2026
 
-  6,146 Total lines  -  4,486 Code lines
+  6,312 Total lines  -  4,534 Code lines
 
 Main changes:
-  -> (Breaking) The program now respects .gitignore files by default: ignored files and folders are
+  -> (Breaking!) The program now respects .gitignore files by default: ignored files and folders are
       skipped, with support for nested .gitignore files and negated patterns. Explicitly given
       target dirs are always traversed, even if a .gitignore would ignore them. Expect different
       (more meaningful) stats and much faster runs on directories containing build artifacts or
@@ -33,6 +33,9 @@ Bugfixes:
   -> Fixed the default configuration file never actually being loaded (the program was looking for
       a file named "default.txt.txt"), which meant that any preferences saved in it were silently
       ignored on every run.
+  -> Fixed the same files being counted twice when a target path was given more than once, or when
+      a target path was contained in another one, like 'mezura src, src/utils'. Such targets are
+      now dropped, keeping only the topmost one.
 
 New commands:
   -> Added the --no-gitignore flag, that disables the new default of respecting .gitignore files.
@@ -49,6 +52,11 @@ New commands:
       with live contrast metrics and turned into ready commands.
 
 Change in commands:
+  -> The target paths (--dirs) now support glob patterns (* ? [..] {..}), which are expanded to every
+      existing directory and file that they match, so 'services/*/src' is a valid target. The matches
+      of a pattern are skipped if a .gitignore ignores them or if they are dotted, exactly like every
+      other path that the program discovers, while the paths that are written out explicitly are
+      always used.
   -> The --exclude command now supports glob patterns (* ? [..] {..}), and applies one consistent
       rule for both files and folders: a pattern without a slash matches a name at any depth, and a
       pattern with slashes matches the end of the path, anchored at path components. Previously,
@@ -64,6 +72,7 @@ Dependencies:
   -> memchr = "2.8" was introduced, for more efficient substring matching
   -> globset = "0.4.19" and ignore = "0.4.20" were introduced, for the glob patterns of the
       --exclude command and for the .gitignore support, respectively
+  -> glob = "0.3.3" was introduced, for the expansion of the glob patterns of the target paths
   -> lazy_static was removed, since the standard library now covers its functionality
   -> chrono and crossbeam-deque were updated to their latest versions, and the versions of all
       the dependencies are now pinned to the ones the program is tested with

@@ -125,8 +125,13 @@ Below there is a list with all the commands-flags that the program accepts.
 --dirs
     The paths to the directories or files, separated by commas if more than 1,
     in this form: '--dirs <path1>, <path2>'
-    The paths must point to directories or files that exist; unlike the '--exclude' command,
-    glob patterns are not supported here.
+    A path can also be a glob pattern (* ? [..] {..}), which is expanded to every existing
+    directory and file that it matches, so 'services/*/src' is a valid target.
+    Since the matches of a pattern are found by the program and not named by you, they follow
+    the same rules as every other path it discovers: the ones that a .gitignore ignores, or that
+    are dotted, are skipped (see the '--no-gitignore' and '--search-in-dotted' commands).
+    A path that you write out explicitly is always used, even if it is ignored or dotted.
+    Targets that are contained in other targets are dropped, so that no file is counted twice.
     If you are using Windows Powershell, you will need to escape the commas with a backtick: ` 
     or surround all the arguments with quotation marks:
     <path1>`, <path2>`, <path3>   or   "<path1>, <path2>, <path3>"
@@ -217,8 +222,9 @@ Below there is a list with all the commands-flags that the program accepts.
     By default, the program respects .gitignore files: any file or folder ignored by a .gitignore
     found in the traversed directories (or in their parent directories, up to the repository root)
     is skipped, and skipped files are included in the excluded files count. Negated patterns
-    ('!keep.log') are supported, and explicitly given targets are always traversed, even if a
-    .gitignore of their parent directories would ignore them.
+    ('!keep.log') are supported, and target paths that are written out explicitly are always used,
+    even if a .gitignore of their parent directories would ignore them. The matches of a glob
+    pattern do not count as written out explicitly, since the program is the one that found them.
 
     This flag disables that behavior, so that every relevant file is counted
     regardless of .gitignore rules.
@@ -384,9 +390,9 @@ With that said, it is important to mention the following limitations:
 
 - The program cannot understand language specific syntax or details, this would require a handwritten, complex, language-specific parser for most different languages. For example, in a .php file that contains html or js, the distinction will not be made. Also, the keyword counting doesn't take any measures to ensure that a valid keyword has the user-intended meaning. For example, the word "class" may appear in the syntax of a programming language with an additional use than declaring a class. This may lead to some false positives.
 
-- The program is not able to detect and ignore duplicate files and directories.
+- If a target path contains another target path, the contained one is dropped, so that its files are not counted twice. The program does not detect duplicates in any other case though: if a directory that is being scanned contains a symbolic link (or a Windows junction) that points to another directory, the files of that directory are counted a second time through the link, and the same is true for hard links to the same file.
 
-- Glob patterns (* ? [..] {..}) are supported by the ```--exclude``` command, but not by the target paths (```--dirs```), which must point to directories or files that actually exist. Full regular expressions are not supported anywhere.
+- Glob patterns (* ? [..] {..}) are supported both by the target paths (```--dirs```) and by the ```--exclude``` command, but full regular expressions are not supported anywhere.
 
 - The program assumes that if a line contains any odd number of the same string symbols, then this is an open multiline string. This works for most cases but it may create inaccuracies, for example if a line in python has """ then the program will consider a multiline string everything until the next " symbol and not the next """ symbol. If a language doesn't support multiline strings, then you would not expect to see odd number of string symbols either way in a valid syntax.
 
