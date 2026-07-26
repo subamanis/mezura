@@ -176,8 +176,15 @@ fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Lan
     if args_str.contains(&(String::from("--") + HELP)) {
         message_printer::print_help_message_for_given_args(args_str);
         return true; 
-    } else if args_str.contains(&(String::from("--") + CHANGELOG)) {
-        message_printer::print_changelog();
+    } else if let Some(pos) = args_str.find(&(String::from("--") + CHANGELOG)) {
+        match args_str[pos + CHANGELOG.len() + 2..].split_whitespace().next() {
+            Some("full") => message_printer::print_changelog(true),
+            Some(arg) if !arg.starts_with("--") => {
+                println!("\n{}", config_manager::ArgParsingError::IncorrectCommandArgs(CHANGELOG.to_owned()).formatted());
+                message_printer::print_help_message_for_command(CHANGELOG);
+            },
+            _ => message_printer::print_changelog(false),
+        }
         return true;
     } else if args_str.contains(&(String::from("--") + SHOW_LANGUAGES)) {
         message_printer::print_supported_languages(language_map);

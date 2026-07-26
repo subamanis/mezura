@@ -147,10 +147,11 @@ pub const LOAD_HELP  :  &str =
 ";
 pub const CHANGELOG_HELP  :  &str =
 "--changelog
-    No arguments.
+    No arguments, or the optional argument 'full'.
 
     Overrides normal program execution and just prints a summary of the changes
-    of every previous version of the program
+    of the current version of the program. If 'full' is provided, the changes
+    of every previous version are printed too, most recent first.
 
 ";
 pub const SHOW_LANGUAGES_HELP  :  &str =
@@ -232,8 +233,14 @@ pub fn print_help_message_for_command(arg: &str) {
     }
 }
 
-pub fn print_changelog() {
-    println!("\n{}\n", String::from_utf8_lossy(&CHANGELOG_BYTES));
+pub fn print_changelog(full: bool) {
+    let changelog = String::from_utf8_lossy(&CHANGELOG_BYTES);
+    if full {
+        println!("\n{}\n", changelog);
+    } else {
+        let latest = changelog.split("-----").next().unwrap().trim_end();
+        println!("\n{}\n\n(run with '--changelog full' to see the full version history)\n", latest);
+    }
 }
 
 pub fn print_supported_languages(languages_map: &HashMap<String,Language>) {
