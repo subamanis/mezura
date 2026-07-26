@@ -1,11 +1,11 @@
 Language
-C++
+Dart
 
 Extensions
-cpp
+dart
 
 String symbols
-"
+" '
 
 Comment symbols
 //
@@ -15,12 +15,12 @@ Multi line comment end
 */
 
 Keyword
-    NAME
-    classes
-    ALIASES
-    class
+NAME
+classes
+ALIASES
+class
 Keyword
-    NAME
-    structs
-    ALIASES
-    struct
+NAME
+enums
+ALIASES
+enum

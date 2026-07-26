@@ -1,92 +1,93 @@
-v0.9.2  -  22/9/2021  
+v2.0.0 - 26/7/2026
 
-  4,260 Total lines  -  3,098 Code lines
-
-Bugfixes:
-  -> Added mutliline comments in the Rust language file, that were missing by mistake
-
-Major/Functionality changes:
-  -> Running the program by double clicking on the exe is no longer supported.
-  -> The program will now terminate after execution at all times 
-      (no longer accepting inputs from stdin on error).
-
-Change in commands:
-  -> Running the program with the --help command, shows information about the other provided commands, 
-      or if none were provided, shows the information of all the commands.
-
-
-
------------------------------------------------------------------------------------------------------------
-
-
-
-v0.9.9 (v1.0.0-beta1)  -  17/10/2021  
-
-  4,766 Total lines  -  3,464 Code lines
-
-Bugfixes:
-  -> Saving a configuration will now only save the specified flags, and not the rest with
-      default values, so that they can be overriden by the default configuration.
+  6,312 Total lines  -  4,534 Code lines
 
 Main changes:
-  -> The previously necessary "data" folder, gets now baked in the executable, at compile time.
-      On the first execution, the folder gets written on a persistent path in the user's machine,
-      according to platform specifications, and for every other execution, the necessary data
-      is read from there, so the user can manually modify the languages.
-  -> The producer (the part that traverses the given dirs to find relevant files) is now paralellized.
-      Performance may increase on cold runs, especially on machines with logical core count > 4.
-  -> Language files now support up to 2 comment symbols.
+  -> (Breaking!) The program now respects .gitignore files by default: ignored files and folders are
+      skipped, with support for nested .gitignore files and negated patterns. Explicitly given
+      target dirs are always traversed, even if a .gitignore would ignore them. Expect different
+      (more meaningful) stats and much faster runs on directories containing build artifacts or
+      dependencies. The --no-gitignore flag restores the old behavior.
 
-New commands:
-  -> Added the --no-keywords flag, that disables keyword counting and printing.
-  -> Added the --changelog command, that displays the changelog history and terminates execution.
-  -> Added the --show-languages command, that displays the language files that were found.
-  -> Added the --show-configs commands, that displays the configuration files that were found.
-
-Change in commands:
-  -> (Breaking: update config files) Change on the --threads command's arguments, to reflect the ability
-      to specify the amount of producers and consumers, separately.
-  -> Added support for log descriptions. Now, after the '--log' command, you can write a word or a sentence
-      that describes the state of the codebase at the time the logging was done. 
-  -> Normal program executions and --help command, will now display the version ID of the program.
-  -> Running the --help command will now work even if there is no data dir.
-  -> If a command was provided with invalid arguments, the help message for this command
-      will also be displayed.
-
-Dependencies: 
-  -> num_cpus = "1.13.0"  was introduced, so that the program can automatically detect
-      an optimal number of threads for producers and consumers.
-  -> directories = "4.0.1"  was introduced, so that platform-specific and suitable paths can be chosen for
-      saving the persistent data of the application in the user machine.
-  -> include_dir = "0.6.2"  was introduced, so that the "data" folder provided with the repository can be
-      conveniently baked in the executable.
-
-Other:
-  -> Running the program with no arguments will now just display the help message.
-  -> The program will now also display how many files it ignored due to the '--exclude' command.
-  -> 7 more language files bundled by default.  
-  -> Added the .h extension in the C++ language file, along with the .cpp and .hpp extensions.
-
-
-
------------------------------------------------------------------------------------------------------------
-
-
-
-v1.0.0 - 16/12/2022
-
-  5,322 Total lines  -  3,853 Code lines
+Performance:
+  -> Various optimizations that yielded significant performance improvements, especially when
+      analyzing large directory trees. You can expect a ~2x performance increase on hot runs,
+      and much more consistent run times, since the worst cases were eliminated.
+      Runs on repositories are additionally much faster now, because of the .gitignore support.
 
 Bugfixes:
-  -> Fixed a bug where saving and loading a config file in the same program execution was producting a panic
-  -> Fixed a runtime panic related to the file parser
+  -> Fixed nondeterministic language attribution for extensions claimed by multiple language files.
+      Each run could previously assign such files to a different language, changing the reported
+      stats between identical runs on the same directory. Files are now always counted under the
+      alphabetically first language that claims the extension.
+  -> Fixed nondeterministic ordering of keyword occurrences in the results. Keywords are now
+      printed in alphabetical order, stable across runs.
+  -> Fixed a race condition in the parallel directory traversal and file parsing, that could slow down
+      the end of a run and, in rare cases, skip files entirely.
+  -> Fixed the detection of mutually exclusive --languages and --exclude-languages combinations.
+      It was previously missed when the excluded list was the larger one, resulting in a misleading
+      "No relevant files found" report.
+  -> Fixed the rewriting of configuration and language files, which could leave stale content at the
+      end of a file when the new content was shorter, corrupting it. Errors while writing files are
+      also no longer silently ignored.
+  -> Fixed the default configuration file never actually being loaded (the program was looking for
+      a file named "default.txt.txt"), which meant that any preferences saved in it were silently
+      ignored on every run.
+  -> Fixed the same files being counted twice when a target path was given more than once, or when
+      a target path was contained in another one, like 'mezura src, src/utils'. Such targets are
+      now dropped, keeping only the topmost one.
 
-Other: 
-  -> Added C language file
-  -> Running the program with no target dir provided (either explicitly, or through a configuration file),
-  will now assume the current working dir as the target dir, in contrast to printing the --help message.
-  -> Added some tests
-  -> Minor help message and readme changes
+New commands:
+  -> Added the --no-gitignore flag, that disables the new default of respecting .gitignore files.
+  -> Added the --colors command, that overrides the colors of the "overview" section with
+      1 to 5 custom colors (hex values or standard terminal color names).
+  -> Added the --color-palette command, that applies a named color palette to the "overview"
+      section. 8 palettes are bundled by default (Mezura, Dracula, Nord, Gruvbox, Catppuccin,
+      Sunset, Neon, Ocean), as editable files in the new "data/palettes" folder, where custom
+      palettes can also be added.
+  -> Added the --show-palettes command, that displays the color palettes that were found,
+      each one previewed on a mock overview with its own colors.
+  -> Added the --tune-palettes command, that generates an interactive HTML page with all the
+      detected color palettes and opens it in the browser, where their colors can be adjusted
+      with live contrast metrics and turned into ready commands.
+
+Change in commands:
+  -> The target paths (--dirs) now support glob patterns (* ? [..] {..}), which are expanded to every
+      existing directory and file that they match, so 'services/*/src' is a valid target. The matches
+      of a pattern are skipped if a .gitignore ignores them or if they are dotted, exactly like every
+      other path that the program discovers, while the paths that are written out explicitly are
+      always used.
+  -> The --exclude command now supports glob patterns (* ? [..] {..}), and applies one consistent
+      rule for both files and folders: a pattern without a slash matches a name at any depth, and a
+      pattern with slashes matches the end of the path, anchored at path components. Previously,
+      folder patterns only matched exact names or full paths, and file patterns could silently
+      match mid-name path suffixes.
+  -> The --threads command now accepts up to 8 producers (instead of 4) and up to 30 consumers
+      (instead of 12), and the automatically chosen numbers were tuned accordingly, since
+      oversubscribing the consumers hides the latency of opening files.
+  -> The --changelog command now prints only the changes of the current version.
+      The full version history (most recent first) is available through '--changelog full'.
+
+Dependencies:
+  -> memchr = "2.8" was introduced, for more efficient substring matching
+  -> globset = "0.4.19" and ignore = "0.4.20" were introduced, for the glob patterns of the
+      --exclude command and for the .gitignore support, respectively
+  -> glob = "0.3.3" was introduced, for the expansion of the glob patterns of the target paths
+  -> lazy_static was removed, since the standard library now covers its functionality
+  -> chrono and crossbeam-deque were updated to their latest versions, and the versions of all
+      the dependencies are now pinned to the ones the program is tested with
+
+Other:
+  -> 9 more language files bundled by default: Ruby, Dart, Zig, Scala, SQL, Haskell, Shell,
+      Elixir and Vue.
+  -> Header files are now counted under dedicated "C Header" (.h) and "C++ Header" (.hpp) languages,
+      instead of being ambiguously attributed to C or C++.
+  -> Project migrated to 2024 language edition and now uses some more modern features
+  -> Invalid values in configuration files are no longer silently replaced:
+      the program now stops and reports exactly which value, in which config file, needs fixing,
+      unless a valid command line argument overrides the faulty value (a warning is shown instead).
+  -> The palette tuner is also available online, without having to install anything:
+      https://subamanis.github.io/mezura/palette-tuner/
 
 
 
@@ -105,7 +106,103 @@ Change in commands:
 -> --log command is no longer automatically saved to a configuration file, if it is specified along
   with the --save command, but can be still added manually in configuration files
 
-Other: 
+Other:
   -> Added SCSS language file
   -> Removed sass and scss file extensions from css file
-  -> Changed paths to application's files to contain platform specific envioronment variables
+  -> Changed paths to application's files to contain platform specific environment variables
+
+
+
+-----------------------------------------------------------------------------------------------------------
+
+
+
+v1.0.0 - 16/12/2022
+
+  5,322 Total lines  -  3,853 Code lines
+
+Bugfixes:
+  -> Fixed a bug where saving and loading a config file in the same program execution was producing a panic
+  -> Fixed a runtime panic related to the file parser
+
+Other:
+  -> Added C language file
+  -> Running the program with no target dir provided (either explicitly, or through a configuration file),
+  will now assume the current working dir as the target dir, in contrast to printing the --help message.
+  -> Added some tests
+  -> Minor help message and readme changes
+
+
+
+-----------------------------------------------------------------------------------------------------------
+
+
+
+v0.9.9 (v1.0.0-beta1)  -  17/10/2021
+
+  4,766 Total lines  -  3,464 Code lines
+
+Bugfixes:
+  -> Saving a configuration will now only save the specified flags, and not the rest with
+      default values, so that they can be overriden by the default configuration.
+
+Main changes:
+  -> The previously necessary "data" folder, gets now baked in the executable, at compile time.
+      On the first execution, the folder gets written on a persistent path in the user's machine,
+      according to platform specifications, and for every other execution, the necessary data
+      is read from there, so the user can manually modify the languages.
+  -> The producer (the part that traverses the given dirs to find relevant files) is now parallelized.
+      Performance may increase on cold runs, especially on machines with logical core count > 4.
+  -> Language files now support up to 2 comment symbols.
+
+New commands:
+  -> Added the --no-keywords flag, that disables keyword counting and printing.
+  -> Added the --changelog command, that displays the changelog history and terminates execution.
+  -> Added the --show-languages command, that displays the language files that were found.
+  -> Added the --show-configs commands, that displays the configuration files that were found.
+
+Change in commands:
+  -> (Breaking: update config files) Change on the --threads command's arguments, to reflect the ability
+      to specify the amount of producers and consumers, separately.
+  -> Added support for log descriptions. Now, after the '--log' command, you can write a word or a sentence
+      that describes the state of the codebase at the time the logging was done.
+  -> Normal program executions and --help command, will now display the version ID of the program.
+  -> Running the --help command will now work even if there is no data dir.
+  -> If a command was provided with invalid arguments, the help message for this command
+      will also be displayed.
+
+Dependencies:
+  -> num_cpus = "1.13.0"  was introduced, so that the program can automatically detect
+      an optimal number of threads for producers and consumers.
+  -> directories = "4.0.1"  was introduced, so that platform-specific and suitable paths can be chosen for
+      saving the persistent data of the application in the user machine.
+  -> include_dir = "0.6.2"  was introduced, so that the "data" folder provided with the repository can be
+      conveniently baked in the executable.
+
+Other:
+  -> Running the program with no arguments will now just display the help message.
+  -> The program will now also display how many files it ignored due to the '--exclude' command.
+  -> 7 more language files bundled by default.
+  -> Added the .h extension in the C++ language file, along with the .cpp and .hpp extensions.
+
+
+
+-----------------------------------------------------------------------------------------------------------
+
+
+
+v0.9.2  -  22/9/2021
+
+  4,260 Total lines  -  3,098 Code lines
+
+Bugfixes:
+  -> Added multiline comments in the Rust language file, that were missing by mistake
+
+Major/Functionality changes:
+  -> Running the program by double clicking on the exe is no longer supported.
+  -> The program will now terminate after execution at all times
+      (no longer accepting inputs from stdin on error).
+
+Change in commands:
+  -> Running the program with the --help command, shows information about the other provided commands,
+      or if none were provided, shows the information of all the commands.

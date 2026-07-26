@@ -56,28 +56,19 @@ pub fn parse_supported_languages_to_map(target_path: &str) -> Result<(HashMap<St
         return Err(LanguageDirParseError::PathMissing(target_path.to_owned()));
     }
     for entry in entries.unwrap() {
-        let entry = match entry {
-            Ok(x) => x,
-            Err(_) => continue
-        };
+        let Ok(entry) = entry else { continue };
 
         let path = entry.path();
         if !Path::new(&path).is_file() {continue;}
-        
-        let reader = match my_reader::BufReader::open(path) {
-            Ok(x) => x,
-            Err(_) => {
-                add_file_name_to_faulty_files(&entry, &mut faulty_files);
-                continue;
-            }
-        } ;
-        
-        let language = match parse_file_to_language(reader, &mut buffer) {
-            Ok(x) => x,
-            Err(_) => {
-                add_file_name_to_faulty_files(&entry, &mut faulty_files);
-                continue;
-            }
+
+        let Ok(reader) = my_reader::BufReader::open(path) else {
+            add_file_name_to_faulty_files(&entry, &mut faulty_files);
+            continue;
+        };
+
+        let Ok(language) = parse_file_to_language(reader, &mut buffer) else {
+            add_file_name_to_faulty_files(&entry, &mut faulty_files);
+            continue;
         };
 
         language_map.insert(language.name.to_owned(), language);
@@ -99,25 +90,16 @@ fn parse_file_to_language(mut reader :my_reader::BufReader, buffer :&mut String)
     if !reader.read_line_exists(buffer) {return Err(());}
 
     if !reader.read_line_and_compare(buffer, EXTENSIONS) {return Err(());}
-    let identifiers = match reader.get_line_sliced(buffer) {
-        Ok(x) => x,
-        Err(_) => return Err(())
-    };
+    let Ok(identifiers) = reader.get_line_sliced(buffer) else { return Err(()) };
     if !reader.read_line_exists(buffer) {return Err(());}
 
     if !reader.read_line_and_compare(buffer, STRING_SYMBOLS) {return Err(());}
-    let string_symbols = match reader.get_line_sliced(buffer) {
-        Ok(x) => x,
-        Err(_) => return Err(())
-    };
+    let Ok(string_symbols) = reader.get_line_sliced(buffer) else { return Err(()) };
     if string_symbols.is_empty() {return Err(());}
 
     if !reader.read_line_exists(buffer) {return Err(());}
-    if !reader.read_line_and_compare(buffer, COMMENT_SYMBOLS) {return Err(());} 
-    let comment_symbols = match reader.get_line_sliced(buffer) {
-        Ok(x) => x,
-        Err(_) => return Err(())
-    };
+    if !reader.read_line_and_compare(buffer, COMMENT_SYMBOLS) {return Err(());}
+    let Ok(comment_symbols) = reader.get_line_sliced(buffer) else { return Err(()) };
     
     let mut multi_start :Option<String> = None;
     let mut multi_end :Option<String> = None;
@@ -140,10 +122,7 @@ fn parse_file_to_language(mut reader :my_reader::BufReader, buffer :&mut String)
         let name = buffer.trim().to_string().clone();
         if name.is_empty() {return Err(());}
         if !reader.read_line_exists(buffer) {return Err(());}
-        let aliases = match reader.get_line_sliced(buffer) {
-            Ok(x) => x,
-            Err(_) => return Err(())
-        };
+        let Ok(aliases) = reader.get_line_sliced(buffer) else { return Err(()) };
         if aliases.is_empty() {return Err(());}
         
         let keyword = Keyword {
@@ -160,12 +139,13 @@ fn parse_file_to_language(mut reader :my_reader::BufReader, buffer :&mut String)
         comment_symbols,
         multiline_comment_start_symbol : multi_start,
         multiline_comment_end_symbol : multi_end,
-        keywords
+        keywords,
+        finders : std::sync::OnceLock::new()
     })
 }
 
 pub fn parse_string_to_language(contents: Cow<str>) -> Language {
-    let mut lines = (&contents).lines();
+    let mut lines = contents.lines();
     let (mut mult_start, mut mult_end) = (None, None);
 
     lines.next();
@@ -180,13 +160,11 @@ pub fn parse_string_to_language(contents: Cow<str>) -> Language {
     lines.next();
     let comment_symbols = split_line_on_whitespace(lines.next().unwrap());
     let next_line = lines.next();
-    if let Some(line) = next_line {
-        if line == MULTILINE_COMMENT_START {
-            mult_start = Some(lines.next().unwrap().trim().to_owned());
-            lines.next();
-            mult_end = Some(lines.next().unwrap().trim().to_owned());
-            lines.next();
-        }
+    if let Some(line) = next_line && line == MULTILINE_COMMENT_START {
+        mult_start = Some(lines.next().unwrap().trim().to_owned());
+        lines.next();
+        mult_end = Some(lines.next().unwrap().trim().to_owned());
+        lines.next();
     }
 
     let mut keywords = Vec::new();
@@ -208,53 +186,115 @@ pub fn parse_string_to_language(contents: Cow<str>) -> Language {
 
 pub fn serialize_language(lang: &Language, path: &str) -> Result<(), io::Error> {
     let file_path = path.to_string() + "/" + &lang.name + ".txt";
-    let mut writer = BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).open(file_path)?);
+    let mut writer = BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(file_path)?);
 
-    writer.write(format!("{}\n",LANGUAGE).as_bytes());
-    writer.write(lang.name.as_bytes());
-    writer.write(b"\n\n");
+    writer.write_all(format!("{LANGUAGE}\n").as_bytes())?;
+    writer.write_all(lang.name.as_bytes())?;
+    writer.write_all(b"\n\n")?;
 
-    writer.write(format!("{}\n",EXTENSIONS).as_bytes());
-    writer.write(lang.extensions.join(" ").as_bytes());
-    writer.write(b"\n\n");
+    writer.write_all(format!("{EXTENSIONS}\n").as_bytes())?;
+    writer.write_all(lang.extensions.join(" ").as_bytes())?;
+    writer.write_all(b"\n\n")?;
 
-    writer.write(format!("{}\n",STRING_SYMBOLS).as_bytes());
-    writer.write(lang.string_symbols.join(" ").as_bytes());
-    writer.write(b"\n\n");
+    writer.write_all(format!("{STRING_SYMBOLS}\n").as_bytes())?;
+    writer.write_all(lang.string_symbols.join(" ").as_bytes())?;
+    writer.write_all(b"\n\n")?;
 
-    writer.write(format!("{}\n",COMMENT_SYMBOLS).as_bytes());
-    writer.write(lang.comment_symbols.join(" ").as_bytes());
-    writer.write(b"\n");
-    
+    writer.write_all(format!("{COMMENT_SYMBOLS}\n").as_bytes())?;
+    writer.write_all(lang.comment_symbols.join(" ").as_bytes())?;
+    writer.write_all(b"\n")?;
+
     if let Some(symbol) = &lang.multiline_comment_start_symbol {
-        writer.write(format!("{}\n",MULTILINE_COMMENT_START).as_bytes());
-        writer.write(symbol.as_bytes());
-        writer.write(b"\n");
-        writer.write(format!("{}\n",MULTILINE_COMMENT_END).as_bytes());
-        writer.write(lang.multiline_comment_end_symbol.as_ref().unwrap().as_bytes());
-        writer.write(b"\n");
+        writer.write_all(format!("{MULTILINE_COMMENT_START}\n").as_bytes())?;
+        writer.write_all(symbol.as_bytes())?;
+        writer.write_all(b"\n")?;
+        writer.write_all(format!("{MULTILINE_COMMENT_END}\n").as_bytes())?;
+        writer.write_all(lang.multiline_comment_end_symbol.as_ref().unwrap().as_bytes())?;
+        writer.write_all(b"\n")?;
     }
-    writer.write(b"\n");
-    
+    writer.write_all(b"\n")?;
+
     for keyword in lang.keywords.iter() {
-        writer.write(format!("{}\n",KEYWORD).as_bytes());
-        writer.write(format!("{}\n",KEYWORD_NAME).as_bytes());
-        writer.write(keyword.descriptive_name.as_bytes());
-        writer.write(b"\n");
-        writer.write(format!("{}\n",KEYWORD_ALIASES).as_bytes());
-        writer.write(keyword.aliases.join(" ").as_bytes());
-        writer.write(b"\n");
+        writer.write_all(format!("{KEYWORD}\n").as_bytes())?;
+        writer.write_all(format!("{KEYWORD_NAME}\n").as_bytes())?;
+        writer.write_all(keyword.descriptive_name.as_bytes())?;
+        writer.write_all(b"\n")?;
+        writer.write_all(format!("{KEYWORD_ALIASES}\n").as_bytes())?;
+        writer.write_all(keyword.aliases.join(" ").as_bytes())?;
+        writer.write_all(b"\n")?;
     }
+
+    writer.flush()?;
 
     Ok(())
 }
 
 
+// ------------------------------ Palette handling ------------------------------
+
+pub fn load_palette(name: &str, palettes_dir: &str) -> Option<Vec<Color>> {
+    let entries = fs::read_dir(palettes_dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|x| x.to_str()) else { continue };
+        if !stem.eq_ignore_ascii_case(name.trim()) {
+            continue;
+        }
+
+        let contents = fs::read_to_string(&path).ok()?;
+        let colors_line = contents.lines().find(|l| !l.trim().is_empty())?;
+        return utils::parse_colors_to_vec(colors_line);
+    }
+
+    None
+}
+
+
+pub fn generate_palette_tuner_page() -> io::Result<String> {
+    fn js_escape(s: &str) -> String {
+        s.replace('\\', "\\\\").replace('"', "\\\"").replace('<', "\\u003c")
+    }
+
+    let template = include_str!("../docs/palette-tuner/index.html");
+
+    let mut entries: Vec<(String, Vec<String>)> = Vec::new();
+    for entry in fs::read_dir(&PERSISTENT_APP_PATHS.palettes_dir)?.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|x| x.to_str()) else { continue };
+        let Ok(contents) = fs::read_to_string(&path) else { continue };
+        let Some(colors_line) = contents.lines().find(|l| !l.trim().is_empty()) else { continue };
+        if utils::parse_colors_to_vec(colors_line).is_none() {
+            continue;
+        }
+        entries.push((stem.to_owned(), colors_line.split_whitespace().map(|x| x.to_owned()).collect()));
+    }
+    entries.sort_by_key(|x| x.0.to_lowercase());
+
+    let palettes_js = entries.iter().map(|(name, tokens)| {
+        format!("{{name:\"{}\",tokens:[{}]}}", js_escape(name),
+            tokens.iter().map(|t| format!("\"{}\"", js_escape(t))).collect::<Vec<_>>().join(","))
+    }).collect::<Vec<_>>().join(",");
+
+    let page = template.replace("/*MEZURA_SYSTEM_PALETTES*/", &format!("SYSTEM_PALETTES = [{palettes_js}];"));
+
+    let out_path = PERSISTENT_APP_PATHS.data_dir.clone() + "palette-tuner.html";
+    fs::write(&out_path, page)?;
+
+    Ok(out_path)
+}
+
+
 // ------------------------------ Config handling ------------------------------
 
-pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String>) -> Result<ConfigurationBuilder,ConfigFileParseError> {
+pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String>) -> Result<(ConfigurationBuilder, Vec<&'static str>),ConfigFileParseError> {
     let config_path = if let Some(dir) = config_dir_path {dir} else {PERSISTENT_APP_PATHS.config_dir.clone()};
-    let file_name = if let Some(x) = file_name {x} else {DEFAULT_CONFIG_NAME};
+    let file_name = if let Some(x) = file_name {x} else {DEFAULT_CONFIG_NAME.trim_end_matches(".txt")};
     let file_path = (config_path + file_name + ".txt").replace("\\", "/");
     let mut reader = BufReader::new(match fs::File::open(file_path){
         Ok(f) => f,
@@ -263,8 +303,9 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
 
     let (mut dirs, mut braces_as_code, mut should_search_in_dotted, mut threads, mut exclude_dirs,
          mut languages_of_interest, mut excluded_languages, mut should_show_faulty_files, mut no_keywords, mut no_visual,
-         mut log, mut compare_level) = (None,None,None,None,None,None,None,None,None,None,None,None);
-    let mut buf = String::with_capacity(150); 
+         mut no_gitignore, mut colors, mut color_palette, mut log, mut compare_level) = (None,None,None,None,None,None,None,None,None,None,None,None,None,None,None);
+    let mut invalid_fields: Vec<&'static str> = Vec::new();
+    let mut buf = String::with_capacity(150);
 
     while let Ok(size) = reader.read_line(&mut buf) {
         if size == 0 {break};
@@ -278,7 +319,9 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                 }
             } else if id == config_manager::EXCLUDE {
                 let paths = read_lines_from_file_to_vec(&mut reader, &mut buf, utils::parse_paths_to_vec);
-                if !paths.is_empty() {
+                if utils::build_exclude_matcher(&paths).is_err() {
+                    invalid_fields.push(config_manager::EXCLUDE);
+                } else if !paths.is_empty() {
                     exclude_dirs = Some(paths);
                 }
             } else if id == config_manager::LANGUAGES {
@@ -293,22 +336,61 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                 }
             } else if id == config_manager::THREADS {
                 buf.clear();
-                reader.read_line(&mut buf);
-                threads = Some(Threads::from(utils::parse_two_usize_values(&buf,MIN_PRODUCERS_VALUE, MAX_PRODUCERS_VALUE,
-                        MIN_CONSUMERS_VALUE, MAX_CONSUMERS_VALUE).unwrap()));
+                let _ = reader.read_line(&mut buf);
+                match utils::parse_two_usize_values(&buf,MIN_PRODUCERS_VALUE, MAX_PRODUCERS_VALUE,
+                        MIN_CONSUMERS_VALUE, MAX_CONSUMERS_VALUE) {
+                    Some(x) => threads = Some(Threads::from(x)),
+                    None => invalid_fields.push(config_manager::THREADS)
+                }
             }else if id == config_manager::BRACES_AS_CODE {
-                braces_as_code = read_bool_value_from_file(&mut reader, &mut buf);
+                match read_bool_value_from_file(&mut reader, &mut buf) {
+                    Ok(x) => braces_as_code = x,
+                    Err(()) => invalid_fields.push(config_manager::BRACES_AS_CODE)
+                }
             } else if id == config_manager::SHOW_FAULTY_FILES {
-                should_show_faulty_files = read_bool_value_from_file(&mut reader, &mut buf);
+                match read_bool_value_from_file(&mut reader, &mut buf) {
+                    Ok(x) => should_show_faulty_files = x,
+                    Err(()) => invalid_fields.push(config_manager::SHOW_FAULTY_FILES)
+                }
             } else if id == config_manager::SEARCH_IN_DOTTED {
-                should_search_in_dotted = read_bool_value_from_file(&mut reader, &mut buf);
+                match read_bool_value_from_file(&mut reader, &mut buf) {
+                    Ok(x) => should_search_in_dotted = x,
+                    Err(()) => invalid_fields.push(config_manager::SEARCH_IN_DOTTED)
+                }
             } else if id == config_manager::NO_KEYWORDS {
-                no_keywords = read_bool_value_from_file(&mut reader, &mut buf);
+                match read_bool_value_from_file(&mut reader, &mut buf) {
+                    Ok(x) => no_keywords = x,
+                    Err(()) => invalid_fields.push(config_manager::NO_KEYWORDS)
+                }
             } else if id == config_manager::NO_VISUAL {
-                no_visual = read_bool_value_from_file(&mut reader, &mut buf);
+                match read_bool_value_from_file(&mut reader, &mut buf) {
+                    Ok(x) => no_visual = x,
+                    Err(()) => invalid_fields.push(config_manager::NO_VISUAL)
+                }
+            } else if id == config_manager::NO_GITIGNORE {
+                match read_bool_value_from_file(&mut reader, &mut buf) {
+                    Ok(x) => no_gitignore = x,
+                    Err(()) => invalid_fields.push(config_manager::NO_GITIGNORE)
+                }
+            } else if id == config_manager::COLORS {
+                buf.clear();
+                let _ = reader.read_line(&mut buf);
+                match utils::parse_colors_to_vec(&buf) {
+                    Some(x) => colors = Some(x),
+                    None => invalid_fields.push(config_manager::COLORS)
+                }
+            } else if id == config_manager::COLOR_PALETTE {
+                buf.clear();
+                let _ = reader.read_line(&mut buf);
+                let name = buf.trim();
+                if name.is_empty() || load_palette(name, &PERSISTENT_APP_PATHS.palettes_dir).is_none() {
+                    invalid_fields.push(config_manager::COLOR_PALETTE);
+                } else {
+                    color_palette = Some(name.to_owned());
+                }
             } else if id == config_manager::LOG {
                 buf.clear();
-                reader.read_line(&mut buf);
+                let _ = reader.read_line(&mut buf);
                 let name = &buf.trim().to_lowercase();
                 if name == "yes" || name == "true" {
                     log = Some(LogOption::new(None));
@@ -317,15 +399,18 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                 }
             } else if id == config_manager::COMPRARE_LEVEL {
                 buf.clear();
-                reader.read_line(&mut buf);
-                compare_level = utils::parse_usize_value(&buf,MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL);
+                let _ = reader.read_line(&mut buf);
+                match utils::parse_usize_value(&buf,MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL) {
+                    Some(x) => compare_level = Some(x),
+                    None => invalid_fields.push(config_manager::COMPRARE_LEVEL)
+                }
             }
         }
         buf.clear();
     }
 
-    Ok(ConfigurationBuilder::new(dirs,exclude_dirs, languages_of_interest, excluded_languages, threads, braces_as_code,should_search_in_dotted,
-             should_show_faulty_files, no_keywords, no_visual, log, compare_level, None, None))
+    Ok((ConfigurationBuilder::new(dirs,exclude_dirs, languages_of_interest, excluded_languages, threads, braces_as_code,should_search_in_dotted,
+             should_show_faulty_files, no_keywords, no_visual, no_gitignore, colors, color_palette, log, compare_level, None, None), invalid_fields))
 }
 
 // Dirs must be specified (is checked before calling this function)
@@ -337,62 +422,76 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
 
     let mut writer = BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(file_name)?);
 
-    writer.write(b"Auto-generated config file.");
+    writer.write_all(b"Auto-generated config file.")?;
 
-    writer.write(&[b"\n\n===> ",config_manager::DIRS.as_bytes(),b"\n"].concat());
-    writer.write(config_builder.dirs.as_ref().unwrap().join(",").as_bytes());
+    writer.write_all(&[b"\n\n===> ",config_manager::DIRS.as_bytes(),b"\n"].concat())?;
+    writer.write_all(config_builder.dirs.as_ref().unwrap().join(",").as_bytes())?;
 
     if let Some(exclude_dirs) = &config_builder.exclude_dirs {
-        writer.write(&[b"\n\n===> ",config_manager::EXCLUDE.as_bytes(),b"\n"].concat());
-        writer.write(exclude_dirs.join(",").as_bytes());
+        writer.write_all(&[b"\n\n===> ",config_manager::EXCLUDE.as_bytes(),b"\n"].concat())?;
+        writer.write_all(exclude_dirs.join(",").as_bytes())?;
     }
     if let Some(languages_of_interest) = &config_builder.languages_of_interest {
-        writer.write(&[b"\n\n===> ",config_manager::LANGUAGES.as_bytes(),b"\n"].concat());
-        writer.write(languages_of_interest.join(",").as_bytes());
+        writer.write_all(&[b"\n\n===> ",config_manager::LANGUAGES.as_bytes(),b"\n"].concat())?;
+        writer.write_all(languages_of_interest.join(",").as_bytes())?;
     }
     if let Some(exclude_languages) = &config_builder.excluded_languages {
-        writer.write(&[b"\n\n===> ",config_manager::EXCLUDE_LANGUAGES.as_bytes(),b"\n"].concat());
-        writer.write(exclude_languages.join(",").as_bytes());
+        writer.write_all(&[b"\n\n===> ",config_manager::EXCLUDE_LANGUAGES.as_bytes(),b"\n"].concat())?;
+        writer.write_all(exclude_languages.join(",").as_bytes())?;
     }
     if let Some(threads) = &config_builder.threads {
-        writer.write(&[b"\n\n===> ",config_manager::THREADS.as_bytes(),b"\n"].concat());
-        writer.write((threads.producers.to_string() + " " + &threads.consumers.to_string()).as_bytes());
+        writer.write_all(&[b"\n\n===> ",config_manager::THREADS.as_bytes(),b"\n"].concat())?;
+        writer.write_all((threads.producers.to_string() + " " + &threads.consumers.to_string()).as_bytes())?;
     }
     if let Some(braces_as_code) = &config_builder.braces_as_code {
-        writer.write(&[b"\n\n===> ",config_manager::BRACES_AS_CODE.as_bytes(),b"\n"].concat());
-        writer.write(if *braces_as_code {b"yes"} else {b"no"});
+        writer.write_all(&[b"\n\n===> ",config_manager::BRACES_AS_CODE.as_bytes(),b"\n"].concat())?;
+        writer.write_all(if *braces_as_code {b"yes"} else {b"no"})?;
     }
     if let Some(should_search_in_dotted) = &config_builder.should_search_in_dotted {
-        writer.write(&[b"\n\n===> ",config_manager::SEARCH_IN_DOTTED.as_bytes(),b"\n"].concat());
-        writer.write(if *should_search_in_dotted {b"yes"} else {b"no"});
+        writer.write_all(&[b"\n\n===> ",config_manager::SEARCH_IN_DOTTED.as_bytes(),b"\n"].concat())?;
+        writer.write_all(if *should_search_in_dotted {b"yes"} else {b"no"})?;
     }
     if let Some(should_show_faulty_files) = &config_builder.should_show_faulty_files {
-        writer.write(&[b"\n\n===> ",config_manager::SHOW_FAULTY_FILES.as_bytes(),b"\n"].concat());
-        writer.write(if *should_show_faulty_files {b"yes"} else {b"no"});
+        writer.write_all(&[b"\n\n===> ",config_manager::SHOW_FAULTY_FILES.as_bytes(),b"\n"].concat())?;
+        writer.write_all(if *should_show_faulty_files {b"yes"} else {b"no"})?;
     }
     if let Some(no_keywords) = &config_builder.no_keywords {
-        writer.write(&[b"\n\n===> ",config_manager::NO_KEYWORDS.as_bytes(),b"\n"].concat());
-        writer.write(if *no_keywords {b"yes"} else {b"no"});
+        writer.write_all(&[b"\n\n===> ",config_manager::NO_KEYWORDS.as_bytes(),b"\n"].concat())?;
+        writer.write_all(if *no_keywords {b"yes"} else {b"no"})?;
     }
     if let Some(no_visual) = &config_builder.no_visual {
-        writer.write(&[b"\n\n===> ",config_manager::NO_VISUAL.as_bytes(),b"\n"].concat());
-        writer.write(if *no_visual {b"yes"} else {b"no"});
+        writer.write_all(&[b"\n\n===> ",config_manager::NO_VISUAL.as_bytes(),b"\n"].concat())?;
+        writer.write_all(if *no_visual {b"yes"} else {b"no"})?;
+    }
+    if let Some(no_gitignore) = &config_builder.no_gitignore {
+        writer.write_all(&[b"\n\n===> ",config_manager::NO_GITIGNORE.as_bytes(),b"\n"].concat())?;
+        writer.write_all(if *no_gitignore {b"yes"} else {b"no"})?;
+    }
+    if let Some(colors) = &config_builder.colors {
+        writer.write_all(&[b"\n\n===> ",config_manager::COLORS.as_bytes(),b"\n"].concat())?;
+        writer.write_all(colors.iter().map(utils::color_to_config_string)
+                .collect::<Vec<_>>().join(" ").as_bytes())?;
+    }
+    if let Some(color_palette) = &config_builder.color_palette {
+        writer.write_all(&[b"\n\n===> ",config_manager::COLOR_PALETTE.as_bytes(),b"\n"].concat())?;
+        writer.write_all(color_palette.as_bytes())?;
     }
     if let Some(compare_level) = &config_builder.compare_level {
-        writer.write(&[b"\n\n===> ",config_manager::COMPRARE_LEVEL.as_bytes(),b"\n"].concat());
-        writer.write(compare_level.to_string().as_bytes());
+        writer.write_all(&[b"\n\n===> ",config_manager::COMPRARE_LEVEL.as_bytes(),b"\n"].concat())?;
+        writer.write_all(compare_level.to_string().as_bytes())?;
     }
 
-    writer.write(b"\n");    
-    writer.flush();
+    writer.write_all(b"\n")?;
+    writer.flush()?;
 
     Ok(())
 }
 
 pub fn write_default_config(contents: String) -> Result<(), io::Error> {
     let file_path = PERSISTENT_APP_PATHS.config_dir.clone() + DEFAULT_CONFIG_NAME;
-    let mut writer = BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).open(file_path)?);
-    writer.write_all(contents.as_bytes());
+    let mut writer = BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(file_path)?);
+    writer.write_all(contents.as_bytes())?;
+    writer.flush()?;
 
     Ok(())
 }
@@ -403,59 +502,63 @@ pub fn write_default_config(contents: String) -> Result<(), io::Error> {
 pub fn log_stats(path: &str, contents: &Option<String>, final_stats: &FinalStats, datetime_now: &DateTime<Local>, config: &Configuration) -> io::Result<()> {
     let mut writer = std::io::BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(path)?);
 
-    write_current_log(&mut writer, config, datetime_now, final_stats);
+    write_current_log(&mut writer, config, datetime_now, final_stats)?;
 
     if let Some(contents) = contents {
-        writer.write(contents.as_bytes());
+        writer.write_all(contents.as_bytes())?;
     }
-    writer.flush();
+    writer.flush()?;
 
     Ok(())
 }
 
-fn write_current_log(writer: &mut BufWriter<File>, config: &Configuration, datetime_now: &DateTime<Local>, final_stats: &FinalStats) {
-    writer.write(format!("===>{}\n",config.log.name.clone().unwrap_or_default()).as_bytes());
-    writer.write(datetime_now.format("%Y-%m-%d %H:%M:%S %z").to_string().as_bytes());
-    writer.write(b"\n");
-    writer.write(b"Configuration:\n");
-    writer.write(format!("    dirs: {}\n",config.dirs.join(",")).as_bytes());
-    writer.write(format!("    exclude: {}\n",config.exclude_dirs.join(",")).as_bytes());
-    writer.write(format!("    languages: {}\n",config.languages_of_interest.join(",")).as_bytes());
-    writer.write(format!("    excluded-languages: {}\n",config.excluded_languages.join(",")).as_bytes());
-    writer.write(format!("    braces-as-code: {}\n",if config.braces_as_code{"yes"} else {"no"}).as_bytes());
-    writer.write(format!("    search-in-dotted: {}\n",if config.should_search_in_dotted{"yes"} else {"no"}).as_bytes());
-    writer.write(b"Stats:\n");
-    writer.write(format!("    Files: {}\n",final_stats.files).as_bytes());
-    writer.write(format!("    Lines: {}\n",final_stats.lines).as_bytes());
-    writer.write(format!("        Code: {}\n",final_stats.code_lines).as_bytes());
-    writer.write(format!("        Extra: {}\n",final_stats.extra_lines).as_bytes());
-    writer.write(format!("    Total Size: {}\n",final_stats.bytes_size.to_string()).as_bytes());
-    writer.write(format!("        Average Size: {}\n\n\n",final_stats.bytes_average_size.to_string()).as_bytes());
-    writer.write(b"--------------------------------------------------------------------------------------------\n\n\n");
+fn write_current_log(writer: &mut BufWriter<File>, config: &Configuration, datetime_now: &DateTime<Local>, final_stats: &FinalStats) -> io::Result<()> {
+    writer.write_all(format!("===>{}\n",config.log.name.clone().unwrap_or_default()).as_bytes())?;
+    writer.write_all(datetime_now.format("%Y-%m-%d %H:%M:%S %z").to_string().as_bytes())?;
+    writer.write_all(b"\n")?;
+    writer.write_all(b"Configuration:\n")?;
+    writer.write_all(format!("    dirs: {}\n",config.dirs.join(",")).as_bytes())?;
+    writer.write_all(format!("    exclude: {}\n",config.exclude_dirs.join(",")).as_bytes())?;
+    writer.write_all(format!("    languages: {}\n",config.languages_of_interest.join(",")).as_bytes())?;
+    writer.write_all(format!("    excluded-languages: {}\n",config.excluded_languages.join(",")).as_bytes())?;
+    writer.write_all(format!("    braces-as-code: {}\n",if config.braces_as_code{"yes"} else {"no"}).as_bytes())?;
+    writer.write_all(format!("    search-in-dotted: {}\n",if config.should_search_in_dotted{"yes"} else {"no"}).as_bytes())?;
+    writer.write_all(b"Stats:\n")?;
+    writer.write_all(format!("    Files: {}\n",final_stats.files).as_bytes())?;
+    writer.write_all(format!("    Lines: {}\n",final_stats.lines).as_bytes())?;
+    writer.write_all(format!("        Code: {}\n",final_stats.code_lines).as_bytes())?;
+    writer.write_all(format!("        Extra: {}\n",final_stats.extra_lines).as_bytes())?;
+    writer.write_all(format!("    Total Size: {}\n",final_stats.bytes_size).as_bytes())?;
+    writer.write_all(format!("        Average Size: {}\n\n\n",final_stats.bytes_average_size).as_bytes())?;
+    writer.write_all(b"--------------------------------------------------------------------------------------------\n\n\n")?;
+
+    Ok(())
 }
 
 
-fn read_bool_value_from_file(reader: &mut BufReader<File>, mut buf: &mut String) -> Option<bool> {
+fn read_bool_value_from_file(reader: &mut BufReader<File>, buf: &mut String) -> Result<Option<bool>, ()> {
     buf.clear();
-    reader.read_line(&mut buf);
+    let _ = reader.read_line(buf);
     let buf = buf.trim();
     if buf.is_empty() {
-        return None;
+        return Ok(None);
     }
     let buf = buf.to_ascii_lowercase();
     if buf == "yes" || buf ==  "true" {
-        Some(true)
+        Ok(Some(true))
+    } else if buf == "no" || buf == "false" {
+        Ok(Some(false))
     } else {
-        Some(false)
+        Err(())
     }
 }
 
 //Keep parsing new lines as relevant, until an empty one appears.
-fn read_lines_from_file_to_vec(reader: &mut BufReader<File>, mut buf: &mut String, parser_func: fn(&str) -> Vec<String>) -> Vec<String> {
+fn read_lines_from_file_to_vec(reader: &mut BufReader<File>, buf: &mut String, parser_func: fn(&str) -> Vec<String>) -> Vec<String> {
     let mut vec = Vec::new();
     loop {
         buf.clear();
-        reader.read_line(&mut buf);
+        let _ = reader.read_line(buf);
         if buf.trim().is_empty() {
             break;
         }
@@ -481,9 +584,9 @@ impl Formatted for LanguageDirParseError {
         match self {
             Self::NoFilesFound => "Error: No language files found in directory.".red(),
             Self::NoFilesFormattedProperly => "Error: No language file is formatted properly, so none could be parsed.".red(),
-            Self::PathMissing(path) => format!("Error: It seems that the language dir ({}) has been deleted.
+            Self::PathMissing(path) => format!("Error: It seems that the language dir ({path}) has been deleted.
 Please delete the \"mezura\" folder and it will be generated again.
-Make sure to backup the \"configs\" and \"logs\" folders because they will be overwritten.", path).red(),
+Make sure to backup the \"configs\" and \"logs\" folders because they will be overwritten.").red(),
         }
     }
 }
@@ -491,7 +594,7 @@ Make sure to backup the \"configs\" and \"logs\" folders because they will be ov
 impl Formatted for ConfigFileParseError {
     fn formatted(&self) -> ColoredString {
         match self {
-            Self::FileNotFound(x) => format!("'{}' config file not found, defaults will be used.", x).yellow(),
+            Self::FileNotFound(x) => format!("'{x}' config file not found, defaults will be used.").yellow(),
             Self::IOError => "Unexpected IO error while reading, defaults will be used".yellow()
         }
     }
@@ -566,13 +669,14 @@ mod tests {
 
     #[test]
     fn test_save_config_file_and_then_parse_it() -> std::io::Result<()> {
-        let command = format!("./ --exclude a,b,c.txt,d.txt, --braces-as-code --threads 1 1");
+        let command = "./ --exclude a,b,c.txt,d.txt, --braces-as-code --threads 1 1".to_string();
         let config_builder = config_manager::create_config_builder_from_args(&command).unwrap();
 
         let test_config_dir = Some(LOCAL_APP_PATHS.test_config_dir.clone());
-        io_handler::save_existing_commands_from_config_builder_to_file(test_config_dir, "auto-generated", &config_builder);
+        io_handler::save_existing_commands_from_config_builder_to_file(test_config_dir, "auto-generated", &config_builder)?;
 
-        let options = io_handler::parse_config_file(Some("auto-generated"), Some(LOCAL_APP_PATHS.test_config_dir.clone())).unwrap();
+        let (options, invalid_fields) = io_handler::parse_config_file(Some("auto-generated"), Some(LOCAL_APP_PATHS.test_config_dir.clone())).unwrap();
+        assert!(invalid_fields.is_empty());
         assert_eq!(config_builder.dirs, options.dirs);
         assert_eq!(config_builder.exclude_dirs, options.exclude_dirs);
         assert_eq!(config_builder.threads, options.threads);
@@ -593,7 +697,8 @@ mod tests {
             .set_braces_as_code(true);
 
 
-        let options = io_handler::parse_config_file(Some("test"), Some(LOCAL_APP_PATHS.test_config_dir.clone())).unwrap();
+        let (options, invalid_fields) = io_handler::parse_config_file(Some("test"), Some(LOCAL_APP_PATHS.test_config_dir.clone())).unwrap();
+        assert!(invalid_fields.is_empty());
         assert_eq!(config.dirs, options.dirs.unwrap());
         assert_eq!(config.exclude_dirs, options.exclude_dirs.unwrap());
         assert_eq!(config.threads, options.threads.unwrap());
@@ -611,5 +716,82 @@ mod tests {
                 &(LOCAL_APP_PATHS.test_dir.clone() + "languages/")).unwrap();
         assert!(lang_map.len() == 2);
         assert!(faulty_files.len() == 1);
+    }
+
+    #[test]
+    fn test_load_palette() {
+        let dir = std::env::temp_dir().join("mezura_palette_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Mypalette.txt"), "cyan bright-magenta ff0080\n").unwrap();
+        std::fs::write(dir.join("Broken.txt"), "kaka\n").unwrap();
+        let dir_str = dir.to_str().unwrap();
+
+        assert_eq!(Some(vec![Color::Cyan, Color::BrightMagenta, Color::TrueColor{r:255,g:0,b:128}]),
+                io_handler::load_palette("mypalette", dir_str));
+        assert_eq!(Some(vec![Color::Cyan, Color::BrightMagenta, Color::TrueColor{r:255,g:0,b:128}]),
+                io_handler::load_palette("MYPALETTE", dir_str));
+        assert_eq!(None, io_handler::load_palette("nonexistant", dir_str));
+        assert_eq!(None, io_handler::load_palette("broken", dir_str));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_default_config_file_is_found_and_parsed() {
+        let dir = std::env::temp_dir().join("mezura_default_config_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("default.txt"), "===> exclude-languages\nSQL\n").unwrap();
+
+        let (options, invalid_fields) = io_handler::parse_config_file(None, Some(dir.to_str().unwrap().to_owned() + "/")).unwrap();
+        assert!(invalid_fields.is_empty());
+        assert_eq!(Some(vec!["sql".to_owned()]), options.excluded_languages);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_parse_config_file_reports_invalid_values() {
+        let dir = std::env::temp_dir().join("mezura_invalid_config_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_str = dir.to_str().unwrap().to_owned() + "/";
+
+        std::fs::write(dir.join("badcfg.txt"),
+                "===> threads\n3343 45534\n\n===> braces-as-code\nmitsos\n\n===> compare\n99\n\n===> no-visual\nyes\n").unwrap();
+
+        let (options, invalid_fields) = io_handler::parse_config_file(Some("badcfg"), Some(dir_str)).unwrap();
+        assert_eq!(invalid_fields, vec![config_manager::THREADS, config_manager::BRACES_AS_CODE, config_manager::COMPRARE_LEVEL]);
+        assert_eq!(options.threads, None);
+        assert_eq!(options.braces_as_code, None);
+        assert_eq!(options.compare_level, None);
+        assert_eq!(options.no_visual, Some(true));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_serialize_language_overwrites_longer_existing_file() {
+        let dir = std::env::temp_dir().join("mezura_serialize_truncate_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_str = dir.to_str().unwrap().to_owned();
+
+        let keyword = |name: &str| Keyword {
+            descriptive_name: name.to_owned(),
+            aliases: vec![name.to_owned()]
+        };
+
+        let long_lang = Language::new("Truncatetest".to_owned(), vec!["trnc".to_owned()], vec!["\"".to_owned()],
+                vec!["//".to_owned()], Some("/*".to_owned()), Some("*/".to_owned()),
+                (0..20).map(|i| keyword(&format!("keyword{i}"))).collect());
+        io_handler::serialize_language(&long_lang, &dir_str).unwrap();
+
+        let short_lang = Language::new("Truncatetest".to_owned(), vec!["trnc".to_owned()], vec!["\"".to_owned()],
+                vec!["//".to_owned()], Some("/*".to_owned()), Some("*/".to_owned()), vec![keyword("keyword0")]);
+        io_handler::serialize_language(&short_lang, &dir_str).unwrap();
+
+        let (lang_map, faulty_files) = io_handler::parse_supported_languages_to_map(&dir_str).unwrap();
+        assert!(faulty_files.is_empty());
+        assert_eq!(lang_map.get("Truncatetest").unwrap(), &short_lang);
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -1,11 +1,11 @@
 Language
-C++
+Odin
 
 Extensions
-cpp
+odin
 
 String symbols
-"
+",',`
 
 Comment symbols
 //
@@ -15,12 +15,17 @@ Multi line comment end
 */
 
 Keyword
-    NAME
-    classes
-    ALIASES
-    class
+NAME
+structs
+ALIASES
+struct
 Keyword
-    NAME
-    structs
-    ALIASES
-    struct
+NAME
+enums
+ALIASES
+enum
+Keyword
+NAME
+unions
+ALIASES
+union

@@ -2,10 +2,10 @@ use std::{path::Path};
 
 use colored::{ColoredString, Colorize};
 
-use crate::{Formatted, io_handler, message_printer, utils};
+use crate::{Color, Formatted, GitignoreStack, io_handler, message_printer, utils};
 
 // Application version, to be displayed at startup and with --help command
-pub const VERSION_ID : &str = "v1.0.1"; 
+pub const VERSION_ID : &str = "v2.0.0";
 
 // command flags
 pub const DIRS               :&str   = "dirs";
@@ -18,6 +18,9 @@ pub const SEARCH_IN_DOTTED   :&str   = "search-in-dotted";
 pub const SHOW_FAULTY_FILES  :&str   = "show-faulty-files";
 pub const NO_KEYWORDS        :&str   = "no-keywords";
 pub const NO_VISUAL          :&str   = "no-visual";
+pub const NO_GITIGNORE       :&str   = "no-gitignore";
+pub const COLORS             :&str   = "colors";
+pub const COLOR_PALETTE      :&str   = "color-palette";
 pub const LOG                :&str   = "log";
 pub const COMPRARE_LEVEL     :&str   = "compare";
 pub const SAVE               :&str   = "save";
@@ -26,10 +29,12 @@ pub const HELP               :&str   = "help";
 pub const CHANGELOG          :&str   = "changelog";
 pub const SHOW_LANGUAGES     :&str   = "show-languages";
 pub const SHOW_CONFIGS       :&str   = "show-configs";
+pub const SHOW_PALETTES      :&str   = "show-palettes";
+pub const TUNE_PALETTES      :&str   = "tune-palettes";
 
-pub const MAX_PRODUCERS_VALUE : usize = 4;
+pub const MAX_PRODUCERS_VALUE : usize = 8;
 pub const MIN_PRODUCERS_VALUE : usize = 1;
-pub const MAX_CONSUMERS_VALUE : usize = 12;
+pub const MAX_CONSUMERS_VALUE : usize = 30;
 pub const MIN_CONSUMERS_VALUE : usize = 1;
 pub const MIN_COMPARE_LEVEL   : usize = 0;
 pub const MAX_COMPARE_LEVEL   : usize = 10;
@@ -40,6 +45,7 @@ const DEF_SEARCH_IN_DOTTED  : bool    = false;
 const DEF_SHOW_FAULTY_FILES : bool    = false;
 const DEF_NO_VISUAL         : bool    = false;
 const DEF_NO_KEYWORDS       : bool    = false;
+const DEF_NO_GITIGNORE      : bool    = false;
 const DEF_COMPARE_LEVEL     : usize   = 1;
 
 
@@ -56,13 +62,15 @@ pub struct Configuration {
     pub should_show_faulty_files: bool,
     pub no_keywords: bool,
     pub no_visual: bool,
+    pub no_gitignore: bool,
+    pub colors: Vec<Color>,
     pub log: LogOption,
     pub compare_level: usize,
     pub config_name_to_save: Option<String>,
     pub config_name_to_load: Option<String>
 }
 
-#[derive(Debug,PartialEq,Clone)]
+#[derive(Debug,PartialEq,Clone,Default)]
 pub struct LogOption {
     pub should_log: bool,
     pub name: Option<String>
@@ -85,7 +93,11 @@ pub enum ArgParsingError {
     UnrecognisedCommand(String),
     IncorrectCommandArgs(String),
     UnexpectedCommandArgs(String),
-    NonExistantConfig(String)
+    NonExistantConfig(String),
+    InvalidValueInConfig(String,String),
+    InvalidGlobPattern(String),
+    NoGlobMatches(String),
+    AllGlobMatchesIgnored(String)
 }
 
 // Empty line argument is not supposed to be allowed, since this check is being performed in main
@@ -99,12 +111,15 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
 pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilder, ArgParsingError> {
     let mut dirs = None;
     let mut options = line.split("--");
+    // The target paths can be given before these flags are parsed, so they are detected up front
+    let respect_gitignore = !line.contains(&(String::from("--") + NO_GITIGNORE));
+    let dotted_are_targetable = line.contains(&(String::from("--") + SEARCH_IN_DOTTED));
 
     if line.trim().starts_with("--") {
         //ignoring the empty first element that is caused by splitting
         options.next();
     } else {
-        match parse_dirs(options.next().unwrap()) {
+        match parse_dirs(options.next().unwrap(), respect_gitignore, dotted_are_targetable) {
             Ok(x) => {
                 if !x.is_empty() {
                     dirs = Some(x);
@@ -118,9 +133,9 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
 
     let mut custom_config = None;
     let (mut exclude_dirs, mut languages_of_interest, mut excluded_languages, mut threads, mut braces_as_code,
-         mut search_in_dotted, mut show_faulty_files, mut config_name_to_save, mut no_visual, mut log, 
-         mut compare_level, mut config_name_to_load, mut no_keywords) 
-         = (None, None, None, None, None, None, None, None, None, None, None, None, None);
+         mut search_in_dotted, mut show_faulty_files, mut config_name_to_save, mut no_visual, mut log,
+         mut compare_level, mut config_name_to_load, mut no_keywords, mut no_gitignore, mut colors, mut color_palette)
+         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
     for command in options {
         let (command_name, arguments) = match command.find(" ") {
             Some(index) => command.split_at(index),
@@ -131,7 +146,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 return Err(ArgParsingError::DoublePath);
             }
 
-            let parse_result = parse_dirs(arguments);
+            let parse_result = parse_dirs(arguments, respect_gitignore, dotted_are_targetable);
             if let Ok(x) = parse_result {
                 if x.is_empty() {
                     message_printer::print_help_message_for_command(DIRS);
@@ -143,7 +158,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             }
         } else if command_name == EXCLUDE {
             let vec = utils::parse_paths_to_vec(arguments);
-            if vec.is_empty() {
+            if vec.is_empty() || utils::build_exclude_matcher(&vec).is_err() {
                 message_printer::print_help_message_for_command(EXCLUDE);
                 return Err(ArgParsingError::IncorrectCommandArgs(EXCLUDE.to_owned()));
             }
@@ -201,6 +216,27 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 return Err(ArgParsingError::UnexpectedCommandArgs(NO_VISUAL.to_owned()))
             }
             no_visual = Some(true);
+        } else if command_name == NO_GITIGNORE {
+            if has_any_args(command) {
+                message_printer::print_help_message_for_command(NO_GITIGNORE);
+                return Err(ArgParsingError::UnexpectedCommandArgs(NO_GITIGNORE.to_owned()))
+            }
+            no_gitignore = Some(true);
+        } else if command_name == COLORS {
+            match utils::parse_colors_to_vec(arguments) {
+                Some(x) => colors = Some(x),
+                None => {
+                    message_printer::print_help_message_for_command(COLORS);
+                    return Err(ArgParsingError::IncorrectCommandArgs(COLORS.to_owned()))
+                }
+            }
+        } else if command_name == COLOR_PALETTE {
+            let name = arguments.trim();
+            if name.is_empty() || io_handler::load_palette(name, &crate::PERSISTENT_APP_PATHS.palettes_dir).is_none() {
+                message_printer::print_help_message_for_command(COLOR_PALETTE);
+                return Err(ArgParsingError::IncorrectCommandArgs(COLOR_PALETTE.to_owned()))
+            }
+            color_palette = Some(name.to_owned());
         } else if command_name == LOG {
             let value = arguments.trim();
             if value.is_empty() {
@@ -223,15 +259,17 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 return Err(ArgParsingError::IncorrectCommandArgs(LOAD.to_owned()));
             }
 
-            if let Ok(options) = io_handler::parse_config_file(Some(config_name), None) {
+            if let Ok((mut options, invalid_fields)) = io_handler::parse_config_file(Some(config_name), None) {
                 if let Some(dirs) = &options.dirs {
-                    for dir in dirs.iter() {
-                        if !utils::is_valid_path(dir) {
-                            return Err(ArgParsingError::InvalidPathInConfig(dir.to_owned(), config_name.to_owned()));
-                        }
+                    match resolve_target_paths(dirs, respect_gitignore, dotted_are_targetable) {
+                        Ok(x) => options.dirs = Some(x),
+                        Err(ArgParsingError::InvalidPath(p)) | Err(ArgParsingError::InvalidGlobPattern(p))
+                                | Err(ArgParsingError::NoGlobMatches(p)) | Err(ArgParsingError::AllGlobMatchesIgnored(p)) =>
+                                return Err(ArgParsingError::InvalidPathInConfig(p, config_name.to_owned())),
+                        Err(x) => return Err(x)
                     }
                 }
-                custom_config = Some(options);
+                custom_config = Some((options, invalid_fields));
                 config_name_to_load = Some(config_name.to_owned());
             } else {
                 return Err(ArgParsingError::NonExistantConfig(config_name.to_owned()))
@@ -251,53 +289,82 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     print_warnings_for_commands_that_need_a_loaded_configuration(&config_name_to_save, &config_name_to_load, &log, &compare_level);
     
     let mut config_builder = ConfigurationBuilder::new(dirs, exclude_dirs, languages_of_interest, excluded_languages, threads, braces_as_code,
-        search_in_dotted, show_faulty_files, no_keywords, no_visual, log, compare_level,
+        search_in_dotted, show_faulty_files, no_keywords, no_visual, no_gitignore, colors, color_palette, log, compare_level,
         config_name_to_save, config_name_to_load);
 
-    if let Some(x) = custom_config {
-        config_builder.add_missing_fields(x);
+    if let Some((custom, invalid_fields)) = custom_config {
+        let config_name = config_builder.config_name_to_load.clone().unwrap_or_default();
+        resolve_invalid_config_fields(&config_builder, &invalid_fields, &config_name)?;
+        config_builder.add_missing_fields(custom);
     }
 
     if let Some(name) = &config_builder.config_name_to_save {
         if config_builder.dirs.is_none() {
-            match parse_working_dir_as_target_dir() {
-                Ok(x) => {config_builder.dirs = Some(x)},
-                Err(x) => {return Err(x)}
-            }
+            config_builder.dirs = Some(parse_working_dir_as_target_dir()?);
         }
 
         match io_handler::save_existing_commands_from_config_builder_to_file(None, name, &config_builder) {
             Err(_) => println!("\n{}","Error while trying to save config.".yellow()),
-            Ok(_) => println!("\nConfiguration '{}' saved successfully.",name)
+            Ok(_) => println!("\nConfiguration '{name}' saved successfully.")
         }
     }
 
-    if config_builder.has_missing_fields() {
-        let default_config = io_handler::parse_config_file(None, None);
-        if let Ok(x) = default_config {
-            config_builder.add_missing_fields(x);
+    if config_builder.has_missing_fields()
+        && let Ok((default_config, invalid_fields)) = io_handler::parse_config_file(None, None) {
+        resolve_invalid_config_fields(&config_builder, &invalid_fields, "default")?;
+        config_builder.add_missing_fields(default_config);
+    }
+
+    if config_builder.colors.is_none()
+        && let Some(name) = &config_builder.color_palette {
+        match io_handler::load_palette(name, &crate::PERSISTENT_APP_PATHS.palettes_dir) {
+            Some(x) => config_builder.colors = Some(x),
+            None => println!("\n{}", format!("Color palette '{name}' could not be loaded, the default colors will be used.").yellow())
         }
     }
 
     if config_builder.dirs.is_none() {
-        match parse_working_dir_as_target_dir() {
-            Ok(x) => {config_builder.dirs = Some(x)},
-            Err(x) => {return Err(x)}
-        }
+        config_builder.dirs = Some(parse_working_dir_as_target_dir()?);
     }
 
     Ok(config_builder)
 }
 
 
+fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_fields: &[&str], config_name: &str) -> Result<(), ArgParsingError> {
+    for field in invalid_fields {
+        let is_overridden = match *field {
+            THREADS => config_builder.threads.is_some(),
+            COMPRARE_LEVEL => config_builder.compare_level.is_some(),
+            BRACES_AS_CODE => config_builder.braces_as_code.is_some(),
+            SEARCH_IN_DOTTED => config_builder.should_search_in_dotted.is_some(),
+            SHOW_FAULTY_FILES => config_builder.should_show_faulty_files.is_some(),
+            NO_KEYWORDS => config_builder.no_keywords.is_some(),
+            NO_VISUAL => config_builder.no_visual.is_some(),
+            NO_GITIGNORE => config_builder.no_gitignore.is_some(),
+            EXCLUDE => config_builder.exclude_dirs.is_some(),
+            COLORS => config_builder.colors.is_some(),
+            COLOR_PALETTE => config_builder.color_palette.is_some(),
+            _ => false
+        };
+
+        if is_overridden {
+            println!("\n{}", format!("Invalid value for the command '--{field}', in config '{config_name}'. The value will be ignored.").yellow());
+        } else {
+            message_printer::print_help_message_for_command(field);
+            return Err(ArgParsingError::InvalidValueInConfig(field.to_string(), config_name.to_owned()));
+        }
+    }
+
+    Ok(())
+}
+
 fn print_warnings_for_commands_that_need_a_loaded_configuration(config_name_to_save: &Option<String>, config_name_to_load: &Option<String>,
         log: &Option<LogOption>, compare_level: &Option<usize>) 
 {
     if config_name_to_load.is_none() {
-        if let Some(log) = log {
-            if config_name_to_save.is_none() && log.should_log {
-                println!("\n{}","'--log' command will be ignored, since no config file was specified.".yellow());
-            }
+        if let Some(log) = log && config_name_to_save.is_none() && log.should_log {
+            println!("\n{}","'--log' command will be ignored, since no config file was specified.".yellow());
         }
 
         if compare_level.is_some() {
@@ -307,31 +374,61 @@ fn print_warnings_for_commands_that_need_a_loaded_configuration(config_name_to_s
 }
 
 fn has_any_args(command: &str) -> bool {
-    command.split(' ').skip(1).filter_map(|x| utils::get_trimmed_if_not_empty(x)).count() != 0
+    command.split(' ').skip(1).filter_map(utils::get_trimmed_if_not_empty).count() != 0
 }
 
-fn parse_dirs(s: &str) -> Result<Vec<String>, ArgParsingError> {
-    let mut _dirs = utils::parse_paths_to_vec(s);
+fn parse_dirs(s: &str, respect_gitignore: bool, search_in_dotted: bool) -> Result<Vec<String>, ArgParsingError> {
+    resolve_target_paths(&utils::parse_paths_to_vec(s), respect_gitignore, search_in_dotted)
+}
 
-    for dir in _dirs.iter_mut() {
-        let trimmed_dir =  dir.trim();
-        if !utils::is_valid_path(dir) {
-            return Err(ArgParsingError::InvalidPath(trimmed_dir.to_owned()))
+// Literal paths must exist and are always used, even if they are ignored or dotted, since the user
+// named them explicitly. Glob patterns are expanded to the existing paths they match, and those
+// matches are discovered by the program, so they are subject to the same rules as every other
+// discovered path. Finally, targets contained in other targets are dropped, so that no file
+// is counted twice.
+fn resolve_target_paths(entries: &[String], respect_gitignore: bool, search_in_dotted: bool)
+-> Result<Vec<String>, ArgParsingError>
+{
+    fn is_dotted(path: &Path) -> bool {
+        path.file_name().and_then(|x| x.to_str()).is_some_and(|x| x.starts_with('.'))
+    }
+
+    let mut resolved = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let trimmed = entry.trim();
+        if utils::has_glob_metacharacters(trimmed) {
+            let paths = match glob::glob(&trimmed.replace('\\', "/")) {
+                Ok(x) => x,
+                Err(_) => return Err(ArgParsingError::InvalidGlobPattern(trimmed.to_owned()))
+            };
+            let matches = paths.flatten().filter(|x| x.is_dir() || x.is_file()).collect::<Vec<_>>();
+            if matches.is_empty() {
+                return Err(ArgParsingError::NoGlobMatches(trimmed.to_owned()));
+            }
+
+            let relevant = matches.iter()
+                    .filter(|x| search_in_dotted || !is_dotted(x))
+                    .filter(|x| !respect_gitignore || !GitignoreStack::is_path_ignored(x))
+                    .filter_map(|x| x.to_str().map(convert_to_absolute)).collect::<Vec<_>>();
+            if relevant.is_empty() {
+                return Err(ArgParsingError::AllGlobMatchesIgnored(trimmed.to_owned()));
+            }
+            resolved.extend(relevant);
+        } else if utils::is_valid_path(trimmed) {
+            resolved.push(convert_to_absolute(trimmed));
         } else {
-            *dir = convert_to_absolute(trimmed_dir);
+            return Err(ArgParsingError::InvalidPath(trimmed.to_owned()));
         }
     }
 
-    Ok(_dirs)
+    Ok(utils::remove_overlapping_paths(resolved))
 }
 
 fn parse_working_dir_as_target_dir() -> Result<Vec<String>, ArgParsingError> {
-    if let Ok(path_buf) = std::env::current_dir() {
-        if let Some(path_str) = path_buf.to_str() {
-            if let Ok(x) = parse_dirs(path_str) {
-                return Ok(x);
-            }
-        }
+    if let Ok(path_buf) = std::env::current_dir()
+        && let Some(path_str) = path_buf.to_str()
+        && let Ok(x) = parse_dirs(path_str, true, false) {
+        return Ok(x);
     }
 
     Err(ArgParsingError::UnparsableWorkingDir)
@@ -366,6 +463,9 @@ pub struct ConfigurationBuilder {
     pub should_show_faulty_files: Option<bool>,
     pub no_keywords:              Option<bool>,
     pub no_visual:                Option<bool>,
+    pub no_gitignore:             Option<bool>,
+    pub colors:                   Option<Vec<Color>>,
+    pub color_palette:            Option<String>,
     pub log:                      Option<LogOption>,
     pub compare_level:            Option<usize>,
     pub config_name_to_save:      Option<String>,
@@ -375,8 +475,9 @@ pub struct ConfigurationBuilder {
 impl ConfigurationBuilder {
     pub fn new(dirs: Option<Vec<String>>, exclude_dirs: Option<Vec<String>>, languages_of_interest: Option<Vec<String>>, excluded_languages: Option<Vec<String>>,
              threads: Option<Threads>, braces_as_code: Option<bool>, should_search_in_dotted: Option<bool>, should_show_faulty_files: Option<bool>, no_keywords: Option<bool>,
-             no_visual: Option<bool>, log: Option<LogOption>, compare_level: Option<usize>, config_name_to_save: Option<String>, config_name_to_load: Option<String>) 
-    -> ConfigurationBuilder 
+             no_visual: Option<bool>, no_gitignore: Option<bool>, colors: Option<Vec<Color>>, color_palette: Option<String>, log: Option<LogOption>,
+             compare_level: Option<usize>, config_name_to_save: Option<String>, config_name_to_load: Option<String>)
+    -> ConfigurationBuilder
     {
         ConfigurationBuilder {
             dirs,
@@ -389,6 +490,9 @@ impl ConfigurationBuilder {
             should_show_faulty_files,
             no_keywords,
             no_visual,
+            no_gitignore,
+            colors,
+            color_palette,
             log,
             compare_level,
             config_name_to_save,
@@ -407,6 +511,9 @@ impl ConfigurationBuilder {
         if self.should_show_faulty_files.is_none() {self.should_show_faulty_files = config.should_show_faulty_files};
         if self.no_keywords.is_none() {self.no_keywords = config.no_keywords};
         if self.no_visual.is_none() {self.no_visual = config.no_visual};
+        if self.no_gitignore.is_none() {self.no_gitignore = config.no_gitignore};
+        if self.colors.is_none() {self.colors = config.colors};
+        if self.color_palette.is_none() {self.color_palette = config.color_palette};
         if self.compare_level.is_none() {self.compare_level = config.compare_level};
         if self.log.is_none() {self.log = config.log};
         self
@@ -415,8 +522,9 @@ impl ConfigurationBuilder {
     pub fn has_missing_fields(&self) -> bool {
         self.exclude_dirs.is_none() || self.languages_of_interest.is_none() ||
         self.threads.is_none() || self.braces_as_code.is_none() || self.should_search_in_dotted.is_none() ||
-        self.should_show_faulty_files.is_none() || self.no_visual.is_none() || self.log.is_none() || self.compare_level.is_none()
-    } 
+        self.should_show_faulty_files.is_none() || self.no_visual.is_none() || self.no_gitignore.is_none() ||
+        self.colors.is_none() || self.color_palette.is_none() || self.log.is_none() || self.compare_level.is_none()
+    }
 
     pub fn build(&self) -> Configuration {
         Configuration {
@@ -425,13 +533,15 @@ impl ConfigurationBuilder {
             exclude_dirs: (self.exclude_dirs).clone().unwrap_or_default(),
             languages_of_interest: (self.languages_of_interest).clone().unwrap_or_default(),
             excluded_languages: (self.excluded_languages).clone().unwrap_or_default(),
-            threads: self.threads.clone().unwrap_or_else(Threads::default),
+            threads: self.threads.clone().unwrap_or_default(),
             braces_as_code: self.braces_as_code.unwrap_or(DEF_BRACES_AS_CODE),
             should_search_in_dotted: self.should_search_in_dotted.unwrap_or(DEF_SEARCH_IN_DOTTED),
             should_show_faulty_files: self.should_show_faulty_files.unwrap_or(DEF_SHOW_FAULTY_FILES),
             no_keywords: self.no_keywords.unwrap_or(DEF_NO_KEYWORDS),
             no_visual: self.no_visual.unwrap_or(DEF_NO_VISUAL),
-            log: self.log.clone().unwrap_or_else(LogOption::default),
+            no_gitignore: self.no_gitignore.unwrap_or(DEF_NO_GITIGNORE),
+            colors: self.colors.clone().unwrap_or_default(),
+            log: self.log.clone().unwrap_or_default(),
             compare_level: self.compare_level.unwrap_or(DEF_COMPARE_LEVEL),
             config_name_to_save: self.config_name_to_save.clone(),
             config_name_to_load: self.config_name_to_load.clone()
@@ -453,6 +563,8 @@ impl Configuration {
             should_show_faulty_files: DEF_SHOW_FAULTY_FILES,
             no_keywords: DEF_NO_KEYWORDS,
             no_visual: DEF_NO_VISUAL,
+            no_gitignore: DEF_NO_GITIGNORE,
+            colors: Vec::new(),
             log: LogOption::default(),
             compare_level: DEF_COMPARE_LEVEL,
             config_name_to_save: None,
@@ -508,6 +620,16 @@ impl Configuration {
         self
     }
 
+    pub fn set_no_gitignore(&mut self, no_gitignore: bool) -> &mut Self {
+        self.no_gitignore = no_gitignore;
+        self
+    }
+
+    pub fn set_colors(&mut self, colors: Vec<Color>) -> &mut Self {
+        self.colors = colors;
+        self
+    }
+
     pub fn set_log_option(&mut self, log: LogOption) -> &mut Self {
         self.log = log;
         self
@@ -528,24 +650,22 @@ impl Threads {
             consumers: threads.1
         }
     }
+}
 
-    pub fn default() -> Self {
+impl Default for Threads {
+    fn default() -> Self {
         let threads = num_cpus::get();
-        // We may actually use one more thread than the available ones, it seems to help a bit
+        // Consumers are deliberately oversubscribed relative to the core count, so that
+        // blocking file opens overlap instead of idling cores.
         if threads <= 4 {
             Threads {
                 producers: 2,
-                consumers: 3
-            }
-        } else if threads <= 8 {
-            Threads {
-                producers: 3,
-                consumers: 6
+                consumers: (threads * 2).clamp(3, MAX_CONSUMERS_VALUE)
             }
         } else {
             Threads {
-                producers: 3,
-                consumers: 8
+                producers: (threads / 2).clamp(2, MAX_PRODUCERS_VALUE),
+                consumers: (threads * 2).clamp(3, MAX_CONSUMERS_VALUE)
             }
         }
     }
@@ -558,13 +678,6 @@ impl LogOption {
             name: log_name,
         }
     }
-
-    pub fn default() -> Self {
-        LogOption {
-            should_log: false,
-            name: None
-        }
-    }
 }
 
 impl Formatted for ArgParsingError {
@@ -573,13 +686,17 @@ impl Formatted for ArgParsingError {
             Self::NoArgsProvided => "No arguments provided.".red(),
             Self::UnparsableWorkingDir => "The current working dir could not be parsed as target dir, try inputing it manually.".red(),
             Self::MissingTargetDirs => "The target directories (--dirs) are not specified.".red(),
-            Self::InvalidPath(p) => format!("Path provided is not a valid directory or file:\n'{}'.",p).red(),
-            Self::InvalidPathInConfig(dir,name) => format!("Specified path '{}', in config '{}', doesn't exist anymore.",dir,name).red(),
+            Self::InvalidPath(p) => format!("Path provided is not a valid directory or file:\n'{p}'.").red(),
+            Self::InvalidPathInConfig(dir,name) => format!("Specified path '{dir}', in config '{name}', doesn't exist anymore.").red(),
             Self::DoublePath => "Directories already provided as first argument, but --dirs command also found.".red(),
-            Self::UnrecognisedCommand(p) => format!("--{} is not recognised as a command.",p).red(),
-            Self::IncorrectCommandArgs(p) => format!("Incorrect arguments provided for the command '--{}'.",p).red(),
-            Self::UnexpectedCommandArgs(p) => format!("Command '--{}' does not expect any arguments.",p).red(),
-            Self::NonExistantConfig(p) => format!("Configuration '{}' does not exist.",p).red()
+            Self::UnrecognisedCommand(p) => format!("--{p} is not recognised as a command.").red(),
+            Self::IncorrectCommandArgs(p) => format!("Incorrect arguments provided for the command '--{p}'.").red(),
+            Self::UnexpectedCommandArgs(p) => format!("Command '--{p}' does not expect any arguments.").red(),
+            Self::NonExistantConfig(p) => format!("Configuration '{p}' does not exist.").red(),
+            Self::InvalidValueInConfig(cmd,conf) => format!("Invalid value for the command '--{cmd}', in config '{conf}'.\nFix the value in the config file, or override it by providing a valid '--{cmd}' argument.").red(),
+            Self::InvalidGlobPattern(p) => format!("'{p}' is not a valid glob pattern.").red(),
+            Self::NoGlobMatches(p) => format!("The pattern '{p}' did not match any existing directory or file.").red(),
+            Self::AllGlobMatchesIgnored(p) => format!("Everything that the pattern '{p}' matched is skipped, either because a .gitignore file ignores it, or because it is a dotted path.\nUse the '--no-gitignore' or '--search-in-dotted' commands to include it, or provide the paths explicitly.").red()
         }
     }
 }
@@ -593,6 +710,19 @@ mod tests {
 
     use super::*;
 
+    fn parse_dirs(s: &str) -> Result<Vec<String>, ArgParsingError> {
+        super::parse_dirs(s, true, false)
+    }
+
+    fn new_conf(dir: &str) -> Configuration {
+        let mut builder = ConfigurationBuilder::new(Some(vec![convert_to_absolute(dir)]), None, None, None, None, None,
+                None, None, None, None, None, None, None, None, None, None, None);
+        if let Ok((default_config, _)) = io_handler::parse_config_file(None, None) {
+            builder.add_missing_fields(default_config);
+        }
+        builder.build()
+    }
+
     #[test]
     fn test_cmd_arg_parsing() {
         assert_eq!(Err(ArgParsingError::InvalidPath("random".to_owned())), create_config_from_args("random"));
@@ -604,8 +734,8 @@ mod tests {
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("dirs".to_owned())), create_config_from_args("--dirs"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("dirs".to_owned())), create_config_from_args("--dirs   "));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 5 10"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 2 13"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 9 10"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 2 31"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 9"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads A"));
         assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("show-faulty-files".to_owned())), create_config_from_args("./ --threads 1 1 --show-faulty-files 1"));
@@ -615,37 +745,46 @@ mod tests {
         assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("braces-as-code".to_owned())), create_config_from_args("./ --braces-as-code a"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned())), create_config_from_args("./ --exclude"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned())), create_config_from_args("./ --exclude   --threads 4"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned())), create_config_from_args("./ --exclude [invalid"));
+        assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("no-gitignore".to_owned())), create_config_from_args("./ --no-gitignore a"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("colors".to_owned())), create_config_from_args("./ --colors"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("colors".to_owned())), create_config_from_args("./ --colors kaka"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("colors".to_owned())), create_config_from_args("./ --colors ff0000 ff0000 ff0000 ff0000 ff0000 ff0000"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("load".to_owned())), create_config_from_args("./ --load"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("load".to_owned())), create_config_from_args("./ --load   "));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("save".to_owned())), create_config_from_args("./ --save"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("save".to_owned())), create_config_from_args("./ --save   "));
 
-        assert_ne!(Configuration::new(vec![convert_to_absolute("../")]), create_config_from_args(std::env::current_dir().unwrap().to_str().unwrap()).unwrap());
-        assert_eq!(Configuration::new(vec![convert_to_absolute("./")]), create_config_from_args(std::env::current_dir().unwrap().to_str().unwrap()).unwrap());
+        assert_ne!(new_conf("../"), create_config_from_args(std::env::current_dir().unwrap().to_str().unwrap()).unwrap());
+        assert_eq!(new_conf("./"), create_config_from_args(std::env::current_dir().unwrap().to_str().unwrap()).unwrap());
 
-        assert_eq!(Configuration::new(vec![convert_to_absolute("./")]), create_config_from_args("./").unwrap());
-        assert_eq!(Configuration::new(vec![convert_to_absolute("./")]), create_config_from_args("--dirs ./").unwrap());
-        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_threads(1,1), create_config_from_args("./ --threads 1 1").unwrap());
-        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_threads(1,1), create_config_from_args("./ --threads   1   1 ").unwrap());
-        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_threads(1,1).set_braces_as_code(true),
+        assert_eq!(new_conf("./"), create_config_from_args("./").unwrap());
+        assert_eq!(new_conf("./"), create_config_from_args("--dirs ./").unwrap());
+        assert_eq!(*new_conf("./").set_threads(1,1), create_config_from_args("./ --threads 1 1").unwrap());
+        assert_eq!(*new_conf("./").set_threads(1,1), create_config_from_args("./ --threads   1   1 ").unwrap());
+        assert_eq!(*new_conf("./").set_threads(1,1).set_braces_as_code(true),
                 create_config_from_args("./ --threads 1 1 --braces-as-code").unwrap());
-        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_should_search_in_dotted(true),
+        assert_eq!(*new_conf("./").set_should_search_in_dotted(true),
                 create_config_from_args("./ --search-in-dotted").unwrap());
-        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_should_enable_visuals(true),
+        assert_eq!(*new_conf("./").set_should_enable_visuals(true),
                 create_config_from_args("./ --no-visual").unwrap());
-        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_should_show_faulty_files(true),
+        assert_eq!(*new_conf("./").set_no_gitignore(true),
+                create_config_from_args("./ --no-gitignore").unwrap());
+        assert_eq!(*new_conf("./").set_colors(vec![Color::TrueColor{r:255,g:136,b:0}, Color::BrightCyan]),
+                create_config_from_args("./ --colors ff8800 bright-cyan").unwrap());
+        assert_eq!(*new_conf("./").set_should_show_faulty_files(true),
                 create_config_from_args("./ --show-faulty-files").unwrap());
-        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_exclude_dirs(vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]),
+        assert_eq!(*new_conf("./").set_exclude_dirs(vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]),
                 create_config_from_args("./ --exclude a,b ,  c ").unwrap());
-        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_exclude_dirs(vec!["a/path".to_owned(),"b/path".to_owned()]),
+        assert_eq!(*new_conf("./").set_exclude_dirs(vec!["a/path".to_owned(),"b/path".to_owned()]),
                 create_config_from_args("./ --exclude \"a\\path\", \"b\\path\"").unwrap());
-        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_languages_of_interest(vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]),
+        assert_eq!(*new_conf("./").set_languages_of_interest(vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]),
                 create_config_from_args("./ --languages a,b,c").unwrap());
-        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_languages_of_interest(vec!["a".to_owned()]),
+        assert_eq!(*new_conf("./").set_languages_of_interest(vec!["a".to_owned()]),
                 create_config_from_args("./ --languages a, ").unwrap());
-        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_log_option(LogOption::new(Some("this is a test".to_owned()))),
+        assert_eq!(*new_conf("./").set_log_option(LogOption::new(Some("this is a test".to_owned()))),
                 create_config_from_args("./ --log   this is a test ").unwrap());
-        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_log_option(LogOption::new(None)),
+        assert_eq!(*new_conf("./").set_log_option(LogOption::new(None)),
                 create_config_from_args("./ --log  ").unwrap());
     }
 
@@ -690,11 +829,81 @@ mod tests {
 
     #[test]
     fn test_parse_dirs() {
-        assert!(parse_dirs("a").is_err());
-        assert!(parse_dirs("a b c").is_err());
+        assert_eq!(Err(ArgParsingError::InvalidPath("a".to_owned())), parse_dirs("a"));
+        assert_eq!(Err(ArgParsingError::InvalidPath("a b c".to_owned())), parse_dirs("a b c"));
 
-        assert_eq!(vec![convert_to_absolute("./"), convert_to_absolute(".././")], parse_dirs("./, .././").unwrap());
-        assert_eq!(vec![convert_to_absolute("./"), convert_to_absolute(".././")], parse_dirs("./, \".././\"").unwrap());
+        assert_eq!(vec![convert_to_absolute("./")], parse_dirs("./").unwrap());
+        assert_eq!(vec![convert_to_absolute("./src")], parse_dirs("\"./src\"").unwrap());
+
+        // Targets that contain other targets swallow them, so that no file is counted twice
+        assert_eq!(vec![convert_to_absolute(".././")], parse_dirs("./, .././").unwrap());
+        assert_eq!(vec![convert_to_absolute(".././")], parse_dirs("./, \".././\"").unwrap());
+        assert_eq!(vec![convert_to_absolute("./")], parse_dirs("./src, ./, ./tests").unwrap());
+        assert_eq!(vec![convert_to_absolute("./src")], parse_dirs("./src, ./src/utils.rs").unwrap());
+
+        // Unrelated targets are all kept
+        assert_eq!(vec![convert_to_absolute("./src"), convert_to_absolute("./tests")],
+                parse_dirs("./tests, ./src").unwrap());
+    }
+
+    #[test]
+    fn test_parse_dirs_with_glob_patterns() {
+        let root = std::env::temp_dir().join("mezura_glob_test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("a").join("src")).unwrap();
+        std::fs::create_dir_all(root.join("b").join("src")).unwrap();
+        std::fs::create_dir_all(root.join("c")).unwrap();
+        std::fs::write(root.join("a").join("src").join("one.rs"), "fn main() {}").unwrap();
+        std::fs::write(root.join("b").join("src").join("two.rs"), "fn main() {}").unwrap();
+        let root = root.to_str().unwrap().replace('\\', "/");
+        let abs = |x: &str| convert_to_absolute(&format!("{root}/{x}"));
+
+        assert_eq!(vec![abs("a/src"), abs("b/src")], parse_dirs(&format!("{root}/*/src")).unwrap());
+        assert_eq!(vec![abs("a/src/one.rs")], parse_dirs(&format!("{root}/a/src/*.rs")).unwrap());
+        assert_eq!(vec![abs("a"), abs("b"), abs("c")], parse_dirs(&format!("{root}/*")).unwrap());
+
+        // A pattern can be mixed with literal paths, and the overlaps of both are collapsed
+        assert_eq!(vec![abs("a"), abs("b"), abs("c")],
+                parse_dirs(&format!("{root}/*, {root}/*/src, {root}/a/src/one.rs")).unwrap());
+
+        assert_eq!(Err(ArgParsingError::NoGlobMatches(format!("{root}/*/nope"))),
+                parse_dirs(&format!("{root}/*/nope")));
+        assert_eq!(Err(ArgParsingError::InvalidGlobPattern("a[".to_owned())), parse_dirs("a["));
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn test_glob_matches_respect_gitignore_but_literal_paths_do_not() {
+        let root = std::env::temp_dir().join("mezura_glob_gitignore_test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(root.join("kept")).unwrap();
+        std::fs::create_dir_all(root.join("build").join("deep")).unwrap();
+        std::fs::write(root.join(".gitignore"), "build/\nignored.rs\n").unwrap();
+        std::fs::write(root.join("kept").join("one.rs"), "fn main() {}").unwrap();
+        std::fs::write(root.join("kept").join("ignored.rs"), "fn main() {}").unwrap();
+        std::fs::write(root.join("build").join("deep").join("generated.rs"), "fn main() {}").unwrap();
+        let root = root.to_str().unwrap().replace('\\', "/");
+        let abs = |x: &str| convert_to_absolute(&format!("{root}/{x}"));
+
+        // The ignored dir and the ignored file are dropped from the matches
+        assert_eq!(vec![abs("kept")], parse_dirs(&format!("{root}/*")).unwrap());
+        assert_eq!(vec![abs("kept/one.rs")], parse_dirs(&format!("{root}/**/*.rs")).unwrap());
+
+        // Unless the gitignore support is turned off
+        assert_eq!(vec![abs("build"), abs("kept")], super::parse_dirs(&format!("{root}/*"), false, false).unwrap());
+        assert_eq!(vec![abs("build/deep/generated.rs"), abs("kept/ignored.rs"), abs("kept/one.rs")],
+                super::parse_dirs(&format!("{root}/**/*.rs"), false, false).unwrap());
+
+        // Explicitly named paths are always used, even when they are ignored
+        assert_eq!(vec![abs("build")], parse_dirs(&format!("{root}/build")).unwrap());
+        assert_eq!(vec![abs("kept/ignored.rs")], parse_dirs(&format!("{root}/kept/ignored.rs")).unwrap());
+
+        assert_eq!(Err(ArgParsingError::AllGlobMatchesIgnored(format!("{root}/build/*"))),
+                parse_dirs(&format!("{root}/build/*")));
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
     
     #[test]
@@ -720,6 +929,42 @@ mod tests {
         saved_config = create_config_builder_from_args("--load test000 --threads 1 4 --dirs ./ --save test000").unwrap();
         saved_config.config_name_to_save = None;
         assert_eq!(saved_config, loaded_config);
+
+        std::fs::remove_file(test_file_path).unwrap();
+    }
+
+    #[test]
+    fn test_color_palette_arg_parsing() {
+        std::fs::create_dir_all(&PERSISTENT_APP_PATHS.palettes_dir).unwrap();
+        let test_palette_path = &PERSISTENT_APP_PATHS.palettes_dir.clone().add("test-palette000.txt");
+        assert!(!Path::new(test_palette_path).exists());
+        std::fs::write(test_palette_path, "cyan ff0080\n").unwrap();
+
+        let config = create_config_from_args("./ --color-palette Test-Palette000").unwrap();
+        assert_eq!(vec![Color::Cyan, Color::TrueColor{r:255,g:0,b:128}], config.colors);
+
+        let overridden = create_config_from_args("./ --color-palette test-palette000 --colors bright-blue").unwrap();
+        assert_eq!(vec![Color::BrightBlue], overridden.colors);
+
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("color-palette".to_owned())),
+                create_config_from_args("./ --color-palette definitely-not-a-palette000"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("color-palette".to_owned())),
+                create_config_from_args("./ --color-palette"));
+
+        std::fs::remove_file(test_palette_path).unwrap();
+    }
+
+    #[test]
+    fn test_load_config_with_invalid_value() {
+        let test_file_path = &PERSISTENT_APP_PATHS.config_dir.clone().add("/test001.txt");
+        assert!(!Path::new(test_file_path).exists());
+        std::fs::write(test_file_path, "===> threads\n3343 45534\n").unwrap();
+
+        assert_eq!(Err(ArgParsingError::InvalidValueInConfig("threads".to_owned(), "test001".to_owned())),
+                create_config_from_args("./ --load test001"));
+
+        let overridden = create_config_from_args("./ --load test001 --threads 1 2").unwrap();
+        assert_eq!(overridden.threads, Threads::new(1, 2));
 
         std::fs::remove_file(test_file_path).unwrap();
     }

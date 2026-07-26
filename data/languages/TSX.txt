@@ -1,11 +1,11 @@
 Language
-C++
+TSX
 
 Extensions
-cpp
+tsx
 
 String symbols
-"
+" '
 
 Comment symbols
 //
@@ -21,6 +21,11 @@ Keyword
     class
 Keyword
     NAME
-    structs
+    interfaces
     ALIASES
-    struct
+    interface
+Keyword
+    NAME
+    enums
+    ALIASES
+    enum

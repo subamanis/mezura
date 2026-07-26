@@ -1,21 +1,22 @@
 Language
-C
+Zig
 
 Extensions
-c
+zig
 
 String symbols
 "
 
 Comment symbols
 //
-Multi line comment start
-/*
-Multi line comment end
-*/
 
 Keyword
 NAME
 structs
 ALIASES
 struct
+Keyword
+NAME
+enums
+ALIASES
+enum

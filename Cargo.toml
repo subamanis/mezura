@@ -1,19 +1,25 @@
 [package]
 name = "mezura"
-version = "1.0.0-beta1"
+version = "2.0.0"
 authors = ["subamanis <petrospapa21@gmail.com>"]
-edition = "2018"
+edition = "2024"
 default-run = "mezura"
 
 [[bin]]
 name = "mezura"
 path = "src/main.rs"
 
+[profile.release]
+debug = true
+
 [dependencies]
 colored = "2"
-lazy_static = "1.4.0"
-chrono = "0.4.19"
-crossbeam-deque = "0.8"
+memchr = "2.8"
+globset = "0.4.19"
+ignore = "0.4.20"
+glob = "0.3.3"
+chrono = "0.4.45"
+crossbeam-deque = "0.8.7"
 num_cpus = "1.13.0"
 directories = "4.0.1"
 include_dir = "0.6.2"

@@ -1,21 +1,22 @@
 Language
-C
+Elixir
 
 Extensions
-c
+ex exs
 
 String symbols
 "
 
 Comment symbols
-//
-Multi line comment start
-/*
-Multi line comment end
-*/
+#
 
 Keyword
 NAME
-structs
+modules
 ALIASES
-struct
+defmodule
+Keyword
+NAME
+functions
+ALIASES
+def defp

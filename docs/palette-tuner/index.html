@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mezura color palettes</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root { --term-bg: #0c0c0c; --card-bg: #242424; --card-border: #3a3a3a; }
+  body { background: #0d0d0d; color: #c8c8c8; font-family: 'Cascadia Code', 'Consolas', monospace; padding: 1rem; }
+  h1 { font-size: 1.4rem; font-weight: 600; color: #eee; margin-bottom: 0.4rem; }
+  .hint { color: #777; font-size: 0.8rem; margin-bottom: 2rem; max-width: 90ch; line-height: 1.5; }
+  #palettes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.2rem; }
+  @media (max-width: 1100px) { #palettes { grid-template-columns: 1fr; } }
+  .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 10px; padding: 1.1rem 1.3rem; }
+  #bg-control { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1.4rem; }
+  #bg-control label { font-size: 0.72rem; color: #888; }
+  #bg-control input[type="color"] { width: 32px; height: 26px; border: 1px solid #333; border-radius: 4px; background: #0c0c0c; padding: 1px; cursor: pointer; }
+  #bg-control input[type="text"] { width: 7.6rem; background: #0c0c0c; border: 1px solid #333; border-radius: 4px; color: #ccc; font-family: inherit; font-size: 0.7rem; padding: 0.26rem 0.42rem; }
+  #bg-control input[type="text"]:focus { outline: none; border-color: #4a4a4a; }
+  #bg-control input[type="text"].invalid { border-color: #a03030; color: #e08080; }
+  .card h2 { font-size: 1rem; font-weight: 600; color: #ddd; margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.75rem; }
+  .card h2 .close { margin-left: auto; background: transparent; border: none; color: #555; font-size: 1rem; padding: 0 0.2rem; cursor: pointer; }
+  .card h2 .close:hover { color: #e07a7a; background: transparent; }
+  .card h2 .reroll { margin-left: auto; background: transparent; border: none; color: #555; font-size: 1.05rem; padding: 0 0.2rem; cursor: pointer; }
+  .card h2 .reroll + .close { margin-left: 0; }
+  .card h2 .reroll:hover { color: #7dc87d; background: transparent; }
+  .card h2 .named-note { font-size: 0.68rem; font-weight: 400; color: #666; }
+  .preview { background: var(--term-bg); border-radius: 6px; padding: 0.7rem 1rem; font-size: 0.74rem; line-height: 1.9; overflow-x: auto; white-space: nowrap; margin-bottom: 0.9rem; }
+  .metric-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 0.6rem; margin-bottom: 0.45rem; font-size: 0.66rem; }
+  .metric-row .rlabel { color: #666; min-width: 7.5rem; }
+  .metric { padding: 0.13rem 0.45rem; border-radius: 4px; border: 1px solid #2e2e2e; color: #999; }
+  .metric.ok { border-color: #2e4a2e; color: #7dc87d; }
+  .metric.warn { border-color: #5a4a1e; color: #d8b957; }
+  .metric.bad { border-color: #5a2424; color: #e07a7a; }
+  .pickers { display: flex; flex-wrap: wrap; gap: 0.7rem 1rem; margin: 0.9rem 0; }
+  .picker { display: flex; flex-direction: column; gap: 0.3rem; }
+  .picker label { font-size: 0.68rem; color: #888; }
+  .picker .row { display: flex; align-items: center; gap: 0.4rem; }
+  .picker input[type="color"] { width: 32px; height: 26px; border: 1px solid #333; border-radius: 4px; background: #0c0c0c; padding: 1px; cursor: pointer; }
+  .picker input[type="text"] { width: 7.6rem; background: #0c0c0c; border: 1px solid #333; border-radius: 4px; color: #ccc; font-family: inherit; font-size: 0.7rem; padding: 0.26rem 0.42rem; }
+  .picker input[type="text"]:focus { outline: none; border-color: #4a4a4a; }
+  .picker input[type="text"].invalid { border-color: #a03030; color: #e08080; }
+  .out { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+  .out code { background: #0c0c0c; border: 1px solid #262626; border-radius: 5px; padding: 0.32rem 0.55rem; font-size: 0.7rem; color: #9ecb9e; user-select: all; overflow-x: auto; max-width: 100%; }
+  button { background: #222; color: #bbb; border: 1px solid #383838; border-radius: 5px; padding: 0.3rem 0.7rem; font-family: inherit; font-size: 0.7rem; cursor: pointer; }
+  button:hover { background: #2d2d2d; color: #ddd; }
+  .copied { color: #7dd87d !important; border-color: #3f6b3f !important; }
+  #add-card { display: flex; align-items: center; justify-content: center; min-height: 120px; background: transparent; border: 2px dashed #333; border-radius: 10px; color: #555; font-size: 2.2rem; cursor: pointer; user-select: none; transition: border-color 0.15s, color 0.15s; }
+  #add-card:hover { border-color: #555; color: #999; }
+</style>
+</head>
+<body>
+<h1>mezura color palettes</h1>
+<p class="hint">Tune each color with the picker or by typing: the field accepts hex values (with or without #) and the 16 named ANSI colors (cyan, bright-magenta, ...), exactly like mezura's own parser. The badges show the contrast of each color against the background (aim for ≥ 4.5) and the ΔE distance between colors that sit next to each other in the output (aim for ≥ 45, below 25 they blend together). Named colors are previewed with Campbell scheme approximations; in a real terminal they follow your own color scheme. The generated command is PowerShell-safe. Press + to spawn a new random playground.</p>
+<div id="bg-control">
+  <label for="bg-color">terminal bg</label>
+  <input type="color" id="bg-color" value="#0c0c0c">
+  <input type="text" id="bg-text" value="0c0c0c" spellcheck="false">
+</div>
+<div id="palettes"></div>
+
+<script>
+let SYSTEM_PALETTES = null;
+/*MEZURA_SYSTEM_PALETTES*/
+
+const PALETTES = [
+  { name: "Mezura",     tokens: ["cyan", "bright-magenta", "bright-yellow", "6ad9bd", "d7c9f0"] },
+  { name: "Dracula",    tokens: ["ff79c6", "8be9fd", "50fa7b", "bd93f9", "bd93f9"] },
+  { name: "Nord",       tokens: ["88c0d0", "81a1c1", "b48ead", "d8dee9", "d8dee9"] },
+  { name: "Gruvbox",    tokens: ["fb4934", "fabd2f", "b8bb26", "83a598", "83a598"] },
+  { name: "Catppuccin", tokens: ["f38ba8", "fab387", "a6e3a1", "cba6f7", "cba6f7"] },
+  { name: "Sunset",     tokens: ["ff5e5b", "ff9e4f", "ffd166", "b0a8b9", "b0a8b9"] },
+  { name: "Neon",       tokens: ["ff2e97", "00f0ff", "f9f002", "9d72ff", "9d72ff"] },
+  { name: "Ocean",      tokens: ["22d3ee", "60a5fa", "34d399", "94a3b8", "94a3b8"] },
+];
+
+const NAMED_COLORS = {
+  "black": "#0C0C0C", "red": "#C50F1F", "green": "#13A10E", "yellow": "#C19C00",
+  "blue": "#0037DA", "magenta": "#881798", "cyan": "#3A96DD", "white": "#CCCCCC",
+  "bright-black": "#767676", "bright-red": "#E74856", "bright-green": "#16C60C",
+  "bright-yellow": "#F9F1A5", "bright-blue": "#3B78FF", "bright-magenta": "#B4009E",
+  "bright-cyan": "#61D6D6", "bright-white": "#F2F2F2"
+};
+
+const SLOT_LABELS = ["1st lang", "2nd lang", "3rd lang", "4th lang", "others"];
+const GRAY = '<span style="color:#8a8a8a">';
+const state = [];
+let customCount = 0;
+let termBg = "#0c0c0c";
+
+function tokenToHex(token) {
+  const t = token.trim().toLowerCase().replace(/_/g, "-");
+  if (NAMED_COLORS[t]) return NAMED_COLORS[t];
+  const hex = t.replace(/^#/, "");
+  if (/^[0-9a-f]{6}$/.test(hex)) return "#" + hex;
+  return null;
+}
+
+function normalizeToken(token) {
+  const t = token.trim().toLowerCase().replace(/_/g, "-");
+  if (NAMED_COLORS[t]) return t;
+  return t.replace(/^#/, "");
+}
+
+function slotsFromTokens(tokens) {
+  return tokens.map(t => ({ token: normalizeToken(t), hex: tokenToHex(t) }));
+}
+
+function hslToHex(h, s, l) {
+  s /= 100; l /= 100;
+  const k = n => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = n => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  const toHex = v => Math.round(v * 255).toString(16).padStart(2, "0");
+  return toHex(f(0)) + toHex(f(8)) + toHex(f(4));
+}
+
+function randomTokens() {
+  const start = Math.random() * 360;
+  const spacing = 70 + Math.random() * 25;
+  const vivid = i => hslToHex((start + i * spacing + (Math.random() * 20 - 10)) % 360,
+      65 + Math.random() * 20, 58 + Math.random() * 14);
+  const muted = hslToHex(Math.random() * 360, 12 + Math.random() * 14, 64 + Math.random() * 10);
+  return [vivid(0), vivid(1), vivid(2), vivid(3), muted];
+}
+
+function bar(slots, indices, counts) {
+  let s = GRAY + '  [-</span>';
+  indices.forEach((idx, i) => {
+    s += '<span style="color:' + slots[idx].hex + '">' + "|".repeat(counts[i]) + '</span>';
+  });
+  return s + GRAY + '-]</span>';
+}
+
+function previewHtml(slots) {
+  const seg = (idx, name) => '<span style="color:' + slots[idx].hex + '">' + name + '</span>';
+  const l1 = GRAY + 'Files:   57.45% </span>' + seg(0, "Rust") +
+    GRAY + ' - 30.86% </span>' + seg(1, "JS") +
+    GRAY + ' -  8.21% </span>' + seg(2, "Python") +
+    GRAY + ' -  3.48% </span>' + seg(3, "C++") +
+    bar(slots, [0, 1, 2, 3], [29, 15, 4, 2]);
+  const l2 = GRAY + 'Lines:   62.10% </span>' + seg(0, "Rust") +
+    GRAY + ' - 21.35% </span>' + seg(1, "JS") +
+    GRAY + ' - 10.11% </span>' + seg(2, "Python") +
+    GRAY + ' -  6.44% </span>' + seg(4, "others") +
+    bar(slots, [0, 1, 2, 4], [31, 11, 5, 3]);
+  return l1 + "<br>" + l2;
+}
+
+function hexToRgb(hex) {
+  const h = hex.replace("#", "");
+  return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)];
+}
+
+function relLuminance(rgb) {
+  const c = rgb.map(v => { v /= 255; return v <= 0.03928 ? v/12.92 : Math.pow((v+0.055)/1.055, 2.4); });
+  return 0.2126*c[0] + 0.7152*c[1] + 0.0722*c[2];
+}
+
+function contrastWithBg(hex) {
+  const l1 = relLuminance(hexToRgb(hex));
+  const l2 = relLuminance(hexToRgb(termBg));
+  return (Math.max(l1,l2) + 0.05) / (Math.min(l1,l2) + 0.05);
+}
+
+function shift(hex, amount) {
+  const rgb = hexToRgb(hex);
+  const dir = relLuminance(rgb) < 0.35 ? 1 : -1;
+  const c = v => Math.max(0, Math.min(255, v + dir * amount)).toString(16).padStart(2, "0");
+  return "#" + c(rgb[0]) + c(rgb[1]) + c(rgb[2]);
+}
+
+function applyTermBg(hex) {
+  termBg = hex;
+  document.documentElement.style.setProperty("--term-bg", hex);
+  document.documentElement.style.setProperty("--card-bg", shift(hex, 24));
+  document.documentElement.style.setProperty("--card-border", shift(hex, 46));
+  state.forEach((s, pi) => { if (s) refresh(pi); });
+}
+
+function rgbToLab(rgb) {
+  let [r,g,b] = rgb.map(v => { v /= 255; return v <= 0.04045 ? v/12.92 : Math.pow((v+0.055)/1.055, 2.4); });
+  let x = (r*0.4124 + g*0.3576 + b*0.1805) / 0.95047;
+  let y = (r*0.2126 + g*0.7152 + b*0.0722);
+  let z = (r*0.0193 + g*0.1192 + b*0.9505) / 1.08883;
+  const f = t => t > 0.008856 ? Math.cbrt(t) : (7.787*t + 16/116);
+  return [116*f(y) - 16, 500*(f(x)-f(y)), 200*(f(y)-f(z))];
+}
+
+function deltaE(hex1, hex2) {
+  const a = rgbToLab(hexToRgb(hex1)), b = rgbToLab(hexToRgb(hex2));
+  return Math.sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2 + (a[2]-b[2])**2);
+}
+
+function metricsHtml(slots) {
+  let bgRow = '<span class="rlabel">vs background</span>';
+  slots.forEach((s, i) => {
+    const ratio = contrastWithBg(s.hex);
+    const cls = ratio >= 4.5 ? "ok" : ratio >= 3 ? "warn" : "bad";
+    bgRow += '<span class="metric ' + cls + '">' + (i === 4 ? "others" : (i+1)) + ': ' + ratio.toFixed(1) + '</span>';
+  });
+  let pairRow = '<span class="rlabel">between colors</span>';
+  [[0,1],[1,2],[2,3],[2,4]].forEach(([a,b]) => {
+    const de = deltaE(slots[a].hex, slots[b].hex);
+    const cls = de >= 45 ? "ok" : de >= 25 ? "warn" : "bad";
+    const bn = b === 4 ? "others" : (b+1);
+    pairRow += '<span class="metric ' + cls + '">' + (a+1) + '↔' + bn + ': ' + Math.round(de) + '</span>';
+  });
+  return '<div class="metric-row">' + bgRow + '</div><div class="metric-row">' + pairRow + '</div>';
+}
+
+function commandFor(slots) {
+  return "--colors " + slots.map(s => s.token).join(" ");
+}
+
+function refresh(pi) {
+  if (!state[pi]) return;
+  document.getElementById("prev-" + pi).innerHTML = previewHtml(state[pi].slots);
+  document.getElementById("met-" + pi).innerHTML = metricsHtml(state[pi].slots);
+  document.getElementById("cmd-" + pi).textContent = commandFor(state[pi].slots);
+}
+
+function padTokens(tokens) {
+  const t = tokens.slice(0, 5);
+  while (t.length < 5) t.push(t[t.length - 1]);
+  return t;
+}
+
+function addCard(name, tokens, closable) {
+  const pi = state.length;
+  tokens = padTokens(tokens);
+  state.push({ name: name, original: [...tokens], slots: slotsFromTokens(tokens) });
+  const slots = state[pi].slots;
+
+  const card = document.createElement("div");
+  card.className = "card";
+  const closeBtn = closable
+    ? '<button class="reroll" title="New random colors" data-reroll="' + pi + '">↻</button>' +
+      '<button class="close" title="Remove this playground" data-close="' + pi + '">✕</button>'
+    : "";
+  const namedNote = tokens.some(t => NAMED_COLORS[normalizeToken(t)]) ? '<span class="named-note">(contains named ANSI colors)</span>' : "";
+  let pickers = "";
+  slots.forEach((s, i) => {
+    pickers += '<div class="picker"><label>' + SLOT_LABELS[i] + '</label><div class="row">' +
+      '<input type="color" value="' + s.hex + '" id="col-' + pi + '-' + i + '" data-p="' + pi + '" data-slot="' + i + '">' +
+      '<input type="text" value="' + s.token + '" id="txt-' + pi + '-' + i + '" data-p="' + pi + '" data-slot="' + i + '" spellcheck="false">' +
+      '</div></div>';
+  });
+  card.innerHTML =
+    '<h2>' + name + ' ' + namedNote + closeBtn + '</h2>' +
+    '<div class="preview" id="prev-' + pi + '">' + previewHtml(slots) + '</div>' +
+    '<div id="met-' + pi + '">' + metricsHtml(slots) + '</div>' +
+    '<div class="pickers">' + pickers + '</div>' +
+    '<div class="out"><code id="cmd-' + pi + '">' + commandFor(slots) + '</code>' +
+    '<button data-copy="' + pi + '">copy</button>' +
+    '<button data-reset="' + pi + '">reset</button></div>';
+
+  document.getElementById("palettes").insertBefore(card, document.getElementById("add-card"));
+  wireCard(card);
+}
+
+function wireCard(card) {
+  card.querySelectorAll("button[data-close]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      state[+btn.dataset.close] = null;
+      card.remove();
+    });
+  });
+
+  card.querySelectorAll("button[data-reroll]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const pi = +btn.dataset.reroll;
+      const tokens = randomTokens();
+      state[pi].original = [...tokens];
+      state[pi].slots = slotsFromTokens(tokens);
+      state[pi].slots.forEach((s, i) => {
+        document.getElementById("col-" + pi + "-" + i).value = s.hex.toLowerCase();
+        const txt = document.getElementById("txt-" + pi + "-" + i);
+        txt.value = s.token;
+        txt.classList.remove("invalid");
+      });
+      refresh(pi);
+    });
+  });
+
+  card.querySelectorAll('input[type="color"]').forEach(input => {
+    input.addEventListener("input", () => {
+      const pi = +input.dataset.p, slot = +input.dataset.slot;
+      state[pi].slots[slot] = { token: input.value.replace("#", "").toLowerCase(), hex: input.value };
+      const txt = document.getElementById("txt-" + pi + "-" + slot);
+      txt.value = state[pi].slots[slot].token;
+      txt.classList.remove("invalid");
+      refresh(pi);
+    });
+  });
+
+  card.querySelectorAll('input[type="text"]').forEach(input => {
+    input.addEventListener("input", () => {
+      const pi = +input.dataset.p, slot = +input.dataset.slot;
+      const hex = tokenToHex(input.value);
+      if (!hex) {
+        input.classList.add("invalid");
+        return;
+      }
+      input.classList.remove("invalid");
+      state[pi].slots[slot] = { token: normalizeToken(input.value), hex: hex };
+      document.getElementById("col-" + pi + "-" + slot).value = hex.toLowerCase();
+      refresh(pi);
+    });
+  });
+
+  card.querySelectorAll("button[data-copy]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const pi = +btn.dataset.copy;
+      const text = document.getElementById("cmd-" + pi).textContent;
+      const done = () => { btn.textContent = "copied"; btn.classList.add("copied");
+        setTimeout(() => { btn.textContent = "copy"; btn.classList.remove("copied"); }, 1200); };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
+      } else {
+        fallbackCopy(text, done);
+      }
+    });
+  });
+
+  card.querySelectorAll("button[data-reset]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const pi = +btn.dataset.reset;
+      state[pi].slots = slotsFromTokens(state[pi].original);
+      state[pi].slots.forEach((s, i) => {
+        document.getElementById("col-" + pi + "-" + i).value = s.hex.toLowerCase();
+        const txt = document.getElementById("txt-" + pi + "-" + i);
+        txt.value = s.token;
+        txt.classList.remove("invalid");
+      });
+      refresh(pi);
+    });
+  });
+}
+
+function fallbackCopy(text, done) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand("copy");
+  document.body.removeChild(ta);
+  done();
+}
+
+const addBtn = document.createElement("div");
+addBtn.id = "add-card";
+addBtn.title = "New playground with random colors";
+addBtn.textContent = "+";
+document.getElementById("palettes").appendChild(addBtn);
+addBtn.addEventListener("click", () => {
+  customCount += 1;
+  addCard("Custom " + customCount, randomTokens(), true);
+});
+
+document.getElementById("bg-color").addEventListener("input", e => {
+  document.getElementById("bg-text").value = e.target.value.replace("#", "");
+  document.getElementById("bg-text").classList.remove("invalid");
+  applyTermBg(e.target.value);
+});
+document.getElementById("bg-text").addEventListener("input", e => {
+  const hex = tokenToHex(e.target.value);
+  if (!hex) {
+    e.target.classList.add("invalid");
+    return;
+  }
+  e.target.classList.remove("invalid");
+  document.getElementById("bg-color").value = hex.toLowerCase();
+  applyTermBg(hex);
+});
+
+(SYSTEM_PALETTES || PALETTES).forEach(p => addCard(p.name, p.tokens, false));
+if (SYSTEM_PALETTES) {
+  document.querySelector(".hint").textContent += " Showing the palettes found on this machine.";
+}
+</script>
+</body>
+</html>

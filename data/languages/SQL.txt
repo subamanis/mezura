@@ -1,26 +1,26 @@
 Language
-C++
+SQL
 
 Extensions
-cpp
+sql
 
 String symbols
-"
+' "
 
 Comment symbols
-//
+--
 Multi line comment start
 /*
 Multi line comment end
 */
 
 Keyword
-    NAME
-    classes
-    ALIASES
-    class
+NAME
+tables
+ALIASES
+TABLE table
 Keyword
-    NAME
-    structs
-    ALIASES
-    struct
+NAME
+views
+ALIASES
+VIEW view

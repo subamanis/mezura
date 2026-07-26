@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-#![allow(unused_must_use)]
 #![allow(dead_code)]
 #![allow(non_snake_case)]
 
@@ -14,35 +13,34 @@ pub mod file_parser;
 
 mod result_printer;
 
-pub use colored::{Colorize,ColoredString};
+pub use colored::{Color,Colorize,ColoredString};
 pub use config_manager::Configuration;
 pub use utils::*;
 pub use domain::{Language, LanguageContentInfo, LanguageMetadata, FileStats, Keyword};
 
 pub type FaultyFilesListMut = Arc<Mutex<Vec<FaultyFileDetails>>>;
+pub type ExtensionLangMap = Arc<HashMap<String, Arc<str>>>;
 pub type ContentInfoMapMut  = Arc<Mutex<HashMap<String,LanguageContentInfo>>>;
 pub type MetadataMapMut     = Arc<Mutex<HashMap<String,LanguageMetadata>>>;
 
-use lazy_static::lazy_static;
 use directories::{BaseDirs,ProjectDirs};
 use crossbeam_deque::{Worker,Injector};
 use chrono::{DateTime, Local};
-use std::{collections::HashMap, fs::{self, File}, io::Read, path::{Path, PathBuf}, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant}};
-use std::{sync::{Arc, Mutex}, thread::JoinHandle};
+use std::{collections::HashMap, fs::{self, File}, io::Read, path::{Path, PathBuf}, sync::atomic::{AtomicBool, AtomicUsize, Ordering}, time::{Duration, Instant}};
+use std::{sync::{Arc, LazyLock, Mutex, OnceLock}, thread::JoinHandle};
 
 
 pub const APP_NAME : &str = "mezura";
 pub const LANGUAGES_DIR_NAME : &str = "languages";
+pub const PALETTES_DIR_NAME : &str = "palettes";
 pub const CONFIG_DIR_NAME : &str = "config";
 pub const LOGS_DIR_NAME : &str = "logs";
 pub const TEST_DIR_NAME : &str = "test_dir";
 pub const DEFAULT_CONFIG_NAME : &str = "default.txt";
 
-lazy_static! {
-    pub static ref PERSISTENT_APP_PATHS : PersistentAppPaths = PersistentAppPaths::get();
-    pub static ref LOCAL_APP_PATHS : LocalAppPaths = LocalAppPaths::get();
-    pub static ref CHANGELOG_BYTES : &'static [u8] = include_bytes!("../Changelog");
-}
+pub static PERSISTENT_APP_PATHS : LazyLock<PersistentAppPaths> = LazyLock::new(PersistentAppPaths::get);
+pub static LOCAL_APP_PATHS : LazyLock<LocalAppPaths> = LazyLock::new(LocalAppPaths::get);
+pub static CHANGELOG_BYTES : &[u8] = include_bytes!("../Changelog");
 
 
 pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Result<Option<Metrics>, ParseFilesError> {
@@ -50,15 +48,18 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let faulty_files_ref : FaultyFilesListMut  = Arc::new(Mutex::new(Vec::with_capacity(10)));
     let finish_condition_ref = Arc::new(AtomicBool::new(false));
     let language_map_ref = Arc::new(language_map);
+    let extension_lang_map: ExtensionLangMap = Arc::new(make_extension_language_map(&language_map_ref));
     let languages_content_info_ref : ContentInfoMapMut = Arc::new(Mutex::new(make_language_stats(language_map_ref.clone())));
     let global_languages_metadata_map = Arc::new(Mutex::new(make_language_metadata(&language_map_ref)));
-    
+
     let mut files_present = FilesPresent::default();
-    let producer_termination_states = Arc::new(Mutex::new(vec![false; config.threads.producers]));
+    let idle_producers = Arc::new(AtomicUsize::new(0));
     let files_injector = Arc::new(Injector::<ParsableFile>::new());
-    let dirs_injector = Arc::new(Injector::<PathBuf>::new());
-    calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector, &mut files_present, 
-            &language_map_ref, &global_languages_metadata_map);
+    let dirs_injector = Arc::new(Injector::<TraversedDir>::new());
+    let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs)
+            .expect("exclude patterns are validated during argument parsing"));
+    calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector, &mut files_present,
+            &extension_lang_map, &global_languages_metadata_map);
 
     let files_stats = Arc::new(Mutex::new(files_present));
 
@@ -70,7 +71,8 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let parsing_started_instant = Instant::now();
     for i in 0..config.threads.producers {
         producer_handles.push(producer::start_producer_thread(i, files_injector.clone(), dirs_injector.clone(), Worker::new_fifo(),
-            global_languages_metadata_map.clone(), producer_termination_states.clone(),language_map_ref.clone(), config.clone(), files_stats.clone()));
+            global_languages_metadata_map.clone(), idle_producers.clone(), extension_lang_map.clone(), exclude_matcher.clone(),
+            config.clone(), files_stats.clone()));
     }
     for i in 0..config.threads.consumers {
         consumer_handles.push(consumer::start_parser_thread(i, files_injector.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
@@ -78,8 +80,9 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     }
 
     for handle in producer_handles {
-        handle.join();
+        let _ = handle.join();
     }
+    let producers_done_millis = parsing_started_instant.elapsed().as_millis();
 
     //If there are a lot of files remaining after producers finish, it makes sense to start another consumer.
     let len = files_injector.len();
@@ -90,12 +93,17 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
 
     finish_condition_ref.store(true,Ordering::Relaxed);
     for handle in consumer_handles {
-        handle.join();
+        let _ = handle.join();
     }
     let parsing_duration_millis = parsing_started_instant.elapsed().as_millis();
 
+    if std::env::var_os("MEZURA_PHASE_TIMING").is_some() {
+        eprintln!("[phase] producers alive: {} ms | drain after producers: {} ms | queue size at producer exit: {}",
+            producers_done_millis, parsing_duration_millis - producers_done_millis, len);
+    }
+
     let file_stats_guard = files_stats.lock().unwrap();
-    let (total_files_num, relevant_files_num, excluded_files_num) = 
+    let (total_files_num, relevant_files_num, excluded_files_num) =
             (file_stats_guard.total_files, file_stats_guard.relevant_files, file_stats_guard.excluded_files);
     if relevant_files_num == 0 {
         return Err(ParseFilesError::NoRelevantFiles(get_activated_languages_as_str(&config)));
@@ -110,12 +118,12 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     }
 
     let mut global_languages_metadata_map_guard = global_languages_metadata_map.lock();
-    let mut languages_metadata_map = global_languages_metadata_map_guard.as_deref_mut().unwrap();
-    
-    remove_faulty_files_stats(&faulty_files_ref, &mut languages_metadata_map, &language_map_ref);
+    let languages_metadata_map = global_languages_metadata_map_guard.as_deref_mut().unwrap();
+
+    remove_faulty_files_stats(&faulty_files_ref, languages_metadata_map, &extension_lang_map);
 
     let mut content_info_map_guard = languages_content_info_ref.lock();
-    let mut content_info_map = content_info_map_guard.as_deref_mut().unwrap();
+    let content_info_map = content_info_map_guard.as_deref_mut().unwrap();
 
     let metrics = generate_metrics_if_parsing_took_more_than_one_sec(parsing_duration_millis, relevant_files_num, content_info_map);
 
@@ -131,45 +139,43 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let datetime_now = chrono::Local::now();
 
     remove_languages_with_0_files(content_info_map, languages_metadata_map);
-    result_printer::format_and_print_results(&mut content_info_map, &mut languages_metadata_map, &final_stats, 
+    result_printer::format_and_print_results(content_info_map, languages_metadata_map, &final_stats,
         &existing_log_contents, &datetime_now, &config);
 
-    if config.log.should_log {
-        if let Some(path) = log_file_path {
-            io_handler::log_stats(&path, &existing_log_contents, &final_stats, &datetime_now, &config);
-        }
+    if config.log.should_log && let Some(path) = log_file_path
+        && io_handler::log_stats(&path, &existing_log_contents, &final_stats, &datetime_now, &config).is_err() {
+        println!("\n{}","Error while trying to save the log.".yellow());
     }
 
     Ok(metrics)
 }
 
 //pub for integration tests
-pub fn calculate_single_file_stats_or_add_to_injector(config: &Configuration, dirs_injector: &Arc<Injector<PathBuf>>, files_injector: &Arc<Injector<ParsableFile>>,
-        files_present: &mut FilesPresent, languages: &Arc<HashMap<String,Language>>, languages_metadata_map: &MetadataMapMut)
+pub fn calculate_single_file_stats_or_add_to_injector(config: &Configuration, dirs_injector: &Arc<Injector<TraversedDir>>, files_injector: &Arc<Injector<ParsableFile>>,
+        files_present: &mut FilesPresent, extension_lang_map: &HashMap<String, Arc<str>>, languages_metadata_map: &MetadataMapMut)
 {
     config.dirs.iter().for_each(|dir| {
         let dir_path = Path::new(dir);
         if dir_path.is_file() {
-            if let Some(x) = dir_path.extension() {
-                if let Some(extension) = x.to_str() {
-                    if let Some(lang_name) = find_lang_with_this_identifier(languages, extension) {
-                        languages_metadata_map.lock().unwrap().get_mut(&lang_name).unwrap().add_file_meta(
-                                dir_path.metadata().map_or(0, |m| m.len() as usize));
-                        files_injector.push(ParsableFile::new(dir_path.to_path_buf(),lang_name));
-                        files_present.total_files += 1;
-                        files_present.relevant_files += 1;
-                    }
-                }
+            if let Some(x) = dir_path.extension()
+                && let Some(extension) = x.to_str()
+                && let Some(lang_name) = find_language_of_extension(extension_lang_map, extension) {
+                languages_metadata_map.lock().unwrap().get_mut(lang_name.as_ref()).unwrap().add_file_meta(
+                        dir_path.metadata().map_or(0, |m| m.len() as usize));
+                files_injector.push(ParsableFile::new(dir_path.to_path_buf(),lang_name));
+                files_present.total_files += 1;
+                files_present.relevant_files += 1;
             }
         } else if dir_path.is_dir() {
-            dirs_injector.push(dir_path.to_path_buf());
+            let gitignore_stack = if config.no_gitignore { None } else { GitignoreStack::for_root_dir(dir_path) };
+            dirs_injector.push(TraversedDir::new(dir_path.to_path_buf(), gitignore_stack));
         }
     })
 }
 
 //pub for integration tests
 pub fn remove_languages_with_0_files(content_info_map: &mut HashMap<String,LanguageContentInfo>,
-    languages_metadata_map: &mut HashMap<String, LanguageMetadata>) 
+    languages_metadata_map: &mut HashMap<String, LanguageMetadata>)
 {
    let mut empty_languages = Vec::new();
    for element in languages_metadata_map.iter() {
@@ -184,18 +190,26 @@ pub fn remove_languages_with_0_files(content_info_map: &mut HashMap<String,Langu
    }
 }
 
-pub fn find_lang_with_this_identifier(languages: &Arc<HashMap<String,Language>>, wanted_identifier: &str) -> Option<String> {
-    for lang in languages.iter() {
-        if lang.1.extensions.iter().any(|x| x == wanted_identifier) {
-            return Some(lang.0.to_owned());
+pub fn make_extension_language_map(languages: &HashMap<String,Language>) -> HashMap<String, Arc<str>> {
+    let mut names = languages.keys().collect::<Vec<_>>();
+    names.sort_unstable();
+    let mut map: HashMap<String, Arc<str>> = HashMap::new();
+    for name in names {
+        let shared_name: Arc<str> = Arc::from(name.as_str());
+        for extension in &languages[name].extensions {
+            map.entry(extension.clone()).or_insert_with(|| shared_name.clone());
         }
     }
-    None
+    map
+}
+
+pub fn find_language_of_extension(extension_lang_map: &HashMap<String, Arc<str>>, extension: &str) -> Option<Arc<str>> {
+    extension_lang_map.get(extension).cloned()
 }
 
 
 fn generate_metrics_if_parsing_took_more_than_one_sec(parsing_duration_millis: u128, relevant_files: usize,
-        content_info_map: &HashMap<String, LanguageContentInfo>) -> Option<Metrics> 
+        content_info_map: &HashMap<String, LanguageContentInfo>) -> Option<Metrics>
 {
     if parsing_duration_millis <= 1000 {
         return None;
@@ -234,13 +248,13 @@ fn print_faulty_files_or_ok(faulty_files_ref: &FaultyFilesListMut, config: &Conf
 }
 
 fn remove_faulty_files_stats(faulty_files_ref: &FaultyFilesListMut, languages_metadata_map: &mut HashMap<String,LanguageMetadata>,
-        language_map: &Arc<HashMap<String,Language>>) {
+        extension_lang_map: &HashMap<String, Arc<str>>) {
     let faulty_files = &*faulty_files_ref.as_ref().lock().unwrap();
     for file in faulty_files {
         let extension = utils::get_file_extension(Path::new(&file.path));
         if let Some(x) = extension {
-            let lang_name = find_lang_with_this_identifier(language_map, x).unwrap();
-            let language_metadata = languages_metadata_map.get_mut(&lang_name).unwrap();
+            let lang_name = find_language_of_extension(extension_lang_map, x).unwrap();
+            let language_metadata = languages_metadata_map.get_mut(lang_name.as_ref()).unwrap();
             language_metadata.files -= 1;
             language_metadata.bytes -= file.size as usize;
         }
@@ -274,7 +288,7 @@ pub fn make_language_stats(languages_map: Arc<HashMap<String,Language>>) -> Hash
 
 pub fn make_language_metadata(language_map: &Arc<HashMap<String,Language>>) -> HashMap<String, LanguageMetadata> {
     let mut map = HashMap::<String,LanguageMetadata>::new();
-    for (name,_) in language_map.iter() {
+    for name in language_map.keys() {
         map.insert(name.to_owned(), LanguageMetadata::default());
     }
     map
@@ -283,23 +297,20 @@ pub fn make_language_metadata(language_map: &Arc<HashMap<String,Language>>) -> H
 fn get_specified_config_file_path(config: &Configuration) -> Option<String> {
     if let Some(name) = &config.config_name_to_save {
         Some(PERSISTENT_APP_PATHS.logs_dir.clone() + name)
-    } else if let Some(name) = &config.config_name_to_load {
-        Some(PERSISTENT_APP_PATHS.logs_dir.clone() + name)
-    } else {
-        None
-    }
+    } else { config.config_name_to_load.as_ref().map(|name| PERSISTENT_APP_PATHS.logs_dir.clone() + name) }
 }
 
 // Used to display colorful errors and warnings, by implementing it on Error enums.
 pub trait Formatted {
     fn formatted(&self) -> ColoredString;
-} 
+}
 
 #[derive(Debug)]
 pub struct PersistentAppPaths {
     pub project_path: String,
     pub data_dir: String,
     pub languages_dir: String,
+    pub palettes_dir: String,
     pub config_dir: String,
     pub logs_dir: String,
     pub are_initialized: bool
@@ -330,7 +341,7 @@ pub struct FinalStats {
     bytes_size: usize,
     bytes_average_size: usize,
     size: f64,
-    size_measurement: String, 
+    size_measurement: String,
     average_size: f64,
     average_size_measurement: String
 }
@@ -346,7 +357,7 @@ pub struct FaultyFileDetails {
 pub enum ParseFilesError {
     NoRelevantFiles(String),
     AllAreFaultyFiles
-} 
+}
 
 #[derive(Debug,Default,Clone)]
 pub struct FilesPresent {
@@ -358,12 +369,24 @@ pub struct FilesPresent {
 #[derive(Debug,Clone)]
 pub struct ParsableFile {
     pub path: PathBuf,
-    pub language_name: String 
+    pub language_name: Arc<str>
+}
+
+#[derive(Debug,Clone)]
+pub struct TraversedDir {
+    pub path: PathBuf,
+    pub gitignore_stack: Option<Arc<GitignoreStack>>
+}
+
+#[derive(Debug)]
+pub struct GitignoreStack {
+    matcher: ignore::gitignore::Gitignore,
+    parent: Option<Arc<GitignoreStack>>
 }
 
 
 impl PersistentAppPaths {
-    //Persistent paths: 
+    //Persistent paths:
     // Windows:  C:/Users/<user_name>/AppData/Roaming/mezura
     // Linux:    /home/<user_name>/.local/share/mezura
     // MacOs:    /Users/<user_name>/Library/Application Support/mezura
@@ -377,11 +400,12 @@ impl PersistentAppPaths {
             are_initialized = false;
             std::fs::create_dir_all(&data_dir).unwrap();
         }
-        return PersistentAppPaths {
+        PersistentAppPaths {
             project_path: project_path.to_str().unwrap().to_owned(),
             data_dir: data_dir.clone(),
             config_dir: data_dir.clone() + CONFIG_DIR_NAME +"/",
             languages_dir: data_dir.clone() + LANGUAGES_DIR_NAME + "/",
+            palettes_dir: data_dir.clone() + PALETTES_DIR_NAME + "/",
             logs_dir: data_dir + LOGS_DIR_NAME + "/",
             are_initialized
         }
@@ -396,7 +420,7 @@ impl LocalAppPaths {
         if working_dir.contains("target/") || working_dir.contains("target\\"){
             working_dir = String::from(".");
         }
-        
+
         let data_dir =  working_dir + "/data/";
 
         LocalAppPaths {
@@ -515,7 +539,7 @@ impl FilesPresent {
 }
 
 impl ParsableFile {
-    pub fn new(path: PathBuf, language_name: String) -> Self {
+    pub fn new(path: PathBuf, language_name: Arc<str>) -> Self {
         ParsableFile {
             path,
             language_name
@@ -523,11 +547,108 @@ impl ParsableFile {
     }
 }
 
+impl TraversedDir {
+    pub fn new(path: PathBuf, gitignore_stack: Option<Arc<GitignoreStack>>) -> Self {
+        TraversedDir {
+            path,
+            gitignore_stack
+        }
+    }
+}
+
+impl GitignoreStack {
+    pub fn extended(dir: &Path, parent: Option<Arc<GitignoreStack>>) -> Option<Arc<GitignoreStack>> {
+        let gitignore_path = dir.join(".gitignore");
+        if !gitignore_path.is_file() {
+            return parent;
+        }
+
+        let (matcher, _) = ignore::gitignore::Gitignore::new(&gitignore_path);
+        if matcher.is_empty() {
+            return parent;
+        }
+
+        Some(Arc::new(GitignoreStack { matcher, parent }))
+    }
+
+    // The .gitignore files of every dir between the repository root and the given dir, excluding it
+    fn of_ancestors(dir: &Path) -> Option<Arc<GitignoreStack>> {
+        if dir.join(".git").exists() {
+            return None;
+        }
+
+        let mut relevant_ancestors: Vec<&Path> = Vec::new();
+        for ancestor in dir.ancestors().skip(1) {
+            relevant_ancestors.push(ancestor);
+            if ancestor.join(".git").exists() {
+                break;
+            }
+        }
+
+        let mut stack = None;
+        for ancestor in relevant_ancestors.iter().rev() {
+            stack = Self::extended(ancestor, stack);
+        }
+        stack
+    }
+
+    // Explicitly given target dirs are traversed even if a .gitignore of their ancestors ignores them
+    pub fn for_root_dir(dir: &Path) -> Option<Arc<GitignoreStack>> {
+        let stack = Self::of_ancestors(dir);
+        if let Some(s) = &stack && s.is_ignored(dir, true) {
+            return None;
+        }
+        stack
+    }
+
+    // Used for paths that the program discovered on its own, like the matches of a glob pattern
+    pub fn is_path_ignored(path: &Path) -> bool {
+        let is_dir = path.is_dir();
+        let Some(parent) = path.parent() else { return false };
+
+        let stack = Self::extended(parent, Self::of_ancestors(parent));
+        match stack {
+            Some(x) => x.is_ignored_with_ancestor_dirs(path, is_dir),
+            None => false
+        }
+    }
+
+    // Unlike the traversal, which prunes ignored dirs as it descends and therefore only has to
+    // check the entry itself, a standalone path has to be checked against its parent dirs too
+    fn is_ignored_with_ancestor_dirs(&self, path: &Path, is_dir: bool) -> bool {
+        let mut node = Some(self);
+        while let Some(stack) = node {
+            match stack.matcher.matched_path_or_any_parents(path, is_dir) {
+                ignore::Match::Ignore(_) => return true,
+                ignore::Match::Whitelist(_) => return false,
+                ignore::Match::None => {}
+            }
+            node = stack.parent.as_deref();
+        }
+
+        false
+    }
+
+    pub fn is_ignored(&self, path: &Path, is_dir: bool) -> bool {
+        let mut node = Some(self);
+        while let Some(stack) = node {
+            match stack.matcher.matched(path, is_dir) {
+                ignore::Match::Ignore(_) => return true,
+                ignore::Match::Whitelist(_) => return false,
+                ignore::Match::None => {}
+            }
+            node = stack.parent.as_deref();
+        }
+
+        false
+    }
+}
+
 
 pub mod domain {
     use super::*;
-    
-    #[derive(Debug,PartialEq, Clone)]
+
+    #[derive(Debug, Clone)]
     pub struct Language {
         pub name: String,
         pub extensions : Vec<String>,
@@ -535,15 +656,28 @@ pub mod domain {
         pub comment_symbols : Vec<String>,
         pub multiline_comment_start_symbol : Option<String>,
         pub multiline_comment_end_symbol : Option<String>,
-        pub keywords : Vec<Keyword>
+        pub keywords : Vec<Keyword>,
+        pub finders : OnceLock<crate::file_parser::LanguageFinders>
     }
-    
+
+    impl PartialEq for Language {
+        fn eq(&self, other: &Self) -> bool {
+            self.name == other.name
+                && self.extensions == other.extensions
+                && self.string_symbols == other.string_symbols
+                && self.comment_symbols == other.comment_symbols
+                && self.multiline_comment_start_symbol == other.multiline_comment_start_symbol
+                && self.multiline_comment_end_symbol == other.multiline_comment_end_symbol
+                && self.keywords == other.keywords
+        }
+    }
+
     #[derive(Debug,PartialEq)]
     pub struct Keyword{
         pub descriptive_name : String,
         pub aliases : Vec<String>
     }
-    
+
     #[derive(Debug,PartialEq)]
     pub struct LanguageContentInfo {
         pub lines : usize,
@@ -557,11 +691,11 @@ pub mod domain {
         pub bytes: usize
     }
 
-    #[derive(Debug,PartialEq)]
+    #[derive(Debug,PartialEq,Default)]
     pub struct FileStats {
         pub lines : usize,
         pub code_lines : usize,
-        pub keyword_occurences : HashMap<String,usize> 
+        pub keyword_occurences : Vec<usize>
     }
 
     impl Clone for Keyword {
@@ -576,7 +710,7 @@ pub mod domain {
     impl Language {
         pub fn new(name: String, extensions: Vec<String>, string_symbols: Vec<String>, comment_symbols: Vec<String>,
             multiline_comment_start_symbol: Option<String>, multiline_comment_end_symbol: Option<String>,
-            keywords: Vec<Keyword>) -> Self 
+            keywords: Vec<Keyword>) -> Self
         {
             Language {
                 name,
@@ -585,7 +719,8 @@ pub mod domain {
                 comment_symbols,
                 multiline_comment_start_symbol,
                 multiline_comment_end_symbol,
-                keywords 
+                keywords,
+                finders : OnceLock::new()
             }
         }
 
@@ -626,15 +761,29 @@ pub mod domain {
                 keyword_occurences: HashMap::new()
             }
         }
-        
-        pub fn add_file_stats(&mut self, other: FileStats) {
+
+        pub fn add_file_stats(&mut self, other: FileStats, keywords: &[Keyword]) {
             self.lines += other.lines;
             self.code_lines += other.code_lines;
-            for (k,v) in other.keyword_occurences.iter() {
-                *self.keyword_occurences.get_mut(k).unwrap() += *v;
+            for (keyword_index, occurrences) in other.keyword_occurences.iter().enumerate() {
+                if *occurrences > 0 {
+                    *self.keyword_occurences.get_mut(&keywords[keyword_index].descriptive_name).unwrap() += *occurrences;
+                }
             }
         }
-        
+
+        pub fn from_file_stats(stats: FileStats, keywords: &[Keyword]) -> LanguageContentInfo {
+            let mut keyword_occurences = HashMap::<String,usize>::new();
+            for (keyword_index, occurrences) in stats.keyword_occurences.iter().enumerate() {
+                keyword_occurences.insert(keywords[keyword_index].descriptive_name.clone(), *occurrences);
+            }
+            LanguageContentInfo {
+                lines : stats.lines,
+                code_lines : stats.code_lines,
+                keyword_occurences
+            }
+        }
+
         pub fn add_content_info(&mut self, other: &LanguageContentInfo) {
             self.lines += other.lines;
             self.code_lines += other.code_lines;
@@ -650,16 +799,6 @@ pub mod domain {
                 lines : 0,
                 code_lines : 0,
                 keyword_occurences : get_keyword_stats_map(ext)
-            }
-        }
-    }
-
-    impl From<FileStats> for LanguageContentInfo {
-        fn from(stats: FileStats) -> Self {
-            LanguageContentInfo {
-                lines : stats.lines,
-                code_lines : stats.code_lines,
-                keyword_occurences : stats.keyword_occurences
             }
         }
     }
@@ -684,19 +823,11 @@ pub mod domain {
     }
 
     impl FileStats {
-        pub fn default() -> Self {
-            FileStats {
-                lines : 0,
-                code_lines : 0,
-                keyword_occurences : hashmap![]
-            }
-        }
-
         pub fn with_keywords(keywords: &[Keyword]) -> Self {
             FileStats {
                 lines : 0,
                 code_lines : 0,
-                keyword_occurences : get_stats_map(keywords)
+                keyword_occurences : vec![0; keywords.len()]
             }
         }
 
@@ -708,11 +839,11 @@ pub mod domain {
             self.code_lines += 1;
         }
 
-        pub fn incr_keyword(&mut self, keyword_name:&str) {
-            *self.keyword_occurences.get_mut(keyword_name).unwrap() += 1;
+        pub fn incr_keyword(&mut self, keyword_index: usize) {
+            self.keyword_occurences[keyword_index] += 1;
         }
     }
-    
+
     fn get_keyword_stats_map(extension: &Language) -> HashMap<String,usize> {
         let mut map = HashMap::<String,usize>::new();
         for k in &extension.keywords {
@@ -721,13 +852,6 @@ pub mod domain {
         map
     }
 
-    fn get_stats_map(keywords: &[Keyword]) -> HashMap<String,usize> {
-        let mut map = HashMap::<String,usize>::new();
-        for k in keywords {
-            map.insert(k.descriptive_name.to_owned(), 0);
-        }
-        map
-    }
 }
 
 #[cfg(test)]

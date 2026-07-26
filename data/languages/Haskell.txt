@@ -1,26 +1,26 @@
 Language
-C++
+Haskell
 
 Extensions
-cpp
+hs
 
 String symbols
 "
 
 Comment symbols
-//
+--
 Multi line comment start
-/*
+{-
 Multi line comment end
-*/
+-}
 
 Keyword
-    NAME
-    classes
-    ALIASES
-    class
+NAME
+data types
+ALIASES
+data
 Keyword
-    NAME
-    structs
-    ALIASES
-    struct
+NAME
+classes
+ALIASES
+class

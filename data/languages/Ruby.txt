@@ -1,26 +1,26 @@
 Language
-C++
+Ruby
 
 Extensions
-cpp
+rb
 
 String symbols
-"
+" '
 
 Comment symbols
-//
+#
 Multi line comment start
-/*
+=begin
 Multi line comment end
-*/
+=end
 
 Keyword
-    NAME
-    classes
-    ALIASES
-    class
+NAME
+classes
+ALIASES
+class
 Keyword
-    NAME
-    structs
-    ALIASES
-    struct
+NAME
+modules
+ALIASES
+module

@@ -1,0 +1,17 @@
+Language
+Shell
+
+Extensions
+sh bash
+
+String symbols
+" '
+
+Comment symbols
+#
+
+Keyword
+NAME
+functions
+ALIASES
+function

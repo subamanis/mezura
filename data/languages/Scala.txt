@@ -1,8 +1,8 @@
 Language
-C++
+Scala
 
 Extensions
-cpp
+scala
 
 String symbols
 "
@@ -15,12 +15,17 @@ Multi line comment end
 */
 
 Keyword
-    NAME
-    classes
-    ALIASES
-    class
+NAME
+classes
+ALIASES
+class
 Keyword
-    NAME
-    structs
-    ALIASES
-    struct
+NAME
+objects
+ALIASES
+object
+Keyword
+NAME
+traits
+ALIASES
+trait

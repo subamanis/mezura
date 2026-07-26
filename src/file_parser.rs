@@ -1,21 +1,81 @@
-use std::{io::{BufRead, BufReader}, str::{self, MatchIndices}};
+use std::borrow::Cow;
+use std::{io::Read as IoRead, str};
+
+use memchr::memmem;
 
 use crate::*;
 
+const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
 
-pub fn parse_file(path: &Path, lang_name: &str, buf: &mut String, language_map: Arc<HashMap<String,Language>>, config: &Configuration)
--> Result<FileStats,String> 
-{
-    let reader = BufReader::new(match File::open(path){
-        Ok(f) => f,
-        Err(x) => return Err(x.to_string())
-    });
-
-    parse_lines(reader, buf, language_map.get(lang_name).unwrap(), config)
+#[derive(Debug, Clone)]
+pub struct LanguageFinders {
+    string_finders: Vec<memmem::Finder<'static>>,
+    comment_finders: Vec<memmem::Finder<'static>>,
+    multiline_start_finder: Option<memmem::Finder<'static>>,
+    multiline_end_finder: Option<memmem::Finder<'static>>,
 }
 
-fn parse_lines(mut reader: BufReader<File>, buf: &mut String, language: &Language, config: &Configuration)
+impl LanguageFinders {
+    pub fn build(language: &Language) -> LanguageFinders {
+        LanguageFinders {
+            string_finders: language.string_symbols.iter().map(|s| memmem::Finder::new(s.as_str()).into_owned()).collect(),
+            comment_finders: language.comment_symbols.iter().map(|s| memmem::Finder::new(s.as_str()).into_owned()).collect(),
+            multiline_start_finder: language.multiline_comment_start_symbol.as_ref().map(|s| memmem::Finder::new(s.as_str()).into_owned()),
+            multiline_end_finder: language.multiline_comment_end_symbol.as_ref().map(|s| memmem::Finder::new(s.as_str()).into_owned()),
+        }
+    }
+}
+
+fn finders_of(language: &Language) -> &LanguageFinders {
+    language.finders.get_or_init(|| LanguageFinders::build(language))
+}
+
+pub struct KeywordMatcher {
+    aliases_with_indices: Vec<(memmem::Finder<'static>, usize, usize)>,
+}
+
+impl KeywordMatcher {
+    pub fn build(language: &Language) -> Option<KeywordMatcher> {
+        let mut aliases_with_indices = Vec::new();
+        for (keyword_index, keyword) in language.keywords.iter().enumerate() {
+            for alias in &keyword.aliases {
+                aliases_with_indices.push((memmem::Finder::new(alias.as_str()).into_owned(), alias.len(), keyword_index));
+            }
+        }
+        if aliases_with_indices.is_empty() {
+            None
+        } else {
+            Some(KeywordMatcher { aliases_with_indices })
+        }
+    }
+}
+
+
+pub fn parse_file(path: &Path, lang_name: &str, buf: &mut String, language_map: Arc<HashMap<String,Language>>,
+    keyword_matcher: Option<&KeywordMatcher>, config: &Configuration)
 -> Result<FileStats,String>
+{
+    let mut file = match File::open(path){
+        Ok(f) => f,
+        Err(x) => return Err(x.to_string())
+    };
+
+    buf.clear();
+    if let Err(x) = file.read_to_string(buf) {
+        return Err(x.to_string());
+    }
+
+    let file_stats = parse_lines(buf, language_map.get(lang_name).unwrap(), keyword_matcher, config);
+
+    if buf.capacity() > MAX_RETAINED_FILE_BUFFER_BYTES {
+        *buf = String::new();
+    }
+
+    Ok(file_stats)
+}
+
+fn parse_lines(contents: &str, language: &Language, keyword_matcher: Option<&KeywordMatcher>, config: &Configuration)
+-> FileStats
 {
     let mut file_stats = match config.no_keywords {
         true => FileStats::default(),
@@ -23,15 +83,10 @@ fn parse_lines(mut reader: BufReader<File>, buf: &mut String, language: &Languag
     };
     let mut is_comment_closed = true;
     let mut open_str_symbol = None;
-    loop {
-        buf.clear();
-        match reader.read_line(buf) {
-            Ok(u) => if u == 0 {return Ok(file_stats)},
-            Err(x) => return Err(x.to_string())
-        }
+    for raw_line in contents.lines() {
         file_stats.incr_lines();
 
-        let line = buf.trim();
+        let line = raw_line.trim();
         if line.is_empty() { continue; }
 
         // Two different parsing functions to skip the unnecessary checks for langs that don't support multiline comments
@@ -50,28 +105,30 @@ fn parse_lines(mut reader: BufReader<File>, buf: &mut String, language: &Languag
             let cleansed = x.trim();
             if config.braces_as_code || cleansed.len() > 2 || (cleansed != "{" && cleansed != "}" && cleansed != "};") {
                 file_stats.incr_code_lines();
-                if !config.no_keywords {
-                    add_keywords_if_any(cleansed, language, &mut file_stats);
+                if !config.no_keywords && let Some(matcher) = keyword_matcher {
+                    add_keywords_if_any(cleansed, matcher, &mut file_stats);
                 }
             }
         } else {
             if line_info.has_string_literal {file_stats.incr_code_lines();}
         }
     }
+
+    file_stats
 }
 
 
 // cleansed_string can contain normal code string or curly braces or strings
 #[derive(Debug, PartialEq)]
-struct LineInfo {
-    cleansed_string: Option<String>,
+struct LineInfo<'a> {
+    cleansed_string: Option<Cow<'a, str>>,
     has_string_literal: bool,
     is_comment_open_after: bool,
     open_str_sybol_after: Option<String>
 }
 
 
-fn get_bounds_only_single_line_comments(line: &str, language: &Language, open_str_symbol: &Option<String>) -> LineInfo {
+fn get_bounds_only_single_line_comments<'a>(line: &'a str, language: &Language, open_str_symbol: &Option<String>) -> LineInfo<'a> {
     let (str_indices, str_symbols) = get_str_indices_and_symbols(line, language, open_str_symbol);
     if open_str_symbol.is_some() && str_indices.is_empty() {
         return LineInfo::none_str(false, true, open_str_symbol.to_owned());
@@ -80,7 +137,7 @@ fn get_bounds_only_single_line_comments(line: &str, language: &Language, open_st
     let comment_indices = find_comment_indicies_without_multiline(line, language);
     
     if str_indices.is_empty() && comment_indices.is_empty() {
-        return LineInfo::with_str(line.to_owned(), false);
+        return LineInfo::whole_line(line, false);
     }
     
     let mut relevant = String::with_capacity(line.len());
@@ -122,7 +179,7 @@ fn get_bounds_only_single_line_comments(line: &str, language: &Language, open_st
             is_str_open_m = false;
             str_counter += 1;
             if !has_more_strs(str_counter) && is_str_open_m {
-                return get_LineInfo_with_str_symbol(relevant, &str_symbols[str_counter-1]);
+                return get_LineInfo_with_str_symbol(relevant, &language.string_symbols[str_symbols[str_counter-1] as usize]);
             }
             
             advance_comment_counter_until(index_after, &mut comment_counter);
@@ -134,7 +191,7 @@ fn get_bounds_only_single_line_comments(line: &str, language: &Language, open_st
                 relevant.push_str(&line[slice_start_index..this_index]);
                 str_counter += 1;
                 if !has_more_strs(str_counter) {
-                    return get_LineInfo_with_str_symbol(relevant, &str_symbols[str_counter-1]);
+                    return get_LineInfo_with_str_symbol(relevant, &language.string_symbols[str_symbols[str_counter-1] as usize]);
                 }
                 
                 is_str_open_m = true;
@@ -152,8 +209,8 @@ fn get_bounds_only_single_line_comments(line: &str, language: &Language, open_st
     }
 }
 
-fn get_bounds_w_multiline_comments(line: &str, language: &Language, is_comment_closed: bool,
-    open_str_symbol: &Option<String>) -> LineInfo
+fn get_bounds_w_multiline_comments<'a>(line: &'a str, language: &Language, is_comment_closed: bool,
+    open_str_symbol: &Option<String>) -> LineInfo<'a>
 {
     let mut com_end_indices = get_com_end_indices(line, language);
     let (str_indices, str_symbols) = get_str_indices_and_symbols(line, language, open_str_symbol);
@@ -177,7 +234,7 @@ fn get_bounds_w_multiline_comments(line: &str, language: &Language, is_comment_c
     }
 
     if str_indices.is_empty() && comment_indices.is_empty() && com_start_indices.is_empty() && com_end_indices.is_empty() {
-        return LineInfo::with_str(line.to_owned(), false);
+        return LineInfo::whole_line(line, false);
     }
 
     let mut relevant = String::with_capacity(line.len());
@@ -295,7 +352,7 @@ fn get_bounds_w_multiline_comments(line: &str, language: &Language, is_comment_c
                 relevant.push_str(&line[slice_start_index..this_index]);
                 str_counter += 1;
                 if !has_more_strs(str_counter) {
-                    return get_LineInfo_with_str_symbol(relevant, &str_symbols[str_counter-1]);
+                    return get_LineInfo_with_str_symbol(relevant, &language.string_symbols[str_symbols[str_counter-1] as usize]);
                 }
                 
                 is_str_open_m = true;
@@ -325,30 +382,34 @@ fn get_bounds_w_multiline_comments(line: &str, language: &Language, is_comment_c
 }
 
 fn find_comment_indicies_without_multiline(line: &str, language: &Language) -> Vec<usize> {
+    let finders = finders_of(language);
+    let line_bytes = line.as_bytes();
     if language.comment_symbols.len() > 1 {
-        let mut matches = line.match_indices(&language.comment_symbols[0]).map(|x| x.0)
-            .chain(line.match_indices(&language.comment_symbols[1]).map(|x| x.0))
+        let mut matches = finders.comment_finders[0].find_iter(line_bytes)
+            .chain(finders.comment_finders[1].find_iter(line_bytes))
             .collect::<Vec<usize>>();
         matches.sort_unstable();
         matches
     } else {
-        line.match_indices(&language.comment_symbols[0]).map(|x| x.0).collect::<Vec<usize>>()
-    } 
+        finders.comment_finders[0].find_iter(line_bytes).collect::<Vec<usize>>()
+    }
 }
 
 fn find_comment_indicies_w_multiline(line: &str, language: &Language, com_end_indices: &[usize]) -> Vec<usize> {
+    let finders = finders_of(language);
+    let line_bytes = line.as_bytes();
     if language.comment_symbols.len() > 1 {
-        line.match_indices(&language.comment_symbols[0])
-        .filter_map(|x| filter_comment_end_indicies(x.0, language, com_end_indices))
+        finders.comment_finders[0].find_iter(line_bytes)
+        .filter_map(|x| filter_comment_end_indicies(x, language, com_end_indices))
             .chain(
-                line.match_indices(&language.comment_symbols[1])
-                .filter_map(|x|  filter_comment_end_indicies(x.0, language, com_end_indices))
+                finders.comment_finders[1].find_iter(line_bytes)
+                .filter_map(|x|  filter_comment_end_indicies(x, language, com_end_indices))
             )
         .collect::<Vec<_>>()
     } else {
-        line.match_indices(&language.comment_symbols[0])
+        finders.comment_finders[0].find_iter(line_bytes)
             .filter_map(|x| {
-                filter_comment_end_indicies(x.0, language, com_end_indices)
+                filter_comment_end_indicies(x, language, com_end_indices)
             })
             .collect::<Vec<_>>()
     }
@@ -362,7 +423,7 @@ fn filter_comment_end_indicies(x: usize, language: &Language, indicies: &[usize]
     }
 }
 
-fn get_LineInfo_with_str_symbol(relevant: String, str_symbol: &str) -> LineInfo {
+fn get_LineInfo_with_str_symbol<'a>(relevant: String, str_symbol: &str) -> LineInfo<'a> {
     if relevant.is_empty() {
         LineInfo::with_open_symbol(str_symbol.to_owned())
     } else {
@@ -371,18 +432,12 @@ fn get_LineInfo_with_str_symbol(relevant: String, str_symbol: &str) -> LineInfo 
 }
 
 fn get_com_end_indices(line: &str, language: &Language) -> Vec<usize> {
-    line.match_indices(language.multiline_comment_end_symbol.as_ref().unwrap()).map(|x| x.0).collect::<Vec<usize>>()
+    finders_of(language).multiline_end_finder.as_ref().unwrap().find_iter(line.as_bytes()).collect::<Vec<usize>>()
 }
 
 fn get_com_start_indices(line: &str, language: &Language, comment_indices: &[usize]) -> Vec<usize> {
-    line.match_indices(language.multiline_comment_start_symbol.as_ref().unwrap())
-    .filter_map(|x|{
-        if !is_intersecting_with_comment_symbol(x.0, comment_indices) {
-            Some(x.0)
-        } else {
-            None
-        }
-    })
+    finders_of(language).multiline_start_finder.as_ref().unwrap().find_iter(line.as_bytes())
+    .filter(|&x| !is_intersecting_with_comment_symbol(x, comment_indices))
     .collect::<Vec<usize>>()
 }
 
@@ -447,7 +502,13 @@ fn resolve_double_counting_of_adjacent_start_and_end_symbols(start_indices: &mut
 }
 
 
-fn add_keywords_if_any(cleansed: &str, language: &Language, file_stats: &mut FileStats) {
+fn add_keywords_if_any(cleansed: &str, matcher: &KeywordMatcher, file_stats: &mut FileStats) {
+    for (alias_finder, alias_len, keyword_index) in &matcher.aliases_with_indices {
+        count_alias_occurrences(cleansed, alias_finder, *alias_len, *keyword_index, file_stats);
+    }
+}
+
+fn count_alias_occurrences(cleansed: &str, alias_finder: &memmem::Finder<'_>, alias_len: usize, keyword_index: usize, file_stats: &mut FileStats) {
     fn is_acceptable_prefix(prefix: &str) -> bool {
         prefix.is_empty() || prefix.ends_with(' ') || prefix.ends_with('}') || prefix.ends_with('{') || prefix.ends_with(',')
     }
@@ -456,42 +517,37 @@ fn add_keywords_if_any(cleansed: &str, language: &Language, file_stats: &mut Fil
         suffix.is_empty() || suffix.starts_with(' ') || suffix.starts_with('}') || suffix.starts_with('{') || suffix.starts_with(',')
     }
 
-    for keyword in &language.keywords {
-        for alias in &keyword.aliases {
-            let mut indices = cleansed.match_indices(alias).map(|x| x.0).collect::<Vec<usize>>();
-            if indices.is_empty() {continue;}
-            let alias_len = alias.len();
+    let mut indices = alias_finder.find_iter(cleansed.as_bytes()).collect::<Vec<usize>>();
+    if indices.is_empty() {return;}
 
-            //ignore indices that are directly next to each other
-            let mut counter = 0;
-            while !indices.is_empty() && counter < indices.len()-1 {
-                if indices[counter] + alias_len == indices[counter+1] {
-                    indices.remove(counter);
-                    indices.remove(counter);
-                } 
-                counter += 1;
-            }
-            if indices.is_empty() {continue};
-
-            let mut surroundings = vec![&cleansed[0..indices[0]]];
-            for i in 1..indices.len() {
-                surroundings.push(&cleansed[indices[i-1]+alias_len..indices[i]]);
-            }
-            surroundings.push(&cleansed[indices[indices.len()-1]+alias_len..cleansed.len()]);
-            
-            let surroundings_len = surroundings.len();
-            let mut counter = 0;
-            while counter < surroundings_len-1 {
-                if is_acceptable_prefix(surroundings[counter]) && is_acceptable_suffix(surroundings[counter+1]) {
-                    file_stats.incr_keyword(&keyword.descriptive_name);
-                }
-                counter += 1;
-            }
+    //ignore indices that are directly next to each other
+    let mut counter = 0;
+    while !indices.is_empty() && counter < indices.len()-1 {
+        if indices[counter] + alias_len == indices[counter+1] {
+            indices.remove(counter);
+            indices.remove(counter);
         }
+        counter += 1;
+    }
+    if indices.is_empty() {return};
+
+    let mut surroundings = vec![&cleansed[0..indices[0]]];
+    for i in 1..indices.len() {
+        surroundings.push(&cleansed[indices[i-1]+alias_len..indices[i]]);
+    }
+    surroundings.push(&cleansed[indices[indices.len()-1]+alias_len..cleansed.len()]);
+
+    let surroundings_len = surroundings.len();
+    let mut counter = 0;
+    while counter < surroundings_len-1 {
+        if is_acceptable_prefix(surroundings[counter]) && is_acceptable_suffix(surroundings[counter+1]) {
+            file_stats.incr_keyword(keyword_index);
+        }
+        counter += 1;
     }
 }
 
-pub fn get_str_indices_and_symbols(line: &str, language: &Language, open_str_symbol: &Option<String>) -> (Vec<usize>,Vec<String>) {
+pub fn get_str_indices_and_symbols(line: &str, language: &Language, open_str_symbol: &Option<String>) -> (Vec<usize>,Vec<u8>) {
     fn is_not_escaped(pos: usize, bytes: &[u8]) -> bool {
         let mut slashes = 0;
         let mut offset = 1;
@@ -502,26 +558,26 @@ pub fn get_str_indices_and_symbols(line: &str, language: &Language, open_str_sym
         slashes % 2 == 0
     }
 
-    fn add_unescaped_indices(indices: &mut Vec<usize>, symbols: &mut Vec<String>, first_symbol: &str, first_val: usize, bytes: &[u8], iter: &mut MatchIndices<&String>) {
+    fn add_unescaped_indices(indices: &mut Vec<usize>, symbols: &mut Vec<u8>, symbol_index: u8, first_val: usize, bytes: &[u8], iter: &mut memmem::FindIter<'_, '_>) {
         if first_val == 0 {
             indices.push(first_val);
-            symbols.push(first_symbol.to_owned());
+            symbols.push(symbol_index);
         } else {
             if is_not_escaped(first_val, bytes) {
                 indices.push(first_val);
-                symbols.push(first_symbol.to_owned());
+                symbols.push(symbol_index);
             }
-        } 
+        }
         for x in iter {
-            if is_not_escaped(x.0, bytes) {
-                indices.push(x.0);
-                symbols.push(x.1.to_owned());
+            if is_not_escaped(x, bytes) {
+                indices.push(x);
+                symbols.push(symbol_index);
             }
         }
     }
 
-    fn add_non_intersecting(indices_1: &mut Vec<usize>, indices_2: &mut Vec<usize>, symbols_1: &mut Vec<String>, symbols_2: &mut Vec<String>,
-            open_str_symbol: &Option<String>, merged_indices: &mut Vec<usize>, merged_symbols: &mut Vec<String>, language: &Language) 
+    fn add_non_intersecting(indices_1: &mut Vec<usize>, indices_2: &mut Vec<usize>, symbols_1: &mut Vec<u8>, symbols_2: &mut Vec<u8>,
+            open_str_symbol: &Option<String>, merged_indices: &mut Vec<usize>, merged_symbols: &mut Vec<u8>, language: &Language)
     {
         let mut is_str_open = open_str_symbol.is_some();
         let (mut first_indicies, mut second_indicies, mut first_symbols, mut second_symbols) = {
@@ -547,24 +603,24 @@ pub fn get_str_indices_and_symbols(line: &str, language: &Language, open_str_sym
                     return;
                 }
                 merged_indices.push(first_indicies[first_counter]);
-                merged_symbols.push(first_symbols[first_counter].to_owned());
+                merged_symbols.push(first_symbols[first_counter]);
                 while second_counter < second_indicies.len() && second_indicies[second_counter] < first_indicies[first_counter] {
                     second_counter += 1;
-                } 
+                }
                 is_str_open = false;
                 first_counter += 1;
             } else {
                 if second_counter >= second_indicies.len() {
                     while first_counter < first_indicies.len() {
                         merged_indices.push(first_indicies[first_counter]);
-                        merged_symbols.push(first_symbols[first_counter].to_owned());
+                        merged_symbols.push(first_symbols[first_counter]);
                         first_counter += 1;
                     }
                     return;
                 } else if first_counter >= first_indicies.len() {
                     while second_counter < second_indicies.len() {
                         merged_indices.push(second_indicies[second_counter]);
-                        merged_symbols.push(second_symbols[second_counter].to_owned());
+                        merged_symbols.push(second_symbols[second_counter]);
 
                         second_counter += 1;
                     }
@@ -582,7 +638,7 @@ pub fn get_str_indices_and_symbols(line: &str, language: &Language, open_str_sym
                 } 
 
                 merged_indices.push(first_indicies[first_counter]);
-                merged_symbols.push(first_symbols[first_counter].to_owned());
+                merged_symbols.push(first_symbols[first_counter]);
                 first_counter += 1;
                 is_str_open = true;
             }
@@ -590,54 +646,57 @@ pub fn get_str_indices_and_symbols(line: &str, language: &Language, open_str_sym
     }
 
     let line_bytes = line.as_bytes();
+    let finders = finders_of(language);
     if language.string_symbols.len() == 2 {
-        let mut iter_1 = line.match_indices(&language.string_symbols[0]);
-        let mut iter_2 = line.match_indices(&language.string_symbols[1]);
+        let mut iter_1 = finders.string_finders[0].find_iter(line_bytes);
+        let mut iter_2 = finders.string_finders[1].find_iter(line_bytes);
         let first_match_1 = iter_1.next();
         let first_match_2 = iter_2.next();
-        let mut indices  = Vec::with_capacity(6);
-        let mut symbols  = Vec::with_capacity(6);
-        if first_match_1.is_none() && first_match_2.is_none() {
-            (vec![],vec![])
-        } else if first_match_1.is_none() {
+        let mut indices  = Vec::new();
+        let mut symbols  = Vec::new();
+        match (first_match_1, first_match_2) {
+        (None, None) => (vec![],vec![]),
+        (None, Some(match_2)) => {
             if open_str_symbol.is_none() {
-                add_unescaped_indices(&mut indices, &mut symbols, first_match_2.unwrap().1,
-                        first_match_2.unwrap().0, line_bytes, &mut iter_2);
+                add_unescaped_indices(&mut indices, &mut symbols, 1,
+                        match_2, line_bytes, &mut iter_2);
                 (indices,symbols)
             } else {
                 let open_str_symbol = open_str_symbol.as_ref().unwrap();
                 if *open_str_symbol == language.string_symbols[1]{
-                    add_unescaped_indices(&mut indices, &mut symbols, first_match_2.unwrap().1,
-                            first_match_2.unwrap().0, line_bytes, &mut iter_2);
+                    add_unescaped_indices(&mut indices, &mut symbols, 1,
+                            match_2, line_bytes, &mut iter_2);
                     (indices,symbols)
                 } else {
                     (vec![],vec![])
                 }
             }
-        } else if first_match_2.is_none() {
+        },
+        (Some(match_1), None) => {
             if open_str_symbol.is_none() {
-                add_unescaped_indices(&mut indices, &mut symbols, first_match_1.unwrap().1,
-                            first_match_1.unwrap().0, line_bytes, &mut iter_1);
+                add_unescaped_indices(&mut indices, &mut symbols, 0,
+                            match_1, line_bytes, &mut iter_1);
                 (indices,symbols)
             } else {
                 let open_str_symbol = open_str_symbol.as_ref().unwrap();
                 if *open_str_symbol == language.string_symbols[0]{
-                    add_unescaped_indices(&mut indices, &mut symbols, first_match_1.unwrap().1,
-                            first_match_1.unwrap().0, line_bytes, &mut iter_1);
+                    add_unescaped_indices(&mut indices, &mut symbols, 0,
+                            match_1, line_bytes, &mut iter_1);
                     (indices,symbols)
                 } else {
                     (vec![],vec![])
                 }
             }
-        } else {
-            let mut indices_1 = Vec::with_capacity(6);
-            let mut symbols_1 = Vec::with_capacity(6);
-            let mut indices_2 = Vec::with_capacity(6);
-            let mut symbols_2 = Vec::with_capacity(6);
-            add_unescaped_indices(&mut indices_1, &mut symbols_1, first_match_1.unwrap().1,
-                    first_match_1.unwrap().0, line_bytes, &mut iter_1);
-            add_unescaped_indices(&mut indices_2, &mut symbols_2, first_match_2.unwrap().1,
-                    first_match_2.unwrap().0, line_bytes, &mut iter_2);
+        },
+        (Some(match_1), Some(match_2)) => {
+            let mut indices_1 = Vec::new();
+            let mut symbols_1 = Vec::new();
+            let mut indices_2 = Vec::new();
+            let mut symbols_2 = Vec::new();
+            add_unescaped_indices(&mut indices_1, &mut symbols_1, 0,
+                    match_1, line_bytes, &mut iter_1);
+            add_unescaped_indices(&mut indices_2, &mut symbols_2, 1,
+                    match_2, line_bytes, &mut iter_2);
             if indices_1.is_empty() && indices_2.is_empty() {
                 (vec![],vec![])
             } else if indices_2.is_empty() {
@@ -650,183 +709,13 @@ pub fn get_str_indices_and_symbols(line: &str, language: &Language, open_str_sym
                 (indices,symbols)
             }
         }
-    } else {
-        let mut indices = Vec::with_capacity(6);
-        let mut symbols = Vec::with_capacity(6);
-        line.match_indices(&language.string_symbols[0]).for_each(|x| {
-            if is_not_escaped(x.0, line_bytes) {
-                indices.push(x.0); symbols.push(x.1.to_owned());
-            }
-        });
-        (indices, symbols)
-    }
-}
-
-pub fn get_str_indices_and_symbols1(line: &str, language: &Language, open_str_symbol: &Option<String>) -> (Vec<usize>,Vec<String>) {
-    fn is_not_escaped(pos: usize, bytes: &[u8]) -> bool {
-        let mut slashes = 0;
-        let mut offset = 1;
-        while pos >= offset && bytes[pos - offset] == b'\\' {
-            offset += 1;
-            slashes += 1;
-        } 
-        slashes % 2 == 0
-    }
-
-    fn add_unescaped_indices(indices: &mut Vec<usize>, symbols: &mut Vec<String>, first_symbol: &str, first_val: usize, bytes: &[u8], iter: &mut MatchIndices<&String>) {
-        if first_val == 0 {
-            indices.push(first_val);
-            symbols.push(first_symbol.to_owned());
-        } else {
-            if is_not_escaped(first_val, bytes) {
-                indices.push(first_val);
-                symbols.push(first_symbol.to_owned());
-            }
-        } 
-        for x in iter {
-            if is_not_escaped(x.0, bytes) {
-                indices.push(x.0);
-                symbols.push(x.1.to_owned());
-            }
-        }
-    }
-
-    fn add_non_intersecting(indices_1: &mut Vec<usize>, indices_2: &mut Vec<usize>, symbols_1: &mut Vec<String>, symbols_2: &mut Vec<String>,
-            open_str_symbol: &Option<String>, merged_indices: &mut Vec<usize>, merged_symbols: &mut Vec<String>, language: &Language) 
-    {
-        let mut is_str_open = open_str_symbol.is_some();
-        let (mut first_indicies, mut second_indicies, mut first_symbols, mut second_symbols) = {
-            if let Some(x) = open_str_symbol {
-                if language.string_symbols[0] == *x {
-                    (indices_1, indices_2, symbols_1, symbols_2)
-                } else {
-                    (indices_2, indices_1, symbols_2, symbols_1)
-                }
-            } else {
-                if indices_1[0] < indices_2[0] { 
-                    (indices_1, indices_2, symbols_1, symbols_2)
-                } else {
-                    (indices_2, indices_1, symbols_2, symbols_1)
-                }
-            }
-        };
-
-        let (mut first_counter, mut second_counter) = (0,0);
-        loop {
-            if is_str_open {
-                if first_counter >= first_indicies.len() {
-                    return;
-                }
-                merged_indices.push(first_indicies[first_counter]);
-                merged_symbols.push(first_symbols[first_counter].to_owned());
-                while second_counter < second_indicies.len() && second_indicies[second_counter] < first_indicies[first_counter] {
-                    second_counter += 1;
-                } 
-                is_str_open = false;
-                first_counter += 1;
-            } else {
-                if second_counter >= second_indicies.len() {
-                    while first_counter < first_indicies.len() {
-                        merged_indices.push(first_indicies[first_counter]);
-                        merged_symbols.push(first_symbols[first_counter].to_owned());
-                        first_counter += 1;
-                    }
-                    return;
-                } else if first_counter >= first_indicies.len() {
-                    while second_counter < second_indicies.len() {
-                        merged_indices.push(second_indicies[second_counter]);
-                        merged_symbols.push(second_symbols[second_counter].to_owned());
-
-                        second_counter += 1;
-                    }
-                    return;
-                }
-
-                if second_indicies[second_counter] < first_indicies[first_counter] {
-                    let (temp_indicies, temp_symbols, temp_counter) = (first_indicies, first_symbols, first_counter);
-                    first_indicies = second_indicies;
-                    first_symbols = second_symbols;
-                    first_counter = second_counter;
-                    second_indicies = temp_indicies;
-                    second_symbols = temp_symbols;
-                    second_counter = temp_counter;
-                } 
-
-                merged_indices.push(first_indicies[first_counter]);
-                merged_symbols.push(first_symbols[first_counter].to_owned());
-                first_counter += 1;
-                is_str_open = true;
-            }
-        }
-    }
-
-    let line_bytes = line.as_bytes();
-    if language.string_symbols.len() == 2 {
-        let mut iter_1 = line.match_indices(&language.string_symbols[0]);
-        let mut iter_2 = line.match_indices(&language.string_symbols[1]);
-        let first_match_1 = iter_1.next();
-        let first_match_2 = iter_2.next();
-        let mut indices  = Vec::with_capacity(6);
-        let mut symbols  = Vec::with_capacity(6);
-        if first_match_1.is_none() && first_match_2.is_none() {
-            (vec![],vec![])
-        } else if first_match_1.is_none() {
-            if open_str_symbol.is_none() {
-                add_unescaped_indices(&mut indices, &mut symbols, first_match_2.unwrap().1,
-                        first_match_2.unwrap().0, line_bytes, &mut iter_2);
-                (indices,symbols)
-            } else {
-                let open_str_symbol = open_str_symbol.as_ref().unwrap();
-                if *open_str_symbol == language.string_symbols[1]{
-                    add_unescaped_indices(&mut indices, &mut symbols, first_match_2.unwrap().1,
-                            first_match_2.unwrap().0, line_bytes, &mut iter_2);
-                    (indices,symbols)
-                } else {
-                    (vec![],vec![])
-                }
-            }
-        } else if first_match_2.is_none() {
-            if open_str_symbol.is_none() {
-                add_unescaped_indices(&mut indices, &mut symbols, first_match_1.unwrap().1,
-                            first_match_1.unwrap().0, line_bytes, &mut iter_1);
-                (indices,symbols)
-            } else {
-                let open_str_symbol = open_str_symbol.as_ref().unwrap();
-                if *open_str_symbol == language.string_symbols[0]{
-                    add_unescaped_indices(&mut indices, &mut symbols, first_match_1.unwrap().1,
-                            first_match_1.unwrap().0, line_bytes, &mut iter_1);
-                    (indices,symbols)
-                } else {
-                    (vec![],vec![])
-                }
-            }
-        } else {
-            let mut indices_1 = Vec::with_capacity(6);
-            let mut symbols_1 = Vec::with_capacity(6);
-            let mut indices_2 = Vec::with_capacity(6);
-            let mut symbols_2 = Vec::with_capacity(6);
-            add_unescaped_indices(&mut indices_1, &mut symbols_1, first_match_1.unwrap().1,
-                    first_match_1.unwrap().0, line_bytes, &mut iter_1);
-            add_unescaped_indices(&mut indices_2, &mut symbols_2, first_match_2.unwrap().1,
-                    first_match_2.unwrap().0, line_bytes, &mut iter_2);
-            if indices_1.is_empty() && indices_2.is_empty() {
-                (vec![],vec![])
-            } else if indices_2.is_empty() {
-                (indices_1,symbols_1)
-            } else if indices_1.is_empty() {
-                (indices_2, symbols_2)
-            } else {
-                add_non_intersecting(&mut indices_1, &mut indices_2, &mut symbols_1, &mut symbols_2,
-                        open_str_symbol, &mut indices, &mut symbols, language);
-                (indices,symbols)
-            }
         }
     } else {
-        let mut indices = Vec::with_capacity(6);
-        let mut symbols = Vec::with_capacity(6);
-        line.match_indices(&language.string_symbols[0]).for_each(|x| {
-            if is_not_escaped(x.0, line_bytes) {
-                indices.push(x.0); symbols.push(x.1.to_owned());
+        let mut indices = Vec::new();
+        let mut symbols = Vec::new();
+        finders.string_finders[0].find_iter(line_bytes).for_each(|x| {
+            if is_not_escaped(x, line_bytes) {
+                indices.push(x); symbols.push(0);
             }
         });
         (indices, symbols)
@@ -854,8 +743,8 @@ fn is_intersecting_with_comment_symbol(index: usize, comments_vec: &[usize]) -> 
 }
 
 
-impl LineInfo {
-    pub fn none_str(is_comment_open_after: bool, has_string_literal: bool, open_str_sybol_after: Option<String>) -> LineInfo{
+impl<'a> LineInfo<'a> {
+    pub fn none_str(is_comment_open_after: bool, has_string_literal: bool, open_str_sybol_after: Option<String>) -> LineInfo<'a> {
         LineInfo {
             cleansed_string: None,
             has_string_literal,
@@ -864,16 +753,25 @@ impl LineInfo {
         }
     }
 
-    pub fn with_str(cleansed_string: String, has_string_literal: bool) -> LineInfo {
+    pub fn with_str(cleansed_string: String, has_string_literal: bool) -> LineInfo<'a> {
         LineInfo {
-            cleansed_string: Some(cleansed_string),
+            cleansed_string: Some(Cow::Owned(cleansed_string)),
             has_string_literal,
             is_comment_open_after : false,
             open_str_sybol_after : None
         }
     }
 
-    pub fn with_open_comment() -> LineInfo {
+    pub fn whole_line(line: &'a str, has_string_literal: bool) -> LineInfo<'a> {
+        LineInfo {
+            cleansed_string: Some(Cow::Borrowed(line)),
+            has_string_literal,
+            is_comment_open_after : false,
+            open_str_sybol_after : None
+        }
+    }
+
+    pub fn with_open_comment() -> LineInfo<'a> {
         LineInfo {
             cleansed_string: None,
             has_string_literal: false,
@@ -882,7 +780,7 @@ impl LineInfo {
         }
     }
 
-    pub fn with_open_symbol(symbol: String) -> LineInfo {
+    pub fn with_open_symbol(symbol: String) -> LineInfo<'a> {
         LineInfo {
             cleansed_string: None,
             has_string_literal: true,
@@ -891,25 +789,25 @@ impl LineInfo {
         }
     }
 
-    pub fn from_slice(slice: &str) -> LineInfo {
+    pub fn from_slice(slice: &'a str) -> LineInfo<'a> {
         LineInfo {
-            cleansed_string: Some(slice.to_owned()),
+            cleansed_string: Some(Cow::Borrowed(slice)),
             has_string_literal: false,
             is_comment_open_after : false,
             open_str_sybol_after : None
         }
     }
 
-    pub fn from_slice_w_literal(slice: &str) -> LineInfo {
+    pub fn from_slice_w_literal(slice: &'a str) -> LineInfo<'a> {
         LineInfo {
-            cleansed_string: Some(slice.to_owned()),
+            cleansed_string: Some(Cow::Borrowed(slice)),
             has_string_literal: true,
             is_comment_open_after : false,
             open_str_sybol_after : None
         }
     }
 
-    pub fn none_all(has_string_literal: bool) -> LineInfo {
+    pub fn none_all(has_string_literal: bool) -> LineInfo<'a> {
         LineInfo {
             cleansed_string: None,
             has_string_literal,
@@ -918,9 +816,9 @@ impl LineInfo {
         }
     }
 
-    pub fn new(cleansed_string: Option<String>, has_string_literal: bool, is_comment_open_after: bool, open_str_sybol_after: Option<String>) -> LineInfo {
+    pub fn new(cleansed_string: Option<String>, has_string_literal: bool, is_comment_open_after: bool, open_str_sybol_after: Option<String>) -> LineInfo<'a> {
         LineInfo {
-            cleansed_string,
+            cleansed_string: cleansed_string.map(Cow::Owned),
             has_string_literal,
             is_comment_open_after,
             open_str_sybol_after
@@ -932,76 +830,87 @@ impl LineInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lazy_static::lazy_static;
-        
-    lazy_static! {
-        static ref CLASS : Keyword = Keyword {
-            descriptive_name : "classes".to_owned(),
-            aliases : vec!["class".to_owned()]
-        };
 
-        static ref INTERFACE : Keyword = Keyword {
-            descriptive_name : "interfaces".to_owned(),
-            aliases : vec!["interface".to_owned()]
-        };
+    static CLASS : LazyLock<Keyword> = LazyLock::new(|| Keyword {
+        descriptive_name : "classes".to_owned(),
+        aliases : vec!["class".to_owned()]
+    });
 
-        static ref ENUM : Keyword = Keyword {
-            descriptive_name : "enums".to_owned(),
-            aliases : vec!["enum".to_owned()]
-        };
+    static INTERFACE : LazyLock<Keyword> = LazyLock::new(|| Keyword {
+        descriptive_name : "interfaces".to_owned(),
+        aliases : vec!["interface".to_owned()]
+    });
 
-        static ref STRUCT : Keyword = Keyword {
-            descriptive_name : "structs".to_owned(),
-            aliases : vec!["struct".to_owned()]
-        };
+    static ENUM : LazyLock<Keyword> = LazyLock::new(|| Keyword {
+        descriptive_name : "enums".to_owned(),
+        aliases : vec!["enum".to_owned()]
+    });
 
-        static ref TRAIT : Keyword = Keyword {
-            descriptive_name : "traits".to_owned(),
-            aliases : vec!["trait".to_owned()]
-        };
+    static STRUCT : LazyLock<Keyword> = LazyLock::new(|| Keyword {
+        descriptive_name : "structs".to_owned(),
+        aliases : vec!["struct".to_owned()]
+    });
 
-        static ref JAVA : Language = Language {
-            name : "java".to_owned(),
-            extensions : vec!["java".to_owned()],
-            string_symbols : vec!["\"".to_owned()],
-            comment_symbols : vec!["//".to_owned()],
-            multiline_comment_start_symbol : Some("/*".to_owned()),
-            multiline_comment_end_symbol : Some("*/".to_owned()),
-            keywords : vec![CLASS.clone(),INTERFACE.clone()]
-        };
+    static TRAIT : LazyLock<Keyword> = LazyLock::new(|| Keyword {
+        descriptive_name : "traits".to_owned(),
+        aliases : vec!["trait".to_owned()]
+    });
 
-        static ref PHP : Language = Language {
-            name : "PHP".to_owned(),
-            extensions : vec!["php".to_owned()],
-            string_symbols : vec!["\"".to_owned(),"'".to_owned()],
-            comment_symbols : vec!["//".to_owned(),"#".to_owned()],
-            multiline_comment_start_symbol : Some("/*".to_owned()),
-            multiline_comment_end_symbol : Some("*/".to_owned()),
-            keywords : vec![CLASS.clone()]
-        };
+    static JAVA : LazyLock<Language> = LazyLock::new(|| Language {
+        name : "java".to_owned(),
+        extensions : vec!["java".to_owned()],
+        string_symbols : vec!["\"".to_owned()],
+        comment_symbols : vec!["//".to_owned()],
+        multiline_comment_start_symbol : Some("/*".to_owned()),
+        multiline_comment_end_symbol : Some("*/".to_owned()),
+        keywords : vec![CLASS.clone(),INTERFACE.clone()],
+        finders : std::sync::OnceLock::new()
+    });
 
-        static ref PYTHON : Language = Language {
-            name : "py".to_owned(),
-            extensions : vec!["py".to_owned()],
-            string_symbols : vec!["\"".to_owned(),"'".to_owned()],
-            comment_symbols : vec!["#".to_owned()],
-            multiline_comment_start_symbol : None,
-            multiline_comment_end_symbol : None,
-            keywords : vec![CLASS.clone()]
-        };
+    static PHP : LazyLock<Language> = LazyLock::new(|| Language {
+        name : "PHP".to_owned(),
+        extensions : vec!["php".to_owned()],
+        string_symbols : vec!["\"".to_owned(),"'".to_owned()],
+        comment_symbols : vec!["//".to_owned(),"#".to_owned()],
+        multiline_comment_start_symbol : Some("/*".to_owned()),
+        multiline_comment_end_symbol : Some("*/".to_owned()),
+        keywords : vec![CLASS.clone()],
+        finders : std::sync::OnceLock::new()
+    });
 
-        static ref RUST : Language = Language {
-            name : "rust".to_owned(),
-            extensions : vec!["rs".to_owned()],
-            string_symbols : vec!["\"".to_owned()],
-            comment_symbols : vec!["//".to_owned()],
-            multiline_comment_start_symbol : Some("/*".to_owned()),
-            multiline_comment_end_symbol : Some("*/".to_owned()),
-            keywords : vec![STRUCT.clone(),ENUM.clone(),TRAIT.clone()]
-        };
+    static PYTHON : LazyLock<Language> = LazyLock::new(|| Language {
+        name : "py".to_owned(),
+        extensions : vec!["py".to_owned()],
+        string_symbols : vec!["\"".to_owned(),"'".to_owned()],
+        comment_symbols : vec!["#".to_owned()],
+        multiline_comment_start_symbol : None,
+        multiline_comment_end_symbol : None,
+        keywords : vec![CLASS.clone()],
+        finders : std::sync::OnceLock::new()
+    });
 
-        static ref LANGUAGE_MAP_REF : Arc<HashMap<String,Language>> =
-                Arc::new(io_handler::parse_supported_languages_to_map(&LOCAL_APP_PATHS.languages_dir).unwrap().0);
+    static RUST : LazyLock<Language> = LazyLock::new(|| Language {
+        name : "rust".to_owned(),
+        extensions : vec!["rs".to_owned()],
+        string_symbols : vec!["\"".to_owned()],
+        comment_symbols : vec!["//".to_owned()],
+        multiline_comment_start_symbol : Some("/*".to_owned()),
+        multiline_comment_end_symbol : Some("*/".to_owned()),
+        keywords : vec![STRUCT.clone(),ENUM.clone(),TRAIT.clone()],
+        finders : std::sync::OnceLock::new()
+    });
+
+    static LANGUAGE_MAP_REF : LazyLock<Arc<HashMap<String,Language>>> =
+            LazyLock::new(|| Arc::new(io_handler::parse_supported_languages_to_map(&LOCAL_APP_PATHS.languages_dir).unwrap().0));
+
+    static JAVA_MATCHER : LazyLock<KeywordMatcher> = LazyLock::new(|| KeywordMatcher::build(&JAVA).unwrap());
+
+    fn matcher_for(lang_name: &str) -> Option<KeywordMatcher> {
+        KeywordMatcher::build(LANGUAGE_MAP_REF.get(lang_name).unwrap())
+    }
+
+    fn content_info_of(stats: FileStats, lang_name: &str) -> LanguageContentInfo {
+        LanguageContentInfo::from_file_stats(stats, &LANGUAGE_MAP_REF.get(lang_name).unwrap().keywords)
     }
 
     #[test]
@@ -1009,37 +918,37 @@ mod tests {
         let mut buf = String::with_capacity(150);
 
         let mut config = Configuration::new(vec!["a".to_owned()]);
-        let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), &config);
-        let result = LanguageContentInfo::from(result.unwrap());
+        let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("Java").as_ref(), &config);
+        let result = content_info_of(result.unwrap(), "Java");
         assert_eq!(LanguageContentInfo::new(44, 13, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         buf.clear();
         config.set_should_not_count_keywords(true);
-        let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), &config);
-        let result = LanguageContentInfo::from(result.unwrap());
+        let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("Java").as_ref(), &config);
+        let result = content_info_of(result.unwrap(), "Java");
         assert_eq!(LanguageContentInfo::new(44, 13, hashmap!()), result);
         buf.clear();
         config.set_should_not_count_keywords(false);
-        let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "C#", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new(vec!["a".to_owned()]));
-        let result = LanguageContentInfo::from(result.unwrap());
+        let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "C#", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("C#").as_ref(), &Configuration::new(vec!["a".to_owned()]));
+        let result = content_info_of(result.unwrap(), "C#");
         assert_eq!(LanguageContentInfo::new(44, 13, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         buf.clear();
         
-        let result = parse_file(Path::new("test_dir/lang_files/d.txt"), "C#", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new(vec!["a".to_owned()]));
-        let result = LanguageContentInfo::from(result.unwrap());
+        let result = parse_file(Path::new("test_dir/lang_files/d.txt"), "C#", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("C#").as_ref(), &Configuration::new(vec!["a".to_owned()]));
+        let result = content_info_of(result.unwrap(), "C#");
         assert_eq!(LanguageContentInfo::new(19, 7, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         buf.clear();
-        let result = parse_file(Path::new("test_dir/lang_files/d.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new(vec!["a".to_owned()]));
-        let result = LanguageContentInfo::from(result.unwrap());
+        let result = parse_file(Path::new("test_dir/lang_files/d.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("Java").as_ref(), &Configuration::new(vec!["a".to_owned()]));
+        let result = content_info_of(result.unwrap(), "Java");
         assert_eq!(LanguageContentInfo::new(19, 7, hashmap!("classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         buf.clear();
 
-        let result = parse_file(Path::new("test_dir/lang_files/b.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new(vec!["a".to_owned()]));
-        let result = LanguageContentInfo::from(result.unwrap());
+        let result = parse_file(Path::new("test_dir/lang_files/b.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("Java").as_ref(), &Configuration::new(vec!["a".to_owned()]));
+        let result = content_info_of(result.unwrap(), "Java");
         assert_eq!(LanguageContentInfo::new(19, 11, hashmap!("classes".to_owned()=>7,"interfaces".to_owned()=>0)), result);
         buf.clear();
 
-        let result = parse_file(Path::new("test_dir/lang_files/c.txt"), "Python", &mut buf, LANGUAGE_MAP_REF.clone(), &Configuration::new(vec!["a".to_owned()]));
-        let result = LanguageContentInfo::from(result.unwrap());
+        let result = parse_file(Path::new("test_dir/lang_files/c.txt"), "Python", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("Python").as_ref(), &Configuration::new(vec!["a".to_owned()]));
+        let result = content_info_of(result.unwrap(), "Python");
         assert_eq!(LanguageContentInfo::new(11, 6, hashmap!("classes".to_owned()=>2)), result);
         buf.clear();
     }
@@ -1048,66 +957,63 @@ mod tests {
     fn finds_keywords_correctly() {
         let line = String::from("Hello world!");
         let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
-        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        add_keywords_if_any(&line, &JAVA_MATCHER, &mut file_stats);
         assert_eq!(make_file_stats(0,0), file_stats);
 
         let line = String::from("class");
         let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
-        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        add_keywords_if_any(&line, &JAVA_MATCHER, &mut file_stats);
         assert_eq!(make_file_stats(1,0), file_stats);
 
         let line = String::from("1class");
         let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
-        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        add_keywords_if_any(&line, &JAVA_MATCHER, &mut file_stats);
         assert_eq!(make_file_stats(0,0), file_stats);
 
         let line = String::from("hello class word!");
         let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
-        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        add_keywords_if_any(&line, &JAVA_MATCHER, &mut file_stats);
         assert_eq!(make_file_stats(1,0), file_stats);
 
         let line = String::from("class class class");
         let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
-        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        add_keywords_if_any(&line, &JAVA_MATCHER, &mut file_stats);
         assert_eq!(make_file_stats(3,0), file_stats);
 
         let line = String::from("classclass");
         let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
-        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        add_keywords_if_any(&line, &JAVA_MATCHER, &mut file_stats);
         assert_eq!(make_file_stats(0,0), file_stats);
 
         let line = String::from("hello,class{word!");
         let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
-        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        add_keywords_if_any(&line, &JAVA_MATCHER, &mut file_stats);
         assert_eq!(make_file_stats(1,0), file_stats);
         
         let line = String::from("classe,");
         let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
-        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        add_keywords_if_any(&line, &JAVA_MATCHER, &mut file_stats);
         assert_eq!(make_file_stats(0,0), file_stats);
         
         let line = String::from("class interfaceclass classinterface interface");
         let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
-        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        add_keywords_if_any(&line, &JAVA_MATCHER, &mut file_stats);
         assert_eq!(make_file_stats(1,1), file_stats);
         
         let line = String::from("{class,interface}");
         let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
-        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        add_keywords_if_any(&line, &JAVA_MATCHER, &mut file_stats);
         assert_eq!(make_file_stats(1,1), file_stats);
         
         let line = String::from("{class.interface}");
         let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
-        add_keywords_if_any(&line, &JAVA, &mut file_stats);
+        add_keywords_if_any(&line, &JAVA_MATCHER, &mut file_stats);
         assert_eq!(make_file_stats(0,0), file_stats);
     }
 
     fn make_file_stats(class_occurances: usize, interface_occurances: usize) -> FileStats {
-        fn get_keyword_map(class_occurances: usize, interface_occurances: usize) -> HashMap<String,usize> {
-            let mut map = HashMap::<String,usize>::new();
-            map.insert(CLASS.descriptive_name.clone(), class_occurances);
-            map.insert(INTERFACE.descriptive_name.clone(), interface_occurances);
-            map
+        fn get_keyword_map(class_occurances: usize, interface_occurances: usize) -> Vec<usize> {
+            vec![class_occurances, interface_occurances]
         }
 
         FileStats {
@@ -1124,11 +1030,11 @@ mod tests {
         let line = String::from("Hello");
         assert_eq!(Vec::<usize>::new(),get_str_indices_and_symbols(&line, &PYTHON, &None).0);
         let line = String::from("\"Hello\"");
-        assert_eq!((vec![0,6],vec!["\"".to_owned(),"\"".to_owned()]),get_str_indices_and_symbols(&line, &PYTHON, &None));
+        assert_eq!((vec![0,6],vec![0u8,0u8]),get_str_indices_and_symbols(&line, &PYTHON, &None));
         let line = String::from("\"'\"Hello");
-        assert_eq!((vec![0,2],vec!["\"".to_owned(),"\"".to_owned()]),get_str_indices_and_symbols(&line, &PYTHON, &None));
-        assert_eq!((vec![1,2],vec!["'".to_owned(),"\"".to_owned()]),get_str_indices_and_symbols(&line, &PYTHON, single_str_opt));
-        assert_eq!((vec![0,1],vec!["\"".to_owned(),"'".to_owned()]),get_str_indices_and_symbols(&line, &PYTHON, double_str_opt));
+        assert_eq!((vec![0,2],vec![0u8,0u8]),get_str_indices_and_symbols(&line, &PYTHON, &None));
+        assert_eq!((vec![1,2],vec![1u8,0u8]),get_str_indices_and_symbols(&line, &PYTHON, single_str_opt));
+        assert_eq!((vec![0,1],vec![0u8,1u8]),get_str_indices_and_symbols(&line, &PYTHON, double_str_opt));
         let line = String::from("''\"\"Hello");
         assert_eq!(vec![0,1,2,3],get_str_indices_and_symbols(&line, &PYTHON, &None).0);
         assert_eq!(vec![0,1],get_str_indices_and_symbols(&line, &PYTHON, single_str_opt).0);
@@ -1146,9 +1052,9 @@ mod tests {
         assert!(get_str_indices_and_symbols(&line, &RUST, double_str_opt).0.len() == 8);
         let line = String::from(r#"[\'⣾\', '⣷', '⣯', '⣟', '⡿']"#); 
         assert!(get_str_indices_and_symbols(&line, &PYTHON, &None).0.len() == 8);
-        assert!(get_str_indices_and_symbols(&line, &RUST, &None).0.len() == 0);
+        assert!(get_str_indices_and_symbols(&line, &RUST, &None).0.is_empty());
         let line = String::from(r#"['⣾", '⣷", '⣯"]"#); 
-        assert_eq!(vec!["'".to_owned(),"'".to_owned(),"\"".to_owned(),"\"".to_owned()], 
+        assert_eq!(vec![1u8,1u8,0u8,0u8],
                 get_str_indices_and_symbols(&line, &PYTHON, &None).1);
         let line = String::from(r#"'\'\'\''"#); 
         assert_eq!(vec![0,7], get_str_indices_and_symbols(&line, &PYTHON, &None).0);
@@ -1229,15 +1135,15 @@ mod tests {
         assert_eq!(vec![0,7], find_comment_indicies_without_multiline(line, &PHP));
 
         let line = "Hello world!";
-        assert_eq!(Vec::<usize>::new(), find_comment_indicies_w_multiline(line, &PHP, &vec![]));
+        assert_eq!(Vec::<usize>::new(), find_comment_indicies_w_multiline(line, &PHP, &[]));
         let line = "//Hello*/ world!";
-        assert_eq!(vec![0], find_comment_indicies_w_multiline(line, &PHP, &vec![7]));
+        assert_eq!(vec![0], find_comment_indicies_w_multiline(line, &PHP, &[7]));
         let line = "///*Hello world!";
-        assert_eq!(vec![0], find_comment_indicies_w_multiline(line, &PHP, &vec![]));
+        assert_eq!(vec![0], find_comment_indicies_w_multiline(line, &PHP, &[]));
         let line = "//*//Hello world!";
-        assert_eq!(vec![0], find_comment_indicies_w_multiline(line, &PHP, &vec![2]));
+        assert_eq!(vec![0], find_comment_indicies_w_multiline(line, &PHP, &[2]));
         let line = "//*/#Hello world!";
-        assert_eq!(vec![0,4], find_comment_indicies_w_multiline(line, &PHP, &vec![2]));
+        assert_eq!(vec![0,4], find_comment_indicies_w_multiline(line, &PHP, &[2]));
     }
     
     #[test]
@@ -1289,7 +1195,7 @@ mod tests {
         assert_eq!(LineInfo::new(Some("He".to_owned()), true, false, Some("\"".to_owned())),get_bounds_only_single_line_comments(&line, &PYTHON, double_str_opt));
         let line = String::from(r#""""Hello""#);
         assert_eq!(LineInfo::new(None, true, false, None), get_bounds_only_single_line_comments(&line, &PYTHON, &None));
-        assert_eq!(LineInfo::new(Some("Hello".to_owned()), true, false, Some("\"".to_owned())), get_bounds_only_single_line_comments(&line, &PYTHON, &double_str_opt));
+        assert_eq!(LineInfo::new(Some("Hello".to_owned()), true, false, Some("\"".to_owned())), get_bounds_only_single_line_comments(&line, &PYTHON, double_str_opt));
         let line = String::from(r#"['⣯', '⣟"#); 
         assert_eq!(LineInfo::new(Some("[, ".to_owned()),true,false,Some("\'".to_owned())), get_bounds_only_single_line_comments(&line, &PYTHON, &None));
         
@@ -1374,7 +1280,7 @@ mod tests {
         assert_eq!(LineInfo::from_slice_w_literal("Heo"), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line = String::from(r#""""Hello""#);
         assert_eq!(LineInfo::new(None, true, false, None), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
-        assert_eq!(LineInfo::new(Some("Hello".to_owned()), true, false, Some("\"".to_owned())), get_bounds_w_multiline_comments(&line, &JAVA, true, &double_str_opt));
+        assert_eq!(LineInfo::new(Some("Hello".to_owned()), true, false, Some("\"".to_owned())), get_bounds_w_multiline_comments(&line, &JAVA, true, double_str_opt));
         
         //testing only comments
         let line = String::from("//");

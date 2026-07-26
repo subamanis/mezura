@@ -1,10 +1,9 @@
 use std::{collections::HashMap, time::Instant};
 
 use colored::*;
-#[macro_use]
-extern crate include_dir;
+use include_dir::include_dir;
 
-use mezura::{*, self, config_manager::{self, CHANGELOG, HELP, SHOW_CONFIGS, SHOW_LANGUAGES, VERSION_ID}, io_handler};
+use mezura::{*, self, config_manager::{self, CHANGELOG, HELP, SHOW_CONFIGS, SHOW_LANGUAGES, SHOW_PALETTES, TUNE_PALETTES, VERSION_ID}, io_handler};
 
 
 fn main() {
@@ -12,7 +11,7 @@ fn main() {
     #[cfg(target_os = "windows")]
     control::set_virtual_terminal(true).unwrap();
 
-    println!("\n{}",VERSION_ID);
+    println!("\n{VERSION_ID}");
 
     let mut language_map: HashMap<String, Language>;
 
@@ -21,7 +20,7 @@ fn main() {
         // and save the baked-in info, to a persistent path for future uses and user modification.
         language_map = read_baked_in_languages_dir();
         if let Err(x) = init_persistent_paths(&language_map, read_baked_in_default_config_contents()) {
-            println!("{}",format!("\nUnable to initialize persistent directories:{}\n",x.to_string()).yellow());
+            println!("{}",format!("\nUnable to initialize persistent directories:{x}\n").yellow());
             std::fs::remove_dir_all(&PERSISTENT_APP_PATHS.project_path).unwrap();
         }
     } else {
@@ -41,6 +40,11 @@ fn main() {
                 return;
             }
         }
+    }
+
+    if PERSISTENT_APP_PATHS.are_initialized && palettes_dir_is_missing_or_empty()
+        && let Err(x) = write_baked_in_palettes() {
+        println!("{}",format!("\nUnable to initialize the color palettes directory: {x}\n").yellow());
     }
 
     let args_str = match read_args_as_str() {
@@ -64,9 +68,9 @@ fn main() {
         } 
     };
 
-    if (config.languages_of_interest.len() == config.excluded_languages.len() && !config.excluded_languages.is_empty()) &&
+    if !config.languages_of_interest.is_empty() &&
      config.languages_of_interest.iter().all(|lang| config.excluded_languages.contains(lang)) {
-        println!("{}",format!("\nIncluded and excluded languages are mutually exclusive.\n").red());
+        println!("{}","\nIncluded and excluded languages are mutually exclusive.\n".red());
         return;
     }
 
@@ -74,7 +78,7 @@ fn main() {
         match retain_only_languages_of_interest(&mut language_map, &config.languages_of_interest) {
             Ok(x) => {
                 if let Some(msg) = x {
-                    println!("\n {}",msg);
+                    println!("\n {msg}");
                 }
             },
             Err(_) => {
@@ -126,7 +130,7 @@ fn retain_only_languages_of_interest(language_map: &mut HashMap<String, Language
     });
 
     if !non_existant_lang_names.is_empty() {
-        Ok(Some(format!("\nThese languages don't exist as language files:\n {}",non_existant_lang_names).yellow()))
+        Ok(Some(format!("\nThese languages don't exist as language files:\n {non_existant_lang_names}").yellow()))
     } else {
         Ok(None)
     }
@@ -157,6 +161,37 @@ fn init_persistent_paths(languages: &HashMap<String,Language>, default_config_co
     }
 
     io_handler::write_default_config(default_config_contents)?;
+    write_baked_in_palettes()?;
+
+    Ok(())
+}
+
+fn open_in_browser(path: &str) {
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("cmd").args(["/C", "start", "", path]).spawn();
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open").arg(path).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let result = std::process::Command::new("xdg-open").arg(path).spawn();
+
+    if result.is_err() {
+        println!("(the page could not be opened in a browser automatically)");
+    }
+}
+
+fn palettes_dir_is_missing_or_empty() -> bool {
+    match std::fs::read_dir(&PERSISTENT_APP_PATHS.palettes_dir) {
+        Ok(mut entries) => entries.next().is_none(),
+        Err(_) => true
+    }
+}
+
+fn write_baked_in_palettes() -> Result<(),std::io::Error> {
+    std::fs::create_dir_all(&PERSISTENT_APP_PATHS.palettes_dir)?;
+    for file in include_dir!("data/palettes").files.iter() {
+        let file_name = std::path::Path::new(file.path).file_name().and_then(|x| x.to_str()).unwrap_or(file.path);
+        std::fs::write(PERSISTENT_APP_PATHS.palettes_dir.clone() + file_name, file.contents)?;
+    }
 
     Ok(())
 }
@@ -176,14 +211,33 @@ fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Lan
     if args_str.contains(&(String::from("--") + HELP)) {
         message_printer::print_help_message_for_given_args(args_str);
         return true; 
-    } else if args_str.contains(&(String::from("--") + CHANGELOG)) {
-        message_printer::print_changelog();
+    } else if let Some(pos) = args_str.find(&(String::from("--") + CHANGELOG)) {
+        match args_str[pos + CHANGELOG.len() + 2..].split_whitespace().next() {
+            Some("full") => message_printer::print_changelog(true),
+            Some(arg) if !arg.starts_with("--") => {
+                println!("\n{}", config_manager::ArgParsingError::IncorrectCommandArgs(CHANGELOG.to_owned()).formatted());
+                message_printer::print_help_message_for_command(CHANGELOG);
+            },
+            _ => message_printer::print_changelog(false),
+        }
         return true;
     } else if args_str.contains(&(String::from("--") + SHOW_LANGUAGES)) {
         message_printer::print_supported_languages(language_map);
         return true;
     } else if args_str.contains(&(String::from("--") + SHOW_CONFIGS)) {
         message_printer::print_existing_configs();
+        return true;
+    } else if args_str.contains(&(String::from("--") + TUNE_PALETTES)) {
+        match io_handler::generate_palette_tuner_page() {
+            Ok(path) => {
+                println!("\nPalette tuner page generated at:\n{path}");
+                open_in_browser(&path);
+            },
+            Err(x) => println!("\n{}", format!("Unable to generate the palette tuner page: {x}").red())
+        }
+        return true;
+    } else if args_str.contains(&(String::from("--") + SHOW_PALETTES)) {
+        message_printer::print_existing_palettes();
         return true;
     }
 
@@ -223,6 +277,6 @@ mod tests {
 
         let result = retain_only_languages_of_interest(&mut language_map, &languages_of_interest);
         assert!(result.is_err());
-        assert!(language_map.len() == 0);
+        assert!(language_map.is_empty());
     }
 }
