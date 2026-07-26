@@ -34,18 +34,19 @@ pub const EXCLUDE_HELP  :  &str =
     <arg1>`, <arg2>`, <arg3>   or   \"<arg1>, <arg2>, <arg3>\"
 
 ";
-pub const GITIGNORE_HELP  :  &str =
-"--gitignore
+pub const NO_GITIGNORE_HELP  :  &str =
+"--no-gitignore
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
     or 'no' to disable. Default: no
 
-    Specifies that the program should respect .gitignore files: any file or folder ignored by a
-    .gitignore found in the traversed directories (or in their parent directories, up to the
-    repository root) is skipped, and skipped files are included in the excluded files count.
-    Negated patterns ('!keep.log') are supported.
+    By default, the program respects .gitignore files: any file or folder ignored by a .gitignore
+    found in the traversed directories (or in their parent directories, up to the repository root)
+    is skipped, and skipped files are included in the excluded files count. Negated patterns
+    ('!keep.log') are supported, and explicitly given targets are always traversed, even if a
+    .gitignore of their parent directories would ignore them.
 
-    Explicitly given targets always win: a directory or file passed as a target is traversed
-    even if a .gitignore of its parent directories would ignore it.
+    This flag disables that behavior, so that every relevant file is counted
+    regardless of .gitignore rules.
 
 ";
 pub const LANGUAGES_HELP  :  &str =
@@ -209,7 +210,7 @@ pub fn print_whole_help_message() {
     msg += SEARCH_IN_DOTTED_HELP;
     msg += SHOW_FAULTY_FILES_HELP;
     msg += NO_VISUAL_HELP;
-    msg += GITIGNORE_HELP;
+    msg += NO_GITIGNORE_HELP;
     msg += LOG_HELP;
     msg += COMPRARE_LEVEL_HELP;
     msg += SAVE_HELP;
@@ -319,8 +320,8 @@ fn get_help_msg_of_command(command: &str) -> Option<&str> {
         Some(SHOW_FAULTY_FILES_HELP)
     } else if command == NO_VISUAL {
         Some(NO_VISUAL_HELP)
-    } else if command == GITIGNORE {
-        Some(GITIGNORE_HELP)
+    } else if command == NO_GITIGNORE {
+        Some(NO_GITIGNORE_HELP)
     } else if command == LOG {
         Some(LOG_HELP)
     } else if command == COMPRARE_LEVEL {

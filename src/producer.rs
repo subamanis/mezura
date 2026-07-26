@@ -55,10 +55,10 @@ pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>,
             }
 
             if let Ok(entries) = fs::read_dir(&dir.path) {
-                let gitignore_stack = if config.respect_gitignore {
-                    GitignoreStack::extended(&dir.path, dir.gitignore_stack.clone())
-                } else {
+                let gitignore_stack = if config.no_gitignore {
                     None
+                } else {
+                    GitignoreStack::extended(&dir.path, dir.gitignore_stack.clone())
                 };
                 traverse_dir(&files_injector, entries, &dirs_injector, &extension_lang_map, &exclude_matcher, &gitignore_stack,
                         &config, &mut local_metadata, &mut total_files, &mut relevant_files, &mut excluded_files)

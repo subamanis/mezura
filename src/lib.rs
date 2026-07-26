@@ -166,7 +166,7 @@ pub fn calculate_single_file_stats_or_add_to_injector(config: &Configuration, di
                 files_present.relevant_files += 1;
             }
         } else if dir_path.is_dir() {
-            let gitignore_stack = if config.respect_gitignore { GitignoreStack::for_root_dir(dir_path) } else { None };
+            let gitignore_stack = if config.no_gitignore { None } else { GitignoreStack::for_root_dir(dir_path) };
             dirs_injector.push(TraversedDir::new(dir_path.to_path_buf(), gitignore_stack));
         }
     })

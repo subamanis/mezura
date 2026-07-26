@@ -101,15 +101,15 @@ fn test_gitignore_traversal() {
 
     let root_str = root.to_str().unwrap().replace('\\', "/");
 
-    let (total, relevant, excluded, found_files) = count_files_of(&root_str, "--gitignore");
+    let (total, relevant, excluded, found_files) = count_files_of(&root_str, "");
     assert_eq!((7, 2, 3), (total, relevant, excluded));
     assert_eq!(vec!["b.rs", "keep.py"], found_files);
 
-    let (total, relevant, excluded, found_files) = count_files_of(&root_str, "");
+    let (total, relevant, excluded, found_files) = count_files_of(&root_str, "--no-gitignore");
     assert_eq!((8, 6, 0), (total, relevant, excluded));
     assert_eq!(vec!["a.py", "b.rs", "c.rs", "d.rs", "e.py", "keep.py"], found_files);
 
-    let (_, relevant, _, found_files) = count_files_of(&format!("{root_str}/ignored_dir"), "--gitignore");
+    let (_, relevant, _, found_files) = count_files_of(&format!("{root_str}/ignored_dir"), "");
     assert_eq!(1, relevant);
     assert_eq!(vec!["c.rs"], found_files);
 
