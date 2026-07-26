@@ -1,0 +1,76 @@
+name: Release
+
+# Triggered by pushing a version tag, e.g.:  git tag v2.0.1 && git push origin v2.0.1
+on:
+  push:
+    tags: [ 'v*' ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: mezura-windows-x86_64
+            binary: target/release/mezura.exe
+          - os: ubuntu-latest
+            artifact: mezura-linux-x86_64
+            binary: target/release/mezura
+          - os: macos-latest
+            artifact: mezura-macos-arm64
+            binary: target/release/mezura
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache the cargo registry and the build dir
+        uses: Swatinem/rust-cache@v2
+
+      # A tag must never produce a release that does not pass its own test suite
+      - name: Test
+        run: cargo test --verbose
+
+      - name: Build
+        run: cargo build --release --verbose
+
+      - name: Upload the binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.binary }}
+
+  publish:
+    name: publish the github release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download every built binary
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Rename the binaries per platform
+        run: |
+          mkdir -p release
+          cp artifacts/mezura-windows-x86_64/mezura.exe release/mezura-windows-x86_64.exe
+          cp artifacts/mezura-linux-x86_64/mezura   release/mezura-linux-x86_64
+          cp artifacts/mezura-macos-arm64/mezura    release/mezura-macos-arm64
+          chmod +x release/mezura-linux-x86_64 release/mezura-macos-arm64
+
+      - name: Create the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true

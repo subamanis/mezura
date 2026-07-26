@@ -39,7 +39,8 @@ cargo build --release
 ```
 
 ### 3. Download the prebuilt binary
-<b>Windows only</b>: grab it directly from the "executable" folder of the repo.
+Grab the one for your platform from the [latest release](https://github.com/subamanis/mezura/releases/latest).
+Windows, Linux and macOS binaries are built and tested on every tagged version.
 
 <br>
 

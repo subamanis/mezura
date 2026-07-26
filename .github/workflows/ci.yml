@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Every platform runs to completion, so that a failure on one still reports the others
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache the cargo registry and the build dir
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --verbose
+
+      # The runners start with no persistent app dir, which is exactly the state that
+      # used to break the program and that the test suite has to keep covering.
+      - name: Test
+        run: cargo test --verbose
+
+      - name: Run against the repository itself
+        run: cargo run --release -- ./src --no-visual
