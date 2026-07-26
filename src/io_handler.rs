@@ -274,7 +274,7 @@ pub fn generate_palette_tuner_page() -> io::Result<String> {
         }
         entries.push((stem.to_owned(), colors_line.split_whitespace().map(|x| x.to_owned()).collect()));
     }
-    entries.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+    entries.sort_by_key(|x| x.0.to_lowercase());
 
     let palettes_js = entries.iter().map(|(name, tokens)| {
         format!("{{name:\"{}\",tokens:[{}]}}", js_escape(name),

@@ -571,7 +571,8 @@ impl GitignoreStack {
         Some(Arc::new(GitignoreStack { matcher, parent }))
     }
 
-    pub fn for_root_dir(dir: &Path) -> Option<Arc<GitignoreStack>> {
+    // The .gitignore files of every dir between the repository root and the given dir, excluding it
+    fn of_ancestors(dir: &Path) -> Option<Arc<GitignoreStack>> {
         if dir.join(".git").exists() {
             return None;
         }
@@ -588,11 +589,44 @@ impl GitignoreStack {
         for ancestor in relevant_ancestors.iter().rev() {
             stack = Self::extended(ancestor, stack);
         }
+        stack
+    }
 
+    // Explicitly given target dirs are traversed even if a .gitignore of their ancestors ignores them
+    pub fn for_root_dir(dir: &Path) -> Option<Arc<GitignoreStack>> {
+        let stack = Self::of_ancestors(dir);
         if let Some(s) = &stack && s.is_ignored(dir, true) {
             return None;
         }
         stack
+    }
+
+    // Used for paths that the program discovered on its own, like the matches of a glob pattern
+    pub fn is_path_ignored(path: &Path) -> bool {
+        let is_dir = path.is_dir();
+        let Some(parent) = path.parent() else { return false };
+
+        let stack = Self::extended(parent, Self::of_ancestors(parent));
+        match stack {
+            Some(x) => x.is_ignored_with_ancestor_dirs(path, is_dir),
+            None => false
+        }
+    }
+
+    // Unlike the traversal, which prunes ignored dirs as it descends and therefore only has to
+    // check the entry itself, a standalone path has to be checked against its parent dirs too
+    fn is_ignored_with_ancestor_dirs(&self, path: &Path, is_dir: bool) -> bool {
+        let mut node = Some(self);
+        while let Some(stack) = node {
+            match stack.matcher.matched_path_or_any_parents(path, is_dir) {
+                ignore::Match::Ignore(_) => return true,
+                ignore::Match::Whitelist(_) => return false,
+                ignore::Match::None => {}
+            }
+            node = stack.parent.as_deref();
+        }
+
+        false
     }
 
     pub fn is_ignored(&self, path: &Path, is_dir: bool) -> bool {

@@ -87,6 +87,38 @@ pub fn is_valid_path(s: &str) -> bool {
     p.is_dir() || p.is_file()
 }
 
+pub fn has_glob_metacharacters(s: &str) -> bool {
+    s.contains(['*', '?', '[', '{'])
+}
+
+// Paths are compared case-insensitively on Windows, where the file system is
+pub fn path_comparison_key(path: &str) -> String {
+    if cfg!(windows) {path.to_lowercase()} else {path.to_owned()}
+}
+
+fn is_ancestor_of(ancestor: &str, path: &str) -> bool {
+    let ancestor = ancestor.trim_end_matches('/');
+    path.len() > ancestor.len() + 1 && path.starts_with(ancestor)
+            && path.as_bytes()[ancestor.len()] == b'/'
+}
+
+// Targets that are contained in other targets would have their files counted twice,
+// so only the topmost of every overlapping group is kept.
+pub fn remove_overlapping_paths(paths: Vec<String>) -> Vec<String> {
+    let mut sorted = paths.into_iter().map(|x| (path_comparison_key(&x), x)).collect::<Vec<_>>();
+    sorted.sort();
+    sorted.dedup_by(|a, b| a.0 == b.0);
+
+    let mut kept : Vec<(String,String)> = Vec::with_capacity(sorted.len());
+    for (key, path) in sorted {
+        if !kept.iter().any(|(kept_key,_)| is_ancestor_of(kept_key, &key)) {
+            kept.push((key, path));
+        }
+    }
+
+    kept.into_iter().map(|(_,path)| path).collect()
+}
+
 pub fn parse_colors_to_vec(s: &str) -> Option<Vec<Color>> {
     let entries = s.split_whitespace().collect::<Vec<_>>();
     if entries.is_empty() || entries.len() > 5 {
@@ -284,6 +316,74 @@ mod Tests{
         assert_eq!(Some((2,6)),parse_two_usize_values("2 6", 1, 4, 1, 12));
     }
 }
+#[cfg(test)]
+mod target_path_tests {
+    use super::*;
+
+    fn dedupe(paths: &[&str]) -> Vec<String> {
+        remove_overlapping_paths(paths.iter().map(|x| x.to_string()).collect())
+    }
+
+    #[test]
+    fn test_has_glob_metacharacters() {
+        assert!(has_glob_metacharacters("src/*"));
+        assert!(has_glob_metacharacters("a?b"));
+        assert!(has_glob_metacharacters("[abc]"));
+        assert!(has_glob_metacharacters("{a,b}"));
+        assert!(has_glob_metacharacters("D:/dev/**/src"));
+
+        assert!(!has_glob_metacharacters("src"));
+        assert!(!has_glob_metacharacters("D:/dev/Rusty/mezura"));
+        assert!(!has_glob_metacharacters("../a b/c-d.rs"));
+    }
+
+    #[test]
+    fn test_remove_overlapping_paths_keeps_unrelated() {
+        assert_eq!(Vec::<String>::new(), dedupe(&[]));
+        assert_eq!(vec!["D:/a"], dedupe(&["D:/a"]));
+        assert_eq!(vec!["D:/a", "D:/b"], dedupe(&["D:/b", "D:/a"]));
+        assert_eq!(vec!["D:/a", "E:/a"], dedupe(&["D:/a", "E:/a"]));
+    }
+
+    #[test]
+    fn test_remove_overlapping_paths_drops_identical() {
+        assert_eq!(vec!["D:/a"], dedupe(&["D:/a", "D:/a"]));
+        assert_eq!(vec!["D:/a", "D:/b"], dedupe(&["D:/b", "D:/a", "D:/b", "D:/a"]));
+    }
+
+    #[test]
+    fn test_remove_overlapping_paths_drops_nested() {
+        assert_eq!(vec!["D:/a"], dedupe(&["D:/a", "D:/a/b"]));
+        assert_eq!(vec!["D:/a"], dedupe(&["D:/a/b", "D:/a"]));
+        assert_eq!(vec!["D:/a"], dedupe(&["D:/a", "D:/a/b/c/d", "D:/a/b"]));
+        assert_eq!(vec!["D:/a"], dedupe(&["D:/a", "D:/a/file.rs"]));
+        assert_eq!(vec!["D:/a", "D:/b"], dedupe(&["D:/a", "D:/a/x", "D:/b", "D:/b/y/z"]));
+    }
+
+    #[test]
+    fn test_remove_overlapping_paths_respects_component_boundaries() {
+        // 'D:/ab' is not inside 'D:/a', despite the string prefix
+        assert_eq!(vec!["D:/a", "D:/ab"], dedupe(&["D:/a", "D:/ab"]));
+        assert_eq!(vec!["D:/a", "D:/a-b"], dedupe(&["D:/a", "D:/a-b"]));
+        // the '-' sorts before the '/', so a naive scan against only the previous kept path
+        // would let 'D:/a/b' through, even though it is inside 'D:/a'
+        assert_eq!(vec!["D:/a", "D:/a-b"], dedupe(&["D:/a", "D:/a-b", "D:/a/b"]));
+        assert_eq!(vec!["D:/a", "D:/a!b", "D:/a-b"], dedupe(&["D:/a/deep/one", "D:/a-b", "D:/a", "D:/a!b"]));
+    }
+
+    #[test]
+    fn test_remove_overlapping_paths_handles_trailing_slashes_and_case() {
+        assert_eq!(vec!["D:/a/"], dedupe(&["D:/a/", "D:/a/b"]));
+
+        let result = dedupe(&["D:/Dev", "D:/dev/sub"]);
+        if cfg!(windows) {
+            assert_eq!(vec!["D:/Dev"], result);
+        } else {
+            assert_eq!(vec!["D:/Dev", "D:/dev/sub"], result);
+        }
+    }
+}
+
 #[cfg(test)]
 mod exclude_matcher_tests {
     use super::*;

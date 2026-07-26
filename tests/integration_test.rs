@@ -84,6 +84,33 @@ fn count_files_of(target: &str, extra_args: &str) -> (usize, usize, usize, Vec<S
 }
 
 #[test]
+fn test_overlapping_and_globbed_targets_count_every_file_once() {
+    let root = std::env::temp_dir().join("mezura_overlap_test");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("sub").join("deep")).unwrap();
+    std::fs::write(root.join("a.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(root.join("sub").join("b.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(root.join("sub").join("deep").join("c.rs"), "fn main() {}\n").unwrap();
+    let root = root.to_str().unwrap().replace('\\', "/");
+
+    let (_, _, _, found_files) = count_files_of(&root, "");
+    assert_eq!(vec!["a.rs", "b.rs", "c.rs"], found_files);
+
+    // Without pruning, the files of the nested targets would appear multiple times
+    let (_, _, _, found_files) = count_files_of(&format!("{root},{root}/sub,{root}/sub/deep"), "");
+    assert_eq!(vec!["a.rs", "b.rs", "c.rs"], found_files);
+
+    let (_, _, _, found_files) = count_files_of(&format!("{root}/sub/deep,{root}/sub"), "");
+    assert_eq!(vec!["b.rs", "c.rs"], found_files);
+
+    // Glob matches go through the same pruning
+    let (_, _, _, found_files) = count_files_of(&format!("{root}/*,{root}/**/*.rs"), "");
+    assert_eq!(vec!["a.rs", "b.rs", "c.rs"], found_files);
+
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn test_gitignore_traversal() {
     let root = std::env::temp_dir().join("mezura_gitignore_test");
     let _ = std::fs::remove_dir_all(&root);

@@ -9,8 +9,13 @@ pub const DIRS_HELP  :  &str =
 "--dirs
     The paths to the directories or files, separated by commas if more than 1,
     in this form: '--dirs <path1>, <path2>'
-    The paths must point to directories or files that exist; unlike the '--exclude' command,
-    glob patterns are not supported here.
+    A path can also be a glob pattern (* ? [..] {..}), which is expanded to every existing
+    directory and file that it matches, so 'services/*/src' is a valid target.
+    Since the matches of a pattern are found by the program and not named by you, they follow
+    the same rules as every other path it discovers: the ones that a .gitignore ignores, or that
+    are dotted, are skipped (see the '--no-gitignore' and '--search-in-dotted' commands).
+    A path that you write out explicitly is always used, even if it is ignored or dotted.
+    Targets that are contained in other targets are dropped, so that no file is counted twice.
     If you are using Windows Powershell, you will need to escape the commas with a backtick: `
     or surround all the arguments with quotation marks:
     <path1>`, <path2>`, <path3>   or   \"<path1>, <path2>, <path3>\"
@@ -44,8 +49,9 @@ pub const NO_GITIGNORE_HELP  :  &str =
     By default, the program respects .gitignore files: any file or folder ignored by a .gitignore
     found in the traversed directories (or in their parent directories, up to the repository root)
     is skipped, and skipped files are included in the excluded files count. Negated patterns
-    ('!keep.log') are supported, and explicitly given targets are always traversed, even if a
-    .gitignore of their parent directories would ignore them.
+    ('!keep.log') are supported, and target paths that are written out explicitly are always used,
+    even if a .gitignore of their parent directories would ignore them. The matches of a glob
+    pattern do not count as written out explicitly, since the program is the one that found them.
 
     This flag disables that behavior, so that every relevant file is counted
     regardless of .gitignore rules.

@@ -2,7 +2,7 @@ use std::{path::Path};
 
 use colored::{ColoredString, Colorize};
 
-use crate::{Color, Formatted, io_handler, message_printer, utils};
+use crate::{Color, Formatted, GitignoreStack, io_handler, message_printer, utils};
 
 // Application version, to be displayed at startup and with --help command
 pub const VERSION_ID : &str = "v2.0.0";
@@ -94,7 +94,10 @@ pub enum ArgParsingError {
     IncorrectCommandArgs(String),
     UnexpectedCommandArgs(String),
     NonExistantConfig(String),
-    InvalidValueInConfig(String,String)
+    InvalidValueInConfig(String,String),
+    InvalidGlobPattern(String),
+    NoGlobMatches(String),
+    AllGlobMatchesIgnored(String)
 }
 
 // Empty line argument is not supposed to be allowed, since this check is being performed in main
@@ -108,12 +111,15 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
 pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilder, ArgParsingError> {
     let mut dirs = None;
     let mut options = line.split("--");
+    // The target paths can be given before these flags are parsed, so they are detected up front
+    let respect_gitignore = !line.contains(&(String::from("--") + NO_GITIGNORE));
+    let dotted_are_targetable = line.contains(&(String::from("--") + SEARCH_IN_DOTTED));
 
     if line.trim().starts_with("--") {
         //ignoring the empty first element that is caused by splitting
         options.next();
     } else {
-        match parse_dirs(options.next().unwrap()) {
+        match parse_dirs(options.next().unwrap(), respect_gitignore, dotted_are_targetable) {
             Ok(x) => {
                 if !x.is_empty() {
                     dirs = Some(x);
@@ -140,7 +146,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 return Err(ArgParsingError::DoublePath);
             }
 
-            let parse_result = parse_dirs(arguments);
+            let parse_result = parse_dirs(arguments, respect_gitignore, dotted_are_targetable);
             if let Ok(x) = parse_result {
                 if x.is_empty() {
                     message_printer::print_help_message_for_command(DIRS);
@@ -253,12 +259,14 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 return Err(ArgParsingError::IncorrectCommandArgs(LOAD.to_owned()));
             }
 
-            if let Ok((options, invalid_fields)) = io_handler::parse_config_file(Some(config_name), None) {
+            if let Ok((mut options, invalid_fields)) = io_handler::parse_config_file(Some(config_name), None) {
                 if let Some(dirs) = &options.dirs {
-                    for dir in dirs.iter() {
-                        if !utils::is_valid_path(dir) {
-                            return Err(ArgParsingError::InvalidPathInConfig(dir.to_owned(), config_name.to_owned()));
-                        }
+                    match resolve_target_paths(dirs, respect_gitignore, dotted_are_targetable) {
+                        Ok(x) => options.dirs = Some(x),
+                        Err(ArgParsingError::InvalidPath(p)) | Err(ArgParsingError::InvalidGlobPattern(p))
+                                | Err(ArgParsingError::NoGlobMatches(p)) | Err(ArgParsingError::AllGlobMatchesIgnored(p)) =>
+                                return Err(ArgParsingError::InvalidPathInConfig(p, config_name.to_owned())),
+                        Err(x) => return Err(x)
                     }
                 }
                 custom_config = Some((options, invalid_fields));
@@ -369,25 +377,57 @@ fn has_any_args(command: &str) -> bool {
     command.split(' ').skip(1).filter_map(utils::get_trimmed_if_not_empty).count() != 0
 }
 
-fn parse_dirs(s: &str) -> Result<Vec<String>, ArgParsingError> {
-    let mut _dirs = utils::parse_paths_to_vec(s);
+fn parse_dirs(s: &str, respect_gitignore: bool, search_in_dotted: bool) -> Result<Vec<String>, ArgParsingError> {
+    resolve_target_paths(&utils::parse_paths_to_vec(s), respect_gitignore, search_in_dotted)
+}
 
-    for dir in _dirs.iter_mut() {
-        let trimmed_dir =  dir.trim();
-        if !utils::is_valid_path(dir) {
-            return Err(ArgParsingError::InvalidPath(trimmed_dir.to_owned()))
+// Literal paths must exist and are always used, even if they are ignored or dotted, since the user
+// named them explicitly. Glob patterns are expanded to the existing paths they match, and those
+// matches are discovered by the program, so they are subject to the same rules as every other
+// discovered path. Finally, targets contained in other targets are dropped, so that no file
+// is counted twice.
+fn resolve_target_paths(entries: &[String], respect_gitignore: bool, search_in_dotted: bool)
+-> Result<Vec<String>, ArgParsingError>
+{
+    fn is_dotted(path: &Path) -> bool {
+        path.file_name().and_then(|x| x.to_str()).is_some_and(|x| x.starts_with('.'))
+    }
+
+    let mut resolved = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let trimmed = entry.trim();
+        if utils::has_glob_metacharacters(trimmed) {
+            let paths = match glob::glob(&trimmed.replace('\\', "/")) {
+                Ok(x) => x,
+                Err(_) => return Err(ArgParsingError::InvalidGlobPattern(trimmed.to_owned()))
+            };
+            let matches = paths.flatten().filter(|x| x.is_dir() || x.is_file()).collect::<Vec<_>>();
+            if matches.is_empty() {
+                return Err(ArgParsingError::NoGlobMatches(trimmed.to_owned()));
+            }
+
+            let relevant = matches.iter()
+                    .filter(|x| search_in_dotted || !is_dotted(x))
+                    .filter(|x| !respect_gitignore || !GitignoreStack::is_path_ignored(x))
+                    .filter_map(|x| x.to_str().map(convert_to_absolute)).collect::<Vec<_>>();
+            if relevant.is_empty() {
+                return Err(ArgParsingError::AllGlobMatchesIgnored(trimmed.to_owned()));
+            }
+            resolved.extend(relevant);
+        } else if utils::is_valid_path(trimmed) {
+            resolved.push(convert_to_absolute(trimmed));
         } else {
-            *dir = convert_to_absolute(trimmed_dir);
+            return Err(ArgParsingError::InvalidPath(trimmed.to_owned()));
         }
     }
 
-    Ok(_dirs)
+    Ok(utils::remove_overlapping_paths(resolved))
 }
 
 fn parse_working_dir_as_target_dir() -> Result<Vec<String>, ArgParsingError> {
     if let Ok(path_buf) = std::env::current_dir()
         && let Some(path_str) = path_buf.to_str()
-        && let Ok(x) = parse_dirs(path_str) {
+        && let Ok(x) = parse_dirs(path_str, true, false) {
         return Ok(x);
     }
 
@@ -653,7 +693,10 @@ impl Formatted for ArgParsingError {
             Self::IncorrectCommandArgs(p) => format!("Incorrect arguments provided for the command '--{p}'.").red(),
             Self::UnexpectedCommandArgs(p) => format!("Command '--{p}' does not expect any arguments.").red(),
             Self::NonExistantConfig(p) => format!("Configuration '{p}' does not exist.").red(),
-            Self::InvalidValueInConfig(cmd,conf) => format!("Invalid value for the command '--{cmd}', in config '{conf}'.\nFix the value in the config file, or override it by providing a valid '--{cmd}' argument.").red()
+            Self::InvalidValueInConfig(cmd,conf) => format!("Invalid value for the command '--{cmd}', in config '{conf}'.\nFix the value in the config file, or override it by providing a valid '--{cmd}' argument.").red(),
+            Self::InvalidGlobPattern(p) => format!("'{p}' is not a valid glob pattern.").red(),
+            Self::NoGlobMatches(p) => format!("The pattern '{p}' did not match any existing directory or file.").red(),
+            Self::AllGlobMatchesIgnored(p) => format!("Everything that the pattern '{p}' matched is skipped, either because a .gitignore file ignores it, or because it is a dotted path.\nUse the '--no-gitignore' or '--search-in-dotted' commands to include it, or provide the paths explicitly.").red()
         }
     }
 }
@@ -666,6 +709,10 @@ mod tests {
     use crate::PERSISTENT_APP_PATHS;
 
     use super::*;
+
+    fn parse_dirs(s: &str) -> Result<Vec<String>, ArgParsingError> {
+        super::parse_dirs(s, true, false)
+    }
 
     fn new_conf(dir: &str) -> Configuration {
         let mut builder = ConfigurationBuilder::new(Some(vec![convert_to_absolute(dir)]), None, None, None, None, None,
@@ -782,11 +829,81 @@ mod tests {
 
     #[test]
     fn test_parse_dirs() {
-        assert!(parse_dirs("a").is_err());
-        assert!(parse_dirs("a b c").is_err());
+        assert_eq!(Err(ArgParsingError::InvalidPath("a".to_owned())), parse_dirs("a"));
+        assert_eq!(Err(ArgParsingError::InvalidPath("a b c".to_owned())), parse_dirs("a b c"));
 
-        assert_eq!(vec![convert_to_absolute("./"), convert_to_absolute(".././")], parse_dirs("./, .././").unwrap());
-        assert_eq!(vec![convert_to_absolute("./"), convert_to_absolute(".././")], parse_dirs("./, \".././\"").unwrap());
+        assert_eq!(vec![convert_to_absolute("./")], parse_dirs("./").unwrap());
+        assert_eq!(vec![convert_to_absolute("./src")], parse_dirs("\"./src\"").unwrap());
+
+        // Targets that contain other targets swallow them, so that no file is counted twice
+        assert_eq!(vec![convert_to_absolute(".././")], parse_dirs("./, .././").unwrap());
+        assert_eq!(vec![convert_to_absolute(".././")], parse_dirs("./, \".././\"").unwrap());
+        assert_eq!(vec![convert_to_absolute("./")], parse_dirs("./src, ./, ./tests").unwrap());
+        assert_eq!(vec![convert_to_absolute("./src")], parse_dirs("./src, ./src/utils.rs").unwrap());
+
+        // Unrelated targets are all kept
+        assert_eq!(vec![convert_to_absolute("./src"), convert_to_absolute("./tests")],
+                parse_dirs("./tests, ./src").unwrap());
+    }
+
+    #[test]
+    fn test_parse_dirs_with_glob_patterns() {
+        let root = std::env::temp_dir().join("mezura_glob_test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("a").join("src")).unwrap();
+        std::fs::create_dir_all(root.join("b").join("src")).unwrap();
+        std::fs::create_dir_all(root.join("c")).unwrap();
+        std::fs::write(root.join("a").join("src").join("one.rs"), "fn main() {}").unwrap();
+        std::fs::write(root.join("b").join("src").join("two.rs"), "fn main() {}").unwrap();
+        let root = root.to_str().unwrap().replace('\\', "/");
+        let abs = |x: &str| convert_to_absolute(&format!("{root}/{x}"));
+
+        assert_eq!(vec![abs("a/src"), abs("b/src")], parse_dirs(&format!("{root}/*/src")).unwrap());
+        assert_eq!(vec![abs("a/src/one.rs")], parse_dirs(&format!("{root}/a/src/*.rs")).unwrap());
+        assert_eq!(vec![abs("a"), abs("b"), abs("c")], parse_dirs(&format!("{root}/*")).unwrap());
+
+        // A pattern can be mixed with literal paths, and the overlaps of both are collapsed
+        assert_eq!(vec![abs("a"), abs("b"), abs("c")],
+                parse_dirs(&format!("{root}/*, {root}/*/src, {root}/a/src/one.rs")).unwrap());
+
+        assert_eq!(Err(ArgParsingError::NoGlobMatches(format!("{root}/*/nope"))),
+                parse_dirs(&format!("{root}/*/nope")));
+        assert_eq!(Err(ArgParsingError::InvalidGlobPattern("a[".to_owned())), parse_dirs("a["));
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn test_glob_matches_respect_gitignore_but_literal_paths_do_not() {
+        let root = std::env::temp_dir().join("mezura_glob_gitignore_test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(root.join("kept")).unwrap();
+        std::fs::create_dir_all(root.join("build").join("deep")).unwrap();
+        std::fs::write(root.join(".gitignore"), "build/\nignored.rs\n").unwrap();
+        std::fs::write(root.join("kept").join("one.rs"), "fn main() {}").unwrap();
+        std::fs::write(root.join("kept").join("ignored.rs"), "fn main() {}").unwrap();
+        std::fs::write(root.join("build").join("deep").join("generated.rs"), "fn main() {}").unwrap();
+        let root = root.to_str().unwrap().replace('\\', "/");
+        let abs = |x: &str| convert_to_absolute(&format!("{root}/{x}"));
+
+        // The ignored dir and the ignored file are dropped from the matches
+        assert_eq!(vec![abs("kept")], parse_dirs(&format!("{root}/*")).unwrap());
+        assert_eq!(vec![abs("kept/one.rs")], parse_dirs(&format!("{root}/**/*.rs")).unwrap());
+
+        // Unless the gitignore support is turned off
+        assert_eq!(vec![abs("build"), abs("kept")], super::parse_dirs(&format!("{root}/*"), false, false).unwrap());
+        assert_eq!(vec![abs("build/deep/generated.rs"), abs("kept/ignored.rs"), abs("kept/one.rs")],
+                super::parse_dirs(&format!("{root}/**/*.rs"), false, false).unwrap());
+
+        // Explicitly named paths are always used, even when they are ignored
+        assert_eq!(vec![abs("build")], parse_dirs(&format!("{root}/build")).unwrap());
+        assert_eq!(vec![abs("kept/ignored.rs")], parse_dirs(&format!("{root}/kept/ignored.rs")).unwrap());
+
+        assert_eq!(Err(ArgParsingError::AllGlobMatchesIgnored(format!("{root}/build/*"))),
+                parse_dirs(&format!("{root}/build/*")));
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
     
     #[test]
