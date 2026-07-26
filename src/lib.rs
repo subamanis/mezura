@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-#![allow(unused_must_use)]
 #![allow(dead_code)]
 #![allow(non_snake_case)]
 
@@ -77,7 +76,7 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     }
 
     for handle in producer_handles {
-        handle.join();
+        let _ = handle.join();
     }
     let producers_done_millis = parsing_started_instant.elapsed().as_millis();
 
@@ -90,7 +89,7 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
 
     finish_condition_ref.store(true,Ordering::Relaxed);
     for handle in consumer_handles {
-        handle.join();
+        let _ = handle.join();
     }
     let parsing_duration_millis = parsing_started_instant.elapsed().as_millis();
 
@@ -139,8 +138,9 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     result_printer::format_and_print_results(content_info_map, languages_metadata_map, &final_stats, 
         &existing_log_contents, &datetime_now, &config);
 
-    if config.log.should_log && let Some(path) = log_file_path {
-        io_handler::log_stats(&path, &existing_log_contents, &final_stats, &datetime_now, &config);
+    if config.log.should_log && let Some(path) = log_file_path
+        && io_handler::log_stats(&path, &existing_log_contents, &final_stats, &datetime_now, &config).is_err() {
+        println!("\n{}","Error while trying to save the log.".yellow());
     }
 
     Ok(metrics)

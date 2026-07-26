@@ -85,7 +85,8 @@ pub enum ArgParsingError {
     UnrecognisedCommand(String),
     IncorrectCommandArgs(String),
     UnexpectedCommandArgs(String),
-    NonExistantConfig(String)
+    NonExistantConfig(String),
+    InvalidValueInConfig(String,String)
 }
 
 // Empty line argument is not supposed to be allowed, since this check is being performed in main
@@ -223,7 +224,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 return Err(ArgParsingError::IncorrectCommandArgs(LOAD.to_owned()));
             }
 
-            if let Ok(options) = io_handler::parse_config_file(Some(config_name), None) {
+            if let Ok((options, invalid_fields)) = io_handler::parse_config_file(Some(config_name), None) {
                 if let Some(dirs) = &options.dirs {
                     for dir in dirs.iter() {
                         if !utils::is_valid_path(dir) {
@@ -231,7 +232,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                         }
                     }
                 }
-                custom_config = Some(options);
+                custom_config = Some((options, invalid_fields));
                 config_name_to_load = Some(config_name.to_owned());
             } else {
                 return Err(ArgParsingError::NonExistantConfig(config_name.to_owned()))
@@ -254,8 +255,10 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         search_in_dotted, show_faulty_files, no_keywords, no_visual, log, compare_level,
         config_name_to_save, config_name_to_load);
 
-    if let Some(x) = custom_config {
-        config_builder.add_missing_fields(x);
+    if let Some((custom, invalid_fields)) = custom_config {
+        let config_name = config_builder.config_name_to_load.clone().unwrap_or_default();
+        resolve_invalid_config_fields(&config_builder, &invalid_fields, &config_name)?;
+        config_builder.add_missing_fields(custom);
     }
 
     if let Some(name) = &config_builder.config_name_to_save {
@@ -269,11 +272,10 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         }
     }
 
-    if config_builder.has_missing_fields() {
-        let default_config = io_handler::parse_config_file(None, None);
-        if let Ok(x) = default_config {
-            config_builder.add_missing_fields(x);
-        }
+    if config_builder.has_missing_fields()
+        && let Ok((default_config, invalid_fields)) = io_handler::parse_config_file(None, None) {
+        resolve_invalid_config_fields(&config_builder, &invalid_fields, "default")?;
+        config_builder.add_missing_fields(default_config);
     }
 
     if config_builder.dirs.is_none() {
@@ -283,6 +285,30 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     Ok(config_builder)
 }
 
+
+fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_fields: &[&str], config_name: &str) -> Result<(), ArgParsingError> {
+    for field in invalid_fields {
+        let is_overridden = match *field {
+            THREADS => config_builder.threads.is_some(),
+            COMPRARE_LEVEL => config_builder.compare_level.is_some(),
+            BRACES_AS_CODE => config_builder.braces_as_code.is_some(),
+            SEARCH_IN_DOTTED => config_builder.should_search_in_dotted.is_some(),
+            SHOW_FAULTY_FILES => config_builder.should_show_faulty_files.is_some(),
+            NO_KEYWORDS => config_builder.no_keywords.is_some(),
+            NO_VISUAL => config_builder.no_visual.is_some(),
+            _ => false
+        };
+
+        if is_overridden {
+            println!("\n{}", format!("Invalid value for the command '--{field}', in config '{config_name}'. The value will be ignored.").yellow());
+        } else {
+            message_printer::print_help_message_for_command(field);
+            return Err(ArgParsingError::InvalidValueInConfig(field.to_string(), config_name.to_owned()));
+        }
+    }
+
+    Ok(())
+}
 
 fn print_warnings_for_commands_that_need_a_loaded_configuration(config_name_to_save: &Option<String>, config_name_to_load: &Option<String>,
         log: &Option<LogOption>, compare_level: &Option<usize>) 
@@ -560,7 +586,8 @@ impl Formatted for ArgParsingError {
             Self::UnrecognisedCommand(p) => format!("--{p} is not recognised as a command.").red(),
             Self::IncorrectCommandArgs(p) => format!("Incorrect arguments provided for the command '--{p}'.").red(),
             Self::UnexpectedCommandArgs(p) => format!("Command '--{p}' does not expect any arguments.").red(),
-            Self::NonExistantConfig(p) => format!("Configuration '{p}' does not exist.").red()
+            Self::NonExistantConfig(p) => format!("Configuration '{p}' does not exist.").red(),
+            Self::InvalidValueInConfig(cmd,conf) => format!("Invalid value for the command '--{cmd}', in config '{conf}'.\nFix the value in the config file, or override it by providing a valid '--{cmd}' argument.").red()
         }
     }
 }
@@ -701,6 +728,21 @@ mod tests {
         saved_config = create_config_builder_from_args("--load test000 --threads 1 4 --dirs ./ --save test000").unwrap();
         saved_config.config_name_to_save = None;
         assert_eq!(saved_config, loaded_config);
+
+        std::fs::remove_file(test_file_path).unwrap();
+    }
+
+    #[test]
+    fn test_load_config_with_invalid_value() {
+        let test_file_path = &PERSISTENT_APP_PATHS.config_dir.clone().add("/test001.txt");
+        assert!(!Path::new(test_file_path).exists());
+        std::fs::write(test_file_path, "===> threads\n3343 45534\n").unwrap();
+
+        assert_eq!(Err(ArgParsingError::InvalidValueInConfig("threads".to_owned(), "test001".to_owned())),
+                create_config_from_args("./ --load test001"));
+
+        let overridden = create_config_from_args("./ --load test001 --threads 1 2").unwrap();
+        assert_eq!(overridden.threads, Threads::new(1, 2));
 
         std::fs::remove_file(test_file_path).unwrap();
     }

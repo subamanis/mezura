@@ -90,7 +90,7 @@ pub fn is_valid_path(s: &str) -> bool {
 pub fn extract_file_contents(file_path: &str) -> Option<String> {
     if Path::new(&file_path).is_file() {
         let mut contents = String::with_capacity(700);
-        File::open(file_path).unwrap().read_to_string(&mut contents);
+        File::open(file_path).ok()?.read_to_string(&mut contents).ok()?;
         if contents.trim().is_empty() {
             None
         } else {

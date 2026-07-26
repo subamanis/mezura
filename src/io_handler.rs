@@ -186,43 +186,45 @@ pub fn parse_string_to_language(contents: Cow<str>) -> Language {
 
 pub fn serialize_language(lang: &Language, path: &str) -> Result<(), io::Error> {
     let file_path = path.to_string() + "/" + &lang.name + ".txt";
-    let mut writer = BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).open(file_path)?);
+    let mut writer = BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(file_path)?);
 
-    writer.write(format!("{LANGUAGE}\n").as_bytes());
-    writer.write(lang.name.as_bytes());
-    writer.write(b"\n\n");
+    writer.write_all(format!("{LANGUAGE}\n").as_bytes())?;
+    writer.write_all(lang.name.as_bytes())?;
+    writer.write_all(b"\n\n")?;
 
-    writer.write(format!("{EXTENSIONS}\n").as_bytes());
-    writer.write(lang.extensions.join(" ").as_bytes());
-    writer.write(b"\n\n");
+    writer.write_all(format!("{EXTENSIONS}\n").as_bytes())?;
+    writer.write_all(lang.extensions.join(" ").as_bytes())?;
+    writer.write_all(b"\n\n")?;
 
-    writer.write(format!("{STRING_SYMBOLS}\n").as_bytes());
-    writer.write(lang.string_symbols.join(" ").as_bytes());
-    writer.write(b"\n\n");
+    writer.write_all(format!("{STRING_SYMBOLS}\n").as_bytes())?;
+    writer.write_all(lang.string_symbols.join(" ").as_bytes())?;
+    writer.write_all(b"\n\n")?;
 
-    writer.write(format!("{COMMENT_SYMBOLS}\n").as_bytes());
-    writer.write(lang.comment_symbols.join(" ").as_bytes());
-    writer.write(b"\n");
-    
+    writer.write_all(format!("{COMMENT_SYMBOLS}\n").as_bytes())?;
+    writer.write_all(lang.comment_symbols.join(" ").as_bytes())?;
+    writer.write_all(b"\n")?;
+
     if let Some(symbol) = &lang.multiline_comment_start_symbol {
-        writer.write(format!("{MULTILINE_COMMENT_START}\n").as_bytes());
-        writer.write(symbol.as_bytes());
-        writer.write(b"\n");
-        writer.write(format!("{MULTILINE_COMMENT_END}\n").as_bytes());
-        writer.write(lang.multiline_comment_end_symbol.as_ref().unwrap().as_bytes());
-        writer.write(b"\n");
+        writer.write_all(format!("{MULTILINE_COMMENT_START}\n").as_bytes())?;
+        writer.write_all(symbol.as_bytes())?;
+        writer.write_all(b"\n")?;
+        writer.write_all(format!("{MULTILINE_COMMENT_END}\n").as_bytes())?;
+        writer.write_all(lang.multiline_comment_end_symbol.as_ref().unwrap().as_bytes())?;
+        writer.write_all(b"\n")?;
     }
-    writer.write(b"\n");
-    
+    writer.write_all(b"\n")?;
+
     for keyword in lang.keywords.iter() {
-        writer.write(format!("{KEYWORD}\n").as_bytes());
-        writer.write(format!("{KEYWORD_NAME}\n").as_bytes());
-        writer.write(keyword.descriptive_name.as_bytes());
-        writer.write(b"\n");
-        writer.write(format!("{KEYWORD_ALIASES}\n").as_bytes());
-        writer.write(keyword.aliases.join(" ").as_bytes());
-        writer.write(b"\n");
+        writer.write_all(format!("{KEYWORD}\n").as_bytes())?;
+        writer.write_all(format!("{KEYWORD_NAME}\n").as_bytes())?;
+        writer.write_all(keyword.descriptive_name.as_bytes())?;
+        writer.write_all(b"\n")?;
+        writer.write_all(format!("{KEYWORD_ALIASES}\n").as_bytes())?;
+        writer.write_all(keyword.aliases.join(" ").as_bytes())?;
+        writer.write_all(b"\n")?;
     }
+
+    writer.flush()?;
 
     Ok(())
 }
@@ -230,7 +232,7 @@ pub fn serialize_language(lang: &Language, path: &str) -> Result<(), io::Error> 
 
 // ------------------------------ Config handling ------------------------------
 
-pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String>) -> Result<ConfigurationBuilder,ConfigFileParseError> {
+pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String>) -> Result<(ConfigurationBuilder, Vec<&'static str>),ConfigFileParseError> {
     let config_path = if let Some(dir) = config_dir_path {dir} else {PERSISTENT_APP_PATHS.config_dir.clone()};
     let file_name = if let Some(x) = file_name {x} else {DEFAULT_CONFIG_NAME};
     let file_path = (config_path + file_name + ".txt").replace("\\", "/");
@@ -242,7 +244,8 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
     let (mut dirs, mut braces_as_code, mut should_search_in_dotted, mut threads, mut exclude_dirs,
          mut languages_of_interest, mut excluded_languages, mut should_show_faulty_files, mut no_keywords, mut no_visual,
          mut log, mut compare_level) = (None,None,None,None,None,None,None,None,None,None,None,None);
-    let mut buf = String::with_capacity(150); 
+    let mut invalid_fields: Vec<&'static str> = Vec::new();
+    let mut buf = String::with_capacity(150);
 
     while let Ok(size) = reader.read_line(&mut buf) {
         if size == 0 {break};
@@ -271,22 +274,40 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                 }
             } else if id == config_manager::THREADS {
                 buf.clear();
-                reader.read_line(&mut buf);
-                threads = Some(Threads::from(utils::parse_two_usize_values(&buf,MIN_PRODUCERS_VALUE, MAX_PRODUCERS_VALUE,
-                        MIN_CONSUMERS_VALUE, MAX_CONSUMERS_VALUE).unwrap()));
+                let _ = reader.read_line(&mut buf);
+                match utils::parse_two_usize_values(&buf,MIN_PRODUCERS_VALUE, MAX_PRODUCERS_VALUE,
+                        MIN_CONSUMERS_VALUE, MAX_CONSUMERS_VALUE) {
+                    Some(x) => threads = Some(Threads::from(x)),
+                    None => invalid_fields.push(config_manager::THREADS)
+                }
             }else if id == config_manager::BRACES_AS_CODE {
-                braces_as_code = read_bool_value_from_file(&mut reader, &mut buf);
+                match read_bool_value_from_file(&mut reader, &mut buf) {
+                    Ok(x) => braces_as_code = x,
+                    Err(()) => invalid_fields.push(config_manager::BRACES_AS_CODE)
+                }
             } else if id == config_manager::SHOW_FAULTY_FILES {
-                should_show_faulty_files = read_bool_value_from_file(&mut reader, &mut buf);
+                match read_bool_value_from_file(&mut reader, &mut buf) {
+                    Ok(x) => should_show_faulty_files = x,
+                    Err(()) => invalid_fields.push(config_manager::SHOW_FAULTY_FILES)
+                }
             } else if id == config_manager::SEARCH_IN_DOTTED {
-                should_search_in_dotted = read_bool_value_from_file(&mut reader, &mut buf);
+                match read_bool_value_from_file(&mut reader, &mut buf) {
+                    Ok(x) => should_search_in_dotted = x,
+                    Err(()) => invalid_fields.push(config_manager::SEARCH_IN_DOTTED)
+                }
             } else if id == config_manager::NO_KEYWORDS {
-                no_keywords = read_bool_value_from_file(&mut reader, &mut buf);
+                match read_bool_value_from_file(&mut reader, &mut buf) {
+                    Ok(x) => no_keywords = x,
+                    Err(()) => invalid_fields.push(config_manager::NO_KEYWORDS)
+                }
             } else if id == config_manager::NO_VISUAL {
-                no_visual = read_bool_value_from_file(&mut reader, &mut buf);
+                match read_bool_value_from_file(&mut reader, &mut buf) {
+                    Ok(x) => no_visual = x,
+                    Err(()) => invalid_fields.push(config_manager::NO_VISUAL)
+                }
             } else if id == config_manager::LOG {
                 buf.clear();
-                reader.read_line(&mut buf);
+                let _ = reader.read_line(&mut buf);
                 let name = &buf.trim().to_lowercase();
                 if name == "yes" || name == "true" {
                     log = Some(LogOption::new(None));
@@ -295,15 +316,18 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                 }
             } else if id == config_manager::COMPRARE_LEVEL {
                 buf.clear();
-                reader.read_line(&mut buf);
-                compare_level = utils::parse_usize_value(&buf,MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL);
+                let _ = reader.read_line(&mut buf);
+                match utils::parse_usize_value(&buf,MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL) {
+                    Some(x) => compare_level = Some(x),
+                    None => invalid_fields.push(config_manager::COMPRARE_LEVEL)
+                }
             }
         }
         buf.clear();
     }
 
-    Ok(ConfigurationBuilder::new(dirs,exclude_dirs, languages_of_interest, excluded_languages, threads, braces_as_code,should_search_in_dotted,
-             should_show_faulty_files, no_keywords, no_visual, log, compare_level, None, None))
+    Ok((ConfigurationBuilder::new(dirs,exclude_dirs, languages_of_interest, excluded_languages, threads, braces_as_code,should_search_in_dotted,
+             should_show_faulty_files, no_keywords, no_visual, log, compare_level, None, None), invalid_fields))
 }
 
 // Dirs must be specified (is checked before calling this function)
@@ -315,62 +339,63 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
 
     let mut writer = BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(file_name)?);
 
-    writer.write(b"Auto-generated config file.");
+    writer.write_all(b"Auto-generated config file.")?;
 
-    writer.write(&[b"\n\n===> ",config_manager::DIRS.as_bytes(),b"\n"].concat());
-    writer.write(config_builder.dirs.as_ref().unwrap().join(",").as_bytes());
+    writer.write_all(&[b"\n\n===> ",config_manager::DIRS.as_bytes(),b"\n"].concat())?;
+    writer.write_all(config_builder.dirs.as_ref().unwrap().join(",").as_bytes())?;
 
     if let Some(exclude_dirs) = &config_builder.exclude_dirs {
-        writer.write(&[b"\n\n===> ",config_manager::EXCLUDE.as_bytes(),b"\n"].concat());
-        writer.write(exclude_dirs.join(",").as_bytes());
+        writer.write_all(&[b"\n\n===> ",config_manager::EXCLUDE.as_bytes(),b"\n"].concat())?;
+        writer.write_all(exclude_dirs.join(",").as_bytes())?;
     }
     if let Some(languages_of_interest) = &config_builder.languages_of_interest {
-        writer.write(&[b"\n\n===> ",config_manager::LANGUAGES.as_bytes(),b"\n"].concat());
-        writer.write(languages_of_interest.join(",").as_bytes());
+        writer.write_all(&[b"\n\n===> ",config_manager::LANGUAGES.as_bytes(),b"\n"].concat())?;
+        writer.write_all(languages_of_interest.join(",").as_bytes())?;
     }
     if let Some(exclude_languages) = &config_builder.excluded_languages {
-        writer.write(&[b"\n\n===> ",config_manager::EXCLUDE_LANGUAGES.as_bytes(),b"\n"].concat());
-        writer.write(exclude_languages.join(",").as_bytes());
+        writer.write_all(&[b"\n\n===> ",config_manager::EXCLUDE_LANGUAGES.as_bytes(),b"\n"].concat())?;
+        writer.write_all(exclude_languages.join(",").as_bytes())?;
     }
     if let Some(threads) = &config_builder.threads {
-        writer.write(&[b"\n\n===> ",config_manager::THREADS.as_bytes(),b"\n"].concat());
-        writer.write((threads.producers.to_string() + " " + &threads.consumers.to_string()).as_bytes());
+        writer.write_all(&[b"\n\n===> ",config_manager::THREADS.as_bytes(),b"\n"].concat())?;
+        writer.write_all((threads.producers.to_string() + " " + &threads.consumers.to_string()).as_bytes())?;
     }
     if let Some(braces_as_code) = &config_builder.braces_as_code {
-        writer.write(&[b"\n\n===> ",config_manager::BRACES_AS_CODE.as_bytes(),b"\n"].concat());
-        writer.write(if *braces_as_code {b"yes"} else {b"no"});
+        writer.write_all(&[b"\n\n===> ",config_manager::BRACES_AS_CODE.as_bytes(),b"\n"].concat())?;
+        writer.write_all(if *braces_as_code {b"yes"} else {b"no"})?;
     }
     if let Some(should_search_in_dotted) = &config_builder.should_search_in_dotted {
-        writer.write(&[b"\n\n===> ",config_manager::SEARCH_IN_DOTTED.as_bytes(),b"\n"].concat());
-        writer.write(if *should_search_in_dotted {b"yes"} else {b"no"});
+        writer.write_all(&[b"\n\n===> ",config_manager::SEARCH_IN_DOTTED.as_bytes(),b"\n"].concat())?;
+        writer.write_all(if *should_search_in_dotted {b"yes"} else {b"no"})?;
     }
     if let Some(should_show_faulty_files) = &config_builder.should_show_faulty_files {
-        writer.write(&[b"\n\n===> ",config_manager::SHOW_FAULTY_FILES.as_bytes(),b"\n"].concat());
-        writer.write(if *should_show_faulty_files {b"yes"} else {b"no"});
+        writer.write_all(&[b"\n\n===> ",config_manager::SHOW_FAULTY_FILES.as_bytes(),b"\n"].concat())?;
+        writer.write_all(if *should_show_faulty_files {b"yes"} else {b"no"})?;
     }
     if let Some(no_keywords) = &config_builder.no_keywords {
-        writer.write(&[b"\n\n===> ",config_manager::NO_KEYWORDS.as_bytes(),b"\n"].concat());
-        writer.write(if *no_keywords {b"yes"} else {b"no"});
+        writer.write_all(&[b"\n\n===> ",config_manager::NO_KEYWORDS.as_bytes(),b"\n"].concat())?;
+        writer.write_all(if *no_keywords {b"yes"} else {b"no"})?;
     }
     if let Some(no_visual) = &config_builder.no_visual {
-        writer.write(&[b"\n\n===> ",config_manager::NO_VISUAL.as_bytes(),b"\n"].concat());
-        writer.write(if *no_visual {b"yes"} else {b"no"});
+        writer.write_all(&[b"\n\n===> ",config_manager::NO_VISUAL.as_bytes(),b"\n"].concat())?;
+        writer.write_all(if *no_visual {b"yes"} else {b"no"})?;
     }
     if let Some(compare_level) = &config_builder.compare_level {
-        writer.write(&[b"\n\n===> ",config_manager::COMPRARE_LEVEL.as_bytes(),b"\n"].concat());
-        writer.write(compare_level.to_string().as_bytes());
+        writer.write_all(&[b"\n\n===> ",config_manager::COMPRARE_LEVEL.as_bytes(),b"\n"].concat())?;
+        writer.write_all(compare_level.to_string().as_bytes())?;
     }
 
-    writer.write(b"\n");    
-    writer.flush();
+    writer.write_all(b"\n")?;
+    writer.flush()?;
 
     Ok(())
 }
 
 pub fn write_default_config(contents: String) -> Result<(), io::Error> {
     let file_path = PERSISTENT_APP_PATHS.config_dir.clone() + DEFAULT_CONFIG_NAME;
-    let mut writer = BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).open(file_path)?);
-    writer.write_all(contents.as_bytes());
+    let mut writer = BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(file_path)?);
+    writer.write_all(contents.as_bytes())?;
+    writer.flush()?;
 
     Ok(())
 }
@@ -381,50 +406,54 @@ pub fn write_default_config(contents: String) -> Result<(), io::Error> {
 pub fn log_stats(path: &str, contents: &Option<String>, final_stats: &FinalStats, datetime_now: &DateTime<Local>, config: &Configuration) -> io::Result<()> {
     let mut writer = std::io::BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(path)?);
 
-    write_current_log(&mut writer, config, datetime_now, final_stats);
+    write_current_log(&mut writer, config, datetime_now, final_stats)?;
 
     if let Some(contents) = contents {
-        writer.write(contents.as_bytes());
+        writer.write_all(contents.as_bytes())?;
     }
-    writer.flush();
+    writer.flush()?;
 
     Ok(())
 }
 
-fn write_current_log(writer: &mut BufWriter<File>, config: &Configuration, datetime_now: &DateTime<Local>, final_stats: &FinalStats) {
-    writer.write(format!("===>{}\n",config.log.name.clone().unwrap_or_default()).as_bytes());
-    writer.write(datetime_now.format("%Y-%m-%d %H:%M:%S %z").to_string().as_bytes());
-    writer.write(b"\n");
-    writer.write(b"Configuration:\n");
-    writer.write(format!("    dirs: {}\n",config.dirs.join(",")).as_bytes());
-    writer.write(format!("    exclude: {}\n",config.exclude_dirs.join(",")).as_bytes());
-    writer.write(format!("    languages: {}\n",config.languages_of_interest.join(",")).as_bytes());
-    writer.write(format!("    excluded-languages: {}\n",config.excluded_languages.join(",")).as_bytes());
-    writer.write(format!("    braces-as-code: {}\n",if config.braces_as_code{"yes"} else {"no"}).as_bytes());
-    writer.write(format!("    search-in-dotted: {}\n",if config.should_search_in_dotted{"yes"} else {"no"}).as_bytes());
-    writer.write(b"Stats:\n");
-    writer.write(format!("    Files: {}\n",final_stats.files).as_bytes());
-    writer.write(format!("    Lines: {}\n",final_stats.lines).as_bytes());
-    writer.write(format!("        Code: {}\n",final_stats.code_lines).as_bytes());
-    writer.write(format!("        Extra: {}\n",final_stats.extra_lines).as_bytes());
-    writer.write(format!("    Total Size: {}\n",final_stats.bytes_size).as_bytes());
-    writer.write(format!("        Average Size: {}\n\n\n",final_stats.bytes_average_size).as_bytes());
-    writer.write(b"--------------------------------------------------------------------------------------------\n\n\n");
+fn write_current_log(writer: &mut BufWriter<File>, config: &Configuration, datetime_now: &DateTime<Local>, final_stats: &FinalStats) -> io::Result<()> {
+    writer.write_all(format!("===>{}\n",config.log.name.clone().unwrap_or_default()).as_bytes())?;
+    writer.write_all(datetime_now.format("%Y-%m-%d %H:%M:%S %z").to_string().as_bytes())?;
+    writer.write_all(b"\n")?;
+    writer.write_all(b"Configuration:\n")?;
+    writer.write_all(format!("    dirs: {}\n",config.dirs.join(",")).as_bytes())?;
+    writer.write_all(format!("    exclude: {}\n",config.exclude_dirs.join(",")).as_bytes())?;
+    writer.write_all(format!("    languages: {}\n",config.languages_of_interest.join(",")).as_bytes())?;
+    writer.write_all(format!("    excluded-languages: {}\n",config.excluded_languages.join(",")).as_bytes())?;
+    writer.write_all(format!("    braces-as-code: {}\n",if config.braces_as_code{"yes"} else {"no"}).as_bytes())?;
+    writer.write_all(format!("    search-in-dotted: {}\n",if config.should_search_in_dotted{"yes"} else {"no"}).as_bytes())?;
+    writer.write_all(b"Stats:\n")?;
+    writer.write_all(format!("    Files: {}\n",final_stats.files).as_bytes())?;
+    writer.write_all(format!("    Lines: {}\n",final_stats.lines).as_bytes())?;
+    writer.write_all(format!("        Code: {}\n",final_stats.code_lines).as_bytes())?;
+    writer.write_all(format!("        Extra: {}\n",final_stats.extra_lines).as_bytes())?;
+    writer.write_all(format!("    Total Size: {}\n",final_stats.bytes_size).as_bytes())?;
+    writer.write_all(format!("        Average Size: {}\n\n\n",final_stats.bytes_average_size).as_bytes())?;
+    writer.write_all(b"--------------------------------------------------------------------------------------------\n\n\n")?;
+
+    Ok(())
 }
 
 
-fn read_bool_value_from_file(reader: &mut BufReader<File>, buf: &mut String) -> Option<bool> {
+fn read_bool_value_from_file(reader: &mut BufReader<File>, buf: &mut String) -> Result<Option<bool>, ()> {
     buf.clear();
-    reader.read_line(buf);
+    let _ = reader.read_line(buf);
     let buf = buf.trim();
     if buf.is_empty() {
-        return None;
+        return Ok(None);
     }
     let buf = buf.to_ascii_lowercase();
     if buf == "yes" || buf ==  "true" {
-        Some(true)
+        Ok(Some(true))
+    } else if buf == "no" || buf == "false" {
+        Ok(Some(false))
     } else {
-        Some(false)
+        Err(())
     }
 }
 
@@ -433,7 +462,7 @@ fn read_lines_from_file_to_vec(reader: &mut BufReader<File>, buf: &mut String, p
     let mut vec = Vec::new();
     loop {
         buf.clear();
-        reader.read_line(buf);
+        let _ = reader.read_line(buf);
         if buf.trim().is_empty() {
             break;
         }
@@ -548,9 +577,10 @@ mod tests {
         let config_builder = config_manager::create_config_builder_from_args(&command).unwrap();
 
         let test_config_dir = Some(LOCAL_APP_PATHS.test_config_dir.clone());
-        io_handler::save_existing_commands_from_config_builder_to_file(test_config_dir, "auto-generated", &config_builder);
+        io_handler::save_existing_commands_from_config_builder_to_file(test_config_dir, "auto-generated", &config_builder)?;
 
-        let options = io_handler::parse_config_file(Some("auto-generated"), Some(LOCAL_APP_PATHS.test_config_dir.clone())).unwrap();
+        let (options, invalid_fields) = io_handler::parse_config_file(Some("auto-generated"), Some(LOCAL_APP_PATHS.test_config_dir.clone())).unwrap();
+        assert!(invalid_fields.is_empty());
         assert_eq!(config_builder.dirs, options.dirs);
         assert_eq!(config_builder.exclude_dirs, options.exclude_dirs);
         assert_eq!(config_builder.threads, options.threads);
@@ -571,7 +601,8 @@ mod tests {
             .set_braces_as_code(true);
 
 
-        let options = io_handler::parse_config_file(Some("test"), Some(LOCAL_APP_PATHS.test_config_dir.clone())).unwrap();
+        let (options, invalid_fields) = io_handler::parse_config_file(Some("test"), Some(LOCAL_APP_PATHS.test_config_dir.clone())).unwrap();
+        assert!(invalid_fields.is_empty());
         assert_eq!(config.dirs, options.dirs.unwrap());
         assert_eq!(config.exclude_dirs, options.exclude_dirs.unwrap());
         assert_eq!(config.threads, options.threads.unwrap());
@@ -589,5 +620,51 @@ mod tests {
                 &(LOCAL_APP_PATHS.test_dir.clone() + "languages/")).unwrap();
         assert!(lang_map.len() == 2);
         assert!(faulty_files.len() == 1);
+    }
+
+    #[test]
+    fn test_parse_config_file_reports_invalid_values() {
+        let dir = std::env::temp_dir().join("mezura_invalid_config_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_str = dir.to_str().unwrap().to_owned() + "/";
+
+        std::fs::write(dir.join("badcfg.txt"),
+                "===> threads\n3343 45534\n\n===> braces-as-code\nmitsos\n\n===> compare\n99\n\n===> no-visual\nyes\n").unwrap();
+
+        let (options, invalid_fields) = io_handler::parse_config_file(Some("badcfg"), Some(dir_str)).unwrap();
+        assert_eq!(invalid_fields, vec![config_manager::THREADS, config_manager::BRACES_AS_CODE, config_manager::COMPRARE_LEVEL]);
+        assert_eq!(options.threads, None);
+        assert_eq!(options.braces_as_code, None);
+        assert_eq!(options.compare_level, None);
+        assert_eq!(options.no_visual, Some(true));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_serialize_language_overwrites_longer_existing_file() {
+        let dir = std::env::temp_dir().join("mezura_serialize_truncate_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_str = dir.to_str().unwrap().to_owned();
+
+        let keyword = |name: &str| Keyword {
+            descriptive_name: name.to_owned(),
+            aliases: vec![name.to_owned()]
+        };
+
+        let long_lang = Language::new("Truncatetest".to_owned(), vec!["trnc".to_owned()], vec!["\"".to_owned()],
+                vec!["//".to_owned()], Some("/*".to_owned()), Some("*/".to_owned()),
+                (0..20).map(|i| keyword(&format!("keyword{i}"))).collect());
+        io_handler::serialize_language(&long_lang, &dir_str).unwrap();
+
+        let short_lang = Language::new("Truncatetest".to_owned(), vec!["trnc".to_owned()], vec!["\"".to_owned()],
+                vec!["//".to_owned()], Some("/*".to_owned()), Some("*/".to_owned()), vec![keyword("keyword0")]);
+        io_handler::serialize_language(&short_lang, &dir_str).unwrap();
+
+        let (lang_map, faulty_files) = io_handler::parse_supported_languages_to_map(&dir_str).unwrap();
+        assert!(faulty_files.is_empty());
+        assert_eq!(lang_map.get("Truncatetest").unwrap(), &short_lang);
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
