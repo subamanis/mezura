@@ -5,14 +5,14 @@ use crossbeam_deque::Steal;
 use crate::*;
 
 
-pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<PathBuf>>, worker: Worker<PathBuf>,
-        languages_metadata_map: MetadataMapMut, idle_producers: Arc<AtomicUsize>, extension_lang_map: ExtensionLangMap, config: Arc<Configuration>,
-        files_stats: Arc<Mutex<FilesPresent>>)
+pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<TraversedDir>>, worker: Worker<TraversedDir>,
+        languages_metadata_map: MetadataMapMut, idle_producers: Arc<AtomicUsize>, extension_lang_map: ExtensionLangMap, exclude_matcher: Arc<globset::GlobSet>,
+        config: Arc<Configuration>, files_stats: Arc<Mutex<FilesPresent>>)
 -> JoinHandle<()>
 {
     thread::Builder::new().name(id.to_string()).spawn(move || {
         let (total_files, relevant_files, excluded_files) =
-                search_for_files(id, files_injector, dirs_injector, worker, idle_producers, extension_lang_map, languages_metadata_map, config);
+                search_for_files(id, files_injector, dirs_injector, worker, idle_producers, extension_lang_map, exclude_matcher, languages_metadata_map, config);
         let mut file_stats_guard = files_stats.lock().unwrap(); 
         file_stats_guard.total_files += total_files;
         file_stats_guard.relevant_files += relevant_files;
@@ -21,8 +21,8 @@ pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFil
     }).unwrap()
 }
 
-pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<PathBuf>>, worker: Worker<PathBuf>, idle_producers: Arc<AtomicUsize>,
-        extension_lang_map: ExtensionLangMap, languages_metadata_map: MetadataMapMut, config: Arc<Configuration>)
+pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<TraversedDir>>, worker: Worker<TraversedDir>, idle_producers: Arc<AtomicUsize>,
+        extension_lang_map: ExtensionLangMap, exclude_matcher: Arc<globset::GlobSet>, languages_metadata_map: MetadataMapMut, config: Arc<Configuration>)
 -> (usize,usize,usize)
 {
     let mut total_files = 0;
@@ -54,9 +54,14 @@ pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>,
                 idle_producers.fetch_sub(1, Ordering::SeqCst);
             }
 
-            if let Ok(entries) = fs::read_dir(dir) {
-                traverse_dir(&files_injector, entries, &dirs_injector, &extension_lang_map, &config, &mut local_metadata,
-                        &mut total_files, &mut relevant_files, &mut excluded_files)
+            if let Ok(entries) = fs::read_dir(&dir.path) {
+                let gitignore_stack = if config.respect_gitignore {
+                    GitignoreStack::extended(&dir.path, dir.gitignore_stack.clone())
+                } else {
+                    None
+                };
+                traverse_dir(&files_injector, entries, &dirs_injector, &extension_lang_map, &exclude_matcher, &gitignore_stack,
+                        &config, &mut local_metadata, &mut total_files, &mut relevant_files, &mut excluded_files)
             }
         } else {
             if !should_terminate {
@@ -85,8 +90,9 @@ pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>,
     (total_files,relevant_files,excluded_files)
 }
 
-fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, dirs_injector: &Arc<Injector<PathBuf>>,
-        extension_lang_map: &HashMap<String, Arc<str>>, config: &Configuration, local_metadata: &mut HashMap<String, LanguageMetadata>,
+fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, dirs_injector: &Arc<Injector<TraversedDir>>,
+        extension_lang_map: &HashMap<String, Arc<str>>, exclude_matcher: &globset::GlobSet, gitignore_stack: &Option<Arc<GitignoreStack>>,
+        config: &Configuration, local_metadata: &mut HashMap<String, LanguageMetadata>,
         total_files: &mut usize, relevant_files: &mut usize, excluded_files: &mut usize)
 {
     let mut local_total_files = 0;
@@ -94,17 +100,18 @@ fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, 
     let mut local_excluded_files = 0;
     for e in entries.flatten(){
         if let Ok(ft) = e.file_type() {
-            if ft.is_file() { 
+            if ft.is_file() {
                 local_total_files += 1;
                 let path_buf = e.path();
                 let Some(extension_name) = path_buf.extension().and_then(|x| x.to_str()) else { continue };
                 if let Some(lang_name) = find_language_of_extension(extension_lang_map, extension_name) {
-                    if !config.exclude_dirs.is_empty() {
-                        let full_path = &path_buf.to_str().unwrap_or("").replace('\\', "/");
-                        if config.exclude_dirs.iter().any(|x| full_path.ends_with(x) || x == full_path) {
-                            local_excluded_files += 1;
-                            continue;
-                        }
+                    if !exclude_matcher.is_empty() && exclude_matcher.is_match(&path_buf) {
+                        local_excluded_files += 1;
+                        continue;
+                    }
+                    if let Some(stack) = gitignore_stack && stack.is_ignored(&path_buf, false) {
+                        local_excluded_files += 1;
+                        continue;
                     }
 
                     local_relevant_files += 1;
@@ -117,7 +124,7 @@ fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, 
                         Some(metadata) => metadata.add_file_meta(bytes),
                         None => { local_metadata.insert(lang_name.as_ref().to_owned(), LanguageMetadata::new(1, bytes)); }
                     }
-                    
+
                     files_injector.push(ParsableFile::new(path_buf, lang_name));
                 }
             } else { //is directory
@@ -126,13 +133,13 @@ fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, 
                 if !config.should_search_in_dotted && dir_name.starts_with('.') { continue; }
 
                 let pathbuf = e.path();
-                let is_excluded = !config.exclude_dirs.is_empty() && {
-                    let full_path = pathbuf.to_str().unwrap_or("").replace('\\', "/");
-                    config.exclude_dirs.iter().any(|x| x == dir_name || *x == full_path)
-                };
-                if !is_excluded {
-                    dirs_injector.push(pathbuf);
+                if !exclude_matcher.is_empty() && exclude_matcher.is_match(&pathbuf) {
+                    continue;
                 }
+                if let Some(stack) = gitignore_stack && stack.is_ignored(&pathbuf, true) {
+                    continue;
+                }
+                dirs_injector.push(TraversedDir::new(pathbuf, gitignore_stack.clone()));
             }
         }
     }

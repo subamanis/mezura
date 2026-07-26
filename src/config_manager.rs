@@ -18,6 +18,7 @@ pub const SEARCH_IN_DOTTED   :&str   = "search-in-dotted";
 pub const SHOW_FAULTY_FILES  :&str   = "show-faulty-files";
 pub const NO_KEYWORDS        :&str   = "no-keywords";
 pub const NO_VISUAL          :&str   = "no-visual";
+pub const GITIGNORE          :&str   = "gitignore";
 pub const LOG                :&str   = "log";
 pub const COMPRARE_LEVEL     :&str   = "compare";
 pub const SAVE               :&str   = "save";
@@ -40,6 +41,7 @@ const DEF_SEARCH_IN_DOTTED  : bool    = false;
 const DEF_SHOW_FAULTY_FILES : bool    = false;
 const DEF_NO_VISUAL         : bool    = false;
 const DEF_NO_KEYWORDS       : bool    = false;
+const DEF_GITIGNORE         : bool    = false;
 const DEF_COMPARE_LEVEL     : usize   = 1;
 
 
@@ -56,6 +58,7 @@ pub struct Configuration {
     pub should_show_faulty_files: bool,
     pub no_keywords: bool,
     pub no_visual: bool,
+    pub respect_gitignore: bool,
     pub log: LogOption,
     pub compare_level: usize,
     pub config_name_to_save: Option<String>,
@@ -119,9 +122,9 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
 
     let mut custom_config = None;
     let (mut exclude_dirs, mut languages_of_interest, mut excluded_languages, mut threads, mut braces_as_code,
-         mut search_in_dotted, mut show_faulty_files, mut config_name_to_save, mut no_visual, mut log, 
-         mut compare_level, mut config_name_to_load, mut no_keywords) 
-         = (None, None, None, None, None, None, None, None, None, None, None, None, None);
+         mut search_in_dotted, mut show_faulty_files, mut config_name_to_save, mut no_visual, mut log,
+         mut compare_level, mut config_name_to_load, mut no_keywords, mut respect_gitignore)
+         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None);
     for command in options {
         let (command_name, arguments) = match command.find(" ") {
             Some(index) => command.split_at(index),
@@ -144,7 +147,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             }
         } else if command_name == EXCLUDE {
             let vec = utils::parse_paths_to_vec(arguments);
-            if vec.is_empty() {
+            if vec.is_empty() || utils::build_exclude_matcher(&vec).is_err() {
                 message_printer::print_help_message_for_command(EXCLUDE);
                 return Err(ArgParsingError::IncorrectCommandArgs(EXCLUDE.to_owned()));
             }
@@ -202,6 +205,12 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 return Err(ArgParsingError::UnexpectedCommandArgs(NO_VISUAL.to_owned()))
             }
             no_visual = Some(true);
+        } else if command_name == GITIGNORE {
+            if has_any_args(command) {
+                message_printer::print_help_message_for_command(GITIGNORE);
+                return Err(ArgParsingError::UnexpectedCommandArgs(GITIGNORE.to_owned()))
+            }
+            respect_gitignore = Some(true);
         } else if command_name == LOG {
             let value = arguments.trim();
             if value.is_empty() {
@@ -252,7 +261,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     print_warnings_for_commands_that_need_a_loaded_configuration(&config_name_to_save, &config_name_to_load, &log, &compare_level);
     
     let mut config_builder = ConfigurationBuilder::new(dirs, exclude_dirs, languages_of_interest, excluded_languages, threads, braces_as_code,
-        search_in_dotted, show_faulty_files, no_keywords, no_visual, log, compare_level,
+        search_in_dotted, show_faulty_files, no_keywords, no_visual, respect_gitignore, log, compare_level,
         config_name_to_save, config_name_to_load);
 
     if let Some((custom, invalid_fields)) = custom_config {
@@ -296,6 +305,8 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             SHOW_FAULTY_FILES => config_builder.should_show_faulty_files.is_some(),
             NO_KEYWORDS => config_builder.no_keywords.is_some(),
             NO_VISUAL => config_builder.no_visual.is_some(),
+            GITIGNORE => config_builder.respect_gitignore.is_some(),
+            EXCLUDE => config_builder.exclude_dirs.is_some(),
             _ => false
         };
 
@@ -382,6 +393,7 @@ pub struct ConfigurationBuilder {
     pub should_show_faulty_files: Option<bool>,
     pub no_keywords:              Option<bool>,
     pub no_visual:                Option<bool>,
+    pub respect_gitignore:        Option<bool>,
     pub log:                      Option<LogOption>,
     pub compare_level:            Option<usize>,
     pub config_name_to_save:      Option<String>,
@@ -391,8 +403,9 @@ pub struct ConfigurationBuilder {
 impl ConfigurationBuilder {
     pub fn new(dirs: Option<Vec<String>>, exclude_dirs: Option<Vec<String>>, languages_of_interest: Option<Vec<String>>, excluded_languages: Option<Vec<String>>,
              threads: Option<Threads>, braces_as_code: Option<bool>, should_search_in_dotted: Option<bool>, should_show_faulty_files: Option<bool>, no_keywords: Option<bool>,
-             no_visual: Option<bool>, log: Option<LogOption>, compare_level: Option<usize>, config_name_to_save: Option<String>, config_name_to_load: Option<String>) 
-    -> ConfigurationBuilder 
+             no_visual: Option<bool>, respect_gitignore: Option<bool>, log: Option<LogOption>, compare_level: Option<usize>, config_name_to_save: Option<String>,
+             config_name_to_load: Option<String>)
+    -> ConfigurationBuilder
     {
         ConfigurationBuilder {
             dirs,
@@ -405,6 +418,7 @@ impl ConfigurationBuilder {
             should_show_faulty_files,
             no_keywords,
             no_visual,
+            respect_gitignore,
             log,
             compare_level,
             config_name_to_save,
@@ -423,6 +437,7 @@ impl ConfigurationBuilder {
         if self.should_show_faulty_files.is_none() {self.should_show_faulty_files = config.should_show_faulty_files};
         if self.no_keywords.is_none() {self.no_keywords = config.no_keywords};
         if self.no_visual.is_none() {self.no_visual = config.no_visual};
+        if self.respect_gitignore.is_none() {self.respect_gitignore = config.respect_gitignore};
         if self.compare_level.is_none() {self.compare_level = config.compare_level};
         if self.log.is_none() {self.log = config.log};
         self
@@ -431,8 +446,9 @@ impl ConfigurationBuilder {
     pub fn has_missing_fields(&self) -> bool {
         self.exclude_dirs.is_none() || self.languages_of_interest.is_none() ||
         self.threads.is_none() || self.braces_as_code.is_none() || self.should_search_in_dotted.is_none() ||
-        self.should_show_faulty_files.is_none() || self.no_visual.is_none() || self.log.is_none() || self.compare_level.is_none()
-    } 
+        self.should_show_faulty_files.is_none() || self.no_visual.is_none() || self.respect_gitignore.is_none() ||
+        self.log.is_none() || self.compare_level.is_none()
+    }
 
     pub fn build(&self) -> Configuration {
         Configuration {
@@ -447,6 +463,7 @@ impl ConfigurationBuilder {
             should_show_faulty_files: self.should_show_faulty_files.unwrap_or(DEF_SHOW_FAULTY_FILES),
             no_keywords: self.no_keywords.unwrap_or(DEF_NO_KEYWORDS),
             no_visual: self.no_visual.unwrap_or(DEF_NO_VISUAL),
+            respect_gitignore: self.respect_gitignore.unwrap_or(DEF_GITIGNORE),
             log: self.log.clone().unwrap_or_default(),
             compare_level: self.compare_level.unwrap_or(DEF_COMPARE_LEVEL),
             config_name_to_save: self.config_name_to_save.clone(),
@@ -469,6 +486,7 @@ impl Configuration {
             should_show_faulty_files: DEF_SHOW_FAULTY_FILES,
             no_keywords: DEF_NO_KEYWORDS,
             no_visual: DEF_NO_VISUAL,
+            respect_gitignore: DEF_GITIGNORE,
             log: LogOption::default(),
             compare_level: DEF_COMPARE_LEVEL,
             config_name_to_save: None,
@@ -521,6 +539,11 @@ impl Configuration {
 
     pub fn set_should_enable_visuals(&mut self, should_enable_visuals: bool) -> &mut Self {
         self.no_visual = should_enable_visuals;
+        self
+    }
+
+    pub fn set_respect_gitignore(&mut self, respect_gitignore: bool) -> &mut Self {
+        self.respect_gitignore = respect_gitignore;
         self
     }
 
@@ -623,6 +646,8 @@ mod tests {
         assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("braces-as-code".to_owned())), create_config_from_args("./ --braces-as-code a"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned())), create_config_from_args("./ --exclude"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned())), create_config_from_args("./ --exclude   --threads 4"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned())), create_config_from_args("./ --exclude [invalid"));
+        assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("gitignore".to_owned())), create_config_from_args("./ --gitignore a"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("load".to_owned())), create_config_from_args("./ --load"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("load".to_owned())), create_config_from_args("./ --load   "));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("save".to_owned())), create_config_from_args("./ --save"));
@@ -641,6 +666,8 @@ mod tests {
                 create_config_from_args("./ --search-in-dotted").unwrap());
         assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_should_enable_visuals(true),
                 create_config_from_args("./ --no-visual").unwrap());
+        assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_respect_gitignore(true),
+                create_config_from_args("./ --gitignore").unwrap());
         assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_should_show_faulty_files(true),
                 create_config_from_args("./ --show-faulty-files").unwrap());
         assert_eq!(*Configuration::new(vec![convert_to_absolute("./")]).set_exclude_dirs(vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]),

@@ -31,8 +31,9 @@ fn test_whole_workflow () {
     let extension_lang_map: ExtensionLangMap = Arc::new(make_extension_language_map(&language_map));
     calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector, &mut files_present, &extension_lang_map, &languages_metadata_map);
 
+    let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs).unwrap());
     let (total_files_num, relevant_files_num, _) = producer::search_for_files(0, files_injector.clone(), dirs_injector.clone(),
-         Worker::new_fifo(), idle_producers, extension_lang_map, languages_metadata_map.clone(), config.clone());
+         Worker::new_fifo(), idle_producers, extension_lang_map, exclude_matcher, languages_metadata_map.clone(), config.clone());
 
     finish_condition_ref.store(true, Ordering::Relaxed);
     consumer::start_parsing_files(0, files_injector, faulty_files_ref.clone(), finish_condition_ref, languages_content_info_ref.clone(),
@@ -54,7 +55,64 @@ fn test_whole_workflow () {
     let mut keyword_num = 0;
     for content_info in content_info_map.iter() {
         content_info.1.keyword_occurences.iter().for_each(|x| keyword_num += x.1);
-    } 
+    }
     assert!(keyword_num != 0);
+}
+
+fn count_files_of(target: &str, extra_args: &str) -> (usize, usize, usize, Vec<String>) {
+    let config = Arc::new(config_manager::create_config_from_args(&format!("{target} {extra_args} --threads 1 1")).unwrap());
+    let language_map = Arc::new(io_handler::parse_supported_languages_to_map(&LOCAL_APP_PATHS.languages_dir).unwrap().0);
+    let files_injector = Arc::new(Injector::new());
+    let dirs_injector = Arc::new(Injector::new());
+    let idle_producers = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let languages_metadata_map = Arc::new(Mutex::new(make_language_metadata(&language_map)));
+    let extension_lang_map: ExtensionLangMap = Arc::new(make_extension_language_map(&language_map));
+    let mut files_present = FilesPresent::default();
+    calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector, &mut files_present, &extension_lang_map, &languages_metadata_map);
+
+    let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs).unwrap());
+    let (total, relevant, excluded) = producer::search_for_files(0, files_injector.clone(), dirs_injector,
+         Worker::new_fifo(), idle_producers, extension_lang_map, exclude_matcher, languages_metadata_map, config);
+
+    let mut found_files = Vec::new();
+    while let crossbeam_deque::Steal::Success(f) = files_injector.steal() {
+        found_files.push(f.path.file_name().unwrap().to_str().unwrap().to_owned());
+    }
+    found_files.sort();
+
+    (total, relevant, excluded, found_files)
+}
+
+#[test]
+fn test_gitignore_traversal() {
+    let root = std::env::temp_dir().join("mezura_gitignore_test");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    std::fs::create_dir_all(root.join("ignored_dir")).unwrap();
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+    std::fs::write(root.join(".gitignore"), "*.py\nignored_dir/\n!keep.py\n").unwrap();
+    std::fs::write(root.join("a.py"), "x = 1\n").unwrap();
+    std::fs::write(root.join("keep.py"), "x = 1\n").unwrap();
+    std::fs::write(root.join("b.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(root.join("ignored_dir").join("c.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(root.join("sub").join(".gitignore"), "*.rs\n").unwrap();
+    std::fs::write(root.join("sub").join("d.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(root.join("sub").join("e.py"), "x = 1\n").unwrap();
+
+    let root_str = root.to_str().unwrap().replace('\\', "/");
+
+    let (total, relevant, excluded, found_files) = count_files_of(&root_str, "--gitignore");
+    assert_eq!((7, 2, 3), (total, relevant, excluded));
+    assert_eq!(vec!["b.rs", "keep.py"], found_files);
+
+    let (total, relevant, excluded, found_files) = count_files_of(&root_str, "");
+    assert_eq!((8, 6, 0), (total, relevant, excluded));
+    assert_eq!(vec!["a.py", "b.rs", "c.rs", "d.rs", "e.py", "keep.py"], found_files);
+
+    let (_, relevant, _, found_files) = count_files_of(&format!("{root_str}/ignored_dir"), "--gitignore");
+    assert_eq!(1, relevant);
+    assert_eq!(vec!["c.rs"], found_files);
+
+    std::fs::remove_dir_all(&root).unwrap();
 }
 

@@ -20,13 +20,32 @@ pub const DIRS_HELP  :  &str =
 ";
 pub const EXCLUDE_HELP  :  &str =
 "--exclude
-    1..n arguments separated by commas, can be a folder name, a file name (including extension),
-    or a full path to a folder or file.
+    1..n glob patterns separated by commas.
+
+    A pattern without a slash matches a file or folder name at any depth ('node_modules', '*.min.js').
+    A pattern with slashes matches the end of the full path, anchored at path components
+    ('Rusty/mezura' matches '.../Rusty/mezura' but not '.../aRusty/mezura'). Full absolute
+    paths work too. Glob syntax is supported in both forms: * ? [..] {..}
+    Matching folders are skipped entirely; the files inside them are not traversed and
+    are not included in the reported count of excluded files.
+
     If you are using Windows Powershell, you will need to escape the commas with a backtick: `
     or surround all the arguments with quatation marks:
     <arg1>`, <arg2>`, <arg3>   or   \"<arg1>, <arg2>, <arg3>\"
 
-    The program will ignore these dirs.
+";
+pub const GITIGNORE_HELP  :  &str =
+"--gitignore
+    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
+    or 'no' to disable. Default: no
+
+    Specifies that the program should respect .gitignore files: any file or folder ignored by a
+    .gitignore found in the traversed directories (or in their parent directories, up to the
+    repository root) is skipped, and skipped files are included in the excluded files count.
+    Negated patterns ('!keep.log') are supported.
+
+    Explicitly given targets always win: a directory or file passed as a target is traversed
+    even if a .gitignore of its parent directories would ignore it.
 
 ";
 pub const LANGUAGES_HELP  :  &str =
@@ -190,6 +209,7 @@ pub fn print_whole_help_message() {
     msg += SEARCH_IN_DOTTED_HELP;
     msg += SHOW_FAULTY_FILES_HELP;
     msg += NO_VISUAL_HELP;
+    msg += GITIGNORE_HELP;
     msg += LOG_HELP;
     msg += COMPRARE_LEVEL_HELP;
     msg += SAVE_HELP;
@@ -299,6 +319,8 @@ fn get_help_msg_of_command(command: &str) -> Option<&str> {
         Some(SHOW_FAULTY_FILES_HELP)
     } else if command == NO_VISUAL {
         Some(NO_VISUAL_HELP)
+    } else if command == GITIGNORE {
+        Some(GITIGNORE_HELP)
     } else if command == LOG {
         Some(LOG_HELP)
     } else if command == COMPRARE_LEVEL {

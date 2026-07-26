@@ -54,7 +54,9 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let mut files_present = FilesPresent::default();
     let idle_producers = Arc::new(AtomicUsize::new(0));
     let files_injector = Arc::new(Injector::<ParsableFile>::new());
-    let dirs_injector = Arc::new(Injector::<PathBuf>::new());
+    let dirs_injector = Arc::new(Injector::<TraversedDir>::new());
+    let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs)
+            .expect("exclude patterns are validated during argument parsing"));
     calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector, &mut files_present,
             &extension_lang_map, &global_languages_metadata_map);
 
@@ -68,7 +70,8 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let parsing_started_instant = Instant::now();
     for i in 0..config.threads.producers {
         producer_handles.push(producer::start_producer_thread(i, files_injector.clone(), dirs_injector.clone(), Worker::new_fifo(),
-            global_languages_metadata_map.clone(), idle_producers.clone(), extension_lang_map.clone(), config.clone(), files_stats.clone()));
+            global_languages_metadata_map.clone(), idle_producers.clone(), extension_lang_map.clone(), exclude_matcher.clone(),
+            config.clone(), files_stats.clone()));
     }
     for i in 0..config.threads.consumers {
         consumer_handles.push(consumer::start_parser_thread(i, files_injector.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
@@ -147,7 +150,7 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
 }
 
 //pub for integration tests
-pub fn calculate_single_file_stats_or_add_to_injector(config: &Configuration, dirs_injector: &Arc<Injector<PathBuf>>, files_injector: &Arc<Injector<ParsableFile>>,
+pub fn calculate_single_file_stats_or_add_to_injector(config: &Configuration, dirs_injector: &Arc<Injector<TraversedDir>>, files_injector: &Arc<Injector<ParsableFile>>,
         files_present: &mut FilesPresent, extension_lang_map: &HashMap<String, Arc<str>>, languages_metadata_map: &MetadataMapMut)
 {
     config.dirs.iter().for_each(|dir| {
@@ -163,7 +166,8 @@ pub fn calculate_single_file_stats_or_add_to_injector(config: &Configuration, di
                 files_present.relevant_files += 1;
             }
         } else if dir_path.is_dir() {
-            dirs_injector.push(dir_path.to_path_buf());
+            let gitignore_stack = if config.respect_gitignore { GitignoreStack::for_root_dir(dir_path) } else { None };
+            dirs_injector.push(TraversedDir::new(dir_path.to_path_buf(), gitignore_stack));
         }
     })
 }
@@ -366,6 +370,18 @@ pub struct ParsableFile {
     pub language_name: Arc<str>
 }
 
+#[derive(Debug,Clone)]
+pub struct TraversedDir {
+    pub path: PathBuf,
+    pub gitignore_stack: Option<Arc<GitignoreStack>>
+}
+
+#[derive(Debug)]
+pub struct GitignoreStack {
+    matcher: ignore::gitignore::Gitignore,
+    parent: Option<Arc<GitignoreStack>>
+}
+
 
 impl PersistentAppPaths {
     //Persistent paths: 
@@ -525,6 +541,69 @@ impl ParsableFile {
             path,
             language_name
         }
+    }
+}
+
+impl TraversedDir {
+    pub fn new(path: PathBuf, gitignore_stack: Option<Arc<GitignoreStack>>) -> Self {
+        TraversedDir {
+            path,
+            gitignore_stack
+        }
+    }
+}
+
+impl GitignoreStack {
+    pub fn extended(dir: &Path, parent: Option<Arc<GitignoreStack>>) -> Option<Arc<GitignoreStack>> {
+        let gitignore_path = dir.join(".gitignore");
+        if !gitignore_path.is_file() {
+            return parent;
+        }
+
+        let (matcher, _) = ignore::gitignore::Gitignore::new(&gitignore_path);
+        if matcher.is_empty() {
+            return parent;
+        }
+
+        Some(Arc::new(GitignoreStack { matcher, parent }))
+    }
+
+    pub fn for_root_dir(dir: &Path) -> Option<Arc<GitignoreStack>> {
+        if dir.join(".git").exists() {
+            return None;
+        }
+
+        let mut relevant_ancestors: Vec<&Path> = Vec::new();
+        for ancestor in dir.ancestors().skip(1) {
+            relevant_ancestors.push(ancestor);
+            if ancestor.join(".git").exists() {
+                break;
+            }
+        }
+
+        let mut stack = None;
+        for ancestor in relevant_ancestors.iter().rev() {
+            stack = Self::extended(ancestor, stack);
+        }
+
+        if let Some(s) = &stack && s.is_ignored(dir, true) {
+            return None;
+        }
+        stack
+    }
+
+    pub fn is_ignored(&self, path: &Path, is_dir: bool) -> bool {
+        let mut node = Some(self);
+        while let Some(stack) = node {
+            match stack.matcher.matched(path, is_dir) {
+                ignore::Match::Ignore(_) => return true,
+                ignore::Match::Whitelist(_) => return false,
+                ignore::Match::None => {}
+            }
+            node = stack.parent.as_deref();
+        }
+
+        false
     }
 }
 

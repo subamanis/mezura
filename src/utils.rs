@@ -87,6 +87,21 @@ pub fn is_valid_path(s: &str) -> bool {
     p.is_dir() || p.is_file()
 }
 
+pub fn build_exclude_matcher(exclude_patterns: &[String]) -> Result<globset::GlobSet, globset::Error> {
+    let mut builder = globset::GlobSetBuilder::new();
+    for pattern in exclude_patterns {
+        let normalized = pattern.trim().replace('\\', "/");
+        let normalized = normalized.trim_end_matches('/');
+        let anchored = if normalized.starts_with("**/") {
+            normalized.to_owned()
+        } else {
+            format!("**/{normalized}")
+        };
+        builder.add(globset::GlobBuilder::new(&anchored).literal_separator(true).build()?);
+    }
+    builder.build()
+}
+
 pub fn extract_file_contents(file_path: &str) -> Option<String> {
     if Path::new(&file_path).is_file() {
         let mut contents = String::with_capacity(700);
@@ -211,5 +226,45 @@ mod Tests{
         assert_eq!(Some((1,1)),parse_two_usize_values("     1       1  ", 1, 4, 1, 12));
         assert_eq!(Some((4,12)),parse_two_usize_values("4 12", 1, 4, 1, 12));
         assert_eq!(Some((2,6)),parse_two_usize_values("2 6", 1, 4, 1, 12));
+    }
+}
+#[cfg(test)]
+mod exclude_matcher_tests {
+    use super::*;
+
+    #[test]
+    fn test_name_patterns_match_at_any_depth() {
+        let matcher = build_exclude_matcher(&["node_modules".to_owned(), "*.min.js".to_owned()]).unwrap();
+
+        assert!(matcher.is_match("node_modules"));
+        assert!(matcher.is_match("D:/proj/node_modules"));
+        assert!(!matcher.is_match("D:/proj/node_modules_2"));
+        assert!(matcher.is_match("D:/proj/app/bundle.min.js"));
+        assert!(!matcher.is_match("D:/proj/app/bundle.js"));
+        assert!(!matcher.is_match("D:/proj/appbundle.min.js/other.js"));
+    }
+
+    #[test]
+    fn test_path_patterns_are_component_anchored() {
+        let matcher = build_exclude_matcher(&["Rusty/mezura".to_owned(), "D:/dev/bench".to_owned()]).unwrap();
+
+        assert!(matcher.is_match("D:/dev/Rusty/mezura"));
+        assert!(!matcher.is_match("D:/dev/aRusty/mezura"));
+        assert!(matcher.is_match("D:/dev/bench"));
+        assert!(!matcher.is_match("D:/dev/benchx"));
+    }
+
+    #[test]
+    fn test_backslashes_and_trailing_slashes_are_normalized() {
+        let matcher = build_exclude_matcher(&["Rusty\\mezura\\bench".to_owned(), "target/".to_owned()]).unwrap();
+
+        assert!(matcher.is_match("D:/dev/Rusty/mezura/bench"));
+        assert!(matcher.is_match("D:/dev/proj/target"));
+    }
+
+    #[test]
+    fn test_invalid_glob_is_rejected() {
+        assert!(build_exclude_matcher(&["[invalid".to_owned()]).is_err());
+        assert!(build_exclude_matcher(&["valid".to_owned(), "[invalid".to_owned()]).is_err());
     }
 }

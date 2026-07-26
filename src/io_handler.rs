@@ -243,7 +243,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
 
     let (mut dirs, mut braces_as_code, mut should_search_in_dotted, mut threads, mut exclude_dirs,
          mut languages_of_interest, mut excluded_languages, mut should_show_faulty_files, mut no_keywords, mut no_visual,
-         mut log, mut compare_level) = (None,None,None,None,None,None,None,None,None,None,None,None);
+         mut respect_gitignore, mut log, mut compare_level) = (None,None,None,None,None,None,None,None,None,None,None,None,None);
     let mut invalid_fields: Vec<&'static str> = Vec::new();
     let mut buf = String::with_capacity(150);
 
@@ -259,7 +259,9 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                 }
             } else if id == config_manager::EXCLUDE {
                 let paths = read_lines_from_file_to_vec(&mut reader, &mut buf, utils::parse_paths_to_vec);
-                if !paths.is_empty() {
+                if utils::build_exclude_matcher(&paths).is_err() {
+                    invalid_fields.push(config_manager::EXCLUDE);
+                } else if !paths.is_empty() {
                     exclude_dirs = Some(paths);
                 }
             } else if id == config_manager::LANGUAGES {
@@ -305,6 +307,11 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                     Ok(x) => no_visual = x,
                     Err(()) => invalid_fields.push(config_manager::NO_VISUAL)
                 }
+            } else if id == config_manager::GITIGNORE {
+                match read_bool_value_from_file(&mut reader, &mut buf) {
+                    Ok(x) => respect_gitignore = x,
+                    Err(()) => invalid_fields.push(config_manager::GITIGNORE)
+                }
             } else if id == config_manager::LOG {
                 buf.clear();
                 let _ = reader.read_line(&mut buf);
@@ -327,7 +334,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
     }
 
     Ok((ConfigurationBuilder::new(dirs,exclude_dirs, languages_of_interest, excluded_languages, threads, braces_as_code,should_search_in_dotted,
-             should_show_faulty_files, no_keywords, no_visual, log, compare_level, None, None), invalid_fields))
+             should_show_faulty_files, no_keywords, no_visual, respect_gitignore, log, compare_level, None, None), invalid_fields))
 }
 
 // Dirs must be specified (is checked before calling this function)
@@ -379,6 +386,10 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
     if let Some(no_visual) = &config_builder.no_visual {
         writer.write_all(&[b"\n\n===> ",config_manager::NO_VISUAL.as_bytes(),b"\n"].concat())?;
         writer.write_all(if *no_visual {b"yes"} else {b"no"})?;
+    }
+    if let Some(respect_gitignore) = &config_builder.respect_gitignore {
+        writer.write_all(&[b"\n\n===> ",config_manager::GITIGNORE.as_bytes(),b"\n"].concat())?;
+        writer.write_all(if *respect_gitignore {b"yes"} else {b"no"})?;
     }
     if let Some(compare_level) = &config_builder.compare_level {
         writer.write_all(&[b"\n\n===> ",config_manager::COMPRARE_LEVEL.as_bytes(),b"\n"].concat())?;
