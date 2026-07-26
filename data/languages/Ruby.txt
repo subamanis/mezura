@@ -1,0 +1,26 @@
+Language
+Ruby
+
+Extensions
+rb
+
+String symbols
+" '
+
+Comment symbols
+#
+Multi line comment start
+=begin
+Multi line comment end
+=end
+
+Keyword
+NAME
+classes
+ALIASES
+class
+Keyword
+NAME
+modules
+ALIASES
+module

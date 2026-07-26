@@ -1,0 +1,26 @@
+Language
+Haskell
+
+Extensions
+hs
+
+String symbols
+"
+
+Comment symbols
+--
+Multi line comment start
+{-
+Multi line comment end
+-}
+
+Keyword
+NAME
+data types
+ALIASES
+data
+Keyword
+NAME
+classes
+ALIASES
+class

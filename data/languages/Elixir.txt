@@ -1,0 +1,22 @@
+Language
+Elixir
+
+Extensions
+ex exs
+
+String symbols
+"
+
+Comment symbols
+#
+
+Keyword
+NAME
+modules
+ALIASES
+defmodule
+Keyword
+NAME
+functions
+ALIASES
+def defp

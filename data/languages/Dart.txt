@@ -1,0 +1,26 @@
+Language
+Dart
+
+Extensions
+dart
+
+String symbols
+" '
+
+Comment symbols
+//
+Multi line comment start
+/*
+Multi line comment end
+*/
+
+Keyword
+NAME
+classes
+ALIASES
+class
+Keyword
+NAME
+enums
+ALIASES
+enum

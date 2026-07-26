@@ -1,0 +1,26 @@
+Language
+SQL
+
+Extensions
+sql
+
+String symbols
+' "
+
+Comment symbols
+--
+Multi line comment start
+/*
+Multi line comment end
+*/
+
+Keyword
+NAME
+tables
+ALIASES
+TABLE table
+Keyword
+NAME
+views
+ALIASES
+VIEW view

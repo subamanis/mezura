@@ -1,0 +1,22 @@
+Language
+Zig
+
+Extensions
+zig
+
+String symbols
+"
+
+Comment symbols
+//
+
+Keyword
+NAME
+structs
+ALIASES
+struct
+Keyword
+NAME
+enums
+ALIASES
+enum
