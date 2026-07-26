@@ -105,10 +105,8 @@ fn parse_lines(contents: &str, language: &Language, keyword_matcher: Option<&Key
             let cleansed = x.trim();
             if config.braces_as_code || cleansed.len() > 2 || (cleansed != "{" && cleansed != "}" && cleansed != "};") {
                 file_stats.incr_code_lines();
-                if !config.no_keywords {
-                    if let Some(matcher) = keyword_matcher {
-                        add_keywords_if_any(cleansed, matcher, &mut file_stats);
-                    }
+                if !config.no_keywords && let Some(matcher) = keyword_matcher {
+                    add_keywords_if_any(cleansed, matcher, &mut file_stats);
                 }
             }
         } else {
@@ -439,13 +437,7 @@ fn get_com_end_indices(line: &str, language: &Language) -> Vec<usize> {
 
 fn get_com_start_indices(line: &str, language: &Language, comment_indices: &[usize]) -> Vec<usize> {
     finders_of(language).multiline_start_finder.as_ref().unwrap().find_iter(line.as_bytes())
-    .filter_map(|x|{
-        if !is_intersecting_with_comment_symbol(x, comment_indices) {
-            Some(x)
-        } else {
-            None
-        }
-    })
+    .filter(|&x| !is_intersecting_with_comment_symbol(x, comment_indices))
     .collect::<Vec<usize>>()
 }
 
@@ -662,47 +654,49 @@ pub fn get_str_indices_and_symbols(line: &str, language: &Language, open_str_sym
         let first_match_2 = iter_2.next();
         let mut indices  = Vec::new();
         let mut symbols  = Vec::new();
-        if first_match_1.is_none() && first_match_2.is_none() {
-            (vec![],vec![])
-        } else if first_match_1.is_none() {
+        match (first_match_1, first_match_2) {
+        (None, None) => (vec![],vec![]),
+        (None, Some(match_2)) => {
             if open_str_symbol.is_none() {
                 add_unescaped_indices(&mut indices, &mut symbols, 1,
-                        first_match_2.unwrap(), line_bytes, &mut iter_2);
+                        match_2, line_bytes, &mut iter_2);
                 (indices,symbols)
             } else {
                 let open_str_symbol = open_str_symbol.as_ref().unwrap();
                 if *open_str_symbol == language.string_symbols[1]{
                     add_unescaped_indices(&mut indices, &mut symbols, 1,
-                            first_match_2.unwrap(), line_bytes, &mut iter_2);
+                            match_2, line_bytes, &mut iter_2);
                     (indices,symbols)
                 } else {
                     (vec![],vec![])
                 }
             }
-        } else if first_match_2.is_none() {
+        },
+        (Some(match_1), None) => {
             if open_str_symbol.is_none() {
                 add_unescaped_indices(&mut indices, &mut symbols, 0,
-                            first_match_1.unwrap(), line_bytes, &mut iter_1);
+                            match_1, line_bytes, &mut iter_1);
                 (indices,symbols)
             } else {
                 let open_str_symbol = open_str_symbol.as_ref().unwrap();
                 if *open_str_symbol == language.string_symbols[0]{
                     add_unescaped_indices(&mut indices, &mut symbols, 0,
-                            first_match_1.unwrap(), line_bytes, &mut iter_1);
+                            match_1, line_bytes, &mut iter_1);
                     (indices,symbols)
                 } else {
                     (vec![],vec![])
                 }
             }
-        } else {
+        },
+        (Some(match_1), Some(match_2)) => {
             let mut indices_1 = Vec::new();
             let mut symbols_1 = Vec::new();
             let mut indices_2 = Vec::new();
             let mut symbols_2 = Vec::new();
             add_unescaped_indices(&mut indices_1, &mut symbols_1, 0,
-                    first_match_1.unwrap(), line_bytes, &mut iter_1);
+                    match_1, line_bytes, &mut iter_1);
             add_unescaped_indices(&mut indices_2, &mut symbols_2, 1,
-                    first_match_2.unwrap(), line_bytes, &mut iter_2);
+                    match_2, line_bytes, &mut iter_2);
             if indices_1.is_empty() && indices_2.is_empty() {
                 (vec![],vec![])
             } else if indices_2.is_empty() {
@@ -714,6 +708,7 @@ pub fn get_str_indices_and_symbols(line: &str, language: &Language, open_str_sym
                         open_str_symbol, &mut indices, &mut symbols, language);
                 (indices,symbols)
             }
+        }
         }
     } else {
         let mut indices = Vec::new();
@@ -835,83 +830,80 @@ impl<'a> LineInfo<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lazy_static::lazy_static;
-        
-    lazy_static! {
-        static ref CLASS : Keyword = Keyword {
-            descriptive_name : "classes".to_owned(),
-            aliases : vec!["class".to_owned()]
-        };
 
-        static ref INTERFACE : Keyword = Keyword {
-            descriptive_name : "interfaces".to_owned(),
-            aliases : vec!["interface".to_owned()]
-        };
+    static CLASS : LazyLock<Keyword> = LazyLock::new(|| Keyword {
+        descriptive_name : "classes".to_owned(),
+        aliases : vec!["class".to_owned()]
+    });
 
-        static ref ENUM : Keyword = Keyword {
-            descriptive_name : "enums".to_owned(),
-            aliases : vec!["enum".to_owned()]
-        };
+    static INTERFACE : LazyLock<Keyword> = LazyLock::new(|| Keyword {
+        descriptive_name : "interfaces".to_owned(),
+        aliases : vec!["interface".to_owned()]
+    });
 
-        static ref STRUCT : Keyword = Keyword {
-            descriptive_name : "structs".to_owned(),
-            aliases : vec!["struct".to_owned()]
-        };
+    static ENUM : LazyLock<Keyword> = LazyLock::new(|| Keyword {
+        descriptive_name : "enums".to_owned(),
+        aliases : vec!["enum".to_owned()]
+    });
 
-        static ref TRAIT : Keyword = Keyword {
-            descriptive_name : "traits".to_owned(),
-            aliases : vec!["trait".to_owned()]
-        };
+    static STRUCT : LazyLock<Keyword> = LazyLock::new(|| Keyword {
+        descriptive_name : "structs".to_owned(),
+        aliases : vec!["struct".to_owned()]
+    });
 
-        static ref JAVA : Language = Language {
-            name : "java".to_owned(),
-            extensions : vec!["java".to_owned()],
-            string_symbols : vec!["\"".to_owned()],
-            comment_symbols : vec!["//".to_owned()],
-            multiline_comment_start_symbol : Some("/*".to_owned()),
-            multiline_comment_end_symbol : Some("*/".to_owned()),
-            keywords : vec![CLASS.clone(),INTERFACE.clone()],
-            finders : std::sync::OnceLock::new()
-        };
+    static TRAIT : LazyLock<Keyword> = LazyLock::new(|| Keyword {
+        descriptive_name : "traits".to_owned(),
+        aliases : vec!["trait".to_owned()]
+    });
 
-        static ref PHP : Language = Language {
-            name : "PHP".to_owned(),
-            extensions : vec!["php".to_owned()],
-            string_symbols : vec!["\"".to_owned(),"'".to_owned()],
-            comment_symbols : vec!["//".to_owned(),"#".to_owned()],
-            multiline_comment_start_symbol : Some("/*".to_owned()),
-            multiline_comment_end_symbol : Some("*/".to_owned()),
-            keywords : vec![CLASS.clone()],
-            finders : std::sync::OnceLock::new()
-        };
+    static JAVA : LazyLock<Language> = LazyLock::new(|| Language {
+        name : "java".to_owned(),
+        extensions : vec!["java".to_owned()],
+        string_symbols : vec!["\"".to_owned()],
+        comment_symbols : vec!["//".to_owned()],
+        multiline_comment_start_symbol : Some("/*".to_owned()),
+        multiline_comment_end_symbol : Some("*/".to_owned()),
+        keywords : vec![CLASS.clone(),INTERFACE.clone()],
+        finders : std::sync::OnceLock::new()
+    });
 
-        static ref PYTHON : Language = Language {
-            name : "py".to_owned(),
-            extensions : vec!["py".to_owned()],
-            string_symbols : vec!["\"".to_owned(),"'".to_owned()],
-            comment_symbols : vec!["#".to_owned()],
-            multiline_comment_start_symbol : None,
-            multiline_comment_end_symbol : None,
-            keywords : vec![CLASS.clone()],
-            finders : std::sync::OnceLock::new()
-        };
+    static PHP : LazyLock<Language> = LazyLock::new(|| Language {
+        name : "PHP".to_owned(),
+        extensions : vec!["php".to_owned()],
+        string_symbols : vec!["\"".to_owned(),"'".to_owned()],
+        comment_symbols : vec!["//".to_owned(),"#".to_owned()],
+        multiline_comment_start_symbol : Some("/*".to_owned()),
+        multiline_comment_end_symbol : Some("*/".to_owned()),
+        keywords : vec![CLASS.clone()],
+        finders : std::sync::OnceLock::new()
+    });
 
-        static ref RUST : Language = Language {
-            name : "rust".to_owned(),
-            extensions : vec!["rs".to_owned()],
-            string_symbols : vec!["\"".to_owned()],
-            comment_symbols : vec!["//".to_owned()],
-            multiline_comment_start_symbol : Some("/*".to_owned()),
-            multiline_comment_end_symbol : Some("*/".to_owned()),
-            keywords : vec![STRUCT.clone(),ENUM.clone(),TRAIT.clone()],
-            finders : std::sync::OnceLock::new()
-        };
+    static PYTHON : LazyLock<Language> = LazyLock::new(|| Language {
+        name : "py".to_owned(),
+        extensions : vec!["py".to_owned()],
+        string_symbols : vec!["\"".to_owned(),"'".to_owned()],
+        comment_symbols : vec!["#".to_owned()],
+        multiline_comment_start_symbol : None,
+        multiline_comment_end_symbol : None,
+        keywords : vec![CLASS.clone()],
+        finders : std::sync::OnceLock::new()
+    });
 
-        static ref LANGUAGE_MAP_REF : Arc<HashMap<String,Language>> =
-                Arc::new(io_handler::parse_supported_languages_to_map(&LOCAL_APP_PATHS.languages_dir).unwrap().0);
+    static RUST : LazyLock<Language> = LazyLock::new(|| Language {
+        name : "rust".to_owned(),
+        extensions : vec!["rs".to_owned()],
+        string_symbols : vec!["\"".to_owned()],
+        comment_symbols : vec!["//".to_owned()],
+        multiline_comment_start_symbol : Some("/*".to_owned()),
+        multiline_comment_end_symbol : Some("*/".to_owned()),
+        keywords : vec![STRUCT.clone(),ENUM.clone(),TRAIT.clone()],
+        finders : std::sync::OnceLock::new()
+    });
 
-        static ref JAVA_MATCHER : KeywordMatcher = KeywordMatcher::build(&JAVA).unwrap();
-    }
+    static LANGUAGE_MAP_REF : LazyLock<Arc<HashMap<String,Language>>> =
+            LazyLock::new(|| Arc::new(io_handler::parse_supported_languages_to_map(&LOCAL_APP_PATHS.languages_dir).unwrap().0));
+
+    static JAVA_MATCHER : LazyLock<KeywordMatcher> = LazyLock::new(|| KeywordMatcher::build(&JAVA).unwrap());
 
     fn matcher_for(lang_name: &str) -> Option<KeywordMatcher> {
         KeywordMatcher::build(LANGUAGE_MAP_REF.get(lang_name).unwrap())
@@ -1060,7 +1052,7 @@ mod tests {
         assert!(get_str_indices_and_symbols(&line, &RUST, double_str_opt).0.len() == 8);
         let line = String::from(r#"[\'⣾\', '⣷', '⣯', '⣟', '⡿']"#); 
         assert!(get_str_indices_and_symbols(&line, &PYTHON, &None).0.len() == 8);
-        assert!(get_str_indices_and_symbols(&line, &RUST, &None).0.len() == 0);
+        assert!(get_str_indices_and_symbols(&line, &RUST, &None).0.is_empty());
         let line = String::from(r#"['⣾", '⣷", '⣯"]"#); 
         assert_eq!(vec![1u8,1u8,0u8,0u8],
                 get_str_indices_and_symbols(&line, &PYTHON, &None).1);
@@ -1143,15 +1135,15 @@ mod tests {
         assert_eq!(vec![0,7], find_comment_indicies_without_multiline(line, &PHP));
 
         let line = "Hello world!";
-        assert_eq!(Vec::<usize>::new(), find_comment_indicies_w_multiline(line, &PHP, &vec![]));
+        assert_eq!(Vec::<usize>::new(), find_comment_indicies_w_multiline(line, &PHP, &[]));
         let line = "//Hello*/ world!";
-        assert_eq!(vec![0], find_comment_indicies_w_multiline(line, &PHP, &vec![7]));
+        assert_eq!(vec![0], find_comment_indicies_w_multiline(line, &PHP, &[7]));
         let line = "///*Hello world!";
-        assert_eq!(vec![0], find_comment_indicies_w_multiline(line, &PHP, &vec![]));
+        assert_eq!(vec![0], find_comment_indicies_w_multiline(line, &PHP, &[]));
         let line = "//*//Hello world!";
-        assert_eq!(vec![0], find_comment_indicies_w_multiline(line, &PHP, &vec![2]));
+        assert_eq!(vec![0], find_comment_indicies_w_multiline(line, &PHP, &[2]));
         let line = "//*/#Hello world!";
-        assert_eq!(vec![0,4], find_comment_indicies_w_multiline(line, &PHP, &vec![2]));
+        assert_eq!(vec![0,4], find_comment_indicies_w_multiline(line, &PHP, &[2]));
     }
     
     #[test]
@@ -1203,7 +1195,7 @@ mod tests {
         assert_eq!(LineInfo::new(Some("He".to_owned()), true, false, Some("\"".to_owned())),get_bounds_only_single_line_comments(&line, &PYTHON, double_str_opt));
         let line = String::from(r#""""Hello""#);
         assert_eq!(LineInfo::new(None, true, false, None), get_bounds_only_single_line_comments(&line, &PYTHON, &None));
-        assert_eq!(LineInfo::new(Some("Hello".to_owned()), true, false, Some("\"".to_owned())), get_bounds_only_single_line_comments(&line, &PYTHON, &double_str_opt));
+        assert_eq!(LineInfo::new(Some("Hello".to_owned()), true, false, Some("\"".to_owned())), get_bounds_only_single_line_comments(&line, &PYTHON, double_str_opt));
         let line = String::from(r#"['⣯', '⣟"#); 
         assert_eq!(LineInfo::new(Some("[, ".to_owned()),true,false,Some("\'".to_owned())), get_bounds_only_single_line_comments(&line, &PYTHON, &None));
         
@@ -1288,7 +1280,7 @@ mod tests {
         assert_eq!(LineInfo::from_slice_w_literal("Heo"), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
         let line = String::from(r#""""Hello""#);
         assert_eq!(LineInfo::new(None, true, false, None), get_bounds_w_multiline_comments(&line, &JAVA, true, &None));
-        assert_eq!(LineInfo::new(Some("Hello".to_owned()), true, false, Some("\"".to_owned())), get_bounds_w_multiline_comments(&line, &JAVA, true, &double_str_opt));
+        assert_eq!(LineInfo::new(Some("Hello".to_owned()), true, false, Some("\"".to_owned())), get_bounds_w_multiline_comments(&line, &JAVA, true, double_str_opt));
         
         //testing only comments
         let line = String::from("//");

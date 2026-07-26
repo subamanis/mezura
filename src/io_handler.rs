@@ -56,28 +56,19 @@ pub fn parse_supported_languages_to_map(target_path: &str) -> Result<(HashMap<St
         return Err(LanguageDirParseError::PathMissing(target_path.to_owned()));
     }
     for entry in entries.unwrap() {
-        let entry = match entry {
-            Ok(x) => x,
-            Err(_) => continue
-        };
+        let Ok(entry) = entry else { continue };
 
         let path = entry.path();
         if !Path::new(&path).is_file() {continue;}
-        
-        let reader = match my_reader::BufReader::open(path) {
-            Ok(x) => x,
-            Err(_) => {
-                add_file_name_to_faulty_files(&entry, &mut faulty_files);
-                continue;
-            }
-        } ;
-        
-        let language = match parse_file_to_language(reader, &mut buffer) {
-            Ok(x) => x,
-            Err(_) => {
-                add_file_name_to_faulty_files(&entry, &mut faulty_files);
-                continue;
-            }
+
+        let Ok(reader) = my_reader::BufReader::open(path) else {
+            add_file_name_to_faulty_files(&entry, &mut faulty_files);
+            continue;
+        };
+
+        let Ok(language) = parse_file_to_language(reader, &mut buffer) else {
+            add_file_name_to_faulty_files(&entry, &mut faulty_files);
+            continue;
         };
 
         language_map.insert(language.name.to_owned(), language);
@@ -99,25 +90,16 @@ fn parse_file_to_language(mut reader :my_reader::BufReader, buffer :&mut String)
     if !reader.read_line_exists(buffer) {return Err(());}
 
     if !reader.read_line_and_compare(buffer, EXTENSIONS) {return Err(());}
-    let identifiers = match reader.get_line_sliced(buffer) {
-        Ok(x) => x,
-        Err(_) => return Err(())
-    };
+    let Ok(identifiers) = reader.get_line_sliced(buffer) else { return Err(()) };
     if !reader.read_line_exists(buffer) {return Err(());}
 
     if !reader.read_line_and_compare(buffer, STRING_SYMBOLS) {return Err(());}
-    let string_symbols = match reader.get_line_sliced(buffer) {
-        Ok(x) => x,
-        Err(_) => return Err(())
-    };
+    let Ok(string_symbols) = reader.get_line_sliced(buffer) else { return Err(()) };
     if string_symbols.is_empty() {return Err(());}
 
     if !reader.read_line_exists(buffer) {return Err(());}
-    if !reader.read_line_and_compare(buffer, COMMENT_SYMBOLS) {return Err(());} 
-    let comment_symbols = match reader.get_line_sliced(buffer) {
-        Ok(x) => x,
-        Err(_) => return Err(())
-    };
+    if !reader.read_line_and_compare(buffer, COMMENT_SYMBOLS) {return Err(());}
+    let Ok(comment_symbols) = reader.get_line_sliced(buffer) else { return Err(()) };
     
     let mut multi_start :Option<String> = None;
     let mut multi_end :Option<String> = None;
@@ -140,10 +122,7 @@ fn parse_file_to_language(mut reader :my_reader::BufReader, buffer :&mut String)
         let name = buffer.trim().to_string().clone();
         if name.is_empty() {return Err(());}
         if !reader.read_line_exists(buffer) {return Err(());}
-        let aliases = match reader.get_line_sliced(buffer) {
-            Ok(x) => x,
-            Err(_) => return Err(())
-        };
+        let Ok(aliases) = reader.get_line_sliced(buffer) else { return Err(()) };
         if aliases.is_empty() {return Err(());}
         
         let keyword = Keyword {
@@ -166,7 +145,7 @@ fn parse_file_to_language(mut reader :my_reader::BufReader, buffer :&mut String)
 }
 
 pub fn parse_string_to_language(contents: Cow<str>) -> Language {
-    let mut lines = (&contents).lines();
+    let mut lines = contents.lines();
     let (mut mult_start, mut mult_end) = (None, None);
 
     lines.next();
@@ -181,13 +160,11 @@ pub fn parse_string_to_language(contents: Cow<str>) -> Language {
     lines.next();
     let comment_symbols = split_line_on_whitespace(lines.next().unwrap());
     let next_line = lines.next();
-    if let Some(line) = next_line {
-        if line == MULTILINE_COMMENT_START {
-            mult_start = Some(lines.next().unwrap().trim().to_owned());
-            lines.next();
-            mult_end = Some(lines.next().unwrap().trim().to_owned());
-            lines.next();
-        }
+    if let Some(line) = next_line && line == MULTILINE_COMMENT_START {
+        mult_start = Some(lines.next().unwrap().trim().to_owned());
+        lines.next();
+        mult_end = Some(lines.next().unwrap().trim().to_owned());
+        lines.next();
     }
 
     let mut keywords = Vec::new();
@@ -211,38 +188,38 @@ pub fn serialize_language(lang: &Language, path: &str) -> Result<(), io::Error> 
     let file_path = path.to_string() + "/" + &lang.name + ".txt";
     let mut writer = BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).open(file_path)?);
 
-    writer.write(format!("{}\n",LANGUAGE).as_bytes());
+    writer.write(format!("{LANGUAGE}\n").as_bytes());
     writer.write(lang.name.as_bytes());
     writer.write(b"\n\n");
 
-    writer.write(format!("{}\n",EXTENSIONS).as_bytes());
+    writer.write(format!("{EXTENSIONS}\n").as_bytes());
     writer.write(lang.extensions.join(" ").as_bytes());
     writer.write(b"\n\n");
 
-    writer.write(format!("{}\n",STRING_SYMBOLS).as_bytes());
+    writer.write(format!("{STRING_SYMBOLS}\n").as_bytes());
     writer.write(lang.string_symbols.join(" ").as_bytes());
     writer.write(b"\n\n");
 
-    writer.write(format!("{}\n",COMMENT_SYMBOLS).as_bytes());
+    writer.write(format!("{COMMENT_SYMBOLS}\n").as_bytes());
     writer.write(lang.comment_symbols.join(" ").as_bytes());
     writer.write(b"\n");
     
     if let Some(symbol) = &lang.multiline_comment_start_symbol {
-        writer.write(format!("{}\n",MULTILINE_COMMENT_START).as_bytes());
+        writer.write(format!("{MULTILINE_COMMENT_START}\n").as_bytes());
         writer.write(symbol.as_bytes());
         writer.write(b"\n");
-        writer.write(format!("{}\n",MULTILINE_COMMENT_END).as_bytes());
+        writer.write(format!("{MULTILINE_COMMENT_END}\n").as_bytes());
         writer.write(lang.multiline_comment_end_symbol.as_ref().unwrap().as_bytes());
         writer.write(b"\n");
     }
     writer.write(b"\n");
     
     for keyword in lang.keywords.iter() {
-        writer.write(format!("{}\n",KEYWORD).as_bytes());
-        writer.write(format!("{}\n",KEYWORD_NAME).as_bytes());
+        writer.write(format!("{KEYWORD}\n").as_bytes());
+        writer.write(format!("{KEYWORD_NAME}\n").as_bytes());
         writer.write(keyword.descriptive_name.as_bytes());
         writer.write(b"\n");
-        writer.write(format!("{}\n",KEYWORD_ALIASES).as_bytes());
+        writer.write(format!("{KEYWORD_ALIASES}\n").as_bytes());
         writer.write(keyword.aliases.join(" ").as_bytes());
         writer.write(b"\n");
     }
@@ -430,15 +407,15 @@ fn write_current_log(writer: &mut BufWriter<File>, config: &Configuration, datet
     writer.write(format!("    Lines: {}\n",final_stats.lines).as_bytes());
     writer.write(format!("        Code: {}\n",final_stats.code_lines).as_bytes());
     writer.write(format!("        Extra: {}\n",final_stats.extra_lines).as_bytes());
-    writer.write(format!("    Total Size: {}\n",final_stats.bytes_size.to_string()).as_bytes());
-    writer.write(format!("        Average Size: {}\n\n\n",final_stats.bytes_average_size.to_string()).as_bytes());
+    writer.write(format!("    Total Size: {}\n",final_stats.bytes_size).as_bytes());
+    writer.write(format!("        Average Size: {}\n\n\n",final_stats.bytes_average_size).as_bytes());
     writer.write(b"--------------------------------------------------------------------------------------------\n\n\n");
 }
 
 
-fn read_bool_value_from_file(reader: &mut BufReader<File>, mut buf: &mut String) -> Option<bool> {
+fn read_bool_value_from_file(reader: &mut BufReader<File>, buf: &mut String) -> Option<bool> {
     buf.clear();
-    reader.read_line(&mut buf);
+    reader.read_line(buf);
     let buf = buf.trim();
     if buf.is_empty() {
         return None;
@@ -452,11 +429,11 @@ fn read_bool_value_from_file(reader: &mut BufReader<File>, mut buf: &mut String)
 }
 
 //Keep parsing new lines as relevant, until an empty one appears.
-fn read_lines_from_file_to_vec(reader: &mut BufReader<File>, mut buf: &mut String, parser_func: fn(&str) -> Vec<String>) -> Vec<String> {
+fn read_lines_from_file_to_vec(reader: &mut BufReader<File>, buf: &mut String, parser_func: fn(&str) -> Vec<String>) -> Vec<String> {
     let mut vec = Vec::new();
     loop {
         buf.clear();
-        reader.read_line(&mut buf);
+        reader.read_line(buf);
         if buf.trim().is_empty() {
             break;
         }
@@ -482,9 +459,9 @@ impl Formatted for LanguageDirParseError {
         match self {
             Self::NoFilesFound => "Error: No language files found in directory.".red(),
             Self::NoFilesFormattedProperly => "Error: No language file is formatted properly, so none could be parsed.".red(),
-            Self::PathMissing(path) => format!("Error: It seems that the language dir ({}) has been deleted.
+            Self::PathMissing(path) => format!("Error: It seems that the language dir ({path}) has been deleted.
 Please delete the \"mezura\" folder and it will be generated again.
-Make sure to backup the \"configs\" and \"logs\" folders because they will be overwritten.", path).red(),
+Make sure to backup the \"configs\" and \"logs\" folders because they will be overwritten.").red(),
         }
     }
 }
@@ -492,7 +469,7 @@ Make sure to backup the \"configs\" and \"logs\" folders because they will be ov
 impl Formatted for ConfigFileParseError {
     fn formatted(&self) -> ColoredString {
         match self {
-            Self::FileNotFound(x) => format!("'{}' config file not found, defaults will be used.", x).yellow(),
+            Self::FileNotFound(x) => format!("'{x}' config file not found, defaults will be used.").yellow(),
             Self::IOError => "Unexpected IO error while reading, defaults will be used".yellow()
         }
     }
@@ -567,7 +544,7 @@ mod tests {
 
     #[test]
     fn test_save_config_file_and_then_parse_it() -> std::io::Result<()> {
-        let command = format!("./ --exclude a,b,c.txt,d.txt, --braces-as-code --threads 1 1");
+        let command = "./ --exclude a,b,c.txt,d.txt, --braces-as-code --threads 1 1".to_string();
         let config_builder = config_manager::create_config_builder_from_args(&command).unwrap();
 
         let test_config_dir = Some(LOCAL_APP_PATHS.test_config_dir.clone());

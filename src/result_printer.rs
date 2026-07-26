@@ -30,10 +30,8 @@ pub fn format_and_print_results(content_info_map: &mut HashMap<String, LanguageC
         print_visual_overview(&mut sorted_language_names, content_info_map, languages_metadata_map, final_stats, config);
     }
 
-    if let Some(content) = existing_log_content {
-        if config.compare_level != 0 {
-            print_comparison_to_previous_runs(final_stats, content,  config.compare_level, datetime_now);
-        }    
+    if let Some(content) = existing_log_content && config.compare_level != 0 {
+        print_comparison_to_previous_runs(final_stats, content,  config.compare_level, datetime_now);
     }
 }
 
@@ -46,7 +44,7 @@ fn print_individually(sorted_languages: &[String], content_info_map: &HashMap<St
         let (average_size, average_size_desc) = get_size_and_formatted_size_text(
                 metadata.bytes / metadata.files, "average");
 
-        format!("{:.1} {} - {:.1} {}",size, size_desc, average_size, average_size_desc)
+        format!("{size:.1} {size_desc} - {average_size:.1} {average_size_desc}")
     }
 
     fn reconstruct_line(i: usize, max_line_stats_len: usize, titles_vec: &[String], lines_stats_vec: &[String],
@@ -102,9 +100,9 @@ fn print_individually(sorted_languages: &[String], content_info_map: &HashMap<St
                 &lines_stats_len_vec, &size_stats_vec, &keywords_stats_vec);
                 
         if i == lines_stats_len_vec.len() - 1 {
-            println!("{}",line);
+            println!("{line}");
         } else {
-            println!("{}\n",line);
+            println!("{line}\n");
         }
     }
 }
@@ -133,9 +131,9 @@ fn print_sum(content_info_map: &HashMap<String,LanguageContentInfo>, final_stats
             code_lines_percentage, total_extra_lines_str, size_text);
 
     if should_print_keywords {
-        println!("{}", format!("{}{}{}\n",title,info,keywords_line));
+        println!("{title}{info}{keywords_line}\n");
     } else {
-        println!("{}", format!("{}{}",title,info));
+        println!("{title}{info}");
     }
 }
 
@@ -194,7 +192,7 @@ fn print_visual_overview(sorted_language_vec: &mut Vec<String>, content_info_map
     let size_line = create_overview_line("Size :", &sizes_percentages, &size_verticals,
             sorted_language_vec, &color_func_vec, config);
 
-    println!("{}\n\n{}\n\n{}\n",files_line, lines_line, size_line);
+    println!("{files_line}\n\n{lines_line}\n\n{size_line}\n");
 }
 
 fn print_comparison_to_previous_runs(final_stats: &FinalStats, log_content: &str, num_of_entries: usize, datetime_now: &DateTime<Local>) {
@@ -219,7 +217,7 @@ fn print_comparison_to_previous_runs(final_stats: &FinalStats, log_content: &str
                 with_seperators(entry.stats.extra_lines), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.extra_lines, final_stats.extra_lines)),
         ));
     }
-    print!("{}", comparison_str);
+    print!("{comparison_str}");
 
     fn color_percentage(percentage: &str) -> ColoredString {
         if percentage.starts_with('+') {
@@ -259,7 +257,7 @@ fn difference_as_signed_percentage_str_of_usize(older: usize, newer: usize) -> S
 
 fn difference_as_signed_percentage_str_of_f64(older: f64, newer: f64) -> String {
     let (difference, sign) = if newer > older {(newer-older, "+".to_owned())} else if older > newer {(older-newer, "-".to_owned())} else {(0.0,String::new())};
-    let mut percentage = (difference as f64 / older as f64) * 100.0;
+    let mut percentage = (difference / older) * 100.0;
     if percentage > 0.0 && percentage < 0.01 {
         percentage = 0.01;
     }
@@ -373,7 +371,7 @@ fn get_language_names_as_sorted_vec_according_to_how_much_they_appeared(
     let mut value_map = HashMap::<String,usize>::new();
     let mut sorted_languages_vec = Vec::new();
     for (ext_name,metadata) in languages_metadata_map.iter() {
-        value_map.insert(ext_name.to_owned(), metadata.files * 10 + metadata.bytes as usize);
+        value_map.insert(ext_name.to_owned(), metadata.files * 10 + metadata.bytes);
         sorted_languages_vec.push(ext_name.to_owned());
     }
 
@@ -411,7 +409,7 @@ fn get_num_of_verticals(percentages: &[f64]) -> Vec<usize> {
 
 // A not very precise attempt to normalize the sum of verticals to the proper number that should appear 
 // in the [-|||...|-] block, but is it good enough.
-fn normalize_to_NUM_OF_VERTICALS(verticals: &mut Vec<usize>, sum: usize) {
+fn normalize_to_NUM_OF_VERTICALS(verticals: &mut [usize], sum: usize) {
     let mut sorted_verticals = Vec::new();
     for i in verticals.iter_mut() {
         sorted_verticals.push(i);
@@ -487,9 +485,9 @@ fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize], 
         color_func_vec: &[fn(&str) -> String], config: &Configuration) -> String 
 {
     let mut line = String::with_capacity(150);
-    line.push_str(&format!("{}    ",prefix));
+    line.push_str(&format!("{prefix}    "));
     for (i,percent) in percentages.iter().enumerate() {
-        let str_perc = format!("{:.2}",percent);
+        let str_perc = format!("{percent:.2}");
         line.push_str(&format!("{}{}% ", " ".repeat(5-str_perc.len()), str_perc));
         if config.no_visual {
             line.push_str(&languages_name[i]);
@@ -527,7 +525,7 @@ fn retain_most_relevant_and_add_others_field_for_rest(sorted_language_names: &mu
        let (mut files, mut lines, mut size) = (0,0,0);
        content_info_map.iter().for_each(|x| lines += x.1.lines);
        languages_metadata_map.iter().for_each(|x| {files += x.1.files; size += x.1.bytes});
-       (files, lines, size as usize) 
+       (files, lines, size) 
    }
 
     if sorted_language_names.len() > 4 {

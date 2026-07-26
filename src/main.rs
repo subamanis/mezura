@@ -1,8 +1,7 @@
 use std::{collections::HashMap, time::Instant};
 
 use colored::*;
-#[macro_use]
-extern crate include_dir;
+use include_dir::include_dir;
 
 use mezura::{*, self, config_manager::{self, CHANGELOG, HELP, SHOW_CONFIGS, SHOW_LANGUAGES, VERSION_ID}, io_handler};
 
@@ -12,7 +11,7 @@ fn main() {
     #[cfg(target_os = "windows")]
     control::set_virtual_terminal(true).unwrap();
 
-    println!("\n{}",VERSION_ID);
+    println!("\n{VERSION_ID}");
 
     let mut language_map: HashMap<String, Language>;
 
@@ -21,7 +20,7 @@ fn main() {
         // and save the baked-in info, to a persistent path for future uses and user modification.
         language_map = read_baked_in_languages_dir();
         if let Err(x) = init_persistent_paths(&language_map, read_baked_in_default_config_contents()) {
-            println!("{}",format!("\nUnable to initialize persistent directories:{}\n",x.to_string()).yellow());
+            println!("{}",format!("\nUnable to initialize persistent directories:{x}\n").yellow());
             std::fs::remove_dir_all(&PERSISTENT_APP_PATHS.project_path).unwrap();
         }
     } else {
@@ -66,7 +65,7 @@ fn main() {
 
     if !config.languages_of_interest.is_empty() &&
      config.languages_of_interest.iter().all(|lang| config.excluded_languages.contains(lang)) {
-        println!("{}",format!("\nIncluded and excluded languages are mutually exclusive.\n").red());
+        println!("{}","\nIncluded and excluded languages are mutually exclusive.\n".red());
         return;
     }
 
@@ -74,7 +73,7 @@ fn main() {
         match retain_only_languages_of_interest(&mut language_map, &config.languages_of_interest) {
             Ok(x) => {
                 if let Some(msg) = x {
-                    println!("\n {}",msg);
+                    println!("\n {msg}");
                 }
             },
             Err(_) => {
@@ -126,7 +125,7 @@ fn retain_only_languages_of_interest(language_map: &mut HashMap<String, Language
     });
 
     if !non_existant_lang_names.is_empty() {
-        Ok(Some(format!("\nThese languages don't exist as language files:\n {}",non_existant_lang_names).yellow()))
+        Ok(Some(format!("\nThese languages don't exist as language files:\n {non_existant_lang_names}").yellow()))
     } else {
         Ok(None)
     }
@@ -230,6 +229,6 @@ mod tests {
 
         let result = retain_only_languages_of_interest(&mut language_map, &languages_of_interest);
         assert!(result.is_err());
-        assert!(language_map.len() == 0);
+        assert!(language_map.is_empty());
     }
 }

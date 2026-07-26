@@ -2,7 +2,7 @@
 name = "mezura"
 version = "1.1.0"
 authors = ["subamanis <petrospapa21@gmail.com>"]
-edition = "2018"
+edition = "2024"
 default-run = "mezura"
 
 [[bin]]
@@ -15,7 +15,6 @@ debug = true
 [dependencies]
 colored = "2"
 memchr = "2"
-lazy_static = "1.4.0"
 chrono = "0.4.19"
 crossbeam-deque = "0.8"
 num_cpus = "1.13.0"

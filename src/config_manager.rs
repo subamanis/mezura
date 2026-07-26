@@ -62,7 +62,7 @@ pub struct Configuration {
     pub config_name_to_load: Option<String>
 }
 
-#[derive(Debug,PartialEq,Clone)]
+#[derive(Debug,PartialEq,Clone,Default)]
 pub struct LogOption {
     pub should_log: bool,
     pub name: Option<String>
@@ -260,15 +260,12 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
 
     if let Some(name) = &config_builder.config_name_to_save {
         if config_builder.dirs.is_none() {
-            match parse_working_dir_as_target_dir() {
-                Ok(x) => {config_builder.dirs = Some(x)},
-                Err(x) => {return Err(x)}
-            }
+            config_builder.dirs = Some(parse_working_dir_as_target_dir()?);
         }
 
         match io_handler::save_existing_commands_from_config_builder_to_file(None, name, &config_builder) {
             Err(_) => println!("\n{}","Error while trying to save config.".yellow()),
-            Ok(_) => println!("\nConfiguration '{}' saved successfully.",name)
+            Ok(_) => println!("\nConfiguration '{name}' saved successfully.")
         }
     }
 
@@ -280,10 +277,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     }
 
     if config_builder.dirs.is_none() {
-        match parse_working_dir_as_target_dir() {
-            Ok(x) => {config_builder.dirs = Some(x)},
-            Err(x) => {return Err(x)}
-        }
+        config_builder.dirs = Some(parse_working_dir_as_target_dir()?);
     }
 
     Ok(config_builder)
@@ -294,10 +288,8 @@ fn print_warnings_for_commands_that_need_a_loaded_configuration(config_name_to_s
         log: &Option<LogOption>, compare_level: &Option<usize>) 
 {
     if config_name_to_load.is_none() {
-        if let Some(log) = log {
-            if config_name_to_save.is_none() && log.should_log {
-                println!("\n{}","'--log' command will be ignored, since no config file was specified.".yellow());
-            }
+        if let Some(log) = log && config_name_to_save.is_none() && log.should_log {
+            println!("\n{}","'--log' command will be ignored, since no config file was specified.".yellow());
         }
 
         if compare_level.is_some() {
@@ -307,7 +299,7 @@ fn print_warnings_for_commands_that_need_a_loaded_configuration(config_name_to_s
 }
 
 fn has_any_args(command: &str) -> bool {
-    command.split(' ').skip(1).filter_map(|x| utils::get_trimmed_if_not_empty(x)).count() != 0
+    command.split(' ').skip(1).filter_map(utils::get_trimmed_if_not_empty).count() != 0
 }
 
 fn parse_dirs(s: &str) -> Result<Vec<String>, ArgParsingError> {
@@ -326,12 +318,10 @@ fn parse_dirs(s: &str) -> Result<Vec<String>, ArgParsingError> {
 }
 
 fn parse_working_dir_as_target_dir() -> Result<Vec<String>, ArgParsingError> {
-    if let Ok(path_buf) = std::env::current_dir() {
-        if let Some(path_str) = path_buf.to_str() {
-            if let Ok(x) = parse_dirs(path_str) {
-                return Ok(x);
-            }
-        }
+    if let Ok(path_buf) = std::env::current_dir()
+        && let Some(path_str) = path_buf.to_str()
+        && let Ok(x) = parse_dirs(path_str) {
+        return Ok(x);
     }
 
     Err(ArgParsingError::UnparsableWorkingDir)
@@ -425,13 +415,13 @@ impl ConfigurationBuilder {
             exclude_dirs: (self.exclude_dirs).clone().unwrap_or_default(),
             languages_of_interest: (self.languages_of_interest).clone().unwrap_or_default(),
             excluded_languages: (self.excluded_languages).clone().unwrap_or_default(),
-            threads: self.threads.clone().unwrap_or_else(Threads::default),
+            threads: self.threads.clone().unwrap_or_default(),
             braces_as_code: self.braces_as_code.unwrap_or(DEF_BRACES_AS_CODE),
             should_search_in_dotted: self.should_search_in_dotted.unwrap_or(DEF_SEARCH_IN_DOTTED),
             should_show_faulty_files: self.should_show_faulty_files.unwrap_or(DEF_SHOW_FAULTY_FILES),
             no_keywords: self.no_keywords.unwrap_or(DEF_NO_KEYWORDS),
             no_visual: self.no_visual.unwrap_or(DEF_NO_VISUAL),
-            log: self.log.clone().unwrap_or_else(LogOption::default),
+            log: self.log.clone().unwrap_or_default(),
             compare_level: self.compare_level.unwrap_or(DEF_COMPARE_LEVEL),
             config_name_to_save: self.config_name_to_save.clone(),
             config_name_to_load: self.config_name_to_load.clone()
@@ -528,19 +518,16 @@ impl Threads {
             consumers: threads.1
         }
     }
+}
 
-    pub fn default() -> Self {
+impl Default for Threads {
+    fn default() -> Self {
         let threads = num_cpus::get();
         // Consumers are deliberately oversubscribed relative to the core count, so that
         // blocking file opens overlap instead of idling cores.
         if threads <= 4 {
             Threads {
                 producers: 2,
-                consumers: (threads * 2).clamp(3, MAX_CONSUMERS_VALUE)
-            }
-        } else if threads <= 8 {
-            Threads {
-                producers: (threads / 2).clamp(2, MAX_PRODUCERS_VALUE),
                 consumers: (threads * 2).clamp(3, MAX_CONSUMERS_VALUE)
             }
         } else {
@@ -559,13 +546,6 @@ impl LogOption {
             name: log_name,
         }
     }
-
-    pub fn default() -> Self {
-        LogOption {
-            should_log: false,
-            name: None
-        }
-    }
 }
 
 impl Formatted for ArgParsingError {
@@ -574,13 +554,13 @@ impl Formatted for ArgParsingError {
             Self::NoArgsProvided => "No arguments provided.".red(),
             Self::UnparsableWorkingDir => "The current working dir could not be parsed as target dir, try inputing it manually.".red(),
             Self::MissingTargetDirs => "The target directories (--dirs) are not specified.".red(),
-            Self::InvalidPath(p) => format!("Path provided is not a valid directory or file:\n'{}'.",p).red(),
-            Self::InvalidPathInConfig(dir,name) => format!("Specified path '{}', in config '{}', doesn't exist anymore.",dir,name).red(),
+            Self::InvalidPath(p) => format!("Path provided is not a valid directory or file:\n'{p}'.").red(),
+            Self::InvalidPathInConfig(dir,name) => format!("Specified path '{dir}', in config '{name}', doesn't exist anymore.").red(),
             Self::DoublePath => "Directories already provided as first argument, but --dirs command also found.".red(),
-            Self::UnrecognisedCommand(p) => format!("--{} is not recognised as a command.",p).red(),
-            Self::IncorrectCommandArgs(p) => format!("Incorrect arguments provided for the command '--{}'.",p).red(),
-            Self::UnexpectedCommandArgs(p) => format!("Command '--{}' does not expect any arguments.",p).red(),
-            Self::NonExistantConfig(p) => format!("Configuration '{}' does not exist.",p).red()
+            Self::UnrecognisedCommand(p) => format!("--{p} is not recognised as a command.").red(),
+            Self::IncorrectCommandArgs(p) => format!("Incorrect arguments provided for the command '--{p}'.").red(),
+            Self::UnexpectedCommandArgs(p) => format!("Command '--{p}' does not expect any arguments.").red(),
+            Self::NonExistantConfig(p) => format!("Configuration '{p}' does not exist.").red()
         }
     }
 }

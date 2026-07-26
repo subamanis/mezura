@@ -54,7 +54,7 @@ pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>,
                 idle_producers.fetch_sub(1, Ordering::SeqCst);
             }
 
-            if let Ok(entries) = fs::read_dir(&dir) {
+            if let Ok(entries) = fs::read_dir(dir) {
                 traverse_dir(&files_injector, entries, &dirs_injector, &extension_lang_map, &config, &mut local_metadata,
                         &mut total_files, &mut relevant_files, &mut excluded_files)
             }
@@ -97,15 +97,7 @@ fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, 
             if ft.is_file() { 
                 local_total_files += 1;
                 let path_buf = e.path();
-                let extension_name = match path_buf.extension() {
-                    Some(x) => {
-                        match x.to_str() {
-                                Some(x) => x,
-                                None => continue
-                            }
-                        },
-                        None => continue
-                };
+                let Some(extension_name) = path_buf.extension().and_then(|x| x.to_str()) else { continue };
                 if let Some(lang_name) = find_language_of_extension(extension_lang_map, extension_name) {
                     if !config.exclude_dirs.is_empty() {
                         let full_path = &path_buf.to_str().unwrap_or("").replace('\\', "/");
@@ -130,13 +122,8 @@ fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, 
                 }
             } else { //is directory
                 let file_name = e.file_name();
-                let dir_name = match file_name.to_str() {
-                    Some(x) => {
-                        if !config.should_search_in_dotted && x.starts_with('.') {continue;}
-                        else {x}
-                    },
-                    None => continue
-                };
+                let Some(dir_name) = file_name.to_str() else { continue };
+                if !config.should_search_in_dotted && dir_name.starts_with('.') { continue; }
 
                 let pathbuf = e.path();
                 let is_excluded = !config.exclude_dirs.is_empty() && {

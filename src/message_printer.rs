@@ -195,7 +195,7 @@ pub fn print_whole_help_message() {
     msg += SAVE_HELP;
     msg += LOAD_HELP;
 
-    println!("{}",msg);
+    println!("{msg}");
 }
 
 pub fn print_help_message_for_given_args(args_line: &str) {
@@ -223,23 +223,23 @@ pub fn print_help_message_for_given_args(args_line: &str) {
     if msg.is_empty() {
         print_whole_help_message();
     } else {
-        println!("{}",msg);
+        println!("{msg}");
     }
 }
 
 pub fn print_help_message_for_command(arg: &str) {
     if let Some(x) = get_help_msg_of_command(arg) {
-        println!("\n{}",x);
+        println!("\n{x}");
     }
 }
 
 pub fn print_changelog(full: bool) {
-    let changelog = String::from_utf8_lossy(&CHANGELOG_BYTES);
+    let changelog = String::from_utf8_lossy(CHANGELOG_BYTES);
     if full {
-        println!("\n{}\n", changelog);
+        println!("\n{changelog}\n");
     } else {
         let latest = changelog.split("-----").next().unwrap().trim_end();
-        println!("\n{}\n\n(run with '--changelog full' to see the full version history)\n", latest);
+        println!("\n{latest}\n\n(run with '--changelog full' to see the full version history)\n");
     }
 }
 
@@ -253,20 +253,13 @@ pub fn print_supported_languages(languages_map: &HashMap<String,Language>) {
 pub fn print_existing_configs() {
     let mut config_names = Vec::with_capacity(10);
 
-    let config_dir = match fs::read_dir(&PERSISTENT_APP_PATHS.config_dir) {
-        Ok(x) => x,
-        Err(_) => {
-            println!("{}","Could not read the config dir".yellow());
-            return;
-        }
+    let Ok(config_dir) = fs::read_dir(&PERSISTENT_APP_PATHS.config_dir) else {
+        println!("{}","Could not read the config dir".yellow());
+        return;
     };
-    for path in config_dir {
-        if let Ok(x) = path {
-            if let Ok(f) = x.file_type() {
-                if f.is_file() {
-                    config_names.push(x.file_name())
-                }
-            }
+    for path in config_dir.flatten() {
+        if let Ok(f) = path.file_type() && f.is_file() {
+            config_names.push(path.file_name())
         }
     }
     let mut config_names = config_names.iter().filter_map(|x| {

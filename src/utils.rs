@@ -57,17 +57,15 @@ pub fn parse_usize_value(s: &str, min: usize, max: usize) -> Option<usize> {
 }
 
 pub fn parse_two_usize_values(s: &str, min1: usize, max1: usize, min2: usize, max2: usize) -> Option<(usize,usize)> {
-    let elements = s.split_whitespace().filter_map(|x| get_trimmed_if_not_empty(x)).collect::<Vec<_>>();
+    let elements = s.split_whitespace().filter_map(get_trimmed_if_not_empty).collect::<Vec<_>>();
     if elements.len() != 2 {
         return None
     }
 
-    if let Ok(val1) = elements[0].parse::<usize>() {
-        if let Ok(val2) = elements[1].parse::<usize>() {
-            if val1 >= min1 && val1 <= max1 && val2 >= min2 && val2 <= max2 {
-                return Some((val1,val2));
-            }
-        }
+    if let Ok(val1) = elements[0].parse::<usize>()
+        && let Ok(val2) = elements[1].parse::<usize>()
+        && val1 >= min1 && val1 <= max1 && val2 >= min2 && val2 <= max2 {
+        return Some((val1,val2));
     }
     
     None
@@ -80,7 +78,7 @@ pub fn get_trimmed_if_not_empty(str: &str) -> Option<String> {
 }
 
 pub fn split_line_on_whitespace(line: &str) -> Vec<String> {
-    line.split_whitespace().filter_map(|x| get_trimmed_if_not_empty(x)).collect::<Vec<_>>()
+    line.split_whitespace().filter_map(get_trimmed_if_not_empty).collect::<Vec<_>>()
 }
 
 
@@ -92,7 +90,7 @@ pub fn is_valid_path(s: &str) -> bool {
 pub fn extract_file_contents(file_path: &str) -> Option<String> {
     if Path::new(&file_path).is_file() {
         let mut contents = String::with_capacity(700);
-        File::open(&file_path).unwrap().read_to_string(&mut contents);
+        File::open(file_path).unwrap().read_to_string(&mut contents);
         if contents.trim().is_empty() {
             None
         } else {

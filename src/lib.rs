@@ -24,12 +24,11 @@ pub type ExtensionLangMap = Arc<HashMap<String, Arc<str>>>;
 pub type ContentInfoMapMut  = Arc<Mutex<HashMap<String,LanguageContentInfo>>>;
 pub type MetadataMapMut     = Arc<Mutex<HashMap<String,LanguageMetadata>>>;
 
-use lazy_static::lazy_static;
 use directories::{BaseDirs,ProjectDirs};
 use crossbeam_deque::{Worker,Injector};
 use chrono::{DateTime, Local};
 use std::{collections::HashMap, fs::{self, File}, io::Read, path::{Path, PathBuf}, sync::atomic::{AtomicBool, AtomicUsize, Ordering}, time::{Duration, Instant}};
-use std::{sync::{Arc, Mutex, OnceLock}, thread::JoinHandle};
+use std::{sync::{Arc, LazyLock, Mutex, OnceLock}, thread::JoinHandle};
 
 
 pub const APP_NAME : &str = "mezura";
@@ -39,11 +38,9 @@ pub const LOGS_DIR_NAME : &str = "logs";
 pub const TEST_DIR_NAME : &str = "test_dir";
 pub const DEFAULT_CONFIG_NAME : &str = "default.txt";
 
-lazy_static! {
-    pub static ref PERSISTENT_APP_PATHS : PersistentAppPaths = PersistentAppPaths::get();
-    pub static ref LOCAL_APP_PATHS : LocalAppPaths = LocalAppPaths::get();
-    pub static ref CHANGELOG_BYTES : &'static [u8] = include_bytes!("../Changelog");
-}
+pub static PERSISTENT_APP_PATHS : LazyLock<PersistentAppPaths> = LazyLock::new(PersistentAppPaths::get);
+pub static LOCAL_APP_PATHS : LazyLock<LocalAppPaths> = LazyLock::new(LocalAppPaths::get);
+pub static CHANGELOG_BYTES : &[u8] = include_bytes!("../Changelog");
 
 
 pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Result<Option<Metrics>, ParseFilesError> {
@@ -118,12 +115,12 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     }
 
     let mut global_languages_metadata_map_guard = global_languages_metadata_map.lock();
-    let mut languages_metadata_map = global_languages_metadata_map_guard.as_deref_mut().unwrap();
+    let languages_metadata_map = global_languages_metadata_map_guard.as_deref_mut().unwrap();
     
-    remove_faulty_files_stats(&faulty_files_ref, &mut languages_metadata_map, &extension_lang_map);
+    remove_faulty_files_stats(&faulty_files_ref, languages_metadata_map, &extension_lang_map);
 
     let mut content_info_map_guard = languages_content_info_ref.lock();
-    let mut content_info_map = content_info_map_guard.as_deref_mut().unwrap();
+    let content_info_map = content_info_map_guard.as_deref_mut().unwrap();
 
     let metrics = generate_metrics_if_parsing_took_more_than_one_sec(parsing_duration_millis, relevant_files_num, content_info_map);
 
@@ -139,13 +136,11 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let datetime_now = chrono::Local::now();
 
     remove_languages_with_0_files(content_info_map, languages_metadata_map);
-    result_printer::format_and_print_results(&mut content_info_map, &mut languages_metadata_map, &final_stats, 
+    result_printer::format_and_print_results(content_info_map, languages_metadata_map, &final_stats, 
         &existing_log_contents, &datetime_now, &config);
 
-    if config.log.should_log {
-        if let Some(path) = log_file_path {
-            io_handler::log_stats(&path, &existing_log_contents, &final_stats, &datetime_now, &config);
-        }
+    if config.log.should_log && let Some(path) = log_file_path {
+        io_handler::log_stats(&path, &existing_log_contents, &final_stats, &datetime_now, &config);
     }
 
     Ok(metrics)
@@ -158,16 +153,14 @@ pub fn calculate_single_file_stats_or_add_to_injector(config: &Configuration, di
     config.dirs.iter().for_each(|dir| {
         let dir_path = Path::new(dir);
         if dir_path.is_file() {
-            if let Some(x) = dir_path.extension() {
-                if let Some(extension) = x.to_str() {
-                    if let Some(lang_name) = find_language_of_extension(extension_lang_map, extension) {
-                        languages_metadata_map.lock().unwrap().get_mut(lang_name.as_ref()).unwrap().add_file_meta(
-                                dir_path.metadata().map_or(0, |m| m.len() as usize));
-                        files_injector.push(ParsableFile::new(dir_path.to_path_buf(),lang_name));
-                        files_present.total_files += 1;
-                        files_present.relevant_files += 1;
-                    }
-                }
+            if let Some(x) = dir_path.extension()
+                && let Some(extension) = x.to_str()
+                && let Some(lang_name) = find_language_of_extension(extension_lang_map, extension) {
+                languages_metadata_map.lock().unwrap().get_mut(lang_name.as_ref()).unwrap().add_file_meta(
+                        dir_path.metadata().map_or(0, |m| m.len() as usize));
+                files_injector.push(ParsableFile::new(dir_path.to_path_buf(),lang_name));
+                files_present.total_files += 1;
+                files_present.relevant_files += 1;
             }
         } else if dir_path.is_dir() {
             dirs_injector.push(dir_path.to_path_buf());
@@ -290,7 +283,7 @@ pub fn make_language_stats(languages_map: Arc<HashMap<String,Language>>) -> Hash
 
 pub fn make_language_metadata(language_map: &Arc<HashMap<String,Language>>) -> HashMap<String, LanguageMetadata> {
     let mut map = HashMap::<String,LanguageMetadata>::new();
-    for (name,_) in language_map.iter() {
+    for name in language_map.keys() {
         map.insert(name.to_owned(), LanguageMetadata::default());
     }
     map
@@ -299,11 +292,7 @@ pub fn make_language_metadata(language_map: &Arc<HashMap<String,Language>>) -> H
 fn get_specified_config_file_path(config: &Configuration) -> Option<String> {
     if let Some(name) = &config.config_name_to_save {
         Some(PERSISTENT_APP_PATHS.logs_dir.clone() + name)
-    } else if let Some(name) = &config.config_name_to_load {
-        Some(PERSISTENT_APP_PATHS.logs_dir.clone() + name)
-    } else {
-        None
-    }
+    } else { config.config_name_to_load.as_ref().map(|name| PERSISTENT_APP_PATHS.logs_dir.clone() + name) }
 }
 
 // Used to display colorful errors and warnings, by implementing it on Error enums.
@@ -393,7 +382,7 @@ impl PersistentAppPaths {
             are_initialized = false;
             std::fs::create_dir_all(&data_dir).unwrap();
         }
-        return PersistentAppPaths {
+        PersistentAppPaths {
             project_path: project_path.to_str().unwrap().to_owned(),
             data_dir: data_dir.clone(),
             config_dir: data_dir.clone() + CONFIG_DIR_NAME +"/",
@@ -586,7 +575,7 @@ pub mod domain {
         pub bytes: usize
     }
 
-    #[derive(Debug,PartialEq)]
+    #[derive(Debug,PartialEq,Default)]
     pub struct FileStats {
         pub lines : usize,
         pub code_lines : usize,
@@ -718,14 +707,6 @@ pub mod domain {
     }
 
     impl FileStats {
-        pub fn default() -> Self {
-            FileStats {
-                lines : 0,
-                code_lines : 0,
-                keyword_occurences : Vec::new()
-            }
-        }
-
         pub fn with_keywords(keywords: &[Keyword]) -> Self {
             FileStats {
                 lines : 0,

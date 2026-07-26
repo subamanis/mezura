@@ -7,13 +7,13 @@ use mezura::config_manager::Threads;
 #[test]
 fn test_whole_workflow () {
     let current_dir = env!("CARGO_MANIFEST_DIR").replace("\\", "/");
-    let config = config_manager::create_config_from_args(&format!("{}/src,{}/tests --threads 1 3 ",current_dir, current_dir)).unwrap();
+    let config = config_manager::create_config_from_args(&format!("{current_dir}/src,{current_dir}/tests --threads 1 3 ")).unwrap();
     let language_map = io_handler::parse_supported_languages_to_map(&LOCAL_APP_PATHS.languages_dir).unwrap().0;
     let language_map_len = language_map.len(); 
 
     assert_eq!(Threads::new(1,3), config.threads);
-    assert_eq!(vec![format!("{}/src",current_dir), format!("{}/tests", current_dir)], config.dirs);
-    assert!(language_map.len() != 0);
+    assert_eq!(vec![format!("{current_dir}/src"), format!("{}/tests", current_dir)], config.dirs);
+    assert!(!language_map.is_empty());
 
     let config = Arc::new(config);
     let mut files_present = FilesPresent::default();
@@ -49,7 +49,7 @@ fn test_whole_workflow () {
     assert!(relevant_files_num != 0 && total_files_num != 0);
     let first_lang_metadata = languages_metadata_map.iter().next().unwrap().1;
     assert!(first_lang_metadata.files != 0 && first_lang_metadata.bytes != 0);
-    assert!(faulty_files_ref.clone().lock().unwrap().len() == 0);
+    assert!(faulty_files_ref.clone().lock().unwrap().is_empty());
 
     let mut keyword_num = 0;
     for content_info in content_info_map.iter() {
