@@ -86,7 +86,9 @@ fn parse_lines(contents: &str, language: &Language, keyword_matcher: Option<&Key
     for raw_line in contents.lines() {
         file_stats.incr_lines();
 
-        let line = raw_line.trim();
+        // Ascii-only trimming, since the unicode whitespace classification of trim() costs
+        // a significant part of the total run time, for lines that are code either way
+        let line = raw_line.trim_ascii();
         if line.is_empty() { continue; }
 
         // Two different parsing functions to skip the unnecessary checks for langs that don't support multiline comments
@@ -102,7 +104,7 @@ fn parse_lines(contents: &str, language: &Language, keyword_matcher: Option<&Key
         open_str_symbol = line_info.open_str_sybol_after;
 
         if let Some(x) = line_info.cleansed_string {
-            let cleansed = x.trim();
+            let cleansed = x.trim_ascii();
             if config.braces_as_code || cleansed.len() > 2 || (cleansed != "{" && cleansed != "}" && cleansed != "};") {
                 file_stats.incr_code_lines();
                 if !config.no_keywords && let Some(matcher) = keyword_matcher {
