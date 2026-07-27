@@ -332,7 +332,7 @@ To make picking colors easier, there is an interactive palette tuner, where ever
 
 <b>[Open the palette tuner online](https://subamanis.github.io/mezura/palette-tuner/)</b> to play with the bundled palettes, or run ```mezura --tune-palettes``` to open it with the palettes found on your own machine, including the ones you created.
 
-<a href="https://subamanis.github.io/mezura/palette-tuner/"><img src="screenshots/palette-tuner.PNG" width="900"></a>
+<a href="https://subamanis.github.io/mezura/palette-tuner/"><img src="screenshots/palette-tuner.png" width="900"></a>
 
 
 
