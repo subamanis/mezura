@@ -22,3 +22,4 @@ src/benchmarks.rs
 bench
 bench_dir
 test_dir/config/auto-generated.txt
+archive
