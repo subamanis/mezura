@@ -385,28 +385,36 @@ pub struct GitignoreStack {
 }
 
 
+// Returns false both when the dir doesn't exist and when it exists but is empty.
+pub fn dir_contains_entries(path: &str) -> bool {
+    fs::read_dir(path).is_ok_and(|mut entries| entries.next().is_some())
+}
+
 impl PersistentAppPaths {
     //Persistent paths:
     // Windows:  C:/Users/<user_name>/AppData/Roaming/mezura
     // Linux:    /home/<user_name>/.local/share/mezura
     // MacOs:    /Users/<user_name>/Library/Application Support/mezura
     pub fn get() -> Self {
-        let mut are_initialized = true;
         let proj_dirs = ProjectDirs::from("", "",  APP_NAME).unwrap();
-        let project_path_str = BaseDirs::new().unwrap().data_dir().to_str().unwrap().to_owned() + "/" + APP_NAME;
-        let project_path = Path::new(&project_path_str);
+        let project_path = BaseDirs::new().unwrap().data_dir().to_str().unwrap().to_owned() + "/" + APP_NAME;
         let data_dir = proj_dirs.data_dir().to_str().unwrap().to_owned() + "/";
-        if !project_path.exists() {
-            are_initialized = false;
-            std::fs::create_dir_all(&data_dir).unwrap();
-        }
+        let languages_dir = data_dir.clone() + LANGUAGES_DIR_NAME + "/";
+        let config_dir = data_dir.clone() + CONFIG_DIR_NAME + "/";
+        let logs_dir = data_dir.clone() + LOGS_DIR_NAME + "/";
+        // The existence of the project dir alone means nothing, since any part of the program (or the test
+        // suite) that touches these paths can create it. The baked-in data must actually be present, otherwise
+        // a half-created dir would be mistaken for a valid installation and every run would fail.
+        let are_initialized = dir_contains_entries(&languages_dir) && Path::new(&config_dir).exists()
+                && Path::new(&logs_dir).exists();
+
         PersistentAppPaths {
-            project_path: project_path.to_str().unwrap().to_owned(),
-            data_dir: data_dir.clone(),
-            config_dir: data_dir.clone() + CONFIG_DIR_NAME +"/",
-            languages_dir: data_dir.clone() + LANGUAGES_DIR_NAME + "/",
+            project_path,
             palettes_dir: data_dir.clone() + PALETTES_DIR_NAME + "/",
-            logs_dir: data_dir + LOGS_DIR_NAME + "/",
+            data_dir,
+            config_dir,
+            languages_dir,
+            logs_dir,
             are_initialized
         }
     }

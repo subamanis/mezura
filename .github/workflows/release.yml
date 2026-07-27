@@ -1,0 +1,97 @@
+name: Release
+
+# Triggered by a version tag, whether it is pushed from the command line with
+#   git tag v2.0.1 && git push origin v2.0.1
+# or created by publishing a release from the github UI.
+on:
+  push:
+    tags: [ 'v*' ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-x86_64
+          - os: ubuntu-latest
+            platform: linux-x86_64
+          - os: macos-latest
+            platform: macos-arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache the cargo registry and the build dir
+        uses: Swatinem/rust-cache@v2
+
+      # A tag must never produce a release that does not pass its own test suite
+      - name: Test
+        run: cargo test --verbose
+
+      - name: Build
+        run: cargo build --release --verbose
+
+      # The archives hold the binary under its plain name, so that it is ready to be
+      # used right after extracting, without having to be renamed
+      - name: Package for windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "mezura-${{ github.ref_name }}-${{ matrix.platform }}"
+          New-Item -ItemType Directory -Path $name | Out-Null
+          Copy-Item target/release/mezura.exe -Destination $name
+          Copy-Item LICENSE, Changelog, README.md -Destination $name
+          Compress-Archive -Path $name -DestinationPath "$name.zip"
+
+      # The release profile keeps the debug symbols, so that flamegraphs can be taken from a
+      # local release build. They quadruple the size of the downloaded binary though, and the
+      # windows one does not carry them anyway, since MSVC writes them to a separate .pdb file.
+      - name: Package for linux and macos
+        if: runner.os != 'Windows'
+        run: |
+          name="mezura-${{ github.ref_name }}-${{ matrix.platform }}"
+          strip target/release/mezura
+          mkdir "$name"
+          cp target/release/mezura "$name/"
+          cp LICENSE Changelog README.md "$name/"
+          tar czf "$name.tar.gz" "$name"
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: mezura-${{ matrix.platform }}
+          path: mezura-${{ github.ref_name }}-${{ matrix.platform }}.*
+          if-no-files-found: error
+
+  publish:
+    name: publish the github release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download every archive
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      # Attaches the archives to the release of this tag. If the release was already created
+      # by hand from the github UI, only the files are added to it and the notes that were
+      # written there are left untouched. If it does not exist yet, it is created.
+      - name: Attach the archives to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          fail_on_unmatched_files: true
