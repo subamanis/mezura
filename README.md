@@ -18,8 +18,8 @@ Example run on entire Linux Kernel: </br>
 * [Logs and Progress](#logs-and-progress)
 * [Color Palettes](#color-palettes)
 * [Supported Languages](#supported-languages)
-* [Windows Performance Note](#windows-performance-note)
 * [Accuracy and Limitations](#accuracy-and-limitations)
+* [Windows Performance Note](#windows-performance-note)
 * [Similar Projects](#similar-projects)
 
 
@@ -485,9 +485,13 @@ non-valid unicode characters. (byte index is not a char boundary).  Bulletproof 
 
 ## Windows Performance Note
 
-When scanning directories on Windows, Windows Defender may significantly impact performance due to real-time protection scanning files as mezura accesses them.
+Opening a file is far more expensive on Windows than on Linux: every open walks the object manager, the security descriptor and the whole filter driver stack, which is where antivirus and other minifilters sit. Since mezura opens one file after another, this dominates: **on Windows the program is I/O bound, and most of its time is spent waiting on `File::open` rather than counting anything**. On Linux the same open is cheap, so the program is parsing bound and the time goes where it should, into the parser.
 
-### Solution:
+The practical consequence is that the same repository on the same machine is measurably faster to analyze from Linux (~2x speedup), and that on Windows the biggest wins come from removing work from the open path rather than from making the parser faster.
+
+That baseline cost is structural and does not go away. What can be removed is what sits on top of it: because every open traverses the filter stack, real-time antivirus protection ends up inside mezura's hot path, inspecting each file as it is opened, and it multiplies an already expensive operation. Excluding mezura from that scanning does not make Windows open files as cheaply as Linux does, it only removes the worst amplifier, which on a large tree is the difference between not-as-fast-as-could-be and slow.
+
+### Removing the antivirus overhead
 To exclude mezura from Windows Defender real-time scanning:
 
 1. Open PowerShell as Administrator
