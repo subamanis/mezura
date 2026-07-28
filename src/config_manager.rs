@@ -22,6 +22,9 @@ pub const NO_GITIGNORE       :&str   = "no-gitignore";
 pub const COLORS             :&str   = "colors";
 pub const COLOR_PALETTE      :&str   = "color-palette";
 pub const STYLE              :&str   = "style";
+pub const BAR_THICKNESS      :&str   = "bar-thickness";
+pub const SORT               :&str   = "sort";
+pub const TOP                :&str   = "top";
 pub const LOG                :&str   = "log";
 pub const COMPRARE_LEVEL     :&str   = "compare";
 pub const SAVE               :&str   = "save";
@@ -69,7 +72,83 @@ pub struct Configuration {
     pub compare_level: usize,
     pub config_name_to_save: Option<String>,
     pub config_name_to_load: Option<String>,
+    pub bar_thickness: BarThickness,
+    pub sort_by: SortCriterion,
+    pub top_n: Option<usize>,
     pub theme: Theme
+}
+
+#[derive(Debug,PartialEq,Eq,Clone,Copy,Default)]
+pub enum SortCriterion {
+    Files,
+    #[default]
+    Lines,
+    Code,
+    Size,
+    Name
+}
+
+impl SortCriterion {
+    pub fn parse(value: &str) -> Option<SortCriterion> {
+        match value.trim().to_lowercase().as_str() {
+            "files" => Some(Self::Files),
+            "lines" => Some(Self::Lines),
+            "code" => Some(Self::Code),
+            "size" => Some(Self::Size),
+            "name" => Some(Self::Name),
+            _ => None
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Files => "files",
+            Self::Lines => "lines",
+            Self::Code => "code",
+            Self::Size => "size",
+            Self::Name => "name"
+        }
+    }
+}
+
+// Only Slim is ASCII, so it is the one guaranteed to render on every terminal
+#[derive(Debug,PartialEq,Eq,Clone,Copy,Default)]
+pub enum BarThickness {
+    #[default]
+    Slim,
+    Medium,
+    Fat,
+    Low
+}
+
+impl BarThickness {
+    pub fn character(&self) -> &'static str {
+        match self {
+            Self::Slim => "|",
+            Self::Medium => "┃",
+            Self::Fat => "█",
+            Self::Low => "▄"
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<BarThickness> {
+        match value.trim().to_lowercase().as_str() {
+            "slim" => Some(Self::Slim),
+            "medium" => Some(Self::Medium),
+            "fat" => Some(Self::Fat),
+            "low" => Some(Self::Low),
+            _ => None
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Slim => "slim",
+            Self::Medium => "medium",
+            Self::Fat => "fat",
+            Self::Low => "low"
+        }
+    }
 }
 
 #[derive(Debug,PartialEq,Clone,Default)]
@@ -138,8 +217,8 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     let mut custom_config = None;
     let (mut exclude_dirs, mut languages_of_interest, mut excluded_languages, mut threads, mut braces_as_code,
          mut search_in_dotted, mut show_faulty_files, mut config_name_to_save, mut no_visual, mut log,
-         mut compare_level, mut config_name_to_load, mut no_keywords, mut no_gitignore, mut colors, mut color_palette, mut styles)
-         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
+         mut compare_level, mut config_name_to_load, mut no_keywords, mut no_gitignore, mut colors, mut color_palette, mut styles, mut bar_thickness, mut sort_by, mut top_n)
+         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
     for command in options {
         let (command_name, arguments) = match command.find(" ") {
             Some(index) => command.split_at(index),
@@ -252,6 +331,30 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                     return Err(ArgParsingError::InvalidStyle(x.formatted()))
                 }
             }
+        } else if command_name == TOP {
+            match utils::parse_usize_value(arguments, 1, usize::MAX) {
+                Some(x) => top_n = Some(x),
+                None => {
+                    message_printer::print_help_message_for_command(TOP);
+                    return Err(ArgParsingError::IncorrectCommandArgs(TOP.to_owned()))
+                }
+            }
+        } else if command_name == SORT {
+            match SortCriterion::parse(arguments) {
+                Some(x) => sort_by = Some(x),
+                None => {
+                    message_printer::print_help_message_for_command(SORT);
+                    return Err(ArgParsingError::IncorrectCommandArgs(SORT.to_owned()))
+                }
+            }
+        } else if command_name == BAR_THICKNESS {
+            match BarThickness::parse(arguments) {
+                Some(x) => bar_thickness = Some(x),
+                None => {
+                    message_printer::print_help_message_for_command(BAR_THICKNESS);
+                    return Err(ArgParsingError::IncorrectCommandArgs(BAR_THICKNESS.to_owned()))
+                }
+            }
         } else if command_name == LOG {
             let value = arguments.trim();
             if value.is_empty() {
@@ -307,7 +410,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         dirs, exclude_dirs, languages_of_interest, excluded_languages, threads, braces_as_code,
         should_search_in_dotted: search_in_dotted, should_show_faulty_files: show_faulty_files,
         no_keywords, no_visual, no_gitignore, colors, color_palette, log, compare_level,
-        config_name_to_save, config_name_to_load, styles, palette_styles: None
+        config_name_to_save, config_name_to_load, styles, bar_thickness, sort_by, top_n, palette_styles: None
     };
 
     if let Some((custom, invalid_fields)) = custom_config {
@@ -494,6 +597,9 @@ pub struct ConfigurationBuilder {
     pub compare_level:            Option<usize>,
     pub config_name_to_save:      Option<String>,
     pub config_name_to_load:      Option<String>,
+    pub bar_thickness:            Option<BarThickness>,
+    pub sort_by:                  Option<SortCriterion>,
+    pub top_n:                    Option<usize>,
     pub styles:                   Option<Vec<(String,String)>>,
     pub palette_styles:           Option<Vec<(String,String)>>
 }
@@ -516,6 +622,9 @@ impl ConfigurationBuilder {
         if self.compare_level.is_none() {self.compare_level = config.compare_level};
         if self.log.is_none() {self.log = config.log};
         if self.styles.is_none() {self.styles = config.styles};
+        if self.bar_thickness.is_none() {self.bar_thickness = config.bar_thickness};
+        if self.sort_by.is_none() {self.sort_by = config.sort_by};
+        if self.top_n.is_none() {self.top_n = config.top_n};
         self
     }
 
@@ -524,7 +633,7 @@ impl ConfigurationBuilder {
         self.threads.is_none() || self.braces_as_code.is_none() || self.should_search_in_dotted.is_none() ||
         self.should_show_faulty_files.is_none() || self.no_visual.is_none() || self.no_gitignore.is_none() ||
         self.colors.is_none() || self.color_palette.is_none() || self.log.is_none() || self.compare_level.is_none() ||
-        self.styles.is_none()
+        self.styles.is_none() || self.bar_thickness.is_none() || self.sort_by.is_none()
     }
 
     pub fn build(&self) -> Configuration {
@@ -546,6 +655,9 @@ impl ConfigurationBuilder {
             compare_level: self.compare_level.unwrap_or(DEF_COMPARE_LEVEL),
             config_name_to_save: self.config_name_to_save.clone(),
             config_name_to_load: self.config_name_to_load.clone(),
+            bar_thickness: self.bar_thickness.unwrap_or_default(),
+            sort_by: self.sort_by.unwrap_or_default(),
+            top_n: self.top_n,
             theme: theme::resolve(self.palette_styles.as_deref().unwrap_or_default(), self.styles.as_deref().unwrap_or_default())
         }
     }
@@ -571,6 +683,9 @@ impl Configuration {
             compare_level: DEF_COMPARE_LEVEL,
             config_name_to_save: None,
             config_name_to_load: None,
+            bar_thickness: BarThickness::default(),
+            sort_by: SortCriterion::default(),
+            top_n: None,
             theme: Theme::default()
         }
     }

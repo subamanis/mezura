@@ -320,7 +320,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
 
     let (mut dirs, mut braces_as_code, mut should_search_in_dotted, mut threads, mut exclude_dirs,
          mut languages_of_interest, mut excluded_languages, mut should_show_faulty_files, mut no_keywords, mut no_visual,
-         mut no_gitignore, mut colors, mut color_palette, mut log, mut compare_level, mut styles) = (None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None);
+         mut no_gitignore, mut colors, mut color_palette, mut log, mut compare_level, mut styles, mut bar_thickness, mut sort_by, mut top_n) = (None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None);
     let mut invalid_fields: Vec<&'static str> = Vec::new();
     let mut buf = String::with_capacity(150);
 
@@ -405,6 +405,27 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                 } else {
                     color_palette = Some(name.to_owned());
                 }
+            } else if id == config_manager::SORT {
+                buf.clear();
+                let _ = reader.read_line(&mut buf);
+                match config_manager::SortCriterion::parse(&buf) {
+                    Some(x) => sort_by = Some(x),
+                    None => invalid_fields.push(config_manager::SORT)
+                }
+            } else if id == config_manager::TOP {
+                buf.clear();
+                let _ = reader.read_line(&mut buf);
+                match utils::parse_usize_value(&buf, 1, usize::MAX) {
+                    Some(x) => top_n = Some(x),
+                    None => invalid_fields.push(config_manager::TOP)
+                }
+            } else if id == config_manager::BAR_THICKNESS {
+                buf.clear();
+                let _ = reader.read_line(&mut buf);
+                match config_manager::BarThickness::parse(&buf) {
+                    Some(x) => bar_thickness = Some(x),
+                    None => invalid_fields.push(config_manager::BAR_THICKNESS)
+                }
             } else if id == config_manager::STYLE {
                 buf.clear();
                 let _ = reader.read_line(&mut buf);
@@ -435,7 +456,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
 
     let builder = ConfigurationBuilder {
         dirs, exclude_dirs, languages_of_interest, excluded_languages, threads, braces_as_code, should_search_in_dotted,
-        should_show_faulty_files, no_keywords, no_visual, no_gitignore, colors, color_palette, log, compare_level, styles,
+        should_show_faulty_files, no_keywords, no_visual, no_gitignore, colors, color_palette, log, compare_level, styles, bar_thickness, sort_by, top_n,
         ..Default::default()
     };
 
@@ -501,6 +522,30 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
         writer.write_all(colors.iter().map(utils::color_to_config_string)
                 .collect::<Vec<_>>().join(" ").as_bytes())?;
     }
+    if let Some(sort_by) = &config_builder.sort_by {
+        writer.write_all(&[b"
+
+===> ",config_manager::SORT.as_bytes(),b"
+"].concat())?;
+        writer.write_all(sort_by.name().as_bytes())?;
+    }
+
+    if let Some(top_n) = &config_builder.top_n {
+        writer.write_all(&[b"
+
+===> ",config_manager::TOP.as_bytes(),b"
+"].concat())?;
+        writer.write_all(top_n.to_string().as_bytes())?;
+    }
+
+    if let Some(bar_thickness) = &config_builder.bar_thickness {
+        writer.write_all(&[b"
+
+===> ",config_manager::BAR_THICKNESS.as_bytes(),b"
+"].concat())?;
+        writer.write_all(bar_thickness.name().as_bytes())?;
+    }
+
     if let Some(styles) = &config_builder.styles {
         let rendered = styles.iter().map(|(token, style)| format!("{token}={style}")).collect::<Vec<_>>().join(",");
         writer.write_all(&[b"\n\n===> ",config_manager::STYLE.as_bytes(),b"\n"].concat())?;

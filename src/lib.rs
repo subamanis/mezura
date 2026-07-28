@@ -14,7 +14,7 @@ pub mod file_parser;
 mod result_printer;
 
 pub use colored::{Color,Colorize,ColoredString};
-pub use config_manager::Configuration;
+pub use config_manager::{Configuration, SortCriterion};
 pub use utils::*;
 pub use domain::{Language, LanguageContentInfo, LanguageMetadata, FileStats, Keyword};
 

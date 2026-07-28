@@ -7,6 +7,13 @@ type ColorFunc = Box<dyn Fn(&str) -> String>;
 //the total number of vertical lines ( | ) that appear in the [-|||...|-] in the overview section
 const NUM_OF_VERTICALS : usize = 50;
 
+//the number of languages the overview shows before folding the rest into "others"
+const OVERVIEW_LANGUAGES : usize = 3;
+
+const DEFAULT_LANGUAGE_COLORS : [Color; 4] = [Color::Cyan, Color::BrightMagenta, Color::BrightYellow,
+        Color::TrueColor{r:106,g:217,b:189}];
+const DEFAULT_OTHERS_COLOR : Color = Color::TrueColor{r:215,g:201,b:240};
+
 const KEYWORD_LINE_OFFSET : usize = 19;
 const STANDARD_LINE_STATS_LEN : usize = 33;
 const DASH_LINE_OFFSET : usize = 47;
@@ -22,10 +29,20 @@ const AVERAGE_SIZE  : &str  = "Average Size:";
 pub fn format_and_print_results(content_info_map: &mut HashMap<String, LanguageContentInfo>, languages_metadata_map: &mut HashMap<String, LanguageMetadata>,
         final_stats: &FinalStats, existing_log_content: &Option<String>, datetime_now: &DateTime<Local>, config: &Configuration) 
 {
-    let mut sorted_language_names = get_language_names_as_sorted_vec_according_to_how_much_they_appeared(languages_metadata_map);
-    let biggest_prefix_standard_spaces = get_biggest_prefix_standard_spaces(&sorted_language_names, languages_metadata_map);
+    let mut sorted_language_names = get_sorted_language_names(content_info_map, languages_metadata_map, config.sort_by);
 
-    print_individually(&sorted_language_names, content_info_map, languages_metadata_map, biggest_prefix_standard_spaces, !config.no_keywords);
+    // The list is cut, but the total below it still counts everything, so the reader is told what
+    // is missing rather than left to wonder why the rows do not add up
+    let hidden_languages = config.top_n.map_or(0, |top| sorted_language_names.len().saturating_sub(top));
+    let shown_language_names = &sorted_language_names[..sorted_language_names.len() - hidden_languages];
+
+    let biggest_prefix_standard_spaces = get_biggest_prefix_standard_spaces(shown_language_names, languages_metadata_map);
+
+    print_individually(shown_language_names, content_info_map, languages_metadata_map, biggest_prefix_standard_spaces, !config.no_keywords);
+    if hidden_languages > 0 {
+        let plural = if hidden_languages == 1 {"language"} else {"languages"};
+        println!("\n{}", theme::active().summary.paint(&format!("(+{hidden_languages} more {plural} hidden by --top {})", config.top_n.unwrap())));
+    }
 
     if languages_metadata_map.len() > 1 {
         print_sum(content_info_map, final_stats, biggest_prefix_standard_spaces, !config.no_keywords);
@@ -149,22 +166,21 @@ fn print_sum(content_info_map: &HashMap<String,LanguageContentInfo>, final_stats
 fn print_visual_overview(sorted_language_vec: &mut Vec<String>, content_info_map: &mut HashMap<String, LanguageContentInfo>,
         languages_metadata_map: &mut HashMap<String, LanguageMetadata>, final_stats: &FinalStats, config: &Configuration) 
 {
-    if content_info_map.len() > 4 {
-        retain_most_relevant_and_add_others_field_for_rest(sorted_language_vec, content_info_map, languages_metadata_map, final_stats);
-    }
+    // The function itself decides whether there is anything to fold
+    retain_most_relevant_and_add_others_field_for_rest(sorted_language_vec, content_info_map, languages_metadata_map, final_stats, config.top_n);
 
     println!("{}.\n", theme::active().heading.paint("Overview"));
 
-    let has_others = sorted_language_vec[sorted_language_vec.len()-1] == "others";
-    let default_colors : [Color; 4] = [Color::Cyan, Color::BrightMagenta, Color::BrightYellow,
-            if has_others { Color::TrueColor{r:215,g:201,b:240} } else { Color::TrueColor{r:106,g:217,b:189} }];
-    let color_func_vec : Vec<ColorFunc> = (0..4).map(|i| {
-            let color = if i == 3 && has_others && config.colors.len() >= 5 {
-                config.colors[4]
-            } else if let Some(&c) = config.colors.get(i) {
-                c
+    // 'others' takes its color by identity and not by position, because --top moves it: with
+    // --top 2 it sits third and used to steal the color meant for the third language.
+    // It claims the last color the palette actually declares, so it never shares one with a
+    // language that is on screen next to it.
+    let others_color = config.colors.get(4).or(config.colors.get(3)).copied().unwrap_or(DEFAULT_OTHERS_COLOR);
+    let color_func_vec : Vec<ColorFunc> = sorted_language_vec.iter().enumerate().map(|(i, name)| {
+            let color = if name == "others" {
+                others_color
             } else {
-                default_colors[i]
+                config.colors.get(i).copied().unwrap_or(DEFAULT_LANGUAGE_COLORS[i.min(DEFAULT_LANGUAGE_COLORS.len()-1)])
             };
             Box::new(move |s: &str| s.color(color).to_string()) as ColorFunc
         }).collect();
@@ -173,9 +189,9 @@ fn print_visual_overview(sorted_language_vec: &mut Vec<String>, content_info_map
     let lines_percentages = get_lines_percentages(content_info_map, sorted_language_vec);
     let sizes_percentages = get_sizes_percentages(languages_metadata_map, sorted_language_vec);
 
-    let files_verticals = if config.no_visual {vec![]} else{get_num_of_verticals(&files_percentages)};
-    let lines_verticals = if config.no_visual {vec![]} else{get_num_of_verticals(&lines_percentages)};
-    let size_verticals = if config.no_visual {vec![]} else{get_num_of_verticals(&sizes_percentages)};
+    let files_verticals = if config.no_visual {vec![]} else{get_num_of_verticals(&files_percentages, NUM_OF_VERTICALS)};
+    let lines_verticals = if config.no_visual {vec![]} else{get_num_of_verticals(&lines_percentages, NUM_OF_VERTICALS)};
+    let size_verticals = if config.no_visual {vec![]} else{get_num_of_verticals(&sizes_percentages, NUM_OF_VERTICALS)};
 
     let files_line = create_overview_line("Files:", &files_percentages, &files_verticals,
             sorted_language_vec, &color_func_vec, config);
@@ -369,120 +385,67 @@ fn percent(value: f64) -> ColoredString {
 }
 
 
-fn get_language_names_as_sorted_vec_according_to_how_much_they_appeared(
-   languages_metadata_map: &HashMap<String, LanguageMetadata>) -> Vec<String> 
+// Ties are broken by name rather than left to the iteration order of the maps, which would make
+// the printed order differ between runs on the very projects where languages are evenly matched
+fn get_sorted_language_names(content_info_map: &HashMap<String, LanguageContentInfo>,
+        languages_metadata_map: &HashMap<String, LanguageMetadata>, criterion: SortCriterion) -> Vec<String>
 {
-    let mut value_map = HashMap::<String,usize>::new();
-    let mut sorted_languages_vec = Vec::new();
-    for (ext_name,metadata) in languages_metadata_map.iter() {
-        value_map.insert(ext_name.to_owned(), metadata.files * 10 + metadata.bytes);
-        sorted_languages_vec.push(ext_name.to_owned());
+    let value_of = |name: &String| match criterion {
+        SortCriterion::Files => languages_metadata_map.get(name).map_or(0, |x| x.files),
+        SortCriterion::Size => languages_metadata_map.get(name).map_or(0, |x| x.bytes),
+        SortCriterion::Lines => content_info_map.get(name).map_or(0, |x| x.lines),
+        SortCriterion::Code => content_info_map.get(name).map_or(0, |x| x.code_lines),
+        SortCriterion::Name => 0
+    };
+
+    let mut names = languages_metadata_map.keys().cloned().collect::<Vec<_>>();
+    if criterion == SortCriterion::Name {
+        names.sort_by_key(|x| x.to_lowercase());
+    } else {
+        names.sort_by(|a, b| value_of(b).cmp(&value_of(a)).then_with(|| a.to_lowercase().cmp(&b.to_lowercase())));
     }
 
-    sorted_languages_vec.sort_by(|a,b| {
-        value_map.get(b).unwrap().cmp(value_map.get(a).unwrap())
-    });
-
-    sorted_languages_vec
+    names
 }
 
-fn get_num_of_verticals(percentages: &[f64]) -> Vec<usize> {
-    let mut verticals = Vec::<usize>::with_capacity(4);
-    let mut sum = 0;
-    for files_percent in percentages.iter(){
-        let num_of_verticals = 
-        if *files_percent == 0f64 {
-            0
-        } else {
-            let mut num_of_verticals = (files_percent/2.0).round() as usize;
-            if num_of_verticals == 0 {
-                num_of_verticals = 1;
-            }
-            num_of_verticals
-        };
-        verticals.push(num_of_verticals);
-        sum += num_of_verticals;
+// Largest remainder apportionment. Every language takes the whole part of its exact share, a
+// language with any presence at all keeps at least one cell so that it cannot vanish from the bar,
+// and the remaining cells go one at a time to whichever language sits furthest from its exact
+// share. Exact by construction, in both directions: the minimum-one rule can push the total over
+// the target (97/1/1/1 wants 51 cells), and that is corrected without ever emptying a language.
+fn get_num_of_verticals(percentages: &[f64], width: usize) -> Vec<usize> {
+    let exact = percentages.iter().map(|x| x * width as f64 / 100.0).collect::<Vec<_>>();
+    let mut verticals = percentages.iter().zip(exact.iter())
+            .map(|(percentage, exact)| if *percentage <= 0.0 {0} else {(*exact as usize).max(1)})
+            .collect::<Vec<_>>();
+
+    let mut sum = verticals.iter().sum::<usize>();
+
+    while sum < width {
+        let distance_below = |i: &usize| exact[*i] - verticals[*i] as f64;
+        let furthest_below = (0..verticals.len()).filter(|i| percentages[*i] > 0.0)
+                .max_by(|a, b| distance_below(a).total_cmp(&distance_below(b)));
+        match furthest_below {
+            Some(i) => verticals[i] += 1,
+            None => break
+        }
+        sum += 1;
     }
 
-    if sum != NUM_OF_VERTICALS {
-        normalize_to_NUM_OF_VERTICALS(&mut verticals, sum);
+    // The cell comes off whoever holds the most, not off whoever is closest to its exact share.
+    // What matters in a bar is relative fidelity: one cell missing from a language holding 96 is
+    // invisible, while the same cell taken from a language holding 3 understates it by a third.
+    while sum > width {
+        let largest = (0..verticals.len()).filter(|i| verticals[*i] > 1)
+                .max_by(|a, b| verticals[*a].cmp(&verticals[*b]).then(exact[*a].total_cmp(&exact[*b])));
+        match largest {
+            Some(i) => verticals[i] -= 1,
+            None => break
+        }
+        sum -= 1;
     }
 
     verticals
-}
-
-// A not very precise attempt to normalize the sum of verticals to the proper number that should appear 
-// in the [-|||...|-] block, but is it good enough.
-fn normalize_to_NUM_OF_VERTICALS(verticals: &mut [usize], sum: usize) {
-    let mut sorted_verticals = Vec::new();
-    for i in verticals.iter_mut() {
-        sorted_verticals.push(i);
-    }
-
-    let comparator = |a: &&mut usize,b: &&mut usize| b.cmp(a);
-    sorted_verticals.sort_by(comparator);
-
-    let is_over = sum > NUM_OF_VERTICALS;
-    let mut difference = if is_over {sum - NUM_OF_VERTICALS} else {NUM_OF_VERTICALS - sum}; 
-
-    let same_num_of_verticals_indices = {
-        let mut temp = Vec::new();
-        let max_value = *sorted_verticals[0];
-        let mut counter = 0;
-        while counter < sorted_verticals.len() && *sorted_verticals[counter] == max_value {
-            temp.push(counter);
-            counter += 1;
-        }
-        temp
-    };
-
-    //ensures that if there are very close percentages, they wont have more than one vertical difference
-    if same_num_of_verticals_indices.len() > 1 {
-        for i in same_num_of_verticals_indices.iter() {
-            if difference > 0 {
-                if is_over {
-                    *sorted_verticals[*i] -= 1
-                } else {
-                    *sorted_verticals[*i] += 1;
-                }
-                difference -= 1;
-            } else {
-                break;
-            }
-        }
-    }
-
-    if difference == 0 {return;}
-
-    if is_over {
-        *sorted_verticals[0] -= 1; 
-        sorted_verticals.sort_by(comparator);
-    } else {
-        *sorted_verticals[0] += 1;
-    }
-    
-    for _ in 0..difference-1 {
-        if is_over {
-            if *sorted_verticals[0] > *sorted_verticals[1] + 3 {
-                *sorted_verticals[0] -= 1;
-            } else {
-                *sorted_verticals[1] -= 1;
-                if sorted_verticals.len() > 2 {
-                    sorted_verticals.sort_by(comparator);
-
-                }
-            }
-        } else {
-            if *sorted_verticals[0] > *sorted_verticals[1] + 5 {
-                *sorted_verticals[1] += 1;
-                if sorted_verticals.len() > 2 {
-                    sorted_verticals.sort_by(comparator);
-                }
-            } else {
-                *sorted_verticals[0] += 1;
-            }
-        }
-    }
 }
 
 fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize], languages_name: &[String],
@@ -504,18 +467,18 @@ fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize], 
     }
     
     if !config.no_visual {
-        add_verticals_str(&mut line, verticals, color_func_vec);
+        add_verticals_str(&mut line, verticals, color_func_vec, config.bar_thickness.character());
     }
 
     line
 }
 
-fn add_verticals_str(line: &mut String, files_verticals: &[usize], color_func_vec: &[ColorFunc]) {
+fn add_verticals_str(line: &mut String, files_verticals: &[usize], color_func_vec: &[ColorFunc], character: &str) {
     let theme = theme::active();
     line.push_str("    ");
     line.push_str(&theme.bar_frame.paint("[-").to_string());
     for (i,verticals) in files_verticals.iter().enumerate() {
-        line.push_str(&color_func_vec[i]("|").repeat(*verticals));
+        line.push_str(&color_func_vec[i](character).repeat(*verticals));
     }
     line.push_str(&theme.bar_frame.paint("-]").to_string());
 }
@@ -523,7 +486,7 @@ fn add_verticals_str(line: &mut String, files_verticals: &[usize], color_func_ve
 fn retain_most_relevant_and_add_others_field_for_rest(sorted_language_names: &mut Vec<String>,
         content_info_map: &mut HashMap<String, LanguageContentInfo>,
         languages_metadata_map: &mut HashMap<String, LanguageMetadata>,
-        final_stats: &FinalStats) 
+        final_stats: &FinalStats, top_n: Option<usize>)
 {
     fn get_files_lines_size(content_info_map: &HashMap<String, LanguageContentInfo>,
         languages_metadata_map: &HashMap<String, LanguageMetadata>) -> (usize,usize,usize) 
@@ -534,18 +497,20 @@ fn retain_most_relevant_and_add_others_field_for_rest(sorted_language_names: &mu
        (files, lines, size) 
    }
 
-    if sorted_language_names.len() > 4 {
-        for _ in 3..sorted_language_names.len() {
-             sorted_language_names.remove(sorted_language_names.len()-1);
-        }
-        sorted_language_names.push("others".to_owned());
-
-        content_info_map.retain(|x,_| sorted_language_names.contains(x));
-        languages_metadata_map.retain(|x,_| sorted_language_names.contains(x));
+    // --top never widens the overview past its own cap, it only narrows it, so that asking for the
+    // top 2 does not leave three languages sitting in the bar
+    let to_keep = OVERVIEW_LANGUAGES.min(top_n.unwrap_or(OVERVIEW_LANGUAGES));
+    if sorted_language_names.len() <= to_keep + 1 {
+        return;
     }
-    
+
+    sorted_language_names.truncate(to_keep);
+    sorted_language_names.push("others".to_owned());
+    content_info_map.retain(|x,_| sorted_language_names.contains(x));
+    languages_metadata_map.retain(|x,_| sorted_language_names.contains(x));
+
     let (relevant_files, relevant_lines, relevant_size) = get_files_lines_size(content_info_map, languages_metadata_map);
-    let (other_files, other_lines, other_size) = 
+    let (other_files, other_lines, other_size) =
         (final_stats.files - relevant_files, final_stats.lines - relevant_lines,
          final_stats.bytes_size - relevant_size);
 
@@ -624,35 +589,6 @@ mod tests {
     use crate::{config_manager::LogOption, io_handler::log_stats};
 
     use super::*;
-
-    #[test]
-    fn test_normalize() {
-        let mut verticals = vec![18,15,19,1];
-        normalize_to_NUM_OF_VERTICALS(&mut verticals, 53);
-        assert_eq!(vec![16,15,18,1], verticals);
-        assert!(verticals.iter().sum::<usize>() == 50);
-        
-        let mut verticals = vec![17,17,18,1];
-        normalize_to_NUM_OF_VERTICALS(&mut verticals, 53);
-        assert_eq!(vec![16,16,17,1], verticals);
-        assert!(verticals.iter().sum::<usize>() == 50);
-    
-        let mut verticals = vec![16,15,16,1];
-        normalize_to_NUM_OF_VERTICALS(&mut verticals, 48);
-        assert_eq!(vec![17,15,17,1], verticals);
-        assert!(verticals.iter().sum::<usize>() == 50);
-    
-        let mut verticals = vec![18,16,17];
-        normalize_to_NUM_OF_VERTICALS(&mut verticals, 51);
-        assert_eq!(vec![17,16,17], verticals);
-        assert!(verticals.iter().sum::<usize>() == 50);
-    
-        let mut verticals = vec![25,26];
-        normalize_to_NUM_OF_VERTICALS(&mut verticals, 51);
-        assert_eq!(vec![25,25], verticals);
-        assert!(verticals.iter().sum::<usize>() == 50);
-    }
-
     #[test]
     fn test_get_lines_percentages() {
         let ext_names = ["py".to_string(),"java".to_string(),"cs".to_string()];
@@ -693,44 +629,113 @@ mod tests {
     #[test]
     fn test_get_num_of_verticals() {
         let percentages = vec![49.6,50.4];
-        let verticals = get_num_of_verticals(&percentages);
+        let verticals = get_num_of_verticals(&percentages, NUM_OF_VERTICALS);
         assert!(verticals.iter().sum::<usize>() == 50);
         assert_eq!(vec![25,25], verticals);
 
         let percentages = vec![0.0,100.0];
-        let verticals = get_num_of_verticals(&percentages);
+        let verticals = get_num_of_verticals(&percentages, NUM_OF_VERTICALS);
         assert!(verticals.iter().sum::<usize>() == 50);
         assert_eq!(vec![0,50], verticals);
 
 
         let percentages = vec![33.33,33.33,33.34];
-        assert_eq!(vec![16,17,17], get_num_of_verticals(&percentages));
+        assert_eq!(vec![16,17,17], get_num_of_verticals(&percentages, NUM_OF_VERTICALS));
 
         let percentages = vec![0.3,65.67,34.3];
-        let verticals = get_num_of_verticals(&percentages);
+        let verticals = get_num_of_verticals(&percentages, NUM_OF_VERTICALS);
         assert!(verticals.iter().sum::<usize>() == 50);
         assert_eq!(vec![1,32,17], verticals);
         
         let percentages = vec![0.0,0.0,100.0];
-        let verticals = get_num_of_verticals(&percentages);
+        let verticals = get_num_of_verticals(&percentages, NUM_OF_VERTICALS);
         assert!(verticals.iter().sum::<usize>() == 50);
         assert_eq!(vec![0,0,50], verticals);
 
         let percentages = vec![0.2,49.9,49.9];
-        let verticals = get_num_of_verticals(&percentages);
+        let verticals = get_num_of_verticals(&percentages, NUM_OF_VERTICALS);
         assert!(verticals.iter().sum::<usize>() == 50);
         assert_eq!(vec![1,24,25], verticals);
 
 
         let percentages = vec![12.5,50.0,25.0,12.5];
-        let verticals = get_num_of_verticals(&percentages);
+        let verticals = get_num_of_verticals(&percentages, NUM_OF_VERTICALS);
         assert!(verticals.iter().sum::<usize>() == 50);
         assert_eq!(vec![6,25,13,6], verticals);
 
         let percentages = vec![0.1,0.1,49.9,49.9];
-        let verticals = get_num_of_verticals(&percentages);
+        let verticals = get_num_of_verticals(&percentages, NUM_OF_VERTICALS);
         assert!(verticals.iter().sum::<usize>() == 50);
         assert_eq!(vec![1,1,24,24], verticals);
+
+        // The minimum-one rule wants 48+1+1+1 here, which is one cell over the target. The excess
+        // has to come off the largest share rather than emptying one of the small ones.
+        let verticals = get_num_of_verticals(&[97.0,1.0,1.0,1.0], NUM_OF_VERTICALS);
+        assert_eq!(vec![47,1,1,1], verticals);
+
+        // Every protected minimum is paid for by the only entry that has cells to spare
+        assert_eq!(vec![47,1,1,1], get_num_of_verticals(&[99.4,0.2,0.2,0.2], NUM_OF_VERTICALS));
+
+        let verticals = get_num_of_verticals(&[99.7,0.1,0.1,0.1], NUM_OF_VERTICALS);
+        assert_eq!(50, verticals.iter().sum::<usize>());
+        assert!(verticals.iter().all(|x| *x >= 1), "a language that is present must never lose its last cell");
+    }
+
+    #[test]
+    fn sorting_uses_the_chosen_criterion_and_breaks_ties_by_name() {
+        let content = hashmap![
+            "Zig".to_owned() => LanguageContentInfo::new(100, 50, HashMap::new()),
+            "Ada".to_owned() => LanguageContentInfo::new(100, 90, HashMap::new()),
+            "Rust".to_owned() => LanguageContentInfo::new(300, 10, HashMap::new())];
+        let meta = hashmap![
+            "Zig".to_owned() => LanguageMetadata::new(9, 10),
+            "Ada".to_owned() => LanguageMetadata::new(1, 900),
+            "Rust".to_owned() => LanguageMetadata::new(5, 50)];
+
+        assert_eq!(vec!["Rust","Ada","Zig"], get_sorted_language_names(&content, &meta, SortCriterion::Lines));
+        assert_eq!(vec!["Zig","Rust","Ada"], get_sorted_language_names(&content, &meta, SortCriterion::Files));
+        assert_eq!(vec!["Ada","Rust","Zig"], get_sorted_language_names(&content, &meta, SortCriterion::Size));
+        assert_eq!(vec!["Ada","Zig","Rust"], get_sorted_language_names(&content, &meta, SortCriterion::Code));
+        assert_eq!(vec!["Ada","Rust","Zig"], get_sorted_language_names(&content, &meta, SortCriterion::Name));
+
+        // Ada and Zig both have 100 lines, so the name decides, not the iteration order of the map
+        assert_eq!(vec!["Rust","Ada","Zig"], get_sorted_language_names(&content, &meta, SortCriterion::Lines));
+    }
+
+    #[test]
+    fn the_cell_that_a_protected_minimum_costs_comes_off_the_largest_share() {
+        // Six entries at 100 cells: the second language deserves 3 and must keep them, because
+        // losing one understates it by a third while the first barely notices
+        let percentages = vec![96.96, 3.0, 0.01, 0.01, 0.01, 0.01];
+        assert_eq!(vec![93,3,1,1,1,1], get_num_of_verticals(&percentages, 100));
+        assert_eq!(vec![45,1,1,1,1,1], get_num_of_verticals(&percentages, NUM_OF_VERTICALS));
+
+        // The width is a parameter, so the same shares scale to any bar
+        assert_eq!(25, get_num_of_verticals(&[50.0,50.0], 50)[0]);
+        assert_eq!(50, get_num_of_verticals(&[50.0,50.0], 100)[0]);
+        assert_eq!(10, get_num_of_verticals(&[50.0,50.0], 20)[0]);
+    }
+
+    #[test]
+    fn verticals_always_sum_to_the_bar_width_and_keep_present_languages_visible() {
+        let cases: Vec<Vec<f64>> = vec![
+            vec![100.0], vec![50.0,50.0], vec![0.01,99.99], vec![0.0,0.0,0.0,100.0],
+            vec![25.0,25.0,25.0,25.0], vec![70.0,10.0,10.0,10.0], vec![1.0,1.0,1.0,97.0],
+            vec![0.04,0.04,0.04,99.88], vec![33.34,33.33,33.33], vec![60.5,39.5],
+            vec![98.0,2.0], vec![2.0,98.0], vec![0.0,100.0,0.0]
+        ];
+
+        for percentages in cases {
+            let verticals = get_num_of_verticals(&percentages, NUM_OF_VERTICALS);
+            assert_eq!(NUM_OF_VERTICALS, verticals.iter().sum::<usize>(), "wrong total for {percentages:?}");
+            for (i, percentage) in percentages.iter().enumerate() {
+                if *percentage > 0.0 {
+                    assert!(verticals[i] >= 1, "{percentages:?} made a present language disappear");
+                } else {
+                    assert_eq!(0, verticals[i], "{percentages:?} gave cells to an absent language");
+                }
+            }
+        }
     }
 
     #[test]
@@ -752,7 +757,7 @@ mod tests {
         ];
         let final_stats = FinalStats::new(40, 4000, 3000, 200000);
 
-        retain_most_relevant_and_add_others_field_for_rest(&mut sorted_language_names, &mut content_info_map, &mut languages_metadata_map, &final_stats);
+        retain_most_relevant_and_add_others_field_for_rest(&mut sorted_language_names, &mut content_info_map, &mut languages_metadata_map, &final_stats, None);
 
         assert_eq!(hashmap![
             "a".to_owned() => LanguageContentInfo::new(1000, 800, hashmap![]),

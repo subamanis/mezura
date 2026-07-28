@@ -164,15 +164,60 @@ pub const COLOR_PALETTE_HELP  :  &str =
     Palettes written for versions before v3.0.0 are converted automatically on the first run.
 
 ";
+pub const SORT_HELP  :  &str =
+"--sort
+    One argument: 'lines', 'files', 'code', 'size' or 'name'. Default: lines
+
+    Chooses the order of the languages in the \"details\" section, which also decides which of them
+    reach the \"overview\" section and which are folded into its 'others' entry.
+    Every criterion except 'name' sorts from the largest down, and ties are broken alphabetically
+    so that the order never changes between runs on the same data.
+
+    Note that before v3.0.0 the order was a fixed formula in which the byte size dominated, so
+    runs that used to be ordered by size are now ordered by lines unless you ask otherwise.
+
+";
+pub const TOP_HELP  :  &str =
+"--top
+    One number, 1 or greater.
+
+    Shows only that many languages in the \"details\" section, the ones that come first according
+    to the '--sort' criterion. A line underneath states how many were hidden, so that the numbers
+    not adding up to the total is never a mystery.
+
+    The total keeps counting every language, hidden ones included, since it is the total.
+    The \"overview\" section never shows more languages than this either, so asking for the top 2
+    does not leave a third one sitting in the bar.
+
+";
+pub const BAR_THICKNESS_HELP  :  &str =
+"--bar-thickness
+    One argument: 'slim', 'medium', 'fat' or 'low'. Default: slim
+
+    Chooses the character that the percentage bar of the \"overview\" section is drawn with.
+
+      slim     |   the default, and the only one made of ASCII, so it is the one that is
+                   guaranteed to render on every terminal
+      medium   ┃   thicker, but still leaves gaps between the strokes
+      fat      █   fills the cell, so the boundary between two language colors is crisp
+      low      ▄   fills only the bottom of the cell, a thin band under the text
+
+    All but 'slim' need a terminal and a font that can render box drawing characters.
+    If the bar comes out as question marks or empty boxes, use 'slim'.
+
+";
 pub const STYLE_HELP  :  &str =
 "--style
     One or more 'token=style' pairs separated by commas, for example:
     --style number=bright-black,label=b5a98a italic,heading=white bold underline
 
     Overrides how a category of printed text looks. A style is a color and any number of the
-    attributes 'bold', 'italic', 'underline' and 'dim', in any order. The color is either a hex
-    value or one of the 16 terminal color names (the same grammar as '--colors'), or the word
-    'default' to leave the terminal's own foreground color alone.
+    attributes 'bold', 'italic', 'underline', 'dim' and 'reverse', in any order. The color is
+    either a hex value or one of the 16 terminal color names (the same grammar as '--colors'),
+    or the word 'default' to leave the terminal's own foreground color alone.
+
+    'reverse' swaps the text and background colors, so it stands out strongly without committing
+    to any color of its own, which means it adapts to whatever theme the terminal is using.
 
     The tokens are:
       heading          the section titles and the 'Analyzing directories' lines
@@ -324,6 +369,9 @@ pub fn print_whole_help_message() {
     msg += NO_GITIGNORE_HELP;
     msg += COLORS_HELP;
     msg += COLOR_PALETTE_HELP;
+    msg += SORT_HELP;
+    msg += TOP_HELP;
+    msg += BAR_THICKNESS_HELP;
     msg += STYLE_HELP;
     msg += LOG_HELP;
     msg += COMPRARE_LEVEL_HELP;
@@ -485,6 +533,12 @@ fn get_help_msg_of_command(command: &str) -> Option<&str> {
         Some(COLORS_HELP)
     } else if command == COLOR_PALETTE {
         Some(COLOR_PALETTE_HELP)
+    } else if command == SORT {
+        Some(SORT_HELP)
+    } else if command == TOP {
+        Some(TOP_HELP)
+    } else if command == BAR_THICKNESS {
+        Some(BAR_THICKNESS_HELP)
     } else if command == STYLE {
         Some(STYLE_HELP)
     } else if command == SHOW_PALETTES {

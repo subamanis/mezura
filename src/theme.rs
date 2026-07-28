@@ -24,6 +24,7 @@ pub struct Style {
     pub italic: bool,
     pub underline: bool,
     pub dim: bool,
+    pub reverse: bool,
 }
 
 impl Style {
@@ -55,6 +56,11 @@ impl Style {
         self
     }
 
+    pub fn reverse(mut self) -> Style {
+        self.reverse = true;
+        self
+    }
+
     pub fn paint(&self, text: &str) -> ColoredString {
         let mut painted = ColoredString::from(text);
         if let Some(color) = self.color {
@@ -71,6 +77,9 @@ impl Style {
         }
         if self.dim {
             painted = painted.dimmed();
+        }
+        if self.reverse {
+            painted = painted.reversed();
         }
 
         painted
@@ -90,6 +99,7 @@ impl Style {
                 "italic" => style.italic = true,
                 "underline" => style.underline = true,
                 "dim" => style.dim = true,
+                "reverse" => style.reverse = true,
                 "default" => {
                     if color_was_given { return None; }
                     color_was_given = true;
@@ -112,6 +122,7 @@ impl Style {
         if self.italic { parts.push("italic".to_owned()); }
         if self.underline { parts.push("underline".to_owned()); }
         if self.dim { parts.push("dim".to_owned()); }
+        if self.reverse { parts.push("reverse".to_owned()); }
 
         parts.join(" ")
     }
@@ -284,7 +295,7 @@ impl ThemeParseError {
         match self {
             Self::UnknownToken(token) => format!("'{token}' is not a style token."),
             Self::InvalidValue(token, value) =>
-                format!("'{value}' is not a valid style for '{token}'. Expected a color (hex or a terminal color name) and any of: bold, italic, underline, dim."),
+                format!("'{value}' is not a valid style for '{token}'. Expected a color (hex or a terminal color name) and any of: bold, italic, underline, dim, reverse."),
             Self::MalformedLine(line) => format!("'{line}' is not a 'token = value' line."),
             Self::EmptyPalette => "the palette declares no colors and no styles.".to_owned()
         }
@@ -334,6 +345,8 @@ mod tests {
         assert_eq!(Some(Style::plain().bold().underline()), Style::parse("bold underline"));
         assert_eq!(Some(Style::plain()), Style::parse("default"));
         assert_eq!(Some(Style::plain().dim()), Style::parse("default dim"));
+        assert_eq!(Some(Style::plain().reverse()), Style::parse("reverse"));
+        assert_eq!(Some(Style::of(Color::Cyan).reverse().bold()), Style::parse("reverse cyan bold"));
     }
 
     #[test]
@@ -348,7 +361,7 @@ mod tests {
 
     #[test]
     fn round_trips_through_its_config_representation() {
-        for value in ["cyan", "b5a98a italic", "bright-yellow bold underline dim", "default", "default bold"] {
+        for value in ["cyan", "b5a98a italic", "bright-yellow bold underline dim", "default", "default bold", "reverse", "cyan reverse bold"] {
             let style = Style::parse(value).unwrap();
             assert_eq!(Some(style.clone()), Style::parse(&style.to_config_string()), "round trip failed for '{value}'");
         }
