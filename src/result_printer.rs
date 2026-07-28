@@ -18,12 +18,12 @@ const DEFAULT_OTHERS_COLOR : Color = Color::TrueColor{r:215,g:201,b:240};
 const PRESENT_BUT_TINY : f64 = 0.001;
 
 const KEYWORD_LINE_OFFSET : usize = 19;
-const STANDARD_LINE_STATS_LEN : usize = 33;
 
 //log file keys
 const FILES         : &str  = "Files:";
 const LINES         : &str  = "Lines:";
 const CODE          : &str  = "Code:";
+const COMMENTS      : &str  = "Comments:";
 const EXTRA         : &str  = "Extra:";
 const TOTAL_SIZE    : &str  = "Total Size:";
 const AVERAGE_SIZE  : &str  = "Average Size:";
@@ -90,7 +90,7 @@ fn print_individually(sorted_languages: &[String], content_info_map: &HashMap<St
 
     println!("{}.\n", theme::active().heading.paint("Details"));
 
-    let mut max_line_stats_len = STANDARD_LINE_STATS_LEN;
+    let mut max_line_stats_len = 0;
     let (mut titles_vec, mut lines_stats_vec, mut lines_stats_len_vec, mut size_stats_vec,
             mut keywords_stats_vec) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
 
@@ -105,18 +105,23 @@ fn print_individually(sorted_languages: &[String], content_info_map: &HashMap<St
                  " ".repeat(biggest_prefix_standard_spaces - prefix_standard_spaces), number(&files_str), colored_word("files"));
         titles_vec.push(title);
 
-        let code_lines_percentage = if content_info.lines > 0 {content_info.code_lines as f64 / content_info.lines as f64 * 100f64} else {0f64};
+        let (code_lines_percentage, comment_lines_percentage) = percentages_of(content_info);
         let lines_str = with_seperators(content_info.lines);
         let code_lines_str = with_seperators(content_info.code_lines);
-        let extra_lines_str = with_seperators(content_info.lines - content_info.code_lines);
-        let curr_line_stats_len = STANDARD_LINE_STATS_LEN + lines_str.len() + code_lines_str.len() + extra_lines_str.len();
-        lines_stats_len_vec.push(curr_line_stats_len); 
+        let comment_lines_str = with_seperators(content_info.comment_lines);
+        let extra_lines_str = with_seperators(content_info.lines - content_info.code_lines - content_info.comment_lines);
+
+        // Measured rather than derived from a constant, so that a percentage which is not five
+        // characters wide, 100.00 or 9.09, cannot shift the size column out of alignment
+        let stats_line = format!("{} {} {{{} code ({}%) + {} comments ({}%) + {} extra}}", colored_word("lines"), number(&lines_str),
+                 number(&code_lines_str), percent(code_lines_percentage), number(&comment_lines_str),
+                 percent(comment_lines_percentage), number(&extra_lines_str));
+        let curr_line_stats_len = widest_visible_line(&stats_line);
+        lines_stats_len_vec.push(curr_line_stats_len);
         if max_line_stats_len < curr_line_stats_len {
             max_line_stats_len = curr_line_stats_len;
         }
-        
-        lines_stats_vec.push(format!("{} {} {{{} code ({}%) + {} extra}}", colored_word("lines"), number(&lines_str), number(&code_lines_str),
-                 percent(code_lines_percentage), number(&extra_lines_str)));
+        lines_stats_vec.push(stats_line);
         size_stats_vec.push(get_size_text(metadata));
         
         if should_print_keywords {
@@ -162,20 +167,27 @@ fn widest_visible_line(text: &str) -> usize {
 fn print_sum(content_info_map: &HashMap<String,LanguageContentInfo>, final_stats: &FinalStats, biggest_prefix_standard_spaces: usize,
         should_print_keywords: bool)
 {
-    let (total_files_str, total_lines_str, total_code_lines_str, total_extra_lines_str) =
-            (with_seperators(final_stats.files),with_seperators(final_stats.lines),with_seperators(final_stats.code_lines), with_seperators(final_stats.extra_lines));
+    let (total_files_str, total_lines_str, total_code_lines_str, total_comment_lines_str, total_extra_lines_str) =
+            (with_seperators(final_stats.files), with_seperators(final_stats.lines), with_seperators(final_stats.code_lines),
+             with_seperators(final_stats.comment_lines), with_seperators(final_stats.extra_lines));
 
     let keywords_sum_map = create_keyword_sum_map(content_info_map);
     let keywords_line = get_keywords_as_str(&keywords_sum_map, biggest_prefix_standard_spaces);
 
     let spaces = biggest_prefix_standard_spaces - (5 + total_files_str.len());
     let title = format!("{}   {}{} {}  -> ",theme::active().details_total.paint("Total")," ".repeat(spaces),number(&total_files_str),colored_word("files"));
-    let code_lines_percentage = if final_stats.lines > 0 {final_stats.code_lines as f64 / final_stats.lines as f64 * 100f64} else {0f64};
+    let (code_lines_percentage, comment_lines_percentage) = if final_stats.lines > 0 {
+        (final_stats.code_lines as f64 / final_stats.lines as f64 * 100f64,
+         final_stats.comment_lines as f64 / final_stats.lines as f64 * 100f64)
+    } else {
+        (0f64, 0f64)
+    };
     let size_text = format!("{} {} - {} {}",number(&final_stats.size.to_string()), colored_word(&format!("{} total", final_stats.size_measurement)),
             number(&final_stats.average_size.to_string()),colored_word(&format!("{} average", final_stats.average_size_measurement)));
 
-    let info = format!("{} {} {{{} code ({}%) + {} extra}}  |  {}\n",colored_word("lines"), number(&total_lines_str),number(&total_code_lines_str),
-            percent(code_lines_percentage), number(&total_extra_lines_str), size_text);
+    let info = format!("{} {} {{{} code ({}%) + {} comments ({}%) + {} extra}}  |  {}\n",colored_word("lines"), number(&total_lines_str),
+            number(&total_code_lines_str), percent(code_lines_percentage), number(&total_comment_lines_str),
+            percent(comment_lines_percentage), number(&total_extra_lines_str), size_text);
 
     // The separator follows the total line, measured from the text that is actually printed. It
     // used to be a formula over some of the numbers plus two magic constants, which left out the
@@ -258,12 +270,21 @@ fn print_comparison_to_previous_runs(final_stats: &FinalStats, log_content: &str
             let then_str = entry.datetime.naive_local().to_string();
             comparison_str.push_str(&format!("{} {} ({} days, {} hours and {} minutes ago)\n",arrow, then_str, days, hours, minutes));
         }
-        comparison_str.push_str(&format!("     Files: {}({}%) Lines: {}({}%) {{Code: {}({}%), Extra: {}({}%)}}\n\n",
+        // An entry from before the comments were split off has an 'extra' that meant something
+        // else, so it is named and left uncompared instead of being reported as a collapse
+        let tail = if entry.splits_comments {
+            format!("Comments: {}({}%), Extra: {}({}%)",
+                number(&with_seperators(entry.stats.comment_lines)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.comment_lines, final_stats.comment_lines)),
+                number(&with_seperators(entry.stats.extra_lines)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.extra_lines, final_stats.extra_lines)))
+        } else {
+            format!("Non-code: {} (logged before comments were counted separately)",
+                number(&with_seperators(entry.stats.extra_lines)))
+        };
+        comparison_str.push_str(&format!("     Files: {}({}%) Lines: {}({}%) {{Code: {}({}%), {}}}\n\n",
                 number(&with_seperators(entry.stats.files)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.files, final_stats.files)),
                 number(&with_seperators(entry.stats.lines)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.lines, final_stats.lines)),
                 number(&with_seperators(entry.stats.code_lines)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.code_lines, final_stats.code_lines)),
-                number(&with_seperators(entry.stats.extra_lines)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.extra_lines, final_stats.extra_lines)),
-        ));
+                tail));
     }
     print!("{comparison_str}");
 
@@ -320,11 +341,16 @@ struct LogEntry {
     name: Option<String>,
     stats: FinalStats,
     datetime: DateTime<Local>,
+    // Entries written before v3.0.0 have no 'Comments' key, and their 'Extra' counted the comments
+    // in as well, so comparing it against an extra that no longer does would report a drop that
+    // never happened
+    splits_comments: bool
 }
 
 fn parse_N_previous_entries(log_content: &str, n: usize) -> Vec<LogEntry> {
     let mut log_entries = Vec::with_capacity(15);
-    let (mut files, mut lines, mut code_lines, mut extra_lines, mut bytes_size) = (0, 0, 0, 0, 0);
+    let (mut files, mut lines, mut code_lines, mut comment_lines, mut extra_lines, mut bytes_size) = (0, 0, 0, 0, 0, 0);
+    let mut splits_comments = false;
     let mut counter = 0;
     let mut is_expecting_date = false;
     let mut entry_name = None;
@@ -352,14 +378,18 @@ fn parse_N_previous_entries(log_content: &str, n: usize) -> Vec<LogEntry> {
             lines = value.trim().parse::<usize>().unwrap();
         } else if let Some(value) = line.strip_prefix(CODE) {
             code_lines = value.trim().parse::<usize>().unwrap();
+        } else if let Some(value) = line.strip_prefix(COMMENTS) {
+            comment_lines = value.trim().parse::<usize>().unwrap();
+            splits_comments = true;
         } else if let Some(value) = line.strip_prefix(EXTRA) {
             extra_lines = value.trim().parse::<usize>().unwrap();
         } else if let Some(value) = line.strip_prefix(TOTAL_SIZE) {
             bytes_size = value.trim().parse::<usize>().unwrap();
         } else if let Some(value) = line.strip_prefix(AVERAGE_SIZE) {
             let bytes_average_size = value.trim().parse::<usize>().unwrap();
-            let stats = FinalStats::new_extended(files, lines, code_lines, extra_lines, bytes_size, bytes_average_size);
-            log_entries.push(LogEntry{name: entry_name.clone(), stats, datetime});
+            let stats = FinalStats::new_extended(files, lines, code_lines, comment_lines, extra_lines, bytes_size, bytes_average_size);
+            log_entries.push(LogEntry{name: entry_name.clone(), stats, datetime, splits_comments});
+            (comment_lines, splits_comments) = (0, false);
 
             counter += 1;
             if counter == n {return log_entries}
@@ -430,6 +460,14 @@ fn percent_text(value: f64) -> String {
 
 fn percent(value: f64) -> ColoredString {
     theme::active().percent.paint(&percent_text(value))
+}
+
+fn percentages_of(content_info: &LanguageContentInfo) -> (f64, f64) {
+    if content_info.lines == 0 {
+        return (0f64, 0f64);
+    }
+    (content_info.code_lines as f64 / content_info.lines as f64 * 100f64,
+     content_info.comment_lines as f64 / content_info.lines as f64 * 100f64)
 }
 
 
@@ -765,9 +803,9 @@ mod tests {
     #[test]
     fn sorting_uses_the_chosen_criterion_and_breaks_ties_by_name() {
         let content = hashmap![
-            "Zig".to_owned() => LanguageContentInfo::new(100, 50, HashMap::new()),
-            "Ada".to_owned() => LanguageContentInfo::new(100, 90, HashMap::new()),
-            "Rust".to_owned() => LanguageContentInfo::new(300, 10, HashMap::new())];
+            "Zig".to_owned() => LanguageContentInfo::new(100, 50, 0, HashMap::new()),
+            "Ada".to_owned() => LanguageContentInfo::new(100, 90, 0, HashMap::new()),
+            "Rust".to_owned() => LanguageContentInfo::new(300, 10, 0, HashMap::new())];
         let meta = hashmap![
             "Zig".to_owned() => LanguageMetadata::new(9, 10),
             "Ada".to_owned() => LanguageMetadata::new(1, 900),
@@ -823,11 +861,11 @@ mod tests {
     fn test_retain_most_relevant_and_add_others_field_for_rest() {
         let mut sorted_language_names = vec!["a".to_owned(), "b".to_owned(), "c".to_owned(), "d".to_owned(), "e".to_owned()];
         let mut content_info_map = hashmap![
-            "a".to_owned() => LanguageContentInfo::new(1000, 800, hashmap![]),
-            "b".to_owned() => LanguageContentInfo::new(900, 700, hashmap![]),
-            "c".to_owned() => LanguageContentInfo::new(800, 600, hashmap![]),
-            "d".to_owned() => LanguageContentInfo::new(700, 500, hashmap![]),
-            "e".to_owned() => LanguageContentInfo::new(600, 400, hashmap![])
+            "a".to_owned() => LanguageContentInfo::new(1000, 800, 0, hashmap![]),
+            "b".to_owned() => LanguageContentInfo::new(900, 700, 0, hashmap![]),
+            "c".to_owned() => LanguageContentInfo::new(800, 600, 0, hashmap![]),
+            "d".to_owned() => LanguageContentInfo::new(700, 500, 0, hashmap![]),
+            "e".to_owned() => LanguageContentInfo::new(600, 400, 0, hashmap![])
         ];
         let mut languages_metadata_map = hashmap![
             "a".to_owned() => LanguageMetadata::new(10, 60000),
@@ -836,15 +874,15 @@ mod tests {
             "d".to_owned() => LanguageMetadata::new(7, 30000),
             "e".to_owned() => LanguageMetadata::new(6, 20000)
         ];
-        let final_stats = FinalStats::new(40, 4000, 3000, 200000);
+        let final_stats = FinalStats::new(40, 4000, 3000, 0, 200000);
 
         retain_most_relevant_and_add_others_field_for_rest(&mut sorted_language_names, &mut content_info_map, &mut languages_metadata_map, &final_stats, None);
 
         assert_eq!(hashmap![
-            "a".to_owned() => LanguageContentInfo::new(1000, 800, hashmap![]),
-            "b".to_owned() => LanguageContentInfo::new(900, 700, hashmap![]),
-            "c".to_owned() => LanguageContentInfo::new(800, 600, hashmap![]),
-            "others".to_owned() => LanguageContentInfo::new(1300, 0, hashmap![])
+            "a".to_owned() => LanguageContentInfo::new(1000, 800, 0, hashmap![]),
+            "b".to_owned() => LanguageContentInfo::new(900, 700, 0, hashmap![]),
+            "c".to_owned() => LanguageContentInfo::new(800, 600, 0, hashmap![]),
+            "others".to_owned() => LanguageContentInfo::new(1300, 0, 0, hashmap![])
             ], content_info_map);
         
         assert_eq!(hashmap![
@@ -936,7 +974,7 @@ mod tests {
 
         let mut config = Configuration::new(vec!["./".to_owned()]);
         config.set_log_option(LogOption::new(Some("test name".to_owned())));
-        let final_stats = FinalStats::new(10, 1000, 100, 100);
+        let final_stats = FinalStats::new(10, 1000, 100, 0, 100);
 
         log_stats(&test_log_dir, &None, &final_stats, &chrono::DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap(), &config).unwrap();
 

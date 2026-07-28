@@ -1,14 +1,14 @@
-files=4 lines=64 code=34
+files=5 lines=83 code=45 comments=12
 
 JS
-  files=1 lines=12 code=8
-  classes=1
+  files=2 lines=31 code=19 comments=3
+  classes=2
 Java
-  files=1 lines=16 code=7
+  files=1 lines=16 code=7 comments=3
   classes=2 interfaces=1
 Python
-  files=1 lines=14 code=9
+  files=1 lines=14 code=9 comments=3
   classes=2
 Rust
-  files=1 lines=22 code=10
+  files=1 lines=22 code=10 comments=3
   enums=1 structs=1 traits=1

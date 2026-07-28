@@ -1,4 +1,4 @@
-// mezura-expect lines=16 code=7 classes=2 interfaces=1
+// mezura-expect lines=16 code=7 comments=3 classes=2 interfaces=1
 package demo;
 
 /* block

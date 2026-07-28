@@ -600,6 +600,7 @@ fn write_current_log(writer: &mut BufWriter<File>, config: &Configuration, datet
     writer.write_all(format!("    Files: {}\n",final_stats.files).as_bytes())?;
     writer.write_all(format!("    Lines: {}\n",final_stats.lines).as_bytes())?;
     writer.write_all(format!("        Code: {}\n",final_stats.code_lines).as_bytes())?;
+    writer.write_all(format!("        Comments: {}\n",final_stats.comment_lines).as_bytes())?;
     writer.write_all(format!("        Extra: {}\n",final_stats.extra_lines).as_bytes())?;
     writer.write_all(format!("    Total Size: {}\n",final_stats.bytes_size).as_bytes())?;
     writer.write_all(format!("        Average Size: {}\n\n\n",final_stats.bytes_average_size).as_bytes())?;

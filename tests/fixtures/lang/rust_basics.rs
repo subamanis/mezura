@@ -1,4 +1,4 @@
-// mezura-expect lines=22 code=10 structs=1 enums=1 traits=1
+// mezura-expect lines=22 code=10 comments=3 structs=1 enums=1 traits=1
 use std::fmt;
 
 /* a block comment

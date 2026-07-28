@@ -24,7 +24,7 @@ fn render_report(content_info: &HashMap<String, LanguageContentInfo>, metadata: 
     let mut names = content_info.keys().cloned().collect::<Vec<_>>();
     names.sort();
 
-    let (mut total_files, mut total_lines, mut total_code) = (0, 0, 0);
+    let (mut total_files, mut total_lines, mut total_code, mut total_comments) = (0, 0, 0, 0);
     let mut report = String::with_capacity(500);
     for name in &names {
         let info = content_info.get(name).unwrap();
@@ -32,8 +32,10 @@ fn render_report(content_info: &HashMap<String, LanguageContentInfo>, metadata: 
         total_files += meta.files;
         total_lines += info.lines;
         total_code += info.code_lines;
+        total_comments += info.comment_lines;
 
-        report.push_str(&format!("{name}\n  files={} lines={} code={}\n", meta.files, info.lines, info.code_lines));
+        report.push_str(&format!("{name}\n  files={} lines={} code={} comments={}\n",
+                meta.files, info.lines, info.code_lines, info.comment_lines));
 
         let mut keywords = info.keyword_occurences.iter().collect::<Vec<_>>();
         keywords.sort_by_key(|(name, _)| name.as_str());
@@ -43,7 +45,7 @@ fn render_report(content_info: &HashMap<String, LanguageContentInfo>, metadata: 
         }
     }
 
-    format!("files={total_files} lines={total_lines} code={total_code}\n\n{report}")
+    format!("files={total_files} lines={total_lines} code={total_code} comments={total_comments}\n\n{report}")
 }
 
 // One producer fills the queue, then several consumers drain it in parallel, which is where the

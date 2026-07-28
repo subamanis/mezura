@@ -1,4 +1,4 @@
-# mezura-expect lines=14 code=9 classes=2
+# mezura-expect lines=14 code=9 comments=3 classes=2
 import os
 
 class Foo:

@@ -1,4 +1,4 @@
-// mezura-expect lines=12 code=8 classes=1
+// mezura-expect lines=12 code=8 comments=1 classes=1
 const a = "/* not a comment */";
 const b = 'http://example.com';
 /* inline */ const c = 1;

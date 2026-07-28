@@ -100,11 +100,17 @@ pub const BRACES_AS_CODE_HELP  :  &str =
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable, or 'no'
     to disable. Default: no
 
-    Specifies whether lines that only contain braces ( {{ or }} ), should be considered as code lines or not.
+    Specifies whether lines that carry no content should be considered as code lines or not.
+    A line carries no content when nothing but punctuation is left on it once the strings and
+    the comments are taken out: '}', '});', '],', ')'.
 
     The default behaviour is to not count them as code, since it is silly for code of the same content
     and substance to be counted differently, according to the programmer's code style.
+    Writing 'if (x) { do(); }' on one line or on three should not change the number.
     This helps to keep the stats clean when using code lines as a complexity and productivity metric.
+
+    Note that other line counters count these lines as code, so this is where their number and
+    mezura's differ. Enabling this flag makes the two closer.
 
 ";
 pub const SEARCH_IN_DOTTED_HELP  :  &str =

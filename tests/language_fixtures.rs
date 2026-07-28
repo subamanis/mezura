@@ -74,7 +74,8 @@ fn language_fixtures_match_their_declared_counts() {
         let mut actual = HashMap::from([
             ("lines".to_owned(), stats.lines),
             ("code".to_owned(), stats.code_lines),
-            ("extra".to_owned(), stats.lines - stats.code_lines),
+            ("comments".to_owned(), stats.comment_lines),
+            ("extra".to_owned(), stats.lines - stats.code_lines - stats.comment_lines),
         ]);
         for (index, keyword) in language.keywords.iter().enumerate() {
             actual.insert(keyword.descriptive_name.clone(), stats.keyword_occurences[index]);

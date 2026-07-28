@@ -58,7 +58,7 @@ The program also accepts a lot of optional flags to customize functionality, see
 ## Details
 The generated stats are the following:
 - Number of files
-- Lines (code + others) and percentages
+- Lines, split into code, comments and everything else, with percentages
 - Size (total and average) 
 - Keyword occurrences
 - Percentage comparisons between languages
@@ -201,11 +201,17 @@ Below there is a list with all the commands-flags that the program accepts.
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
     or 'no' to disable. Default: no 
 
-    Specifies whether lines that only contain braces, should be considered as code lines or not.
+    Specifies whether lines that carry no content should be considered as code lines or not.
+    A line carries no content when nothing but punctuation is left on it once the strings and
+    the comments are taken out: '}', '});', '],', ')'.
 
     The default behaviour is to not count them as code, since it is silly for code of the same content
     and substance to be counted differently, according to the programmer's code style.
+    Writing 'if (x) { do(); }' on one line or on three should not change the number.
     This helps to keep the stats clean when using code lines as a complexity and productivity metric.
+
+    Note that other line counters count these lines as code, so this is where their number and
+    mezura's differ. Enabling this flag makes the two closer.
 
 --search-in-dotted
 
@@ -437,7 +443,9 @@ The priorities of the specified flags are:
 ## Logs and Progress
 Inside the 'data/logs' folder, the program will save log files that correspond to saved configurations everytime the '--log' flag is used. <br>
 Inside the log files, the date and time of the execution and the name of the log (if specified) are saved, along with information about the current configuration (like the target directories, whether braces should be considered code, etc, so you can see if at some point the configuration got modified), and also the total files, lines, code lines,
-extra lines, size and average size of the execution. They are in an easy to parse format for external use also. <br>
+comment lines, extra lines, size and average size of the execution. They are in an easy to parse format for external use also. <br>
+
+Entries written before v3.0.0 have no comment count, and their "Extra" included the comments. Such an entry is recognised and its extra lines are printed without a comparison, instead of reporting a drop that never happened. <br>
 
 By using the '--compare <N>' flag, the (N) previous logged executions will be retrieved from the file and will be compared and printed to the screen. For example
 for N = 3, it would look like this:

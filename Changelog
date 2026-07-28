@@ -7,12 +7,25 @@ Main changes:
       tokens, summary, success, warning, error, footer), and each takes a color plus any of bold, italic,
       underline, dim and reverse, in any order. "default" leaves the terminal's own foreground alone.
       Run "--help style" for the full list.
+  -> Comment lines are now counted and reported separately, with their own percentage, so a
+      language row reads "lines N {N code (X%) + N comments (X%) + N extra}".
 
 (Breaking!)
   -> The color palette files have a new format: every line is now a "token = value" pair, where
       "languages" holds the 1 to 5 overview colors that used to be the whole file, and any style
       token can be declared alongside it. Palettes written for older versions are detected and
       converted in place, whenever they show up, so nothing has to be done by hand.
+  -> --no-visual and --no-keywords are removed, replaced by --hide. Use '--hide bar' and
+      '--hide keywords'.
+  -> The default order of the languages is now the number of lines, and ties are broken
+      alphabetically. Use '--sort size' to get the old order back.
+  -> "extra" no longer includes the comments: it is the blank lines plus the lines that carry
+      no content.
+  -> Lines that carry no content are recognised consistently now, whatever punctuation they are
+      made of. The old rule covered only a few shapes, so a small number of lines move between
+      "code" and "extra". '--braces-as-code' counts them all as code, as before.
+  -> Log entries gained a "Comments" key. An entry written by an older version does not have one,
+      so it is printed without an extra comparison instead of reporting a drop that never happened.
 
 New commands:
   -> --hide <list> : leaves parts of the output unprinted. Takes any of version, status, details,
@@ -31,14 +44,6 @@ New commands:
       The total keeps counting all of them, and the overview never shows more than n either.
 
 Change in commands:
-  -> (Breaking!) --no-visual and --no-keywords are removed, replaced by --hide.
-      --no-visual did two unrelated things, dropping the colors of the overview and dropping its
-      bar, and its name said neither. '--hide bar' is the half of it that was worth keeping: the
-      colors already disappear on their own when the output is not a terminal, which is the case
-      that mattered. '--no-keywords' becomes '--hide keywords'.
-  ->  The default order of the languages is now the number of lines, and ties are broken alphabetically.
-      It used to be a fixed formula that sorted by size, with lines as a tie breaker.
-      Use '--sort size' to get the old order back.
   -> --color-palette now applies the palette's overview colors and any style tokens it declares.
       --colors still overrides only the overview colors, so a palette's styles apply even when
       --colors is given.

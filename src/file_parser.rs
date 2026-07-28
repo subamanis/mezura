@@ -105,14 +105,22 @@ fn parse_lines(contents: &str, language: &Language, keyword_matcher: Option<&Key
 
         if let Some(x) = line_info.cleansed_string {
             let cleansed = x.trim_ascii();
-            if config.braces_as_code || cleansed.len() > 2 || (cleansed != "{" && cleansed != "}" && cleansed != "};") {
+            // A line with no letter and no digit left after the strings and the comments were
+            // stripped is punctuation that the language required, not something the programmer
+            // said: '}', '});', '],', ')'. Bytes above 0x7f count as content, so that an identifier
+            // written in a non-latin alphabet reads as code instead of looking like punctuation.
+            let is_no_content = !line_info.has_string_literal
+                    && !cleansed.bytes().any(|b| b.is_ascii_alphanumeric() || b >= 0x80);
+            if config.braces_as_code || !is_no_content {
                 file_stats.incr_code_lines();
                 if !config.hidden.keywords && let Some(matcher) = keyword_matcher {
                     add_keywords_if_any(cleansed, matcher, &mut file_stats);
                 }
             }
+        } else if line_info.has_string_literal {
+            file_stats.incr_code_lines();
         } else {
-            if line_info.has_string_literal {file_stats.incr_code_lines();}
+            file_stats.incr_comment_lines();
         }
     }
 
@@ -924,37 +932,58 @@ mod tests {
         let mut config = Configuration::new(vec!["a".to_owned()]);
         let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("Java").as_ref(), &config);
         let result = content_info_of(result.unwrap(), "Java");
-        assert_eq!(LanguageContentInfo::new(44, 13, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
+        assert_eq!(LanguageContentInfo::new(44, 13, 15, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         buf.clear();
         config.set_hidden(config_manager::Hidden {keywords: true, ..Default::default()});
         let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("Java").as_ref(), &config);
         let result = content_info_of(result.unwrap(), "Java");
-        assert_eq!(LanguageContentInfo::new(44, 13, hashmap!()), result);
+        assert_eq!(LanguageContentInfo::new(44, 13, 15, hashmap!()), result);
         buf.clear();
         config.set_hidden(config_manager::Hidden::default());
         let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "C#", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("C#").as_ref(), &Configuration::new(vec!["a".to_owned()]));
         let result = content_info_of(result.unwrap(), "C#");
-        assert_eq!(LanguageContentInfo::new(44, 13, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
+        assert_eq!(LanguageContentInfo::new(44, 13, 15, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         buf.clear();
         
         let result = parse_file(Path::new("test_dir/lang_files/d.txt"), "C#", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("C#").as_ref(), &Configuration::new(vec!["a".to_owned()]));
         let result = content_info_of(result.unwrap(), "C#");
-        assert_eq!(LanguageContentInfo::new(19, 7, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
+        assert_eq!(LanguageContentInfo::new(19, 7, 10, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         buf.clear();
         let result = parse_file(Path::new("test_dir/lang_files/d.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("Java").as_ref(), &Configuration::new(vec!["a".to_owned()]));
         let result = content_info_of(result.unwrap(), "Java");
-        assert_eq!(LanguageContentInfo::new(19, 7, hashmap!("classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
+        assert_eq!(LanguageContentInfo::new(19, 7, 10, hashmap!("classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         buf.clear();
 
         let result = parse_file(Path::new("test_dir/lang_files/b.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("Java").as_ref(), &Configuration::new(vec!["a".to_owned()]));
         let result = content_info_of(result.unwrap(), "Java");
-        assert_eq!(LanguageContentInfo::new(19, 11, hashmap!("classes".to_owned()=>7,"interfaces".to_owned()=>0)), result);
+        assert_eq!(LanguageContentInfo::new(19, 11, 5, hashmap!("classes".to_owned()=>7,"interfaces".to_owned()=>0)), result);
         buf.clear();
 
         let result = parse_file(Path::new("test_dir/lang_files/c.txt"), "Python", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("Python").as_ref(), &Configuration::new(vec!["a".to_owned()]));
         let result = content_info_of(result.unwrap(), "Python");
-        assert_eq!(LanguageContentInfo::new(11, 6, hashmap!("classes".to_owned()=>2)), result);
+        assert_eq!(LanguageContentInfo::new(11, 6, 3, hashmap!("classes".to_owned()=>2)), result);
         buf.clear();
+    }
+
+    // The flag had no test at all: everything that mentioned it checked that it could be parsed
+    // from the command line or written to a config file, and nothing checked that it counts
+    // anything differently, so it could have been disconnected from the parser entirely.
+    #[test]
+    fn braces_as_code_moves_the_no_content_lines_into_code() {
+        let mut buf = String::with_capacity(150);
+        let path = Path::new("test_dir/lang_files/a.txt");
+        let count_with = |flag: bool, buf: &mut String| {
+            let mut config = Configuration::new(vec!["a".to_owned()]);
+            config.set_braces_as_code(flag);
+            let stats = parse_file(path, "Java", buf, LANGUAGE_MAP_REF.clone(), matcher_for("Java").as_ref(), &config).unwrap();
+            (stats.lines, stats.code_lines, stats.comment_lines)
+        };
+
+        // a.txt has 10 lines that are nothing but a brace, and 6 blank ones. The comments never
+        // move, whatever the flag says, and the three categories always add up to the total.
+        assert_eq!((44, 13, 15), count_with(false, &mut buf));
+        buf.clear();
+        assert_eq!((44, 23, 15), count_with(true, &mut buf));
     }
 
     #[test]
@@ -1023,6 +1052,7 @@ mod tests {
         FileStats {
             lines: 0,
             code_lines: 0,
+            comment_lines: 0,
             keyword_occurences : get_keyword_map(class_occurances, interface_occurances)
         }
     }

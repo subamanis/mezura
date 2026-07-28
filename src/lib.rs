@@ -342,11 +342,14 @@ pub struct Metrics {
     pub lines_per_sec: usize
 }
 
+// 'extra_lines' is what is left after the code and the comments: blank lines, and lines that the
+// language required but that say nothing, like a closing brace. The three add up to 'lines'.
 #[derive(Debug, PartialEq)]
 pub struct FinalStats {
     files: usize,
     lines: usize,
     code_lines: usize,
+    comment_lines: usize,
     extra_lines: usize,
     bytes_size: usize,
     bytes_average_size: usize,
@@ -462,7 +465,7 @@ impl Formatted for ParseFilesError {
 }
 
 impl FinalStats {
-    pub fn new(files: usize, lines: usize, code_lines: usize, bytes_size: usize) -> Self
+    pub fn new(files: usize, lines: usize, code_lines: usize, comment_lines: usize, bytes_size: usize) -> Self
     {
         let bytes_average_size = bytes_size / files;
         let (size, size_measurement) = FinalStats::get_formatted_size_and_measurement(bytes_size);
@@ -473,7 +476,8 @@ impl FinalStats {
             files,
             lines,
             code_lines,
-            extra_lines: lines - code_lines,
+            comment_lines,
+            extra_lines: lines - code_lines - comment_lines,
             bytes_size,
             bytes_average_size,
             size,
@@ -483,7 +487,8 @@ impl FinalStats {
         }
     }
 
-    pub fn new_extended(files: usize, lines: usize, code_lines: usize, extra_lines: usize, bytes_size: usize, bytes_average_size: usize) -> Self {
+    pub fn new_extended(files: usize, lines: usize, code_lines: usize, comment_lines: usize, extra_lines: usize,
+            bytes_size: usize, bytes_average_size: usize) -> Self {
         let (size, size_measurement) = FinalStats::get_formatted_size_and_measurement(bytes_size);
         let size = round_1(size);
         let (average_size, average_size_measurement) = Self::get_formatted_size_and_measurement(bytes_average_size);
@@ -493,6 +498,7 @@ impl FinalStats {
             files,
             lines,
             code_lines,
+            comment_lines,
             extra_lines,
             bytes_size,
             bytes_average_size,
@@ -504,9 +510,10 @@ impl FinalStats {
     }
 
     pub fn calculate(content_info_map: &HashMap<String,LanguageContentInfo>, languages_metadata_map: &HashMap<String,LanguageMetadata>) -> Self {
-        let (mut total_files, mut total_lines, mut total_code_lines, mut total_bytes) = (0, 0, 0,0);
+        let (mut total_files, mut total_lines, mut total_code_lines, mut total_comment_lines, mut total_bytes) = (0, 0, 0, 0, 0);
         languages_metadata_map.values().for_each(|e| {total_files += e.files; total_bytes += e.bytes});
-        content_info_map.values().for_each(|c| {total_lines += c.lines; total_code_lines += c.code_lines});
+        content_info_map.values().for_each(|c| {total_lines += c.lines; total_code_lines += c.code_lines;
+                total_comment_lines += c.comment_lines});
         let bytes_size = total_bytes;
         let bytes_average_size = total_bytes / total_files;
         let (total_size, size_measurement) = Self::get_formatted_size_and_measurement(total_bytes);
@@ -519,7 +526,8 @@ impl FinalStats {
             files: total_files,
             lines: total_lines,
             code_lines: total_code_lines,
-            extra_lines: total_lines - total_code_lines,
+            comment_lines: total_comment_lines,
+            extra_lines: total_lines - total_code_lines - total_comment_lines,
             bytes_size,
             bytes_average_size,
             size: total_size,
@@ -690,6 +698,7 @@ pub mod domain {
     pub struct LanguageContentInfo {
         pub lines : usize,
         pub code_lines : usize,
+        pub comment_lines : usize,
         pub keyword_occurences : HashMap<String,usize>
     }
 
@@ -703,6 +712,7 @@ pub mod domain {
     pub struct FileStats {
         pub lines : usize,
         pub code_lines : usize,
+        pub comment_lines : usize,
         pub keyword_occurences : Vec<usize>
     }
 
@@ -754,10 +764,11 @@ pub mod domain {
     }
 
     impl LanguageContentInfo {
-        pub fn new(lines: usize, code_lines: usize, keyword_occurences: HashMap<String,usize>) -> Self {
+        pub fn new(lines: usize, code_lines: usize, comment_lines: usize, keyword_occurences: HashMap<String,usize>) -> Self {
             LanguageContentInfo {
                 lines,
                 code_lines,
+                comment_lines,
                 keyword_occurences
             }
         }
@@ -766,6 +777,7 @@ pub mod domain {
             LanguageContentInfo {
                 lines,
                 code_lines: 0,
+                comment_lines: 0,
                 keyword_occurences: HashMap::new()
             }
         }
@@ -773,6 +785,7 @@ pub mod domain {
         pub fn add_file_stats(&mut self, other: FileStats, keywords: &[Keyword]) {
             self.lines += other.lines;
             self.code_lines += other.code_lines;
+            self.comment_lines += other.comment_lines;
             for (keyword_index, occurrences) in other.keyword_occurences.iter().enumerate() {
                 if *occurrences > 0 {
                     *self.keyword_occurences.get_mut(&keywords[keyword_index].descriptive_name).unwrap() += *occurrences;
@@ -788,6 +801,7 @@ pub mod domain {
             LanguageContentInfo {
                 lines : stats.lines,
                 code_lines : stats.code_lines,
+                comment_lines : stats.comment_lines,
                 keyword_occurences
             }
         }
@@ -795,6 +809,7 @@ pub mod domain {
         pub fn add_content_info(&mut self, other: &LanguageContentInfo) {
             self.lines += other.lines;
             self.code_lines += other.code_lines;
+            self.comment_lines += other.comment_lines;
             for (k,v) in other.keyword_occurences.iter() {
                 *self.keyword_occurences.get_mut(k).unwrap() += *v;
             }
@@ -806,6 +821,7 @@ pub mod domain {
             LanguageContentInfo {
                 lines : 0,
                 code_lines : 0,
+                comment_lines : 0,
                 keyword_occurences : get_keyword_stats_map(ext)
             }
         }
@@ -835,6 +851,7 @@ pub mod domain {
             FileStats {
                 lines : 0,
                 code_lines : 0,
+                comment_lines : 0,
                 keyword_occurences : vec![0; keywords.len()]
             }
         }
@@ -845,6 +862,10 @@ pub mod domain {
 
         pub fn incr_code_lines(&mut self) {
             self.code_lines += 1;
+        }
+
+        pub fn incr_comment_lines(&mut self) {
+            self.comment_lines += 1;
         }
 
         pub fn incr_keyword(&mut self, keyword_index: usize) {
@@ -869,22 +890,23 @@ mod tests {
     #[test]
     fn test_FinalStats_creation() {
         let content_info_map = hashmap![
-            "a".to_owned() => LanguageContentInfo::new(2000, 1400, hashmap![]),
-            "b".to_owned() => LanguageContentInfo::new(1000, 800, hashmap![]),
-            "c".to_owned() => LanguageContentInfo::new(1000, 800, hashmap![])
+            "a".to_owned() => LanguageContentInfo::new(2000, 1400, 0, hashmap![]),
+            "b".to_owned() => LanguageContentInfo::new(1000, 800, 0, hashmap![]),
+            "c".to_owned() => LanguageContentInfo::new(1000, 800, 0, hashmap![])
         ];
         let languages_metadata_map = hashmap![
             "a".to_owned() => LanguageMetadata::new(20, 100000),
             "b".to_owned() => LanguageMetadata::new(10, 50000),
             "c".to_owned() => LanguageMetadata::new(10, 50000)
         ];
-        let f = FinalStats::new(40, 4000, 3000, 200000);
-        let ef = FinalStats::new_extended(40, 4000, 3000, 1000, 200000, 5000);
+        let f = FinalStats::new(40, 4000, 3000, 0, 200000);
+        let ef = FinalStats::new_extended(40, 4000, 3000, 0, 1000, 200000, 5000);
         let cf = FinalStats::calculate(&content_info_map, &languages_metadata_map);
         let customf = FinalStats {
             files: 40,
             lines: 4000,
             code_lines: 3000,
+            comment_lines: 0,
             extra_lines: 1000,
             bytes_size: 200000,
             bytes_average_size: 5000,
@@ -899,22 +921,23 @@ mod tests {
 
 
         let content_info_map = hashmap![
-            "a".to_owned() => LanguageContentInfo::new(2000, 1400, hashmap![]),
-            "b".to_owned() => LanguageContentInfo::new(1000, 800, hashmap![]),
-            "c".to_owned() => LanguageContentInfo::new(1000, 800, hashmap![])
+            "a".to_owned() => LanguageContentInfo::new(2000, 1400, 0, hashmap![]),
+            "b".to_owned() => LanguageContentInfo::new(1000, 800, 0, hashmap![]),
+            "c".to_owned() => LanguageContentInfo::new(1000, 800, 0, hashmap![])
         ];
         let languages_metadata_map = hashmap![
             "a".to_owned() => LanguageMetadata::new(25, 1417403),
             "b".to_owned() => LanguageMetadata::new(12, 500000),
             "c".to_owned() => LanguageMetadata::new(12, 500000)
         ];
-        let f = FinalStats::new(49, 4000, 3000, 2417403);
-        let ef = FinalStats::new_extended(49, 4000, 3000, 1000, 2417403, 49334);
+        let f = FinalStats::new(49, 4000, 3000, 0, 2417403);
+        let ef = FinalStats::new_extended(49, 4000, 3000, 0, 1000, 2417403, 49334);
         let cf = FinalStats::calculate(&content_info_map, &languages_metadata_map);
         let customf = FinalStats {
             files: 49,
             lines: 4000,
             code_lines: 3000,
+            comment_lines: 0,
             extra_lines: 1000,
             bytes_size: 2417403,
             bytes_average_size: 49334,
