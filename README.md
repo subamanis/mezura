@@ -84,12 +84,14 @@ In order for a file to be considered for counting, its extension must be support
 Below there is a list with all the commands-flags that the program accepts.
 ```
 --help
+
     No arguments or any number of existing other commands.
 
     Overrides normal program execution and just displays this message on the terminal.
     If more commands are provided, information will be displayed specifically about them.
 
 --changelog
+
     No arguments, or the optional argument 'full'.
 
     Overrides normal program execution and just prints a summary of the changes of the current version of
@@ -97,24 +99,32 @@ Below there is a list with all the commands-flags that the program accepts.
     most recent first.
 
 --show-languages
+
     No arguments.
 
     Overrides normal program execution and just prints a sorted list with the names of all the supported
     languages that were detected in the persistent data path of the application, where you can add more.
 
 --show-configs
+
     No arguments.
 
     Overrides normal program execution and just prints a sorted list with the names of all the configuration
     files that were detected in the persistent data path of the application. 
 
 --show-palettes
-    No arguments.
 
-    Overrides normal program execution and just prints a sorted list with the names + visual previews of all the color
-    palettes that were detected in the persistent data path of the application, where you can add more.
+    No arguments, or one of 'slim', 'medium', 'fat' and 'low'. Default: slim
+
+    Overrides normal program execution and just prints a sorted list with the names of all the color palettes
+    that were detected in the persistent data path of the application, where you can add more,
+    each one previewed on a mock overview.
+
+    The optional argument draws the preview bars with the character that the '--bar-thickness' command
+    would use, so that a palette can be judged the way it will actually be printed.
 
 --tune-palettes
+
     No arguments.
 
     Overrides normal program execution: generates an interactive HTML page with all the color
@@ -124,6 +134,7 @@ Below there is a list with all the commands-flags that the program accepts.
     use directly or save in a palette file.
 
 --dirs
+
     The paths to the directories or files, separated by commas if more than 1,
     in this form: '--dirs <path1>, <path2>'
     A path can also be a glob pattern (* ? [..] {..}), which is expanded to every existing
@@ -142,7 +153,8 @@ Below there is a list with all the commands-flags that the program accepts.
     1) as the first arguments of the program directly
     2) if they are present in a configuration file (see [Configuration Files](#configuration-files)).
 
---exclude 
+--exclude
+
     1..n glob patterns separated by commas.
 
     A pattern without a slash matches a file or folder name at any depth ('node_modules', '*.min.js').
@@ -156,7 +168,8 @@ Below there is a list with all the commands-flags that the program accepts.
     or surround all the arguments with quotation marks:
     <arg1>`, <arg2>`, <arg3>   or   "<arg1>, <arg2>, <arg3>"
 
---languages 
+--languages
+
     1..n arguments separated by commas, case-insensitive
 
     The given language names must exist in any of the files in the 'data/languages/' dir as the
@@ -164,7 +177,8 @@ Below there is a list with all the commands-flags that the program accepts.
 
     Only the languages specified here will be taken into account for the stats.
 
---exclude-languages 
+--exclude-languages
+
     1..n arguments separated by commas, case-insensitive
 
     The given language names should exist in any of the files in the 'data/languages/' dir as the
@@ -173,6 +187,7 @@ Below there is a list with all the commands-flags that the program accepts.
     The given language names will be ignored from the stats calculation, if they exist.
 
 --threads
+
     2 numbers: the first between 1 and 8 and the second between 1 and 30. 
 
     This represents the number of the producers (threads that will traverse the given directories),
@@ -182,6 +197,7 @@ Below there is a list with all the commands-flags that the program accepts.
     on your machine. Generally, a good ratio of producers-consumers is 1:3
     
 --braces-as-code
+
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
     or 'no' to disable. Default: no 
 
@@ -192,6 +208,7 @@ Below there is a list with all the commands-flags that the program accepts.
     This helps to keep the stats clean when using code lines as a complexity and productivity metric.
 
 --search-in-dotted
+
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
     or 'no' to disable. Default: no 
 
@@ -199,6 +216,7 @@ Below there is a list with all the commands-flags that the program accepts.
     like .vscode or .git.
 
 --show-faulty-files
+
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
     or 'no' to disable. Default: no 
 
@@ -209,14 +227,8 @@ Below there is a list with all the commands-flags that the program accepts.
     Specifies that their path, along with information about the exact error is displayed too.
     The most common reason for this error is if a file contains non UTF-8 characters. 
 
---no-visual
-    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
-    or 'no' to disable. Default: no 
-
-    Disables the colors in the "overview" section of the results, and disables the visualization with 
-    the vertical lines that represent the percentages.
-
 --no-gitignore
+
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
     or 'no' to disable. Default: no
 
@@ -230,7 +242,32 @@ Below there is a list with all the commands-flags that the program accepts.
     This flag disables that behavior, so that every relevant file is counted
     regardless of .gitignore rules.
 
+--hide
+
+    One or more names separated by commas or spaces, for example:
+    --hide status,timing   or   --hide status timing
+
+    Leaves the named parts of the output unprinted. What you can hide:
+
+      version     the version line at the top
+      status      the 'Analyzing directories', 'Parsing files' and 'N files found' lines
+      details     the per language rows and the total underneath them
+      keywords    the keyword counts, keeping the rest of the details rows
+      overview    the whole percentages section
+      bar         only the [-|||-] bar of the overview, keeping the percentages and the colors
+      progress    the comparison with previous runs (the same as '--compare 0')
+      timing      the execution time line at the bottom
+
+    The list mixes whole sections with parts of them on purpose: you are pointing at what you
+    see, not at how the program is organised.
+
+    Errors and warnings are never hidden. Hiding the status still reports files that failed to
+    be parsed, since otherwise the numbers would silently be wrong.
+
+    Replaces the '--no-visual' and '--no-keywords' commands of previous versions.
+
 --colors
+
     1 to 5 colors separated by spaces. A color is either a hex value, with or without a leading
     '#' (e.g. ff8800 #00ff00), or one of the 16 standard terminal color names (black, red, green,
     yellow, blue, magenta, cyan, white and their bright- variants, e.g. bright-magenta).
@@ -246,6 +283,7 @@ Below there is a list with all the commands-flags that the program accepts.
     quotation marks ("#ff8800"), since an unquoted '#' starts a comment.
 
 --color-palette
+
     One argument, the name of a palette (case-insensitive).
 
     Applies a named color palette. Palettes are .txt files in the 'data/palettes' dir, in the
@@ -260,6 +298,7 @@ Below there is a list with all the commands-flags that the program accepts.
     Palettes written for versions before v3.0.0 are converted automatically on the first run.
 
 --sort
+
     One argument: 'lines', 'files', 'code', 'size' or 'name'. Default: lines
 
     Chooses the order of the languages in the "details" section, which also decides which of them
@@ -271,6 +310,7 @@ Below there is a list with all the commands-flags that the program accepts.
     runs that used to be ordered by size are now ordered by lines unless you ask otherwise.
 
 --top
+
     One number, 1 or greater.
 
     Shows only that many languages in the "details" section, the ones that come first according
@@ -282,6 +322,7 @@ Below there is a list with all the commands-flags that the program accepts.
     does not leave a third one sitting in the bar.
 
 --bar-thickness
+
     One argument: 'slim', 'medium', 'fat' or 'low'. Default: slim
 
     Chooses the character that the percentage bar of the "overview" section is drawn with.
@@ -296,6 +337,7 @@ Below there is a list with all the commands-flags that the program accepts.
     If the bar comes out as question marks or empty boxes, use 'slim'.
 
 --style
+
     One or more 'token=style' pairs separated by commas, for example:
     --style number=bright-black,label=b5a98a italic,heading=white bold underline
 
@@ -335,12 +377,14 @@ Below there is a list with all the commands-flags that the program accepts.
     preferences across palette changes, and '--style' wins over both.
 
 --save
+
     One argument as the file name (whitespace allowed, without an extension, case-insensitive)
 
     Doing so, will run the program and also create a .txt configuration file,
     inside 'data/config/' with the specified name, that can later be loaded with the --load command.
 
 --load
+
     One argument as the file name (whitespace allowed, without an extension, case-insensitive)
     
     Associated with the '--save' command, this command is used to load the flags of 
@@ -348,7 +392,8 @@ Below there is a list with all the commands-flags that the program accepts.
 
     You can combine the '--load' and '--save' commands to modify a configuration file.
 
---log 
+--log
+
     0..n words as arguments in the cmd.
     If specified in a configuration file use 'true' or 'yes' to enable,
     or 'no' to disable. Default: no 
@@ -361,6 +406,7 @@ Below there is a list with all the commands-flags that the program accepts.
     This flag will not be saved in a configuration file automatically, but it can be added manually.
 
 --compare
+
     1 argument: a number between 0 and 10. Default: 1
 
     This flag only works if a configuration file is loaded. Specifies with how many previous logs this

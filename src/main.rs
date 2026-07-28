@@ -11,8 +11,6 @@ fn main() {
     #[cfg(target_os = "windows")]
     control::set_virtual_terminal(true).unwrap();
 
-    println!("\n{VERSION_ID}");
-
     let mut language_map: HashMap<String, Language>;
 
     if !PERSISTENT_APP_PATHS.are_initialized {
@@ -79,6 +77,15 @@ fn main() {
     };
     theme::set_active(config.theme.clone());
 
+    // Printed here and not at the very start, so that '--hide version' can be declared in a
+    // configuration file and not only on the command line
+    if !config.hidden.version {
+        // The status block opens with a blank line of its own, so the separation below the
+        // version is only missing when that block is not printed
+        let separator = if config.hidden.status {"\n"} else {""};
+        println!("\n{VERSION_ID}{separator}");
+    }
+
     if !config.languages_of_interest.is_empty() &&
      config.languages_of_interest.iter().all(|lang| config.excluded_languages.contains(lang)) {
         println!("\n{}\n",theme::active().error.paint("Included and excluded languages are mutually exclusive."));
@@ -108,14 +115,17 @@ fn main() {
     }
 
     let instant = Instant::now();
+    let hide_timing = config.hidden.timing;
     match mezura::run(config, language_map) {
         Ok(x) => {
-            let perf = format!("Exec time: {:.2} secs ", instant.elapsed().as_secs_f32());
-            let metrics = match x {
-                Some(x) => format!("(Parsing {} files/s | {} lines/s)", with_seperators(x.files_per_sec), with_seperators(x.lines_per_sec)),
-                None => String::new()
-            };
-            println!("\n{}",theme::active().footer.paint(&(perf + &metrics)));
+            if !hide_timing {
+                let perf = format!("Exec time: {:.2} secs ", instant.elapsed().as_secs_f32());
+                let metrics = match x {
+                    Some(x) => format!("(Parsing {} files/s | {} lines/s)", with_seperators(x.files_per_sec), with_seperators(x.lines_per_sec)),
+                    None => String::new()
+                };
+                println!("\n{}",theme::active().footer.paint(&(perf + &metrics)));
+            }
         },
         Err(x) => println!("{}",x.formatted())
     }
@@ -212,7 +222,15 @@ fn read_args_as_str() -> Option<String> {
     }
 }
 
+// These commands take no configuration, so there is nothing that could hide the version line
+// from them, and they are the only place where the version of an installed binary can be read
 fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Language>) -> bool {
+    let is_present = |command: &str| args_str.contains(&(String::from("--") + command));
+    if ![HELP, CHANGELOG, SHOW_LANGUAGES, SHOW_CONFIGS, SHOW_PALETTES, TUNE_PALETTES].iter().any(|x| is_present(x)) {
+        return false;
+    }
+    println!("\n{VERSION_ID}");
+
     if args_str.contains(&(String::from("--") + HELP)) {
         message_printer::print_help_message_for_given_args(args_str);
         return true; 
@@ -241,8 +259,17 @@ fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Lan
             Err(x) => println!("\n{}", format!("Unable to generate the palette tuner page: {x}").red())
         }
         return true;
-    } else if args_str.contains(&(String::from("--") + SHOW_PALETTES)) {
-        message_printer::print_existing_palettes();
+    } else if let Some(pos) = args_str.find(&(String::from("--") + SHOW_PALETTES)) {
+        match args_str[pos + SHOW_PALETTES.len() + 2..].split_whitespace().next() {
+            Some(arg) if !arg.starts_with("--") => match config_manager::BarThickness::parse(arg) {
+                Some(thickness) => message_printer::print_existing_palettes(thickness),
+                None => {
+                    println!("\n{}", config_manager::ArgParsingError::IncorrectCommandArgs(SHOW_PALETTES.to_owned()).formatted());
+                    message_printer::print_help_message_for_command(SHOW_PALETTES);
+                }
+            },
+            _ => message_printer::print_existing_palettes(config_manager::BarThickness::default())
+        }
         return true;
     }
 

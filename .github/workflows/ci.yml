@@ -50,4 +50,4 @@ jobs:
         run: cargo test --verbose
 
       - name: Run against the repository itself
-        run: cargo run --release -- ./src --no-visual
+        run: cargo run --release -- ./src --hide bar

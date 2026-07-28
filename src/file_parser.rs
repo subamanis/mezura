@@ -77,7 +77,7 @@ pub fn parse_file(path: &Path, lang_name: &str, buf: &mut String, language_map: 
 fn parse_lines(contents: &str, language: &Language, keyword_matcher: Option<&KeywordMatcher>, config: &Configuration)
 -> FileStats
 {
-    let mut file_stats = match config.no_keywords {
+    let mut file_stats = match config.hidden.keywords {
         true => FileStats::default(),
         false => FileStats::with_keywords(&language.keywords)
     };
@@ -107,7 +107,7 @@ fn parse_lines(contents: &str, language: &Language, keyword_matcher: Option<&Key
             let cleansed = x.trim_ascii();
             if config.braces_as_code || cleansed.len() > 2 || (cleansed != "{" && cleansed != "}" && cleansed != "};") {
                 file_stats.incr_code_lines();
-                if !config.no_keywords && let Some(matcher) = keyword_matcher {
+                if !config.hidden.keywords && let Some(matcher) = keyword_matcher {
                     add_keywords_if_any(cleansed, matcher, &mut file_stats);
                 }
             }
@@ -926,12 +926,12 @@ mod tests {
         let result = content_info_of(result.unwrap(), "Java");
         assert_eq!(LanguageContentInfo::new(44, 13, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         buf.clear();
-        config.set_should_not_count_keywords(true);
+        config.set_hidden(config_manager::Hidden {keywords: true, ..Default::default()});
         let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "Java", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("Java").as_ref(), &config);
         let result = content_info_of(result.unwrap(), "Java");
         assert_eq!(LanguageContentInfo::new(44, 13, hashmap!()), result);
         buf.clear();
-        config.set_should_not_count_keywords(false);
+        config.set_hidden(config_manager::Hidden::default());
         let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "C#", &mut buf, LANGUAGE_MAP_REF.clone(), matcher_for("C#").as_ref(), &Configuration::new(vec!["a".to_owned()]));
         let result = content_info_of(result.unwrap(), "C#");
         assert_eq!(LanguageContentInfo::new(44, 13, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);

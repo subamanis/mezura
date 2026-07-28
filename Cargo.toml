@@ -1,6 +1,6 @@
 [package]
 name = "mezura"
-version = "2.0.1"
+version = "3.0.0"
 authors = ["subamanis <petrospapa21@gmail.com>"]
 edition = "2024"
 default-run = "mezura"

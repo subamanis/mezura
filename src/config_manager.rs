@@ -16,8 +16,7 @@ pub const THREADS            :&str   = "threads";
 pub const BRACES_AS_CODE     :&str   = "braces-as-code";
 pub const SEARCH_IN_DOTTED   :&str   = "search-in-dotted";
 pub const SHOW_FAULTY_FILES  :&str   = "show-faulty-files";
-pub const NO_KEYWORDS        :&str   = "no-keywords";
-pub const NO_VISUAL          :&str   = "no-visual";
+pub const HIDE               :&str   = "hide";
 pub const NO_GITIGNORE       :&str   = "no-gitignore";
 pub const COLORS             :&str   = "colors";
 pub const COLOR_PALETTE      :&str   = "color-palette";
@@ -47,8 +46,6 @@ pub const MAX_COMPARE_LEVEL   : usize = 10;
 const DEF_BRACES_AS_CODE    : bool    = false;
 const DEF_SEARCH_IN_DOTTED  : bool    = false;
 const DEF_SHOW_FAULTY_FILES : bool    = false;
-const DEF_NO_VISUAL         : bool    = false;
-const DEF_NO_KEYWORDS       : bool    = false;
 const DEF_NO_GITIGNORE      : bool    = false;
 const DEF_COMPARE_LEVEL     : usize   = 1;
 
@@ -64,8 +61,7 @@ pub struct Configuration {
     pub braces_as_code: bool,
     pub should_search_in_dotted: bool,
     pub should_show_faulty_files: bool,
-    pub no_keywords: bool,
-    pub no_visual: bool,
+    pub hidden: Hidden,
     pub no_gitignore: bool,
     pub colors: Vec<Color>,
     pub log: LogOption,
@@ -76,6 +72,58 @@ pub struct Configuration {
     pub sort_by: SortCriterion,
     pub top_n: Option<usize>,
     pub theme: Theme
+}
+
+// A hide list and not a show list: a show list would have to be re-enumerated every time a section
+// is added, and a configuration saved today would silently keep hiding it.
+// The list mixes whole sections with parts of them on purpose, because the user is pointing at what
+// they see and not at how the program is structured.
+#[derive(Debug,PartialEq,Eq,Clone,Copy,Default)]
+pub struct Hidden {
+    pub version: bool,
+    pub status: bool,
+    pub details: bool,
+    pub keywords: bool,
+    pub overview: bool,
+    pub bar: bool,
+    pub progress: bool,
+    pub timing: bool
+}
+
+impl Hidden {
+    fn pairs(self) -> [(&'static str, bool); 8] {
+        [("version", self.version), ("status", self.status), ("details", self.details),
+         ("keywords", self.keywords), ("overview", self.overview), ("bar", self.bar),
+         ("progress", self.progress), ("timing", self.timing)]
+    }
+
+    // Returns the unrecognised name, so that the error can say which one it was
+    pub fn parse(value: &str) -> Result<Hidden, String> {
+        let mut hidden = Hidden::default();
+        for entry in value.split([',', ' ', '\t']).map(str::trim).filter(|x| !x.is_empty()) {
+            match entry.to_lowercase().as_str() {
+                "version" => hidden.version = true,
+                "status" => hidden.status = true,
+                "details" => hidden.details = true,
+                "keywords" => hidden.keywords = true,
+                "overview" => hidden.overview = true,
+                "bar" => hidden.bar = true,
+                "progress" => hidden.progress = true,
+                "timing" => hidden.timing = true,
+                _ => return Err(entry.to_owned())
+            }
+        }
+
+        Ok(hidden)
+    }
+
+    pub fn to_list_string(self) -> String {
+        self.pairs().iter().filter(|(_,is_hidden)| *is_hidden).map(|(name,_)| *name).collect::<Vec<_>>().join(",")
+    }
+
+    pub fn names() -> String {
+        Hidden::default().pairs().iter().map(|(name,_)| *name).collect::<Vec<_>>().join(", ")
+    }
 }
 
 #[derive(Debug,PartialEq,Eq,Clone,Copy,Default)]
@@ -177,6 +225,7 @@ pub enum ArgParsingError {
     NonExistantConfig(String),
     NonExistantPalette(String),
     InvalidStyle(String),
+    InvalidHideTarget(String),
     InvalidValueInConfig(String,String),
     InvalidGlobPattern(String),
     NoGlobMatches(String),
@@ -216,9 +265,9 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
 
     let mut custom_config = None;
     let (mut exclude_dirs, mut languages_of_interest, mut excluded_languages, mut threads, mut braces_as_code,
-         mut search_in_dotted, mut show_faulty_files, mut config_name_to_save, mut no_visual, mut log,
-         mut compare_level, mut config_name_to_load, mut no_keywords, mut no_gitignore, mut colors, mut color_palette, mut styles, mut bar_thickness, mut sort_by, mut top_n)
-         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
+         mut search_in_dotted, mut show_faulty_files, mut config_name_to_save, mut hidden, mut log,
+         mut compare_level, mut config_name_to_load, mut no_gitignore, mut colors, mut color_palette, mut styles, mut bar_thickness, mut sort_by, mut top_n)
+         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
     for command in options {
         let (command_name, arguments) = match command.find(" ") {
             Some(index) => command.split_at(index),
@@ -287,18 +336,18 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 return Err(ArgParsingError::UnexpectedCommandArgs(SHOW_FAULTY_FILES.to_owned()))
             }
             show_faulty_files = Some(true);
-        } else if command_name == NO_KEYWORDS {
-            if has_any_args(command) {
-                message_printer::print_help_message_for_command(NO_VISUAL);
-                return Err(ArgParsingError::UnexpectedCommandArgs(NO_KEYWORDS.to_owned()))
+        } else if command_name == HIDE {
+            if arguments.trim().is_empty() {
+                message_printer::print_help_message_for_command(HIDE);
+                return Err(ArgParsingError::IncorrectCommandArgs(HIDE.to_owned()))
             }
-            no_keywords = Some(true);
-        } else if command_name == NO_VISUAL {
-            if has_any_args(command) {
-                message_printer::print_help_message_for_command(NO_VISUAL);
-                return Err(ArgParsingError::UnexpectedCommandArgs(NO_VISUAL.to_owned()))
+            match Hidden::parse(arguments) {
+                Ok(x) => hidden = Some(x),
+                Err(x) => {
+                    message_printer::print_help_message_for_command(HIDE);
+                    return Err(ArgParsingError::InvalidHideTarget(x))
+                }
             }
-            no_visual = Some(true);
         } else if command_name == NO_GITIGNORE {
             if has_any_args(command) {
                 message_printer::print_help_message_for_command(NO_GITIGNORE);
@@ -409,7 +458,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     let mut config_builder = ConfigurationBuilder {
         dirs, exclude_dirs, languages_of_interest, excluded_languages, threads, braces_as_code,
         should_search_in_dotted: search_in_dotted, should_show_faulty_files: show_faulty_files,
-        no_keywords, no_visual, no_gitignore, colors, color_palette, log, compare_level,
+        hidden, no_gitignore, colors, color_palette, log, compare_level,
         config_name_to_save, config_name_to_load, styles, bar_thickness, sort_by, top_n, palette_styles: None
     };
 
@@ -466,8 +515,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             BRACES_AS_CODE => config_builder.braces_as_code.is_some(),
             SEARCH_IN_DOTTED => config_builder.should_search_in_dotted.is_some(),
             SHOW_FAULTY_FILES => config_builder.should_show_faulty_files.is_some(),
-            NO_KEYWORDS => config_builder.no_keywords.is_some(),
-            NO_VISUAL => config_builder.no_visual.is_some(),
+            HIDE => config_builder.hidden.is_some(),
             NO_GITIGNORE => config_builder.no_gitignore.is_some(),
             EXCLUDE => config_builder.exclude_dirs.is_some(),
             COLORS => config_builder.colors.is_some(),
@@ -588,8 +636,7 @@ pub struct ConfigurationBuilder {
     pub braces_as_code:           Option<bool>,
     pub should_search_in_dotted:  Option<bool>,
     pub should_show_faulty_files: Option<bool>,
-    pub no_keywords:              Option<bool>,
-    pub no_visual:                Option<bool>,
+    pub hidden:                   Option<Hidden>,
     pub no_gitignore:             Option<bool>,
     pub colors:                   Option<Vec<Color>>,
     pub color_palette:            Option<String>,
@@ -614,8 +661,7 @@ impl ConfigurationBuilder {
         if self.braces_as_code.is_none() {self.braces_as_code = config.braces_as_code};
         if self.should_search_in_dotted.is_none() {self.should_search_in_dotted = config.should_search_in_dotted};
         if self.should_show_faulty_files.is_none() {self.should_show_faulty_files = config.should_show_faulty_files};
-        if self.no_keywords.is_none() {self.no_keywords = config.no_keywords};
-        if self.no_visual.is_none() {self.no_visual = config.no_visual};
+        if self.hidden.is_none() {self.hidden = config.hidden};
         if self.no_gitignore.is_none() {self.no_gitignore = config.no_gitignore};
         if self.colors.is_none() {self.colors = config.colors};
         if self.color_palette.is_none() {self.color_palette = config.color_palette};
@@ -631,7 +677,7 @@ impl ConfigurationBuilder {
     pub fn has_missing_fields(&self) -> bool {
         self.exclude_dirs.is_none() || self.languages_of_interest.is_none() ||
         self.threads.is_none() || self.braces_as_code.is_none() || self.should_search_in_dotted.is_none() ||
-        self.should_show_faulty_files.is_none() || self.no_visual.is_none() || self.no_gitignore.is_none() ||
+        self.should_show_faulty_files.is_none() || self.hidden.is_none() || self.no_gitignore.is_none() ||
         self.colors.is_none() || self.color_palette.is_none() || self.log.is_none() || self.compare_level.is_none() ||
         self.styles.is_none() || self.bar_thickness.is_none() || self.sort_by.is_none()
     }
@@ -647,8 +693,7 @@ impl ConfigurationBuilder {
             braces_as_code: self.braces_as_code.unwrap_or(DEF_BRACES_AS_CODE),
             should_search_in_dotted: self.should_search_in_dotted.unwrap_or(DEF_SEARCH_IN_DOTTED),
             should_show_faulty_files: self.should_show_faulty_files.unwrap_or(DEF_SHOW_FAULTY_FILES),
-            no_keywords: self.no_keywords.unwrap_or(DEF_NO_KEYWORDS),
-            no_visual: self.no_visual.unwrap_or(DEF_NO_VISUAL),
+            hidden: self.hidden.unwrap_or_default(),
             no_gitignore: self.no_gitignore.unwrap_or(DEF_NO_GITIGNORE),
             colors: self.colors.clone().unwrap_or_default(),
             log: self.log.clone().unwrap_or_default(),
@@ -675,8 +720,7 @@ impl Configuration {
             braces_as_code: DEF_BRACES_AS_CODE,
             should_search_in_dotted: DEF_SEARCH_IN_DOTTED,
             should_show_faulty_files: DEF_SHOW_FAULTY_FILES,
-            no_keywords: DEF_NO_KEYWORDS,
-            no_visual: DEF_NO_VISUAL,
+            hidden: Hidden::default(),
             no_gitignore: DEF_NO_GITIGNORE,
             colors: Vec::new(),
             log: LogOption::default(),
@@ -728,13 +772,8 @@ impl Configuration {
         self
     }
 
-    pub fn set_should_not_count_keywords(&mut self, should_count_keywords: bool) -> &mut Self {
-        self.no_keywords = should_count_keywords;
-        self
-    }
-
-    pub fn set_should_enable_visuals(&mut self, should_enable_visuals: bool) -> &mut Self {
-        self.no_visual = should_enable_visuals;
+    pub fn set_hidden(&mut self, hidden: Hidden) -> &mut Self {
+        self.hidden = hidden;
         self
     }
 
@@ -813,6 +852,7 @@ impl Formatted for ArgParsingError {
             Self::NonExistantConfig(p) => format!("Configuration '{p}' does not exist.").red(),
             Self::NonExistantPalette(p) => format!("Color palette '{p}' was not found, or could not be read.").red(),
             Self::InvalidStyle(p) => p.clone().red(),
+            Self::InvalidHideTarget(p) => format!("'{p}' is not something that can be hidden.\nThe options are: {}.", Hidden::names()).red(),
             Self::InvalidValueInConfig(cmd,conf) => format!("Invalid value for the command '--{cmd}', in config '{conf}'.\nFix the value in the config file, or override it by providing a valid '--{cmd}' argument.").red(),
             Self::InvalidGlobPattern(p) => format!("'{p}' is not a valid glob pattern.").red(),
             Self::NoGlobMatches(p) => format!("The pattern '{p}' did not match any existing directory or file.").red(),
@@ -861,7 +901,6 @@ mod tests {
         assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("show-faulty-files".to_owned())), create_config_from_args("./ --threads 1 1 --show-faulty-files 1"));
         assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("show-faulty-files".to_owned())), create_config_from_args("./ --threads 1 1 --show-faulty-files a"));
         assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("search-in-dotted".to_owned())), create_config_from_args("./ --threads 1 1 --search-in-dotted a"));
-        assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("no-visual".to_owned())), create_config_from_args("./ --no-visual a"));
         assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("braces-as-code".to_owned())), create_config_from_args("./ --braces-as-code a"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned())), create_config_from_args("./ --exclude"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned())), create_config_from_args("./ --exclude   --threads 4"));
@@ -886,8 +925,6 @@ mod tests {
                 create_config_from_args("./ --threads 1 1 --braces-as-code").unwrap());
         assert_eq!(*new_conf("./").set_should_search_in_dotted(true),
                 create_config_from_args("./ --search-in-dotted").unwrap());
-        assert_eq!(*new_conf("./").set_should_enable_visuals(true),
-                create_config_from_args("./ --no-visual").unwrap());
         assert_eq!(*new_conf("./").set_no_gitignore(true),
                 create_config_from_args("./ --no-gitignore").unwrap());
         assert_eq!(*new_conf("./").set_colors(vec![Color::TrueColor{r:255,g:136,b:0}, Color::BrightCyan]),
@@ -906,6 +943,30 @@ mod tests {
                 create_config_from_args("./ --log   this is a test ").unwrap());
         assert_eq!(*new_conf("./").set_log_option(LogOption::new(None)),
                 create_config_from_args("./ --log  ").unwrap());
+    }
+
+    #[test]
+    fn test_hide_arg_parsing() {
+        let hidden = |command: &str| create_config_from_args(command).unwrap().hidden;
+
+        assert_eq!(Hidden::default(), hidden("./"));
+        assert_eq!(Hidden {keywords: true, ..Default::default()}, hidden("./ --hide keywords"));
+        // Commas and spaces both separate, so the Powershell comma escaping is never needed
+        let expected = Hidden {status: true, bar: true, timing: true, ..Default::default()};
+        assert_eq!(expected, hidden("./ --hide status,bar,timing"));
+        assert_eq!(expected, hidden("./ --hide status bar timing"));
+        assert_eq!(expected, hidden("./ --hide  STATUS , bar,  Timing "));
+
+        // The error names the entry that was not understood, instead of the whole command
+        assert_eq!(Err(ArgParsingError::InvalidHideTarget("detials".to_owned())),
+                create_config_from_args("./ --hide details,detials"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs(HIDE.to_owned())), create_config_from_args("./ --hide"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs(HIDE.to_owned())), create_config_from_args("./ --hide   "));
+
+        // What is written to a config file is what the command line accepts
+        assert_eq!("status,bar,timing", expected.to_list_string());
+        assert_eq!(Ok(expected), Hidden::parse(&expected.to_list_string()));
+        assert_eq!(Ok(Hidden::default()), Hidden::parse(""));
     }
 
     #[test]

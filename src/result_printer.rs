@@ -19,7 +19,6 @@ const PRESENT_BUT_TINY : f64 = 0.001;
 
 const KEYWORD_LINE_OFFSET : usize = 19;
 const STANDARD_LINE_STATS_LEN : usize = 33;
-const DASH_LINE_OFFSET : usize = 47;
 
 //log file keys
 const FILES         : &str  = "Files:";
@@ -40,19 +39,27 @@ pub fn format_and_print_results(content_info_map: &mut HashMap<String, LanguageC
     let shown_language_names = &sorted_language_names[..sorted_language_names.len() - hidden_languages];
 
     let biggest_prefix_standard_spaces = get_biggest_prefix_standard_spaces(shown_language_names, languages_metadata_map);
+    let should_print_keywords = !config.hidden.keywords;
 
-    print_individually(shown_language_names, content_info_map, languages_metadata_map, biggest_prefix_standard_spaces, !config.no_keywords);
-    if hidden_languages > 0 {
-        let plural = if hidden_languages == 1 {"language"} else {"languages"};
-        println!("\n{}", theme::active().summary.paint(&format!("(+{hidden_languages} more {plural} hidden by --top {})", config.top_n.unwrap())));
+    if !config.hidden.details {
+        print_individually(shown_language_names, content_info_map, languages_metadata_map,
+                biggest_prefix_standard_spaces, should_print_keywords);
+        if hidden_languages > 0 {
+            let plural = if hidden_languages == 1 {"language"} else {"languages"};
+            println!("\n{}", theme::active().summary.paint(&format!("(+{hidden_languages} more {plural} hidden by --top {})", config.top_n.unwrap())));
+        }
     }
 
     if languages_metadata_map.len() > 1 {
-        print_sum(content_info_map, final_stats, biggest_prefix_standard_spaces, !config.no_keywords);
-        print_visual_overview(&mut sorted_language_names, content_info_map, languages_metadata_map, final_stats, config);
+        if !config.hidden.details {
+            print_sum(content_info_map, final_stats, biggest_prefix_standard_spaces, should_print_keywords);
+        }
+        if !config.hidden.overview {
+            print_visual_overview(&mut sorted_language_names, content_info_map, languages_metadata_map, final_stats, config);
+        }
     }
 
-    if let Some(content) = existing_log_content && config.compare_level != 0 {
+    if !config.hidden.progress && let Some(content) = existing_log_content && config.compare_level != 0 {
         print_comparison_to_previous_runs(final_stats, content,  config.compare_level, datetime_now);
     }
 }
@@ -74,7 +81,7 @@ fn print_individually(sorted_languages: &[String], content_info_map: &HashMap<St
     {
         let spaces = max_line_stats_len+1 - lines_stats_len_vec[i];
         let mut line = titles_vec[i].clone() + &lines_stats_vec[i] + &" ".repeat(spaces) + " |  " + &size_stats_vec[i];
-        //if run with --no-keywords
+        //if run with --hide keywords
         if !keywords_stats_vec.is_empty(){
             line = line + "\n" + &keywords_stats_vec[i];
         } 
@@ -120,7 +127,7 @@ fn print_individually(sorted_languages: &[String], content_info_map: &HashMap<St
     for i in 0..lines_stats_vec.len() {
         let line = reconstruct_line(i, max_line_stats_len, &titles_vec, &lines_stats_vec,
                 &lines_stats_len_vec, &size_stats_vec, &keywords_stats_vec);
-                
+
         if i == lines_stats_len_vec.len() - 1 {
             println!("{line}");
         } else {
@@ -130,11 +137,33 @@ fn print_individually(sorted_languages: &[String], content_info_map: &HashMap<St
 }
 
 
+// The text is already coloured by the time it gets measured, so the escape sequences have to be
+// skipped: their bytes are in the string but not on the screen.
+fn widest_visible_line(text: &str) -> usize {
+    fn visible_len(line: &str) -> usize {
+        let mut len = 0;
+        let mut chars = line.chars();
+        while let Some(character) = chars.next() {
+            if character == '\x1b' {
+                for terminator in chars.by_ref() {
+                    if terminator == 'm' {break}
+                }
+            } else {
+                len += 1;
+            }
+        }
+        len
+    }
+
+    text.lines().map(visible_len).max().unwrap_or(0)
+}
+
+
 fn print_sum(content_info_map: &HashMap<String,LanguageContentInfo>, final_stats: &FinalStats, biggest_prefix_standard_spaces: usize,
-        should_print_keywords: bool) 
+        should_print_keywords: bool)
 {
-    let (total_files_str, total_lines_str, total_code_lines_str, total_extra_lines_str) = 
-            (with_seperators(final_stats.files),with_seperators(final_stats.lines),with_seperators(final_stats.code_lines), with_seperators(final_stats.extra_lines)); 
+    let (total_files_str, total_lines_str, total_code_lines_str, total_extra_lines_str) =
+            (with_seperators(final_stats.files),with_seperators(final_stats.lines),with_seperators(final_stats.code_lines), with_seperators(final_stats.extra_lines));
 
     let keywords_sum_map = create_keyword_sum_map(content_info_map);
     let keywords_line = get_keywords_as_str(&keywords_sum_map, biggest_prefix_standard_spaces);
@@ -145,12 +174,16 @@ fn print_sum(content_info_map: &HashMap<String,LanguageContentInfo>, final_stats
     let size_text = format!("{} {} - {} {}",number(&final_stats.size.to_string()), colored_word(&format!("{} total", final_stats.size_measurement)),
             number(&final_stats.average_size.to_string()),colored_word(&format!("{} average", final_stats.average_size_measurement)));
 
-    let line_len = STANDARD_LINE_STATS_LEN + total_files_str.len() + total_code_lines_str.len() + total_extra_lines_str.len() +
-            final_stats.size.to_string().len() + final_stats.average_size.to_string().len() + DASH_LINE_OFFSET;
-    println!("{} ",theme::active().separator.paint(&"-".repeat(line_len)));
-
     let info = format!("{} {} {{{} code ({}%) + {} extra}}  |  {}\n",colored_word("lines"), number(&total_lines_str),number(&total_code_lines_str),
             percent(code_lines_percentage), number(&total_extra_lines_str), size_text);
+
+    // The separator follows the total line, measured from the text that is actually printed. It
+    // used to be a formula over some of the numbers plus two magic constants, which left out the
+    // total line count, the width of the language name column and the size units, so it always
+    // fell short. The keywords line is deliberately not measured, since it can be much wider than
+    // the row it annotates.
+    let line_len = widest_visible_line(&format!("{title}{info}"));
+    println!("{} ",theme::active().separator.paint(&"-".repeat(line_len)));
 
     if should_print_keywords {
         println!("{title}{info}{keywords_line}\n");
@@ -195,9 +228,9 @@ fn print_visual_overview(sorted_language_vec: &mut Vec<String>, content_info_map
     let lines_percentages = get_lines_percentages(content_info_map, sorted_language_vec);
     let sizes_percentages = get_sizes_percentages(languages_metadata_map, sorted_language_vec);
 
-    let files_verticals = if config.no_visual {vec![]} else{get_num_of_verticals(&files_percentages, NUM_OF_VERTICALS)};
-    let lines_verticals = if config.no_visual {vec![]} else{get_num_of_verticals(&lines_percentages, NUM_OF_VERTICALS)};
-    let size_verticals = if config.no_visual {vec![]} else{get_num_of_verticals(&sizes_percentages, NUM_OF_VERTICALS)};
+    let files_verticals = if config.hidden.bar {vec![]} else{get_num_of_verticals(&files_percentages, NUM_OF_VERTICALS)};
+    let lines_verticals = if config.hidden.bar {vec![]} else{get_num_of_verticals(&lines_percentages, NUM_OF_VERTICALS)};
+    let size_verticals = if config.hidden.bar {vec![]} else{get_num_of_verticals(&sizes_percentages, NUM_OF_VERTICALS)};
 
     let files_line = create_overview_line("Files:", &files_percentages, &files_verticals,
             sorted_language_vec, &color_func_vec, config);
@@ -473,17 +506,13 @@ fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize], 
         // single language at 100.00 is six characters wide and used to underflow this subtraction
         let str_perc = percent_text(*percentage);
         line.push_str(&format!("{}{}% ", " ".repeat(5usize.saturating_sub(str_perc.len())), percent(*percentage)));
-        if config.no_visual {
-            line.push_str(&languages_name[i]);
-        } else {
-            line.push_str(&color_func_vec[i](&languages_name[i]));
-        }
+        line.push_str(&color_func_vec[i](&languages_name[i]));
         if i < percentages.len() - 1{
             line.push_str(" - ")
         }
     }
-    
-    if !config.no_visual {
+
+    if !config.hidden.bar {
         add_verticals_str(&mut line, verticals, color_func_vec, config.bar_thickness.character());
     }
 

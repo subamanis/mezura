@@ -22,5 +22,5 @@ no
 ===> show-faulty-files
 no
 
-===> no-visual
-no
+===> hide
+bar,timing

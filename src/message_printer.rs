@@ -2,11 +2,12 @@ use std::{collections::HashMap, fs};
 
 use colored::Colorize;
 
-use crate::{CHANGELOG_BYTES, Language, PERSISTENT_APP_PATHS, config_manager::*, io_handler};
+use crate::{CHANGELOG_BYTES, Formatted, Language, PERSISTENT_APP_PATHS, config_manager::*, io_handler};
 
 // These constants need to be maintained along with the readme's commands
 pub const DIRS_HELP  :  &str =
 "--dirs
+
     The paths to the directories or files, separated by commas if more than 1,
     in this form: '--dirs <path1>, <path2>'
     A path can also be a glob pattern (* ? [..] {..}), which is expanded to every existing
@@ -27,6 +28,7 @@ pub const DIRS_HELP  :  &str =
 ";
 pub const EXCLUDE_HELP  :  &str =
 "--exclude
+
     1..n glob patterns separated by commas.
 
     A pattern without a slash matches a file or folder name at any depth ('node_modules', '*.min.js').
@@ -43,6 +45,7 @@ pub const EXCLUDE_HELP  :  &str =
 ";
 pub const NO_GITIGNORE_HELP  :  &str =
 "--no-gitignore
+
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
     or 'no' to disable. Default: no
 
@@ -59,6 +62,7 @@ pub const NO_GITIGNORE_HELP  :  &str =
 ";
 pub const LANGUAGES_HELP  :  &str =
 "--languages
+
     1..n arguments separated by commas, case-insensitive
 
     The given language names must exist in any of the files in the 'data/languages/' dir as the
@@ -69,6 +73,7 @@ pub const LANGUAGES_HELP  :  &str =
 ";
 pub const EXCLUDE_LANGUAGES_HELP  :  &str =
 "--exclude-languages
+
     1..n arguments separated by commas, case-insensitive
 
     The given language names should exist in any of the files in the 'data/languages/' dir as the
@@ -79,6 +84,7 @@ pub const EXCLUDE_LANGUAGES_HELP  :  &str =
 ";
 pub const THREADS_HELP  :  &str =
 "--threads
+
     2 numbers: the first between 1 and 8 and the second between 1 and 30.
 
     This represents the number of the producers (threads that will traverse the given directories),
@@ -90,6 +96,7 @@ pub const THREADS_HELP  :  &str =
 ";
 pub const BRACES_AS_CODE_HELP  :  &str =
 "--braces-as-code
+
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable, or 'no'
     to disable. Default: no
 
@@ -102,6 +109,7 @@ pub const BRACES_AS_CODE_HELP  :  &str =
 ";
 pub const SEARCH_IN_DOTTED_HELP  :  &str =
 "--search-in-dotted
+
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
     or 'no' to disable. Default: no
 
@@ -111,6 +119,7 @@ pub const SEARCH_IN_DOTTED_HELP  :  &str =
 ";
 pub const SHOW_FAULTY_FILES_HELP  :  &str =
 "--show-faulty-files
+
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
     or 'no' to disable. Default: no
 
@@ -122,17 +131,35 @@ pub const SHOW_FAULTY_FILES_HELP  :  &str =
     The most common reason for this error is if a file contains non UTF-8 characters.
 
 ";
-pub const NO_VISUAL_HELP  :  &str =
-"--no-visual
-    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
-    or 'no' to disable. Default: no
+pub const HIDE_HELP  :  &str =
+"--hide
 
-    Disables the colors in the \"overview\" section of the results, and disables the visualization with
-    the vertical lines that represent the percentages.
+    One or more names separated by commas or spaces, for example:
+    --hide status,timing   or   --hide status timing
+
+    Leaves the named parts of the output unprinted. What you can hide:
+
+      version     the version line at the top
+      status      the 'Analyzing directories', 'Parsing files' and 'N files found' lines
+      details     the per language rows and the total underneath them
+      keywords    the keyword counts, keeping the rest of the details rows
+      overview    the whole percentages section
+      bar         only the [-|||-] bar of the overview, keeping the percentages and the colors
+      progress    the comparison with previous runs (the same as '--compare 0')
+      timing      the execution time line at the bottom
+
+    The list mixes whole sections with parts of them on purpose: you are pointing at what you
+    see, not at how the program is organised.
+
+    Errors and warnings are never hidden. Hiding the status still reports files that failed to
+    be parsed, since otherwise the numbers would silently be wrong.
+
+    Replaces the '--no-visual' and '--no-keywords' commands of previous versions.
 
 ";
 pub const COLORS_HELP  :  &str =
 "--colors
+
     1 to 5 colors separated by spaces. A color is either a hex value, with or without a leading
     '#' (e.g. ff8800 #00ff00), or one of the 16 standard terminal color names (black, red, green,
     yellow, blue, magenta, cyan, white and their bright- variants, e.g. bright-magenta).
@@ -150,6 +177,7 @@ pub const COLORS_HELP  :  &str =
 ";
 pub const COLOR_PALETTE_HELP  :  &str =
 "--color-palette
+
     One argument, the name of a palette (case-insensitive).
 
     Applies a named color palette. Palettes are .txt files in the 'data/palettes' dir, in the
@@ -166,6 +194,7 @@ pub const COLOR_PALETTE_HELP  :  &str =
 ";
 pub const SORT_HELP  :  &str =
 "--sort
+
     One argument: 'lines', 'files', 'code', 'size' or 'name'. Default: lines
 
     Chooses the order of the languages in the \"details\" section, which also decides which of them
@@ -179,6 +208,7 @@ pub const SORT_HELP  :  &str =
 ";
 pub const TOP_HELP  :  &str =
 "--top
+
     One number, 1 or greater.
 
     Shows only that many languages in the \"details\" section, the ones that come first according
@@ -192,6 +222,7 @@ pub const TOP_HELP  :  &str =
 ";
 pub const BAR_THICKNESS_HELP  :  &str =
 "--bar-thickness
+
     One argument: 'slim', 'medium', 'fat' or 'low'. Default: slim
 
     Chooses the character that the percentage bar of the \"overview\" section is drawn with.
@@ -208,6 +239,7 @@ pub const BAR_THICKNESS_HELP  :  &str =
 ";
 pub const STYLE_HELP  :  &str =
 "--style
+
     One or more 'token=style' pairs separated by commas, for example:
     --style number=bright-black,label=b5a98a italic,heading=white bold underline
 
@@ -249,6 +281,7 @@ pub const STYLE_HELP  :  &str =
 ";
 pub const TUNE_PALETTES_HELP  :  &str =
 "--tune-palettes
+
     No arguments.
 
     Overrides normal program execution: generates an interactive HTML page with all the color
@@ -260,15 +293,21 @@ pub const TUNE_PALETTES_HELP  :  &str =
 ";
 pub const SHOW_PALETTES_HELP  :  &str =
 "--show-palettes
-    No arguments.
+
+    No arguments, or one of 'slim', 'medium', 'fat' and 'low'. Default: slim
 
     Overrides normal program execution and just prints a sorted list with the names of
     all the color palettes that were detected in the persistent data path
-    of the application, where you can add more.
+    of the application, where you can add more, each one previewed on a mock overview.
+
+    The optional argument draws the preview bars with the character that the
+    '--bar-thickness' command would use, so that a palette can be judged the way it will
+    actually be printed.
 
 ";
 pub const LOG_HELP  :  &str =
 "--log
+
     Can take 0..n words as arguments in the cmd.
     If specified in a configuration file use 'true' or 'yes' to enable,
     or 'no' to disable. Default: no
@@ -283,6 +322,7 @@ pub const LOG_HELP  :  &str =
 ";
 pub const COMPRARE_LEVEL_HELP  :  &str =
 "--compare
+
     1 argument: a number between 0 and 10. Default: 1
 
     This flag only works if a configuration file is loaded. Specifies with how many previous logs this
@@ -293,6 +333,7 @@ pub const COMPRARE_LEVEL_HELP  :  &str =
 ";
 pub const SAVE_HELP  :  &str =
 "--save
+
     One argument as the file name (whitespace allowed, without an extension, case-insensitive)
 
     Doing so, will run the program and also create a .txt configuration file,
@@ -301,6 +342,7 @@ pub const SAVE_HELP  :  &str =
 ";
 pub const LOAD_HELP  :  &str =
 "--load
+
     One argument as the file name (whitespace allowed, without an extension, case-insensitive)
 
     Associated with the '--save' command, this command is used to load the flags of
@@ -311,6 +353,7 @@ pub const LOAD_HELP  :  &str =
 ";
 pub const CHANGELOG_HELP  :  &str =
 "--changelog
+
     No arguments, or the optional argument 'full'.
 
     Overrides normal program execution and just prints a summary of the changes
@@ -320,6 +363,7 @@ pub const CHANGELOG_HELP  :  &str =
 ";
 pub const SHOW_LANGUAGES_HELP  :  &str =
 "--show-languages
+
     No arguments.
 
     Overrides normal program execution and just prints a sorted list with the names of
@@ -329,6 +373,7 @@ pub const SHOW_LANGUAGES_HELP  :  &str =
 ";
 pub const SHOW_CONFIGS_HELP  :  &str =
 "--show-configs
+
     No arguments.
 
     Overrides normal program execution and just prints a sorted list with the names of
@@ -367,8 +412,8 @@ pub fn print_whole_help_message() {
     msg += BRACES_AS_CODE_HELP;
     msg += SEARCH_IN_DOTTED_HELP;
     msg += SHOW_FAULTY_FILES_HELP;
-    msg += NO_VISUAL_HELP;
     msg += NO_GITIGNORE_HELP;
+    msg += HIDE_HELP;
     msg += COLORS_HELP;
     msg += COLOR_PALETTE_HELP;
     msg += SORT_HELP;
@@ -398,10 +443,10 @@ pub fn print_help_message_for_given_args(args_line: &str) {
 
         if let Some(x) = get_help_msg_of_command(sliced[0]) {
             msg += x;
-        } else {
-            if sliced[0].trim() != HELP {
-                msg += &format!("'--{}' is not recognised as a command\n\n",sliced[0]);
-            }
+        } else if sliced[0].trim() != HELP {
+            // The same error the program gives without '--help', so that an unknown command
+            // does not read as an ordinary line of help text
+            msg += &format!("{}\n\n", ArgParsingError::UnrecognisedCommand(sliced[0].to_owned()).formatted());
         }
     }
 
@@ -428,7 +473,7 @@ pub fn print_changelog(full: bool) {
     }
 }
 
-pub fn print_existing_palettes() {
+pub fn print_existing_palettes(bar_thickness: BarThickness) {
     // The percentages of a mock "overview" line, used to preview every palette
     const MOCK_PERCENTAGES : [(&str, f64, usize); 4] =
             [("first", 40.0, 20), ("second", 30.0, 15), ("third", 20.0, 10), ("fourth", 10.0, 5)];
@@ -465,7 +510,7 @@ pub fn print_existing_palettes() {
         msg.push_str("    [-");
         for (i, (_, _, verticals)) in MOCK_PERCENTAGES.iter().enumerate() {
             let color = colors[i.min(colors.len()-1)];
-            msg.push_str(&"|".repeat(*verticals).color(color).to_string());
+            msg.push_str(&bar_thickness.character().repeat(*verticals).color(color).to_string());
         }
         msg.push_str("-]\n");
     }
@@ -527,8 +572,8 @@ fn get_help_msg_of_command(command: &str) -> Option<&str> {
         Some(SEARCH_IN_DOTTED_HELP)
     } else if command == SHOW_FAULTY_FILES {
         Some(SHOW_FAULTY_FILES_HELP)
-    } else if command == NO_VISUAL {
-        Some(NO_VISUAL_HELP)
+    } else if command == HIDE {
+        Some(HIDE_HELP)
     } else if command == NO_GITIGNORE {
         Some(NO_GITIGNORE_HELP)
     } else if command == COLORS {

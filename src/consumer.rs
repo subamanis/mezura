@@ -26,7 +26,9 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                 idle_iterations = 0;
                 let lang_name = parsable_file.language_name.as_ref();
                 if !keyword_matchers.contains_key(lang_name) {
-                    let built = if config.no_keywords {
+                    // Hidden keywords are not counted either. Nothing else in the program reads
+                    // the counts, not even the log, so the work would be thrown away
+                    let built = if config.hidden.keywords {
                         None
                     } else {
                         file_parser::KeywordMatcher::build(language_map.get(lang_name).unwrap())

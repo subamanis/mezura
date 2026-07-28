@@ -66,7 +66,9 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let mut producer_handles = Vec::with_capacity(config.threads.producers);
     let mut consumer_handles = Vec::with_capacity(config.threads.consumers);
 
-    println!("\n{}...",theme::active().heading.paint("Analyzing directories"));
+    if !config.hidden.status {
+        println!("\n{}...",theme::active().heading.paint("Analyzing directories"));
+    }
 
     let parsing_started_instant = Instant::now();
     for i in 0..config.threads.producers {
@@ -108,10 +110,12 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     if relevant_files_num == 0 {
         return Err(ParseFilesError::NoRelevantFiles(get_activated_languages_as_str(&config)));
     }
-    println!("{}\n",theme::active().summary.paint(&format!("{} files found. {} of interest. {} excluded.",
-            with_seperators(total_files_num), with_seperators(relevant_files_num), with_seperators(excluded_files_num))));
+    if !config.hidden.status {
+        println!("{}\n",theme::active().summary.paint(&format!("{} files found. {} of interest. {} excluded.",
+                with_seperators(total_files_num), with_seperators(relevant_files_num), with_seperators(excluded_files_num))));
 
-    println!("{}...",theme::active().heading.paint("Parsing files"));
+        println!("{}...",theme::active().heading.paint("Parsing files"));
+    }
 
     print_faulty_files_or_ok(&faulty_files_ref, &config);
     if faulty_files_ref.lock().unwrap().len() == relevant_files_num {
@@ -231,10 +235,14 @@ fn generate_metrics_if_parsing_took_more_than_one_sec(parsing_duration_millis: u
 }
 
 
+// Hiding the status never hides a parsing failure: that would show wrong numbers with nothing
+// to indicate it
 fn print_faulty_files_or_ok(faulty_files_ref: &FaultyFilesListMut, config: &Configuration) {
     let faulty_files = &*faulty_files_ref.as_ref().lock().unwrap();
     if faulty_files.is_empty() {
-        println!("{}\n",theme::active().success.paint("ok"));
+        if !config.hidden.status {
+            println!("{}\n",theme::active().success.paint("ok"));
+        }
     } else {
         let error = &theme::active().error;
         println!("{} {}",error.paint(&faulty_files.len().to_string()), error.paint("faulty files detected. They will be ignored in stat calculation."));

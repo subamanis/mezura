@@ -319,8 +319,8 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
     });
 
     let (mut dirs, mut braces_as_code, mut should_search_in_dotted, mut threads, mut exclude_dirs,
-         mut languages_of_interest, mut excluded_languages, mut should_show_faulty_files, mut no_keywords, mut no_visual,
-         mut no_gitignore, mut colors, mut color_palette, mut log, mut compare_level, mut styles, mut bar_thickness, mut sort_by, mut top_n) = (None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None);
+         mut languages_of_interest, mut excluded_languages, mut should_show_faulty_files, mut hidden,
+         mut no_gitignore, mut colors, mut color_palette, mut log, mut compare_level, mut styles, mut bar_thickness, mut sort_by, mut top_n) = (None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None);
     let mut invalid_fields: Vec<&'static str> = Vec::new();
     let mut buf = String::with_capacity(150);
 
@@ -374,15 +374,12 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                     Ok(x) => should_search_in_dotted = x,
                     Err(()) => invalid_fields.push(config_manager::SEARCH_IN_DOTTED)
                 }
-            } else if id == config_manager::NO_KEYWORDS {
-                match read_bool_value_from_file(&mut reader, &mut buf) {
-                    Ok(x) => no_keywords = x,
-                    Err(()) => invalid_fields.push(config_manager::NO_KEYWORDS)
-                }
-            } else if id == config_manager::NO_VISUAL {
-                match read_bool_value_from_file(&mut reader, &mut buf) {
-                    Ok(x) => no_visual = x,
-                    Err(()) => invalid_fields.push(config_manager::NO_VISUAL)
+            } else if id == config_manager::HIDE {
+                buf.clear();
+                let _ = reader.read_line(&mut buf);
+                match config_manager::Hidden::parse(&buf) {
+                    Ok(x) => hidden = Some(x),
+                    Err(_) => invalid_fields.push(config_manager::HIDE)
                 }
             } else if id == config_manager::NO_GITIGNORE {
                 match read_bool_value_from_file(&mut reader, &mut buf) {
@@ -456,7 +453,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
 
     let builder = ConfigurationBuilder {
         dirs, exclude_dirs, languages_of_interest, excluded_languages, threads, braces_as_code, should_search_in_dotted,
-        should_show_faulty_files, no_keywords, no_visual, no_gitignore, colors, color_palette, log, compare_level, styles, bar_thickness, sort_by, top_n,
+        should_show_faulty_files, hidden, no_gitignore, colors, color_palette, log, compare_level, styles, bar_thickness, sort_by, top_n,
         ..Default::default()
     };
 
@@ -505,13 +502,9 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
         writer.write_all(&[b"\n\n===> ",config_manager::SHOW_FAULTY_FILES.as_bytes(),b"\n"].concat())?;
         writer.write_all(if *should_show_faulty_files {b"yes"} else {b"no"})?;
     }
-    if let Some(no_keywords) = &config_builder.no_keywords {
-        writer.write_all(&[b"\n\n===> ",config_manager::NO_KEYWORDS.as_bytes(),b"\n"].concat())?;
-        writer.write_all(if *no_keywords {b"yes"} else {b"no"})?;
-    }
-    if let Some(no_visual) = &config_builder.no_visual {
-        writer.write_all(&[b"\n\n===> ",config_manager::NO_VISUAL.as_bytes(),b"\n"].concat())?;
-        writer.write_all(if *no_visual {b"yes"} else {b"no"})?;
+    if let Some(hidden) = &config_builder.hidden {
+        writer.write_all(&[b"\n\n===> ",config_manager::HIDE.as_bytes(),b"\n"].concat())?;
+        writer.write_all(hidden.to_list_string().as_bytes())?;
     }
     if let Some(no_gitignore) = &config_builder.no_gitignore {
         writer.write_all(&[b"\n\n===> ",config_manager::NO_GITIGNORE.as_bytes(),b"\n"].concat())?;
@@ -740,7 +733,7 @@ mod tests {
 
     #[test]
     fn test_save_config_file_and_then_parse_it() -> std::io::Result<()> {
-        let command = "./ --exclude a,b,c.txt,d.txt, --braces-as-code --threads 1 1".to_string();
+        let command = "./ --exclude a,b,c.txt,d.txt, --braces-as-code --threads 1 1 --hide keywords,timing".to_string();
         let config_builder = config_manager::create_config_builder_from_args(&command).unwrap();
 
         let test_config_dir = Some(LOCAL_APP_PATHS.test_config_dir.clone());
@@ -754,7 +747,7 @@ mod tests {
         assert_eq!(config_builder.braces_as_code, options.braces_as_code);
         assert_eq!(config_builder.should_show_faulty_files, options.should_show_faulty_files);
         assert_eq!(config_builder.should_search_in_dotted, options.should_search_in_dotted);
-        assert_eq!(config_builder.no_visual, options.no_visual);
+        assert_eq!(config_builder.hidden, options.hidden);
 
         Ok(())
     }
@@ -765,7 +758,8 @@ mod tests {
         config
             .set_exclude_dirs(vec!["a".to_owned(), "b".to_owned(), "c.txt".to_owned(), "d.txt".to_owned()])
             .set_threads(1,1)
-            .set_braces_as_code(true);
+            .set_braces_as_code(true)
+            .set_hidden(config_manager::Hidden {bar: true, timing: true, ..Default::default()});
 
 
         let (options, invalid_fields) = io_handler::parse_config_file(Some("test"), Some(LOCAL_APP_PATHS.test_config_dir.clone())).unwrap();
@@ -776,7 +770,7 @@ mod tests {
         assert_eq!(config.braces_as_code, options.braces_as_code.unwrap());
         assert_eq!(config.should_show_faulty_files, options.should_show_faulty_files.unwrap());
         assert_eq!(config.should_search_in_dotted, options.should_search_in_dotted.unwrap());
-        assert_eq!(config.no_visual, options.no_visual.unwrap());
+        assert_eq!(config.hidden, options.hidden.unwrap());
 
         Ok(())
     }
@@ -835,14 +829,16 @@ mod tests {
         let dir_str = dir.to_str().unwrap().to_owned() + "/";
 
         std::fs::write(dir.join("badcfg.txt"),
-                "===> threads\n3343 45534\n\n===> braces-as-code\nmitsos\n\n===> compare\n99\n\n===> no-visual\nyes\n").unwrap();
+                "===> threads\n3343 45534\n\n===> braces-as-code\nmitsos\n\n===> compare\n99\n\n===> hide\nkeywords\n\n===> sort\nnope\n").unwrap();
 
         let (options, invalid_fields) = io_handler::parse_config_file(Some("badcfg"), Some(dir_str)).unwrap();
-        assert_eq!(invalid_fields, vec![config_manager::THREADS, config_manager::BRACES_AS_CODE, config_manager::COMPRARE_LEVEL]);
+        assert_eq!(invalid_fields, vec![config_manager::THREADS, config_manager::BRACES_AS_CODE,
+                config_manager::COMPRARE_LEVEL, config_manager::SORT]);
         assert_eq!(options.threads, None);
         assert_eq!(options.braces_as_code, None);
         assert_eq!(options.compare_level, None);
-        assert_eq!(options.no_visual, Some(true));
+        assert_eq!(options.sort_by, None);
+        assert_eq!(options.hidden, Some(config_manager::Hidden {keywords: true, ..Default::default()}));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

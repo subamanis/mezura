@@ -15,21 +15,29 @@ Main changes:
       converted in place, whenever they show up, so nothing has to be done by hand.
 
 New commands:
+  -> --hide <list> : leaves parts of the output unprinted. Takes any of version, status, details,
+      keywords, overview, bar, progress and timing, separated by commas or spaces.
+      Errors and warnings are never hidden, so hiding the status still reports files that failed
+      to be parsed.
   -> --style <token>=<value>,... : overrides the style of one or more categories of printed text,
       for a single run. Can also be stored in a configuration file and is kept by --save.
   -> --bar-thickness slim|medium|fat|low : chooses the character the overview bar is drawn with.
       'slim' is the default and the only ASCII one, so it is the fallback for terminals that
       cannot render box drawing characters.
   -> --sort lines|files|code|size|name : chooses the order of the languages.
+  -> --show-palettes now takes an optional thickness ('--show-palettes fat'), so a palette can be
+      previewed with the same bar character that --bar-thickness would print it with.
   -> --top <n> : shows only the first n languages, and states underneath how many were hidden.
       The total keeps counting all of them, and the overview never shows more than n either.
 
 Change in commands:
-  -> (Breaking!) The default order of the languages is now the number of lines. It used to be a
-      fixed formula, 'files * 10 + bytes', in which the byte count dominated by orders of magnitude,
-      so in practice the list was ordered by size while the report leads with lines. Ties are now
-      broken alphabetically instead of being left to the iteration order of a hash map.
-      This also changes which languages reach the overview and which fall into its 'others' entry.
+  -> (Breaking!) --no-visual and --no-keywords are removed, replaced by --hide.
+      --no-visual did two unrelated things, dropping the colors of the overview and dropping its
+      bar, and its name said neither. '--hide bar' is the half of it that was worth keeping: the
+      colors already disappear on their own when the output is not a terminal, which is the case
+      that mattered. '--no-keywords' becomes '--hide keywords'.
+  ->  The default order of the languages is now the number of lines, and ties are broken alphabetically.
+      It used to be a fixed formula that sorted by size, with lines as a tie breaker.
       Use '--sort size' to get the old order back.
   -> --color-palette now applies the palette's overview colors and any style tokens it declares.
       --colors still overrides only the overview colors, so a palette's styles apply even when
@@ -40,6 +48,7 @@ Change in commands:
 
 Bugfixes:
   -> The percentage bar of the overview is now more accurate
+  -> The dashed line above the total now matches the width of the total line.
 
 Other:
   -> With no palette and no --style, the output is byte for byte identical to v2.0.1, escape codes
