@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
 
-#![allow(dead_code)]
 #![allow(non_snake_case)]
 
 pub mod config_manager;
 pub mod io_handler;
 pub mod utils;
+pub mod theme;
 pub mod consumer;
 pub mod producer;
 pub mod message_printer;
@@ -66,7 +66,7 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let mut producer_handles = Vec::with_capacity(config.threads.producers);
     let mut consumer_handles = Vec::with_capacity(config.threads.consumers);
 
-    println!("\n{}...","Analyzing directories".underline().bold());
+    println!("\n{}...",theme::active().heading.paint("Analyzing directories"));
 
     let parsing_started_instant = Instant::now();
     for i in 0..config.threads.producers {
@@ -108,9 +108,10 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     if relevant_files_num == 0 {
         return Err(ParseFilesError::NoRelevantFiles(get_activated_languages_as_str(&config)));
     }
-    println!("{} files found. {} of interest. {} excluded.\n",with_seperators(total_files_num), with_seperators(relevant_files_num), with_seperators(excluded_files_num));
+    println!("{}\n",theme::active().summary.paint(&format!("{} files found. {} of interest. {} excluded.",
+            with_seperators(total_files_num), with_seperators(relevant_files_num), with_seperators(excluded_files_num))));
 
-    println!("{}...","Parsing files".underline().bold());
+    println!("{}...",theme::active().heading.paint("Parsing files"));
 
     print_faulty_files_or_ok(&faulty_files_ref, &config);
     if faulty_files_ref.lock().unwrap().len() == relevant_files_num {
@@ -144,7 +145,7 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
 
     if config.log.should_log && let Some(path) = log_file_path
         && io_handler::log_stats(&path, &existing_log_contents, &final_stats, &datetime_now, &config).is_err() {
-        println!("\n{}","Error while trying to save the log.".yellow());
+        println!("\n{}",theme::active().warning.paint("Error while trying to save the log."));
     }
 
     Ok(metrics)
@@ -233,9 +234,10 @@ fn generate_metrics_if_parsing_took_more_than_one_sec(parsing_duration_millis: u
 fn print_faulty_files_or_ok(faulty_files_ref: &FaultyFilesListMut, config: &Configuration) {
     let faulty_files = &*faulty_files_ref.as_ref().lock().unwrap();
     if faulty_files.is_empty() {
-        println!("{}\n","ok".bright_green());
+        println!("{}\n",theme::active().success.paint("ok"));
     } else {
-        println!("{} {}",format!("{}",faulty_files.len()).red(), "faulty files detected. They will be ignored in stat calculation.".red());
+        let error = &theme::active().error;
+        println!("{} {}",error.paint(&faulty_files.len().to_string()), error.paint("faulty files detected. They will be ignored in stat calculation."));
         if config.should_show_faulty_files {
             for f in faulty_files {
                 println!("-- Error: {} \n   for file: {}\n",f.error_msg,f.path);
@@ -445,8 +447,8 @@ impl LocalAppPaths {
 impl Formatted for ParseFilesError {
     fn formatted(&self) -> ColoredString {
         match self {
-            Self::NoRelevantFiles(x) => format!("{} {}","No relevant files found in the given directory.", x).yellow(),
-            Self::AllAreFaultyFiles => "None of the files were able to be parsed".yellow()
+            Self::NoRelevantFiles(x) => theme::active().warning.paint(&format!("{} {}","No relevant files found in the given directory.", x)),
+            Self::AllAreFaultyFiles => theme::active().warning.paint("None of the files were able to be parsed")
         }
     }
 }
@@ -532,16 +534,6 @@ impl FaultyFileDetails {
             path,
             error_msg,
             size
-        }
-    }
-}
-
-impl FilesPresent {
-    pub fn new(total_files: usize, relevant_files: usize, excluded_files: usize) -> Self {
-        FilesPresent {
-            total_files,
-            relevant_files,
-            excluded_files
         }
     }
 }

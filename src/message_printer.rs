@@ -152,13 +152,52 @@ pub const COLOR_PALETTE_HELP  :  &str =
 "--color-palette
     One argument, the name of a palette (case-insensitive).
 
-    Applies a named color palette to the \"overview\" section of the results. Palettes are .txt
-    files in the 'data/palettes' dir, in the persistent data path of the application: the file
-    name is the palette name, and the first line contains 1 to 5 colors in the same format as
-    the '--colors' command. You can add your own palettes there.
+    Applies a named color palette. Palettes are .txt files in the 'data/palettes' dir, in the
+    persistent data path of the application, where the file name is the palette name. Each line
+    is a 'token = value' pair: 'languages' takes 1 to 5 colors in the same format as the
+    '--colors' command, and any style token (see '--help style') takes a style.
+    You can add your own palettes there.
     Use the '--show-palettes' command to list the available palettes.
 
-    If the '--colors' command is also provided, it takes precedence over the palette.
+    If the '--colors' command is also provided, it takes precedence over the palette's
+    'languages' line, while the palette's style tokens still apply.
+    Palettes written for versions before v3.0.0 are converted automatically on the first run.
+
+";
+pub const STYLE_HELP  :  &str =
+"--style
+    One or more 'token=style' pairs separated by commas, for example:
+    --style number=bright-black,label=b5a98a italic,heading=white bold underline
+
+    Overrides how a category of printed text looks. A style is a color and any number of the
+    attributes 'bold', 'italic', 'underline' and 'dim', in any order. The color is either a hex
+    value or one of the 16 terminal color names (the same grammar as '--colors'), or the word
+    'default' to leave the terminal's own foreground color alone.
+
+    The tokens are:
+      heading          the section titles and the 'Analyzing directories' lines
+      separator        the dashed line above the total
+      bar-frame        the '[-' and '-]' around the overview bar
+      number           every counted value
+      percent          every percentage
+      label            the words 'files', 'lines', 'KBs total' and so on
+      overview-label   the 'Files:', 'Lines:' and 'Size :' row labels of the overview
+      language-name    a language name in the details rows
+      total-name       the word 'Total'
+      keyword          the names of the counted keywords
+      progress-up      an increase in the progress section
+      progress-down    a decrease
+      progress-same    no change
+      progress-entry   the '->' of a progress entry
+      summary          the found / of interest / excluded line
+      success          the 'ok' after parsing
+      warning          warnings
+      error            errors
+      footer           the execution time line
+
+    Styles can also be declared inside a color palette or in a config file. They are applied in
+    that order, so a palette can ship a complete look while your own config keeps your
+    preferences across palette changes, and '--style' wins over both.
 
 ";
 pub const TUNE_PALETTES_HELP  :  &str =
@@ -285,6 +324,7 @@ pub fn print_whole_help_message() {
     msg += NO_GITIGNORE_HELP;
     msg += COLORS_HELP;
     msg += COLOR_PALETTE_HELP;
+    msg += STYLE_HELP;
     msg += LOG_HELP;
     msg += COMPRARE_LEVEL_HELP;
     msg += SAVE_HELP;
@@ -361,7 +401,7 @@ pub fn print_existing_palettes() {
     for name in palette_names.iter() {
         msg.push_str(&format!("\n  {}\n     ", name.bold()));
 
-        let Some(colors) = io_handler::load_palette(name, &PERSISTENT_APP_PATHS.palettes_dir) else {
+        let Some(colors) = io_handler::load_palette(name, &PERSISTENT_APP_PATHS.palettes_dir).and_then(|x| x.languages) else {
             msg.push_str(&format!("{}\n","(the colors of this palette could not be parsed)".yellow()));
             continue;
         };
@@ -445,6 +485,8 @@ fn get_help_msg_of_command(command: &str) -> Option<&str> {
         Some(COLORS_HELP)
     } else if command == COLOR_PALETTE {
         Some(COLOR_PALETTE_HELP)
+    } else if command == STYLE {
+        Some(STYLE_HELP)
     } else if command == SHOW_PALETTES {
         Some(SHOW_PALETTES_HELP)
     } else if command == TUNE_PALETTES {

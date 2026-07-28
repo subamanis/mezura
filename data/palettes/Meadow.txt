@@ -1,1 +1,2 @@
-#e80000 #00f2b6 #99ff00 #ffe5a3
+# mezura-format: 2
+languages = #e80000 #00f2b6 #99ff00 #ffe5a3

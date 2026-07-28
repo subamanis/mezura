@@ -133,7 +133,7 @@ pub fn parse_colors_to_vec(s: &str) -> Option<Vec<Color>> {
     Some(colors)
 }
 
-fn parse_single_color(token: &str) -> Option<Color> {
+pub fn parse_single_color(token: &str) -> Option<Color> {
     match token.to_lowercase().replace('_', "-").as_str() {
         "black" => Some(Color::Black),
         "red" => Some(Color::Red),

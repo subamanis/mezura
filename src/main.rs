@@ -3,7 +3,7 @@ use std::{collections::HashMap, time::Instant};
 use colored::*;
 use include_dir::include_dir;
 
-use mezura::{*, self, config_manager::{self, CHANGELOG, HELP, SHOW_CONFIGS, SHOW_LANGUAGES, SHOW_PALETTES, TUNE_PALETTES, VERSION_ID}, io_handler};
+use mezura::{*, self, config_manager::{self, CHANGELOG, HELP, SHOW_CONFIGS, SHOW_LANGUAGES, SHOW_PALETTES, TUNE_PALETTES, VERSION_ID}, io_handler, theme};
 
 
 fn main() {
@@ -48,6 +48,15 @@ fn main() {
         println!("{}",format!("\nUnable to initialize the color palettes directory: {x}\n").yellow());
     }
 
+    if PERSISTENT_APP_PATHS.are_initialized {
+        match io_handler::migrate_legacy_palettes(&PERSISTENT_APP_PATHS.palettes_dir) {
+            Ok(migrated) if !migrated.is_empty() =>
+                println!("{}", format!("\nUpdated {} color palette(s) to the new format: {}\n", migrated.len(), migrated.join(", ")).yellow()),
+            Err(x) => println!("{}", format!("\nUnable to update the color palettes to the new format: {x}\n").yellow()),
+            _ => ()
+        }
+    }
+
     let args_str = match read_args_as_str() {
         Some(args) => {
             args
@@ -66,12 +75,13 @@ fn main() {
         Err(x) => {
             println!("\n{}\n",x.formatted());
             return;
-        } 
+        }
     };
+    theme::set_active(config.theme.clone());
 
     if !config.languages_of_interest.is_empty() &&
      config.languages_of_interest.iter().all(|lang| config.excluded_languages.contains(lang)) {
-        println!("{}","\nIncluded and excluded languages are mutually exclusive.\n".red());
+        println!("\n{}\n",theme::active().error.paint("Included and excluded languages are mutually exclusive."));
         return;
     }
 
@@ -83,7 +93,7 @@ fn main() {
                 }
             },
             Err(_) => {
-                println!("\n{}\n","Error: None of the provided language names map to valid supported languages".red());
+                println!("\n{}\n",theme::active().error.paint("Error: None of the provided language names map to valid supported languages"));
                 return;
             }
         }
@@ -100,12 +110,12 @@ fn main() {
     let instant = Instant::now();
     match mezura::run(config, language_map) {
         Ok(x) => {
-            let perf = format!("\nExec time: {:.2} secs ", instant.elapsed().as_secs_f32());
+            let perf = format!("Exec time: {:.2} secs ", instant.elapsed().as_secs_f32());
             let metrics = match x {
                 Some(x) => format!("(Parsing {} files/s | {} lines/s)", with_seperators(x.files_per_sec), with_seperators(x.lines_per_sec)),
                 None => String::new()
             };
-            println!("{}",perf + &metrics);
+            println!("\n{}",theme::active().footer.paint(&(perf + &metrics)));
         },
         Err(x) => println!("{}",x.formatted())
     }

@@ -791,6 +791,7 @@ impl<'a> LineInfo<'a> {
         }
     }
 
+    #[cfg(test)]
     pub fn from_slice(slice: &'a str) -> LineInfo<'a> {
         LineInfo {
             cleansed_string: Some(Cow::Borrowed(slice)),
@@ -800,6 +801,7 @@ impl<'a> LineInfo<'a> {
         }
     }
 
+    #[cfg(test)]
     pub fn from_slice_w_literal(slice: &'a str) -> LineInfo<'a> {
         LineInfo {
             cleansed_string: Some(Cow::Borrowed(slice)),

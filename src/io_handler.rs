@@ -4,7 +4,7 @@ use chrono::{DateTime, Local};
 use colored::*;
 
 use crate::{Configuration, DEFAULT_CONFIG_NAME, FinalStats, Formatted, PERSISTENT_APP_PATHS, config_manager::{self, ConfigurationBuilder, LogOption,
-     MAX_COMPARE_LEVEL, MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_COMPARE_LEVEL, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE, Threads}, domain::*, split_line_on_whitespace, utils};
+     MAX_COMPARE_LEVEL, MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_COMPARE_LEVEL, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE, Threads}, domain::*, split_line_on_whitespace, theme, utils};
 
 
 const LANGUAGE                 : &str = "Language";     
@@ -17,13 +17,6 @@ const KEYWORD                  : &str = "Keyword";
 const KEYWORD_NAME             : &str = "NAME";     
 const KEYWORD_ALIASES          : &str = "ALIASES";     
 
-
-#[derive(Debug)]
-pub struct LanguageDirParseInfo {
-    pub language_map: HashMap<String,Language>,
-    pub faulty_files: Vec<String>,
-    pub non_existant_languages:  Vec<String>
-}
 
 #[derive(Debug)]
 pub enum LanguageDirParseError {
@@ -232,7 +225,7 @@ pub fn serialize_language(lang: &Language, path: &str) -> Result<(), io::Error> 
 
 // ------------------------------ Palette handling ------------------------------
 
-pub fn load_palette(name: &str, palettes_dir: &str) -> Option<Vec<Color>> {
+pub fn load_palette(name: &str, palettes_dir: &str) -> Option<theme::Palette> {
     let entries = fs::read_dir(palettes_dir).ok()?;
     for entry in entries.flatten() {
         let path = entry.path();
@@ -245,11 +238,36 @@ pub fn load_palette(name: &str, palettes_dir: &str) -> Option<Vec<Color>> {
         }
 
         let contents = fs::read_to_string(&path).ok()?;
-        let colors_line = contents.lines().find(|l| !l.trim().is_empty())?;
-        return utils::parse_colors_to_vec(colors_line);
+        return theme::Palette::parse(&contents).ok();
     }
 
     None
+}
+
+// Palettes are the one data file whose format changed in v3.0.0. The old shape is unambiguous (its
+// first meaningful line has no '='), and the conversion loses nothing, so installed palettes are
+// rewritten in place rather than starting to fail for everyone who already had them.
+pub fn migrate_legacy_palettes(palettes_dir: &str) -> io::Result<Vec<String>> {
+    let mut migrated = Vec::new();
+    for entry in fs::read_dir(palettes_dir)?.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        let Ok(contents) = fs::read_to_string(&path) else { continue };
+        if !theme::Palette::is_in_legacy_format(&contents) {
+            continue;
+        }
+
+        let Some(palette) = theme::Palette::from_legacy_format(&contents) else { continue };
+        fs::write(&path, palette.to_file_contents())?;
+        if let Some(name) = path.file_stem().and_then(|x| x.to_str()) {
+            migrated.push(name.to_owned());
+        }
+    }
+
+    Ok(migrated)
 }
 
 
@@ -268,11 +286,10 @@ pub fn generate_palette_tuner_page() -> io::Result<String> {
         }
         let Some(stem) = path.file_stem().and_then(|x| x.to_str()) else { continue };
         let Ok(contents) = fs::read_to_string(&path) else { continue };
-        let Some(colors_line) = contents.lines().find(|l| !l.trim().is_empty()) else { continue };
-        if utils::parse_colors_to_vec(colors_line).is_none() {
-            continue;
-        }
-        entries.push((stem.to_owned(), colors_line.split_whitespace().map(|x| x.to_owned()).collect()));
+        // The page edits the language slots only, so a palette without them has nothing to show
+        let Ok(palette) = theme::Palette::parse(&contents) else { continue };
+        let Some(colors) = palette.languages else { continue };
+        entries.push((stem.to_owned(), colors.iter().map(utils::color_to_config_string).collect()));
     }
     entries.sort_by_key(|x| x.0.to_lowercase());
 
@@ -303,7 +320,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
 
     let (mut dirs, mut braces_as_code, mut should_search_in_dotted, mut threads, mut exclude_dirs,
          mut languages_of_interest, mut excluded_languages, mut should_show_faulty_files, mut no_keywords, mut no_visual,
-         mut no_gitignore, mut colors, mut color_palette, mut log, mut compare_level) = (None,None,None,None,None,None,None,None,None,None,None,None,None,None,None);
+         mut no_gitignore, mut colors, mut color_palette, mut log, mut compare_level, mut styles) = (None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None);
     let mut invalid_fields: Vec<&'static str> = Vec::new();
     let mut buf = String::with_capacity(150);
 
@@ -388,6 +405,13 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                 } else {
                     color_palette = Some(name.to_owned());
                 }
+            } else if id == config_manager::STYLE {
+                buf.clear();
+                let _ = reader.read_line(&mut buf);
+                match theme::parse_overrides(&buf) {
+                    Ok(x) => styles = Some(x),
+                    Err(_) => invalid_fields.push(config_manager::STYLE)
+                }
             } else if id == config_manager::LOG {
                 buf.clear();
                 let _ = reader.read_line(&mut buf);
@@ -409,8 +433,13 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
         buf.clear();
     }
 
-    Ok((ConfigurationBuilder::new(dirs,exclude_dirs, languages_of_interest, excluded_languages, threads, braces_as_code,should_search_in_dotted,
-             should_show_faulty_files, no_keywords, no_visual, no_gitignore, colors, color_palette, log, compare_level, None, None), invalid_fields))
+    let builder = ConfigurationBuilder {
+        dirs, exclude_dirs, languages_of_interest, excluded_languages, threads, braces_as_code, should_search_in_dotted,
+        should_show_faulty_files, no_keywords, no_visual, no_gitignore, colors, color_palette, log, compare_level, styles,
+        ..Default::default()
+    };
+
+    Ok((builder, invalid_fields))
 }
 
 // Dirs must be specified (is checked before calling this function)
@@ -472,6 +501,12 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
         writer.write_all(colors.iter().map(utils::color_to_config_string)
                 .collect::<Vec<_>>().join(" ").as_bytes())?;
     }
+    if let Some(styles) = &config_builder.styles {
+        let rendered = styles.iter().map(|(token, style)| format!("{token}={style}")).collect::<Vec<_>>().join(",");
+        writer.write_all(&[b"\n\n===> ",config_manager::STYLE.as_bytes(),b"\n"].concat())?;
+        writer.write_all(rendered.as_bytes())?;
+    }
+
     if let Some(color_palette) = &config_builder.color_palette {
         writer.write_all(&[b"\n\n===> ",config_manager::COLOR_PALETTE.as_bytes(),b"\n"].concat())?;
         writer.write_all(color_palette.as_bytes())?;
@@ -568,16 +603,6 @@ fn read_lines_from_file_to_vec(reader: &mut BufReader<File>, buf: &mut String, p
     vec
 }
 
-
-impl LanguageDirParseInfo {
-    pub fn new(language_map: HashMap<String, Language>, faulty_files: Vec<String>, non_existant_languages: Vec<String>) -> Self {
-        LanguageDirParseInfo {
-            language_map,
-            faulty_files,
-            non_existant_languages
-        }
-    }
-}
 
 const REGENERATE_LANGUAGES_HINT : &str =
         "Delete the \"languages\" folder and it will be generated again on the next execution.\nThe \"config\" and \"logs\" folders will not be affected.";
@@ -723,16 +748,24 @@ mod tests {
     fn test_load_palette() {
         let dir = std::env::temp_dir().join("mezura_palette_test");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("Mypalette.txt"), "cyan bright-magenta ff0080\n").unwrap();
-        std::fs::write(dir.join("Broken.txt"), "kaka\n").unwrap();
+        std::fs::write(dir.join("Mypalette.txt"), "languages = cyan bright-magenta ff0080\nlabel = bright-yellow italic\n").unwrap();
+        std::fs::write(dir.join("Broken.txt"), "languages = kaka\n").unwrap();
+        std::fs::write(dir.join("Legacy.txt"), "cyan bright-magenta ff0080\n").unwrap();
         let dir_str = dir.to_str().unwrap();
 
-        assert_eq!(Some(vec![Color::Cyan, Color::BrightMagenta, Color::TrueColor{r:255,g:0,b:128}]),
-                io_handler::load_palette("mypalette", dir_str));
-        assert_eq!(Some(vec![Color::Cyan, Color::BrightMagenta, Color::TrueColor{r:255,g:0,b:128}]),
-                io_handler::load_palette("MYPALETTE", dir_str));
-        assert_eq!(None, io_handler::load_palette("nonexistant", dir_str));
-        assert_eq!(None, io_handler::load_palette("broken", dir_str));
+        let expected_colors = Some(vec![Color::Cyan, Color::BrightMagenta, Color::TrueColor{r:255,g:0,b:128}]);
+        let loaded = io_handler::load_palette("mypalette", dir_str).unwrap();
+        assert_eq!(expected_colors, loaded.languages);
+        assert_eq!(vec![("label".to_owned(), "bright-yellow italic".to_owned())], loaded.styles);
+        assert_eq!(expected_colors, io_handler::load_palette("MYPALETTE", dir_str).unwrap().languages);
+        assert!(io_handler::load_palette("nonexistant", dir_str).is_none());
+        assert!(io_handler::load_palette("broken", dir_str).is_none());
+
+        // A palette left in the pre-v3 format is rewritten in place and loads normally afterwards
+        assert!(io_handler::load_palette("legacy", dir_str).is_none());
+        assert_eq!(vec!["Legacy".to_owned()], io_handler::migrate_legacy_palettes(dir_str).unwrap());
+        assert_eq!(expected_colors, io_handler::load_palette("legacy", dir_str).unwrap().languages);
+        assert!(io_handler::migrate_legacy_palettes(dir_str).unwrap().is_empty());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

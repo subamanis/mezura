@@ -61,8 +61,8 @@ fn print_individually(sorted_languages: &[String], content_info_map: &HashMap<St
         line
     }
 
-    println!("{}.\n", "Details".underline().bold());
-    
+    println!("{}.\n", theme::active().heading.paint("Details"));
+
     let mut max_line_stats_len = STANDARD_LINE_STATS_LEN;
     let (mut titles_vec, mut lines_stats_vec, mut lines_stats_len_vec, mut size_stats_vec,
             mut keywords_stats_vec) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
@@ -74,8 +74,8 @@ fn print_individually(sorted_languages: &[String], content_info_map: &HashMap<St
         let files_str = with_seperators(metadata.files);
         let prefix_standard_spaces = lang_name.chars().count() + metadata.files.to_string().chars().count() +
                  utils::num_of_seperators(metadata.files); 
-        let title = format!("{}   {}{} {}  -> ",lang_name.bold(), " ".repeat(biggest_prefix_standard_spaces - prefix_standard_spaces),
-                 files_str, colored_word("files"));
+        let title = format!("{}   {}{} {}  -> ",theme::active().language_name.paint(lang_name),
+                 " ".repeat(biggest_prefix_standard_spaces - prefix_standard_spaces), number(&files_str), colored_word("files"));
         titles_vec.push(title);
 
         let code_lines_percentage = if content_info.lines > 0 {content_info.code_lines as f64 / content_info.lines as f64 * 100f64} else {0f64};
@@ -88,8 +88,8 @@ fn print_individually(sorted_languages: &[String], content_info_map: &HashMap<St
             max_line_stats_len = curr_line_stats_len;
         }
         
-        lines_stats_vec.push(format!("{} {} {{{} code ({:.2}%) + {} extra}}", colored_word("lines"), lines_str, code_lines_str,
-                 code_lines_percentage, extra_lines_str));
+        lines_stats_vec.push(format!("{} {} {{{} code ({}%) + {} extra}}", colored_word("lines"), number(&lines_str), number(&code_lines_str),
+                 percent(code_lines_percentage), number(&extra_lines_str)));
         size_stats_vec.push(get_size_text(metadata));
         
         if should_print_keywords {
@@ -120,17 +120,17 @@ fn print_sum(content_info_map: &HashMap<String,LanguageContentInfo>, final_stats
     let keywords_line = get_keywords_as_str(&keywords_sum_map, biggest_prefix_standard_spaces);
 
     let spaces = biggest_prefix_standard_spaces - (5 + total_files_str.len());
-    let title = format!("{}   {}{} {}  -> ","Total".bold()," ".repeat(spaces),total_files_str,colored_word("files"));
+    let title = format!("{}   {}{} {}  -> ",theme::active().total_name.paint("Total")," ".repeat(spaces),number(&total_files_str),colored_word("files"));
     let code_lines_percentage = if final_stats.lines > 0 {final_stats.code_lines as f64 / final_stats.lines as f64 * 100f64} else {0f64};
-    let size_text = format!("{} {} - {} {}",final_stats.size, colored_word(&format!("{} total", final_stats.size_measurement)),
-            final_stats.average_size,colored_word(&format!("{} average", final_stats.average_size_measurement)));
+    let size_text = format!("{} {} - {} {}",number(&final_stats.size.to_string()), colored_word(&format!("{} total", final_stats.size_measurement)),
+            number(&final_stats.average_size.to_string()),colored_word(&format!("{} average", final_stats.average_size_measurement)));
 
     let line_len = STANDARD_LINE_STATS_LEN + total_files_str.len() + total_code_lines_str.len() + total_extra_lines_str.len() +
             final_stats.size.to_string().len() + final_stats.average_size.to_string().len() + DASH_LINE_OFFSET;
-    println!("{} ","-".repeat(line_len));
+    println!("{} ",theme::active().separator.paint(&"-".repeat(line_len)));
 
-    let info = format!("{} {} {{{} code ({:.2}%) + {} extra}}  |  {}\n",colored_word("lines"), total_lines_str,total_code_lines_str,
-            code_lines_percentage, total_extra_lines_str, size_text);
+    let info = format!("{} {} {{{} code ({}%) + {} extra}}  |  {}\n",colored_word("lines"), number(&total_lines_str),number(&total_code_lines_str),
+            percent(code_lines_percentage), number(&total_extra_lines_str), size_text);
 
     if should_print_keywords {
         println!("{title}{info}{keywords_line}\n");
@@ -153,7 +153,7 @@ fn print_visual_overview(sorted_language_vec: &mut Vec<String>, content_info_map
         retain_most_relevant_and_add_others_field_for_rest(sorted_language_vec, content_info_map, languages_metadata_map, final_stats);
     }
 
-    println!("{}.\n", "Overview".underline().bold());
+    println!("{}.\n", theme::active().heading.paint("Overview"));
 
     let has_others = sorted_language_vec[sorted_language_vec.len()-1] == "others";
     let default_colors : [Color; 4] = [Color::Cyan, Color::BrightMagenta, Color::BrightYellow,
@@ -188,7 +188,7 @@ fn print_visual_overview(sorted_language_vec: &mut Vec<String>, content_info_map
 }
 
 fn print_comparison_to_previous_runs(final_stats: &FinalStats, log_content: &str, num_of_entries: usize, datetime_now: &DateTime<Local>) {
-    println!("\n{}.\n", "Progress".underline().bold());
+    println!("\n{}.\n", theme::active().heading.paint("Progress"));
 
     let log_entries = parse_N_previous_entries(log_content, num_of_entries);
 
@@ -196,30 +196,32 @@ fn print_comparison_to_previous_runs(final_stats: &FinalStats, log_content: &str
     for entry in log_entries.iter() {
         let duration = datetime_now.signed_duration_since(entry.datetime);
         let (days, hours, minutes) = split_minutes_to_D_H_M(duration.num_minutes());
+        let arrow = theme::active().progress_entry.paint("->");
         if let Some(name) = &entry.name {
-            comparison_str.push_str(&format!("{} \"{}\" ({} days, {} hours and {} minutes ago)\n","->".bold(), name, days, hours, minutes));
+            comparison_str.push_str(&format!("{} \"{}\" ({} days, {} hours and {} minutes ago)\n",arrow, name, days, hours, minutes));
         } else {
             let then_str = entry.datetime.naive_local().to_string();
-            comparison_str.push_str(&format!("{} {} ({} days, {} hours and {} minutes ago)\n","->".bold(), then_str, days, hours, minutes));
+            comparison_str.push_str(&format!("{} {} ({} days, {} hours and {} minutes ago)\n",arrow, then_str, days, hours, minutes));
         }
         comparison_str.push_str(&format!("     Files: {}({}%) Lines: {}({}%) {{Code: {}({}%), Extra: {}({}%)}}\n\n",
-                with_seperators(entry.stats.files), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.files, final_stats.files)),
-                with_seperators(entry.stats.lines), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.lines, final_stats.lines)),
-                with_seperators(entry.stats.code_lines), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.code_lines, final_stats.code_lines)),
-                with_seperators(entry.stats.extra_lines), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.extra_lines, final_stats.extra_lines)),
+                number(&with_seperators(entry.stats.files)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.files, final_stats.files)),
+                number(&with_seperators(entry.stats.lines)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.lines, final_stats.lines)),
+                number(&with_seperators(entry.stats.code_lines)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.code_lines, final_stats.code_lines)),
+                number(&with_seperators(entry.stats.extra_lines)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.extra_lines, final_stats.extra_lines)),
         ));
     }
     print!("{comparison_str}");
 
     fn color_percentage(percentage: &str) -> ColoredString {
+        let theme = theme::active();
         if percentage.starts_with('+') {
-            percentage.truecolor(201, 255, 189)
+            theme.progress_up.paint(percentage)
         } else if percentage.starts_with('-') {
-            percentage.truecolor(219, 129, 129)
+            theme.progress_down.paint(percentage)
         } else {
-            percentage.truecolor(255, 255, 255)
+            theme.progress_same.paint(percentage)
         }
-    }   
+    }
 }
 
 
@@ -247,6 +249,7 @@ fn difference_as_signed_percentage_str_of_usize(older: usize, newer: usize) -> S
 }
 
 
+#[cfg(test)]
 fn difference_as_signed_percentage_str_of_f64(older: f64, newer: f64) -> String {
     let (difference, sign) = if newer > older {(newer-older, "+".to_owned())} else if older > newer {(older-newer, "-".to_owned())} else {(0.0,String::new())};
     let mut percentage = (difference / older) * 100.0;
@@ -318,10 +321,11 @@ fn get_keywords_as_str(keyword_occurencies: &HashMap<String,usize>, max_files_nu
         sorted_keywords.sort_unstable_by_key(|(name,_)| name.as_str());
         let mut keyword_iter = sorted_keywords.into_iter();
         let first_keyword = keyword_iter.next().unwrap();
+        let theme = theme::active();
         keyword_info.push_str(&format!("{}{}: {}"," ".repeat(KEYWORD_LINE_OFFSET + max_files_num_size),
-                colored_word(first_keyword.0),with_seperators(*first_keyword.1)));
+                theme.keyword.paint(first_keyword.0),theme.number.paint(&with_seperators(*first_keyword.1))));
         for (keyword_name,occurancies) in keyword_iter {
-            keyword_info.push_str(&format!(" , {}: {}",colored_word(keyword_name),with_seperators(*occurancies)));
+            keyword_info.push_str(&format!(" , {}: {}",theme.keyword.paint(keyword_name),theme.number.paint(&with_seperators(*occurancies))));
         }
     }
     keyword_info
@@ -344,16 +348,24 @@ fn create_keyword_sum_map(content_info_map: &HashMap<String,LanguageContentInfo>
 }
 
 fn get_size_and_formatted_size_text(value: usize, suffix: &str) -> (f64,ColoredString) {
-    if value > 1000000 
+    if value > 1000000
         {(value as f64 / 1000000f64, colored_word(&("MBs ".to_owned() + suffix)))}
-    else if value > 1000 
+    else if value > 1000
         {(value as f64 / 1000f64, colored_word(&("KBs ".to_owned() + suffix)))}
     else
         {(value as f64, colored_word(&("Bytes ".to_owned() + suffix)))}
 }
 
 fn colored_word(word: &str) -> ColoredString {
-    word.italic().truecolor(181, 169, 138)
+    theme::active().label.paint(word)
+}
+
+fn number(value: &str) -> ColoredString {
+    theme::active().number.paint(value)
+}
+
+fn percent(value: f64) -> ColoredString {
+    theme::active().percent.paint(&format!("{value:.2}"))
 }
 
 
@@ -477,10 +489,10 @@ fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize], 
         color_func_vec: &[ColorFunc], config: &Configuration) -> String
 {
     let mut line = String::with_capacity(150);
-    line.push_str(&format!("{prefix}    "));
-    for (i,percent) in percentages.iter().enumerate() {
-        let str_perc = format!("{percent:.2}");
-        line.push_str(&format!("{}{}% ", " ".repeat(5-str_perc.len()), str_perc));
+    line.push_str(&format!("{}    ", theme::active().overview_label.paint(prefix)));
+    for (i,percentage) in percentages.iter().enumerate() {
+        let str_perc = format!("{percentage:.2}");
+        line.push_str(&format!("{}{}% ", " ".repeat(5-str_perc.len()), percent(*percentage)));
         if config.no_visual {
             line.push_str(&languages_name[i]);
         } else {
@@ -499,11 +511,13 @@ fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize], 
 }
 
 fn add_verticals_str(line: &mut String, files_verticals: &[usize], color_func_vec: &[ColorFunc]) {
-    line.push_str("    [-");
+    let theme = theme::active();
+    line.push_str("    ");
+    line.push_str(&theme.bar_frame.paint("[-").to_string());
     for (i,verticals) in files_verticals.iter().enumerate() {
         line.push_str(&color_func_vec[i]("|").repeat(*verticals));
     }
-    line.push_str("-]");
+    line.push_str(&theme.bar_frame.paint("-]").to_string());
 }
 
 fn retain_most_relevant_and_add_others_field_for_rest(sorted_language_names: &mut Vec<String>,

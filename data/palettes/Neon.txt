@@ -1,1 +1,2 @@
-ff2e97 00f0ff f9f002 9d72ff
+# mezura-format: 2
+languages = ff2e97 00f0ff f9f002 9d72ff

@@ -1,3 +1,44 @@
+v3.0.0 - unreleased
+
+Main changes:
+  -> Every piece of printed text can now be styled, not just the four colors of the overview.
+      19 semantic tokens are exposed (heading, separator, bar-frame, number, percent, label,
+      overview-label, language-name, total-name, keyword, the four progress tokens, summary,
+      success, warning, error, footer), and each takes a color plus any of bold, italic, underline
+      and dim, in any order. "default" leaves the terminal's own foreground alone.
+      Run "--help style" for the full list.
+
+(Breaking!)
+  -> The color palette files have a new format: every line is now a "token = value" pair, where
+      "languages" holds the 1 to 5 overview colors that used to be the whole file, and any style
+      token can be declared alongside it. Palettes written for older versions are detected and
+      converted automatically on the first run, in place, and the conversion loses nothing.
+      Palettes copied from an older README will be rejected with a message naming the problem.
+
+New commands:
+  -> --style <token>=<value>,... : overrides the style of one or more categories of printed text,
+      for a single run. Can also be stored in a configuration file and is kept by --save.
+
+Change in commands:
+  -> --color-palette now applies both the palette's overview colors and any style tokens it
+      declares. If --colors is also given it overrides the overview colors only, since that is all
+      it ever spoke about, and the palette's style tokens still apply.
+      The order in which styles are applied is: built-in defaults, then the palette, then your
+      configuration file, then --style. This is what lets a palette ship a complete look while
+      your own preferences survive switching between palettes.
+
+Other:
+  -> With no palette and no --style, the output is byte for byte identical to v2.0.1, escape codes
+      included: the built-in defaults are exactly the appearance that used to be hardcoded.
+  -> The test suite gained per-language parser fixtures that declare their own hand-verified counts,
+      and a byte-exact comparison of the whole fixture corpus against a recorded result.
+
+
+
+-----------------------------------------------------------------------------------------------------------
+
+
+
 v2.0.1 - 27/7/2026
 
   6,320 Total lines  -  4,531 Code lines

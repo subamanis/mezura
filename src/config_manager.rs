@@ -2,10 +2,10 @@ use std::{path::Path};
 
 use colored::{ColoredString, Colorize};
 
-use crate::{Color, Formatted, GitignoreStack, io_handler, message_printer, utils};
+use crate::{Color, Formatted, GitignoreStack, io_handler, message_printer, theme::{self, Theme}, utils};
 
 // Application version, to be displayed at startup and with --help command
-pub const VERSION_ID : &str = "v2.0.1";
+pub const VERSION_ID : &str = "v3.0.0";
 
 // command flags
 pub const DIRS               :&str   = "dirs";
@@ -21,6 +21,7 @@ pub const NO_VISUAL          :&str   = "no-visual";
 pub const NO_GITIGNORE       :&str   = "no-gitignore";
 pub const COLORS             :&str   = "colors";
 pub const COLOR_PALETTE      :&str   = "color-palette";
+pub const STYLE              :&str   = "style";
 pub const LOG                :&str   = "log";
 pub const COMPRARE_LEVEL     :&str   = "compare";
 pub const SAVE               :&str   = "save";
@@ -67,7 +68,8 @@ pub struct Configuration {
     pub log: LogOption,
     pub compare_level: usize,
     pub config_name_to_save: Option<String>,
-    pub config_name_to_load: Option<String>
+    pub config_name_to_load: Option<String>,
+    pub theme: Theme
 }
 
 #[derive(Debug,PartialEq,Clone,Default)]
@@ -94,6 +96,8 @@ pub enum ArgParsingError {
     IncorrectCommandArgs(String),
     UnexpectedCommandArgs(String),
     NonExistantConfig(String),
+    NonExistantPalette(String),
+    InvalidStyle(String),
     InvalidValueInConfig(String,String),
     InvalidGlobPattern(String),
     NoGlobMatches(String),
@@ -134,8 +138,8 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     let mut custom_config = None;
     let (mut exclude_dirs, mut languages_of_interest, mut excluded_languages, mut threads, mut braces_as_code,
          mut search_in_dotted, mut show_faulty_files, mut config_name_to_save, mut no_visual, mut log,
-         mut compare_level, mut config_name_to_load, mut no_keywords, mut no_gitignore, mut colors, mut color_palette)
-         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
+         mut compare_level, mut config_name_to_load, mut no_keywords, mut no_gitignore, mut colors, mut color_palette, mut styles)
+         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
     for command in options {
         let (command_name, arguments) = match command.find(" ") {
             Some(index) => command.split_at(index),
@@ -168,14 +172,14 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             if vec.is_empty() {
                 message_printer::print_help_message_for_command(LANGUAGES);
                 return Err(ArgParsingError::IncorrectCommandArgs(LANGUAGES.to_owned()));
-            }    
+            }
             languages_of_interest = Some(vec);
         } else if command_name == EXCLUDE_LANGUAGES {
             let vec = utils::parse_languages_to_vec(arguments);
             if vec.is_empty() {
                 message_printer::print_help_message_for_command(EXCLUDE_LANGUAGES);
                 return Err(ArgParsingError::IncorrectCommandArgs(EXCLUDE_LANGUAGES.to_owned()));
-            }    
+            }
             excluded_languages = Some(vec);
         } else if command_name == THREADS {
             let threads_values = utils::parse_two_usize_values(arguments,
@@ -232,11 +236,22 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             }
         } else if command_name == COLOR_PALETTE {
             let name = arguments.trim();
-            if name.is_empty() || io_handler::load_palette(name, &crate::PERSISTENT_APP_PATHS.palettes_dir).is_none() {
+            if name.is_empty() {
                 message_printer::print_help_message_for_command(COLOR_PALETTE);
                 return Err(ArgParsingError::IncorrectCommandArgs(COLOR_PALETTE.to_owned()))
             }
+            if io_handler::load_palette(name, &crate::PERSISTENT_APP_PATHS.palettes_dir).is_none() {
+                return Err(ArgParsingError::NonExistantPalette(name.to_owned()))
+            }
             color_palette = Some(name.to_owned());
+        } else if command_name == STYLE {
+            match theme::parse_overrides(arguments) {
+                Ok(x) => styles = Some(x),
+                Err(x) => {
+                    message_printer::print_help_message_for_command(STYLE);
+                    return Err(ArgParsingError::InvalidStyle(x.formatted()))
+                }
+            }
         } else if command_name == LOG {
             let value = arguments.trim();
             if value.is_empty() {
@@ -287,10 +302,13 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     }
 
     print_warnings_for_commands_that_need_a_loaded_configuration(&config_name_to_save, &config_name_to_load, &log, &compare_level);
-    
-    let mut config_builder = ConfigurationBuilder::new(dirs, exclude_dirs, languages_of_interest, excluded_languages, threads, braces_as_code,
-        search_in_dotted, show_faulty_files, no_keywords, no_visual, no_gitignore, colors, color_palette, log, compare_level,
-        config_name_to_save, config_name_to_load);
+
+    let mut config_builder = ConfigurationBuilder {
+        dirs, exclude_dirs, languages_of_interest, excluded_languages, threads, braces_as_code,
+        should_search_in_dotted: search_in_dotted, should_show_faulty_files: show_faulty_files,
+        no_keywords, no_visual, no_gitignore, colors, color_palette, log, compare_level,
+        config_name_to_save, config_name_to_load, styles, palette_styles: None
+    };
 
     if let Some((custom, invalid_fields)) = custom_config {
         let config_name = config_builder.config_name_to_load.clone().unwrap_or_default();
@@ -315,10 +333,16 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         config_builder.add_missing_fields(default_config);
     }
 
-    if config_builder.colors.is_none()
-        && let Some(name) = &config_builder.color_palette {
+    // A palette contributes its language colors only when they are not overridden, but its style
+    // tokens always apply, since --colors speaks about the overview alone
+    if let Some(name) = &config_builder.color_palette {
         match io_handler::load_palette(name, &crate::PERSISTENT_APP_PATHS.palettes_dir) {
-            Some(x) => config_builder.colors = Some(x),
+            Some(palette) => {
+                if config_builder.colors.is_none() {
+                    config_builder.colors = palette.languages;
+                }
+                config_builder.palette_styles = Some(palette.styles);
+            },
             None => println!("\n{}", format!("Color palette '{name}' could not be loaded, the default colors will be used.").yellow())
         }
     }
@@ -360,7 +384,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
 }
 
 fn print_warnings_for_commands_that_need_a_loaded_configuration(config_name_to_save: &Option<String>, config_name_to_load: &Option<String>,
-        log: &Option<LogOption>, compare_level: &Option<usize>) 
+        log: &Option<LogOption>, compare_level: &Option<usize>)
 {
     if config_name_to_load.is_none() {
         if let Some(log) = log && config_name_to_save.is_none() && log.should_log {
@@ -435,7 +459,7 @@ fn parse_working_dir_as_target_dir() -> Result<Vec<String>, ArgParsingError> {
 }
 
 // The "canonicalize" function from the std that this function uses, (at least on window) seems to put the weird prefix
-// "\\?\" before the path and it also puts forward slashes that we want to convert for compatibility.  
+// "\\?\" before the path and it also puts forward slashes that we want to convert for compatibility.
 fn convert_to_absolute(s: &str) -> String {
     let p = Path::new(s);
     if p.is_absolute() {
@@ -451,7 +475,7 @@ fn convert_to_absolute(s: &str) -> String {
 }
 
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default)]
 pub struct ConfigurationBuilder {
     pub dirs:                     Option<Vec<String>>,
     pub exclude_dirs:             Option<Vec<String>>,
@@ -469,37 +493,12 @@ pub struct ConfigurationBuilder {
     pub log:                      Option<LogOption>,
     pub compare_level:            Option<usize>,
     pub config_name_to_save:      Option<String>,
-    pub config_name_to_load:      Option<String>
+    pub config_name_to_load:      Option<String>,
+    pub styles:                   Option<Vec<(String,String)>>,
+    pub palette_styles:           Option<Vec<(String,String)>>
 }
 
 impl ConfigurationBuilder {
-    pub fn new(dirs: Option<Vec<String>>, exclude_dirs: Option<Vec<String>>, languages_of_interest: Option<Vec<String>>, excluded_languages: Option<Vec<String>>,
-             threads: Option<Threads>, braces_as_code: Option<bool>, should_search_in_dotted: Option<bool>, should_show_faulty_files: Option<bool>, no_keywords: Option<bool>,
-             no_visual: Option<bool>, no_gitignore: Option<bool>, colors: Option<Vec<Color>>, color_palette: Option<String>, log: Option<LogOption>,
-             compare_level: Option<usize>, config_name_to_save: Option<String>, config_name_to_load: Option<String>)
-    -> ConfigurationBuilder
-    {
-        ConfigurationBuilder {
-            dirs,
-            exclude_dirs,
-            languages_of_interest,
-            excluded_languages,
-            threads,
-            braces_as_code,
-            should_search_in_dotted,
-            should_show_faulty_files,
-            no_keywords,
-            no_visual,
-            no_gitignore,
-            colors,
-            color_palette,
-            log,
-            compare_level,
-            config_name_to_save,
-            config_name_to_load
-        }
-    }
-
     pub fn add_missing_fields(&mut self, config: Self) -> &mut Self {
         if self.dirs.is_none() {self.dirs = config.dirs};
         if self.exclude_dirs.is_none() {self.exclude_dirs = config.exclude_dirs};
@@ -516,6 +515,7 @@ impl ConfigurationBuilder {
         if self.color_palette.is_none() {self.color_palette = config.color_palette};
         if self.compare_level.is_none() {self.compare_level = config.compare_level};
         if self.log.is_none() {self.log = config.log};
+        if self.styles.is_none() {self.styles = config.styles};
         self
     }
 
@@ -523,7 +523,8 @@ impl ConfigurationBuilder {
         self.exclude_dirs.is_none() || self.languages_of_interest.is_none() ||
         self.threads.is_none() || self.braces_as_code.is_none() || self.should_search_in_dotted.is_none() ||
         self.should_show_faulty_files.is_none() || self.no_visual.is_none() || self.no_gitignore.is_none() ||
-        self.colors.is_none() || self.color_palette.is_none() || self.log.is_none() || self.compare_level.is_none()
+        self.colors.is_none() || self.color_palette.is_none() || self.log.is_none() || self.compare_level.is_none() ||
+        self.styles.is_none()
     }
 
     pub fn build(&self) -> Configuration {
@@ -544,7 +545,8 @@ impl ConfigurationBuilder {
             log: self.log.clone().unwrap_or_default(),
             compare_level: self.compare_level.unwrap_or(DEF_COMPARE_LEVEL),
             config_name_to_save: self.config_name_to_save.clone(),
-            config_name_to_load: self.config_name_to_load.clone()
+            config_name_to_load: self.config_name_to_load.clone(),
+            theme: theme::resolve(self.palette_styles.as_deref().unwrap_or_default(), self.styles.as_deref().unwrap_or_default())
         }
     }
 }
@@ -568,7 +570,8 @@ impl Configuration {
             log: LogOption::default(),
             compare_level: DEF_COMPARE_LEVEL,
             config_name_to_save: None,
-            config_name_to_load: None
+            config_name_to_load: None,
+            theme: Theme::default()
         }
     }
 
@@ -604,7 +607,7 @@ impl Configuration {
         self.should_search_in_dotted = should_search_in_dotted;
         self
     }
-    
+
     pub fn set_should_show_faulty_files(&mut self, should_show_faulty_files: bool) -> &mut Self {
         self.should_show_faulty_files = should_show_faulty_files;
         self
@@ -693,6 +696,8 @@ impl Formatted for ArgParsingError {
             Self::IncorrectCommandArgs(p) => format!("Incorrect arguments provided for the command '--{p}'.").red(),
             Self::UnexpectedCommandArgs(p) => format!("Command '--{p}' does not expect any arguments.").red(),
             Self::NonExistantConfig(p) => format!("Configuration '{p}' does not exist.").red(),
+            Self::NonExistantPalette(p) => format!("Color palette '{p}' was not found, or could not be read.").red(),
+            Self::InvalidStyle(p) => p.clone().red(),
             Self::InvalidValueInConfig(cmd,conf) => format!("Invalid value for the command '--{cmd}', in config '{conf}'.\nFix the value in the config file, or override it by providing a valid '--{cmd}' argument.").red(),
             Self::InvalidGlobPattern(p) => format!("'{p}' is not a valid glob pattern.").red(),
             Self::NoGlobMatches(p) => format!("The pattern '{p}' did not match any existing directory or file.").red(),
@@ -709,14 +714,14 @@ mod tests {
     use crate::PERSISTENT_APP_PATHS;
 
     use super::*;
+    use crate::theme::Style;
 
     fn parse_dirs(s: &str) -> Result<Vec<String>, ArgParsingError> {
         super::parse_dirs(s, true, false)
     }
 
     fn new_conf(dir: &str) -> Configuration {
-        let mut builder = ConfigurationBuilder::new(Some(vec![convert_to_absolute(dir)]), None, None, None, None, None,
-                None, None, None, None, None, None, None, None, None, None, None);
+        let mut builder = ConfigurationBuilder { dirs: Some(vec![convert_to_absolute(dir)]), ..Default::default() };
         if let Ok((default_config, _)) = io_handler::parse_config_file(None, None) {
             builder.add_missing_fields(default_config);
         }
@@ -905,7 +910,7 @@ mod tests {
 
         std::fs::remove_dir_all(&root).unwrap();
     }
-    
+
     #[test]
     fn test_save_load_configs() {
         // The saving and loading of configs always goes through the persistent config dir, which doesn't
@@ -924,7 +929,7 @@ mod tests {
         saved_config.config_name_to_save = None;
         loaded_config.config_name_to_load = None;
         assert_eq!(saved_config, loaded_config);
-        
+
         loaded_config = create_config_builder_from_args("--load test000 --threads 1 4 --dirs ./").unwrap();
         assert_eq!(saved_config.dirs, loaded_config.dirs);
         assert_ne!(saved_config.threads, loaded_config.threads);
@@ -940,17 +945,34 @@ mod tests {
     fn test_color_palette_arg_parsing() {
         std::fs::create_dir_all(&PERSISTENT_APP_PATHS.palettes_dir).unwrap();
         let test_palette_path = &PERSISTENT_APP_PATHS.palettes_dir.clone().add("test-palette000.txt");
-        assert!(!Path::new(test_palette_path).exists());
-        std::fs::write(test_palette_path, "cyan ff0080\n").unwrap();
+        // Cleaning up front instead of asserting absence, so that a failed run does not leave
+        // behind a file that makes every later run fail during setup
+        let _ = std::fs::remove_file(test_palette_path);
+        std::fs::write(test_palette_path, "languages = cyan ff0080\nnumber = bright-black dim\n").unwrap();
 
         let config = create_config_from_args("./ --color-palette Test-Palette000").unwrap();
         assert_eq!(vec![Color::Cyan, Color::TrueColor{r:255,g:0,b:128}], config.colors);
+        assert_eq!(Style::of(Color::BrightBlack).dim(), config.theme.number);
 
+        // --colors speaks about the overview alone, so the palette's style tokens still apply
         let overridden = create_config_from_args("./ --color-palette test-palette000 --colors bright-blue").unwrap();
         assert_eq!(vec![Color::BrightBlue], overridden.colors);
+        assert_eq!(Style::of(Color::BrightBlack).dim(), overridden.theme.number);
 
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("color-palette".to_owned())),
+        // and --style wins over what the palette declared
+        let restyled = create_config_from_args("./ --color-palette test-palette000 --style number=cyan,heading=bold").unwrap();
+        assert_eq!(Style::of(Color::Cyan), restyled.theme.number);
+        assert_eq!(Style::plain().bold(), restyled.theme.heading);
+
+        // The error names what is actually wrong, instead of a generic "incorrect arguments"
+        assert!(matches!(create_config_from_args("./ --style"), Err(ArgParsingError::InvalidStyle(_))));
+        assert!(matches!(create_config_from_args("./ --style nonsense"), Err(ArgParsingError::InvalidStyle(_))));
+        assert_eq!(Err(ArgParsingError::InvalidStyle("'numberr' is not a style token.".to_owned())),
+                create_config_from_args("./ --style numberr=cyan"));
+        assert!(matches!(create_config_from_args("./ --style number=notacolor"), Err(ArgParsingError::InvalidStyle(_))));
+        assert_eq!(Err(ArgParsingError::NonExistantPalette("definitely-not-a-palette000".to_owned())),
                 create_config_from_args("./ --color-palette definitely-not-a-palette000"));
+
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("color-palette".to_owned())),
                 create_config_from_args("./ --color-palette"));
 
@@ -973,4 +995,3 @@ mod tests {
         std::fs::remove_file(test_file_path).unwrap();
     }
 }
-

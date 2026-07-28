@@ -148,14 +148,3 @@ fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, 
     *relevant_files += local_relevant_files;
     *excluded_files += local_excluded_files;
 }
-
-#[cfg(debug_assertions)]
-fn print_thread_colored_msg(id: usize, msg: String) {
-    if id == 0 {
-        println!("{}",msg.truecolor(51, 167, 255));
-    } else if id == 1 {
-        println!("{}",msg.truecolor(255, 179, 71));
-    } else {
-        println!("{}",msg.truecolor(47, 171, 44));
-    }
-}
