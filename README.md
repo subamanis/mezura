@@ -315,8 +315,10 @@ Below there is a list with all the commands-flags that the program accepts.
       percent          every percentage
       label            the words 'files', 'lines', 'KBs total' and so on
       overview-label   the 'Files:', 'Lines:' and 'Size :' row labels of the overview
-      language-name    a language name in the details rows
-      total-name       the word 'Total'
+      details-language  a language name in the details rows
+      overview-language the language names in the overview. A color declared here is ignored, since
+                        the overview colors each language from the palette, but the attributes apply
+      details-total     the word 'Total'
       keyword          the names of the counted keywords
       progress-up      an increase in the progress section
       progress-down    a decrease

@@ -2,9 +2,9 @@ v3.0.0 - unreleased
 
 Main changes:
   -> Every piece of printed text can now be styled, not just the four colors of the overview.
-      19 semantic tokens are exposed (heading, separator, bar-frame, number, percent, label,
-      overview-label, language-name, total-name, keyword, the four progress tokens, summary,
-      success, warning, error, footer), and each takes a color plus any of bold, italic,
+      20 semantic tokens are exposed (heading, separator, bar-frame, number, percent, label,
+      overview-label, details-language, overview-language, details-total, keyword, the four progress
+      tokens, summary, success, warning, error, footer), and each takes a color plus any of bold, italic,
       underline, dim and reverse, in any order. "default" leaves the terminal's own foreground alone.
       Run "--help style" for the full list.
 
@@ -12,8 +12,7 @@ Main changes:
   -> The color palette files have a new format: every line is now a "token = value" pair, where
       "languages" holds the 1 to 5 overview colors that used to be the whole file, and any style
       token can be declared alongside it. Palettes written for older versions are detected and
-      converted automatically on the first run, in place, and the conversion loses nothing.
-      Palettes copied from an older README will be rejected with a message naming the problem.
+      converted in place, whenever they show up, so nothing has to be done by hand.
 
 New commands:
   -> --style <token>=<value>,... : overrides the style of one or more categories of printed text,
@@ -32,24 +31,15 @@ Change in commands:
       broken alphabetically instead of being left to the iteration order of a hash map.
       This also changes which languages reach the overview and which fall into its 'others' entry.
       Use '--sort size' to get the old order back.
-  -> --color-palette now applies both the palette's overview colors and any style tokens it
-      declares. If --colors is also given it overrides the overview colors only, since that is all
-      it ever spoke about, and the palette's style tokens still apply.
-      The order in which styles are applied is: built-in defaults, then the palette, then your
-      configuration file, then --style. This is what lets a palette ship a complete look while
-      your own preferences survive switching between palettes.
+  -> --color-palette now applies the palette's overview colors and any style tokens it declares.
+      --colors still overrides only the overview colors, so a palette's styles apply even when
+      --colors is given.
+      Styles are applied in this order: built-in defaults, then the palette, then your configuration
+      file, then --style. So a palette can carry a complete look, while the styles in your own
+      config survive switching between palettes.
 
 Bugfixes:
-  -> The percentage bar of the overview is now exact instead of approximate. The old code rounded
-      each share independently and then repaired the total with a series of heuristics, which could
-      leave a language two whole cells away from its real share. It now uses largest remainder
-      apportionment: every language gets the whole part of its share, the leftover cells go to the
-      largest fractional parts, and a language that is present never loses its last cell. When the
-      minimum-one rule forces the total over the width, the cell is taken from whichever language
-      holds the most, since one cell missing from a large share is invisible while the same cell
-      taken from a small one misrepresents it badly.
-      Expect the bar to differ by a cell or two from v2.0.1 on projects that have a long tail of
-      very small languages.
+  -> The percentage bar of the overview is now more accurate
 
 Other:
   -> With no palette and no --style, the output is byte for byte identical to v2.0.1, escape codes

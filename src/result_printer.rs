@@ -14,6 +14,9 @@ const DEFAULT_LANGUAGE_COLORS : [Color; 4] = [Color::Cyan, Color::BrightMagenta,
         Color::TrueColor{r:106,g:217,b:189}];
 const DEFAULT_OTHERS_COLOR : Color = Color::TrueColor{r:215,g:201,b:240};
 
+//a language that is present but whose share rounds away to zero: shown as "<0.01", given no cell
+const PRESENT_BUT_TINY : f64 = 0.001;
+
 const KEYWORD_LINE_OFFSET : usize = 19;
 const STANDARD_LINE_STATS_LEN : usize = 33;
 const DASH_LINE_OFFSET : usize = 47;
@@ -91,7 +94,7 @@ fn print_individually(sorted_languages: &[String], content_info_map: &HashMap<St
         let files_str = with_seperators(metadata.files);
         let prefix_standard_spaces = lang_name.chars().count() + metadata.files.to_string().chars().count() +
                  utils::num_of_seperators(metadata.files); 
-        let title = format!("{}   {}{} {}  -> ",theme::active().language_name.paint(lang_name),
+        let title = format!("{}   {}{} {}  -> ",theme::active().details_language.paint(lang_name),
                  " ".repeat(biggest_prefix_standard_spaces - prefix_standard_spaces), number(&files_str), colored_word("files"));
         titles_vec.push(title);
 
@@ -137,7 +140,7 @@ fn print_sum(content_info_map: &HashMap<String,LanguageContentInfo>, final_stats
     let keywords_line = get_keywords_as_str(&keywords_sum_map, biggest_prefix_standard_spaces);
 
     let spaces = biggest_prefix_standard_spaces - (5 + total_files_str.len());
-    let title = format!("{}   {}{} {}  -> ",theme::active().total_name.paint("Total")," ".repeat(spaces),number(&total_files_str),colored_word("files"));
+    let title = format!("{}   {}{} {}  -> ",theme::active().details_total.paint("Total")," ".repeat(spaces),number(&total_files_str),colored_word("files"));
     let code_lines_percentage = if final_stats.lines > 0 {final_stats.code_lines as f64 / final_stats.lines as f64 * 100f64} else {0f64};
     let size_text = format!("{} {} - {} {}",number(&final_stats.size.to_string()), colored_word(&format!("{} total", final_stats.size_measurement)),
             number(&final_stats.average_size.to_string()),colored_word(&format!("{} average", final_stats.average_size_measurement)));
@@ -182,7 +185,10 @@ fn print_visual_overview(sorted_language_vec: &mut Vec<String>, content_info_map
             } else {
                 config.colors.get(i).copied().unwrap_or(DEFAULT_LANGUAGE_COLORS[i.min(DEFAULT_LANGUAGE_COLORS.len()-1)])
             };
-            Box::new(move |s: &str| s.color(color).to_string()) as ColorFunc
+            // The attributes come from the theme while the color stays per language, which is why
+            // a color declared on 'overview-language' has nothing to apply to and is ignored
+            let style = theme::active().overview_language.clone();
+            Box::new(move |s: &str| style.paint_with_color(s, color).to_string()) as ColorFunc
         }).collect();
 
     let files_percentages = get_files_percentages(languages_metadata_map, sorted_language_vec);
@@ -380,8 +386,17 @@ fn number(value: &str) -> ColoredString {
     theme::active().number.paint(value)
 }
 
+// A language that is present but rounds to 0.00 would read as absent, while the bar still shows a
+// cell for it because of the minimum-one rule. '<0.01' is the same convention the progress section
+// already uses for tiny differences. Comparing the formatted text rather than the number keeps this
+// independent of how the formatter rounds a halfway value.
+fn percent_text(value: f64) -> String {
+    let text = format!("{value:.2}");
+    if value > 0.0 && text == "0.00" { "<0.01".to_owned() } else { text }
+}
+
 fn percent(value: f64) -> ColoredString {
-    theme::active().percent.paint(&format!("{value:.2}"))
+    theme::active().percent.paint(&percent_text(value))
 }
 
 
@@ -416,14 +431,14 @@ fn get_sorted_language_names(content_info_map: &HashMap<String, LanguageContentI
 fn get_num_of_verticals(percentages: &[f64], width: usize) -> Vec<usize> {
     let exact = percentages.iter().map(|x| x * width as f64 / 100.0).collect::<Vec<_>>();
     let mut verticals = percentages.iter().zip(exact.iter())
-            .map(|(percentage, exact)| if *percentage <= 0.0 {0} else {(*exact as usize).max(1)})
+            .map(|(percentage, exact)| if *percentage < 0.01 {0} else {(*exact as usize).max(1)})
             .collect::<Vec<_>>();
 
     let mut sum = verticals.iter().sum::<usize>();
 
     while sum < width {
         let distance_below = |i: &usize| exact[*i] - verticals[*i] as f64;
-        let furthest_below = (0..verticals.len()).filter(|i| percentages[*i] > 0.0)
+        let furthest_below = (0..verticals.len()).filter(|i| percentages[*i] >= 0.01)
                 .max_by(|a, b| distance_below(a).total_cmp(&distance_below(b)));
         match furthest_below {
             Some(i) => verticals[i] += 1,
@@ -454,8 +469,10 @@ fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize], 
     let mut line = String::with_capacity(150);
     line.push_str(&format!("{}    ", theme::active().overview_label.paint(prefix)));
     for (i,percentage) in percentages.iter().enumerate() {
-        let str_perc = format!("{percentage:.2}");
-        line.push_str(&format!("{}{}% ", " ".repeat(5-str_perc.len()), percent(*percentage)));
+        // The padding is computed from the same text that gets printed, and saturates, since a
+        // single language at 100.00 is six characters wide and used to underflow this subtraction
+        let str_perc = percent_text(*percentage);
+        line.push_str(&format!("{}{}% ", " ".repeat(5usize.saturating_sub(str_perc.len())), percent(*percentage)));
         if config.no_visual {
             line.push_str(&languages_name[i]);
         } else {
@@ -556,16 +573,19 @@ fn get_percentages(numbers: &[usize]) -> Vec<f64> {
     let mut sum = 0.0;
     for (counter,files) in numbers.iter().enumerate() {
         if counter == numbers.len() - 1 {
-            if sum > 99.99 {
-                language_percentages.push(0.0);
-            } else {
-                let rounded = ((100f64 - sum) * 100f64).round() / 100f64; 
-                language_percentages.push(rounded);
-            }
+            let remainder = if sum > 99.99 {0.0} else {((100f64 - sum) * 100f64).round() / 100f64};
+            // The last entry is the one that absorbs the rounding, and it is usually 'others', so
+            // it needs the same marker as the rest when it is present but too small to print
+            language_percentages.push(if remainder == 0.0 && *files > 0 {PRESENT_BUT_TINY} else {remainder});
         } else {
             let percentage = *files as f64/total_files as f64;
             let canonicalized = (percentage * 10000f64).round() / 100f64;
-            sum += canonicalized;
+            // A language that exists but rounds away to zero keeps a value just above zero, so
+            // that the printed text can say "<0.01" instead of claiming it is absent. The running
+            // sum still takes the rounded value, so the arithmetic of the last entry is untouched,
+            // and the marker stays below the threshold that earns a cell in the bar.
+            let canonicalized = if canonicalized == 0.0 && *files > 0 {PRESENT_BUT_TINY} else {canonicalized};
+            sum += (canonicalized * 100f64).round() / 100f64;
             language_percentages.push(canonicalized);
         }
     }
@@ -679,6 +699,38 @@ mod tests {
         let verticals = get_num_of_verticals(&[99.7,0.1,0.1,0.1], NUM_OF_VERTICALS);
         assert_eq!(50, verticals.iter().sum::<usize>());
         assert!(verticals.iter().all(|x| *x >= 1), "a language that is present must never lose its last cell");
+    }
+
+    #[test]
+    fn a_language_that_rounds_away_is_shown_as_less_than_a_hundredth_and_gets_no_cell() {
+        // 3 files out of 800000 is 0.000375%, which used to print as a flat 0.00. Checked in the
+        // middle and in the last position, which are computed by different branches
+        for numbers in [vec![500_000, 3, 299_997], vec![500_000, 299_997, 3]] {
+            let percentages = get_percentages(&numbers);
+            let tiny = numbers.iter().position(|x| *x == 3).unwrap();
+            assert_eq!("<0.01", percent_text(percentages[tiny]), "for {numbers:?}");
+            let verticals = get_num_of_verticals(&percentages, NUM_OF_VERTICALS);
+            assert_eq!(0, verticals[tiny], "a share too small to be printed must not claim a cell either");
+            assert_eq!(NUM_OF_VERTICALS, verticals.iter().sum::<usize>());
+        }
+
+        // A language that really is absent stays at a flat zero and keeps no cell
+        let percentages = get_percentages(&[500_000, 299_997, 0]);
+        assert_eq!("0.00", percent_text(percentages[2]));
+        assert_eq!(0, get_num_of_verticals(&percentages, NUM_OF_VERTICALS)[2]);
+
+        // A genuine zero stays a zero, and anything printable is left alone
+        assert_eq!("0.00", percent_text(0.0));
+        assert_eq!("0.01", percent_text(0.01));
+        assert_eq!("12.35", percent_text(12.345));
+        assert_eq!("100.00", percent_text(100.0));
+
+        // The overview pads every percentage into a 5 column field, so the marker has to fit in it.
+        // 100.00 is the one value that does not, which is why that padding saturates.
+        for value in [0.0, PRESENT_BUT_TINY, 0.01, 9.9, 99.99] {
+            assert!(percent_text(value).len() <= 5, "'{}' does not fit the column", percent_text(value));
+        }
+        assert_eq!(6, percent_text(100.0).len());
     }
 
     #[test]

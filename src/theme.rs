@@ -62,10 +62,20 @@ impl Style {
     }
 
     pub fn paint(&self, text: &str) -> ColoredString {
-        let mut painted = ColoredString::from(text);
-        if let Some(color) = self.color {
-            painted = painted.color(color);
-        }
+        self.apply_attributes(match self.color {
+            Some(color) => ColoredString::from(text).color(color),
+            None => ColoredString::from(text)
+        })
+    }
+
+    // The overview colors every language individually, so the color comes from the caller there and
+    // whatever the style itself declares is ignored
+    pub fn paint_with_color(&self, text: &str, color: Color) -> ColoredString {
+        self.apply_attributes(ColoredString::from(text).color(color))
+    }
+
+    fn apply_attributes(&self, painted: ColoredString) -> ColoredString {
+        let mut painted = painted;
         if self.bold {
             painted = painted.bold();
         }
@@ -177,8 +187,9 @@ theme_tokens! {
     percent         => "percent",         Style::plain();
     label           => "label",           Style::of(LABEL_GOLD).italic();
     overview_label  => "overview-label",  Style::plain();
-    language_name   => "language-name",   Style::plain().bold();
-    total_name      => "total-name",      Style::plain().bold();
+    details_language => "details-language", Style::plain().bold();
+    overview_language => "overview-language", Style::plain();
+    details_total     => "details-total", Style::plain().bold();
     keyword         => "keyword",         Style::of(LABEL_GOLD).italic();
     progress_up     => "progress-up",     Style::of(Color::TrueColor { r: 201, g: 255, b: 189 });
     progress_down   => "progress-down",   Style::of(Color::TrueColor { r: 219, g: 129, b: 129 });
@@ -373,10 +384,25 @@ mod tests {
         for name in Theme::token_names() {
             assert!(theme.style_of_token_mut(name).is_some(), "'{name}' is listed but does not resolve");
         }
-        assert!(theme.style_of_token_mut("language_name").is_some());
-        assert!(theme.style_of_token_mut("LANGUAGE-NAME").is_some());
+        assert!(theme.style_of_token_mut("details_language").is_some(), "underscores are accepted as separators");
+        assert!(theme.style_of_token_mut("DETAILS-LANGUAGE").is_some(), "token names are case insensitive");
         assert_eq!(Err(ThemeParseError::UnknownToken("headings".to_owned())), theme.set_token("headings", "cyan"));
         assert_eq!(Err(ThemeParseError::InvalidValue("heading".to_owned(), "nonsense".to_owned())), theme.set_token("heading", "nonsense"));
+    }
+
+    #[test]
+    fn the_overview_language_token_keeps_the_per_language_color() {
+        // Asserting on the fields rather than the rendered text, because a test binary is not a
+        // terminal and colored emits no escape codes there, which would make the check vacuous
+        let style = Style::parse("red italic bold").unwrap();
+        let painted = style.paint_with_color("Rust", Color::Cyan);
+
+        assert_eq!(Some(Color::Cyan), painted.fgcolor(), "the caller's color must win");
+        assert!(painted.style().contains(colored::Styles::Italic));
+        assert!(painted.style().contains(colored::Styles::Bold));
+
+        // and the ordinary paint still honours the style's own color
+        assert_eq!(Some(Color::Red), style.paint("Rust").fgcolor());
     }
 
     #[test]
