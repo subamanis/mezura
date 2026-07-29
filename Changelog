@@ -2,13 +2,9 @@ v3.0.0 - unreleased
 
 Main changes:
   -> Every piece of printed text can now be styled, not just the four colors of the overview.
-      20 semantic tokens are exposed (heading, separator, bar-frame, number, percent, label,
-      overview-label, details-language, overview-language, details-total, keyword, the four progress
-      tokens, summary, success, warning, error, footer), and each takes a color plus any of bold, italic,
-      underline, dim and reverse, in any order. "default" leaves the terminal's own foreground alone.
-      Run "--help style" for the full list.
-  -> Comment lines are now counted and reported separately, with their own percentage, so a
-      language row reads "lines N {N code (X%) + N comments (X%) + N extra}".
+      37 tokens are exposed, and each takes a color plus any of bold, italic, underline, dim and
+      reverse, in any order. Run "--help style" for the full list.
+  -> Comment lines are now counted and reported separately, with their own percentage.
 
 (Breaking!)
   -> The color palette files have a new format: every line is now a "token = value" pair, where
@@ -56,8 +52,9 @@ Bugfixes:
   -> The dashed line above the total now matches the width of the total line.
 
 Other:
-  -> With no palette and no --style, the output is byte for byte identical to v2.0.1, escape codes
-      included: the built-in defaults are exactly the appearance that used to be hardcoded.
+  -> Updated default styling.The "details" section was rebuilt: each language is a block of three rows,
+      with the file count and size above the name, the line breakdown beside it and the keywords below.
+      It is about 50 columns narrower than before. Some other subtle style changes have also been applied.
   -> The test suite gained per-language parser fixtures that declare their own hand-verified counts,
       and a byte-exact comparison of the whole fixture corpus against a recorded result.
 

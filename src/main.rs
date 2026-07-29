@@ -83,7 +83,7 @@ fn main() {
         // The status block opens with a blank line of its own, so the separation below the
         // version is only missing when that block is not printed
         let separator = if config.hidden.status {"\n"} else {""};
-        println!("\n{VERSION_ID}{separator}");
+        println!("\n{}{separator}", theme::active().version.paint(VERSION_ID));
     }
 
     if !config.languages_of_interest.is_empty() &&
@@ -229,7 +229,7 @@ fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Lan
     if ![HELP, CHANGELOG, SHOW_LANGUAGES, SHOW_CONFIGS, SHOW_PALETTES, TUNE_PALETTES].iter().any(|x| is_present(x)) {
         return false;
     }
-    println!("\n{VERSION_ID}");
+    println!("\n{}", theme::active().version.paint(VERSION_ID));
 
     if args_str.contains(&(String::from("--") + HELP)) {
         message_printer::print_help_message_for_given_args(args_str);

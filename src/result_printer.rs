@@ -1,5 +1,3 @@
-use std::cmp::max;
-
 use crate::*;
 
 type ColorFunc = Box<dyn Fn(&str) -> String>;
@@ -17,7 +15,7 @@ const DEFAULT_OTHERS_COLOR : Color = Color::TrueColor{r:215,g:201,b:240};
 //a language that is present but whose share rounds away to zero: shown as "<0.01", given no cell
 const PRESENT_BUT_TINY : f64 = 0.001;
 
-const KEYWORD_LINE_OFFSET : usize = 19;
+const TOTAL_NAME : &str = "Total";
 
 //log file keys
 const FILES         : &str  = "Files:";
@@ -38,21 +36,21 @@ pub fn format_and_print_results(content_info_map: &mut HashMap<String, LanguageC
     let hidden_languages = config.top_n.map_or(0, |top| sorted_language_names.len().saturating_sub(top));
     let shown_language_names = &sorted_language_names[..sorted_language_names.len() - hidden_languages];
 
-    let biggest_prefix_standard_spaces = get_biggest_prefix_standard_spaces(shown_language_names, languages_metadata_map);
+    let columns = Columns::of(shown_language_names, content_info_map, languages_metadata_map, final_stats);
+    let block_width = columns.width();
     let should_print_keywords = !config.hidden.keywords;
 
     if !config.hidden.details {
-        print_individually(shown_language_names, content_info_map, languages_metadata_map,
-                biggest_prefix_standard_spaces, should_print_keywords);
+        print_individually(shown_language_names, content_info_map, languages_metadata_map, &columns, block_width, should_print_keywords);
         if hidden_languages > 0 {
             let plural = if hidden_languages == 1 {"language"} else {"languages"};
-            println!("\n{}", theme::active().summary.paint(&format!("(+{hidden_languages} more {plural} hidden by --top {})", config.top_n.unwrap())));
+            println!("\n{}", theme::active().note.paint(&format!("(+{hidden_languages} more {plural} hidden by --top {})", config.top_n.unwrap())));
         }
     }
 
     if languages_metadata_map.len() > 1 {
         if !config.hidden.details {
-            print_sum(content_info_map, final_stats, biggest_prefix_standard_spaces, should_print_keywords);
+            print_sum(content_info_map, final_stats, &columns, block_width, should_print_keywords);
         }
         if !config.hidden.overview {
             print_visual_overview(&mut sorted_language_names, content_info_map, languages_metadata_map, final_stats, config);
@@ -66,78 +64,109 @@ pub fn format_and_print_results(content_info_map: &mut HashMap<String, LanguageC
 
 
 fn print_individually(sorted_languages: &[String], content_info_map: &HashMap<String,LanguageContentInfo>,
-     languages_metadata_map: &HashMap<String, LanguageMetadata>, biggest_prefix_standard_spaces: usize, should_print_keywords: bool)
+     languages_metadata_map: &HashMap<String, LanguageMetadata>, columns: &Columns, block_width: usize, should_print_keywords: bool)
 {
-    fn get_size_text(metadata: &LanguageMetadata) -> String {
-        let (size, size_desc) = get_size_and_formatted_size_text(metadata.bytes, "total");
-        let (average_size, average_size_desc) = get_size_and_formatted_size_text(
-                metadata.bytes / metadata.files, "average");
-
-        format!("{size:.1} {size_desc} - {average_size:.1} {average_size_desc}")
-    }
-
-    fn reconstruct_line(i: usize, max_line_stats_len: usize, titles_vec: &[String], lines_stats_vec: &[String],
-         lines_stats_len_vec: &[usize], size_stats_vec: &[String], keywords_stats_vec: &[String]) -> String
-    {
-        let spaces = max_line_stats_len+1 - lines_stats_len_vec[i];
-        let mut line = titles_vec[i].clone() + &lines_stats_vec[i] + &" ".repeat(spaces) + " |  " + &size_stats_vec[i];
-        //if run with --hide keywords
-        if !keywords_stats_vec.is_empty(){
-            line = line + "\n" + &keywords_stats_vec[i];
-        } 
-        line
-    }
-
     println!("{}.\n", theme::active().heading.paint("Details"));
 
-    let mut max_line_stats_len = 0;
-    let (mut titles_vec, mut lines_stats_vec, mut lines_stats_len_vec, mut size_stats_vec,
-            mut keywords_stats_vec) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
-
-    for lang_name in sorted_languages {
+    let last = sorted_languages.len().saturating_sub(1);
+    for (i, lang_name) in sorted_languages.iter().enumerate() {
         let content_info = content_info_map.get(lang_name).unwrap();
         let metadata = languages_metadata_map.get(lang_name).unwrap();
 
-        let files_str = with_seperators(metadata.files);
-        let prefix_standard_spaces = lang_name.chars().count() + metadata.files.to_string().chars().count() +
-                 utils::num_of_seperators(metadata.files); 
-        let title = format!("{}   {}{} {}  -> ",theme::active().details_language.paint(lang_name),
-                 " ".repeat(biggest_prefix_standard_spaces - prefix_standard_spaces), number(&files_str), colored_word("files"));
-        titles_vec.push(title);
-
-        let (code_lines_percentage, comment_lines_percentage) = percentages_of(content_info);
-        let lines_str = with_seperators(content_info.lines);
-        let code_lines_str = with_seperators(content_info.code_lines);
-        let comment_lines_str = with_seperators(content_info.comment_lines);
-        let extra_lines_str = with_seperators(content_info.lines - content_info.code_lines - content_info.comment_lines);
-
-        // Measured rather than derived from a constant, so that a percentage which is not five
-        // characters wide, 100.00 or 9.09, cannot shift the size column out of alignment
-        let stats_line = format!("{} {} {{{} code ({}%) + {} comments ({}%) + {} extra}}", colored_word("lines"), number(&lines_str),
-                 number(&code_lines_str), percent(code_lines_percentage), number(&comment_lines_str),
-                 percent(comment_lines_percentage), number(&extra_lines_str));
-        let curr_line_stats_len = widest_visible_line(&stats_line);
-        lines_stats_len_vec.push(curr_line_stats_len);
-        if max_line_stats_len < curr_line_stats_len {
-            max_line_stats_len = curr_line_stats_len;
-        }
-        lines_stats_vec.push(stats_line);
-        size_stats_vec.push(get_size_text(metadata));
-        
+        println!("{}", columns.files_row(metadata.files, &size_text(metadata.bytes, metadata.bytes / metadata.files), block_width));
+        println!("{}", columns.breakdown_row(&theme::active().details_language.paint(lang_name).to_string(),
+                lang_name.chars().count(), content_info.lines, content_info.code_lines, content_info.comment_lines));
         if should_print_keywords {
-            keywords_stats_vec.push(get_keywords_as_str(&content_info.keyword_occurences, biggest_prefix_standard_spaces));
+            let keywords = get_keywords_as_str(&content_info.keyword_occurences, columns.words_start());
+            if !keywords.is_empty() {
+                println!("{keywords}");
+            }
+        }
+
+        if i != last {
+            println!();
         }
     }
+}
 
-    for i in 0..lines_stats_vec.len() {
-        let line = reconstruct_line(i, max_line_stats_len, &titles_vec, &lines_stats_vec,
-                &lines_stats_len_vec, &size_stats_vec, &keywords_stats_vec);
 
-        if i == lines_stats_len_vec.len() - 1 {
-            println!("{line}");
-        } else {
-            println!("{line}\n");
+// Every column is right aligned to a shared edge. The file count and the line count end at the same
+// place, so the line count, being the longer of the two and the criterion the list is sorted by,
+// reaches further left and is the first thing the eye lands on.
+struct Columns {
+    name: usize,
+    headline: usize,
+    code: usize,
+    comments: usize,
+    extra: usize
+}
+
+// Kept on both sides of the arrow, so the longest language name still has room around it
+const NAME_GAP : usize = 3;
+
+impl Columns {
+    fn of(sorted_languages: &[String], content_info_map: &HashMap<String, LanguageContentInfo>,
+            languages_metadata_map: &HashMap<String, LanguageMetadata>, final_stats: &FinalStats) -> Self
+    {
+        let len_of = |value: usize| with_seperators(value).len();
+        let mut columns = Columns {
+            name: sorted_languages.iter().map(|x| x.chars().count()).max().unwrap_or(0).max(TOTAL_NAME.len()),
+            headline: len_of(final_stats.files).max(len_of(final_stats.lines)),
+            code: len_of(final_stats.code_lines),
+            comments: len_of(final_stats.comment_lines),
+            extra: len_of(final_stats.extra_lines)
+        };
+
+        // The total holds the largest of every column, except when --top hid the language that made
+        // it so, which is why the shown ones are measured too instead of assumed smaller
+        for name in sorted_languages {
+            let content_info = content_info_map.get(name).unwrap();
+            columns.headline = columns.headline.max(len_of(languages_metadata_map.get(name).unwrap().files))
+                    .max(len_of(content_info.lines));
+            columns.code = columns.code.max(len_of(content_info.code_lines));
+            columns.comments = columns.comments.max(len_of(content_info.comment_lines));
+            columns.extra = columns.extra.max(len_of(content_info.lines - content_info.code_lines - content_info.comment_lines));
         }
+
+        columns
+    }
+
+    // Where the file count and the line count both end
+    fn headline_end(&self) -> usize {
+        self.name + 2 * NAME_GAP + 2 + self.headline
+    }
+
+    // Where the words 'files' and 'lines' start, and with them the keywords row
+    fn words_start(&self) -> usize {
+        self.headline_end() + 1
+    }
+
+    fn breakdown_row(&self, painted_name: &str, name_len: usize, lines: usize, code_lines: usize, comment_lines: usize) -> String {
+        let (code_percentage, comment_percentage) = percentages(lines, code_lines, comment_lines);
+        let theme = theme::active();
+        format!("{}{}{}{}{:>headline_w$} {} {{ {:>code_w$} {} ({})  +  {:>comments_w$} {} ({})  +  {:>extra_w$} {} }}",
+                painted_name, " ".repeat(self.name - name_len + NAME_GAP), theme.arrow.paint("->"), " ".repeat(NAME_GAP),
+                theme.lines_number.paint(&with_seperators(lines)), theme.lines_label.paint("lines"),
+                theme.code_number.paint(&with_seperators(code_lines)), theme.code_label.paint("code"), percent(code_percentage),
+                theme.comments_number.paint(&with_seperators(comment_lines)), theme.comments_label.paint("comments"), percent(comment_percentage),
+                theme.extra_number.paint(&with_seperators(lines - code_lines - comment_lines)), theme.extra_label.paint("extra"),
+                headline_w = self.headline, code_w = self.code, comments_w = self.comments, extra_w = self.extra)
+    }
+
+    // The size text ends where the row below it does
+    fn files_row(&self, files: usize, size_text: &str, width: usize) -> String {
+        let theme = theme::active();
+        let left = format!("{}{:>headline_w$} {}", " ".repeat(self.headline_end() - self.headline),
+                theme.files_number.paint(&with_seperators(files)), theme.files_label.paint("files"), headline_w = self.headline);
+        let used = widest_visible_line(&left) + widest_visible_line(size_text);
+
+        left + &" ".repeat(width.saturating_sub(used).max(2)) + size_text
+    }
+
+    // Rendered once to be measured and again to be printed, which costs nothing once per run and
+    // keeps the width honest instead of derived from a formula that can fall behind
+    fn width(&self) -> usize {
+        widest_visible_line(&self.breakdown_row("", 0, 0, 0, 0))
     }
 }
 
@@ -164,44 +193,22 @@ fn widest_visible_line(text: &str) -> usize {
 }
 
 
-fn print_sum(content_info_map: &HashMap<String,LanguageContentInfo>, final_stats: &FinalStats, biggest_prefix_standard_spaces: usize,
-        should_print_keywords: bool)
+fn print_sum(content_info_map: &HashMap<String,LanguageContentInfo>, final_stats: &FinalStats, columns: &Columns,
+        block_width: usize, should_print_keywords: bool)
 {
-    let (total_files_str, total_lines_str, total_code_lines_str, total_comment_lines_str, total_extra_lines_str) =
-            (with_seperators(final_stats.files), with_seperators(final_stats.lines), with_seperators(final_stats.code_lines),
-             with_seperators(final_stats.comment_lines), with_seperators(final_stats.extra_lines));
-
-    let keywords_sum_map = create_keyword_sum_map(content_info_map);
-    let keywords_line = get_keywords_as_str(&keywords_sum_map, biggest_prefix_standard_spaces);
-
-    let spaces = biggest_prefix_standard_spaces - (5 + total_files_str.len());
-    let title = format!("{}   {}{} {}  -> ",theme::active().details_total.paint("Total")," ".repeat(spaces),number(&total_files_str),colored_word("files"));
-    let (code_lines_percentage, comment_lines_percentage) = if final_stats.lines > 0 {
-        (final_stats.code_lines as f64 / final_stats.lines as f64 * 100f64,
-         final_stats.comment_lines as f64 / final_stats.lines as f64 * 100f64)
-    } else {
-        (0f64, 0f64)
-    };
-    let size_text = format!("{} {} - {} {}",number(&final_stats.size.to_string()), colored_word(&format!("{} total", final_stats.size_measurement)),
-            number(&final_stats.average_size.to_string()),colored_word(&format!("{} average", final_stats.average_size_measurement)));
-
-    let info = format!("{} {} {{{} code ({}%) + {} comments ({}%) + {} extra}}  |  {}\n",colored_word("lines"), number(&total_lines_str),
-            number(&total_code_lines_str), percent(code_lines_percentage), number(&total_comment_lines_str),
-            percent(comment_lines_percentage), number(&total_extra_lines_str), size_text);
-
-    // The separator follows the total line, measured from the text that is actually printed. It
-    // used to be a formula over some of the numbers plus two magic constants, which left out the
-    // total line count, the width of the language name column and the size units, so it always
-    // fell short. The keywords line is deliberately not measured, since it can be much wider than
-    // the row it annotates.
-    let line_len = widest_visible_line(&format!("{title}{info}"));
-    println!("{} ",theme::active().separator.paint(&"-".repeat(line_len)));
+    // The separator spans the block, which every row of the details section already fits exactly
+    println!("{} ",theme::active().separator.paint(&"-".repeat(block_width)));
+    println!("{}", columns.files_row(final_stats.files, &size_text(final_stats.bytes_size, final_stats.bytes_average_size), block_width));
+    println!("{}", columns.breakdown_row(&theme::active().details_total.paint(TOTAL_NAME).to_string(),
+            TOTAL_NAME.len(), final_stats.lines, final_stats.code_lines, final_stats.comment_lines));
 
     if should_print_keywords {
-        println!("{title}{info}{keywords_line}\n");
-    } else {
-        println!("{title}{info}");
+        let keywords_line = get_keywords_as_str(&create_keyword_sum_map(content_info_map), columns.words_start());
+        if !keywords_line.is_empty() {
+            println!("{keywords_line}");
+        }
     }
+    println!();
 }
 
 //                                    OVERVIEW
@@ -244,12 +251,19 @@ fn print_visual_overview(sorted_language_vec: &mut Vec<String>, content_info_map
     let lines_verticals = if config.hidden.bar {vec![]} else{get_num_of_verticals(&lines_percentages, NUM_OF_VERTICALS)};
     let size_verticals = if config.hidden.bar {vec![]} else{get_num_of_verticals(&sizes_percentages, NUM_OF_VERTICALS)};
 
+    // Each percentage is padded to the widest of the three rows in its own position, so the same
+    // language stays in the same column down the section without paying for a gap nobody needs
+    let percent_widths = (0..sorted_language_vec.len()).map(|i| {
+        percent_text(files_percentages[i]).len().max(percent_text(lines_percentages[i]).len())
+                .max(percent_text(sizes_percentages[i]).len())
+    }).collect::<Vec<_>>();
+
     let files_line = create_overview_line("Files:", &files_percentages, &files_verticals,
-            sorted_language_vec, &color_func_vec, config);
+            sorted_language_vec, &color_func_vec, &percent_widths, config);
     let lines_line = create_overview_line("Lines:", &lines_percentages, &lines_verticals,
-            sorted_language_vec, &color_func_vec, config);
+            sorted_language_vec, &color_func_vec, &percent_widths, config);
     let size_line = create_overview_line("Size :", &sizes_percentages, &size_verticals,
-            sorted_language_vec, &color_func_vec, config);
+            sorted_language_vec, &color_func_vec, &percent_widths, config);
 
     println!("{files_line}\n\n{lines_line}\n\n{size_line}\n");
 }
@@ -274,16 +288,16 @@ fn print_comparison_to_previous_runs(final_stats: &FinalStats, log_content: &str
         // else, so it is named and left uncompared instead of being reported as a collapse
         let tail = if entry.splits_comments {
             format!("Comments: {}({}%), Extra: {}({}%)",
-                number(&with_seperators(entry.stats.comment_lines)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.comment_lines, final_stats.comment_lines)),
-                number(&with_seperators(entry.stats.extra_lines)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.extra_lines, final_stats.extra_lines)))
+                theme::active().comments_number.paint(&with_seperators(entry.stats.comment_lines)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.comment_lines, final_stats.comment_lines)),
+                theme::active().extra_number.paint(&with_seperators(entry.stats.extra_lines)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.extra_lines, final_stats.extra_lines)))
         } else {
             format!("Non-code: {} (logged before comments were counted separately)",
-                number(&with_seperators(entry.stats.extra_lines)))
+                theme::active().extra_number.paint(&with_seperators(entry.stats.extra_lines)))
         };
         comparison_str.push_str(&format!("     Files: {}({}%) Lines: {}({}%) {{Code: {}({}%), {}}}\n\n",
-                number(&with_seperators(entry.stats.files)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.files, final_stats.files)),
-                number(&with_seperators(entry.stats.lines)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.lines, final_stats.lines)),
-                number(&with_seperators(entry.stats.code_lines)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.code_lines, final_stats.code_lines)),
+                theme::active().files_number.paint(&with_seperators(entry.stats.files)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.files, final_stats.files)),
+                theme::active().lines_number.paint(&with_seperators(entry.stats.lines)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.lines, final_stats.lines)),
+                theme::active().code_number.paint(&with_seperators(entry.stats.code_lines)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.code_lines, final_stats.code_lines)),
                 tail));
     }
     print!("{comparison_str}");
@@ -399,7 +413,8 @@ fn parse_N_previous_entries(log_content: &str, n: usize) -> Vec<LogEntry> {
     log_entries
 } 
 
-fn get_keywords_as_str(keyword_occurencies: &HashMap<String,usize>, max_files_num_size: usize) -> String {
+// Indented to where the word 'lines' starts on the row above
+fn get_keywords_as_str(keyword_occurencies: &HashMap<String,usize>, indent: usize) -> String {
     let mut keyword_info = String::new();
     if !keyword_occurencies.is_empty() {
         let mut sorted_keywords = keyword_occurencies.iter().collect::<Vec<_>>();
@@ -407,10 +422,10 @@ fn get_keywords_as_str(keyword_occurencies: &HashMap<String,usize>, max_files_nu
         let mut keyword_iter = sorted_keywords.into_iter();
         let first_keyword = keyword_iter.next().unwrap();
         let theme = theme::active();
-        keyword_info.push_str(&format!("{}{}: {}"," ".repeat(KEYWORD_LINE_OFFSET + max_files_num_size),
-                theme.keyword.paint(first_keyword.0),theme.number.paint(&with_seperators(*first_keyword.1))));
+        keyword_info.push_str(&format!("{}{}: {}"," ".repeat(indent),
+                theme.keyword_label.paint(first_keyword.0),theme.keyword_number.paint(&with_seperators(*first_keyword.1))));
         for (keyword_name,occurancies) in keyword_iter {
-            keyword_info.push_str(&format!(" , {}: {}",theme.keyword.paint(keyword_name),theme.number.paint(&with_seperators(*occurancies))));
+            keyword_info.push_str(&format!(" , {}: {}",theme.keyword_label.paint(keyword_name),theme.keyword_number.paint(&with_seperators(*occurancies))));
         }
     }
     keyword_info
@@ -432,21 +447,21 @@ fn create_keyword_sum_map(content_info_map: &HashMap<String,LanguageContentInfo>
     collective_keywords_map
 }
 
-fn get_size_and_formatted_size_text(value: usize, suffix: &str) -> (f64,ColoredString) {
-    if value > 1000000
-        {(value as f64 / 1000000f64, colored_word(&("MBs ".to_owned() + suffix)))}
-    else if value > 1000
-        {(value as f64 / 1000f64, colored_word(&("KBs ".to_owned() + suffix)))}
-    else
-        {(value as f64, colored_word(&("Bytes ".to_owned() + suffix)))}
-}
+// The language rows and the total go through the same formatting, so a value on the border of a
+// unit cannot be reported as MBs on one line and KBs on another
+fn size_text(total_bytes: usize, average_bytes: usize) -> String {
+    fn scaled(value: usize) -> (f64, &'static str) {
+        if value > 1_000_000 {(value as f64 / 1_000_000f64, "MBs")}
+        else if value > 1000 {(value as f64 / 1000f64, "KBs")}
+        else {(value as f64, "Bytes")}
+    }
 
-fn colored_word(word: &str) -> ColoredString {
-    theme::active().label.paint(word)
-}
-
-fn number(value: &str) -> ColoredString {
-    theme::active().number.paint(value)
+    let theme = theme::active();
+    let (total, total_unit) = scaled(total_bytes);
+    let (average, average_unit) = scaled(average_bytes);
+    format!("{} {} - {} {}",
+            theme.total_size_number.paint(&format!("{total:.1}")), theme.total_size_label.paint(&format!("{total_unit} total")),
+            theme.avg_size_number.paint(&format!("{average:.1}")), theme.avg_size_label.paint(&format!("{average_unit} average")))
 }
 
 // A language that is present but rounds to 0.00 would read as absent, while the bar still shows a
@@ -458,17 +473,25 @@ fn percent_text(value: f64) -> String {
     if value > 0.0 && text == "0.00" { "<0.01".to_owned() } else { text }
 }
 
+// The '%' is painted with the number: leaving it outside made it keep the default colour while
+// the digits next to it were faded
 fn percent(value: f64) -> ColoredString {
-    theme::active().percent.paint(&percent_text(value))
+    theme::active().percent.paint(&(percent_text(value) + "%"))
 }
 
-fn percentages_of(content_info: &LanguageContentInfo) -> (f64, f64) {
-    if content_info.lines == 0 {
+// The overview's percentages are the datum of that section rather than an annotation on a count,
+// so they are not the ones that were faded
+fn overview_percent(value: f64) -> ColoredString {
+    theme::active().overview_percent.paint(&(percent_text(value) + "%"))
+}
+
+fn percentages(lines: usize, code_lines: usize, comment_lines: usize) -> (f64, f64) {
+    if lines == 0 {
         return (0f64, 0f64);
     }
-    (content_info.code_lines as f64 / content_info.lines as f64 * 100f64,
-     content_info.comment_lines as f64 / content_info.lines as f64 * 100f64)
+    (code_lines as f64 / lines as f64 * 100f64, comment_lines as f64 / lines as f64 * 100f64)
 }
+
 
 
 // Ties are broken by name rather than left to the iteration order of the maps, which would make
@@ -535,15 +558,13 @@ fn get_num_of_verticals(percentages: &[f64], width: usize) -> Vec<usize> {
 }
 
 fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize], languages_name: &[String],
-        color_func_vec: &[ColorFunc], config: &Configuration) -> String
+        color_func_vec: &[ColorFunc], percent_widths: &[usize], config: &Configuration) -> String
 {
     let mut line = String::with_capacity(150);
-    line.push_str(&format!("{}    ", theme::active().overview_label.paint(prefix)));
+    line.push_str(&format!("{}   ", theme::active().overview_label.paint(prefix)));
     for (i,percentage) in percentages.iter().enumerate() {
-        // The padding is computed from the same text that gets printed, and saturates, since a
-        // single language at 100.00 is six characters wide and used to underflow this subtraction
         let str_perc = percent_text(*percentage);
-        line.push_str(&format!("{}{}% ", " ".repeat(5usize.saturating_sub(str_perc.len())), percent(*percentage)));
+        line.push_str(&format!("{}{} ", " ".repeat(percent_widths[i].saturating_sub(str_perc.len())), overview_percent(*percentage)));
         line.push_str(&color_func_vec[i](&languages_name[i]));
         if i < percentages.len() - 1{
             line.push_str(" - ")
@@ -559,7 +580,7 @@ fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize], 
 
 fn add_verticals_str(line: &mut String, files_verticals: &[usize], color_func_vec: &[ColorFunc], character: &str) {
     let theme = theme::active();
-    line.push_str("    ");
+    line.push_str("   ");
     line.push_str(&theme.bar_frame.paint("[-").to_string());
     for (i,verticals) in files_verticals.iter().enumerate() {
         line.push_str(&color_func_vec[i](character).repeat(*verticals));
@@ -659,14 +680,6 @@ fn get_percentages(numbers: &[usize]) -> Vec<f64> {
     language_percentages
 }
 
-fn get_biggest_prefix_standard_spaces(sorted_language_names: &[String], languages_metadata_map: &HashMap<String, LanguageMetadata>) -> usize {
-    let longest_lang_name = sorted_language_names.iter().map(|x| x.chars().count()).max().unwrap();
-    let longest_lang_name = max(longest_lang_name,5);
-    let total_files: usize = languages_metadata_map.iter().map(|meta| meta.1.files).sum();
-    let total_files_digits = total_files.to_string().chars().count();
-
-    longest_lang_name + total_files_digits + utils::num_of_seperators(total_files)
-}
 
 
 #[cfg(test)]

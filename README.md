@@ -345,7 +345,7 @@ Below there is a list with all the commands-flags that the program accepts.
 --style
 
     One or more 'token=style' pairs separated by commas, for example:
-    --style number=bright-black,label=b5a98a italic,heading=white bold underline
+    --style code-number=bright-black,code-label=b5a98a italic,heading=white bold underline
 
     Overrides how a category of printed text looks. A style is a color and any number of the
     attributes 'bold', 'italic', 'underline', 'dim' and 'reverse', in any order. The color is
@@ -355,28 +355,44 @@ Below there is a list with all the commands-flags that the program accepts.
     'reverse' swaps the text and background colors, so it stands out strongly without committing
     to any color of its own, which means it adapts to whatever theme the terminal is using.
 
-    The tokens are:
-      heading          the section titles and the "Analyzing directories" lines
-      separator        the dashed line above the total
-      bar-frame        the '[-' and '-]' around the overview bar
-      number           every counted value
-      percent          every percentage
-      label            the words 'files', 'lines', 'KBs total' and so on
-      overview-label   the 'Files:', 'Lines:' and 'Size :' row labels of the overview
-      details-language  a language name in the details rows
-      overview-language the language names in the overview. A color declared here is ignored, since
-                        the overview colors each language from the palette, but the attributes apply
-      details-total     the word 'Total'
-      keyword          the names of the counted keywords
-      progress-up      an increase in the progress section
-      progress-down    a decrease
-      progress-same    no change
-      progress-entry   the '->' of a progress entry
-      summary          the found / of interest / excluded line
-      success          the 'ok' after parsing
-      warning          warnings
-      error            errors
-      footer           the execution time line
+    Every counted quantity owns two tokens, one for the number and one for the word beside it,
+    so either can be picked out without touching the other. Each is named after the word that
+    appears on screen:
+
+      files-number       files-label
+      lines-number       lines-label
+      code-number        code-label
+      comments-number    comments-label
+      extra-number       extra-label
+      total-size-number  total-size-label
+      avg-size-number    avg-size-label
+      keyword-number     keyword-label
+
+    The numbers of the "progress" section are the same quantities, so they follow the same tokens.
+
+    The rest:
+      version            the version line at the top
+      heading            the section titles and the "Analyzing directories" lines
+      separator          the dashed line above the total
+      arrow              the '->' after a language name
+      bar-frame          the '[-' and '-]' around the overview bar
+      percent            the percentages inside the braces of the details rows
+      details-language   a language name in the details rows
+      details-total      the word 'Total'
+      overview-label     the 'Files:', 'Lines:' and 'Size :' row labels of the overview
+      overview-percent   the percentages of the overview
+      overview-language  the language names in the overview. A color declared here is ignored, since
+                         the overview colors each language from the palette, but the attributes apply
+      progress-up        an increase in the progress section
+      progress-down      a decrease
+      progress-same      no change
+      progress-entry     the '->' of a progress entry
+      summary            the found / of interest / excluded line
+      note               the '(+N more languages hidden by --top N)' line
+      success            the 'ok' after parsing
+      warning            warnings
+      error              errors
+      footer             the execution time line
 
     Styles can also be declared inside a color palette or in a config file. They are applied in
     that order, so a palette can ship a complete look while your own config keeps your

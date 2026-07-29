@@ -1124,28 +1124,28 @@ mod tests {
         // Cleaning up front instead of asserting absence, so that a failed run does not leave
         // behind a file that makes every later run fail during setup
         let _ = std::fs::remove_file(test_palette_path);
-        std::fs::write(test_palette_path, "languages = cyan ff0080\nnumber = bright-black dim\n").unwrap();
+        std::fs::write(test_palette_path, "languages = cyan ff0080\ncode-number = bright-black dim\n").unwrap();
 
         let config = create_config_from_args("./ --color-palette Test-Palette000").unwrap();
         assert_eq!(vec![Color::Cyan, Color::TrueColor{r:255,g:0,b:128}], config.colors);
-        assert_eq!(Style::of(Color::BrightBlack).dim(), config.theme.number);
+        assert_eq!(Style::of(Color::BrightBlack).dim(), config.theme.code_number);
 
         // --colors speaks about the overview alone, so the palette's style tokens still apply
         let overridden = create_config_from_args("./ --color-palette test-palette000 --colors bright-blue").unwrap();
         assert_eq!(vec![Color::BrightBlue], overridden.colors);
-        assert_eq!(Style::of(Color::BrightBlack).dim(), overridden.theme.number);
+        assert_eq!(Style::of(Color::BrightBlack).dim(), overridden.theme.code_number);
 
         // and --style wins over what the palette declared
-        let restyled = create_config_from_args("./ --color-palette test-palette000 --style number=cyan,heading=bold").unwrap();
-        assert_eq!(Style::of(Color::Cyan), restyled.theme.number);
+        let restyled = create_config_from_args("./ --color-palette test-palette000 --style code-number=cyan,heading=bold").unwrap();
+        assert_eq!(Style::of(Color::Cyan), restyled.theme.code_number);
         assert_eq!(Style::plain().bold(), restyled.theme.heading);
 
         // The error names what is actually wrong, instead of a generic "incorrect arguments"
         assert!(matches!(create_config_from_args("./ --style"), Err(ArgParsingError::InvalidStyle(_))));
         assert!(matches!(create_config_from_args("./ --style nonsense"), Err(ArgParsingError::InvalidStyle(_))));
-        assert_eq!(Err(ArgParsingError::InvalidStyle("'numberr' is not a style token.".to_owned())),
-                create_config_from_args("./ --style numberr=cyan"));
-        assert!(matches!(create_config_from_args("./ --style number=notacolor"), Err(ArgParsingError::InvalidStyle(_))));
+        assert_eq!(Err(ArgParsingError::InvalidStyle("'code-numberr' is not a style token.".to_owned())),
+                create_config_from_args("./ --style code-numberr=cyan"));
+        assert!(matches!(create_config_from_args("./ --style code-number=notacolor"), Err(ArgParsingError::InvalidStyle(_))));
         assert_eq!(Err(ArgParsingError::NonExistantPalette("definitely-not-a-palette000".to_owned())),
                 create_config_from_args("./ --color-palette definitely-not-a-palette000"));
 

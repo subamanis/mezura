@@ -424,9 +424,8 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                     None => invalid_fields.push(config_manager::BAR_THICKNESS)
                 }
             } else if id == config_manager::STYLE {
-                buf.clear();
-                let _ = reader.read_line(&mut buf);
-                match theme::parse_overrides(&buf) {
+                let declared = read_lines_from_file_to_vec(&mut reader, &mut buf, |line| vec![line.trim().to_owned()]);
+                match theme::parse_overrides(&declared.join("\n")) {
                     Ok(x) => styles = Some(x),
                     Err(_) => invalid_fields.push(config_manager::STYLE)
                 }
@@ -540,7 +539,8 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
     }
 
     if let Some(styles) = &config_builder.styles {
-        let rendered = styles.iter().map(|(token, style)| format!("{token}={style}")).collect::<Vec<_>>().join(",");
+        // One pair per line, the same shape a palette file uses, so a long list stays readable
+        let rendered = styles.iter().map(|(token, style)| format!("{token} = {style}")).collect::<Vec<_>>().join("\n");
         writer.write_all(&[b"\n\n===> ",config_manager::STYLE.as_bytes(),b"\n"].concat())?;
         writer.write_all(rendered.as_bytes())?;
     }
@@ -734,7 +734,8 @@ mod tests {
 
     #[test]
     fn test_save_config_file_and_then_parse_it() -> std::io::Result<()> {
-        let command = "./ --exclude a,b,c.txt,d.txt, --braces-as-code --threads 1 1 --hide keywords,timing".to_string();
+        let command = "./ --exclude a,b,c.txt,d.txt, --braces-as-code --threads 1 1 --hide keywords,timing \
+                --style code-number=green,comments-label=magenta bold,arrow=default dim".to_string();
         let config_builder = config_manager::create_config_builder_from_args(&command).unwrap();
 
         let test_config_dir = Some(LOCAL_APP_PATHS.test_config_dir.clone());
@@ -749,6 +750,9 @@ mod tests {
         assert_eq!(config_builder.should_show_faulty_files, options.should_show_faulty_files);
         assert_eq!(config_builder.should_search_in_dotted, options.should_search_in_dotted);
         assert_eq!(config_builder.hidden, options.hidden);
+        // Written one pair per line and read back as a group, so a saved theme survives a reload
+        assert_eq!(config_builder.styles, options.styles);
+        assert_eq!(3, options.styles.as_ref().unwrap().len());
 
         Ok(())
     }
@@ -788,7 +792,7 @@ mod tests {
     fn test_load_palette() {
         let dir = std::env::temp_dir().join("mezura_palette_test");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("Mypalette.txt"), "languages = cyan bright-magenta ff0080\nlabel = bright-yellow italic\n").unwrap();
+        std::fs::write(dir.join("Mypalette.txt"), "languages = cyan bright-magenta ff0080\ncode-label = bright-yellow italic\n").unwrap();
         std::fs::write(dir.join("Broken.txt"), "languages = kaka\n").unwrap();
         std::fs::write(dir.join("Legacy.txt"), "cyan bright-magenta ff0080\n").unwrap();
         let dir_str = dir.to_str().unwrap();
@@ -796,7 +800,7 @@ mod tests {
         let expected_colors = Some(vec![Color::Cyan, Color::BrightMagenta, Color::TrueColor{r:255,g:0,b:128}]);
         let loaded = io_handler::load_palette("mypalette", dir_str).unwrap();
         assert_eq!(expected_colors, loaded.languages);
-        assert_eq!(vec![("label".to_owned(), "bright-yellow italic".to_owned())], loaded.styles);
+        assert_eq!(vec![("code-label".to_owned(), "bright-yellow italic".to_owned())], loaded.styles);
         assert_eq!(expected_colors, io_handler::load_palette("MYPALETTE", dir_str).unwrap().languages);
         assert!(io_handler::load_palette("nonexistant", dir_str).is_none());
         assert!(io_handler::load_palette("broken", dir_str).is_none());

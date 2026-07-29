@@ -3,6 +3,10 @@ use std::sync::{LazyLock, OnceLock};
 use crate::{Color, ColoredString, Colorize, utils};
 
 const LABEL_GOLD: Color = Color::TrueColor { r: 181, g: 169, b: 138 };
+// A step below the terminal's foreground, not a step above black. 'bright-black' and the 'dim'
+// attribute both land far darker than this on most schemes.
+const FAINT: Color = Color::TrueColor { r: 170, g: 170, b: 170 };
+const FAINTER: Color = Color::TrueColor { r: 150, g: 150, b: 150 };
 
 static ACTIVE_THEME: OnceLock<Theme> = OnceLock::new();
 static DEFAULT_THEME: LazyLock<Theme> = LazyLock::new(Theme::default);
@@ -96,7 +100,7 @@ impl Style {
     }
 
     // Every attribute is additive and only one color is allowed, so the order of the tokens carries
-    // no meaning and 'label = bold' is as valid as 'label = b5a98a italic'
+    // no meaning and 'code-label = bold' is as valid as 'code-label = b5a98a italic'
     pub fn parse(value: &str) -> Option<Style> {
         let mut style = Style::plain();
         let mut color_was_given = false;
@@ -177,29 +181,51 @@ macro_rules! theme_tokens {
     };
 }
 
-// The defaults reproduce the hardcoded appearance of v2.0.1 exactly, so a palette that declares
-// none of these renders byte for byte as before
+// Every counted quantity owns both of its tokens, the number and the word next to it, so that a
+// theme can pick out one of them without touching the rest. The token is named after the word that
+// appears on screen, so 'files' and 'comments' are plural and 'code' and 'extra' are not.
 theme_tokens! {
-    heading         => "heading",         Style::plain().underline().bold();
-    separator       => "separator",       Style::plain();
-    bar_frame       => "bar-frame",       Style::plain();
-    number          => "number",          Style::plain();
-    percent         => "percent",         Style::plain();
-    label           => "label",           Style::of(LABEL_GOLD).italic();
-    overview_label  => "overview-label",  Style::plain();
-    details_language => "details-language", Style::plain().bold();
+    version           => "version",           Style::plain();
+    heading           => "heading",           Style::plain().underline().bold();
+    separator         => "separator",         Style::of(FAINT);
+    arrow             => "arrow",             Style::of(FAINT);
+    bar_frame         => "bar-frame",         Style::plain();
+    percent           => "percent",           Style::of(FAINTER);
+
+    files_number      => "files-number",      Style::plain();
+    files_label       => "files-label",       Style::of(LABEL_GOLD).italic();
+    lines_number      => "lines-number",      Style::plain();
+    lines_label       => "lines-label",       Style::of(LABEL_GOLD).italic();
+    code_number       => "code-number",       Style::plain();
+    code_label        => "code-label",        Style::of(LABEL_GOLD).italic();
+    comments_number   => "comments-number",   Style::plain();
+    comments_label    => "comments-label",    Style::of(LABEL_GOLD).italic();
+    extra_number      => "extra-number",      Style::plain();
+    extra_label       => "extra-label",       Style::of(LABEL_GOLD).italic();
+    total_size_number => "total-size-number", Style::plain();
+    total_size_label  => "total-size-label",  Style::of(LABEL_GOLD).italic();
+    avg_size_number   => "avg-size-number",   Style::plain();
+    avg_size_label    => "avg-size-label",    Style::of(LABEL_GOLD).italic();
+    keyword_number    => "keyword-number",    Style::plain();
+    keyword_label     => "keyword-label",     Style::of(LABEL_GOLD).italic().dim();
+
+    details_language  => "details-language",  Style::plain().bold();
+    details_total     => "details-total",     Style::plain().bold();
+    overview_label    => "overview-label",    Style::plain();
+    overview_percent  => "overview-percent",  Style::plain();
     overview_language => "overview-language", Style::plain();
-    details_total     => "details-total", Style::plain().bold();
-    keyword         => "keyword",         Style::of(LABEL_GOLD).italic();
-    progress_up     => "progress-up",     Style::of(Color::TrueColor { r: 201, g: 255, b: 189 });
-    progress_down   => "progress-down",   Style::of(Color::TrueColor { r: 219, g: 129, b: 129 });
-    progress_same   => "progress-same",   Style::of(Color::TrueColor { r: 255, g: 255, b: 255 });
-    progress_entry  => "progress-entry",  Style::plain().bold();
-    summary         => "summary",         Style::plain();
-    success         => "success",         Style::of(Color::BrightGreen);
-    warning         => "warning",         Style::of(Color::Yellow);
-    error           => "error",           Style::of(Color::Red);
-    footer          => "footer",          Style::plain();
+
+    progress_up       => "progress-up",       Style::of(Color::TrueColor { r: 201, g: 255, b: 189 });
+    progress_down     => "progress-down",     Style::of(Color::TrueColor { r: 219, g: 129, b: 129 });
+    progress_same     => "progress-same",     Style::of(Color::TrueColor { r: 255, g: 255, b: 255 });
+    progress_entry    => "progress-entry",    Style::plain().bold();
+
+    summary           => "summary",           Style::plain();
+    note              => "note",              Style::plain().dim().italic();
+    success           => "success",           Style::of(Color::BrightGreen);
+    warning           => "warning",           Style::of(Color::Yellow);
+    error             => "error",             Style::of(Color::Red);
+    footer            => "footer",            Style::plain().dim();
 }
 
 impl Theme {
@@ -319,7 +345,8 @@ pub fn parse_overrides(value: &str) -> Result<Vec<(String, String)>, ThemeParseE
     let mut validation_theme = Theme::default();
     let mut overrides = Vec::new();
 
-    for entry in value.split(',').map(str::trim).filter(|x| !x.is_empty()) {
+    // Commas on the command line, one per line in a configuration file
+    for entry in value.split([',', '\n']).map(str::trim).filter(|x| !x.is_empty()) {
         let Some((token, style)) = entry.split_once('=') else {
             return Err(ThemeParseError::MalformedLine(entry.to_owned()));
         };
@@ -410,11 +437,11 @@ mod tests {
         let mut theme = Theme::default();
         assert!(theme.non_default_tokens().is_empty());
 
-        theme.set_token("number", "bright-black").unwrap();
+        theme.set_token("code-number", "bright-black").unwrap();
         theme.set_token("percent", "dim").unwrap();
         let non_defaults = theme.non_default_tokens();
         assert_eq!(2, non_defaults.len());
-        assert!(non_defaults.contains(&("number", "bright-black".to_owned())));
+        assert!(non_defaults.contains(&("code-number", "bright-black".to_owned())));
         assert!(non_defaults.contains(&("percent", "default dim".to_owned())));
     }
 
@@ -425,16 +452,16 @@ mod tests {
 
     #[test]
     fn parses_a_palette_file() {
-        let palette = Palette::parse("# mezura-format: 2\nlanguages = cyan bright-magenta 6ad9bd\n\nlabel = b5a98a italic\nnumber = dim\n").unwrap();
+        let palette = Palette::parse("# mezura-format: 2\nlanguages = cyan bright-magenta 6ad9bd\n\ncode-label = b5a98a italic\ncode-number = dim\n").unwrap();
         assert_eq!(Some(vec![Color::Cyan, Color::BrightMagenta, Color::TrueColor{r:106,g:217,b:189}]), palette.languages);
-        assert_eq!(vec![("label".to_owned(), "b5a98a italic".to_owned()), ("number".to_owned(), "dim".to_owned())], palette.styles);
+        assert_eq!(vec![("code-label".to_owned(), "b5a98a italic".to_owned()), ("code-number".to_owned(), "dim".to_owned())], palette.styles);
     }
 
     #[test]
     fn rejects_a_malformed_palette_file() {
         assert_eq!(Err(ThemeParseError::MalformedLine("cyan magenta".to_owned())), Palette::parse("cyan magenta"));
         assert_eq!(Err(ThemeParseError::UnknownToken("labell".to_owned())), Palette::parse("labell = cyan"));
-        assert_eq!(Err(ThemeParseError::InvalidValue("label".to_owned(), "nope".to_owned())), Palette::parse("label = nope"));
+        assert_eq!(Err(ThemeParseError::InvalidValue("code-label".to_owned(), "nope".to_owned())), Palette::parse("code-label = nope"));
         assert_eq!(Err(ThemeParseError::InvalidValue("languages".to_owned(), "nope".to_owned())), Palette::parse("languages = nope"));
     }
 
@@ -465,18 +492,18 @@ mod tests {
 
     #[test]
     fn a_palette_file_round_trips() {
-        let original = Palette::parse("languages = cyan d7c9f0\nheading = white bold\nkeyword = bright-yellow italic\n").unwrap();
+        let original = Palette::parse("languages = cyan d7c9f0\nheading = white bold\nkeyword-label = bright-yellow italic\n").unwrap();
         assert_eq!(original, Palette::parse(&original.to_file_contents()).unwrap());
     }
 
     #[test]
     fn the_config_layer_wins_over_the_palette_layer() {
-        let palette = [("label".to_owned(), "cyan".to_owned()), ("number".to_owned(), "dim".to_owned())];
-        let config = [("label".to_owned(), "bright-red bold".to_owned())];
+        let palette = [("code-label".to_owned(), "cyan".to_owned()), ("code-number".to_owned(), "dim".to_owned())];
+        let config = [("code-label".to_owned(), "bright-red bold".to_owned())];
 
         let theme = resolve(&palette, &config);
-        assert_eq!(Style::of(Color::BrightRed).bold(), theme.label);
-        assert_eq!(Style::plain().dim(), theme.number);
+        assert_eq!(Style::of(Color::BrightRed).bold(), theme.code_label);
+        assert_eq!(Style::plain().dim(), theme.code_number);
         assert_eq!(Theme::default().heading, theme.heading);
     }
 }
