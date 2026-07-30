@@ -12,6 +12,8 @@ const OVERVIEW_LANGUAGES : usize = 3;
 
 const OTHERS_NAME : &str = "others";
 
+const BYTES_UNIT : &str = "Bytes";
+
 //a language that is present but whose share rounds away to zero: shown as "<0.01", given no cell
 const PRESENT_BUT_TINY : f64 = 0.001;
 
@@ -108,7 +110,7 @@ fn table_lines(theme: &Theme, sorted_languages: &[String], content_info_map: &Ha
     const TIGHT_AFTER : [usize; 4] = [1, 3, 5, 7];
     const TIGHT_GAP : usize = 2;
 
-    fn row_of(name: &str, files: usize, lines: usize, code: usize, comments: usize, bytes: usize,
+    fn row_of(theme: &Theme, name: &str, files: usize, lines: usize, code: usize, comments: usize, bytes: usize,
             total_files: usize, total_lines: usize) -> [String; 11]
     {
         fn percent_cell(value: f64) -> String {
@@ -127,22 +129,24 @@ fn table_lines(theme: &Theme, sorted_languages: &[String], content_info_map: &Ha
          with_seperators(code), percent_cell(code_percentage),
          with_seperators(comments), percent_cell(comment_percentage),
          with_seperators(lines - code - comments),
-         with_decimal_separator(format!("{size:.1}")) + " " + unit]
+         size_figure(size, unit) + " " + &theme.size_unit.paint(unit).to_string()]
     }
 
     let mut rows = sorted_languages.iter().map(|name| {
             let content_info = content_info_map.get(name).unwrap();
             let metadata = languages_metadata_map.get(name).unwrap();
-            row_of(name, metadata.files, content_info.lines, content_info.code_lines, content_info.comment_lines,
+            row_of(theme, name, metadata.files, content_info.lines, content_info.code_lines, content_info.comment_lines,
                     metadata.bytes, final_stats.files, final_stats.lines)
         }).collect::<Vec<_>>();
     if print_total {
-        rows.push(row_of(TOTAL_NAME, final_stats.files, final_stats.lines, final_stats.code_lines,
+        rows.push(row_of(theme, TOTAL_NAME, final_stats.files, final_stats.lines, final_stats.code_lines,
                 final_stats.comment_lines, final_stats.bytes_size, final_stats.files, final_stats.lines));
     }
 
+    // The size cell carries its own colour for the unit, so its width has to be measured with the
+    // escape sequences skipped rather than counted as characters
     let widths = (0..HEADERS.len()).map(|i|
-            rows.iter().map(|row| row[i].chars().count()).max().unwrap_or(0).max(HEADERS[i].len())).collect::<Vec<_>>();
+            rows.iter().map(|row| widest_visible_line(&row[i])).max().unwrap_or(0).max(HEADERS[i].len())).collect::<Vec<_>>();
 
     let header_styles = [&theme.details_language, &theme.files_label, &theme.percent, &theme.lines_label, &theme.percent,
             &theme.code_label, &theme.percent, &theme.comments_label, &theme.percent, &theme.extra_label, &theme.total_size_label];
@@ -156,7 +160,7 @@ fn table_lines(theme: &Theme, sorted_languages: &[String], content_info_map: &Ha
     let render = |cells: &[String], styles: &[&theme::Style; 11]| {
         let mut line = String::with_capacity(140);
         for (i, cell) in cells.iter().enumerate() {
-            let padding = " ".repeat(widths[i] - cell.chars().count());
+            let padding = " ".repeat(widths[i] - widest_visible_line(cell));
             if i == 0 {
                 line.push_str(&format!("{}{}", styles[i].paint(cell), padding));
             } else if TIGHT_AFTER.contains(&(i - 1)) {
@@ -254,7 +258,7 @@ fn boxed_lines(theme: &Theme, sorted_languages: &[String], content_info_map: &Ha
 
     struct Cell { number: String, percent: String }
 
-    fn row_of(name: &str, files: usize, lines: usize, code: usize, comments: usize, bytes: usize,
+    fn row_of(theme: &Theme, name: &str, files: usize, lines: usize, code: usize, comments: usize, bytes: usize,
             total_files: usize, total_lines: usize) -> (String, [Cell; 6])
     {
         fn share(part: usize, whole: usize) -> String {
@@ -272,22 +276,23 @@ fn boxed_lines(theme: &Theme, sorted_languages: &[String], content_info_map: &Ha
             cell(with_seperators(code), percent_text(code_percentage) + "%"),
             cell(with_seperators(comments), percent_text(comment_percentage) + "%"),
             cell(with_seperators(lines - code - comments), String::new()),
-            cell(with_decimal_separator(format!("{size:.1}")) + " " + unit, String::new())])
+            cell(size_figure(size, unit) + " " + &theme.size_unit.paint(unit).to_string(), String::new())])
     }
 
     let mut rows = sorted_languages.iter().map(|name| {
             let content_info = content_info_map.get(name).unwrap();
             let metadata = languages_metadata_map.get(name).unwrap();
-            row_of(name, metadata.files, content_info.lines, content_info.code_lines, content_info.comment_lines,
+            row_of(theme, name, metadata.files, content_info.lines, content_info.code_lines, content_info.comment_lines,
                     metadata.bytes, final_stats.files, final_stats.lines)
         }).collect::<Vec<_>>();
     if print_total {
-        rows.push(row_of(TOTAL_NAME, final_stats.files, final_stats.lines, final_stats.code_lines,
+        rows.push(row_of(theme, TOTAL_NAME, final_stats.files, final_stats.lines, final_stats.code_lines,
                 final_stats.comment_lines, final_stats.bytes_size, final_stats.files, final_stats.lines));
     }
 
     let name_width = rows.iter().map(|(name,_)| name.chars().count()).max().unwrap_or(0).max(HEADERS[0].len());
-    let number_widths = (0..6).map(|i| rows.iter().map(|(_,cells)| cells[i].number.chars().count()).max().unwrap_or(0))
+    // Measured with the escape sequences skipped, since the size cell colours its own unit
+    let number_widths = (0..6).map(|i| rows.iter().map(|(_,cells)| widest_visible_line(&cells[i].number)).max().unwrap_or(0))
             .collect::<Vec<_>>();
     let percent_widths = (0..6).map(|i| rows.iter().map(|(_,cells)| cells[i].percent.chars().count()).max().unwrap_or(0))
             .collect::<Vec<_>>();
@@ -357,7 +362,7 @@ fn boxed_lines(theme: &Theme, sorted_languages: &[String], content_info_map: &Ha
         let name_style = if position == language_rows {&theme.details_total} else {&theme.details_language};
         let mut painted = vec![format!("{}{}", name_style.paint(name), " ".repeat(inner_widths[0] - name.chars().count()))];
         for (i, cell) in cells.iter().enumerate() {
-            let number = format!("{}{}", " ".repeat(number_widths[i] - cell.number.chars().count()),
+            let number = format!("{}{}", " ".repeat(number_widths[i] - widest_visible_line(&cell.number)),
                     number_styles[i].paint(&cell.number));
             let body = if i < WITH_PERCENT {
                 format!("{number}{}{}{}", " ".repeat(PERCENT_GAP), theme.percent.paint(&cell.percent),
@@ -427,28 +432,38 @@ pub fn theme_sample_rows(theme: &Theme, layout: Layout) -> Vec<String> {
 fn print_individually(theme: &Theme, sorted_languages: &[String], content_info_map: &HashMap<String,LanguageContentInfo>,
      languages_metadata_map: &HashMap<String, LanguageMetadata>, columns: &Columns, block_width: usize, should_print_keywords: bool)
 {
-    println!("{}.\n", theme.heading.paint("Details"));
+    print_lines(&individual_lines(theme, sorted_languages, content_info_map, languages_metadata_map,
+            columns, block_width, should_print_keywords));
+}
+
+fn individual_lines(theme: &Theme, sorted_languages: &[String], content_info_map: &HashMap<String,LanguageContentInfo>,
+     languages_metadata_map: &HashMap<String, LanguageMetadata>, columns: &Columns, block_width: usize,
+     should_print_keywords: bool) -> Vec<String>
+{
+    let mut lines = vec![format!("{}.", theme.heading.paint("Details")), String::new()];
 
     let last = sorted_languages.len().saturating_sub(1);
     for (i, lang_name) in sorted_languages.iter().enumerate() {
         let content_info = content_info_map.get(lang_name).unwrap();
         let metadata = languages_metadata_map.get(lang_name).unwrap();
 
-        println!("{}", columns.files_row(theme, metadata.files,
+        lines.push(columns.files_row(theme, metadata.files,
                 &size_text(theme, metadata.bytes, metadata.bytes / metadata.files), block_width));
-        println!("{}", columns.breakdown_row(theme, &theme.details_language.paint(lang_name).to_string(),
+        lines.push(columns.breakdown_row(theme, &theme.details_language.paint(lang_name).to_string(),
                 lang_name.chars().count(), content_info.lines, content_info.code_lines, content_info.comment_lines));
         if should_print_keywords {
             let keywords = get_keywords_as_str(theme, &content_info.keyword_occurences, columns.words_start(), block_width);
             if !keywords.is_empty() {
-                println!("{keywords}");
+                lines.push(keywords);
             }
         }
 
         if i != last {
-            println!();
+            lines.push(String::new());
         }
     }
+
+    lines
 }
 
 
@@ -559,20 +574,29 @@ fn widest_visible_line(text: &str) -> usize {
 fn print_sum(theme: &Theme, content_info_map: &HashMap<String,LanguageContentInfo>, final_stats: &FinalStats, columns: &Columns,
         block_width: usize, should_print_keywords: bool)
 {
+    print_lines(&sum_lines(theme, content_info_map, final_stats, columns, block_width, should_print_keywords));
+}
+
+fn sum_lines(theme: &Theme, content_info_map: &HashMap<String,LanguageContentInfo>, final_stats: &FinalStats, columns: &Columns,
+        block_width: usize, should_print_keywords: bool) -> Vec<String>
+{
     // The separator spans the block, which every row of the details section already fits exactly
-    println!("{} ",theme.separator.paint(&"-".repeat(block_width)));
-    println!("{}", columns.files_row(theme, final_stats.files,
-            &size_text(theme, final_stats.bytes_size, final_stats.bytes_average_size), block_width));
-    println!("{}", columns.breakdown_row(theme, &theme.details_total.paint(TOTAL_NAME).to_string(),
-            TOTAL_NAME.len(), final_stats.lines, final_stats.code_lines, final_stats.comment_lines));
+    let mut lines = vec![
+        format!("{} ",theme.separator.paint(&"-".repeat(block_width))),
+        columns.files_row(theme, final_stats.files,
+                &size_text(theme, final_stats.bytes_size, final_stats.bytes_average_size), block_width),
+        columns.breakdown_row(theme, &theme.details_total.paint(TOTAL_NAME).to_string(),
+                TOTAL_NAME.len(), final_stats.lines, final_stats.code_lines, final_stats.comment_lines)];
 
     if should_print_keywords {
         let keywords_line = get_keywords_as_str(theme, &create_keyword_sum_map(content_info_map), columns.words_start(), block_width);
         if !keywords_line.is_empty() {
-            println!("{keywords_line}");
+            lines.push(keywords_line);
         }
     }
-    println!();
+    lines.push(String::new());
+
+    lines
 }
 
 //                                    OVERVIEW
@@ -585,13 +609,17 @@ fn print_sum(theme: &Theme, content_info_map: &HashMap<String,LanguageContentInf
 fn print_visual_overview(sorted_language_names: &[String], content_info_map: &HashMap<String, LanguageContentInfo>,
         languages_metadata_map: &HashMap<String, LanguageMetadata>, final_stats: &FinalStats, config: &Configuration)
 {
+    print_lines(&overview_lines(sorted_language_names, content_info_map, languages_metadata_map, final_stats, config));
+}
+
+fn overview_lines(sorted_language_names: &[String], content_info_map: &HashMap<String, LanguageContentInfo>,
+        languages_metadata_map: &HashMap<String, LanguageMetadata>, final_stats: &FinalStats, config: &Configuration) -> Vec<String>
+{
     // The function itself decides whether there is anything to fold
     let (sorted_language_vec, content_info_map, languages_metadata_map) =
             most_relevant_with_others_for_rest(sorted_language_names, content_info_map, languages_metadata_map, final_stats, config.top_n);
     let (sorted_language_vec, content_info_map, languages_metadata_map) =
             (&sorted_language_vec, &content_info_map, &languages_metadata_map);
-
-    println!("{}.\n", theme::active().heading.paint("Overview"));
 
     // 'others' takes its style by identity and not by position, because --top moves it: with
     // --top 2 it sits third and used to steal the slot meant for the third language.
@@ -633,7 +661,14 @@ fn print_visual_overview(sorted_language_names: &[String], content_info_map: &Ha
     let size_line = create_overview_line("Size :", &sizes_percentages, &size_verticals,
             sorted_language_vec, &color_func_vec, &bar_func_vec, &percent_widths, config);
 
-    println!("{files_line}\n\n{lines_line}\n\n{size_line}\n");
+    vec![format!("{}.", theme::active().heading.paint("Overview")), String::new(),
+         files_line, String::new(), lines_line, String::new(), size_line, String::new()]
+}
+
+fn print_lines(lines: &[String]) {
+    for line in lines {
+        println!("{line}");
+    }
 }
 
 fn print_comparison_to_previous_runs(final_stats: &FinalStats, log_content: &str, num_of_entries: usize, datetime_now: &DateTime<Local>) {
@@ -848,15 +883,27 @@ fn scaled(value: usize) -> (f64, &'static str) {
     if value > 1_000_000_000 {(value as f64 / 1_000_000_000f64, "GBs")}
     else if value > 1_000_000 {(value as f64 / 1_000_000f64, "MBs")}
     else if value > 1000 {(value as f64 / 1000f64, "KBs")}
-    else {(value as f64, "Bytes")}
+    else {(value as f64, BYTES_UNIT)}
+}
+
+// A count of bytes is a whole number, so '430.0 Bytes' would be claiming a precision the figure does
+// not have. Only a scaled one is divided, and only a divided one has a decimal to show.
+fn size_figure(value: f64, unit: &str) -> String {
+    if unit == BYTES_UNIT {
+        with_seperators(value as usize)
+    } else {
+        with_decimal_separator(format!("{value:.1}"))
+    }
 }
 
 fn size_text(theme: &Theme, total_bytes: usize, average_bytes: usize) -> String {
     let (total, total_unit) = scaled(total_bytes);
     let (average, average_unit) = scaled(average_bytes);
-    format!("{} {} - {} {}",
-            theme.total_size_number.paint(&with_decimal_separator(format!("{total:.1}"))), theme.total_size_label.paint(&format!("{total_unit} total")),
-            theme.avg_size_number.paint(&with_decimal_separator(format!("{average:.1}"))), theme.avg_size_label.paint(&format!("{average_unit} average")))
+    format!("{} {} {} - {} {} {}",
+            theme.total_size_number.paint(&size_figure(total, total_unit)),
+            theme.size_unit.paint(total_unit), theme.total_size_label.paint("total"),
+            theme.avg_size_number.paint(&size_figure(average, average_unit)),
+            theme.size_unit.paint(average_unit), theme.avg_size_label.paint("average"))
 }
 
 // A language that is present but rounds to 0.00 would read as absent, while the bar still shows a
@@ -1093,6 +1140,102 @@ mod tests {
     use crate::{config_manager::LogOption, io_handler::log_stats};
 
     use super::*;
+
+    // One dataset for every layout, chosen so that the things that break are all present at once: a
+    // long language name next to a short one, figures wide enough to move the shared right edge, a
+    // keyword row long enough to wrap, a language with no keywords at all, and five languages, which
+    // is one more than the overview can show without folding into "others".
+    fn sample_data() -> (Vec<String>, HashMap<String, LanguageContentInfo>, HashMap<String, LanguageMetadata>, FinalStats) {
+        let content_info_map = hashmap![
+            "Rust".to_owned() => LanguageContentInfo::new(9008, 6122, 505,
+                    hashmap!["enums".to_owned() => 11, "structs".to_owned() => 29, "traits".to_owned() => 1]),
+            "JavaScript".to_owned() => LanguageContentInfo::new(1200, 900, 120,
+                    hashmap!["classes".to_owned() => 805, "functions".to_owned() => 1204, "generators".to_owned() => 17,
+                             "promises".to_owned() => 96, "imports".to_owned() => 342]),
+            "HTML".to_owned() => LanguageContentInfo::new(396, 361, 0, hashmap![]),
+            "Python".to_owned() => LanguageContentInfo::new(250, 200, 20, hashmap!["classes".to_owned() => 2]),
+            "Java".to_owned() => LanguageContentInfo::new(80, 60, 5,
+                    hashmap!["classes".to_owned() => 2, "interfaces".to_owned() => 1])];
+        let languages_metadata_map = hashmap![
+            "Rust".to_owned() => LanguageMetadata::new(13, 416800),
+            "JavaScript".to_owned() => LanguageMetadata::new(4, 40000),
+            "HTML".to_owned() => LanguageMetadata::new(2, 18800),
+            "Python".to_owned() => LanguageMetadata::new(3, 9000),
+            "Java".to_owned() => LanguageMetadata::new(1, 900)];
+        let final_stats = FinalStats::new_extended(23, 10934, 7643, 650, 2641, 485500, 21108);
+        let sorted = get_sorted_language_names(&content_info_map, &languages_metadata_map, SortCriterion::Lines);
+
+        (sorted, content_info_map, languages_metadata_map, final_stats)
+    }
+
+    fn render_every_layout() -> String {
+        // Not left to the absence of a terminal: CLICOLOR_FORCE overrides that, and the verification
+        // protocol in CLAUDE.md tells the reader to export it, so the same shell that ran a manual
+        // comparison would otherwise fail this test with a wall of escape codes
+        colored::control::set_override(false);
+
+        let (sorted, content_info, metadata, final_stats) = sample_data();
+        let theme = &Theme::default();
+        let columns = Columns::of(&sorted, &content_info, &metadata, &final_stats);
+        let width = columns.width(theme);
+        let mut config = Configuration::new(vec!["./".to_owned()]);
+
+        let mut cases: Vec<(String, Vec<String>)> = Vec::new();
+        let mut list = individual_lines(theme, &sorted, &content_info, &metadata, &columns, width, true);
+        list.extend(sum_lines(theme, &content_info, &final_stats, &columns, width, true));
+        cases.push(("list".to_owned(), list));
+        cases.push(("list, keywords hidden".to_owned(),
+                individual_lines(theme, &sorted, &content_info, &metadata, &columns, width, false)));
+
+        let mut table = table_lines(theme, &sorted, &content_info, &metadata, &final_stats, true);
+        table.extend(keyword_block_lines(theme, &sorted, &content_info));
+        cases.push(("table".to_owned(), table));
+
+        let mut boxed = boxed_lines(theme, &sorted, &content_info, &metadata, &final_stats, true);
+        boxed.extend(keyword_block_lines(theme, &sorted, &content_info));
+        cases.push(("boxed".to_owned(), boxed));
+
+        cases.push(("overview".to_owned(), overview_lines(&sorted, &content_info, &metadata, &final_stats, &config)));
+
+        config.top_n = Some(2);
+        cases.push(("overview, top 2".to_owned(), overview_lines(&sorted, &content_info, &metadata, &final_stats, &config)));
+
+        config.top_n = None;
+        config.hidden.bar = true;
+        cases.push(("overview, bar hidden".to_owned(), overview_lines(&sorted, &content_info, &metadata, &final_stats, &config)));
+
+        let mut rendered = String::with_capacity(4000);
+        for (name, lines) in cases {
+            rendered.push_str(&format!("===> {name}\n"));
+            for line in lines {
+                rendered.push_str(line.trim_end());
+                rendered.push('\n');
+            }
+            rendered.push('\n');
+        }
+
+        rendered
+    }
+
+    // The counting has its own golden in tests/stats_golden.rs; this one is the presentation, which
+    // until now was verified by looking at it. Colours are absent by construction, since a test
+    // binary is not a terminal, so what is locked here is the shape: alignment, widths, the wrapping
+    // of the keyword rows, the folding into "others" and the apportionment of the bar.
+    #[test]
+    fn every_layout_matches_the_golden_file() {
+        let golden = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join("layouts.golden");
+        let rendered = render_every_layout();
+
+        if std::env::var_os("MEZURA_UPDATE_GOLDEN").is_some() {
+            std::fs::write(&golden, rendered.as_bytes()).unwrap();
+            return;
+        }
+
+        let expected = std::fs::read_to_string(&golden).expect("run with MEZURA_UPDATE_GOLDEN=1 to create it");
+        assert_eq!(expected.replace("\r\n", "\n"), rendered,
+                "the printed layouts changed. Read the diff, and if every difference is intended, \
+                 regenerate with MEZURA_UPDATE_GOLDEN=1 cargo test");
+    }
     #[test]
     fn test_get_lines_percentages() {
         let ext_names = ["py".to_string(),"java".to_string(),"cs".to_string()];

@@ -8,7 +8,6 @@ const SIZE_GOLD: Color = Color::TrueColor { r: 125, g: 119, b: 105 };
 // attribute both land far darker than this on most schemes.
 const FAINT: Color = Color::TrueColor { r: 170, g: 170, b: 170 };
 const FAINTER: Color = Color::TrueColor { r: 150, g: 150, b: 150 };
-const SIZE_GREY: Color = Color::TrueColor { r: 166, g: 166, b: 166 };
 const KEYWORD_GREY: Color = Color::TrueColor { r: 181, g: 181, b: 181 };
 
 static ACTIVE_THEME: OnceLock<Theme> = OnceLock::new();
@@ -212,10 +211,14 @@ theme_tokens! {
     comments_label    => "comments-label",    Style::of(LABEL_GOLD).italic();
     extra_number      => "extra-number",      Style::plain();
     extra_label       => "extra-label",       Style::of(LABEL_GOLD).italic();
-    total_size_number => "total-size-number", Style::of(SIZE_GREY);
-    total_size_label  => "total-size-label",  Style::of(SIZE_GOLD);
-    avg_size_number   => "avg-size-number",   Style::of(SIZE_GREY);
-    avg_size_label    => "avg-size-label",    Style::of(SIZE_GOLD);
+    total_size_number => "total-size-number", Style::plain();
+    total_size_label  => "total-size-label",  Style::of(LABEL_GOLD).italic();
+    avg_size_number   => "avg-size-number",   Style::plain();
+    avg_size_label    => "avg-size-label",    Style::of(LABEL_GOLD).italic();
+    // One token for both the total and the average, since there is no reason to want KBs in one
+    // colour next to KBs in another. It is the one piece of the size that stays dim, because a unit
+    // is the least informative part of a figure the reader is scanning past
+    size_unit         => "size-unit",         Style::of(SIZE_GOLD);
     keyword_number    => "keyword-number",    Style::of(KEYWORD_GREY);
     keyword_label     => "keyword-label",     Style::plain().dim();
 

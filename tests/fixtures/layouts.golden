@@ -1,0 +1,112 @@
+===> list
+Details.
+
+                      13 files                              416.8 KBs total - 32.1 KBs average
+Rust         ->    9,008 lines { 6,122 code (67.96%)  +  505 comments (5.61%)  +  2,381 extra }
+                         enums: 11, structs: 29, traits: 1
+
+                       4 files                               40.0 KBs total - 10.0 KBs average
+JavaScript   ->    1,200 lines {   900 code (75.00%)  +  120 comments (10.00%)  +    180 extra }
+                         classes: 805, functions: 1,204, generators: 17, imports: 342,
+                         promises: 96
+
+                       2 files                                18.8 KBs total - 9.4 KBs average
+HTML         ->      396 lines {   361 code (91.16%)  +    0 comments (0.00%)  +     35 extra }
+
+                       3 files                                 9.0 KBs total - 3.0 KBs average
+Python       ->      250 lines {   200 code (80.00%)  +   20 comments (8.00%)  +     30 extra }
+                         classes: 2
+
+                       1 files                             900 Bytes total - 900 Bytes average
+Java         ->       80 lines {    60 code (75.00%)  +    5 comments (6.25%)  +     15 extra }
+                         classes: 2, interfaces: 1
+----------------------------------------------------------------------------------------------
+                      23 files                              485.5 KBs total - 21.1 KBs average
+Total        ->   10,934 lines { 7,643 code (69.90%)  +  650 comments (5.94%)  +  2,641 extra }
+                         classes: 809, enums: 11, functions: 1,204, generators: 17,
+                         imports: 342, interfaces: 1, promises: 96, structs: 29, traits: 1
+
+
+===> list, keywords hidden
+Details.
+
+                      13 files                              416.8 KBs total - 32.1 KBs average
+Rust         ->    9,008 lines { 6,122 code (67.96%)  +  505 comments (5.61%)  +  2,381 extra }
+
+                       4 files                               40.0 KBs total - 10.0 KBs average
+JavaScript   ->    1,200 lines {   900 code (75.00%)  +  120 comments (10.00%)  +    180 extra }
+
+                       2 files                                18.8 KBs total - 9.4 KBs average
+HTML         ->      396 lines {   361 code (91.16%)  +    0 comments (0.00%)  +     35 extra }
+
+                       3 files                                 9.0 KBs total - 3.0 KBs average
+Python       ->      250 lines {   200 code (80.00%)  +   20 comments (8.00%)  +     30 extra }
+
+                       1 files                             900 Bytes total - 900 Bytes average
+Java         ->       80 lines {    60 code (75.00%)  +    5 comments (6.25%)  +     15 extra }
+
+===> table
+Language      Files  %           Lines  %           Code  %         Comments  %         Extra         Size
+Rust             13  56.52%      9,008  82.39%     6,122  67.96%         505  5.61%     2,381    416.8 KBs
+JavaScript        4  17.39%      1,200  10.97%       900  75.00%         120  10.00%      180     40.0 KBs
+HTML              2  8.70%         396  3.62%        361  91.16%           0  0.00%        35     18.8 KBs
+Python            3  13.04%        250  2.29%        200  80.00%          20  8.00%        30      9.0 KBs
+Java              1  4.35%          80  0.73%         60  75.00%           5  6.25%        15    900 Bytes
+----------------------------------------------------------------------------------------------------------
+Total            23  100.00%    10,934  100.00%    7,643  69.90%         650  5.94%     2,641    485.5 KBs
+Rust         enums: 11, structs: 29, traits: 1
+JavaScript   classes: 805, functions: 1,204, generators: 17, imports: 342, promises: 96
+Python       classes: 2
+Java         classes: 2, interfaces: 1
+
+===> boxed
+┌────────────┬─────────────┬─────────────────┬───────────────┬─────────────┬───────┬───────────┐
+│  Language  │    Files    │      Lines      │     Code      │  Comments   │ Extra │   Size    │
+├────────────┼─────────────┼─────────────────┼───────────────┼─────────────┼───────┼───────────┤
+│ Rust       │ 13  56.52%  │  9,008  82.39%  │ 6,122  67.96% │ 505  5.61%  │ 2,381 │ 416.8 KBs │
+├╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌┤
+│ JavaScript │  4  17.39%  │  1,200  10.97%  │   900  75.00% │ 120  10.00% │   180 │  40.0 KBs │
+├╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌┤
+│ HTML       │  2  8.70%   │    396  3.62%   │   361  91.16% │   0  0.00%  │    35 │  18.8 KBs │
+├╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌┤
+│ Python     │  3  13.04%  │    250  2.29%   │   200  80.00% │  20  8.00%  │    30 │   9.0 KBs │
+├╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌┤
+│ Java       │  1  4.35%   │     80  0.73%   │    60  75.00% │   5  6.25%  │    15 │ 900 Bytes │
+├────────────┼─────────────┼─────────────────┼───────────────┼─────────────┼───────┼───────────┤
+│ Total      │ 23  100.00% │ 10,934  100.00% │ 7,643  69.90% │ 650  5.94%  │ 2,641 │ 485.5 KBs │
+└────────────┴─────────────┴─────────────────┴───────────────┴─────────────┴───────┴───────────┘
+Rust         enums: 11, structs: 29, traits: 1
+JavaScript   classes: 805, functions: 1,204, generators: 17, imports: 342, promises: 96
+Python       classes: 2
+Java         classes: 2, interfaces: 1
+
+===> overview
+Overview.
+
+Files:   56.52% Rust - 17.39% JavaScript - 8.70% HTML - 17.39% others   [-┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃-]
+
+Lines:   82.39% Rust - 10.97% JavaScript - 3.62% HTML -  3.02% others   [-┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃-]
+
+Size :   85.85% Rust -  8.24% JavaScript - 3.87% HTML -  2.04% others   [-┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃-]
+
+
+===> overview, top 2
+Overview.
+
+Files:   56.52% Rust - 17.39% JavaScript - 26.09% others   [-┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃-]
+
+Lines:   82.39% Rust - 10.97% JavaScript -  6.64% others   [-┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃-]
+
+Size :   85.85% Rust -  8.24% JavaScript -  5.91% others   [-┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃-]
+
+
+===> overview, bar hidden
+Overview.
+
+Files:   56.52% Rust - 17.39% JavaScript - 8.70% HTML - 17.39% others
+
+Lines:   82.39% Rust - 10.97% JavaScript - 3.62% HTML -  3.02% others
+
+Size :   85.85% Rust -  8.24% JavaScript - 3.87% HTML -  2.04% others
+
+

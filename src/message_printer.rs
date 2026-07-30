@@ -370,6 +370,10 @@ pub const STYLE_HELP  :  &str =
       extra-number       extra-label
       total-size-number  total-size-label
       avg-size-number    avg-size-label
+
+    'size-unit' is the unit next to a size, the 'KBs' of '430.5 KBs total', and it is one token for
+    both sizes since there is no reason to want two colors of KBs on one line. It is separate from
+    the labels so that it can stay quiet while 'Size' reads like every other column header.
       keyword-number     keyword-label
 
     The numbers of the \"progress\" section are the same quantities, so they follow the same tokens.
@@ -677,7 +681,7 @@ pub fn print_changelog(full: bool) {
     }
 }
 
-// A theme is 41 tokens and the listing used to show five of them, the language slots, on a mock
+// A theme is 42 tokens and the listing used to show five of them, the language slots, on a mock
 // overview line. So the one place whose job is to show what a theme looks like before you pick it
 // said nothing about its headings, labels, numbers, percentages, arrow, separator or size figures.
 // It now prints a sample of the real details rows too, which is the densest line the program has.
