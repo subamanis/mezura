@@ -266,6 +266,25 @@ pub const LAYOUT_HELP  :  &str =
     suppresses them.
 
 ";
+pub const RESTORE_HELP  :  &str =
+"--restore
+
+    No arguments.
+
+    Overrides normal program execution and writes back every file that mezura ships with and that
+    is not in your data directory any more: the language files, the themes and the default
+    configuration. It says which ones it wrote, and says so too when nothing was missing.
+
+    It only ever creates. A file that is there is never touched, so your own languages, themes and
+    configurations are safe and nothing you have edited is undone. A file that exists but is broken
+    is not repaired either, since a file emptied on purpose and one damaged by accident look the
+    same from here: delete it and run this again.
+
+    The language files are the reason this exists. If one of them is missing, that language stops
+    being counted and nothing says so, because a file that is not there cannot be reported as
+    faulty. Themes and configurations announce their own absence; languages do not.
+
+";
 pub const OUTPUT_HELP  :  &str =
 "--output
 
@@ -524,7 +543,7 @@ pub const HELP_HELP  :  &str =
 // The one list of commands. The full help prints it in this order, the lookup for a single command
 // searches it, and the close-match suggestions for an unrecognised name take their candidates from
 // it, so a new command cannot appear in one of the three and be forgotten in the others.
-pub const COMMAND_HELP : [(&str, &str); 31] = [
+pub const COMMAND_HELP : [(&str, &str); 32] = [
     (HELP, HELP_HELP),
     (VERSION, VERSION_HELP),
     (CHANGELOG, CHANGELOG_HELP),
@@ -532,6 +551,7 @@ pub const COMMAND_HELP : [(&str, &str); 31] = [
     (SHOW_CONFIGS, SHOW_CONFIGS_HELP),
     (SHOW_THEMES, SHOW_THEMES_HELP),
     (THEME_EDITOR, THEME_EDITOR_HELP),
+    (RESTORE, RESTORE_HELP),
     (DIRS, DIRS_HELP),
     (EXCLUDE, EXCLUDE_HELP),
     (LANGUAGES, LANGUAGES_HELP),

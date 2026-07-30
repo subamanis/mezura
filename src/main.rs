@@ -1,9 +1,9 @@
 use std::{collections::HashMap, process::ExitCode, time::Instant};
 
 use colored::*;
-use include_dir::include_dir;
+use include_dir::{File, include_dir};
 
-use mezura::{*, self, config_manager::{self, CHANGELOG, HELP, LAYOUT, SHOW_CONFIGS, SHOW_LANGUAGES, SHOW_THEMES, THEME_EDITOR, VERSION, VERSION_ID}, io_handler, theme};
+use mezura::{*, self, config_manager::{self, CHANGELOG, HELP, LAYOUT, RESTORE, SHOW_CONFIGS, SHOW_LANGUAGES, SHOW_THEMES, THEME_EDITOR, VERSION, VERSION_ID}, io_handler, theme};
 
 
 // A failure code is owed to whoever runs mezura from a script: everything that prints an error and
@@ -18,8 +18,11 @@ fn main() -> ExitCode {
     if !PERSISTENT_APP_PATHS.are_initialized {
         // If it is the first execution, use the baked-in language folder of the executable to initialize the language map
         // and save the baked-in info, to a persistent path for future uses and user modification.
+        // The same writer as '--restore', so it only creates what is missing: this branch is entered
+        // by a deleted languages or config directory just as much as by a first run, and overwriting
+        // there would cost the user their themes and their default configuration.
         language_map = read_baked_in_languages_dir();
-        if let Err(x) = init_persistent_paths(&language_map, read_baked_in_default_config_contents()) {
+        if let Err(x) = restore_missing_baked_in_files() {
             // Whatever was created stays on disk. It is not considered a valid installation anyway,
             // so the next execution will detect that and try to complete it again.
             eprintln!("{}",format!("\nUnable to initialize persistent directories: {x}\n").yellow());
@@ -43,8 +46,11 @@ fn main() -> ExitCode {
         }
     }
 
+    // The themes directory is not part of what makes an installation valid, so it is checked on its
+    // own. The check is one directory read and not a stat per file, which is why it is here on every
+    // run while the rest is left to '--restore'
     if PERSISTENT_APP_PATHS.are_initialized && !dir_contains_entries(&PERSISTENT_APP_PATHS.themes_dir)
-        && let Err(x) = write_baked_in_themes() {
+        && let Err(x) = restore_missing_baked_in_files() {
         eprintln!("{}",format!("\nUnable to initialize the themes directory: {x}\n").yellow());
     }
 
@@ -192,22 +198,6 @@ fn read_baked_in_default_config_contents() -> String {
     String::from_utf8_lossy(include_bytes!("../data/config/default.txt")).to_string()
 }
 
-fn init_persistent_paths(languages: &HashMap<String,Language>, default_config_contents: String) -> Result<(),std::io::Error> {
-    // create_dir_all, so that an incomplete dir left behind by a previous failed attempt gets completed
-    std::fs::create_dir_all(&PERSISTENT_APP_PATHS.languages_dir)?;
-    std::fs::create_dir_all(&PERSISTENT_APP_PATHS.config_dir)?;
-    std::fs::create_dir_all(&PERSISTENT_APP_PATHS.logs_dir)?;
-
-    for language in languages.values() {
-        io_handler::serialize_language(language, &PERSISTENT_APP_PATHS.languages_dir)?;
-    }
-
-    io_handler::write_default_config(default_config_contents)?;
-    write_baked_in_themes()?;
-
-    Ok(())
-}
-
 fn open_in_browser(path: &str) {
     #[cfg(target_os = "windows")]
     let result = std::process::Command::new("cmd").args(["/C", "start", "", path]).spawn();
@@ -221,11 +211,36 @@ fn open_in_browser(path: &str) {
     }
 }
 
-fn write_baked_in_themes() -> Result<(),std::io::Error> {
-    std::fs::create_dir_all(&PERSISTENT_APP_PATHS.themes_dir)?;
-    for file in include_dir!("data/themes").files.iter() {
-        let file_name = std::path::Path::new(file.path).file_name().and_then(|x| x.to_str()).unwrap_or(file.path);
-        std::fs::write(PERSISTENT_APP_PATHS.themes_dir.clone() + file_name, file.contents)?;
+// Only ever creates. Whatever is on disk stays as it is, which is what makes this safe to run at any
+// time: a language, theme or configuration of your own is never a file that ships with the program,
+// and one that ships and was edited is not overwritten either.
+// A file that exists but is damaged is not repaired, because from here it cannot be told apart from
+// one that was emptied deliberately.
+fn restore_missing_baked_in_files() -> Result<Vec<String>, std::io::Error> {
+    let mut created = Vec::new();
+    write_missing_files(include_dir!("data/languages").files, &PERSISTENT_APP_PATHS.languages_dir, &mut created)?;
+    write_missing_files(include_dir!("data/themes").files, &PERSISTENT_APP_PATHS.themes_dir, &mut created)?;
+
+    // The logs directory holds nothing that ships, but without it a run with '--log' has nowhere to write
+    std::fs::create_dir_all(&PERSISTENT_APP_PATHS.logs_dir)?;
+    std::fs::create_dir_all(&PERSISTENT_APP_PATHS.config_dir)?;
+    if !std::path::Path::new(&(PERSISTENT_APP_PATHS.config_dir.clone() + DEFAULT_CONFIG_NAME)).exists() {
+        io_handler::write_default_config(read_baked_in_default_config_contents())?;
+        created.push(DEFAULT_CONFIG_NAME.to_owned());
+    }
+
+    Ok(created)
+}
+
+fn write_missing_files(files: &[File], target_dir: &str, created: &mut Vec<String>) -> Result<(), std::io::Error> {
+    std::fs::create_dir_all(target_dir)?;
+    for file in files {
+        let name = std::path::Path::new(file.path).file_name().and_then(|x| x.to_str()).unwrap_or(file.path);
+        let path = target_dir.to_owned() + name;
+        if !std::path::Path::new(&path).exists() {
+            std::fs::write(&path, file.contents)?;
+            created.push(name.to_owned());
+        }
     }
 
     Ok(())
@@ -249,7 +264,7 @@ fn read_args_as_str() -> Option<String> {
 // handing arguments it has already rejected to the configuration parser.
 fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Language>) -> Option<ExitCode> {
     let is_present = |command: &str| args_str.contains(&(String::from("--") + command));
-    if ![HELP, VERSION, CHANGELOG, SHOW_LANGUAGES, SHOW_CONFIGS, SHOW_THEMES, THEME_EDITOR].iter().any(|x| is_present(x)) {
+    if ![HELP, VERSION, CHANGELOG, SHOW_LANGUAGES, SHOW_CONFIGS, SHOW_THEMES, THEME_EDITOR, RESTORE].iter().any(|x| is_present(x)) {
         return None;
     }
 
@@ -287,6 +302,22 @@ fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Lan
     } else if args_str.contains(&(String::from("--") + SHOW_CONFIGS)) {
         message_printer::print_existing_configs();
         return Some(ExitCode::SUCCESS);
+    } else if args_str.contains(&(String::from("--") + RESTORE)) {
+        return match restore_missing_baked_in_files() {
+            Ok(created) => {
+                if created.is_empty() {
+                    println!("\nNothing to restore, every file that ships with mezura is in place.");
+                } else {
+                    let plural = if created.len() == 1 {"file"} else {"files"};
+                    println!("\nRestored {} {plural}:\n{}", created.len(), created.join(", "));
+                }
+                Some(ExitCode::SUCCESS)
+            },
+            Err(x) => {
+                println!("\n{}", format!("Unable to restore the missing files: {x}").red());
+                Some(ExitCode::FAILURE)
+            }
+        };
     } else if args_str.contains(&(String::from("--") + THEME_EDITOR)) {
         return match io_handler::generate_theme_editor_page() {
             Ok(path) => {
@@ -331,9 +362,38 @@ fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Lan
 
 #[cfg(test)]
 mod tests {
-    use mezura::{Language, hashmap};
+    use include_dir::include_dir;
+    use mezura::{LOCAL_APP_PATHS, Language, hashmap};
 
-    use crate::retain_only_languages_of_interest;
+    use crate::{retain_only_languages_of_interest, write_missing_files};
+
+    #[test]
+    fn restoring_creates_what_is_missing_and_touches_nothing_else() {
+        let dir = LOCAL_APP_PATHS.test_dir.clone() + "restore-test/";
+        let _ = std::fs::remove_dir_all(&dir);
+        let files = include_dir!("data/themes").files;
+
+        let mut created = Vec::new();
+        write_missing_files(files, &dir, &mut created).unwrap();
+        assert_eq!(files.len(), created.len());
+
+        let mut nothing_missing = Vec::new();
+        write_missing_files(files, &dir, &mut nothing_missing).unwrap();
+        assert!(nothing_missing.is_empty());
+
+        // The edited one has to survive, since a restore that undid your own changes would be worse
+        // than the missing file it was meant to fix
+        let edited = dir.clone() + &created[0];
+        std::fs::write(&edited, b"mine").unwrap();
+        std::fs::remove_file(dir.clone() + &created[1]).unwrap();
+
+        let mut second_round = Vec::new();
+        write_missing_files(files, &dir, &mut second_round).unwrap();
+        assert_eq!(vec![created[1].clone()], second_round);
+        assert_eq!("mine", std::fs::read_to_string(&edited).unwrap());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn test_retain_only_languages_of_interest() {

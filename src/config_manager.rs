@@ -41,6 +41,7 @@ pub const SHOW_LANGUAGES     :&str   = "show-languages";
 pub const SHOW_CONFIGS       :&str   = "show-configs";
 pub const SHOW_THEMES        :&str   = "show-themes";
 pub const THEME_EDITOR       :&str   = "theme-editor";
+pub const RESTORE            :&str   = "restore";
 
 
 pub const MAX_PRODUCERS_VALUE : usize = 8;
