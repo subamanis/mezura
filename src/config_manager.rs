@@ -24,6 +24,7 @@ pub const THEME              :&str   = "theme";
 pub const STYLE              :&str   = "style";
 pub const BAR_THICKNESS      :&str   = "bar-thickness";
 pub const LAYOUT             :&str   = "layout";
+pub const OUTPUT             :&str   = "output";
 pub const NUMBER_SEPARATOR   :&str   = "number-separator";
 pub const DECIMAL_SEPARATOR  :&str   = "decimal-separator";
 pub const SORT               :&str   = "sort";
@@ -77,6 +78,7 @@ pub struct Configuration {
     pub theme_name_to_save: Option<String>,
     pub bar_thickness: BarThickness,
     pub layout: Layout,
+    pub output: OutputFormat,
     pub number_separator: NumberSeparator,
     pub decimal_separator: DecimalSeparator,
     pub sort_by: SortCriterion,
@@ -238,6 +240,26 @@ impl Layout {
     }
 }
 
+// Not a layout: a layout is the shape of a printed block, while this replaces the whole output,
+// overview and status lines included. It is also the one display setting a configuration file may
+// not carry, since a config that silently turns the output into JSON cannot be seen in the output.
+#[derive(Debug,PartialEq,Eq,Clone,Copy,Default)]
+pub enum OutputFormat {
+    #[default]
+    Text,
+    Json
+}
+
+impl OutputFormat {
+    pub fn parse(value: &str) -> Option<OutputFormat> {
+        match value.trim().to_lowercase().as_str() {
+            "text" => Some(Self::Text),
+            "json" => Some(Self::Json),
+            _ => None
+        }
+    }
+}
+
 // The keyword rows list several figures side by side, so a grouping character that is also the
 // list's own separator makes one long number out of two short ones
 #[derive(Debug,PartialEq,Eq,Clone,Copy,Default)]
@@ -353,11 +375,11 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
     // not sit next to '--save': what the file has to hold is the look, not the pieces it came from
     if let Some(name) = &config.theme_name_to_save {
         if config.theme == Theme::default() {
-            println!("\n{}", format!("Nothing to save in theme '{name}': every style is at its default.").yellow());
+            eprintln!("\n{}", format!("Nothing to save in theme '{name}': every style is at its default.").yellow());
         } else {
             match io_handler::save_theme_to_file(&crate::PERSISTENT_APP_PATHS.themes_dir, name, &config.theme) {
-                Err(_) => println!("\n{}","Error while trying to save the theme.".yellow()),
-                Ok(_) => println!("\nTheme '{name}' saved successfully.")
+                Err(_) => eprintln!("\n{}","Error while trying to save the theme.".yellow()),
+                Ok(_) => eprintln!("\nTheme '{name}' saved successfully.")
             }
         }
     }
@@ -392,8 +414,8 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     let (mut exclude_dirs, mut languages_of_interest, mut excluded_languages, mut threads, mut braces_as_code,
          mut search_in_dotted, mut show_faulty_files, mut config_name_to_save, mut hidden, mut log,
          mut compare_level, mut config_name_to_load, mut no_gitignore, mut theme_name, mut theme_name_to_save, mut styles, mut bar_thickness,
-         mut number_separator, mut decimal_separator, mut layout, mut sort_by, mut top_n)
-         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
+         mut number_separator, mut decimal_separator, mut layout, mut output, mut sort_by, mut top_n)
+         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
     for command in options {
         let (command_name, arguments) = match command.find(" ") {
             Some(index) => command.split_at(index),
@@ -530,6 +552,14 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                     return Err(ArgParsingError::IncorrectCommandArgs(LAYOUT.to_owned()))
                 }
             }
+        } else if command_name == OUTPUT {
+            match OutputFormat::parse(arguments) {
+                Some(x) => output = Some(x),
+                None => {
+                    message_printer::print_help_message_for_command(OUTPUT);
+                    return Err(ArgParsingError::IncorrectCommandArgs(OUTPUT.to_owned()))
+                }
+            }
         } else if command_name == NUMBER_SEPARATOR {
             match NumberSeparator::parse(arguments) {
                 Some(x) => number_separator = Some(x),
@@ -608,7 +638,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         dirs, exclude_dirs, languages_of_interest, excluded_languages, threads, braces_as_code,
         should_search_in_dotted: search_in_dotted, should_show_faulty_files: show_faulty_files,
         hidden, no_gitignore, theme_name, theme_name_to_save, log, compare_level,
-        config_name_to_save, config_name_to_load, styles, bar_thickness, number_separator, decimal_separator, layout, sort_by, top_n,
+        config_name_to_save, config_name_to_load, styles, bar_thickness, number_separator, decimal_separator, layout, output, sort_by, top_n,
         config_styles: None, theme_styles: None
     };
 
@@ -625,8 +655,8 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         }
 
         match io_handler::save_existing_commands_from_config_builder_to_file(None, name, &config_builder) {
-            Err(_) => println!("\n{}","Error while trying to save config.".yellow()),
-            Ok(_) => println!("\nConfiguration '{name}' saved successfully.")
+            Err(_) => eprintln!("\n{}","Error while trying to save config.".yellow()),
+            Ok(_) => eprintln!("\nConfiguration '{name}' saved successfully.")
         }
     }
 
@@ -641,11 +671,11 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         match io_handler::load_theme(name, &crate::PERSISTENT_APP_PATHS.themes_dir) {
             Some((styles, errors)) => {
                 for error in &errors {
-                    println!("\n{}", format!("In theme '{name}': {}", error.formatted()).yellow());
+                    eprintln!("\n{}", format!("In theme '{name}': {}", error.formatted()).yellow());
                 }
                 config_builder.theme_styles = Some(styles);
             },
-            None => println!("\n{}", format!("Theme '{name}' could not be loaded, the default styles will be used.").yellow())
+            None => eprintln!("\n{}", format!("Theme '{name}' could not be loaded, the default styles will be used.").yellow())
         }
     }
 
@@ -659,7 +689,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
 
 fn print_config_file_warnings(warnings: &[String], config_name: &str) {
     for warning in warnings {
-        println!("\n{}", format!("In config '{config_name}': {warning}").yellow());
+        eprintln!("\n{}", format!("In config '{config_name}': {warning}").yellow());
     }
 }
 
@@ -687,7 +717,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
         };
 
         if is_overridden {
-            println!("\n{}", format!("Invalid value for the command '--{field}', in config '{config_name}'. The value will be ignored.").yellow());
+            eprintln!("\n{}", format!("Invalid value for the command '--{field}', in config '{config_name}'. The value will be ignored.").yellow());
         } else {
             message_printer::print_help_message_for_command(field);
             return Err(ArgParsingError::InvalidValueInConfig(field.to_string(), config_name.to_owned()));
@@ -702,11 +732,11 @@ fn print_warnings_for_commands_that_need_a_loaded_configuration(config_name_to_s
 {
     if config_name_to_load.is_none() {
         if let Some(log) = log && config_name_to_save.is_none() && log.should_log {
-            println!("\n{}","'--log' command will be ignored, since no config file was specified.".yellow());
+            eprintln!("\n{}","'--log' command will be ignored, since no config file was specified.".yellow());
         }
 
         if compare_level.is_some() {
-            println!("\n{}","'--compare' command will be ignored, since no config file was specified for loading.".yellow());
+            eprintln!("\n{}","'--compare' command will be ignored, since no config file was specified for loading.".yellow());
         }
     }
 }
@@ -811,6 +841,9 @@ pub struct ConfigurationBuilder {
     pub number_separator:         Option<NumberSeparator>,
     pub decimal_separator:        Option<DecimalSeparator>,
     pub layout:                   Option<Layout>,
+    // Absent from 'add_missing_fields' and 'has_missing_fields' on purpose, like the save and load
+    // names: those two functions exist for what a configuration file can supply, and this is not it
+    pub output:                   Option<OutputFormat>,
     pub sort_by:                  Option<SortCriterion>,
     pub top_n:                    Option<usize>,
     pub styles:                   Option<Vec<(String,String)>>,
@@ -873,6 +906,7 @@ impl ConfigurationBuilder {
             number_separator: self.number_separator.unwrap_or_default(),
             decimal_separator: self.decimal_separator.unwrap_or_default(),
             layout: self.layout.unwrap_or_default(),
+            output: self.output.unwrap_or_default(),
             sort_by: self.sort_by.unwrap_or_default(),
             top_n: self.top_n,
             theme: theme::resolve(self.theme_styles.as_deref().unwrap_or_default(),
@@ -904,10 +938,17 @@ impl Configuration {
             number_separator: NumberSeparator::default(),
             decimal_separator: DecimalSeparator::default(),
             layout: Layout::default(),
+            output: OutputFormat::default(),
             sort_by: SortCriterion::default(),
             top_n: None,
             theme: Theme::default()
         }
+    }
+
+    // Everything that is not the document itself stays off stdout when the output is machine
+    // readable, so that a single stray line cannot make it unparseable
+    pub fn prints_text(&self) -> bool {
+        self.output == OutputFormat::Text
     }
 
     //Setters used mainly in tests, for the ability to chain many config changes

@@ -22,7 +22,7 @@ fn main() -> ExitCode {
         if let Err(x) = init_persistent_paths(&language_map, read_baked_in_default_config_contents()) {
             // Whatever was created stays on disk. It is not considered a valid installation anyway,
             // so the next execution will detect that and try to complete it again.
-            println!("{}",format!("\nUnable to initialize persistent directories: {x}\n").yellow());
+            eprintln!("{}",format!("\nUnable to initialize persistent directories: {x}\n").yellow());
         }
     } else {
         match io_handler::parse_supported_languages_to_map(&PERSISTENT_APP_PATHS.languages_dir) {
@@ -31,13 +31,13 @@ fn main() -> ExitCode {
                     let mut warn_msg = String::from("\nFormatting problems detected in language files: ");
                     warn_msg.push_str(&faulty_files.join(", "));
                     warn_msg.push_str(".\nThese files will not be taken into consideration.");
-                    println!("{}",warn_msg.yellow());
+                    eprintln!("{}",warn_msg.yellow());
                 }
 
                 language_map = _language_map;
             },
             Err(x) => {
-                println!("\n{}", x.formatted());
+                eprintln!("\n{}", x.formatted());
                 return ExitCode::FAILURE;
             }
         }
@@ -45,7 +45,7 @@ fn main() -> ExitCode {
 
     if PERSISTENT_APP_PATHS.are_initialized && !dir_contains_entries(&PERSISTENT_APP_PATHS.themes_dir)
         && let Err(x) = write_baked_in_themes() {
-        println!("{}",format!("\nUnable to initialize the themes directory: {x}\n").yellow());
+        eprintln!("{}",format!("\nUnable to initialize the themes directory: {x}\n").yellow());
     }
 
     let args_str = match read_args_as_str() {
@@ -64,7 +64,7 @@ fn main() -> ExitCode {
     let config = match config_manager::create_config_from_args(&args_str) {
         Ok(config) => config,
         Err(x) => {
-            println!("\n{}\n",x.formatted());
+            eprintln!("\n{}\n",x.formatted());
             return ExitCode::FAILURE;
         }
     };
@@ -72,9 +72,15 @@ fn main() -> ExitCode {
     utils::set_number_separator(config.number_separator);
     utils::set_decimal_separator(config.decimal_separator);
 
+    // A pipe already strips the escape codes, but CLICOLOR_FORCE overrides that and would put them
+    // inside the strings of the document, so the machine format turns them off itself
+    if !config.prints_text() {
+        control::set_override(false);
+    }
+
     // Printed here and not at the very start, so that '--hide version' can be declared in a
     // configuration file and not only on the command line
-    if !config.hidden.version {
+    if !config.hidden.version && config.prints_text() {
         // The status block opens with a blank line of its own, so the separation below the
         // version is only missing when that block is not printed
         let separator = if config.hidden.directory_info {"\n"} else {""};
@@ -83,7 +89,7 @@ fn main() -> ExitCode {
 
     if !config.languages_of_interest.is_empty() &&
      config.languages_of_interest.iter().all(|lang| config.excluded_languages.contains(lang)) {
-        println!("\n{}\n",theme::active().error.paint("Included and excluded languages are mutually exclusive."));
+        eprintln!("\n{}\n",theme::active().error.paint("Included and excluded languages are mutually exclusive."));
         return ExitCode::FAILURE;
     }
 
@@ -91,11 +97,11 @@ fn main() -> ExitCode {
         match retain_only_languages_of_interest(&mut language_map, &config.languages_of_interest) {
             Ok(x) => {
                 if let Some(msg) = x {
-                    println!("\n {msg}");
+                    eprintln!("\n {msg}");
                 }
             },
             Err(x) => {
-                println!("\n{x}\n");
+                eprintln!("\n{x}\n");
                 return ExitCode::FAILURE;
             }
         }
@@ -110,7 +116,9 @@ fn main() -> ExitCode {
     }
 
     let instant = Instant::now();
-    let hide_timing = config.hidden.timing;
+    // The footer is text and the document carries its own 'scan_ms', so the format has to be read
+    // before the configuration is handed over to the run
+    let hide_timing = config.hidden.timing || !config.prints_text();
     match mezura::run(config, language_map) {
         Ok(x) => {
             if !hide_timing {
@@ -124,7 +132,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         },
         Err(x) => {
-            println!("{}",x.formatted());
+            eprintln!("{}",x.formatted());
             match x {
                 // Finding no code is an answer and not a failure, while every file failing to be
                 // parsed means a real error behind each one of them

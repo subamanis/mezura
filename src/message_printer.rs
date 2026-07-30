@@ -266,6 +266,33 @@ pub const LAYOUT_HELP  :  &str =
     suppresses them.
 
 ";
+pub const OUTPUT_HELP  :  &str =
+"--output
+
+    One argument: 'text' or 'json'. Default: text
+
+    Chooses what mezura writes to its output. 'json' replaces everything, the status lines and
+    the overview included, with a single JSON document, so that the run can be read by another
+    program instead of by a person.
+
+      mezura ./src --output json > stats.json
+      mezura ./src --output json | jq '.total.code'
+
+    The document carries the counts as plain numbers of lines and bytes: no thousands
+    separators, no KB or MB, no percentages and no colors, whatever the rest of the settings
+    say. '--sort' and '--top' still order and cut the list of languages, and the count of the
+    ones left out is in the document. '--hide keywords' and '--hide timing' remove what they
+    name, since it is either not counted or not measured; the rest of the '--hide' list names
+    printed sections that a JSON run does not have.
+
+    Warnings and errors are written to the error output, so they never end up inside the
+    document. A run that finds nothing to count still writes a valid one, with an empty list of
+    languages and a total of zero.
+
+    This is the one display setting that a configuration file cannot carry, so that no saved
+    configuration can silently turn the output of every later run into JSON.
+
+";
 pub const NUMBER_SEPARATOR_HELP  :  &str =
 "--number-separator
 
@@ -497,7 +524,7 @@ pub const HELP_HELP  :  &str =
 // The one list of commands. The full help prints it in this order, the lookup for a single command
 // searches it, and the close-match suggestions for an unrecognised name take their candidates from
 // it, so a new command cannot appear in one of the three and be forgotten in the others.
-pub const COMMAND_HELP : [(&str, &str); 30] = [
+pub const COMMAND_HELP : [(&str, &str); 31] = [
     (HELP, HELP_HELP),
     (VERSION, VERSION_HELP),
     (CHANGELOG, CHANGELOG_HELP),
@@ -520,6 +547,7 @@ pub const COMMAND_HELP : [(&str, &str); 30] = [
     (TOP, TOP_HELP),
     (BAR_THICKNESS, BAR_THICKNESS_HELP),
     (LAYOUT, LAYOUT_HELP),
+    (OUTPUT, OUTPUT_HELP),
     (NUMBER_SEPARATOR, NUMBER_SEPARATOR_HELP),
     (DECIMAL_SEPARATOR, DECIMAL_SEPARATOR_HELP),
     (STYLE, STYLE_HELP),

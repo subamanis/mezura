@@ -13,6 +13,7 @@ pub mod message_printer;
 pub mod file_parser;
 
 mod result_printer;
+mod json_printer;
 
 pub use colored::{Color,Colorize,ColoredString};
 pub use config_manager::{Configuration, SortCriterion};
@@ -67,7 +68,7 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let mut producer_handles = Vec::with_capacity(config.threads.producers);
     let mut consumer_handles = Vec::with_capacity(config.threads.consumers);
 
-    if !config.hidden.directory_info {
+    if !config.hidden.directory_info && config.prints_text() {
         println!("\n{}...",theme::active().heading.paint("Analyzing directories"));
     }
 
@@ -109,13 +110,19 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let (total_files_num, relevant_files_num, excluded_files_num) =
             (file_stats_guard.total_files, file_stats_guard.relevant_files, file_stats_guard.excluded_files);
     if relevant_files_num == 0 {
+        // A machine consumer must not have to tell "no output" apart from "no code found", so the
+        // document is written even here, whole and with everything zeroed
+        if !config.prints_text() {
+            json_printer::print_as_json(&HashMap::new(), &HashMap::new(), &FinalStats::new_extended(0,0,0,0,0,0,0),
+                    &[], &file_stats_guard, parsing_duration_millis, &chrono::Local::now(), &config);
+        }
         return Err(ParseFilesError::NoRelevantFiles(get_activated_languages_as_str(&config)));
     }
-    if !config.hidden.directory_info {
+    if !config.hidden.directory_info && config.prints_text() {
         println!("{}\n",theme::active().summary.paint(&format!("{} files found. {} of interest. {} excluded.",
                 with_seperators(total_files_num), with_seperators(relevant_files_num), with_seperators(excluded_files_num))));
     }
-    if !config.hidden.parsing_info {
+    if !config.hidden.parsing_info && config.prints_text() {
         println!("{}...",theme::active().heading.paint("Parsing files"));
     }
 
@@ -146,12 +153,17 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let datetime_now = chrono::Local::now();
 
     remove_languages_with_0_files(content_info_map, languages_metadata_map);
-    result_printer::format_and_print_results(content_info_map, languages_metadata_map, &final_stats,
-        &existing_log_contents, &datetime_now, &config);
+    if config.prints_text() {
+        result_printer::format_and_print_results(content_info_map, languages_metadata_map, &final_stats,
+            &existing_log_contents, &datetime_now, &config);
+    } else {
+        json_printer::print_as_json(content_info_map, languages_metadata_map, &final_stats,
+            &faulty_files_ref.lock().unwrap(), &file_stats_guard, parsing_duration_millis, &datetime_now, &config);
+    }
 
     if config.log.should_log && let Some(path) = log_file_path
         && io_handler::log_stats(&path, &existing_log_contents, &final_stats, &datetime_now, &config).is_err() {
-        println!("\n{}",theme::active().warning.paint("Error while trying to save the log."));
+        eprintln!("\n{}",theme::active().warning.paint("Error while trying to save the log."));
     }
 
     Ok(metrics)
@@ -242,20 +254,22 @@ fn generate_metrics_if_parsing_took_more_than_one_sec(parsing_duration_millis: u
 fn print_faulty_files_or_ok(faulty_files_ref: &FaultyFilesListMut, config: &Configuration) {
     let faulty_files = &*faulty_files_ref.as_ref().lock().unwrap();
     if faulty_files.is_empty() {
-        if !config.hidden.parsing_info {
+        if !config.hidden.parsing_info && config.prints_text() {
             println!("{}\n",theme::active().success.paint("ok"));
         }
     } else {
+        // A JSON run reports them inside the document as well, but they are a mistake and belong on
+        // the error output in every case, where '--hide' can never suppress them
         let error = &theme::active().error;
-        println!("{} {}",error.paint(&faulty_files.len().to_string()), error.paint("faulty files detected. They will be ignored in stat calculation."));
+        eprintln!("{} {}",error.paint(&faulty_files.len().to_string()), error.paint("faulty files detected. They will be ignored in stat calculation."));
         if config.should_show_faulty_files {
             for f in faulty_files {
-                println!("-- Error: {} \n   for file: {}\n",f.error_msg,f.path);
+                eprintln!("-- Error: {} \n   for file: {}\n",f.error_msg,f.path);
             }
         } else {
-            println!("Run with command '--{}' to get detailed info.",config_manager::SHOW_FAULTY_FILES)
+            eprintln!("Run with command '--{}' to get detailed info.",config_manager::SHOW_FAULTY_FILES)
         }
-        println!();
+        eprintln!();
     }
 }
 

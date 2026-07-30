@@ -888,7 +888,7 @@ fn percentages(lines: usize, code_lines: usize, comment_lines: usize) -> (f64, f
 
 // Ties are broken by name rather than left to the iteration order of the maps, which would make
 // the printed order differ between runs on the very projects where languages are evenly matched
-fn get_sorted_language_names(content_info_map: &HashMap<String, LanguageContentInfo>,
+pub(crate) fn get_sorted_language_names(content_info_map: &HashMap<String, LanguageContentInfo>,
         languages_metadata_map: &HashMap<String, LanguageMetadata>, criterion: SortCriterion) -> Vec<String>
 {
     let value_of = |name: &String| match criterion {
