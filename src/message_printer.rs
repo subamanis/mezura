@@ -382,10 +382,11 @@ pub const STYLE_HELP  :  &str =
       version            the version line at the top
       heading            the section titles and the 'Analyzing directories' lines
       separator          the dashed line above the total
-      arrow              the '->' after a language name
+      arrow              the '->' after a language name, in the 'list' layout only
       bar-frame          the '[-' and '-]' around the overview bar
-      percent            the percentages inside the braces of the details rows
-      details-language   a language name in the details rows
+      percent            the percentages of the details rows
+      details-language-header  the word 'Language' over the first column of the two tables
+      details-language-name    the name of a language, in a row and in the keywords block
       details-total      the word 'Total'
       overview-label     the 'Files:', 'Lines:' and 'Size :' row labels of the overview
       overview-percent   the percentages of the overview
@@ -681,7 +682,7 @@ pub fn print_changelog(full: bool) {
     }
 }
 
-// A theme is 42 tokens and the listing used to show five of them, the language slots, on a mock
+// A theme is 43 tokens and the listing used to show five of them, the language slots, on a mock
 // overview line. So the one place whose job is to show what a theme looks like before you pick it
 // said nothing about its headings, labels, numbers, percentages, arrow, separator or size figures.
 // It now prints a sample of the real details rows too, which is the densest line the program has.

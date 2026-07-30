@@ -222,7 +222,10 @@ theme_tokens! {
     keyword_number    => "keyword-number",    Style::of(KEYWORD_GREY);
     keyword_label     => "keyword-label",     Style::plain().dim();
 
-    details_language  => "details-language",  Style::plain().bold();
+    // The word "Language" over the column and the name of a language in a row are different
+    // things that happened to share a token, the same way the size header and the unit did
+    details_language_header => "details-language-header", Style::of(LABEL_GOLD).italic();
+    details_language_name   => "details-language-name",   Style::plain().bold();
     details_total     => "details-total",     Style::plain().bold();
     overview_label    => "overview-label",    Style::plain();
     overview_percent  => "overview-percent",  Style::plain();
@@ -433,8 +436,8 @@ mod tests {
         for name in Theme::token_names() {
             assert!(theme.style_of_token_mut(name).is_some(), "'{name}' is listed but does not resolve");
         }
-        assert!(theme.style_of_token_mut("details_language").is_some(), "underscores are accepted as separators");
-        assert!(theme.style_of_token_mut("DETAILS-LANGUAGE").is_some(), "token names are case insensitive");
+        assert!(theme.style_of_token_mut("details_language_name").is_some(), "underscores are accepted as separators");
+        assert!(theme.style_of_token_mut("DETAILS-LANGUAGE-NAME").is_some(), "token names are case insensitive");
         assert_eq!(Err(ThemeParseError::UnknownToken("headings".to_owned())), theme.set_token("headings", "cyan"));
         assert_eq!(Err(ThemeParseError::InvalidValue("heading".to_owned(), "nonsense".to_owned())), theme.set_token("heading", "nonsense"));
     }

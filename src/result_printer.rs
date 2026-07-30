@@ -148,9 +148,9 @@ fn table_lines(theme: &Theme, sorted_languages: &[String], content_info_map: &Ha
     let widths = (0..HEADERS.len()).map(|i|
             rows.iter().map(|row| widest_visible_line(&row[i])).max().unwrap_or(0).max(HEADERS[i].len())).collect::<Vec<_>>();
 
-    let header_styles = [&theme.details_language, &theme.files_label, &theme.percent, &theme.lines_label, &theme.percent,
+    let header_styles = [&theme.details_language_header, &theme.files_label, &theme.percent, &theme.lines_label, &theme.percent,
             &theme.code_label, &theme.percent, &theme.comments_label, &theme.percent, &theme.extra_label, &theme.total_size_label];
-    let body_styles = [&theme.details_language, &theme.files_number, &theme.percent, &theme.lines_number, &theme.percent,
+    let body_styles = [&theme.details_language_name, &theme.files_number, &theme.percent, &theme.lines_number, &theme.percent,
             &theme.code_number, &theme.percent, &theme.comments_number, &theme.percent, &theme.extra_number, &theme.total_size_number];
 
     // The figures are right aligned so they can be compared down a column. The language name and the
@@ -221,7 +221,7 @@ fn keyword_block_lines(theme: &Theme, sorted_languages: &[String], content_info_
     }
 
     let language_width = keyword_rows.iter().map(|(name,_)| name.chars().count()).max().unwrap();
-    keyword_rows.into_iter().map(|(name, keywords)| format!("{}{}{}", theme.details_language.paint(name),
+    keyword_rows.into_iter().map(|(name, keywords)| format!("{}{}{}", theme.details_language_name.paint(name),
             " ".repeat(language_width - name.chars().count() + GAP), keywords)).collect()
 }
 
@@ -337,7 +337,9 @@ fn boxed_lines(theme: &Theme, sorted_languages: &[String], content_info_map: &Ha
 
     // The titles sit over columns of mixed width, so they are centred rather than pinned to one
     // side of a cell that is often wider than the word in it
-    let mut header_cells = vec![format!("{:^width$}", HEADERS[0], width = inner_widths[0])];
+    let centred = format!("{:^width$}", HEADERS[0], width = inner_widths[0]);
+    let mut header_cells = vec![theme.details_language_header.paint(centred.trim_end()).to_string()
+            + &" ".repeat(centred.len() - centred.trim_end().len())];
     for (i, style) in header_styles.iter().enumerate() {
         let width = inner_widths[i + 1];
         let text = HEADERS[i + 1];
@@ -359,7 +361,7 @@ fn boxed_lines(theme: &Theme, sorted_languages: &[String], content_info_map: &Ha
         };
         lines.push(separator);
 
-        let name_style = if position == language_rows {&theme.details_total} else {&theme.details_language};
+        let name_style = if position == language_rows {&theme.details_total} else {&theme.details_language_name};
         let mut painted = vec![format!("{}{}", name_style.paint(name), " ".repeat(inner_widths[0] - name.chars().count()))];
         for (i, cell) in cells.iter().enumerate() {
             let number = format!("{}{}", " ".repeat(number_widths[i] - widest_visible_line(&cell.number)),
@@ -422,7 +424,7 @@ pub fn theme_sample_rows(theme: &Theme, layout: Layout) -> Vec<String> {
             };
             let width = columns.width(theme);
             vec![columns.files_row(theme, FILES, &size_text(theme, BYTES, BYTES / FILES), width),
-                 columns.breakdown_row(theme, &theme.details_language.paint(NAME).to_string(), NAME.len(), LINES, CODE, COMMENTS),
+                 columns.breakdown_row(theme, &theme.details_language_name.paint(NAME).to_string(), NAME.len(), LINES, CODE, COMMENTS),
                  get_keywords_as_str(theme, &keywords, columns.words_start(), width)]
         }
     }
@@ -449,7 +451,7 @@ fn individual_lines(theme: &Theme, sorted_languages: &[String], content_info_map
 
         lines.push(columns.files_row(theme, metadata.files,
                 &size_text(theme, metadata.bytes, metadata.bytes / metadata.files), block_width));
-        lines.push(columns.breakdown_row(theme, &theme.details_language.paint(lang_name).to_string(),
+        lines.push(columns.breakdown_row(theme, &theme.details_language_name.paint(lang_name).to_string(),
                 lang_name.chars().count(), content_info.lines, content_info.code_lines, content_info.comment_lines));
         if should_print_keywords {
             let keywords = get_keywords_as_str(theme, &content_info.keyword_occurences, columns.words_start(), block_width);
