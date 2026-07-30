@@ -1,0 +1,4 @@
+language-1 = #e80000
+language-2 = #00f2b6
+language-3 = #99ff00
+language-4 = #ffe5a3

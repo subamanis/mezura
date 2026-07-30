@@ -2,7 +2,9 @@ use std::{path::Path};
 
 use colored::{ColoredString, Colorize};
 
-use crate::{Color, Formatted, GitignoreStack, io_handler, message_printer, theme::{self, Theme}, utils};
+use crate::{Formatted, GitignoreStack, io_handler, message_printer, suggestions, theme::{self, Theme}, utils};
+#[cfg(test)]
+use crate::Color;
 
 // Application version, to be displayed at startup and with --help command
 pub const VERSION_ID : &str = "v3.0.0";
@@ -18,22 +20,27 @@ pub const SEARCH_IN_DOTTED   :&str   = "search-in-dotted";
 pub const SHOW_FAULTY_FILES  :&str   = "show-faulty-files";
 pub const HIDE               :&str   = "hide";
 pub const NO_GITIGNORE       :&str   = "no-gitignore";
-pub const COLORS             :&str   = "colors";
-pub const COLOR_PALETTE      :&str   = "color-palette";
+pub const THEME              :&str   = "theme";
 pub const STYLE              :&str   = "style";
 pub const BAR_THICKNESS      :&str   = "bar-thickness";
+pub const LAYOUT             :&str   = "layout";
+pub const NUMBER_SEPARATOR   :&str   = "number-separator";
+pub const DECIMAL_SEPARATOR  :&str   = "decimal-separator";
 pub const SORT               :&str   = "sort";
 pub const TOP                :&str   = "top";
 pub const LOG                :&str   = "log";
 pub const COMPRARE_LEVEL     :&str   = "compare";
 pub const SAVE               :&str   = "save";
+pub const SAVE_THEME         :&str   = "save-theme";
 pub const LOAD               :&str   = "load";
 pub const HELP               :&str   = "help";
+pub const VERSION            :&str   = "version";
 pub const CHANGELOG          :&str   = "changelog";
 pub const SHOW_LANGUAGES     :&str   = "show-languages";
 pub const SHOW_CONFIGS       :&str   = "show-configs";
-pub const SHOW_PALETTES      :&str   = "show-palettes";
-pub const TUNE_PALETTES      :&str   = "tune-palettes";
+pub const SHOW_THEMES        :&str   = "show-themes";
+pub const THEME_EDITOR       :&str   = "theme-editor";
+
 
 pub const MAX_PRODUCERS_VALUE : usize = 8;
 pub const MIN_PRODUCERS_VALUE : usize = 1;
@@ -63,12 +70,15 @@ pub struct Configuration {
     pub should_show_faulty_files: bool,
     pub hidden: Hidden,
     pub no_gitignore: bool,
-    pub colors: Vec<Color>,
     pub log: LogOption,
     pub compare_level: usize,
     pub config_name_to_save: Option<String>,
     pub config_name_to_load: Option<String>,
+    pub theme_name_to_save: Option<String>,
     pub bar_thickness: BarThickness,
+    pub layout: Layout,
+    pub number_separator: NumberSeparator,
+    pub decimal_separator: DecimalSeparator,
     pub sort_by: SortCriterion,
     pub top_n: Option<usize>,
     pub theme: Theme
@@ -81,8 +91,8 @@ pub struct Configuration {
 #[derive(Debug,PartialEq,Eq,Clone,Copy,Default)]
 pub struct Hidden {
     pub version: bool,
-    pub status: bool,
-    pub details: bool,
+    pub directory_info: bool,
+    pub parsing_info: bool,
     pub keywords: bool,
     pub overview: bool,
     pub bar: bool,
@@ -92,7 +102,7 @@ pub struct Hidden {
 
 impl Hidden {
     fn pairs(self) -> [(&'static str, bool); 8] {
-        [("version", self.version), ("status", self.status), ("details", self.details),
+        [("version", self.version), ("directory-info", self.directory_info), ("parsing-info", self.parsing_info),
          ("keywords", self.keywords), ("overview", self.overview), ("bar", self.bar),
          ("progress", self.progress), ("timing", self.timing)]
     }
@@ -103,8 +113,8 @@ impl Hidden {
         for entry in value.split([',', ' ', '\t']).map(str::trim).filter(|x| !x.is_empty()) {
             match entry.to_lowercase().as_str() {
                 "version" => hidden.version = true,
-                "status" => hidden.status = true,
-                "details" => hidden.details = true,
+                "directory-info" => hidden.directory_info = true,
+                "parsing-info" => hidden.parsing_info = true,
                 "keywords" => hidden.keywords = true,
                 "overview" => hidden.overview = true,
                 "bar" => hidden.bar = true,
@@ -162,8 +172,8 @@ impl SortCriterion {
 // Only Slim is ASCII, so it is the one guaranteed to render on every terminal
 #[derive(Debug,PartialEq,Eq,Clone,Copy,Default)]
 pub enum BarThickness {
-    #[default]
     Slim,
+    #[default]
     Medium,
     Fat,
     Low
@@ -199,6 +209,109 @@ impl BarThickness {
     }
 }
 
+// 'compact' was specified once and dropped: it was "one line per language with no blank lines",
+// which is what 'table' already is, and aligned as well.
+#[derive(Debug,PartialEq,Eq,Clone,Copy,Default)]
+pub enum Layout {
+    List,
+    #[default]
+    Table,
+    Boxed
+}
+
+impl Layout {
+    pub fn parse(value: &str) -> Option<Layout> {
+        match value.trim().to_lowercase().as_str() {
+            "list" => Some(Self::List),
+            "table" => Some(Self::Table),
+            "boxed" => Some(Self::Boxed),
+            _ => None
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::List => "list",
+            Self::Table => "table",
+            Self::Boxed => "boxed"
+        }
+    }
+}
+
+// The keyword rows list several figures side by side, so a grouping character that is also the
+// list's own separator makes one long number out of two short ones
+#[derive(Debug,PartialEq,Eq,Clone,Copy,Default)]
+pub enum NumberSeparator {
+    #[default]
+    Comma,
+    Underscore,
+    Dot,
+    None
+}
+
+impl NumberSeparator {
+    pub fn character(&self) -> Option<char> {
+        match self {
+            Self::Comma => Some(','),
+            Self::Underscore => Some('_'),
+            Self::Dot => Some('.'),
+            Self::None => None
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<NumberSeparator> {
+        match value.trim().to_lowercase().as_str() {
+            "comma" | "," => Some(Self::Comma),
+            "underscore" | "_" => Some(Self::Underscore),
+            "dot" | "." => Some(Self::Dot),
+            "none" => Some(Self::None),
+            _ => None
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Comma => "comma",
+            Self::Underscore => "underscore",
+            Self::Dot => "dot",
+            Self::None => "none"
+        }
+    }
+}
+
+// Free to combine with any grouping character, including the same one. Both '1.559.486 / 365.2' and
+// '1,559,486 / 365,2' are what some readers expect, so neither is refused.
+#[derive(Debug,PartialEq,Eq,Clone,Copy,Default)]
+pub enum DecimalSeparator {
+    #[default]
+    Dot,
+    Comma
+}
+
+impl DecimalSeparator {
+    pub fn character(&self) -> char {
+        match self {
+            Self::Dot => '.',
+            Self::Comma => ','
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<DecimalSeparator> {
+        match value.trim().to_lowercase().as_str() {
+            "dot" | "." => Some(Self::Dot),
+            "comma" | "," => Some(Self::Comma),
+            _ => None
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Dot => "dot",
+            Self::Comma => "comma"
+        }
+    }
+}
+
 #[derive(Debug,PartialEq,Clone,Default)]
 pub struct LogOption {
     pub should_log: bool,
@@ -223,7 +336,7 @@ pub enum ArgParsingError {
     IncorrectCommandArgs(String),
     UnexpectedCommandArgs(String),
     NonExistantConfig(String),
-    NonExistantPalette(String),
+    NonExistantTheme(String),
     InvalidStyle(String),
     InvalidHideTarget(String),
     InvalidValueInConfig(String,String),
@@ -234,10 +347,22 @@ pub enum ArgParsingError {
 
 // Empty line argument is not supposed to be allowed, since this check is being performed in main
 pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError> {
-    match create_config_builder_from_args(line) {
-        Ok(config_builder) => Ok(config_builder.build()),
-        Err(x) => Err(x)
+    let config = create_config_builder_from_args(line)?.build();
+
+    // Written from the resolved theme and therefore after it is built, which is also why this does
+    // not sit next to '--save': what the file has to hold is the look, not the pieces it came from
+    if let Some(name) = &config.theme_name_to_save {
+        if config.theme == Theme::default() {
+            println!("\n{}", format!("Nothing to save in theme '{name}': every style is at its default.").yellow());
+        } else {
+            match io_handler::save_theme_to_file(&crate::PERSISTENT_APP_PATHS.themes_dir, name, &config.theme) {
+                Err(_) => println!("\n{}","Error while trying to save the theme.".yellow()),
+                Ok(_) => println!("\nTheme '{name}' saved successfully.")
+            }
+        }
     }
+
+    Ok(config)
 }
 
 pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilder, ArgParsingError> {
@@ -266,8 +391,9 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     let mut custom_config = None;
     let (mut exclude_dirs, mut languages_of_interest, mut excluded_languages, mut threads, mut braces_as_code,
          mut search_in_dotted, mut show_faulty_files, mut config_name_to_save, mut hidden, mut log,
-         mut compare_level, mut config_name_to_load, mut no_gitignore, mut colors, mut color_palette, mut styles, mut bar_thickness, mut sort_by, mut top_n)
-         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
+         mut compare_level, mut config_name_to_load, mut no_gitignore, mut theme_name, mut theme_name_to_save, mut styles, mut bar_thickness,
+         mut number_separator, mut decimal_separator, mut layout, mut sort_by, mut top_n)
+         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
     for command in options {
         let (command_name, arguments) = match command.find(" ") {
             Some(index) => command.split_at(index),
@@ -354,24 +480,16 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 return Err(ArgParsingError::UnexpectedCommandArgs(NO_GITIGNORE.to_owned()))
             }
             no_gitignore = Some(true);
-        } else if command_name == COLORS {
-            match utils::parse_colors_to_vec(arguments) {
-                Some(x) => colors = Some(x),
-                None => {
-                    message_printer::print_help_message_for_command(COLORS);
-                    return Err(ArgParsingError::IncorrectCommandArgs(COLORS.to_owned()))
-                }
-            }
-        } else if command_name == COLOR_PALETTE {
+        } else if command_name == THEME {
             let name = arguments.trim();
             if name.is_empty() {
-                message_printer::print_help_message_for_command(COLOR_PALETTE);
-                return Err(ArgParsingError::IncorrectCommandArgs(COLOR_PALETTE.to_owned()))
+                message_printer::print_help_message_for_command(THEME);
+                return Err(ArgParsingError::IncorrectCommandArgs(THEME.to_owned()))
             }
-            if io_handler::load_palette(name, &crate::PERSISTENT_APP_PATHS.palettes_dir).is_none() {
-                return Err(ArgParsingError::NonExistantPalette(name.to_owned()))
+            if io_handler::load_theme(name, &crate::PERSISTENT_APP_PATHS.themes_dir).is_none() {
+                return Err(ArgParsingError::NonExistantTheme(name.to_owned()))
             }
-            color_palette = Some(name.to_owned());
+            theme_name = Some(name.to_owned());
         } else if command_name == STYLE {
             match theme::parse_overrides(arguments) {
                 Ok(x) => styles = Some(x),
@@ -404,6 +522,30 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                     return Err(ArgParsingError::IncorrectCommandArgs(BAR_THICKNESS.to_owned()))
                 }
             }
+        } else if command_name == LAYOUT {
+            match Layout::parse(arguments) {
+                Some(x) => layout = Some(x),
+                None => {
+                    message_printer::print_help_message_for_command(LAYOUT);
+                    return Err(ArgParsingError::IncorrectCommandArgs(LAYOUT.to_owned()))
+                }
+            }
+        } else if command_name == NUMBER_SEPARATOR {
+            match NumberSeparator::parse(arguments) {
+                Some(x) => number_separator = Some(x),
+                None => {
+                    message_printer::print_help_message_for_command(NUMBER_SEPARATOR);
+                    return Err(ArgParsingError::IncorrectCommandArgs(NUMBER_SEPARATOR.to_owned()))
+                }
+            }
+        } else if command_name == DECIMAL_SEPARATOR {
+            match DecimalSeparator::parse(arguments) {
+                Some(x) => decimal_separator = Some(x),
+                None => {
+                    message_printer::print_help_message_for_command(DECIMAL_SEPARATOR);
+                    return Err(ArgParsingError::IncorrectCommandArgs(DECIMAL_SEPARATOR.to_owned()))
+                }
+            }
         } else if command_name == LOG {
             let value = arguments.trim();
             if value.is_empty() {
@@ -426,7 +568,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 return Err(ArgParsingError::IncorrectCommandArgs(LOAD.to_owned()));
             }
 
-            if let Ok((mut options, invalid_fields)) = io_handler::parse_config_file(Some(config_name), None) {
+            if let Ok((mut options, issues)) = io_handler::parse_config_file(Some(config_name), None) {
                 if let Some(dirs) = &options.dirs {
                     match resolve_target_paths(dirs, respect_gitignore, dotted_are_targetable) {
                         Ok(x) => options.dirs = Some(x),
@@ -436,7 +578,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                         Err(x) => return Err(x)
                     }
                 }
-                custom_config = Some((options, invalid_fields));
+                custom_config = Some((options, issues));
                 config_name_to_load = Some(config_name.to_owned());
             } else {
                 return Err(ArgParsingError::NonExistantConfig(config_name.to_owned()))
@@ -448,8 +590,15 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 return Err(ArgParsingError::IncorrectCommandArgs(SAVE.to_owned()))
             }
             config_name_to_save = Some(name.to_owned());
+        } else if command_name == SAVE_THEME {
+            let name = arguments.trim();
+            if name.is_empty() {
+                message_printer::print_help_message_for_command(SAVE_THEME);
+                return Err(ArgParsingError::IncorrectCommandArgs(SAVE_THEME.to_owned()))
+            }
+            theme_name_to_save = Some(name.to_owned());
         } else {
-            return Err(ArgParsingError::UnrecognisedCommand(command.to_owned()));
+            return Err(ArgParsingError::UnrecognisedCommand(command_name.to_owned()));
         }
     }
 
@@ -458,13 +607,15 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     let mut config_builder = ConfigurationBuilder {
         dirs, exclude_dirs, languages_of_interest, excluded_languages, threads, braces_as_code,
         should_search_in_dotted: search_in_dotted, should_show_faulty_files: show_faulty_files,
-        hidden, no_gitignore, colors, color_palette, log, compare_level,
-        config_name_to_save, config_name_to_load, styles, bar_thickness, sort_by, top_n, palette_styles: None
+        hidden, no_gitignore, theme_name, theme_name_to_save, log, compare_level,
+        config_name_to_save, config_name_to_load, styles, bar_thickness, number_separator, decimal_separator, layout, sort_by, top_n,
+        config_styles: None, theme_styles: None
     };
 
-    if let Some((custom, invalid_fields)) = custom_config {
+    if let Some((custom, issues)) = custom_config {
         let config_name = config_builder.config_name_to_load.clone().unwrap_or_default();
-        resolve_invalid_config_fields(&config_builder, &invalid_fields, &config_name)?;
+        print_config_file_warnings(&issues.warnings, &config_name);
+        resolve_invalid_config_fields(&config_builder, &issues.invalid_fields, &config_name)?;
         config_builder.add_missing_fields(custom);
     }
 
@@ -480,22 +631,21 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     }
 
     if config_builder.has_missing_fields()
-        && let Ok((default_config, invalid_fields)) = io_handler::parse_config_file(None, None) {
-        resolve_invalid_config_fields(&config_builder, &invalid_fields, "default")?;
+        && let Ok((default_config, issues)) = io_handler::parse_config_file(None, None) {
+        print_config_file_warnings(&issues.warnings, "default");
+        resolve_invalid_config_fields(&config_builder, &issues.invalid_fields, "default")?;
         config_builder.add_missing_fields(default_config);
     }
 
-    // A palette contributes its language colors only when they are not overridden, but its style
-    // tokens always apply, since --colors speaks about the overview alone
-    if let Some(name) = &config_builder.color_palette {
-        match io_handler::load_palette(name, &crate::PERSISTENT_APP_PATHS.palettes_dir) {
-            Some(palette) => {
-                if config_builder.colors.is_none() {
-                    config_builder.colors = palette.languages;
+    if let Some(name) = &config_builder.theme_name {
+        match io_handler::load_theme(name, &crate::PERSISTENT_APP_PATHS.themes_dir) {
+            Some((styles, errors)) => {
+                for error in &errors {
+                    println!("\n{}", format!("In theme '{name}': {}", error.formatted()).yellow());
                 }
-                config_builder.palette_styles = Some(palette.styles);
+                config_builder.theme_styles = Some(styles);
             },
-            None => println!("\n{}", format!("Color palette '{name}' could not be loaded, the default colors will be used.").yellow())
+            None => println!("\n{}", format!("Theme '{name}' could not be loaded, the default styles will be used.").yellow())
         }
     }
 
@@ -507,6 +657,14 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
 }
 
 
+fn print_config_file_warnings(warnings: &[String], config_name: &str) {
+    for warning in warnings {
+        println!("\n{}", format!("In config '{config_name}': {warning}").yellow());
+    }
+}
+
+// Every command that can end up in 'invalid_fields' belongs here. One that is missing is treated as
+// never overridden, so giving it correctly on the command line would still not rescue the run.
 fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_fields: &[&str], config_name: &str) -> Result<(), ArgParsingError> {
     for field in invalid_fields {
         let is_overridden = match *field {
@@ -518,8 +676,13 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             HIDE => config_builder.hidden.is_some(),
             NO_GITIGNORE => config_builder.no_gitignore.is_some(),
             EXCLUDE => config_builder.exclude_dirs.is_some(),
-            COLORS => config_builder.colors.is_some(),
-            COLOR_PALETTE => config_builder.color_palette.is_some(),
+            THEME => config_builder.theme_name.is_some(),
+            SORT => config_builder.sort_by.is_some(),
+            TOP => config_builder.top_n.is_some(),
+            BAR_THICKNESS => config_builder.bar_thickness.is_some(),
+            NUMBER_SEPARATOR => config_builder.number_separator.is_some(),
+            DECIMAL_SEPARATOR => config_builder.decimal_separator.is_some(),
+            LAYOUT => config_builder.layout.is_some(),
             _ => false
         };
 
@@ -638,17 +801,21 @@ pub struct ConfigurationBuilder {
     pub should_show_faulty_files: Option<bool>,
     pub hidden:                   Option<Hidden>,
     pub no_gitignore:             Option<bool>,
-    pub colors:                   Option<Vec<Color>>,
-    pub color_palette:            Option<String>,
+    pub theme_name:               Option<String>,
     pub log:                      Option<LogOption>,
     pub compare_level:            Option<usize>,
     pub config_name_to_save:      Option<String>,
     pub config_name_to_load:      Option<String>,
+    pub theme_name_to_save:       Option<String>,
     pub bar_thickness:            Option<BarThickness>,
+    pub number_separator:         Option<NumberSeparator>,
+    pub decimal_separator:        Option<DecimalSeparator>,
+    pub layout:                   Option<Layout>,
     pub sort_by:                  Option<SortCriterion>,
     pub top_n:                    Option<usize>,
     pub styles:                   Option<Vec<(String,String)>>,
-    pub palette_styles:           Option<Vec<(String,String)>>
+    pub config_styles:            Option<Vec<(String,String)>>,
+    pub theme_styles:             Option<Vec<(String,String)>>
 }
 
 impl ConfigurationBuilder {
@@ -663,12 +830,14 @@ impl ConfigurationBuilder {
         if self.should_show_faulty_files.is_none() {self.should_show_faulty_files = config.should_show_faulty_files};
         if self.hidden.is_none() {self.hidden = config.hidden};
         if self.no_gitignore.is_none() {self.no_gitignore = config.no_gitignore};
-        if self.colors.is_none() {self.colors = config.colors};
-        if self.color_palette.is_none() {self.color_palette = config.color_palette};
+        if self.theme_name.is_none() {self.theme_name = config.theme_name};
         if self.compare_level.is_none() {self.compare_level = config.compare_level};
         if self.log.is_none() {self.log = config.log};
-        if self.styles.is_none() {self.styles = config.styles};
+        if self.config_styles.is_none() {self.config_styles = config.config_styles};
         if self.bar_thickness.is_none() {self.bar_thickness = config.bar_thickness};
+        if self.number_separator.is_none() {self.number_separator = config.number_separator};
+        if self.decimal_separator.is_none() {self.decimal_separator = config.decimal_separator};
+        if self.layout.is_none() {self.layout = config.layout};
         if self.sort_by.is_none() {self.sort_by = config.sort_by};
         if self.top_n.is_none() {self.top_n = config.top_n};
         self
@@ -678,8 +847,8 @@ impl ConfigurationBuilder {
         self.exclude_dirs.is_none() || self.languages_of_interest.is_none() ||
         self.threads.is_none() || self.braces_as_code.is_none() || self.should_search_in_dotted.is_none() ||
         self.should_show_faulty_files.is_none() || self.hidden.is_none() || self.no_gitignore.is_none() ||
-        self.colors.is_none() || self.color_palette.is_none() || self.log.is_none() || self.compare_level.is_none() ||
-        self.styles.is_none() || self.bar_thickness.is_none() || self.sort_by.is_none()
+        self.theme_name.is_none() || self.log.is_none() || self.compare_level.is_none() ||
+        self.config_styles.is_none() || self.bar_thickness.is_none() || self.number_separator.is_none() || self.decimal_separator.is_none() || self.layout.is_none() || self.sort_by.is_none()
     }
 
     pub fn build(&self) -> Configuration {
@@ -695,15 +864,19 @@ impl ConfigurationBuilder {
             should_show_faulty_files: self.should_show_faulty_files.unwrap_or(DEF_SHOW_FAULTY_FILES),
             hidden: self.hidden.unwrap_or_default(),
             no_gitignore: self.no_gitignore.unwrap_or(DEF_NO_GITIGNORE),
-            colors: self.colors.clone().unwrap_or_default(),
             log: self.log.clone().unwrap_or_default(),
             compare_level: self.compare_level.unwrap_or(DEF_COMPARE_LEVEL),
             config_name_to_save: self.config_name_to_save.clone(),
             config_name_to_load: self.config_name_to_load.clone(),
+            theme_name_to_save: self.theme_name_to_save.clone(),
             bar_thickness: self.bar_thickness.unwrap_or_default(),
+            number_separator: self.number_separator.unwrap_or_default(),
+            decimal_separator: self.decimal_separator.unwrap_or_default(),
+            layout: self.layout.unwrap_or_default(),
             sort_by: self.sort_by.unwrap_or_default(),
             top_n: self.top_n,
-            theme: theme::resolve(self.palette_styles.as_deref().unwrap_or_default(), self.styles.as_deref().unwrap_or_default())
+            theme: theme::resolve(self.theme_styles.as_deref().unwrap_or_default(),
+                    self.config_styles.as_deref().unwrap_or_default(), self.styles.as_deref().unwrap_or_default())
         }
     }
 }
@@ -722,12 +895,15 @@ impl Configuration {
             should_show_faulty_files: DEF_SHOW_FAULTY_FILES,
             hidden: Hidden::default(),
             no_gitignore: DEF_NO_GITIGNORE,
-            colors: Vec::new(),
             log: LogOption::default(),
             compare_level: DEF_COMPARE_LEVEL,
             config_name_to_save: None,
             config_name_to_load: None,
+            theme_name_to_save: None,
             bar_thickness: BarThickness::default(),
+            number_separator: NumberSeparator::default(),
+            decimal_separator: DecimalSeparator::default(),
+            layout: Layout::default(),
             sort_by: SortCriterion::default(),
             top_n: None,
             theme: Theme::default()
@@ -782,8 +958,8 @@ impl Configuration {
         self
     }
 
-    pub fn set_colors(&mut self, colors: Vec<Color>) -> &mut Self {
-        self.colors = colors;
+    pub fn set_theme(&mut self, theme: Theme) -> &mut Self {
+        self.theme = theme;
         self
     }
 
@@ -846,11 +1022,29 @@ impl Formatted for ArgParsingError {
             Self::InvalidPath(p) => format!("Path provided is not a valid directory or file:\n'{p}'.").red(),
             Self::InvalidPathInConfig(dir,name) => format!("Specified path '{dir}', in config '{name}', doesn't exist anymore.").red(),
             Self::DoublePath => "Directories already provided as first argument, but --dirs command also found.".red(),
-            Self::UnrecognisedCommand(p) => format!("--{p} is not recognised as a command.").red(),
+            // Only the mistake is red. What to do about it is not an error, it is the way out.
+            Self::UnrecognisedCommand(p) => {
+                let tail = suggestions::formatted_suggestion(p, &message_printer::command_names())
+                        .unwrap_or_else(|| format!("Run '--{HELP}' to see every command."));
+                let error = format!("--{p} is not recognised as a command.").red();
+                ColoredString::from(format!("{error}\n\n{tail}").as_str())
+            },
             Self::IncorrectCommandArgs(p) => format!("Incorrect arguments provided for the command '--{p}'.").red(),
             Self::UnexpectedCommandArgs(p) => format!("Command '--{p}' does not expect any arguments.").red(),
-            Self::NonExistantConfig(p) => format!("Configuration '{p}' does not exist.").red(),
-            Self::NonExistantPalette(p) => format!("Color palette '{p}' was not found, or could not be read.").red(),
+            Self::NonExistantConfig(p) => {
+                let names = io_handler::names_in_dir(&crate::PERSISTENT_APP_PATHS.config_dir);
+                let tail = suggestions::formatted_suggestion(p, &names.iter().map(String::as_str).collect::<Vec<_>>())
+                        .unwrap_or_else(|| format!("Run '--{SHOW_CONFIGS}' to see the ones you have."));
+                let error = format!("Configuration '{p}' does not exist.").red();
+                ColoredString::from(format!("{error}\n\n{tail}").as_str())
+            },
+            Self::NonExistantTheme(p) => {
+                let names = io_handler::names_in_dir(&crate::PERSISTENT_APP_PATHS.themes_dir);
+                let tail = suggestions::formatted_suggestion(p, &names.iter().map(String::as_str).collect::<Vec<_>>())
+                        .unwrap_or_else(|| format!("Run '--{SHOW_THEMES}' to see the ones you have."));
+                let error = format!("Theme '{p}' was not found, or could not be read.").red();
+                ColoredString::from(format!("{error}\n\n{tail}").as_str())
+            },
             Self::InvalidStyle(p) => p.clone().red(),
             Self::InvalidHideTarget(p) => format!("'{p}' is not something that can be hidden.\nThe options are: {}.", Hidden::names()).red(),
             Self::InvalidValueInConfig(cmd,conf) => format!("Invalid value for the command '--{cmd}', in config '{conf}'.\nFix the value in the config file, or override it by providing a valid '--{cmd}' argument.").red(),
@@ -883,6 +1077,16 @@ mod tests {
         builder.build()
     }
 
+    // A command given twice keeps the value it was last given, which is what a reader of the line
+    // assumes and what every shell tool does
+    #[test]
+    fn test_a_repeated_command_keeps_its_last_value() {
+        assert_eq!(Threads::new(3, 11), create_config_from_args("./ --threads 2 10 --threads 3 11").unwrap().threads);
+        assert_eq!(Some(4), create_config_from_args("./ --top 9 --top 4").unwrap().top_n);
+        assert_eq!(SortCriterion::Name, create_config_from_args("./ --sort size --sort name").unwrap().sort_by);
+        assert_eq!(Layout::Boxed, create_config_from_args("./ --layout list --layout boxed").unwrap().layout);
+    }
+
     #[test]
     fn test_cmd_arg_parsing() {
         assert_eq!(Err(ArgParsingError::InvalidPath("random".to_owned())), create_config_from_args("random"));
@@ -906,9 +1110,6 @@ mod tests {
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned())), create_config_from_args("./ --exclude   --threads 4"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned())), create_config_from_args("./ --exclude [invalid"));
         assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("no-gitignore".to_owned())), create_config_from_args("./ --no-gitignore a"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("colors".to_owned())), create_config_from_args("./ --colors"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("colors".to_owned())), create_config_from_args("./ --colors kaka"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("colors".to_owned())), create_config_from_args("./ --colors ff0000 ff0000 ff0000 ff0000 ff0000 ff0000"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("load".to_owned())), create_config_from_args("./ --load"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("load".to_owned())), create_config_from_args("./ --load   "));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("save".to_owned())), create_config_from_args("./ --save"));
@@ -927,8 +1128,6 @@ mod tests {
                 create_config_from_args("./ --search-in-dotted").unwrap());
         assert_eq!(*new_conf("./").set_no_gitignore(true),
                 create_config_from_args("./ --no-gitignore").unwrap());
-        assert_eq!(*new_conf("./").set_colors(vec![Color::TrueColor{r:255,g:136,b:0}, Color::BrightCyan]),
-                create_config_from_args("./ --colors ff8800 bright-cyan").unwrap());
         assert_eq!(*new_conf("./").set_should_show_faulty_files(true),
                 create_config_from_args("./ --show-faulty-files").unwrap());
         assert_eq!(*new_conf("./").set_exclude_dirs(vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]),
@@ -952,19 +1151,19 @@ mod tests {
         assert_eq!(Hidden::default(), hidden("./"));
         assert_eq!(Hidden {keywords: true, ..Default::default()}, hidden("./ --hide keywords"));
         // Commas and spaces both separate, so the Powershell comma escaping is never needed
-        let expected = Hidden {status: true, bar: true, timing: true, ..Default::default()};
-        assert_eq!(expected, hidden("./ --hide status,bar,timing"));
-        assert_eq!(expected, hidden("./ --hide status bar timing"));
-        assert_eq!(expected, hidden("./ --hide  STATUS , bar,  Timing "));
+        let expected = Hidden {parsing_info: true, bar: true, timing: true, ..Default::default()};
+        assert_eq!(expected, hidden("./ --hide parsing-info,bar,timing"));
+        assert_eq!(expected, hidden("./ --hide parsing-info bar timing"));
+        assert_eq!(expected, hidden("./ --hide  PARSING-INFO , bar,  Timing "));
 
         // The error names the entry that was not understood, instead of the whole command
         assert_eq!(Err(ArgParsingError::InvalidHideTarget("detials".to_owned())),
-                create_config_from_args("./ --hide details,detials"));
+                create_config_from_args("./ --hide keywords,detials"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs(HIDE.to_owned())), create_config_from_args("./ --hide"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs(HIDE.to_owned())), create_config_from_args("./ --hide   "));
 
         // What is written to a config file is what the command line accepts
-        assert_eq!("status,bar,timing", expected.to_list_string());
+        assert_eq!("parsing-info,bar,timing", expected.to_list_string());
         assert_eq!(Ok(expected), Hidden::parse(&expected.to_list_string()));
         assert_eq!(Ok(Hidden::default()), Hidden::parse(""));
     }
@@ -1118,27 +1317,24 @@ mod tests {
     }
 
     #[test]
-    fn test_color_palette_arg_parsing() {
-        std::fs::create_dir_all(&PERSISTENT_APP_PATHS.palettes_dir).unwrap();
-        let test_palette_path = &PERSISTENT_APP_PATHS.palettes_dir.clone().add("test-palette000.txt");
+    fn test_theme_arg_parsing() {
+        std::fs::create_dir_all(&PERSISTENT_APP_PATHS.themes_dir).unwrap();
+        let test_theme_path = &PERSISTENT_APP_PATHS.themes_dir.clone().add("test-theme000.txt");
         // Cleaning up front instead of asserting absence, so that a failed run does not leave
         // behind a file that makes every later run fail during setup
-        let _ = std::fs::remove_file(test_palette_path);
-        std::fs::write(test_palette_path, "languages = cyan ff0080\ncode-number = bright-black dim\n").unwrap();
+        let _ = std::fs::remove_file(test_theme_path);
+        std::fs::write(test_theme_path, "language-1 = cyan\nlanguage-2 = ff0080\ncode-number = bright-black dim\n").unwrap();
 
-        let config = create_config_from_args("./ --color-palette Test-Palette000").unwrap();
-        assert_eq!(vec![Color::Cyan, Color::TrueColor{r:255,g:0,b:128}], config.colors);
+        let config = create_config_from_args("./ --theme Test-Theme000").unwrap();
+        assert_eq!(Style::of(Color::Cyan), config.theme.language_1);
+        assert_eq!(Style::of(Color::TrueColor{r:255,g:0,b:128}), config.theme.language_2);
         assert_eq!(Style::of(Color::BrightBlack).dim(), config.theme.code_number);
 
-        // --colors speaks about the overview alone, so the palette's style tokens still apply
-        let overridden = create_config_from_args("./ --color-palette test-palette000 --colors bright-blue").unwrap();
-        assert_eq!(vec![Color::BrightBlue], overridden.colors);
-        assert_eq!(Style::of(Color::BrightBlack).dim(), overridden.theme.code_number);
-
-        // and --style wins over what the palette declared
-        let restyled = create_config_from_args("./ --color-palette test-palette000 --style code-number=cyan,heading=bold").unwrap();
+        // --style wins over what the theme declared, and the tokens it does not name survive
+        let restyled = create_config_from_args("./ --theme test-theme000 --style code-number=cyan,heading=bold").unwrap();
         assert_eq!(Style::of(Color::Cyan), restyled.theme.code_number);
         assert_eq!(Style::plain().bold(), restyled.theme.heading);
+        assert_eq!(Style::of(Color::Cyan), restyled.theme.language_1);
 
         // The error names what is actually wrong, instead of a generic "incorrect arguments"
         assert!(matches!(create_config_from_args("./ --style"), Err(ArgParsingError::InvalidStyle(_))));
@@ -1146,13 +1342,13 @@ mod tests {
         assert_eq!(Err(ArgParsingError::InvalidStyle("'code-numberr' is not a style token.".to_owned())),
                 create_config_from_args("./ --style code-numberr=cyan"));
         assert!(matches!(create_config_from_args("./ --style code-number=notacolor"), Err(ArgParsingError::InvalidStyle(_))));
-        assert_eq!(Err(ArgParsingError::NonExistantPalette("definitely-not-a-palette000".to_owned())),
-                create_config_from_args("./ --color-palette definitely-not-a-palette000"));
+        assert_eq!(Err(ArgParsingError::NonExistantTheme("definitely-not-a-theme000".to_owned())),
+                create_config_from_args("./ --theme definitely-not-a-theme000"));
 
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("color-palette".to_owned())),
-                create_config_from_args("./ --color-palette"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("theme".to_owned())),
+                create_config_from_args("./ --theme"));
 
-        std::fs::remove_file(test_palette_path).unwrap();
+        std::fs::remove_file(test_theme_path).unwrap();
     }
 
     #[test]
@@ -1167,6 +1363,30 @@ mod tests {
 
         let overridden = create_config_from_args("./ --load test001 --threads 1 2").unwrap();
         assert_eq!(overridden.threads, Threads::new(1, 2));
+
+        std::fs::remove_file(test_file_path).unwrap();
+    }
+
+    // Every command that 'resolve_invalid_config_fields' does not know about is treated as never
+    // overridden, so giving it correctly on the command line would still kill the run
+    #[test]
+    fn test_a_command_line_value_rescues_every_invalid_field_of_a_config() {
+        std::fs::create_dir_all(&PERSISTENT_APP_PATHS.config_dir).unwrap();
+        let test_file_path = &PERSISTENT_APP_PATHS.config_dir.clone().add("/test002.txt");
+        let _ = std::fs::remove_file(test_file_path);
+        std::fs::write(test_file_path, "===> sort\nnope\n\n===> top\nnope\n\n===> bar-thickness\nnope\n\n\
+                ===> number-separator\nnope\n\n===> decimal-separator\nnope\n").unwrap();
+
+        assert_eq!(Err(ArgParsingError::InvalidValueInConfig("sort".to_owned(), "test002".to_owned())),
+                create_config_from_args("./ --load test002"));
+
+        let rescued = create_config_from_args(
+                "./ --load test002 --sort name --top 3 --bar-thickness fat --number-separator dot --decimal-separator comma").unwrap();
+        assert_eq!(SortCriterion::Name, rescued.sort_by);
+        assert_eq!(Some(3), rescued.top_n);
+        assert_eq!(BarThickness::Fat, rescued.bar_thickness);
+        assert_eq!(NumberSeparator::Dot, rescued.number_separator);
+        assert_eq!(DecimalSeparator::Comma, rescued.decimal_separator);
 
         std::fs::remove_file(test_file_path).unwrap();
     }

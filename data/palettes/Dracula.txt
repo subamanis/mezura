@@ -1,2 +1,0 @@
-# mezura-format: 2
-languages = ff79c6 8be9fd 50fa7b bd93f9

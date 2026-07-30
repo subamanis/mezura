@@ -6,6 +6,7 @@ pub mod config_manager;
 pub mod io_handler;
 pub mod utils;
 pub mod theme;
+pub mod suggestions;
 pub mod consumer;
 pub mod producer;
 pub mod message_printer;
@@ -32,7 +33,7 @@ use std::{sync::{Arc, LazyLock, Mutex, OnceLock}, thread::JoinHandle};
 
 pub const APP_NAME : &str = "mezura";
 pub const LANGUAGES_DIR_NAME : &str = "languages";
-pub const PALETTES_DIR_NAME : &str = "palettes";
+pub const THEMES_DIR_NAME : &str = "themes";
 pub const CONFIG_DIR_NAME : &str = "config";
 pub const LOGS_DIR_NAME : &str = "logs";
 pub const TEST_DIR_NAME : &str = "test_dir";
@@ -66,7 +67,7 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let mut producer_handles = Vec::with_capacity(config.threads.producers);
     let mut consumer_handles = Vec::with_capacity(config.threads.consumers);
 
-    if !config.hidden.status {
+    if !config.hidden.directory_info {
         println!("\n{}...",theme::active().heading.paint("Analyzing directories"));
     }
 
@@ -110,10 +111,11 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     if relevant_files_num == 0 {
         return Err(ParseFilesError::NoRelevantFiles(get_activated_languages_as_str(&config)));
     }
-    if !config.hidden.status {
+    if !config.hidden.directory_info {
         println!("{}\n",theme::active().summary.paint(&format!("{} files found. {} of interest. {} excluded.",
                 with_seperators(total_files_num), with_seperators(relevant_files_num), with_seperators(excluded_files_num))));
-
+    }
+    if !config.hidden.parsing_info {
         println!("{}...",theme::active().heading.paint("Parsing files"));
     }
 
@@ -240,7 +242,7 @@ fn generate_metrics_if_parsing_took_more_than_one_sec(parsing_duration_millis: u
 fn print_faulty_files_or_ok(faulty_files_ref: &FaultyFilesListMut, config: &Configuration) {
     let faulty_files = &*faulty_files_ref.as_ref().lock().unwrap();
     if faulty_files.is_empty() {
-        if !config.hidden.status {
+        if !config.hidden.parsing_info {
             println!("{}\n",theme::active().success.paint("ok"));
         }
     } else {
@@ -320,7 +322,7 @@ pub struct PersistentAppPaths {
     pub project_path: String,
     pub data_dir: String,
     pub languages_dir: String,
-    pub palettes_dir: String,
+    pub themes_dir: String,
     pub config_dir: String,
     pub logs_dir: String,
     pub are_initialized: bool
@@ -423,7 +425,7 @@ impl PersistentAppPaths {
 
         PersistentAppPaths {
             project_path,
-            palettes_dir: data_dir.clone() + PALETTES_DIR_NAME + "/",
+            themes_dir: data_dir.clone() + THEMES_DIR_NAME + "/",
             data_dir,
             config_dir,
             languages_dir,
@@ -538,7 +540,8 @@ impl FinalStats {
     }
 
     fn get_formatted_size_and_measurement(value: usize) -> (f64, String) {
-        if value >= 1000000 {(value as f64 / 1000000f64, "MBs".to_owned())}
+        if value >= 1000000000 {(value as f64 / 1000000000f64, "GBs".to_owned())}
+        else if value >= 1000000 {(value as f64 / 1000000f64, "MBs".to_owned())}
         else if value >= 1000 {(value as f64 / 1000f64, "KBs".to_owned())}
         else {(value as f64, "Bytes".to_owned())}
     }

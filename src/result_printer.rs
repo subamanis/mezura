@@ -1,4 +1,6 @@
 use crate::*;
+use crate::config_manager::Layout;
+use crate::theme::Theme;
 
 type ColorFunc = Box<dyn Fn(&str) -> String>;
 
@@ -8,9 +10,7 @@ const NUM_OF_VERTICALS : usize = 50;
 //the number of languages the overview shows before folding the rest into "others"
 const OVERVIEW_LANGUAGES : usize = 3;
 
-const DEFAULT_LANGUAGE_COLORS : [Color; 4] = [Color::Cyan, Color::BrightMagenta, Color::BrightYellow,
-        Color::TrueColor{r:106,g:217,b:189}];
-const DEFAULT_OTHERS_COLOR : Color = Color::TrueColor{r:215,g:201,b:240};
+const OTHERS_NAME : &str = "others";
 
 //a language that is present but whose share rounds away to zero: shown as "<0.01", given no cell
 const PRESENT_BUT_TINY : f64 = 0.001;
@@ -36,21 +36,31 @@ pub fn format_and_print_results(content_info_map: &mut HashMap<String, LanguageC
     let hidden_languages = config.top_n.map_or(0, |top| sorted_language_names.len().saturating_sub(top));
     let shown_language_names = &sorted_language_names[..sorted_language_names.len() - hidden_languages];
 
+    let theme = theme::active();
     let columns = Columns::of(shown_language_names, content_info_map, languages_metadata_map, final_stats);
-    let block_width = columns.width();
+    let block_width = columns.width(theme);
     let should_print_keywords = !config.hidden.keywords;
+    let is_table = config.layout != Layout::List;
+    let print_total = languages_metadata_map.len() > 1;
 
-    if !config.hidden.details {
-        print_individually(shown_language_names, content_info_map, languages_metadata_map, &columns, block_width, should_print_keywords);
-        if hidden_languages > 0 {
-            let plural = if hidden_languages == 1 {"language"} else {"languages"};
-            println!("\n{}", theme::active().note.paint(&format!("(+{hidden_languages} more {plural} hidden by --top {})", config.top_n.unwrap())));
-        }
+    if config.layout == Layout::Boxed {
+        print_as_boxed_table(theme, shown_language_names, content_info_map, languages_metadata_map, final_stats,
+                print_total, should_print_keywords);
+    } else if is_table {
+        print_as_table(theme, shown_language_names, content_info_map, languages_metadata_map, final_stats,
+                print_total, should_print_keywords);
+    } else {
+        print_individually(theme, shown_language_names, content_info_map, languages_metadata_map, &columns, block_width, should_print_keywords);
     }
 
-    if languages_metadata_map.len() > 1 {
-        if !config.hidden.details {
-            print_sum(content_info_map, final_stats, &columns, block_width, should_print_keywords);
+    if hidden_languages > 0 {
+        let plural = if hidden_languages == 1 {"language"} else {"languages"};
+        println!("\n{}", theme.note.paint(&format!("(+{hidden_languages} more {plural} hidden by --top {})", config.top_n.unwrap())));
+    }
+
+    if print_total {
+        if !is_table {
+            print_sum(theme, content_info_map, final_stats, &columns, block_width, should_print_keywords);
         }
         if !config.hidden.overview {
             print_visual_overview(&mut sorted_language_names, content_info_map, languages_metadata_map, final_stats, config);
@@ -63,21 +73,373 @@ pub fn format_and_print_results(content_info_map: &mut HashMap<String, LanguageC
 }
 
 
-fn print_individually(sorted_languages: &[String], content_info_map: &HashMap<String,LanguageContentInfo>,
+// One aligned row per language, no borders: whitespace alignment survives being pasted into a
+// README or a ticket, which is what tokei, scc and cloc print for the same reason.
+// The header cells reuse the label token of the quantity underneath them and the body cells its
+// number token, so the table needs no styling of its own.
+fn print_as_table(theme: &Theme, sorted_languages: &[String], content_info_map: &HashMap<String,LanguageContentInfo>,
+        languages_metadata_map: &HashMap<String, LanguageMetadata>, final_stats: &FinalStats,
+        print_total: bool, should_print_keywords: bool)
+{
+    println!("{}.\n", theme.heading.paint("Details"));
+    for line in table_lines(theme, sorted_languages, content_info_map, languages_metadata_map, final_stats, print_total) {
+        println!("{line}");
+    }
+
+    if should_print_keywords {
+        print_keyword_block(theme, sorted_languages, content_info_map);
+    }
+
+    // The 'list' layout closes with a blank line of its own, this one has to say so
+    println!();
+}
+
+fn table_lines(theme: &Theme, sorted_languages: &[String], content_info_map: &HashMap<String,LanguageContentInfo>,
+        languages_metadata_map: &HashMap<String, LanguageMetadata>, final_stats: &FinalStats,
+        print_total: bool) -> Vec<String>
+{
+    // Every counted column carries its own percentage instead of one lonely 'Code%' column. The two
+    // that compare languages ('Files' and 'Lines') take a share of the total, the two that describe
+    // a language ('Code' and 'Comments') take a share of that language's own lines, which is what
+    // the same numbers mean in the default layout.
+    const HEADERS : [&str; 11] = ["Language", "Files", "%", "Lines", "%", "Code", "%", "Comments", "%", "Extra", "Size"];
+    const GAP : usize = 4;
+    // The columns a percentage belongs to, kept against their number by a gap of their own
+    const TIGHT_AFTER : [usize; 4] = [1, 3, 5, 7];
+    const TIGHT_GAP : usize = 2;
+
+    fn row_of(name: &str, files: usize, lines: usize, code: usize, comments: usize, bytes: usize,
+            total_files: usize, total_lines: usize) -> [String; 11]
+    {
+        fn percent_cell(value: f64) -> String {
+            percent_text(value) + "%"
+        }
+
+        fn share(part: usize, whole: usize) -> String {
+            percent_cell(if whole == 0 {0.0} else {part as f64 / whole as f64 * 100.0})
+        }
+
+        let (size, unit) = scaled(bytes);
+        let (code_percentage, comment_percentage) = percentages(lines, code, comments);
+        [name.to_owned(),
+         with_seperators(files), share(files, total_files),
+         with_seperators(lines), share(lines, total_lines),
+         with_seperators(code), percent_cell(code_percentage),
+         with_seperators(comments), percent_cell(comment_percentage),
+         with_seperators(lines - code - comments),
+         with_decimal_separator(format!("{size:.1}")) + " " + unit]
+    }
+
+    let mut rows = sorted_languages.iter().map(|name| {
+            let content_info = content_info_map.get(name).unwrap();
+            let metadata = languages_metadata_map.get(name).unwrap();
+            row_of(name, metadata.files, content_info.lines, content_info.code_lines, content_info.comment_lines,
+                    metadata.bytes, final_stats.files, final_stats.lines)
+        }).collect::<Vec<_>>();
+    if print_total {
+        rows.push(row_of(TOTAL_NAME, final_stats.files, final_stats.lines, final_stats.code_lines,
+                final_stats.comment_lines, final_stats.bytes_size, final_stats.files, final_stats.lines));
+    }
+
+    let widths = (0..HEADERS.len()).map(|i|
+            rows.iter().map(|row| row[i].chars().count()).max().unwrap_or(0).max(HEADERS[i].len())).collect::<Vec<_>>();
+
+    let header_styles = [&theme.details_language, &theme.files_label, &theme.percent, &theme.lines_label, &theme.percent,
+            &theme.code_label, &theme.percent, &theme.comments_label, &theme.percent, &theme.extra_label, &theme.total_size_label];
+    let body_styles = [&theme.details_language, &theme.files_number, &theme.percent, &theme.lines_number, &theme.percent,
+            &theme.code_number, &theme.percent, &theme.comments_number, &theme.percent, &theme.extra_number, &theme.total_size_number];
+
+    // The figures are right aligned so they can be compared down a column. The language name and the
+    // percentages are not: a percentage sits a fixed two spaces after the number it belongs to, and
+    // padding it on the left would push it further away on exactly the rows where its column happens
+    // to be wider, which is what the total's '100.00%' did to every language row above it.
+    let render = |cells: &[String], styles: &[&theme::Style; 11]| {
+        let mut line = String::with_capacity(140);
+        for (i, cell) in cells.iter().enumerate() {
+            let padding = " ".repeat(widths[i] - cell.chars().count());
+            if i == 0 {
+                line.push_str(&format!("{}{}", styles[i].paint(cell), padding));
+            } else if TIGHT_AFTER.contains(&(i - 1)) {
+                line.push_str(&format!("{}{}{}", " ".repeat(TIGHT_GAP), styles[i].paint(cell), padding));
+            } else {
+                line.push_str(&format!("{}{}{}", " ".repeat(GAP), padding, styles[i].paint(cell)));
+            }
+        }
+        line
+    };
+
+    let table_width = widths.iter().sum::<usize>()
+            + GAP * (HEADERS.len() - 1 - TIGHT_AFTER.len()) + TIGHT_GAP * TIGHT_AFTER.len();
+
+    let mut lines = vec![render(&HEADERS.map(str::to_owned), &header_styles)];
+
+    let language_rows = rows.len() - usize::from(print_total);
+    for row in rows.iter().take(language_rows) {
+        lines.push(render(row, &body_styles));
+    }
+    if print_total {
+        lines.push(theme.separator.paint(&"-".repeat(table_width)).to_string());
+        let mut total_styles = body_styles;
+        total_styles[0] = &theme.details_total;
+        lines.push(render(&rows[language_rows], &total_styles));
+    }
+
+    lines
+}
+
+
+// Their own block instead of a trailing column, whose width varies by nature and would destroy the
+// alignment that is the whole point of a table. Not aligned by position, though: a column of the
+// table means one thing all the way down, while the first keyword of one language and the first of
+// the next are unrelated, so aligning them promises a comparison that does not exist.
+fn print_keyword_block(theme: &Theme, sorted_languages: &[String], content_info_map: &HashMap<String,LanguageContentInfo>) {
+    let lines = keyword_block_lines(theme, sorted_languages, content_info_map);
+    if !lines.is_empty() {
+        println!("
+{}.
+", theme.heading.paint("Keywords"));
+        for line in lines {
+            println!("{line}");
+        }
+    }
+}
+
+fn keyword_block_lines(theme: &Theme, sorted_languages: &[String], content_info_map: &HashMap<String,LanguageContentInfo>) -> Vec<String> {
+    const GAP : usize = 3;
+
+    let keyword_rows = sorted_languages.iter().filter_map(|name| {
+            let keywords = get_keywords_as_str(theme, &content_info_map.get(name).unwrap().keyword_occurences, 0, usize::MAX);
+            if keywords.is_empty() {None} else {Some((name, keywords))}
+        }).collect::<Vec<_>>();
+
+    if keyword_rows.is_empty() {
+        return Vec::new();
+    }
+
+    let language_width = keyword_rows.iter().map(|(name,_)| name.chars().count()).max().unwrap();
+    keyword_rows.into_iter().map(|(name, keywords)| format!("{}{}{}", theme.details_language.paint(name),
+            " ".repeat(language_width - name.chars().count() + GAP), keywords)).collect()
+}
+
+
+// The same figures as the borderless table, in a drawn frame. Each number and its percentage share
+// one cell here, since the borders already do the grouping that the tight gap does over there, and
+// that brings the whole thing down from eleven columns to seven.
+fn print_as_boxed_table(theme: &Theme, sorted_languages: &[String], content_info_map: &HashMap<String,LanguageContentInfo>,
+        languages_metadata_map: &HashMap<String, LanguageMetadata>, final_stats: &FinalStats,
+        print_total: bool, should_print_keywords: bool)
+{
+    println!("{}.
+", theme.heading.paint("Details"));
+    for line in boxed_lines(theme, sorted_languages, content_info_map, languages_metadata_map, final_stats, print_total) {
+        println!("{line}");
+    }
+
+    if should_print_keywords {
+        print_keyword_block(theme, sorted_languages, content_info_map);
+    }
+    println!();
+}
+
+fn boxed_lines(theme: &Theme, sorted_languages: &[String], content_info_map: &HashMap<String,LanguageContentInfo>,
+        languages_metadata_map: &HashMap<String, LanguageMetadata>, final_stats: &FinalStats,
+        print_total: bool) -> Vec<String>
+{
+    const HEADERS : [&str; 7] = ["Language", "Files", "Lines", "Code", "Comments", "Extra", "Size"];
+    // The columns that carry a percentage next to their number
+    const WITH_PERCENT : usize = 4;
+    const PERCENT_GAP : usize = 2;
+    // One space of air between a border and the text it holds
+    const PAD : usize = 1;
+
+    struct Cell { number: String, percent: String }
+
+    fn row_of(name: &str, files: usize, lines: usize, code: usize, comments: usize, bytes: usize,
+            total_files: usize, total_lines: usize) -> (String, [Cell; 6])
+    {
+        fn share(part: usize, whole: usize) -> String {
+            percent_text(if whole == 0 {0.0} else {part as f64 / whole as f64 * 100.0}) + "%"
+        }
+        fn cell(number: String, percent: String) -> Cell {
+            Cell { number, percent }
+        }
+
+        let (size, unit) = scaled(bytes);
+        let (code_percentage, comment_percentage) = percentages(lines, code, comments);
+        (name.to_owned(), [
+            cell(with_seperators(files), share(files, total_files)),
+            cell(with_seperators(lines), share(lines, total_lines)),
+            cell(with_seperators(code), percent_text(code_percentage) + "%"),
+            cell(with_seperators(comments), percent_text(comment_percentage) + "%"),
+            cell(with_seperators(lines - code - comments), String::new()),
+            cell(with_decimal_separator(format!("{size:.1}")) + " " + unit, String::new())])
+    }
+
+    let mut rows = sorted_languages.iter().map(|name| {
+            let content_info = content_info_map.get(name).unwrap();
+            let metadata = languages_metadata_map.get(name).unwrap();
+            row_of(name, metadata.files, content_info.lines, content_info.code_lines, content_info.comment_lines,
+                    metadata.bytes, final_stats.files, final_stats.lines)
+        }).collect::<Vec<_>>();
+    if print_total {
+        rows.push(row_of(TOTAL_NAME, final_stats.files, final_stats.lines, final_stats.code_lines,
+                final_stats.comment_lines, final_stats.bytes_size, final_stats.files, final_stats.lines));
+    }
+
+    let name_width = rows.iter().map(|(name,_)| name.chars().count()).max().unwrap_or(0).max(HEADERS[0].len());
+    let number_widths = (0..6).map(|i| rows.iter().map(|(_,cells)| cells[i].number.chars().count()).max().unwrap_or(0))
+            .collect::<Vec<_>>();
+    let percent_widths = (0..6).map(|i| rows.iter().map(|(_,cells)| cells[i].percent.chars().count()).max().unwrap_or(0))
+            .collect::<Vec<_>>();
+
+    // A column is as wide as its content needs, or as its header, whichever is more
+    let inner_widths = std::iter::once(name_width).chain((0..6).map(|i| {
+            let content = number_widths[i] + if i < WITH_PERCENT {PERCENT_GAP + percent_widths[i]} else {0};
+            content.max(HEADERS[i + 1].len())
+        })).collect::<Vec<_>>();
+
+    let header_styles = [&theme.files_label, &theme.lines_label, &theme.code_label,
+            &theme.comments_label, &theme.extra_label, &theme.total_size_label];
+    let number_styles = [&theme.files_number, &theme.lines_number, &theme.code_number,
+            &theme.comments_number, &theme.extra_number, &theme.total_size_number];
+
+    // Hardcoded while this layout is being looked at. If it stays, the three want their own tokens,
+    // which needs FEAT-17 first: they mean nothing in the other two layouts.
+    const BORDER_OUTER : Color = Color::TrueColor { r: 160, g: 160, b: 160 };
+    const BORDER_INNER : Color = Color::TrueColor { r: 65, g: 65, b: 65 };
+    const BORDER_INNER_ALT : Color = Color::TrueColor { r: 140, g: 140, b: 140 };
+
+    // The two ends always belong to the outer frame. A crossing takes the shade of its own line when
+    // that line is solid, and the interior shade when it is dashed, so that it never cuts the
+    // vertical it sits on with a brighter bead.
+    let frame = |left: &str, joint: &str, right: &str, fill: &str, shade: Color, dashed: bool| {
+        let painted_joint = joint.color(if dashed {BORDER_INNER} else {shade}).to_string();
+        let runs = inner_widths.iter().map(|width| fill.repeat(width + 2 * PAD).color(shade).to_string())
+                .collect::<Vec<_>>();
+        format!("{}{}{}", left.color(BORDER_OUTER), runs.join(&painted_joint), right.color(BORDER_OUTER))
+    };
+
+    // The header and the total sit between two solid lines, so their verticals are solid too. Only
+    // the language rows, the ones the dashed lines separate, get the dim ones.
+    let content_row = |cells: Vec<String>, bright: bool| {
+        let padding = " ".repeat(PAD);
+        let bar = "│".color(BORDER_OUTER).to_string();
+        let inner_bar = "│".color(if bright {BORDER_OUTER} else {BORDER_INNER}).to_string();
+        format!("{bar}{padding}{}{padding}{bar}", cells.join(&format!("{padding}{inner_bar}{padding}")))
+    };
+
+    let mut lines = vec![frame("┌", "┬", "┐", "─", BORDER_OUTER, false)];
+
+    // The titles sit over columns of mixed width, so they are centred rather than pinned to one
+    // side of a cell that is often wider than the word in it
+    let mut header_cells = vec![format!("{:^width$}", HEADERS[0], width = inner_widths[0])];
+    for (i, style) in header_styles.iter().enumerate() {
+        let width = inner_widths[i + 1];
+        let text = HEADERS[i + 1];
+        let left = (width - text.len()) / 2;
+        header_cells.push(format!("{}{}{}", " ".repeat(left), style.paint(text), " ".repeat(width - text.len() - left)));
+    }
+    lines.push(content_row(header_cells, true));
+
+    // The two lines that bound the body, under the header and above the total, belong to the frame
+    // rather than to the striping: they are solid and take its shade, which is also what makes the
+    // first and the last crossing of every column bright. Only the lines between two languages are
+    // dashed, and those alternate.
+    let language_rows = rows.len() - usize::from(print_total);
+    for (position, (name, cells)) in rows.iter().enumerate() {
+        let separator = if position == 0 || position == language_rows {
+            frame("├", "┼", "┤", "─", BORDER_OUTER, false)
+        } else {
+            frame("├", "┼", "┤", "╌", if position % 2 == 1 {BORDER_INNER_ALT} else {BORDER_INNER}, true)
+        };
+        lines.push(separator);
+
+        let name_style = if position == language_rows {&theme.details_total} else {&theme.details_language};
+        let mut painted = vec![format!("{}{}", name_style.paint(name), " ".repeat(inner_widths[0] - name.chars().count()))];
+        for (i, cell) in cells.iter().enumerate() {
+            let number = format!("{}{}", " ".repeat(number_widths[i] - cell.number.chars().count()),
+                    number_styles[i].paint(&cell.number));
+            let body = if i < WITH_PERCENT {
+                format!("{number}{}{}{}", " ".repeat(PERCENT_GAP), theme.percent.paint(&cell.percent),
+                        " ".repeat(percent_widths[i] - cell.percent.chars().count()))
+            } else {
+                number
+            };
+            let used = number_widths[i] + if i < WITH_PERCENT {PERCENT_GAP + percent_widths[i]} else {0};
+            painted.push(format!("{body}{}", " ".repeat(inner_widths[i + 1] - used)));
+        }
+        lines.push(content_row(painted, position == language_rows));
+    }
+
+    lines.push(frame("└", "┴", "┘", "─", BORDER_OUTER, false));
+    lines
+}
+
+
+// The theme listing runs before a configuration exists, so it cannot go through 'theme::active()'.
+// It asks for the real rows of one made-up language instead, built by the same functions a run uses,
+// so that the preview cannot drift from what will actually be printed. It follows the layout in
+// effect for the same reason, and so that the listing stays one size however many layouts exist.
+// The figures are constants, so that every theme is judged against the same row.
+pub fn theme_sample_rows(theme: &Theme, layout: Layout) -> Vec<String> {
+    const NAME    : &str   = "Rust";
+    const FILES   : usize  = 1_284;
+    const LINES   : usize  = 96_512;
+    const CODE    : usize  = 71_004;
+    const COMMENTS: usize  = 12_838;
+    const BYTES   : usize  = 3_412_500;
+
+    let names = [NAME.to_owned()];
+    let keywords = hashmap!("structs".to_owned() => 284usize, "traits".to_owned() => 31);
+    let content_info_map = hashmap!(NAME.to_owned() => LanguageContentInfo::new(LINES, CODE, COMMENTS, keywords.clone()));
+    let metadata_map = hashmap!(NAME.to_owned() => LanguageMetadata::new(FILES, BYTES));
+    let final_stats = FinalStats::calculate(&content_info_map, &metadata_map);
+
+    // The two tables keep their keywords in a block of their own, so the sample has to ask for it or
+    // the keyword tokens would go unshown in exactly the two layouts that are now the common ones.
+    // One language, so there is nothing for a total to add up: it would only repeat the row above it.
+    let with_keywords = |mut lines: Vec<String>| {
+        lines.push(String::new());
+        lines.extend(keyword_block_lines(theme, &names, &content_info_map));
+        lines
+    };
+    match layout {
+        Layout::Table => with_keywords(table_lines(theme, &names, &content_info_map, &metadata_map, &final_stats, false)),
+        Layout::Boxed => with_keywords(boxed_lines(theme, &names, &content_info_map, &metadata_map, &final_stats, false)),
+        Layout::List => {
+            let len_of = |value: usize| with_seperators(value).len();
+            let columns = Columns {
+                name: NAME.len().max(TOTAL_NAME.len()),
+                headline: len_of(FILES).max(len_of(LINES)),
+                code: len_of(CODE),
+                comments: len_of(COMMENTS),
+                extra: len_of(LINES - CODE - COMMENTS)
+            };
+            let width = columns.width(theme);
+            vec![columns.files_row(theme, FILES, &size_text(theme, BYTES, BYTES / FILES), width),
+                 columns.breakdown_row(theme, &theme.details_language.paint(NAME).to_string(), NAME.len(), LINES, CODE, COMMENTS),
+                 get_keywords_as_str(theme, &keywords, columns.words_start(), width)]
+        }
+    }
+}
+
+
+fn print_individually(theme: &Theme, sorted_languages: &[String], content_info_map: &HashMap<String,LanguageContentInfo>,
      languages_metadata_map: &HashMap<String, LanguageMetadata>, columns: &Columns, block_width: usize, should_print_keywords: bool)
 {
-    println!("{}.\n", theme::active().heading.paint("Details"));
+    println!("{}.\n", theme.heading.paint("Details"));
 
     let last = sorted_languages.len().saturating_sub(1);
     for (i, lang_name) in sorted_languages.iter().enumerate() {
         let content_info = content_info_map.get(lang_name).unwrap();
         let metadata = languages_metadata_map.get(lang_name).unwrap();
 
-        println!("{}", columns.files_row(metadata.files, &size_text(metadata.bytes, metadata.bytes / metadata.files), block_width));
-        println!("{}", columns.breakdown_row(&theme::active().details_language.paint(lang_name).to_string(),
+        println!("{}", columns.files_row(theme, metadata.files,
+                &size_text(theme, metadata.bytes, metadata.bytes / metadata.files), block_width));
+        println!("{}", columns.breakdown_row(theme, &theme.details_language.paint(lang_name).to_string(),
                 lang_name.chars().count(), content_info.lines, content_info.code_lines, content_info.comment_lines));
         if should_print_keywords {
-            let keywords = get_keywords_as_str(&content_info.keyword_occurences, columns.words_start());
+            let keywords = get_keywords_as_str(theme, &content_info.keyword_occurences, columns.words_start(), block_width);
             if !keywords.is_empty() {
                 println!("{keywords}");
             }
@@ -141,21 +503,22 @@ impl Columns {
         self.headline_end() + 1
     }
 
-    fn breakdown_row(&self, painted_name: &str, name_len: usize, lines: usize, code_lines: usize, comment_lines: usize) -> String {
+    // The theme arrives as an argument rather than being read from 'theme::active()', because
+    // '--show-themes' renders one sample per theme it found, in a single run, and it renders it
+    // through these same functions so that the preview cannot drift from the real output
+    fn breakdown_row(&self, theme: &Theme, painted_name: &str, name_len: usize, lines: usize, code_lines: usize, comment_lines: usize) -> String {
         let (code_percentage, comment_percentage) = percentages(lines, code_lines, comment_lines);
-        let theme = theme::active();
         format!("{}{}{}{}{:>headline_w$} {} {{ {:>code_w$} {} ({})  +  {:>comments_w$} {} ({})  +  {:>extra_w$} {} }}",
                 painted_name, " ".repeat(self.name - name_len + NAME_GAP), theme.arrow.paint("->"), " ".repeat(NAME_GAP),
                 theme.lines_number.paint(&with_seperators(lines)), theme.lines_label.paint("lines"),
-                theme.code_number.paint(&with_seperators(code_lines)), theme.code_label.paint("code"), percent(code_percentage),
-                theme.comments_number.paint(&with_seperators(comment_lines)), theme.comments_label.paint("comments"), percent(comment_percentage),
+                theme.code_number.paint(&with_seperators(code_lines)), theme.code_label.paint("code"), percent(theme, code_percentage),
+                theme.comments_number.paint(&with_seperators(comment_lines)), theme.comments_label.paint("comments"), percent(theme, comment_percentage),
                 theme.extra_number.paint(&with_seperators(lines - code_lines - comment_lines)), theme.extra_label.paint("extra"),
                 headline_w = self.headline, code_w = self.code, comments_w = self.comments, extra_w = self.extra)
     }
 
     // The size text ends where the row below it does
-    fn files_row(&self, files: usize, size_text: &str, width: usize) -> String {
-        let theme = theme::active();
+    fn files_row(&self, theme: &Theme, files: usize, size_text: &str, width: usize) -> String {
         let left = format!("{}{:>headline_w$} {}", " ".repeat(self.headline_end() - self.headline),
                 theme.files_number.paint(&with_seperators(files)), theme.files_label.paint("files"), headline_w = self.headline);
         let used = widest_visible_line(&left) + widest_visible_line(size_text);
@@ -165,8 +528,8 @@ impl Columns {
 
     // Rendered once to be measured and again to be printed, which costs nothing once per run and
     // keeps the width honest instead of derived from a formula that can fall behind
-    fn width(&self) -> usize {
-        widest_visible_line(&self.breakdown_row("", 0, 0, 0, 0))
+    fn width(&self, theme: &Theme) -> usize {
+        widest_visible_line(&self.breakdown_row(theme, "", 0, 0, 0, 0))
     }
 }
 
@@ -193,17 +556,18 @@ fn widest_visible_line(text: &str) -> usize {
 }
 
 
-fn print_sum(content_info_map: &HashMap<String,LanguageContentInfo>, final_stats: &FinalStats, columns: &Columns,
+fn print_sum(theme: &Theme, content_info_map: &HashMap<String,LanguageContentInfo>, final_stats: &FinalStats, columns: &Columns,
         block_width: usize, should_print_keywords: bool)
 {
     // The separator spans the block, which every row of the details section already fits exactly
-    println!("{} ",theme::active().separator.paint(&"-".repeat(block_width)));
-    println!("{}", columns.files_row(final_stats.files, &size_text(final_stats.bytes_size, final_stats.bytes_average_size), block_width));
-    println!("{}", columns.breakdown_row(&theme::active().details_total.paint(TOTAL_NAME).to_string(),
+    println!("{} ",theme.separator.paint(&"-".repeat(block_width)));
+    println!("{}", columns.files_row(theme, final_stats.files,
+            &size_text(theme, final_stats.bytes_size, final_stats.bytes_average_size), block_width));
+    println!("{}", columns.breakdown_row(theme, &theme.details_total.paint(TOTAL_NAME).to_string(),
             TOTAL_NAME.len(), final_stats.lines, final_stats.code_lines, final_stats.comment_lines));
 
     if should_print_keywords {
-        let keywords_line = get_keywords_as_str(&create_keyword_sum_map(content_info_map), columns.words_start());
+        let keywords_line = get_keywords_as_str(theme, &create_keyword_sum_map(content_info_map), columns.words_start(), block_width);
         if !keywords_line.is_empty() {
             println!("{keywords_line}");
         }
@@ -226,21 +590,22 @@ fn print_visual_overview(sorted_language_vec: &mut Vec<String>, content_info_map
 
     println!("{}.\n", theme::active().heading.paint("Overview"));
 
-    // 'others' takes its color by identity and not by position, because --top moves it: with
-    // --top 2 it sits third and used to steal the color meant for the third language.
-    // It claims the last color the palette actually declares, so it never shares one with a
-    // language that is on screen next to it.
-    let others_color = config.colors.get(4).or(config.colors.get(3)).copied().unwrap_or(DEFAULT_OTHERS_COLOR);
-    let color_func_vec : Vec<ColorFunc> = sorted_language_vec.iter().enumerate().map(|(i, name)| {
-            let color = if name == "others" {
-                others_color
-            } else {
-                config.colors.get(i).copied().unwrap_or(DEFAULT_LANGUAGE_COLORS[i.min(DEFAULT_LANGUAGE_COLORS.len()-1)])
-            };
-            // The attributes come from the theme while the color stays per language, which is why
-            // a color declared on 'overview-language' has nothing to apply to and is ignored
-            let style = theme::active().overview_language.clone();
-            Box::new(move |s: &str| style.paint_with_color(s, color).to_string()) as ColorFunc
+    // 'others' takes its style by identity and not by position, because --top moves it: with
+    // --top 2 it sits third and used to steal the slot meant for the third language.
+    let slots = theme::active().language_slots();
+    let styles = sorted_language_vec.iter().enumerate()
+            .map(|(i, name)| if name == OTHERS_NAME {slots[slots.len()-1]} else {slots[i.min(slots.len()-2)]}.clone())
+            .collect::<Vec<_>>();
+    let color_func_vec : Vec<ColorFunc> = styles.iter().cloned()
+            .map(|style| Box::new(move |s: &str| style.paint(s).to_string()) as ColorFunc).collect();
+    // A bar cell takes the color of the slot and none of its attributes: bold or underline on a
+    // block character is not something a terminal shows usefully
+    let bar_func_vec : Vec<ColorFunc> = styles.iter().map(|style| {
+            let color = style.color;
+            Box::new(move |s: &str| match color {
+                Some(color) => s.color(color).to_string(),
+                None => s.to_owned()
+            }) as ColorFunc
         }).collect();
 
     let files_percentages = get_files_percentages(languages_metadata_map, sorted_language_vec);
@@ -259,11 +624,11 @@ fn print_visual_overview(sorted_language_vec: &mut Vec<String>, content_info_map
     }).collect::<Vec<_>>();
 
     let files_line = create_overview_line("Files:", &files_percentages, &files_verticals,
-            sorted_language_vec, &color_func_vec, &percent_widths, config);
+            sorted_language_vec, &color_func_vec, &bar_func_vec, &percent_widths, config);
     let lines_line = create_overview_line("Lines:", &lines_percentages, &lines_verticals,
-            sorted_language_vec, &color_func_vec, &percent_widths, config);
+            sorted_language_vec, &color_func_vec, &bar_func_vec, &percent_widths, config);
     let size_line = create_overview_line("Size :", &sizes_percentages, &size_verticals,
-            sorted_language_vec, &color_func_vec, &percent_widths, config);
+            sorted_language_vec, &color_func_vec, &bar_func_vec, &percent_widths, config);
 
     println!("{files_line}\n\n{lines_line}\n\n{size_line}\n");
 }
@@ -335,7 +700,7 @@ fn difference_as_signed_percentage_str_of_usize(older: usize, newer: usize) -> S
         percentage = 0.01;
     }
     
-    sign + prefix_symbol + &round_2(percentage).to_string()
+    sign + prefix_symbol + &with_decimal_separator(round_2(percentage).to_string())
 }
 
 
@@ -413,21 +778,48 @@ fn parse_N_previous_entries(log_content: &str, n: usize) -> Vec<LogEntry> {
     log_entries
 } 
 
-// Indented to where the word 'lines' starts on the row above
-fn get_keywords_as_str(keyword_occurencies: &HashMap<String,usize>, indent: usize) -> String {
-    let mut keyword_info = String::new();
-    if !keyword_occurencies.is_empty() {
-        let mut sorted_keywords = keyword_occurencies.iter().collect::<Vec<_>>();
-        sorted_keywords.sort_unstable_by_key(|(name,_)| name.as_str());
-        let mut keyword_iter = sorted_keywords.into_iter();
-        let first_keyword = keyword_iter.next().unwrap();
-        let theme = theme::active();
-        keyword_info.push_str(&format!("{}{}: {}"," ".repeat(indent),
-                theme.keyword_label.paint(first_keyword.0),theme.keyword_number.paint(&with_seperators(*first_keyword.1))));
-        for (keyword_name,occurancies) in keyword_iter {
-            keyword_info.push_str(&format!(" , {}: {}",theme.keyword_label.paint(keyword_name),theme.keyword_number.paint(&with_seperators(*occurancies))));
-        }
+// Both the plain text and the painted text of every entry, in one place, because the two layouts
+// need different things from it: one measures to wrap, the other measures to align by column
+// The name and the count apart, because the two layouts put different things between them: one
+// writes 'structs: 12' as it comes, the other pads the name so the colons of a column line up
+fn keyword_entries(keyword_occurencies: &HashMap<String,usize>) -> Vec<(String, String)> {
+    let mut sorted_keywords = keyword_occurencies.iter().collect::<Vec<_>>();
+    sorted_keywords.sort_unstable_by_key(|(name,_)| name.as_str());
+
+    sorted_keywords.into_iter().map(|(name, occurancies)| (name.to_owned(), with_seperators(*occurancies))).collect()
+}
+
+// Indented to where the word 'lines' starts on the row above, and wrapped to the width of the block
+// so that a language with many keywords cannot push the section wider than every other row
+fn get_keywords_as_str(theme: &Theme, keyword_occurencies: &HashMap<String,usize>, indent: usize, width: usize) -> String {
+    const SEPARATOR : &str = ", ";
+
+    if keyword_occurencies.is_empty() {
+        return String::new();
     }
+
+    let mut keyword_info = " ".repeat(indent);
+    let mut used = indent;
+    for (position, (name, count)) in keyword_entries(keyword_occurencies).into_iter().enumerate() {
+        let entry_len = name.chars().count() + 2 + count.chars().count();
+        let entry = format!("{}: {}", theme.keyword_label.paint(&name), theme.keyword_number.paint(&count));
+
+        if position > 0 {
+            // The comma stays on the line it ends, the way a sentence breaks
+            if used + SEPARATOR.len() + entry_len > width {
+                keyword_info.push_str(",\n");
+                keyword_info.push_str(&" ".repeat(indent));
+                used = indent;
+            } else {
+                keyword_info.push_str(SEPARATOR);
+                used += SEPARATOR.len();
+            }
+        }
+
+        keyword_info.push_str(&entry);
+        used += entry_len;
+    }
+
     keyword_info
 }
 
@@ -449,19 +841,19 @@ fn create_keyword_sum_map(content_info_map: &HashMap<String,LanguageContentInfo>
 
 // The language rows and the total go through the same formatting, so a value on the border of a
 // unit cannot be reported as MBs on one line and KBs on another
-fn size_text(total_bytes: usize, average_bytes: usize) -> String {
-    fn scaled(value: usize) -> (f64, &'static str) {
-        if value > 1_000_000 {(value as f64 / 1_000_000f64, "MBs")}
-        else if value > 1000 {(value as f64 / 1000f64, "KBs")}
-        else {(value as f64, "Bytes")}
-    }
+fn scaled(value: usize) -> (f64, &'static str) {
+    if value > 1_000_000_000 {(value as f64 / 1_000_000_000f64, "GBs")}
+    else if value > 1_000_000 {(value as f64 / 1_000_000f64, "MBs")}
+    else if value > 1000 {(value as f64 / 1000f64, "KBs")}
+    else {(value as f64, "Bytes")}
+}
 
-    let theme = theme::active();
+fn size_text(theme: &Theme, total_bytes: usize, average_bytes: usize) -> String {
     let (total, total_unit) = scaled(total_bytes);
     let (average, average_unit) = scaled(average_bytes);
     format!("{} {} - {} {}",
-            theme.total_size_number.paint(&format!("{total:.1}")), theme.total_size_label.paint(&format!("{total_unit} total")),
-            theme.avg_size_number.paint(&format!("{average:.1}")), theme.avg_size_label.paint(&format!("{average_unit} average")))
+            theme.total_size_number.paint(&with_decimal_separator(format!("{total:.1}"))), theme.total_size_label.paint(&format!("{total_unit} total")),
+            theme.avg_size_number.paint(&with_decimal_separator(format!("{average:.1}"))), theme.avg_size_label.paint(&format!("{average_unit} average")))
 }
 
 // A language that is present but rounds to 0.00 would read as absent, while the bar still shows a
@@ -470,19 +862,19 @@ fn size_text(total_bytes: usize, average_bytes: usize) -> String {
 // independent of how the formatter rounds a halfway value.
 fn percent_text(value: f64) -> String {
     let text = format!("{value:.2}");
-    if value > 0.0 && text == "0.00" { "<0.01".to_owned() } else { text }
+    with_decimal_separator(if value > 0.0 && text == "0.00" { "<0.01".to_owned() } else { text })
 }
 
 // The '%' is painted with the number: leaving it outside made it keep the default colour while
 // the digits next to it were faded
-fn percent(value: f64) -> ColoredString {
-    theme::active().percent.paint(&(percent_text(value) + "%"))
+fn percent(theme: &Theme, value: f64) -> ColoredString {
+    theme.percent.paint(&(percent_text(value) + "%"))
 }
 
 // The overview's percentages are the datum of that section rather than an annotation on a count,
 // so they are not the ones that were faded
-fn overview_percent(value: f64) -> ColoredString {
-    theme::active().overview_percent.paint(&(percent_text(value) + "%"))
+fn overview_percent(theme: &Theme, value: f64) -> ColoredString {
+    theme.overview_percent.paint(&(percent_text(value) + "%"))
 }
 
 fn percentages(lines: usize, code_lines: usize, comment_lines: usize) -> (f64, f64) {
@@ -558,13 +950,14 @@ fn get_num_of_verticals(percentages: &[f64], width: usize) -> Vec<usize> {
 }
 
 fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize], languages_name: &[String],
-        color_func_vec: &[ColorFunc], percent_widths: &[usize], config: &Configuration) -> String
+        color_func_vec: &[ColorFunc], bar_func_vec: &[ColorFunc], percent_widths: &[usize], config: &Configuration) -> String
 {
+    let theme = theme::active();
     let mut line = String::with_capacity(150);
-    line.push_str(&format!("{}   ", theme::active().overview_label.paint(prefix)));
+    line.push_str(&format!("{}   ", theme.overview_label.paint(prefix)));
     for (i,percentage) in percentages.iter().enumerate() {
         let str_perc = percent_text(*percentage);
-        line.push_str(&format!("{}{} ", " ".repeat(percent_widths[i].saturating_sub(str_perc.len())), overview_percent(*percentage)));
+        line.push_str(&format!("{}{} ", " ".repeat(percent_widths[i].saturating_sub(str_perc.len())), overview_percent(theme, *percentage)));
         line.push_str(&color_func_vec[i](&languages_name[i]));
         if i < percentages.len() - 1{
             line.push_str(" - ")
@@ -572,7 +965,7 @@ fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize], 
     }
 
     if !config.hidden.bar {
-        add_verticals_str(&mut line, verticals, color_func_vec, config.bar_thickness.character());
+        add_verticals_str(&mut line, verticals, bar_func_vec, config.bar_thickness.character());
     }
 
     line
@@ -610,7 +1003,7 @@ fn retain_most_relevant_and_add_others_field_for_rest(sorted_language_names: &mu
     }
 
     sorted_language_names.truncate(to_keep);
-    sorted_language_names.push("others".to_owned());
+    sorted_language_names.push(OTHERS_NAME.to_owned());
     content_info_map.retain(|x,_| sorted_language_names.contains(x));
     languages_metadata_map.retain(|x,_| sorted_language_names.contains(x));
 
@@ -620,8 +1013,8 @@ fn retain_most_relevant_and_add_others_field_for_rest(sorted_language_names: &mu
          final_stats.bytes_size - relevant_size);
 
     //We only care about the total lines of code for the "others" field, this is the only field involved with calculations
-    content_info_map.insert("others".to_string(), LanguageContentInfo::dummy(other_lines));
-    languages_metadata_map.insert("others".to_string(), LanguageMetadata::new(other_files, other_size));
+    content_info_map.insert(OTHERS_NAME.to_string(), LanguageContentInfo::dummy(other_lines));
+    languages_metadata_map.insert(OTHERS_NAME.to_string(), LanguageMetadata::new(other_files, other_size));
 }
 
 

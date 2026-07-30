@@ -3,10 +3,13 @@ use std::sync::{LazyLock, OnceLock};
 use crate::{Color, ColoredString, Colorize, utils};
 
 const LABEL_GOLD: Color = Color::TrueColor { r: 181, g: 169, b: 138 };
+const SIZE_GOLD: Color = Color::TrueColor { r: 125, g: 119, b: 105 };
 // A step below the terminal's foreground, not a step above black. 'bright-black' and the 'dim'
 // attribute both land far darker than this on most schemes.
 const FAINT: Color = Color::TrueColor { r: 170, g: 170, b: 170 };
 const FAINTER: Color = Color::TrueColor { r: 150, g: 150, b: 150 };
+const SIZE_GREY: Color = Color::TrueColor { r: 166, g: 166, b: 166 };
+const KEYWORD_GREY: Color = Color::TrueColor { r: 181, g: 181, b: 181 };
 
 static ACTIVE_THEME: OnceLock<Theme> = OnceLock::new();
 static DEFAULT_THEME: LazyLock<Theme> = LazyLock::new(Theme::default);
@@ -169,6 +172,13 @@ macro_rules! theme_tokens {
                 &[$($name,)+]
             }
 
+            pub fn style_of_token(&self, token: &str) -> Option<&Style> {
+                match token.to_lowercase().replace('_', "-").as_str() {
+                    $($name => Some(&self.$field),)+
+                    _ => None
+                }
+            }
+
             pub fn non_default_tokens(&self) -> Vec<(&'static str, String)> {
                 let defaults = Theme::default();
                 let mut entries = Vec::new();
@@ -194,7 +204,7 @@ theme_tokens! {
 
     files_number      => "files-number",      Style::plain();
     files_label       => "files-label",       Style::of(LABEL_GOLD).italic();
-    lines_number      => "lines-number",      Style::plain();
+    lines_number      => "lines-number",      Style::of(Color::White).bold();
     lines_label       => "lines-label",       Style::of(LABEL_GOLD).italic();
     code_number       => "code-number",       Style::plain();
     code_label        => "code-label",        Style::of(LABEL_GOLD).italic();
@@ -202,18 +212,23 @@ theme_tokens! {
     comments_label    => "comments-label",    Style::of(LABEL_GOLD).italic();
     extra_number      => "extra-number",      Style::plain();
     extra_label       => "extra-label",       Style::of(LABEL_GOLD).italic();
-    total_size_number => "total-size-number", Style::plain();
-    total_size_label  => "total-size-label",  Style::of(LABEL_GOLD).italic();
-    avg_size_number   => "avg-size-number",   Style::plain();
-    avg_size_label    => "avg-size-label",    Style::of(LABEL_GOLD).italic();
-    keyword_number    => "keyword-number",    Style::plain();
-    keyword_label     => "keyword-label",     Style::of(LABEL_GOLD).italic().dim();
+    total_size_number => "total-size-number", Style::of(SIZE_GREY);
+    total_size_label  => "total-size-label",  Style::of(SIZE_GOLD);
+    avg_size_number   => "avg-size-number",   Style::of(SIZE_GREY);
+    avg_size_label    => "avg-size-label",    Style::of(SIZE_GOLD);
+    keyword_number    => "keyword-number",    Style::of(KEYWORD_GREY);
+    keyword_label     => "keyword-label",     Style::plain().dim();
 
     details_language  => "details-language",  Style::plain().bold();
     details_total     => "details-total",     Style::plain().bold();
     overview_label    => "overview-label",    Style::plain();
     overview_percent  => "overview-percent",  Style::plain();
-    overview_language => "overview-language", Style::plain();
+
+    language_1        => "language-1",        Style::of(Color::Cyan);
+    language_2        => "language-2",        Style::of(Color::BrightMagenta);
+    language_3        => "language-3",        Style::of(Color::BrightYellow);
+    language_4        => "language-4",        Style::of(Color::TrueColor { r: 106, g: 217, b: 189 });
+    language_others   => "language-others",   Style::of(Color::TrueColor { r: 215, g: 201, b: 240 });
 
     progress_up       => "progress-up",       Style::of(Color::TrueColor { r: 201, g: 255, b: 189 });
     progress_down     => "progress-down",     Style::of(Color::TrueColor { r: 219, g: 129, b: 129 });
@@ -229,6 +244,16 @@ theme_tokens! {
 }
 
 impl Theme {
+    // The overview paints a language by the slot it occupies. The bar cells take the color alone,
+    // since bold or underline on a block character is not something a terminal shows usefully.
+    pub fn language_slots(&self) -> [&Style; 5] {
+        [&self.language_1, &self.language_2, &self.language_3, &self.language_4, &self.language_others]
+    }
+
+    pub fn language_colors(&self) -> [Color; 5] {
+        self.language_slots().map(|x| x.color.unwrap_or(Color::White))
+    }
+
     pub fn set_token(&mut self, token: &str, value: &str) -> Result<(), ThemeParseError> {
         let style = Style::parse(value).ok_or_else(|| ThemeParseError::InvalidValue(token.to_owned(), value.trim().to_owned()))?;
         match self.style_of_token_mut(token) {
@@ -241,82 +266,44 @@ impl Theme {
     }
 }
 
-pub const FORMAT_MARKER: &str = "# mezura-format: 2";
-pub const LANGUAGES_KEY: &str = "languages";
+// A theme file is a list of 'token = value' lines and nothing else, which is the same shape that
+// '--style' and a config's style block carry. Tokens it does not mention are left to whatever the
+// next layer of the precedence chain provides, so the overrides stay raw pairs instead of a Theme.
+pub type ThemeFile = (Vec<(String, String)>, Vec<ThemeParseError>);
 
-// A palette carries the language slot colors and any style tokens it chooses to override. Tokens it
-// does not mention are left to whatever the next layer of the precedence chain provides, which is
-// why the overrides are kept as raw pairs instead of being baked into a Theme here.
-#[derive(Debug, PartialEq, Eq, Default)]
-pub struct Palette {
-    pub languages: Option<Vec<Color>>,
-    pub styles: Vec<(String, String)>,
+pub fn parse_theme_file(contents: &str) -> ThemeFile {
+    let mut validation_theme = Theme::default();
+    let (mut styles, mut errors) = (Vec::new(), Vec::new());
+
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let Some((token, value)) = line.split_once('=') else {
+            errors.push(ThemeParseError::MalformedLine(line.to_owned()));
+            continue;
+        };
+        let (token, value) = (token.trim().to_lowercase(), value.trim());
+
+        match validation_theme.set_token(&token, value) {
+            Ok(()) => styles.push((token, value.to_owned())),
+            Err(x) => errors.push(x)
+        }
+    }
+
+    // A theme that declares nothing at all is a broken file, not an empty preference. It is only
+    // worth saying when nothing else was wrong, since otherwise the reason is already above.
+    if styles.is_empty() && errors.is_empty() {
+        errors.push(ThemeParseError::EmptyTheme);
+    }
+
+    (styles, errors)
 }
 
-impl Palette {
-    // The '#' of a comment and the '#' of a hex color are the same character, so a legacy file
-    // whose first color is written as '#e80000' must not be mistaken for a comment. The old format
-    // had no comments at all, so the first non-empty line is always its content.
-    pub fn is_in_legacy_format(contents: &str) -> bool {
-        match contents.lines().map(str::trim).find(|line| !line.is_empty()) {
-            Some(line) => !line.starts_with("# mezura-format") && !line.contains('='),
-            None => false
-        }
-    }
-
-    // The pre-v3 format was a single positional line of colors. The conversion is mechanical and
-    // lossless, so installed palettes are migrated in place instead of being rejected.
-    pub fn from_legacy_format(contents: &str) -> Option<Palette> {
-        let colors_line = contents.lines().find(|line| !line.trim().is_empty())?;
-        Some(Palette { languages: Some(utils::parse_colors_to_vec(colors_line)?), styles: Vec::new() })
-    }
-
-    pub fn parse(contents: &str) -> Result<Palette, ThemeParseError> {
-        let mut palette = Palette::default();
-        let mut validation_theme = Theme::default();
-
-        for line in contents.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-
-            let Some((key, value)) = line.split_once('=') else {
-                return Err(ThemeParseError::MalformedLine(line.to_owned()));
-            };
-            let (key, value) = (key.trim().to_lowercase(), value.trim());
-
-            if key == LANGUAGES_KEY {
-                palette.languages = Some(utils::parse_colors_to_vec(value).ok_or_else(||
-                        ThemeParseError::InvalidValue(LANGUAGES_KEY.to_owned(), value.to_owned()))?);
-            } else {
-                validation_theme.set_token(&key, value)?;
-                palette.styles.push((key, value.to_owned()));
-            }
-        }
-
-        // A palette that declares nothing at all is a broken file, not an empty preference. Without
-        // this it would load successfully and silently leave everything at the defaults.
-        if palette.languages.is_none() && palette.styles.is_empty() {
-            return Err(ThemeParseError::EmptyPalette);
-        }
-
-        Ok(palette)
-    }
-
-    pub fn to_file_contents(&self) -> String {
-        let mut contents = String::from(FORMAT_MARKER);
-        contents.push('\n');
-        if let Some(languages) = &self.languages {
-            let rendered = languages.iter().map(utils::color_to_config_string).collect::<Vec<_>>();
-            contents.push_str(&format!("{LANGUAGES_KEY} = {}\n", rendered.join(" ")));
-        }
-        for (token, value) in &self.styles {
-            contents.push_str(&format!("{token} = {value}\n"));
-        }
-
-        contents
-    }
+pub fn theme_file_contents(styles: &[(String, String)]) -> String {
+    styles.iter().map(|(token, value)| format!("{token} = {value}\n")).collect()
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -324,7 +311,7 @@ pub enum ThemeParseError {
     UnknownToken(String),
     InvalidValue(String, String),
     MalformedLine(String),
-    EmptyPalette,
+    EmptyTheme,
 }
 
 impl ThemeParseError {
@@ -334,7 +321,7 @@ impl ThemeParseError {
             Self::InvalidValue(token, value) =>
                 format!("'{value}' is not a valid style for '{token}'. Expected a color (hex or a terminal color name) and any of: bold, italic, underline, dim, reverse."),
             Self::MalformedLine(line) => format!("'{line}' is not a 'token = value' line."),
-            Self::EmptyPalette => "the palette declares no colors and no styles.".to_owned()
+            Self::EmptyTheme => "the theme declares no styles at all.".to_owned()
         }
     }
 }
@@ -358,12 +345,44 @@ pub fn parse_overrides(value: &str) -> Result<Vec<(String, String)>, ThemeParseE
     if overrides.is_empty() { Err(ThemeParseError::MalformedLine(value.trim().to_owned())) } else { Ok(overrides) }
 }
 
-// The precedence chain of the whole styling system, in one place: what the program hardcodes, then
-// what the palette declares, then what the user's own configuration says
-pub fn resolve(palette_styles: &[(String, String)], config_styles: &[(String, String)]) -> Theme {
+// The same list as above, read the way a file is read: a mistake on one line is reported and the
+// line is dropped, while every other line still applies. '--style' keeps stopping on the first one,
+// because there the mistake was just typed and can be retyped.
+pub fn parse_overrides_leniently(value: &str) -> (Vec<(String, String)>, Vec<ThemeParseError>) {
+    let mut validation_theme = Theme::default();
+    let (mut overrides, mut errors) = (Vec::new(), Vec::new());
+
+    for entry in value.split([',', '\n']).map(str::trim).filter(|x| !x.is_empty()) {
+        let Some((token, style)) = entry.split_once('=') else {
+            errors.push(ThemeParseError::MalformedLine(entry.to_owned()));
+            continue;
+        };
+        let (token, style) = (token.trim().to_lowercase(), style.trim().to_owned());
+        match validation_theme.set_token(&token, &style) {
+            Ok(()) => overrides.push((token, style)),
+            Err(x) => errors.push(x)
+        }
+    }
+
+    (overrides, errors)
+}
+
+// The precedence chain of the whole styling system, in one place, one ladder of increasing
+// specificity: what the program hardcodes, then the named theme, then this project's config, then
+// this run's '--style'. 'language-others' is the one inherited token: a theme that names the four
+// language slots and not the fold almost always meant the fourth, and the two are never on screen
+// together, since folding only happens past five languages and then only three are shown.
+pub fn resolve(theme_styles: &[(String, String)], config_styles: &[(String, String)], cmd_styles: &[(String, String)]) -> Theme {
     let mut theme = Theme::default();
-    for (token, value) in palette_styles.iter().chain(config_styles.iter()) {
+    let (mut declared_fourth, mut declared_others) = (false, false);
+    for (token, value) in theme_styles.iter().chain(config_styles.iter()).chain(cmd_styles.iter()) {
+        declared_fourth |= token == "language-4";
+        declared_others |= token == "language-others";
         let _ = theme.set_token(token, value);
+    }
+
+    if declared_fourth && !declared_others {
+        theme.language_others = theme.language_4.clone();
     }
 
     theme
@@ -451,59 +470,70 @@ mod tests {
     }
 
     #[test]
-    fn parses_a_palette_file() {
-        let palette = Palette::parse("# mezura-format: 2\nlanguages = cyan bright-magenta 6ad9bd\n\ncode-label = b5a98a italic\ncode-number = dim\n").unwrap();
-        assert_eq!(Some(vec![Color::Cyan, Color::BrightMagenta, Color::TrueColor{r:106,g:217,b:189}]), palette.languages);
-        assert_eq!(vec![("code-label".to_owned(), "b5a98a italic".to_owned()), ("code-number".to_owned(), "dim".to_owned())], palette.styles);
+    fn parses_a_theme_file() {
+        let (styles, errors) = parse_theme_file("# a comment\nlanguage-1 = cyan\n\ncode-label = b5a98a italic\ncode-number = dim\n");
+        assert!(errors.is_empty());
+        assert_eq!(vec![("language-1".to_owned(), "cyan".to_owned()), ("code-label".to_owned(), "b5a98a italic".to_owned()),
+                ("code-number".to_owned(), "dim".to_owned())], styles);
     }
 
     #[test]
-    fn rejects_a_malformed_palette_file() {
-        assert_eq!(Err(ThemeParseError::MalformedLine("cyan magenta".to_owned())), Palette::parse("cyan magenta"));
-        assert_eq!(Err(ThemeParseError::UnknownToken("labell".to_owned())), Palette::parse("labell = cyan"));
-        assert_eq!(Err(ThemeParseError::InvalidValue("code-label".to_owned(), "nope".to_owned())), Palette::parse("code-label = nope"));
-        assert_eq!(Err(ThemeParseError::InvalidValue("languages".to_owned(), "nope".to_owned())), Palette::parse("languages = nope"));
+    fn reports_every_malformed_line_of_a_theme_file() {
+        assert_eq!(vec![ThemeParseError::MalformedLine("cyan magenta".to_owned())], parse_theme_file("cyan magenta").1);
+        assert_eq!(vec![ThemeParseError::UnknownToken("labell".to_owned())], parse_theme_file("labell = cyan").1);
+        assert_eq!(vec![ThemeParseError::InvalidValue("code-label".to_owned(), "nope".to_owned())], parse_theme_file("code-label = nope").1);
+        assert_eq!(vec![ThemeParseError::InvalidValue("language-1".to_owned(), "nope".to_owned())], parse_theme_file("language-1 = nope").1);
+    }
+
+    // A mistyped token costs nothing that was measured, so it must not take the rest of the file
+    // down with it the way it used to
+    #[test]
+    fn a_broken_line_does_not_discard_the_lines_around_it() {
+        let (styles, errors) = parse_theme_file("language-1 = cyan\nlabell = cyan\ncode-label = nope\nheading = white bold\n");
+        assert_eq!(vec![("language-1".to_owned(), "cyan".to_owned()), ("heading".to_owned(), "white bold".to_owned())], styles);
+        assert_eq!(vec![ThemeParseError::UnknownToken("labell".to_owned()),
+                ThemeParseError::InvalidValue("code-label".to_owned(), "nope".to_owned())], errors);
     }
 
     #[test]
-    fn detects_and_converts_the_legacy_format() {
-        let legacy = "cyan bright-magenta bright-yellow 6ad9bd d7c9f0";
-        assert!(Palette::is_in_legacy_format(legacy));
-        assert!(!Palette::is_in_legacy_format("# mezura-format: 2\nlanguages = cyan"));
-        assert!(!Palette::is_in_legacy_format("languages = cyan"));
-        assert!(!Palette::is_in_legacy_format(""));
-
-        // A legacy palette whose first color carries the optional '#' must not be mistaken for a
-        // comment, otherwise it silently loads as an empty palette instead of being converted
-        let hex_prefixed = "#e80000 #00f2b6 #99ff00 #ffe5a3";
-        assert!(Palette::is_in_legacy_format(hex_prefixed));
-        assert_eq!(4, Palette::from_legacy_format(hex_prefixed).unwrap().languages.unwrap().len());
-        assert_eq!(Err(ThemeParseError::EmptyPalette), Palette::parse(hex_prefixed));
-        assert_eq!(Err(ThemeParseError::EmptyPalette), Palette::parse("# just a comment\n\n"));
-
-        let converted = Palette::from_legacy_format(legacy).unwrap();
-        assert_eq!(5, converted.languages.as_ref().unwrap().len());
-        assert!(converted.styles.is_empty());
-
-        let rewritten = converted.to_file_contents();
-        assert!(rewritten.starts_with(FORMAT_MARKER));
-        assert_eq!(converted, Palette::parse(&rewritten).unwrap());
+    fn a_theme_that_declares_nothing_says_so() {
+        assert_eq!(vec![ThemeParseError::EmptyTheme], parse_theme_file("# just a comment\n\n").1);
+        assert_eq!(vec![ThemeParseError::EmptyTheme], parse_theme_file("").1);
     }
 
     #[test]
-    fn a_palette_file_round_trips() {
-        let original = Palette::parse("languages = cyan d7c9f0\nheading = white bold\nkeyword-label = bright-yellow italic\n").unwrap();
-        assert_eq!(original, Palette::parse(&original.to_file_contents()).unwrap());
+    fn a_theme_file_round_trips() {
+        let original = parse_theme_file("language-1 = cyan\nheading = white bold\nkeyword-label = bright-yellow italic\n").0;
+        assert_eq!(original, parse_theme_file(&theme_file_contents(&original)).0);
     }
 
+    // The fold and the fourth language never share a screen, so a theme that names the four slots
+    // and not the fold almost always meant the fourth, and falling back to the built-in lilac
+    // would wreck it. With neither declared, the built-in stays.
     #[test]
-    fn the_config_layer_wins_over_the_palette_layer() {
-        let palette = [("code-label".to_owned(), "cyan".to_owned()), ("code-number".to_owned(), "dim".to_owned())];
-        let config = [("code-label".to_owned(), "bright-red bold".to_owned())];
+    fn the_others_slot_follows_the_fourth_language_unless_it_is_declared() {
+        let four = [("language-4".to_owned(), "cyan".to_owned())];
+        assert_eq!(Style::of(Color::Cyan), resolve(&four, &[], &[]).language_others);
 
-        let theme = resolve(&palette, &config);
+        let both = [("language-4".to_owned(), "cyan".to_owned()), ("language-others".to_owned(), "red".to_owned())];
+        assert_eq!(Style::of(Color::Red), resolve(&both, &[], &[]).language_others);
+
+        assert_eq!(Theme::default().language_others, resolve(&[], &[], &[]).language_others);
+    }
+
+    // One ladder of increasing specificity: each layer wins over the one before it, and a token
+    // that a later layer does not name keeps whatever the earlier one gave it
+    #[test]
+    fn every_style_layer_wins_over_the_one_before_it() {
+        let theme_file = [("code-label".to_owned(), "cyan".to_owned()), ("code-number".to_owned(), "dim".to_owned()),
+                ("heading".to_owned(), "green".to_owned())];
+        let config = [("code-label".to_owned(), "bright-red bold".to_owned()), ("heading".to_owned(), "blue".to_owned())];
+        let cmd = [("heading".to_owned(), "magenta underline".to_owned())];
+
+        let theme = resolve(&theme_file, &config, &cmd);
+        assert_eq!(Style::of(Color::Magenta).underline(), theme.heading);
         assert_eq!(Style::of(Color::BrightRed).bold(), theme.code_label);
         assert_eq!(Style::plain().dim(), theme.code_number);
-        assert_eq!(Theme::default().heading, theme.heading);
+        assert_eq!(Theme::default().summary, theme.summary);
     }
 }

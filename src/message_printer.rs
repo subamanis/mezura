@@ -2,7 +2,7 @@ use std::{collections::HashMap, fs};
 
 use colored::Colorize;
 
-use crate::{CHANGELOG_BYTES, Formatted, Language, PERSISTENT_APP_PATHS, config_manager::*, io_handler};
+use crate::{CHANGELOG_BYTES, Formatted, Language, PERSISTENT_APP_PATHS, config_manager::*, io_handler, theme};
 
 // These constants need to be maintained along with the readme's commands
 pub const DIRS_HELP  :  &str =
@@ -141,61 +141,57 @@ pub const HIDE_HELP  :  &str =
 "--hide
 
     One or more names separated by commas or spaces, for example:
-    --hide status,timing   or   --hide status timing
+    --hide parsing-info,timing   or   --hide parsing-info timing
 
     Leaves the named parts of the output unprinted. What you can hide:
 
-      version     the version line at the top
-      status      the 'Analyzing directories', 'Parsing files' and 'N files found' lines
-      details     the per language rows and the total underneath them
-      keywords    the keyword counts, keeping the rest of the details rows
-      overview    the whole percentages section
-      bar         only the [-|||-] bar of the overview, keeping the percentages and the colors
-      progress    the comparison with previous runs (the same as '--compare 0')
-      timing      the execution time line at the bottom
+      version         the version line at the top
+      directory-info  the 'Analyzing directories' line and the 'N files found' line under it
+      parsing-info    the 'Parsing files' line and the 'ok' under it
+      keywords        the keyword counts, keeping the rest of the details rows
+      overview        the whole percentages section
+      bar             only the [-|||-] bar of the overview, keeping the percentages and the colors
+      progress        the comparison with previous runs (the same as '--compare 0')
+      timing          the execution time line at the bottom
 
     The list mixes whole sections with parts of them on purpose: you are pointing at what you
     see, not at how the program is organised.
 
-    Errors and warnings are never hidden. Hiding the status still reports files that failed to
-    be parsed, since otherwise the numbers would silently be wrong.
+    Errors and warnings are never hidden. Hiding the parsing info still reports files that failed
+    to be parsed, since otherwise the numbers would silently be wrong.
 
     Replaces the '--no-visual' and '--no-keywords' commands of previous versions.
 
 ";
-pub const COLORS_HELP  :  &str =
-"--colors
+pub const THEME_HELP  :  &str =
+"--theme
 
-    1 to 5 colors separated by spaces. A color is either a hex value, with or without a leading
-    '#' (e.g. ff8800 #00ff00), or one of the 16 standard terminal color names (black, red, green,
-    yellow, blue, magenta, cyan, white and their bright- variants, e.g. bright-magenta).
+    One argument, the name of a theme (case-insensitive).
 
-    Overrides the colors used in the \"overview\" section of the results: the first three colors
-    are used for the three most relevant languages, the fourth for a fourth language, and the
-    optional fifth for the 'others' entry (if omitted, the fourth is used for 'others' too).
-    If fewer colors are provided, the remaining ones keep their default color.
+    Applies a named theme. Themes are .txt files in the 'data/themes' dir, in the persistent
+    data path of the application, where the file name is the theme name. Every line is a
+    'token = value' pair, the same tokens and values that '--style' takes (see '--help style').
+    You can add your own there, and '--show-themes' lists the ones you have.
 
-    Named colors follow the terminal's color scheme; hex colors are rendered with 24-bit ANSI
-    codes, so the terminal must support truecolor.
-    If you are using Windows Powershell, either omit the '#' or surround the color with
-    quotation marks (\"#ff8800\"), since an unquoted '#' starts a comment.
+    A theme carries only how the output looks. What is measured and what is shown stays in a
+    configuration file, so a theme can be handed to someone else without carrying your paths
+    or your settings with it.
+
+    A style that does not parse is reported and skipped, and the rest of the theme still applies.
+    A name that matches no file is an error, since that one is a mistake in the command.
 
 ";
-pub const COLOR_PALETTE_HELP  :  &str =
-"--color-palette
+pub const SAVE_THEME_HELP  :  &str =
+"--save-theme
 
-    One argument, the name of a palette (case-insensitive).
+    One argument, the name of the theme file to write (case-insensitive, no extension).
 
-    Applies a named color palette. Palettes are .txt files in the 'data/palettes' dir, in the
-    persistent data path of the application, where the file name is the palette name. Each line
-    is a 'token = value' pair: 'languages' takes 1 to 5 colors in the same format as the
-    '--colors' command, and any style token (see '--help style') takes a style.
-    You can add your own palettes there.
-    Use the '--show-palettes' command to list the available palettes.
+    Writes everything about the way this run looks into a theme file: whatever theme was loaded,
+    plus the style block of the configuration, plus any '--style' given on the command line, all
+    flattened into values. The file stands on its own and can be shared as it is.
 
-    If the '--colors' command is also provided, it takes precedence over the palette's
-    'languages' line, while the palette's style tokens still apply.
-    Palettes written for versions before v3.0.0 are converted automatically on the first run.
+    Combined with '--save', the configuration that is written points at this theme by name and
+    carries no styles of its own.
 
 ";
 pub const SORT_HELP  :  &str =
@@ -229,18 +225,78 @@ pub const TOP_HELP  :  &str =
 pub const BAR_THICKNESS_HELP  :  &str =
 "--bar-thickness
 
-    One argument: 'slim', 'medium', 'fat' or 'low'. Default: slim
+    One argument: 'slim', 'medium', 'fat' or 'low'. Default: medium
 
     Chooses the character that the percentage bar of the \"overview\" section is drawn with.
 
-      slim     |   the default, and the only one made of ASCII, so it is the one that is
-                   guaranteed to render on every terminal
-      medium   ┃   thicker, but still leaves gaps between the strokes
+      slim     |   the only one made of ASCII, so it is the one that is guaranteed to
+                   render on every terminal
+      medium   ┃   the default, thicker, but still leaves gaps between the strokes
       fat      █   fills the cell, so the boundary between two language colors is crisp
       low      ▄   fills only the bottom of the cell, a thin band under the text
 
     All but 'slim' need a terminal and a font that can render box drawing characters.
     If the bar comes out as question marks or empty boxes, use 'slim'.
+
+";
+pub const LAYOUT_HELP  :  &str =
+"--layout
+
+    One argument: 'table', 'boxed' or 'list'. Default: table
+
+    Chooses the shape of the \"details\" section.
+
+      table     one aligned row per language: Language, Files, Lines, Code, Comments, Extra
+                and Size, with a percentage next to each of the first four. No borders, only
+                whitespace alignment, so it survives being pasted into a README or a ticket.
+      boxed     the same figures inside a drawn frame. Each number shares a cell with its
+                percentage there, since the borders already group the two, which makes it
+                narrower than 'table'. Needs a terminal that can render box drawing
+                characters.
+      list      one block of three rows per language: the file count and the size above the
+                name, the line breakdown beside it, the keywords below. Wider, and it cannot
+                be read down a column, but it reads well for a handful of languages.
+
+    The percentage next to 'Files' and to 'Lines' is that language's share of the total, the
+    one next to 'Code' and to 'Comments' is its share of that language's own lines, which is
+    what the same two numbers mean in the 'list' layout.
+
+    In the two tables the keywords cannot be a column without destroying the alignment, so they
+    are printed as their own block underneath, one line per language. '--hide keywords' still
+    suppresses them.
+
+";
+pub const NUMBER_SEPARATOR_HELP  :  &str =
+"--number-separator
+
+    One argument: 'comma', 'underscore', 'dot' or 'none'. The character itself is also
+    accepted, so '--number-separator _' is the same as '--number-separator underscore'.
+    Default: comma
+
+    Chooses the character that groups the digits of every printed number.
+
+      comma        1,559,486
+      underscore   1_559_486
+      dot          1.559.486
+      none         1559486
+
+    The keyword row lists several figures next to each other, separated by commas, so
+    'comma' is the one choice where a grouped number and the end of one are the same
+    character.
+
+";
+pub const DECIMAL_SEPARATOR_HELP  :  &str =
+"--decimal-separator
+
+    One argument: 'dot' or 'comma'. The character itself is also accepted, so
+    '--decimal-separator ,' is the same as '--decimal-separator comma'. Default: dot
+
+    Chooses the character that separates the decimals of every printed number: the sizes,
+    the percentages and the execution time.
+
+    It is free to be the same character as the one '--number-separator' groups the digits
+    with, since both conventions are in use somewhere. Nothing that is written to a log
+    file is affected, so a log stays readable by any version.
 
 ";
 pub const STYLE_HELP  :  &str =
@@ -283,8 +339,12 @@ pub const STYLE_HELP  :  &str =
       details-total      the word 'Total'
       overview-label     the 'Files:', 'Lines:' and 'Size :' row labels of the overview
       overview-percent   the percentages of the overview
-      overview-language  the language names in the overview. A color declared here is ignored, since
-                         the overview colors each language from the palette, but the attributes apply
+      language-1         the first language of the overview, its name and the color of its bar cells
+      language-2         the second
+      language-3         the third
+      language-4         the fourth, shown only when nothing was folded into 'others'
+      language-others    the folded 'others' entry. A theme that names 'language-4' and not this one
+                         gets the same style here, since the two never appear together
       progress-up        an increase in the progress section
       progress-down      a decrease
       progress-same      no change
@@ -296,35 +356,42 @@ pub const STYLE_HELP  :  &str =
       error              errors
       footer             the execution time line
 
-    Styles can also be declared inside a color palette or in a config file. They are applied in
-    that order, so a palette can ship a complete look while your own config keeps your
-    preferences across palette changes, and '--style' wins over both.
+    Only the color of a 'language-' token reaches the cells of the overview bar; bold, italic and
+    the rest apply to the language name alone.
+
+    The same tokens can be declared in a theme file and in the style block of a config. They are
+    applied as one ladder of increasing specificity: the built-in defaults, then the theme, then
+    this project's config, then '--style' for this run. So a theme can ship a complete look, your
+    own config can keep a few tweaks that survive switching themes, and '--style' wins over both.
 
 ";
-pub const TUNE_PALETTES_HELP  :  &str =
-"--tune-palettes
+pub const THEME_EDITOR_HELP  :  &str =
+"--theme-editor
 
     No arguments.
 
-    Overrides normal program execution: generates an interactive HTML page with all the color
-    palettes found in the persistent data path of the application, and opens it in the default
-    browser. There, every color of every palette can be adjusted, with live contrast metrics
-    and a mock overview, and the result is turned into a ready '--colors' command that you can
-    use directly or save in a palette file.
+    Overrides normal program execution: generates an interactive HTML page with the language
+    colors of every theme found in the persistent data path of the application, and opens it
+    in the default browser. There, every color can be adjusted, with live contrast metrics and
+    a mock overview drawn with the same bar character the program prints, and the result is
+    turned into the five 'language-' lines of a theme file.
+
+    Replaces the '--tune-palettes' command of previous versions.
 
 ";
-pub const SHOW_PALETTES_HELP  :  &str =
-"--show-palettes
+pub const SHOW_THEMES_HELP  :  &str =
+"--show-themes
 
-    No arguments, or one of 'slim', 'medium', 'fat' and 'low'. Default: slim
+    No arguments, or one of 'slim', 'medium', 'fat' and 'low'. Default: medium
 
-    Overrides normal program execution and just prints a sorted list with the names of
-    all the color palettes that were detected in the persistent data path
-    of the application, where you can add more, each one previewed on a mock overview.
+    Overrides normal program execution and just prints a sorted list with the names of all
+    the themes that were detected in the persistent data path of the application, where you
+    can add more, each one previewed on a sample of the real details rows and a mock overview.
 
-    The optional argument draws the preview bars with the character that the
-    '--bar-thickness' command would use, so that a palette can be judged the way it will
-    actually be printed.
+    The preview follows '--layout', so it shows the shape a run would actually print.
+
+    The optional argument draws the preview bar with the character that the '--bar-thickness'
+    command would use, so that a theme can be judged the way it will be printed.
 
 ";
 pub const LOG_HELP  :  &str =
@@ -405,6 +472,82 @@ pub const SHOW_CONFIGS_HELP  :  &str =
 ";
 
 
+pub const VERSION_HELP  :  &str =
+"--version
+
+    No arguments.
+
+    Overrides normal program execution and prints the version of this binary, with the date it
+    was released on. An unreleased build says so instead of naming a date.
+
+    Not to be confused with '--hide version', which only leaves the version line off the top of
+    a normal run.
+
+";
+pub const HELP_HELP  :  &str =
+"--help
+
+    No arguments, or any number of other command names, written with their dashes:
+    '--help --style --layout' explains those two and nothing else.
+
+    Overrides normal program execution and prints this message.
+
+";
+
+// The one list of commands. The full help prints it in this order, the lookup for a single command
+// searches it, and the close-match suggestions for an unrecognised name take their candidates from
+// it, so a new command cannot appear in one of the three and be forgotten in the others.
+pub const COMMAND_HELP : [(&str, &str); 30] = [
+    (HELP, HELP_HELP),
+    (VERSION, VERSION_HELP),
+    (CHANGELOG, CHANGELOG_HELP),
+    (SHOW_LANGUAGES, SHOW_LANGUAGES_HELP),
+    (SHOW_CONFIGS, SHOW_CONFIGS_HELP),
+    (SHOW_THEMES, SHOW_THEMES_HELP),
+    (THEME_EDITOR, THEME_EDITOR_HELP),
+    (DIRS, DIRS_HELP),
+    (EXCLUDE, EXCLUDE_HELP),
+    (LANGUAGES, LANGUAGES_HELP),
+    (EXCLUDE_LANGUAGES, EXCLUDE_LANGUAGES_HELP),
+    (THREADS, THREADS_HELP),
+    (BRACES_AS_CODE, BRACES_AS_CODE_HELP),
+    (SEARCH_IN_DOTTED, SEARCH_IN_DOTTED_HELP),
+    (SHOW_FAULTY_FILES, SHOW_FAULTY_FILES_HELP),
+    (NO_GITIGNORE, NO_GITIGNORE_HELP),
+    (HIDE, HIDE_HELP),
+    (THEME, THEME_HELP),
+    (SORT, SORT_HELP),
+    (TOP, TOP_HELP),
+    (BAR_THICKNESS, BAR_THICKNESS_HELP),
+    (LAYOUT, LAYOUT_HELP),
+    (NUMBER_SEPARATOR, NUMBER_SEPARATOR_HELP),
+    (DECIMAL_SEPARATOR, DECIMAL_SEPARATOR_HELP),
+    (STYLE, STYLE_HELP),
+    (LOG, LOG_HELP),
+    (COMPRARE_LEVEL, COMPRARE_LEVEL_HELP),
+    (SAVE, SAVE_HELP),
+    (LOAD, LOAD_HELP),
+    (SAVE_THEME, SAVE_THEME_HELP),
+];
+
+// The date lives in the first line of the Changelog, 'v3.0.0 - unreleased' or 'v2.0.1 - 27/7/2026',
+// and nowhere else. A separate constant would be a third place to remember on every release, next to
+// VERSION_ID and Cargo.toml, and the one most likely to be forgotten. The test in this module is
+// what keeps that first line and VERSION_ID from drifting apart.
+pub fn print_version() {
+    let changelog = String::from_utf8_lossy(CHANGELOG_BYTES);
+    let released = changelog.lines().next().unwrap_or_default().split_once(" - ")
+            .map_or_else(|| "unreleased".to_owned(), |(_, date)| date.trim().to_owned());
+
+    println!("
+{} ({released})
+", theme::active().version.paint(VERSION_ID));
+}
+
+pub fn command_names() -> Vec<&'static str> {
+    COMMAND_HELP.iter().map(|(name, _)| *name).collect()
+}
+
 pub fn print_whole_help_message() {
 
     let mut msg ="
@@ -421,31 +564,9 @@ pub fn print_whole_help_message() {
     msg += get_data_dir_str().as_str();
     msg += "Format of arguments: <path_here> --optional_command1 --optional_commandN\n\nCOMMANDS:\n\n";
 
-    msg += CHANGELOG_HELP;
-    msg += SHOW_LANGUAGES_HELP;
-    msg += SHOW_CONFIGS_HELP;
-    msg += SHOW_PALETTES_HELP;
-    msg += TUNE_PALETTES_HELP;
-    msg += DIRS_HELP;
-    msg += EXCLUDE_HELP;
-    msg += LANGUAGES_HELP;
-    msg += EXCLUDE_LANGUAGES_HELP;
-    msg += THREADS_HELP;
-    msg += BRACES_AS_CODE_HELP;
-    msg += SEARCH_IN_DOTTED_HELP;
-    msg += SHOW_FAULTY_FILES_HELP;
-    msg += NO_GITIGNORE_HELP;
-    msg += HIDE_HELP;
-    msg += COLORS_HELP;
-    msg += COLOR_PALETTE_HELP;
-    msg += SORT_HELP;
-    msg += TOP_HELP;
-    msg += BAR_THICKNESS_HELP;
-    msg += STYLE_HELP;
-    msg += LOG_HELP;
-    msg += COMPRARE_LEVEL_HELP;
-    msg += SAVE_HELP;
-    msg += LOAD_HELP;
+    for (_, help) in COMMAND_HELP {
+        msg += help;
+    }
 
     println!("{msg}");
 }
@@ -457,25 +578,38 @@ pub fn print_help_message_for_given_args(args_line: &str) {
         return;
     }
 
-    let mut msg = get_data_dir_str();
-
+    // The first '--help' is the command being run and not something it was asked about, so it is
+    // skipped once. A second one is a real question, and a third says nothing the second did not,
+    // so a name is answered once however many times it was typed.
+    let mut command_itself_skipped = false;
+    let mut asked : Vec<&str> = Vec::new();
     for option in options {
-        if option.trim().is_empty() {continue;}
-        let sliced = option.split_whitespace().collect::<Vec<_>>();
-
-        if let Some(x) = get_help_msg_of_command(sliced[0]) {
-            msg += x;
-        } else if sliced[0].trim() != HELP {
-            // The same error the program gives without '--help', so that an unknown command
-            // does not read as an ordinary line of help text
-            msg += &format!("{}\n\n", ArgParsingError::UnrecognisedCommand(sliced[0].to_owned()).formatted());
+        let Some(name) = option.split_whitespace().next() else { continue };
+        if name == HELP && !command_itself_skipped {
+            command_itself_skipped = true;
+            continue;
+        }
+        if !asked.contains(&name) {
+            asked.push(name);
         }
     }
 
-    if msg.is_empty() {
+    let mut entries = String::new();
+    for name in asked {
+        match get_help_msg_of_command(name) {
+            Some(x) => entries += x,
+            // The same error the program gives without '--help', so that an unknown command does
+            // not read as an ordinary line of help text
+            None => entries += &format!("{}\n\n", ArgParsingError::UnrecognisedCommand(name.to_owned()).formatted())
+        }
+    }
+
+    // The data dir line is always there, so asking whether the message is empty never answered
+    // anything: nothing recognised has to be counted on its own
+    if entries.is_empty() {
         print_whole_help_message();
     } else {
-        println!("{msg}");
+        println!("{}{entries}", get_data_dir_str());
     }
 }
 
@@ -495,46 +629,67 @@ pub fn print_changelog(full: bool) {
     }
 }
 
-pub fn print_existing_palettes(bar_thickness: BarThickness) {
-    // The percentages of a mock "overview" line, used to preview every palette
-    const MOCK_PERCENTAGES : [(&str, f64, usize); 4] =
-            [("first", 40.0, 20), ("second", 30.0, 15), ("third", 20.0, 10), ("fourth", 10.0, 5)];
+// A theme is 41 tokens and the listing used to show five of them, the language slots, on a mock
+// overview line. So the one place whose job is to show what a theme looks like before you pick it
+// said nothing about its headings, labels, numbers, percentages, arrow, separator or size figures.
+// It now prints a sample of the real details rows too, which is the densest line the program has.
+pub fn print_existing_themes(bar_thickness: BarThickness, layout: Layout) {
+    // Five entries, so that every language slot including the fold gets to show itself. The
+    // verticals add up to the width of a real bar.
+    const MOCK_PERCENTAGES : [(&str, f64, usize); 5] =
+            [("first", 40.0, 20), ("second", 26.0, 13), ("third", 16.0, 8), ("fourth", 10.0, 5), ("others", 8.0, 4)];
+    const INDENT : &str = "     ";
+    // Puts the bar under the first percentage, past the width of the "Lines:" label and its gap
+    const BAR_INDENT : usize = 9;
 
-    let mut palette_names = Vec::with_capacity(10);
-    let Ok(palettes_dir) = fs::read_dir(&PERSISTENT_APP_PATHS.palettes_dir) else {
-        println!("{}","Could not read the palettes dir".yellow());
+    let mut theme_names = Vec::with_capacity(10);
+    let Ok(themes_dir) = fs::read_dir(&PERSISTENT_APP_PATHS.themes_dir) else {
+        println!("{}","Could not read the themes dir".yellow());
         return;
     };
-    for path in palettes_dir.flatten() {
+    for path in themes_dir.flatten() {
         if let Ok(f) = path.file_type() && f.is_file()
             && let Some(stem) = path.path().file_stem().and_then(|x| x.to_str()) {
-            palette_names.push(stem.to_owned());
+            theme_names.push(stem.to_owned());
         }
     }
-    palette_names.sort_by_key(|x| x.to_lowercase());
+    theme_names.sort_by_key(|x| x.to_lowercase());
 
     let mut msg = get_data_dir_str();
-    msg.push_str("Found these color palettes:\n");
-    for name in palette_names.iter() {
-        msg.push_str(&format!("\n  {}\n     ", name.bold()));
+    msg.push_str("Found these themes:\n");
+    for name in theme_names.iter() {
+        msg.push_str(&format!("\n  {}\n\n", name.bold()));
 
-        let Some(colors) = io_handler::load_palette(name, &PERSISTENT_APP_PATHS.palettes_dir).and_then(|x| x.languages) else {
-            msg.push_str(&format!("{}\n","(the colors of this palette could not be parsed)".yellow()));
+        let Some((styles, _)) = io_handler::load_theme(name, &PERSISTENT_APP_PATHS.themes_dir) else {
+            msg.push_str(&format!("{INDENT}{}\n","(this theme could not be read)".yellow()));
             continue;
         };
+        let theme = theme::resolve(&styles, &[], &[]);
 
+        msg.push_str(&format!("{INDENT}{}.\n", theme.heading.paint("Details")));
+        for row in crate::result_printer::theme_sample_rows(&theme, layout) {
+            msg.push_str(&format!("{INDENT}{row}\n"));
+        }
+
+        msg.push_str(&format!("\n{INDENT}{}.\n", theme.heading.paint("Overview")));
+        msg.push_str(&format!("{INDENT}{}   ", theme.overview_label.paint("Lines:")));
+        let slots = theme.language_slots();
         for (i, (lang, percentage, _)) in MOCK_PERCENTAGES.iter().enumerate() {
-            let color = colors[i.min(colors.len()-1)];
-            msg.push_str(&format!("{:>5.2}% {}", percentage, lang.color(color)));
+            msg.push_str(&format!("{} {}", theme.overview_percent.paint(&format!("{percentage:>5.2}%")), slots[i].paint(lang)));
             if i < MOCK_PERCENTAGES.len()-1 {msg.push_str(" - ")}
         }
 
-        msg.push_str("    [-");
+        // On its own line, under the percentages: five language slots plus a fifty cell bar do not
+        // fit next to each other, and this listing has no reason to be the widest thing printed
+        msg.push_str(&format!("\n{INDENT}{}{}", " ".repeat(BAR_INDENT), theme.bar_frame.paint("[-")));
         for (i, (_, _, verticals)) in MOCK_PERCENTAGES.iter().enumerate() {
-            let color = colors[i.min(colors.len()-1)];
-            msg.push_str(&bar_thickness.character().repeat(*verticals).color(color).to_string());
+            let cell = bar_thickness.character().repeat(*verticals);
+            msg.push_str(&match slots[i].color {
+                Some(color) => cell.color(color).to_string(),
+                None => cell
+            });
         }
-        msg.push_str("-]\n");
+        msg.push_str(&format!("{}\n", theme.bar_frame.paint("-]")));
     }
 
     println!("{msg}");
@@ -577,58 +732,33 @@ fn get_data_dir_str() -> String {
     format!("\nData dir path: {}\n\n", PERSISTENT_APP_PATHS.data_dir)
 }
 
-fn get_help_msg_of_command(command: &str) -> Option<&str> {
-    if command == DIRS {
-        Some(DIRS_HELP)
-    } else if command == EXCLUDE {
-        Some(EXCLUDE_HELP)
-    } else if command == LANGUAGES {
-        Some(LANGUAGES_HELP)
-    } else if command == EXCLUDE_LANGUAGES {
-        Some(EXCLUDE_LANGUAGES_HELP)
-    } else if command == THREADS {
-        Some(THREADS_HELP)
-    } else if command == BRACES_AS_CODE {
-        Some(BRACES_AS_CODE_HELP)
-    } else if command == SEARCH_IN_DOTTED {
-        Some(SEARCH_IN_DOTTED_HELP)
-    } else if command == SHOW_FAULTY_FILES {
-        Some(SHOW_FAULTY_FILES_HELP)
-    } else if command == HIDE {
-        Some(HIDE_HELP)
-    } else if command == NO_GITIGNORE {
-        Some(NO_GITIGNORE_HELP)
-    } else if command == COLORS {
-        Some(COLORS_HELP)
-    } else if command == COLOR_PALETTE {
-        Some(COLOR_PALETTE_HELP)
-    } else if command == SORT {
-        Some(SORT_HELP)
-    } else if command == TOP {
-        Some(TOP_HELP)
-    } else if command == BAR_THICKNESS {
-        Some(BAR_THICKNESS_HELP)
-    } else if command == STYLE {
-        Some(STYLE_HELP)
-    } else if command == SHOW_PALETTES {
-        Some(SHOW_PALETTES_HELP)
-    } else if command == TUNE_PALETTES {
-        Some(TUNE_PALETTES_HELP)
-    } else if command == LOG {
-        Some(LOG_HELP)
-    } else if command == COMPRARE_LEVEL {
-        Some(COMPRARE_LEVEL_HELP)
-    } else if command == SAVE {
-        Some(SAVE_HELP)
-    } else if command == LOAD {
-        Some(LOAD_HELP)
-    } else if command == CHANGELOG {
-        Some(CHANGELOG_HELP)
-    } else if command == SHOW_LANGUAGES {
-        Some(SHOW_LANGUAGES_HELP)
-    } else if command == SHOW_CONFIGS {
-        Some(SHOW_CONFIGS_HELP)
-    } else {
-        None
+fn get_help_msg_of_command(command: &str) -> Option<&'static str> {
+    COMMAND_HELP.iter().find(|(name, _)| *name == command).map(|(_, help)| *help)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // '--version' reads the release date from the first line of the Changelog, so that line has to
+    // keep naming the version this binary reports. Without this the two drift apart silently and
+    // '--version' starts quoting the date of a release that is not the one running.
+    #[test]
+    fn the_changelog_opens_with_the_version_this_binary_reports() {
+        let changelog = String::from_utf8_lossy(CHANGELOG_BYTES);
+        let first = changelog.lines().next().unwrap();
+        assert!(first.starts_with(&format!("{VERSION_ID} - ")),
+                "the Changelog opens with '{first}', which does not start with '{VERSION_ID} - '");
+    }
+
+    // The three lists of commands became one table, and nothing else may hold a fourth
+    #[test]
+    fn every_command_has_exactly_one_help_entry() {
+        let names = command_names();
+        for name in &names {
+            assert!(get_help_msg_of_command(name).is_some(), "'--{name}' has no help entry");
+            assert_eq!(1, names.iter().filter(|x| *x == name).count(), "'--{name}' is listed twice");
+        }
     }
 }

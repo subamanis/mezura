@@ -1,12 +1,14 @@
-use std::{collections::HashMap, time::Instant};
+use std::{collections::HashMap, process::ExitCode, time::Instant};
 
 use colored::*;
 use include_dir::include_dir;
 
-use mezura::{*, self, config_manager::{self, CHANGELOG, HELP, SHOW_CONFIGS, SHOW_LANGUAGES, SHOW_PALETTES, TUNE_PALETTES, VERSION_ID}, io_handler, theme};
+use mezura::{*, self, config_manager::{self, CHANGELOG, HELP, LAYOUT, SHOW_CONFIGS, SHOW_LANGUAGES, SHOW_THEMES, THEME_EDITOR, VERSION, VERSION_ID}, io_handler, theme};
 
 
-fn main() {
+// A failure code is owed to whoever runs mezura from a script: everything that prints an error and
+// stops is a run that did not happen, and until now all of them were indistinguishable from success.
+fn main() -> ExitCode {
     // Only on windows, it is required to enable a virtual terminal environment, so that the colors will display correctly
     #[cfg(target_os = "windows")]
     control::set_virtual_terminal(true).unwrap();
@@ -36,23 +38,14 @@ fn main() {
             },
             Err(x) => {
                 println!("\n{}", x.formatted());
-                return;
+                return ExitCode::FAILURE;
             }
         }
     }
 
-    if PERSISTENT_APP_PATHS.are_initialized && !dir_contains_entries(&PERSISTENT_APP_PATHS.palettes_dir)
-        && let Err(x) = write_baked_in_palettes() {
-        println!("{}",format!("\nUnable to initialize the color palettes directory: {x}\n").yellow());
-    }
-
-    if PERSISTENT_APP_PATHS.are_initialized {
-        match io_handler::migrate_legacy_palettes(&PERSISTENT_APP_PATHS.palettes_dir) {
-            Ok(migrated) if !migrated.is_empty() =>
-                println!("{}", format!("\nUpdated {} color palette(s) to the new format: {}\n", migrated.len(), migrated.join(", ")).yellow()),
-            Err(x) => println!("{}", format!("\nUnable to update the color palettes to the new format: {x}\n").yellow()),
-            _ => ()
-        }
+    if PERSISTENT_APP_PATHS.are_initialized && !dir_contains_entries(&PERSISTENT_APP_PATHS.themes_dir)
+        && let Err(x) = write_baked_in_themes() {
+        println!("{}",format!("\nUnable to initialize the themes directory: {x}\n").yellow());
     }
 
     let args_str = match read_args_as_str() {
@@ -64,32 +57,34 @@ fn main() {
         }
     };
 
-    if handle_message_only_command(&args_str, &language_map) {
-        return;
+    if let Some(code) = handle_message_only_command(&args_str, &language_map) {
+        return code;
     }
 
     let config = match config_manager::create_config_from_args(&args_str) {
         Ok(config) => config,
         Err(x) => {
             println!("\n{}\n",x.formatted());
-            return;
+            return ExitCode::FAILURE;
         }
     };
     theme::set_active(config.theme.clone());
+    utils::set_number_separator(config.number_separator);
+    utils::set_decimal_separator(config.decimal_separator);
 
     // Printed here and not at the very start, so that '--hide version' can be declared in a
     // configuration file and not only on the command line
     if !config.hidden.version {
         // The status block opens with a blank line of its own, so the separation below the
         // version is only missing when that block is not printed
-        let separator = if config.hidden.status {"\n"} else {""};
+        let separator = if config.hidden.directory_info {"\n"} else {""};
         println!("\n{}{separator}", theme::active().version.paint(VERSION_ID));
     }
 
     if !config.languages_of_interest.is_empty() &&
      config.languages_of_interest.iter().all(|lang| config.excluded_languages.contains(lang)) {
         println!("\n{}\n",theme::active().error.paint("Included and excluded languages are mutually exclusive."));
-        return;
+        return ExitCode::FAILURE;
     }
 
     if !config.languages_of_interest.is_empty() {
@@ -99,9 +94,9 @@ fn main() {
                     println!("\n {msg}");
                 }
             },
-            Err(_) => {
-                println!("\n{}\n",theme::active().error.paint("Error: None of the provided language names map to valid supported languages"));
-                return;
+            Err(x) => {
+                println!("\n{x}\n");
+                return ExitCode::FAILURE;
             }
         }
     }
@@ -119,42 +114,57 @@ fn main() {
     match mezura::run(config, language_map) {
         Ok(x) => {
             if !hide_timing {
-                let perf = format!("Exec time: {:.2} secs ", instant.elapsed().as_secs_f32());
+                let perf = format!("Exec time: {} secs ", utils::with_decimal_separator(format!("{:.2}", instant.elapsed().as_secs_f32())));
                 let metrics = match x {
                     Some(x) => format!("(Parsing {} files/s | {} lines/s)", with_seperators(x.files_per_sec), with_seperators(x.lines_per_sec)),
                     None => String::new()
                 };
                 println!("\n{}",theme::active().footer.paint(&(perf + &metrics)));
             }
+            ExitCode::SUCCESS
         },
-        Err(x) => println!("{}",x.formatted())
+        Err(x) => {
+            println!("{}",x.formatted());
+            match x {
+                // Finding no code is an answer and not a failure, while every file failing to be
+                // parsed means a real error behind each one of them
+                ParseFilesError::NoRelevantFiles(_) => ExitCode::SUCCESS,
+                ParseFilesError::AllAreFaultyFiles => ExitCode::FAILURE
+            }
+        }
     }
 }
 
 
-fn retain_only_languages_of_interest(language_map: &mut HashMap<String, Language>, languages_of_interest: &[String]) -> Result<Option<ColoredString>,()> 
+// Every name that did not match is reported with the names it is closest to, one at a time. With
+// one line for the whole list there was nothing to attach a suggestion to, and the number of
+// language files is only going to grow.
+fn retain_only_languages_of_interest(language_map: &mut HashMap<String, Language>, languages_of_interest: &[String])
+        -> Result<Option<String>, String>
 {
-    language_map.retain(|s, _| languages_of_interest.iter().any(|x| x.to_lowercase() == s.to_lowercase()));
+    let mut all_names = language_map.keys().cloned().collect::<Vec<_>>();
+    all_names.sort_by_key(|x| x.to_lowercase());
+    let candidates = all_names.iter().map(String::as_str).collect::<Vec<_>>();
 
-    if language_map.is_empty() {
-        return Err(());
-    }
-
-    let mut non_existant_lang_names = String::with_capacity(60);
-    let mut has_any_relevant_languages = false;
-    languages_of_interest.iter().for_each(|x| {
-        if !language_map.iter().any(|(s,_)| s.to_lowercase() == x.to_lowercase()) {
-            non_existant_lang_names.push_str(&(x.clone() + " , "));
-        } else {
-            has_any_relevant_languages = true;
+    // Only the mistake is coloured. What to do about it is not an error, it is the way out.
+    let mut report = String::with_capacity(100);
+    for name in languages_of_interest {
+        if all_names.iter().any(|x| x.eq_ignore_ascii_case(name)) {
+            continue;
         }
-    });
-
-    if !non_existant_lang_names.is_empty() {
-        Ok(Some(format!("\nThese languages don't exist as language files:\n {non_existant_lang_names}").yellow()))
-    } else {
-        Ok(None)
+        report.push_str(&format!("\n{}", theme::active().warning.paint(&format!("'{name}' does not exist as a language file."))));
+        if let Some(x) = suggestions::formatted_suggestion(name, &candidates) {
+            report.push_str(&format!("\n{x}\n"));
+        }
     }
+
+    language_map.retain(|s, _| languages_of_interest.iter().any(|x| x.eq_ignore_ascii_case(s)));
+    if language_map.is_empty() {
+        let headline = theme::active().error.paint("None of the provided language names map to valid supported languages.");
+        return Err(format!("{headline}\n{report}"));
+    }
+
+    Ok(if report.is_empty() {None} else {Some(report)})
 }
 
 
@@ -183,7 +193,7 @@ fn init_persistent_paths(languages: &HashMap<String,Language>, default_config_co
     }
 
     io_handler::write_default_config(default_config_contents)?;
-    write_baked_in_palettes()?;
+    write_baked_in_themes()?;
 
     Ok(())
 }
@@ -201,11 +211,11 @@ fn open_in_browser(path: &str) {
     }
 }
 
-fn write_baked_in_palettes() -> Result<(),std::io::Error> {
-    std::fs::create_dir_all(&PERSISTENT_APP_PATHS.palettes_dir)?;
-    for file in include_dir!("data/palettes").files.iter() {
+fn write_baked_in_themes() -> Result<(),std::io::Error> {
+    std::fs::create_dir_all(&PERSISTENT_APP_PATHS.themes_dir)?;
+    for file in include_dir!("data/themes").files.iter() {
         let file_name = std::path::Path::new(file.path).file_name().and_then(|x| x.to_str()).unwrap_or(file.path);
-        std::fs::write(PERSISTENT_APP_PATHS.palettes_dir.clone() + file_name, file.contents)?;
+        std::fs::write(PERSISTENT_APP_PATHS.themes_dir.clone() + file_name, file.contents)?;
     }
 
     Ok(())
@@ -223,57 +233,90 @@ fn read_args_as_str() -> Option<String> {
 }
 
 // These commands take no configuration, so there is nothing that could hide the version line
-// from them, and they are the only place where the version of an installed binary can be read
-fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Language>) -> bool {
+// from them, and they are the only place where the version of an installed binary can be read.
+// 'None' means the args are not one of them, and not that nothing went wrong: three of the branches
+// below report a mistake, and a bool could not tell the caller to stop with a failure instead of
+// handing arguments it has already rejected to the configuration parser.
+fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Language>) -> Option<ExitCode> {
     let is_present = |command: &str| args_str.contains(&(String::from("--") + command));
-    if ![HELP, CHANGELOG, SHOW_LANGUAGES, SHOW_CONFIGS, SHOW_PALETTES, TUNE_PALETTES].iter().any(|x| is_present(x)) {
-        return false;
+    if ![HELP, VERSION, CHANGELOG, SHOW_LANGUAGES, SHOW_CONFIGS, SHOW_THEMES, THEME_EDITOR].iter().any(|x| is_present(x)) {
+        return None;
+    }
+
+    // '--version' prints the line itself, with the release date next to it, so it is answered before
+    // the plain banner that every other message-only command opens with. With '--help' next to it,
+    // the question is about the command and belongs to the help.
+    if is_present(VERSION) && !is_present(HELP) {
+        message_printer::print_version();
+        return Some(ExitCode::SUCCESS);
     }
     println!("\n{}", theme::active().version.paint(VERSION_ID));
 
     if args_str.contains(&(String::from("--") + HELP)) {
         message_printer::print_help_message_for_given_args(args_str);
-        return true; 
+        return Some(ExitCode::SUCCESS);
     } else if let Some(pos) = args_str.find(&(String::from("--") + CHANGELOG)) {
-        match args_str[pos + CHANGELOG.len() + 2..].split_whitespace().next() {
-            Some("full") => message_printer::print_changelog(true),
+        return match args_str[pos + CHANGELOG.len() + 2..].split_whitespace().next() {
+            Some("full") => {
+                message_printer::print_changelog(true);
+                Some(ExitCode::SUCCESS)
+            },
             Some(arg) if !arg.starts_with("--") => {
                 println!("\n{}", config_manager::ArgParsingError::IncorrectCommandArgs(CHANGELOG.to_owned()).formatted());
                 message_printer::print_help_message_for_command(CHANGELOG);
+                Some(ExitCode::FAILURE)
             },
-            _ => message_printer::print_changelog(false),
-        }
-        return true;
+            _ => {
+                message_printer::print_changelog(false);
+                Some(ExitCode::SUCCESS)
+            },
+        };
     } else if args_str.contains(&(String::from("--") + SHOW_LANGUAGES)) {
         message_printer::print_supported_languages(language_map);
-        return true;
+        return Some(ExitCode::SUCCESS);
     } else if args_str.contains(&(String::from("--") + SHOW_CONFIGS)) {
         message_printer::print_existing_configs();
-        return true;
-    } else if args_str.contains(&(String::from("--") + TUNE_PALETTES)) {
-        match io_handler::generate_palette_tuner_page() {
+        return Some(ExitCode::SUCCESS);
+    } else if args_str.contains(&(String::from("--") + THEME_EDITOR)) {
+        return match io_handler::generate_theme_editor_page() {
             Ok(path) => {
-                println!("\nPalette tuner page generated at:\n{path}");
+                println!("\nTheme editor page generated at:\n{path}");
                 open_in_browser(&path);
+                Some(ExitCode::SUCCESS)
             },
-            Err(x) => println!("\n{}", format!("Unable to generate the palette tuner page: {x}").red())
-        }
-        return true;
-    } else if let Some(pos) = args_str.find(&(String::from("--") + SHOW_PALETTES)) {
-        match args_str[pos + SHOW_PALETTES.len() + 2..].split_whitespace().next() {
+            Err(x) => {
+                println!("\n{}", format!("Unable to generate the theme editor page: {x}").red());
+                Some(ExitCode::FAILURE)
+            }
+        };
+    } else if let Some(pos) = args_str.find(&(String::from("--") + SHOW_THEMES)) {
+        // The preview follows '--layout', so that what it shows is what a run would print. Read here
+        // by hand, because a message-only command runs before there is a configuration to ask.
+        let layout = args_str.find(&(String::from("--") + LAYOUT))
+                .and_then(|at| args_str[at + LAYOUT.len() + 2..].split_whitespace().next())
+                .and_then(config_manager::Layout::parse)
+                .unwrap_or_default();
+
+        return match args_str[pos + SHOW_THEMES.len() + 2..].split_whitespace().next() {
             Some(arg) if !arg.starts_with("--") => match config_manager::BarThickness::parse(arg) {
-                Some(thickness) => message_printer::print_existing_palettes(thickness),
+                Some(thickness) => {
+                    message_printer::print_existing_themes(thickness, layout);
+                    Some(ExitCode::SUCCESS)
+                },
                 None => {
-                    println!("\n{}", config_manager::ArgParsingError::IncorrectCommandArgs(SHOW_PALETTES.to_owned()).formatted());
-                    message_printer::print_help_message_for_command(SHOW_PALETTES);
+                    println!("\n{}", config_manager::ArgParsingError::IncorrectCommandArgs(SHOW_THEMES.to_owned()).formatted());
+                    message_printer::print_help_message_for_command(SHOW_THEMES);
+                    Some(ExitCode::FAILURE)
                 }
             },
-            _ => message_printer::print_existing_palettes(config_manager::BarThickness::default())
-        }
-        return true;
+            _ => {
+                message_printer::print_existing_themes(config_manager::BarThickness::default(), layout);
+                Some(ExitCode::SUCCESS)
+            }
+        };
     }
 
-    false
+    None
 }
 
 #[cfg(test)]

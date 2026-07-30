@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>mezura color palettes</title>
+<title>mezura themes</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   :root { --term-bg: #0c0c0c; --card-bg: #242424; --card-border: #3a3a3a; }
@@ -51,8 +51,8 @@
 </style>
 </head>
 <body>
-<h1>mezura color palettes</h1>
-<p class="hint">Tune each color with the picker or by typing: the field accepts hex values (with or without #) and the 16 named ANSI colors (cyan, bright-magenta, ...), exactly like mezura's own parser. The badges show the contrast of each color against the background (aim for ≥ 4.5) and the ΔE distance between colors that sit next to each other in the output (aim for ≥ 45, below 25 they blend together). Named colors are previewed with Campbell scheme approximations; in a real terminal they follow your own color scheme. The generated command is PowerShell-safe. Press + to spawn a new random playground.</p>
+<h1>mezura themes</h1>
+<p class="hint">Tune each color with the picker or by typing: the field accepts hex values (with or without #) and the 16 named ANSI colors (cyan, bright-magenta, ...), exactly like mezura's own parser. The badges show the contrast of each color against the background (aim for ≥ 4.5) and the ΔE distance between colors that sit next to each other in the output (aim for ≥ 45, below 25 they blend together). Named colors are previewed with Campbell scheme approximations; in a real terminal they follow your own color scheme. The five lines below each playground are the language slots of a theme file: paste them into a .txt in the themes dir, or into the style block of a config. Press + to spawn a new random playground.</p>
 <div id="bg-control">
   <label for="bg-color">terminal bg</label>
   <input type="color" id="bg-color" value="#0c0c0c">
@@ -61,8 +61,8 @@
 <div id="palettes"></div>
 
 <script>
-let SYSTEM_PALETTES = null;
-/*MEZURA_SYSTEM_PALETTES*/
+let SYSTEM_THEMES = null;
+/*MEZURA_SYSTEM_THEMES*/
 
 const PALETTES = [
   { name: "Mezura",     tokens: ["cyan", "bright-magenta", "bright-yellow", "6ad9bd", "d7c9f0"] },
@@ -125,10 +125,13 @@ function randomTokens() {
   return [vivid(0), vivid(1), vivid(2), vivid(3), muted];
 }
 
+// The character '--bar-thickness medium' draws with, which is the default the program prints
+const BAR_CELL = "┃";
+
 function bar(slots, indices, counts) {
   let s = GRAY + '  [-</span>';
   indices.forEach((idx, i) => {
-    s += '<span style="color:' + slots[idx].hex + '">' + "|".repeat(counts[i]) + '</span>';
+    s += '<span style="color:' + slots[idx].hex + '">' + BAR_CELL.repeat(counts[i]) + '</span>';
   });
   return s + GRAY + '-]</span>';
 }
@@ -210,8 +213,10 @@ function metricsHtml(slots) {
   return '<div class="metric-row">' + bgRow + '</div><div class="metric-row">' + pairRow + '</div>';
 }
 
+const SLOT_NAMES = ["language-1", "language-2", "language-3", "language-4", "language-others"];
+
 function commandFor(slots) {
-  return "--colors " + slots.map(s => s.token).join(" ");
+  return slots.map((s, i) => SLOT_NAMES[i] + " = " + s.token).join("\n");
 }
 
 function refresh(pi) {
@@ -375,9 +380,9 @@ document.getElementById("bg-text").addEventListener("input", e => {
   applyTermBg(hex);
 });
 
-(SYSTEM_PALETTES || PALETTES).forEach(p => addCard(p.name, p.tokens, false));
-if (SYSTEM_PALETTES) {
-  document.querySelector(".hint").textContent += " Showing the palettes found on this machine.";
+(SYSTEM_THEMES || PALETTES).forEach(p => addCard(p.name, p.tokens, false));
+if (SYSTEM_THEMES) {
+  document.querySelector(".hint").textContent += " Showing the themes found on this machine.";
 }
 </script>
 </body>

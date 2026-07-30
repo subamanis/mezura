@@ -1,4 +1,7 @@
+use std::sync::OnceLock;
+
 use crate::*;
+use crate::config_manager::{DecimalSeparator, NumberSeparator};
 
 
 #[macro_export]
@@ -119,20 +122,6 @@ pub fn remove_overlapping_paths(paths: Vec<String>) -> Vec<String> {
     kept.into_iter().map(|(_,path)| path).collect()
 }
 
-pub fn parse_colors_to_vec(s: &str) -> Option<Vec<Color>> {
-    let entries = s.split_whitespace().collect::<Vec<_>>();
-    if entries.is_empty() || entries.len() > 5 {
-        return None;
-    }
-
-    let mut colors = Vec::with_capacity(5);
-    for entry in entries {
-        colors.push(parse_single_color(entry)?);
-    }
-
-    Some(colors)
-}
-
 pub fn parse_single_color(token: &str) -> Option<Color> {
     match token.to_lowercase().replace('_', "-").as_str() {
         "black" => Some(Color::Black),
@@ -212,25 +201,43 @@ pub fn get_file_extension(path: &Path) -> Option<&str> {
 }
 
 
-pub fn with_seperators(i: usize) -> String {
-    let mut s = String::new();
-    let i_str = i.to_string();
-    let a = i_str.chars().rev().enumerate();
-    for (idx, val) in a {
-        if idx != 0 && idx % 3 == 0 {
-            s.insert(0, ',');
-        }
-        s.insert(0, val);
+// Reached from every printed figure, so it is set once instead of being threaded through the
+// printer, the same way the active theme is
+static NUMBER_SEPARATOR : OnceLock<NumberSeparator> = OnceLock::new();
+
+static DECIMAL_SEPARATOR : OnceLock<DecimalSeparator> = OnceLock::new();
+
+pub fn set_number_separator(separator: NumberSeparator) {
+    let _ = NUMBER_SEPARATOR.set(separator);
+}
+
+pub fn set_decimal_separator(separator: DecimalSeparator) {
+    let _ = DECIMAL_SEPARATOR.set(separator);
+}
+
+// Applied to text that is already rounded, so that every rule about rounding stays written with a
+// dot and only the last step decides what the reader sees
+pub fn with_decimal_separator(text: String) -> String {
+    match DECIMAL_SEPARATOR.get().copied().unwrap_or_default().character() {
+        '.' => text,
+        separator => text.replace('.', &separator.to_string())
     }
-    s
+}
+
+pub fn with_seperators(i: usize) -> String {
+    with_seperators_str(&i.to_string())
 }
 
 pub fn with_seperators_str(i_str: &str) -> String {
+    let Some(separator) = NUMBER_SEPARATOR.get().copied().unwrap_or_default().character() else {
+        return i_str.to_owned();
+    };
+
     let mut s = String::new();
     let a = i_str.chars().rev().enumerate();
     for (idx, val) in a {
         if idx != 0 && idx % 3 == 0 {
-            s.insert(0, ',');
+            s.insert(0, separator);
         }
         s.insert(0, val);
     }
@@ -418,26 +425,7 @@ mod exclude_matcher_tests {
         assert!(matcher.is_match("D:/dev/proj/target"));
     }
 
-    #[test]
-    fn test_parse_colors_to_vec() {
-        assert_eq!(Some(vec![Color::TrueColor{r:255,g:0,b:0}]), parse_colors_to_vec("ff0000"));
-        assert_eq!(Some(vec![Color::TrueColor{r:255,g:0,b:0}]), parse_colors_to_vec("#FF0000"));
-        assert_eq!(Some(vec![Color::Cyan, Color::BrightMagenta, Color::TrueColor{r:1,g:2,b:3}]),
-                parse_colors_to_vec("cyan BRIGHT-MAGENTA #010203"));
-        assert_eq!(Some(vec![Color::BrightYellow]), parse_colors_to_vec("bright_yellow"));
-        assert_eq!(5, parse_colors_to_vec("cyan magenta yellow 6ad9bd d7c9f0").unwrap().len());
-
-        assert_eq!(None, parse_colors_to_vec(""));
-        assert_eq!(None, parse_colors_to_vec("   "));
-        assert_eq!(None, parse_colors_to_vec("a b c d e f"));
-        assert_eq!(None, parse_colors_to_vec("ff000"));
-        assert_eq!(None, parse_colors_to_vec("ff00000"));
-        assert_eq!(None, parse_colors_to_vec("ff00zz"));
-        assert_eq!(None, parse_colors_to_vec("ff0000 kaka"));
-        assert_eq!(None, parse_colors_to_vec("brightest-yellow"));
-    }
-
-    #[test]
+        #[test]
     fn test_color_to_config_string() {
         assert_eq!("cyan", color_to_config_string(&Color::Cyan));
         assert_eq!("bright-magenta", color_to_config_string(&Color::BrightMagenta));

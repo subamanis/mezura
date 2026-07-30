@@ -223,10 +223,22 @@ pub fn serialize_language(lang: &Language, path: &str) -> Result<(), io::Error> 
 }
 
 
-// ------------------------------ Palette handling ------------------------------
+// The names a directory offers, for the close-match suggestions of one that was not found
+pub fn names_in_dir(dir: &str) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
+    let mut names = entries.flatten().filter(|x| x.path().is_file())
+            .filter_map(|x| x.path().file_stem().and_then(|x| x.to_str()).map(str::to_owned)).collect::<Vec<_>>();
+    names.sort_by_key(|x| x.to_lowercase());
+    names
+}
 
-pub fn load_palette(name: &str, palettes_dir: &str) -> Option<theme::Palette> {
-    let entries = fs::read_dir(palettes_dir).ok()?;
+
+// ------------------------------ Theme handling ------------------------------
+
+// None means the theme is not there at all, which is a mistake in the name and not in the file.
+// A theme that exists always loads, carrying whatever its parser could not read.
+pub fn load_theme(name: &str, themes_dir: &str) -> Option<theme::ThemeFile> {
+    let entries = fs::read_dir(themes_dir).ok()?;
     for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_file() {
@@ -238,69 +250,49 @@ pub fn load_palette(name: &str, palettes_dir: &str) -> Option<theme::Palette> {
         }
 
         let contents = fs::read_to_string(&path).ok()?;
-        return theme::Palette::parse(&contents).ok();
+        return Some(theme::parse_theme_file(&contents));
     }
 
     None
 }
 
-// Palettes are the one data file whose format changed in v3.0.0. The old shape is unambiguous (its
-// first meaningful line has no '='), and the conversion loses nothing, so installed palettes are
-// rewritten in place rather than starting to fail for everyone who already had them.
-pub fn migrate_legacy_palettes(palettes_dir: &str) -> io::Result<Vec<String>> {
-    let mut migrated = Vec::new();
-    for entry in fs::read_dir(palettes_dir)?.flatten() {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-
-        let Ok(contents) = fs::read_to_string(&path) else { continue };
-        if !theme::Palette::is_in_legacy_format(&contents) {
-            continue;
-        }
-
-        let Some(palette) = theme::Palette::from_legacy_format(&contents) else { continue };
-        fs::write(&path, palette.to_file_contents())?;
-        if let Some(name) = path.file_stem().and_then(|x| x.to_str()) {
-            migrated.push(name.to_owned());
-        }
-    }
-
-    Ok(migrated)
+// Flattened on purpose: the reason a theme file exists is that it can be handed to someone else, so
+// it carries values and not a reference to whatever it was built on top of.
+pub fn save_theme_to_file(themes_dir: &str, name: &str, theme: &theme::Theme) -> io::Result<()> {
+    let styles = theme.non_default_tokens().into_iter().map(|(token, value)| (token.to_owned(), value)).collect::<Vec<_>>();
+    fs::create_dir_all(themes_dir)?;
+    fs::write(themes_dir.to_owned() + name + ".txt", theme::theme_file_contents(&styles))
 }
 
-
-pub fn generate_palette_tuner_page() -> io::Result<String> {
+pub fn generate_theme_editor_page() -> io::Result<String> {
     fn js_escape(s: &str) -> String {
         s.replace('\\', "\\\\").replace('"', "\\\"").replace('<', "\\u003c")
     }
 
-    let template = include_str!("../docs/palette-tuner/index.html");
+    let template = include_str!("../docs/theme-editor/index.html");
 
     let mut entries: Vec<(String, Vec<String>)> = Vec::new();
-    for entry in fs::read_dir(&PERSISTENT_APP_PATHS.palettes_dir)?.flatten() {
+    for entry in fs::read_dir(&PERSISTENT_APP_PATHS.themes_dir)?.flatten() {
         let path = entry.path();
         if !path.is_file() {
             continue;
         }
         let Some(stem) = path.file_stem().and_then(|x| x.to_str()) else { continue };
         let Ok(contents) = fs::read_to_string(&path) else { continue };
-        // The page edits the language slots only, so a palette without them has nothing to show
-        let Ok(palette) = theme::Palette::parse(&contents) else { continue };
-        let Some(colors) = palette.languages else { continue };
-        entries.push((stem.to_owned(), colors.iter().map(utils::color_to_config_string).collect()));
+        // The page edits the language slots only, so the rest of the theme is resolved and dropped
+        let resolved = theme::resolve(&theme::parse_theme_file(&contents).0, &[], &[]);
+        entries.push((stem.to_owned(), resolved.language_colors().iter().map(utils::color_to_config_string).collect()));
     }
     entries.sort_by_key(|x| x.0.to_lowercase());
 
-    let palettes_js = entries.iter().map(|(name, tokens)| {
+    let themes_js = entries.iter().map(|(name, tokens)| {
         format!("{{name:\"{}\",tokens:[{}]}}", js_escape(name),
             tokens.iter().map(|t| format!("\"{}\"", js_escape(t))).collect::<Vec<_>>().join(","))
     }).collect::<Vec<_>>().join(",");
 
-    let page = template.replace("/*MEZURA_SYSTEM_PALETTES*/", &format!("SYSTEM_PALETTES = [{palettes_js}];"));
+    let page = template.replace("/*MEZURA_SYSTEM_THEMES*/", &format!("SYSTEM_THEMES = [{themes_js}];"));
 
-    let out_path = PERSISTENT_APP_PATHS.data_dir.clone() + "palette-tuner.html";
+    let out_path = PERSISTENT_APP_PATHS.data_dir.clone() + "theme-editor.html";
     fs::write(&out_path, page)?;
 
     Ok(out_path)
@@ -309,7 +301,16 @@ pub fn generate_palette_tuner_page() -> io::Result<String> {
 
 // ------------------------------ Config handling ------------------------------
 
-pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String>) -> Result<(ConfigurationBuilder, Vec<&'static str>),ConfigFileParseError> {
+// 'invalid_fields' are the ones whose value decides what the program does, so a bad one stops the
+// run unless the command line already overrode it. 'warnings' are the ones that only decide how the
+// result looks, plus the sections nobody asked for, and they are always just said out loud.
+#[derive(Debug, Default)]
+pub struct ConfigFileIssues {
+    pub invalid_fields: Vec<&'static str>,
+    pub warnings: Vec<String>
+}
+
+pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String>) -> Result<(ConfigurationBuilder, ConfigFileIssues),ConfigFileParseError> {
     let config_path = if let Some(dir) = config_dir_path {dir} else {PERSISTENT_APP_PATHS.config_dir.clone()};
     let file_name = if let Some(x) = file_name {x} else {DEFAULT_CONFIG_NAME.trim_end_matches(".txt")};
     let file_path = (config_path + file_name + ".txt").replace("\\", "/");
@@ -320,14 +321,15 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
 
     let (mut dirs, mut braces_as_code, mut should_search_in_dotted, mut threads, mut exclude_dirs,
          mut languages_of_interest, mut excluded_languages, mut should_show_faulty_files, mut hidden,
-         mut no_gitignore, mut colors, mut color_palette, mut log, mut compare_level, mut styles, mut bar_thickness, mut sort_by, mut top_n) = (None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None);
-    let mut invalid_fields: Vec<&'static str> = Vec::new();
+         mut no_gitignore, mut theme_name, mut log, mut compare_level, mut config_styles, mut bar_thickness,
+         mut number_separator, mut decimal_separator, mut layout, mut sort_by, mut top_n) = (None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None);
+    let mut issues = ConfigFileIssues::default();
     let mut buf = String::with_capacity(150);
 
     while let Ok(size) = reader.read_line(&mut buf) {
         if size == 0 {break};
         if buf.trim().starts_with("===>") {
-            let id = buf.split(' ').nth(1).unwrap_or("").trim();
+            let id = buf.trim().trim_start_matches("===>").split_whitespace().next().unwrap_or("");
 
             if id == config_manager::DIRS {
                 let paths = read_lines_from_file_to_vec(&mut reader, &mut buf, utils::parse_paths_to_vec);
@@ -337,7 +339,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
             } else if id == config_manager::EXCLUDE {
                 let paths = read_lines_from_file_to_vec(&mut reader, &mut buf, utils::parse_paths_to_vec);
                 if utils::build_exclude_matcher(&paths).is_err() {
-                    invalid_fields.push(config_manager::EXCLUDE);
+                    issues.invalid_fields.push(config_manager::EXCLUDE);
                 } else if !paths.is_empty() {
                     exclude_dirs = Some(paths);
                 }
@@ -357,77 +359,92 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                 match utils::parse_two_usize_values(&buf,MIN_PRODUCERS_VALUE, MAX_PRODUCERS_VALUE,
                         MIN_CONSUMERS_VALUE, MAX_CONSUMERS_VALUE) {
                     Some(x) => threads = Some(Threads::from(x)),
-                    None => invalid_fields.push(config_manager::THREADS)
+                    None => issues.invalid_fields.push(config_manager::THREADS)
                 }
             }else if id == config_manager::BRACES_AS_CODE {
                 match read_bool_value_from_file(&mut reader, &mut buf) {
                     Ok(x) => braces_as_code = x,
-                    Err(()) => invalid_fields.push(config_manager::BRACES_AS_CODE)
+                    Err(()) => issues.invalid_fields.push(config_manager::BRACES_AS_CODE)
                 }
             } else if id == config_manager::SHOW_FAULTY_FILES {
                 match read_bool_value_from_file(&mut reader, &mut buf) {
                     Ok(x) => should_show_faulty_files = x,
-                    Err(()) => invalid_fields.push(config_manager::SHOW_FAULTY_FILES)
+                    Err(()) => issues.invalid_fields.push(config_manager::SHOW_FAULTY_FILES)
                 }
             } else if id == config_manager::SEARCH_IN_DOTTED {
                 match read_bool_value_from_file(&mut reader, &mut buf) {
                     Ok(x) => should_search_in_dotted = x,
-                    Err(()) => invalid_fields.push(config_manager::SEARCH_IN_DOTTED)
+                    Err(()) => issues.invalid_fields.push(config_manager::SEARCH_IN_DOTTED)
                 }
             } else if id == config_manager::HIDE {
                 buf.clear();
                 let _ = reader.read_line(&mut buf);
                 match config_manager::Hidden::parse(&buf) {
                     Ok(x) => hidden = Some(x),
-                    Err(_) => invalid_fields.push(config_manager::HIDE)
+                    Err(_) => issues.invalid_fields.push(config_manager::HIDE)
                 }
             } else if id == config_manager::NO_GITIGNORE {
                 match read_bool_value_from_file(&mut reader, &mut buf) {
                     Ok(x) => no_gitignore = x,
-                    Err(()) => invalid_fields.push(config_manager::NO_GITIGNORE)
+                    Err(()) => issues.invalid_fields.push(config_manager::NO_GITIGNORE)
                 }
-            } else if id == config_manager::COLORS {
-                buf.clear();
-                let _ = reader.read_line(&mut buf);
-                match utils::parse_colors_to_vec(&buf) {
-                    Some(x) => colors = Some(x),
-                    None => invalid_fields.push(config_manager::COLORS)
-                }
-            } else if id == config_manager::COLOR_PALETTE {
+            } else if id == config_manager::THEME {
                 buf.clear();
                 let _ = reader.read_line(&mut buf);
                 let name = buf.trim();
-                if name.is_empty() || load_palette(name, &PERSISTENT_APP_PATHS.palettes_dir).is_none() {
-                    invalid_fields.push(config_manager::COLOR_PALETTE);
+                if name.is_empty() || load_theme(name, &PERSISTENT_APP_PATHS.themes_dir).is_none() {
+                    issues.invalid_fields.push(config_manager::THEME);
                 } else {
-                    color_palette = Some(name.to_owned());
+                    theme_name = Some(name.to_owned());
                 }
             } else if id == config_manager::SORT {
                 buf.clear();
                 let _ = reader.read_line(&mut buf);
                 match config_manager::SortCriterion::parse(&buf) {
                     Some(x) => sort_by = Some(x),
-                    None => invalid_fields.push(config_manager::SORT)
+                    None => issues.invalid_fields.push(config_manager::SORT)
                 }
             } else if id == config_manager::TOP {
                 buf.clear();
                 let _ = reader.read_line(&mut buf);
                 match utils::parse_usize_value(&buf, 1, usize::MAX) {
                     Some(x) => top_n = Some(x),
-                    None => invalid_fields.push(config_manager::TOP)
+                    None => issues.invalid_fields.push(config_manager::TOP)
                 }
             } else if id == config_manager::BAR_THICKNESS {
                 buf.clear();
                 let _ = reader.read_line(&mut buf);
                 match config_manager::BarThickness::parse(&buf) {
                     Some(x) => bar_thickness = Some(x),
-                    None => invalid_fields.push(config_manager::BAR_THICKNESS)
+                    None => issues.invalid_fields.push(config_manager::BAR_THICKNESS)
+                }
+            } else if id == config_manager::NUMBER_SEPARATOR {
+                buf.clear();
+                let _ = reader.read_line(&mut buf);
+                match config_manager::NumberSeparator::parse(&buf) {
+                    Some(x) => number_separator = Some(x),
+                    None => issues.invalid_fields.push(config_manager::NUMBER_SEPARATOR)
+                }
+            } else if id == config_manager::DECIMAL_SEPARATOR {
+                buf.clear();
+                let _ = reader.read_line(&mut buf);
+                match config_manager::DecimalSeparator::parse(&buf) {
+                    Some(x) => decimal_separator = Some(x),
+                    None => issues.invalid_fields.push(config_manager::DECIMAL_SEPARATOR)
+                }
+            } else if id == config_manager::LAYOUT {
+                buf.clear();
+                let _ = reader.read_line(&mut buf);
+                match config_manager::Layout::parse(&buf) {
+                    Some(x) => layout = Some(x),
+                    None => issues.invalid_fields.push(config_manager::LAYOUT)
                 }
             } else if id == config_manager::STYLE {
                 let declared = read_lines_from_file_to_vec(&mut reader, &mut buf, |line| vec![line.trim().to_owned()]);
-                match theme::parse_overrides(&declared.join("\n")) {
-                    Ok(x) => styles = Some(x),
-                    Err(_) => invalid_fields.push(config_manager::STYLE)
+                let (declared, errors) = theme::parse_overrides_leniently(&declared.join("\n"));
+                issues.warnings.extend(errors.iter().map(theme::ThemeParseError::formatted));
+                if !declared.is_empty() {
+                    config_styles = Some(declared);
                 }
             } else if id == config_manager::LOG {
                 buf.clear();
@@ -443,8 +460,10 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                 let _ = reader.read_line(&mut buf);
                 match utils::parse_usize_value(&buf,MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL) {
                     Some(x) => compare_level = Some(x),
-                    None => invalid_fields.push(config_manager::COMPRARE_LEVEL)
+                    None => issues.invalid_fields.push(config_manager::COMPRARE_LEVEL)
                 }
+            } else {
+                issues.warnings.push(format!("'{id}' is not a command, the section is ignored."));
             }
         }
         buf.clear();
@@ -452,11 +471,12 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
 
     let builder = ConfigurationBuilder {
         dirs, exclude_dirs, languages_of_interest, excluded_languages, threads, braces_as_code, should_search_in_dotted,
-        should_show_faulty_files, hidden, no_gitignore, colors, color_palette, log, compare_level, styles, bar_thickness, sort_by, top_n,
+        should_show_faulty_files, hidden, no_gitignore, theme_name, log, compare_level, config_styles, bar_thickness,
+        number_separator, decimal_separator, layout, sort_by, top_n,
         ..Default::default()
     };
 
-    Ok((builder, invalid_fields))
+    Ok((builder, issues))
 }
 
 // Dirs must be specified (is checked before calling this function)
@@ -509,11 +529,6 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
         writer.write_all(&[b"\n\n===> ",config_manager::NO_GITIGNORE.as_bytes(),b"\n"].concat())?;
         writer.write_all(if *no_gitignore {b"yes"} else {b"no"})?;
     }
-    if let Some(colors) = &config_builder.colors {
-        writer.write_all(&[b"\n\n===> ",config_manager::COLORS.as_bytes(),b"\n"].concat())?;
-        writer.write_all(colors.iter().map(utils::color_to_config_string)
-                .collect::<Vec<_>>().join(" ").as_bytes())?;
-    }
     if let Some(sort_by) = &config_builder.sort_by {
         writer.write_all(&[b"
 
@@ -538,16 +553,37 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
         writer.write_all(bar_thickness.name().as_bytes())?;
     }
 
-    if let Some(styles) = &config_builder.styles {
-        // One pair per line, the same shape a palette file uses, so a long list stays readable
+    if let Some(number_separator) = &config_builder.number_separator {
+        writer.write_all(&[b"\n\n===> ",config_manager::NUMBER_SEPARATOR.as_bytes(),b"\n"].concat())?;
+        writer.write_all(number_separator.name().as_bytes())?;
+    }
+
+    if let Some(decimal_separator) = &config_builder.decimal_separator {
+        writer.write_all(&[b"\n\n===> ",config_manager::DECIMAL_SEPARATOR.as_bytes(),b"\n"].concat())?;
+        writer.write_all(decimal_separator.name().as_bytes())?;
+    }
+
+    if let Some(layout) = &config_builder.layout {
+        writer.write_all(&[b"\n\n===> ",config_manager::LAYOUT.as_bytes(),b"\n"].concat())?;
+        writer.write_all(layout.name().as_bytes())?;
+    }
+
+    // The two style layers of a configuration collapse into its one block, in the order they were
+    // applied, so that reloading the file reproduces what the run looked like. When --save-theme is
+    // writing a theme in the same run, they are already inside it and would only be said twice.
+    let styles = if config_builder.theme_name_to_save.is_some() {Vec::new()}
+            else {config_builder.config_styles.iter().chain(config_builder.styles.iter()).flatten().collect::<Vec<_>>()};
+    if !styles.is_empty() {
+        // One pair per line, the same shape a theme file uses, so a long list stays readable
         let rendered = styles.iter().map(|(token, style)| format!("{token} = {style}")).collect::<Vec<_>>().join("\n");
         writer.write_all(&[b"\n\n===> ",config_manager::STYLE.as_bytes(),b"\n"].concat())?;
         writer.write_all(rendered.as_bytes())?;
     }
 
-    if let Some(color_palette) = &config_builder.color_palette {
-        writer.write_all(&[b"\n\n===> ",config_manager::COLOR_PALETTE.as_bytes(),b"\n"].concat())?;
-        writer.write_all(color_palette.as_bytes())?;
+    // A theme that --save-theme is writing in the same run is the one this config should point at
+    if let Some(theme_name) = config_builder.theme_name_to_save.as_ref().or(config_builder.theme_name.as_ref()) {
+        writer.write_all(&[b"\n\n===> ",config_manager::THEME.as_bytes(),b"\n"].concat())?;
+        writer.write_all(theme_name.as_bytes())?;
     }
     if let Some(compare_level) = &config_builder.compare_level {
         writer.write_all(&[b"\n\n===> ",config_manager::COMPRARE_LEVEL.as_bytes(),b"\n"].concat())?;
@@ -741,8 +777,8 @@ mod tests {
         let test_config_dir = Some(LOCAL_APP_PATHS.test_config_dir.clone());
         io_handler::save_existing_commands_from_config_builder_to_file(test_config_dir, "auto-generated", &config_builder)?;
 
-        let (options, invalid_fields) = io_handler::parse_config_file(Some("auto-generated"), Some(LOCAL_APP_PATHS.test_config_dir.clone())).unwrap();
-        assert!(invalid_fields.is_empty());
+        let (options, issues) = io_handler::parse_config_file(Some("auto-generated"), Some(LOCAL_APP_PATHS.test_config_dir.clone())).unwrap();
+        assert!(issues.invalid_fields.is_empty() && issues.warnings.is_empty());
         assert_eq!(config_builder.dirs, options.dirs);
         assert_eq!(config_builder.exclude_dirs, options.exclude_dirs);
         assert_eq!(config_builder.threads, options.threads);
@@ -750,9 +786,9 @@ mod tests {
         assert_eq!(config_builder.should_show_faulty_files, options.should_show_faulty_files);
         assert_eq!(config_builder.should_search_in_dotted, options.should_search_in_dotted);
         assert_eq!(config_builder.hidden, options.hidden);
-        // Written one pair per line and read back as a group, so a saved theme survives a reload
-        assert_eq!(config_builder.styles, options.styles);
-        assert_eq!(3, options.styles.as_ref().unwrap().len());
+        // Written one pair per line and read back as a group, so a saved look survives a reload
+        assert_eq!(config_builder.styles, options.config_styles);
+        assert_eq!(3, options.config_styles.as_ref().unwrap().len());
 
         Ok(())
     }
@@ -767,8 +803,8 @@ mod tests {
             .set_hidden(config_manager::Hidden {bar: true, timing: true, ..Default::default()});
 
 
-        let (options, invalid_fields) = io_handler::parse_config_file(Some("test"), Some(LOCAL_APP_PATHS.test_config_dir.clone())).unwrap();
-        assert!(invalid_fields.is_empty());
+        let (options, issues) = io_handler::parse_config_file(Some("test"), Some(LOCAL_APP_PATHS.test_config_dir.clone())).unwrap();
+        assert!(issues.invalid_fields.is_empty() && issues.warnings.is_empty());
         assert_eq!(config.dirs, options.dirs.unwrap());
         assert_eq!(config.exclude_dirs, options.exclude_dirs.unwrap());
         assert_eq!(config.threads, options.threads.unwrap());
@@ -789,27 +825,45 @@ mod tests {
     }
 
     #[test]
-    fn test_load_palette() {
-        let dir = std::env::temp_dir().join("mezura_palette_test");
+    fn test_load_theme() {
+        let dir = std::env::temp_dir().join("mezura_theme_test");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("Mypalette.txt"), "languages = cyan bright-magenta ff0080\ncode-label = bright-yellow italic\n").unwrap();
-        std::fs::write(dir.join("Broken.txt"), "languages = kaka\n").unwrap();
-        std::fs::write(dir.join("Legacy.txt"), "cyan bright-magenta ff0080\n").unwrap();
+        std::fs::write(dir.join("Mytheme.txt"), "language-1 = cyan\nlanguage-2 = bright-magenta\ncode-label = bright-yellow italic\n").unwrap();
+        std::fs::write(dir.join("Broken.txt"), "language-1 = kaka\nheading = white bold\n").unwrap();
         let dir_str = dir.to_str().unwrap();
 
-        let expected_colors = Some(vec![Color::Cyan, Color::BrightMagenta, Color::TrueColor{r:255,g:0,b:128}]);
-        let loaded = io_handler::load_palette("mypalette", dir_str).unwrap();
-        assert_eq!(expected_colors, loaded.languages);
-        assert_eq!(vec![("code-label".to_owned(), "bright-yellow italic".to_owned())], loaded.styles);
-        assert_eq!(expected_colors, io_handler::load_palette("MYPALETTE", dir_str).unwrap().languages);
-        assert!(io_handler::load_palette("nonexistant", dir_str).is_none());
-        assert!(io_handler::load_palette("broken", dir_str).is_none());
+        let expected = vec![("language-1".to_owned(), "cyan".to_owned()), ("language-2".to_owned(), "bright-magenta".to_owned()),
+                ("code-label".to_owned(), "bright-yellow italic".to_owned())];
+        let (loaded, errors) = io_handler::load_theme("mytheme", dir_str).unwrap();
+        assert!(errors.is_empty());
+        assert_eq!(expected, loaded);
+        assert_eq!(expected, io_handler::load_theme("MYTHEME", dir_str).unwrap().0);
+        assert!(io_handler::load_theme("nonexistant", dir_str).is_none());
 
-        // A palette left in the pre-v3 format is rewritten in place and loads normally afterwards
-        assert!(io_handler::load_palette("legacy", dir_str).is_none());
-        assert_eq!(vec!["Legacy".to_owned()], io_handler::migrate_legacy_palettes(dir_str).unwrap());
-        assert_eq!(expected_colors, io_handler::load_palette("legacy", dir_str).unwrap().languages);
-        assert!(io_handler::migrate_legacy_palettes(dir_str).unwrap().is_empty());
+        // A theme that is there always loads, carrying what could not be read. Only a name that
+        // points at no file at all is a failure, since only that one is a mistake in the command.
+        let (broken, errors) = io_handler::load_theme("broken", dir_str).unwrap();
+        assert_eq!(vec![("heading".to_owned(), "white bold".to_owned())], broken);
+        assert_eq!(vec![theme::ThemeParseError::InvalidValue("language-1".to_owned(), "kaka".to_owned())], errors);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // The file --save-theme writes has to reproduce the look on its own, which is the whole reason
+    // it is flattened instead of pointing at whatever it was built on top of
+    #[test]
+    fn test_a_saved_theme_reloads_into_the_same_theme() {
+        let dir = std::env::temp_dir().join("mezura_theme_save_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let dir_str = dir.to_str().unwrap().to_owned() + "/";
+
+        let original = theme::resolve(&[("language-1".to_owned(), "cyan".to_owned())],
+                &[("heading".to_owned(), "ff0080 reverse".to_owned())], &[("code-number".to_owned(), "dim".to_owned())]);
+        io_handler::save_theme_to_file(&dir_str, "written", &original).unwrap();
+
+        let (styles, errors) = io_handler::load_theme("written", &dir_str).unwrap();
+        assert!(errors.is_empty());
+        assert_eq!(original, theme::resolve(&styles, &[], &[]));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -820,8 +874,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("default.txt"), "===> exclude-languages\nSQL\n").unwrap();
 
-        let (options, invalid_fields) = io_handler::parse_config_file(None, Some(dir.to_str().unwrap().to_owned() + "/")).unwrap();
-        assert!(invalid_fields.is_empty());
+        let (options, issues) = io_handler::parse_config_file(None, Some(dir.to_str().unwrap().to_owned() + "/")).unwrap();
+        assert!(issues.invalid_fields.is_empty() && issues.warnings.is_empty());
         assert_eq!(Some(vec!["sql".to_owned()]), options.excluded_languages);
 
         std::fs::remove_dir_all(&dir).unwrap();
@@ -836,14 +890,39 @@ mod tests {
         std::fs::write(dir.join("badcfg.txt"),
                 "===> threads\n3343 45534\n\n===> braces-as-code\nmitsos\n\n===> compare\n99\n\n===> hide\nkeywords\n\n===> sort\nnope\n").unwrap();
 
-        let (options, invalid_fields) = io_handler::parse_config_file(Some("badcfg"), Some(dir_str)).unwrap();
-        assert_eq!(invalid_fields, vec![config_manager::THREADS, config_manager::BRACES_AS_CODE,
+        let (options, issues) = io_handler::parse_config_file(Some("badcfg"), Some(dir_str)).unwrap();
+        assert_eq!(issues.invalid_fields, vec![config_manager::THREADS, config_manager::BRACES_AS_CODE,
                 config_manager::COMPRARE_LEVEL, config_manager::SORT]);
+        assert!(issues.warnings.is_empty());
         assert_eq!(options.threads, None);
         assert_eq!(options.braces_as_code, None);
         assert_eq!(options.compare_level, None);
         assert_eq!(options.sort_by, None);
         assert_eq!(options.hidden, Some(config_manager::Hidden {keywords: true, ..Default::default()}));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // A section nobody knows and a style line that does not parse are both about how the result
+    // looks, so they are said out loud and the rest of the file still applies
+    #[test]
+    fn test_parse_config_file_warns_instead_of_failing_for_unknown_sections_and_styles() {
+        let dir = std::env::temp_dir().join("mezura_warning_config_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_str = dir.to_str().unwrap().to_owned() + "/";
+
+        std::fs::write(dir.join("warncfg.txt"),
+                "===> mpampis\nwhatever\n\n===> style\ncode-number = green\nlabell = cyan\nheading = nope\narrow = dim\n\n===> sort\nname\n").unwrap();
+
+        let (options, issues) = io_handler::parse_config_file(Some("warncfg"), Some(dir_str)).unwrap();
+        assert!(issues.invalid_fields.is_empty());
+        assert_eq!(3, issues.warnings.len());
+        assert!(issues.warnings[0].contains("mpampis"));
+        assert!(issues.warnings[1].contains("labell"));
+        assert!(issues.warnings[2].contains("heading"));
+
+        assert_eq!(Some(vec![("code-number".to_owned(), "green".to_owned()), ("arrow".to_owned(), "dim".to_owned())]), options.config_styles);
+        assert_eq!(Some(config_manager::SortCriterion::Name), options.sort_by);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

@@ -1,0 +1,5 @@
+language-1 = cyan
+language-2 = bright-magenta
+language-3 = bright-yellow
+language-4 = 6ad9bd
+language-others = d7c9f0

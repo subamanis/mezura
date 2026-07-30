@@ -1,2 +1,0 @@
-# mezura-format: 2
-languages = fb4934 fabd2f b8bb26 83a598

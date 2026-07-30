@@ -1,0 +1,4 @@
+language-1 = 22d3ee
+language-2 = 60a5fa
+language-3 = 34d399
+language-4 = 94a3b8
