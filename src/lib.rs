@@ -45,8 +45,8 @@ pub static LOCAL_APP_PATHS : LazyLock<LocalAppPaths> = LazyLock::new(LocalAppPat
 pub static CHANGELOG_BYTES : &[u8] = include_bytes!("../Changelog");
 
 
-pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Result<Option<Metrics>, ParseFilesError> {
-    let config = Arc::new(config);
+pub fn run(config: &Configuration, language_map: HashMap<String, Language>) -> Result<RunResult, ParseFilesError> {
+    let config = Arc::new(config.clone());
     let faulty_files_ref : FaultyFilesListMut  = Arc::new(Mutex::new(Vec::with_capacity(10)));
     let finish_condition_ref = Arc::new(AtomicBool::new(false));
     let language_map_ref = Arc::new(language_map);
@@ -106,29 +106,22 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
             producers_done_millis, parsing_duration_millis - producers_done_millis, len);
     }
 
-    let file_stats_guard = files_stats.lock().unwrap();
-    let (total_files_num, relevant_files_num, excluded_files_num) =
-            (file_stats_guard.total_files, file_stats_guard.relevant_files, file_stats_guard.excluded_files);
+    let files_present = *files_stats.lock().unwrap();
+    let relevant_files_num = files_present.relevant_files;
     if relevant_files_num == 0 {
-        // A machine consumer must not have to tell "no output" apart from "no code found", so the
-        // document is written even here, whole and with everything zeroed
-        if !config.prints_text() {
-            json_printer::print_as_json(&HashMap::new(), &HashMap::new(), &FinalStats::new_extended(0,0,0,0,0,0,0),
-                    &[], &file_stats_guard, parsing_duration_millis, &chrono::Local::now(), &config);
-        }
-        return Err(ParseFilesError::NoRelevantFiles(get_activated_languages_as_str(&config)));
+        return Ok(RunResult::of_nothing(files_present, parsing_duration_millis));
     }
     if !config.hidden.directory_info && config.prints_text() {
         println!("{}\n",theme::active().summary.paint(&format!("{} files found. {} of interest. {} excluded.",
-                with_seperators(total_files_num), with_seperators(relevant_files_num), with_seperators(excluded_files_num))));
+                with_seperators(files_present.total_files), with_seperators(relevant_files_num),
+                with_seperators(files_present.excluded_files))));
     }
     if !config.hidden.parsing_info && config.prints_text() {
         println!("{}...",theme::active().heading.paint("Parsing files"));
     }
 
-    print_faulty_files_or_ok(&faulty_files_ref, &config);
     if faulty_files_ref.lock().unwrap().len() == relevant_files_num {
-        return Err(ParseFilesError::AllAreFaultyFiles);
+        return Err(ParseFilesError::AllAreFaultyFiles(std::mem::take(&mut faulty_files_ref.lock().unwrap())));
     }
 
     let mut global_languages_metadata_map_guard = global_languages_metadata_map.lock();
@@ -140,33 +133,53 @@ pub fn run(config: Configuration, language_map: HashMap<String, Language>) -> Re
     let content_info_map = content_info_map_guard.as_deref_mut().unwrap();
 
     let metrics = generate_metrics_if_parsing_took_more_than_one_sec(parsing_duration_millis, relevant_files_num, content_info_map);
-
     let final_stats = FinalStats::calculate(content_info_map, languages_metadata_map);
-    let log_file_path = get_specified_config_file_path(&config);
-    let existing_log_contents = {
-        if let Some(path) = &log_file_path {
-            extract_file_contents(path)
-        } else {
-            None
-        }
-    };
+    remove_languages_with_0_files(content_info_map, languages_metadata_map);
+
+    Ok(RunResult {
+        content_info_map: std::mem::take(content_info_map),
+        languages_metadata_map: std::mem::take(languages_metadata_map),
+        final_stats,
+        faulty_files: std::mem::take(&mut faulty_files_ref.lock().unwrap()),
+        files_present,
+        scan_duration_millis: parsing_duration_millis,
+        metrics
+    })
+}
+
+// Everything that turns a result into something a person reads, kept out of 'run' so that the run
+// itself is a function of its inputs. A caller that wants the numbers and not the report never calls
+// this, and one that wants both gets the same result twice, since presenting reads and never writes.
+pub fn present(result: &RunResult, config: &Configuration) {
     let datetime_now = chrono::Local::now();
 
-    remove_languages_with_0_files(content_info_map, languages_metadata_map);
-    if config.prints_text() {
-        result_printer::format_and_print_results(content_info_map, languages_metadata_map, &final_stats,
-            &existing_log_contents, &datetime_now, &config);
-    } else {
-        json_printer::print_as_json(content_info_map, languages_metadata_map, &final_stats,
-            &faulty_files_ref.lock().unwrap(), &file_stats_guard, parsing_duration_millis, &datetime_now, &config);
+    if result.files_present.relevant_files == 0 {
+        // A machine consumer must not have to tell "no output" apart from "no code found", so the
+        // document is written even here, whole and with everything zeroed
+        if config.prints_text() {
+            eprintln!("{}", ParseFilesError::NoRelevantFiles(get_activated_languages_as_str(config)).formatted());
+        } else {
+            json_printer::print_as_json(result, &datetime_now, config);
+        }
+        return;
     }
+
+    print_faulty_files_or_ok(&result.faulty_files, config);
+
+    if !config.prints_text() {
+        json_printer::print_as_json(result, &datetime_now, config);
+        return;
+    }
+
+    let log_file_path = get_specified_config_file_path(config);
+    let existing_log_contents = log_file_path.as_ref().and_then(|path| extract_file_contents(path));
+    result_printer::format_and_print_results(&result.content_info_map, &result.languages_metadata_map,
+            &result.final_stats, &existing_log_contents, &datetime_now, config);
 
     if config.log.should_log && let Some(path) = log_file_path
-        && io_handler::log_stats(&path, &existing_log_contents, &final_stats, &datetime_now, &config).is_err() {
+        && io_handler::log_stats(&path, &existing_log_contents, &result.final_stats, &datetime_now, config).is_err() {
         eprintln!("\n{}",theme::active().warning.paint("Error while trying to save the log."));
     }
-
-    Ok(metrics)
 }
 
 //pub for integration tests
@@ -251,8 +264,7 @@ fn generate_metrics_if_parsing_took_more_than_one_sec(parsing_duration_millis: u
 
 // Hiding the status never hides a parsing failure: that would show wrong numbers with nothing
 // to indicate it
-fn print_faulty_files_or_ok(faulty_files_ref: &FaultyFilesListMut, config: &Configuration) {
-    let faulty_files = &*faulty_files_ref.as_ref().lock().unwrap();
+pub fn print_faulty_files_or_ok(faulty_files: &[FaultyFileDetails], config: &Configuration) {
     if faulty_files.is_empty() {
         if !config.hidden.parsing_info && config.prints_text() {
             println!("{}\n",theme::active().success.paint("ok"));
@@ -358,6 +370,36 @@ pub struct Metrics {
     pub lines_per_sec: usize
 }
 
+// What one run produces, and the only thing 'run' returns. Presentation is a separate call, so the
+// same result can be printed, written as JSON, compared with another one, or read by a caller that
+// wants none of those.
+#[derive(Debug)]
+pub struct RunResult {
+    pub content_info_map: HashMap<String, LanguageContentInfo>,
+    pub languages_metadata_map: HashMap<String, LanguageMetadata>,
+    pub final_stats: FinalStats,
+    pub faulty_files: Vec<FaultyFileDetails>,
+    pub files_present: FilesPresent,
+    pub scan_duration_millis: u128,
+    pub metrics: Option<Metrics>
+}
+
+impl RunResult {
+    // Nothing of interest was found, which is an answer and not a failure: the counts are zero and
+    // the file numbers still say how many were looked at and how many were excluded.
+    fn of_nothing(files_present: FilesPresent, scan_duration_millis: u128) -> Self {
+        RunResult {
+            content_info_map: HashMap::new(),
+            languages_metadata_map: HashMap::new(),
+            final_stats: FinalStats::new_extended(0, 0, 0, 0, 0, 0, 0),
+            faulty_files: Vec::new(),
+            files_present,
+            scan_duration_millis,
+            metrics: None
+        }
+    }
+}
+
 // 'extra_lines' is what is left after the code and the comments: blank lines, and lines that the
 // language required but that say nothing, like a closing brace. The three add up to 'lines'.
 #[derive(Debug, PartialEq)]
@@ -382,13 +424,15 @@ pub struct FaultyFileDetails {
     size: u64
 }
 
+// The failure carries the faulty files with it, so that the report of what went wrong is printed by
+// whoever is doing the printing, and 'run' does not have to print on its way out
 #[derive(Debug)]
 pub enum ParseFilesError {
     NoRelevantFiles(String),
-    AllAreFaultyFiles
+    AllAreFaultyFiles(Vec<FaultyFileDetails>)
 }
 
-#[derive(Debug,Default,Clone)]
+#[derive(Debug,Default,Clone,Copy)]
 pub struct FilesPresent {
     pub total_files: usize,
     pub relevant_files: usize,
@@ -475,7 +519,7 @@ impl Formatted for ParseFilesError {
     fn formatted(&self) -> ColoredString {
         match self {
             Self::NoRelevantFiles(x) => theme::active().warning.paint(&format!("{} {}","No relevant files found in the given directory.", x)),
-            Self::AllAreFaultyFiles => theme::active().warning.paint("None of the files were able to be parsed")
+            Self::AllAreFaultyFiles(_) => theme::active().warning.paint("None of the files were able to be parsed")
         }
     }
 }
@@ -711,7 +755,7 @@ pub mod domain {
         pub aliases : Vec<String>
     }
 
-    #[derive(Debug,PartialEq)]
+    #[derive(Debug,PartialEq,Clone)]
     pub struct LanguageContentInfo {
         pub lines : usize,
         pub code_lines : usize,

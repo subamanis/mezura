@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use chrono::{DateTime, Local, SecondsFormat};
 
 use crate::{FaultyFileDetails, FilesPresent, FinalStats, LanguageContentInfo, LanguageMetadata,
-        config_manager::Configuration, result_printer};
+        RunResult, config_manager::Configuration, result_printer};
 
 // Bumped only when a key is removed or changes meaning. Adding one is not a bump, so a consumer can
 // check this and not the version of the binary, which moves for reasons that do not concern it.
@@ -12,20 +12,12 @@ const FORMAT_VERSION : usize = 1;
 // The document is a designed shape and not a serialization of the structs the program happens to
 // have. It carries every number that was measured, in its raw unit, and nothing the printer computed
 // in order to look right: no sizes in KB, no separators, no percentages, no bar.
-pub fn print_as_json(content_info_map: &HashMap<String, LanguageContentInfo>,
-        languages_metadata_map: &HashMap<String, LanguageMetadata>, final_stats: &FinalStats,
-        faulty_files: &[FaultyFileDetails], files: &FilesPresent, scan_ms: u128,
-        datetime_now: &DateTime<Local>, config: &Configuration)
-{
-    println!("{}", document(content_info_map, languages_metadata_map, final_stats, faulty_files,
-            files, scan_ms, datetime_now, config));
+pub fn print_as_json(result: &RunResult, datetime_now: &DateTime<Local>, config: &Configuration) {
+    println!("{}", document(result, datetime_now, config));
 }
 
-fn document(content_info_map: &HashMap<String, LanguageContentInfo>,
-        languages_metadata_map: &HashMap<String, LanguageMetadata>, final_stats: &FinalStats,
-        faulty_files: &[FaultyFileDetails], files: &FilesPresent, scan_ms: u128,
-        datetime_now: &DateTime<Local>, config: &Configuration) -> String
-{
+fn document(result: &RunResult, datetime_now: &DateTime<Local>, config: &Configuration) -> String {
+    let RunResult {content_info_map, languages_metadata_map, final_stats, faulty_files, files_present, ..} = result;
     let names = result_printer::get_sorted_language_names(content_info_map, languages_metadata_map, config.sort_by);
     let hidden = config.top_n.map_or(0, |top| names.len().saturating_sub(top));
     let shown = &names[..names.len() - hidden];
@@ -35,7 +27,7 @@ fn document(content_info_map: &HashMap<String, LanguageContentInfo>,
         format!("  \"mezura_version\": \"{}\"", escaped(config.version.trim_start_matches('v'))),
         format!("  \"generated_at\": \"{}\"", datetime_now.to_rfc3339_opts(SecondsFormat::Secs, false)),
         format!("  \"scope\": {}", scope_object(config)),
-        format!("  \"scan\": {}", scan_object(files, faulty_files.len())),
+        format!("  \"scan\": {}", scan_object(files_present, faulty_files.len())),
         format!("  \"total\": {}", total_object(final_stats)),
         format!("  \"languages\": {}", languages_array(shown, content_info_map, languages_metadata_map, config)),
         format!("  \"languages_hidden\": {hidden}"),
@@ -44,7 +36,7 @@ fn document(content_info_map: &HashMap<String, LanguageContentInfo>,
     // The only volatile block apart from the timestamp, so hiding the timing is also what makes the
     // document repeatable enough to hash or to compare against a stored one
     if !config.hidden.timing {
-        members.push(format!("  \"performance\": {}", performance_object(scan_ms, config)));
+        members.push(format!("  \"performance\": {}", performance_object(result.scan_duration_millis, config)));
     }
 
     format!("{{\n{}\n}}", members.join(",\n"))
@@ -219,18 +211,27 @@ mod tests {
         LanguageContentInfo {lines, code_lines: code, comment_lines: comments, keyword_occurences: keywords}
     }
 
+    fn result_of(content_info_map: HashMap<String, LanguageContentInfo>,
+            languages_metadata_map: HashMap<String, LanguageMetadata>, final_stats: FinalStats,
+            faulty_files: Vec<FaultyFileDetails>, files_present: FilesPresent) -> RunResult
+    {
+        RunResult {content_info_map, languages_metadata_map, final_stats, faulty_files, files_present,
+                scan_duration_millis: 1180, metrics: None}
+    }
+
     fn document_of(config: &Configuration) -> String {
-        let content_info_map = hashmap![
-            "Rust".to_owned() => stats_of(100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 1]),
-            "HTML".to_owned() => stats_of(40, 30, 0, HashMap::new())];
-        let languages_metadata_map = hashmap![
-            "Rust".to_owned() => LanguageMetadata {files: 2, bytes: 5000},
-            "HTML".to_owned() => LanguageMetadata {files: 1, bytes: 900}];
-        let final_stats = FinalStats::new_extended(3, 140, 100, 10, 30, 5900, 1966);
-        let files = FilesPresent {total_files: 5, relevant_files: 3, excluded_files: 2};
+        let result = result_of(
+            hashmap![
+                "Rust".to_owned() => stats_of(100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 1]),
+                "HTML".to_owned() => stats_of(40, 30, 0, HashMap::new())],
+            hashmap![
+                "Rust".to_owned() => LanguageMetadata {files: 2, bytes: 5000},
+                "HTML".to_owned() => LanguageMetadata {files: 1, bytes: 900}],
+            FinalStats::new_extended(3, 140, 100, 10, 30, 5900, 1966), Vec::new(),
+            FilesPresent {total_files: 5, relevant_files: 3, excluded_files: 2});
         let datetime = DateTime::parse_from_rfc3339("2026-07-30T14:22:07+03:00").unwrap().with_timezone(&Local);
 
-        document(&content_info_map, &languages_metadata_map, &final_stats, &[], &files, 1180, &datetime, config)
+        document(&result, &datetime, config)
     }
 
     #[test]
@@ -311,10 +312,9 @@ mod tests {
     #[test]
     fn a_run_with_nothing_to_count_is_still_a_whole_document() {
         let config = Configuration::new(vec!["./src".to_owned()]);
-        let files = FilesPresent {total_files: 12, relevant_files: 0, excluded_files: 12};
-        let datetime = Local::now();
-        let document = document(&HashMap::new(), &HashMap::new(), &FinalStats::new_extended(0,0,0,0,0,0,0),
-                &[], &files, 4, &datetime, &config);
+        let result = result_of(HashMap::new(), HashMap::new(), FinalStats::new_extended(0,0,0,0,0,0,0),
+                Vec::new(), FilesPresent {total_files: 12, relevant_files: 0, excluded_files: 12});
+        let document = document(&result, &Local::now(), &config);
 
         assert!(document.contains("\"languages\": []"));
         assert!(document.contains("\"files\": 0"));
@@ -325,14 +325,14 @@ mod tests {
     #[test]
     fn the_faulty_files_are_reported_with_their_reason_in_a_stable_order() {
         let config = Configuration::new(vec!["./src".to_owned()]);
-        let faulty = vec![
-            FaultyFileDetails::new("src\\z.rs".to_owned(), "no".to_owned(), 20),
-            FaultyFileDetails::new("src\\a.rs".to_owned(), "nope".to_owned(), 10)];
-        let content_info_map = hashmap!["Rust".to_owned() => stats_of(10, 5, 0, HashMap::new())];
-        let languages_metadata_map = hashmap!["Rust".to_owned() => LanguageMetadata {files: 1, bytes: 30}];
-        let document = document(&content_info_map, &languages_metadata_map,
-                &FinalStats::new_extended(1, 10, 5, 0, 5, 30, 30), &faulty,
-                &FilesPresent {total_files: 3, relevant_files: 3, excluded_files: 0}, 4, &Local::now(), &config);
+        let result = result_of(
+            hashmap!["Rust".to_owned() => stats_of(10, 5, 0, HashMap::new())],
+            hashmap!["Rust".to_owned() => LanguageMetadata {files: 1, bytes: 30}],
+            FinalStats::new_extended(1, 10, 5, 0, 5, 30, 30),
+            vec![FaultyFileDetails::new("src\\z.rs".to_owned(), "no".to_owned(), 20),
+                 FaultyFileDetails::new("src\\a.rs".to_owned(), "nope".to_owned(), 10)],
+            FilesPresent {total_files: 3, relevant_files: 3, excluded_files: 0});
+        let document = document(&result, &Local::now(), &config);
 
         assert!(document.contains("\"files_faulty\": 2"));
         assert!(document.contains("\"path\": \"src\\\\a.rs\""));

@@ -116,14 +116,15 @@ fn main() -> ExitCode {
     }
 
     let instant = Instant::now();
-    // The footer is text and the document carries its own 'scan_ms', so the format has to be read
-    // before the configuration is handed over to the run
-    let hide_timing = config.hidden.timing || !config.prints_text();
-    match mezura::run(config, language_map) {
-        Ok(x) => {
-            if !hide_timing {
+    match mezura::run(&config, language_map) {
+        Ok(result) => {
+            mezura::present(&result, &config);
+            // The document carries its own 'scan_ms', measured inside the run, and this is the only
+            // place that knows what the whole thing took. A run that found nothing to count says so
+            // and stops there, with no timing under it
+            if !config.hidden.timing && config.prints_text() && result.files_present.relevant_files > 0 {
                 let perf = format!("Exec time: {} secs ", utils::with_decimal_separator(format!("{:.2}", instant.elapsed().as_secs_f32())));
-                let metrics = match x {
+                let metrics = match result.metrics {
                     Some(x) => format!("(Parsing {} files/s | {} lines/s)", with_seperators(x.files_per_sec), with_seperators(x.lines_per_sec)),
                     None => String::new()
                 };
@@ -131,14 +132,15 @@ fn main() -> ExitCode {
             }
             ExitCode::SUCCESS
         },
+        // Finding no code is an answer and not a failure, so it comes back as a result with nothing
+        // in it. Only every single file failing to be parsed reaches this, and there is a real
+        // error behind each one of them
         Err(x) => {
-            eprintln!("{}",x.formatted());
-            match x {
-                // Finding no code is an answer and not a failure, while every file failing to be
-                // parsed means a real error behind each one of them
-                ParseFilesError::NoRelevantFiles(_) => ExitCode::SUCCESS,
-                ParseFilesError::AllAreFaultyFiles => ExitCode::FAILURE
+            if let ParseFilesError::AllAreFaultyFiles(faulty_files) = &x {
+                mezura::print_faulty_files_or_ok(faulty_files, &config);
             }
+            eprintln!("{}",x.formatted());
+            ExitCode::FAILURE
         }
     }
 }

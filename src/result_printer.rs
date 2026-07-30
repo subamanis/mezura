@@ -26,10 +26,10 @@ const EXTRA         : &str  = "Extra:";
 const TOTAL_SIZE    : &str  = "Total Size:";
 const AVERAGE_SIZE  : &str  = "Average Size:";
 
-pub fn format_and_print_results(content_info_map: &mut HashMap<String, LanguageContentInfo>, languages_metadata_map: &mut HashMap<String, LanguageMetadata>,
+pub fn format_and_print_results(content_info_map: &HashMap<String, LanguageContentInfo>, languages_metadata_map: &HashMap<String, LanguageMetadata>,
         final_stats: &FinalStats, existing_log_content: &Option<String>, datetime_now: &DateTime<Local>, config: &Configuration) 
 {
-    let mut sorted_language_names = get_sorted_language_names(content_info_map, languages_metadata_map, config.sort_by);
+    let sorted_language_names = get_sorted_language_names(content_info_map, languages_metadata_map, config.sort_by);
 
     // The list is cut, but the total below it still counts everything, so the reader is told what
     // is missing rather than left to wonder why the rows do not add up
@@ -63,7 +63,7 @@ pub fn format_and_print_results(content_info_map: &mut HashMap<String, LanguageC
             print_sum(theme, content_info_map, final_stats, &columns, block_width, should_print_keywords);
         }
         if !config.hidden.overview {
-            print_visual_overview(&mut sorted_language_names, content_info_map, languages_metadata_map, final_stats, config);
+            print_visual_overview(&sorted_language_names, content_info_map, languages_metadata_map, final_stats, config);
         }
     }
 
@@ -582,11 +582,14 @@ fn print_sum(theme: &Theme, content_info_map: &HashMap<String,LanguageContentInf
 // Lines: ...
 //
 // Size : ...
-fn print_visual_overview(sorted_language_vec: &mut Vec<String>, content_info_map: &mut HashMap<String, LanguageContentInfo>,
-        languages_metadata_map: &mut HashMap<String, LanguageMetadata>, final_stats: &FinalStats, config: &Configuration) 
+fn print_visual_overview(sorted_language_names: &[String], content_info_map: &HashMap<String, LanguageContentInfo>,
+        languages_metadata_map: &HashMap<String, LanguageMetadata>, final_stats: &FinalStats, config: &Configuration)
 {
     // The function itself decides whether there is anything to fold
-    retain_most_relevant_and_add_others_field_for_rest(sorted_language_vec, content_info_map, languages_metadata_map, final_stats, config.top_n);
+    let (sorted_language_vec, content_info_map, languages_metadata_map) =
+            most_relevant_with_others_for_rest(sorted_language_names, content_info_map, languages_metadata_map, final_stats, config.top_n);
+    let (sorted_language_vec, content_info_map, languages_metadata_map) =
+            (&sorted_language_vec, &content_info_map, &languages_metadata_map);
 
     println!("{}.\n", theme::active().heading.paint("Overview"));
 
@@ -981,10 +984,14 @@ fn add_verticals_str(line: &mut String, files_verticals: &[usize], color_func_ve
     line.push_str(&theme.bar_frame.paint("-]").to_string());
 }
 
-fn retain_most_relevant_and_add_others_field_for_rest(sorted_language_names: &mut Vec<String>,
-        content_info_map: &mut HashMap<String, LanguageContentInfo>,
-        languages_metadata_map: &mut HashMap<String, LanguageMetadata>,
+// Returns its own view of the data instead of folding the caller's maps in place. "others" is a
+// creature of the overview and of nothing else, and a result that has been printed once has to still
+// be the result: the in-place version left the caller holding three languages and a fiction.
+fn most_relevant_with_others_for_rest(sorted_language_names: &[String],
+        content_info_map: &HashMap<String, LanguageContentInfo>,
+        languages_metadata_map: &HashMap<String, LanguageMetadata>,
         final_stats: &FinalStats, top_n: Option<usize>)
+-> (Vec<String>, HashMap<String, LanguageContentInfo>, HashMap<String, LanguageMetadata>)
 {
     fn get_files_lines_size(content_info_map: &HashMap<String, LanguageContentInfo>,
         languages_metadata_map: &HashMap<String, LanguageMetadata>) -> (usize,usize,usize) 
@@ -999,15 +1006,17 @@ fn retain_most_relevant_and_add_others_field_for_rest(sorted_language_names: &mu
     // top 2 does not leave three languages sitting in the bar
     let to_keep = OVERVIEW_LANGUAGES.min(top_n.unwrap_or(OVERVIEW_LANGUAGES));
     if sorted_language_names.len() <= to_keep + 1 {
-        return;
+        return (sorted_language_names.to_vec(), content_info_map.clone(), languages_metadata_map.clone());
     }
 
-    sorted_language_names.truncate(to_keep);
+    let mut sorted_language_names = sorted_language_names[..to_keep].to_vec();
     sorted_language_names.push(OTHERS_NAME.to_owned());
+    let mut content_info_map = content_info_map.clone();
+    let mut languages_metadata_map = languages_metadata_map.clone();
     content_info_map.retain(|x,_| sorted_language_names.contains(x));
     languages_metadata_map.retain(|x,_| sorted_language_names.contains(x));
 
-    let (relevant_files, relevant_lines, relevant_size) = get_files_lines_size(content_info_map, languages_metadata_map);
+    let (relevant_files, relevant_lines, relevant_size) = get_files_lines_size(&content_info_map, &languages_metadata_map);
     let (other_files, other_lines, other_size) =
         (final_stats.files - relevant_files, final_stats.lines - relevant_lines,
          final_stats.bytes_size - relevant_size);
@@ -1015,6 +1024,8 @@ fn retain_most_relevant_and_add_others_field_for_rest(sorted_language_names: &mu
     //We only care about the total lines of code for the "others" field, this is the only field involved with calculations
     content_info_map.insert(OTHERS_NAME.to_string(), LanguageContentInfo::dummy(other_lines));
     languages_metadata_map.insert(OTHERS_NAME.to_string(), LanguageMetadata::new(other_files, other_size));
+
+    (sorted_language_names, content_info_map, languages_metadata_map)
 }
 
 
@@ -1265,15 +1276,15 @@ mod tests {
 
     #[test]
     fn test_retain_most_relevant_and_add_others_field_for_rest() {
-        let mut sorted_language_names = vec!["a".to_owned(), "b".to_owned(), "c".to_owned(), "d".to_owned(), "e".to_owned()];
-        let mut content_info_map = hashmap![
+        let sorted_language_names = vec!["a".to_owned(), "b".to_owned(), "c".to_owned(), "d".to_owned(), "e".to_owned()];
+        let content_info_map = hashmap![
             "a".to_owned() => LanguageContentInfo::new(1000, 800, 0, hashmap![]),
             "b".to_owned() => LanguageContentInfo::new(900, 700, 0, hashmap![]),
             "c".to_owned() => LanguageContentInfo::new(800, 600, 0, hashmap![]),
             "d".to_owned() => LanguageContentInfo::new(700, 500, 0, hashmap![]),
             "e".to_owned() => LanguageContentInfo::new(600, 400, 0, hashmap![])
         ];
-        let mut languages_metadata_map = hashmap![
+        let languages_metadata_map = hashmap![
             "a".to_owned() => LanguageMetadata::new(10, 60000),
             "b".to_owned() => LanguageMetadata::new(9, 50000),
             "c".to_owned() => LanguageMetadata::new(8, 40000),
@@ -1282,8 +1293,17 @@ mod tests {
         ];
         let final_stats = FinalStats::new(40, 4000, 3000, 0, 200000);
 
-        retain_most_relevant_and_add_others_field_for_rest(&mut sorted_language_names, &mut content_info_map, &mut languages_metadata_map, &final_stats, None);
+        let (folded_names, folded_content_info_map, folded_languages_metadata_map) = most_relevant_with_others_for_rest(
+                &sorted_language_names, &content_info_map, &languages_metadata_map, &final_stats, None);
 
+        // The caller's own data is untouched, so the same result can be printed again or handed to
+        // a second consumer. Folding into "others" produces a separate view and nothing more.
+        assert_eq!(5, sorted_language_names.len());
+        assert_eq!(5, content_info_map.len());
+        assert_eq!(5, languages_metadata_map.len());
+        assert_eq!(vec!["a".to_owned(), "b".to_owned(), "c".to_owned(), "others".to_owned()], folded_names);
+
+        let (content_info_map, languages_metadata_map) = (folded_content_info_map, folded_languages_metadata_map);
         assert_eq!(hashmap![
             "a".to_owned() => LanguageContentInfo::new(1000, 800, 0, hashmap![]),
             "b".to_owned() => LanguageContentInfo::new(900, 700, 0, hashmap![]),
