@@ -608,6 +608,25 @@ pub fn write_default_config(contents: String) -> Result<(), io::Error> {
 
 // ----------------------------------- Log handling ------------------------------------------
 
+// Everything that can change a number, and nothing that only changes how it looks, written into
+// every log entry so that a later run can say whether the two are comparable at all. The same list
+// is what the progress section reads back, so the writing and the comparison cannot drift into
+// formatting the same setting two different ways.
+pub fn counting_settings(config: &Configuration) -> [(&'static str, String); 7] {
+    let yes_no = |value: bool| if value {"yes"} else {"no"}.to_owned();
+
+    // Every key is the name of the command that sets it, so that the 'modified:' tag of the progress
+    // section names something the reader can look up with '--help'. That is why this one is the
+    // double negative 'no-gitignore' and not the 'gitignore' that would have read better.
+    [(config_manager::DIRS, config.dirs.join(",")),
+     (config_manager::EXCLUDE, config.exclude_dirs.join(",")),
+     (config_manager::LANGUAGES, config.languages_of_interest.join(",")),
+     (config_manager::EXCLUDE_LANGUAGES, config.excluded_languages.join(",")),
+     (config_manager::BRACES_AS_CODE, yes_no(config.braces_as_code)),
+     (config_manager::SEARCH_IN_DOTTED, yes_no(config.should_search_in_dotted)),
+     (config_manager::NO_GITIGNORE, yes_no(config.no_gitignore))]
+}
+
 pub fn log_stats(path: &str, contents: &Option<String>, final_stats: &FinalStats, datetime_now: &DateTime<Local>, config: &Configuration) -> io::Result<()> {
     let mut writer = std::io::BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(path)?);
 
@@ -626,12 +645,9 @@ fn write_current_log(writer: &mut BufWriter<File>, config: &Configuration, datet
     writer.write_all(datetime_now.format("%Y-%m-%d %H:%M:%S %z").to_string().as_bytes())?;
     writer.write_all(b"\n")?;
     writer.write_all(b"Configuration:\n")?;
-    writer.write_all(format!("    dirs: {}\n",config.dirs.join(",")).as_bytes())?;
-    writer.write_all(format!("    exclude: {}\n",config.exclude_dirs.join(",")).as_bytes())?;
-    writer.write_all(format!("    languages: {}\n",config.languages_of_interest.join(",")).as_bytes())?;
-    writer.write_all(format!("    excluded-languages: {}\n",config.excluded_languages.join(",")).as_bytes())?;
-    writer.write_all(format!("    braces-as-code: {}\n",if config.braces_as_code{"yes"} else {"no"}).as_bytes())?;
-    writer.write_all(format!("    search-in-dotted: {}\n",if config.should_search_in_dotted{"yes"} else {"no"}).as_bytes())?;
+    for (key, value) in counting_settings(config) {
+        writer.write_all(format!("    {key}: {value}\n").as_bytes())?;
+    }
     writer.write_all(b"Stats:\n")?;
     writer.write_all(format!("    Files: {}\n",final_stats.files).as_bytes())?;
     writer.write_all(format!("    Lines: {}\n",final_stats.lines).as_bytes())?;

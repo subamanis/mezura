@@ -14,9 +14,10 @@ Example run on entire Linux Kernel: </br>
 * [How To Run](#how-to-run)
 * [Details](#details)
 * [Cmd Commands](#cmd-commands)
+* [Scripting](#scripting)
 * [Configuration Files](#configuration-files)
 * [Logs and Progress](#logs-and-progress)
-* [Color Palettes](#color-palettes)
+* [Themes](#themes)
 * [Supported Languages](#supported-languages)
 * [Accuracy and Limitations](#accuracy-and-limitations)
 * [Windows Performance Note](#windows-performance-note)
@@ -66,7 +67,7 @@ The generated stats are the following:
 
 By default, the files and folders that are ignored by a .gitignore are skipped, so that build artifacts and dependencies don't pollute the stats (see the ```--no-gitignore``` command).
 
-There is a "data" folder in the repository, that contains some already provided language files, color palettes and the default configuration file.
+There is a "data" folder in the repository, that contains some already provided language files, themes and the default configuration file.
 The program, at compile time, includes the "data" folder in the binary, and during the first execution, it saves it with the same structure in a persistent path, inside the user's computer, according to the platform's specification. More specifically, the paths per operating system are:
 ```
     Windows:  %APPDATA%\mezura
@@ -74,8 +75,8 @@ The program, at compile time, includes the "data" folder in the binary, and duri
     MacOs:    /Users/$USER/Library/Application Support/mezura
 ```
 
-After every subsequent execution, the languages, color palettes, configurations and logs, are read from these folders, so the user can have easy access and modify them,
-like add more languages of his choice, add custom color palettes, or modify the default configuration.
+After every subsequent execution, the languages, themes, configurations and logs, are read from these folders, so the user can have easy access and modify them,
+like add more languages of his choice, add custom themes, or modify the default configuration.
 
 In order for a file to be considered for counting, its extension must be supported, meaning that a .txt language file specifying the particular extension as an entry in its 'Extensions' field, must be present in the "data/languages" dir, see [Supported Languages](#supported-languages).
 
@@ -83,55 +84,7 @@ In order for a file to be considered for counting, its extension must be support
 ## Cmd Commands
 Below there is a list with all the commands-flags that the program accepts.
 ```
---help
-
-    No arguments or any number of existing other commands.
-
-    Overrides normal program execution and just displays this message on the terminal.
-    If more commands are provided, information will be displayed specifically about them.
-
---changelog
-
-    No arguments, or the optional argument 'full'.
-
-    Overrides normal program execution and just prints a summary of the changes of the current version of
-    the program. If 'full' is provided, the changes of every previous version are printed too,
-    most recent first.
-
---show-languages
-
-    No arguments.
-
-    Overrides normal program execution and just prints a sorted list with the names of all the supported
-    languages that were detected in the persistent data path of the application, where you can add more.
-
---show-configs
-
-    No arguments.
-
-    Overrides normal program execution and just prints a sorted list with the names of all the configuration
-    files that were detected in the persistent data path of the application. 
-
---show-palettes
-
-    No arguments, or one of 'slim', 'medium', 'fat' and 'low'. Default: slim
-
-    Overrides normal program execution and just prints a sorted list with the names of all the color palettes
-    that were detected in the persistent data path of the application, where you can add more,
-    each one previewed on a mock overview.
-
-    The optional argument draws the preview bars with the character that the '--bar-thickness' command
-    would use, so that a palette can be judged the way it will actually be printed.
-
---tune-palettes
-
-    No arguments.
-
-    Overrides normal program execution: generates an interactive HTML page with all the color
-    palettes found in the persistent data path of the application, and opens it in the default
-    browser. There, every color of every palette can be adjusted, with live contrast metrics
-    and a mock overview, and the result is turned into a ready '--colors' command that you can
-    use directly or save in a palette file.
+WHAT IS COUNTED
 
 --dirs
 
@@ -144,14 +97,13 @@ Below there is a list with all the commands-flags that the program accepts.
     are dotted, are skipped (see the '--no-gitignore' and '--search-in-dotted' commands).
     A path that you write out explicitly is always used, even if it is ignored or dotted.
     Targets that are contained in other targets are dropped, so that no file is counted twice.
-    If you are using Windows Powershell, you will need to escape the commas with a backtick: ` 
+    If you are using Windows Powershell, you will need to escape the commas with a backtick: `
     or surround all the arguments with quotation marks:
     <path1>`, <path2>`, <path3>   or   "<path1>, <path2>, <path3>"
 
-    The target directories can also be given implicitly (in which case this command is not needed)
-    with 2 ways:
+    The target directories can also be given implicitly (in which case this command is not needed) with 2 ways:
     1) as the first arguments of the program directly
-    2) if they are present in a configuration file (see [Configuration Files](#configuration-files)).
+    2) if they are present in a configuration file (see '--save' and '--load' commands).
 
 --exclude
 
@@ -164,7 +116,7 @@ Below there is a list with all the commands-flags that the program accepts.
     Matching folders are skipped entirely; the files inside them are not traversed and
     are not included in the reported count of excluded files.
 
-    If you are using Windows Powershell, you will need to escape the commas with a backtick: ` 
+    If you are using Windows Powershell, you will need to escape the commas with a backtick: `
     or surround all the arguments with quotation marks:
     <arg1>`, <arg2>`, <arg3>   or   "<arg1>, <arg2>, <arg3>"
 
@@ -186,53 +138,6 @@ Below there is a list with all the commands-flags that the program accepts.
 
     The given language names will be ignored from the stats calculation, if they exist.
 
---threads
-
-    2 numbers: the first between 1 and 8 and the second between 1 and 30. 
-
-    This represents the number of the producers (threads that will traverse the given directories),
-    and consumers (threads that will parse whatever files the producers found).
-
-    If this command is not provided, the numbers will be chosen based on the available threads
-    on your machine. Generally, a good ratio of producers-consumers is 1:3
-    
---braces-as-code
-
-    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
-    or 'no' to disable. Default: no 
-
-    Specifies whether lines that carry no content should be considered as code lines or not.
-    A line carries no content when nothing but punctuation is left on it once the strings and
-    the comments are taken out: '}', '});', '],', ')'.
-
-    The default behaviour is to not count them as code, since it is silly for code of the same content
-    and substance to be counted differently, according to the programmer's code style.
-    Writing 'if (x) { do(); }' on one line or on three should not change the number.
-    This helps to keep the stats clean when using code lines as a complexity and productivity metric.
-
-    Note that other line counters count these lines as code, so this is where their number and
-    mezura's differ. Enabling this flag makes the two closer.
-
---search-in-dotted
-
-    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
-    or 'no' to disable. Default: no 
-
-    Specifies whether the program should traverse directories that are prefixed with a dot,
-    like .vscode or .git.
-
---show-faulty-files
-
-    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
-    or 'no' to disable. Default: no 
-
-    Sometimes it happens that an error occurs when trying to parse a file, either while opening it,
-    or while reading its contents. The default behavior when this happens is to count all of
-    the faulty files and display their count.
-
-    Specifies that their path, along with information about the exact error is displayed too.
-    The most common reason for this error is if a file contains non UTF-8 characters. 
-
 --no-gitignore
 
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
@@ -248,60 +153,65 @@ Below there is a list with all the commands-flags that the program accepts.
     This flag disables that behavior, so that every relevant file is counted
     regardless of .gitignore rules.
 
---hide
+--search-in-dotted
 
-    One or more names separated by commas or spaces, for example:
-    --hide status,timing   or   --hide status timing
+    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
+    or 'no' to disable. Default: no
 
-    Leaves the named parts of the output unprinted. What you can hide:
+    Specifies whether the program should traverse directories that are prefixed with a dot,
+    like .vscode or .git.
 
-      version     the version line at the top
-      status      the 'Analyzing directories', 'Parsing files' and 'N files found' lines
-      details     the per language rows and the total underneath them
-      keywords    the keyword counts, keeping the rest of the details rows
-      overview    the whole percentages section
-      bar         only the [-|||-] bar of the overview, keeping the percentages and the colors
-      progress    the comparison with previous runs (the same as '--compare 0')
-      timing      the execution time line at the bottom
+--braces-as-code
 
-    The list mixes whole sections with parts of them on purpose: you are pointing at what you
-    see, not at how the program is organised.
+    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable, or 'no'
+    to disable. Default: no
 
-    Errors and warnings are never hidden. Hiding the status still reports files that failed to
-    be parsed, since otherwise the numbers would silently be wrong.
+    Specifies whether lines that carry no content should be considered as code lines or not.
+    A line carries no content when nothing but punctuation is left on it once the strings and
+    the comments are taken out: '}', '});', '],', ')'.
 
-    Replaces the '--no-visual' and '--no-keywords' commands of previous versions.
+    The default behaviour is to not count them as code, since it is silly for code of the same content
+    and substance to be counted differently, according to the programmer's code style.
+    Writing 'if (x) { do(); }' on one line or on three should not change the number.
+    This helps to keep the stats clean when using code lines as a complexity and productivity metric.
 
---colors
+    Note that other line counters count these lines as code, so this is where their number and
+    mezura's differ. Enabling this flag makes the two closer.
 
-    1 to 5 colors separated by spaces. A color is either a hex value, with or without a leading
-    '#' (e.g. ff8800 #00ff00), or one of the 16 standard terminal color names (black, red, green,
-    yellow, blue, magenta, cyan, white and their bright- variants, e.g. bright-magenta).
+--show-languages
 
-    Overrides the colors used in the "overview" section of the results: the first three colors
-    are used for the three most relevant languages, the fourth for a fourth language, and the
-    optional fifth for the 'others' entry (if omitted, the fourth is used for 'others' too).
-    If fewer colors are provided, the remaining ones keep their default color.
+    No arguments.
 
-    Named colors follow the terminal's color scheme; hex colors are rendered with 24-bit ANSI
-    codes, so the terminal must support truecolor.
-    If you are using Windows Powershell, either omit the '#' or surround the color with
-    quotation marks ("#ff8800"), since an unquoted '#' starts a comment.
+    Overrides normal program execution and just prints a sorted list with the names of
+    all the supported languages that were detected in the persistent data path
+    of the application, where you can add more.
 
---color-palette
+HOW THE REPORT LOOKS
 
-    One argument, the name of a palette (case-insensitive).
+--layout
 
-    Applies a named color palette. Palettes are .txt files in the 'data/palettes' dir, in the
-    persistent data path of the application, where the file name is the palette name. Each line
-    is a 'token = value' pair: 'languages' takes 1 to 5 colors in the same format as the
-    '--colors' command, and any style token (see '--style') takes a style.
-    You can add your own palettes there.
-    Use the '--show-palettes' command to list the available palettes.
+    One argument: 'table', 'boxed' or 'list'. Default: table
 
-    If the '--colors' command is also provided, it takes precedence over the palette's
-    'languages' line, while the palette's style tokens still apply.
-    Palettes written for versions before v3.0.0 are converted automatically on the first run.
+    Chooses the shape of the "details" section.
+
+      table     one aligned row per language: Language, Files, Lines, Code, Comments, Extra
+                and Size, with a percentage next to each of the first four. No borders, only
+                whitespace alignment, so it survives being pasted into a README or a ticket.
+      boxed     the same figures inside a drawn frame. Each number shares a cell with its
+                percentage there, since the borders already group the two, which makes it
+                narrower than 'table'. Needs a terminal that can render box drawing
+                characters.
+      list      one block of three rows per language: the file count and the size above the
+                name, the line breakdown beside it, the keywords below. Wider, and it cannot
+                be read down a column, but it reads well for a handful of languages.
+
+    The percentage next to 'Files' and to 'Lines' is that language's share of the total, the
+    one next to 'Code' and to 'Comments' is its share of that language's own lines, which is
+    what the same two numbers mean in the 'list' layout.
+
+    In the two tables the keywords cannot be a column without destroying the alignment, so they
+    are printed as their own block underneath, one line per language. '--hide keywords' still
+    suppresses them.
 
 --sort
 
@@ -327,20 +237,45 @@ Below there is a list with all the commands-flags that the program accepts.
     The "overview" section never shows more languages than this either, so asking for the top 2
     does not leave a third one sitting in the bar.
 
---bar-thickness
+--hide
 
-    One argument: 'slim', 'medium', 'fat' or 'low'. Default: slim
+    One or more names separated by commas or spaces, for example:
+    --hide parsing-info,timing   or   --hide parsing-info timing
 
-    Chooses the character that the percentage bar of the "overview" section is drawn with.
+    Leaves the named parts of the output unprinted. What you can hide:
 
-      slim     |   the default, and the only one made of ASCII, so it is the one that is
-                   guaranteed to render on every terminal
-      medium   ┃   thicker, but still leaves gaps between the strokes
-      fat      █   fills the cell, so the boundary between two language colors is crisp
-      low      ▄   fills only the bottom of the cell, a thin band under the text
+      version         the version line at the top
+      directory-info  the 'Analyzing directories' line and the 'N files found' line under it
+      parsing-info    the 'Parsing files' line and the 'ok' under it
+      keywords        the keyword counts, keeping the rest of the details rows
+      overview        the whole percentages section
+      bar             only the [-|||-] bar of the overview, keeping the percentages and the colors
+      progress        the comparison with previous runs (the same as '--compare 0')
+      timing          the execution time line at the bottom
 
-    All but 'slim' need a terminal and a font that can render box drawing characters.
-    If the bar comes out as question marks or empty boxes, use 'slim'.
+    The list mixes whole sections with parts of them on purpose: you are pointing at what you
+    see, not at how the program is organised.
+
+    Errors and warnings are never hidden. Hiding the parsing info still reports files that failed
+    to be parsed, since otherwise the numbers would silently be wrong.
+
+    Replaces the '--no-visual' and '--no-keywords' commands of previous versions.
+
+--theme
+
+    One argument, the name of a theme (case-insensitive).
+
+    Applies a named theme. Themes are .txt files in the 'data/themes' dir, in the persistent
+    data path of the application, where the file name is the theme name. Every line is a
+    'token = value' pair, the same tokens and values that '--style' takes (see '--help style').
+    You can add your own there, and '--show-themes' lists the ones you have.
+
+    A theme carries only how the output looks. What is measured and what is shown stays in a
+    configuration file, so a theme can be handed to someone else without carrying your paths
+    or your settings with it.
+
+    A style that does not parse is reported and skipped, and the rest of the theme still applies.
+    A name that matches no file is an error, since that one is a mistake in the command.
 
 --style
 
@@ -366,27 +301,38 @@ Below there is a list with all the commands-flags that the program accepts.
       extra-number       extra-label
       total-size-number  total-size-label
       avg-size-number    avg-size-label
+
+    'size-unit' is the unit next to a size, the 'KBs' of '430.5 KBs total', and it is one token for
+    both sizes since there is no reason to want two colors of KBs on one line. It is separate from
+    the labels so that it can stay quiet while 'Size' reads like every other column header.
       keyword-number     keyword-label
 
     The numbers of the "progress" section are the same quantities, so they follow the same tokens.
 
     The rest:
       version            the version line at the top
-      heading            the section titles and the "Analyzing directories" lines
+      heading            the section titles and the 'Analyzing directories' lines
       separator          the dashed line above the total
-      arrow              the '->' after a language name
+      arrow              the '->' after a language name, in the 'list' layout only
       bar-frame          the '[-' and '-]' around the overview bar
-      percent            the percentages inside the braces of the details rows
-      details-language   a language name in the details rows
+      percent            the percentages of the details rows
+      details-language-header  the word 'Language' over the first column of the two tables
+      details-language-name    the name of a language, in a row and in the keywords block
       details-total      the word 'Total'
       overview-label     the 'Files:', 'Lines:' and 'Size :' row labels of the overview
       overview-percent   the percentages of the overview
-      overview-language  the language names in the overview. A color declared here is ignored, since
-                         the overview colors each language from the palette, but the attributes apply
+      language-1         the first language of the overview, its name and the color of its bar cells
+      language-2         the second
+      language-3         the third
+      language-4         the fourth, shown only when nothing was folded into 'others'
+      language-others    the folded 'others' entry. A theme that names 'language-4' and not this one
+                         gets the same style here, since the two never appear together
       progress-up        an increase in the progress section
       progress-down      a decrease
       progress-same      no change
       progress-entry     the '->' of a progress entry
+      progress-modified  the word 'modified:' on an entry that was counted with other settings
+      progress-modified-field  the names of the settings that changed since that entry
       summary            the found / of interest / excluded line
       note               the '(+N more languages hidden by --top N)' line
       success            the 'ok' after parsing
@@ -394,31 +340,115 @@ Below there is a list with all the commands-flags that the program accepts.
       error              errors
       footer             the execution time line
 
-    Styles can also be declared inside a color palette or in a config file. They are applied in
-    that order, so a palette can ship a complete look while your own config keeps your
-    preferences across palette changes, and '--style' wins over both.
+    Only the color of a 'language-' token reaches the cells of the overview bar; bold, italic and
+    the rest apply to the language name alone.
 
---save
+    The same tokens can be declared in a theme file and in the style block of a config. They are
+    applied as one ladder of increasing specificity: the built-in defaults, then the theme, then
+    this project's config, then '--style' for this run. So a theme can ship a complete look, your
+    own config can keep a few tweaks that survive switching themes, and '--style' wins over both.
 
-    One argument as the file name (whitespace allowed, without an extension, case-insensitive)
+--bar-thickness
 
-    Doing so, will run the program and also create a .txt configuration file,
-    inside 'data/config/' with the specified name, that can later be loaded with the --load command.
+    One argument: 'slim', 'medium', 'fat' or 'low'. Default: medium
 
---load
+    Chooses the character that the percentage bar of the "overview" section is drawn with.
 
-    One argument as the file name (whitespace allowed, without an extension, case-insensitive)
-    
-    Associated with the '--save' command, this command is used to load the flags of 
-    an existing configuration file from the 'data/config/' directory. 
+      slim     |   the only one made of ASCII, so it is the one that is guaranteed to
+                   render on every terminal
+      medium   ┃   the default, thicker, but still leaves gaps between the strokes
+      fat      █   fills the cell, so the boundary between two language colors is crisp
+      low      ▄   fills only the bottom of the cell, a thin band under the text
 
-    You can combine the '--load' and '--save' commands to modify a configuration file.
+    All but 'slim' need a terminal and a font that can render box drawing characters.
+    If the bar comes out as question marks or empty boxes, use 'slim'.
+
+--number-separator
+
+    One argument: 'comma', 'underscore', 'dot' or 'none'. The character itself is also
+    accepted, so '--number-separator _' is the same as '--number-separator underscore'.
+    Default: comma
+
+    Chooses the character that groups the digits of every printed number.
+
+      comma        1,559,486
+      underscore   1_559_486
+      dot          1.559.486
+      none         1559486
+
+    The keyword row lists several figures next to each other, separated by commas, so
+    'comma' is the one choice where a grouped number and the end of one are the same
+    character.
+
+--decimal-separator
+
+    One argument: 'dot' or 'comma'. The character itself is also accepted, so
+    '--decimal-separator ,' is the same as '--decimal-separator comma'. Default: dot
+
+    Chooses the character that separates the decimals of every printed number: the sizes,
+    the percentages and the execution time.
+
+    It is free to be the same character as the one '--number-separator' groups the digits
+    with, since both conventions are in use somewhere. Nothing that is written to a log
+    file is affected, so a log stays readable by any version.
+
+--show-themes
+
+    No arguments, or one of 'slim', 'medium', 'fat' and 'low'. Default: medium
+
+    Overrides normal program execution and just prints a sorted list with the names of all
+    the themes that were detected in the persistent data path of the application, where you
+    can add more, each one previewed on a sample of the real details rows and a mock overview.
+
+    The preview follows '--layout', so it shows the shape a run would actually print.
+
+    The optional argument draws the preview bar with the character that the '--bar-thickness'
+    command would use, so that a theme can be judged the way it will be printed.
+
+--theme-editor
+
+    No arguments.
+
+    Overrides normal program execution: generates an interactive HTML page with the language
+    colors of every theme found in the persistent data path of the application, and opens it
+    in the default browser. There, every color can be adjusted, with live contrast metrics and
+    a mock overview drawn with the same bar character the program prints, and the result is
+    turned into the five 'language-' lines of a theme file.
+
+    Replaces the '--tune-palettes' command of previous versions.
+
+TAKING THE RESULT ELSEWHERE
+
+--output
+
+    One argument: 'text' or 'json'. Default: text
+
+    Chooses what mezura writes to its output. 'json' replaces everything, the status lines and
+    the overview included, with a single JSON document, so that the run can be read by another
+    program instead of by a person.
+
+      mezura ./src --output json > stats.json
+      mezura ./src --output json | jq '.total.code'
+
+    The document carries the counts as plain numbers of lines and bytes: no thousands
+    separators, no KB or MB, no percentages and no colors, whatever the rest of the settings
+    say. '--sort' and '--top' still order and cut the list of languages, and the count of the
+    ones left out is in the document. '--hide keywords' and '--hide timing' remove what they
+    name, since it is either not counted or not measured; the rest of the '--hide' list names
+    printed sections that a JSON run does not have.
+
+    Warnings and errors are written to the error output, so they never end up inside the
+    document. A run that finds nothing to count still writes a valid one, with an empty list of
+    languages and a total of zero.
+
+    This is the one display setting that a configuration file cannot carry, so that no saved
+    configuration can silently turn the output of every later run into JSON.
 
 --log
 
-    0..n words as arguments in the cmd.
+    Can take 0..n words as arguments in the cmd.
     If specified in a configuration file use 'true' or 'yes' to enable,
-    or 'no' to disable. Default: no 
+    or 'no' to disable. Default: no
 
     This flag only works if a configuration file is loaded. Specifies that a new log entry should be made
     with the stats of this program execution, inside the appropriate file in the 'data/logs' directory.
@@ -432,10 +462,146 @@ Below there is a list with all the commands-flags that the program accepts.
     1 argument: a number between 0 and 10. Default: 1
 
     This flag only works if a configuration file is loaded. Specifies with how many previous logs this
-    program execution should be compared to (see [Logs and Progress](#logs-and-progress)).
+    program execution should be compared to (see '--save' and '--load' commands).
 
     Providing 0 as argument will disable the progress report (comparison).
+
+    Every log entry records the settings that decide what is counted, and an entry that was written
+    with different ones is marked 'modified:' followed by their names. The comparison is still shown,
+    because the point is to say whether it can be trusted: a change of 'dirs' means the numbers came
+    from another tree, while a change of 'braces-as-code' means lines moved between code and extra
+    and the total did not. An entry written by a version that did not record a setting is never
+    reported as having changed it.
+
+YOUR DATA DIRECTORY
+
+--save
+
+    One argument as the file name (whitespace allowed, without an extension, case-insensitive)
+
+    Doing so, will run the program and also create a .txt configuration file,
+    inside 'data/config/' with the specified name, that can later be loaded with the --load command.
+
+--load
+
+    One argument as the file name (whitespace allowed, without an extension, case-insensitive)
+
+    Associated with the '--save' command, this command is used to load the flags of
+    an existing configuration file from the 'data/config/' directory.
+
+    You can combine the '--load' and '--save' commands to modify a configuration file.
+
+--save-theme
+
+    One argument, the name of the theme file to write (case-insensitive, no extension).
+
+    Writes everything about the way this run looks into a theme file: whatever theme was loaded,
+    plus the style block of the configuration, plus any '--style' given on the command line, all
+    flattened into values. The file stands on its own and can be shared as it is.
+
+    Combined with '--save', the configuration that is written points at this theme by name and
+    carries no styles of its own.
+
+--show-configs
+
+    No arguments.
+
+    Overrides normal program execution and just prints a sorted list with the names of
+    all the configuration files that were detected in the persistent data path
+    of the application.
+
+--restore
+
+    No arguments.
+
+    Overrides normal program execution and writes back every file that mezura ships with and that
+    is not in your data directory any more: the language files, the themes and the default
+    configuration. It says which ones it wrote, and says so too when nothing was missing.
+
+    It only ever creates. A file that is there is never touched, so your own languages, themes and
+    configurations are safe and nothing you have edited is undone. A file that exists but is broken
+    is not repaired either, since a file emptied on purpose and one damaged by accident look the
+    same from here: delete it and run this again.
+
+    The language files are the reason this exists. If one of them is missing, that language stops
+    being counted and nothing says so, because a file that is not there cannot be reported as
+    faulty. Themes and configurations announce their own absence; languages do not.
+
+TUNING AND DIAGNOSTICS
+
+--threads
+
+    2 numbers: the first between 1 and 8 and the second between 1 and 30.
+
+    This represents the number of the producers (threads that will traverse the given directories),
+    and consumers (threads that will parse whatever files the producers found).
+
+    If this command is not provided, the numbers will be chosen based on the available threads
+    on your machine. Generally, a good ratio of producers-consumers is 1:3
+
+--show-faulty-files
+
+    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
+    or 'no' to disable. Default: no
+
+    Sometimes it happens that an error occurs when trying to parse a file, either while opening it,
+    or while reading its contents. The default behavior when this happens is to count all of
+    the faulty files and display their count.
+
+    This flag specifies that their path, along with information about the exact error is displayed too.
+    The most common reason for this error is if a file contains non UTF-8 characters.
+
+THE PROGRAM ITSELF
+
+--help
+
+    No arguments, or any number of other command names, written with their dashes:
+    '--help --style --layout' explains those two and nothing else.
+
+    Overrides normal program execution and prints this message.
+
+--version
+
+    No arguments.
+
+    Overrides normal program execution and prints the version of this binary, with the date it
+    was released on. An unreleased build says so instead of naming a date.
+
+    Not to be confused with '--hide version', which only leaves the version line off the top of
+    a normal run.
+
+--changelog
+
+    No arguments, or the optional argument 'full'.
+
+    Overrides normal program execution and just prints a summary of the changes
+    of the current version of the program. If 'full' is provided, the changes
+    of every previous version are printed too, most recent first.
 ```
+
+
+## Scripting
+
+`--output json` writes a single JSON document instead of the printed report, so that a build step, a
+badge or a dashboard can read a run instead of a person. Everything that is not the document itself,
+warnings included, goes to the error output, so `mezura ./src --output json > stats.json` leaves a file
+that a parser accepts.
+
+```
+mezura ./src --output json | jq '.total.code'
+mezura ./src --output json | jq -r '.languages[] | "\(.name) \(.lines)"'
+```
+
+The counts are plain numbers of lines and bytes, with no separators, no KB or MB and no percentages:
+those are decisions about a terminal and a consumer that wants them can compute them. `scope` echoes
+the settings that can change a number, so that two documents are not compared when one of them was
+produced with a different `--exclude` or with `--braces-as-code`. `format` is the version of the
+document itself, separate from `mezura_version`, and it only moves when a key is removed or changes
+meaning, so a parser can check that one and ignore which build wrote the file.
+
+**Exit codes.** 0 means mezura ran and told you what it found, including when it found nothing,
+because zero is an answer. 1 means it did not run: a mistake in what was asked for, a name that does
+not exist, or a set of files where every one of them failed to be parsed.
 
 
 ## Configuration Files
@@ -471,18 +637,20 @@ Note that a configuration file must be loaded for both '--log' and '--compare' t
 
 
 
-## Color Palettes
-The colors of the "overview" section can be customized, either by giving explicit colors with the ```--colors``` command, or by applying a named palette with the ```--color-palette``` command. A color is either a hex value or one of the 16 standard terminal color names, which follow the color scheme of your terminal.
+## Themes
+Everything the program prints can be styled: 45 tokens, each taking a color plus any of bold, italic, underline, dim and reverse. A color is either a hex value or one of the 16 standard terminal color names, which follow the color scheme of your terminal. Run ```--help style``` for the full list of tokens.
 
-8 palettes are bundled: <b>Mezura</b> (the default one), Dracula, Nord, Gruvbox, Catppuccin, Sunset, Neon and Ocean. They are plain .txt files in the "data/palettes" dir of the persistent data path, so you can edit them, or add your own by dropping a file there. Use the ```--show-palettes``` command to list the ones that were found.
+A **theme** is a plain .txt file of ```token = value``` lines, in the "data/themes" dir of the persistent data path. It carries only how the output looks, never what is measured, so it can be shared as it is. Apply one with ```--theme <name>```, list the ones you have with ```--show-themes```, and write the current look into a new one with ```--save-theme <name>```.
 
-To make picking colors easier, there is an interactive palette tuner, where every palette is previewed on a mock overview, every color can be adjusted (with live contrast and color distance metrics, so that the result stays readable), and the outcome is turned into a ready to use command.
+7 themes are bundled: **Mezura** (the default one), Dracula, Gruvbox, Catppuccin, Meadow, Neon and Ocean. Edit them, or add your own by dropping a file there.
 
-<b>[Open the palette tuner online](https://subamanis.github.io/mezura/palette-tuner/)</b> to play with the bundled palettes, or run ```mezura --tune-palettes``` to open it with the palettes found on your own machine, including the ones you created.
+The four languages of the overview and the folded 'others' entry are five ordinary tokens, ```language-1``` to ```language-4``` and ```language-others```, so a theme sets them the same way it sets everything else.
 
-<a href="https://subamanis.github.io/mezura/palette-tuner/"><img src="screenshots/palette-tuner.png" width="900"></a>
+To make picking those five easier, there is an interactive editor, where every theme is previewed on a mock overview, every color can be adjusted (with live contrast and color distance metrics, so that the result stays readable), and the outcome is turned into the lines you paste into a theme file.
 
+<b>[Open the theme editor online](https://subamanis.github.io/mezura/theme-editor/)</b> to play with the bundled themes, or run ```mezura --theme-editor``` to open it with the themes found on your own machine, including the ones you created.
 
+<a href="https://subamanis.github.io/mezura/theme-editor/"><img src="screenshots/palette-tuner.png" width="900"></a>
 
 ## Supported Languages
 Note that the default supported languages are incomplete, but they can be easily expanded by the user. All the supported languages can be found in the folder "data/languages"

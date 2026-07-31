@@ -4,9 +4,10 @@ Configuration:
     dirs: ./
     exclude: 
     languages: 
-    excluded-languages: 
+    exclude-languages: 
     braces-as-code: no
     search-in-dotted: no
+    no-gitignore: no
 Stats:
     Files: 10
     Lines: 1000

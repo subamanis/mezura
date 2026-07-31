@@ -14,6 +14,13 @@ const OTHERS_NAME : &str = "others";
 
 const BYTES_UNIT : &str = "Bytes";
 
+// The keys of the settings block of a log entry, which are the command names that
+// 'io_handler::counting_settings' writes. Kept as a list so that a line of the stats block can never
+// be mistaken for one of them.
+const SETTING_KEYS : [&str; 7] = [config_manager::DIRS, config_manager::EXCLUDE, config_manager::LANGUAGES,
+        config_manager::EXCLUDE_LANGUAGES, config_manager::BRACES_AS_CODE, config_manager::SEARCH_IN_DOTTED,
+        config_manager::NO_GITIGNORE];
+
 //a language that is present but whose share rounds away to zero: shown as "<0.01", given no cell
 const PRESENT_BUT_TINY : f64 = 0.001;
 
@@ -70,7 +77,7 @@ pub fn format_and_print_results(content_info_map: &HashMap<String, LanguageConte
     }
 
     if !config.hidden.progress && let Some(content) = existing_log_content && config.compare_level != 0 {
-        print_comparison_to_previous_runs(final_stats, content,  config.compare_level, datetime_now);
+        print_comparison_to_previous_runs(final_stats, content, config, datetime_now);
     }
 }
 
@@ -673,21 +680,47 @@ fn print_lines(lines: &[String]) {
     }
 }
 
-fn print_comparison_to_previous_runs(final_stats: &FinalStats, log_content: &str, num_of_entries: usize, datetime_now: &DateTime<Local>) {
+// The settings this run counted with, against the ones the entry recorded. A setting the entry never
+// wrote is left alone rather than reported as changed, which is what keeps entries from older
+// versions from being accused of a difference nobody can know about.
+fn settings_changed_since(entry: &LogEntry, config: &Configuration) -> Vec<&'static str> {
+    io_handler::counting_settings(config).into_iter()
+            .filter(|(key, value)| entry.settings.iter().any(|(k, v)| k == key && v != value))
+            .map(|(key, _)| key)
+            .collect()
+}
+
+// Placed at the end of the line of the entry it belongs to, because it is a statement about that
+// entry and not about the run. Nothing is printed when nothing changed: a mark on every line in the
+// ordinary case is noise, and the reader would stop seeing it exactly when it appears.
+fn modified_tag(changed: &[&'static str]) -> String {
+    if changed.is_empty() {
+        return String::new();
+    }
+
+    let theme = theme::active();
+    format!("   {} {}", theme.progress_modified.paint("modified:"),
+            theme.progress_modified_field.paint(&changed.join(", ")))
+}
+
+fn print_comparison_to_previous_runs(final_stats: &FinalStats, log_content: &str, config: &Configuration, datetime_now: &DateTime<Local>) {
     println!("\n{}.\n", theme::active().heading.paint("Progress"));
 
-    let log_entries = parse_N_previous_entries(log_content, num_of_entries);
+    let log_entries = parse_N_previous_entries(log_content, config.compare_level);
 
     let mut comparison_str = String::with_capacity(200);
     for entry in log_entries.iter() {
         let duration = datetime_now.signed_duration_since(entry.datetime);
         let (days, hours, minutes) = split_minutes_to_D_H_M(duration.num_minutes());
         let arrow = theme::active().progress_entry.paint("->");
+        let tag = modified_tag(&settings_changed_since(entry, config));
         if let Some(name) = &entry.name {
-            comparison_str.push_str(&format!("{} \"{}\" ({} days, {} hours and {} minutes ago)\n",arrow, name, days, hours, minutes));
+            comparison_str.push_str(&format!("{} \"{}\" ({} days, {} hours and {} minutes ago){}\n",
+                    arrow, name, days, hours, minutes, tag));
         } else {
             let then_str = entry.datetime.naive_local().to_string();
-            comparison_str.push_str(&format!("{} {} ({} days, {} hours and {} minutes ago)\n",arrow, then_str, days, hours, minutes));
+            comparison_str.push_str(&format!("{} {} ({} days, {} hours and {} minutes ago){}\n",
+                    arrow, then_str, days, hours, minutes, tag));
         }
         // An entry from before the comments were split off has an 'extra' that meant something
         // else, so it is named and left uncompared instead of being reported as a collapse
@@ -760,6 +793,10 @@ struct LogEntry {
     name: Option<String>,
     stats: FinalStats,
     datetime: DateTime<Local>,
+    // The counting settings as that run recorded them. A setting the entry does not mention is one
+    // that version did not write, and an absent setting can never be reported as changed: the older
+    // entries here have no 'excluded-languages' line at all, and none of them has 'gitignore'
+    settings: Vec<(String, String)>,
     // Entries written before v3.0.0 have no 'Comments' key, and their 'Extra' counted the comments
     // in as well, so comparing it against an extra that no longer does would report a drop that
     // never happened
@@ -774,9 +811,14 @@ fn parse_N_previous_entries(log_content: &str, n: usize) -> Vec<LogEntry> {
     let mut is_expecting_date = false;
     let mut entry_name = None;
     let mut datetime = chrono::Local::now();
+    let mut settings : Vec<(String, String)> = Vec::with_capacity(7);
 
     for line in log_content.lines() {
         let line = line.trim_start();
+        if let Some((key, value)) = line.split_once(": ").or_else(|| line.strip_suffix(':').map(|key| (key, "")))
+            && SETTING_KEYS.contains(&key) {
+            settings.push((key.to_owned(), value.trim().to_owned()));
+        }
         if is_expecting_date {
             let fixed_datetime = chrono::DateTime::parse_from_str(line, "%Y-%m-%d %H:%M:%S %z").unwrap();
             datetime = fixed_datetime.with_timezone(&Local);
@@ -785,6 +827,7 @@ fn parse_N_previous_entries(log_content: &str, n: usize) -> Vec<LogEntry> {
 
         if let Some(entry) = line.strip_prefix("===>") {
             is_expecting_date = true;
+            settings.clear();
             let _entry = entry.trim();
             if !_entry.is_empty() {
                 entry_name = Some(_entry.to_owned());
@@ -807,7 +850,7 @@ fn parse_N_previous_entries(log_content: &str, n: usize) -> Vec<LogEntry> {
         } else if let Some(value) = line.strip_prefix(AVERAGE_SIZE) {
             let bytes_average_size = value.trim().parse::<usize>().unwrap();
             let stats = FinalStats::new_extended(files, lines, code_lines, comment_lines, extra_lines, bytes_size, bytes_average_size);
-            log_entries.push(LogEntry{name: entry_name.clone(), stats, datetime, splits_comments});
+            log_entries.push(LogEntry{name: entry_name.clone(), stats, datetime, settings: settings.clone(), splits_comments});
             (comment_lines, splits_comments) = (0, false);
 
             counter += 1;
@@ -1462,6 +1505,34 @@ mod tests {
             "c".to_owned() => LanguageMetadata::new(8, 40000),
             "others".to_owned() => LanguageMetadata::new(13, 50000)
             ], languages_metadata_map);
+    }
+
+    // The rule that keeps every old entry from being accused of a change nobody recorded: a setting
+    // the entry never wrote is unknown, not different.
+    #[test]
+    fn a_setting_an_entry_never_recorded_is_never_reported_as_changed() {
+        let entry_of = |settings: Vec<(&str, &str)>| LogEntry {
+            name: None, stats: FinalStats::new_extended(1, 1, 1, 0, 0, 1, 1), datetime: Local::now(),
+            settings: settings.into_iter().map(|(k, v)| (k.to_owned(), v.to_owned())).collect(),
+            splits_comments: true};
+        let mut config = Configuration::new(vec!["./src".to_owned()]);
+        config.braces_as_code = true;
+
+        // Everything the entry knows about matches, and it knows nothing of the rest
+        let entry = entry_of(vec![("braces-as-code", "yes")]);
+        assert!(settings_changed_since(&entry, &config).is_empty());
+        assert!(modified_tag(&settings_changed_since(&entry, &config)).is_empty());
+
+        let entry = entry_of(vec![("braces-as-code", "no"), ("no-gitignore", "no")]);
+        assert_eq!(vec!["braces-as-code"], settings_changed_since(&entry, &config));
+
+        config.no_gitignore = true;
+        let changed = settings_changed_since(&entry, &config);
+        assert_eq!(vec!["braces-as-code", "no-gitignore"], changed);
+        assert!(modified_tag(&changed).contains("braces-as-code, no-gitignore"));
+
+        // An entry with no settings block at all, which is every entry written before this existed
+        assert!(settings_changed_since(&entry_of(vec![]), &config).is_empty());
     }
 
     #[test]

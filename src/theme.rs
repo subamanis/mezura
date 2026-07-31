@@ -240,6 +240,9 @@ theme_tokens! {
     progress_down     => "progress-down",     Style::of(Color::TrueColor { r: 219, g: 129, b: 129 });
     progress_same     => "progress-same",     Style::of(Color::TrueColor { r: 255, g: 255, b: 255 });
     progress_entry    => "progress-entry",    Style::plain().bold();
+    // Two tokens and not one per setting: the word is the flag, the names are the detail
+    progress_modified => "progress-modified", Style::of(Color::Yellow);
+    progress_modified_field => "progress-modified-field", Style::plain();
 
     summary           => "summary",           Style::plain();
     note              => "note",              Style::plain().dim().italic();

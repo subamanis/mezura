@@ -400,6 +400,8 @@ pub const STYLE_HELP  :  &str =
       progress-down      a decrease
       progress-same      no change
       progress-entry     the '->' of a progress entry
+      progress-modified  the word 'modified:' on an entry that was counted with other settings
+      progress-modified-field  the names of the settings that changed since that entry
       summary            the found / of interest / excluded line
       note               the '(+N more languages hidden by --top N)' line
       success            the 'ok' after parsing
@@ -469,6 +471,13 @@ pub const COMPRARE_LEVEL_HELP  :  &str =
     program execution should be compared to (see '--save' and '--load' commands).
 
     Providing 0 as argument will disable the progress report (comparison).
+
+    Every log entry records the settings that decide what is counted, and an entry that was written
+    with different ones is marked 'modified:' followed by their names. The comparison is still shown,
+    because the point is to say whether it can be trusted: a change of 'dirs' means the numbers came
+    from another tree, while a change of 'braces-as-code' means lines moved between code and extra
+    and the total did not. An entry written by a version that did not record a setting is never
+    reported as having changed it.
 
 ";
 pub const SAVE_HELP  :  &str =
@@ -545,43 +554,73 @@ pub const HELP_HELP  :  &str =
 
 ";
 
-// The one list of commands. The full help prints it in this order, the lookup for a single command
-// searches it, and the close-match suggestions for an unrecognised name take their candidates from
-// it, so a new command cannot appear in one of the three and be forgotten in the others.
-pub const COMMAND_HELP : [(&str, &str); 32] = [
-    (HELP, HELP_HELP),
-    (VERSION, VERSION_HELP),
-    (CHANGELOG, CHANGELOG_HELP),
-    (SHOW_LANGUAGES, SHOW_LANGUAGES_HELP),
-    (SHOW_CONFIGS, SHOW_CONFIGS_HELP),
-    (SHOW_THEMES, SHOW_THEMES_HELP),
-    (THEME_EDITOR, THEME_EDITOR_HELP),
-    (RESTORE, RESTORE_HELP),
-    (DIRS, DIRS_HELP),
-    (EXCLUDE, EXCLUDE_HELP),
-    (LANGUAGES, LANGUAGES_HELP),
-    (EXCLUDE_LANGUAGES, EXCLUDE_LANGUAGES_HELP),
-    (THREADS, THREADS_HELP),
-    (BRACES_AS_CODE, BRACES_AS_CODE_HELP),
-    (SEARCH_IN_DOTTED, SEARCH_IN_DOTTED_HELP),
-    (SHOW_FAULTY_FILES, SHOW_FAULTY_FILES_HELP),
-    (NO_GITIGNORE, NO_GITIGNORE_HELP),
-    (HIDE, HIDE_HELP),
-    (THEME, THEME_HELP),
-    (SORT, SORT_HELP),
-    (TOP, TOP_HELP),
-    (BAR_THICKNESS, BAR_THICKNESS_HELP),
-    (LAYOUT, LAYOUT_HELP),
-    (OUTPUT, OUTPUT_HELP),
-    (NUMBER_SEPARATOR, NUMBER_SEPARATOR_HELP),
-    (DECIMAL_SEPARATOR, DECIMAL_SEPARATOR_HELP),
-    (STYLE, STYLE_HELP),
-    (LOG, LOG_HELP),
-    (COMPRARE_LEVEL, COMPRARE_LEVEL_HELP),
-    (SAVE, SAVE_HELP),
-    (LOAD, LOAD_HELP),
-    (SAVE_THEME, SAVE_THEME_HELP),
+// The one list of commands, grouped by what they are about and not by how they work, which is why
+// the ones that print instead of counting are spread across the groups they belong to rather than
+// sitting together: a reader looking for themes wants '--show-themes' next to '--theme', and does
+// not care that one of them overrides the run. The full help prints it in this order, the lookup for
+// a single command searches it, and the close-match suggestions take their candidates from it, so a
+// new command cannot appear in one of the three and be forgotten in the others.
+pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 6] = [
+    ("What is counted", &[
+        (DIRS, DIRS_HELP),
+        (EXCLUDE, EXCLUDE_HELP),
+        (LANGUAGES, LANGUAGES_HELP),
+        (EXCLUDE_LANGUAGES, EXCLUDE_LANGUAGES_HELP),
+        (NO_GITIGNORE, NO_GITIGNORE_HELP),
+        (SEARCH_IN_DOTTED, SEARCH_IN_DOTTED_HELP),
+        (BRACES_AS_CODE, BRACES_AS_CODE_HELP),
+        (SHOW_LANGUAGES, SHOW_LANGUAGES_HELP),
+    ]),
+    ("How the report looks", &[
+        (LAYOUT, LAYOUT_HELP),
+        (SORT, SORT_HELP),
+        (TOP, TOP_HELP),
+        (HIDE, HIDE_HELP),
+        (THEME, THEME_HELP),
+        (STYLE, STYLE_HELP),
+        (BAR_THICKNESS, BAR_THICKNESS_HELP),
+        (NUMBER_SEPARATOR, NUMBER_SEPARATOR_HELP),
+        (DECIMAL_SEPARATOR, DECIMAL_SEPARATOR_HELP),
+        (SHOW_THEMES, SHOW_THEMES_HELP),
+        (THEME_EDITOR, THEME_EDITOR_HELP),
+    ]),
+    ("Taking the result elsewhere", &[
+        (OUTPUT, OUTPUT_HELP),
+        (LOG, LOG_HELP),
+        (COMPRARE_LEVEL, COMPRARE_LEVEL_HELP),
+    ]),
+    ("Your data directory", &[
+        (SAVE, SAVE_HELP),
+        (LOAD, LOAD_HELP),
+        (SAVE_THEME, SAVE_THEME_HELP),
+        (SHOW_CONFIGS, SHOW_CONFIGS_HELP),
+        (RESTORE, RESTORE_HELP),
+    ]),
+    ("Tuning and diagnostics", &[
+        (THREADS, THREADS_HELP),
+        (SHOW_FAULTY_FILES, SHOW_FAULTY_FILES_HELP),
+    ]),
+    ("The program itself", &[
+        (HELP, HELP_HELP),
+        (VERSION, VERSION_HELP),
+        (CHANGELOG, CHANGELOG_HELP),
+    ]),
 ];
+
+// Used both by the full help and by the test that writes the README's command list, so that the two
+// cannot describe the same commands differently or in a different order
+pub fn help_body() -> String {
+    let mut body = String::with_capacity(20_000);
+    for (group, commands) in COMMAND_HELP {
+        body.push_str(&group.to_uppercase());
+        body.push_str("\n\n");
+        for (_, help) in commands {
+            body.push_str(help);
+        }
+    }
+
+    body
+}
 
 // The date lives in the first line of the Changelog, 'v3.0.0 - unreleased' or 'v2.0.1 - 27/7/2026',
 // and nowhere else. A separate constant would be a third place to remember on every release, next to
@@ -598,7 +637,7 @@ pub fn print_version() {
 }
 
 pub fn command_names() -> Vec<&'static str> {
-    COMMAND_HELP.iter().map(|(name, _)| *name).collect()
+    COMMAND_HELP.iter().flat_map(|(_, commands)| commands.iter().map(|(name, _)| *name)).collect()
 }
 
 pub fn print_whole_help_message() {
@@ -615,11 +654,8 @@ pub fn print_whole_help_message() {
 
 
     msg += get_data_dir_str().as_str();
-    msg += "Format of arguments: <path_here> --optional_command1 --optional_commandN\n\nCOMMANDS:\n\n";
-
-    for (_, help) in COMMAND_HELP {
-        msg += help;
-    }
+    msg += "Format of arguments: <path_here> --optional_command1 --optional_commandN\n\n";
+    msg += &help_body();
 
     println!("{msg}");
 }
@@ -682,7 +718,7 @@ pub fn print_changelog(full: bool) {
     }
 }
 
-// A theme is 43 tokens and the listing used to show five of them, the language slots, on a mock
+// A theme is 45 tokens and the listing used to show five of them, the language slots, on a mock
 // overview line. So the one place whose job is to show what a theme looks like before you pick it
 // said nothing about its headings, labels, numbers, percentages, arrow, separator or size figures.
 // It now prints a sample of the real details rows too, which is the densest line the program has.
@@ -786,13 +822,48 @@ fn get_data_dir_str() -> String {
 }
 
 fn get_help_msg_of_command(command: &str) -> Option<&'static str> {
-    COMMAND_HELP.iter().find(|(name, _)| *name == command).map(|(_, help)| *help)
+    COMMAND_HELP.iter().flat_map(|(_, commands)| commands.iter())
+            .find(|(name, _)| *name == command).map(|(_, help)| *help)
 }
 
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const README_HEADING : &str = "## Cmd Commands";
+    const FENCE : &str = "```";
+
+    // Returns the command block of the README, and everything before and after it, so that the block
+    // can be replaced without the rest of a hand written document being touched
+    fn readme_parts(readme: &str) -> (String, String, String) {
+        let heading_at = readme.find(README_HEADING).expect("the README has a '## Cmd Commands' heading");
+        let opening = readme[heading_at..].find(FENCE).expect("that section opens a fenced block") + heading_at;
+        let body_at = opening + FENCE.len();
+        let closing = readme[body_at..].find(FENCE).expect("that fenced block is closed") + body_at;
+
+        (readme[..body_at].to_owned(), readme[body_at..closing].to_owned(), readme[closing..].to_owned())
+    }
+
+    // The README's command list is not maintained, it is written from the help texts, which are the
+    // one source. Everything the README wants to say that the help does not say has to live outside
+    // the fence, because the inside of it is replaced wholesale.
+    #[test]
+    fn the_readme_command_list_is_the_help_itself() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md");
+        let readme = std::fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+        let (before, block, after) = readme_parts(&readme);
+        let generated = help_body();
+
+        if std::env::var_os("MEZURA_UPDATE_GOLDEN").is_some() {
+            std::fs::write(&path, format!("{before}\n{}\n{after}", generated.trim_end())).unwrap();
+            return;
+        }
+
+        assert_eq!(block.trim(), generated.trim(),
+                "the command list in the README no longer matches the help texts, which are the source. \
+                 Regenerate it with MEZURA_UPDATE_GOLDEN=1 cargo test --lib readme");
+    }
 
     // '--version' reads the release date from the first line of the Changelog, so that line has to
     // keep naming the version this binary reports. Without this the two drift apart silently and
