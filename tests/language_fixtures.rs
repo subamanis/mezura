@@ -63,7 +63,7 @@ fn language_fixtures_match_their_declared_counts() {
         let language = language_map.get(lang_name.as_ref()).unwrap();
         let keyword_matcher = KeywordMatcher::build(language);
         let mut buf = String::new();
-        let stats = match file_parser::parse_file(&path, lang_name.as_ref(), &mut buf, &mut file_parser::ScanBuffers::default(), language_map.clone(), keyword_matcher.as_ref(), &config) {
+        let stats = match file_parser::parse_file(&path, lang_name.as_ref(), &mut buf, &mut file_parser::ScanBuffers::default(), &language_map, keyword_matcher.as_ref(), &config) {
             Ok(stats) => stats,
             Err(x) => {
                 failures.push(format!("{name}: could not be parsed: {x}"));

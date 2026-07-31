@@ -37,7 +37,7 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                     keyword_matchers.insert(lang_name.to_owned(), built);
                 }
                 let keyword_matcher = keyword_matchers.get(lang_name).unwrap().as_ref();
-                match file_parser::parse_file(&parsable_file.path, lang_name, &mut buf, &mut scan_buffers, language_map.clone(), keyword_matcher, &config) {
+                match file_parser::parse_file(&parsable_file.path, lang_name, &mut buf, &mut scan_buffers, &language_map, keyword_matcher, &config) {
                     Ok(x) => {
                         let keywords = &language_map.get(lang_name).unwrap().keywords;
                         match local_content_info.get_mut(lang_name) {
