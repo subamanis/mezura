@@ -157,6 +157,14 @@ pub struct ScanBuffers {
     com_starts: Vec<usize>,
     com_ends: Vec<usize>,
     consumed: Vec<usize>,
+    relevant: String,
+}
+
+// The keyword scratch cannot live in ScanBuffers: while a LineInfo borrows the cleansed line out of
+// it, the whole struct is borrowed, and counting the keywords of that very line needs a free one.
+#[derive(Debug, Default)]
+pub struct ParseBuffers {
+    scan: ScanBuffers,
     alias_indices: Vec<usize>,
 }
 
@@ -170,6 +178,7 @@ impl ScanBuffers {
         self.com_ends.clear();
         self.consumed.clear();
         self.consumed.resize(slots, 0);
+        self.relevant.clear();
     }
 }
 
@@ -262,7 +271,7 @@ impl KeywordMatcher {
 }
 
 
-pub fn parse_file(path: &Path, lang_name: &str, buf: &mut String, buffers: &mut ScanBuffers,
+pub fn parse_file(path: &Path, lang_name: &str, buf: &mut String, buffers: &mut ParseBuffers,
     language_map: &HashMap<String,Language>, keyword_matcher: Option<&KeywordMatcher>, config: &Configuration)
 -> Result<FileStats,String>
 {
@@ -286,8 +295,9 @@ pub fn parse_file(path: &Path, lang_name: &str, buf: &mut String, buffers: &mut 
 }
 
 fn parse_lines(contents: &str, language: &Language, keyword_matcher: Option<&KeywordMatcher>, config: &Configuration,
-    buffers: &mut ScanBuffers) -> FileStats
+    buffers: &mut ParseBuffers) -> FileStats
 {
+    let ParseBuffers { scan, alias_indices } = buffers;
     let mut file_stats = match config.hidden.keywords {
         true => FileStats::default(),
         false => FileStats::with_keywords(&language.keywords)
@@ -306,9 +316,9 @@ fn parse_lines(contents: &str, language: &Language, keyword_matcher: Option<&Key
         // for performance reasons
         let line_info = 
         if language.supports_multiline_comments() {
-            get_bounds_w_multiline_comments(line, language, is_comment_closed, &open_str_symbol, buffers)
+            get_bounds_w_multiline_comments(line, language, is_comment_closed, &open_str_symbol, scan)
         } else {
-            get_bounds_only_single_line_comments(line, language, &open_str_symbol, buffers)
+            get_bounds_only_single_line_comments(line, language, &open_str_symbol, scan)
         };
 
         is_comment_closed = !line_info.is_comment_open_after;
@@ -325,7 +335,7 @@ fn parse_lines(contents: &str, language: &Language, keyword_matcher: Option<&Key
             if config.braces_as_code || !is_no_content {
                 file_stats.incr_code_lines();
                 if !config.hidden.keywords && let Some(matcher) = keyword_matcher {
-                    add_keywords_if_any(cleansed, matcher, &mut file_stats, &mut buffers.alias_indices);
+                    add_keywords_if_any(cleansed, matcher, &mut file_stats, alias_indices);
                 }
             }
         } else if line_info.has_string_literal {
@@ -350,11 +360,11 @@ struct LineInfo<'a> {
 
 
 fn get_bounds_only_single_line_comments<'a>(line: &'a str, language: &Language, open_str_symbol: &Option<u8>,
-    buffers: &mut ScanBuffers) -> LineInfo<'a>
+    buffers: &'a mut ScanBuffers) -> LineInfo<'a>
 {
     scan_line(line, language, buffers);
     resolve_string_delimiters(language, open_str_symbol, buffers);
-    let ScanBuffers { strings: str_indices, string_symbols: str_symbols, comments: comment_indices, .. } = buffers;
+    let ScanBuffers { strings: str_indices, string_symbols: str_symbols, comments: comment_indices, relevant, .. } = buffers;
 
     if open_str_symbol.is_some() && str_indices.is_empty() {
         return LineInfo::none_str(false, true, *open_str_symbol);
@@ -364,7 +374,6 @@ fn get_bounds_only_single_line_comments<'a>(line: &'a str, language: &Language, 
         return LineInfo::whole_line(line, false);
     }
     
-    let mut relevant = String::with_capacity(line.len());
     let has_more_strs = |counter| counter < str_indices.len();
     let has_more_comments = |counter| counter < comment_indices.len(); 
     let next_symbol_is_comment = |comment_counter: usize, str_counter: usize| {
@@ -397,7 +406,7 @@ fn get_bounds_only_single_line_comments<'a>(line: &'a str, language: &Language, 
             
             if index_after >= line.len() {
                 if relevant.is_empty() {return LineInfo::none_all(true);}
-                else {return LineInfo::with_str(relevant,true);}
+                else {return LineInfo::with_buffer(relevant,true);}
             } 
             
             is_str_open_m = false;
@@ -424,22 +433,22 @@ fn get_bounds_only_single_line_comments<'a>(line: &'a str, language: &Language, 
                 relevant.push_str(&line[slice_start_index..comment_indices[comment_counter]]);
                 
                 if relevant.is_empty() {return LineInfo::none_str(false, has_string_literal, None);}
-                else {return LineInfo::new(Some(relevant), has_string_literal, false, None);}
+                else {return LineInfo::buffered(relevant, has_string_literal, false, None);}
             } else {
                 relevant.push_str(&line[slice_start_index..line.len()]);
-                return LineInfo::with_str(relevant, has_string_literal);
+                return LineInfo::with_buffer(relevant, has_string_literal);
             }
         }
     }
 }
 
 fn get_bounds_w_multiline_comments<'a>(line: &'a str, language: &Language, is_comment_closed: bool,
-    open_str_symbol: &Option<u8>, buffers: &mut ScanBuffers) -> LineInfo<'a>
+    open_str_symbol: &Option<u8>, buffers: &'a mut ScanBuffers) -> LineInfo<'a>
 {
     scan_line(line, language, buffers);
     resolve_string_delimiters(language, open_str_symbol, buffers);
     let ScanBuffers { strings: str_indices, string_symbols: str_symbols, comments: comment_indices,
-            com_starts: com_start_indices, com_ends: com_end_indices, .. } = buffers;
+            com_starts: com_start_indices, com_ends: com_end_indices, relevant, .. } = buffers;
 
     if is_comment_closed {
         if open_str_symbol.is_some() && str_indices.is_empty() {
@@ -465,7 +474,6 @@ fn get_bounds_w_multiline_comments<'a>(line: &'a str, language: &Language, is_co
         return LineInfo::whole_line(line, false);
     }
 
-    let mut relevant = String::with_capacity(line.len());
     let (mut start_com_counter, mut end_com_counter, mut str_counter, mut comment_counter) = (0,0,0,0); 
     let (mut is_com_open_m, mut is_str_open_m) = (!is_comment_closed, open_str_symbol.is_some());
 
@@ -534,7 +542,7 @@ fn get_bounds_w_multiline_comments<'a>(line: &'a str, language: &Language, is_co
             let index_after = last_symbol_index + 1;
             if index_after >= line.len() {
                 if relevant.is_empty() {return LineInfo::none_all(true);}
-                else {return LineInfo::with_str(relevant,true);}
+                else {return LineInfo::with_buffer(relevant,true);}
             } 
             
             progress_counters_after(last_symbol_index, &mut comment_counter, &mut str_counter,
@@ -546,13 +554,13 @@ fn get_bounds_w_multiline_comments<'a>(line: &'a str, language: &Language, is_co
             slice_start_index = index_after;
         } else if is_com_open_m {
             if end_com_counter == com_end_indices.len() {
-                return LineInfo::new(Some(relevant), has_string_literal, true, None);
+                return LineInfo::buffered(relevant, has_string_literal, true, None);
             }
             last_symbol_index = com_end_indices[end_com_counter];
             let index_after = last_symbol_index + language.multiline_end_len();
             if index_after >= line.len() {
                 if relevant.is_empty() {return LineInfo::none_all(has_string_literal);}
-                else {return LineInfo::with_str(relevant,has_string_literal);}
+                else {return LineInfo::with_buffer(relevant,has_string_literal);}
             } 
 
             is_com_open_m = false;
@@ -571,7 +579,7 @@ fn get_bounds_w_multiline_comments<'a>(line: &'a str, language: &Language, is_co
             if next_symbol_is_comment(comment_counter, str_counter, start_com_counter) {
                 relevant.push_str(&line[slice_start_index..comment_indices[comment_counter]]);
                 if relevant.is_empty() {return LineInfo::none_all(has_string_literal);}
-                else {return LineInfo::with_str(relevant,has_string_literal);}
+                else {return LineInfo::with_buffer(relevant,has_string_literal);}
             } else if next_symbol_is_string(comment_counter, str_counter, start_com_counter) {
                 let this_index = str_indices[str_counter];
                 if skipped_com_end_symbol(last_symbol_index, end_com_counter, this_index) {
@@ -595,7 +603,7 @@ fn get_bounds_w_multiline_comments<'a>(line: &'a str, language: &Language, is_co
                 relevant.push_str(&line[slice_start_index..this_index]);
                 if !has_more_ends(end_com_counter) {
                     if relevant.is_empty() {return LineInfo::with_open_comment();}
-                    else {return LineInfo::new(Some(relevant), has_string_literal, true, None);}
+                    else {return LineInfo::buffered(relevant, has_string_literal, true, None);}
                 }
                 
                 is_com_open_m = true;
@@ -603,17 +611,17 @@ fn get_bounds_w_multiline_comments<'a>(line: &'a str, language: &Language, is_co
                 last_symbol_index = this_index;
             } else {
                 relevant.push_str(&line[slice_start_index..line.len()]);
-                return LineInfo::with_str(relevant, has_string_literal);
+                return LineInfo::with_buffer(relevant, has_string_literal);
             }
         }
     }
 }
 
-fn get_LineInfo_with_str_symbol<'a>(relevant: String, str_symbol: u8) -> LineInfo<'a> {
+fn get_LineInfo_with_str_symbol<'a>(relevant: &'a str, str_symbol: u8) -> LineInfo<'a> {
     if relevant.is_empty() {
         LineInfo::with_open_symbol(str_symbol)
     } else {
-        LineInfo::new(Some(relevant), true, false, Some(str_symbol))
+        LineInfo::buffered(relevant, true, false, Some(str_symbol))
     }
 }
 
@@ -779,12 +787,23 @@ impl<'a> LineInfo<'a> {
         }
     }
 
-    pub fn with_str(cleansed_string: String, has_string_literal: bool) -> LineInfo<'a> {
+    pub fn with_buffer(cleansed_string: &'a str, has_string_literal: bool) -> LineInfo<'a> {
         LineInfo {
-            cleansed_string: Some(Cow::Owned(cleansed_string)),
+            cleansed_string: Some(Cow::Borrowed(cleansed_string)),
             has_string_literal,
             is_comment_open_after : false,
             open_str_sybol_after : None
+        }
+    }
+
+    pub fn buffered(cleansed_string: &'a str, has_string_literal: bool, is_comment_open_after: bool,
+        open_str_sybol_after: Option<u8>) -> LineInfo<'a>
+    {
+        LineInfo {
+            cleansed_string: Some(Cow::Borrowed(cleansed_string)),
+            has_string_literal,
+            is_comment_open_after,
+            open_str_sybol_after
         }
     }
 
@@ -844,6 +863,7 @@ impl<'a> LineInfo<'a> {
         }
     }
 
+    #[cfg(test)]
     pub fn new(cleansed_string: Option<String>, has_string_literal: bool, is_comment_open_after: bool, open_str_sybol_after: Option<u8>) -> LineInfo<'a> {
         LineInfo {
             cleansed_string: cleansed_string.map(Cow::Owned),
@@ -861,12 +881,25 @@ mod tests {
 
     // The parser is handed its working memory by the consumer thread that owns it. A test cares
     // about one line at a time, so it gets a fresh one and reads the result out.
+    // The cleansed line lives in the buffers the consumer thread owns, so a LineInfo borrows them.
+    // A test owns its buffers for one call only, and takes the string with it on the way out.
+    fn detached<'a>(info: LineInfo<'_>) -> LineInfo<'a> {
+        LineInfo {
+            cleansed_string: info.cleansed_string.map(|x| Cow::Owned(x.into_owned())),
+            has_string_literal: info.has_string_literal,
+            is_comment_open_after: info.is_comment_open_after,
+            open_str_sybol_after: info.open_str_sybol_after
+        }
+    }
+
     fn bounds_multi<'a>(line: &'a str, language: &Language, is_comment_closed: bool, open_str_symbol: &Option<u8>) -> LineInfo<'a> {
-        get_bounds_w_multiline_comments(line, language, is_comment_closed, open_str_symbol, &mut ScanBuffers::default())
+        let mut buffers = ScanBuffers::default();
+        detached(get_bounds_w_multiline_comments(line, language, is_comment_closed, open_str_symbol, &mut buffers))
     }
 
     fn bounds_single<'a>(line: &'a str, language: &Language, open_str_symbol: &Option<u8>) -> LineInfo<'a> {
-        get_bounds_only_single_line_comments(line, language, open_str_symbol, &mut ScanBuffers::default())
+        let mut buffers = ScanBuffers::default();
+        detached(get_bounds_only_single_line_comments(line, language, open_str_symbol, &mut buffers))
     }
 
     fn str_delimiters(line: &str, language: &Language, open_str_symbol: &Option<u8>) -> (Vec<usize>, Vec<u8>) {
@@ -990,36 +1023,36 @@ mod tests {
         let mut buf = String::with_capacity(150);
 
         let mut config = Configuration::new(vec!["a".to_owned()]);
-        let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "Java", &mut buf, &mut ScanBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &config);
+        let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "Java", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &config);
         let result = content_info_of(result.unwrap(), "Java");
         assert_eq!(LanguageContentInfo::new(44, 13, 15, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         buf.clear();
         config.set_hidden(config_manager::Hidden {keywords: true, ..Default::default()});
-        let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "Java", &mut buf, &mut ScanBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &config);
+        let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "Java", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &config);
         let result = content_info_of(result.unwrap(), "Java");
         assert_eq!(LanguageContentInfo::new(44, 13, 15, hashmap!()), result);
         buf.clear();
         config.set_hidden(config_manager::Hidden::default());
-        let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "C#", &mut buf, &mut ScanBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("C#").as_ref(), &Configuration::new(vec!["a".to_owned()]));
+        let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "C#", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("C#").as_ref(), &Configuration::new(vec!["a".to_owned()]));
         let result = content_info_of(result.unwrap(), "C#");
         assert_eq!(LanguageContentInfo::new(44, 13, 15, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         buf.clear();
         
-        let result = parse_file(Path::new("test_dir/lang_files/d.txt"), "C#", &mut buf, &mut ScanBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("C#").as_ref(), &Configuration::new(vec!["a".to_owned()]));
+        let result = parse_file(Path::new("test_dir/lang_files/d.txt"), "C#", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("C#").as_ref(), &Configuration::new(vec!["a".to_owned()]));
         let result = content_info_of(result.unwrap(), "C#");
         assert_eq!(LanguageContentInfo::new(19, 7, 10, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         buf.clear();
-        let result = parse_file(Path::new("test_dir/lang_files/d.txt"), "Java", &mut buf, &mut ScanBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &Configuration::new(vec!["a".to_owned()]));
+        let result = parse_file(Path::new("test_dir/lang_files/d.txt"), "Java", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &Configuration::new(vec!["a".to_owned()]));
         let result = content_info_of(result.unwrap(), "Java");
         assert_eq!(LanguageContentInfo::new(19, 7, 10, hashmap!("classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         buf.clear();
 
-        let result = parse_file(Path::new("test_dir/lang_files/b.txt"), "Java", &mut buf, &mut ScanBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &Configuration::new(vec!["a".to_owned()]));
+        let result = parse_file(Path::new("test_dir/lang_files/b.txt"), "Java", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &Configuration::new(vec!["a".to_owned()]));
         let result = content_info_of(result.unwrap(), "Java");
         assert_eq!(LanguageContentInfo::new(19, 11, 5, hashmap!("classes".to_owned()=>7,"interfaces".to_owned()=>0)), result);
         buf.clear();
 
-        let result = parse_file(Path::new("test_dir/lang_files/c.txt"), "Python", &mut buf, &mut ScanBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Python").as_ref(), &Configuration::new(vec!["a".to_owned()]));
+        let result = parse_file(Path::new("test_dir/lang_files/c.txt"), "Python", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Python").as_ref(), &Configuration::new(vec!["a".to_owned()]));
         let result = content_info_of(result.unwrap(), "Python");
         assert_eq!(LanguageContentInfo::new(11, 6, 3, hashmap!("classes".to_owned()=>2)), result);
         buf.clear();
@@ -1035,7 +1068,7 @@ mod tests {
         let count_with = |flag: bool, buf: &mut String| {
             let mut config = Configuration::new(vec!["a".to_owned()]);
             config.set_braces_as_code(flag);
-            let stats = parse_file(path, "Java", buf, &mut ScanBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &config).unwrap();
+            let stats = parse_file(path, "Java", buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &config).unwrap();
             (stats.lines, stats.code_lines, stats.comment_lines)
         };
 
