@@ -391,38 +391,28 @@ fn get_bounds_w_multiline_comments<'a>(line: &'a str, language: &Language, is_co
     }
 }
 
+// However many single line comment symbols the language declares. With one of them the matches come
+// out in order already, so the sort is the price of the second and not of the first.
 fn find_comment_indicies_without_multiline(line: &str, language: &Language) -> Vec<usize> {
     let finders = finders_of(language);
     let line_bytes = line.as_bytes();
-    if language.comment_symbols.len() > 1 {
-        let mut matches = finders.comment_finders[0].find_iter(line_bytes)
-            .chain(finders.comment_finders[1].find_iter(line_bytes))
+    let mut matches = finders.comment_finders.iter()
+            .flat_map(|finder| finder.find_iter(line_bytes))
             .collect::<Vec<usize>>();
+    if language.comment_symbols.len() > 1 {
         matches.sort_unstable();
-        matches
-    } else {
-        finders.comment_finders[0].find_iter(line_bytes).collect::<Vec<usize>>()
     }
+
+    matches
 }
 
 fn find_comment_indicies_w_multiline(line: &str, language: &Language, com_end_indices: &[usize]) -> Vec<usize> {
     let finders = finders_of(language);
     let line_bytes = line.as_bytes();
-    if language.comment_symbols.len() > 1 {
-        finders.comment_finders[0].find_iter(line_bytes)
-        .filter_map(|x| filter_comment_end_indicies(x, language, com_end_indices))
-            .chain(
-                finders.comment_finders[1].find_iter(line_bytes)
-                .filter_map(|x|  filter_comment_end_indicies(x, language, com_end_indices))
-            )
-        .collect::<Vec<_>>()
-    } else {
-        finders.comment_finders[0].find_iter(line_bytes)
-            .filter_map(|x| {
-                filter_comment_end_indicies(x, language, com_end_indices)
-            })
+    finders.comment_finders.iter()
+            .flat_map(|finder| finder.find_iter(line_bytes))
+            .filter_map(|x| filter_comment_end_indicies(x, language, com_end_indices))
             .collect::<Vec<_>>()
-    }
 }
 
 fn filter_comment_end_indicies(x: usize, language: &Language, indicies: &[usize]) -> Option<usize> {
@@ -557,6 +547,9 @@ fn count_alias_occurrences(cleansed: &str, alias_finder: &memmem::Finder<'_>, al
     }
 }
 
+// Every occurrence of every string symbol on the line, reduced to the ones that actually open or
+// close a string. The number of symbols a language declares is not fixed: the one rule is that only
+// the symbol that opened a string can close it, so anything of another kind in between is text.
 pub fn get_str_indices_and_symbols(line: &str, language: &Language, open_str_symbol: &Option<String>) -> (Vec<usize>,Vec<u8>) {
     fn is_not_escaped(pos: usize, bytes: &[u8]) -> bool {
         let mut slashes = 0;
@@ -564,172 +557,51 @@ pub fn get_str_indices_and_symbols(line: &str, language: &Language, open_str_sym
         while pos >= offset && bytes[pos - offset] == b'\\' {
             offset += 1;
             slashes += 1;
-        } 
+        }
         slashes % 2 == 0
-    }
-
-    fn add_unescaped_indices(indices: &mut Vec<usize>, symbols: &mut Vec<u8>, symbol_index: u8, first_val: usize, bytes: &[u8], iter: &mut memmem::FindIter<'_, '_>) {
-        if first_val == 0 {
-            indices.push(first_val);
-            symbols.push(symbol_index);
-        } else {
-            if is_not_escaped(first_val, bytes) {
-                indices.push(first_val);
-                symbols.push(symbol_index);
-            }
-        }
-        for x in iter {
-            if is_not_escaped(x, bytes) {
-                indices.push(x);
-                symbols.push(symbol_index);
-            }
-        }
-    }
-
-    fn add_non_intersecting(indices_1: &mut Vec<usize>, indices_2: &mut Vec<usize>, symbols_1: &mut Vec<u8>, symbols_2: &mut Vec<u8>,
-            open_str_symbol: &Option<String>, merged_indices: &mut Vec<usize>, merged_symbols: &mut Vec<u8>, language: &Language)
-    {
-        let mut is_str_open = open_str_symbol.is_some();
-        let (mut first_indicies, mut second_indicies, mut first_symbols, mut second_symbols) = {
-            if let Some(x) = open_str_symbol {
-                if language.string_symbols[0] == *x {
-                    (indices_1, indices_2, symbols_1, symbols_2)
-                } else {
-                    (indices_2, indices_1, symbols_2, symbols_1)
-                }
-            } else {
-                if indices_1[0] < indices_2[0] { 
-                    (indices_1, indices_2, symbols_1, symbols_2)
-                } else {
-                    (indices_2, indices_1, symbols_2, symbols_1)
-                }
-            }
-        };
-
-        let (mut first_counter, mut second_counter) = (0,0);
-        loop {
-            if is_str_open {
-                if first_counter >= first_indicies.len() {
-                    return;
-                }
-                merged_indices.push(first_indicies[first_counter]);
-                merged_symbols.push(first_symbols[first_counter]);
-                while second_counter < second_indicies.len() && second_indicies[second_counter] < first_indicies[first_counter] {
-                    second_counter += 1;
-                }
-                is_str_open = false;
-                first_counter += 1;
-            } else {
-                if second_counter >= second_indicies.len() {
-                    while first_counter < first_indicies.len() {
-                        merged_indices.push(first_indicies[first_counter]);
-                        merged_symbols.push(first_symbols[first_counter]);
-                        first_counter += 1;
-                    }
-                    return;
-                } else if first_counter >= first_indicies.len() {
-                    while second_counter < second_indicies.len() {
-                        merged_indices.push(second_indicies[second_counter]);
-                        merged_symbols.push(second_symbols[second_counter]);
-
-                        second_counter += 1;
-                    }
-                    return;
-                }
-
-                if second_indicies[second_counter] < first_indicies[first_counter] {
-                    let (temp_indicies, temp_symbols, temp_counter) = (first_indicies, first_symbols, first_counter);
-                    first_indicies = second_indicies;
-                    first_symbols = second_symbols;
-                    first_counter = second_counter;
-                    second_indicies = temp_indicies;
-                    second_symbols = temp_symbols;
-                    second_counter = temp_counter;
-                } 
-
-                merged_indices.push(first_indicies[first_counter]);
-                merged_symbols.push(first_symbols[first_counter]);
-                first_counter += 1;
-                is_str_open = true;
-            }
-        }
     }
 
     let line_bytes = line.as_bytes();
     let finders = finders_of(language);
-    if language.string_symbols.len() == 2 {
-        let mut iter_1 = finders.string_finders[0].find_iter(line_bytes);
-        let mut iter_2 = finders.string_finders[1].find_iter(line_bytes);
-        let first_match_1 = iter_1.next();
-        let first_match_2 = iter_2.next();
-        let mut indices  = Vec::new();
-        let mut symbols  = Vec::new();
-        match (first_match_1, first_match_2) {
-        (None, None) => (vec![],vec![]),
-        (None, Some(match_2)) => {
-            if open_str_symbol.is_none() {
-                add_unescaped_indices(&mut indices, &mut symbols, 1,
-                        match_2, line_bytes, &mut iter_2);
-                (indices,symbols)
-            } else {
-                let open_str_symbol = open_str_symbol.as_ref().unwrap();
-                if *open_str_symbol == language.string_symbols[1]{
-                    add_unescaped_indices(&mut indices, &mut symbols, 1,
-                            match_2, line_bytes, &mut iter_2);
-                    (indices,symbols)
-                } else {
-                    (vec![],vec![])
-                }
-            }
-        },
-        (Some(match_1), None) => {
-            if open_str_symbol.is_none() {
-                add_unescaped_indices(&mut indices, &mut symbols, 0,
-                            match_1, line_bytes, &mut iter_1);
-                (indices,symbols)
-            } else {
-                let open_str_symbol = open_str_symbol.as_ref().unwrap();
-                if *open_str_symbol == language.string_symbols[0]{
-                    add_unescaped_indices(&mut indices, &mut symbols, 0,
-                            match_1, line_bytes, &mut iter_1);
-                    (indices,symbols)
-                } else {
-                    (vec![],vec![])
-                }
-            }
-        },
-        (Some(match_1), Some(match_2)) => {
-            let mut indices_1 = Vec::new();
-            let mut symbols_1 = Vec::new();
-            let mut indices_2 = Vec::new();
-            let mut symbols_2 = Vec::new();
-            add_unescaped_indices(&mut indices_1, &mut symbols_1, 0,
-                    match_1, line_bytes, &mut iter_1);
-            add_unescaped_indices(&mut indices_2, &mut symbols_2, 1,
-                    match_2, line_bytes, &mut iter_2);
-            if indices_1.is_empty() && indices_2.is_empty() {
-                (vec![],vec![])
-            } else if indices_2.is_empty() {
-                (indices_1,symbols_1)
-            } else if indices_1.is_empty() {
-                (indices_2, symbols_2)
-            } else {
-                add_non_intersecting(&mut indices_1, &mut indices_2, &mut symbols_1, &mut symbols_2,
-                        open_str_symbol, &mut indices, &mut symbols, language);
-                (indices,symbols)
+    let length_of = |symbol: u8| language.string_symbols[symbol as usize].len();
+
+    let mut occurrences = Vec::with_capacity(8);
+    for (symbol, finder) in finders.string_finders.iter().enumerate() {
+        for at in finder.find_iter(line_bytes) {
+            if at == 0 || is_not_escaped(at, line_bytes) {
+                occurrences.push((at, symbol as u8));
             }
         }
-        }
-    } else {
-        let mut indices = Vec::new();
-        let mut symbols = Vec::new();
-        finders.string_finders[0].find_iter(line_bytes).for_each(|x| {
-            if is_not_escaped(x, line_bytes) {
-                indices.push(x); symbols.push(0);
-            }
-        });
-        (indices, symbols)
     }
+    // In the order they are written, and where two of them start at the same place the longer one is
+    // the real one: a '"""' is not three '"', and without this rule a language could not declare both
+    if language.string_symbols.len() > 1 {
+        occurrences.sort_unstable_by(|(a_at, a_symbol), (b_at, b_symbol)|
+                a_at.cmp(b_at).then_with(|| length_of(*b_symbol).cmp(&length_of(*a_symbol))));
+    }
+
+    let mut open = open_str_symbol.as_ref()
+            .and_then(|symbol| language.string_symbols.iter().position(|x| x == symbol))
+            .map(|position| position as u8);
+    let mut consumed_up_to = 0;
+    let (mut indices, mut symbols) = (Vec::with_capacity(occurrences.len()), Vec::with_capacity(occurrences.len()));
+
+    for (at, symbol) in occurrences {
+        // What sits inside a symbol that was already taken is part of it, not a symbol of its own
+        if at < consumed_up_to {
+            continue;
+        }
+        match open {
+            Some(open_symbol) if open_symbol != symbol => continue,
+            Some(_) => open = None,
+            None => open = Some(symbol)
+        }
+        consumed_up_to = at + length_of(symbol);
+        indices.push(at);
+        symbols.push(symbol);
+    }
+
+    (indices, symbols)
 }
 
 fn is_intersecting_with_multi_line_end_symbol(index: usize, symbol_len: usize, end_vec: &[usize]) -> bool {
@@ -909,6 +781,20 @@ mod tests {
         multiline_comment_start_symbol : Some("/*".to_owned()),
         multiline_comment_end_symbol : Some("*/".to_owned()),
         keywords : vec![STRUCT.clone(),ENUM.clone(),TRAIT.clone()],
+        finders : std::sync::OnceLock::new()
+    });
+
+    // Four string symbols and three comment ones, which no language file could express before: with
+    // three the old merge silently scanned for the first alone, and with more than two comment
+    // symbols it scanned for the first two.
+    static PYTHON_FULL : LazyLock<Language> = LazyLock::new(|| Language {
+        name : "py".to_owned(),
+        extensions : vec!["py".to_owned()],
+        string_symbols : vec!["\"\"\"".to_owned(), "'''".to_owned(), "\"".to_owned(), "'".to_owned()],
+        comment_symbols : vec!["#".to_owned(), "//".to_owned(), "--".to_owned()],
+        multiline_comment_start_symbol : None,
+        multiline_comment_end_symbol : None,
+        keywords : vec![CLASS.clone()],
         finders : std::sync::OnceLock::new()
     });
 
@@ -1095,9 +981,70 @@ mod tests {
         let line = String::from(r#""\"\\"""#); //  """\"""
         assert_eq!(vec![0,5,6], get_str_indices_and_symbols(&line, &RUST, &None).0);
         assert_eq!(vec![0,5,6], get_str_indices_and_symbols(&line, &PYTHON, &None).0);
-        let line = String::from(r#"\\\"\"\\""#); 
+        let line = String::from(r#"\\\"\"\\""#);
         assert_eq!(vec![8], get_str_indices_and_symbols(&line, &RUST, &None).0);
         assert_eq!(vec![8], get_str_indices_and_symbols(&line, &PYTHON, &None).0);
+    }
+
+    // The number of string symbols is not two any more, and the two rules that make more than two
+    // work: only the symbol that opened a string closes it, and where two of them start at the same
+    // place the longer one wins.
+    #[test]
+    fn a_language_can_declare_more_than_two_string_symbols() {
+        let indices_of = |line: &str| get_str_indices_and_symbols(&String::from(line), &PYTHON_FULL, &None);
+
+        // The third and the fourth symbol are seen at all, which is what the old merge could not do
+        assert_eq!(vec![0, 4], indices_of(r#""abc""#).0);
+        assert_eq!(vec![0, 4], indices_of(r#"'abc'"#).0);
+
+        // '"""' is one symbol and not three '"', so the docstring opens once and closes once
+        let (indices, symbols) = indices_of(r#""""a docstring""""#);
+        assert_eq!(vec![0, 14], indices);
+        assert_eq!(vec![0u8, 0u8], symbols);
+
+        // Only the symbol that opened closes: the quote of an apostrophe inside a string is text,
+        // and so is a '"""' that turns up inside a plain '"'
+        assert_eq!(vec![0, 10], indices_of(r#""it's fine""#).0);
+        assert_eq!(vec![0, 8], indices_of(r#"'a """ b'"#).0);
+
+        // A line that leaves one open reports its symbol, and the next line closes with that one
+        let (indices, symbols) = indices_of(r#"x = """ open"#);
+        assert_eq!((vec![4], vec![0u8]), (indices, symbols));
+        let open = Some(PYTHON_FULL.string_symbols[0].clone());
+        assert_eq!(vec![5], get_str_indices_and_symbols(&String::from("still\"\"\""), &PYTHON_FULL, &open).0);
+    }
+
+    // The bug the general merge fixed on its way in, found by comparing it against the two symbol
+    // version it replaced over every line of up to six characters drawn from '"', '\'', '\\' and 'a',
+    // in each of the three states a previous line can leave: of 16,383 cases the two disagreed on
+    // 642, all of them this one. Inside an open string, the other symbol is text, and it stays text
+    // even when every occurrence of the symbol that could close the string is escaped. The old merge
+    // had two paths for "only one kind of symbol survived the escaping" and only one of them asked
+    // what was open.
+    #[test]
+    fn the_other_symbol_stays_text_when_the_one_that_could_close_the_string_is_escaped() {
+        let open_single = Some("'".to_owned());
+        let open_double = Some("\"".to_owned());
+
+        // A '"' while a '...' string is open, and the only ''' on the line is escaped
+        assert_eq!((vec![], vec![]), get_str_indices_and_symbols(&String::from("\"\\'"), &PYTHON, &open_single));
+        assert_eq!((vec![], vec![]), get_str_indices_and_symbols(&String::from("'\\\""), &PYTHON, &open_double));
+        assert_eq!((vec![], vec![]), get_str_indices_and_symbols(&String::from("a\"b\\'c"), &PYTHON, &open_single));
+
+        // And the same line closes the string as soon as one unescaped occurrence is there
+        assert_eq!(vec![3], get_str_indices_and_symbols(&String::from("\"\\''"), &PYTHON, &open_single).0);
+    }
+
+    #[test]
+    fn a_language_can_declare_more_than_two_comment_symbols() {
+        let indices_of = |line: &str| find_comment_indicies_without_multiline(&String::from(line), &PYTHON_FULL);
+
+        assert_eq!(vec![4], indices_of("code# a comment"));
+        assert_eq!(vec![4], indices_of("code// a comment"));
+        // The third one, which the old merge never looked for
+        assert_eq!(vec![4], indices_of("code-- a comment"));
+        // All of them on one line, in the order they are written and not in the order they are declared
+        assert_eq!(vec![2, 6, 10], indices_of("a --b //c #d"));
     }
 
     #[test]
@@ -1355,3 +1302,4 @@ mod tests {
         assert_eq!(LineInfo::new(Some(" */ ".to_string()), true, false, Some("\"".to_string())), get_bounds_w_multiline_comments(&line, &JAVA, true, double_str_opt));
     }
 }
+
