@@ -133,7 +133,7 @@ fn parse_file_to_language(mut reader :my_reader::BufReader, buffer :&mut String)
         multiline_comment_start_symbol : multi_start,
         multiline_comment_end_symbol : multi_end,
         keywords,
-        finders : std::sync::OnceLock::new()
+        scan_plan : std::sync::OnceLock::new()
     })
 }
 

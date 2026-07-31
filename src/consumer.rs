@@ -16,6 +16,7 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
     languages_content_info: ContentInfoMapMut, language_map: Arc<HashMap<String,Language>>, config: Arc<Configuration>) 
 {
     let mut buf = String::with_capacity(150);
+    let mut scan_buffers = file_parser::ScanBuffers::default();
     let mut idle_iterations = 0u32;
     let mut keyword_matchers: HashMap<String, Option<file_parser::KeywordMatcher>> = HashMap::new();
     let mut local_content_info: HashMap<String, LanguageContentInfo> = HashMap::new();
@@ -36,7 +37,7 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                     keyword_matchers.insert(lang_name.to_owned(), built);
                 }
                 let keyword_matcher = keyword_matchers.get(lang_name).unwrap().as_ref();
-                match file_parser::parse_file(&parsable_file.path, lang_name, &mut buf, language_map.clone(), keyword_matcher, &config) {
+                match file_parser::parse_file(&parsable_file.path, lang_name, &mut buf, &mut scan_buffers, language_map.clone(), keyword_matcher, &config) {
                     Ok(x) => {
                         let keywords = &language_map.get(lang_name).unwrap().keywords;
                         match local_content_info.get_mut(lang_name) {

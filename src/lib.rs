@@ -734,7 +734,7 @@ pub mod domain {
         pub multiline_comment_start_symbol : Option<String>,
         pub multiline_comment_end_symbol : Option<String>,
         pub keywords : Vec<Keyword>,
-        pub finders : OnceLock<crate::file_parser::LanguageFinders>
+        pub scan_plan : OnceLock<crate::file_parser::ScanPlan>
     }
 
     impl PartialEq for Language {
@@ -799,7 +799,7 @@ pub mod domain {
                 multiline_comment_start_symbol,
                 multiline_comment_end_symbol,
                 keywords,
-                finders : OnceLock::new()
+                scan_plan : OnceLock::new()
             }
         }
 
