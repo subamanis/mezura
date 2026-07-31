@@ -11,6 +11,7 @@ pub mod consumer;
 pub mod producer;
 pub mod message_printer;
 pub mod file_parser;
+pub mod phase_timing;
 
 mod result_printer;
 mod json_printer;
@@ -101,9 +102,10 @@ pub fn run(config: &Configuration, language_map: HashMap<String, Language>) -> R
     }
     let parsing_duration_millis = parsing_started_instant.elapsed().as_millis();
 
-    if std::env::var_os("MEZURA_PHASE_TIMING").is_some() {
+    if *phase_timing::ENABLED {
         eprintln!("[phase] producers alive: {} ms | drain after producers: {} ms | queue size at producer exit: {}",
             producers_done_millis, parsing_duration_millis - producers_done_millis, len);
+        eprintln!("{}", phase_timing::report());
     }
 
     let files_present = *files_stats.lock().unwrap();

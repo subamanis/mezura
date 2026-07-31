@@ -57,14 +57,25 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                     break;
                 }
 
+                // An empty queue while the producers are still running is the consumer waiting for
+                // work that has not been discovered yet, which is the only real starvation here
+                let waited_from = phase_timing::ENABLED.then(phase_timing::now);
                 idle_iterations += 1;
                 if idle_iterations < 10 {
                     thread::yield_now();
                 } else {
                     thread::sleep(Duration::from_millis(2));
                 }
+                if let Some(from) = waited_from {
+                    parse_buffers.timing.starved += 1;
+                    parse_buffers.timing.starved_nanos += phase_timing::nanos_since(from);
+                }
             }
         }
+    }
+
+    if *phase_timing::ENABLED {
+        parse_buffers.timing.publish();
     }
 
     if !local_content_info.is_empty() {

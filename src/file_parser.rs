@@ -166,6 +166,7 @@ pub struct ScanBuffers {
 pub struct ParseBuffers {
     scan: ScanBuffers,
     alias_indices: Vec<usize>,
+    pub timing: phase_timing::Totals,
 }
 
 impl ScanBuffers {
@@ -275,17 +276,31 @@ pub fn parse_file(path: &Path, lang_name: &str, buf: &mut String, buffers: &mut 
     language_map: &HashMap<String,Language>, keyword_matcher: Option<&KeywordMatcher>, config: &Configuration)
 -> Result<FileStats,String>
 {
+    // None unless MEZURA_PHASE_TIMING is set, so a normal run never reads the clock at all
+    let mut at = phase_timing::ENABLED.then(phase_timing::now);
+
     let mut file = match File::open(path){
         Ok(f) => f,
         Err(x) => return Err(x.to_string())
     };
+    if let Some(t) = at {
+        buffers.timing.open_nanos += phase_timing::nanos_since(t);
+        at = Some(phase_timing::now());
+    }
 
     buf.clear();
     if let Err(x) = file.read_to_string(buf) {
         return Err(x.to_string());
     }
+    if let Some(t) = at {
+        buffers.timing.read_nanos += phase_timing::nanos_since(t);
+        buffers.timing.bytes += buf.len() as u64;
+        buffers.timing.files += 1;
+        at = Some(phase_timing::now());
+    }
 
     let file_stats = parse_lines(buf, language_map.get(lang_name).unwrap(), keyword_matcher, config, buffers);
+    if let Some(t) = at { buffers.timing.parse_nanos += phase_timing::nanos_since(t); }
 
     if buf.capacity() > MAX_RETAINED_FILE_BUFFER_BYTES {
         *buf = String::new();
@@ -297,7 +312,7 @@ pub fn parse_file(path: &Path, lang_name: &str, buf: &mut String, buffers: &mut 
 fn parse_lines(contents: &str, language: &Language, keyword_matcher: Option<&KeywordMatcher>, config: &Configuration,
     buffers: &mut ParseBuffers) -> FileStats
 {
-    let ParseBuffers { scan, alias_indices } = buffers;
+    let ParseBuffers { scan, alias_indices, .. } = buffers;
     let mut file_stats = match config.hidden.keywords {
         true => FileStats::default(),
         false => FileStats::with_keywords(&language.keywords)
