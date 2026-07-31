@@ -309,6 +309,45 @@ pub fn parse_file(path: &Path, lang_name: &str, buf: &mut String, buffers: &mut 
     Ok(file_stats)
 }
 
+// str::lines() splits on a char pattern, which reaches the standard library's own byte search: a
+// SWAR loop over two usize words at a time. The memchr crate is already a dependency and searches
+// the same byte with SIMD. Same lines out, including the trailing '\r' that lines() drops.
+struct LineIter<'a> {
+    contents: &'a str,
+    newlines: memchr::Memchr<'a>,
+    start: usize,
+}
+
+impl<'a> Iterator for LineIter<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<&'a str> {
+        match self.newlines.next() {
+            Some(at) => {
+                let mut end = at;
+                if end > self.start && self.contents.as_bytes()[end - 1] == b'\r' {
+                    end -= 1;
+                }
+                let line = &self.contents[self.start..end];
+                self.start = at + 1;
+                Some(line)
+            },
+            None => {
+                if self.start >= self.contents.len() {
+                    return None;
+                }
+                let line = &self.contents[self.start..];
+                self.start = self.contents.len();
+                Some(line)
+            }
+        }
+    }
+}
+
+fn lines_of(contents: &str) -> LineIter<'_> {
+    LineIter { contents, newlines: memchr::memchr_iter(b'\n', contents.as_bytes()), start: 0 }
+}
+
 fn parse_lines(contents: &str, language: &Language, keyword_matcher: Option<&KeywordMatcher>, config: &Configuration,
     buffers: &mut ParseBuffers) -> FileStats
 {
@@ -319,7 +358,7 @@ fn parse_lines(contents: &str, language: &Language, keyword_matcher: Option<&Key
     };
     let mut is_comment_closed = true;
     let mut open_str_symbol = None;
-    for raw_line in contents.lines() {
+    for raw_line in lines_of(contents) {
         file_stats.incr_lines();
 
         // Ascii-only trimming, since the unicode whitespace classification of trim() costs
@@ -1314,6 +1353,20 @@ mod tests {
         // and five are one '"""' that never closes
         assert_eq!(vec![0, 3], str_delimiters(&"\"".repeat(6), &PYTHON_FULL, &None).0);
         assert_eq!(vec![0], str_delimiters(&"\"".repeat(5), &PYTHON_FULL, &None).0);
+    }
+
+    // The whole point of replacing str::lines() is that nothing about the lines changes, so the
+    // standard library is the oracle: every shape that behaves differently at the end of a file.
+    #[test]
+    fn the_line_iterator_agrees_with_the_standard_library() {
+        let cases = ["", "\n", "\n\n", "a", "a\n", "a\nb", "a\nb\n", "a\r\nb", "a\r\n",
+                     "a\r\r\nb", "a\rb", "\r\n", "  \n\t\n", "one\ntwo\nthree",
+                     "fn main() {\n    println!(\"hi\");\n}\n", "αβ\nγ"];
+        for case in cases {
+            let expected = case.lines().collect::<Vec<&str>>();
+            let actual = lines_of(case).collect::<Vec<&str>>();
+            assert_eq!(expected, actual, "disagreed on {case:?}");
+        }
     }
 
     #[test]
