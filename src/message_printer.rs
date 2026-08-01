@@ -289,18 +289,18 @@ pub const RESTORE_HELP  :  &str =
 
     No arguments.
 
-    Overrides normal program execution and writes back every file that mezura ships with and that
-    is not in your data directory any more: the language files, the themes and the default
-    configuration. It says which ones it wrote, and says so too when nothing was missing.
+    Overrides normal program execution and brings your data directory back to what this version of
+    mezura ships: anything missing is written, and a language file that no longer says what ours
+    says is replaced. It reports what it did.
 
-    It only ever creates. A file that is there is never touched, so your own languages, themes and
-    configurations are safe and nothing you have edited is undone. A file that exists but is broken
-    is not repaired either, since a file emptied on purpose and one damaged by accident look the
-    same from here: delete it and run this again.
+    This already happens on its own when you install a new version, so you should not need it. It
+    is here for when something was damaged or deleted within one version, where nothing else would
+    notice.
 
-    The language files are the reason this exists. If one of them is missing, that language stops
-    being counted and nothing says so, because a file that is not there cannot be reported as
-    faulty. Themes and configurations announce their own absence; languages do not.
+    A language file you changed is replaced too, since one that has fallen behind counts wrongly,
+    but your copy is kept under 'data/replaced/<version>/' and named, so you can carry your changes
+    over. A language file of your own is never touched, and neither are your themes, your default
+    configuration or 'extension_priority.txt': those are written when absent and left alone after.
 
 ";
 pub const OUTPUT_HELP  :  &str =

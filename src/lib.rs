@@ -41,6 +41,8 @@ pub const LOGS_DIR_NAME : &str = "logs";
 pub const TEST_DIR_NAME : &str = "test_dir";
 pub const DEFAULT_CONFIG_NAME : &str = "default.txt";
 pub const EXTENSION_PRIORITY_FILE_NAME : &str = "extension_priority.txt";
+pub const MANIFEST_FILE_NAME : &str = "installed.txt";
+pub const REPLACED_DIR_NAME : &str = "replaced";
 
 pub static PERSISTENT_APP_PATHS : LazyLock<PersistentAppPaths> = LazyLock::new(PersistentAppPaths::get);
 pub static LOCAL_APP_PATHS : LazyLock<LocalAppPaths> = LazyLock::new(LocalAppPaths::get);

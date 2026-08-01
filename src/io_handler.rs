@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, fs::{self, DirEntry, File}, io::{self, BufRead, BufReader, BufWriter, Write}, path::Path};
+use std::{collections::HashMap, fs::{self, DirEntry, File}, io::{self, BufRead, BufReader, BufWriter, Write}, path::Path};
 
 use chrono::{DateTime, Local};
 use colored::*;
@@ -141,44 +141,59 @@ fn parse_file_to_language(mut reader :my_reader::BufReader, buffer :&mut String)
     })
 }
 
-pub fn parse_string_to_language(contents: Cow<str>) -> Language {
-    let mut lines = contents.lines();
-    let (mut mult_start, mut mult_end) = (None, None);
+// Returns None instead of panicking on anything it does not recognise, because it is no longer only
+// read over the baked-in files, which are ours and are correct by construction. The migration reads
+// what is on the user's disk through it, to ask whether their copy of a file still means what our
+// copy means, and a file that somebody edited into something unparseable must come back as "not the
+// same" rather than take the run down with it.
+pub fn parse_string_to_language(contents: &str) -> Option<Language> {
+    let mut lines = contents.lines().map(str::trim_end);
 
-    lines.next();
-    let lang_name = lines.next().unwrap().trim().to_owned();
-    lines.next();
-    lines.next();
-    let extensions = split_line_on_whitespace(lines.next().unwrap());
-    lines.next();
-    lines.next();
-    let string_symbols = split_line_on_whitespace(lines.next().unwrap());
-    lines.next();
-    lines.next();
-    let comment_symbols = split_line_on_whitespace(lines.next().unwrap());
-    let next_line = lines.next();
-    if let Some(line) = next_line && line == MULTILINE_COMMENT_START {
-        mult_start = Some(lines.next().unwrap().trim().to_owned());
-        lines.next();
-        mult_end = Some(lines.next().unwrap().trim().to_owned());
-        lines.next();
+    if lines.next()? != LANGUAGE {return None;}
+    let lang_name = lines.next()?.trim().to_owned();
+    if lang_name.is_empty() {return None;}
+    lines.next()?;
+
+    if lines.next()? != EXTENSIONS {return None;}
+    let extensions = split_line_on_whitespace(lines.next()?);
+    if extensions.is_empty() {return None;}
+    lines.next()?;
+
+    if lines.next()? != STRING_SYMBOLS {return None;}
+    let string_symbols = split_line_on_whitespace(lines.next()?);
+    if string_symbols.is_empty() {return None;}
+    lines.next()?;
+
+    if lines.next()? != COMMENT_SYMBOLS {return None;}
+    let comment_symbols = split_line_on_whitespace(lines.next()?);
+
+    let (mut mult_start, mut mult_end) = (None, None);
+    let mut next_line = lines.next();
+    if next_line == Some(MULTILINE_COMMENT_START) {
+        let start = lines.next()?.trim().to_owned();
+        if start.is_empty() || lines.next()? != MULTILINE_COMMENT_END {return None;}
+        let end = lines.next()?.trim().to_owned();
+        if end.is_empty() {return None;}
+        (mult_start, mult_end) = (Some(start), Some(end));
+        // The blank line that separates the multiline symbols from the keyword blocks, and which a
+        // language declaring no keywords does not have at all
+        next_line = lines.next();
     }
 
     let mut keywords = Vec::new();
-    while let Some(x) = lines.next() {
-        if x != KEYWORD {break;} 
+    while let Some(line) = next_line {
+        if line != KEYWORD {break;}
+        if lines.next()? != KEYWORD_NAME {return None;}
+        let name = lines.next()?.trim().to_owned();
+        if lines.next()? != KEYWORD_ALIASES {return None;}
+        let aliases = split_line_on_whitespace(lines.next()?);
+        if name.is_empty() || aliases.is_empty() {return None;}
 
-        lines.next();
-        let k_name = lines.next().unwrap().trim().to_owned();
-        lines.next();
-        let k_aliases = split_line_on_whitespace(lines.next().unwrap());
-        keywords.push(Keyword{
-            descriptive_name: k_name,
-            aliases: k_aliases
-        });
+        keywords.push(Keyword{descriptive_name: name, aliases});
+        next_line = lines.next();
     }
 
-    Language::new(lang_name, extensions, string_symbols, comment_symbols, mult_start, mult_end, keywords)
+    Some(Language::new(lang_name, extensions, string_symbols, comment_symbols, mult_start, mult_end, keywords))
 }
 
 pub fn serialize_language(lang: &Language, path: &str) -> Result<(), io::Error> {
@@ -968,6 +983,34 @@ pl      Perl, Prolog
                 options.forced_languages);
 
         std::fs::remove_file(&path)
+    }
+
+    // It used to unwrap its way through the file, which was safe while the only files it ever read
+    // were ours. The migration now asks it whether the user's copy still means what our copy means,
+    // so a file edited into something unrecognisable has to come back as None and not take the run
+    // with it. Every one of these was a panic before.
+    #[test]
+    fn a_language_that_does_not_parse_comes_back_as_none() {
+        let good = "Language\nLua\n\nExtensions\nlua\n\nString symbols\n\" '\n\nComment symbols\n--\n";
+        assert!(io_handler::parse_string_to_language(good).is_some());
+        // and the carriage returns of a windows checkout change nothing about it
+        assert_eq!(io_handler::parse_string_to_language(good),
+                io_handler::parse_string_to_language(&good.replace('\n', "\r\n")));
+
+        let broken = [
+            String::new(),
+            "Language\n".to_owned(),
+            good.replace("Extensions", "Extension"),
+            // an extra blank line, which the loader itself rejects just as flatly
+            good.replace("lua\n", "lua\n\n"),
+            // no name, no extensions, and no string symbols, each on its own
+            good.replace("Lua\n", "\n"),
+            good.replace("lua\n\n", "\n\n"),
+            good.replace("\" '\n", "\n")
+        ];
+        for contents in broken {
+            assert!(io_handler::parse_string_to_language(&contents).is_none(), "accepted:\n{contents}");
+        }
     }
 
     #[test]
