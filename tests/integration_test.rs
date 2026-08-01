@@ -29,14 +29,14 @@ fn test_whole_workflow () {
     assert!(languages_metadata_map.lock().unwrap().len() == language_map_len);
 
     let extension_lang_map: ExtensionLangMap = Arc::new(make_extension_language_map(&language_map));
-    calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector, &mut files_present, &extension_lang_map, &languages_metadata_map);
+    calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector, &mut files_present, &extension_lang_map);
 
     let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs).unwrap());
     let (total_files_num, relevant_files_num, _) = producer::search_for_files(0, files_injector.clone(), dirs_injector.clone(),
-         Worker::new_fifo(), idle_producers, extension_lang_map, exclude_matcher, languages_metadata_map.clone(), config.clone());
+         Worker::new_fifo(), idle_producers, extension_lang_map, exclude_matcher, config.clone());
 
     finish_condition_ref.store(true, Ordering::Relaxed);
-    consumer::start_parsing_files(0, files_injector, faulty_files_ref.clone(), finish_condition_ref, languages_content_info_ref.clone(),
+    consumer::start_parsing_files(0, files_injector, faulty_files_ref.clone(), finish_condition_ref, languages_content_info_ref.clone(), languages_metadata_map.clone(),
          language_map.clone(), config);
     
     let mut content_info_map_guard = languages_content_info_ref.lock();
@@ -65,14 +65,13 @@ fn count_files_of(target: &str, extra_args: &str) -> (usize, usize, usize, Vec<S
     let files_injector = Arc::new(Injector::new());
     let dirs_injector = Arc::new(Injector::new());
     let idle_producers = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let languages_metadata_map = Arc::new(Mutex::new(make_language_metadata(&language_map)));
     let extension_lang_map: ExtensionLangMap = Arc::new(make_extension_language_map(&language_map));
     let mut files_present = FilesPresent::default();
-    calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector, &mut files_present, &extension_lang_map, &languages_metadata_map);
+    calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector, &mut files_present, &extension_lang_map);
 
     let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs).unwrap());
     let (total, relevant, excluded) = producer::search_for_files(0, files_injector.clone(), dirs_injector,
-         Worker::new_fifo(), idle_producers, extension_lang_map, exclude_matcher, languages_metadata_map, config);
+         Worker::new_fifo(), idle_producers, extension_lang_map, exclude_matcher, config);
 
     let mut found_files = Vec::new();
     while let crossbeam_deque::Steal::Success(f) = files_injector.steal() {

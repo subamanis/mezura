@@ -4,7 +4,7 @@ use memchr::memmem;
 
 use crate::*;
 
-const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
+pub const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
 
 const NO_SLOT : u16 = u16::MAX;
 
@@ -305,10 +305,6 @@ pub fn parse_file(path: &Path, lang_name: &str, buf: &mut String, buffers: &mut 
 
     let file_stats = parse_lines(buf, language_map.get(lang_name).unwrap(), keyword_matcher, config, buffers);
     if let Some(t) = at { buffers.timing.parse_nanos += phase_timing::nanos_since(t); }
-
-    if buf.capacity() > MAX_RETAINED_FILE_BUFFER_BYTES {
-        *buf = String::new();
-    }
 
     Ok(file_stats)
 }

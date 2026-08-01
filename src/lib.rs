@@ -62,7 +62,7 @@ pub fn run(config: &Configuration, language_map: HashMap<String, Language>) -> R
     let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs)
             .expect("exclude patterns are validated during argument parsing"));
     calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector, &mut files_present,
-            &extension_lang_map, &global_languages_metadata_map);
+            &extension_lang_map);
 
     let files_stats = Arc::new(Mutex::new(files_present));
 
@@ -76,12 +76,12 @@ pub fn run(config: &Configuration, language_map: HashMap<String, Language>) -> R
     let parsing_started_instant = Instant::now();
     for i in 0..config.threads.producers {
         producer_handles.push(producer::start_producer_thread(i, files_injector.clone(), dirs_injector.clone(), Worker::new_fifo(),
-            global_languages_metadata_map.clone(), idle_producers.clone(), extension_lang_map.clone(), exclude_matcher.clone(),
+            idle_producers.clone(), extension_lang_map.clone(), exclude_matcher.clone(),
             config.clone(), files_stats.clone()));
     }
     for i in 0..config.threads.consumers {
         consumer_handles.push(consumer::start_parser_thread(i, files_injector.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
-        languages_content_info_ref.clone(), language_map_ref.clone(), config.clone()));
+        languages_content_info_ref.clone(), global_languages_metadata_map.clone(), language_map_ref.clone(), config.clone()));
     }
 
     for handle in producer_handles {
@@ -89,12 +89,7 @@ pub fn run(config: &Configuration, language_map: HashMap<String, Language>) -> R
     }
     let producers_done_millis = parsing_started_instant.elapsed().as_millis();
 
-    //If there are a lot of files remaining after producers finish, it makes sense to start another consumer.
-    let len = files_injector.len();
-    if len > 1200 {
-        consumer_handles.push(consumer::start_parser_thread(config.threads.consumers, files_injector, faulty_files_ref.clone(), finish_condition_ref.clone(),
-        languages_content_info_ref.clone(), language_map_ref.clone(), config.clone()));
-    }
+    let queued_at_producer_exit = files_injector.len();
 
     finish_condition_ref.store(true,Ordering::Relaxed);
     for handle in consumer_handles {
@@ -104,7 +99,7 @@ pub fn run(config: &Configuration, language_map: HashMap<String, Language>) -> R
 
     if *phase_timing::ENABLED {
         eprintln!("[phase] producers alive: {} ms | drain after producers: {} ms | queue size at producer exit: {}",
-            producers_done_millis, parsing_duration_millis - producers_done_millis, len);
+            producers_done_millis, parsing_duration_millis - producers_done_millis, queued_at_producer_exit);
         eprintln!("{}", phase_timing::report());
     }
 
@@ -128,8 +123,6 @@ pub fn run(config: &Configuration, language_map: HashMap<String, Language>) -> R
 
     let mut global_languages_metadata_map_guard = global_languages_metadata_map.lock();
     let languages_metadata_map = global_languages_metadata_map_guard.as_deref_mut().unwrap();
-
-    remove_faulty_files_stats(&faulty_files_ref, languages_metadata_map, &extension_lang_map);
 
     let mut content_info_map_guard = languages_content_info_ref.lock();
     let content_info_map = content_info_map_guard.as_deref_mut().unwrap();
@@ -186,7 +179,7 @@ pub fn present(result: &RunResult, config: &Configuration) {
 
 //pub for integration tests
 pub fn calculate_single_file_stats_or_add_to_injector(config: &Configuration, dirs_injector: &Arc<Injector<TraversedDir>>, files_injector: &Arc<Injector<ParsableFile>>,
-        files_present: &mut FilesPresent, extension_lang_map: &HashMap<String, Arc<str>>, languages_metadata_map: &MetadataMapMut)
+        files_present: &mut FilesPresent, extension_lang_map: &HashMap<String, Arc<str>>)
 {
     config.dirs.iter().for_each(|dir| {
         let dir_path = Path::new(dir);
@@ -194,8 +187,6 @@ pub fn calculate_single_file_stats_or_add_to_injector(config: &Configuration, di
             if let Some(x) = dir_path.extension()
                 && let Some(extension) = x.to_str()
                 && let Some(lang_name) = find_language_of_extension(extension_lang_map, extension) {
-                languages_metadata_map.lock().unwrap().get_mut(lang_name.as_ref()).unwrap().add_file_meta(
-                        dir_path.metadata().map_or(0, |m| m.len() as usize));
                 files_injector.push(ParsableFile::new(dir_path.to_path_buf(),lang_name));
                 files_present.total_files += 1;
                 files_present.relevant_files += 1;
@@ -287,19 +278,6 @@ pub fn print_faulty_files_or_ok(faulty_files: &[FaultyFileDetails], config: &Con
     }
 }
 
-fn remove_faulty_files_stats(faulty_files_ref: &FaultyFilesListMut, languages_metadata_map: &mut HashMap<String,LanguageMetadata>,
-        extension_lang_map: &HashMap<String, Arc<str>>) {
-    let faulty_files = &*faulty_files_ref.as_ref().lock().unwrap();
-    for file in faulty_files {
-        let extension = utils::get_file_extension(Path::new(&file.path));
-        if let Some(x) = extension {
-            let lang_name = find_language_of_extension(extension_lang_map, x).unwrap();
-            let language_metadata = languages_metadata_map.get_mut(lang_name.as_ref()).unwrap();
-            language_metadata.files -= 1;
-            language_metadata.bytes -= file.size as usize;
-        }
-    }
-}
 
 fn get_activated_languages_as_str(config: &Configuration) -> String {
     let mut msg = if config.languages_of_interest.is_empty() {

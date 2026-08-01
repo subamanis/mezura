@@ -5,21 +5,24 @@ use crossbeam_deque::Steal;
 use crate::*;
 
 pub fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
-        languages_content_info: ContentInfoMapMut, language_map: Arc<HashMap<String,Language>>, config: Arc<Configuration>) -> JoinHandle<()>
+        languages_content_info: ContentInfoMapMut, languages_metadata_map: MetadataMapMut, language_map: Arc<HashMap<String,Language>>,
+        config: Arc<Configuration>) -> JoinHandle<()>
 {
     thread::Builder::new().name(id.to_string()).spawn(move || {
-        start_parsing_files(id, files_injector, faulty_files, finish_condition, languages_content_info, language_map, config);
+        start_parsing_files(id, files_injector, faulty_files, finish_condition, languages_content_info, languages_metadata_map, language_map, config);
     }).unwrap()
 }
 
 pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
-    languages_content_info: ContentInfoMapMut, language_map: Arc<HashMap<String,Language>>, config: Arc<Configuration>) 
+    languages_content_info: ContentInfoMapMut, languages_metadata_map: MetadataMapMut, language_map: Arc<HashMap<String,Language>>,
+    config: Arc<Configuration>) 
 {
     let mut buf = String::with_capacity(150);
     let mut parse_buffers = file_parser::ParseBuffers::default();
     let mut idle_iterations = 0u32;
     let mut keyword_matchers: HashMap<String, Option<file_parser::KeywordMatcher>> = HashMap::new();
-    let mut local_content_info: HashMap<String, LanguageContentInfo> = HashMap::new();
+    // One entry per language holding both halves, so a file still costs a single lookup
+    let mut local_content_info: HashMap<String, (LanguageContentInfo, LanguageMetadata)> = HashMap::new();
     // let mut share = 0;
     loop {
         match files_injector.steal() {
@@ -40,13 +43,20 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                 match file_parser::parse_file(&parsable_file.path, lang_name, &mut buf, &mut parse_buffers, &language_map, keyword_matcher, &config) {
                     Ok(x) => {
                         let keywords = &language_map.get(lang_name).unwrap().keywords;
+                        let bytes = buf.len();
                         match local_content_info.get_mut(lang_name) {
-                            Some(info) => info.add_file_stats(x, keywords),
-                            None => { local_content_info.insert(lang_name.to_owned(), LanguageContentInfo::from_file_stats(x, keywords)); }
+                            Some((info, meta)) => { info.add_file_stats(x, keywords); meta.add_file_meta(bytes); },
+                            None => { local_content_info.insert(lang_name.to_owned(),
+                                    (LanguageContentInfo::from_file_stats(x, keywords), LanguageMetadata::new(1, bytes))); }
                         }
                     },
                     Err(x) => faulty_files.lock().unwrap().push(FaultyFileDetails::new(
                             parsable_file.path.to_str().unwrap().to_owned(),x,parsable_file.path.metadata().map_or(0, |m| m.len())))
+                }
+                // Shrinking belongs to whoever owns the buffer, and it has to happen after its
+                // length has been read as the file's size
+                if buf.capacity() > file_parser::MAX_RETAINED_FILE_BUFFER_BYTES {
+                    buf = String::with_capacity(150);
                 }
             },
             Steal::Retry => {
@@ -79,9 +89,15 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
     }
 
     if !local_content_info.is_empty() {
-        let mut global_content_info_guard = languages_content_info.lock().unwrap();
-        for (lang_name, info) in local_content_info.iter() {
-            global_content_info_guard.get_mut(lang_name).unwrap().add_content_info(info);
+        {
+            let mut global_content_info_guard = languages_content_info.lock().unwrap();
+            for (lang_name, (info, _)) in local_content_info.iter() {
+                global_content_info_guard.get_mut(lang_name).unwrap().add_content_info(info);
+            }
+        }
+        let mut global_metadata_guard = languages_metadata_map.lock().unwrap();
+        for (lang_name, (_, meta)) in local_content_info.iter() {
+            global_metadata_guard.get_mut(lang_name).unwrap().add_metadata(meta);
         }
     }
     // println!("Thread {} finished, having done {} files.",_id,share);

@@ -67,11 +67,11 @@ fn collect_stats() -> String {
     let dirs_injector = Arc::new(Injector::new());
 
     let mut files_present = FilesPresent::default();
-    calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector, &mut files_present, &extension_lang_map, &metadata_ref);
+    calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector, &mut files_present, &extension_lang_map);
 
     let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs).unwrap());
     let (_, relevant_files, _) = producer::search_for_files(0, files_injector.clone(), dirs_injector, Worker::new_fifo(),
-            Arc::new(AtomicUsize::new(0)), extension_lang_map, exclude_matcher, metadata_ref.clone(), config.clone());
+            Arc::new(AtomicUsize::new(0)), extension_lang_map, exclude_matcher, config.clone());
     assert!(relevant_files > 0, "the fixture corpus produced no relevant files");
 
     finish_condition_ref.store(true, Ordering::Relaxed);
@@ -79,8 +79,9 @@ fn collect_stats() -> String {
         let (files_injector, faulty_files_ref) = (files_injector.clone(), faulty_files_ref.clone());
         let (finish_condition_ref, content_info_ref) = (finish_condition_ref.clone(), content_info_ref.clone());
         let (language_map, config) = (language_map.clone(), config.clone());
+        let metadata_ref = metadata_ref.clone();
         std::thread::spawn(move || {
-            consumer::start_parsing_files(id, files_injector, faulty_files_ref, finish_condition_ref, content_info_ref, language_map, config);
+            consumer::start_parsing_files(id, files_injector, faulty_files_ref, finish_condition_ref, content_info_ref, metadata_ref, language_map, config);
         })
     }).collect::<Vec<_>>();
     handles.into_iter().for_each(|handle| handle.join().unwrap());
