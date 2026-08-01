@@ -5,7 +5,7 @@ Extensions
 go
 
 String symbols
-"
+" `
 
 Comment symbols
 //

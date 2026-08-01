@@ -2,7 +2,7 @@ Language
 Shell
 
 Extensions
-sh bash
+sh bash zsh ksh
 
 String symbols
 " '

@@ -5,7 +5,7 @@ Extensions
 scala
 
 String symbols
-"
+""" "
 
 Comment symbols
 //

@@ -5,7 +5,7 @@ Extensions
 kt kts
 
 String symbols
-"
+""" "
 
 Comment symbols
 //

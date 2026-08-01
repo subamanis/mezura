@@ -5,7 +5,7 @@ Extensions
 tsx
 
 String symbols
-" '
+" ' `
 
 Comment symbols
 //

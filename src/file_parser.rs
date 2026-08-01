@@ -547,6 +547,12 @@ fn get_bounds_w_multiline_comments(line: &str, language: &Language, is_comment_c
     comment_indices.retain(|x| !is_intersecting_with_multi_line_end_symbol(*x, language.multiline_end_len(), com_end_indices));
     com_start_indices.retain(|x| !is_intersecting_with_comment_symbol(*x, comment_indices));
 
+    // A comment and the multiline start can begin at the very same place, and then the longer one is
+    // the real one: Lua's '--[[' opens a block, it is not a '--' line comment that happens to be
+    // followed by brackets. This is the same longest-first rule the string symbols already follow,
+    // and without it the block never opens and everything inside it counts as code.
+    resolve_comment_and_multiline_start_at_the_same_place(line, language, comment_indices, com_start_indices);
+
     if !com_end_indices.is_empty() && !com_start_indices.is_empty() {
         resolve_double_counting_of_adjacent_start_and_end_symbols(com_start_indices, com_end_indices,
             !is_comment_closed, language.multiline_start_len());
@@ -871,6 +877,25 @@ fn resolve_string_delimiters(language: &Language, open_str_symbol: &Option<u8>, 
         strings.push(at);
         string_symbols.push(symbol);
     }
+}
+
+fn resolve_comment_and_multiline_start_at_the_same_place(line: &str, language: &Language,
+    comment_indices: &mut Vec<usize>, com_start_indices: &mut Vec<usize>)
+{
+    if comment_indices.is_empty() || com_start_indices.is_empty() {
+        return;
+    }
+    let start_len = language.multiline_start_len();
+    let longest_comment_at = |at: usize| {
+        language.comment_symbols.iter()
+                .filter(|symbol| line.as_bytes()[at..].starts_with(symbol.as_bytes()))
+                .map(|symbol| symbol.len())
+                .max()
+                .unwrap_or(0)
+    };
+
+    comment_indices.retain(|at| !com_start_indices.contains(at) || longest_comment_at(*at) >= start_len);
+    com_start_indices.retain(|at| !comment_indices.contains(at));
 }
 
 fn is_intersecting_with_multi_line_end_symbol(index: usize, symbol_len: usize, end_vec: &[usize]) -> bool {
@@ -1364,6 +1389,74 @@ mod tests {
         assert_eq!(vec![4], indices_of("code-- a comment"));
         // All of them on one line, in the order they are written and not in the order they are declared
         assert_eq!(vec![2, 6, 10], indices_of("a --b //c #d"));
+    }
+
+    // A block comment whose opening starts with the line comment symbol, which is Lua's shape
+    static LUA : LazyLock<Language> = LazyLock::new(|| Language {
+        name : "lua".to_owned(),
+        extensions : vec!["lua".to_owned()],
+        string_symbols : vec!["\"".to_owned(),"'".to_owned()],
+        comment_symbols : vec!["--".to_owned()],
+        multiline_comment_start_symbol : Some("--[[".to_owned()),
+        multiline_comment_end_symbol : Some("]]".to_owned()),
+        keywords : vec![],
+        scan_plan : std::sync::OnceLock::new()
+    });
+
+    // '--[[' opens a block; it is not a '--' line comment that happens to be followed by brackets.
+    // Without the longest-first rule the block never opened and its contents counted as code.
+    #[test]
+    fn the_longer_symbol_wins_when_a_comment_and_a_block_start_together() {
+        // the block opens and stays open
+        assert_eq!(TextInfo::with_open_comment(), bounds_multi("--[[", &LUA, true, &None));
+        assert_eq!(TextInfo::with_open_comment(), bounds_multi("--[[ opening", &LUA, true, &None));
+        // and a plain line comment still behaves like one
+        assert_eq!(TextInfo::none_all(false), bounds_multi("-- just a comment", &LUA, true, &None));
+        // code before the block is kept, the block is not
+        assert_eq!(TextInfo::new(Some("x = 1 ".to_owned()), false, true, None),
+                bounds_multi("x = 1 --[[ opens here", &LUA, true, &None));
+        // and it closes on ']]'
+        assert_eq!(TextInfo::from_slice(" y = 2"), bounds_multi("]] y = 2", &LUA, false, &None));
+    }
+
+    static DEFN : LazyLock<Keyword> = LazyLock::new(|| Keyword {
+        descriptive_name : "functions".to_owned(),
+        aliases : vec!["(defn".to_owned(), "defn".to_owned()]
+    });
+
+    static CLOJURE : LazyLock<Language> = LazyLock::new(|| Language {
+        name : "clojure".to_owned(),
+        extensions : vec!["clj".to_owned()],
+        string_symbols : vec!["\"".to_owned()],
+        comment_symbols : vec![";".to_owned()],
+        multiline_comment_start_symbol : None,
+        multiline_comment_end_symbol : None,
+        keywords : vec![DEFN.clone()],
+        scan_plan : std::sync::OnceLock::new()
+    });
+
+    // '(' is not an accepted boundary, so the Lisp family's '(defn' counts zero through a bare alias.
+    // The bracket therefore belongs to the alias, and the two forms are declared together. They can
+    // never double count: wherever '(defn' matches, the bare 'defn' sits one byte later with the
+    // bracket before it and is rejected, so exactly one of the pair fires.
+    #[test]
+    fn a_bracketed_alias_counts_once_and_never_twice() {
+        let matcher = KeywordMatcher::build(&CLOJURE).unwrap();
+        let count_of = |line: &str| {
+            let mut file_stats = FileStats::with_keywords(std::slice::from_ref(&DEFN));
+            keywords_of(line, &matcher, &mut file_stats);
+            file_stats.keyword_occurences[0]
+        };
+
+        assert_eq!(1, count_of("(defn foo [x] x)"));
+        assert_eq!(1, count_of("  (defn foo [x] x)"));
+        assert_eq!(1, count_of("(do (defn foo))"));
+        // the bare form still counts where nothing precedes it
+        assert_eq!(1, count_of("defn"));
+        assert_eq!(1, count_of("defn foo"));
+        // and neither form fires on a longer word
+        assert_eq!(0, count_of("(defnx foo)"));
+        assert_eq!(0, count_of("(mydefn foo)"));
     }
 
     // Every symbol of a kind has to be searched in the same pass, otherwise its positions would not

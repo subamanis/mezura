@@ -2,10 +2,10 @@ Language
 C#
 
 Extensions
-cs
+cs csx
 
 String symbols
-"
+""" "
 
 Comment symbols
 //

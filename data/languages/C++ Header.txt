@@ -2,7 +2,7 @@ Language
 C++ Header
 
 Extensions
-hpp
+hpp hh hxx h++
 
 String symbols
 "

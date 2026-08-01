@@ -2,10 +2,10 @@ Language
 TS
 
 Extensions
-ts
+ts mts cts
 
 String symbols
-" '
+" ' `
 
 Comment symbols
 //

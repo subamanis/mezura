@@ -2,10 +2,10 @@ Language
 Python
 
 Extensions
-py
+py pyw pyi
 
 String symbols
-" '
+""" ''' " '
 
 Comment symbols
 #

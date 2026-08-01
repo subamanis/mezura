@@ -2,10 +2,10 @@ Language
 JS
 
 Extensions
-js
+js mjs cjs
 
 String symbols
-" '
+" ' `
 
 Comment symbols
 //

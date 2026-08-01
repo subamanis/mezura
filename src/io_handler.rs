@@ -106,7 +106,10 @@ fn parse_file_to_language(mut reader :my_reader::BufReader, buffer :&mut String)
         let symbol = buffer.trim_end().to_owned();
         if symbol.is_empty() {return Err(());}
         multi_end = Some(symbol);
-        if !reader.read_line_exists(buffer) {return Err(())}
+        // The blank line that separates the multiline symbols from the keyword blocks. A language
+        // that declares no keywords ends here instead, and that is not a formatting mistake: CSS,
+        // HTML and SCSS were rejected outright for it, on a clean installation as much as an old one.
+        reader.read_line_exists(buffer);
     }
     
     let mut keywords = Vec::new();
@@ -969,4 +972,33 @@ mod tests {
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
+    // Every language file that ships has to parse. CSS, HTML and SCSS were silently rejected for
+    // months because the parser demanded a blank line after the multiline comment symbols, which a
+    // language with no keywords has no reason to have, and nothing pointed at it: the run simply
+    // said "formatting problems" and carried on without them.
+    #[test]
+    fn every_shipped_language_file_parses() {
+        let dir = &LOCAL_APP_PATHS.languages_dir;
+        let (languages, faulty) = io_handler::parse_supported_languages_to_map(dir)
+                .unwrap_or_else(|e| panic!("the shipped languages dir did not parse at all: {e:?}"));
+
+        assert!(faulty.is_empty(), "these shipped language files do not parse: {faulty:?}");
+
+        let on_disk = std::fs::read_dir(dir).unwrap()
+                .flatten()
+                .filter(|e| e.path().is_file())
+                .count();
+        assert_eq!(on_disk, languages.len(),
+                "{} language files on disk but {} parsed", on_disk, languages.len());
+
+        // and each one has to describe something countable
+        for (name, language) in languages.iter() {
+            assert!(!language.extensions.is_empty(), "{name} declares no extension");
+            assert!(!language.string_symbols.is_empty(), "{name} declares no string symbol");
+            assert_eq!(language.multiline_comment_start_symbol.is_some(),
+                    language.multiline_comment_end_symbol.is_some(),
+                    "{name} declares only one half of its multiline comment");
+        }
+    }
+
 }
