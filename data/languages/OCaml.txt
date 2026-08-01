@@ -1,31 +1,26 @@
 Language
-Odin
+OCaml
 
 Extensions
-odin
+ml mli
 
 String symbols
-" ' `
+"
 
 Comment symbols
-//
+
 Multi line comment start
-/*
+(*
 Multi line comment end
-*/
+*)
 
 Keyword
 NAME
-structs
+types
 ALIASES
-struct
+type
 Keyword
 NAME
-enums
+modules
 ALIASES
-enum
-Keyword
-NAME
-unions
-ALIASES
-union
+module

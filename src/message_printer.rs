@@ -82,6 +82,17 @@ pub const EXCLUDE_LANGUAGES_HELP  :  &str =
     The given language names will be ignored from the stats calculation, if they exist.
 
 ";
+pub const FORCE_LANG_HELP  :  &str =
+"--force-lang
+
+    1..n pairs of 'extension=language' separated by commas, case-insensitive
+
+    Decides which language an extension is counted as, whether or not another language claims it:
+    '--force-lang m=matlab,pl=perl,txt=python'
+
+    Overrides the 'extension_priority.txt' file of the data dir.
+
+";
 pub const THREADS_HELP  :  &str =
 "--threads
 
@@ -573,6 +584,7 @@ pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 6] = [
         (EXCLUDE, EXCLUDE_HELP),
         (LANGUAGES, LANGUAGES_HELP),
         (EXCLUDE_LANGUAGES, EXCLUDE_LANGUAGES_HELP),
+        (FORCE_LANG, FORCE_LANG_HELP),
         (NO_GITIGNORE, NO_GITIGNORE_HELP),
         (SEARCH_IN_DOTTED, SEARCH_IN_DOTTED_HELP),
         (BRACES_AS_CODE, BRACES_AS_CODE_HELP),

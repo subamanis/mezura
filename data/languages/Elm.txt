@@ -1,31 +1,21 @@
 Language
-Odin
+Elm
 
 Extensions
-odin
+elm
 
 String symbols
-" ' `
+""" "
 
 Comment symbols
-//
+--
 Multi line comment start
-/*
+{-
 Multi line comment end
-*/
+-}
 
 Keyword
 NAME
-structs
+types
 ALIASES
-struct
-Keyword
-NAME
-enums
-ALIASES
-enum
-Keyword
-NAME
-unions
-ALIASES
-union
+type

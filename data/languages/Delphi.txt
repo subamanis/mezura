@@ -1,31 +1,26 @@
 Language
-Odin
+Delphi
 
 Extensions
-odin
+pas dpr dpk
 
 String symbols
-" ' `
+'
 
 Comment symbols
 //
 Multi line comment start
-/*
+{
 Multi line comment end
-*/
+}
 
 Keyword
 NAME
-structs
+classes
 ALIASES
-struct
+class
 Keyword
 NAME
-enums
+records
 ALIASES
-enum
-Keyword
-NAME
-unions
-ALIASES
-union
+record

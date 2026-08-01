@@ -54,6 +54,15 @@ fn main() -> ExitCode {
         eprintln!("{}",format!("\nUnable to initialize the themes directory: {x}\n").yellow());
     }
 
+    // An installation made before this file existed would otherwise never receive it, and the only
+    // sign would be that a decision the user thought they had made is not being applied. One stat
+    // per run buys that, the same trade the themes directory above makes.
+    if PERSISTENT_APP_PATHS.are_initialized
+        && !std::path::Path::new(&(PERSISTENT_APP_PATHS.data_dir.clone() + EXTENSION_PRIORITY_FILE_NAME)).exists()
+        && let Err(x) = restore_missing_baked_in_files() {
+        eprintln!("{}",format!("\nUnable to create the '{EXTENSION_PRIORITY_FILE_NAME}' file: {x}\n").yellow());
+    }
+
     let args_str = match read_args_as_str() {
         Some(args) => {
             args
@@ -121,8 +130,14 @@ fn main() -> ExitCode {
         });
     }
 
+    let (extension_priority, faulty_priority_lines) = read_extension_priority();
+    if !faulty_priority_lines.is_empty() {
+        eprintln!("{}", format!("\nLines that could not be read in '{EXTENSION_PRIORITY_FILE_NAME}', and were skipped:\n{}",
+                faulty_priority_lines.join("\n")).yellow());
+    }
+
     let instant = Instant::now();
-    match mezura::run(&config, language_map) {
+    match mezura::run(&config, language_map, &extension_priority) {
         Ok(result) => {
             mezura::present(&result, &config);
             // The document carries its own 'scan_ms', measured inside the run, and this is the only
@@ -198,6 +213,18 @@ fn read_baked_in_default_config_contents() -> String {
     String::from_utf8_lossy(include_bytes!("../data/config/default.txt")).to_string()
 }
 
+fn read_baked_in_extension_priority_contents() -> String {
+    String::from_utf8_lossy(include_bytes!("../data/extension_priority.txt")).to_string()
+}
+
+// An installation made by an earlier version has no such file, and the baked-in copy is not used as
+// a substitute: the user is meant to edit the one on disk, and reading a different one would make
+// their edits look like they had no effect. It is written by the same restore that writes everything
+// else, and until it is there every contested extension simply announces its tiebreak.
+fn read_extension_priority() -> (HashMap<String,Vec<String>>, Vec<String>) {
+    io_handler::parse_extension_priority_file(&(PERSISTENT_APP_PATHS.data_dir.clone() + EXTENSION_PRIORITY_FILE_NAME))
+}
+
 fn open_in_browser(path: &str) {
     #[cfg(target_os = "windows")]
     let result = std::process::Command::new("cmd").args(["/C", "start", "", path]).spawn();
@@ -227,6 +254,12 @@ fn restore_missing_baked_in_files() -> Result<Vec<String>, std::io::Error> {
     if !std::path::Path::new(&(PERSISTENT_APP_PATHS.config_dir.clone() + DEFAULT_CONFIG_NAME)).exists() {
         io_handler::write_default_config(read_baked_in_default_config_contents())?;
         created.push(DEFAULT_CONFIG_NAME.to_owned());
+    }
+
+    let priority_path = PERSISTENT_APP_PATHS.data_dir.clone() + EXTENSION_PRIORITY_FILE_NAME;
+    if !std::path::Path::new(&priority_path).exists() {
+        std::fs::write(&priority_path, read_baked_in_extension_priority_contents())?;
+        created.push(EXTENSION_PRIORITY_FILE_NAME.to_owned());
     }
 
     Ok(created)

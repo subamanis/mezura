@@ -24,18 +24,45 @@ pub fn round_2(num: f64) -> f64 {
 }
 
 
-pub fn parse_languages_to_vec(s: &str) -> Vec<String> {
-    fn remove_dot_prefix(str: &str) -> &str {
-        if let Some(stripped) = str.strip_prefix('.') {
-            stripped
-        } else {
-            str
-        }
+fn remove_dot_prefix(str: &str) -> &str {
+    if let Some(stripped) = str.strip_prefix('.') {
+        stripped
+    } else {
+        str
     }
+}
 
+pub fn parse_languages_to_vec(s: &str) -> Vec<String> {
     s.split(',')
     .filter_map(|x| get_trimmed_if_not_empty(&remove_dot_prefix(x.trim()).to_lowercase()))
     .collect::<Vec<_>>()
+}
+
+// 'm=matlab,.pl=perl'. The extension is lowercased here, like every other extension the program
+// holds, so that the map it ends up in is keyed the same way the lookup asks for it. The language
+// name is kept as it was typed and compared without case later, since that is what '--languages'
+// already does with the names it is given.
+pub fn parse_forced_languages(s: &str) -> Option<HashMap<String,String>> {
+    let mut forced = HashMap::new();
+    for pair in s.split(',').filter_map(get_trimmed_if_not_empty) {
+        let (extension, language) = pair.split_once('=')?;
+        let extension = remove_dot_prefix(extension.trim()).to_lowercase();
+        let language = language.trim();
+        if extension.is_empty() || language.is_empty() {
+            return None;
+        }
+        forced.insert(extension, language.to_owned());
+    }
+
+    if forced.is_empty() {None} else {Some(forced)}
+}
+
+// Sorted, because it is written into config files and into the log entries that a later run compares
+// itself against, and a map's order would make the same setting look like a changed one
+pub fn forced_languages_to_string(forced: &HashMap<String,String>) -> String {
+    let mut pairs = forced.iter().map(|(extension, language)| format!("{extension}={language}")).collect::<Vec<_>>();
+    pairs.sort();
+    pairs.join(",")
 }
 
 pub fn parse_paths_to_vec(s: &str) -> Vec<String> {

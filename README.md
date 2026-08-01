@@ -138,6 +138,15 @@ WHAT IS COUNTED
 
     The given language names will be ignored from the stats calculation, if they exist.
 
+--force-lang
+
+    1..n pairs of 'extension=language' separated by commas, case-insensitive
+
+    Decides which language an extension is counted as, whether or not another language claims it:
+    '--force-lang m=matlab,pl=perl,txt=python'
+
+    Overrides the 'extension_priority.txt' file of the data dir.
+
 --no-gitignore
 
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
@@ -664,7 +673,9 @@ Note that the default supported languages are incomplete, but they can be easily
 as separate text files, in the persistent data path of the application. 
 The user can easily specify a new language by replicating the format of the language files and customizing it accordingly, either by following the rules below or by copy pasting an existing file.
 
-Header files have their own dedicated languages: `.h` files are counted under "C Header" and `.hpp` files under "C++ Header", since the program cannot know which codebase a header belongs to. If two or more language files claim the same extension, all files with this extension are counted under the language that comes first alphabetically.
+Header files have their own dedicated languages: `.h` files are counted under "C Header" and `.hpp` files under "C++ Header", since the program cannot know which codebase a header belongs to.
+
+If two or more language files claim the same extension, the winner is the one named in the `extension_priority.txt` file of the data dir, which ships with an answer for every contest between the languages that come with the program. An extension that nobody has named there goes to the language that comes first alphabetically, and the program reports it, since that is a tie-break and not a decision. Either way ```--force-lang``` overrides it for a single run or, through a configuration file, for a single project.
 
 The format of the languages is as follows(and should not be modified at all):
 
@@ -718,9 +729,17 @@ With that said, it is important to mention the following limitations:
 
 - Glob patterns (* ? [..] {..}) are supported both by the target paths (```--dirs```) and by the ```--exclude``` command, but full regular expressions are not supported anywhere.
 
-- The program assumes that if a line contains any odd number of the same string symbols, then this is an open multiline string. This works for most cases but it may create inaccuracies, for example if a line in python has """ then the program will consider a multiline string everything until the next " symbol and not the next """ symbol. If a language doesn't support multiline strings, then you would not expect to see odd number of string symbols either way in a valid syntax.
+- The program assumes that if a line contains any odd number of the same string symbol, then this is an open multiline string, and only the symbol that opened a string can close it. This is why a language that has a distinct multiline string delimiter should declare it: Python declares ```"""``` and ```'''``` alongside ```"``` and ```'```, so a docstring that contains a single quote is read correctly. A language whose multiline strings cannot be written as a delimiter (a Rust ```r#"..."#```, a PHP heredoc, a C# verbatim string) still falls back to the odd-count assumption, which is right for most code and can miscount a line that deliberately breaks it.
 
 - A language can declare only one multiline comment start symbol and one multiline comment end symbol in the .txt, however many string and single line comment symbols it declares.
+
+- A string symbol is one symbol that both opens and closes, so a language whose string opens with one symbol and closes with another cannot declare it. That covers the Rust ```r#"..."#```, the C# ```@"..."```, the PowerShell here-string and the shell and PHP heredocs, whose terminator the programmer chooses anyway. In practice these forms contain the ordinary quote at both ends, so the odd-count rule above still opens and closes them correctly, and only a body with an odd number of quotes inside is miscounted.
+
+- Extensions are matched without regard to case, so a file named ```MAIN.RS``` is counted as Rust, and so is one named ```main.rs```. The one thing this loses is the Unix convention where an upper case ```.C``` means C++ while ```.c``` means C: to mezura they are the same extension.
+
+- A file is recognised by its extension alone, so files that are known by their name instead are not counted at all: ```Makefile```, ```Dockerfile``` and the like have no extension, and ```CMakeLists.txt``` looks like a text file.
+
+- When two languages claim the same extension, only one of them can have it, and the choice changes the numbers rather than only the label, since the loser's files are then parsed with the winner's comment and string symbols. The program says so every time it has to break such a tie by itself. To decide it once, name the winner in the ```extension_priority.txt``` file of the data directory; to decide it for one run or for one project, use ```--force-lang```, which overrides that file.
 
 - Regural expressions are not handled in a special way, so if a regex contains a string or comment symbol, it may create some inaccurancies for the file.
 

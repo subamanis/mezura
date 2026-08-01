@@ -58,7 +58,7 @@ fn collect_stats() -> String {
     let config = Arc::new(config);
 
     let language_map = Arc::new(io_handler::parse_supported_languages_to_map(&LOCAL_APP_PATHS.languages_dir).unwrap().0);
-    let extension_lang_map: ExtensionLangMap = Arc::new(make_extension_language_map(&language_map));
+    let extension_lang_map: ExtensionLangMap = Arc::new(make_extension_language_map(&language_map, &HashMap::new(), &HashMap::new()).0);
     let content_info_ref: ContentInfoMapMut = Arc::new(Mutex::new(make_language_stats(language_map.clone())));
     let metadata_ref = Arc::new(Mutex::new(make_language_metadata(&language_map)));
     let faulty_files_ref: FaultyFilesListMut = Arc::new(Mutex::new(Vec::new()));

@@ -1,4 +1,4 @@
-use std::{path::Path};
+use std::{collections::HashMap, path::Path};
 
 use colored::{ColoredString, Colorize};
 
@@ -14,6 +14,7 @@ pub const DIRS               :&str   = "dirs";
 pub const EXCLUDE            :&str   = "exclude";
 pub const LANGUAGES          :&str   = "languages";
 pub const EXCLUDE_LANGUAGES  :&str   = "exclude-languages";
+pub const FORCE_LANG         :&str   = "force-lang";
 pub const THREADS            :&str   = "threads";
 pub const BRACES_AS_CODE     :&str   = "braces-as-code";
 pub const SEARCH_IN_DOTTED   :&str   = "search-in-dotted";
@@ -66,6 +67,7 @@ pub struct Configuration {
     pub exclude_dirs: Vec<String>,
     pub languages_of_interest: Vec<String>,
     pub excluded_languages: Vec<String>,
+    pub forced_languages: HashMap<String,String>,
     pub threads: Threads,
     pub braces_as_code: bool,
     pub should_search_in_dotted: bool,
@@ -412,11 +414,11 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     }
 
     let mut custom_config = None;
-    let (mut exclude_dirs, mut languages_of_interest, mut excluded_languages, mut threads, mut braces_as_code,
+    let (mut exclude_dirs, mut languages_of_interest, mut excluded_languages, mut forced_languages, mut threads, mut braces_as_code,
          mut search_in_dotted, mut show_faulty_files, mut config_name_to_save, mut hidden, mut log,
          mut compare_level, mut config_name_to_load, mut no_gitignore, mut theme_name, mut theme_name_to_save, mut styles, mut bar_thickness,
          mut number_separator, mut decimal_separator, mut layout, mut output, mut sort_by, mut top_n)
-         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
+         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
     for command in options {
         let (command_name, arguments) = match command.find(" ") {
             Some(index) => command.split_at(index),
@@ -458,6 +460,12 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 return Err(ArgParsingError::IncorrectCommandArgs(EXCLUDE_LANGUAGES.to_owned()));
             }
             excluded_languages = Some(vec);
+        } else if command_name == FORCE_LANG {
+            let Some(map) = utils::parse_forced_languages(arguments) else {
+                message_printer::print_help_message_for_command(FORCE_LANG);
+                return Err(ArgParsingError::IncorrectCommandArgs(FORCE_LANG.to_owned()));
+            };
+            forced_languages = Some(map);
         } else if command_name == THREADS {
             let threads_values = utils::parse_two_usize_values(arguments,
                     MIN_PRODUCERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE, MAX_CONSUMERS_VALUE);
@@ -636,7 +644,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     print_warnings_for_commands_that_need_a_loaded_configuration(&config_name_to_save, &config_name_to_load, &log, &compare_level);
 
     let mut config_builder = ConfigurationBuilder {
-        dirs, exclude_dirs, languages_of_interest, excluded_languages, threads, braces_as_code,
+        dirs, exclude_dirs, languages_of_interest, excluded_languages, forced_languages, threads, braces_as_code,
         should_search_in_dotted: search_in_dotted, should_show_faulty_files: show_faulty_files,
         hidden, no_gitignore, theme_name, theme_name_to_save, log, compare_level,
         config_name_to_save, config_name_to_load, styles, bar_thickness, number_separator, decimal_separator, layout, output, sort_by, top_n,
@@ -707,6 +715,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             HIDE => config_builder.hidden.is_some(),
             NO_GITIGNORE => config_builder.no_gitignore.is_some(),
             EXCLUDE => config_builder.exclude_dirs.is_some(),
+            FORCE_LANG => config_builder.forced_languages.is_some(),
             THEME => config_builder.theme_name.is_some(),
             SORT => config_builder.sort_by.is_some(),
             TOP => config_builder.top_n.is_some(),
@@ -826,6 +835,7 @@ pub struct ConfigurationBuilder {
     pub exclude_dirs:             Option<Vec<String>>,
     pub languages_of_interest:    Option<Vec<String>>,
     pub excluded_languages:       Option<Vec<String>>,
+    pub forced_languages:         Option<HashMap<String,String>>,
     pub threads:                  Option<Threads>,
     pub braces_as_code:           Option<bool>,
     pub should_search_in_dotted:  Option<bool>,
@@ -858,6 +868,7 @@ impl ConfigurationBuilder {
         if self.exclude_dirs.is_none() {self.exclude_dirs = config.exclude_dirs};
         if self.languages_of_interest.is_none() {self.languages_of_interest = config.languages_of_interest};
         if self.excluded_languages.is_none() {self.excluded_languages = config.excluded_languages};
+        if self.forced_languages.is_none() {self.forced_languages = config.forced_languages};
         if self.threads.is_none() {self.threads = config.threads};
         if self.braces_as_code.is_none() {self.braces_as_code = config.braces_as_code};
         if self.should_search_in_dotted.is_none() {self.should_search_in_dotted = config.should_search_in_dotted};
@@ -878,7 +889,7 @@ impl ConfigurationBuilder {
     }
 
     pub fn has_missing_fields(&self) -> bool {
-        self.exclude_dirs.is_none() || self.languages_of_interest.is_none() ||
+        self.exclude_dirs.is_none() || self.languages_of_interest.is_none() || self.forced_languages.is_none() ||
         self.threads.is_none() || self.braces_as_code.is_none() || self.should_search_in_dotted.is_none() ||
         self.should_show_faulty_files.is_none() || self.hidden.is_none() || self.no_gitignore.is_none() ||
         self.theme_name.is_none() || self.log.is_none() || self.compare_level.is_none() ||
@@ -892,6 +903,7 @@ impl ConfigurationBuilder {
             exclude_dirs: (self.exclude_dirs).clone().unwrap_or_default(),
             languages_of_interest: (self.languages_of_interest).clone().unwrap_or_default(),
             excluded_languages: (self.excluded_languages).clone().unwrap_or_default(),
+            forced_languages: (self.forced_languages).clone().unwrap_or_default(),
             threads: self.threads.clone().unwrap_or_default(),
             braces_as_code: self.braces_as_code.unwrap_or(DEF_BRACES_AS_CODE),
             should_search_in_dotted: self.should_search_in_dotted.unwrap_or(DEF_SEARCH_IN_DOTTED),
@@ -924,6 +936,7 @@ impl Configuration {
             exclude_dirs: Vec::new(),
             languages_of_interest: Vec::new(),
             excluded_languages: Vec::new(),
+            forced_languages: HashMap::new(),
             threads: Threads::default(),
             braces_as_code: DEF_BRACES_AS_CODE,
             should_search_in_dotted: DEF_SEARCH_IN_DOTTED,
@@ -1415,23 +1428,40 @@ mod tests {
     // Every command that 'resolve_invalid_config_fields' does not know about is treated as never
     // overridden, so giving it correctly on the command line would still kill the run
     #[test]
+    fn force_lang_takes_pairs_of_an_extension_and_a_language_and_refuses_anything_else() {
+        let forced = |args: &str| create_config_from_args(&format!("./ --force-lang {args}")).map(|x| x.forced_languages);
+
+        assert_eq!(Ok(crate::hashmap!("m".to_owned() => "matlab".to_owned())), forced("m=matlab"));
+        // A leading dot is accepted the way '--languages' accepts it, and the extension is lowercased
+        // here so that it is keyed the same way the lookup will ask for it. The language name is kept
+        // as it was typed, and compared without case later.
+        assert_eq!(Ok(crate::hashmap!("m".to_owned() => "MATLAB".to_owned(), "pl".to_owned() => "perl".to_owned())),
+                forced(".M=MATLAB, pl = perl"));
+
+        for wrong in ["", "matlab", "m=", "=matlab", "m=matlab,perl"] {
+            assert!(forced(wrong).is_err(), "'--force-lang {wrong}' was accepted");
+        }
+    }
+
+    #[test]
     fn test_a_command_line_value_rescues_every_invalid_field_of_a_config() {
         std::fs::create_dir_all(&PERSISTENT_APP_PATHS.config_dir).unwrap();
         let test_file_path = &PERSISTENT_APP_PATHS.config_dir.clone().add("/test002.txt");
         let _ = std::fs::remove_file(test_file_path);
         std::fs::write(test_file_path, "===> sort\nnope\n\n===> top\nnope\n\n===> bar-thickness\nnope\n\n\
-                ===> number-separator\nnope\n\n===> decimal-separator\nnope\n").unwrap();
+                ===> number-separator\nnope\n\n===> decimal-separator\nnope\n\n===> force-lang\nnope\n").unwrap();
 
         assert_eq!(Err(ArgParsingError::InvalidValueInConfig("sort".to_owned(), "test002".to_owned())),
                 create_config_from_args("./ --load test002"));
 
         let rescued = create_config_from_args(
-                "./ --load test002 --sort name --top 3 --bar-thickness fat --number-separator dot --decimal-separator comma").unwrap();
+                "./ --load test002 --sort name --top 3 --bar-thickness fat --number-separator dot --decimal-separator comma --force-lang m=matlab").unwrap();
         assert_eq!(SortCriterion::Name, rescued.sort_by);
         assert_eq!(Some(3), rescued.top_n);
         assert_eq!(BarThickness::Fat, rescued.bar_thickness);
         assert_eq!(NumberSeparator::Dot, rescued.number_separator);
         assert_eq!(DecimalSeparator::Comma, rescued.decimal_separator);
+        assert_eq!(crate::hashmap!("m".to_owned() => "matlab".to_owned()), rescued.forced_languages);
 
         std::fs::remove_file(test_file_path).unwrap();
     }

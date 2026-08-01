@@ -1,31 +1,26 @@
 Language
-Odin
+WAT
 
 Extensions
-odin
+wat wast
 
 String symbols
-" ' `
+"
 
 Comment symbols
-//
+;;
 Multi line comment start
-/*
+(;
 Multi line comment end
-*/
+;)
 
 Keyword
 NAME
-structs
+functions
 ALIASES
-struct
+(func func
 Keyword
 NAME
-enums
+modules
 ALIASES
-enum
-Keyword
-NAME
-unions
-ALIASES
-union
+(module module

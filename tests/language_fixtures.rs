@@ -38,7 +38,7 @@ fn fixture_paths(root: &Path) -> Vec<std::path::PathBuf> {
 fn language_fixtures_match_their_declared_counts() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join("lang");
     let language_map = Arc::new(io_handler::parse_supported_languages_to_map(&LOCAL_APP_PATHS.languages_dir).unwrap().0);
-    let extension_map = make_extension_language_map(&language_map);
+    let extension_map = make_extension_language_map(&language_map, &HashMap::new(), &HashMap::new()).0;
     // Built-in defaults only, so that a preference in the machine's own config file cannot change the counts
     let config = Configuration::new(Vec::new());
 

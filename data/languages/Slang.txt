@@ -1,11 +1,11 @@
 Language
-Odin
+Slang
 
 Extensions
-odin
+slang
 
 String symbols
-" ' `
+"
 
 Comment symbols
 //
@@ -21,11 +21,6 @@ ALIASES
 struct
 Keyword
 NAME
-enums
+interfaces
 ALIASES
-enum
-Keyword
-NAME
-unions
-ALIASES
-union
+interface

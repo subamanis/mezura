@@ -1,31 +1,27 @@
 Language
-Odin
+Clojure
 
 Extensions
-odin
+clj cljs cljc
 
 String symbols
-" ' `
+"
 
 Comment symbols
-//
-Multi line comment start
-/*
-Multi line comment end
-*/
+;
 
 Keyword
 NAME
-structs
+functions
 ALIASES
-struct
+(defn defn
 Keyword
 NAME
-enums
+macros
 ALIASES
-enum
+(defmacro defmacro
 Keyword
 NAME
-unions
+namespaces
 ALIASES
-union
+(ns ns

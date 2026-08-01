@@ -1,0 +1,22 @@
+Language
+Erlang
+
+Extensions
+erl hrl
+
+String symbols
+"
+
+Comment symbols
+%
+
+Keyword
+NAME
+modules
+ALIASES
+-module
+Keyword
+NAME
+records
+ALIASES
+-record

@@ -1,11 +1,11 @@
 Language
-Odin
+HLSL
 
 Extensions
-odin
+hlsl hlsli fx fxh
 
 String symbols
-" ' `
+"
 
 Comment symbols
 //
@@ -21,11 +21,6 @@ ALIASES
 struct
 Keyword
 NAME
-enums
+buffers
 ALIASES
-enum
-Keyword
-NAME
-unions
-ALIASES
-union
+cbuffer

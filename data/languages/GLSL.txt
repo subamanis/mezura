@@ -1,11 +1,11 @@
 Language
-Odin
+GLSL
 
 Extensions
-odin
+glsl vert frag geom comp tesc tese
 
 String symbols
-" ' `
+"
 
 Comment symbols
 //
@@ -19,13 +19,3 @@ NAME
 structs
 ALIASES
 struct
-Keyword
-NAME
-enums
-ALIASES
-enum
-Keyword
-NAME
-unions
-ALIASES
-union

@@ -5,6 +5,7 @@ Configuration:
     exclude: 
     languages: 
     exclude-languages: 
+    force-lang: 
     braces-as-code: no
     search-in-dotted: no
     no-gitignore: no

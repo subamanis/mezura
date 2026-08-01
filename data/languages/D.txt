@@ -1,11 +1,11 @@
 Language
-Odin
+D
 
 Extensions
-odin
+d di
 
 String symbols
-" ' `
+" `
 
 Comment symbols
 //
@@ -16,16 +16,21 @@ Multi line comment end
 
 Keyword
 NAME
+classes
+ALIASES
+class
+Keyword
+NAME
 structs
 ALIASES
 struct
 Keyword
 NAME
-enums
+interfaces
 ALIASES
-enum
+interface
 Keyword
 NAME
-unions
+templates
 ALIASES
-union
+template

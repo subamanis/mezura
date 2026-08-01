@@ -1,31 +1,21 @@
 Language
-Odin
+PowerShell
 
 Extensions
-odin
+ps1 psm1 psd1
 
 String symbols
-" ' `
+" '
 
 Comment symbols
-//
+#
 Multi line comment start
-/*
+<#
 Multi line comment end
-*/
+#>
 
 Keyword
 NAME
-structs
+classes
 ALIASES
-struct
-Keyword
-NAME
-enums
-ALIASES
-enum
-Keyword
-NAME
-unions
-ALIASES
-union
+class

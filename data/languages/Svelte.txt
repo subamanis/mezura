@@ -1,8 +1,8 @@
 Language
-Odin
+Svelte
 
 Extensions
-odin
+svelte
 
 String symbols
 " ' `
@@ -16,16 +16,6 @@ Multi line comment end
 
 Keyword
 NAME
-structs
+classes
 ALIASES
-struct
-Keyword
-NAME
-enums
-ALIASES
-enum
-Keyword
-NAME
-unions
-ALIASES
-union
+class

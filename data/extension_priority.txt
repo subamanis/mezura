@@ -1,0 +1,39 @@
+Which language wins an extension that more than one of them claims.
+
+Two languages can want the same extension: '.m' is Objective-C to one person and MATLAB to another,
+'.pl' is Perl to one and Prolog to another. Only one of them can have it, and the choice matters more
+than a label, because the wrong language means the wrong comment symbols, and then every comment line
+of the loser is counted as code.
+
+Without a line here, the extension goes to whichever language name comes first alphabetically, and
+the program says so on every run so that it is never a silent decision. Write the extension, then the
+languages that claim it separated by commas. The first name takes it and the rest lose their claim:
+
+    m       Objective-C, MATLAB
+    pl      Perl, Prolog
+
+The names are the ones the language files declare, and neither they nor the extension care about
+capitalisation. A language you have removed, or one that never existed, is skipped and the next name
+on the line is tried.
+
+This settles the question for every run. To decide it for one run, or for one project through its
+configuration file, use '--force-lang', as in '--force-lang m=matlab', which overrides this file.
+
+The four that ship are the only contests the shipped languages have between them, and none of the
+four has an answer that is right for everybody:
+
+  h     C Header over Objective-C, whose headers are also '.h' files. There is no way to tell the
+        two apart from the name, so the more common one wins by default.
+  m     Objective-C over MATLAB, because more of it is written in the repositories this program is
+        pointed at. If you write MATLAB, this is the line to swap.
+  pl    Perl over Prolog. Prolog also answers to '.pro'.
+  pas   Pascal over Delphi. Delphi also answers to '.dpr' and '.dpk'.
+
+Everything above is explanation and is ignored, exactly as in a configuration file. The rules
+are the lines below the marker.
+
+===> contested-extensions
+h       C Header, Objective-C
+m       Objective-C, MATLAB
+pl      Perl, Prolog
+pas     Pascal, Delphi

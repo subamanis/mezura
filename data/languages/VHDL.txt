@@ -1,0 +1,11 @@
+Language
+VHDL
+
+Extensions
+vhd vhdl
+
+String symbols
+"
+
+Comment symbols
+--

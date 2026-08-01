@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use crossbeam_deque::{Injector, Worker};
@@ -28,7 +29,7 @@ fn test_whole_workflow () {
 
     assert!(languages_metadata_map.lock().unwrap().len() == language_map_len);
 
-    let extension_lang_map: ExtensionLangMap = Arc::new(make_extension_language_map(&language_map));
+    let extension_lang_map: ExtensionLangMap = Arc::new(make_extension_language_map(&language_map, &HashMap::new(), &HashMap::new()).0);
     calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector, &mut files_present, &extension_lang_map);
 
     let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs).unwrap());
@@ -65,7 +66,7 @@ fn count_files_of(target: &str, extra_args: &str) -> (usize, usize, usize, Vec<S
     let files_injector = Arc::new(Injector::new());
     let dirs_injector = Arc::new(Injector::new());
     let idle_producers = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let extension_lang_map: ExtensionLangMap = Arc::new(make_extension_language_map(&language_map));
+    let extension_lang_map: ExtensionLangMap = Arc::new(make_extension_language_map(&language_map, &HashMap::new(), &HashMap::new()).0);
     let mut files_present = FilesPresent::default();
     calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector, &mut files_present, &extension_lang_map);
 

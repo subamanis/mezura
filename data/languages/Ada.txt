@@ -1,0 +1,22 @@
+Language
+Ada
+
+Extensions
+adb ads
+
+String symbols
+"
+
+Comment symbols
+--
+
+Keyword
+NAME
+packages
+ALIASES
+package
+Keyword
+NAME
+types
+ALIASES
+type

@@ -1,14 +1,14 @@
 Language
-CSS
+Assembly
 
 Extensions
-css
+s asm nasm
 
 String symbols
 " '
 
 Comment symbols
-
+; # //
 Multi line comment start
 /*
 Multi line comment end

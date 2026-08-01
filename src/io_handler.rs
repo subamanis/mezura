@@ -13,9 +13,10 @@ const STRING_SYMBOLS           : &str = "String symbols";
 const COMMENT_SYMBOLS          : &str = "Comment symbols";     
 const MULTILINE_COMMENT_START  : &str = "Multi line comment start";     
 const MULTILINE_COMMENT_END    : &str = "Multi line comment end";     
-const KEYWORD                  : &str = "Keyword";     
-const KEYWORD_NAME             : &str = "NAME";     
-const KEYWORD_ALIASES          : &str = "ALIASES";     
+const KEYWORD                  : &str = "Keyword";
+const KEYWORD_NAME             : &str = "NAME";
+const KEYWORD_ALIASES          : &str = "ALIASES";
+const CONTESTED_EXTENSIONS     : &str = "contested-extensions";
 
 
 #[derive(Debug)]
@@ -236,6 +237,61 @@ pub fn names_in_dir(dir: &str) -> Vec<String> {
 }
 
 
+// A missing file is not a mistake: an installation made by an earlier version has none, and the
+// only consequence is that contested extensions fall back to the alphabetical tiebreak, which
+// announces itself anyway.
+pub fn parse_extension_priority_file(path: &str) -> (HashMap<String,Vec<String>>, Vec<String>) {
+    match fs::read_to_string(path) {
+        Ok(contents) => parse_extension_priority(&contents),
+        Err(_) => (HashMap::new(), Vec::new())
+    }
+}
+
+// A line that does not parse is reported and skipped while the rest of the file applies, because a
+// mistake here cannot produce a wrong number in silence: the extension it failed to settle falls
+// through to the tiebreak, which says so by name.
+pub fn parse_extension_priority(contents: &str) -> (HashMap<String,Vec<String>>, Vec<String>) {
+    let mut rules : HashMap<String,Vec<String>> = HashMap::new();
+    let mut faulty_lines = Vec::new();
+    let mut inside_the_rules = false;
+
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() {continue;}
+        // The '===>' of the configuration files and not the bare headers of the language files: a
+        // language file has no prose in it and needs nothing to separate the two, while this one
+        // explains itself above its rules exactly as a configuration does. A marker also ends the
+        // block, so that a section added later is skipped rather than read as a rule for an
+        // extension named '===>', which is neither applied nor reported.
+        if line.starts_with("===>") {
+            inside_the_rules = line.trim_start_matches("===>").split_whitespace().next()
+                    .is_some_and(|id| id.eq_ignore_ascii_case(CONTESTED_EXTENSIONS));
+            continue;
+        }
+        if !inside_the_rules {continue;}
+
+        let Some((extension, claimants)) = line.split_once(char::is_whitespace) else {
+            faulty_lines.push(line.to_owned());
+            continue;
+        };
+        let names = claimants.split(',').filter_map(utils::get_trimmed_if_not_empty).collect::<Vec<_>>();
+        if names.is_empty() {
+            faulty_lines.push(line.to_owned());
+            continue;
+        }
+
+        // The first declaration of an extension is the one that counts, so that a second one cannot
+        // silently undo a decision that is sitting a few lines above it in the same file
+        match rules.entry(extension.to_ascii_lowercase()) {
+            std::collections::hash_map::Entry::Occupied(_) => faulty_lines.push(line.to_owned()),
+            std::collections::hash_map::Entry::Vacant(slot) => { slot.insert(names); }
+        }
+    }
+
+    (rules, faulty_lines)
+}
+
+
 // ------------------------------ Theme handling ------------------------------
 
 // None means the theme is not there at all, which is a mistake in the name and not in the file.
@@ -323,9 +379,9 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
     });
 
     let (mut dirs, mut braces_as_code, mut should_search_in_dotted, mut threads, mut exclude_dirs,
-         mut languages_of_interest, mut excluded_languages, mut should_show_faulty_files, mut hidden,
+         mut languages_of_interest, mut excluded_languages, mut forced_languages, mut should_show_faulty_files, mut hidden,
          mut no_gitignore, mut theme_name, mut log, mut compare_level, mut config_styles, mut bar_thickness,
-         mut number_separator, mut decimal_separator, mut layout, mut sort_by, mut top_n) = (None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None);
+         mut number_separator, mut decimal_separator, mut layout, mut sort_by, mut top_n) = (None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None);
     let mut issues = ConfigFileIssues::default();
     let mut buf = String::with_capacity(150);
 
@@ -355,6 +411,19 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                 let langs = read_lines_from_file_to_vec(&mut reader, &mut buf, utils::parse_languages_to_vec);
                 if !langs.is_empty() {
                     excluded_languages = Some(langs);
+                }
+            } else if id == config_manager::FORCE_LANG {
+                // Read as a block and not as a single line, like the other lists: a value written
+                // across two lines was otherwise cut down to its first line in silence, since the
+                // remainder does not begin with '===>' and the outer loop simply skips it.
+                let declared = read_lines_from_file_to_vec(&mut reader, &mut buf, |line| vec![line.trim().to_owned()]).join(",");
+                // An empty value is the command left in the file without being used, which is not a
+                // mistake. Anything else that does not parse is one.
+                if declared.split(',').any(|pair| !pair.trim().is_empty()) {
+                    match utils::parse_forced_languages(&declared) {
+                        Some(x) => forced_languages = Some(x),
+                        None => issues.invalid_fields.push(config_manager::FORCE_LANG)
+                    }
                 }
             } else if id == config_manager::THREADS {
                 buf.clear();
@@ -473,7 +542,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
     }
 
     let builder = ConfigurationBuilder {
-        dirs, exclude_dirs, languages_of_interest, excluded_languages, threads, braces_as_code, should_search_in_dotted,
+        dirs, exclude_dirs, languages_of_interest, excluded_languages, forced_languages, threads, braces_as_code, should_search_in_dotted,
         should_show_faulty_files, hidden, no_gitignore, theme_name, log, compare_level, config_styles, bar_thickness,
         number_separator, decimal_separator, layout, sort_by, top_n,
         ..Default::default()
@@ -507,6 +576,10 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
     if let Some(exclude_languages) = &config_builder.excluded_languages {
         writer.write_all(&[b"\n\n===> ",config_manager::EXCLUDE_LANGUAGES.as_bytes(),b"\n"].concat())?;
         writer.write_all(exclude_languages.join(",").as_bytes())?;
+    }
+    if let Some(forced_languages) = &config_builder.forced_languages {
+        writer.write_all(&[b"\n\n===> ",config_manager::FORCE_LANG.as_bytes(),b"\n"].concat())?;
+        writer.write_all(utils::forced_languages_to_string(forced_languages).as_bytes())?;
     }
     if let Some(threads) = &config_builder.threads {
         writer.write_all(&[b"\n\n===> ",config_manager::THREADS.as_bytes(),b"\n"].concat())?;
@@ -615,7 +688,7 @@ pub fn write_default_config(contents: String) -> Result<(), io::Error> {
 // every log entry so that a later run can say whether the two are comparable at all. The same list
 // is what the progress section reads back, so the writing and the comparison cannot drift into
 // formatting the same setting two different ways.
-pub fn counting_settings(config: &Configuration) -> [(&'static str, String); 7] {
+pub fn counting_settings(config: &Configuration) -> [(&'static str, String); 8] {
     let yes_no = |value: bool| if value {"yes"} else {"no"}.to_owned();
 
     // Every key is the name of the command that sets it, so that the 'modified:' tag of the progress
@@ -625,6 +698,7 @@ pub fn counting_settings(config: &Configuration) -> [(&'static str, String); 7] 
      (config_manager::EXCLUDE, config.exclude_dirs.join(",")),
      (config_manager::LANGUAGES, config.languages_of_interest.join(",")),
      (config_manager::EXCLUDE_LANGUAGES, config.excluded_languages.join(",")),
+     (config_manager::FORCE_LANG, utils::forced_languages_to_string(&config.forced_languages)),
      (config_manager::BRACES_AS_CODE, yes_no(config.braces_as_code)),
      (config_manager::SEARCH_IN_DOTTED, yes_no(config.should_search_in_dotted)),
      (config_manager::NO_GITIGNORE, yes_no(config.no_gitignore))]
@@ -790,6 +864,7 @@ mod tests {
     #[test]
     fn test_save_config_file_and_then_parse_it() -> std::io::Result<()> {
         let command = "./ --exclude a,b,c.txt,d.txt, --braces-as-code --threads 1 1 --hide keywords,timing \
+                --force-lang m=matlab,.pl=Perl \
                 --style code-number=green,comments-label=magenta bold,arrow=default dim".to_string();
         let config_builder = config_manager::create_config_builder_from_args(&command).unwrap();
 
@@ -805,11 +880,100 @@ mod tests {
         assert_eq!(config_builder.should_show_faulty_files, options.should_show_faulty_files);
         assert_eq!(config_builder.should_search_in_dotted, options.should_search_in_dotted);
         assert_eq!(config_builder.hidden, options.hidden);
+        // A project that answers a contested extension its own way answers it once, in its config
+        assert_eq!(config_builder.forced_languages, options.forced_languages);
+        assert_eq!(Some(crate::hashmap!("m".to_owned() => "matlab".to_owned(), "pl".to_owned() => "Perl".to_owned())),
+                options.forced_languages);
         // Written one pair per line and read back as a group, so a saved look survives a reload
         assert_eq!(config_builder.styles, options.config_styles);
         assert_eq!(3, options.config_styles.as_ref().unwrap().len());
 
         Ok(())
+    }
+
+    // The warning about a contested extension is worth having only if a clean installation never
+    // sees it, so the shipped priority file has to answer every contest the shipped languages have
+    // between them. Adding a language that takes an extension another one already claims is
+    // therefore two files and not one.
+    #[test]
+    fn every_contest_between_the_shipped_languages_is_settled_by_the_shipped_priority_file() {
+        let (languages, _) = io_handler::parse_supported_languages_to_map(&LOCAL_APP_PATHS.languages_dir).unwrap();
+        let (priority, faulty) = io_handler::parse_extension_priority_file(
+                &(LOCAL_APP_PATHS.data_dir.clone() + crate::EXTENSION_PRIORITY_FILE_NAME));
+        assert!(faulty.is_empty(), "the shipped priority file has lines that do not parse: {faulty:?}");
+
+        let (_, report) = crate::make_extension_language_map(&languages, &priority, &HashMap::new());
+        let unsettled = report.collisions.iter()
+                .filter(|x| x.resolved_by == crate::ResolvedBy::AlphabeticalFallback)
+                .map(|x| format!("'{}' between {} and {}", x.extension, x.winner, x.losers.join(", ")))
+                .collect::<Vec<_>>();
+
+        assert!(unsettled.is_empty(),
+                "these contests are left to the alphabetical tiebreak, so a clean installation is \
+                 warned about them on every run. Declare each one in '{}':\n{}",
+                crate::EXTENSION_PRIORITY_FILE_NAME, unsettled.join("\n"));
+    }
+
+    // Everything above the header is explanation and has to stay explanation, including an example
+    // written in the very shape of a rule
+    #[test]
+    fn the_priority_file_reads_only_what_is_under_its_header() {
+        let (rules, faulty) = io_handler::parse_extension_priority(
+"Anything up here is prose, and this looks exactly like a rule:
+    m       Objective-C, MATLAB
+
+===> contested-extensions
+M        Objective-C , MATLAB
+pl       Perl
+");
+        assert!(faulty.is_empty());
+        assert_eq!(2, rules.len());
+        assert_eq!(Some(&vec!["Objective-C".to_owned(), "MATLAB".to_owned()]), rules.get("m"));
+        assert_eq!(Some(&vec!["Perl".to_owned()]), rules.get("pl"));
+    }
+
+    #[test]
+    fn a_line_of_the_priority_file_that_does_not_parse_is_skipped_and_the_rest_applies() {
+        let (rules, faulty) = io_handler::parse_extension_priority(
+"===> contested-extensions
+m       Objective-C, MATLAB
+justoneword
+m       Prolog
+v       ,  ,
+===> some-section-added-later
+pl      Perl, Prolog
+");
+        // A marker ends the block, so the section after it is skipped whole instead of becoming a
+        // rule for an extension called '===>'
+        assert!(!rules.contains_key("===>") && !rules.contains_key("pl"));
+        assert_eq!(1, rules.len());
+        // the second declaration is the one that loses, and the decision above it stands
+        assert_eq!(Some(&vec!["Objective-C".to_owned(), "MATLAB".to_owned()]), rules.get("m"));
+        assert_eq!(vec!["justoneword".to_owned(), "m       Prolog".to_owned(), "v       ,  ,".to_owned()], faulty);
+    }
+
+    // The value used to be read as a single line, and a second line of it was dropped in silence:
+    // it does not begin with '===>', so the loop that looks for commands simply skipped it, and
+    // nothing was reported as invalid because what was read did parse.
+    #[test]
+    fn a_force_lang_value_written_across_lines_is_read_whole() -> std::io::Result<()> {
+        let dir = LOCAL_APP_PATHS.test_config_dir.clone();
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.clone() + "force-lang-block.txt";
+        std::fs::write(&path, "===> dirs\n./\n\n===> force-lang\nm=matlab,\npl=perl\n")?;
+
+        let (options, issues) = io_handler::parse_config_file(Some("force-lang-block"), Some(dir)).unwrap();
+        assert!(issues.invalid_fields.is_empty());
+        assert_eq!(Some(crate::hashmap!("m".to_owned() => "matlab".to_owned(), "pl".to_owned() => "perl".to_owned())),
+                options.forced_languages);
+
+        std::fs::remove_file(&path)
+    }
+
+    #[test]
+    fn a_missing_priority_file_is_not_a_mistake() {
+        let (rules, faulty) = io_handler::parse_extension_priority_file("a/path/that/is/not/there.txt");
+        assert!(rules.is_empty() && faulty.is_empty());
     }
 
     #[test]

@@ -542,16 +542,10 @@ fn get_bounds_w_multiline_comments(line: &str, language: &Language, is_comment_c
         }
     }
 
-    // A '//' that sits inside a '*/' is part of it and not a comment of its own, and a '/*' that
-    // sits inside a comment never opens one
+    // A '//' that sits inside a '*/' is part of it and not a comment of its own
     comment_indices.retain(|x| !is_intersecting_with_multi_line_end_symbol(*x, language.multiline_end_len(), com_end_indices));
-    com_start_indices.retain(|x| !is_intersecting_with_comment_symbol(*x, comment_indices));
 
-    // A comment and the multiline start can begin at the very same place, and then the longer one is
-    // the real one: Lua's '--[[' opens a block, it is not a '--' line comment that happens to be
-    // followed by brackets. This is the same longest-first rule the string symbols already follow,
-    // and without it the block never opens and everything inside it counts as code.
-    resolve_comment_and_multiline_start_at_the_same_place(line, language, comment_indices, com_start_indices);
+    resolve_comment_and_multiline_start_overlap(line, language, comment_indices, com_start_indices);
 
     if !com_end_indices.is_empty() && !com_start_indices.is_empty() {
         resolve_double_counting_of_adjacent_start_and_end_symbols(com_start_indices, com_end_indices,
@@ -810,11 +804,22 @@ fn push_trimmed_spans(spans: &mut Vec<(u32, u32)>, ranges: &[(usize, usize)], li
 fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher,
     file_stats: &mut FileStats, indices: &mut Vec<usize>)
 {
-    fn is_acceptable(byte: Option<&u8>) -> bool {
+    // The two sides are not the same question, and '(' is where they part. After the word it opens
+    // an argument or an inheritance list and is part of the declaration: Delphi writes
+    // 'TFoo = class(TObject)' and Erlang writes '-module(greeter).', and both were counted as
+    // nothing at all while the word sat against a bracket. Before the word it means the word is the
+    // head of an s-expression, which is already handled by declaring the bracket inside the alias,
+    // as Clojure and Lisp do with '(defn'. Accepting it on that side as well would count '(defn'
+    // through the bracketed alias and again through the bare one.
+    fn is_acceptable_before(byte: Option<&u8>) -> bool {
         match byte {
             None => true,
             Some(b) => *b == b' ' || *b == b'}' || *b == b'{' || *b == b','
         }
+    }
+
+    fn is_acceptable_after(byte: Option<&u8>) -> bool {
+        matches!(byte, Some(b'(')) || is_acceptable_before(byte)
     }
 
     if spans.is_empty() { return; }
@@ -846,7 +851,7 @@ fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher
 
             let before = if *at > from { bytes.get(*at - 1) } else { None };
             let after = if at + alias_len < to { bytes.get(at + alias_len) } else { None };
-            if is_acceptable(before) && is_acceptable(after) {
+            if is_acceptable_before(before) && is_acceptable_after(after) {
                 file_stats.incr_keyword(*keyword_index);
             }
         }
@@ -879,7 +884,13 @@ fn resolve_string_delimiters(language: &Language, open_str_symbol: &Option<u8>, 
     }
 }
 
-fn resolve_comment_and_multiline_start_at_the_same_place(line: &str, language: &Language,
+// A comment symbol and the multiline start can overlap, and then only one of them is real: whichever
+// begins first swallows the other, and when they begin in the same place the longer one wins. All
+// three shapes occur. A '/*' inside a '//' opens nothing, which is the plain case. PowerShell's '<#'
+// holds a whole '#' comment inside it, and reading that '#' as a comment of its own stops the block
+// from ever opening, which is how every block comment of a language silently stops working. Lua's
+// '--[[' begins exactly where its own '--' does, and the shorter one winning has the same effect.
+fn resolve_comment_and_multiline_start_overlap(line: &str, language: &Language,
     comment_indices: &mut Vec<usize>, com_start_indices: &mut Vec<usize>)
 {
     if comment_indices.is_empty() || com_start_indices.is_empty() {
@@ -893,6 +904,11 @@ fn resolve_comment_and_multiline_start_at_the_same_place(line: &str, language: &
                 .max()
                 .unwrap_or(0)
     };
+
+    com_start_indices.retain(|start| !comment_indices.iter()
+            .any(|at| start > at && *start < at + longest_comment_at(*at)));
+    comment_indices.retain(|at| !com_start_indices.iter()
+            .any(|start| at > start && *at < start + start_len));
 
     comment_indices.retain(|at| !com_start_indices.contains(at) || longest_comment_at(*at) >= start_len);
     com_start_indices.retain(|at| !comment_indices.contains(at));
@@ -910,13 +926,6 @@ fn is_intersecting_with_multi_line_end_symbol(index: usize, symbol_len: usize, e
     false
 }
 
-fn is_intersecting_with_comment_symbol(index: usize, comments_vec: &[usize]) -> bool {
-    for i in comments_vec {
-        if *i == index + 1 {return true;} 
-    }
-
-    false
-}
 
 
 impl LineInfo {
@@ -1272,6 +1281,20 @@ mod tests {
         let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
         keywords_of(&line, &JAVA_MATCHER, &mut file_stats);
         assert_eq!(make_file_stats(0,0), file_stats);
+
+        // A bracket after the word opens an argument or an inheritance list and belongs to the
+        // declaration, which is what Delphi's 'TFoo = class(TObject)' and Erlang's '-module(x).'
+        // are. A bracket before it means the word is the head of an s-expression, and accepting
+        // that side too would count Clojure's '(defn' twice, once through each of its aliases.
+        let line = String::from("TFoo = class(TObject)");
+        let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
+        keywords_of(&line, &JAVA_MATCHER, &mut file_stats);
+        assert_eq!(make_file_stats(1,0), file_stats);
+
+        let line = String::from("(class foo)");
+        let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
+        keywords_of(&line, &JAVA_MATCHER, &mut file_stats);
+        assert_eq!(make_file_stats(0,0), file_stats);
     }
 
     fn make_file_stats(class_occurances: usize, interface_occurances: usize) -> FileStats {
@@ -1417,6 +1440,34 @@ mod tests {
                 bounds_multi("x = 1 --[[ opens here", &LUA, true, &None));
         // and it closes on ']]'
         assert_eq!(TextInfo::from_slice(" y = 2"), bounds_multi("]] y = 2", &LUA, false, &None));
+    }
+
+    // A block comment whose opening holds the line comment symbol inside it, which is PowerShell's shape
+    static POWERSHELL : LazyLock<Language> = LazyLock::new(|| Language {
+        name : "powershell".to_owned(),
+        extensions : vec!["ps1".to_owned()],
+        string_symbols : vec!["\"".to_owned(),"'".to_owned()],
+        comment_symbols : vec!["#".to_owned()],
+        multiline_comment_start_symbol : Some("<#".to_owned()),
+        multiline_comment_end_symbol : Some("#>".to_owned()),
+        keywords : vec![],
+        scan_plan : std::sync::OnceLock::new()
+    });
+
+    // The '#' of '<#' is not a comment of its own. Reading it as one leaves the block closed for the
+    // whole file, so every block comment in the language counts as code, in silence.
+    #[test]
+    fn a_comment_symbol_inside_the_block_opening_belongs_to_the_opening() {
+        // the block opens and stays open
+        assert_eq!(TextInfo::with_open_comment(), bounds_multi("<#", &POWERSHELL, true, &None));
+        assert_eq!(TextInfo::with_open_comment(), bounds_multi("<# opening", &POWERSHELL, true, &None));
+        // code before it is kept, the block is not
+        assert_eq!(TextInfo::new(Some("$x = 1 ".to_owned()), false, true, None),
+                bounds_multi("$x = 1 <# opens here", &POWERSHELL, true, &None));
+        // a plain line comment still behaves like one
+        assert_eq!(TextInfo::none_all(false), bounds_multi("# just a comment", &POWERSHELL, true, &None));
+        // and the block closes on '#>' without its '#' reading as a comment
+        assert_eq!(TextInfo::from_slice(" $y = 2"), bounds_multi("#> $y = 2", &POWERSHELL, false, &None));
     }
 
     static DEFN : LazyLock<Keyword> = LazyLock::new(|| Keyword {

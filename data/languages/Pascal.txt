@@ -1,31 +1,26 @@
 Language
-Odin
+Pascal
 
 Extensions
-odin
+pas pp lpr
 
 String symbols
-" ' `
+'
 
 Comment symbols
 //
 Multi line comment start
-/*
+{
 Multi line comment end
-*/
+}
 
 Keyword
 NAME
-structs
+classes
 ALIASES
-struct
+class
 Keyword
 NAME
-enums
+records
 ALIASES
-enum
-Keyword
-NAME
-unions
-ALIASES
-union
+record

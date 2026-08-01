@@ -1,0 +1,17 @@
+Language
+Perl
+
+Extensions
+pl pm
+
+String symbols
+" '
+
+Comment symbols
+#
+
+Keyword
+NAME
+packages
+ALIASES
+package

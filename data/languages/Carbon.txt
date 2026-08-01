@@ -1,0 +1,22 @@
+Language
+Carbon
+
+Extensions
+carbon
+
+String symbols
+''' "
+
+Comment symbols
+//
+
+Keyword
+NAME
+classes
+ALIASES
+class
+Keyword
+NAME
+interfaces
+ALIASES
+interface

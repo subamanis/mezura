@@ -1,0 +1,11 @@
+# mezura-expect lines=11 code=5 comments=2 extra=4 types=1 interfaces=1 enums=1
+type Query {
+  greeting: String
+}
+
+interface Node {
+  id: ID
+}
+
+# an enum
+enum Color { RED, GREEN }

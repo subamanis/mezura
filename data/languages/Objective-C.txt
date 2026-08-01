@@ -1,11 +1,11 @@
 Language
-Odin
+Objective-C
 
 Extensions
-odin
+m mm h
 
 String symbols
-" ' `
+"
 
 Comment symbols
 //
@@ -16,16 +16,11 @@ Multi line comment end
 
 Keyword
 NAME
-structs
+classes
 ALIASES
-struct
+@interface
 Keyword
 NAME
-enums
+protocols
 ALIASES
-enum
-Keyword
-NAME
-unions
-ALIASES
-union
+@protocol

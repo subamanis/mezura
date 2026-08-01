@@ -1,31 +1,31 @@
 Language
-Odin
+Lisp
 
 Extensions
-odin
+lisp lsp
 
 String symbols
-" ' `
+"
 
 Comment symbols
-//
+;
 Multi line comment start
-/*
+#|
 Multi line comment end
-*/
+|#
 
 Keyword
 NAME
-structs
+functions
 ALIASES
-struct
+(defun defun
 Keyword
 NAME
-enums
+macros
 ALIASES
-enum
+(defmacro defmacro
 Keyword
 NAME
-unions
+classes
 ALIASES
-union
+(defclass defclass

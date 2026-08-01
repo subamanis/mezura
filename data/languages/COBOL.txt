@@ -1,0 +1,22 @@
+Language
+COBOL
+
+Extensions
+cob cbl cpy
+
+String symbols
+" '
+
+Comment symbols
+*>
+
+Keyword
+NAME
+divisions
+ALIASES
+DIVISION. division. DIVISION division
+Keyword
+NAME
+programs
+ALIASES
+PROGRAM-ID. program-id. PROGRAM-ID program-id
