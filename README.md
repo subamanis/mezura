@@ -531,13 +531,20 @@ TUNING AND DIAGNOSTICS
 
 --threads
 
-    2 numbers: the first between 1 and 8 and the second between 1 and 30.
+    2 numbers: the first between 1 and 32 and the second between 1 and 128.
 
     This represents the number of the producers (threads that will traverse the given directories),
     and consumers (threads that will parse whatever files the producers found).
 
     If this command is not provided, the numbers will be chosen based on the available threads
-    on your machine. Generally, a good ratio of producers-consumers is 1:3
+    on your machine.
+
+    There are far more consumers than cores on purpose. A consumer spends most of its life waiting
+    for a file to open, so what decides the speed is how many reads are in flight, not how many
+    cores there are. Raising the number costs nothing on a fast disk whose files are already
+    cached, and is worth up to twice the speed on a slow disk or on the first run after a reboot.
+    If your files live on a slow drive, or you are counting a tree you have not touched today, it
+    is worth trying a higher number than the default.
 
 --show-faulty-files
 
@@ -669,10 +676,10 @@ Extensions
 <name of file extensions like cpp hpp or py, separated by whitespace>
 
 String symbols
-<either 1 or 2 string symbols, separated by whitespace, like: " ' >
+<one or more string symbols, separated by whitespace, like: " ' >
 
 Comment symbols
-<either 1 or 2 single line comment symbols, separated by whitespace, like: // # >
+<one or more single line comment symbols, separated by whitespace, like: // # >
 
 ```
 All the following lines are optional and can be omitted. You can also specify an arbitrary amount of keywords.
@@ -713,7 +720,7 @@ With that said, it is important to mention the following limitations:
 
 - The program assumes that if a line contains any odd number of the same string symbols, then this is an open multiline string. This works for most cases but it may create inaccuracies, for example if a line in python has """ then the program will consider a multiline string everything until the next " symbol and not the next """ symbol. If a language doesn't support multiline strings, then you would not expect to see odd number of string symbols either way in a valid syntax.
 
-- A language can only declare either one or two string and comment symbols and only one multiline comment start symbol + multiline comment end symbol in the .txt, not more.
+- A language can declare only one multiline comment start symbol and one multiline comment end symbol in the .txt, however many string and single line comment symbols it declares.
 
 - Regural expressions are not handled in a special way, so if a regex contains a string or comment symbol, it may create some inaccurancies for the file.
 

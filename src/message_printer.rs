@@ -85,13 +85,20 @@ pub const EXCLUDE_LANGUAGES_HELP  :  &str =
 pub const THREADS_HELP  :  &str =
 "--threads
 
-    2 numbers: the first between 1 and 8 and the second between 1 and 30.
+    2 numbers: the first between 1 and 32 and the second between 1 and 128.
 
     This represents the number of the producers (threads that will traverse the given directories),
     and consumers (threads that will parse whatever files the producers found).
 
     If this command is not provided, the numbers will be chosen based on the available threads
-    on your machine. Generally, a good ratio of producers-consumers is 1:3
+    on your machine.
+
+    There are far more consumers than cores on purpose. A consumer spends most of its life waiting
+    for a file to open, so what decides the speed is how many reads are in flight, not how many
+    cores there are. Raising the number costs nothing on a fast disk whose files are already
+    cached, and is worth up to twice the speed on a slow disk or on the first run after a reboot.
+    If your files live on a slow drive, or you are counting a tree you have not touched today, it
+    is worth trying a higher number than the default.
 
 ";
 pub const BRACES_AS_CODE_HELP  :  &str =
