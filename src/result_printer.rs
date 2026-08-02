@@ -62,19 +62,13 @@ fn is_grouped(groups: &[Group]) -> bool {
 // '--sort' applies at both levels with the same criterion, and '--top' is per module, since the
 // question it asks is about the rows the reader is looking at
 fn groups_of<'a>(result: &'a RunResult, config: &Configuration) -> Vec<Group<'a>> {
-    let value_of = |module: &ModuleResult| match config.sort_by {
-        SortCriterion::Files => module.final_stats.files,
-        SortCriterion::Size => module.final_stats.bytes_size,
-        SortCriterion::Lines => module.final_stats.lines,
-        SortCriterion::Code => module.final_stats.code_lines,
-        SortCriterion::Name => 0
-    };
-    let name_of = |module: &ModuleResult| module.name.clone().unwrap_or_else(|| UNNAMED_MODULE_NAME.to_owned()).to_lowercase();
-
-    let mut modules = result.modules.iter().collect::<Vec<_>>();
-    modules.sort_by(|a, b| value_of(b).cmp(&value_of(a)).then_with(|| name_of(a).cmp(&name_of(b))));
-
-    modules.into_iter().map(|module| {
+    // The modules keep the order they were written in, and '--sort' orders only the languages
+    // inside them. The two are not the same kind of thing: a language is something the program
+    // found, so somebody has to choose an order for it, while a module is something the user named,
+    // and the order they named them in is already a choice. Reordering it overrules them, and it
+    // takes away the only way of arranging the columns of a matrix that they had. The leftovers are
+    // last because they were never declared at all.
+    result.modules.iter().map(|module| {
         let languages = get_sorted_language_names(&module.content_info_map, &module.languages_metadata_map, config.sort_by);
         let hidden = config.top_n.map_or(0, |top| languages.len().saturating_sub(top));
         Group {
@@ -132,7 +126,7 @@ so the 'table' layout was printed. Use the modules feature to get a matrix: 'mez
     let print_total = languages_metadata_map.len() > 1 || groups.len() > 1;
 
     match layout {
-        Layout::Matrix => print_as_matrix(theme, &groups, &matrix_names, final_stats, config.sort_by, print_total, should_print_keywords),
+        Layout::Matrix => print_as_matrix(theme, &groups, &matrix_names, final_stats, print_total, should_print_keywords),
         Layout::Boxed => print_as_boxed_table(theme, &groups, final_stats, print_total, should_print_keywords),
         Layout::Table => print_as_table(theme, &groups, final_stats, print_total, should_print_keywords),
         Layout::List => print_individually(theme, &groups, &columns, block_width, should_print_keywords)
@@ -184,6 +178,10 @@ fn print_as_table(theme: &Theme, groups: &[Group], final_stats: &FinalStats,
 // of the whole, and the languages indented under it take their share of it, so the two levels answer
 // the two different questions that nesting them was for.
 const GROUP_INDENT : &str = "  ";
+
+// The list layout indents further than the tables do. Its rows are far wider and carry a blank line
+// between them already, so two spaces disappear where in a table they are plainly a level.
+const LIST_INDENT : &str = "    ";
 
 // The name cell of every row that is going to be printed, and what it is
 fn named_rows<'a>(groups: &'a [Group], print_total: bool) -> Vec<(String, RowKind, &'a Group<'a>, Option<&'a String>)> {
@@ -307,7 +305,14 @@ fn table_lines(theme: &Theme, groups: &[Group], final_stats: &FinalStats, print_
 
     let mut lines = vec![render(&headers, &header_styles)];
 
-    for (row, (_, kind, _, _)) in rows.iter().zip(described.iter()) {
+    // A blank line closes each module, so the sections are read apart at a glance instead of being
+    // told apart only by the indentation of every second row. Without grouping there are no
+    // sections and nothing changes.
+    let grouped = is_grouped(groups);
+    for (position, (row, (_, kind, _, _))) in rows.iter().zip(described.iter()).enumerate() {
+        if grouped && position > 0 && *kind != RowKind::Language {
+            lines.push(String::new());
+        }
         if *kind == RowKind::Total {
             lines.push(theme.separator.paint(&"-".repeat(table_width)).to_string());
         }
@@ -333,10 +338,10 @@ fn table_lines(theme: &Theme, groups: &[Group], final_stats: &FinalStats, print_
 // ordering by: the axis you are comparing on is the one you chose, and a line under the heading says
 // which it is rather than leaving the reader to guess.
 fn print_as_matrix(theme: &Theme, groups: &[Group], languages: &[String], final_stats: &FinalStats,
-        criterion: SortCriterion, print_total: bool, should_print_keywords: bool)
+        print_total: bool, should_print_keywords: bool)
 {
     println!("{}.\n", theme.heading.paint("Details"));
-    for line in matrix_lines(theme, groups, languages, final_stats, criterion, print_total) {
+    for line in matrix_lines(theme, groups, languages, final_stats, print_total) {
         println!("{line}");
     }
 
@@ -357,108 +362,135 @@ fn print_as_matrix(theme: &Theme, groups: &[Group], languages: &[String], final_
     println!();
 }
 
-// What a cell holds, and everything that depends on the criterion, in one place so that adding a
-// sort criterion cannot leave the matrix showing something else than it is ordered by
-fn measured_by(criterion: SortCriterion) -> (&'static str, fn(&FinalStats) -> usize) {
-    match criterion {
-        SortCriterion::Files => ("files", |stats| stats.files),
-        SortCriterion::Size => ("size", |stats| stats.bytes_size),
-        SortCriterion::Code => ("code lines", |stats| stats.code_lines),
-        // Sorting by name says nothing about what to measure, so the cells stay on the quantity the
-        // rest of the report leads with
-        SortCriterion::Lines | SortCriterion::Name => ("lines", |stats| stats.lines)
-    }
-}
+// The three quantities every other layout leads with, stacked down each cell instead of one number
+// across it. One number was too poor to be worth a layout, and a percentage next to it was the wrong
+// repair: everywhere else a percentage is read down a column, here it would be read along a row, and
+// a share of what is genuinely ambiguous, the language across the modules or the module across the
+// languages. Three plain numbers ask no such question.
+//
+// They carry their own labels in a column of their own rather than a legend above the table, so
+// nothing has to be remembered while reading, and '--sort' goes back to doing only what it does
+// everywhere else, which is to decide the order of the rows and of the columns.
+const MATRIX_METRICS : [&str; 3] = ["files", "lines", "code"];
+// Which of the three the language name sits on, and the one row a module that lacks the language
+// marks with a dash. Blanking the other two keeps a sparse matrix from filling up with punctuation.
+const MATRIX_LINES_ROW : usize = 1;
 
-fn matrix_lines(theme: &Theme, groups: &[Group], languages: &[String], final_stats: &FinalStats,
-        criterion: SortCriterion, print_total: bool) -> Vec<String>
+fn matrix_lines<'a>(theme: &'a Theme, groups: &[Group], languages: &[String], final_stats: &FinalStats,
+        print_total: bool) -> Vec<String>
 {
     const GAP : usize = 4;
     const TOTAL_HEADER : &str = "Total";
 
-    let (measured, of_stats) = measured_by(criterion);
-    let value_of = |group: &Group, language: &str| match criterion {
-        SortCriterion::Files => group.languages_metadata_map.get(language).map_or(0, |x| x.files),
-        SortCriterion::Size => group.languages_metadata_map.get(language).map_or(0, |x| x.bytes),
-        SortCriterion::Code => group.content_info_map.get(language).map_or(0, |x| x.code_lines),
-        _ => group.content_info_map.get(language).map_or(0, |x| x.lines)
-    };
-    // A size is scaled the way it is everywhere else, or the cells would carry raw byte counts that
-    // nothing else in the report prints
-    let text_of = |value: usize| {
-        if value == 0 {
-            return None;
-        }
-        Some(if criterion == SortCriterion::Size {
-            let (size, unit) = scaled(value);
-            size_figure(size, unit) + " " + unit
-        } else {
-            with_seperators(value)
+    // 'None' is a module that does not have the language at all, which is not the same as one that
+    // has it and counts zero
+    let of_group = |group: &Group, language: &str, metric: usize| -> Option<usize> {
+        let content_info = group.content_info_map.get(language)?;
+        Some(match metric {
+            0 => group.languages_metadata_map.get(language).map_or(0, |x| x.files),
+            1 => content_info.lines,
+            _ => content_info.code_lines
         })
     };
+    let of_stats = |stats: &FinalStats, metric: usize| match metric {
+        0 => stats.files,
+        1 => stats.lines,
+        _ => stats.code_lines
+    };
+    let cell_of = |value: Option<usize>, metric: usize| match value {
+        Some(value) => with_seperators(value),
+        None if metric == MATRIX_LINES_ROW => "-".to_owned(),
+        None => String::new()
+    };
 
-    // A zero is a language the module does not have at all, and in a matrix that is most of the
-    // cells. Written out as '0' they crowd out the numbers that are the point of the layout.
-    let cell_of = |value: usize| text_of(value).unwrap_or_else(|| "-".to_owned());
-
-    let mut rows = Vec::with_capacity(languages.len() + 1);
+    // One language is three rows, and the name is on the first of them, so that it reads as the
+    // heading of its own little block. The labels are written once, against the total, and the
+    // blocks above take their meaning from the order they are already in: repeating them on every
+    // language turned the widest column of the table into a word said five times over.
+    let mut rows = Vec::with_capacity(languages.len() * MATRIX_METRICS.len() + MATRIX_METRICS.len());
+    // Written once, wherever they can be: against the total when there is one, and against the
+    // languages when there is not, so the rows are never left unnamed
     for language in languages {
-        let mut cells = vec![language.clone()];
-        cells.extend(groups.iter().map(|group| cell_of(value_of(group, language))));
-        cells.push(cell_of(groups.iter().map(|group| value_of(group, language)).sum()));
-        rows.push(cells);
+        for (metric, label) in MATRIX_METRICS.iter().enumerate() {
+            let label = if print_total {String::new()} else {(*label).to_owned()};
+            let mut cells = vec![if metric == 0 {language.clone()} else {String::new()}, label];
+            cells.extend(groups.iter().map(|group| cell_of(of_group(group, language, metric), metric)));
+            let total = groups.iter().filter_map(|group| of_group(group, language, metric)).sum::<usize>();
+            cells.push(cell_of(Some(total), metric));
+            rows.push((cells, metric));
+        }
     }
     // The total counts every language, including the ones '--top' left out of the rows above
-    let mut totals = vec![TOTAL_HEADER.to_owned()];
-    totals.extend(groups.iter().map(|group| cell_of(of_stats(group.final_stats))));
-    totals.push(cell_of(of_stats(final_stats)));
+    let totals = MATRIX_METRICS.iter().enumerate().map(|(metric, label)| {
+        let mut cells = vec![if metric == 0 {TOTAL_HEADER.to_owned()} else {String::new()}, (*label).to_owned()];
+        cells.extend(groups.iter().map(|group| cell_of(Some(of_stats(group.final_stats, metric)), metric)));
+        cells.push(cell_of(Some(of_stats(final_stats, metric)), metric));
+        (cells, metric)
+    }).collect::<Vec<_>>();
 
-    let headers = std::iter::once("Language".to_owned())
+    let headers = [String::from("Language"), String::new()].into_iter()
             .chain(groups.iter().map(|group| group.displayed_name().to_owned()))
             .chain(std::iter::once(TOTAL_HEADER.to_owned())).collect::<Vec<_>>();
-    let widths = (0..headers.len()).map(|i| rows.iter().chain(std::iter::once(&totals))
-            .map(|row| row[i].chars().count()).max().unwrap_or(0).max(headers[i].chars().count()))
+    let widths = (0..headers.len()).map(|i| rows.iter().chain(totals.iter())
+            .map(|(row,_)| row[i].chars().count()).max().unwrap_or(0).max(headers[i].chars().count()))
             .collect::<Vec<_>>();
 
-    // The name column is left aligned like a label and every figure is right aligned, so that a
-    // column can be compared down and a language across
+    // The name and its labels are left aligned like the labels they are, and every figure is right
+    // aligned, so that a column can be compared down and a language across
     let render = |cells: &[String], styles: &[&theme::Style]| {
-        let mut line = String::with_capacity(120);
+        let mut line = String::with_capacity(140);
         for (i, cell) in cells.iter().enumerate() {
             let padding = " ".repeat(widths[i] - cell.chars().count());
             if i == 0 {
                 line.push_str(&format!("{}{padding}", styles[i].paint(cell)));
+            } else if i == 1 {
+                line.push_str(&format!("{}{}{padding}", " ".repeat(GAP), styles[i].paint(cell)));
             } else {
                 line.push_str(&format!("{}{padding}{}", " ".repeat(GAP), styles[i].paint(cell)));
             }
         }
-        line
+        line.trim_end().to_owned()
     };
 
-    let number_style = match criterion {
-        SortCriterion::Files => &theme.files_number,
-        SortCriterion::Size => &theme.total_size_number,
-        SortCriterion::Code => &theme.code_number,
-        _ => &theme.lines_number
+    // Each of the three rows takes the tokens of the quantity it carries, so the matrix is themed by
+    // what a reader already set for the other layouts and needs nothing of its own
+    let number_style = |metric: usize| match metric {
+        0 => &theme.files_number,
+        1 => &theme.lines_number,
+        _ => &theme.code_number
     };
-    let mut header_styles = vec![&theme.details_language_header];
+    let label_style = |metric: usize| match metric {
+        0 => &theme.files_label,
+        1 => &theme.lines_label,
+        _ => &theme.code_label
+    };
+    let mut header_styles = vec![&theme.details_language_header, &theme.details_language_header];
     header_styles.extend(groups.iter().map(|_| &theme.details_module));
     header_styles.push(&theme.details_total);
-    let body_styles = std::iter::once(&theme.details_language_name)
-            .chain((0..headers.len() - 1).map(|_| number_style)).collect::<Vec<_>>();
-    let total_styles = std::iter::once(&theme.details_total)
-            .chain((0..headers.len() - 1).map(|_| number_style)).collect::<Vec<_>>();
+
+    let styles_for = |name_style: &'a theme::Style, metric: usize| {
+        [name_style, label_style(metric)].into_iter()
+                .chain((0..headers.len() - 2).map(|_| number_style(metric))).collect::<Vec<_>>()
+    };
 
     let table_width = widths.iter().sum::<usize>() + GAP * (headers.len() - 1);
-    let mut lines = vec![theme.note.paint(&format!("every cell is {measured}")).to_string(), String::new(),
-            render(&headers, &header_styles)];
-    lines.extend(rows.iter().map(|row| render(row, &body_styles)));
+    let mut lines = vec![render(&headers, &header_styles)];
+    for (position, (row, metric)) in rows.iter().enumerate() {
+        // A language is three physical rows, so they need to be told apart by something other than
+        // the name sitting on the first of them
+        if position > 0 && position % MATRIX_METRICS.len() == 0 {
+            lines.push(String::new());
+        }
+        lines.push(render(row, &styles_for(&theme.details_language_name, *metric)));
+    }
     // Suppressed on the same terms as everywhere else. One module and one language leaves nothing
     // for it to add up, and here it would repeat the single row twice over, since the matrix
     // already carries a Total column next to it.
     if print_total {
         lines.push(theme.separator.paint(&"-".repeat(table_width)).to_string());
-        lines.push(render(&totals, &total_styles));
+        for (row, metric) in &totals {
+            lines.push(render(row, &styles_for(&theme.details_total, *metric)));
+        }
     }
 
     lines
@@ -742,7 +774,7 @@ fn individual_lines(theme: &Theme, groups: &[Group], columns: &Columns, block_wi
      should_print_keywords: bool) -> Vec<String>
 {
     let grouped = is_grouped(groups);
-    let indent = if grouped {GROUP_INDENT} else {""};
+    let indent = if grouped {LIST_INDENT} else {""};
     let mut lines = vec![format!("{}.", theme.heading.paint("Details")), String::new()];
 
     for (position, group) in groups.iter().enumerate() {
@@ -800,7 +832,7 @@ impl Columns {
     fn of(groups: &[Group], final_stats: &FinalStats) -> Self
     {
         let grouped = is_grouped(groups);
-        let indent = if grouped {GROUP_INDENT.len()} else {0};
+        let indent = if grouped {LIST_INDENT.len()} else {0};
         let len_of = |value: usize| with_seperators(value).len();
         let mut columns = Columns {
             name: TOTAL_NAME.len(),
@@ -1740,16 +1772,17 @@ mod tests {
         let groups = groups_from(&modules, &config);
         cases.push(("modules, table, sorted by name".to_owned(), table_lines(theme, &groups, &final_stats, true)));
 
-        // The rows of the matrix are the languages of the whole run, so what fills the cells is the
-        // criterion and the criterion is what the second case changes
+        // The rows of the matrix are the languages of the whole run, and each of them is three
+        // physical rows, so the second case is the one where a module does not have the language
+        // at all and only the middle of the three carries a dash
         config.sort_by = SortCriterion::Lines;
         let groups = groups_from(&modules, &config);
         cases.push(("modules, matrix".to_owned(),
-                matrix_lines(theme, &groups, &sorted, &final_stats, SortCriterion::Lines, true)));
-        cases.push(("modules, matrix, by size".to_owned(),
-                matrix_lines(theme, &groups, &sorted, &final_stats, SortCriterion::Size, true)));
+                matrix_lines(theme, &groups, &sorted, &final_stats, true)));
         cases.push(("modules, matrix, top 2".to_owned(),
-                matrix_lines(theme, &groups, &sorted[..2], &final_stats, SortCriterion::Lines, true)));
+                matrix_lines(theme, &groups, &sorted[..2], &final_stats, true)));
+        cases.push(("modules, matrix, no total".to_owned(),
+                matrix_lines(theme, &groups, &sorted[..1], &final_stats, false)));
 
         let mut rendered = String::with_capacity(4000);
         for (name, lines) in cases {
@@ -1791,7 +1824,7 @@ mod tests {
         // and the arrow of every row still lands in the same column
         let arrow_at = |needle: &str| lines.iter().find(|x| x.starts_with(needle)).map(|x| x.find("->").unwrap());
         assert_eq!(arrow_at("a "), arrow_at(UNNAMED_MODULE_NAME));
-        assert_eq!(arrow_at("a "), arrow_at("  D"));
+        assert_eq!(arrow_at("a "), arrow_at(&(LIST_INDENT.to_owned() + "D")));
     }
 
     // Everything above renders one block at a time, and the wiring that hands each block its data

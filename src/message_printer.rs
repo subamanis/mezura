@@ -35,7 +35,9 @@ pub const DIRS_HELP  :  &str =
     is the module and a separate unnamed target. Repeating a name adds to it.
     Every file belongs to exactly one module, and the most specific path wins, so the second
     example above means 'the tests there, the rest of the project here', whichever order they are
-    written in. Anything the named ones did not claim is one row called '(unnamed)'.
+    written in. Anything the named ones did not claim is one row called '(unnamed)', and it comes
+    last. The rest appear in the order you wrote them, which is how you arrange the columns of the
+    'matrix' layout: '--sort' orders the languages inside a module and never the modules themselves.
     Declaring the same path under two different names is refused, since there is nothing more
     specific to settle it. A run that names nothing prints exactly what it always did.
 
@@ -263,6 +265,8 @@ pub const TOP_HELP  :  &str =
     The \"overview\" section never shows more languages than this either, so asking for the top 2
     does not leave a third one sitting in the bar.
 
+    It never reorders the modules themselves, only the languages inside them: you chose that order
+    when you wrote them.
     With modules, the cut happens inside each one, since that is what the rows under a module are.
     The 'matrix' layout is the exception: its rows are the languages of the whole run, so there the
     cut is over all of them.

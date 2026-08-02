@@ -244,20 +244,28 @@ fn is_ancestor_of(ancestor: &str, path: &str) -> bool {
 
 // Sorted by path and with the duplicates gone, so that the nearest enclosing target of any entry is
 // the last one kept before it. 'covered' decides what "enclosing" is allowed to remove.
+//
+// The sort belongs to the algorithm and not to the answer, so the order the targets were written in
+// is carried through it and restored at the end. It used to come out sorted by path, which is a
+// third order that is neither what was asked for nor anything a reader could act on: declaring
+// 'zeta=... alpha=...' produced a report whose first column was alpha.
 fn keep_topmost(targets: Vec<Target>, covered: impl Fn(&Target, &Target) -> bool) -> Vec<Target> {
-    let mut sorted = targets.into_iter().map(|x| (path_comparison_key(&x.path), x)).collect::<Vec<_>>();
+    let mut sorted = targets.into_iter().enumerate()
+            .map(|(declared_at, x)| (path_comparison_key(&x.path), declared_at, x)).collect::<Vec<_>>();
     sorted.sort_by(|a, b| a.0.cmp(&b.0));
+    // A stable sort leaves the earliest declaration of a repeated path first, and this keeps that one
     sorted.dedup_by(|a, b| a.0 == b.0);
 
-    let mut kept : Vec<(String,Target)> = Vec::with_capacity(sorted.len());
-    for (key, target) in sorted {
-        let enclosing = kept.iter().rev().find(|(kept_key,_)| is_ancestor_of(kept_key, &key));
-        if !enclosing.is_some_and(|(_, enclosing)| covered(enclosing, &target)) {
-            kept.push((key, target));
+    let mut kept : Vec<(String,usize,Target)> = Vec::with_capacity(sorted.len());
+    for (key, declared_at, target) in sorted {
+        let enclosing = kept.iter().rev().find(|(kept_key,_,_)| is_ancestor_of(kept_key, &key));
+        if !enclosing.is_some_and(|(_, _, enclosing)| covered(enclosing, &target)) {
+            kept.push((key, declared_at, target));
         }
     }
 
-    kept.into_iter().map(|(_,target)| target).collect()
+    kept.sort_by_key(|(_, declared_at, _)| *declared_at);
+    kept.into_iter().map(|(_,_,target)| target).collect()
 }
 
 // Targets that are contained in other targets would have their files counted twice, so only the
@@ -564,14 +572,15 @@ mod target_path_tests {
     fn test_remove_overlapping_paths_keeps_unrelated() {
         assert_eq!(Vec::<String>::new(), dedupe(&[]));
         assert_eq!(vec!["D:/a"], dedupe(&["D:/a"]));
-        assert_eq!(vec!["D:/a", "D:/b"], dedupe(&["D:/b", "D:/a"]));
+        // The order they were written in, not the order they sort in
+        assert_eq!(vec!["D:/b", "D:/a"], dedupe(&["D:/b", "D:/a"]));
         assert_eq!(vec!["D:/a", "E:/a"], dedupe(&["D:/a", "E:/a"]));
     }
 
     #[test]
     fn test_remove_overlapping_paths_drops_identical() {
         assert_eq!(vec!["D:/a"], dedupe(&["D:/a", "D:/a"]));
-        assert_eq!(vec!["D:/a", "D:/b"], dedupe(&["D:/b", "D:/a", "D:/b", "D:/a"]));
+        assert_eq!(vec!["D:/b", "D:/a"], dedupe(&["D:/b", "D:/a", "D:/b", "D:/a"]));
     }
 
     #[test]
@@ -591,7 +600,7 @@ mod target_path_tests {
         // the '-' sorts before the '/', so a naive scan against only the previous kept path
         // would let 'D:/a/b' through, even though it is inside 'D:/a'
         assert_eq!(vec!["D:/a", "D:/a-b"], dedupe(&["D:/a", "D:/a-b", "D:/a/b"]));
-        assert_eq!(vec!["D:/a", "D:/a!b", "D:/a-b"], dedupe(&["D:/a/deep/one", "D:/a-b", "D:/a", "D:/a!b"]));
+        assert_eq!(vec!["D:/a-b", "D:/a", "D:/a!b"], dedupe(&["D:/a/deep/one", "D:/a-b", "D:/a", "D:/a!b"]));
     }
 
     #[test]

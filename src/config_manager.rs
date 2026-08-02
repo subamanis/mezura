@@ -879,7 +879,7 @@ fn resolve_target_paths(entries: &[(Option<String>, String)], respect_gitignore:
         // Two spellings of one name are one module, the way two spellings of one extension are one
         // extension. The first one seen is the one the report prints.
         let module = module.as_ref().map(|name| resolved.iter()
-                .find_map(|x: &Target| x.module.clone().filter(|seen| seen.eq_ignore_ascii_case(name)))
+                .find_map(|x: &Target| x.module.clone().filter(|seen| seen.to_lowercase() == name.to_lowercase()))
                 .unwrap_or_else(|| name.clone()));
         if utils::has_glob_metacharacters(trimmed) {
             let paths = match glob::glob(&trimmed.replace('\\', "/")) {
@@ -1419,8 +1419,8 @@ mod tests {
         assert_eq!(vec![convert_to_absolute("./")], parse_dirs("./src, ./, ./tests").unwrap());
         assert_eq!(vec![convert_to_absolute("./src")], parse_dirs("./src, ./src/utils.rs").unwrap());
 
-        // Unrelated targets are all kept
-        assert_eq!(vec![convert_to_absolute("./src"), convert_to_absolute("./tests")],
+        // Unrelated targets are all kept, in the order they were written
+        assert_eq!(vec![convert_to_absolute("./tests"), convert_to_absolute("./src")],
                 parse_dirs("./tests, ./src").unwrap());
 
         // A space is not a separator while nothing is named, so a path is allowed to contain one.

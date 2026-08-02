@@ -724,7 +724,13 @@ pub fn counting_settings(config: &Configuration) -> [(&'static str, String); 8] 
     // Every key is the name of the command that sets it, so that the 'modified:' tag of the progress
     // section names something the reader can look up with '--help'. That is why this one is the
     // double negative 'no-gitignore' and not the 'gitignore' that would have read better.
-    [(config_manager::DIRS, config_manager::targets_to_string(&config.dirs)),
+    // Sorted here and nowhere else. The report shows the targets in the order they were declared,
+    // because that order is the user's own arrangement of the columns, but reordering them changes
+    // no number, and this list exists to say whether two runs counted the same thing.
+    let mut targets = config.dirs.clone();
+    targets.sort_by_key(|x| utils::path_comparison_key(&x.to_string()));
+
+    [(config_manager::DIRS, config_manager::targets_to_string(&targets)),
      (config_manager::EXCLUDE, config.exclude_dirs.join(",")),
      (config_manager::LANGUAGES, config.languages_of_interest.join(",")),
      (config_manager::EXCLUDE_LANGUAGES, config.excluded_languages.join(",")),
