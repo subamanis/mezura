@@ -21,8 +21,12 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
     let mut parse_buffers = file_parser::ParseBuffers::default();
     let mut idle_iterations = 0u32;
     let mut keyword_matchers: HashMap<String, Option<file_parser::KeywordMatcher>> = HashMap::new();
-    // One entry per language holding both halves, so a file still costs a single lookup
-    let mut local_content_info: HashMap<String, (LanguageContentInfo, LanguageMetadata)> = HashMap::new();
+    // One entry per language holding both halves, so a file still costs a single lookup. The module
+    // is an index into the outer vector and never part of the key: a composite one would be an
+    // allocation on every file, and a run without modules simply has a vector of one.
+    let modules = languages_content_info.lock().unwrap().len();
+    let mut local_content_info: Vec<HashMap<String, (LanguageContentInfo, LanguageMetadata)>> =
+            vec![HashMap::new(); modules];
     // let mut share = 0;
     loop {
         match files_injector.steal() {
@@ -44,9 +48,10 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                     Ok(x) => {
                         let keywords = &language_map.get(lang_name).unwrap().keywords;
                         let bytes = buf.len();
-                        match local_content_info.get_mut(lang_name) {
+                        let bucket = &mut local_content_info[parsable_file.module as usize];
+                        match bucket.get_mut(lang_name) {
                             Some((info, meta)) => { info.add_file_stats(x, keywords); meta.add_file_meta(bytes); },
-                            None => { local_content_info.insert(lang_name.to_owned(),
+                            None => { bucket.insert(lang_name.to_owned(),
                                     (LanguageContentInfo::from_file_stats(x, keywords), LanguageMetadata::new(1, bytes))); }
                         }
                     },
@@ -88,16 +93,20 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
         parse_buffers.timing.publish();
     }
 
-    if !local_content_info.is_empty() {
+    if local_content_info.iter().any(|bucket| !bucket.is_empty()) {
         {
             let mut global_content_info_guard = languages_content_info.lock().unwrap();
-            for (lang_name, (info, _)) in local_content_info.iter() {
-                global_content_info_guard.get_mut(lang_name).unwrap().add_content_info(info);
+            for (module, bucket) in local_content_info.iter().enumerate() {
+                for (lang_name, (info, _)) in bucket.iter() {
+                    global_content_info_guard[module].get_mut(lang_name).unwrap().add_content_info(info);
+                }
             }
         }
         let mut global_metadata_guard = languages_metadata_map.lock().unwrap();
-        for (lang_name, (_, meta)) in local_content_info.iter() {
-            global_metadata_guard.get_mut(lang_name).unwrap().add_metadata(meta);
+        for (module, bucket) in local_content_info.iter().enumerate() {
+            for (lang_name, (_, meta)) in bucket.iter() {
+                global_metadata_guard[module].get_mut(lang_name).unwrap().add_metadata(meta);
+            }
         }
     }
     // println!("Thread {} finished, having done {} files.",_id,share);

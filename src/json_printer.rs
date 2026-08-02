@@ -32,7 +32,13 @@ fn document(result: &RunResult, datetime_now: &DateTime<Local>, config: &Configu
         format!("  \"languages\": {}", languages_array(shown, content_info_map, languages_metadata_map, config)),
         format!("  \"languages_hidden\": {hidden}"),
         format!("  \"faulty_files\": {}", faulty_files_array(faulty_files)),
+        format!("  \"warnings\": {}", warnings_array()),
     ];
+    // Absent from a run that named no module, the same way the section is absent from the printed
+    // report: a consumer that never asked for a second axis is not handed one holding everything
+    if result.has_modules() {
+        members.push(format!("  \"modules\": {}", modules_array(result, config)));
+    }
     // The only volatile block apart from the timestamp, so hiding the timing is also what makes the
     // document repeatable enough to hash or to compare against a stored one
     if !config.hidden.timing {
@@ -47,7 +53,7 @@ fn document(result: &RunResult, datetime_now: &DateTime<Local>, config: &Configu
 // comparable with one without it.
 fn scope_object(config: &Configuration) -> String {
     let members = [
-        format!("    \"dirs\": {}", string_array(&config.dirs)),
+        format!("    \"dirs\": {}", string_array(&config.dirs.iter().map(|x| x.to_string()).collect::<Vec<_>>())),
         format!("    \"exclude\": {}", string_array(&config.exclude_dirs)),
         format!("    \"languages\": {}", string_array(&config.languages_of_interest)),
         format!("    \"excluded_languages\": {}", string_array(&config.excluded_languages)),
@@ -85,6 +91,34 @@ fn total_object(final_stats: &FinalStats) -> String {
     ];
 
     format!("{{\n{}\n  }}", members.join(",\n"))
+}
+
+// The leftovers of the named modules carry 'null' and not the '(unnamed)' the report prints: a marker
+// spelled as a name is one a real module could be called, and a machine consumer grouping by that
+// key would silently merge the two.
+fn modules_array(result: &RunResult, config: &Configuration) -> String {
+    let entries = result.modules.iter().map(|module| {
+        let names = result_printer::get_sorted_language_names(&module.content_info_map, &module.languages_metadata_map, config.sort_by);
+        let hidden = config.top_n.map_or(0, |top| names.len().saturating_sub(top));
+        let shown = &names[..names.len() - hidden];
+        let name = module.name.as_ref().map_or("null".to_owned(), |x| format!("\"{}\"", escaped(x)));
+        let members = [
+            format!("      \"name\": {name}"),
+            format!("      \"total\": {}", indented(&total_object(&module.final_stats))),
+            format!("      \"languages\": {}", indented(&languages_array(shown, &module.content_info_map,
+                    &module.languages_metadata_map, config))),
+            format!("      \"languages_hidden\": {hidden}"),
+        ];
+        format!("    {{\n{}\n    }}", members.join(",\n"))
+    }).collect::<Vec<_>>();
+
+    format!("[\n{}\n  ]", entries.join(",\n"))
+}
+
+// The two blocks are shared with the top level, where they sit one level higher, so their closing
+// braces and their members are pushed in rather than written twice
+fn indented(block: &str) -> String {
+    block.replace('\n', "\n    ")
 }
 
 // An array and not an object keyed by language name, so that the order '--sort' chose survives and
@@ -140,6 +174,32 @@ fn keywords_object(occurences: &HashMap<String, usize>) -> String {
             .collect::<Vec<_>>();
 
     format!("{{\n{}\n      }}", members.join(",\n"))
+}
+
+// Everything the run said on the error output, which a machine consumer never sees. Always present,
+// empty array included, so that a consumer can read it without asking whether the key is there.
+//
+// 'code' is the half that is safe to branch on and 'message' the half that is safe to show, and
+// 'affects' is what lets a consumer written today keep working when a later version adds a code it
+// has never heard of: the question is whether the counts can be trusted, not which of the codes are
+// the serious ones. In emission order, which is the order they were printed in.
+fn warnings_array() -> String {
+    let warnings = crate::warnings::collected();
+    if warnings.is_empty() {
+        return String::from("[]");
+    }
+
+    let entries = warnings.iter().map(|warning| {
+        let members = [
+            format!("      \"code\": \"{}\"", escaped(warning.code)),
+            format!("      \"affects\": \"{}\"", warning.affects.name()),
+            format!("      \"subject\": \"{}\"", escaped(&warning.subject)),
+            format!("      \"message\": \"{}\"", escaped(&warning.message)),
+        ];
+        format!("    {{\n{}\n    }}", members.join(",\n"))
+    }).collect::<Vec<_>>();
+
+    format!("[\n{}\n  ]", entries.join(",\n"))
 }
 
 // Sorted by path, because the faulty files are collected by whichever thread hit them and their
@@ -215,8 +275,8 @@ mod tests {
             languages_metadata_map: HashMap<String, LanguageMetadata>, final_stats: FinalStats,
             faulty_files: Vec<FaultyFileDetails>, files_present: FilesPresent) -> RunResult
     {
-        RunResult {content_info_map, languages_metadata_map, final_stats, faulty_files, files_present,
-                scan_duration_millis: 1180, metrics: None}
+        RunResult {content_info_map, languages_metadata_map, modules: Vec::new(), final_stats, faulty_files,
+                files_present, scan_duration_millis: 1180, metrics: None}
     }
 
     fn document_of(config: &Configuration) -> String {
@@ -307,6 +367,72 @@ mod tests {
 
         assert!(!document.contains("\"performance\""));
         assert!(!document.contains("\"scan_ms\""));
+    }
+
+    // The key is absent from a run that named nothing, and the leftovers carry 'null': a marker
+    // spelled '(unnamed)' is a name a real module could be given, and a consumer grouping by that key
+    // would merge the two without noticing
+    #[test]
+    fn the_modules_appear_only_when_one_was_named_and_the_leftovers_have_no_name() {
+        let mut config = Configuration::new(vec!["./src".to_owned()]);
+        assert!(!document_of(&config).contains("\"modules\""));
+
+        let module_of = |name: Option<&str>, language: &str, lines: usize, files: usize| {
+            let content_info_map = hashmap![language.to_owned() => stats_of(lines, lines, 0, HashMap::new())];
+            let languages_metadata_map = hashmap![language.to_owned() => LanguageMetadata {files, bytes: lines * 10}];
+            let final_stats = FinalStats::calculate(&content_info_map, &languages_metadata_map);
+            crate::ModuleResult {name: name.map(str::to_owned), content_info_map, languages_metadata_map, final_stats}
+        };
+        let mut result = result_of(
+            hashmap!["Rust".to_owned() => stats_of(100, 100, 0, HashMap::new()),
+                     "HTML".to_owned() => stats_of(40, 40, 0, HashMap::new())],
+            hashmap!["Rust".to_owned() => LanguageMetadata {files: 2, bytes: 1000},
+                     "HTML".to_owned() => LanguageMetadata {files: 1, bytes: 400}],
+            FinalStats::new_extended(3, 140, 140, 0, 0, 1400, 466), Vec::new(),
+            FilesPresent {total_files: 3, relevant_files: 3, excluded_files: 0});
+        result.modules = vec![module_of(Some("backend"), "Rust", 100, 2), module_of(None, "HTML", 40, 1)];
+
+        config.hidden.timing = true;
+        let rendered = document(&result, &Local::now(), &config);
+        assert!(rendered.contains("\"name\": \"backend\""));
+        assert!(rendered.contains("\"name\": null"));
+        // Each module carries the same 'total' and 'languages' blocks the document carries for the
+        // whole run, so a consumer reads one shape and not two, and the two of them add up to it
+        let block = &rendered[rendered.find("\"modules\"").unwrap()..];
+        assert_eq!(2, block.matches("\"total\":").count());
+        assert_eq!(2, block.matches("\"languages\":").count());
+        assert!(block.contains("\"lines\": 100") && block.contains("\"lines\": 40"));
+        assert!(rendered.contains("\"lines\": 140"));
+        assert!(rendered.contains("\"languages_hidden\": 0"));
+
+        // '--top' is per module there too, so a module with one language is not cut by '--top 1'
+        // while the report as a whole has two
+        config.top_n = Some(1);
+        let cut = document(&result, &Local::now(), &config);
+        assert_eq!(2, cut.matches("\"languages_hidden\": 0").count());
+        assert!(cut.contains("\"languages_hidden\": 1"));
+    }
+
+    // Everything a run says on the error output is invisible to whoever asked for the document, and
+    // some of it means the counts cannot be trusted. The collector is shared by the whole process,
+    // so this asserts on its own entry rather than on the whole array.
+    #[test]
+    fn a_warning_reaches_the_document_with_both_of_its_halves() {
+        let config = Configuration::new(vec!["./src".to_owned()]);
+        // Present even when there is nothing to say, so a consumer never has to test for the key
+        assert!(document_of(&config).contains("\"warnings\": []") || document_of(&config).contains("\"warnings\": ["));
+
+        crate::warnings::keep(crate::warnings::Warning::new(crate::warnings::EXTENSION_TIEBREAK,
+                crate::warnings::Affects::Counts, "a-subject-only-this-test-uses",
+                "quoted \"text\" and a \\ backslash".to_owned()));
+
+        let rendered = warnings_array();
+        assert!(rendered.contains("\"subject\": \"a-subject-only-this-test-uses\""));
+        assert!(rendered.contains("\"code\": \"extension-tiebreak\""));
+        assert!(rendered.contains("\"affects\": \"counts\""));
+        // The message is prose written for a person, so it goes through the same escaping as every
+        // other string here or a quotation mark in it would break the document
+        assert!(rendered.contains("quoted \\\"text\\\" and a \\\\ backslash"));
     }
 
     #[test]

@@ -13,13 +13,37 @@ pub const DIRS_HELP  :  &str =
     A path can also be a glob pattern (* ? [..] {..}), which is expanded to every existing
     directory and file that it matches, so 'services/*/src' is a valid target.
     Since the matches of a pattern are found by the program and not named by you, they follow
-    the same rules as every other path it discovers: the ones that a .gitignore ignores, or that
-    are dotted, are skipped (see the '--no-gitignore' and '--search-in-dotted' commands).
-    A path that you write out explicitly is always used, even if it is ignored or dotted.
+    the same rules as every other path it discovers: the ones that a .gitignore ignores, that
+    are dotted, or that are links, are skipped (see the '--no-gitignore' and '--search-in-dotted'
+    commands).
+    A path that you write out explicitly is always used, even if it is ignored, dotted or a link.
     Targets that are contained in other targets are dropped, so that no file is counted twice.
     If you are using Windows Powershell, you will need to escape the commas with a backtick: `
     or surround all the arguments with quotation marks:
     <path1>`, <path2>`, <path3>   or   \"<path1>, <path2>, <path3>\"
+
+    MODULES
+
+    A target can be given a name, and then the report is grouped by it as well as by language,
+    which answers 'how much of this is the frontend' without running the program once per folder:
+
+        mezura frontend=./web backend=./api
+        mezura ./project tests=./project/tests
+
+    A comma continues the list of paths of the same module and a space ends it, so
+    'tests=./api/tests,./web/tests' is one module of two directories, while 'frontend=./web ./ui'
+    is the module and a separate unnamed target. Repeating a name adds to it.
+    Every file belongs to exactly one module, and the most specific path wins, so the second
+    example above means 'the tests there, the rest of the project here', whichever order they are
+    written in. Anything the named ones did not claim is one row called '(unnamed)'.
+    Declaring the same path under two different names is refused, since there is nothing more
+    specific to settle it. A run that names nothing prints exactly what it always did.
+
+    A space only ends a target once you have named one. While no name is given, a path is allowed
+    to contain spaces and only a comma separates two of them, which is the way it has always been.
+    That does leave one thing a command line cannot say, a path with a space in it in a run that
+    also names modules, because your shell removes the quotation marks before the program sees
+    them. Write those in a configuration file, one target per line, where a space never separates.
 
     The target directories can also be given implicitly (in which case this command is not needed) with 2 ways:
     1) as the first arguments of the program directly
@@ -239,6 +263,10 @@ pub const TOP_HELP  :  &str =
     The \"overview\" section never shows more languages than this either, so asking for the top 2
     does not leave a third one sitting in the bar.
 
+    With modules, the cut happens inside each one, since that is what the rows under a module are.
+    The 'matrix' layout is the exception: its rows are the languages of the whole run, so there the
+    cut is over all of them.
+
 ";
 pub const BAR_THICKNESS_HELP  :  &str =
 "--bar-thickness
@@ -260,7 +288,7 @@ pub const BAR_THICKNESS_HELP  :  &str =
 pub const LAYOUT_HELP  :  &str =
 "--layout
 
-    One argument: 'table', 'boxed' or 'list'. Default: table
+    One argument: 'table', 'boxed', 'list' or 'matrix'. Default: table
 
     Chooses the shape of the \"details\" section.
 
@@ -274,6 +302,14 @@ pub const LAYOUT_HELP  :  &str =
       list      one block of three rows per language: the file count and the size above the
                 name, the line breakdown beside it, the keywords below. Wider, and it cannot
                 be read down a column, but it reads well for a handful of languages.
+      matrix    languages down, modules across, one number per cell. The other three answer
+                'what is inside the backend', read down a section; this one answers 'how do
+                the modules compare on the same language', read along a row, which is what
+                you want when the folders you named are several answers to one problem rather
+                than several parts of one thing. Only one number fits in a cell, so it holds
+                whatever '--sort' is ordering by, and a line above the table says which.
+                A dash is a language the module does not have. With no module named there is
+                nothing to cross, so it says so and prints 'table' instead.
 
     The percentage next to 'Files' and to 'Lines' is that language's share of the total, the
     one next to 'Code' and to 'Comments' is its share of that language's own lines, which is
@@ -322,8 +358,15 @@ pub const OUTPUT_HELP  :  &str =
     name, since it is either not counted or not measured; the rest of the '--hide' list names
     printed sections that a JSON run does not have.
 
-    Warnings and errors are written to the error output, so they never end up inside the
-    document. A run that finds nothing to count still writes a valid one, with an empty list of
+    Warnings and errors are written to the error output, so no stray line can land inside the
+    document, and the warnings are carried in it as well, under 'warnings'. Each one has a
+    'code' that is safe to branch on and will not change wording under you, an 'affects' of
+    'counts' or 'settings', the 'subject' it is about, and the readable 'message'. Ask whether
+    any of them affects the counts to know whether the numbers can be trusted: a language file
+    that could not be read means a whole language went uncounted, while an ignored setting does
+    not touch a number. The list is there even when it is empty.
+
+    A run that finds nothing to count still writes a valid document, with an empty list of
     languages and a total of zero.
 
     This is the one display setting that a configuration file cannot carry, so that no saved
@@ -737,7 +780,7 @@ pub fn print_changelog(full: bool) {
     }
 }
 
-// A theme is 45 tokens and the listing used to show five of them, the language slots, on a mock
+// A theme is 46 tokens and the listing used to show five of them, the language slots, on a mock
 // overview line. So the one place whose job is to show what a theme looks like before you pick it
 // said nothing about its headings, labels, numbers, percentages, arrow, separator or size figures.
 // It now prints a sample of the real details rows too, which is the densest line the program has.

@@ -59,11 +59,73 @@ const DEF_SHOW_FAULTY_FILES : bool    = false;
 const DEF_NO_GITIGNORE      : bool    = false;
 const DEF_COMPARE_LEVEL     : usize   = 1;
 
+// What the always-loaded configuration is called in a message about it
+const DEFAULT_CONFIG_LABEL  : &str    = "default";
+
+
+// A directory or file that was asked for, and the name it was asked for under. 'None' is a target
+// that was given no name, and every one of them shares the '(unnamed)' row of the report.
+// The name lives inside the target and not in a list of its own, so that everything which already
+// carries the targets carries the modules with them: the saved configuration, the log entry that
+// decides whether two runs are comparable, and the echo of the settings in the JSON document.
+#[derive(Debug,PartialEq,Eq,Clone)]
+pub struct Target {
+    pub module: Option<String>,
+    // Absolute and resolved, never what was typed
+    pub path: String
+}
+
+impl Target {
+    pub fn of(path: String) -> Self {
+        Target { module: None, path }
+    }
+
+    pub fn named(module: &str, path: String) -> Self {
+        Target { module: Some(module.to_owned()), path }
+    }
+}
+
+impl std::fmt::Display for Target {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.module {
+            Some(name) => write!(formatter, "{name}={}", self.path),
+            None => write!(formatter, "{}", self.path)
+        }
+    }
+}
+
+impl Target {
+    // The form that reads back as this exact target. The quotes go around the path and not around
+    // the whole thing, because the name is taken from before the first '=' and a leading quote
+    // would end up inside it.
+    pub fn declared_form(&self) -> String {
+        let path = if self.path.contains(char::is_whitespace) {format!("\"{}\"", self.path)} else {self.path.clone()};
+        match &self.module {
+            Some(name) => format!("{name}={path}"),
+            None => path
+        }
+    }
+}
+
+// Targets on one line, for the log entry that decides whether two runs are comparable.
+//
+// The separator is a comma while nothing is named, which is the only thing this ever wrote and what
+// keeps a run after an upgrade from reporting 'modified: dirs' over a difference in punctuation. The
+// moment a module exists it has to be whitespace: inside a comma list a name carries on to the paths
+// after it, so 'frontend=./web,./ui' is one module of two directories, and an unnamed target written
+// after a named one with a comma between them would be read back as part of it.
+pub fn targets_to_string(targets: &[Target]) -> String {
+    if targets.iter().all(|x| x.module.is_none()) {
+        targets.iter().map(|x| x.path.clone()).collect::<Vec<_>>().join(",")
+    } else {
+        targets.iter().map(Target::declared_form).collect::<Vec<_>>().join(" ")
+    }
+}
 
 #[derive(Debug,PartialEq,Clone)]
 pub struct Configuration {
     pub version: &'static str,
-    pub dirs: Vec<String>,
+    pub dirs: Vec<Target>,
     pub exclude_dirs: Vec<String>,
     pub languages_of_interest: Vec<String>,
     pub excluded_languages: Vec<String>,
@@ -221,7 +283,8 @@ pub enum Layout {
     List,
     #[default]
     Table,
-    Boxed
+    Boxed,
+    Matrix
 }
 
 impl Layout {
@@ -230,6 +293,7 @@ impl Layout {
             "list" => Some(Self::List),
             "table" => Some(Self::Table),
             "boxed" => Some(Self::Boxed),
+            "matrix" => Some(Self::Matrix),
             _ => None
         }
     }
@@ -238,7 +302,8 @@ impl Layout {
         match self {
             Self::List => "list",
             Self::Table => "table",
-            Self::Boxed => "boxed"
+            Self::Boxed => "boxed",
+            Self::Matrix => "matrix"
         }
     }
 }
@@ -367,7 +432,9 @@ pub enum ArgParsingError {
     InvalidValueInConfig(String,String),
     InvalidGlobPattern(String),
     NoGlobMatches(String),
-    AllGlobMatchesIgnored(String)
+    AllGlobMatchesIgnored(String),
+    MalformedTarget(String),
+    ContestedTarget(String, String, String)
 }
 
 // Empty line argument is not supposed to be allowed, since this check is being performed in main
@@ -608,15 +675,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             }
 
             if let Ok((mut options, issues)) = io_handler::parse_config_file(Some(config_name), None) {
-                if let Some(dirs) = &options.dirs {
-                    match resolve_target_paths(dirs, respect_gitignore, dotted_are_targetable) {
-                        Ok(x) => options.dirs = Some(x),
-                        Err(ArgParsingError::InvalidPath(p)) | Err(ArgParsingError::InvalidGlobPattern(p))
-                                | Err(ArgParsingError::NoGlobMatches(p)) | Err(ArgParsingError::AllGlobMatchesIgnored(p)) =>
-                                return Err(ArgParsingError::InvalidPathInConfig(p, config_name.to_owned())),
-                        Err(x) => return Err(x)
-                    }
-                }
+                resolve_dirs_of_config(&mut options, config_name, respect_gitignore, dotted_are_targetable)?;
                 custom_config = Some((options, issues));
                 config_name_to_load = Some(config_name.to_owned());
             } else {
@@ -670,9 +729,14 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     }
 
     if config_builder.has_missing_fields()
-        && let Ok((default_config, issues)) = io_handler::parse_config_file(None, None) {
-        print_config_file_warnings(&issues.warnings, "default");
-        resolve_invalid_config_fields(&config_builder, &issues.invalid_fields, "default")?;
+        && let Ok((mut default_config, issues)) = io_handler::parse_config_file(None, None) {
+        print_config_file_warnings(&issues.warnings, DEFAULT_CONFIG_LABEL);
+        resolve_invalid_config_fields(&config_builder, &issues.invalid_fields, DEFAULT_CONFIG_LABEL)?;
+        // Only when they are going to be used. A 'dirs' block sitting unused in the default
+        // configuration is not something a run that named its own targets should die over.
+        if config_builder.dirs.is_none() {
+            resolve_dirs_of_config(&mut default_config, DEFAULT_CONFIG_LABEL, respect_gitignore, dotted_are_targetable)?;
+        }
         config_builder.add_missing_fields(default_config);
     }
 
@@ -680,11 +744,13 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         match io_handler::load_theme(name, &crate::PERSISTENT_APP_PATHS.themes_dir) {
             Some((styles, errors)) => {
                 for error in &errors {
-                    eprintln!("\n{}", format!("In theme '{name}': {}", error.formatted()).yellow());
+                    crate::warnings::emit(crate::warnings::Warning::new(crate::warnings::CONFIG_STYLE_INVALID, crate::warnings::Affects::Settings, name,
+                            format!("In theme '{name}': {}", error.formatted())));
                 }
                 config_builder.theme_styles = Some(styles);
             },
-            None => eprintln!("\n{}", format!("Theme '{name}' could not be loaded, the default styles will be used.").yellow())
+            None => crate::warnings::emit(crate::warnings::Warning::new(crate::warnings::THEME_UNAVAILABLE, crate::warnings::Affects::Settings, name,
+                    format!("Theme '{name}' could not be loaded, the default styles will be used.")))
         }
     }
 
@@ -696,9 +762,31 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
 }
 
 
-fn print_config_file_warnings(warnings: &[String], config_name: &str) {
-    for warning in warnings {
-        eprintln!("\n{}", format!("In config '{config_name}': {warning}").yellow());
+// The targets a configuration file declares are text like any other, and they have to go through the
+// same resolution the command line does: made absolute, checked for existing, expanded if they are
+// patterns, and refused when two names claim one path. The default configuration was reaching
+// 'add_missing_fields' without any of it, so a 'dirs' block written there was used raw, and with
+// modules that meant a contest the command line refuses being accepted in silence.
+fn resolve_dirs_of_config(options: &mut ConfigurationBuilder, config_name: &str, respect_gitignore: bool,
+        dotted_are_targetable: bool) -> Result<(), ArgParsingError>
+{
+    let Some(dirs) = &options.dirs else { return Ok(()) };
+
+    match reparse_targets(dirs, respect_gitignore, dotted_are_targetable) {
+        Ok(x) => options.dirs = Some(x),
+        Err(ArgParsingError::InvalidPath(p)) | Err(ArgParsingError::InvalidGlobPattern(p))
+                | Err(ArgParsingError::NoGlobMatches(p)) | Err(ArgParsingError::AllGlobMatchesIgnored(p)) =>
+                return Err(ArgParsingError::InvalidPathInConfig(p, config_name.to_owned())),
+        Err(x) => return Err(x)
+    }
+
+    Ok(())
+}
+
+fn print_config_file_warnings(issues: &[(&'static str, String)], config_name: &str) {
+    for (code, warning) in issues {
+        crate::warnings::emit(crate::warnings::Warning::new(code, crate::warnings::Affects::Settings, config_name,
+                format!("In config '{config_name}': {warning}")));
     }
 }
 
@@ -707,6 +795,7 @@ fn print_config_file_warnings(warnings: &[String], config_name: &str) {
 fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_fields: &[&str], config_name: &str) -> Result<(), ArgParsingError> {
     for field in invalid_fields {
         let is_overridden = match *field {
+            DIRS => config_builder.dirs.is_some(),
             THREADS => config_builder.threads.is_some(),
             COMPRARE_LEVEL => config_builder.compare_level.is_some(),
             BRACES_AS_CODE => config_builder.braces_as_code.is_some(),
@@ -727,7 +816,8 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
         };
 
         if is_overridden {
-            eprintln!("\n{}", format!("Invalid value for the command '--{field}', in config '{config_name}'. The value will be ignored.").yellow());
+            crate::warnings::emit(crate::warnings::Warning::new(crate::warnings::CONFIG_VALUE_IGNORED, crate::warnings::Affects::Settings, field,
+                    format!("Invalid value for the command '--{field}', in config '{config_name}'. The value will be ignored.")));
         } else {
             message_printer::print_help_message_for_command(field);
             return Err(ArgParsingError::InvalidValueInConfig(field.to_string(), config_name.to_owned()));
@@ -755,25 +845,42 @@ fn has_any_args(command: &str) -> bool {
     command.split(' ').skip(1).filter_map(utils::get_trimmed_if_not_empty).count() != 0
 }
 
-fn parse_dirs(s: &str, respect_gitignore: bool, search_in_dotted: bool) -> Result<Vec<String>, ArgParsingError> {
-    resolve_target_paths(&utils::parse_paths_to_vec(s), respect_gitignore, search_in_dotted)
+fn parse_dirs(s: &str, respect_gitignore: bool, search_in_dotted: bool) -> Result<Vec<Target>, ArgParsingError> {
+    let declared = utils::parse_targets(s).map_err(ArgParsingError::MalformedTarget)?;
+    resolve_target_paths(&declared, respect_gitignore, search_in_dotted)
+}
+
+// A target that a configuration file declared, or that a run has already resolved once, is read back
+// through the same parser as a command line, so that the name and the path cannot be taken apart in
+// two different ways
+fn reparse_targets(targets: &[Target], respect_gitignore: bool, search_in_dotted: bool)
+-> Result<Vec<Target>, ArgParsingError>
+{
+    let declared = targets.iter().map(|x| (x.module.clone(), x.path.clone())).collect::<Vec<_>>();
+    resolve_target_paths(&declared, respect_gitignore, search_in_dotted)
 }
 
 // Literal paths must exist and are always used, even if they are ignored or dotted, since the user
 // named them explicitly. Glob patterns are expanded to the existing paths they match, and those
 // matches are discovered by the program, so they are subject to the same rules as every other
 // discovered path. Finally, targets contained in other targets are dropped, so that no file
-// is counted twice.
-fn resolve_target_paths(entries: &[String], respect_gitignore: bool, search_in_dotted: bool)
--> Result<Vec<String>, ArgParsingError>
+// is counted twice, unless the nested one carries a module of its own and is therefore the boundary
+// that takes those files off the one around it.
+fn resolve_target_paths(entries: &[(Option<String>, String)], respect_gitignore: bool, search_in_dotted: bool)
+-> Result<Vec<Target>, ArgParsingError>
 {
     fn is_dotted(path: &Path) -> bool {
         path.file_name().and_then(|x| x.to_str()).is_some_and(|x| x.starts_with('.'))
     }
 
     let mut resolved = Vec::with_capacity(entries.len());
-    for entry in entries {
+    for (module, entry) in entries {
         let trimmed = entry.trim();
+        // Two spellings of one name are one module, the way two spellings of one extension are one
+        // extension. The first one seen is the one the report prints.
+        let module = module.as_ref().map(|name| resolved.iter()
+                .find_map(|x: &Target| x.module.clone().filter(|seen| seen.eq_ignore_ascii_case(name)))
+                .unwrap_or_else(|| name.clone()));
         if utils::has_glob_metacharacters(trimmed) {
             let paths = match glob::glob(&trimmed.replace('\\', "/")) {
                 Ok(x) => x,
@@ -787,26 +894,50 @@ fn resolve_target_paths(entries: &[String], respect_gitignore: bool, search_in_d
             let relevant = matches.iter()
                     .filter(|x| search_in_dotted || !is_dotted(x))
                     .filter(|x| !respect_gitignore || !GitignoreStack::is_path_ignored(x))
-                    .filter_map(|x| x.to_str().map(convert_to_absolute)).collect::<Vec<_>>();
+                    // A pattern is not a name: what it matched was found by the program, and a link
+                    // it found is a link the walk would have skipped for counting twice whatever it
+                    // points at. Named on its own it is still followed, as any target is.
+                    .filter(|x| !x.is_symlink())
+                    .filter_map(|x| x.to_str().map(convert_to_absolute))
+                    .map(|path| Target { module: module.clone(), path }).collect::<Vec<_>>();
             if relevant.is_empty() {
                 return Err(ArgParsingError::AllGlobMatchesIgnored(trimmed.to_owned()));
             }
             resolved.extend(relevant);
         } else if utils::is_valid_path(trimmed) {
-            resolved.push(convert_to_absolute(trimmed));
+            resolved.push(Target { module: module.clone(), path: convert_to_absolute(trimmed) });
         } else {
             return Err(ArgParsingError::InvalidPath(trimmed.to_owned()));
         }
     }
 
-    Ok(utils::remove_overlapping_paths(resolved))
+    // Two names over one path is not something a rule can settle: there is no more specific one of
+    // the two, and whichever won would take the other's files away without a word
+    for (position, target) in resolved.iter().enumerate() {
+        let key = utils::path_comparison_key(&target.path);
+        if let Some(other) = resolved[position + 1..].iter()
+                .find(|x| x.module != target.module && utils::path_comparison_key(&x.path) == key) {
+            return Err(ArgParsingError::ContestedTarget(target.path.clone(),
+                    name_or_rest(&target.module), name_or_rest(&other.module)));
+        }
+    }
+
+    Ok(utils::remove_overlapping_targets(resolved))
 }
 
-fn parse_working_dir_as_target_dir() -> Result<Vec<String>, ArgParsingError> {
+fn name_or_rest(module: &Option<String>) -> String {
+    module.clone().unwrap_or_else(|| crate::UNNAMED_MODULE_NAME.to_owned())
+}
+
+// The working directory is not something anybody typed, so it is not put through the parser that
+// takes typed text apart. It used to be, and a working directory whose path contains a space was
+// then split into two targets, neither of which existed, which stopped a bare 'mezura' from running
+// at all in a place like 'C:/Users/John Smith/project'.
+fn parse_working_dir_as_target_dir() -> Result<Vec<Target>, ArgParsingError> {
     if let Ok(path_buf) = std::env::current_dir()
         && let Some(path_str) = path_buf.to_str()
-        && let Ok(x) = parse_dirs(path_str, true, false) {
-        return Ok(x);
+        && utils::is_valid_path(path_str) {
+        return Ok(vec![Target::of(convert_to_absolute(path_str))]);
     }
 
     Err(ArgParsingError::UnparsableWorkingDir)
@@ -831,7 +962,7 @@ fn convert_to_absolute(s: &str) -> String {
 
 #[derive(Debug, PartialEq, Default)]
 pub struct ConfigurationBuilder {
-    pub dirs:                     Option<Vec<String>>,
+    pub dirs:                     Option<Vec<Target>>,
     pub exclude_dirs:             Option<Vec<String>>,
     pub languages_of_interest:    Option<Vec<String>>,
     pub excluded_languages:       Option<Vec<String>>,
@@ -932,7 +1063,7 @@ impl Configuration {
     pub fn new(dirs: Vec<String>) -> Self {
         Configuration {
             version: VERSION_ID,
-            dirs,
+            dirs: dirs.into_iter().map(Target::of).collect(),
             exclude_dirs: Vec::new(),
             languages_of_interest: Vec::new(),
             excluded_languages: Vec::new(),
@@ -1108,7 +1239,9 @@ impl Formatted for ArgParsingError {
             Self::InvalidValueInConfig(cmd,conf) => format!("Invalid value for the command '--{cmd}', in config '{conf}'.\nFix the value in the config file, or override it by providing a valid '--{cmd}' argument.").red(),
             Self::InvalidGlobPattern(p) => format!("'{p}' is not a valid glob pattern.").red(),
             Self::NoGlobMatches(p) => format!("The pattern '{p}' did not match any existing directory or file.").red(),
-            Self::AllGlobMatchesIgnored(p) => format!("Everything that the pattern '{p}' matched is skipped, either because a .gitignore file ignores it, or because it is a dotted path.\nUse the '--no-gitignore' or '--search-in-dotted' commands to include it, or provide the paths explicitly.").red()
+            Self::AllGlobMatchesIgnored(p) => format!("Everything that the pattern '{p}' matched is skipped, because a .gitignore file ignores it, because it is a dotted path, or because it is a link.\nUse the '--no-gitignore' or '--search-in-dotted' commands to include it, or provide the paths explicitly.").red(),
+            Self::MalformedTarget(p) => format!("'{p}' names a module with no path after it.\nA target is written as '<module>=<path>', and its paths are separated by commas: 'tests=./api/tests,./web/tests'.").red(),
+            Self::ContestedTarget(path, first, second) => format!("'{path}' is declared both as '{first}' and as '{second}'.\nEvery file belongs to exactly one module, and there is no more specific of the two to decide it.").red()
         }
     }
 }
@@ -1123,12 +1256,19 @@ mod tests {
     use super::*;
     use crate::theme::Style;
 
+    // Rendered back into the form they were declared in, so that a test reads the same way whether
+    // the target was named or not
     fn parse_dirs(s: &str) -> Result<Vec<String>, ArgParsingError> {
-        super::parse_dirs(s, true, false)
+        parse_dirs_with(s, true, false)
+    }
+
+    fn parse_dirs_with(s: &str, respect_gitignore: bool, search_in_dotted: bool) -> Result<Vec<String>, ArgParsingError> {
+        super::parse_dirs(s, respect_gitignore, search_in_dotted)
+                .map(|targets| targets.iter().map(Target::to_string).collect())
     }
 
     fn new_conf(dir: &str) -> Configuration {
-        let mut builder = ConfigurationBuilder { dirs: Some(vec![convert_to_absolute(dir)]), ..Default::default() };
+        let mut builder = ConfigurationBuilder { dirs: Some(vec![Target::of(convert_to_absolute(dir))]), ..Default::default() };
         if let Ok((default_config, _)) = io_handler::parse_config_file(None, None) {
             builder.add_missing_fields(default_config);
         }
@@ -1282,6 +1422,78 @@ mod tests {
         // Unrelated targets are all kept
         assert_eq!(vec![convert_to_absolute("./src"), convert_to_absolute("./tests")],
                 parse_dirs("./tests, ./src").unwrap());
+
+        // A space is not a separator while nothing is named, so a path is allowed to contain one.
+        // It cannot be: by the time a command line reaches here the shell has split it and taken
+        // the quotes off, so a space inside a path and a space between two paths look the same.
+        assert_eq!(Err(ArgParsingError::InvalidPath("./tests ./src".to_owned())), parse_dirs("./tests ./src"));
+        assert_eq!(vec![convert_to_absolute("./")], parse_dirs(&std::env::current_dir().unwrap().to_string_lossy()).unwrap());
+    }
+
+    #[test]
+    fn a_target_can_be_declared_under_a_module_name() {
+        let src = convert_to_absolute("./src");
+        let tests = convert_to_absolute("./tests");
+
+        assert_eq!(vec![format!("code={src}"), format!("suite={tests}")], parse_dirs("code=./src suite=./tests").unwrap());
+        // The name holds for the whole comma list it opened, and one module is allowed to be several
+        // directories
+        assert_eq!(vec![format!("code={src}"), format!("code={tests}")], parse_dirs("code=./src,./tests").unwrap());
+        // and a name inside the list still starts a new one, which is what lets a saved
+        // configuration write the whole thing back on one line and read it as what it was
+        assert_eq!(vec![format!("code={src}"), format!("suite={tests}")], parse_dirs("code=./src,suite=./tests").unwrap());
+        // A comma with a space around it is still a comma
+        assert_eq!(vec![format!("code={src}"), format!("code={tests}")], parse_dirs("code=./src, ./tests").unwrap());
+        // but a space alone ends the list, so nothing written after a named target joins it. That
+        // only holds once a name is present, which is what this whole rule is conditional on.
+        assert_eq!(vec![format!("code={src}"), tests.clone()], parse_dirs("code=./src ./tests").unwrap());
+        // Two spellings of one name are one module
+        assert_eq!(vec![format!("code={src}"), format!("code={tests}")], parse_dirs("code=./src CODE=./tests").unwrap());
+
+        // An '=' is a legal character in a path, so anything that looks like one is read as one
+        assert_eq!(vec![src.clone()], parse_dirs("./src").unwrap());
+        assert_eq!(Err(ArgParsingError::MalformedTarget("code=".to_owned())), parse_dirs("code="));
+        assert_eq!(Err(ArgParsingError::InvalidPath("nope".to_owned())), parse_dirs("code=nope"));
+    }
+
+    // The targets a configuration declares are text like any other and go through the same
+    // resolution the command line does. The default configuration was reaching the builder without
+    // any of it, so a contest the command line refuses was accepted there in silence and the paths
+    // stayed relative, which is not what the boundary table of the modules is built to match.
+    #[test]
+    fn the_targets_of_a_configuration_are_resolved_before_they_are_used() {
+        let config_of = |dirs: Vec<Target>| ConfigurationBuilder { dirs: Some(dirs), ..Default::default() };
+
+        let mut options = config_of(vec![Target::named("frontend", "./src".to_owned()),
+                Target::named("backend", "./src".to_owned())]);
+        assert_eq!(Err(ArgParsingError::ContestedTarget(convert_to_absolute("./src"), "frontend".to_owned(), "backend".to_owned())),
+                resolve_dirs_of_config(&mut options, "x", true, false));
+
+        let mut options = config_of(vec![Target::of("./does-not-exist".to_owned())]);
+        assert_eq!(Err(ArgParsingError::InvalidPathInConfig("./does-not-exist".to_owned(), "x".to_owned())),
+                resolve_dirs_of_config(&mut options, "x", true, false));
+
+        let mut options = config_of(vec![Target::named("code", "./src".to_owned())]);
+        assert_eq!(Ok(()), resolve_dirs_of_config(&mut options, "x", true, false));
+        assert_eq!(Some(vec![Target::named("code", convert_to_absolute("./src"))]), options.dirs);
+
+        // A configuration that declares no target has nothing to resolve and nothing to complain of
+        let mut options = ConfigurationBuilder::default();
+        assert_eq!(Ok(()), resolve_dirs_of_config(&mut options, "x", true, false));
+    }
+
+    // There is no more specific one of the two to decide it, and whichever won would take the
+    // other's files away without a word
+    #[test]
+    fn one_path_under_two_names_is_refused() {
+        let src = convert_to_absolute("./src");
+        assert_eq!(Err(ArgParsingError::ContestedTarget(src.clone(), "code".to_owned(), "other".to_owned())),
+                parse_dirs("code=./src other=./src"));
+        assert_eq!(Err(ArgParsingError::ContestedTarget(src.clone(), "code".to_owned(), "(unnamed)".to_owned())),
+                parse_dirs("code=./src ./src"));
+
+        // The same name twice over one path is a repetition and not a contest
+        assert_eq!(vec![format!("code={src}")], parse_dirs("code=./src code=./src").unwrap());
     }
 
     #[test]
@@ -1330,9 +1542,9 @@ mod tests {
         assert_eq!(vec![abs("kept/one.rs")], parse_dirs(&format!("{root}/**/*.rs")).unwrap());
 
         // Unless the gitignore support is turned off
-        assert_eq!(vec![abs("build"), abs("kept")], super::parse_dirs(&format!("{root}/*"), false, false).unwrap());
+        assert_eq!(vec![abs("build"), abs("kept")], parse_dirs_with(&format!("{root}/*"), false, false).unwrap());
         assert_eq!(vec![abs("build/deep/generated.rs"), abs("kept/ignored.rs"), abs("kept/one.rs")],
-                super::parse_dirs(&format!("{root}/**/*.rs"), false, false).unwrap());
+                parse_dirs_with(&format!("{root}/**/*.rs"), false, false).unwrap());
 
         // Explicitly named paths are always used, even when they are ignored
         assert_eq!(vec![abs("build")], parse_dirs(&format!("{root}/build")).unwrap());
@@ -1354,7 +1566,7 @@ mod tests {
 
         let mut saved_config = create_config_builder_from_args("--threads 1 5 --languages lang1, lang2 --save test000").unwrap();
         assert!(Path::new(test_file_path).exists());
-        assert_eq!(saved_config.dirs.clone().unwrap()[0], convert_to_absolute("./"));
+        assert_eq!(saved_config.dirs.clone().unwrap()[0], Target::of(convert_to_absolute("./")));
         assert_eq!(saved_config.threads.clone().unwrap(), Threads::new(1, 5));
         assert_eq!(saved_config.languages_of_interest.clone().unwrap(), vec!["lang1", "lang2"]);
 
@@ -1448,14 +1660,20 @@ mod tests {
         std::fs::create_dir_all(&PERSISTENT_APP_PATHS.config_dir).unwrap();
         let test_file_path = &PERSISTENT_APP_PATHS.config_dir.clone().add("/test002.txt");
         let _ = std::fs::remove_file(test_file_path);
-        std::fs::write(test_file_path, "===> sort\nnope\n\n===> top\nnope\n\n===> bar-thickness\nnope\n\n\
+        std::fs::write(test_file_path, "===> dirs\nfrontend=\n\n===> sort\nnope\n\n===> top\nnope\n\n===> bar-thickness\nnope\n\n\
                 ===> number-separator\nnope\n\n===> decimal-separator\nnope\n\n===> force-lang\nnope\n").unwrap();
+
+        // A target that does not parse is a target whose files would not be counted, so with no
+        // target on the command line to take its place the run stops instead of counting less
+        assert_eq!(Err(ArgParsingError::InvalidValueInConfig("dirs".to_owned(), "test002".to_owned())),
+                create_config_from_args("--load test002"));
 
         assert_eq!(Err(ArgParsingError::InvalidValueInConfig("sort".to_owned(), "test002".to_owned())),
                 create_config_from_args("./ --load test002"));
 
         let rescued = create_config_from_args(
                 "./ --load test002 --sort name --top 3 --bar-thickness fat --number-separator dot --decimal-separator comma --force-lang m=matlab").unwrap();
+        assert_eq!(vec![Target::of(convert_to_absolute("./"))], rescued.dirs);
         assert_eq!(SortCriterion::Name, rescued.sort_by);
         assert_eq!(Some(3), rescued.top_n);
         assert_eq!(BarThickness::Fat, rescued.bar_thickness);

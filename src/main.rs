@@ -37,6 +37,12 @@ fn main() -> ExitCode {
                     warn_msg.push_str(&faulty_files.join(", "));
                     warn_msg.push_str(".\nThese files will not be taken into consideration.");
                     eprintln!("{}",warn_msg.yellow());
+                    // One per file and not one for the list, since each is a whole language whose
+                    // files went uncounted and a reader of the document wants to know which
+                    for file in &faulty_files {
+                        warnings::keep(warnings::Warning::new(warnings::LANGUAGE_FILE_UNREADABLE, warnings::Affects::Counts, file,
+                                format!("'{file}' could not be read as a language file, so the files of that language were not counted.")));
+                    }
                 }
 
                 language_map = _language_map;
@@ -119,6 +125,10 @@ fn main() -> ExitCode {
     if !faulty_priority_lines.is_empty() {
         eprintln!("{}", format!("\nLines that could not be read in '{EXTENSION_PRIORITY_FILE_NAME}', and were skipped:\n{}",
                 faulty_priority_lines.join("\n")).yellow());
+        for line in &faulty_priority_lines {
+            warnings::keep(warnings::Warning::new(warnings::PRIORITY_LINE_SKIPPED, warnings::Affects::Settings, line,
+                    format!("'{line}' could not be read in '{EXTENSION_PRIORITY_FILE_NAME}' and was skipped, so any contest it was meant to settle was left to the tiebreak.")));
+        }
     }
 
     let instant = Instant::now();

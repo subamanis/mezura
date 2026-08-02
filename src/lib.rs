@@ -12,6 +12,7 @@ pub mod producer;
 pub mod message_printer;
 pub mod file_parser;
 pub mod phase_timing;
+pub mod warnings;
 
 mod result_printer;
 mod json_printer;
@@ -23,8 +24,10 @@ pub use domain::{Language, LanguageContentInfo, LanguageMetadata, FileStats, Key
 
 pub type FaultyFilesListMut = Arc<Mutex<Vec<FaultyFileDetails>>>;
 pub type ExtensionLangMap = Arc<HashMap<String, Arc<str>>>;
-pub type ContentInfoMapMut  = Arc<Mutex<HashMap<String,LanguageContentInfo>>>;
-pub type MetadataMapMut     = Arc<Mutex<HashMap<String,LanguageMetadata>>>;
+// One bucket per module, and a run that declared none has exactly one, so that nothing downstream
+// has two shapes to handle
+pub type ContentInfoMapMut  = Arc<Mutex<Vec<HashMap<String,LanguageContentInfo>>>>;
+pub type MetadataMapMut     = Arc<Mutex<Vec<HashMap<String,LanguageMetadata>>>>;
 
 use directories::{BaseDirs,ProjectDirs};
 use crossbeam_deque::{Worker,Injector};
@@ -43,6 +46,13 @@ pub const DEFAULT_CONFIG_NAME : &str = "default.txt";
 pub const EXTENSION_PRIORITY_FILE_NAME : &str = "extension_priority.txt";
 pub const MANIFEST_FILE_NAME : &str = "installed.txt";
 pub const REPLACED_DIR_NAME : &str = "replaced";
+// Marked rather than named, because naming it after its directory would be a lie: with
+// './project tests=./project/tests' a row called 'project' is everything in it except the tests.
+// Being one marked row is also what settles two unnamed targets ending in the same folder name.
+// It says what the row is and not what is left in it, which is the only wording that holds in both
+// shapes: with './project tests=./project/tests' the row really is the rest of the project, but
+// with 'frontend=./web ./docs' the './docs' did not survive anything, it was simply never named.
+pub const UNNAMED_MODULE_NAME : &str = "(unnamed)";
 
 pub static PERSISTENT_APP_PATHS : LazyLock<PersistentAppPaths> = LazyLock::new(PersistentAppPaths::get);
 pub static LOCAL_APP_PATHS : LazyLock<LocalAppPaths> = LazyLock::new(LocalAppPaths::get);
@@ -58,12 +68,15 @@ pub fn run(config: &Configuration, language_map: HashMap<String, Language>,
     let language_map_ref = Arc::new(language_map);
     let (extension_map, extension_report) =
             make_extension_language_map(&language_map_ref, extension_priority, &config.forced_languages);
-    if let Some(message) = extension_report.formatted() {
-        eprintln!("\n{message}");
-    }
+    extension_report.warnings().into_iter().for_each(warnings::emit);
     let extension_lang_map: ExtensionLangMap = Arc::new(extension_map);
-    let languages_content_info_ref : ContentInfoMapMut = Arc::new(Mutex::new(make_language_stats(language_map_ref.clone())));
-    let global_languages_metadata_map = Arc::new(Mutex::new(make_language_metadata(&language_map_ref)));
+    // Pre-built for every module and language pair, and not only for every language: the merge that
+    // ends a consumer reaches straight into this map and unwraps, so a pair that was never foreseen
+    // would kill the thread rather than miscount
+    let modules = Arc::new(Modules::of(&config.dirs));
+    let languages_content_info_ref : ContentInfoMapMut =
+            Arc::new(Mutex::new(make_language_stats(language_map_ref.clone(), modules.count())));
+    let global_languages_metadata_map = Arc::new(Mutex::new(make_language_metadata(&language_map_ref, modules.count())));
 
     let mut files_present = FilesPresent::default();
     let idle_producers = Arc::new(AtomicUsize::new(0));
@@ -72,7 +85,7 @@ pub fn run(config: &Configuration, language_map: HashMap<String, Language>,
     let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs)
             .expect("exclude patterns are validated during argument parsing"));
     calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector, &mut files_present,
-            &extension_lang_map);
+            &extension_lang_map, &modules);
 
     let files_stats = Arc::new(Mutex::new(files_present));
 
@@ -87,7 +100,7 @@ pub fn run(config: &Configuration, language_map: HashMap<String, Language>,
     for i in 0..config.threads.producers {
         producer_handles.push(producer::start_producer_thread(i, files_injector.clone(), dirs_injector.clone(), Worker::new_fifo(),
             idle_producers.clone(), extension_lang_map.clone(), exclude_matcher.clone(),
-            config.clone(), files_stats.clone()));
+            config.clone(), files_stats.clone(), modules.clone()));
     }
     for i in 0..config.threads.consumers {
         consumer_handles.push(consumer::start_parser_thread(i, files_injector.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
@@ -132,24 +145,67 @@ pub fn run(config: &Configuration, language_map: HashMap<String, Language>,
     }
 
     let mut global_languages_metadata_map_guard = global_languages_metadata_map.lock();
-    let languages_metadata_map = global_languages_metadata_map_guard.as_deref_mut().unwrap();
+    let per_module_metadata = global_languages_metadata_map_guard.as_deref_mut().unwrap();
 
     let mut content_info_map_guard = languages_content_info_ref.lock();
-    let content_info_map = content_info_map_guard.as_deref_mut().unwrap();
+    let per_module_content_info = content_info_map_guard.as_deref_mut().unwrap();
 
-    let metrics = generate_metrics_if_parsing_took_more_than_one_sec(parsing_duration_millis, relevant_files_num, content_info_map);
-    let final_stats = FinalStats::calculate(content_info_map, languages_metadata_map);
-    remove_languages_with_0_files(content_info_map, languages_metadata_map);
+    let (content_info_map, languages_metadata_map) = merged_over_modules(per_module_content_info, per_module_metadata);
+    let metrics = generate_metrics_if_parsing_took_more_than_one_sec(parsing_duration_millis, relevant_files_num, &content_info_map);
+    let final_stats = FinalStats::calculate(&content_info_map, &languages_metadata_map);
+
+    let mut modules_result = Vec::with_capacity(modules.count());
+    for id in 0..modules.count() {
+        let (mut content_info, mut metadata) = (std::mem::take(&mut per_module_content_info[id]),
+                std::mem::take(&mut per_module_metadata[id]));
+        remove_languages_with_0_files(&mut content_info, &mut metadata);
+        // A module that found nothing still gets its row, since it was asked for by name and its
+        // absence from the report would read as a mistake in the report
+        let final_stats = if metadata.is_empty() {FinalStats::new_extended(0, 0, 0, 0, 0, 0, 0)}
+                else {FinalStats::calculate(&content_info, &metadata)};
+        modules_result.push(ModuleResult {
+            name: modules.name_of(id as ModuleId).map(str::to_owned),
+            content_info_map: content_info,
+            languages_metadata_map: metadata,
+            final_stats
+        });
+    }
+
+    let (mut content_info_map, mut languages_metadata_map) = (content_info_map, languages_metadata_map);
+    // After the total has been calculated from them, since the empty ones add nothing to it and
+    // dropping them first would only make the same sum out of fewer entries
+    remove_languages_with_0_files(&mut content_info_map, &mut languages_metadata_map);
 
     Ok(RunResult {
-        content_info_map: std::mem::take(content_info_map),
-        languages_metadata_map: std::mem::take(languages_metadata_map),
+        content_info_map,
+        languages_metadata_map,
+        modules: modules_result,
         final_stats,
         faulty_files: std::mem::take(&mut faulty_files_ref.lock().unwrap()),
         files_present,
         scan_duration_millis: parsing_duration_millis,
         metrics
     })
+}
+
+// The totals across every module, which is what the overview, the sum and the document's own
+// language list are about: those questions are asked of the whole run and not of one part of it
+fn merged_over_modules(per_module_content_info: &[HashMap<String,LanguageContentInfo>],
+        per_module_metadata: &[HashMap<String,LanguageMetadata>])
+-> (HashMap<String,LanguageContentInfo>, HashMap<String,LanguageMetadata>)
+{
+    let mut content_info = per_module_content_info[0].clone();
+    let mut metadata = per_module_metadata[0].clone();
+    for id in 1..per_module_content_info.len() {
+        for (name, info) in &per_module_content_info[id] {
+            content_info.get_mut(name).unwrap().add_content_info(info);
+        }
+        for (name, meta) in &per_module_metadata[id] {
+            metadata.get_mut(name).unwrap().add_metadata(meta);
+        }
+    }
+
+    (content_info, metadata)
 }
 
 // Everything that turns a result into something a person reads, kept out of 'run' so that the run
@@ -178,32 +234,35 @@ pub fn present(result: &RunResult, config: &Configuration) {
 
     let log_file_path = get_specified_config_file_path(config);
     let existing_log_contents = log_file_path.as_ref().and_then(|path| extract_file_contents(path));
-    result_printer::format_and_print_results(&result.content_info_map, &result.languages_metadata_map,
-            &result.final_stats, &existing_log_contents, &datetime_now, config);
+    result_printer::format_and_print_results(result, &existing_log_contents, &datetime_now, config);
 
     if config.log.should_log && let Some(path) = log_file_path
-        && io_handler::log_stats(&path, &existing_log_contents, &result.final_stats, &datetime_now, config).is_err() {
+        && io_handler::log_stats(&path, &existing_log_contents, result, &datetime_now, config).is_err() {
         eprintln!("\n{}",theme::active().warning.paint("Error while trying to save the log."));
     }
 }
 
 //pub for integration tests
+// The roots and not every target: a target that lies inside another is reached by the walk of the
+// one around it, and walking it again would count its files twice. Its module is not lost with it,
+// it is what the boundary table hands back on the way down.
 pub fn calculate_single_file_stats_or_add_to_injector(config: &Configuration, dirs_injector: &Arc<Injector<TraversedDir>>, files_injector: &Arc<Injector<ParsableFile>>,
-        files_present: &mut FilesPresent, extension_lang_map: &HashMap<String, Arc<str>>)
+        files_present: &mut FilesPresent, extension_lang_map: &HashMap<String, Arc<str>>, modules: &Modules)
 {
-    config.dirs.iter().for_each(|dir| {
-        let dir_path = Path::new(dir);
+    utils::topmost_targets(&config.dirs).iter().for_each(|target| {
+        let dir_path = Path::new(&target.path);
+        let module = modules.of_target(target);
         if dir_path.is_file() {
             if let Some(x) = dir_path.extension()
                 && let Some(extension) = x.to_str()
                 && let Some(lang_name) = find_language_of_extension(extension_lang_map, extension) {
-                files_injector.push(ParsableFile::new(dir_path.to_path_buf(),lang_name));
+                files_injector.push(ParsableFile::new(dir_path.to_path_buf(), lang_name, module));
                 files_present.total_files += 1;
                 files_present.relevant_files += 1;
             }
         } else if dir_path.is_dir() {
             let gitignore_stack = if config.no_gitignore { None } else { GitignoreStack::for_root_dir(dir_path) };
-            dirs_injector.push(TraversedDir::new(dir_path.to_path_buf(), gitignore_stack));
+            dirs_injector.push(TraversedDir::new(dir_path.to_path_buf(), gitignore_stack, module));
         }
     })
 }
@@ -223,6 +282,111 @@ pub fn remove_languages_with_0_files(content_info_map: &mut HashMap<String,Langu
        languages_metadata_map.remove(&ext);
        content_info_map.remove(&ext);
    }
+}
+
+// The module a file was counted under, carried through the queue as an index and never as a name.
+// A composite string key would be an allocation on every single file, which is what the whole
+// performance work of v3 was spent removing.
+pub type ModuleId = u16;
+
+// The names, in the order they were declared, and the places where the walk changes its mind about
+// which module it is in.
+//
+// The module of a directory is decided once, on the way in, and its children inherit it, so a run
+// that nests nothing looks up nothing at all: every root carries its own module and the walk never
+// asks again. Only a target that lies inside another target can change the answer part way down,
+// and those are the only paths this table holds.
+#[derive(Debug,Default)]
+pub struct Modules {
+    // Empty when nothing was named, and then everything belongs to the single bucket 0
+    names: Vec<Option<String>>,
+    dir_boundaries: HashMap<String, ModuleId>,
+    file_boundaries: HashMap<String, ModuleId>
+}
+
+impl Modules {
+    // The boundaries are built from the resolved paths and never from what was typed, because
+    // 'starts_with' and an equality on a path are case sensitive on every platform: on Windows a
+    // 'frontend=./Web' over a real './web' would match nothing, the module would come out empty and
+    // every file would fall into '(unnamed)' with nothing printed to say why.
+    pub fn of(targets: &[config_manager::Target]) -> Self {
+        if targets.iter().all(|x| x.module.is_none()) {
+            return Modules::default();
+        }
+
+        let mut names : Vec<Option<String>> = Vec::new();
+        for target in targets {
+            if !names.contains(&target.module) {
+                names.push(target.module.clone());
+            }
+        }
+        // The unnamed one is a row like any other, and it is last because it is the leftover
+        if let Some(position) = names.iter().position(Option::is_none) {
+            let unnamed = names.remove(position);
+            names.push(unnamed);
+        }
+
+        let roots = utils::topmost_targets(targets);
+        let mut modules = Modules { names, ..Default::default() };
+        for target in targets {
+            if roots.contains(target) {
+                continue;
+            }
+            let id = modules.id_of(&target.module);
+            let key = utils::path_comparison_key(target.path.trim_end_matches('/'));
+            if Path::new(&target.path).is_dir() {
+                modules.dir_boundaries.insert(key, id);
+            } else {
+                modules.file_boundaries.insert(key, id);
+            }
+        }
+
+        modules
+    }
+
+    fn id_of(&self, module: &Option<String>) -> ModuleId {
+        self.names.iter().position(|x| x == module).unwrap_or(0) as ModuleId
+    }
+
+    pub fn count(&self) -> usize {
+        self.names.len().max(1)
+    }
+
+    pub fn is_used(&self) -> bool {
+        !self.names.is_empty()
+    }
+
+    pub fn name_of(&self, id: ModuleId) -> Option<&str> {
+        self.names.get(id as usize).and_then(|x| x.as_deref())
+    }
+
+    // The module of a target, for the roots the traversal is handed
+    pub fn of_target(&self, target: &config_manager::Target) -> ModuleId {
+        if self.is_used() {self.id_of(&target.module)} else {0}
+    }
+
+    pub fn has_dir_boundaries(&self) -> bool {
+        !self.dir_boundaries.is_empty()
+    }
+
+    pub fn has_file_boundaries(&self) -> bool {
+        !self.file_boundaries.is_empty()
+    }
+
+    // Called only when the run declared a target inside another one, which is the only way a child
+    // can belong somewhere other than where its parent does
+    pub fn at_dir(&self, path: &Path, inherited: ModuleId) -> ModuleId {
+        self.at(&self.dir_boundaries, path, inherited)
+    }
+
+    pub fn at_file(&self, path: &Path, inherited: ModuleId) -> ModuleId {
+        self.at(&self.file_boundaries, path, inherited)
+    }
+
+    fn at(&self, boundaries: &HashMap<String, ModuleId>, path: &Path, inherited: ModuleId) -> ModuleId {
+        let Some(path) = path.to_str() else { return inherited };
+        boundaries.get(&utils::path_comparison_key(&path.replace('\\', "/"))).copied().unwrap_or(inherited)
+    }
 }
 
 // An extension claimed by more than one language, and how that was settled. The three outcomes are
@@ -254,24 +418,30 @@ impl ExtensionReport {
     // Only the tiebreak is reported. A collision that the priority file or '--force-lang' settled is
     // a decision somebody took on purpose, and printing it on every run would turn the whole notice
     // into noise that hides the one line that matters.
-    pub fn formatted(&self) -> Option<String> {
-        let mut lines = Vec::new();
+    //
+    // One warning per contested extension rather than one for the lot, because each names a
+    // different extension and that is what a reader of the document wants to key on. What reaches
+    // the terminal is unchanged: the blocks were joined by a blank line, and separate lines each
+    // carrying a leading one produce the same text.
+    //
+    // Returned as values and emitted by the caller, so that what a report is worth can be tested
+    // without going through the collector that the whole process shares.
+    pub fn warnings(&self) -> Vec<warnings::Warning> {
+        let mut reported = Vec::new();
         for collision in self.collisions.iter().filter(|x| x.resolved_by == ResolvedBy::AlphabeticalFallback) {
-            lines.push(format!("The extension '{}' is claimed by {} and {}. It was given to {} only because that name comes first \
+            reported.push(warnings::Warning::new(warnings::EXTENSION_TIEBREAK, warnings::Affects::Counts, &collision.extension,
+                    format!("The extension '{}' is claimed by {} and {}. It was given to {} only because that name comes first \
 alphabetically, so the files of the rest are counted with the wrong comment and string symbols.\nDeclare it in '{}', or run with '--force-lang {}=<language>'.",
                     collision.extension, collision.winner, collision.losers.join(", "), collision.winner,
-                    EXTENSION_PRIORITY_FILE_NAME, collision.extension));
+                    EXTENSION_PRIORITY_FILE_NAME, collision.extension)));
         }
 
         for (extension, wanted) in &self.unknown_forced_languages {
-            lines.push(format!("'--force-lang {extension}={wanted}' names a language that is not available, so the extension was left as it was."));
+            reported.push(warnings::Warning::new(warnings::UNKNOWN_FORCED_LANGUAGE, warnings::Affects::Settings, extension,
+                    format!("'--force-lang {extension}={wanted}' names a language that is not available, so the extension was left as it was.")));
         }
 
-        if lines.is_empty() {
-            None
-        } else {
-            Some(theme::active().warning.paint(&lines.join("\n\n")).to_string())
-        }
+        reported
     }
 }
 
@@ -444,20 +614,20 @@ fn get_activated_languages_as_str(config: &Configuration) -> String {
     msg
 }
 
-pub fn make_language_stats(languages_map: Arc<HashMap<String,Language>>) -> HashMap<String,LanguageContentInfo> {
+pub fn make_language_stats(languages_map: Arc<HashMap<String,Language>>, modules: usize) -> Vec<HashMap<String,LanguageContentInfo>> {
     let mut map = HashMap::<String,LanguageContentInfo>::new();
     for (key, value) in languages_map.iter() {
         map.insert(key.to_owned(), LanguageContentInfo::from(value));
     }
-    map
+    vec![map; modules]
 }
 
-pub fn make_language_metadata(language_map: &Arc<HashMap<String,Language>>) -> HashMap<String, LanguageMetadata> {
+pub fn make_language_metadata(language_map: &Arc<HashMap<String,Language>>, modules: usize) -> Vec<HashMap<String, LanguageMetadata>> {
     let mut map = HashMap::<String,LanguageMetadata>::new();
     for name in language_map.keys() {
         map.insert(name.to_owned(), LanguageMetadata::default());
     }
-    map
+    vec![map; modules]
 }
 
 fn get_specified_config_file_path(config: &Configuration) -> Option<String> {
@@ -503,13 +673,26 @@ pub struct Metrics {
 // wants none of those.
 #[derive(Debug)]
 pub struct RunResult {
+    // The totals across every module. A run that named none has exactly one module holding the same
+    // numbers, and reading these is what every question about the whole run goes through.
     pub content_info_map: HashMap<String, LanguageContentInfo>,
     pub languages_metadata_map: HashMap<String, LanguageMetadata>,
+    pub modules: Vec<ModuleResult>,
     pub final_stats: FinalStats,
     pub faulty_files: Vec<FaultyFileDetails>,
     pub files_present: FilesPresent,
     pub scan_duration_millis: u128,
     pub metrics: Option<Metrics>
+}
+
+// One part of the run, counted on its own. 'name' is None for the leftovers of the named ones, which
+// is also the single unnamed one of a run that declared no modules at all.
+#[derive(Debug)]
+pub struct ModuleResult {
+    pub name: Option<String>,
+    pub content_info_map: HashMap<String, LanguageContentInfo>,
+    pub languages_metadata_map: HashMap<String, LanguageMetadata>,
+    pub final_stats: FinalStats
 }
 
 impl RunResult {
@@ -519,12 +702,19 @@ impl RunResult {
         RunResult {
             content_info_map: HashMap::new(),
             languages_metadata_map: HashMap::new(),
+            modules: Vec::new(),
             final_stats: FinalStats::new_extended(0, 0, 0, 0, 0, 0, 0),
             faulty_files: Vec::new(),
             files_present,
             scan_duration_millis,
             metrics: None
         }
+    }
+
+    // Whether the report has a second axis at all. One name is enough for the column to appear, and
+    // without one there is nothing to group by and the output is what it always was.
+    pub fn has_modules(&self) -> bool {
+        self.modules.iter().any(|x| x.name.is_some())
     }
 }
 
@@ -570,13 +760,15 @@ pub struct FilesPresent {
 #[derive(Debug,Clone)]
 pub struct ParsableFile {
     pub path: PathBuf,
-    pub language_name: Arc<str>
+    pub language_name: Arc<str>,
+    pub module: ModuleId
 }
 
 #[derive(Debug,Clone)]
 pub struct TraversedDir {
     pub path: PathBuf,
-    pub gitignore_stack: Option<Arc<GitignoreStack>>
+    pub gitignore_stack: Option<Arc<GitignoreStack>>,
+    pub module: ModuleId
 }
 
 #[derive(Debug)]
@@ -755,19 +947,21 @@ impl FaultyFileDetails {
 }
 
 impl ParsableFile {
-    pub fn new(path: PathBuf, language_name: Arc<str>) -> Self {
+    pub fn new(path: PathBuf, language_name: Arc<str>, module: ModuleId) -> Self {
         ParsableFile {
             path,
-            language_name
+            language_name,
+            module
         }
     }
 }
 
 impl TraversedDir {
-    pub fn new(path: PathBuf, gitignore_stack: Option<Arc<GitignoreStack>>) -> Self {
+    pub fn new(path: PathBuf, gitignore_stack: Option<Arc<GitignoreStack>>, module: ModuleId) -> Self {
         TraversedDir {
             path,
-            gitignore_stack
+            gitignore_stack,
+            module
         }
     }
 }
@@ -1110,7 +1304,7 @@ mod tests {
         assert_eq!("Rust", winner_of(&map, "rs"));
         assert_eq!("Go", winner_of(&map, "go"));
         assert_eq!(ExtensionReport::default(), report);
-        assert_eq!(None, report.formatted());
+        assert!(report.warnings().is_empty());
     }
 
     // The tiebreak is the outcome nobody chose, and the only one that is announced
@@ -1127,7 +1321,8 @@ mod tests {
             losers: vec!["Objective-C".to_owned()],
             resolved_by: ResolvedBy::AlphabeticalFallback
         }], report.collisions);
-        assert!(report.formatted().is_some_and(|x| x.contains("only because")));
+        assert_eq!(vec![(warnings::EXTENSION_TIEBREAK, "counts")],
+                report.warnings().iter().map(|x| (x.code, x.affects.name())).collect::<Vec<_>>());
     }
 
     #[test]
@@ -1145,7 +1340,7 @@ mod tests {
         assert_eq!(ResolvedBy::ForceLang, report.collisions[0].resolved_by);
 
         // and neither of them is the tiebreak, so neither is announced
-        assert_eq!(None, report.formatted());
+        assert!(report.warnings().is_empty());
     }
 
     // A rule whose every name has been renamed away, removed or misspelled settles nothing, and the
@@ -1158,7 +1353,10 @@ mod tests {
 
         assert_eq!("MATLAB", winner_of(&map, "m"));
         assert_eq!(ResolvedBy::AlphabeticalFallback, report.collisions[0].resolved_by);
-        assert!(report.formatted().is_some_and(|x| x.contains("only because")));
+        let reported = report.warnings();
+        assert_eq!(warnings::EXTENSION_TIEBREAK, reported[0].code);
+        assert_eq!("m", reported[0].subject);
+        assert!(reported[0].message.contains("only because"));
     }
 
     // A name in the priority file that no longer exists is skipped rather than left to win nothing
@@ -1193,7 +1391,7 @@ mod tests {
 
         assert_eq!("MATLAB", winner_of(&map, "m"));
         assert_eq!(ResolvedBy::ForceLang, report.collisions[0].resolved_by);
-        assert_eq!(None, report.formatted());
+        assert!(report.warnings().is_empty());
     }
 
     #[test]
@@ -1204,7 +1402,12 @@ mod tests {
 
         assert_eq!("Python", winner_of(&map, "py"));
         assert_eq!(vec![("py".to_owned(), "cobol".to_owned())], report.unknown_forced_languages);
-        assert!(report.formatted().is_some_and(|x| x.contains("not available")));
+        let reported = report.warnings();
+        assert_eq!(warnings::UNKNOWN_FORCED_LANGUAGE, reported[0].code);
+        // a mapping that did not apply leaves the counts alone, it is the settings that were not honoured
+        assert_eq!("settings", reported[0].affects.name());
+        assert_eq!("py", reported[0].subject);
+        assert!(reported[0].message.contains("not available"));
     }
 
     // Two spellings of one extension are one extension, and they have to collide as one. Left as
@@ -1221,6 +1424,79 @@ mod tests {
         assert_eq!("Zig", winner_of(&map, "ZIG"));
         assert_eq!("Zig", winner_of(&map, "Zig"));
         assert_eq!("", winner_of(&map, "zigg"));
+    }
+
+    // 'name path' declares the module, a bare path declares none. The paths are the repository's
+    // own, because a boundary is only a boundary if it is on disk: the table has to know whether a
+    // nested target is a directory or a file to decide which of the two lookups will find it.
+    fn modules_of(entries: &[&str]) -> Modules {
+        let targets = entries.iter().map(|entry| match entry.split_once(' ') {
+            Some((name, path)) => config_manager::Target::named(name, path.to_owned()),
+            None => config_manager::Target::of((*entry).to_owned())
+        }).collect::<Vec<_>>();
+
+        Modules::of(&targets)
+    }
+
+    #[test]
+    fn a_run_that_names_nothing_has_one_bucket_and_no_lookups() {
+        let modules = modules_of(&["./src", "./tests"]);
+
+        assert!(!modules.is_used());
+        assert_eq!(1, modules.count());
+        assert_eq!(None, modules.name_of(0));
+        assert!(!modules.has_dir_boundaries() && !modules.has_file_boundaries());
+    }
+
+    // The order is the order they were declared in, except that the leftovers are last because they
+    // are the leftovers. What the report shows is decided by '--sort' and not by this.
+    #[test]
+    fn the_leftovers_are_a_bucket_of_their_own_and_come_last() {
+        let modules = modules_of(&["./src", "code ./src/utils.rs", "docs ./data"]);
+
+        assert!(modules.is_used());
+        assert_eq!(3, modules.count());
+        assert_eq!(Some("code"), modules.name_of(0));
+        assert_eq!(Some("docs"), modules.name_of(1));
+        assert_eq!(None, modules.name_of(2));
+
+        // One name and there is a second axis, with nothing left over to put in an unnamed row
+        let modules = modules_of(&["code ./src"]);
+        assert!(modules.is_used());
+        assert_eq!(1, modules.count());
+        assert_eq!(Some("code"), modules.name_of(0));
+    }
+
+    // The lookup that a walk pays for is the one that can find something. A nested file target must
+    // not make every directory pay, and a nested directory must not make every file pay.
+    #[test]
+    fn only_a_target_inside_another_target_is_a_boundary() {
+        let unrelated = modules_of(&["code ./src", "suite ./tests"]);
+        assert!(!unrelated.has_dir_boundaries() && !unrelated.has_file_boundaries());
+
+        let nested_dir = modules_of(&["./", "fixtures ./tests/fixtures"]);
+        assert!(nested_dir.has_dir_boundaries() && !nested_dir.has_file_boundaries());
+
+        let nested_file = modules_of(&["./src", "entry ./src/main.rs"]);
+        assert!(!nested_file.has_dir_boundaries() && nested_file.has_file_boundaries());
+    }
+
+    // A path that does not match falls through to what the parent was, and the match is made on the
+    // resolved path with the platform's own idea of case, or a boundary declared with a different
+    // capitalisation would find nothing and its module would come out empty with nothing printed
+    #[test]
+    fn a_boundary_answers_for_its_own_path_and_leaves_the_rest_inherited() {
+        let modules = modules_of(&["./", "fixtures ./tests/fixtures"]);
+        let fixtures = modules.id_of(&Some("fixtures".to_owned()));
+
+        assert_eq!(fixtures, modules.at_dir(Path::new("./tests/fixtures"), 7));
+        assert_eq!(7, modules.at_dir(Path::new("./tests"), 7));
+        assert_eq!(7, modules.at_dir(Path::new("./tests/fixtures/lang"), 7));
+        // the same path as the platform hands it over during a walk
+        assert_eq!(fixtures, modules.at_dir(Path::new(".\\tests\\fixtures"), 7));
+        if cfg!(windows) {
+            assert_eq!(fixtures, modules.at_dir(Path::new("./TESTS/Fixtures"), 7));
+        }
     }
 
     #[test]
@@ -1287,4 +1563,3 @@ mod tests {
         assert_eq!(customf, cf);
     }
 }
-

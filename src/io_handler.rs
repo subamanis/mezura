@@ -3,8 +3,8 @@ use std::{collections::HashMap, fs::{self, DirEntry, File}, io::{self, BufRead, 
 use chrono::{DateTime, Local};
 use colored::*;
 
-use crate::{Configuration, DEFAULT_CONFIG_NAME, FinalStats, Formatted, PERSISTENT_APP_PATHS, config_manager::{self, ConfigurationBuilder, LogOption,
-     MAX_COMPARE_LEVEL, MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_COMPARE_LEVEL, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE, Threads}, domain::*, split_line_on_whitespace, theme, utils};
+use crate::{Configuration, DEFAULT_CONFIG_NAME, Formatted, PERSISTENT_APP_PATHS, config_manager::{self, ConfigurationBuilder, LogOption,
+     MAX_COMPARE_LEVEL, MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_COMPARE_LEVEL, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE, Target, Threads}, domain::*, split_line_on_whitespace, theme, utils};
 
 
 const LANGUAGE                 : &str = "Language";     
@@ -381,7 +381,10 @@ pub fn generate_theme_editor_page() -> io::Result<String> {
 #[derive(Debug, Default)]
 pub struct ConfigFileIssues {
     pub invalid_fields: Vec<&'static str>,
-    pub warnings: Vec<String>
+    // The code travels with the message from where the kind is known. Recovering it later by
+    // looking for a phrase inside the English would tie the machine readable half of a warning to
+    // the wording of the human one, which is the exact coupling the pair exists to avoid.
+    pub warnings: Vec<(&'static str, String)>
 }
 
 pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String>) -> Result<(ConfigurationBuilder, ConfigFileIssues),ConfigFileParseError> {
@@ -406,9 +409,16 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
             let id = buf.trim().trim_start_matches("===>").split_whitespace().next().unwrap_or("");
 
             if id == config_manager::DIRS {
-                let paths = read_lines_from_file_to_vec(&mut reader, &mut buf, utils::parse_paths_to_vec);
-                if !paths.is_empty() {
-                    dirs = Some(paths);
+                // The line is what ends a target here, and a space never does, so a path with one in
+                // it needs no quoting and a configuration written by any earlier version still
+                // reads. A target that does not parse is a target that would silently not be
+                // counted, so it stops the run rather than warning.
+                let declared = read_lines_from_file_to_vec(&mut reader, &mut buf, |line| vec![line.trim().to_owned()]);
+                match utils::parse_targets_in_block(&declared.join("\n")) {
+                    Ok(targets) if !targets.is_empty() => dirs = Some(targets.into_iter()
+                            .map(|(module, path)| Target { module, path }).collect()),
+                    Ok(_) => {},
+                    Err(_) => issues.invalid_fields.push(config_manager::DIRS)
                 }
             } else if id == config_manager::EXCLUDE {
                 let paths = read_lines_from_file_to_vec(&mut reader, &mut buf, utils::parse_paths_to_vec);
@@ -529,7 +539,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
             } else if id == config_manager::STYLE {
                 let declared = read_lines_from_file_to_vec(&mut reader, &mut buf, |line| vec![line.trim().to_owned()]);
                 let (declared, errors) = theme::parse_overrides_leniently(&declared.join("\n"));
-                issues.warnings.extend(errors.iter().map(theme::ThemeParseError::formatted));
+                issues.warnings.extend(errors.iter().map(|x| (crate::warnings::CONFIG_STYLE_INVALID, x.formatted())));
                 if !declared.is_empty() {
                     config_styles = Some(declared);
                 }
@@ -550,7 +560,8 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                     None => issues.invalid_fields.push(config_manager::COMPRARE_LEVEL)
                 }
             } else {
-                issues.warnings.push(format!("'{id}' is not a command, the section is ignored."));
+                issues.warnings.push((crate::warnings::CONFIG_SECTION_UNKNOWN,
+                        format!("'{id}' is not a command, the section is ignored.")));
             }
         }
         buf.clear();
@@ -577,8 +588,12 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
 
     writer.write_all(b"Auto-generated config file.")?;
 
+    // One target per line, which the block reader joins back with the whitespace that separates one
+    // from the next. It is the readable form and the unambiguous one at the same time: a name only
+    // ever reaches the paths written after it with a comma between them.
     writer.write_all(&[b"\n\n===> ",config_manager::DIRS.as_bytes(),b"\n"].concat())?;
-    writer.write_all(config_builder.dirs.as_ref().unwrap().join(",").as_bytes())?;
+    writer.write_all(config_builder.dirs.as_ref().unwrap().iter().map(config_manager::Target::declared_form)
+            .collect::<Vec<_>>().join("\n").as_bytes())?;
 
     if let Some(exclude_dirs) = &config_builder.exclude_dirs {
         writer.write_all(&[b"\n\n===> ",config_manager::EXCLUDE.as_bytes(),b"\n"].concat())?;
@@ -709,7 +724,7 @@ pub fn counting_settings(config: &Configuration) -> [(&'static str, String); 8] 
     // Every key is the name of the command that sets it, so that the 'modified:' tag of the progress
     // section names something the reader can look up with '--help'. That is why this one is the
     // double negative 'no-gitignore' and not the 'gitignore' that would have read better.
-    [(config_manager::DIRS, config.dirs.join(",")),
+    [(config_manager::DIRS, config_manager::targets_to_string(&config.dirs)),
      (config_manager::EXCLUDE, config.exclude_dirs.join(",")),
      (config_manager::LANGUAGES, config.languages_of_interest.join(",")),
      (config_manager::EXCLUDE_LANGUAGES, config.excluded_languages.join(",")),
@@ -719,10 +734,10 @@ pub fn counting_settings(config: &Configuration) -> [(&'static str, String); 8] 
      (config_manager::NO_GITIGNORE, yes_no(config.no_gitignore))]
 }
 
-pub fn log_stats(path: &str, contents: &Option<String>, final_stats: &FinalStats, datetime_now: &DateTime<Local>, config: &Configuration) -> io::Result<()> {
+pub fn log_stats(path: &str, contents: &Option<String>, result: &crate::RunResult, datetime_now: &DateTime<Local>, config: &Configuration) -> io::Result<()> {
     let mut writer = std::io::BufWriter::new(std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(path)?);
 
-    write_current_log(&mut writer, config, datetime_now, final_stats)?;
+    write_current_log(&mut writer, config, datetime_now, result)?;
 
     if let Some(contents) = contents {
         writer.write_all(contents.as_bytes())?;
@@ -732,7 +747,12 @@ pub fn log_stats(path: &str, contents: &Option<String>, final_stats: &FinalStats
     Ok(())
 }
 
-fn write_current_log(writer: &mut BufWriter<File>, config: &Configuration, datetime_now: &DateTime<Local>, final_stats: &FinalStats) -> io::Result<()> {
+// The totals stay where they were and the modules are a block under them, so an entry written before
+// any of this existed reads exactly as it always did and a run that named none writes no block at
+// all. Nothing on disk needs converting, which is the same reason an entry from v2 with no
+// 'Comments' line is still read without complaint.
+fn write_current_log(writer: &mut BufWriter<File>, config: &Configuration, datetime_now: &DateTime<Local>, result: &crate::RunResult) -> io::Result<()> {
+    let final_stats = &result.final_stats;
     writer.write_all(format!("===>{}\n",config.log.name.clone().unwrap_or_default()).as_bytes())?;
     writer.write_all(datetime_now.format("%Y-%m-%d %H:%M:%S %z").to_string().as_bytes())?;
     writer.write_all(b"\n")?;
@@ -747,7 +767,20 @@ fn write_current_log(writer: &mut BufWriter<File>, config: &Configuration, datet
     writer.write_all(format!("        Comments: {}\n",final_stats.comment_lines).as_bytes())?;
     writer.write_all(format!("        Extra: {}\n",final_stats.extra_lines).as_bytes())?;
     writer.write_all(format!("    Total Size: {}\n",final_stats.bytes_size).as_bytes())?;
-    writer.write_all(format!("        Average Size: {}\n\n\n",final_stats.bytes_average_size).as_bytes())?;
+    writer.write_all(format!("        Average Size: {}\n",final_stats.bytes_average_size).as_bytes())?;
+    if result.has_modules() {
+        writer.write_all(b"    Modules:\n")?;
+        for module in &result.modules {
+            let stats = &module.final_stats;
+            writer.write_all(format!("        {}:\n", module.name.as_deref().unwrap_or(crate::UNNAMED_MODULE_NAME)).as_bytes())?;
+            writer.write_all(format!("            Files: {}\n", stats.files).as_bytes())?;
+            writer.write_all(format!("            Lines: {}\n", stats.lines).as_bytes())?;
+            writer.write_all(format!("                Code: {}\n", stats.code_lines).as_bytes())?;
+            writer.write_all(format!("                Comments: {}\n", stats.comment_lines).as_bytes())?;
+            writer.write_all(format!("                Extra: {}\n", stats.extra_lines).as_bytes())?;
+        }
+    }
+    writer.write_all(b"\n\n")?;
     writer.write_all(b"--------------------------------------------------------------------------------------------\n\n\n")?;
 
     Ok(())
@@ -772,7 +805,7 @@ fn read_bool_value_from_file(reader: &mut BufReader<File>, buf: &mut String) -> 
 }
 
 //Keep parsing new lines as relevant, until an empty one appears.
-fn read_lines_from_file_to_vec(reader: &mut BufReader<File>, buf: &mut String, parser_func: fn(&str) -> Vec<String>) -> Vec<String> {
+fn read_lines_from_file_to_vec<T>(reader: &mut BufReader<File>, buf: &mut String, parser_func: fn(&str) -> Vec<T>) -> Vec<T> {
     let mut vec = Vec::new();
     loop {
         buf.clear();
@@ -875,6 +908,8 @@ mod my_reader {
 #[cfg(test)]
 mod tests {
     use crate::*;
+    use crate::config_manager::{ConfigurationBuilder, Target};
+    use super::{parse_config_file, save_existing_commands_from_config_builder_to_file};
 
     #[test]
     fn test_save_config_file_and_then_parse_it() -> std::io::Result<()> {
@@ -981,6 +1016,69 @@ pl      Perl, Prolog
         assert!(issues.invalid_fields.is_empty());
         assert_eq!(Some(crate::hashmap!("m".to_owned() => "matlab".to_owned(), "pl".to_owned() => "perl".to_owned())),
                 options.forced_languages);
+
+        std::fs::remove_file(&path)
+    }
+
+    // The whole point of putting the name inside the target rather than in a field of its own: what
+    // '--save' writes has to be what a load reads, or the definitions would drift away from the
+    // paths they belong to on the first round trip.
+    #[test]
+    fn the_modules_of_a_saved_configuration_survive_being_read_back() -> std::io::Result<()> {
+        let dir = LOCAL_APP_PATHS.test_config_dir.clone();
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.clone() + "modules-round-trip.txt";
+
+        // The last two are the ones that break: an unnamed target after a named one, and a path
+        // with a space in it now that whitespace is what separates one target from the next
+        let declared = vec![Target::named("frontend", "D:/x/web".to_owned()),
+                Target::named("frontend", "D:/x/ui".to_owned()),
+                Target::named("backend", "D:/x/my api".to_owned()),
+                Target::of("D:/x/loose".to_owned())];
+        // The one line form that the log entry carries. Whitespace and not commas, or the unnamed
+        // target at the end would be read back as one more directory of 'backend'.
+        assert_eq!("frontend=D:/x/web frontend=D:/x/ui backend=\"D:/x/my api\" D:/x/loose",
+                config_manager::targets_to_string(&declared));
+        // and while nothing is named it is what it always was, so an entry logged by an older
+        // version is not reported as having had its targets changed
+        assert_eq!("D:/x/web,D:/x/api", config_manager::targets_to_string(
+                &[Target::of("D:/x/web".to_owned()), Target::of("D:/x/api".to_owned())]));
+
+        let builder = ConfigurationBuilder { dirs: Some(declared.clone()), ..Default::default() };
+        save_existing_commands_from_config_builder_to_file(Some(dir.clone()), "modules-round-trip", &builder)?;
+
+        let (options, issues) = parse_config_file(Some("modules-round-trip"), Some(dir)).unwrap();
+        assert!(issues.invalid_fields.is_empty());
+        assert_eq!(Some(declared), options.dirs);
+
+        std::fs::remove_file(&path)
+    }
+
+    // A block is read as a whole, so a module written on a line of its own means what the same
+    // module written next to the others means
+    #[test]
+    fn the_dirs_block_reads_a_module_across_lines_and_refuses_one_with_no_path() -> std::io::Result<()> {
+        let dir = LOCAL_APP_PATHS.test_config_dir.clone();
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.clone() + "dirs-block.txt";
+        std::fs::write(&path, "===> dirs\ntests=D:/x/api/tests\ntests=D:/x/web/tests\nbackend=D:/x/api\n")?;
+
+        let (options, issues) = parse_config_file(Some("dirs-block"), Some(dir.clone())).unwrap();
+        assert!(issues.invalid_fields.is_empty());
+        assert_eq!(Some(vec![Target::named("tests", "D:/x/api/tests".to_owned()),
+                Target::named("tests", "D:/x/web/tests".to_owned()),
+                Target::named("backend", "D:/x/api".to_owned())]), options.dirs);
+
+        // and a trailing comma still continues the list over the line break
+        std::fs::write(&path, "===> dirs\ntests=D:/x/api/tests,\nD:/x/web/tests\n")?;
+        let (options, _) = parse_config_file(Some("dirs-block"), Some(dir.clone())).unwrap();
+        assert_eq!(Some(vec![Target::named("tests", "D:/x/api/tests".to_owned()),
+                Target::named("tests", "D:/x/web/tests".to_owned())]), options.dirs);
+
+        std::fs::write(&path, "===> dirs\nfrontend=\n")?;
+        let (options, issues) = parse_config_file(Some("dirs-block"), Some(dir)).unwrap();
+        assert_eq!(vec![config_manager::DIRS], issues.invalid_fields);
+        assert_eq!(None, options.dirs);
 
         std::fs::remove_file(&path)
     }
@@ -1143,9 +1241,9 @@ pl      Perl, Prolog
         let (options, issues) = io_handler::parse_config_file(Some("warncfg"), Some(dir_str)).unwrap();
         assert!(issues.invalid_fields.is_empty());
         assert_eq!(3, issues.warnings.len());
-        assert!(issues.warnings[0].contains("mpampis"));
-        assert!(issues.warnings[1].contains("labell"));
-        assert!(issues.warnings[2].contains("heading"));
+        assert!(issues.warnings[0].1.contains("mpampis"));
+        assert!(issues.warnings[1].1.contains("labell"));
+        assert!(issues.warnings[2].1.contains("heading"));
 
         assert_eq!(Some(vec![("code-number".to_owned(), "green".to_owned()), ("arrow".to_owned(), "dim".to_owned())]), options.config_styles);
         assert_eq!(Some(config_manager::SortCriterion::Name), options.sort_by);

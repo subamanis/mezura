@@ -63,6 +63,7 @@ The generated stats are the following:
 - Size (total and average) 
 - Keyword occurrences
 - Percentage comparisons between languages
+- The same figures grouped by a named part of the project, if you name one (see the modules section of ```--dirs```)
 - Difference of stats between executions 
 
 By default, the files and folders that are ignored by a .gitignore are skipped, so that build artifacts and dependencies don't pollute the stats (see the ```--no-gitignore``` command).
@@ -95,13 +96,37 @@ WHAT IS COUNTED
     A path can also be a glob pattern (* ? [..] {..}), which is expanded to every existing
     directory and file that it matches, so 'services/*/src' is a valid target.
     Since the matches of a pattern are found by the program and not named by you, they follow
-    the same rules as every other path it discovers: the ones that a .gitignore ignores, or that
-    are dotted, are skipped (see the '--no-gitignore' and '--search-in-dotted' commands).
-    A path that you write out explicitly is always used, even if it is ignored or dotted.
+    the same rules as every other path it discovers: the ones that a .gitignore ignores, that
+    are dotted, or that are links, are skipped (see the '--no-gitignore' and '--search-in-dotted'
+    commands).
+    A path that you write out explicitly is always used, even if it is ignored, dotted or a link.
     Targets that are contained in other targets are dropped, so that no file is counted twice.
     If you are using Windows Powershell, you will need to escape the commas with a backtick: `
     or surround all the arguments with quotation marks:
     <path1>`, <path2>`, <path3>   or   "<path1>, <path2>, <path3>"
+
+    MODULES
+
+    A target can be given a name, and then the report is grouped by it as well as by language,
+    which answers 'how much of this is the frontend' without running the program once per folder:
+
+        mezura frontend=./web backend=./api
+        mezura ./project tests=./project/tests
+
+    A comma continues the list of paths of the same module and a space ends it, so
+    'tests=./api/tests,./web/tests' is one module of two directories, while 'frontend=./web ./ui'
+    is the module and a separate unnamed target. Repeating a name adds to it.
+    Every file belongs to exactly one module, and the most specific path wins, so the second
+    example above means 'the tests there, the rest of the project here', whichever order they are
+    written in. Anything the named ones did not claim is one row called '(unnamed)'.
+    Declaring the same path under two different names is refused, since there is nothing more
+    specific to settle it. A run that names nothing prints exactly what it always did.
+
+    A space only ends a target once you have named one. While no name is given, a path is allowed
+    to contain spaces and only a comma separates two of them, which is the way it has always been.
+    That does leave one thing a command line cannot say, a path with a space in it in a run that
+    also names modules, because your shell removes the quotation marks before the program sees
+    them. Write those in a configuration file, one target per line, where a space never separates.
 
     The target directories can also be given implicitly (in which case this command is not needed) with 2 ways:
     1) as the first arguments of the program directly
@@ -201,7 +226,7 @@ HOW THE REPORT LOOKS
 
 --layout
 
-    One argument: 'table', 'boxed' or 'list'. Default: table
+    One argument: 'table', 'boxed', 'list' or 'matrix'. Default: table
 
     Chooses the shape of the "details" section.
 
@@ -215,6 +240,14 @@ HOW THE REPORT LOOKS
       list      one block of three rows per language: the file count and the size above the
                 name, the line breakdown beside it, the keywords below. Wider, and it cannot
                 be read down a column, but it reads well for a handful of languages.
+      matrix    languages down, modules across, one number per cell. The other three answer
+                'what is inside the backend', read down a section; this one answers 'how do
+                the modules compare on the same language', read along a row, which is what
+                you want when the folders you named are several answers to one problem rather
+                than several parts of one thing. Only one number fits in a cell, so it holds
+                whatever '--sort' is ordering by, and a line above the table says which.
+                A dash is a language the module does not have. With no module named there is
+                nothing to cross, so it says so and prints 'table' instead.
 
     The percentage next to 'Files' and to 'Lines' is that language's share of the total, the
     one next to 'Code' and to 'Comments' is its share of that language's own lines, which is
@@ -247,6 +280,10 @@ HOW THE REPORT LOOKS
     The total keeps counting every language, hidden ones included, since it is the total.
     The "overview" section never shows more languages than this either, so asking for the top 2
     does not leave a third one sitting in the bar.
+
+    With modules, the cut happens inside each one, since that is what the rows under a module are.
+    The 'matrix' layout is the exception: its rows are the languages of the whole run, so there the
+    cut is over all of them.
 
 --hide
 
@@ -448,8 +485,15 @@ TAKING THE RESULT ELSEWHERE
     name, since it is either not counted or not measured; the rest of the '--hide' list names
     printed sections that a JSON run does not have.
 
-    Warnings and errors are written to the error output, so they never end up inside the
-    document. A run that finds nothing to count still writes a valid one, with an empty list of
+    Warnings and errors are written to the error output, so no stray line can land inside the
+    document, and the warnings are carried in it as well, under 'warnings'. Each one has a
+    'code' that is safe to branch on and will not change wording under you, an 'affects' of
+    'counts' or 'settings', the 'subject' it is about, and the readable 'message'. Ask whether
+    any of them affects the counts to know whether the numbers can be trusted: a language file
+    that could not be read means a whole language went uncounted, while an ignored setting does
+    not touch a number. The list is there even when it is empty.
+
+    A run that finds nothing to count still writes a valid document, with an empty list of
     languages and a total of zero.
 
     This is the one display setting that a configuration file cannot carry, so that no saved
@@ -617,6 +661,17 @@ produced with a different `--exclude` or with `--braces-as-code`. `format` is th
 document itself, separate from `mezura_version`, and it only moves when a key is removed or changes
 meaning, so a parser can check that one and ignore which build wrote the file.
 
+`warnings` carries what the run said on the error output, which whoever reads the document never
+sees. Each entry has a `code` that is safe to branch on, a `message` that is safe to show and free to
+be reworded, the `subject` it is about, and an `affects` of `counts` or `settings`. That last one is
+the useful question: an unreadable language file means a whole language went uncounted, while a
+setting that was ignored leaves every number intact, and a consumer can gate on it without keeping a
+list of every code that exists.
+
+```
+mezura ./src --output json | jq -e '[.warnings[] | select(.affects == "counts")] | length == 0'
+```
+
 **Exit codes.** 0 means mezura ran and told you what it found, including when it found nothing,
 because zero is an answer. 1 means it did not run: a mistake in what was asked for, a name that does
 not exist, or a set of files where every one of them failed to be parsed.
@@ -647,6 +702,8 @@ comment lines, extra lines, size and average size of the execution. They are in 
 
 Entries written before v3.0.0 have no comment count, and their "Extra" included the comments. Such an entry is recognised and its extra lines are printed without a comparison, instead of reporting a drop that never happened. <br>
 
+A run that names its targets writes a "Modules" block under the totals of its entry, and the progress section then carries one narrow line per module: which of them grew, and by how much. A module that was not there last time, or that is not there any more, is named as such instead of being compared against nothing. An entry written by a run that named none has no such block, and is read exactly as it always was. <br>
+
 By using the '--compare <N>' flag, the (N) previous logged executions will be retrieved from the file and will be compared and printed to the screen. For example
 for N = 3, it would look like this:
 ![](screenshots/compare-logs.PNG)
@@ -656,7 +713,7 @@ Note that a configuration file must be loaded for both '--log' and '--compare' t
 
 
 ## Themes
-Everything the program prints can be styled: 45 tokens, each taking a color plus any of bold, italic, underline, dim and reverse. A color is either a hex value or one of the 16 standard terminal color names, which follow the color scheme of your terminal. Run ```--help style``` for the full list of tokens.
+Everything the program prints can be styled: 46 tokens, each taking a color plus any of bold, italic, underline, dim and reverse. A color is either a hex value or one of the 16 standard terminal color names, which follow the color scheme of your terminal. Run ```--help style``` for the full list of tokens.
 
 A **theme** is a plain .txt file of ```token = value``` lines, in the "data/themes" dir of the persistent data path. It carries only how the output looks, never what is measured, so it can be shared as it is. Apply one with ```--theme <name>```, list the ones you have with ```--show-themes```, and write the current look into a new one with ```--save-theme <name>```.
 
@@ -727,7 +784,7 @@ With that said, it is important to mention the following limitations:
 
 - The program cannot understand language specific syntax or details, this would require a handwritten, complex, language-specific parser for most different languages. For example, in a .php file that contains html or js, the distinction will not be made. Also, the keyword counting doesn't take any measures to ensure that a valid keyword has the user-intended meaning. For example, the word "class" may appear in the syntax of a programming language with an additional use than declaring a class. This may lead to some false positives.
 
-- If a target path contains another target path, the contained one is dropped, so that its files are not counted twice. The program does not detect duplicates in any other case though: if a directory that is being scanned contains a symbolic link (or a Windows junction) that points to another directory, the files of that directory are counted a second time through the link, and the same is true for hard links to the same file.
+- If a target path contains another target path, the contained one is dropped, so that its files are not counted twice. A symbolic link (or a Windows junction) that the scan comes across is not followed, for the same reason: whatever it points at would be counted a second time through it. The same goes for one that a glob pattern matched, since those are found by the program rather than named by you. One that you name as a target yourself is followed, since that is what you asked for. Hard links are the case that stays: they are indistinguishable from an ordinary file, so the same content reached through two of them is counted twice.
 
 - Glob patterns (* ? [..] {..}) are supported both by the target paths (```--dirs```) and by the ```--exclude``` command, but full regular expressions are not supported anywhere.
 

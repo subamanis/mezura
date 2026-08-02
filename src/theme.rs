@@ -226,6 +226,9 @@ theme_tokens! {
     // things that happened to share a token, the same way the size header and the unit did
     details_language_header => "details-language-header", Style::of(LABEL_GOLD).italic();
     details_language_name   => "details-language-name",   Style::plain().bold();
+    // The name of a module, wherever one is printed: the row that opens its section in the details,
+    // its heading in the keywords, and its line in the progress section
+    details_module    => "details-module",    Style::of(LABEL_GOLD).bold();
     details_total     => "details-total",     Style::plain().bold();
     overview_label    => "overview-label",    Style::plain();
     overview_percent  => "overview-percent",  Style::plain();

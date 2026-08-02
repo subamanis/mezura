@@ -59,19 +59,20 @@ fn collect_stats() -> String {
 
     let language_map = Arc::new(io_handler::parse_supported_languages_to_map(&LOCAL_APP_PATHS.languages_dir).unwrap().0);
     let extension_lang_map: ExtensionLangMap = Arc::new(make_extension_language_map(&language_map, &HashMap::new(), &HashMap::new()).0);
-    let content_info_ref: ContentInfoMapMut = Arc::new(Mutex::new(make_language_stats(language_map.clone())));
-    let metadata_ref = Arc::new(Mutex::new(make_language_metadata(&language_map)));
+    let modules = Arc::new(Modules::of(&config.dirs));
+    let content_info_ref: ContentInfoMapMut = Arc::new(Mutex::new(make_language_stats(language_map.clone(), modules.count())));
+    let metadata_ref = Arc::new(Mutex::new(make_language_metadata(&language_map, modules.count())));
     let faulty_files_ref: FaultyFilesListMut = Arc::new(Mutex::new(Vec::new()));
     let finish_condition_ref = Arc::new(AtomicBool::new(false));
     let files_injector = Arc::new(Injector::new());
     let dirs_injector = Arc::new(Injector::new());
 
     let mut files_present = FilesPresent::default();
-    calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector, &mut files_present, &extension_lang_map);
+    calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector, &mut files_present, &extension_lang_map, &modules);
 
     let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs).unwrap());
     let (_, relevant_files, _) = producer::search_for_files(0, files_injector.clone(), dirs_injector, Worker::new_fifo(),
-            Arc::new(AtomicUsize::new(0)), extension_lang_map, exclude_matcher, config.clone());
+            Arc::new(AtomicUsize::new(0)), extension_lang_map, exclude_matcher, config.clone(), modules);
     assert!(relevant_files > 0, "the fixture corpus produced no relevant files");
 
     finish_condition_ref.store(true, Ordering::Relaxed);
@@ -91,9 +92,9 @@ fn collect_stats() -> String {
     drop(faulty_files);
 
     let mut content_info_guard = content_info_ref.lock();
-    let content_info = content_info_guard.as_deref_mut().unwrap();
+    let content_info = &mut content_info_guard.as_deref_mut().unwrap()[0];
     let mut metadata_guard = metadata_ref.lock();
-    let metadata = metadata_guard.as_deref_mut().unwrap();
+    let metadata = &mut metadata_guard.as_deref_mut().unwrap()[0];
     remove_languages_with_0_files(content_info, metadata);
 
     render_report(content_info, metadata)

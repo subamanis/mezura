@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 
 use crate::*;
-use crate::config_manager::{DecimalSeparator, NumberSeparator};
+use crate::config_manager::{DecimalSeparator, NumberSeparator, Target};
 
 
 #[macro_export]
@@ -66,12 +66,122 @@ pub fn forced_languages_to_string(forced: &HashMap<String,String>) -> String {
 }
 
 pub fn parse_paths_to_vec(s: &str) -> Vec<String> {
-    s.split(',')
-    .filter_map(|x| {
-        let cleansed = &x.trim().replace("\\", "/");
-        get_trimmed_if_not_empty(cleansed.strip_prefix('"').unwrap_or(cleansed).strip_suffix('"').unwrap_or(cleansed))
-    })
-    .collect::<Vec<_>>()
+    s.split(',').filter_map(cleaned_path).collect::<Vec<_>>()
+}
+
+fn cleaned_path(piece: &str) -> Option<String> {
+    let cleansed = &piece.trim().replace("\\", "/");
+    get_trimmed_if_not_empty(cleansed.strip_prefix('"').unwrap_or(cleansed).strip_suffix('"').unwrap_or(cleansed))
+}
+
+// 'frontend=./web'. The name is whatever comes before the first '=', and only when it could not be
+// part of a path itself: an '=' is a legal character in a file name on Linux, so anything that looks
+// like a path or a glob pattern is left alone and read as one.
+fn split_off_module_name(piece: &str) -> Option<(&str, &str)> {
+    let (name, path) = piece.split_once('=')?;
+    let name = name.trim();
+    if name.is_empty() || name.contains(['/', '\\', '.', '*', '?', '[', ']', '{', '}']) {
+        return None;
+    }
+
+    Some((name, path))
+}
+
+// One target ends and the next begins at a separator, while a comma continues the list of paths that
+// belong to the same one. A comma with a gap around it is still a comma, which is why that gap does
+// not separate: '--dirs ./a, ./b' has always meant two targets and still does, and 'tests=./a, ./b'
+// keeps both paths under 'tests' instead of losing the second one to nobody.
+// What the separator is depends on where the text came from, and that is the whole point: the caller
+// knows where one target provably ends, and this has no business guessing.
+fn split_targets(s: &str, is_separator: impl Fn(char) -> bool) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut gap = false;
+
+    for character in s.chars() {
+        if character == '"' {
+            in_quotes = !in_quotes;
+        } else if !in_quotes && is_separator(character) {
+            gap = !current.is_empty();
+            continue;
+        }
+
+        if gap {
+            gap = false;
+            if character != ',' && !current.ends_with(',') {
+                tokens.push(std::mem::take(&mut current));
+            }
+        }
+        current.push(character);
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+
+    tokens
+}
+
+// The declared targets, each with the module it was named under. A name holds for the rest of the
+// comma list it opened, so 'frontend=./web,./ui' is one module of two directories, and it stops
+// where that list ends, so nothing written after a named target joins it by accident. Inside the
+// list a name still starts a new one, which is what lets a saved configuration write the whole
+// thing back as 'frontend=./web,backend=./api' and read it as the two targets it was.
+// The error is the piece that could not be read, which is always a name with nothing after it.
+fn targets_of(tokens: Vec<String>) -> Result<Vec<(Option<String>, String)>, String> {
+    let mut targets = Vec::new();
+    for token in tokens {
+        let mut module: Option<String> = None;
+        for piece in token.split(',') {
+            let piece = piece.trim();
+            if piece.is_empty() {
+                continue;
+            }
+
+            let path = match split_off_module_name(piece) {
+                Some((name, path)) => {
+                    module = Some(name.to_owned());
+                    path
+                },
+                None => piece
+            };
+
+            match cleaned_path(path) {
+                Some(path) => targets.push((module.clone(), path)),
+                None => return Err(piece.to_owned())
+            }
+        }
+    }
+
+    Ok(targets)
+}
+
+// A command line, where a space separates one target from the next only once a module is named.
+//
+// It cannot separate them unconditionally, because by the time the arguments reach here the shell
+// has already split them and eaten the quotes, so a space inside one path and the space between two
+// paths look exactly alike and no amount of quoting by the user can tell them apart. Making it
+// conditional is the same rule the rest of the feature follows: name nothing and the grammar is
+// the one that was always there, commas and nothing else, so a path with a space in it keeps
+// working for everyone who never asked for a second axis.
+pub fn parse_targets(s: &str) -> Result<Vec<(Option<String>, String)>, String> {
+    let separated = split_targets(s, char::is_whitespace);
+    let declares_a_module = separated.iter().flat_map(|token| token.split(','))
+            .any(|piece| split_off_module_name(piece.trim()).is_some());
+
+    if declares_a_module {
+        targets_of(separated)
+    } else {
+        targets_of(vec![s.to_owned()])
+    }
+}
+
+// The '===> dirs' block of a configuration file, where the line is what separates one target from
+// the next. A space never does, so a path with one in it needs no quoting here, which is also the
+// way out for the one thing a command line cannot express: a spaced path in a run that names
+// modules. A trailing comma still continues the list onto the next line.
+pub fn parse_targets_in_block(block: &str) -> Result<Vec<(Option<String>, String)>, String> {
+    targets_of(split_targets(block, |character| character == '\n'))
 }
 
 pub fn parse_usize_value(s: &str, min: usize, max: usize) -> Option<usize> {
@@ -132,21 +242,37 @@ fn is_ancestor_of(ancestor: &str, path: &str) -> bool {
             && path.as_bytes()[ancestor.len()] == b'/'
 }
 
-// Targets that are contained in other targets would have their files counted twice,
-// so only the topmost of every overlapping group is kept.
-pub fn remove_overlapping_paths(paths: Vec<String>) -> Vec<String> {
-    let mut sorted = paths.into_iter().map(|x| (path_comparison_key(&x), x)).collect::<Vec<_>>();
-    sorted.sort();
+// Sorted by path and with the duplicates gone, so that the nearest enclosing target of any entry is
+// the last one kept before it. 'covered' decides what "enclosing" is allowed to remove.
+fn keep_topmost(targets: Vec<Target>, covered: impl Fn(&Target, &Target) -> bool) -> Vec<Target> {
+    let mut sorted = targets.into_iter().map(|x| (path_comparison_key(&x.path), x)).collect::<Vec<_>>();
+    sorted.sort_by(|a, b| a.0.cmp(&b.0));
     sorted.dedup_by(|a, b| a.0 == b.0);
 
-    let mut kept : Vec<(String,String)> = Vec::with_capacity(sorted.len());
-    for (key, path) in sorted {
-        if !kept.iter().any(|(kept_key,_)| is_ancestor_of(kept_key, &key)) {
-            kept.push((key, path));
+    let mut kept : Vec<(String,Target)> = Vec::with_capacity(sorted.len());
+    for (key, target) in sorted {
+        let enclosing = kept.iter().rev().find(|(kept_key,_)| is_ancestor_of(kept_key, &key));
+        if !enclosing.is_some_and(|(_, enclosing)| covered(enclosing, &target)) {
+            kept.push((key, target));
         }
     }
 
-    kept.into_iter().map(|(_,path)| path).collect()
+    kept.into_iter().map(|(_,target)| target).collect()
+}
+
+// Targets that are contained in other targets would have their files counted twice, so only the
+// topmost of every overlapping group is kept. A nested one that names a different module is not a
+// repetition of its parent, it is the boundary that takes those files away from it, so it stays:
+// dropping it is what would quietly count the tests of 'backend=./api tests=./api/tests' as backend.
+pub fn remove_overlapping_targets(targets: Vec<Target>) -> Vec<Target> {
+    keep_topmost(targets, |enclosing, target| enclosing.module == target.module)
+}
+
+// The directories the traversal starts from, which is the same list with the nesting gone whatever
+// the names are. A nested target is never walked on its own: the walk of the one that contains it
+// reaches those files anyway, and the module they belong to is decided on the way down.
+pub fn topmost_targets(targets: &[Target]) -> Vec<Target> {
+    keep_topmost(targets.to_vec(), |_, _| true)
 }
 
 pub fn parse_single_color(token: &str) -> Option<Color> {
@@ -325,6 +451,56 @@ mod Tests{
         assert_eq!(vec!["a".to_owned(),"b/b".to_owned()], parse_paths_to_vec(" a  ,  b\\b "));
     }
 
+    fn targets(s: &str) -> Vec<(Option<String>, String)> {
+        parse_targets(s).unwrap()
+    }
+
+    // The one rule the command line has to live by: a space becomes a separator only once a module
+    // is named. It cannot do so unconditionally, because the shell has already split the arguments
+    // and removed the quotes by the time they arrive, so a space inside one path and a space
+    // between two paths are the same character with no way left to tell them apart.
+    #[test]
+    pub fn a_space_separates_targets_only_once_one_of_them_is_named() {
+        let named = |name: &str, path: &str| (Some(name.to_owned()), path.to_owned());
+        let plain = |path: &str| (None, path.to_owned());
+
+        // Nothing named: a space is part of the path, exactly as it was before modules existed
+        assert_eq!(vec![plain("C:/Users/John Smith/proj")], targets("C:/Users/John Smith/proj"));
+        assert_eq!(vec![plain("a/a"), plain("b/b")], targets("a\\a, b\\b"));
+        assert_eq!(vec![plain("./src ./tests")], targets("./src ./tests"));
+
+        // One name and the space is what ends a target
+        assert_eq!(vec![named("frontend", "./web"), named("backend", "./api")],
+                targets("frontend=./web backend=./api"));
+        assert_eq!(vec![plain("./project"), named("tests", "./project/tests")],
+                targets("./project tests=./project/tests"));
+        // and the order it is written in does not matter
+        assert_eq!(vec![named("tests", "./project/tests"), plain("./project")],
+                targets("tests=./project/tests ./project"));
+        // A name holds across commas and a new one ends it
+        assert_eq!(vec![named("f", "./web"), named("f", "./ui"), named("b", "./api")],
+                targets("f=./web,./ui b=./api"));
+    }
+
+    // The way out of the one thing a command line cannot say: a spaced path in a run that also names
+    // modules. In a file the line is the separator, so a space is never one.
+    #[test]
+    pub fn a_line_is_what_ends_a_target_in_a_configuration_block() {
+        let parsed = |s: &str| parse_targets_in_block(s).unwrap();
+        assert_eq!(vec![(Some("frontend".to_owned()), "C:/my path/web".to_owned()),
+                        (Some("backend".to_owned()), "C:/my path/api".to_owned())],
+                parsed("frontend=C:/my path/web\nbackend=C:/my path/api"));
+
+        // Everything an earlier version could have written, on the one line it wrote it on
+        assert_eq!(vec![(None, "C:/Users/John Smith/proj".to_owned()), (None, "D:/other".to_owned())],
+                parsed("C:/Users/John Smith/proj,D:/other"));
+
+        // and a trailing comma continues the list onto the next line
+        assert_eq!(vec![(Some("tests".to_owned()), "./api/tests".to_owned()),
+                        (Some("tests".to_owned()), "./web/tests".to_owned())],
+                parsed("tests=./api/tests,\n./web/tests"));
+    }
+
     #[test]
     pub fn test_parse_usize_values() {
         assert_eq!(None,parse_usize_value("0", 1, 8));
@@ -355,7 +531,20 @@ mod target_path_tests {
     use super::*;
 
     fn dedupe(paths: &[&str]) -> Vec<String> {
-        remove_overlapping_paths(paths.iter().map(|x| x.to_string()).collect())
+        kept_paths(remove_overlapping_targets(paths.iter().map(|x| Target::of((*x).to_owned())).collect()))
+    }
+
+    // 'name path' declares the module, a bare path declares none
+    fn dedupe_named(entries: &[&str]) -> Vec<String> {
+        let targets = entries.iter().map(|entry| match entry.split_once(' ') {
+            Some((name, path)) => Target::named(name, path.to_owned()),
+            None => Target::of((*entry).to_owned())
+        }).collect();
+        kept_paths(remove_overlapping_targets(targets))
+    }
+
+    fn kept_paths(targets: Vec<Target>) -> Vec<String> {
+        targets.into_iter().map(|x| x.to_string()).collect()
     }
 
     #[test]
@@ -415,6 +604,33 @@ mod target_path_tests {
         } else {
             assert_eq!(vec!["D:/Dev", "D:/dev/sub"], result);
         }
+    }
+
+    // Dropping the nested one is what would quietly count the tests as backend, which is the exact
+    // opposite of what was asked for
+    #[test]
+    fn a_nested_target_survives_the_pruning_when_it_names_another_module() {
+        assert_eq!(vec!["backend=D:/api", "tests=D:/api/tests"],
+                dedupe_named(&["backend D:/api", "tests D:/api/tests"]));
+        assert_eq!(vec!["D:/api", "tests=D:/api/tests"], dedupe_named(&["D:/api", "tests D:/api/tests"]));
+
+        // and it is dropped when it would have been counted the same way anyway
+        assert_eq!(vec!["tests=D:/api"], dedupe_named(&["tests D:/api", "tests D:/api/deep"]));
+    }
+
+    // The nearest enclosing target decides, not the outermost one: below a boundary that changed the
+    // module, a target that changes it back is a boundary of its own and has to stay
+    #[test]
+    fn a_target_that_reverts_the_module_of_the_one_above_it_is_kept() {
+        assert_eq!(vec!["D:/a", "tests=D:/a/b", "D:/a/b/c"],
+                dedupe_named(&["D:/a", "tests D:/a/b", "D:/a/b/c"]));
+    }
+
+    #[test]
+    fn the_roots_of_the_traversal_never_contain_one_another() {
+        let targets = vec![Target::named("backend", "D:/api".to_owned()),
+                Target::named("tests", "D:/api/tests".to_owned())];
+        assert_eq!(vec!["backend=D:/api"], kept_paths(topmost_targets(&targets)));
     }
 }
 
