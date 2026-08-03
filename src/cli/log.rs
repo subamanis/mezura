@@ -37,9 +37,9 @@ pub fn counting_settings(config: &mezura::engine::config::EngineConfig) -> [(&'s
     // because that order is the user's own arrangement of the columns, but reordering them changes
     // no number, and this list exists to say whether two runs counted the same thing.
     let mut targets = dirs.clone();
-    targets.sort_by_key(|x| mezura::engine::targets::path_comparison_key(&x.to_string()));
+    targets.sort();
 
-    [(config_manager::DIRS, mezura::engine::config::targets_to_string(&targets)),
+    [(config_manager::DIRS, config_manager::targets_to_string(&targets)),
      (config_manager::EXCLUDE, exclude_dirs.join(",")),
      (config_manager::LANGUAGES, languages_of_interest.join(",")),
      (config_manager::EXCLUDE_LANGUAGES, excluded_languages.join(",")),

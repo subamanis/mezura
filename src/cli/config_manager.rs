@@ -4,8 +4,8 @@ use colored::{ColoredString, Colorize};
 
 use super::formatted::Formatted;
 use super::{message_printer, suggestions, theme::Theme};
-use mezura::engine::config::{DEF_BRACES_AS_CODE, DEF_NO_GITIGNORE, DEF_SEARCH_IN_DOTTED, EngineConfig,
-        MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE, Target, Threads};
+use mezura::{EngineConfig, Target, Threads};
+use mezura::engine::config::{MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE};
 #[cfg(test)]
 use colored::Color;
 
@@ -398,6 +398,32 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
     Ok(config)
 }
 
+// The form that reads back as this exact target, which is the syntax 'parse_dirs' below accepts. The
+// quotes go around the path and not around the whole thing, because the name is taken from before the
+// first '=' and a leading quote would end up inside it.
+pub fn declared_form(target: &Target) -> String {
+    let path = if target.path.contains(char::is_whitespace) {format!("\"{}\"", target.path)} else {target.path.clone()};
+    match &target.module {
+        Some(name) => format!("{name}={path}"),
+        None => path
+    }
+}
+
+// Targets on one line, for the log entry that decides whether two runs are comparable.
+//
+// The separator is a comma while nothing is named, which is the only thing this ever wrote and what
+// keeps a run after an upgrade from reporting 'modified: dirs' over a difference in punctuation. The
+// moment a module exists it has to be whitespace: inside a comma list a name carries on to the paths
+// after it, so 'frontend=./web,./ui' is one module of two directories, and an unnamed target written
+// after a named one with a comma between them would be read back as part of it.
+pub fn targets_to_string(targets: &[Target]) -> String {
+    if targets.iter().all(|x| x.module.is_none()) {
+        targets.iter().map(|x| x.path.clone()).collect::<Vec<_>>().join(",")
+    } else {
+        targets.iter().map(declared_form).collect::<Vec<_>>().join(" ")
+    }
+}
+
 pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilder, ArgParsingError> {
     let mut dirs = None;
     let mut options = line.split("--");
@@ -449,7 +475,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             }
         } else if command_name == EXCLUDE {
             let vec = super::args::parse_paths_to_vec(arguments);
-            if vec.is_empty() || mezura::engine::targets::build_exclude_matcher(&vec).is_err() {
+            if vec.is_empty() || mezura::engine::targets::validate_exclude_patterns(&vec).is_err() {
                 message_printer::print_help_message_for_command(EXCLUDE);
                 return Err(ArgParsingError::IncorrectCommandArgs(EXCLUDE.to_owned()));
             }
@@ -930,6 +956,10 @@ impl ConfigurationBuilder {
     // list, matching the command line and the configuration file.
     pub fn build(&self) -> Configuration {
         let hidden = self.hidden.unwrap_or_default();
+        // Asked of the engine rather than read from constants of its own, so the help text and the
+        // behaviour cannot answer differently. The literal below stays exhaustive on purpose: a new
+        // field of EngineConfig has to be decided here and not inherited silently.
+        let engine_defaults = EngineConfig::default();
 
         Configuration {
             engine: EngineConfig {
@@ -939,9 +969,9 @@ impl ConfigurationBuilder {
                 excluded_languages: (self.excluded_languages).clone().unwrap_or_default(),
                 forced_languages: (self.forced_languages).clone().unwrap_or_default(),
                 threads: self.threads.clone().unwrap_or_default(),
-                braces_as_code: self.braces_as_code.unwrap_or(DEF_BRACES_AS_CODE),
-                should_search_in_dotted: self.should_search_in_dotted.unwrap_or(DEF_SEARCH_IN_DOTTED),
-                no_gitignore: self.no_gitignore.unwrap_or(DEF_NO_GITIGNORE),
+                braces_as_code: self.braces_as_code.unwrap_or(engine_defaults.braces_as_code),
+                should_search_in_dotted: self.should_search_in_dotted.unwrap_or(engine_defaults.should_search_in_dotted),
+                no_gitignore: self.no_gitignore.unwrap_or(engine_defaults.no_gitignore),
                 // The one flag that answers both questions
                 count_keywords: !hidden.keywords
             },
@@ -1485,11 +1515,11 @@ mod tests {
     fn force_lang_takes_pairs_of_an_extension_and_a_language_and_refuses_anything_else() {
         let forced = |args: &str| create_config_from_args(&format!("./ --force-lang {args}")).map(|x| x.engine.forced_languages);
 
-        assert_eq!(Ok(mezura::hashmap!("m".to_owned() => "matlab".to_owned())), forced("m=matlab"));
+        assert_eq!(Ok(hashmap!("m".to_owned() => "matlab".to_owned())), forced("m=matlab"));
         // A leading dot is accepted the way '--languages' accepts it, and the extension is lowercased
         // here so that it is keyed the same way the lookup will ask for it. The language name is kept
         // as it was typed, and compared without case later.
-        assert_eq!(Ok(mezura::hashmap!("m".to_owned() => "MATLAB".to_owned(), "pl".to_owned() => "perl".to_owned())),
+        assert_eq!(Ok(hashmap!("m".to_owned() => "MATLAB".to_owned(), "pl".to_owned() => "perl".to_owned())),
                 forced(".M=MATLAB, pl = perl"));
 
         for wrong in ["", "matlab", "m=", "=matlab", "m=matlab,perl"] {
@@ -1521,7 +1551,7 @@ mod tests {
         assert_eq!(BarThickness::Fat, rescued.view.bar_thickness);
         assert_eq!(NumberSeparator::Dot, rescued.view.number_separator);
         assert_eq!(DecimalSeparator::Comma, rescued.view.decimal_separator);
-        assert_eq!(mezura::hashmap!("m".to_owned() => "matlab".to_owned()), rescued.engine.forced_languages);
+        assert_eq!(hashmap!("m".to_owned() => "matlab".to_owned()), rescued.engine.forced_languages);
 
         std::fs::remove_file(test_file_path).unwrap();
     }

@@ -4,7 +4,10 @@ use colored::Colorize;
 
 use super::formatted::Formatted;
 use crate::paths::PERSISTENT_APP_PATHS;
-use mezura::{CHANGELOG_BYTES, Language};
+use mezura::Language;
+
+// The file itself, so that the command never depends on an installation having a copy of it.
+static CHANGELOG_BYTES : &[u8] = include_bytes!("../../Changelog");
 use super::config_manager::*;
 
 // These constants need to be maintained along with the readme's commands

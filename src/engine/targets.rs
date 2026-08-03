@@ -10,7 +10,7 @@ use crate::engine::config::Target;
 // The directories the traversal starts from, which is the same list with the nesting gone whatever
 // the names are. A nested target is never walked on its own: the walk of the one that contains it
 // reaches those files anyway, and the module they belong to is decided on the way down.
-pub fn topmost_targets(targets: &[Target]) -> Vec<Target> {
+pub(crate) fn topmost_targets(targets: &[Target]) -> Vec<Target> {
     keep_topmost(targets.to_vec(), |_, _| true)
 }
 
@@ -18,11 +18,19 @@ pub fn topmost_targets(targets: &[Target]) -> Vec<Target> {
 // topmost of every overlapping group is kept. A nested one that names a different module is not a
 // repetition of its parent, it is the boundary that takes those files away from it, so it stays:
 // dropping it is what would quietly count the tests of 'backend=./api tests=./api/tests' as backend.
-pub fn remove_overlapping_targets(targets: Vec<Target>) -> Vec<Target> {
+pub(crate) fn remove_overlapping_targets(targets: Vec<Target>) -> Vec<Target> {
     keep_topmost(targets, |enclosing, target| enclosing.module == target.module)
 }
 
-pub fn build_exclude_matcher(exclude_patterns: &[String]) -> Result<globset::GlobSet, globset::Error> {
+// Whether every pattern parses, which is all a caller can act on. The matcher itself stays inside,
+// because its type belongs to a dependency and putting it in the signature would make a release of
+// globset a breaking change of ours.
+pub fn validate_exclude_patterns(exclude_patterns: &[String]) -> Result<(), TargetError> {
+    build_exclude_matcher(exclude_patterns).map(|_| ())
+            .map_err(|x| TargetError::InvalidGlob(x.glob().unwrap_or("").to_owned()))
+}
+
+pub(crate) fn build_exclude_matcher(exclude_patterns: &[String]) -> Result<globset::GlobSet, globset::Error> {
     let mut builder = globset::GlobSetBuilder::new();
     for pattern in exclude_patterns {
         let normalized = pattern.trim().replace('\\', "/");
@@ -38,7 +46,7 @@ pub fn build_exclude_matcher(exclude_patterns: &[String]) -> Result<globset::Glo
 }
 
 // Paths are compared case-insensitively on Windows, where the file system is
-pub fn path_comparison_key(path: &str) -> String {
+pub(crate) fn path_comparison_key(path: &str) -> String {
     if cfg!(windows) {path.to_lowercase()} else {path.to_owned()}
 }
 
@@ -170,6 +178,8 @@ fn is_valid_path(s: &str) -> bool {
 }
 
 
+// The one way to produce the form 'Target.path' demands. The type says 'absolute and resolved, never
+// what was typed' and a caller building targets by hand has no other way to satisfy it.
 pub // The "canonicalize" function from the std that this function uses, (at least on window) seems to put the weird prefix
 // "\\?\" before the path and it also puts forward slashes that we want to convert for compatibility.
 fn convert_to_absolute(s: &str) -> String {

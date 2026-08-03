@@ -9,10 +9,14 @@ comment in that language's own syntax:
 // mezura-expect lines=22 code=10 structs=1 enums=1 traits=1
 ```
 
-`tests/language_fixtures.rs` walks this directory, resolves each file's language through the same
-extension mapping the program uses, parses it, and compares. The declared numbers are **hand-verified
-ground truth**, not captured output: a mismatch means either the parser regressed or the fixture is
-wrong, and both are worth stopping for.
+`language_fixtures_match_their_declared_counts`, **inline in `src/file_parser.rs`**, walks this
+directory, resolves each file's language through the same extension mapping the program uses, parses
+it, and compares. The declared numbers are **hand-verified ground truth**, not captured output: a
+mismatch means either the parser regressed or the fixture is wrong, and both are worth stopping for.
+
+It lives beside the parser rather than in `tests/` because it calls `parse_file` and `KeywordMatcher`
+directly, and every file under `tests/` is a separate crate that can only reach `pub` items. Run it
+with `cargo test --lib language_fixtures`.
 
 ### Adding a language
 
@@ -39,7 +43,7 @@ Worth covering per language: a full-line comment, a trailing comment, a blank li
 ## `stats.golden`
 
 The byte-for-byte record of what the whole `lang/` corpus produces, checked by
-`tests/stats_golden.rs`, which runs the real producer and several consumer threads over it.
+`tests/stats_golden.rs`, which calls `run` over it with one producer and four consumer threads.
 
 Regenerate after an intentional change and review the diff before committing it:
 

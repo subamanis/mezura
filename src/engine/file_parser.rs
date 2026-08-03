@@ -962,7 +962,9 @@ mod tests {
     use std::sync::{Arc, LazyLock};
 
     use super::*;
-    use crate::{LOCAL_APP_PATHS, Keyword, LanguageContentInfo, find_language_of_extension, make_extension_language_map};
+    use crate::{Keyword, LanguageContentInfo};
+    use crate::test_paths::LANGUAGES_DIR;
+    use crate::engine::extensions::{find_language_of_extension, make_extension_language_map};
 
     // The parser is handed its working memory by the consumer thread that owns it. A test cares
     // about one line at a time, so it gets a fresh one and reads the result out.
@@ -1127,7 +1129,7 @@ mod tests {
     });
 
     static LANGUAGE_MAP_REF : LazyLock<Arc<HashMap<String,Language>>> =
-            LazyLock::new(|| Arc::new(crate::languages::parse_supported_languages_to_map(&LOCAL_APP_PATHS.languages_dir).unwrap().0));
+            LazyLock::new(|| Arc::new(crate::language_file::parse_dir(LANGUAGES_DIR).unwrap().0));
 
     static JAVA_MATCHER : LazyLock<KeywordMatcher> = LazyLock::new(|| KeywordMatcher::build(&JAVA).unwrap());
 

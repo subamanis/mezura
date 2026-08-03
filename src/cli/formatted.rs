@@ -2,7 +2,7 @@
 // it describes. The library gives those a plain 'Display'; this is the same text with a style on it.
 use colored::{ColoredString, Colorize};
 
-use mezura::{ParseFilesError, languages::LanguageDirParseError};
+use mezura::{ParseFilesError, language_file::LanguageDirParseError};
 
 pub trait Formatted {
     fn formatted(&self) -> ColoredString;

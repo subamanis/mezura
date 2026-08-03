@@ -8,9 +8,9 @@ pub const MAX_PRODUCERS_VALUE : usize = 32;
 pub const MIN_PRODUCERS_VALUE : usize = 1;
 pub const MAX_CONSUMERS_VALUE : usize = 128;
 pub const MIN_CONSUMERS_VALUE : usize = 1;
-pub const DEF_BRACES_AS_CODE    : bool    = false;
-pub const DEF_SEARCH_IN_DOTTED  : bool    = false;
-pub const DEF_NO_GITIGNORE      : bool    = false;
+pub(crate) const DEF_BRACES_AS_CODE    : bool    = false;
+pub(crate) const DEF_SEARCH_IN_DOTTED  : bool    = false;
+pub(crate) const DEF_NO_GITIGNORE      : bool    = false;
 
 
 // A directory or file that was asked for, and the name it was asked for under. 'None' is a target
@@ -33,16 +33,21 @@ impl Target {
     pub fn named(module: &str, path: String) -> Self {
         Target { module: Some(module.to_owned()), path }
     }
+}
 
-    // The form that reads back as this exact target. The quotes go around the path and not around
-    // the whole thing, because the name is taken from before the first '=' and a leading quote
-    // would end up inside it.
-    pub fn declared_form(&self) -> String {
-        let path = if self.path.contains(char::is_whitespace) {format!("\"{}\"", self.path)} else {self.path.clone()};
-        match &self.module {
-            Some(name) => format!("{name}={path}"),
-            None => path
-        }
+// By path, case-insensitively where the file system is, which is the only comparison that answers
+// "are these two targets the same place" on every platform. A name never takes part: two spellings of
+// one path are one place whatever they were called.
+impl Ord for Target {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        crate::engine::targets::path_comparison_key(&self.path)
+                .cmp(&crate::engine::targets::path_comparison_key(&other.path))
+    }
+}
+
+impl PartialOrd for Target {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -187,20 +192,3 @@ impl EngineConfig {
         self
     }
 }
-
-// Targets on one line, for the log entry that decides whether two runs are comparable.
-//
-// The separator is a comma while nothing is named, which is the only thing this ever wrote and what
-// keeps a run after an upgrade from reporting 'modified: dirs' over a difference in punctuation. The
-// moment a module exists it has to be whitespace: inside a comma list a name carries on to the paths
-// after it, so 'frontend=./web,./ui' is one module of two directories, and an unnamed target written
-// after a named one with a comma between them would be read back as part of it.
-pub fn targets_to_string(targets: &[Target]) -> String {
-    if targets.iter().all(|x| x.module.is_none()) {
-        targets.iter().map(|x| x.path.clone()).collect::<Vec<_>>().join(",")
-    } else {
-        targets.iter().map(Target::declared_form).collect::<Vec<_>>().join(" ")
-    }
-}
-
-

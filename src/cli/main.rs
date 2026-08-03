@@ -2,6 +2,18 @@
 
 #![allow(non_snake_case)]
 
+// A binary publishes nothing, so this is a convenience and not a surface. The library's own copy is
+// gated behind cfg(test), because there every call site is a test and '#[macro_export]' was putting
+// it at the root of anyone who depends on us.
+macro_rules! hashmap {
+    ($( $key: expr => $val: expr ),*) => {{
+        #[allow(unused_mut)]
+        let mut map = ::std::collections::HashMap::new();
+        $( map.insert($key, $val); )*
+        map
+    }}
+}
+
 mod paths;
 mod present;
 mod formatted;
@@ -23,7 +35,9 @@ use std::{collections::HashMap, process::ExitCode, time::Instant};
 use colored::*;
 use include_dir::{File, include_dir};
 
-use mezura::*;
+use mezura::{EXTENSION_PRIORITY_FILE_NAME, FilesPresent, Language, ParseFilesError};
+use crate::paths::{CONFIG_DIR_NAME, DEFAULT_CONFIG_NAME, LANGUAGES_DIR_NAME, LOGS_DIR_NAME,
+        MANIFEST_FILE_NAME, REPLACED_DIR_NAME, THEMES_DIR_NAME};
 use crate::formatted::Formatted;
 use crate::config_manager::Configuration;
 use crate::config_manager::{CHANGELOG, HELP, LAYOUT, RESTORE, SHOW_CONFIGS,
@@ -54,7 +68,7 @@ fn main() -> ExitCode {
         // the same ones it just wrote, so nothing is lost by not re-reading them.
         language_map = read_baked_in_languages_dir();
     } else {
-        match mezura::languages::parse_supported_languages_to_map(&crate::paths::PERSISTENT_APP_PATHS.languages_dir) {
+        match mezura::language_file::parse_dir(&crate::paths::PERSISTENT_APP_PATHS.languages_dir) {
             Ok((_language_map, faulty_files)) => {
                 if !faulty_files.is_empty() {
                     let mut warn_msg = String::from("\nFormatting problems detected in language files: ");
@@ -253,7 +267,7 @@ fn read_baked_in_languages_dir() -> HashMap<String, Language> {
     for file in include_dir!("data/languages").files.iter() {
         // These are ours and every one of them parses, which the test suite is what actually
         // guarantees. A file that somehow did not would be left out rather than take the run down.
-        if let Some(language) = mezura::languages::parse_string_to_language(&String::from_utf8_lossy(file.contents)) {
+        if let Some(language) = mezura::language_file::parse_definition(&String::from_utf8_lossy(file.contents)) {
             lang_files.insert(language.name.to_owned(), language);
         }
     }
@@ -274,7 +288,7 @@ fn read_baked_in_extension_priority_contents() -> String {
 // their edits look like they had no effect. It is written by the same restore that writes everything
 // else, and until it is there every contested extension simply announces its tiebreak.
 fn read_extension_priority() -> (HashMap<String,Vec<String>>, Vec<String>) {
-    mezura::languages::parse_extension_priority_file(&(crate::paths::PERSISTENT_APP_PATHS.data_dir.clone() + EXTENSION_PRIORITY_FILE_NAME))
+    mezura::language_file::parse_priority_file(&(crate::paths::PERSISTENT_APP_PATHS.data_dir.clone() + EXTENSION_PRIORITY_FILE_NAME))
 }
 
 fn open_in_browser(path: &str) {
@@ -374,7 +388,7 @@ fn shipped_files() -> Vec<(String, &'static [u8])> {
 // that change a count, which is the only reason to take somebody's file away from them.
 fn means_the_same(on_disk: &[u8], shipped: &[u8]) -> bool {
     let (theirs, ours) = (String::from_utf8_lossy(on_disk), String::from_utf8_lossy(shipped));
-    match (mezura::languages::parse_string_to_language(&theirs), mezura::languages::parse_string_to_language(&ours)) {
+    match (mezura::language_file::parse_definition(&theirs), mezura::language_file::parse_definition(&ours)) {
         (Some(theirs), Some(ours)) => theirs == ours,
         // Ours always parses, so this is a file edited into something that no longer does, and
         // replacing it is a repair
@@ -617,7 +631,8 @@ fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Lan
 mod tests {
     use std::collections::HashMap;
 
-    use mezura::{LOCAL_APP_PATHS, Language};
+    use mezura::Language;
+    use crate::paths::test_paths::TEST_DIR;
 
     use crate::config_manager::VERSION_ID;
 
@@ -628,7 +643,7 @@ mod tests {
     // supposed to reach the user as a message.
     #[test]
     fn a_migration_replaces_what_was_changed_and_keeps_it_and_is_silent_about_the_rest() {
-        let dir = LOCAL_APP_PATHS.test_dir.clone() + "migration-test/";
+        let dir = TEST_DIR.to_owned() + "migration-test/";
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -685,7 +700,7 @@ mod tests {
     // answer they gave to a contested extension, which they would have to give again every release.
     #[test]
     fn the_two_files_that_exist_in_order_to_be_edited_are_never_replaced() {
-        let dir = LOCAL_APP_PATHS.test_dir.clone() + "migration-carve-out/";
+        let dir = TEST_DIR.to_owned() + "migration-carve-out/";
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         migrate_data_files(&dir, false).unwrap();
@@ -707,7 +722,7 @@ mod tests {
     // own by more than the fact that we do not ship it: only the manifest remembers writing it.
     #[test]
     fn a_file_we_no_longer_ship_is_moved_out_and_one_of_their_own_is_left_alone() {
-        let dir = LOCAL_APP_PATHS.test_dir.clone() + "migration-withdrawn/";
+        let dir = TEST_DIR.to_owned() + "migration-withdrawn/";
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         migrate_data_files(&dir, false).unwrap();
@@ -739,7 +754,7 @@ mod tests {
     // longer ship deleted every one of them.
     #[test]
     fn a_file_that_stopped_being_managed_is_not_a_file_that_stopped_being_shipped() {
-        let dir = LOCAL_APP_PATHS.test_dir.clone() + "migration-recategorised/";
+        let dir = TEST_DIR.to_owned() + "migration-recategorised/";
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         migrate_data_files(&dir, false).unwrap();
@@ -762,7 +777,7 @@ mod tests {
     // which is what keeps the mechanism self-healing.
     #[test]
     fn any_version_but_this_one_makes_the_pass_run_and_so_does_an_unreadable_manifest() {
-        let dir = LOCAL_APP_PATHS.test_dir.clone() + "migration-manifest/";
+        let dir = TEST_DIR.to_owned() + "migration-manifest/";
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         migrate_data_files(&dir, false).unwrap();
@@ -796,7 +811,7 @@ third
     }
 
     fn java_and_csharp() -> HashMap<String, Language> {
-        mezura::hashmap![
+        hashmap![
                 "Java".to_owned() => Language::new("Java".to_owned(),vec![],vec![],vec!["\"".to_owned()],None,None,vec![]),
                 "C#".to_owned() => Language::new("C#".to_owned(),vec![],vec![],vec!["\"".to_owned()],None,None,vec![])]
     }

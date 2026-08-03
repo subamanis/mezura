@@ -734,9 +734,9 @@ pub fn theme_sample_rows(theme: &Theme, layout: Layout) -> Vec<String> {
     const COMMENTS: usize  = 12_838;
     const BYTES   : usize  = 3_412_500;
 
-    let keywords = mezura::hashmap!("structs".to_owned() => 284usize, "traits".to_owned() => 31);
-    let content_info_map = mezura::hashmap!(NAME.to_owned() => LanguageContentInfo::new(LINES, CODE, COMMENTS, keywords.clone()));
-    let metadata_map = mezura::hashmap!(NAME.to_owned() => LanguageMetadata::new(FILES, BYTES));
+    let keywords = hashmap!("structs".to_owned() => 284usize, "traits".to_owned() => 31);
+    let content_info_map = hashmap!(NAME.to_owned() => LanguageContentInfo::new(LINES, CODE, COMMENTS, keywords.clone()));
+    let metadata_map = hashmap!(NAME.to_owned() => LanguageMetadata::new(FILES, BYTES));
     let final_stats = FinalStats::calculate(&content_info_map, &metadata_map);
     let groups = vec![Group {name: None, languages: vec![NAME.to_owned()], hidden: 0,
             content_info_map: &content_info_map, languages_metadata_map: &metadata_map, final_stats: &final_stats}];
@@ -1645,7 +1645,8 @@ mod tests {
 
     use std::path::Path;
 
-    use mezura::{FilesPresent, LOCAL_APP_PATHS, ModuleResult};
+    use mezura::{FilesPresent, ModuleResult};
+    use crate::paths::test_paths::{LOG_DIR, TEST_DIR};
     use crate::config_manager::LogOption;
     use super::super::log::log_stats;
 
@@ -1656,17 +1657,17 @@ mod tests {
     // keyword row long enough to wrap, a language with no keywords at all, and five languages, which
     // is one more than the overview can show without folding into "others".
     fn sample_data() -> (Vec<String>, HashMap<String, LanguageContentInfo>, HashMap<String, LanguageMetadata>, FinalStats) {
-        let content_info_map = mezura::hashmap![
+        let content_info_map = hashmap![
             "Rust".to_owned() => LanguageContentInfo::new(9008, 6122, 505,
-                    mezura::hashmap!["enums".to_owned() => 11, "structs".to_owned() => 29, "traits".to_owned() => 1]),
+                    hashmap!["enums".to_owned() => 11, "structs".to_owned() => 29, "traits".to_owned() => 1]),
             "JavaScript".to_owned() => LanguageContentInfo::new(1200, 900, 120,
-                    mezura::hashmap!["classes".to_owned() => 805, "functions".to_owned() => 1204, "generators".to_owned() => 17,
+                    hashmap!["classes".to_owned() => 805, "functions".to_owned() => 1204, "generators".to_owned() => 17,
                              "promises".to_owned() => 96, "imports".to_owned() => 342]),
-            "HTML".to_owned() => LanguageContentInfo::new(396, 361, 0, mezura::hashmap![]),
-            "Python".to_owned() => LanguageContentInfo::new(250, 200, 20, mezura::hashmap!["classes".to_owned() => 2]),
+            "HTML".to_owned() => LanguageContentInfo::new(396, 361, 0, hashmap![]),
+            "Python".to_owned() => LanguageContentInfo::new(250, 200, 20, hashmap!["classes".to_owned() => 2]),
             "Java".to_owned() => LanguageContentInfo::new(80, 60, 5,
-                    mezura::hashmap!["classes".to_owned() => 2, "interfaces".to_owned() => 1])];
-        let languages_metadata_map = mezura::hashmap![
+                    hashmap!["classes".to_owned() => 2, "interfaces".to_owned() => 1])];
+        let languages_metadata_map = hashmap![
             "Rust".to_owned() => LanguageMetadata::new(13, 416800),
             "JavaScript".to_owned() => LanguageMetadata::new(4, 40000),
             "HTML".to_owned() => LanguageMetadata::new(2, 18800),
@@ -1817,8 +1818,8 @@ mod tests {
     fn the_leftovers_row_fits_the_column_even_when_every_other_name_is_shorter() {
         colored::control::set_override(false);
 
-        let content_info = mezura::hashmap!["D".to_owned() => LanguageContentInfo::new(2, 2, 0, mezura::hashmap![])];
-        let metadata = mezura::hashmap!["D".to_owned() => LanguageMetadata::new(1, 24)];
+        let content_info = hashmap!["D".to_owned() => LanguageContentInfo::new(2, 2, 0, hashmap![])];
+        let metadata = hashmap!["D".to_owned() => LanguageMetadata::new(1, 24)];
         let final_stats = FinalStats::calculate(&content_info, &metadata);
         fn group<'a>(name: Option<&'a str>, content_info: &'a HashMap<String, LanguageContentInfo>,
                 metadata: &'a HashMap<String, LanguageMetadata>, final_stats: &'a FinalStats) -> Group<'a> {
@@ -1894,34 +1895,34 @@ mod tests {
     fn test_get_lines_percentages() {
         let ext_names = ["py".to_string(),"java".to_string(),"cs".to_string()];
 
-        let content_info_map = mezura::hashmap!("cs".to_string() => LanguageContentInfo::dummy(100),
+        let content_info_map = hashmap!("cs".to_string() => LanguageContentInfo::dummy(100),
             "java".to_string() => LanguageContentInfo::dummy(100), "py".to_string() => LanguageContentInfo::dummy(0));
         assert_eq!(vec![0f64,50f64,50f64], get_lines_percentages(&content_info_map, &ext_names));
-        let content_info_map = mezura::hashmap!("cs".to_string() => LanguageContentInfo::dummy(0),
+        let content_info_map = hashmap!("cs".to_string() => LanguageContentInfo::dummy(0),
         "java".to_string() => LanguageContentInfo::dummy(0), "py".to_string() => LanguageContentInfo::dummy(1));
         assert_eq!(vec![100f64,0f64,0f64], get_lines_percentages(&content_info_map, &ext_names));
-        let content_info_map = mezura::hashmap!("cs".to_string() => LanguageContentInfo::dummy(20),
+        let content_info_map = hashmap!("cs".to_string() => LanguageContentInfo::dummy(20),
         "java".to_string() => LanguageContentInfo::dummy(20), "py".to_string() => LanguageContentInfo::dummy(20));
         assert_eq!(vec![33.33f64,33.33f64,33.34f64], get_lines_percentages(&content_info_map, &ext_names));
         
         let ext_names = ["py".to_string(),"java".to_string(),"cs".to_string(),"rs".to_string()];
 
-        let content_info_map = mezura::hashmap!("cs".to_string() => LanguageContentInfo::dummy(100),
+        let content_info_map = hashmap!("cs".to_string() => LanguageContentInfo::dummy(100),
             "java".to_string() => LanguageContentInfo::dummy(100), "py".to_string() => LanguageContentInfo::dummy(0),
             "rs".to_string() => LanguageContentInfo::dummy(0));
         assert_eq!(vec![0f64,50f64,50f64,0f64], get_lines_percentages(&content_info_map, &ext_names));
-        let content_info_map = mezura::hashmap!("cs".to_string() => LanguageContentInfo::dummy(100),
+        let content_info_map = hashmap!("cs".to_string() => LanguageContentInfo::dummy(100),
             "java".to_string() => LanguageContentInfo::dummy(100), "py".to_string() => LanguageContentInfo::dummy(100),
             "rs".to_string() => LanguageContentInfo::dummy(0));
         assert_eq!(vec![33.33,33.33,33.33,0.01], get_lines_percentages(&content_info_map, &ext_names));
-        let content_info_map = mezura::hashmap!("cs".to_string() => LanguageContentInfo::dummy(201),
+        let content_info_map = hashmap!("cs".to_string() => LanguageContentInfo::dummy(201),
             "java".to_string() => LanguageContentInfo::dummy(200), "py".to_string() => LanguageContentInfo::dummy(200),
             "rs".to_string() => LanguageContentInfo::dummy(0));
         assert_eq!(vec![33.28,33.28,33.44,0.0], get_lines_percentages(&content_info_map, &ext_names));
 
         let ext_names = ["py".to_string(),"java".to_string(),"cs".to_string(),"rs".to_string(),"cpp".to_string()];
 
-        let content_info_map = mezura::hashmap!("cs".to_string() => LanguageContentInfo::dummy(100),
+        let content_info_map = hashmap!("cs".to_string() => LanguageContentInfo::dummy(100),
             "java".to_string() => LanguageContentInfo::dummy(100), "py".to_string() => LanguageContentInfo::dummy(0),
             "rs".to_string() => LanguageContentInfo::dummy(0), "cpp".to_string() => LanguageContentInfo::dummy(0));
         assert_eq!(vec![0.0,50f64,50f64,0f64,0f64], get_lines_percentages(&content_info_map, &ext_names));
@@ -2016,11 +2017,11 @@ mod tests {
 
     #[test]
     fn sorting_uses_the_chosen_criterion_and_breaks_ties_by_name() {
-        let content = mezura::hashmap![
+        let content = hashmap![
             "Zig".to_owned() => LanguageContentInfo::new(100, 50, 0, HashMap::new()),
             "Ada".to_owned() => LanguageContentInfo::new(100, 90, 0, HashMap::new()),
             "Rust".to_owned() => LanguageContentInfo::new(300, 10, 0, HashMap::new())];
-        let meta = mezura::hashmap![
+        let meta = hashmap![
             "Zig".to_owned() => LanguageMetadata::new(9, 10),
             "Ada".to_owned() => LanguageMetadata::new(1, 900),
             "Rust".to_owned() => LanguageMetadata::new(5, 50)];
@@ -2074,14 +2075,14 @@ mod tests {
     #[test]
     fn test_retain_most_relevant_and_add_others_field_for_rest() {
         let sorted_language_names = vec!["a".to_owned(), "b".to_owned(), "c".to_owned(), "d".to_owned(), "e".to_owned()];
-        let content_info_map = mezura::hashmap![
-            "a".to_owned() => LanguageContentInfo::new(1000, 800, 0, mezura::hashmap![]),
-            "b".to_owned() => LanguageContentInfo::new(900, 700, 0, mezura::hashmap![]),
-            "c".to_owned() => LanguageContentInfo::new(800, 600, 0, mezura::hashmap![]),
-            "d".to_owned() => LanguageContentInfo::new(700, 500, 0, mezura::hashmap![]),
-            "e".to_owned() => LanguageContentInfo::new(600, 400, 0, mezura::hashmap![])
+        let content_info_map = hashmap![
+            "a".to_owned() => LanguageContentInfo::new(1000, 800, 0, hashmap![]),
+            "b".to_owned() => LanguageContentInfo::new(900, 700, 0, hashmap![]),
+            "c".to_owned() => LanguageContentInfo::new(800, 600, 0, hashmap![]),
+            "d".to_owned() => LanguageContentInfo::new(700, 500, 0, hashmap![]),
+            "e".to_owned() => LanguageContentInfo::new(600, 400, 0, hashmap![])
         ];
-        let languages_metadata_map = mezura::hashmap![
+        let languages_metadata_map = hashmap![
             "a".to_owned() => LanguageMetadata::new(10, 60000),
             "b".to_owned() => LanguageMetadata::new(9, 50000),
             "c".to_owned() => LanguageMetadata::new(8, 40000),
@@ -2101,14 +2102,14 @@ mod tests {
         assert_eq!(vec!["a".to_owned(), "b".to_owned(), "c".to_owned(), "others".to_owned()], folded_names);
 
         let (content_info_map, languages_metadata_map) = (folded_content_info_map, folded_languages_metadata_map);
-        assert_eq!(mezura::hashmap![
-            "a".to_owned() => LanguageContentInfo::new(1000, 800, 0, mezura::hashmap![]),
-            "b".to_owned() => LanguageContentInfo::new(900, 700, 0, mezura::hashmap![]),
-            "c".to_owned() => LanguageContentInfo::new(800, 600, 0, mezura::hashmap![]),
-            "others".to_owned() => LanguageContentInfo::new(1300, 0, 0, mezura::hashmap![])
+        assert_eq!(hashmap![
+            "a".to_owned() => LanguageContentInfo::new(1000, 800, 0, hashmap![]),
+            "b".to_owned() => LanguageContentInfo::new(900, 700, 0, hashmap![]),
+            "c".to_owned() => LanguageContentInfo::new(800, 600, 0, hashmap![]),
+            "others".to_owned() => LanguageContentInfo::new(1300, 0, 0, hashmap![])
             ], content_info_map);
         
-        assert_eq!(mezura::hashmap![
+        assert_eq!(hashmap![
             "a".to_owned() => LanguageMetadata::new(10, 60000),
             "b".to_owned() => LanguageMetadata::new(9, 50000),
             "c".to_owned() => LanguageMetadata::new(8, 40000),
@@ -2170,7 +2171,7 @@ mod tests {
 
     #[test]
     fn test_parse_N_previous_entries() {
-        let contents = super::super::log::extract_file_contents(&(LOCAL_APP_PATHS.test_dir.clone()+"logs/test1")).unwrap();
+        let contents = super::super::log::extract_file_contents(&(TEST_DIR.to_owned()+"logs/test1")).unwrap();
         let log_entries = parse_N_previous_entries(&contents, 3);
 
         assert_eq!(10, log_entries[0].stats.files);
@@ -2224,7 +2225,7 @@ mod tests {
 
     #[test]
     fn test_log_creation_and_reading() -> std::io::Result<()> {
-        let test_log_dir = LOCAL_APP_PATHS.test_log_dir.clone() + "test2";
+        let test_log_dir = LOG_DIR.to_owned() + "test2";
         if Path::new(&test_log_dir).exists() {
             std::fs::remove_file(&test_log_dir).unwrap();
         }
@@ -2259,7 +2260,7 @@ mod tests {
     // of the ones above and below it
     #[test]
     fn the_modules_of_an_entry_are_read_back_and_never_reach_another_one() {
-        let test_log_dir = LOCAL_APP_PATHS.test_log_dir.clone() + "test_modules";
+        let test_log_dir = LOG_DIR.to_owned() + "test_modules";
         if Path::new(&test_log_dir).exists() {
             std::fs::remove_file(&test_log_dir).unwrap();
         }

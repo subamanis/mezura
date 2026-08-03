@@ -282,10 +282,10 @@ mod tests {
 
     fn document_of(config: &crate::config_manager::Configuration) -> String {
         let result = result_of(
-            mezura::hashmap![
-                "Rust".to_owned() => stats_of(100, 70, 10, mezura::hashmap!["structs".to_owned() => 3, "enums".to_owned() => 1]),
+            hashmap![
+                "Rust".to_owned() => stats_of(100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 1]),
                 "HTML".to_owned() => stats_of(40, 30, 0, HashMap::new())],
-            mezura::hashmap![
+            hashmap![
                 "Rust".to_owned() => LanguageMetadata {files: 2, bytes: 5000},
                 "HTML".to_owned() => LanguageMetadata {files: 1, bytes: 900}],
             FinalStats::new_extended(3, 140, 100, 10, 30, 5900, 1966), Vec::new(),
@@ -379,15 +379,15 @@ mod tests {
         assert!(!document_of(&config).contains("\"modules\""));
 
         let module_of = |name: Option<&str>, language: &str, lines: usize, files: usize| {
-            let content_info_map = mezura::hashmap![language.to_owned() => stats_of(lines, lines, 0, HashMap::new())];
-            let languages_metadata_map = mezura::hashmap![language.to_owned() => LanguageMetadata {files, bytes: lines * 10}];
+            let content_info_map = hashmap![language.to_owned() => stats_of(lines, lines, 0, HashMap::new())];
+            let languages_metadata_map = hashmap![language.to_owned() => LanguageMetadata {files, bytes: lines * 10}];
             let final_stats = FinalStats::calculate(&content_info_map, &languages_metadata_map);
             mezura::ModuleResult {name: name.map(str::to_owned), content_info_map, languages_metadata_map, final_stats}
         };
         let mut result = result_of(
-            mezura::hashmap!["Rust".to_owned() => stats_of(100, 100, 0, HashMap::new()),
+            hashmap!["Rust".to_owned() => stats_of(100, 100, 0, HashMap::new()),
                      "HTML".to_owned() => stats_of(40, 40, 0, HashMap::new())],
-            mezura::hashmap!["Rust".to_owned() => LanguageMetadata {files: 2, bytes: 1000},
+            hashmap!["Rust".to_owned() => LanguageMetadata {files: 2, bytes: 1000},
                      "HTML".to_owned() => LanguageMetadata {files: 1, bytes: 400}],
             FinalStats::new_extended(3, 140, 140, 0, 0, 1400, 466), Vec::new(),
             FilesPresent {total_files: 3, relevant_files: 3, excluded_files: 0});
@@ -453,8 +453,8 @@ mod tests {
     fn the_faulty_files_are_reported_with_their_reason_in_a_stable_order() {
         let config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         let result = result_of(
-            mezura::hashmap!["Rust".to_owned() => stats_of(10, 5, 0, HashMap::new())],
-            mezura::hashmap!["Rust".to_owned() => LanguageMetadata {files: 1, bytes: 30}],
+            hashmap!["Rust".to_owned() => stats_of(10, 5, 0, HashMap::new())],
+            hashmap!["Rust".to_owned() => LanguageMetadata {files: 1, bytes: 30}],
             FinalStats::new_extended(1, 10, 5, 0, 5, 30, 30),
             vec![FaultyFileDetails::new("src\\z.rs".to_owned(), "no".to_owned(), 20),
                  FaultyFileDetails::new("src\\a.rs".to_owned(), "nope".to_owned(), 10)],

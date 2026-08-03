@@ -129,8 +129,11 @@ Change in commands:
       tweaks that survive switching themes, and --style wins over both.
 
 Performance:
-  -> Counting uses well under half the processor time it did, and a large repository is counted in
-      about two thirds of the time. The counts themselves are unchanged.
+  -> Counting uses well under half the processor time it did, while counting more languages than
+      before, and the counts themselves are unchanged. How much of that reaches the clock is decided
+      by your disk: a large repository on a fast NVMe was already close to what the processor can
+      do, while on a slower drive, or with antivirus scanning every file that is opened, the same
+      repository is now counted in a little over half the time.
   -> mezura now uses many more threads for reading files, because a thread spends most of its time
       waiting for a file to open rather than working. This is worth nothing on a fast disk whose
       files were read recently, and up to twice the speed on a slow disk or on the first run after

@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use mezura::*;
+use mezura::{EngineConfig, Languages, Target, Threads, language_file, run};
+
+const LANGUAGES_DIR : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/languages/");
 
 // Two directories, one producer and three consumers, through the published surface and nothing else.
 // What a command line would have parsed into an EngineConfig is asserted where the parsing lives.
@@ -13,7 +15,7 @@ fn a_run_over_two_directories_counts_files_lines_and_keywords() {
     assert_eq!(Threads::new(1, 3), config.threads);
     assert_eq!(vec![Target::of(format!("{current_dir}/src")), Target::of(format!("{current_dir}/tests"))], config.dirs);
 
-    let language_map = languages::parse_supported_languages_to_map(&LOCAL_APP_PATHS.languages_dir).unwrap().0;
+    let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
     assert!(!language_map.is_empty());
 
     let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);

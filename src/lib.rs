@@ -2,7 +2,9 @@
 
 #![allow(non_snake_case)]
 
-#[macro_export]
+// Test scaffolding, and every call site in this crate is in a test module. Exported it was published
+// API: '#[macro_export]' is unconditional and puts the macro at the root of whoever depends on us.
+#[cfg(test)]
 macro_rules! hashmap {
     ($( $key: expr => $val: expr ),*) => {{
         #[allow(unused_mut)]
@@ -12,43 +14,43 @@ macro_rules! hashmap {
     }}
 }
 
-pub mod domain;
+mod domain;
+mod result;
+mod phase_timing;
+// Still open, and each is its own decision: see B0c and B0d in RESTRUCTURE.md section 12.
 pub mod engine;
-pub mod result;
 pub mod languages;
-pub mod phase_timing;
+pub mod language_file;
+// The codes are what one caller wants and another does not, so they stay behind the module. The two
+// types every caller meets are re-exported below.
 pub mod warnings;
 
 
 pub use engine::config::{EngineConfig, Target, Threads};
-pub use engine::extensions::{ExtensionCollision, ExtensionReport, ResolvedBy, find_language_of_extension, make_extension_language_map};
-pub use engine::modules::{ModuleId, Modules};
 pub use languages::Languages;
 pub use domain::{Language, LanguageContentInfo, LanguageMetadata, FileStats, Keyword};
 pub use result::{FaultyFileDetails, FilesPresent, FinalStats, Metrics, ModuleResult, ParseFilesError, RunResult};
+pub use warnings::{Affects, Warning};
 
-pub type FaultyFilesListMut = Arc<Mutex<Vec<FaultyFileDetails>>>;
-pub type ExtensionLangMap = Arc<HashMap<String, Arc<str>>>;
+pub(crate) type FaultyFilesListMut = Arc<Mutex<Vec<FaultyFileDetails>>>;
+pub(crate) type ExtensionLangMap = Arc<HashMap<String, Arc<str>>>;
 // One bucket per module, and a run that declared none has exactly one, so that nothing downstream
 // has two shapes to handle
-pub type ContentInfoMapMut  = Arc<Mutex<Vec<HashMap<String,LanguageContentInfo>>>>;
-pub type MetadataMapMut     = Arc<Mutex<Vec<HashMap<String,LanguageMetadata>>>>;
+pub(crate) type ContentInfoMapMut  = Arc<Mutex<Vec<HashMap<String,LanguageContentInfo>>>>;
+pub(crate) type MetadataMapMut     = Arc<Mutex<Vec<HashMap<String,LanguageMetadata>>>>;
+
+use engine::extensions::find_language_of_extension;
+use engine::modules::{ModuleId, Modules};
 
 use crossbeam_deque::{Worker,Injector};
 use std::{collections::HashMap, path::{Path, PathBuf}, sync::atomic::{AtomicBool, AtomicUsize, Ordering}, time::Instant};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, Mutex};
 
 
-pub const APP_NAME : &str = "mezura";
-pub const LANGUAGES_DIR_NAME : &str = "languages";
-pub const THEMES_DIR_NAME : &str = "themes";
-pub const CONFIG_DIR_NAME : &str = "config";
-pub const LOGS_DIR_NAME : &str = "logs";
-pub const TEST_DIR_NAME : &str = "test_dir";
-pub const DEFAULT_CONFIG_NAME : &str = "default.txt";
+// Named here and not with the rest of the file layout, which belongs to the command line, because a
+// warning this crate emits tells the reader to declare the contested extension in it. Whoever acts
+// on that warning needs the name as much as whoever writes the file.
 pub const EXTENSION_PRIORITY_FILE_NAME : &str = "extension_priority.txt";
-pub const MANIFEST_FILE_NAME : &str = "installed.txt";
-pub const REPLACED_DIR_NAME : &str = "replaced";
 // Marked rather than named, because naming it after its directory would be a lie: with
 // './project tests=./project/tests' a row called 'project' is everything in it except the tests.
 // Being one marked row is also what settles two unnamed targets ending in the same folder name.
@@ -57,8 +59,15 @@ pub const REPLACED_DIR_NAME : &str = "replaced";
 // with 'frontend=./web ./docs' the './docs' did not survive anything, it was simply never named.
 pub const UNNAMED_MODULE_NAME : &str = "(unnamed)";
 
-pub static LOCAL_APP_PATHS : LazyLock<LocalAppPaths> = LazyLock::new(LocalAppPaths::get);
-pub static CHANGELOG_BYTES : &[u8] = include_bytes!("../Changelog");
+// The repository's own 'data/', which only tests ever read: the program itself reads the persistent
+// directory, and that one belongs to the command line. Anchored on the manifest rather than on the
+// executable, so it does not depend on where cargo put the test binary or on the working directory.
+#[cfg(test)]
+pub(crate) mod test_paths {
+    pub const DATA_DIR      : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/");
+    pub const LANGUAGES_DIR : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/languages/");
+    pub const TEST_DIR      : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test_dir/");
+}
 
 
 // 'on_traversal_done' is called exactly once, with what the walk found, at the only moment a caller
@@ -209,7 +218,7 @@ fn merged_over_modules(per_module_content_info: &[HashMap<String,LanguageContent
 // The roots and not every target: a target that lies inside another is reached by the walk of the
 // one around it, and walking it again would count its files twice. Its module is not lost with it,
 // it is what the boundary table hands back on the way down.
-pub fn calculate_single_file_stats_or_add_to_injector(config: &EngineConfig, dirs_injector: &Arc<Injector<TraversedDir>>, files_injector: &Arc<Injector<ParsableFile>>,
+pub(crate) fn calculate_single_file_stats_or_add_to_injector(config: &EngineConfig, dirs_injector: &Arc<Injector<TraversedDir>>, files_injector: &Arc<Injector<ParsableFile>>,
         files_present: &mut FilesPresent, extension_lang_map: &HashMap<String, Arc<str>>, modules: &Modules)
 {
     crate::engine::targets::topmost_targets(&config.dirs).iter().for_each(|target| {
@@ -230,7 +239,7 @@ pub fn calculate_single_file_stats_or_add_to_injector(config: &EngineConfig, dir
     })
 }
 
-pub fn remove_languages_with_0_files(content_info_map: &mut HashMap<String,LanguageContentInfo>,
+pub(crate) fn remove_languages_with_0_files(content_info_map: &mut HashMap<String,LanguageContentInfo>,
     languages_metadata_map: &mut HashMap<String, LanguageMetadata>)
 {
    let mut empty_languages = Vec::new();
@@ -279,7 +288,7 @@ fn generate_metrics_if_parsing_took_more_than_one_sec(parsing_duration_millis: u
 
 
 
-pub fn make_language_stats(languages_map: Arc<HashMap<String,Language>>, modules: usize) -> Vec<HashMap<String,LanguageContentInfo>> {
+pub(crate) fn make_language_stats(languages_map: Arc<HashMap<String,Language>>, modules: usize) -> Vec<HashMap<String,LanguageContentInfo>> {
     let mut map = HashMap::<String,LanguageContentInfo>::new();
     for (key, value) in languages_map.iter() {
         map.insert(key.to_owned(), LanguageContentInfo::from(value));
@@ -287,7 +296,7 @@ pub fn make_language_stats(languages_map: Arc<HashMap<String,Language>>, modules
     vec![map; modules]
 }
 
-pub fn make_language_metadata(language_map: &Arc<HashMap<String,Language>>, modules: usize) -> Vec<HashMap<String, LanguageMetadata>> {
+pub(crate) fn make_language_metadata(language_map: &Arc<HashMap<String,Language>>, modules: usize) -> Vec<HashMap<String, LanguageMetadata>> {
     let mut map = HashMap::<String,LanguageMetadata>::new();
     for name in language_map.keys() {
         map.insert(name.to_owned(), LanguageMetadata::default());
@@ -298,15 +307,6 @@ pub fn make_language_metadata(language_map: &Arc<HashMap<String,Language>>, modu
 
 
 
-#[derive(Debug)]
-pub struct LocalAppPaths {
-    pub data_dir: String,
-    pub languages_dir: String,
-    pub config_dir: String,
-    pub test_dir: String,
-    pub test_config_dir: String,
-    pub test_log_dir: String,
-}
 
 
 
@@ -315,21 +315,21 @@ pub struct LocalAppPaths {
 
 
 #[derive(Debug,Clone)]
-pub struct ParsableFile {
+pub(crate) struct ParsableFile {
     pub path: PathBuf,
     pub language_name: Arc<str>,
     pub module: ModuleId
 }
 
 #[derive(Debug,Clone)]
-pub struct TraversedDir {
+pub(crate) struct TraversedDir {
     pub path: PathBuf,
     pub gitignore_stack: Option<Arc<GitignoreStack>>,
     pub module: ModuleId
 }
 
 #[derive(Debug)]
-pub struct GitignoreStack {
+pub(crate) struct GitignoreStack {
     matcher: ignore::gitignore::Gitignore,
     parent: Option<Arc<GitignoreStack>>
 }
@@ -337,27 +337,6 @@ pub struct GitignoreStack {
 
 
 
-impl LocalAppPaths {
-    // Paths that exist inside the repository folder
-    pub fn get() -> Self {
-        let mut working_dir = String::from(std::env::current_exe().expect("Failed to find executable path.")
-            .parent().expect("Failed to get parent directory of the executable.").to_str().unwrap());
-        if working_dir.contains("target/") || working_dir.contains("target\\"){
-            working_dir = String::from(".");
-        }
-
-        let data_dir =  working_dir + "/data/";
-
-        LocalAppPaths {
-            data_dir: data_dir.clone(),
-            languages_dir: data_dir.clone() + LANGUAGES_DIR_NAME + "/",
-            config_dir: data_dir.clone() + CONFIG_DIR_NAME + "/",
-            test_dir: data_dir.clone() + "../" + TEST_DIR_NAME + "/",
-            test_config_dir: data_dir.clone() + "../" + TEST_DIR_NAME + "/config/",
-            test_log_dir: data_dir + "../" + TEST_DIR_NAME + "/logs/"
-        }
-    }
-}
 
 
 

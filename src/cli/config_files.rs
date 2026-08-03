@@ -5,7 +5,7 @@ use colored::{ColoredString, Colorize};
 
 use super::formatted::Formatted;
 use crate::paths::PERSISTENT_APP_PATHS;
-use mezura::{DEFAULT_CONFIG_NAME};
+use crate::paths::DEFAULT_CONFIG_NAME;
 use super::theme_files;
 use super::config_manager::{self, ConfigurationBuilder, LogOption, MAX_COMPARE_LEVEL, MIN_COMPARE_LEVEL};
 use mezura::engine::config::{MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE};
@@ -63,7 +63,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                 }
             } else if id == config_manager::EXCLUDE {
                 let paths = read_lines_from_file_to_vec(&mut reader, &mut buf, super::args::parse_paths_to_vec);
-                if mezura::engine::targets::build_exclude_matcher(&paths).is_err() {
+                if mezura::engine::targets::validate_exclude_patterns(&paths).is_err() {
                     issues.invalid_fields.push(config_manager::EXCLUDE);
                 } else if !paths.is_empty() {
                     exclude_dirs = Some(paths);
@@ -233,7 +233,7 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
     // from the next. It is the readable form and the unambiguous one at the same time: a name only
     // ever reaches the paths written after it with a comma between them.
     writer.write_all(&[b"\n\n===> ",config_manager::DIRS.as_bytes(),b"\n"].concat())?;
-    writer.write_all(config_builder.dirs.as_ref().unwrap().iter().map(mezura::engine::config::Target::declared_form)
+    writer.write_all(config_builder.dirs.as_ref().unwrap().iter().map(config_manager::declared_form)
             .collect::<Vec<_>>().join("\n").as_bytes())?;
 
     if let Some(exclude_dirs) = &config_builder.exclude_dirs {
@@ -398,7 +398,8 @@ impl Formatted for ConfigFileParseError {
 mod tests {
     use super::super::config_manager::Configuration;
     use super::*;
-    use mezura::{LOCAL_APP_PATHS, Target};
+    use mezura::Target;
+    use crate::paths::test_paths::CONFIG_DIR;
     use super::super::config_manager::ConfigurationBuilder;
     #[test]
     fn test_save_config_file_and_then_parse_it() -> std::io::Result<()> {
@@ -407,10 +408,10 @@ mod tests {
                 --style code-number=green,comments-label=magenta bold,arrow=default dim".to_string();
         let config_builder = config_manager::create_config_builder_from_args(&command).unwrap();
 
-        let test_config_dir = Some(LOCAL_APP_PATHS.test_config_dir.clone());
+        let test_config_dir = Some(CONFIG_DIR.to_owned());
         super::super::config_files::save_existing_commands_from_config_builder_to_file(test_config_dir, "auto-generated", &config_builder)?;
 
-        let (options, issues) = super::super::config_files::parse_config_file(Some("auto-generated"), Some(LOCAL_APP_PATHS.test_config_dir.clone())).unwrap();
+        let (options, issues) = super::super::config_files::parse_config_file(Some("auto-generated"), Some(CONFIG_DIR.to_owned())).unwrap();
         assert!(issues.invalid_fields.is_empty() && issues.warnings.is_empty());
         assert_eq!(config_builder.dirs, options.dirs);
         assert_eq!(config_builder.exclude_dirs, options.exclude_dirs);
@@ -421,7 +422,7 @@ mod tests {
         assert_eq!(config_builder.hidden, options.hidden);
         // A project that answers a contested extension its own way answers it once, in its config
         assert_eq!(config_builder.forced_languages, options.forced_languages);
-        assert_eq!(Some(mezura::hashmap!("m".to_owned() => "matlab".to_owned(), "pl".to_owned() => "Perl".to_owned())),
+        assert_eq!(Some(hashmap!("m".to_owned() => "matlab".to_owned(), "pl".to_owned() => "Perl".to_owned())),
                 options.forced_languages);
         // Written one pair per line and read back as a group, so a saved look survives a reload
         assert_eq!(config_builder.styles, options.config_styles);
@@ -432,14 +433,14 @@ mod tests {
 
     #[test]
     fn a_force_lang_value_written_across_lines_is_read_whole() -> std::io::Result<()> {
-        let dir = LOCAL_APP_PATHS.test_config_dir.clone();
+        let dir = CONFIG_DIR.to_owned();
         std::fs::create_dir_all(&dir)?;
         let path = dir.clone() + "force-lang-block.txt";
         std::fs::write(&path, "===> dirs\n./\n\n===> force-lang\nm=matlab,\npl=perl\n")?;
 
         let (options, issues) = super::super::config_files::parse_config_file(Some("force-lang-block"), Some(dir)).unwrap();
         assert!(issues.invalid_fields.is_empty());
-        assert_eq!(Some(mezura::hashmap!("m".to_owned() => "matlab".to_owned(), "pl".to_owned() => "perl".to_owned())),
+        assert_eq!(Some(hashmap!("m".to_owned() => "matlab".to_owned(), "pl".to_owned() => "perl".to_owned())),
                 options.forced_languages);
 
         std::fs::remove_file(&path)
@@ -450,7 +451,7 @@ mod tests {
     // paths they belong to on the first round trip.
     #[test]
     fn the_modules_of_a_saved_configuration_survive_being_read_back() -> std::io::Result<()> {
-        let dir = LOCAL_APP_PATHS.test_config_dir.clone();
+        let dir = CONFIG_DIR.to_owned();
         std::fs::create_dir_all(&dir)?;
         let path = dir.clone() + "modules-round-trip.txt";
 
@@ -463,10 +464,10 @@ mod tests {
         // The one line form that the log entry carries. Whitespace and not commas, or the unnamed
         // target at the end would be read back as one more directory of 'backend'.
         assert_eq!("frontend=D:/x/web frontend=D:/x/ui backend=\"D:/x/my api\" D:/x/loose",
-                mezura::engine::config::targets_to_string(&declared));
+                config_manager::targets_to_string(&declared));
         // and while nothing is named it is what it always was, so an entry logged by an older
         // version is not reported as having had its targets changed
-        assert_eq!("D:/x/web,D:/x/api", mezura::engine::config::targets_to_string(
+        assert_eq!("D:/x/web,D:/x/api", config_manager::targets_to_string(
                 &[Target::of("D:/x/web".to_owned()), Target::of("D:/x/api".to_owned())]));
 
         let builder = ConfigurationBuilder { dirs: Some(declared.clone()), ..Default::default() };
@@ -483,7 +484,7 @@ mod tests {
     // module written next to the others means
     #[test]
     fn the_dirs_block_reads_a_module_across_lines_and_refuses_one_with_no_path() -> std::io::Result<()> {
-        let dir = LOCAL_APP_PATHS.test_config_dir.clone();
+        let dir = CONFIG_DIR.to_owned();
         std::fs::create_dir_all(&dir)?;
         let path = dir.clone() + "dirs-block.txt";
         std::fs::write(&path, "===> dirs\ntests=D:/x/api/tests\ntests=D:/x/web/tests\nbackend=D:/x/api\n")?;
@@ -523,7 +524,7 @@ mod tests {
             .set_hidden(config_manager::Hidden {bar: true, timing: true, ..Default::default()});
 
 
-        let (options, issues) = super::super::config_files::parse_config_file(Some("test"), Some(LOCAL_APP_PATHS.test_config_dir.clone())).unwrap();
+        let (options, issues) = super::super::config_files::parse_config_file(Some("test"), Some(CONFIG_DIR.to_owned())).unwrap();
         assert!(issues.invalid_fields.is_empty() && issues.warnings.is_empty());
         assert_eq!(config.engine.dirs, options.dirs.unwrap());
         assert_eq!(config.engine.exclude_dirs, options.exclude_dirs.unwrap());

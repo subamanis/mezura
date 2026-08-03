@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use mezura::EngineConfig;
-use mezura::*;
+use mezura::{EngineConfig, LanguageContentInfo, LanguageMetadata, Languages, ParseFilesError,
+        language_file, run};
+
+const LANGUAGES_DIR : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/languages/");
 
 const CONSUMER_THREADS: usize = 4;
 const UPDATE_ENV_VAR: &str = "MEZURA_UPDATE_GOLDEN";
@@ -53,7 +55,7 @@ fn collect_stats() -> String {
     let mut config = EngineConfig::new(vec![fixtures_root().to_str().unwrap().replace('\\', "/")]);
     config.set_threads(1, CONSUMER_THREADS);
 
-    let language_map = languages::parse_supported_languages_to_map(&LOCAL_APP_PATHS.languages_dir).unwrap().0;
+    let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
 
     let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
 

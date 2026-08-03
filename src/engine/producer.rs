@@ -3,8 +3,10 @@ use std::{collections::HashMap, fs, fs::ReadDir, sync::{Arc, Mutex, atomic::{Ato
 
 use crossbeam_deque::{Injector, Steal, Worker};
 
-use crate::{EngineConfig, ExtensionLangMap, FilesPresent, GitignoreStack, ModuleId, Modules,
-        ParsableFile, TraversedDir, find_language_of_extension};
+use crate::engine::modules::{ModuleId, Modules};
+use crate::{EngineConfig, ExtensionLangMap, FilesPresent, GitignoreStack,
+        ParsableFile, TraversedDir};
+use crate::engine::extensions::find_language_of_extension;
 
 
 pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<TraversedDir>>, worker: Worker<TraversedDir>,
@@ -161,8 +163,9 @@ mod tests {
 
     use super::*;
     use crate::engine::targets::build_exclude_matcher;
-    use crate::{LOCAL_APP_PATHS, calculate_single_file_stats_or_add_to_injector,
-            make_extension_language_map};
+    use crate::calculate_single_file_stats_or_add_to_injector;
+    use crate::test_paths::LANGUAGES_DIR;
+    use crate::engine::extensions::make_extension_language_map;
 
     fn count_files_of(target: &str, extra_args: &str) -> (usize, usize, usize, Vec<String>) {
         let (total, relevant, excluded, found) = walk(target, extra_args);
@@ -190,7 +193,7 @@ mod tests {
                 .set_no_gitignore(extra_args.contains("--no-gitignore"))
                 .set_should_search_in_dotted(extra_args.contains("--search-in-dotted"));
         let config = Arc::new(config);
-        let language_map = Arc::new(crate::languages::parse_supported_languages_to_map(&LOCAL_APP_PATHS.languages_dir).unwrap().0);
+        let language_map = Arc::new(crate::language_file::parse_dir(LANGUAGES_DIR).unwrap().0);
         let files_injector = Arc::new(Injector::new());
         let dirs_injector = Arc::new(Injector::new());
         let idle_producers = Arc::new(AtomicUsize::new(0));
