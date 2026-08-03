@@ -7,7 +7,7 @@ default-run = "mezura"
 
 [[bin]]
 name = "mezura"
-path = "src/main.rs"
+path = "src/cli/main.rs"
 
 [profile.release]
 debug = true

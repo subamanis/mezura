@@ -2,8 +2,9 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Local, SecondsFormat};
 
-use crate::{FaultyFileDetails, FilesPresent, FinalStats, LanguageContentInfo, LanguageMetadata,
-        RunResult, config_manager::Configuration, result_printer};
+use mezura::{FaultyFileDetails, FilesPresent, FinalStats, LanguageContentInfo, LanguageMetadata, RunResult};
+use super::config_manager::Configuration;
+use super::result_printer;
 
 // Bumped only when a key is removed or changes meaning. Adding one is not a bump, so a consumer can
 // check this and not the version of the binary, which moves for reasons that do not concern it.
@@ -18,13 +19,13 @@ pub fn print_as_json(result: &RunResult, datetime_now: &DateTime<Local>, config:
 
 fn document(result: &RunResult, datetime_now: &DateTime<Local>, config: &Configuration) -> String {
     let RunResult {content_info_map, languages_metadata_map, final_stats, faulty_files, files_present, ..} = result;
-    let names = result_printer::get_sorted_language_names(content_info_map, languages_metadata_map, config.sort_by);
-    let hidden = config.top_n.map_or(0, |top| names.len().saturating_sub(top));
+    let names = result_printer::get_sorted_language_names(content_info_map, languages_metadata_map, config.view.sort_by);
+    let hidden = config.view.top_n.map_or(0, |top| names.len().saturating_sub(top));
     let shown = &names[..names.len() - hidden];
 
     let mut members = vec![
         format!("  \"format\": {FORMAT_VERSION}"),
-        format!("  \"mezura_version\": \"{}\"", escaped(config.version.trim_start_matches('v'))),
+        format!("  \"mezura_version\": \"{}\"", escaped(config.view.version.trim_start_matches('v'))),
         format!("  \"generated_at\": \"{}\"", datetime_now.to_rfc3339_opts(SecondsFormat::Secs, false)),
         format!("  \"scope\": {}", scope_object(config)),
         format!("  \"scan\": {}", scan_object(files_present, faulty_files.len())),
@@ -41,7 +42,7 @@ fn document(result: &RunResult, datetime_now: &DateTime<Local>, config: &Configu
     }
     // The only volatile block apart from the timestamp, so hiding the timing is also what makes the
     // document repeatable enough to hash or to compare against a stored one
-    if !config.hidden.timing {
+    if !config.view.hidden.timing {
         members.push(format!("  \"performance\": {}", performance_object(result.scan_duration_millis, config)));
     }
 
@@ -53,14 +54,14 @@ fn document(result: &RunResult, datetime_now: &DateTime<Local>, config: &Configu
 // comparable with one without it.
 fn scope_object(config: &Configuration) -> String {
     let members = [
-        format!("    \"dirs\": {}", string_array(&config.dirs.iter().map(|x| x.to_string()).collect::<Vec<_>>())),
-        format!("    \"exclude\": {}", string_array(&config.exclude_dirs)),
-        format!("    \"languages\": {}", string_array(&config.languages_of_interest)),
-        format!("    \"excluded_languages\": {}", string_array(&config.excluded_languages)),
-        format!("    \"braces_as_code\": {}", config.braces_as_code),
-        format!("    \"search_in_dotted\": {}", config.should_search_in_dotted),
-        format!("    \"gitignore\": {}", !config.no_gitignore),
-        format!("    \"keywords_counted\": {}", !config.hidden.keywords),
+        format!("    \"dirs\": {}", string_array(&config.engine.dirs.iter().map(|x| x.to_string()).collect::<Vec<_>>())),
+        format!("    \"exclude\": {}", string_array(&config.engine.exclude_dirs)),
+        format!("    \"languages\": {}", string_array(&config.engine.languages_of_interest)),
+        format!("    \"excluded_languages\": {}", string_array(&config.engine.excluded_languages)),
+        format!("    \"braces_as_code\": {}", config.engine.braces_as_code),
+        format!("    \"search_in_dotted\": {}", config.engine.should_search_in_dotted),
+        format!("    \"gitignore\": {}", !config.engine.no_gitignore),
+        format!("    \"keywords_counted\": {}", !config.view.hidden.keywords),
     ];
 
     format!("{{\n{}\n  }}", members.join(",\n"))
@@ -98,8 +99,8 @@ fn total_object(final_stats: &FinalStats) -> String {
 // key would silently merge the two.
 fn modules_array(result: &RunResult, config: &Configuration) -> String {
     let entries = result.modules.iter().map(|module| {
-        let names = result_printer::get_sorted_language_names(&module.content_info_map, &module.languages_metadata_map, config.sort_by);
-        let hidden = config.top_n.map_or(0, |top| names.len().saturating_sub(top));
+        let names = result_printer::get_sorted_language_names(&module.content_info_map, &module.languages_metadata_map, config.view.sort_by);
+        let hidden = config.view.top_n.map_or(0, |top| names.len().saturating_sub(top));
         let shown = &names[..names.len() - hidden];
         let name = module.name.as_ref().map_or("null".to_owned(), |x| format!("\"{}\"", escaped(x)));
         let members = [
@@ -133,7 +134,7 @@ fn languages_array(shown: &[String], content_info_map: &HashMap<String, Language
     let entries = shown.iter().filter_map(|name| {
         let info = content_info_map.get(name)?;
         let metadata = languages_metadata_map.get(name)?;
-        Some(language_object(name, info, metadata, !config.hidden.keywords))
+        Some(language_object(name, info, metadata, !config.view.hidden.keywords))
     }).collect::<Vec<_>>();
 
     format!("[\n{}\n  ]", entries.join(",\n"))
@@ -184,7 +185,7 @@ fn keywords_object(occurences: &HashMap<String, usize>) -> String {
 // has never heard of: the question is whether the counts can be trusted, not which of the codes are
 // the serious ones. In emission order, which is the order they were printed in.
 fn warnings_array() -> String {
-    let warnings = crate::warnings::collected();
+    let warnings = super::warnings::collected();
     if warnings.is_empty() {
         return String::from("[]");
     }
@@ -228,7 +229,7 @@ fn faulty_files_array(faulty_files: &[FaultyFileDetails]) -> String {
 // The total is not known yet at this point, and the shell can measure it honestly anyway.
 fn performance_object(scan_ms: u128, config: &Configuration) -> String {
     let threads = format!("{{\n      \"producers\": {},\n      \"consumers\": {}\n    }}",
-            config.threads.producers, config.threads.consumers);
+            config.engine.threads.producers, config.engine.threads.consumers);
 
     format!("{{\n    \"scan_ms\": {scan_ms},\n    \"threads\": {threads}\n  }}")
 }
@@ -263,7 +264,7 @@ fn escaped(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::{config_manager::{Configuration, Layout, SortCriterion}, hashmap};
+    use crate::config_manager::{Layout, SortCriterion};
 
     use super::*;
 
@@ -279,12 +280,12 @@ mod tests {
                 files_present, scan_duration_millis: 1180, metrics: None}
     }
 
-    fn document_of(config: &Configuration) -> String {
+    fn document_of(config: &crate::config_manager::Configuration) -> String {
         let result = result_of(
-            hashmap![
-                "Rust".to_owned() => stats_of(100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 1]),
+            mezura::hashmap![
+                "Rust".to_owned() => stats_of(100, 70, 10, mezura::hashmap!["structs".to_owned() => 3, "enums".to_owned() => 1]),
                 "HTML".to_owned() => stats_of(40, 30, 0, HashMap::new())],
-            hashmap![
+            mezura::hashmap![
                 "Rust".to_owned() => LanguageMetadata {files: 2, bytes: 5000},
                 "HTML".to_owned() => LanguageMetadata {files: 1, bytes: 900}],
             FinalStats::new_extended(3, 140, 100, 10, 30, 5900, 1966), Vec::new(),
@@ -305,8 +306,8 @@ mod tests {
 
     #[test]
     fn the_document_carries_the_raw_counts_and_none_of_the_presentation() {
-        let mut config = Configuration::new(vec!["./src".to_owned()]);
-        config.layout = Layout::Boxed;
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        config.view.layout = Layout::Boxed;
         let document = document_of(&config);
 
         assert!(document.contains("\"format\": 1"));
@@ -325,16 +326,16 @@ mod tests {
 
     #[test]
     fn sort_orders_the_languages_and_top_cuts_them_while_the_total_stays_whole() {
-        let mut config = Configuration::new(vec!["./src".to_owned()]);
-        config.sort_by = SortCriterion::Name;
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        config.view.sort_by = SortCriterion::Name;
         let document = document_of(&config);
         assert!(document.find("\"HTML\"").unwrap() < document.find("\"Rust\"").unwrap());
 
-        config.sort_by = SortCriterion::Lines;
+        config.view.sort_by = SortCriterion::Lines;
         let document = document_of(&config);
         assert!(document.find("\"Rust\"").unwrap() < document.find("\"HTML\"").unwrap());
 
-        config.top_n = Some(1);
+        config.view.top_n = Some(1);
         let document = document_of(&config);
         assert!(document.contains("\"Rust\""));
         assert!(!document.contains("\"HTML\""));
@@ -344,7 +345,7 @@ mod tests {
 
     #[test]
     fn hiding_the_keywords_removes_the_key_while_a_language_without_any_gets_an_empty_one() {
-        let config = Configuration::new(vec!["./src".to_owned()]);
+        let config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         let document = document_of(&config);
         assert!(document.contains("\"keywords\": {}"));
         assert!(document.contains("\"structs\": 3"));
@@ -352,8 +353,8 @@ mod tests {
         // Sorted by name, so that two runs over the same tree produce the same bytes
         assert!(document.find("\"enums\"").unwrap() < document.find("\"structs\"").unwrap());
 
-        let mut config = Configuration::new(vec!["./src".to_owned()]);
-        config.hidden.keywords = true;
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        config.view.hidden.keywords = true;
         let document = document_of(&config);
         assert!(!document.contains("\"keywords\""));
         assert!(document.contains("\"keywords_counted\": false"));
@@ -361,8 +362,8 @@ mod tests {
 
     #[test]
     fn hiding_the_timing_removes_the_only_block_that_changes_between_two_identical_runs() {
-        let mut config = Configuration::new(vec!["./src".to_owned()]);
-        config.hidden.timing = true;
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        config.view.hidden.timing = true;
         let document = document_of(&config);
 
         assert!(!document.contains("\"performance\""));
@@ -374,25 +375,25 @@ mod tests {
     // would merge the two without noticing
     #[test]
     fn the_modules_appear_only_when_one_was_named_and_the_leftovers_have_no_name() {
-        let mut config = Configuration::new(vec!["./src".to_owned()]);
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         assert!(!document_of(&config).contains("\"modules\""));
 
         let module_of = |name: Option<&str>, language: &str, lines: usize, files: usize| {
-            let content_info_map = hashmap![language.to_owned() => stats_of(lines, lines, 0, HashMap::new())];
-            let languages_metadata_map = hashmap![language.to_owned() => LanguageMetadata {files, bytes: lines * 10}];
+            let content_info_map = mezura::hashmap![language.to_owned() => stats_of(lines, lines, 0, HashMap::new())];
+            let languages_metadata_map = mezura::hashmap![language.to_owned() => LanguageMetadata {files, bytes: lines * 10}];
             let final_stats = FinalStats::calculate(&content_info_map, &languages_metadata_map);
-            crate::ModuleResult {name: name.map(str::to_owned), content_info_map, languages_metadata_map, final_stats}
+            mezura::ModuleResult {name: name.map(str::to_owned), content_info_map, languages_metadata_map, final_stats}
         };
         let mut result = result_of(
-            hashmap!["Rust".to_owned() => stats_of(100, 100, 0, HashMap::new()),
+            mezura::hashmap!["Rust".to_owned() => stats_of(100, 100, 0, HashMap::new()),
                      "HTML".to_owned() => stats_of(40, 40, 0, HashMap::new())],
-            hashmap!["Rust".to_owned() => LanguageMetadata {files: 2, bytes: 1000},
+            mezura::hashmap!["Rust".to_owned() => LanguageMetadata {files: 2, bytes: 1000},
                      "HTML".to_owned() => LanguageMetadata {files: 1, bytes: 400}],
             FinalStats::new_extended(3, 140, 140, 0, 0, 1400, 466), Vec::new(),
             FilesPresent {total_files: 3, relevant_files: 3, excluded_files: 0});
         result.modules = vec![module_of(Some("backend"), "Rust", 100, 2), module_of(None, "HTML", 40, 1)];
 
-        config.hidden.timing = true;
+        config.view.hidden.timing = true;
         let rendered = document(&result, &Local::now(), &config);
         assert!(rendered.contains("\"name\": \"backend\""));
         assert!(rendered.contains("\"name\": null"));
@@ -407,7 +408,7 @@ mod tests {
 
         // '--top' is per module there too, so a module with one language is not cut by '--top 1'
         // while the report as a whole has two
-        config.top_n = Some(1);
+        config.view.top_n = Some(1);
         let cut = document(&result, &Local::now(), &config);
         assert_eq!(2, cut.matches("\"languages_hidden\": 0").count());
         assert!(cut.contains("\"languages_hidden\": 1"));
@@ -418,12 +419,12 @@ mod tests {
     // so this asserts on its own entry rather than on the whole array.
     #[test]
     fn a_warning_reaches_the_document_with_both_of_its_halves() {
-        let config = Configuration::new(vec!["./src".to_owned()]);
+        let config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         // Present even when there is nothing to say, so a consumer never has to test for the key
         assert!(document_of(&config).contains("\"warnings\": []") || document_of(&config).contains("\"warnings\": ["));
 
-        crate::warnings::keep(crate::warnings::Warning::new(crate::warnings::EXTENSION_TIEBREAK,
-                crate::warnings::Affects::Counts, "a-subject-only-this-test-uses",
+        super::super::warnings::keep(mezura::warnings::Warning::new(mezura::warnings::EXTENSION_TIEBREAK,
+                mezura::warnings::Affects::Counts, "a-subject-only-this-test-uses",
                 "quoted \"text\" and a \\ backslash".to_owned()));
 
         let rendered = warnings_array();
@@ -437,7 +438,7 @@ mod tests {
 
     #[test]
     fn a_run_with_nothing_to_count_is_still_a_whole_document() {
-        let config = Configuration::new(vec!["./src".to_owned()]);
+        let config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         let result = result_of(HashMap::new(), HashMap::new(), FinalStats::new_extended(0,0,0,0,0,0,0),
                 Vec::new(), FilesPresent {total_files: 12, relevant_files: 0, excluded_files: 12});
         let document = document(&result, &Local::now(), &config);
@@ -450,10 +451,10 @@ mod tests {
 
     #[test]
     fn the_faulty_files_are_reported_with_their_reason_in_a_stable_order() {
-        let config = Configuration::new(vec!["./src".to_owned()]);
+        let config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         let result = result_of(
-            hashmap!["Rust".to_owned() => stats_of(10, 5, 0, HashMap::new())],
-            hashmap!["Rust".to_owned() => LanguageMetadata {files: 1, bytes: 30}],
+            mezura::hashmap!["Rust".to_owned() => stats_of(10, 5, 0, HashMap::new())],
+            mezura::hashmap!["Rust".to_owned() => LanguageMetadata {files: 1, bytes: 30}],
             FinalStats::new_extended(1, 10, 5, 0, 5, 30, 30),
             vec![FaultyFileDetails::new("src\\z.rs".to_owned(), "no".to_owned(), 20),
                  FaultyFileDetails::new("src\\a.rs".to_owned(), "nope".to_owned(), 10)],

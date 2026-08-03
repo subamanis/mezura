@@ -1,9 +1,33 @@
+#![forbid(unsafe_code)]
+
+#![allow(non_snake_case)]
+
+mod paths;
+mod present;
+mod formatted;
+mod warnings;
+mod config_manager;
+mod config_files;
+mod theme_files;
+mod theme;
+mod log;
+mod args;
+mod format;
+mod message_printer;
+mod suggestions;
+mod result_printer;
+mod json_printer;
+
 use std::{collections::HashMap, process::ExitCode, time::Instant};
 
 use colored::*;
 use include_dir::{File, include_dir};
 
-use mezura::{*, self, config_manager::{self, CHANGELOG, HELP, LAYOUT, RESTORE, SHOW_CONFIGS, SHOW_LANGUAGES, SHOW_THEMES, THEME_EDITOR, VERSION, VERSION_ID}, io_handler, theme};
+use mezura::*;
+use crate::formatted::Formatted;
+use crate::config_manager::Configuration;
+use crate::config_manager::{CHANGELOG, HELP, LAYOUT, RESTORE, SHOW_CONFIGS,
+        SHOW_LANGUAGES, SHOW_THEMES, THEME_EDITOR, VERSION, VERSION_ID};
 
 
 // A failure code is owed to whoever runs mezura from a script: everything that prints an error and
@@ -13,24 +37,24 @@ fn main() -> ExitCode {
     #[cfg(target_os = "windows")]
     control::set_virtual_terminal(true).unwrap();
 
-    let mut language_map: HashMap<String, Language>;
+    let language_map: HashMap<String, Language>;
 
     // Before the languages are read, or the run that performs it would still count with the old
     // files and the change would appear to take two runs to arrive
-    match migrate_data_files(&PERSISTENT_APP_PATHS.data_dir, false) {
+    match migrate_data_files(&crate::paths::PERSISTENT_APP_PATHS.data_dir, false) {
         Ok(outcome) => if let Some(message) = outcome.formatted() {eprintln!("{message}")},
         // Whatever was written stays on disk, and the version is recorded only after a pass that
         // finished, so the next execution tries again instead of believing it is done
         Err(x) => eprintln!("{}",format!("\nUnable to update the data files: {x}\n").yellow())
     }
 
-    if !PERSISTENT_APP_PATHS.are_initialized {
+    if !crate::paths::PERSISTENT_APP_PATHS.are_initialized {
         // A first execution reads the baked-in copies for this run, because the paths were resolved,
         // and the directory judged, before the migration above created anything. The contents are
         // the same ones it just wrote, so nothing is lost by not re-reading them.
         language_map = read_baked_in_languages_dir();
     } else {
-        match io_handler::parse_supported_languages_to_map(&PERSISTENT_APP_PATHS.languages_dir) {
+        match mezura::languages::parse_supported_languages_to_map(&crate::paths::PERSISTENT_APP_PATHS.languages_dir) {
             Ok((_language_map, faulty_files)) => {
                 if !faulty_files.is_empty() {
                     let mut warn_msg = String::from("\nFormatting problems detected in language files: ");
@@ -40,7 +64,7 @@ fn main() -> ExitCode {
                     // One per file and not one for the list, since each is a whole language whose
                     // files went uncounted and a reader of the document wants to know which
                     for file in &faulty_files {
-                        warnings::keep(warnings::Warning::new(warnings::LANGUAGE_FILE_UNREADABLE, warnings::Affects::Counts, file,
+                        crate::warnings::keep(mezura::warnings::Warning::new(mezura::warnings::LANGUAGE_FILE_UNREADABLE, mezura::warnings::Affects::Counts, file,
                                 format!("'{file}' could not be read as a language file, so the files of that language were not counted.")));
                     }
                 }
@@ -74,33 +98,33 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    theme::set_active(config.theme.clone());
-    utils::set_number_separator(config.number_separator);
-    utils::set_decimal_separator(config.decimal_separator);
+    crate::theme::set_active(config.view.theme.clone());
+    crate::format::set_number_separator(config.view.number_separator);
+    crate::format::set_decimal_separator(config.view.decimal_separator);
 
     // A pipe already strips the escape codes, but CLICOLOR_FORCE overrides that and would put them
     // inside the strings of the document, so the machine format turns them off itself
-    if !config.prints_text() {
+    if !config.view.prints_text() {
         control::set_override(false);
     }
 
     // Printed here and not at the very start, so that '--hide version' can be declared in a
     // configuration file and not only on the command line
-    if !config.hidden.version && config.prints_text() {
+    if !config.view.hidden.version && config.view.prints_text() {
         // The status block opens with a blank line of its own, so the separation below the
         // version is only missing when that block is not printed
-        let separator = if config.hidden.directory_info {"\n"} else {""};
-        println!("\n{}{separator}", theme::active().version.paint(VERSION_ID));
+        let separator = if config.view.hidden.directory_info {"\n"} else {""};
+        println!("\n{}{separator}", crate::theme::active().version.paint(VERSION_ID));
     }
 
-    if !config.languages_of_interest.is_empty() &&
-     config.languages_of_interest.iter().all(|lang| config.excluded_languages.contains(lang)) {
-        eprintln!("\n{}\n",theme::active().error.paint("Included and excluded languages are mutually exclusive."));
+    if !config.engine.languages_of_interest.is_empty() &&
+     config.engine.languages_of_interest.iter().all(|lang| config.engine.excluded_languages.contains(lang)) {
+        eprintln!("\n{}\n",crate::theme::active().error.paint("Included and excluded languages are mutually exclusive."));
         return ExitCode::FAILURE;
     }
 
-    if !config.languages_of_interest.is_empty() {
-        match retain_only_languages_of_interest(&mut language_map, &config.languages_of_interest) {
+    if !config.engine.languages_of_interest.is_empty() {
+        match report_unknown_languages(&language_map, &config.engine.languages_of_interest) {
             Ok(x) => {
                 if let Some(msg) = x {
                     eprintln!("\n {msg}");
@@ -113,38 +137,49 @@ fn main() -> ExitCode {
         }
     }
 
-    if !config.excluded_languages.is_empty() {
-        config.excluded_languages.iter().for_each(|x| {
-            language_map.retain(|k, _| {
-                k.to_lowercase() != x.to_lowercase()
-            });
-        });
-    }
-
     let (extension_priority, faulty_priority_lines) = read_extension_priority();
     if !faulty_priority_lines.is_empty() {
         eprintln!("{}", format!("\nLines that could not be read in '{EXTENSION_PRIORITY_FILE_NAME}', and were skipped:\n{}",
                 faulty_priority_lines.join("\n")).yellow());
         for line in &faulty_priority_lines {
-            warnings::keep(warnings::Warning::new(warnings::PRIORITY_LINE_SKIPPED, warnings::Affects::Settings, line,
+            crate::warnings::keep(mezura::warnings::Warning::new(mezura::warnings::PRIORITY_LINE_SKIPPED, mezura::warnings::Affects::Settings, line,
                     format!("'{line}' could not be read in '{EXTENSION_PRIORITY_FILE_NAME}' and was skipped, so any contest it was meant to settle was left to the tiebreak.")));
         }
     }
 
+    // Which languages are in play and who owns a contested extension is worked out here and not
+    // inside the run, so that what it has to complain about lands beside the other complaints about
+    // settings rather than in the middle of the status lines.
+    let (languages, reported) = mezura::Languages::resolve(language_map, &extension_priority, &config.engine);
+    for warning in reported {
+        // A name that does not exist was already put on the screen by 'report_unknown_languages',
+        // in colour and with a suggested spelling under it, so this one is only kept for the
+        // document. Everything else has no other voice and is printed here.
+        if warning.code == mezura::warnings::UNKNOWN_LANGUAGE {
+            crate::warnings::keep(warning);
+        } else {
+            crate::warnings::emit(warning);
+        }
+    }
+
+    if !config.view.hidden.directory_info && config.view.prints_text() {
+        println!("\n{}...",crate::theme::active().heading.paint("Analyzing directories"));
+    }
+
     let instant = Instant::now();
-    match mezura::run(&config, language_map, &extension_priority) {
+    match mezura::run(&config.engine, languages, |scan| announce_traversal(&config, scan)) {
         Ok(result) => {
-            mezura::present(&result, &config);
+            crate::present::present(&result, &config);
             // The document carries its own 'scan_ms', measured inside the run, and this is the only
             // place that knows what the whole thing took. A run that found nothing to count says so
             // and stops there, with no timing under it
-            if !config.hidden.timing && config.prints_text() && result.files_present.relevant_files > 0 {
-                let perf = format!("Exec time: {} secs ", utils::with_decimal_separator(format!("{:.2}", instant.elapsed().as_secs_f32())));
+            if !config.view.hidden.timing && config.view.prints_text() && result.files_present.relevant_files > 0 {
+                let perf = format!("Exec time: {} secs ", crate::format::with_decimal_separator(format!("{:.2}", instant.elapsed().as_secs_f32())));
                 let metrics = match result.metrics {
-                    Some(x) => format!("(Parsing {} files/s | {} lines/s)", with_seperators(x.files_per_sec), with_seperators(x.lines_per_sec)),
+                    Some(x) => format!("(Parsing {} files/s | {} lines/s)", crate::format::with_seperators(x.files_per_sec), crate::format::with_seperators(x.lines_per_sec)),
                     None => String::new()
                 };
-                println!("\n{}",theme::active().footer.paint(&(perf + &metrics)));
+                println!("\n{}",crate::theme::active().footer.paint(&(perf + &metrics)));
             }
             ExitCode::SUCCESS
         },
@@ -153,7 +188,7 @@ fn main() -> ExitCode {
         // error behind each one of them
         Err(x) => {
             if let ParseFilesError::AllAreFaultyFiles(faulty_files) = &x {
-                mezura::print_faulty_files_or_ok(faulty_files, &config);
+                crate::present::print_faulty_files_or_ok(faulty_files, &config);
             }
             eprintln!("{}",x.formatted());
             ExitCode::FAILURE
@@ -162,31 +197,50 @@ fn main() -> ExitCode {
 }
 
 
+// The two lines that sit between the phases. They cannot be printed around the call, because the
+// traversal and the parsing overlap and these are known part way through. A run that found nothing
+// says so through the error that follows instead, which is why the counts are skipped here.
+fn announce_traversal(config: &Configuration, scan: FilesPresent) {
+    if scan.relevant_files == 0 {
+        return;
+    }
+    if !config.view.hidden.directory_info && config.view.prints_text() {
+        println!("{}\n",crate::theme::active().summary.paint(&format!("{} files found. {} of interest. {} excluded.",
+                crate::format::with_seperators(scan.total_files), crate::format::with_seperators(scan.relevant_files),
+                crate::format::with_seperators(scan.excluded_files))));
+    }
+    if !config.view.hidden.parsing_info && config.view.prints_text() {
+        println!("{}...",crate::theme::active().heading.paint("Parsing files"));
+    }
+}
+
+
 // Every name that did not match is reported with the names it is closest to, one at a time. With
 // one line for the whole list there was nothing to attach a suggestion to, and the number of
 // language files is only going to grow.
-fn retain_only_languages_of_interest(language_map: &mut HashMap<String, Language>, languages_of_interest: &[String])
+//
+// The filtering itself belongs to the run, so that a caller which is not this binary gets the same
+// selection. What is left here is the part that only a person needs: the colour and the correction.
+fn report_unknown_languages(language_map: &HashMap<String, Language>, languages_of_interest: &[String])
         -> Result<Option<String>, String>
 {
+    let unknown = mezura::languages::unknown_language_names(language_map, languages_of_interest);
+
     let mut all_names = language_map.keys().cloned().collect::<Vec<_>>();
     all_names.sort_by_key(|x| x.to_lowercase());
     let candidates = all_names.iter().map(String::as_str).collect::<Vec<_>>();
 
     // Only the mistake is coloured. What to do about it is not an error, it is the way out.
     let mut report = String::with_capacity(100);
-    for name in languages_of_interest {
-        if all_names.iter().any(|x| x.eq_ignore_ascii_case(name)) {
-            continue;
-        }
-        report.push_str(&format!("\n{}", theme::active().warning.paint(&format!("'{name}' does not exist as a language file."))));
-        if let Some(x) = suggestions::formatted_suggestion(name, &candidates) {
+    for name in &unknown {
+        report.push_str(&format!("\n{}", crate::theme::active().warning.paint(&format!("'{name}' does not exist as a language file."))));
+        if let Some(x) = crate::suggestions::formatted_suggestion(name, &candidates) {
             report.push_str(&format!("\n{x}\n"));
         }
     }
 
-    language_map.retain(|s, _| languages_of_interest.iter().any(|x| x.eq_ignore_ascii_case(s)));
-    if language_map.is_empty() {
-        let headline = theme::active().error.paint("None of the provided language names map to valid supported languages.");
+    if unknown.len() == languages_of_interest.len() {
+        let headline = crate::theme::active().error.paint("None of the provided language names map to valid supported languages.");
         return Err(format!("{headline}\n{report}"));
     }
 
@@ -199,7 +253,7 @@ fn read_baked_in_languages_dir() -> HashMap<String, Language> {
     for file in include_dir!("data/languages").files.iter() {
         // These are ours and every one of them parses, which the test suite is what actually
         // guarantees. A file that somehow did not would be left out rather than take the run down.
-        if let Some(language) = io_handler::parse_string_to_language(&String::from_utf8_lossy(file.contents)) {
+        if let Some(language) = mezura::languages::parse_string_to_language(&String::from_utf8_lossy(file.contents)) {
             lang_files.insert(language.name.to_owned(), language);
         }
     }
@@ -208,11 +262,11 @@ fn read_baked_in_languages_dir() -> HashMap<String, Language> {
 }
 
 fn read_baked_in_default_config_contents() -> String {
-    String::from_utf8_lossy(include_bytes!("../data/config/default.txt")).to_string()
+    String::from_utf8_lossy(include_bytes!("../../data/config/default.txt")).to_string()
 }
 
 fn read_baked_in_extension_priority_contents() -> String {
-    String::from_utf8_lossy(include_bytes!("../data/extension_priority.txt")).to_string()
+    String::from_utf8_lossy(include_bytes!("../../data/extension_priority.txt")).to_string()
 }
 
 // An installation made by an earlier version has no such file, and the baked-in copy is not used as
@@ -220,7 +274,7 @@ fn read_baked_in_extension_priority_contents() -> String {
 // their edits look like they had no effect. It is written by the same restore that writes everything
 // else, and until it is there every contested extension simply announces its tiebreak.
 fn read_extension_priority() -> (HashMap<String,Vec<String>>, Vec<String>) {
-    io_handler::parse_extension_priority_file(&(PERSISTENT_APP_PATHS.data_dir.clone() + EXTENSION_PRIORITY_FILE_NAME))
+    mezura::languages::parse_extension_priority_file(&(crate::paths::PERSISTENT_APP_PATHS.data_dir.clone() + EXTENSION_PRIORITY_FILE_NAME))
 }
 
 fn open_in_browser(path: &str) {
@@ -254,7 +308,7 @@ impl MigrationOutcome {
         let (count, plural) = (self.replaced.len(), if self.replaced.len() == 1 {"file"} else {"files"});
         Some(format!("\nUpdated the data files for {VERSION_ID}.\n{count} {plural} you had changed {} replaced. \
 Yours can be found in '{}{REPLACED_DIR_NAME}/{VERSION_ID}/', if you want to carry your changes over:\n  {}\n",
-                if count == 1 {"was"} else {"were"}, PERSISTENT_APP_PATHS.data_dir, self.replaced.join(", ")).yellow().to_string())
+                if count == 1 {"was"} else {"were"}, crate::paths::PERSISTENT_APP_PATHS.data_dir, self.replaced.join(", ")).yellow().to_string())
     }
 }
 
@@ -320,7 +374,7 @@ fn shipped_files() -> Vec<(String, &'static [u8])> {
 // that change a count, which is the only reason to take somebody's file away from them.
 fn means_the_same(on_disk: &[u8], shipped: &[u8]) -> bool {
     let (theirs, ours) = (String::from_utf8_lossy(on_disk), String::from_utf8_lossy(shipped));
-    match (io_handler::parse_string_to_language(&theirs), io_handler::parse_string_to_language(&ours)) {
+    match (mezura::languages::parse_string_to_language(&theirs), mezura::languages::parse_string_to_language(&ours)) {
         (Some(theirs), Some(ours)) => theirs == ours,
         // Ours always parses, so this is a file edited into something that no longer does, and
         // replacing it is a repair
@@ -437,7 +491,7 @@ fn migrate_data_files(data_dir: &str, force: bool) -> Result<MigrationOutcome, s
 
 fn read_args_as_str() -> Option<String> {
     let args = std::env::args().skip(1)
-            .filter_map(|arg| get_trimmed_if_not_empty(&arg))
+            .filter_map(|arg| crate::args::get_trimmed_if_not_empty(&arg))
             .collect::<Vec<String>>();
     if args.is_empty() {
         None
@@ -461,40 +515,40 @@ fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Lan
     // the plain banner that every other message-only command opens with. With '--help' next to it,
     // the question is about the command and belongs to the help.
     if is_present(VERSION) && !is_present(HELP) {
-        message_printer::print_version();
+        crate::message_printer::print_version();
         return Some(ExitCode::SUCCESS);
     }
-    println!("\n{}", theme::active().version.paint(VERSION_ID));
+    println!("\n{}", crate::theme::active().version.paint(VERSION_ID));
 
     if args_str.contains(&(String::from("--") + HELP)) {
-        message_printer::print_help_message_for_given_args(args_str);
+        crate::message_printer::print_help_message_for_given_args(args_str);
         return Some(ExitCode::SUCCESS);
     } else if let Some(pos) = args_str.find(&(String::from("--") + CHANGELOG)) {
         return match args_str[pos + CHANGELOG.len() + 2..].split_whitespace().next() {
             Some("full") => {
-                message_printer::print_changelog(true);
+                crate::message_printer::print_changelog(true);
                 Some(ExitCode::SUCCESS)
             },
             Some(arg) if !arg.starts_with("--") => {
                 println!("\n{}", config_manager::ArgParsingError::IncorrectCommandArgs(CHANGELOG.to_owned()).formatted());
-                message_printer::print_help_message_for_command(CHANGELOG);
+                crate::message_printer::print_help_message_for_command(CHANGELOG);
                 Some(ExitCode::FAILURE)
             },
             _ => {
-                message_printer::print_changelog(false);
+                crate::message_printer::print_changelog(false);
                 Some(ExitCode::SUCCESS)
             },
         };
     } else if args_str.contains(&(String::from("--") + SHOW_LANGUAGES)) {
-        message_printer::print_supported_languages(language_map);
+        crate::message_printer::print_supported_languages(language_map);
         return Some(ExitCode::SUCCESS);
     } else if args_str.contains(&(String::from("--") + SHOW_CONFIGS)) {
-        message_printer::print_existing_configs();
+        crate::message_printer::print_existing_configs();
         return Some(ExitCode::SUCCESS);
     } else if args_str.contains(&(String::from("--") + RESTORE)) {
         // The same pass a version change performs, asked for by hand: useful when something was
         // damaged inside one version, where nothing would otherwise trigger it
-        return match migrate_data_files(&PERSISTENT_APP_PATHS.data_dir, true) {
+        return match migrate_data_files(&crate::paths::PERSISTENT_APP_PATHS.data_dir, true) {
             Ok(outcome) => {
                 if outcome.installed.is_empty() && outcome.replaced.is_empty() && outcome.withdrawn.is_empty() {
                     println!("\nEverything that ships with mezura is in place.");
@@ -508,7 +562,7 @@ fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Lan
                 }
                 if !outcome.withdrawn.is_empty() {
                     println!("\nNo longer part of mezura, and moved to '{}{REPLACED_DIR_NAME}/{VERSION_ID}/':\n{}",
-                            PERSISTENT_APP_PATHS.data_dir, outcome.withdrawn.join(", "));
+                            crate::paths::PERSISTENT_APP_PATHS.data_dir, outcome.withdrawn.join(", "));
                 }
                 Some(ExitCode::SUCCESS)
             },
@@ -518,7 +572,7 @@ fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Lan
             }
         };
     } else if args_str.contains(&(String::from("--") + THEME_EDITOR)) {
-        return match io_handler::generate_theme_editor_page() {
+        return match crate::theme_files::generate_theme_editor_page() {
             Ok(path) => {
                 println!("\nTheme editor page generated at:\n{path}");
                 open_in_browser(&path);
@@ -540,17 +594,17 @@ fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Lan
         return match args_str[pos + SHOW_THEMES.len() + 2..].split_whitespace().next() {
             Some(arg) if !arg.starts_with("--") => match config_manager::BarThickness::parse(arg) {
                 Some(thickness) => {
-                    message_printer::print_existing_themes(thickness, layout);
+                    crate::message_printer::print_existing_themes(thickness, layout);
                     Some(ExitCode::SUCCESS)
                 },
                 None => {
                     println!("\n{}", config_manager::ArgParsingError::IncorrectCommandArgs(SHOW_THEMES.to_owned()).formatted());
-                    message_printer::print_help_message_for_command(SHOW_THEMES);
+                    crate::message_printer::print_help_message_for_command(SHOW_THEMES);
                     Some(ExitCode::FAILURE)
                 }
             },
             _ => {
-                message_printer::print_existing_themes(config_manager::BarThickness::default(), layout);
+                crate::message_printer::print_existing_themes(config_manager::BarThickness::default(), layout);
                 Some(ExitCode::SUCCESS)
             }
         };
@@ -561,11 +615,13 @@ fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Lan
 
 #[cfg(test)]
 mod tests {
-    use mezura::{LOCAL_APP_PATHS, Language, hashmap};
+    use std::collections::HashMap;
 
-    use mezura::config_manager::VERSION_ID;
+    use mezura::{LOCAL_APP_PATHS, Language};
 
-    use crate::{content_hash, migrate_data_files, retain_only_languages_of_interest};
+    use crate::config_manager::VERSION_ID;
+
+    use crate::{content_hash, migrate_data_files, report_unknown_languages};
 
     // The shipped copy always wins and the user's is kept, which is the whole of the policy. What
     // this pins is the three ways a file can differ from what we ship, because only one of them is
@@ -598,7 +654,7 @@ mod tests {
         let edited = migrate_data_files(&dir, true).unwrap();
         assert_eq!(vec!["languages/Lua.txt".to_owned()], edited.replaced);
         assert_eq!(shipped, std::fs::read_to_string(&lua).unwrap());
-        assert!(std::fs::read_to_string(format!("{dir}replaced/{}/languages/Lua.txt", mezura::config_manager::VERSION_ID))
+        assert!(std::fs::read_to_string(format!("{dir}replaced/{}/languages/Lua.txt", crate::config_manager::VERSION_ID))
                 .unwrap().contains("\""));
 
         // A theme is taste, and one that has fallen behind what we ship breaks nothing, so somebody
@@ -739,33 +795,27 @@ third
 "));
     }
 
+    fn java_and_csharp() -> HashMap<String, Language> {
+        mezura::hashmap![
+                "Java".to_owned() => Language::new("Java".to_owned(),vec![],vec![],vec!["\"".to_owned()],None,None,vec![]),
+                "C#".to_owned() => Language::new("C#".to_owned(),vec![],vec![],vec!["\"".to_owned()],None,None,vec![])]
+    }
+
+    // The counterpart of this, that the map really is narrowed, is asserted next to the run, which
+    // is where the narrowing happens now. What is left here is the part a person reads.
     #[test]
-    fn test_retain_only_languages_of_interest() {
-        let languages_of_interest = vec!["java".to_owned()];
-        let mut language_map = hashmap![
-                "Java".to_owned() => Language::new("Java".to_owned(),vec![],vec![],vec!["\"".to_owned()],None,None,vec![]),
-                "C#".to_owned() => Language::new("C#".to_owned(),vec![],vec![],vec!["\"".to_owned()],None,None,vec![])];
+    fn test_report_unknown_languages() {
+        let map = java_and_csharp();
 
-        let result = retain_only_languages_of_interest(&mut language_map, &languages_of_interest);
-        assert!(result.unwrap().is_none());
-        assert!(language_map.len() == 1);
-        
-        let languages_of_interest = vec!["java".to_owned(),"c++".to_owned(),"Rust".to_owned()];
-        let mut language_map = hashmap![
-                "Java".to_owned() => Language::new("Java".to_owned(),vec![],vec![],vec!["\"".to_owned()],None,None,vec![]),
-                "C#".to_owned() => Language::new("C#".to_owned(),vec![],vec![],vec!["\"".to_owned()],None,None,vec![])];
+        // every name exists, so there is nothing to say
+        assert!(report_unknown_languages(&map, &["java".to_owned()]).unwrap().is_none());
 
-        let result = retain_only_languages_of_interest(&mut language_map, &languages_of_interest);
-        assert!(result.unwrap().is_some());
-        assert!(language_map.len() == 1);
-        
-        let languages_of_interest = vec!["c++".to_owned(),"Rust".to_owned()];
-        let mut language_map = hashmap![
-                "Java".to_owned() => Language::new("Java".to_owned(),vec![],vec![],vec!["\"".to_owned()],None,None,vec![]),
-                "C#".to_owned() => Language::new("C#".to_owned(),vec![],vec![],vec!["\"".to_owned()],None,None,vec![])];
+        // one of the three is real, so the other two are reported and the run goes on
+        let some_unknown = ["java".to_owned(), "c++".to_owned(), "Rust".to_owned()];
+        assert!(report_unknown_languages(&map, &some_unknown).unwrap().is_some());
 
-        let result = retain_only_languages_of_interest(&mut language_map, &languages_of_interest);
-        assert!(result.is_err());
-        assert!(language_map.is_empty());
+        // none of them is, and that stops the run
+        let all_unknown = ["c++".to_owned(), "Rust".to_owned()];
+        assert!(report_unknown_languages(&map, &all_unknown).is_err());
     }
 }

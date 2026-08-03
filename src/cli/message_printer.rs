@@ -2,7 +2,10 @@ use std::{collections::HashMap, fs};
 
 use colored::Colorize;
 
-use crate::{CHANGELOG_BYTES, Formatted, Language, PERSISTENT_APP_PATHS, config_manager::*, io_handler, theme};
+use super::formatted::Formatted;
+use crate::paths::PERSISTENT_APP_PATHS;
+use mezura::{CHANGELOG_BYTES, Language};
+use super::config_manager::*;
 
 // These constants need to be maintained along with the readme's commands
 pub const DIRS_HELP  :  &str =
@@ -699,7 +702,7 @@ pub fn print_version() {
 
     println!("
 {} ({released})
-", theme::active().version.paint(VERSION_ID));
+", super::theme::active().version.paint(VERSION_ID));
 }
 
 pub fn command_names() -> Vec<&'static str> {
@@ -815,14 +818,14 @@ pub fn print_existing_themes(bar_thickness: BarThickness, layout: Layout) {
     for name in theme_names.iter() {
         msg.push_str(&format!("\n  {}\n\n", name.bold()));
 
-        let Some((styles, _)) = io_handler::load_theme(name, &PERSISTENT_APP_PATHS.themes_dir) else {
+        let Some((styles, _)) = super::theme_files::load_theme(name, &PERSISTENT_APP_PATHS.themes_dir) else {
             msg.push_str(&format!("{INDENT}{}\n","(this theme could not be read)".yellow()));
             continue;
         };
-        let theme = theme::resolve(&styles, &[], &[]);
+        let theme = super::theme::resolve(&styles, &[], &[]);
 
         msg.push_str(&format!("{INDENT}{}.\n", theme.heading.paint("Details")));
-        for row in crate::result_printer::theme_sample_rows(&theme, layout) {
+        for row in super::result_printer::theme_sample_rows(&theme, layout) {
             msg.push_str(&format!("{INDENT}{row}\n"));
         }
 

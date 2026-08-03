@@ -1,6 +1,7 @@
 use std::sync::{LazyLock, OnceLock};
 
-use crate::{Color, ColoredString, Colorize, utils};
+use colored::{Color, ColoredString, Colorize};
+
 
 const LABEL_GOLD: Color = Color::TrueColor { r: 181, g: 169, b: 138 };
 const SIZE_GOLD: Color = Color::TrueColor { r: 125, g: 119, b: 105 };
@@ -62,9 +63,17 @@ impl Style {
         self
     }
 
+
+    // Both used only by the tests of this file, which is what marks them
+    #[cfg(test)]
     pub fn reverse(mut self) -> Style {
         self.reverse = true;
         self
+    }
+
+    #[cfg(test)]
+    pub fn paint_with_color(&self, text: &str, color: Color) -> ColoredString {
+        self.apply_attributes(ColoredString::from(text).color(color))
     }
 
     pub fn paint(&self, text: &str) -> ColoredString {
@@ -74,11 +83,6 @@ impl Style {
         })
     }
 
-    // The overview colors every language individually, so the color comes from the caller there and
-    // whatever the style itself declares is ignored
-    pub fn paint_with_color(&self, text: &str, color: Color) -> ColoredString {
-        self.apply_attributes(ColoredString::from(text).color(color))
-    }
 
     fn apply_attributes(&self, painted: ColoredString) -> ColoredString {
         let mut painted = painted;
@@ -123,7 +127,7 @@ impl Style {
                 _ => {
                     if color_was_given { return None; }
                     color_was_given = true;
-                    style.color = Some(utils::parse_single_color(token)?);
+                    style.color = Some(super::theme::parse_single_color(token)?);
                 }
             }
         }
@@ -133,7 +137,7 @@ impl Style {
 
     pub fn to_config_string(&self) -> String {
         let mut parts = Vec::with_capacity(5);
-        parts.push(self.color.map_or("default".to_owned(), |x| utils::color_to_config_string(&x)));
+        parts.push(self.color.map_or("default".to_owned(), |x| super::theme::color_to_config_string(&x)));
         if self.bold { parts.push("bold".to_owned()); }
         if self.italic { parts.push("italic".to_owned()); }
         if self.underline { parts.push("underline".to_owned()); }
@@ -167,15 +171,9 @@ macro_rules! theme_tokens {
                 }
             }
 
+            #[cfg(test)]
             pub fn token_names() -> &'static [&'static str] {
                 &[$($name,)+]
-            }
-
-            pub fn style_of_token(&self, token: &str) -> Option<&Style> {
-                match token.to_lowercase().replace('_', "-").as_str() {
-                    $($name => Some(&self.$field),)+
-                    _ => None
-                }
             }
 
             pub fn non_default_tokens(&self) -> Vec<(&'static str, String)> {
@@ -547,5 +545,61 @@ mod tests {
         assert_eq!(Style::of(Color::BrightRed).bold(), theme.code_label);
         assert_eq!(Style::plain().dim(), theme.code_number);
         assert_eq!(Theme::default().summary, theme.summary);
+    }
+}
+
+
+pub fn parse_single_color(token: &str) -> Option<Color> {
+    match token.to_lowercase().replace('_', "-").as_str() {
+        "black" => Some(Color::Black),
+        "red" => Some(Color::Red),
+        "green" => Some(Color::Green),
+        "yellow" => Some(Color::Yellow),
+        "blue" => Some(Color::Blue),
+        "magenta" => Some(Color::Magenta),
+        "cyan" => Some(Color::Cyan),
+        "white" => Some(Color::White),
+        "bright-black" => Some(Color::BrightBlack),
+        "bright-red" => Some(Color::BrightRed),
+        "bright-green" => Some(Color::BrightGreen),
+        "bright-yellow" => Some(Color::BrightYellow),
+        "bright-blue" => Some(Color::BrightBlue),
+        "bright-magenta" => Some(Color::BrightMagenta),
+        "bright-cyan" => Some(Color::BrightCyan),
+        "bright-white" => Some(Color::BrightWhite),
+        other => {
+            let hex = other.strip_prefix('#').unwrap_or(other);
+            if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+                return None;
+            }
+            Some(Color::TrueColor {
+                r: u8::from_str_radix(&hex[0..2], 16).ok()?,
+                g: u8::from_str_radix(&hex[2..4], 16).ok()?,
+                b: u8::from_str_radix(&hex[4..6], 16).ok()?
+            })
+        }
+    }
+}
+
+pub fn color_to_config_string(color: &Color) -> String {
+    match color {
+        Color::TrueColor {r, g, b} => format!("{r:02x}{g:02x}{b:02x}"),
+        named => format!("{:?}", named).chars().enumerate().flat_map(|(i, c)| {
+            if i > 0 && c.is_ascii_uppercase() { vec!['-', c.to_ascii_lowercase()] }
+            else { vec![c.to_ascii_lowercase()] }
+        }).collect()
+    }
+}
+
+
+#[cfg(test)]
+mod color_tests {
+    use super::*;
+
+    #[test]
+    fn test_color_to_config_string() {
+        assert_eq!("cyan", color_to_config_string(&Color::Cyan));
+        assert_eq!("bright-magenta", color_to_config_string(&Color::BrightMagenta));
+        assert_eq!("ff0080", color_to_config_string(&Color::TrueColor{r:255,g:0,b:128}));
     }
 }

@@ -1,8 +1,8 @@
-use std::{io::Read as IoRead, str};
+use std::{collections::HashMap, fs::File, io::Read as IoRead, path::Path, str};
 
 use memchr::memmem;
 
-use crate::*;
+use crate::{EngineConfig, FileStats, Language, phase_timing};
 
 pub const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
 
@@ -277,7 +277,7 @@ impl KeywordMatcher {
 
 
 pub fn parse_file(path: &Path, lang_name: &str, buf: &mut String, buffers: &mut ParseBuffers,
-    language_map: &HashMap<String,Language>, keyword_matcher: Option<&KeywordMatcher>, config: &Configuration)
+    language_map: &HashMap<String,Language>, keyword_matcher: Option<&KeywordMatcher>, config: &EngineConfig)
 -> Result<FileStats,String>
 {
     // None unless MEZURA_PHASE_TIMING is set, so a normal run never reads the clock at all
@@ -348,15 +348,15 @@ fn lines_of(contents: &str) -> LineIter<'_> {
     LineIter { contents, newlines: memchr::memchr_iter(b'\n', contents.as_bytes()), start: 0 }
 }
 
-fn parse_lines(contents: &str, language: &Language, keyword_matcher: Option<&KeywordMatcher>, config: &Configuration,
+fn parse_lines(contents: &str, language: &Language, keyword_matcher: Option<&KeywordMatcher>, config: &EngineConfig,
     buffers: &mut ParseBuffers) -> FileStats
 {
     let ParseBuffers { scan, alias_indices, code_spans, .. } = buffers;
-    let mut file_stats = match config.hidden.keywords {
-        true => FileStats::default(),
-        false => FileStats::with_keywords(&language.keywords)
+    let mut file_stats = match config.count_keywords {
+        false => FileStats::default(),
+        true => FileStats::with_keywords(&language.keywords)
     };
-    let counting_keywords = !config.hidden.keywords && keyword_matcher.is_some();
+    let counting_keywords = config.count_keywords && keyword_matcher.is_some();
     code_spans.clear();
 
     let mut is_comment_closed = true;
@@ -959,7 +959,10 @@ impl LineInfo {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, LazyLock};
+
     use super::*;
+    use crate::{LOCAL_APP_PATHS, Keyword, LanguageContentInfo, find_language_of_extension, make_extension_language_map};
 
     // The parser is handed its working memory by the consumer thread that owns it. A test cares
     // about one line at a time, so it gets a fresh one and reads the result out.
@@ -1124,7 +1127,7 @@ mod tests {
     });
 
     static LANGUAGE_MAP_REF : LazyLock<Arc<HashMap<String,Language>>> =
-            LazyLock::new(|| Arc::new(io_handler::parse_supported_languages_to_map(&LOCAL_APP_PATHS.languages_dir).unwrap().0));
+            LazyLock::new(|| Arc::new(crate::languages::parse_supported_languages_to_map(&LOCAL_APP_PATHS.languages_dir).unwrap().0));
 
     static JAVA_MATCHER : LazyLock<KeywordMatcher> = LazyLock::new(|| KeywordMatcher::build(&JAVA).unwrap());
 
@@ -1140,37 +1143,37 @@ mod tests {
     fn test_correct_parsing_of_test_dir() {
         let mut buf = String::with_capacity(150);
 
-        let mut config = Configuration::new(vec!["a".to_owned()]);
+        let mut config = EngineConfig::new(vec!["a".to_owned()]);
         let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "Java", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &config);
         let result = content_info_of(result.unwrap(), "Java");
         assert_eq!(LanguageContentInfo::new(44, 13, 15, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         buf.clear();
-        config.set_hidden(config_manager::Hidden {keywords: true, ..Default::default()});
+        config.set_count_keywords(false);
         let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "Java", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &config);
         let result = content_info_of(result.unwrap(), "Java");
         assert_eq!(LanguageContentInfo::new(44, 13, 15, hashmap!()), result);
         buf.clear();
-        config.set_hidden(config_manager::Hidden::default());
-        let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "C#", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("C#").as_ref(), &Configuration::new(vec!["a".to_owned()]));
+        config.set_count_keywords(true);
+        let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "C#", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("C#").as_ref(), &EngineConfig::new(vec!["a".to_owned()]));
         let result = content_info_of(result.unwrap(), "C#");
         assert_eq!(LanguageContentInfo::new(44, 13, 15, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         buf.clear();
         
-        let result = parse_file(Path::new("test_dir/lang_files/d.txt"), "C#", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("C#").as_ref(), &Configuration::new(vec!["a".to_owned()]));
+        let result = parse_file(Path::new("test_dir/lang_files/d.txt"), "C#", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("C#").as_ref(), &EngineConfig::new(vec!["a".to_owned()]));
         let result = content_info_of(result.unwrap(), "C#");
         assert_eq!(LanguageContentInfo::new(19, 7, 10, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         buf.clear();
-        let result = parse_file(Path::new("test_dir/lang_files/d.txt"), "Java", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &Configuration::new(vec!["a".to_owned()]));
+        let result = parse_file(Path::new("test_dir/lang_files/d.txt"), "Java", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &EngineConfig::new(vec!["a".to_owned()]));
         let result = content_info_of(result.unwrap(), "Java");
         assert_eq!(LanguageContentInfo::new(19, 7, 10, hashmap!("classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         buf.clear();
 
-        let result = parse_file(Path::new("test_dir/lang_files/b.txt"), "Java", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &Configuration::new(vec!["a".to_owned()]));
+        let result = parse_file(Path::new("test_dir/lang_files/b.txt"), "Java", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &EngineConfig::new(vec!["a".to_owned()]));
         let result = content_info_of(result.unwrap(), "Java");
         assert_eq!(LanguageContentInfo::new(19, 11, 5, hashmap!("classes".to_owned()=>7,"interfaces".to_owned()=>0)), result);
         buf.clear();
 
-        let result = parse_file(Path::new("test_dir/lang_files/c.txt"), "Python", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Python").as_ref(), &Configuration::new(vec!["a".to_owned()]));
+        let result = parse_file(Path::new("test_dir/lang_files/c.txt"), "Python", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Python").as_ref(), &EngineConfig::new(vec!["a".to_owned()]));
         let result = content_info_of(result.unwrap(), "Python");
         assert_eq!(LanguageContentInfo::new(11, 6, 3, hashmap!("classes".to_owned()=>2)), result);
         buf.clear();
@@ -1184,7 +1187,7 @@ mod tests {
         let mut buf = String::with_capacity(150);
         let path = Path::new("test_dir/lang_files/a.txt");
         let count_with = |flag: bool, buf: &mut String| {
-            let mut config = Configuration::new(vec!["a".to_owned()]);
+            let mut config = EngineConfig::new(vec!["a".to_owned()]);
             config.set_braces_as_code(flag);
             let stats = parse_file(path, "Java", buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &config).unwrap();
             (stats.lines, stats.code_lines, stats.comment_lines)
@@ -1824,6 +1827,133 @@ mod tests {
         assert_eq!(TextInfo::new(Some("Hello  ".to_string()), true, false, Some(0u8)), bounds_multi(&line, &JAVA, true, &None));
         assert_eq!(TextInfo::new(Some(" ".to_string()), true, false, Some(0u8)), bounds_multi(&line, &JAVA, false, &None));
         assert_eq!(TextInfo::new(Some(" */ ".to_string()), true, false, Some(0u8)), bounds_multi(&line, &JAVA, true, double_str_opt));
+    }
+
+
+    const MARKER: &str = "mezura-expect";
+
+    fn fixtures_dir() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join("lang")
+    }
+
+    // Each fixture declares, on its first line and in its own comment syntax, the counts mezura must
+    // produce for it. The counts are hand-verified, so a mismatch means either the parser regressed
+    // or the fixture is wrong; both are worth stopping for. The header line itself is a comment, so
+    // it is included in 'lines' and excluded from 'code'.
+    fn parse_expectations(first_line: &str) -> Option<HashMap<String, usize>> {
+        let after_marker = first_line.split_once(MARKER)?.1;
+        let mut expectations = HashMap::new();
+        for entry in after_marker.split_whitespace() {
+            let (key, value) = entry.split_once('=')?;
+            expectations.insert(key.to_owned(), value.parse::<usize>().ok()?);
+        }
+
+        if expectations.is_empty() { None } else { Some(expectations) }
+    }
+
+    fn fixture_paths(root: &Path) -> Vec<std::path::PathBuf> {
+        let mut paths = std::fs::read_dir(root)
+            .unwrap_or_else(|x| panic!("cannot read the fixture directory {}: {x}", root.display()))
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.is_file())
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths
+    }
+
+    #[test]
+    fn language_fixtures_match_their_declared_counts() {
+        let root = fixtures_dir();
+        let extension_map = make_extension_language_map(&LANGUAGE_MAP_REF, &HashMap::new(), &HashMap::new()).0;
+        // Built-in defaults only, so that a preference in the machine's own config file cannot
+        // change the counts
+        let config = EngineConfig::new(Vec::new());
+
+        let mut failures = Vec::new();
+        let mut checked = 0;
+
+        for path in fixture_paths(&root) {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let extension = path.extension().and_then(|x| x.to_str()).unwrap_or_default();
+
+            let Some(lang_name) = find_language_of_extension(&extension_map, extension) else {
+                failures.push(format!("{name}: no supported language claims the extension '{extension}'"));
+                continue;
+            };
+
+            let contents = std::fs::read_to_string(&path).unwrap();
+            let Some(expected) = parse_expectations(contents.lines().next().unwrap_or_default()) else {
+                failures.push(format!("{name}: the first line must contain a '{MARKER} lines=N code=N ...' header"));
+                continue;
+            };
+
+            let language = LANGUAGE_MAP_REF.get(lang_name.as_ref()).unwrap();
+            let keyword_matcher = KeywordMatcher::build(language);
+            let mut buf = String::new();
+            let stats = match parse_file(&path, lang_name.as_ref(), &mut buf, &mut ParseBuffers::default(),
+                    &LANGUAGE_MAP_REF, keyword_matcher.as_ref(), &config) {
+                Ok(stats) => stats,
+                Err(x) => {
+                    failures.push(format!("{name}: could not be parsed: {x}"));
+                    continue;
+                }
+            };
+
+            let mut actual = HashMap::from([
+                ("lines".to_owned(), stats.lines),
+                ("code".to_owned(), stats.code_lines),
+                ("comments".to_owned(), stats.comment_lines),
+                ("extra".to_owned(), stats.lines - stats.code_lines - stats.comment_lines),
+            ]);
+            for (index, keyword) in language.keywords.iter().enumerate() {
+                actual.insert(keyword.descriptive_name.clone(), stats.keyword_occurences[index]);
+            }
+
+            for (key, expected_value) in &expected {
+                match actual.get(key) {
+                    Some(actual_value) if actual_value == expected_value => (),
+                    Some(actual_value) => failures.push(format!("{name} ({lang_name}): {key} expected {expected_value}, got {actual_value}")),
+                    None => {
+                        let mut known = actual.keys().cloned().collect::<Vec<_>>();
+                        known.sort();
+                        failures.push(format!("{name} ({lang_name}): '{key}' is not a countable field. Available: {}", known.join(", ")));
+                    }
+                }
+            }
+
+            // A keyword the fixture does not mention must be absent, otherwise a fixture could
+            // quietly stop covering a keyword the moment someone forgets to declare it
+            for (index, keyword) in language.keywords.iter().enumerate() {
+                let occurrences = stats.keyword_occurences[index];
+                if occurrences > 0 && !expected.contains_key(&keyword.descriptive_name) {
+                    failures.push(format!("{name} ({lang_name}): found {occurrences} '{}' but the header does not declare them",
+                            keyword.descriptive_name));
+                }
+            }
+
+            checked += 1;
+        }
+
+        assert!(checked > 0, "no fixtures were checked, is {} populated?", root.display());
+        assert!(failures.is_empty(), "\n{} fixture check(s) failed:\n  {}\n", failures.len(), failures.join("\n  "));
+    }
+
+    #[test]
+    fn every_fixture_extension_resolves_to_exactly_one_language() {
+        let mut claimants_of = HashMap::<String, Vec<String>>::new();
+        for language in LANGUAGE_MAP_REF.values() {
+            for extension in &language.extensions {
+                claimants_of.entry(extension.clone()).or_default().push(language.name.clone());
+            }
+        }
+
+        for path in fixture_paths(&fixtures_dir()) {
+            let extension = path.extension().and_then(|x| x.to_str()).unwrap_or_default().to_owned();
+            let claimants = claimants_of.get(&extension).cloned().unwrap_or_default();
+            assert!(claimants.len() == 1, "the fixture extension '{extension}' is claimed by {} languages ({}), so its counts depend on the tie-break rule",
+                    claimants.len(), claimants.join(", "));
+        }
     }
 }
 

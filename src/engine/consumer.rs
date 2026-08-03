@@ -1,12 +1,14 @@
-use std::{sync::atomic::Ordering, thread, time::Duration};
+use std::{collections::HashMap, sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, thread::JoinHandle, time::Duration};
 
-use crossbeam_deque::Steal;
+use crossbeam_deque::{Injector, Steal, Worker};
 
-use crate::*;
+use crate::{EngineConfig, ContentInfoMapMut, FaultyFileDetails, FaultyFilesListMut, Language, LanguageContentInfo,
+        LanguageMetadata, MetadataMapMut, ParsableFile, phase_timing};
+use crate::engine::file_parser;
 
 pub fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
         languages_content_info: ContentInfoMapMut, languages_metadata_map: MetadataMapMut, language_map: Arc<HashMap<String,Language>>,
-        config: Arc<Configuration>) -> JoinHandle<()>
+        config: Arc<EngineConfig>) -> JoinHandle<()>
 {
     thread::Builder::new().name(id.to_string()).spawn(move || {
         start_parsing_files(id, files_injector, faulty_files, finish_condition, languages_content_info, languages_metadata_map, language_map, config);
@@ -15,7 +17,7 @@ pub fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>
 
 pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
     languages_content_info: ContentInfoMapMut, languages_metadata_map: MetadataMapMut, language_map: Arc<HashMap<String,Language>>,
-    config: Arc<Configuration>) 
+    config: Arc<EngineConfig>) 
 {
     let mut buf = String::with_capacity(150);
     let mut parse_buffers = file_parser::ParseBuffers::default();
@@ -27,19 +29,30 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
     let modules = languages_content_info.lock().unwrap().len();
     let mut local_content_info: Vec<HashMap<String, (LanguageContentInfo, LanguageMetadata)>> =
             vec![HashMap::new(); modules];
+    // A batch and not a file at a time, because the consumers outnumber the cores four to one and
+    // every one of them was reaching for the same injector head between one file and the next. The
+    // cost is not the atomic, it is the losing side: a contended steal returns Retry, and the arm
+    // below answers it by yielding, which on an oversubscribed machine buys a scheduling round for
+    // every file. The batch halves whatever is left when the queue runs low, so the last files
+    // still spread out instead of ending up behind one thread.
+    let worker = Worker::new_fifo();
     // let mut share = 0;
     loop {
-        match files_injector.steal() {
+        let next = match worker.pop() {
+            Some(parsable_file) => Steal::Success(parsable_file),
+            None => files_injector.steal_batch_and_pop(&worker)
+        };
+        match next {
             Steal::Success(parsable_file) => {
                 idle_iterations = 0;
                 let lang_name = parsable_file.language_name.as_ref();
                 if !keyword_matchers.contains_key(lang_name) {
                     // Hidden keywords are not counted either. Nothing else in the program reads
                     // the counts, not even the log, so the work would be thrown away
-                    let built = if config.hidden.keywords {
-                        None
-                    } else {
+                    let built = if config.count_keywords {
                         file_parser::KeywordMatcher::build(language_map.get(lang_name).unwrap())
+                    } else {
+                        None
                     };
                     keyword_matchers.insert(lang_name.to_owned(), built);
                 }

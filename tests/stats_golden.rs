@@ -1,10 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 
-use crossbeam_deque::{Injector, Worker};
-use mezura::config_manager::Configuration;
+use mezura::EngineConfig;
 use mezura::*;
 
 const CONSUMER_THREADS: usize = 4;
@@ -48,56 +45,28 @@ fn render_report(content_info: &HashMap<String, LanguageContentInfo>, metadata: 
     format!("files={total_files} lines={total_lines} code={total_code} comments={total_comments}\n\n{report}")
 }
 
-// One producer fills the queue, then several consumers drain it in parallel, which is where the
-// per-thread stats merging happens and where the historical nondeterminism bugs lived.
+// One producer and several consumers, which is where the per-thread stats merging happens and where
+// the historical nondeterminism bugs lived. Through 'run' and not through a hand-built queue, so
+// that what is measured is the wiring the program actually uses.
 fn collect_stats() -> String {
-    let mut config = Configuration::new(vec![fixtures_root().to_str().unwrap().replace('\\', "/")]);
-    // The producer count must match the number of producers actually started, since traversal only
-    // terminates once that many of them report idle at the same time
-    config.set_threads(1, CONSUMER_THREADS).set_should_show_faulty_files(true);
-    let config = Arc::new(config);
+    // Only the counting half, since nothing here is printed.
+    let mut config = EngineConfig::new(vec![fixtures_root().to_str().unwrap().replace('\\', "/")]);
+    config.set_threads(1, CONSUMER_THREADS);
 
-    let language_map = Arc::new(io_handler::parse_supported_languages_to_map(&LOCAL_APP_PATHS.languages_dir).unwrap().0);
-    let extension_lang_map: ExtensionLangMap = Arc::new(make_extension_language_map(&language_map, &HashMap::new(), &HashMap::new()).0);
-    let modules = Arc::new(Modules::of(&config.dirs));
-    let content_info_ref: ContentInfoMapMut = Arc::new(Mutex::new(make_language_stats(language_map.clone(), modules.count())));
-    let metadata_ref = Arc::new(Mutex::new(make_language_metadata(&language_map, modules.count())));
-    let faulty_files_ref: FaultyFilesListMut = Arc::new(Mutex::new(Vec::new()));
-    let finish_condition_ref = Arc::new(AtomicBool::new(false));
-    let files_injector = Arc::new(Injector::new());
-    let dirs_injector = Arc::new(Injector::new());
+    let language_map = languages::parse_supported_languages_to_map(&LOCAL_APP_PATHS.languages_dir).unwrap().0;
 
-    let mut files_present = FilesPresent::default();
-    calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector, &mut files_present, &extension_lang_map, &modules);
+    let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
 
-    let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs).unwrap());
-    let (_, relevant_files, _) = producer::search_for_files(0, files_injector.clone(), dirs_injector, Worker::new_fifo(),
-            Arc::new(AtomicUsize::new(0)), extension_lang_map, exclude_matcher, config.clone(), modules);
-    assert!(relevant_files > 0, "the fixture corpus produced no relevant files");
+    let result = match run(&config, languages, |_| {}) {
+        Ok(x) => x,
+        Err(ParseFilesError::AllAreFaultyFiles(files)) => panic!("all {} fixtures failed to parse", files.len()),
+        Err(x) => panic!("the fixture corpus could not be counted: {x:?}")
+    };
 
-    finish_condition_ref.store(true, Ordering::Relaxed);
-    let handles = (0..CONSUMER_THREADS).map(|id| {
-        let (files_injector, faulty_files_ref) = (files_injector.clone(), faulty_files_ref.clone());
-        let (finish_condition_ref, content_info_ref) = (finish_condition_ref.clone(), content_info_ref.clone());
-        let (language_map, config) = (language_map.clone(), config.clone());
-        let metadata_ref = metadata_ref.clone();
-        std::thread::spawn(move || {
-            consumer::start_parsing_files(id, files_injector, faulty_files_ref, finish_condition_ref, content_info_ref, metadata_ref, language_map, config);
-        })
-    }).collect::<Vec<_>>();
-    handles.into_iter().for_each(|handle| handle.join().unwrap());
+    assert!(result.files_present.relevant_files > 0, "the fixture corpus produced no relevant files");
+    assert!(result.faulty_files.is_empty(), "{} fixture(s) failed to parse", result.faulty_files.len());
 
-    let faulty_files = faulty_files_ref.lock().unwrap();
-    assert!(faulty_files.is_empty(), "{} fixture(s) failed to parse", faulty_files.len());
-    drop(faulty_files);
-
-    let mut content_info_guard = content_info_ref.lock();
-    let content_info = &mut content_info_guard.as_deref_mut().unwrap()[0];
-    let mut metadata_guard = metadata_ref.lock();
-    let metadata = &mut metadata_guard.as_deref_mut().unwrap()[0];
-    remove_languages_with_0_files(content_info, metadata);
-
-    render_report(content_info, metadata)
+    render_report(&result.content_info_map, &result.languages_metadata_map)
 }
 
 #[test]

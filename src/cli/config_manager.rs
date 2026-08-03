@@ -1,10 +1,13 @@
-use std::{collections::HashMap, path::Path};
+use std::collections::HashMap;
 
 use colored::{ColoredString, Colorize};
 
-use crate::{Formatted, GitignoreStack, io_handler, message_printer, suggestions, theme::{self, Theme}, utils};
+use super::formatted::Formatted;
+use super::{message_printer, suggestions, theme::Theme};
+use mezura::engine::config::{DEF_BRACES_AS_CODE, DEF_NO_GITIGNORE, DEF_SEARCH_IN_DOTTED, EngineConfig,
+        MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE, Target, Threads};
 #[cfg(test)]
-use crate::Color;
+use colored::Color;
 
 // Application version, to be displayed at startup and with --help command
 pub const VERSION_ID : &str = "v3.0.0";
@@ -45,97 +48,42 @@ pub const THEME_EDITOR       :&str   = "theme-editor";
 pub const RESTORE            :&str   = "restore";
 
 
-pub const MAX_PRODUCERS_VALUE : usize = 32;
-pub const MIN_PRODUCERS_VALUE : usize = 1;
-pub const MAX_CONSUMERS_VALUE : usize = 128;
-pub const MIN_CONSUMERS_VALUE : usize = 1;
 pub const MIN_COMPARE_LEVEL   : usize = 0;
 pub const MAX_COMPARE_LEVEL   : usize = 10;
 
 // default config values
-const DEF_BRACES_AS_CODE    : bool    = false;
-const DEF_SEARCH_IN_DOTTED  : bool    = false;
 const DEF_SHOW_FAULTY_FILES : bool    = false;
-const DEF_NO_GITIGNORE      : bool    = false;
 const DEF_COMPARE_LEVEL     : usize   = 1;
 
 // What the always-loaded configuration is called in a message about it
 const DEFAULT_CONFIG_LABEL  : &str    = "default";
 
 
-// A directory or file that was asked for, and the name it was asked for under. 'None' is a target
-// that was given no name, and every one of them shares the '(unnamed)' row of the report.
-// The name lives inside the target and not in a list of its own, so that everything which already
-// carries the targets carries the modules with them: the saved configuration, the log entry that
-// decides whether two runs are comparable, and the echo of the settings in the JSON document.
-#[derive(Debug,PartialEq,Eq,Clone)]
-pub struct Target {
-    pub module: Option<String>,
-    // Absolute and resolved, never what was typed
-    pub path: String
-}
 
-impl Target {
-    pub fn of(path: String) -> Self {
-        Target { module: None, path }
-    }
 
-    pub fn named(module: &str, path: String) -> Self {
-        Target { module: Some(module.to_owned()), path }
-    }
-}
 
-impl std::fmt::Display for Target {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.module {
-            Some(name) => write!(formatter, "{name}={}", self.path),
-            None => write!(formatter, "{}", self.path)
-        }
-    }
-}
 
-impl Target {
-    // The form that reads back as this exact target. The quotes go around the path and not around
-    // the whole thing, because the name is taken from before the first '=' and a leading quote
-    // would end up inside it.
-    pub fn declared_form(&self) -> String {
-        let path = if self.path.contains(char::is_whitespace) {format!("\"{}\"", self.path)} else {self.path.clone()};
-        match &self.module {
-            Some(name) => format!("{name}={path}"),
-            None => path
-        }
-    }
-}
 
-// Targets on one line, for the log entry that decides whether two runs are comparable.
+// Two halves and not one flat struct, because the two are asked different questions. The engine is
+// handed only what can change a number; the presentation is handed everything, since echoing what
+// the counting was done with is part of its job.
 //
-// The separator is a comma while nothing is named, which is the only thing this ever wrote and what
-// keeps a run after an upgrade from reporting 'modified: dirs' over a difference in punctuation. The
-// moment a module exists it has to be whitespace: inside a comma list a name carries on to the paths
-// after it, so 'frontend=./web,./ui' is one module of two directories, and an unnamed target written
-// after a named one with a comma between them would be read back as part of it.
-pub fn targets_to_string(targets: &[Target]) -> String {
-    if targets.iter().all(|x| x.module.is_none()) {
-        targets.iter().map(|x| x.path.clone()).collect::<Vec<_>>().join(",")
-    } else {
-        targets.iter().map(Target::declared_form).collect::<Vec<_>>().join(" ")
-    }
+// The command line and the configuration file stay flat, because the distinction is ours and not the
+// user's. Only 'build' knows that one flag can answer both questions, which is what '--hide keywords'
+// does: it is 'count_keywords' to the engine and 'hidden' to the view.
+#[derive(Debug,PartialEq,Clone,Default)]
+pub struct Configuration {
+    pub engine: EngineConfig,
+    pub view: ViewConfig
 }
 
+
+// Everything that decides how the answer is shown, saved and logged. The engine never sees it.
 #[derive(Debug,PartialEq,Clone)]
-pub struct Configuration {
+pub struct ViewConfig {
     pub version: &'static str,
-    pub dirs: Vec<Target>,
-    pub exclude_dirs: Vec<String>,
-    pub languages_of_interest: Vec<String>,
-    pub excluded_languages: Vec<String>,
-    pub forced_languages: HashMap<String,String>,
-    pub threads: Threads,
-    pub braces_as_code: bool,
-    pub should_search_in_dotted: bool,
     pub should_show_faulty_files: bool,
     pub hidden: Hidden,
-    pub no_gitignore: bool,
     pub log: LogOption,
     pub compare_level: usize,
     pub config_name_to_save: Option<String>,
@@ -408,17 +356,10 @@ pub struct LogOption {
     pub name: Option<String>
 }
 
-#[derive(Debug,PartialEq,Clone)]
-pub struct Threads {
-    pub producers: usize,
-    pub consumers: usize
-}
 
 #[derive(Debug, PartialEq)]
 pub enum ArgParsingError {
-    NoArgsProvided,
     UnparsableWorkingDir,
-    MissingTargetDirs,
     InvalidPath(String),
     InvalidPathInConfig(String,String),
     DoublePath,
@@ -443,11 +384,11 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
 
     // Written from the resolved theme and therefore after it is built, which is also why this does
     // not sit next to '--save': what the file has to hold is the look, not the pieces it came from
-    if let Some(name) = &config.theme_name_to_save {
-        if config.theme == Theme::default() {
+    if let Some(name) = &config.view.theme_name_to_save {
+        if config.view.theme == Theme::default() {
             eprintln!("\n{}", format!("Nothing to save in theme '{name}': every style is at its default.").yellow());
         } else {
-            match io_handler::save_theme_to_file(&crate::PERSISTENT_APP_PATHS.themes_dir, name, &config.theme) {
+            match super::theme_files::save_theme_to_file(&crate::paths::PERSISTENT_APP_PATHS.themes_dir, name, &config.view.theme) {
                 Err(_) => eprintln!("\n{}","Error while trying to save the theme.".yellow()),
                 Ok(_) => eprintln!("\nTheme '{name}' saved successfully.")
             }
@@ -507,34 +448,34 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 return Err(parse_result.err().unwrap());
             }
         } else if command_name == EXCLUDE {
-            let vec = utils::parse_paths_to_vec(arguments);
-            if vec.is_empty() || utils::build_exclude_matcher(&vec).is_err() {
+            let vec = super::args::parse_paths_to_vec(arguments);
+            if vec.is_empty() || mezura::engine::targets::build_exclude_matcher(&vec).is_err() {
                 message_printer::print_help_message_for_command(EXCLUDE);
                 return Err(ArgParsingError::IncorrectCommandArgs(EXCLUDE.to_owned()));
             }
             exclude_dirs = Some(vec);
         } else if command_name == LANGUAGES {
-            let vec = utils::parse_languages_to_vec(arguments);
+            let vec = super::args::parse_languages_to_vec(arguments);
             if vec.is_empty() {
                 message_printer::print_help_message_for_command(LANGUAGES);
                 return Err(ArgParsingError::IncorrectCommandArgs(LANGUAGES.to_owned()));
             }
             languages_of_interest = Some(vec);
         } else if command_name == EXCLUDE_LANGUAGES {
-            let vec = utils::parse_languages_to_vec(arguments);
+            let vec = super::args::parse_languages_to_vec(arguments);
             if vec.is_empty() {
                 message_printer::print_help_message_for_command(EXCLUDE_LANGUAGES);
                 return Err(ArgParsingError::IncorrectCommandArgs(EXCLUDE_LANGUAGES.to_owned()));
             }
             excluded_languages = Some(vec);
         } else if command_name == FORCE_LANG {
-            let Some(map) = utils::parse_forced_languages(arguments) else {
+            let Some(map) = super::args::parse_forced_languages(arguments) else {
                 message_printer::print_help_message_for_command(FORCE_LANG);
                 return Err(ArgParsingError::IncorrectCommandArgs(FORCE_LANG.to_owned()));
             };
             forced_languages = Some(map);
         } else if command_name == THREADS {
-            let threads_values = utils::parse_two_usize_values(arguments,
+            let threads_values = super::args::parse_two_usize_values(arguments,
                     MIN_PRODUCERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE, MAX_CONSUMERS_VALUE);
             if let Some(_threads) = threads_values {
                 threads = Some(Threads::from(_threads));
@@ -584,12 +525,12 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 message_printer::print_help_message_for_command(THEME);
                 return Err(ArgParsingError::IncorrectCommandArgs(THEME.to_owned()))
             }
-            if io_handler::load_theme(name, &crate::PERSISTENT_APP_PATHS.themes_dir).is_none() {
+            if super::theme_files::load_theme(name, &crate::paths::PERSISTENT_APP_PATHS.themes_dir).is_none() {
                 return Err(ArgParsingError::NonExistantTheme(name.to_owned()))
             }
             theme_name = Some(name.to_owned());
         } else if command_name == STYLE {
-            match theme::parse_overrides(arguments) {
+            match super::theme::parse_overrides(arguments) {
                 Ok(x) => styles = Some(x),
                 Err(x) => {
                     message_printer::print_help_message_for_command(STYLE);
@@ -597,7 +538,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 }
             }
         } else if command_name == TOP {
-            match utils::parse_usize_value(arguments, 1, usize::MAX) {
+            match super::args::parse_usize_value(arguments, 1, usize::MAX) {
                 Some(x) => top_n = Some(x),
                 None => {
                     message_printer::print_help_message_for_command(TOP);
@@ -660,7 +601,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 log = Some(LogOption::new(Some(value.to_owned())));
             }
         } else if command_name == COMPRARE_LEVEL {
-            let compare_num = utils::parse_usize_value(arguments, MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL);
+            let compare_num = super::args::parse_usize_value(arguments, MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL);
             if compare_num.is_none() {
                 message_printer::print_help_message_for_command(COMPRARE_LEVEL);
                 return Err(ArgParsingError::IncorrectCommandArgs(COMPRARE_LEVEL.to_owned()))
@@ -674,7 +615,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 return Err(ArgParsingError::IncorrectCommandArgs(LOAD.to_owned()));
             }
 
-            if let Ok((mut options, issues)) = io_handler::parse_config_file(Some(config_name), None) {
+            if let Ok((mut options, issues)) = super::config_files::parse_config_file(Some(config_name), None) {
                 resolve_dirs_of_config(&mut options, config_name, respect_gitignore, dotted_are_targetable)?;
                 custom_config = Some((options, issues));
                 config_name_to_load = Some(config_name.to_owned());
@@ -722,14 +663,14 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             config_builder.dirs = Some(parse_working_dir_as_target_dir()?);
         }
 
-        match io_handler::save_existing_commands_from_config_builder_to_file(None, name, &config_builder) {
+        match super::config_files::save_existing_commands_from_config_builder_to_file(None, name, &config_builder) {
             Err(_) => eprintln!("\n{}","Error while trying to save config.".yellow()),
             Ok(_) => eprintln!("\nConfiguration '{name}' saved successfully.")
         }
     }
 
     if config_builder.has_missing_fields()
-        && let Ok((mut default_config, issues)) = io_handler::parse_config_file(None, None) {
+        && let Ok((mut default_config, issues)) = super::config_files::parse_config_file(None, None) {
         print_config_file_warnings(&issues.warnings, DEFAULT_CONFIG_LABEL);
         resolve_invalid_config_fields(&config_builder, &issues.invalid_fields, DEFAULT_CONFIG_LABEL)?;
         // Only when they are going to be used. A 'dirs' block sitting unused in the default
@@ -741,15 +682,15 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     }
 
     if let Some(name) = &config_builder.theme_name {
-        match io_handler::load_theme(name, &crate::PERSISTENT_APP_PATHS.themes_dir) {
+        match super::theme_files::load_theme(name, &crate::paths::PERSISTENT_APP_PATHS.themes_dir) {
             Some((styles, errors)) => {
                 for error in &errors {
-                    crate::warnings::emit(crate::warnings::Warning::new(crate::warnings::CONFIG_STYLE_INVALID, crate::warnings::Affects::Settings, name,
+                    super::warnings::emit(mezura::warnings::Warning::new(mezura::warnings::CONFIG_STYLE_INVALID, mezura::warnings::Affects::Settings, name,
                             format!("In theme '{name}': {}", error.formatted())));
                 }
                 config_builder.theme_styles = Some(styles);
             },
-            None => crate::warnings::emit(crate::warnings::Warning::new(crate::warnings::THEME_UNAVAILABLE, crate::warnings::Affects::Settings, name,
+            None => super::warnings::emit(mezura::warnings::Warning::new(mezura::warnings::THEME_UNAVAILABLE, mezura::warnings::Affects::Settings, name,
                     format!("Theme '{name}' could not be loaded, the default styles will be used.")))
         }
     }
@@ -785,7 +726,7 @@ fn resolve_dirs_of_config(options: &mut ConfigurationBuilder, config_name: &str,
 
 fn print_config_file_warnings(issues: &[(&'static str, String)], config_name: &str) {
     for (code, warning) in issues {
-        crate::warnings::emit(crate::warnings::Warning::new(code, crate::warnings::Affects::Settings, config_name,
+        super::warnings::emit(mezura::warnings::Warning::new(code, mezura::warnings::Affects::Settings, config_name,
                 format!("In config '{config_name}': {warning}")));
     }
 }
@@ -793,30 +734,52 @@ fn print_config_file_warnings(issues: &[(&'static str, String)], config_name: &s
 // Every command that can end up in 'invalid_fields' belongs here. One that is missing is treated as
 // never overridden, so giving it correctly on the command line would still not rescue the run.
 fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_fields: &[&str], config_name: &str) -> Result<(), ArgParsingError> {
+    // Destructured with no '..' on purpose. This function decides whether a bad value in a config
+    // only warns or kills the run, by asking whether the command line already set the same field,
+    // and the match below ends in '_ => false', so a command missing from it counts as never
+    // overridden and giving it correctly on the command line does not rescue the run. 'sort', 'top'
+    // and 'bar-thickness' were all missing until v3.0.0 with nothing to point at the omission.
+    //
+    // Every command a configuration file can carry is a field here, so a new one stops the build in
+    // this spot until somebody decides whether it belongs in the match. Everything bound to '_'
+    // below is a written decision, with the reason next to it.
+    let ConfigurationBuilder {
+            dirs, exclude_dirs, forced_languages, threads, braces_as_code, should_search_in_dotted,
+            should_show_faulty_files, hidden, no_gitignore, theme_name, compare_level, bar_thickness,
+            number_separator, decimal_separator, layout, sort_by, top_n,
+            // these three accept whatever they are given, so a config can hold no invalid value for
+            // them and they never reach 'invalid_fields'
+            languages_of_interest: _, excluded_languages: _, log: _,
+            // not carried by a configuration file at all
+            config_name_to_save: _, config_name_to_load: _, theme_name_to_save: _, output: _,
+            // a style that does not parse is reported per line and skipped, and the rest of the file
+            // still applies, so these warn instead of reaching here
+            styles: _, config_styles: _, theme_styles: _ } = config_builder;
+
     for field in invalid_fields {
         let is_overridden = match *field {
-            DIRS => config_builder.dirs.is_some(),
-            THREADS => config_builder.threads.is_some(),
-            COMPRARE_LEVEL => config_builder.compare_level.is_some(),
-            BRACES_AS_CODE => config_builder.braces_as_code.is_some(),
-            SEARCH_IN_DOTTED => config_builder.should_search_in_dotted.is_some(),
-            SHOW_FAULTY_FILES => config_builder.should_show_faulty_files.is_some(),
-            HIDE => config_builder.hidden.is_some(),
-            NO_GITIGNORE => config_builder.no_gitignore.is_some(),
-            EXCLUDE => config_builder.exclude_dirs.is_some(),
-            FORCE_LANG => config_builder.forced_languages.is_some(),
-            THEME => config_builder.theme_name.is_some(),
-            SORT => config_builder.sort_by.is_some(),
-            TOP => config_builder.top_n.is_some(),
-            BAR_THICKNESS => config_builder.bar_thickness.is_some(),
-            NUMBER_SEPARATOR => config_builder.number_separator.is_some(),
-            DECIMAL_SEPARATOR => config_builder.decimal_separator.is_some(),
-            LAYOUT => config_builder.layout.is_some(),
+            DIRS => dirs.is_some(),
+            THREADS => threads.is_some(),
+            COMPRARE_LEVEL => compare_level.is_some(),
+            BRACES_AS_CODE => braces_as_code.is_some(),
+            SEARCH_IN_DOTTED => should_search_in_dotted.is_some(),
+            SHOW_FAULTY_FILES => should_show_faulty_files.is_some(),
+            HIDE => hidden.is_some(),
+            NO_GITIGNORE => no_gitignore.is_some(),
+            EXCLUDE => exclude_dirs.is_some(),
+            FORCE_LANG => forced_languages.is_some(),
+            THEME => theme_name.is_some(),
+            SORT => sort_by.is_some(),
+            TOP => top_n.is_some(),
+            BAR_THICKNESS => bar_thickness.is_some(),
+            NUMBER_SEPARATOR => number_separator.is_some(),
+            DECIMAL_SEPARATOR => decimal_separator.is_some(),
+            LAYOUT => layout.is_some(),
             _ => false
         };
 
         if is_overridden {
-            crate::warnings::emit(crate::warnings::Warning::new(crate::warnings::CONFIG_VALUE_IGNORED, crate::warnings::Affects::Settings, field,
+            super::warnings::emit(mezura::warnings::Warning::new(mezura::warnings::CONFIG_VALUE_IGNORED, mezura::warnings::Affects::Settings, field,
                     format!("Invalid value for the command '--{field}', in config '{config_name}'. The value will be ignored.")));
         } else {
             message_printer::print_help_message_for_command(field);
@@ -842,12 +805,12 @@ fn print_warnings_for_commands_that_need_a_loaded_configuration(config_name_to_s
 }
 
 fn has_any_args(command: &str) -> bool {
-    command.split(' ').skip(1).filter_map(utils::get_trimmed_if_not_empty).count() != 0
+    command.split(' ').skip(1).filter_map(super::args::get_trimmed_if_not_empty).count() != 0
 }
 
 fn parse_dirs(s: &str, respect_gitignore: bool, search_in_dotted: bool) -> Result<Vec<Target>, ArgParsingError> {
-    let declared = utils::parse_targets(s).map_err(ArgParsingError::MalformedTarget)?;
-    resolve_target_paths(&declared, respect_gitignore, search_in_dotted)
+    let declared = super::args::parse_targets(s).map_err(ArgParsingError::MalformedTarget)?;
+    resolve_targets(&declared, respect_gitignore, search_in_dotted)
 }
 
 // A target that a configuration file declared, or that a run has already resolved once, is read back
@@ -857,77 +820,28 @@ fn reparse_targets(targets: &[Target], respect_gitignore: bool, search_in_dotted
 -> Result<Vec<Target>, ArgParsingError>
 {
     let declared = targets.iter().map(|x| (x.module.clone(), x.path.clone())).collect::<Vec<_>>();
-    resolve_target_paths(&declared, respect_gitignore, search_in_dotted)
+    resolve_targets(&declared, respect_gitignore, search_in_dotted)
 }
 
-// Literal paths must exist and are always used, even if they are ignored or dotted, since the user
-// named them explicitly. Glob patterns are expanded to the existing paths they match, and those
-// matches are discovered by the program, so they are subject to the same rules as every other
-// discovered path. Finally, targets contained in other targets are dropped, so that no file
-// is counted twice, unless the nested one carries a module of its own and is therefore the boundary
-// that takes those files off the one around it.
-fn resolve_target_paths(entries: &[(Option<String>, String)], respect_gitignore: bool, search_in_dotted: bool)
+
+// The engine decides which paths are walkable; this turns what it says into the wording a person
+// reads on the command line.
+fn resolve_targets(entries: &[(Option<String>, String)], respect_gitignore: bool, search_in_dotted: bool)
 -> Result<Vec<Target>, ArgParsingError>
 {
-    fn is_dotted(path: &Path) -> bool {
-        path.file_name().and_then(|x| x.to_str()).is_some_and(|x| x.starts_with('.'))
-    }
-
-    let mut resolved = Vec::with_capacity(entries.len());
-    for (module, entry) in entries {
-        let trimmed = entry.trim();
-        // Two spellings of one name are one module, the way two spellings of one extension are one
-        // extension. The first one seen is the one the report prints.
-        let module = module.as_ref().map(|name| resolved.iter()
-                .find_map(|x: &Target| x.module.clone().filter(|seen| seen.to_lowercase() == name.to_lowercase()))
-                .unwrap_or_else(|| name.clone()));
-        if utils::has_glob_metacharacters(trimmed) {
-            let paths = match glob::glob(&trimmed.replace('\\', "/")) {
-                Ok(x) => x,
-                Err(_) => return Err(ArgParsingError::InvalidGlobPattern(trimmed.to_owned()))
-            };
-            let matches = paths.flatten().filter(|x| x.is_dir() || x.is_file()).collect::<Vec<_>>();
-            if matches.is_empty() {
-                return Err(ArgParsingError::NoGlobMatches(trimmed.to_owned()));
-            }
-
-            let relevant = matches.iter()
-                    .filter(|x| search_in_dotted || !is_dotted(x))
-                    .filter(|x| !respect_gitignore || !GitignoreStack::is_path_ignored(x))
-                    // A pattern is not a name: what it matched was found by the program, and a link
-                    // it found is a link the walk would have skipped for counting twice whatever it
-                    // points at. Named on its own it is still followed, as any target is.
-                    .filter(|x| !x.is_symlink())
-                    .filter_map(|x| x.to_str().map(convert_to_absolute))
-                    .map(|path| Target { module: module.clone(), path }).collect::<Vec<_>>();
-            if relevant.is_empty() {
-                return Err(ArgParsingError::AllGlobMatchesIgnored(trimmed.to_owned()));
-            }
-            resolved.extend(relevant);
-        } else if utils::is_valid_path(trimmed) {
-            resolved.push(Target { module: module.clone(), path: convert_to_absolute(trimmed) });
-        } else {
-            return Err(ArgParsingError::InvalidPath(trimmed.to_owned()));
-        }
-    }
-
-    // Two names over one path is not something a rule can settle: there is no more specific one of
-    // the two, and whichever won would take the other's files away without a word
-    for (position, target) in resolved.iter().enumerate() {
-        let key = utils::path_comparison_key(&target.path);
-        if let Some(other) = resolved[position + 1..].iter()
-                .find(|x| x.module != target.module && utils::path_comparison_key(&x.path) == key) {
-            return Err(ArgParsingError::ContestedTarget(target.path.clone(),
-                    name_or_rest(&target.module), name_or_rest(&other.module)));
-        }
-    }
-
-    Ok(utils::remove_overlapping_targets(resolved))
+    use mezura::engine::targets::TargetError;
+    mezura::engine::targets::resolve(entries, respect_gitignore, search_in_dotted).map_err(|x| match x {
+        TargetError::InvalidPath(p) => ArgParsingError::InvalidPath(p),
+        TargetError::InvalidGlob(p) => ArgParsingError::InvalidGlobPattern(p),
+        TargetError::NoGlobMatches(p) => ArgParsingError::NoGlobMatches(p),
+        TargetError::AllGlobMatchesIgnored(p) => ArgParsingError::AllGlobMatchesIgnored(p),
+        TargetError::Contested(path, a, b) => ArgParsingError::ContestedTarget(path, a, b),
+        // 'TargetError' is non_exhaustive, so a variant added later stops here rather than
+        // in the middle of a run
+        other => ArgParsingError::InvalidPath(format!("{other:?}"))
+    })
 }
 
-fn name_or_rest(module: &Option<String>) -> String {
-    module.clone().unwrap_or_else(|| crate::UNNAMED_MODULE_NAME.to_owned())
-}
 
 // The working directory is not something anybody typed, so it is not put through the parser that
 // takes typed text apart. It used to be, and a working directory whose path contains a space was
@@ -936,28 +850,13 @@ fn name_or_rest(module: &Option<String>) -> String {
 fn parse_working_dir_as_target_dir() -> Result<Vec<Target>, ArgParsingError> {
     if let Ok(path_buf) = std::env::current_dir()
         && let Some(path_str) = path_buf.to_str()
-        && utils::is_valid_path(path_str) {
-        return Ok(vec![Target::of(convert_to_absolute(path_str))]);
+        && super::args::is_valid_path(path_str) {
+        return Ok(vec![Target::of(mezura::engine::targets::convert_to_absolute(path_str))]);
     }
 
     Err(ArgParsingError::UnparsableWorkingDir)
 }
 
-// The "canonicalize" function from the std that this function uses, (at least on window) seems to put the weird prefix
-// "\\?\" before the path and it also puts forward slashes that we want to convert for compatibility.
-fn convert_to_absolute(s: &str) -> String {
-    let p = Path::new(s);
-    if p.is_absolute() {
-        return s.replace("\\", "/");
-    }
-
-    if let Ok(buf) = std::fs::canonicalize(p) {
-        let str_path = buf.to_str().unwrap();
-        str_path.strip_prefix(r"\\?\").unwrap_or(str_path).replace("\\", "/")
-    } else {
-        s.replace("\\", "/")
-    }
-}
 
 
 #[derive(Debug, PartialEq, Default)]
@@ -1027,169 +926,106 @@ impl ConfigurationBuilder {
         self.config_styles.is_none() || self.bar_thickness.is_none() || self.number_separator.is_none() || self.decimal_separator.is_none() || self.layout.is_none() || self.sort_by.is_none()
     }
 
+    // The only place that knows the flat form maps onto two halves. Everything above this stays one
+    // list, matching the command line and the configuration file.
     pub fn build(&self) -> Configuration {
+        let hidden = self.hidden.unwrap_or_default();
+
         Configuration {
-            version: VERSION_ID,
-            dirs: self.dirs.clone().unwrap(),
-            exclude_dirs: (self.exclude_dirs).clone().unwrap_or_default(),
-            languages_of_interest: (self.languages_of_interest).clone().unwrap_or_default(),
-            excluded_languages: (self.excluded_languages).clone().unwrap_or_default(),
-            forced_languages: (self.forced_languages).clone().unwrap_or_default(),
-            threads: self.threads.clone().unwrap_or_default(),
-            braces_as_code: self.braces_as_code.unwrap_or(DEF_BRACES_AS_CODE),
-            should_search_in_dotted: self.should_search_in_dotted.unwrap_or(DEF_SEARCH_IN_DOTTED),
-            should_show_faulty_files: self.should_show_faulty_files.unwrap_or(DEF_SHOW_FAULTY_FILES),
-            hidden: self.hidden.unwrap_or_default(),
-            no_gitignore: self.no_gitignore.unwrap_or(DEF_NO_GITIGNORE),
-            log: self.log.clone().unwrap_or_default(),
-            compare_level: self.compare_level.unwrap_or(DEF_COMPARE_LEVEL),
-            config_name_to_save: self.config_name_to_save.clone(),
-            config_name_to_load: self.config_name_to_load.clone(),
-            theme_name_to_save: self.theme_name_to_save.clone(),
-            bar_thickness: self.bar_thickness.unwrap_or_default(),
-            number_separator: self.number_separator.unwrap_or_default(),
-            decimal_separator: self.decimal_separator.unwrap_or_default(),
-            layout: self.layout.unwrap_or_default(),
-            output: self.output.unwrap_or_default(),
-            sort_by: self.sort_by.unwrap_or_default(),
-            top_n: self.top_n,
-            theme: theme::resolve(self.theme_styles.as_deref().unwrap_or_default(),
-                    self.config_styles.as_deref().unwrap_or_default(), self.styles.as_deref().unwrap_or_default())
+            engine: EngineConfig {
+                dirs: self.dirs.clone().unwrap(),
+                exclude_dirs: (self.exclude_dirs).clone().unwrap_or_default(),
+                languages_of_interest: (self.languages_of_interest).clone().unwrap_or_default(),
+                excluded_languages: (self.excluded_languages).clone().unwrap_or_default(),
+                forced_languages: (self.forced_languages).clone().unwrap_or_default(),
+                threads: self.threads.clone().unwrap_or_default(),
+                braces_as_code: self.braces_as_code.unwrap_or(DEF_BRACES_AS_CODE),
+                should_search_in_dotted: self.should_search_in_dotted.unwrap_or(DEF_SEARCH_IN_DOTTED),
+                no_gitignore: self.no_gitignore.unwrap_or(DEF_NO_GITIGNORE),
+                // The one flag that answers both questions
+                count_keywords: !hidden.keywords
+            },
+            view: ViewConfig {
+                version: VERSION_ID,
+                should_show_faulty_files: self.should_show_faulty_files.unwrap_or(DEF_SHOW_FAULTY_FILES),
+                hidden,
+                log: self.log.clone().unwrap_or_default(),
+                compare_level: self.compare_level.unwrap_or(DEF_COMPARE_LEVEL),
+                config_name_to_save: self.config_name_to_save.clone(),
+                config_name_to_load: self.config_name_to_load.clone(),
+                theme_name_to_save: self.theme_name_to_save.clone(),
+                bar_thickness: self.bar_thickness.unwrap_or_default(),
+                layout: self.layout.unwrap_or_default(),
+                output: self.output.unwrap_or_default(),
+                number_separator: self.number_separator.unwrap_or_default(),
+                decimal_separator: self.decimal_separator.unwrap_or_default(),
+                sort_by: self.sort_by.unwrap_or_default(),
+                top_n: self.top_n,
+                theme: super::theme::resolve(self.theme_styles.as_deref().unwrap_or_default(),
+                        self.config_styles.as_deref().unwrap_or_default(), self.styles.as_deref().unwrap_or_default())
+            }
         }
     }
 }
 
-impl Configuration {
-    pub fn new(dirs: Vec<String>) -> Self {
-        Configuration {
+impl Default for ViewConfig {
+    fn default() -> Self {
+        ViewConfig {
             version: VERSION_ID,
-            dirs: dirs.into_iter().map(Target::of).collect(),
-            exclude_dirs: Vec::new(),
-            languages_of_interest: Vec::new(),
-            excluded_languages: Vec::new(),
-            forced_languages: HashMap::new(),
-            threads: Threads::default(),
-            braces_as_code: DEF_BRACES_AS_CODE,
-            should_search_in_dotted: DEF_SEARCH_IN_DOTTED,
             should_show_faulty_files: DEF_SHOW_FAULTY_FILES,
             hidden: Hidden::default(),
-            no_gitignore: DEF_NO_GITIGNORE,
             log: LogOption::default(),
             compare_level: DEF_COMPARE_LEVEL,
             config_name_to_save: None,
             config_name_to_load: None,
             theme_name_to_save: None,
             bar_thickness: BarThickness::default(),
-            number_separator: NumberSeparator::default(),
-            decimal_separator: DecimalSeparator::default(),
             layout: Layout::default(),
             output: OutputFormat::default(),
+            number_separator: NumberSeparator::default(),
+            decimal_separator: DecimalSeparator::default(),
             sort_by: SortCriterion::default(),
             top_n: None,
             theme: Theme::default()
         }
     }
+}
 
+
+impl ViewConfig {
     // Everything that is not the document itself stays off stdout when the output is machine
     // readable, so that a single stray line cannot make it unparseable
     pub fn prints_text(&self) -> bool {
         self.output == OutputFormat::Text
     }
 
-    //Setters used mainly in tests, for the ability to chain many config changes
-
-    pub fn set_config_names_to_save_and_load(&mut self, to_save: Option<String>, to_load: Option<String>) -> &mut Self {
-        self.config_name_to_save = to_save;
-        self.config_name_to_load = to_load;
-        self
-    }
-
-    pub fn set_exclude_dirs(&mut self, exclude_dirs: Vec<String>) -> &mut Self {
-        self.exclude_dirs = exclude_dirs;
-        self
-    }
-
-    pub fn set_languages_of_interest(&mut self, languages_of_interest: Vec<String>) -> &mut Self {
-        self.languages_of_interest = languages_of_interest;
-        self
-    }
-
-    pub fn set_threads(&mut self, producers: usize, consumers: usize) -> &mut Self {
-        self.threads = Threads::new(producers, consumers);
-        self
-    }
-
-    pub fn set_braces_as_code(&mut self, braces_as_code: bool) -> &mut Self {
-        self.braces_as_code = braces_as_code;
-        self
-    }
-
-    pub fn set_should_search_in_dotted(&mut self, should_search_in_dotted: bool) -> &mut Self {
-        self.should_search_in_dotted = should_search_in_dotted;
-        self
-    }
-
+    // Used only by the tests of this crate, which is what marks them
+    #[cfg(test)]
     pub fn set_should_show_faulty_files(&mut self, should_show_faulty_files: bool) -> &mut Self {
         self.should_show_faulty_files = should_show_faulty_files;
         self
     }
 
-    pub fn set_hidden(&mut self, hidden: Hidden) -> &mut Self {
-        self.hidden = hidden;
-        self
-    }
-
-    pub fn set_no_gitignore(&mut self, no_gitignore: bool) -> &mut Self {
-        self.no_gitignore = no_gitignore;
-        self
-    }
-
-    pub fn set_theme(&mut self, theme: Theme) -> &mut Self {
-        self.theme = theme;
-        self
-    }
-
+    #[cfg(test)]
     pub fn set_log_option(&mut self, log: LogOption) -> &mut Self {
         self.log = log;
         self
     }
 }
 
-impl Threads {
-    pub fn new(producers: usize, consumers: usize) -> Self {
-        Threads {
-            producers,
-            consumers
-        }
+impl Configuration {
+    #[cfg(test)]
+    pub fn new(dirs: Vec<String>) -> Self {
+        Configuration { engine: EngineConfig::new(dirs), view: ViewConfig::default() }
     }
 
-    pub fn from(threads: (usize,usize)) -> Self {
-        Threads {
-            producers: threads.0,
-            consumers: threads.1
-        }
-    }
-}
-
-impl Default for Threads {
-    fn default() -> Self {
-        let threads = num_cpus::get();
-        // Consumers are oversubscribed hard, because what they wait on is a blocking file open and
-        // the number that matters is how many reads are in flight, not how many cores exist. On one
-        // machine, going from 22 consumers to 96 cost nothing measurable on a fast disk with a warm
-        // cache, won 1.20x on a slow disk, and won 1.97x from cold. The asymmetry is the whole
-        // argument: it is free where it does not help.
-        if threads <= 4 {
-            Threads {
-                producers: 2,
-                consumers: (threads * 4).clamp(8, MAX_CONSUMERS_VALUE)
-            }
-        } else {
-            Threads {
-                producers: (threads / 2).clamp(2, MAX_PRODUCERS_VALUE),
-                consumers: (threads * 4).clamp(8, MAX_CONSUMERS_VALUE)
-            }
-        }
+    // One flag answering two questions, so the two halves are set together and never one without
+    // the other
+    #[cfg(test)]
+    pub fn set_hidden(&mut self, hidden: Hidden) -> &mut Self {
+        self.engine.count_keywords = !hidden.keywords;
+        self.view.hidden = hidden;
+        self
     }
 }
 
@@ -1205,9 +1041,7 @@ impl LogOption {
 impl Formatted for ArgParsingError {
     fn formatted(&self) -> ColoredString {
         match self {
-            Self::NoArgsProvided => "No arguments provided.".red(),
             Self::UnparsableWorkingDir => "The current working dir could not be parsed as target dir, try inputing it manually.".red(),
-            Self::MissingTargetDirs => "The target directories (--dirs) are not specified.".red(),
             Self::InvalidPath(p) => format!("Path provided is not a valid directory or file:\n'{p}'.").red(),
             Self::InvalidPathInConfig(dir,name) => format!("Specified path '{dir}', in config '{name}', doesn't exist anymore.").red(),
             Self::DoublePath => "Directories already provided as first argument, but --dirs command also found.".red(),
@@ -1221,14 +1055,14 @@ impl Formatted for ArgParsingError {
             Self::IncorrectCommandArgs(p) => format!("Incorrect arguments provided for the command '--{p}'.").red(),
             Self::UnexpectedCommandArgs(p) => format!("Command '--{p}' does not expect any arguments.").red(),
             Self::NonExistantConfig(p) => {
-                let names = io_handler::names_in_dir(&crate::PERSISTENT_APP_PATHS.config_dir);
+                let names = super::config_files::names_in_dir(&crate::paths::PERSISTENT_APP_PATHS.config_dir);
                 let tail = suggestions::formatted_suggestion(p, &names.iter().map(String::as_str).collect::<Vec<_>>())
                         .unwrap_or_else(|| format!("Run '--{SHOW_CONFIGS}' to see the ones you have."));
                 let error = format!("Configuration '{p}' does not exist.").red();
                 ColoredString::from(format!("{error}\n\n{tail}").as_str())
             },
             Self::NonExistantTheme(p) => {
-                let names = io_handler::names_in_dir(&crate::PERSISTENT_APP_PATHS.themes_dir);
+                let names = super::config_files::names_in_dir(&crate::paths::PERSISTENT_APP_PATHS.themes_dir);
                 let tail = suggestions::formatted_suggestion(p, &names.iter().map(String::as_str).collect::<Vec<_>>())
                         .unwrap_or_else(|| format!("Run '--{SHOW_THEMES}' to see the ones you have."));
                 let error = format!("Theme '{p}' was not found, or could not be read.").red();
@@ -1249,12 +1083,12 @@ impl Formatted for ArgParsingError {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
     use std::ops::Add;
 
-    use crate::PERSISTENT_APP_PATHS;
-
+    
     use super::*;
-    use crate::theme::Style;
+    use super::super::theme::Style;
 
     // Rendered back into the form they were declared in, so that a test reads the same way whether
     // the target was named or not
@@ -1268,21 +1102,29 @@ mod tests {
     }
 
     fn new_conf(dir: &str) -> Configuration {
-        let mut builder = ConfigurationBuilder { dirs: Some(vec![Target::of(convert_to_absolute(dir))]), ..Default::default() };
-        if let Ok((default_config, _)) = io_handler::parse_config_file(None, None) {
+        let mut builder = ConfigurationBuilder { dirs: Some(vec![Target::of(mezura::engine::targets::convert_to_absolute(dir))]), ..Default::default() };
+        if let Ok((default_config, _)) = super::super::config_files::parse_config_file(None, None) {
             builder.add_missing_fields(default_config);
         }
         builder.build()
+    }
+
+    // The same, with one flag set by hand. The closure has to name the half it lands in, which is
+    // the thing worth stating in a test of what the parsing produces.
+    fn conf(dir: &str, edit: impl FnOnce(&mut Configuration)) -> Configuration {
+        let mut config = new_conf(dir);
+        edit(&mut config);
+        config
     }
 
     // A command given twice keeps the value it was last given, which is what a reader of the line
     // assumes and what every shell tool does
     #[test]
     fn test_a_repeated_command_keeps_its_last_value() {
-        assert_eq!(Threads::new(3, 11), create_config_from_args("./ --threads 2 10 --threads 3 11").unwrap().threads);
-        assert_eq!(Some(4), create_config_from_args("./ --top 9 --top 4").unwrap().top_n);
-        assert_eq!(SortCriterion::Name, create_config_from_args("./ --sort size --sort name").unwrap().sort_by);
-        assert_eq!(Layout::Boxed, create_config_from_args("./ --layout list --layout boxed").unwrap().layout);
+        assert_eq!(Threads::new(3, 11), create_config_from_args("./ --threads 2 10 --threads 3 11").unwrap().engine.threads);
+        assert_eq!(Some(4), create_config_from_args("./ --top 9 --top 4").unwrap().view.top_n);
+        assert_eq!(SortCriterion::Name, create_config_from_args("./ --sort size --sort name").unwrap().view.sort_by);
+        assert_eq!(Layout::Boxed, create_config_from_args("./ --layout list --layout boxed").unwrap().view.layout);
     }
 
     #[test]
@@ -1318,33 +1160,33 @@ mod tests {
 
         assert_eq!(new_conf("./"), create_config_from_args("./").unwrap());
         assert_eq!(new_conf("./"), create_config_from_args("--dirs ./").unwrap());
-        assert_eq!(*new_conf("./").set_threads(1,1), create_config_from_args("./ --threads 1 1").unwrap());
-        assert_eq!(*new_conf("./").set_threads(1,1), create_config_from_args("./ --threads   1   1 ").unwrap());
-        assert_eq!(*new_conf("./").set_threads(1,1).set_braces_as_code(true),
+        assert_eq!(conf("./", |c| {c.engine.set_threads(1,1);}), create_config_from_args("./ --threads 1 1").unwrap());
+        assert_eq!(conf("./", |c| {c.engine.set_threads(1,1);}), create_config_from_args("./ --threads   1   1 ").unwrap());
+        assert_eq!(conf("./", |c| {c.engine.set_threads(1,1).set_braces_as_code(true);}),
                 create_config_from_args("./ --threads 1 1 --braces-as-code").unwrap());
-        assert_eq!(*new_conf("./").set_should_search_in_dotted(true),
+        assert_eq!(conf("./", |c| {c.engine.set_should_search_in_dotted(true);}),
                 create_config_from_args("./ --search-in-dotted").unwrap());
-        assert_eq!(*new_conf("./").set_no_gitignore(true),
+        assert_eq!(conf("./", |c| {c.engine.set_no_gitignore(true);}),
                 create_config_from_args("./ --no-gitignore").unwrap());
-        assert_eq!(*new_conf("./").set_should_show_faulty_files(true),
+        assert_eq!(conf("./", |c| {c.view.set_should_show_faulty_files(true);}),
                 create_config_from_args("./ --show-faulty-files").unwrap());
-        assert_eq!(*new_conf("./").set_exclude_dirs(vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]),
+        assert_eq!(conf("./", |c| {c.engine.set_exclude_dirs(vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]);}),
                 create_config_from_args("./ --exclude a,b ,  c ").unwrap());
-        assert_eq!(*new_conf("./").set_exclude_dirs(vec!["a/path".to_owned(),"b/path".to_owned()]),
+        assert_eq!(conf("./", |c| {c.engine.set_exclude_dirs(vec!["a/path".to_owned(),"b/path".to_owned()]);}),
                 create_config_from_args("./ --exclude \"a\\path\", \"b\\path\"").unwrap());
-        assert_eq!(*new_conf("./").set_languages_of_interest(vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]),
+        assert_eq!(conf("./", |c| {c.engine.set_languages_of_interest(vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]);}),
                 create_config_from_args("./ --languages a,b,c").unwrap());
-        assert_eq!(*new_conf("./").set_languages_of_interest(vec!["a".to_owned()]),
+        assert_eq!(conf("./", |c| {c.engine.set_languages_of_interest(vec!["a".to_owned()]);}),
                 create_config_from_args("./ --languages a, ").unwrap());
-        assert_eq!(*new_conf("./").set_log_option(LogOption::new(Some("this is a test".to_owned()))),
+        assert_eq!(conf("./", |c| {c.view.set_log_option(LogOption::new(Some("this is a test".to_owned())));}),
                 create_config_from_args("./ --log   this is a test ").unwrap());
-        assert_eq!(*new_conf("./").set_log_option(LogOption::new(None)),
+        assert_eq!(conf("./", |c| {c.view.set_log_option(LogOption::new(None));}),
                 create_config_from_args("./ --log  ").unwrap());
     }
 
     #[test]
     fn test_hide_arg_parsing() {
-        let hidden = |command: &str| create_config_from_args(command).unwrap().hidden;
+        let hidden = |command: &str| create_config_from_args(command).unwrap().view.hidden;
 
         assert_eq!(Hidden::default(), hidden("./"));
         assert_eq!(Hidden {keywords: true, ..Default::default()}, hidden("./ --hide keywords"));
@@ -1380,27 +1222,27 @@ mod tests {
     #[test]
     fn test_absolute_conversion() {
         let path = "./";
-        let abs = convert_to_absolute(path);
+        let abs = mezura::engine::targets::convert_to_absolute(path);
         assert!(Path::new(path).is_relative());
         assert!(Path::new(&abs).is_absolute());
 
         let path = "./src";
-        let abs = convert_to_absolute(path);
+        let abs = mezura::engine::targets::convert_to_absolute(path);
         assert!(Path::new(path).is_relative());
         assert!(Path::new(&abs).is_absolute());
 
         let path = "./src/../src";
-        let abs = convert_to_absolute(path);
+        let abs = mezura::engine::targets::convert_to_absolute(path);
         assert!(Path::new(path).is_relative());
         assert!(Path::new(&abs).is_absolute());
 
         let path = "src";
-        let abs = convert_to_absolute(path);
+        let abs = mezura::engine::targets::convert_to_absolute(path);
         assert!(Path::new(path).is_relative());
         assert!(Path::new(&abs).is_absolute());
 
-        let path = "src/utils.rs";
-        let abs = convert_to_absolute(path);
+        let path = "src/lib.rs";
+        let abs = mezura::engine::targets::convert_to_absolute(path);
         assert!(Path::new(path).is_relative());
         assert!(Path::new(&abs).is_absolute());
     }
@@ -1410,30 +1252,30 @@ mod tests {
         assert_eq!(Err(ArgParsingError::InvalidPath("a".to_owned())), parse_dirs("a"));
         assert_eq!(Err(ArgParsingError::InvalidPath("a b c".to_owned())), parse_dirs("a b c"));
 
-        assert_eq!(vec![convert_to_absolute("./")], parse_dirs("./").unwrap());
-        assert_eq!(vec![convert_to_absolute("./src")], parse_dirs("\"./src\"").unwrap());
+        assert_eq!(vec![mezura::engine::targets::convert_to_absolute("./")], parse_dirs("./").unwrap());
+        assert_eq!(vec![mezura::engine::targets::convert_to_absolute("./src")], parse_dirs("\"./src\"").unwrap());
 
         // Targets that contain other targets swallow them, so that no file is counted twice
-        assert_eq!(vec![convert_to_absolute(".././")], parse_dirs("./, .././").unwrap());
-        assert_eq!(vec![convert_to_absolute(".././")], parse_dirs("./, \".././\"").unwrap());
-        assert_eq!(vec![convert_to_absolute("./")], parse_dirs("./src, ./, ./tests").unwrap());
-        assert_eq!(vec![convert_to_absolute("./src")], parse_dirs("./src, ./src/utils.rs").unwrap());
+        assert_eq!(vec![mezura::engine::targets::convert_to_absolute(".././")], parse_dirs("./, .././").unwrap());
+        assert_eq!(vec![mezura::engine::targets::convert_to_absolute(".././")], parse_dirs("./, \".././\"").unwrap());
+        assert_eq!(vec![mezura::engine::targets::convert_to_absolute("./")], parse_dirs("./src, ./, ./tests").unwrap());
+        assert_eq!(vec![mezura::engine::targets::convert_to_absolute("./src")], parse_dirs("./src, ./src/lib.rs").unwrap());
 
         // Unrelated targets are all kept, in the order they were written
-        assert_eq!(vec![convert_to_absolute("./tests"), convert_to_absolute("./src")],
+        assert_eq!(vec![mezura::engine::targets::convert_to_absolute("./tests"), mezura::engine::targets::convert_to_absolute("./src")],
                 parse_dirs("./tests, ./src").unwrap());
 
         // A space is not a separator while nothing is named, so a path is allowed to contain one.
         // It cannot be: by the time a command line reaches here the shell has split it and taken
         // the quotes off, so a space inside a path and a space between two paths look the same.
         assert_eq!(Err(ArgParsingError::InvalidPath("./tests ./src".to_owned())), parse_dirs("./tests ./src"));
-        assert_eq!(vec![convert_to_absolute("./")], parse_dirs(&std::env::current_dir().unwrap().to_string_lossy()).unwrap());
+        assert_eq!(vec![mezura::engine::targets::convert_to_absolute("./")], parse_dirs(&std::env::current_dir().unwrap().to_string_lossy()).unwrap());
     }
 
     #[test]
     fn a_target_can_be_declared_under_a_module_name() {
-        let src = convert_to_absolute("./src");
-        let tests = convert_to_absolute("./tests");
+        let src = mezura::engine::targets::convert_to_absolute("./src");
+        let tests = mezura::engine::targets::convert_to_absolute("./tests");
 
         assert_eq!(vec![format!("code={src}"), format!("suite={tests}")], parse_dirs("code=./src suite=./tests").unwrap());
         // The name holds for the whole comma list it opened, and one module is allowed to be several
@@ -1466,7 +1308,7 @@ mod tests {
 
         let mut options = config_of(vec![Target::named("frontend", "./src".to_owned()),
                 Target::named("backend", "./src".to_owned())]);
-        assert_eq!(Err(ArgParsingError::ContestedTarget(convert_to_absolute("./src"), "frontend".to_owned(), "backend".to_owned())),
+        assert_eq!(Err(ArgParsingError::ContestedTarget(mezura::engine::targets::convert_to_absolute("./src"), "frontend".to_owned(), "backend".to_owned())),
                 resolve_dirs_of_config(&mut options, "x", true, false));
 
         let mut options = config_of(vec![Target::of("./does-not-exist".to_owned())]);
@@ -1475,7 +1317,7 @@ mod tests {
 
         let mut options = config_of(vec![Target::named("code", "./src".to_owned())]);
         assert_eq!(Ok(()), resolve_dirs_of_config(&mut options, "x", true, false));
-        assert_eq!(Some(vec![Target::named("code", convert_to_absolute("./src"))]), options.dirs);
+        assert_eq!(Some(vec![Target::named("code", mezura::engine::targets::convert_to_absolute("./src"))]), options.dirs);
 
         // A configuration that declares no target has nothing to resolve and nothing to complain of
         let mut options = ConfigurationBuilder::default();
@@ -1486,7 +1328,7 @@ mod tests {
     // other's files away without a word
     #[test]
     fn one_path_under_two_names_is_refused() {
-        let src = convert_to_absolute("./src");
+        let src = mezura::engine::targets::convert_to_absolute("./src");
         assert_eq!(Err(ArgParsingError::ContestedTarget(src.clone(), "code".to_owned(), "other".to_owned())),
                 parse_dirs("code=./src other=./src"));
         assert_eq!(Err(ArgParsingError::ContestedTarget(src.clone(), "code".to_owned(), "(unnamed)".to_owned())),
@@ -1506,7 +1348,7 @@ mod tests {
         std::fs::write(root.join("a").join("src").join("one.rs"), "fn main() {}").unwrap();
         std::fs::write(root.join("b").join("src").join("two.rs"), "fn main() {}").unwrap();
         let root = root.to_str().unwrap().replace('\\', "/");
-        let abs = |x: &str| convert_to_absolute(&format!("{root}/{x}"));
+        let abs = |x: &str| mezura::engine::targets::convert_to_absolute(&format!("{root}/{x}"));
 
         assert_eq!(vec![abs("a/src"), abs("b/src")], parse_dirs(&format!("{root}/*/src")).unwrap());
         assert_eq!(vec![abs("a/src/one.rs")], parse_dirs(&format!("{root}/a/src/*.rs")).unwrap());
@@ -1535,7 +1377,7 @@ mod tests {
         std::fs::write(root.join("kept").join("ignored.rs"), "fn main() {}").unwrap();
         std::fs::write(root.join("build").join("deep").join("generated.rs"), "fn main() {}").unwrap();
         let root = root.to_str().unwrap().replace('\\', "/");
-        let abs = |x: &str| convert_to_absolute(&format!("{root}/{x}"));
+        let abs = |x: &str| mezura::engine::targets::convert_to_absolute(&format!("{root}/{x}"));
 
         // The ignored dir and the ignored file are dropped from the matches
         assert_eq!(vec![abs("kept")], parse_dirs(&format!("{root}/*")).unwrap());
@@ -1560,13 +1402,13 @@ mod tests {
     fn test_save_load_configs() {
         // The saving and loading of configs always goes through the persistent config dir, which doesn't
         // exist yet on a machine where the program has never been executed.
-        std::fs::create_dir_all(&PERSISTENT_APP_PATHS.config_dir).unwrap();
-        let test_file_path = &PERSISTENT_APP_PATHS.config_dir.clone().add("/test000.txt");
+        std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
+        let test_file_path = &crate::paths::PERSISTENT_APP_PATHS.config_dir.clone().add("/test000.txt");
         assert!(!Path::new(test_file_path).exists());
 
         let mut saved_config = create_config_builder_from_args("--threads 1 5 --languages lang1, lang2 --save test000").unwrap();
         assert!(Path::new(test_file_path).exists());
-        assert_eq!(saved_config.dirs.clone().unwrap()[0], Target::of(convert_to_absolute("./")));
+        assert_eq!(saved_config.dirs.clone().unwrap()[0], Target::of(mezura::engine::targets::convert_to_absolute("./")));
         assert_eq!(saved_config.threads.clone().unwrap(), Threads::new(1, 5));
         assert_eq!(saved_config.languages_of_interest.clone().unwrap(), vec!["lang1", "lang2"]);
 
@@ -1588,23 +1430,23 @@ mod tests {
 
     #[test]
     fn test_theme_arg_parsing() {
-        std::fs::create_dir_all(&PERSISTENT_APP_PATHS.themes_dir).unwrap();
-        let test_theme_path = &PERSISTENT_APP_PATHS.themes_dir.clone().add("test-theme000.txt");
+        std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.themes_dir).unwrap();
+        let test_theme_path = &crate::paths::PERSISTENT_APP_PATHS.themes_dir.clone().add("test-theme000.txt");
         // Cleaning up front instead of asserting absence, so that a failed run does not leave
         // behind a file that makes every later run fail during setup
         let _ = std::fs::remove_file(test_theme_path);
         std::fs::write(test_theme_path, "language-1 = cyan\nlanguage-2 = ff0080\ncode-number = bright-black dim\n").unwrap();
 
         let config = create_config_from_args("./ --theme Test-Theme000").unwrap();
-        assert_eq!(Style::of(Color::Cyan), config.theme.language_1);
-        assert_eq!(Style::of(Color::TrueColor{r:255,g:0,b:128}), config.theme.language_2);
-        assert_eq!(Style::of(Color::BrightBlack).dim(), config.theme.code_number);
+        assert_eq!(Style::of(Color::Cyan), config.view.theme.language_1);
+        assert_eq!(Style::of(Color::TrueColor{r:255,g:0,b:128}), config.view.theme.language_2);
+        assert_eq!(Style::of(Color::BrightBlack).dim(), config.view.theme.code_number);
 
         // --style wins over what the theme declared, and the tokens it does not name survive
         let restyled = create_config_from_args("./ --theme test-theme000 --style code-number=cyan,heading=bold").unwrap();
-        assert_eq!(Style::of(Color::Cyan), restyled.theme.code_number);
-        assert_eq!(Style::plain().bold(), restyled.theme.heading);
-        assert_eq!(Style::of(Color::Cyan), restyled.theme.language_1);
+        assert_eq!(Style::of(Color::Cyan), restyled.view.theme.code_number);
+        assert_eq!(Style::plain().bold(), restyled.view.theme.heading);
+        assert_eq!(Style::of(Color::Cyan), restyled.view.theme.language_1);
 
         // The error names what is actually wrong, instead of a generic "incorrect arguments"
         assert!(matches!(create_config_from_args("./ --style"), Err(ArgParsingError::InvalidStyle(_))));
@@ -1623,8 +1465,8 @@ mod tests {
 
     #[test]
     fn test_load_config_with_invalid_value() {
-        std::fs::create_dir_all(&PERSISTENT_APP_PATHS.config_dir).unwrap();
-        let test_file_path = &PERSISTENT_APP_PATHS.config_dir.clone().add("/test001.txt");
+        std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
+        let test_file_path = &crate::paths::PERSISTENT_APP_PATHS.config_dir.clone().add("/test001.txt");
         assert!(!Path::new(test_file_path).exists());
         std::fs::write(test_file_path, "===> threads\n3343 45534\n").unwrap();
 
@@ -1632,7 +1474,7 @@ mod tests {
                 create_config_from_args("./ --load test001"));
 
         let overridden = create_config_from_args("./ --load test001 --threads 1 2").unwrap();
-        assert_eq!(overridden.threads, Threads::new(1, 2));
+        assert_eq!(overridden.engine.threads, Threads::new(1, 2));
 
         std::fs::remove_file(test_file_path).unwrap();
     }
@@ -1641,13 +1483,13 @@ mod tests {
     // overridden, so giving it correctly on the command line would still kill the run
     #[test]
     fn force_lang_takes_pairs_of_an_extension_and_a_language_and_refuses_anything_else() {
-        let forced = |args: &str| create_config_from_args(&format!("./ --force-lang {args}")).map(|x| x.forced_languages);
+        let forced = |args: &str| create_config_from_args(&format!("./ --force-lang {args}")).map(|x| x.engine.forced_languages);
 
-        assert_eq!(Ok(crate::hashmap!("m".to_owned() => "matlab".to_owned())), forced("m=matlab"));
+        assert_eq!(Ok(mezura::hashmap!("m".to_owned() => "matlab".to_owned())), forced("m=matlab"));
         // A leading dot is accepted the way '--languages' accepts it, and the extension is lowercased
         // here so that it is keyed the same way the lookup will ask for it. The language name is kept
         // as it was typed, and compared without case later.
-        assert_eq!(Ok(crate::hashmap!("m".to_owned() => "MATLAB".to_owned(), "pl".to_owned() => "perl".to_owned())),
+        assert_eq!(Ok(mezura::hashmap!("m".to_owned() => "MATLAB".to_owned(), "pl".to_owned() => "perl".to_owned())),
                 forced(".M=MATLAB, pl = perl"));
 
         for wrong in ["", "matlab", "m=", "=matlab", "m=matlab,perl"] {
@@ -1657,8 +1499,8 @@ mod tests {
 
     #[test]
     fn test_a_command_line_value_rescues_every_invalid_field_of_a_config() {
-        std::fs::create_dir_all(&PERSISTENT_APP_PATHS.config_dir).unwrap();
-        let test_file_path = &PERSISTENT_APP_PATHS.config_dir.clone().add("/test002.txt");
+        std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
+        let test_file_path = &crate::paths::PERSISTENT_APP_PATHS.config_dir.clone().add("/test002.txt");
         let _ = std::fs::remove_file(test_file_path);
         std::fs::write(test_file_path, "===> dirs\nfrontend=\n\n===> sort\nnope\n\n===> top\nnope\n\n===> bar-thickness\nnope\n\n\
                 ===> number-separator\nnope\n\n===> decimal-separator\nnope\n\n===> force-lang\nnope\n").unwrap();
@@ -1673,13 +1515,13 @@ mod tests {
 
         let rescued = create_config_from_args(
                 "./ --load test002 --sort name --top 3 --bar-thickness fat --number-separator dot --decimal-separator comma --force-lang m=matlab").unwrap();
-        assert_eq!(vec![Target::of(convert_to_absolute("./"))], rescued.dirs);
-        assert_eq!(SortCriterion::Name, rescued.sort_by);
-        assert_eq!(Some(3), rescued.top_n);
-        assert_eq!(BarThickness::Fat, rescued.bar_thickness);
-        assert_eq!(NumberSeparator::Dot, rescued.number_separator);
-        assert_eq!(DecimalSeparator::Comma, rescued.decimal_separator);
-        assert_eq!(crate::hashmap!("m".to_owned() => "matlab".to_owned()), rescued.forced_languages);
+        assert_eq!(vec![Target::of(mezura::engine::targets::convert_to_absolute("./"))], rescued.engine.dirs);
+        assert_eq!(SortCriterion::Name, rescued.view.sort_by);
+        assert_eq!(Some(3), rescued.view.top_n);
+        assert_eq!(BarThickness::Fat, rescued.view.bar_thickness);
+        assert_eq!(NumberSeparator::Dot, rescued.view.number_separator);
+        assert_eq!(DecimalSeparator::Comma, rescued.view.decimal_separator);
+        assert_eq!(mezura::hashmap!("m".to_owned() => "matlab".to_owned()), rescued.engine.forced_languages);
 
         std::fs::remove_file(test_file_path).unwrap();
     }
