@@ -35,13 +35,17 @@ impl Target {
     }
 }
 
-// By path, case-insensitively where the file system is, which is the only comparison that answers
-// "are these two targets the same place" on every platform. A name never takes part: two spellings of
-// one path are one place whatever they were called.
+// By path first, case-insensitively where the file system is, so that two spellings of one place sort
+// together. The raw path and the name then break the tie, and they are not decoration: 'Ord' has to
+// agree with 'Eq', and 'Eq' is derived over both fields. Without them, two targets that differ only
+// in case, or only in name, compare Equal while '==' says false, and the first 'dedup' or
+// 'binary_search' written over a sorted list of them would quietly drop one.
 impl Ord for Target {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         crate::engine::targets::path_comparison_key(&self.path)
                 .cmp(&crate::engine::targets::path_comparison_key(&other.path))
+                .then_with(|| self.path.cmp(&other.path))
+                .then_with(|| self.module.cmp(&other.module))
     }
 }
 

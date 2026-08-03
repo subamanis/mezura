@@ -128,7 +128,9 @@ impl FinalStats {
             lines,
             code_lines,
             comment_lines,
-            extra_lines: lines - code_lines - comment_lines,
+            // Saturating for the same reason the division above is checked: this is a public door,
+            // and three counts that do not add up are the caller's arithmetic, not a reason to panic.
+            extra_lines: lines.saturating_sub(code_lines).saturating_sub(comment_lines),
             bytes_size,
             bytes_average_size,
             size,

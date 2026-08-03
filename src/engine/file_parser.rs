@@ -493,10 +493,6 @@ fn get_bounds_only_single_line_comments(line: &str, language: &Language, open_st
 
             is_str_open_m = false;
             str_counter += 1;
-            if !has_more_strs(str_counter) && is_str_open_m {
-                return line_info_with_str_symbol(code_ranges.len(), str_symbols[str_counter-1]);
-            }
-            
             advance_comment_counter_until(index_after, &mut comment_counter);
             slice_start_index = index_after;
             has_string_literal = true;
@@ -1619,6 +1615,16 @@ mod tests {
         let (mut start_indices, mut end_indices) = (vec![0,2,7],vec![1,3,6,8]);
         resolve_double_counting_of_adjacent_start_and_end_symbols(&mut start_indices, &mut end_indices, true, 2);
         assert_eq!((start_indices, end_indices), (vec![7],vec![1,3]));
+
+        // '*/ */*' with a comment open from the line before, which is the case that decides the two
+        // conditions in the loop below 'resolve_collision'. They are not mirror images of each other,
+        // and the one that looks like a typo is the one that is right: the end symbol at 0 closes the
+        // comment, so the '*/' at 3 is a stray in code and the '/*' at 4 is a real opener. Reading the
+        // second condition as the mirror of the first discards the opener instead of the stray, and
+        // the whole rest of the file is then counted as code.
+        let (mut start_indices, mut end_indices) = (vec![4],vec![0,3]);
+        resolve_double_counting_of_adjacent_start_and_end_symbols(&mut start_indices, &mut end_indices, true, 2);
+        assert_eq!((start_indices, end_indices), (vec![4],vec![0]));
 
         // /* */*/*//*
         let (mut start_indices, mut end_indices) = (vec![0,4,6,9],vec![3,5,7]);

@@ -40,6 +40,7 @@ impl Warning {
 pub const EXTENSION_TIEBREAK      : &str = "extension-tiebreak";
 pub const UNKNOWN_FORCED_LANGUAGE : &str = "unknown-forced-language";
 pub const UNKNOWN_LANGUAGE        : &str = "unknown-language";
+pub const UNKNOWN_EXCLUDED_LANGUAGE: &str = "unknown-excluded-language";
 pub const LANGUAGE_FILE_UNREADABLE: &str = "language-file-unreadable";
 pub const PRIORITY_LINE_SKIPPED   : &str = "priority-line-skipped";
 pub const CONFIG_VALUE_IGNORED    : &str = "config-value-ignored";

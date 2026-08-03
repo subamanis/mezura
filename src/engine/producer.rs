@@ -14,7 +14,7 @@ pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFil
         config: Arc<EngineConfig>, files_stats: Arc<Mutex<FilesPresent>>, modules: Arc<Modules>)
 -> JoinHandle<()>
 {
-    thread::Builder::new().name(id.to_string()).spawn(move || {
+    thread::Builder::new().name(format!("producer-{id}")).spawn(move || {
         let (total_files, relevant_files, excluded_files) =
                 search_for_files(id, files_injector, dirs_injector, worker, idle_producers, extension_lang_map, exclude_matcher, config, modules);
         let mut file_stats_guard = files_stats.lock().unwrap(); 

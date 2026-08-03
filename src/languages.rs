@@ -60,6 +60,13 @@ fn retain_languages_of_interest(mut definitions: HashMap<String,Language>, confi
         definitions.retain(|name, _| config.languages_of_interest.iter().any(|x| x.eq_ignore_ascii_case(name)));
     }
 
+    // Reported under a code of its own, and not the one above it, because the command line has
+    // already put that one on the screen with a suggested spelling and keeps it only for the
+    // document. This one has no other voice.
+    for name in unknown_language_names(&definitions, &config.excluded_languages) {
+        reported.push(Warning::new(warnings::UNKNOWN_EXCLUDED_LANGUAGE, warnings::Affects::Settings, &name,
+                format!("'{name}' does not exist as a language file, so excluding it changed nothing.")));
+    }
     for excluded in &config.excluded_languages {
         definitions.retain(|name, _| name.to_lowercase() != excluded.to_lowercase());
     }
@@ -115,5 +122,23 @@ mod language_selection_tests {
         assert_eq!(warnings::UNKNOWN_LANGUAGE, mine.code);
         // the counts are sound for what does exist, it is the setting that was not honoured
         assert_eq!("settings", mine.affects.name());
+    }
+
+    // Excluding a name that does not exist did nothing and said nothing, while asking for one four
+    // lines above it has always been reported. Its own code, because the command line prints this one
+    // and only keeps the other.
+    #[test]
+    fn excluding_a_language_that_does_not_exist_is_reported_too() {
+        let mut config = EngineConfig::new(vec!["./".to_owned()]);
+        config.excluded_languages = vec!["Java".to_owned(), "Nolang-Q9".to_owned()];
+        let (kept, reported) = retain_languages_of_interest(
+                languages_claiming(&[("Java", &["java"]), ("Rust", &["rs"])]), &config);
+
+        assert_eq!(vec!["Rust"], kept.into_keys().collect::<Vec<_>>());
+        let mine = reported.iter().find(|x| x.subject == "Nolang-Q9").unwrap();
+        assert_eq!(warnings::UNKNOWN_EXCLUDED_LANGUAGE, mine.code);
+        assert_eq!("settings", mine.affects.name());
+        // and the one that does exist is excluded without a word about it
+        assert!(!reported.iter().any(|x| x.subject == "Java"));
     }
 }

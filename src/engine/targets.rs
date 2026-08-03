@@ -45,8 +45,13 @@ pub(crate) fn build_exclude_matcher(exclude_patterns: &[String]) -> Result<globs
     builder.build()
 }
 
-// Paths are compared case-insensitively on Windows, where the file system is
+// The key that answers "are these two the same place". Case-insensitive on Windows, where the file
+// system is, and without a trailing separator, because 'D:/a' and 'D:/a/' are one directory. The
+// second half was missing and it counted every file under such a pair twice: the deduplication
+// compares these keys, and the containment test asks for a path strictly longer than its ancestor
+// plus a separator, which 'D:/a/' is not against 'D:/a'.
 pub(crate) fn path_comparison_key(path: &str) -> String {
+    let path = path.trim_end_matches('/');
     if cfg!(windows) {path.to_lowercase()} else {path.to_owned()}
 }
 
@@ -272,6 +277,11 @@ mod target_path_tests {
     #[test]
     fn test_remove_overlapping_paths_handles_trailing_slashes_and_case() {
         assert_eq!(vec!["D:/a/"], dedupe(&["D:/a/", "D:/a/b"]));
+        // The same place written twice, once with the slash. Only the byte-identical duplicate was
+        // ever tested, so this pair survived the pruning and every file under it was counted twice.
+        assert_eq!(vec!["D:/a"], dedupe(&["D:/a", "D:/a/"]));
+        assert_eq!(vec!["D:/a/"], dedupe(&["D:/a/", "D:/a"]));
+        assert_eq!(vec!["D:/a"], dedupe(&["D:/a", "D:/a/", "D:/a/b"]));
 
         let result = dedupe(&["D:/Dev", "D:/dev/sub"]);
         if cfg!(windows) {

@@ -83,8 +83,11 @@ pub fn make_extension_language_map(languages: &HashMap<String,Language>, priorit
     // key. A caller of the library sets this field directly and is under no obligation to lowercase
     // it, and when only one of the two lookups did, the mapping was applied while the run also
     // warned that the extension had been left to the alphabetical tiebreak.
+    // The leading dot is stripped here and not only where a command line is parsed, or a caller
+    // writing '.rs' would silently match no extension at all: the claimants below are keyed on the
+    // bare form.
     let forced : HashMap<String, &str> = forced.iter()
-            .map(|(extension, language)| (extension.to_ascii_lowercase(), language.as_str()))
+            .map(|(extension, language)| (extension.trim_start_matches('.').to_ascii_lowercase(), language.as_str()))
             .collect();
     // Searched in the sorted order the names already have, and not through the keys of a map, whose
     // iteration order is arbitrary: two languages whose names differ only in case would otherwise

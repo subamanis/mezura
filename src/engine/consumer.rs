@@ -10,7 +10,7 @@ pub fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>
         languages_content_info: ContentInfoMapMut, languages_metadata_map: MetadataMapMut, language_map: Arc<HashMap<String,Language>>,
         config: Arc<EngineConfig>) -> JoinHandle<()>
 {
-    thread::Builder::new().name(id.to_string()).spawn(move || {
+    thread::Builder::new().name(format!("consumer-{id}")).spawn(move || {
         start_parsing_files(id, files_injector, faulty_files, finish_condition, languages_content_info, languages_metadata_map, language_map, config);
     }).unwrap()
 }

@@ -141,6 +141,10 @@ Performance:
       so it is worth raising if your files live on a slow drive.
 
 Bugfixes:
+  -> Naming the same directory twice, once with a slash at the end, counted everything in it twice.
+      "mezura ./src,./src/" now reports what "mezura ./src" reports.
+  -> "--exclude-languages" now says so when it is given a name that is not a language, instead of
+      silently excluding nothing. Asking for one with "--languages" always did.
   -> A symbolic link, or a Windows junction, that the scan comes across is no longer followed, so
       whatever it points at is not counted a second time through it. The same goes for one that a
       glob pattern matched. Expect a smaller count on a project that links one of its own
