@@ -14,7 +14,7 @@ esac
 
 echo "pre-commit: writing the README command list from the help texts"
 # Compiles the staged source rather than trusting whatever binary happens to be lying in target/
-if ! MEZURA_UPDATE_GOLDEN=1 cargo test --lib readme --quiet; then
+if ! MEZURA_UPDATE_GOLDEN=1 cargo test -p mezura readme --quiet; then
     echo "pre-commit: the README could not be regenerated, commit aborted" >&2
     exit 1
 fi

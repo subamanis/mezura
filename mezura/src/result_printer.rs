@@ -1646,7 +1646,7 @@ mod tests {
     use std::path::Path;
 
     use mezura_core::{FilesPresent, ModuleResult};
-    use crate::paths::test_paths::{LOG_DIR, TEST_DIR};
+    use crate::paths::test_paths::{FIXTURES_DIR, SCRATCH_LOG_DIR};
     use crate::config_manager::LogOption;
     use super::super::log::log_stats;
 
@@ -2171,7 +2171,7 @@ mod tests {
 
     #[test]
     fn test_parse_N_previous_entries() {
-        let contents = super::super::log::extract_file_contents(&(TEST_DIR.to_owned()+"logs/test1")).unwrap();
+        let contents = super::super::log::extract_file_contents(&(FIXTURES_DIR.to_owned()+"logs/test1")).unwrap();
         let log_entries = parse_N_previous_entries(&contents, 3);
 
         assert_eq!(10, log_entries[0].stats.files);
@@ -2225,7 +2225,8 @@ mod tests {
 
     #[test]
     fn test_log_creation_and_reading() -> std::io::Result<()> {
-        let test_log_dir = LOG_DIR.to_owned() + "test2";
+        std::fs::create_dir_all(SCRATCH_LOG_DIR)?;
+        let test_log_dir = SCRATCH_LOG_DIR.to_owned() + "test2";
         if Path::new(&test_log_dir).exists() {
             std::fs::remove_file(&test_log_dir).unwrap();
         }
@@ -2260,7 +2261,8 @@ mod tests {
     // of the ones above and below it
     #[test]
     fn the_modules_of_an_entry_are_read_back_and_never_reach_another_one() {
-        let test_log_dir = LOG_DIR.to_owned() + "test_modules";
+        std::fs::create_dir_all(SCRATCH_LOG_DIR).unwrap();
+        let test_log_dir = SCRATCH_LOG_DIR.to_owned() + "test_modules";
         if Path::new(&test_log_dir).exists() {
             std::fs::remove_file(&test_log_dir).unwrap();
         }

@@ -1,5 +1,8 @@
 # Test fixtures
 
+Everything here is a checked-in input that the tests read and never write to. A test that needs to
+write goes to a temporary directory of its own; nothing writes into this one.
+
 ## `lang/`, per-language parser fixtures
 
 One small file per language, whose **first line declares the counts mezura must produce for it**, as a
@@ -16,7 +19,7 @@ mismatch means either the parser regressed or the fixture is wrong, and both are
 
 It lives beside the parser rather than in `tests/` because it calls `parse_file` and `KeywordMatcher`
 directly, and every file under `tests/` is a separate crate that can only reach `pub` items. Run it
-with `cargo test --lib language_fixtures`.
+with `cargo test -p mezura-core language_fixtures`.
 
 ### Adding a language
 
@@ -48,11 +51,25 @@ The byte-for-byte record of what the whole `lang/` corpus produces, checked by
 Regenerate after an intentional change and review the diff before committing it:
 
 ```
-MEZURA_UPDATE_GOLDEN=1 cargo test --test stats_golden
+MEZURA_UPDATE_GOLDEN=1 cargo test -p mezura-core --test stats_golden
 ```
 
 Byte sizes are deliberately not in the report: they are the one figure that differs between a CRLF and
 an LF checkout, which would break the golden on the CI matrix.
+
+## `parser/`, the four sample files of the parser cases
+
+`a.txt` to `d.txt`, read by the parser tests inline in `src/engine/file_parser.rs`. Unlike `lang/`,
+these are not one per language and they declare nothing: the language is the one the test names, and
+the expected counts live in the test body. That is the point of them, and why they carry a `.txt`
+extension that implies no language: the same file is counted as Java and then as C#, which is how the
+per-language rules are told apart from the parser's own mechanics.
+
+## `definitions/`, language definition files
+
+Three of them, read by `test_parse_dir` in `src/language_file.rs`, which asserts that two parse and
+one does not. They are inputs to the definition-file parser and have nothing to do with counting, so
+they deliberately do not live beside the shipped definitions in `data/languages`.
 
 ## What is not covered here yet
 

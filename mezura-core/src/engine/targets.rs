@@ -7,11 +7,10 @@ use crate::GitignoreStack;
 use crate::engine::config::Target;
 
 
-// Proof at the type level that resolution has already happened: the only way to construct one is
-// 'resolve' below, so a raw or unexpanded path cannot reach 'run', and 'run' never resolves
-// anything a second time. The damage that forbids is real: a pattern's match may itself be named
-// like a pattern, and a second expansion would read the bracket in a directory literally called
-// 'a[b' as a pattern of its own and refuse a place that exists.
+// Proof at the type level that resolution has already happened: every way to construct one,
+// 'resolve', 'of' and 'literal', hands back only validated absolute paths, and the empty 'Default'
+// is refused by 'run' itself. A raw or unexpanded path therefore cannot reach 'run', and 'run'
+// never resolves anything a second time.
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
 pub struct Targets(Vec<Target>);
 
@@ -24,16 +23,12 @@ impl Targets {
     }
 
     // For a path the program discovered on its own rather than read from anyone's text: taken as
-    // the literal place it names, never as pattern syntax, because nobody wrote it to mean one.
-    // 'of' would read the brackets in a working directory called 'a[b' as a character class.
+    // the literal place it names, never as pattern syntax. One that does not exist is a missing
+    // place, where 'of' would read any pattern characters in the same text as a pattern.
     pub fn literal(paths: &[&str]) -> Result<Self, TargetError> {
         let mut targets = Vec::with_capacity(paths.len());
         for path in paths {
-            let trimmed = path.trim();
-            if !is_valid_path(trimmed) {
-                return Err(TargetError::InvalidPath(trimmed.to_owned()));
-            }
-            targets.push(Target::of(convert_to_absolute(trimmed)));
+            targets.push(literal_target(None, path.trim())?);
         }
         Ok(Targets(remove_overlapping_targets(targets)))
     }
@@ -168,12 +163,15 @@ pub fn prepare(entries: &[(Option<String>, String)]) -> Result<Vec<Target>, Targ
         let module = module.as_ref().map(|name| prepared.iter()
                 .find_map(|x: &Target| x.module.clone().filter(|seen| seen.to_lowercase() == name.to_lowercase()))
                 .unwrap_or_else(|| name.clone()));
-        if has_glob_metacharacters(trimmed) {
+        // The place that exists wins over the syntax: a path that names something on disk is taken
+        // literally whatever characters it carries, and pattern syntax is read only in text that
+        // names nothing. Deciding by syntax first read the brackets of an existing directory, or
+        // of the working directory a relative path was joined to, as a character class, and
+        // refused a place that exists.
+        if !is_valid_path(trimmed) && has_glob_metacharacters(trimmed) {
             prepared.push(Target { module, path: absolutize_pattern(trimmed) });
-        } else if is_valid_path(trimmed) {
-            prepared.push(Target { module, path: convert_to_absolute(trimmed) });
         } else {
-            return Err(TargetError::InvalidPath(trimmed.to_owned()));
+            prepared.push(literal_target(module, trimmed)?);
         }
     }
     Ok(prepared)
@@ -188,7 +186,9 @@ fn expand_patterns(targets: Vec<Target>, respect_gitignore: bool, search_in_dott
 
     let mut resolved = Vec::with_capacity(targets.len());
     for target in targets {
-        if has_glob_metacharacters(&target.path) {
+        // Existence decides here too: prepared targets come back through this on the second
+        // resolution pass, and an absolutized literal may carry pattern characters it never typed
+        if !is_valid_path(&target.path) && has_glob_metacharacters(&target.path) {
             let paths = match glob::glob(&target.path) {
                 Ok(x) => x,
                 Err(_) => return Err(TargetError::InvalidGlob(target.path.clone()))
@@ -248,6 +248,17 @@ fn absolutize_pattern(pattern: &str) -> String {
 
 fn name_or_rest(module: &Option<String>) -> String {
     module.clone().unwrap_or_else(|| crate::UNNAMED_MODULE_NAME.to_owned())
+}
+
+// The one definition of what a literal target is: the place must exist, and the path it keeps is
+// the absolute spelling. Shared by the typed door of 'prepare' and the discovered door of
+// 'literal', so the two cannot drift on what counts as a valid place.
+fn literal_target(module: Option<String>, text: &str) -> Result<Target, TargetError> {
+    if is_valid_path(text) {
+        Ok(Target { module, path: convert_to_absolute(text) })
+    } else {
+        Err(TargetError::InvalidPath(text.to_owned()))
+    }
 }
 
 // The opener is the signal, which is what the help text and the README both describe as
@@ -393,25 +404,39 @@ mod target_path_tests {
                 dedupe_named(&["D:/a", "tests D:/a/b", "D:/a/b/c"]));
     }
 
-    // 'of' reads pattern syntax because its input is typed text; 'literal' exists for a path the
-    // program discovered on its own, which nobody wrote to mean anything but itself.
+    // A place that exists is the place the user named, whatever characters its name carries:
+    // pattern syntax applies only to text that names nothing on disk. Deciding by syntax first
+    // read the brackets of an existing directory, or of the working directory a relative path had
+    // been joined to, as a character class, and refused a place that exists: a saved configuration
+    // holds its targets in absolute form, so one saved under a bracketed ancestor could never load.
     #[test]
-    fn a_literal_target_is_never_read_as_pattern_syntax() {
-        let root = std::env::temp_dir().join("mezura-literal-brackets");
+    fn an_existing_path_is_a_literal_target_even_when_it_looks_like_a_pattern() {
+        let root = std::env::temp_dir().join("mezura-existing-bracket");
         let _ = std::fs::remove_dir_all(&root);
         let bracketed = root.join("a[b");
         std::fs::create_dir_all(&bracketed).unwrap();
         let bracketed_str = bracketed.to_str().unwrap().replace('\\', "/");
 
-        let literal = Targets::literal(&[&bracketed_str]);
+        let resolved = resolve(&[(None, bracketed_str.clone())], true, false);
         let typed = Targets::of(&[&bracketed_str]);
         std::fs::remove_dir_all(&root).unwrap();
 
-        let literal = literal.unwrap();
-        assert_eq!(1, literal.len());
-        assert!(literal[0].path.ends_with("a[b"), "kept as itself, got {literal:?}");
-        // and the same text typed by a person is pattern syntax with an unclosed bracket
-        assert!(typed.is_err(), "the typed form was not read as a pattern: {typed:?}");
+        let resolved = resolved.unwrap();
+        assert_eq!(1, resolved.len());
+        assert!(resolved[0].path.ends_with("a[b"), "not kept as itself: {resolved:?}");
+        assert_eq!(*resolved, *typed.unwrap());
+    }
+
+    // 'literal' exists for a path the program discovered on its own, which nobody wrote to mean
+    // anything but itself: text that names nothing on disk is a missing place, never a pattern.
+    // The same text through 'of' was typed, and typed pattern syntax is read as a pattern.
+    #[test]
+    fn a_literal_target_is_never_read_as_pattern_syntax() {
+        let missing = std::env::temp_dir().join("mezura-nowhere").join("a?b");
+        let missing_str = missing.to_str().unwrap().replace('\\', "/");
+
+        assert_eq!(Err(TargetError::InvalidPath(missing_str.clone())), Targets::literal(&[&missing_str]));
+        assert!(matches!(Targets::of(&[&missing_str]), Err(TargetError::NoGlobMatches(_))));
     }
 
     #[test]

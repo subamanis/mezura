@@ -21,6 +21,5 @@ mezura.exe
 src/benchmarks.rs
 bench
 bench_dir
-mezura/test_dir/config/auto-generated.txt
+mezura/test_dir/
 archive
-mezura/test_dir/migration-*/

@@ -636,7 +636,7 @@ mod tests {
     use std::collections::HashMap;
 
     use mezura_core::Language;
-    use crate::paths::test_paths::TEST_DIR;
+    use crate::paths::test_paths::SCRATCH_DIR;
 
     use crate::config_manager::VERSION_ID;
 
@@ -647,7 +647,7 @@ mod tests {
     // supposed to reach the user as a message.
     #[test]
     fn a_migration_replaces_what_was_changed_and_keeps_it_and_is_silent_about_the_rest() {
-        let dir = TEST_DIR.to_owned() + "migration-test/";
+        let dir = SCRATCH_DIR.to_owned() + "migration-test/";
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -704,7 +704,7 @@ mod tests {
     // answer they gave to a contested extension, which they would have to give again every release.
     #[test]
     fn the_two_files_that_exist_in_order_to_be_edited_are_never_replaced() {
-        let dir = TEST_DIR.to_owned() + "migration-carve-out/";
+        let dir = SCRATCH_DIR.to_owned() + "migration-carve-out/";
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         migrate_data_files(&dir, false).unwrap();
@@ -726,7 +726,7 @@ mod tests {
     // own by more than the fact that we do not ship it: only the manifest remembers writing it.
     #[test]
     fn a_file_we_no_longer_ship_is_moved_out_and_one_of_their_own_is_left_alone() {
-        let dir = TEST_DIR.to_owned() + "migration-withdrawn/";
+        let dir = SCRATCH_DIR.to_owned() + "migration-withdrawn/";
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         migrate_data_files(&dir, false).unwrap();
@@ -758,7 +758,7 @@ mod tests {
     // longer ship deleted every one of them.
     #[test]
     fn a_file_that_stopped_being_managed_is_not_a_file_that_stopped_being_shipped() {
-        let dir = TEST_DIR.to_owned() + "migration-recategorised/";
+        let dir = SCRATCH_DIR.to_owned() + "migration-recategorised/";
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         migrate_data_files(&dir, false).unwrap();
@@ -781,7 +781,7 @@ mod tests {
     // which is what keeps the mechanism self-healing.
     #[test]
     fn any_version_but_this_one_makes_the_pass_run_and_so_does_an_unreadable_manifest() {
-        let dir = TEST_DIR.to_owned() + "migration-manifest/";
+        let dir = SCRATCH_DIR.to_owned() + "migration-manifest/";
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         migrate_data_files(&dir, false).unwrap();

@@ -339,7 +339,7 @@ mod line_reader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_paths::{DATA_DIR, LANGUAGES_DIR, TEST_DIR};
+    use crate::test_paths::{DATA_DIR, FIXTURES_DIR, LANGUAGES_DIR};
     #[test]
     fn every_contest_between_the_shipped_languages_is_settled_by_the_shipped_priority_file() {
         let (languages, _) = crate::language_file::parse_dir(LANGUAGES_DIR).unwrap();
@@ -427,7 +427,7 @@ pl      Perl, Prolog
     #[test]
     fn test_parse_dir() {
         let (lang_map, faulty_files) = crate::language_file::parse_dir(
-                &(TEST_DIR.to_owned() + "languages/")).unwrap();
+                &(FIXTURES_DIR.to_owned() + "definitions/")).unwrap();
         assert!(lang_map.len() == 2);
         assert!(faulty_files.len() == 1);
     }

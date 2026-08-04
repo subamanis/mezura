@@ -128,6 +128,20 @@ fn a_run_where_every_file_fails_to_parse_is_an_answer_not_an_error() {
     assert!(!result.all_relevant_files_were_faulty());
 }
 
+// A configuration with no targets at all is a malformed question, not an empty answer: the command
+// line can never produce one, because a bare run falls back to the working directory, so it is a
+// library caller forgetting dirs, and an Ok full of zeros would dress the mistake up as a
+// measurement.
+#[test]
+fn a_run_with_no_targets_is_an_error_not_an_empty_answer() {
+    let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
+    let config = EngineConfig::default();
+    let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
+
+    let err = run(&config, languages, |_| {}).unwrap_err();
+    assert!(matches!(err, mezura_core::RunError::NoTargets), "got: {err:?}");
+}
+
 // A pattern's match may itself be named like a pattern: 'a?b' legitimately matches a directory
 // literally called 'a[b'. The resolved list is handed to 'run' as it is, and nothing may resolve it
 // a second time: a second expansion would read the bracket as a pattern of its own and refuse a

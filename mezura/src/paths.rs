@@ -20,13 +20,19 @@ pub const REPLACED_DIR_NAME : &str = "replaced";
 
 pub static PERSISTENT_APP_PATHS : LazyLock<PersistentAppPaths> = LazyLock::new(PersistentAppPaths::get);
 
-// The repository's own 'test_dir', which only tests read. Anchored on the manifest rather than on the
-// executable, so it does not depend on where cargo put the test binary or on the working directory.
+// What the tests read and what they write, kept apart. 'tests/fixtures' holds checked-in inputs and
+// is never written to; 'test_dir' is scratch, ignored by git as a whole, and a test that writes
+// there makes the directory it needs. Both are anchored on the manifest rather than on the
+// executable, so neither depends on where cargo put the test binary or on the working directory.
+//
+// Mixing the two hid a dependency for as long as they were mixed: two tests write a file without
+// creating its directory, and passed only because a checked-in fixture happened to be sitting in it.
 #[cfg(test)]
 pub mod test_paths {
-    pub const TEST_DIR   : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test_dir/");
-    pub const CONFIG_DIR : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test_dir/config/");
-    pub const LOG_DIR    : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test_dir/logs/");
+    pub const FIXTURES_DIR       : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/");
+    pub const SCRATCH_DIR        : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test_dir/");
+    pub const SCRATCH_CONFIG_DIR : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test_dir/config/");
+    pub const SCRATCH_LOG_DIR    : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test_dir/logs/");
 }
 
 #[derive(Debug)]

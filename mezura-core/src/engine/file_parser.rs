@@ -959,8 +959,15 @@ mod tests {
 
     use super::*;
     use crate::{Keyword, LanguageContentInfo};
-    use crate::test_paths::LANGUAGES_DIR;
+    use crate::test_paths::{FIXTURES_DIR, LANGUAGES_DIR};
     use crate::engine::extensions::{find_language_of_extension, make_extension_language_map};
+
+    // The four sample files the parser cases below read. They carry no telling extension, because
+    // the language is the one the test names and not the one a suffix would imply, which is what
+    // lets the same file be counted as Java and then as C#.
+    fn sample_file(name: &str) -> std::path::PathBuf {
+        Path::new(FIXTURES_DIR).join("parser").join(name)
+    }
 
     // The parser is handed its working memory by the consumer thread that owns it. A test cares
     // about one line at a time, so it gets a fresh one and reads the result out.
@@ -1138,40 +1145,40 @@ mod tests {
     }
 
     #[test]
-    fn test_correct_parsing_of_test_dir() {
+    fn test_correct_parsing_of_the_sample_files() {
         let mut buf = String::with_capacity(150);
 
         let mut config = EngineConfig::default();
-        let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "Java", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &config);
+        let result = parse_file(&sample_file("a.txt"), "Java", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &config);
         let result = content_info_of(result.unwrap(), "Java");
         assert_eq!(LanguageContentInfo::new(44, 13, 15, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         buf.clear();
         config.set_count_keywords(false);
-        let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "Java", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &config);
+        let result = parse_file(&sample_file("a.txt"), "Java", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &config);
         let result = content_info_of(result.unwrap(), "Java");
         assert_eq!(LanguageContentInfo::new(44, 13, 15, hashmap!()), result);
         buf.clear();
         config.set_count_keywords(true);
-        let result = parse_file(Path::new("test_dir/lang_files/a.txt"), "C#", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("C#").as_ref(), &EngineConfig::default());
+        let result = parse_file(&sample_file("a.txt"), "C#", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("C#").as_ref(), &EngineConfig::default());
         let result = content_info_of(result.unwrap(), "C#");
         assert_eq!(LanguageContentInfo::new(44, 13, 15, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         buf.clear();
         
-        let result = parse_file(Path::new("test_dir/lang_files/d.txt"), "C#", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("C#").as_ref(), &EngineConfig::default());
+        let result = parse_file(&sample_file("d.txt"), "C#", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("C#").as_ref(), &EngineConfig::default());
         let result = content_info_of(result.unwrap(), "C#");
         assert_eq!(LanguageContentInfo::new(19, 7, 10, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         buf.clear();
-        let result = parse_file(Path::new("test_dir/lang_files/d.txt"), "Java", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &EngineConfig::default());
+        let result = parse_file(&sample_file("d.txt"), "Java", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &EngineConfig::default());
         let result = content_info_of(result.unwrap(), "Java");
         assert_eq!(LanguageContentInfo::new(19, 7, 10, hashmap!("classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         buf.clear();
 
-        let result = parse_file(Path::new("test_dir/lang_files/b.txt"), "Java", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &EngineConfig::default());
+        let result = parse_file(&sample_file("b.txt"), "Java", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &EngineConfig::default());
         let result = content_info_of(result.unwrap(), "Java");
         assert_eq!(LanguageContentInfo::new(19, 11, 5, hashmap!("classes".to_owned()=>7,"interfaces".to_owned()=>0)), result);
         buf.clear();
 
-        let result = parse_file(Path::new("test_dir/lang_files/c.txt"), "Python", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Python").as_ref(), &EngineConfig::default());
+        let result = parse_file(&sample_file("c.txt"), "Python", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Python").as_ref(), &EngineConfig::default());
         let result = content_info_of(result.unwrap(), "Python");
         assert_eq!(LanguageContentInfo::new(11, 6, 3, hashmap!("classes".to_owned()=>2)), result);
         buf.clear();
@@ -1183,11 +1190,11 @@ mod tests {
     #[test]
     fn braces_as_code_moves_the_no_content_lines_into_code() {
         let mut buf = String::with_capacity(150);
-        let path = Path::new("test_dir/lang_files/a.txt");
+        let path = sample_file("a.txt");
         let count_with = |flag: bool, buf: &mut String| {
             let mut config = EngineConfig::default();
             config.set_braces_as_code(flag);
-            let stats = parse_file(path, "Java", buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &config).unwrap();
+            let stats = parse_file(&path, "Java", buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &config).unwrap();
             (stats.lines, stats.code_lines, stats.comment_lines)
         };
 
@@ -1841,7 +1848,7 @@ mod tests {
     const MARKER: &str = "mezura-expect";
 
     fn fixtures_dir() -> std::path::PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join("lang")
+        Path::new(FIXTURES_DIR).join("lang")
     }
 
     // Each fixture declares, on its first line and in its own comment syntax, the counts mezura must

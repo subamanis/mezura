@@ -693,7 +693,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
 
     if let Some(name) = &config_builder.config_name_to_save {
         if config_builder.dirs.is_none() {
-            config_builder.dirs = Some(parse_working_dir_as_target_dir()?);
+            config_builder.dirs = Some(working_dir_as_targets()?.to_vec());
         }
 
         match super::config_files::save_existing_commands_from_config_builder_to_file(None, name, &config_builder) {
@@ -887,22 +887,10 @@ fn map_target_error(x: mezura_core::engine::targets::TargetError) -> ArgParsingE
 }
 
 
-// The working directory is not something anybody typed, so it is not put through the parser that
-// takes typed text apart. It used to be, and a working directory whose path contains a space was
-// then split into two targets, neither of which existed, which stopped a bare 'mezura' from running
-// at all in a place like 'C:/Users/John Smith/project'.
-fn parse_working_dir_as_target_dir() -> Result<Vec<Target>, ArgParsingError> {
-    if let Ok(path_buf) = std::env::current_dir()
-        && let Some(path_str) = path_buf.to_str()
-        && super::args::is_valid_path(path_str) {
-        return Ok(vec![Target::of(mezura_core::engine::targets::convert_to_absolute(path_str))]);
-    }
-
-    Err(ArgParsingError::UnparsableWorkingDir)
-}
-
-// The same place as a 'Targets': through 'literal' and never through resolution, because a working
-// directory whose name happens to carry a bracket is still just a directory.
+// The working directory is not something anybody typed, so it goes through 'literal' and never
+// through the parser that takes typed text apart. It used to, and a working directory whose path
+// contains a space was then split into two targets, neither of which existed, which stopped a bare
+// 'mezura' from running at all in a place like 'C:/Users/John Smith/project'.
 fn working_dir_as_targets() -> Result<Targets, ArgParsingError> {
     if let Ok(path_buf) = std::env::current_dir()
         && let Some(path_str) = path_buf.to_str()

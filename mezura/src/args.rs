@@ -1,7 +1,6 @@
 // Turning the text of a command line or a configuration file into values. Nothing here counts
 // anything; it is the front door and it belongs to the command line.
 use std::collections::HashMap;
-use std::path::Path;
 
 
 // A command line, where a space separates one target from the next only once a module is named.
@@ -100,12 +99,6 @@ pub fn get_trimmed_if_not_empty(str: &str) -> Option<String> {
     let str = str.trim();
     if str.is_empty() {None}
     else {Some(str.to_owned())}
-}
-
-
-pub fn is_valid_path(s: &str) -> bool {
-    let p = Path::new(s.trim());
-    p.is_dir() || p.is_file()
 }
 
 

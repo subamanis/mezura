@@ -141,6 +141,8 @@ Performance:
       so it is worth raising if your files live on a slow drive.
 
 Bugfixes:
+  -> A target whose path exists is now always taken literally: a directory with '[' or '{' in its
+      name, or a run started inside one, used to be refused as an invalid glob pattern.
   -> Naming the same directory twice, once with a slash at the end, counted everything in it twice.
       "mezura ./src,./src/" now reports what "mezura ./src" reports.
   -> "--exclude-languages" now says so when it is given a name that is not a language, instead of

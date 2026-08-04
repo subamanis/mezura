@@ -60,14 +60,16 @@ pub const EXTENSION_PRIORITY_FILE_NAME : &str = "extension_priority.txt";
 // with 'frontend=./web ./docs' the './docs' did not survive anything, it was simply never named.
 pub const UNNAMED_MODULE_NAME : &str = "(unnamed)";
 
-// The repository's own 'data/', which only tests ever read: the program itself reads the persistent
-// directory, and that one belongs to the command line. Anchored on the manifest rather than on the
-// executable, so it does not depend on where cargo put the test binary or on the working directory.
+// What the tests read: the repository's own 'data/', which the program itself never reads (it reads
+// the persistent directory, and that one belongs to the command line), and the checked-in inputs
+// under 'tests/fixtures'. Nothing here is ever written to. Both are anchored on the manifest rather
+// than on the working directory, which cargo happens to set to the package root: a test that leans
+// on that passes from cargo and nowhere else.
 #[cfg(test)]
 pub(crate) mod test_paths {
     pub const DATA_DIR      : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/");
     pub const LANGUAGES_DIR : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/languages/");
-    pub const TEST_DIR      : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test_dir/");
+    pub const FIXTURES_DIR  : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/");
 }
 
 
@@ -94,6 +96,9 @@ pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
 pub fn run(config: &EngineConfig, languages: Languages,
         on_traversal_done: impl FnOnce(FilesPresent)) -> Result<RunResult, RunError>
 {
+    if config.dirs.is_empty() {
+        return Err(RunError::NoTargets);
+    }
     let config = Arc::new(config.clone());
     let faulty_files_ref : FaultyFilesListMut  = Arc::new(Mutex::new(Vec::with_capacity(10)));
     let finish_condition_ref = Arc::new(AtomicBool::new(false));

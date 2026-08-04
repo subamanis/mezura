@@ -82,7 +82,9 @@ mod tests {
         let published_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("..").join("docs").join("theme-editor").join("index.html");
 
-        if std::env::var_os("MEZURA_UPDATE_GOLDEN").is_some() {
+        // Its own switch and not MEZURA_UPDATE_GOLDEN, because this one rewrites a page the world
+        // sees: refreshing test fixtures must not be able to republish the site as a side effect.
+        if std::env::var_os("MEZURA_UPDATE_PUBLISHED").is_some() {
             std::fs::write(&published_path, template).unwrap();
             return;
         }
@@ -90,7 +92,7 @@ mod tests {
         let published = std::fs::read_to_string(&published_path).unwrap().replace("\r\n", "\n");
         assert_eq!(published, template.replace("\r\n", "\n"),
                 "docs/theme-editor/index.html no longer matches the embedded template it publishes. \
-                 Regenerate it with MEZURA_UPDATE_GOLDEN=1 cargo test -p mezura published_theme_editor");
+                 Regenerate it with MEZURA_UPDATE_PUBLISHED=1 cargo test -p mezura published_theme_editor");
     }
 
     #[test]

@@ -95,6 +95,8 @@ WHAT IS COUNTED
     in this form: '--dirs <path1>, <path2>'
     A path can also be a glob pattern (* ? [..] {..}), which is expanded to every existing
     directory and file that it matches, so 'services/*/src' is a valid target.
+    A path that exists exactly as written is always taken literally, so a folder with one of
+    those characters in its name is still just a folder.
     Since the matches of a pattern are found by the program and not named by you, they follow
     the same rules as every other path it discovers: the ones that a .gitignore ignores, that
     are dotted, or that are links, are skipped (see the '--no-gitignore' and '--search-in-dotted'

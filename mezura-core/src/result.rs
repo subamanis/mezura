@@ -134,6 +134,11 @@ pub struct FaultyFileDetails {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum RunError {
+    // No places to look is a malformed question and not an empty answer. The command line can
+    // never ask it, because a bare run falls back to the working directory; a library caller who
+    // built a configuration without dirs almost certainly forgot them, and an Ok full of zeros
+    // would dress the mistake up as a measurement.
+    NoTargets,
     // The pattern as the caller wrote it, not the anchored form the matcher builds from it
     InvalidExcludePattern(String),
     // The operating system refused every thread of one side. A refusal of some but not all is not
@@ -158,6 +163,7 @@ pub struct FilesPresent {
 impl std::fmt::Display for RunError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::NoTargets => write!(f, "The configuration names no directories or files, so there is nothing to count."),
             Self::InvalidExcludePattern(x) => write!(f, "'{x}' is not a valid exclude pattern, so nothing was counted."),
             Self::NoThreadsAvailable { side, error } => write!(f, "The operating system refused every {side} thread, so the run could not start: {error}"),
             Self::IncompleteRun { worker_panic } => write!(f, "A worker thread died mid-run, so the counts would have been incomplete and were discarded: {worker_panic}")

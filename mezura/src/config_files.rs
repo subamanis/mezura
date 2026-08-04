@@ -452,7 +452,7 @@ mod tests {
     use super::super::config_manager::Configuration;
     use super::*;
     use mezura_core::Target;
-    use crate::paths::test_paths::CONFIG_DIR;
+    use crate::paths::test_paths::{FIXTURES_DIR, SCRATCH_CONFIG_DIR};
     use super::super::config_manager::ConfigurationBuilder;
     // A line the reader could not deliver used to end the loop as if the file ended there, and the
     // half that had been read was applied without a word: a config saved in the wrong encoding kept
@@ -490,10 +490,11 @@ mod tests {
                 --style code-number=green,comments-label=magenta bold,arrow=default dim".to_string();
         let config_builder = config_manager::create_config_builder_from_args(&command).unwrap();
 
-        let test_config_dir = Some(CONFIG_DIR.to_owned());
+        std::fs::create_dir_all(SCRATCH_CONFIG_DIR)?;
+        let test_config_dir = Some(SCRATCH_CONFIG_DIR.to_owned());
         super::super::config_files::save_existing_commands_from_config_builder_to_file(test_config_dir, "auto-generated", &config_builder)?;
 
-        let (options, issues) = super::super::config_files::parse_config_file(Some("auto-generated"), Some(CONFIG_DIR.to_owned())).unwrap();
+        let (options, issues) = super::super::config_files::parse_config_file(Some("auto-generated"), Some(SCRATCH_CONFIG_DIR.to_owned())).unwrap();
         assert!(issues.invalid_fields.is_empty() && issues.warnings.is_empty());
         assert_eq!(config_builder.dirs, options.dirs);
         assert_eq!(config_builder.exclude_dirs, options.exclude_dirs);
@@ -515,7 +516,7 @@ mod tests {
 
     #[test]
     fn a_force_lang_value_written_across_lines_is_read_whole() -> std::io::Result<()> {
-        let dir = CONFIG_DIR.to_owned();
+        let dir = SCRATCH_CONFIG_DIR.to_owned();
         std::fs::create_dir_all(&dir)?;
         let path = dir.clone() + "force-lang-block.txt";
         std::fs::write(&path, "===> dirs\n./\n\n===> force-lang\nm=matlab,\npl=perl\n")?;
@@ -533,7 +534,7 @@ mod tests {
     // paths they belong to on the first round trip.
     #[test]
     fn the_modules_of_a_saved_configuration_survive_being_read_back() -> std::io::Result<()> {
-        let dir = CONFIG_DIR.to_owned();
+        let dir = SCRATCH_CONFIG_DIR.to_owned();
         std::fs::create_dir_all(&dir)?;
         let path = dir.clone() + "modules-round-trip.txt";
 
@@ -566,7 +567,7 @@ mod tests {
     // module written next to the others means
     #[test]
     fn the_dirs_block_reads_a_module_across_lines_and_refuses_one_with_no_path() -> std::io::Result<()> {
-        let dir = CONFIG_DIR.to_owned();
+        let dir = SCRATCH_CONFIG_DIR.to_owned();
         std::fs::create_dir_all(&dir)?;
         let path = dir.clone() + "dirs-block.txt";
         std::fs::write(&path, "===> dirs\ntests=D:/x/api/tests\ntests=D:/x/web/tests\nbackend=D:/x/api\n")?;
@@ -608,7 +609,7 @@ mod tests {
             .set_hidden(config_manager::Hidden {bar: true, timing: true, ..Default::default()});
 
 
-        let (options, issues) = super::super::config_files::parse_config_file(Some("test"), Some(CONFIG_DIR.to_owned())).unwrap();
+        let (options, issues) = super::super::config_files::parse_config_file(Some("test"), Some(FIXTURES_DIR.to_owned() + "config/")).unwrap();
         assert!(issues.invalid_fields.is_empty() && issues.warnings.is_empty());
         assert_eq!(declared_dirs, options.dirs.unwrap());
         assert_eq!(config.engine.exclude_dirs, options.exclude_dirs.unwrap());
