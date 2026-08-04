@@ -13,7 +13,10 @@ pub struct Language {
     pub multiline_comment_start_symbol : Option<String>,
     pub multiline_comment_end_symbol : Option<String>,
     pub keywords : Vec<Keyword>,
-    pub scan_plan : OnceLock<crate::engine::file_parser::ScanPlan>
+    // What the parser works out once from the symbols above and then reuses for every file of this
+    // language. A cache and not part of the vocabulary: it is filled on the first file parsed, its
+    // type belongs to the engine, and 'Language::new' is how anyone builds one of these.
+    pub(crate) scan_plan : OnceLock<crate::engine::file_parser::ScanPlan>
 }
 
 impl PartialEq for Language {
