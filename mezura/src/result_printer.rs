@@ -245,7 +245,7 @@ fn table_lines(theme: &Theme, groups: &[Group], final_stats: &FinalStats, print_
             percent_cell(if whole == 0 {0.0} else {part as f64 / whole as f64 * 100.0})
         }
 
-        let (size, unit) = super::format::active().size(bytes);
+        let (size, unit) = super::format::active().size_with_unit(bytes);
         let (code_percentage, comment_percentage) = percentages(lines, code, comments);
         [name.to_owned(),
          with_seperators(files), share(files, total_files),
@@ -592,7 +592,7 @@ fn boxed_lines(theme: &Theme, groups: &[Group], final_stats: &FinalStats, print_
             Cell { number, percent }
         }
 
-        let (size, unit) = super::format::active().size(bytes);
+        let (size, unit) = super::format::active().size_with_unit(bytes);
         let (code_percentage, comment_percentage) = percentages(lines, code, comments);
         (name.to_owned(), [
             cell(with_seperators(files), share(files, total_files)),
@@ -1362,8 +1362,8 @@ fn create_keyword_sum_map(content_info_map: &HashMap<String,LanguageContentInfo>
 }
 
 fn size_text(theme: &Theme, total_bytes: usize, average_bytes: usize) -> String {
-    let (total, total_unit) = super::format::active().size(total_bytes);
-    let (average, average_unit) = super::format::active().size(average_bytes);
+    let (total, total_unit) = super::format::active().size_with_unit(total_bytes);
+    let (average, average_unit) = super::format::active().size_with_unit(average_bytes);
     format!("{} {} {} - {} {} {}",
             theme.total_size_number.paint(&total),
             theme.size_unit.paint(total_unit), theme.total_size_label.paint("total"),

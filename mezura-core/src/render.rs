@@ -86,16 +86,6 @@ pub fn percentages(numbers: &[usize]) -> Vec<f64> {
     shares
 }
 
-// A count of bytes in the largest unit that leaves a figure worth reading, so that 2417403 is 2.4
-// and not 2417.4. Every row of a report goes through it, which is what stops one line from calling
-// a value MBs while the line under it calls the same value KBs.
-pub fn size_with_unit(bytes: usize) -> (f64, &'static str) {
-    if bytes >= 1_000_000_000 {(bytes as f64 / 1_000_000_000f64, "GBs")}
-    else if bytes >= 1_000_000 {(bytes as f64 / 1_000_000f64, "MBs")}
-    else if bytes >= 1_000 {(bytes as f64 / 1_000f64, "KBs")}
-    else {(bytes as f64, "Bytes")}
-}
-
 // How much bigger or smaller the newer figure is, as a percentage of the older one. Signed, so a
 // shrinking count comes back negative, and zero when there was nothing to grow from: a jump out of
 // nothing is not a percentage, and calling it one prints 'inf'.
@@ -149,15 +139,17 @@ impl NumberFormat {
         }
     }
 
+    // A count of bytes in the largest unit that leaves a figure worth reading, so that 2417403 is
+    // 2.4 and not 2417.4. Every row of a report goes through it, which is what stops one line from
+    // calling a value MBs while the line under it calls the same value KBs.
+    //
     // A count of bytes is a whole number, so '430.0 Bytes' would claim a precision the figure does
-    // not have. Only a scaled value is divided, and only a divided one has a decimal to show.
-    pub fn size(&self, bytes: usize) -> (String, &'static str) {
-        let (figure, unit) = size_with_unit(bytes);
-        if unit == "Bytes" {
-            (self.integer(figure as usize), unit)
-        } else {
-            (self.with_decimal_mark(&format!("{figure:.1}")), unit)
-        }
+    // not have: only a divided value has a decimal to show.
+    pub fn size_with_unit(&self, bytes: usize) -> (String, &'static str) {
+        if bytes >= 1_000_000_000 {(self.with_decimal_mark(&format!("{:.1}", bytes as f64 / 1_000_000_000f64)), "GBs")}
+        else if bytes >= 1_000_000 {(self.with_decimal_mark(&format!("{:.1}", bytes as f64 / 1_000_000f64)), "MBs")}
+        else if bytes >= 1_000 {(self.with_decimal_mark(&format!("{:.1}", bytes as f64 / 1_000f64)), "KBs")}
+        else {(self.integer(bytes), "Bytes")}
     }
 
     // A share that is present but rounds to 0.00 would read as absent, so it is named instead. The
@@ -309,12 +301,13 @@ mod tests {
     // reads '1000 Bytes' next to a '1.0 KBs' one byte later is the one that is wrong.
     #[test]
     fn a_size_takes_the_largest_unit_that_leaves_a_figure_worth_reading() {
-        assert_eq!((999.0, "Bytes"), size_with_unit(999));
-        assert_eq!((1.0, "KBs"), size_with_unit(1_000));
-        assert_eq!((1.0, "MBs"), size_with_unit(1_000_000));
-        assert_eq!((1.0, "GBs"), size_with_unit(1_000_000_000));
-        assert_eq!((2.417403, "MBs"), size_with_unit(2_417_403));
-        assert_eq!((0.0, "Bytes"), size_with_unit(0));
+        let format = NumberFormat::default();
+        assert_eq!(("999".to_owned(), "Bytes"), format.size_with_unit(999));
+        assert_eq!(("1.0".to_owned(), "KBs"), format.size_with_unit(1_000));
+        assert_eq!(("1.0".to_owned(), "MBs"), format.size_with_unit(1_000_000));
+        assert_eq!(("1.0".to_owned(), "GBs"), format.size_with_unit(1_000_000_000));
+        assert_eq!(("2.4".to_owned(), "MBs"), format.size_with_unit(2_417_403));
+        assert_eq!(("0".to_owned(), "Bytes"), format.size_with_unit(0));
     }
 
     #[test]
@@ -344,11 +337,11 @@ mod tests {
         assert_eq!("1.234,5", european.grouped("1234.5"));
         assert_eq!("12,35", european.percent(12.345));
 
-        assert_eq!(("2.4".to_owned(), "MBs"), english.size(2_417_403));
-        assert_eq!(("2,4".to_owned(), "MBs"), european.size(2_417_403));
+        assert_eq!(("2.4".to_owned(), "MBs"), english.size_with_unit(2_417_403));
+        assert_eq!(("2,4".to_owned(), "MBs"), european.size_with_unit(2_417_403));
         // A whole number of bytes is not divided, so it shows no decimal at all
-        assert_eq!(("430".to_owned(), "Bytes"), english.size(430));
-        assert_eq!(("999".to_owned(), "Bytes"), english.size(999));
+        assert_eq!(("430".to_owned(), "Bytes"), english.size_with_unit(430));
+        assert_eq!(("999".to_owned(), "Bytes"), english.size_with_unit(999));
     }
 
     #[test]

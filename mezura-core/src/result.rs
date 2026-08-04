@@ -114,7 +114,7 @@ impl RunResult {
 // rendering.
 //
 // Sizes are here in bytes and in no other unit. A figure like '2.4 MBs' is a way of showing the
-// same number, so it belongs to whoever is showing it: 'render::size_with_unit' does it, and doing
+// same number, so it belongs to whoever is showing it: 'render::NumberFormat' does that, and doing
 // it here as well is what let a report say '1000 Bytes' where the document said '1.0 KBs'.
 #[derive(Debug, PartialEq)]
 #[non_exhaustive]
