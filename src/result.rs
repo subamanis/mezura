@@ -83,6 +83,14 @@ impl RunResult {
         !self.faulty_files.is_empty() && self.faulty_files.len() == self.files_present.relevant_files
     }
 
+    // Whether the zero this result reports is a count of anything: a scan that found no relevant
+    // files after failing to open a directory is not "no code here", it is "I could not look".
+    // An empty but readable tree with one unreadable corner also answers yes, deliberately: the
+    // corner that could not be opened may have held everything, so the zero is suspect either way.
+    pub fn nothing_could_be_read(&self) -> bool {
+        self.files_present.relevant_files == 0 && !self.unreadable_dirs.is_empty()
+    }
+
     // Whether the report has a second axis at all. One name is enough for the column to appear, and
     // without one there is nothing to group by and the output is what it always was.
     pub fn has_modules(&self) -> bool {
@@ -260,4 +268,26 @@ pub fn round_1(num: f64) -> f64 {
 
 use crate::{LanguageContentInfo, LanguageMetadata};
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::modules::Modules;
 
+    fn result_with(relevant: usize, unreadable: Vec<String>) -> RunResult {
+        let mut result = RunResult::of_nothing(
+                FilesPresent { total_files: relevant, relevant_files: relevant, excluded_files: 0 },
+                0, &Modules::of(&[]), unreadable, Threads::new(1, 1));
+        result.files_present.relevant_files = relevant;
+        result
+    }
+
+    // The truth table of the two zero-answers: an empty readable tree is an answer, an empty scan
+    // that failed to open something is not, and finding files makes the question moot
+    #[test]
+    fn an_empty_scan_is_suspect_only_when_something_was_unreadable() {
+        assert!(!result_with(0, Vec::new()).nothing_could_be_read());
+        assert!(result_with(0, vec!["D:/gone".to_owned()]).nothing_could_be_read());
+        assert!(!result_with(3, vec!["D:/gone".to_owned()]).nothing_could_be_read());
+        assert!(!result_with(3, Vec::new()).nothing_could_be_read());
+    }
+}

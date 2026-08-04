@@ -150,6 +150,9 @@ Bugfixes:
       is: the count, and the paths themselves with "--show-faulty-files".
   -> The paths of faulty files are now written with forward slashes throughout, instead of mixing
       them with backslashes halfway through on Windows. This also applies to the JSON document.
+  -> A scan that finds nothing after failing to open a directory now exits with a failure code,
+      the same way a run where every file failed to parse always has: that zero is not a count of
+      anything. Finding nothing in directories that could actually be read still exits 0.
   -> A path with "--" inside it, like the folder names some tools generate, is no longer cut at it
       and refused. A command begins only where "--" follows a space or starts the line, and the
       message-only commands answer only when written as whole words, so "--helpme" is an

@@ -184,9 +184,10 @@ fn main() -> ExitCode {
     match mezura::run(&config.engine, languages, |scan| announce_traversal(&config, scan)) {
         Ok(result) => {
             crate::present::present(&result, &config);
-            // Presented above like the failure it is; the exit code keeps its documented meaning,
-            // that 1 is a run which did not happen
-            if result.all_relevant_files_were_faulty() {
+            // Presented above like the failures they are; the exit code keeps its documented
+            // meaning, that 1 is a run which did not happen. The second is the mirror of the first
+            // one level up: every file unparseable, or every place unopenable.
+            if result.all_relevant_files_were_faulty() || result.nothing_could_be_read() {
                 return ExitCode::FAILURE;
             }
             // The document carries its own 'scan_ms', measured inside the run, and this is the only
