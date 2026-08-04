@@ -20,9 +20,14 @@ use super::config_manager;
 // the second half of the same guard. 'threads: _' and the rest below are written decisions and not
 // omissions. The sibling guard in 'resolve_invalid_config_fields' does the same for the
 // commands a configuration file can carry.
-pub fn counting_settings(config: &mezura_core::engine::config::EngineConfig) -> [(&'static str, String); 8] {
-    let mezura_core::engine::config::EngineConfig { dirs, exclude_dirs, languages_of_interest, excluded_languages,
+pub fn counting_settings(config: &mezura_core::engine::config::EngineConfig, targets: &[mezura_core::Target])
+-> [(&'static str, String); 8] {
+    let mezura_core::engine::config::EngineConfig { exclude_dirs, languages_of_interest, excluded_languages,
             forced_languages, braces_as_code, should_search_in_dotted, no_gitignore,
+            // recorded from the result instead, which holds the resolved list the run walked: the
+            // declared form answers a different question, since the same './src' declared over two
+            // different trees is two different measurements
+            dirs: _,
             // changes no number: the same tree counted by more threads is the same tree
             threads: _,
             // changes only the keyword counts, which the log does not record
@@ -36,7 +41,7 @@ pub fn counting_settings(config: &mezura_core::engine::config::EngineConfig) -> 
     // Sorted here and nowhere else. The report shows the targets in the order they were declared,
     // because that order is the user's own arrangement of the columns, but reordering them changes
     // no number, and this list exists to say whether two runs counted the same thing.
-    let mut targets = dirs.to_vec();
+    let mut targets = targets.to_vec();
     targets.sort();
 
     [(config_manager::DIRS, config_manager::targets_to_string(&targets)),
@@ -86,7 +91,7 @@ fn write_current_log(writer: &mut BufWriter<File>, config: &Configuration, datet
     writer.write_all(datetime_now.format("%Y-%m-%d %H:%M:%S %z").to_string().as_bytes())?;
     writer.write_all(b"\n")?;
     writer.write_all(b"Configuration:\n")?;
-    for (key, value) in counting_settings(&config.engine) {
+    for (key, value) in counting_settings(&config.engine, &result.targets) {
         writer.write_all(format!("    {key}: {value}\n").as_bytes())?;
     }
     writer.write_all(b"Stats:\n")?;

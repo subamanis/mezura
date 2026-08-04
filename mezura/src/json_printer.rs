@@ -28,7 +28,7 @@ fn document(result: &RunResult, datetime_now: &DateTime<Local>, config: &Configu
         format!("  \"format\": {FORMAT_VERSION}"),
         format!("  \"mezura_version\": \"{}\"", escaped(config.view.version.trim_start_matches('v'))),
         format!("  \"generated_at\": \"{}\"", datetime_now.to_rfc3339_opts(SecondsFormat::Secs, false)),
-        format!("  \"scope\": {}", scope_object(config)),
+        format!("  \"scope\": {}", scope_object(config, &result.targets)),
         format!("  \"scan\": {}", scan_object(files_present, faulty_files.len())),
         format!("  \"total\": {}", total_object(final_stats)),
         format!("  \"languages\": {}", languages_array(shown, content_info_map, languages_metadata_map, config)),
@@ -54,9 +54,12 @@ fn document(result: &RunResult, datetime_now: &DateTime<Local>, config: &Configu
 // Only what can change a number: no theme, no layout, no separators. Without it two documents that
 // differ because of an '--exclude' look like a code change, and a run with '--braces-as-code' looks
 // comparable with one without it.
-fn scope_object(config: &Configuration) -> String {
+fn scope_object(config: &Configuration, targets: &[mezura_core::Target]) -> String {
     let members = [
-        format!("    \"dirs\": {}", string_array(&config.engine.dirs.iter().map(|x| x.to_string()).collect::<Vec<_>>())),
+        // The resolved list off the result and not the declared one off the configuration: the
+        // same './src' declared over two different trees is two different measurements, and this
+        // block exists so two documents can be told comparable
+        format!("    \"dirs\": {}", string_array(&targets.iter().map(|x| x.to_string()).collect::<Vec<_>>())),
         format!("    \"exclude\": {}", string_array(&config.engine.exclude_dirs)),
         format!("    \"languages\": {}", string_array(&config.engine.languages_of_interest)),
         format!("    \"excluded_languages\": {}", string_array(&config.engine.excluded_languages)),
@@ -283,7 +286,7 @@ mod tests {
             faulty_files: Vec<FaultyFileDetails>, files_present: FilesPresent) -> RunResult
     {
         RunResult {content_info_map, languages_metadata_map, modules: Vec::new(), final_stats, faulty_files,
-                files_present, scan_duration_millis: 1180, metrics: None, unreadable_dirs: Vec::new(), threads: mezura_core::Threads::new(2, 8)}
+                files_present, scan_duration_millis: 1180, metrics: None, targets: Vec::new(), unreadable_dirs: Vec::new(), threads: mezura_core::Threads::new(2, 8)}
     }
 
     fn document_of(config: &crate::config_manager::Configuration) -> String {

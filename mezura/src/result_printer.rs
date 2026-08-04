@@ -1039,8 +1039,8 @@ fn print_lines(lines: &[String]) {
 // The settings this run counted with, against the ones the entry recorded. A setting the entry never
 // wrote is left alone rather than reported as changed, which is what keeps entries from older
 // versions from being accused of a difference nobody can know about.
-fn settings_changed_since(entry: &LogEntry, config: &Configuration) -> Vec<&'static str> {
-    super::log::counting_settings(&config.engine).into_iter()
+fn settings_changed_since(entry: &LogEntry, config: &Configuration, targets: &[mezura_core::Target]) -> Vec<&'static str> {
+    super::log::counting_settings(&config.engine, targets).into_iter()
             .filter(|(key, value)| entry.settings.iter().any(|(k, v)| k == key && v != value))
             .map(|(key, _)| key)
             .collect()
@@ -1133,7 +1133,7 @@ fn print_comparison_to_previous_runs(result: &RunResult, log_content: &str, conf
         let duration = datetime_now.signed_duration_since(entry.datetime);
         let (days, hours, minutes) = split_minutes_to_D_H_M(duration.num_minutes());
         let arrow = super::theme::active().progress_entry.paint("->");
-        let tag = modified_tag(&settings_changed_since(entry, config));
+        let tag = modified_tag(&settings_changed_since(entry, config, &result.targets));
         if let Some(name) = &entry.name {
             comparison_str.push_str(&format!("{} \"{}\" ({} days, {} hours and {} minutes ago){}\n",
                     arrow, name, days, hours, minutes, tag));
@@ -1698,7 +1698,7 @@ mod tests {
     fn groups_from<'a>(modules: &'a [ModuleResult], config: &crate::config_manager::Configuration) -> Vec<Group<'a>> {
         let result = RunResult {content_info_map: HashMap::new(), languages_metadata_map: HashMap::new(),
                 modules: Vec::new(), final_stats: FinalStats::new_extended(0,0,0,0,0,0,0), faulty_files: Vec::new(),
-                files_present: FilesPresent::default(), scan_duration_millis: 0, metrics: None, unreadable_dirs: Vec::new(), threads: mezura_core::Threads::new(1, 1)};
+                files_present: FilesPresent::default(), scan_duration_millis: 0, metrics: None, targets: Vec::new(), unreadable_dirs: Vec::new(), threads: mezura_core::Threads::new(1, 1)};
         let mut result = result;
         result.modules = modules.iter().map(|x| ModuleResult {
             name: x.name.clone(),
@@ -1853,7 +1853,7 @@ mod tests {
         let of_modules = |modules: Vec<ModuleResult>| RunResult {
             content_info_map: content_info.clone(), languages_metadata_map: metadata.clone(), modules,
             final_stats: FinalStats::new_extended(23, 10934, 7643, 650, 2641, 485500, 21108),
-            faulty_files: Vec::new(), files_present: FilesPresent::default(), scan_duration_millis: 0, metrics: None, unreadable_dirs: Vec::new(), threads: mezura_core::Threads::new(1, 1)};
+            faulty_files: Vec::new(), files_present: FilesPresent::default(), scan_duration_millis: 0, metrics: None, targets: Vec::new(), unreadable_dirs: Vec::new(), threads: mezura_core::Threads::new(1, 1)};
         let single = || vec![ModuleResult {name: None, content_info_map: content_info.clone(),
                 languages_metadata_map: metadata.clone(),
                 final_stats: FinalStats::calculate(&content_info, &metadata)}];
@@ -2130,19 +2130,19 @@ mod tests {
 
         // Everything the entry knows about matches, and it knows nothing of the rest
         let entry = entry_of(vec![("braces-as-code", "yes")]);
-        assert!(settings_changed_since(&entry, &config).is_empty());
-        assert!(modified_tag(&settings_changed_since(&entry, &config)).is_empty());
+        assert!(settings_changed_since(&entry, &config, &[]).is_empty());
+        assert!(modified_tag(&settings_changed_since(&entry, &config, &[])).is_empty());
 
         let entry = entry_of(vec![("braces-as-code", "no"), ("no-gitignore", "no")]);
-        assert_eq!(vec!["braces-as-code"], settings_changed_since(&entry, &config));
+        assert_eq!(vec!["braces-as-code"], settings_changed_since(&entry, &config, &[]));
 
         config.engine.no_gitignore = true;
-        let changed = settings_changed_since(&entry, &config);
+        let changed = settings_changed_since(&entry, &config, &[]);
         assert_eq!(vec!["braces-as-code", "no-gitignore"], changed);
         assert!(modified_tag(&changed).contains("braces-as-code, no-gitignore"));
 
         // An entry with no settings block at all, which is every entry written before this existed
-        assert!(settings_changed_since(&entry_of(vec![]), &config).is_empty());
+        assert!(settings_changed_since(&entry_of(vec![]), &config, &[]).is_empty());
     }
 
     #[test]
@@ -2220,7 +2220,7 @@ mod tests {
     fn result_of(final_stats: FinalStats, modules: Vec<ModuleResult>) -> RunResult {
         RunResult {content_info_map: HashMap::new(), languages_metadata_map: HashMap::new(), modules,
                 final_stats, faulty_files: Vec::new(), files_present: FilesPresent::default(),
-                scan_duration_millis: 0, metrics: None, unreadable_dirs: Vec::new(), threads: mezura_core::Threads::new(1, 1)}
+                scan_duration_millis: 0, metrics: None, targets: Vec::new(), unreadable_dirs: Vec::new(), threads: mezura_core::Threads::new(1, 1)}
     }
 
     #[test]

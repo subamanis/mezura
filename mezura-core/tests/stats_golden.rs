@@ -51,7 +51,7 @@ fn render_report(content_info: &HashMap<String, LanguageContentInfo>, metadata: 
 // that what is measured is the wiring the program actually uses.
 fn collect_stats() -> String {
     // Only the counting half, since nothing here is printed.
-    let mut config = EngineConfig::new(mezura_core::Targets::of(&[&fixtures_root().to_str().unwrap().replace('\\', "/")]).unwrap());
+    let mut config = EngineConfig::new(vec![fixtures_root().to_str().unwrap().replace('\\', "/")]);
     config.set_threads(1, CONSUMER_THREADS);
 
     let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;

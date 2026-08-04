@@ -203,9 +203,13 @@ fn main() -> ExitCode {
             }
             ExitCode::SUCCESS
         },
-        // A mistake in the configuration that only a library caller can make: the command line
-        // validated its exclude patterns before it built the run, so this arm is a safety net and
-        // not a path anything is expected to take
+        // Mistakes in the configuration surface here, because the run is what resolves the
+        // declared targets: the wording is this crate's own, and a configuration file that
+        // supplied the dirs is named as the culprit the reader cannot see failing
+        Err(mezura_core::RunError::InvalidTargets(inner)) => {
+            eprintln!("{}", crate::config_manager::attributed_dirs_error(inner, &config.view.dirs_source).formatted());
+            ExitCode::FAILURE
+        },
         Err(x) => {
             eprintln!("{}",x.formatted());
             ExitCode::FAILURE

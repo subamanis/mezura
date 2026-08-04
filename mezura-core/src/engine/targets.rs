@@ -7,32 +7,13 @@ use crate::GitignoreStack;
 use crate::engine::config::Target;
 
 
-// Proof at the type level that resolution has already happened: every way to construct one,
-// 'resolve', 'of' and 'literal', hands back only validated absolute paths, and the empty 'Default'
-// is refused by 'run' itself. A raw or unexpanded path therefore cannot reach 'run', and 'run'
-// never resolves anything a second time.
-#[derive(Debug, PartialEq, Eq, Clone, Default)]
-pub struct Targets(Vec<Target>);
-
-impl Targets {
-    // The plain form of 'resolve', for the caller with nothing to say but where to look: no module
-    // names, and the same settings 'EngineConfig' defaults to.
-    pub fn of(paths: &[&str]) -> Result<Self, TargetError> {
-        let entries = paths.iter().map(|path| (None, (*path).to_owned())).collect::<Vec<_>>();
-        resolve(&entries, !crate::engine::config::DEF_NO_GITIGNORE, crate::engine::config::DEF_SEARCH_IN_DOTTED)
-    }
-
-    // For a path the program discovered on its own rather than read from anyone's text: taken as
-    // the literal place it names, never as pattern syntax. One that does not exist is a missing
-    // place, where 'of' would read any pattern characters in the same text as a pattern.
-    pub fn literal(paths: &[&str]) -> Result<Self, TargetError> {
-        let mut targets = Vec::with_capacity(paths.len());
-        for path in paths {
-            targets.push(literal_target(None, path.trim())?);
-        }
-        Ok(Targets(remove_overlapping_targets(targets)))
-    }
-}
+// Proof inside this crate that resolution has already happened: 'run' makes one at its entry from
+// the declared targets of the configuration, using that same configuration's settings, and
+// everything downstream of it operates on validated absolute paths. It never leaves the crate,
+// because a caller has nothing to do with it: the configuration carries targets as declared, and
+// resolving them is the run's own first step.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) struct Targets(Vec<Target>);
 
 impl std::ops::Deref for Targets {
     type Target = [Target];
@@ -123,8 +104,9 @@ fn is_ancestor_of(ancestor: &str, path: &str) -> bool {
 }
 
 
-// What went wrong while working out which paths to walk. Reported rather than printed, and the
-// command line turns it into its own error with the wording a person reads.
+// What went wrong while working out which paths to walk. Carried on the run's own error, and the
+// command line turns it into its own wording; the Display below is the plain-text form a library
+// caller prints.
 #[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TargetError {
@@ -135,29 +117,47 @@ pub enum TargetError {
     Contested(String, String, String)
 }
 
+impl std::error::Error for TargetError {}
+
+impl std::fmt::Display for TargetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidPath(x) => write!(f, "'{x}' does not exist as a directory or file."),
+            Self::InvalidGlob(x) => write!(f, "'{x}' is not a valid glob pattern."),
+            Self::NoGlobMatches(x) => write!(f, "'{x}' does not match any existing directory or file."),
+            Self::AllGlobMatchesIgnored(x) => write!(f, "Everything '{x}' matches is ignored, dotted or a link."),
+            Self::Contested(path, first, second) => write!(f, "'{path}' is declared under two names, '{first}' and '{second}'.")
+        }
+    }
+}
+
 // Literal paths must exist and are always used, even if they are ignored or dotted, since the user
 // named them explicitly. Glob patterns are expanded to the existing paths they match, and those
 // matches are discovered by the program, so they are subject to the same rules as every other
 // discovered path. Finally, targets contained in other targets are dropped, so that no file
 // is counted twice, unless the nested one carries a module of its own and is therefore the boundary
-// that takes those files off the one around it.
-pub fn resolve(entries: &[(Option<String>, String)], respect_gitignore: bool, search_in_dotted: bool)
+// that takes those files off the one around it. Idempotent, because the whole of it is
+// existence-first: what a first pass resolved, a second pass takes literally.
+pub(crate) fn resolve(declared: &[Target], respect_gitignore: bool, search_in_dotted: bool)
 -> Result<Targets, TargetError>
 {
-    expand_patterns(prepare(entries)?, respect_gitignore, search_in_dotted).map(Targets)
+    expand_patterns(validate_and_absolutize(declared)?, respect_gitignore, search_in_dotted).map(Targets)
 }
 
-// The half of resolution that no setting can change: names are taken apart, two spellings of one
-// module are unified, a literal path is demanded to exist and made absolute, and a relative pattern
-// is joined to the working directory, so that a saved configuration still names the same places when
-// it is loaded from some other one. Patterns are expanded in 'expand_patterns' and not here, because
-// which of their matches survive depends on settings that every source of a run has to be heard on
-// first. Idempotent, so a target that has been through it, or through the whole of 'resolve', can be
-// put through again unchanged.
-pub fn prepare(entries: &[(Option<String>, String)]) -> Result<Vec<Target>, TargetError> {
-    let mut prepared: Vec<Target> = Vec::with_capacity(entries.len());
-    for (module, entry) in entries {
-        let trimmed = entry.trim();
+// A target that names nothing is refused, and everything else comes back in the absolute spelling
+// the run will use: a relative path is made absolute, a relative pattern is joined to the working
+// directory so that a saved configuration still names the same places when it is loaded from some
+// other one, and two spellings of one module name are unified.
+//
+// This is the half of resolution that no setting can change, which is why it can be done on its
+// own. 'run' does it anyway as its first step, so call this only to refuse a bad path early, at the
+// moment somebody typed it and before a run is worth starting. What it deliberately does not do is
+// expand patterns: which of a pattern's matches survive depends on the settings of the
+// configuration the targets belong to, and those are the run's to read.
+pub fn validate_and_absolutize(declared: &[Target]) -> Result<Vec<Target>, TargetError> {
+    let mut prepared: Vec<Target> = Vec::with_capacity(declared.len());
+    for target in declared {
+        let (module, trimmed) = (&target.module, target.path.trim());
         // Two spellings of one name are one module, the way two spellings of one extension are one
         // extension. The first one seen is the one the report prints.
         let module = module.as_ref().map(|name| prepared.iter()
@@ -170,8 +170,10 @@ pub fn prepare(entries: &[(Option<String>, String)]) -> Result<Vec<Target>, Targ
         // refused a place that exists.
         if !is_valid_path(trimmed) && has_glob_metacharacters(trimmed) {
             prepared.push(Target { module, path: absolutize_pattern(trimmed) });
+        } else if is_valid_path(trimmed) {
+            prepared.push(Target { module, path: convert_to_absolute(trimmed) });
         } else {
-            prepared.push(literal_target(module, trimmed)?);
+            return Err(TargetError::InvalidPath(trimmed.to_owned()));
         }
     }
     Ok(prepared)
@@ -250,17 +252,6 @@ fn name_or_rest(module: &Option<String>) -> String {
     module.clone().unwrap_or_else(|| crate::UNNAMED_MODULE_NAME.to_owned())
 }
 
-// The one definition of what a literal target is: the place must exist, and the path it keeps is
-// the absolute spelling. Shared by the typed door of 'prepare' and the discovered door of
-// 'literal', so the two cannot drift on what counts as a valid place.
-fn literal_target(module: Option<String>, text: &str) -> Result<Target, TargetError> {
-    if is_valid_path(text) {
-        Ok(Target { module, path: convert_to_absolute(text) })
-    } else {
-        Err(TargetError::InvalidPath(text.to_owned()))
-    }
-}
-
 // The opener is the signal, which is what the help text and the README both describe as
 // '(* ? [..] {..})'. A closing bracket on its own is an ordinary character in a path, and treating
 // it as a pattern sends the target down the glob branch, where being gitignored, dotted or a symlink
@@ -275,13 +266,13 @@ fn is_valid_path(s: &str) -> bool {
 }
 
 
-// The spelling every path inside a 'Targets' carries: absolute, forward slashes, and without the
-// '\\?\' prefix that std's 'canonicalize' puts on Windows. 'prepare' runs every literal target
+// The spelling every resolved path carries: absolute, forward slashes, no trailing separator, and
+// without the '\\?\' prefix that std's 'canonicalize' puts on Windows. Every literal target goes
 // through it, so a caller wanting the spelling a resolved target will have starts here.
 pub fn convert_to_absolute(s: &str) -> String {
     let p = Path::new(s);
     if p.is_absolute() {
-        return s.replace("\\", "/");
+        return without_trailing_slash(&s.replace("\\", "/")).to_owned();
     }
 
     // The canonical form of a path that was typed as valid UTF-8 need not be valid UTF-8 itself,
@@ -289,9 +280,18 @@ pub fn convert_to_absolute(s: &str) -> String {
     // holds. Falling back to what was typed keeps a string that still names the place, which
     // 'to_string_lossy' would not: this one is handed back to 'is_dir' and 'is_file' further down.
     match std::fs::canonicalize(p).ok().and_then(|buf| buf.to_str().map(str::to_owned)) {
-        Some(str_path) => str_path.strip_prefix(r"\\?\").unwrap_or(&str_path).replace("\\", "/"),
-        None => s.replace("\\", "/")
+        Some(str_path) => without_trailing_slash(&str_path.strip_prefix(r"\\?\").unwrap_or(&str_path).replace("\\", "/")).to_owned(),
+        None => without_trailing_slash(&s.replace("\\", "/")).to_owned()
     }
+}
+
+// One place, one spelling: 'D:/x/' and 'D:/x' name the same directory, and two runs over it have to
+// record the same string or a comparison between them reports a change nobody made. Not taken off a
+// root, where the separator belongs to the name: 'D:/' is the root of the drive while 'D:' is the
+// current directory on it, and '/' is the root of the file system.
+fn without_trailing_slash(path: &str) -> &str {
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() || trimmed.ends_with(':') {path} else {trimmed}
 }
 
 
@@ -417,26 +417,140 @@ mod target_path_tests {
         std::fs::create_dir_all(&bracketed).unwrap();
         let bracketed_str = bracketed.to_str().unwrap().replace('\\', "/");
 
-        let resolved = resolve(&[(None, bracketed_str.clone())], true, false);
-        let typed = Targets::of(&[&bracketed_str]);
+        let resolved = resolve(&[Target::of(bracketed_str)], true, false);
         std::fs::remove_dir_all(&root).unwrap();
 
         let resolved = resolved.unwrap();
         assert_eq!(1, resolved.len());
         assert!(resolved[0].path.ends_with("a[b"), "not kept as itself: {resolved:?}");
-        assert_eq!(*resolved, *typed.unwrap());
     }
 
-    // 'literal' exists for a path the program discovered on its own, which nobody wrote to mean
-    // anything but itself: text that names nothing on disk is a missing place, never a pattern.
-    // The same text through 'of' was typed, and typed pattern syntax is read as a pattern.
-    #[test]
-    fn a_literal_target_is_never_read_as_pattern_syntax() {
-        let missing = std::env::temp_dir().join("mezura-nowhere").join("a?b");
-        let missing_str = missing.to_str().unwrap().replace('\\', "/");
+    fn resolved_paths(declared: Vec<Target>, respect_gitignore: bool) -> Result<Vec<String>, TargetError> {
+        resolve(&declared, respect_gitignore, false).map(|x| x.iter().map(Target::to_string).collect())
+    }
 
-        assert_eq!(Err(TargetError::InvalidPath(missing_str.clone())), Targets::literal(&[&missing_str]));
-        assert!(matches!(Targets::of(&[&missing_str]), Err(TargetError::NoGlobMatches(_))));
+    // There is no more specific one of the two to decide it, and whichever won would take the
+    // other's files away without a word
+    #[test]
+    fn one_path_under_two_names_is_refused() {
+        let root = std::env::temp_dir().join("mezura-contested");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let root_str = root.to_str().unwrap().replace('\\', "/");
+
+        let contested = resolve(&[Target::named("code", root_str.clone()), Target::named("other", root_str.clone())], true, false);
+        let unnamed = resolve(&[Target::named("code", root_str.clone()), Target::of(root_str.clone())], true, false);
+        let repeated = resolve(&[Target::named("code", root_str.clone()), Target::named("code", root_str)], true, false);
+        std::fs::remove_dir_all(&root).unwrap();
+
+        assert!(matches!(contested, Err(TargetError::Contested(_, ref a, ref b)) if a == "code" && b == "other"));
+        assert!(matches!(unnamed, Err(TargetError::Contested(_, ref a, ref b)) if a == "code" && b == "(unnamed)"));
+        // The same name twice over one path is a repetition and not a contest
+        assert_eq!(1, repeated.unwrap().len());
+    }
+
+    #[test]
+    fn a_pattern_expands_to_its_existing_matches_and_overlaps_collapse() {
+        let root = std::env::temp_dir().join("mezura_glob_test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("a").join("src")).unwrap();
+        std::fs::create_dir_all(root.join("b").join("src")).unwrap();
+        std::fs::create_dir_all(root.join("c")).unwrap();
+        std::fs::write(root.join("a").join("src").join("one.rs"), "fn main() {}").unwrap();
+        std::fs::write(root.join("b").join("src").join("two.rs"), "fn main() {}").unwrap();
+        let root_str = root.to_str().unwrap().replace('\\', "/");
+        let abs = |x: &str| convert_to_absolute(&format!("{root_str}/{x}"));
+
+        assert_eq!(vec![abs("a/src"), abs("b/src")], resolved_paths(vec![Target::of(format!("{root_str}/*/src"))], true).unwrap());
+        assert_eq!(vec![abs("a/src/one.rs")], resolved_paths(vec![Target::of(format!("{root_str}/a/src/*.rs"))], true).unwrap());
+        assert_eq!(vec![abs("a"), abs("b"), abs("c")], resolved_paths(vec![Target::of(format!("{root_str}/*"))], true).unwrap());
+
+        // A pattern can be mixed with literal paths, and the overlaps of both are collapsed
+        assert_eq!(vec![abs("a"), abs("b"), abs("c")], resolved_paths(vec![Target::of(format!("{root_str}/*")),
+                Target::of(format!("{root_str}/*/src")), Target::of(format!("{root_str}/a/src/one.rs"))], true).unwrap());
+
+        assert!(matches!(resolved_paths(vec![Target::of(format!("{root_str}/*/nope"))], true),
+                Err(TargetError::NoGlobMatches(_))));
+        // Named in its prepared form, joined to the working directory: that is what a saved
+        // configuration holds, so the error names what is actually written wherever it lives
+        assert!(matches!(resolved_paths(vec![Target::of("a[".to_owned())], true),
+                Err(TargetError::InvalidGlob(p)) if p == convert_to_absolute("./").trim_end_matches('/').to_owned() + "/a["));
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn glob_matches_respect_gitignore_but_literal_paths_do_not() {
+        let root = std::env::temp_dir().join("mezura_glob_gitignore_test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(root.join("kept")).unwrap();
+        std::fs::create_dir_all(root.join("build").join("deep")).unwrap();
+        std::fs::write(root.join(".gitignore"), "build/\nignored.rs\n").unwrap();
+        std::fs::write(root.join("kept").join("one.rs"), "fn main() {}").unwrap();
+        std::fs::write(root.join("kept").join("ignored.rs"), "fn main() {}").unwrap();
+        std::fs::write(root.join("build").join("deep").join("generated.rs"), "fn main() {}").unwrap();
+        let root_str = root.to_str().unwrap().replace('\\', "/");
+        let abs = |x: &str| convert_to_absolute(&format!("{root_str}/{x}"));
+
+        // The ignored dir and the ignored file are dropped from the matches
+        assert_eq!(vec![abs("kept")], resolved_paths(vec![Target::of(format!("{root_str}/*"))], true).unwrap());
+        assert_eq!(vec![abs("kept/one.rs")], resolved_paths(vec![Target::of(format!("{root_str}/**/*.rs"))], true).unwrap());
+
+        // Unless the gitignore support is turned off
+        assert_eq!(vec![abs("build"), abs("kept")], resolved_paths(vec![Target::of(format!("{root_str}/*"))], false).unwrap());
+        assert_eq!(vec![abs("build/deep/generated.rs"), abs("kept/ignored.rs"), abs("kept/one.rs")],
+                resolved_paths(vec![Target::of(format!("{root_str}/**/*.rs"))], false).unwrap());
+
+        // Explicitly named paths are always used, even when they are ignored
+        assert_eq!(vec![abs("build")], resolved_paths(vec![Target::of(format!("{root_str}/build"))], true).unwrap());
+        assert_eq!(vec![abs("kept/ignored.rs")], resolved_paths(vec![Target::of(format!("{root_str}/kept/ignored.rs"))], true).unwrap());
+
+        assert!(matches!(resolved_paths(vec![Target::of(format!("{root_str}/build/*"))], true),
+                Err(TargetError::AllGlobMatchesIgnored(_))));
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    // A trailing separator names the same place as none, and the resolved spelling has to settle on
+    // one of them: the log compares these strings to decide whether two runs measured the same tree,
+    // so 'D:/x/' against 'D:/x' reported a change nobody made. The pruning inside one run already
+    // treated them as one place, which is exactly what kept the disagreement out of sight.
+    #[test]
+    fn a_trailing_separator_is_not_a_second_spelling_of_one_place() {
+        let root = std::env::temp_dir().join("mezura-trailing-slash");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let root_str = root.to_str().unwrap().replace('\\', "/");
+
+        let bare = convert_to_absolute(&root_str);
+        let slashed = convert_to_absolute(&(root_str.clone() + "/"));
+        std::fs::remove_dir_all(&root).unwrap();
+
+        assert_eq!(bare, slashed);
+    }
+
+    // A root is not a directory with a separator after it: 'D:/' is the root of the drive while
+    // 'D:' is the current directory on it, and '/' is the root of the file system.
+    #[test]
+    fn the_trailing_separator_of_a_root_belongs_to_its_name() {
+        assert_eq!("D:/", without_trailing_slash("D:/"));
+        assert_eq!("/", without_trailing_slash("/"));
+        assert_eq!("D:/x", without_trailing_slash("D:/x/"));
+        assert_eq!("D:/x", without_trailing_slash("D:/x//"));
+        assert_eq!("//server/share", without_trailing_slash("//server/share/"));
+    }
+
+    // The other side of existence-first: text that names nothing on disk is a pattern when it
+    // carries the syntax, and a missing place when it does not.
+    #[test]
+    fn text_that_names_nothing_is_a_pattern_only_when_it_carries_the_syntax() {
+        let nowhere = std::env::temp_dir().join("mezura-nowhere");
+        let pattern_str = nowhere.join("a?b").to_str().unwrap().replace('\\', "/");
+        let plain_str = nowhere.join("plain").to_str().unwrap().replace('\\', "/");
+
+        assert!(matches!(resolve(&[Target::of(pattern_str)], true, false), Err(TargetError::NoGlobMatches(_))));
+        assert!(matches!(validate_and_absolutize(&[Target::of(plain_str.clone())]), Err(TargetError::InvalidPath(p)) if p == plain_str));
     }
 
     #[test]

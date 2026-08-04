@@ -21,9 +21,9 @@ pub(crate) const DEF_NO_GITIGNORE      : bool    = false;
 #[derive(Debug,PartialEq,Eq,Clone)]
 pub struct Target {
     pub module: Option<String>,
-    // Absolute and resolved only inside a 'Targets', which is the type that guarantees it. On its
-    // own a target holds whatever state its holder put it in: as declared in a configuration file
-    // it is what was written, prepared it is absolute with its pattern not yet expanded.
+    // Whatever state its holder put it in: as declared it is what was written, prepared it is
+    // absolute with its pattern not yet expanded, and the list the run walks, which is also what
+    // 'RunResult.targets' reports, holds only resolved absolute paths.
     pub path: String
 }
 
@@ -123,12 +123,16 @@ impl Default for Threads {
     }
 }
 
-// Everything the counting needs, and nothing else. This is what a library caller builds.
+// Everything the counting needs, and nothing else. This is what a library caller builds, and it is
+// plain data: nothing in it has to be computed, in any order, before anything else.
 #[derive(Debug,PartialEq,Clone)]
 pub struct EngineConfig {
-    // A 'Targets' and not a list of paths, so the places to walk are resolved exactly once, by
-    // whoever built the configuration, and 'run' can never be handed a raw or unexpanded path
-    pub dirs: crate::engine::targets::Targets,
+    // The places to count, as declared: paths or glob patterns, relative or absolute, exactly as
+    // whoever built the configuration wrote them down. 'run' resolves them at its entry with the
+    // settings of this same configuration, so the flags that filter a pattern's matches and the
+    // flags the walk obeys can never disagree. A relative path is joined to the process working
+    // directory at that moment, and 'RunResult.targets' reports what the list resolved to.
+    pub dirs: Vec<Target>,
     pub exclude_dirs: Vec<String>,
     pub languages_of_interest: Vec<String>,
     pub excluded_languages: Vec<String>,
@@ -148,7 +152,7 @@ pub struct EngineConfig {
 impl Default for EngineConfig {
     fn default() -> Self {
         EngineConfig {
-            dirs: crate::engine::targets::Targets::default(),
+            dirs: Vec::new(),
             exclude_dirs: Vec::new(),
             languages_of_interest: Vec::new(),
             excluded_languages: Vec::new(),
@@ -163,11 +167,11 @@ impl Default for EngineConfig {
 }
 
 impl EngineConfig {
-    // What a caller with nothing to say but where to look writes, with 'Targets::of' supplying the
-    // dirs. Everything else has a default that matches what the command line would have produced.
-    pub fn new(dirs: crate::engine::targets::Targets) -> Self {
+    // What a caller with nothing to say but where to look writes. Everything else has a default
+    // that matches what the command line would have produced.
+    pub fn new(dirs: Vec<String>) -> Self {
         EngineConfig {
-            dirs,
+            dirs: dirs.into_iter().map(Target::of).collect(),
             ..Default::default()
         }
     }

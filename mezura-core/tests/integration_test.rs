@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use mezura_core::{EngineConfig, Languages, Target, Targets, Threads, language_file, run};
+use mezura_core::{EngineConfig, Languages, Target, Threads, language_file, run};
 
 const LANGUAGES_DIR : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/languages/");
 
@@ -9,11 +9,11 @@ const LANGUAGES_DIR : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/language
 #[test]
 fn a_run_over_two_directories_counts_files_lines_and_keywords() {
     let current_dir = env!("CARGO_MANIFEST_DIR").replace("\\", "/");
-    let mut config = EngineConfig::new(Targets::of(&[&format!("{current_dir}/src"), &format!("{current_dir}/tests")]).unwrap());
+    let mut config = EngineConfig::new(vec![format!("{current_dir}/src"), format!("{current_dir}/tests")]);
     config.set_threads(1, 3);
 
     assert_eq!(Threads::new(1, 3), config.threads);
-    assert_eq!(vec![Target::of(format!("{current_dir}/src")), Target::of(format!("{current_dir}/tests"))], config.dirs.to_vec());
+    assert_eq!(vec![Target::of(format!("{current_dir}/src")), Target::of(format!("{current_dir}/tests"))], config.dirs);
 
     let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
     assert!(!language_map.is_empty());
@@ -49,8 +49,7 @@ fn a_run_that_names_modules_and_finds_nothing_still_reports_them() {
     let path_of = |p: &std::path::Path| p.to_str().unwrap().replace('\\', "/");
 
     let mut config = EngineConfig {
-        dirs: mezura_core::engine::targets::resolve(&[(Some("api".to_owned()), path_of(&api)),
-                (Some("web".to_owned()), path_of(&web))], true, false).unwrap(),
+        dirs: vec![Target::named("api", path_of(&api)), Target::named("web", path_of(&web))],
         ..Default::default()
     };
     config.set_threads(1, 2);
@@ -75,7 +74,7 @@ fn a_run_that_names_modules_and_finds_nothing_still_reports_them() {
 #[test]
 fn an_exclude_pattern_that_does_not_parse_is_an_error_not_a_panic() {
     let current_dir = env!("CARGO_MANIFEST_DIR").replace("\\", "/");
-    let mut config = EngineConfig::new(Targets::of(&[&format!("{current_dir}/src")]).unwrap());
+    let mut config = EngineConfig::new(vec![format!("{current_dir}/src")]);
     config.set_exclude_dirs(vec!["target".to_owned(), "[invalid".to_owned()]);
     config.set_threads(1, 1);
 
@@ -101,7 +100,7 @@ fn a_run_where_every_file_fails_to_parse_is_an_answer_not_an_error() {
     std::fs::write(root.join("b.rs"), [0xFF, 0xFE, 0x80, b'\n']).unwrap();
     let root_str = root.to_str().unwrap().replace('\\', "/");
 
-    let mut config = EngineConfig::new(Targets::of(&[&root_str]).unwrap());
+    let mut config = EngineConfig::new(vec![root_str]);
     config.set_threads(1, 2);
     let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
     let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
@@ -118,7 +117,7 @@ fn a_run_where_every_file_fails_to_parse_is_an_answer_not_an_error() {
     let empty = std::env::temp_dir().join("mezura-all-faulty-empty");
     let _ = std::fs::remove_dir_all(&empty);
     std::fs::create_dir_all(&empty).unwrap();
-    let mut config = EngineConfig::new(Targets::of(&[&empty.to_str().unwrap().replace('\\', "/")]).unwrap());
+    let mut config = EngineConfig::new(vec![empty.to_str().unwrap().replace('\\', "/")]);
     config.set_threads(1, 1);
     let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
     let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
@@ -142,10 +141,65 @@ fn a_run_with_no_targets_is_an_error_not_an_empty_answer() {
     assert!(matches!(err, mezura_core::RunError::NoTargets), "got: {err:?}");
 }
 
+// The declared targets are the run's to resolve, so a mistake in them comes back on its Result
+// like every other mistake in the configuration, carrying the path exactly as it was declared, and
+// each kind of mistake keeps its own variant so a caller can tell them apart.
+#[test]
+fn a_target_that_names_nothing_is_a_run_error() {
+    let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
+    let config = EngineConfig::new(vec!["./does-not-exist-run".to_owned()]);
+    let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
+
+    let err = run(&config, languages, |_| {}).unwrap_err();
+    assert!(matches!(&err, mezura_core::RunError::InvalidTargets(mezura_core::TargetError::InvalidPath(p)) if p == "./does-not-exist-run"),
+            "got: {err:?}");
+
+    // one place under two names travels the same road
+    let root = std::env::temp_dir().join("mezura-run-contested");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let root_str = root.to_str().unwrap().replace('\\', "/");
+    let config = EngineConfig {
+        dirs: vec![Target::named("a", root_str.clone()), Target::named("b", root_str)],
+        ..Default::default()
+    };
+    let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
+    let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
+    let err = run(&config, languages, |_| {}).unwrap_err();
+    std::fs::remove_dir_all(&root).unwrap();
+    assert!(matches!(&err, mezura_core::RunError::InvalidTargets(mezura_core::TargetError::Contested(..))), "got: {err:?}");
+}
+
+// What was measured is on the result, resolved: the declared form answers a different question,
+// since the same relative path declared over two different working directories is two different
+// measurements, and a pattern's matches change while its text does not.
+#[test]
+fn the_result_reports_the_resolved_targets_the_run_walked() {
+    let root = std::env::temp_dir().join("mezura-result-targets");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("sub1")).unwrap();
+    std::fs::create_dir_all(root.join("sub2")).unwrap();
+    std::fs::write(root.join("sub1").join("a.rs"), "fn a() {}\n").unwrap();
+    std::fs::write(root.join("sub2").join("b.rs"), "fn b() {}\n").unwrap();
+    let root_str = root.to_str().unwrap().replace('\\', "/");
+
+    let mut config = EngineConfig::new(vec![format!("{root_str}/sub*")]);
+    config.set_threads(1, 1);
+    let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
+    let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
+    let result = run(&config, languages, |_| {}).unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+
+    let mut walked = result.targets.iter().map(|x| x.path.clone()).collect::<Vec<_>>();
+    walked.sort();
+    assert_eq!(vec![format!("{root_str}/sub1"), format!("{root_str}/sub2")], walked);
+    // and the configuration still holds what was declared
+    assert_eq!(vec![Target::of(format!("{root_str}/sub*"))], config.dirs);
+}
+
 // A pattern's match may itself be named like a pattern: 'a?b' legitimately matches a directory
-// literally called 'a[b'. The resolved list is handed to 'run' as it is, and nothing may resolve it
-// a second time: a second expansion would read the bracket as a pattern of its own and refuse a
-// directory that exists.
+// literally called 'a[b'. Resolution is existence-first, so the match is a place that exists and
+// is taken as itself, never re-read as a pattern of its own, however many times it is resolved.
 #[test]
 fn a_resolved_match_named_like_a_pattern_is_counted_not_re_expanded() {
     let root = std::env::temp_dir().join("mezura-bracket-match");
@@ -155,10 +209,7 @@ fn a_resolved_match_named_like_a_pattern_is_counted_not_re_expanded() {
     std::fs::write(inner.join("x.rs"), "fn x() { let a = 1; }\n").unwrap();
     let pattern = root.to_str().unwrap().replace('\\', "/") + "/a?b";
 
-    let dirs = mezura_core::engine::targets::resolve(&[(None, pattern)], true, false).unwrap();
-    assert!(dirs[0].path.ends_with("a[b"), "the pattern did not resolve to the bracket directory: {dirs:?}");
-
-    let mut config = EngineConfig::new(dirs);
+    let mut config = EngineConfig::new(vec![pattern]);
     config.set_threads(1, 1);
     let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
     let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
@@ -177,7 +228,7 @@ fn a_resolved_match_named_like_a_pattern_is_counted_not_re_expanded() {
 fn a_thread_count_outside_the_supported_range_cannot_reach_the_run() {
     let current_dir = env!("CARGO_MANIFEST_DIR").replace("\\", "/");
     let count_with = |producers: usize, consumers: usize| {
-        let mut config = EngineConfig::new(Targets::of(&[&format!("{current_dir}/src")]).unwrap());
+        let mut config = EngineConfig::new(vec![format!("{current_dir}/src")]);
         config.set_threads(producers, consumers);
         let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
         let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
@@ -195,7 +246,7 @@ fn a_thread_count_outside_the_supported_range_cannot_reach_the_run() {
     assert_eq!(sane, count_with(usize::MAX, usize::MAX), "absurdly many");
 
     // And what was actually used is readable, rather than the number that was asked for
-    let mut config = EngineConfig::new(Targets::of(&[&format!("{current_dir}/src")]).unwrap());
+    let mut config = EngineConfig::new(vec![format!("{current_dir}/src")]);
     config.set_threads(0, 100_000);
     assert_eq!((1, 128), (config.threads.producers(), config.threads.consumers()));
 }
@@ -207,7 +258,7 @@ fn a_thread_count_outside_the_supported_range_cannot_reach_the_run() {
 #[test]
 fn the_result_reports_the_threads_the_run_actually_used() {
     let current_dir = env!("CARGO_MANIFEST_DIR").replace("\\", "/");
-    let mut config = EngineConfig::new(Targets::of(&[&format!("{current_dir}/src")]).unwrap());
+    let mut config = EngineConfig::new(vec![format!("{current_dir}/src")]);
     config.set_threads(2, 3);
 
     let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
@@ -219,7 +270,7 @@ fn the_result_reports_the_threads_the_run_actually_used() {
     let empty = std::env::temp_dir().join("mezura-threads-empty");
     let _ = std::fs::remove_dir_all(&empty);
     std::fs::create_dir_all(&empty).unwrap();
-    let mut config = EngineConfig::new(Targets::of(&[&empty.to_string_lossy().replace("\\", "/")]).unwrap());
+    let mut config = EngineConfig::new(vec![empty.to_string_lossy().replace("\\", "/")]);
     config.set_threads(1, 2);
     let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
     let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);

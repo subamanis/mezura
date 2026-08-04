@@ -205,6 +205,7 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+    use crate::engine::config::Target;
     use crate::engine::targets::build_exclude_matcher;
     use crate::calculate_single_file_stats_or_add_to_injector;
     use crate::test_paths::LANGUAGES_DIR;
@@ -224,25 +225,27 @@ mod tests {
         let declares_a_module = target.contains('=');
         let pieces = if declares_a_module {target.split_whitespace().collect::<Vec<_>>()}
                 else {target.split(',').collect::<Vec<_>>()};
-        let entries = pieces.into_iter().map(str::trim).filter(|x| !x.is_empty())
+        let declared = pieces.into_iter().map(str::trim).filter(|x| !x.is_empty())
                 .map(|piece| match piece.split_once('=').filter(|_| declares_a_module) {
-                    Some((name, path)) => (Some(name.trim().to_owned()), path.trim().to_owned()),
-                    None => (None, piece.to_owned())
+                    Some((name, path)) => Target::named(name.trim(), path.trim().to_owned()),
+                    None => Target::of(piece.to_owned())
                 }).collect::<Vec<_>>();
-        let mut config = EngineConfig::new(crate::engine::targets::resolve(&entries,
-                !extra_args.contains("--no-gitignore"), extra_args.contains("--search-in-dotted")).unwrap());
+        let mut config = EngineConfig { dirs: declared, ..Default::default() };
         config.set_threads(1, 1)
                 .set_no_gitignore(extra_args.contains("--no-gitignore"))
                 .set_should_search_in_dotted(extra_args.contains("--search-in-dotted"));
+        // The same first step 'run' takes: the declared targets, resolved with the flags of the
+        // configuration the walk is about to obey
+        let dirs = crate::engine::targets::resolve(&config.dirs, !config.no_gitignore, config.should_search_in_dotted).unwrap();
         let config = Arc::new(config);
         let language_map = Arc::new(crate::language_file::parse_dir(LANGUAGES_DIR).unwrap().0);
         let files_injector = Arc::new(Injector::new());
         let dirs_injector = Arc::new(Injector::new());
         let idle_producers = Arc::new(AtomicUsize::new(0));
         let extension_lang_map: ExtensionLangMap = Arc::new(make_extension_language_map(&language_map, &HashMap::new(), &HashMap::new()).0);
-        let modules = Arc::new(Modules::of(&config.dirs));
+        let modules = Arc::new(Modules::of(&dirs));
         let mut files_present = FilesPresent::default();
-        calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector, &mut files_present, &extension_lang_map, &modules);
+        calculate_single_file_stats_or_add_to_injector(&config, &dirs, &dirs_injector, &files_injector, &mut files_present, &extension_lang_map, &modules);
 
         let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs).unwrap());
         let (total, relevant, excluded, _) = search_for_files(0, files_injector.clone(), dirs_injector,
@@ -275,16 +278,17 @@ mod tests {
         let root_str = root.to_str().unwrap().replace('\\', "/");
         let vanished = format!("{root_str}/gone");
 
-        let mut config = EngineConfig::new(crate::engine::targets::Targets::of(&[&root_str]).unwrap());
+        let mut config = EngineConfig::new(vec![root_str.clone()]);
         config.set_threads(1, 1);
+        let dirs = crate::engine::targets::resolve(&config.dirs, !config.no_gitignore, config.should_search_in_dotted).unwrap();
         let config = Arc::new(config);
         let language_map = Arc::new(crate::language_file::parse_dir(LANGUAGES_DIR).unwrap().0);
         let extension_lang_map: ExtensionLangMap =
                 Arc::new(make_extension_language_map(&language_map, &HashMap::new(), &HashMap::new()).0);
-        let modules = Arc::new(Modules::of(&config.dirs));
+        let modules = Arc::new(Modules::of(&dirs));
         let (files_injector, dirs_injector) = (Arc::new(Injector::new()), Arc::new(Injector::new()));
         let mut files_present = FilesPresent::default();
-        calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector,
+        calculate_single_file_stats_or_add_to_injector(&config, &dirs, &dirs_injector, &files_injector,
                 &mut files_present, &extension_lang_map, &modules);
         // Queued and then gone, which the walk finds out only when it tries to open it
         dirs_injector.push(TraversedDir::new(std::path::PathBuf::from(&vanished), None, 0));

@@ -27,7 +27,7 @@ pub mod warnings;
 
 
 pub use engine::config::{EngineConfig, Target, Threads};
-pub use engine::targets::Targets;
+pub use engine::targets::TargetError;
 pub use languages::Languages;
 pub use domain::{Language, LanguageContentInfo, LanguageMetadata, FileStats, Keyword};
 pub use result::{FaultyFileDetails, FilesPresent, FinalStats, Metrics, ModuleResult, RunError, RunResult};
@@ -99,6 +99,11 @@ pub fn run(config: &EngineConfig, languages: Languages,
     if config.dirs.is_empty() {
         return Err(RunError::NoTargets);
     }
+    // The declared targets become places to walk here, with the settings of the same configuration
+    // the walk itself obeys, so the two can never disagree. Resolution is existence-first and
+    // idempotent, so a caller that resolved early for its own reasons loses nothing by this pass.
+    let dirs = engine::targets::resolve(&config.dirs, !config.no_gitignore, config.should_search_in_dotted)
+            .map_err(RunError::InvalidTargets)?;
     let config = Arc::new(config.clone());
     let faulty_files_ref : FaultyFilesListMut  = Arc::new(Mutex::new(Vec::with_capacity(10)));
     let finish_condition_ref = Arc::new(AtomicBool::new(false));
@@ -110,7 +115,7 @@ pub fn run(config: &EngineConfig, languages: Languages,
     // Pre-built for every module and language pair, and not only for every language: the merge that
     // ends a consumer reaches straight into this map and unwraps, so a pair that was never foreseen
     // would kill the thread rather than miscount
-    let modules = Arc::new(Modules::of(&config.dirs));
+    let modules = Arc::new(Modules::of(&dirs));
     let languages_content_info_ref : ContentInfoMapMut =
             Arc::new(Mutex::new(make_language_stats(language_map_ref.clone(), modules.count())));
     let global_languages_metadata_map = Arc::new(Mutex::new(make_language_metadata(&language_map_ref, modules.count())));
@@ -128,7 +133,7 @@ pub fn run(config: &EngineConfig, languages: Languages,
                         .cloned().unwrap_or_default();
                 RunError::InvalidExcludePattern(culprit)
             })?);
-    calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector, &mut files_present,
+    calculate_single_file_stats_or_add_to_injector(&config, &dirs, &dirs_injector, &files_injector, &mut files_present,
             &extension_lang_map, &modules);
 
     let files_stats = Arc::new(Mutex::new(files_present));
@@ -216,7 +221,7 @@ pub fn run(config: &EngineConfig, languages: Languages,
     on_traversal_done(files_present);
     if relevant_files_num == 0 {
         return Ok(RunResult::of_nothing(files_present, parsing_duration_millis, &modules,
-                std::mem::take(&mut unreadable_dirs.lock().unwrap()), threads_used));
+                dirs.to_vec(), std::mem::take(&mut unreadable_dirs.lock().unwrap()), threads_used));
     }
 
     let mut global_languages_metadata_map_guard = global_languages_metadata_map.lock();
@@ -260,6 +265,7 @@ pub fn run(config: &EngineConfig, languages: Languages,
         files_present,
         scan_duration_millis: parsing_duration_millis,
         metrics,
+        targets: dirs.to_vec(),
         unreadable_dirs: std::mem::take(&mut unreadable_dirs.lock().unwrap()),
         threads: threads_used
     })
@@ -288,11 +294,13 @@ fn merged_over_modules(per_module_content_info: &[HashMap<String,LanguageContent
 
 // The roots and not every target: a target that lies inside another is reached by the walk of the
 // one around it, and walking it again would count its files twice. Its module is not lost with it,
-// it is what the boundary table hands back on the way down.
-pub(crate) fn calculate_single_file_stats_or_add_to_injector(config: &EngineConfig, dirs_injector: &Arc<Injector<TraversedDir>>, files_injector: &Arc<Injector<ParsableFile>>,
+// it is what the boundary table hands back on the way down. 'dirs' is the resolved list the run
+// built at its entry, never the declared one off the configuration.
+pub(crate) fn calculate_single_file_stats_or_add_to_injector(config: &EngineConfig, dirs: &engine::targets::Targets,
+        dirs_injector: &Arc<Injector<TraversedDir>>, files_injector: &Arc<Injector<ParsableFile>>,
         files_present: &mut FilesPresent, extension_lang_map: &HashMap<String, Arc<str>>, modules: &Modules)
 {
-    crate::engine::targets::topmost_targets(&config.dirs).iter().for_each(|target| {
+    crate::engine::targets::topmost_targets(dirs).iter().for_each(|target| {
         let dir_path = Path::new(&target.path);
         let module = modules.of_target(target);
         if dir_path.is_file() {
@@ -640,15 +648,14 @@ mod tests {
 // cause the deaths fire on the corpus names used here and on nothing else.
 #[cfg(test)]
 mod worker_death_tests {
-    use crate::{EngineConfig, Languages, RunError, Targets, run};
+    use crate::{EngineConfig, Languages, RunError, run};
 
     fn corpus(name: &str) -> (std::path::PathBuf, EngineConfig) {
         let root = std::env::temp_dir().join(name);
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("a.rs"), "fn a() { let x = 1; }\n").unwrap();
-        let root_str = root.to_string_lossy().replace('\\', "/");
-        let mut config = EngineConfig::new(Targets::of(&[&root_str]).unwrap());
+        let mut config = EngineConfig::new(vec![root.to_string_lossy().replace('\\', "/")]);
         config.set_threads(2, 2);
         (root, config)
     }

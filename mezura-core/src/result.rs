@@ -2,7 +2,7 @@
 // 'Language' exists before anything has been counted; a 'FinalStats' does not.
 use std::collections::HashMap;
 
-use crate::engine::config::Threads;
+use crate::engine::config::{Target, Threads};
 use crate::engine::modules::{ModuleId, Modules};
 
 #[derive(Debug)]
@@ -26,6 +26,12 @@ pub struct RunResult {
     pub files_present: FilesPresent,
     pub scan_duration_millis: u128,
     pub metrics: Option<Metrics>,
+    // The places the run actually walked: the declared targets, resolved, with every pattern
+    // expanded to what it matched at the moment of the run. This is what a log or a document that
+    // wants to say "these two runs measured the same thing" has to record, because the declared
+    // form answers a different question: the same './src' declared over two different trees is two
+    // different measurements, and a pattern's matches change while its text does not.
+    pub targets: Vec<Target>,
     // Directories the walk found and could not open, so everything under them is missing from every
     // number above. Empty on an ordinary run, and the one thing that says the counts are short.
     pub unreadable_dirs: Vec<String>,
@@ -56,7 +62,7 @@ impl RunResult {
     // than as an empty part. Leaving them out also made the two answers disagree, since 'has_modules'
     // then said no and the whole block vanished from the document exactly when the scan was empty.
     pub(crate) fn of_nothing(files_present: FilesPresent, scan_duration_millis: u128, modules: &Modules,
-            unreadable_dirs: Vec<String>, threads: Threads) -> Self {
+            targets: Vec<Target>, unreadable_dirs: Vec<String>, threads: Threads) -> Self {
         RunResult {
             content_info_map: HashMap::new(),
             languages_metadata_map: HashMap::new(),
@@ -71,6 +77,7 @@ impl RunResult {
             files_present,
             scan_duration_millis,
             metrics: None,
+            targets,
             unreadable_dirs,
             threads
         }
@@ -128,9 +135,12 @@ pub struct FaultyFileDetails {
     pub size: u64
 }
 
-// A mistake in the configuration itself, which only a library caller can make: the command line
-// validates its own input before it ever builds a run. Finding nothing is a result, and every file
-// failing to parse is a result with the reasons attached, so neither lives here.
+// A mistake in the configuration itself, as opposed to something the counting found. What can be
+// judged with no setting known, a typed path that names nothing, the command line still refuses
+// where it was typed; what depends on the merged settings, which is every pattern and every target
+// a configuration file declared, is the run's to judge and arrives here. Finding nothing is a
+// result, and every file failing to parse is a result with the reasons attached, so neither lives
+// here.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum RunError {
@@ -139,6 +149,10 @@ pub enum RunError {
     // built a configuration without dirs almost certainly forgot them, and an Ok full of zeros
     // would dress the mistake up as a measurement.
     NoTargets,
+    // The declared targets could not be turned into places to walk: a path that names nothing, a
+    // pattern that does not parse or matches nothing, or one place declared under two names. Found
+    // at the run's entry, where the targets are resolved with the same configuration the walk obeys.
+    InvalidTargets(crate::engine::targets::TargetError),
     // The pattern as the caller wrote it, not the anchored form the matcher builds from it
     InvalidExcludePattern(String),
     // The operating system refused every thread of one side. A refusal of some but not all is not
@@ -164,6 +178,7 @@ impl std::fmt::Display for RunError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NoTargets => write!(f, "The configuration names no directories or files, so there is nothing to count."),
+            Self::InvalidTargets(x) => write!(f, "{x} Nothing was counted."),
             Self::InvalidExcludePattern(x) => write!(f, "'{x}' is not a valid exclude pattern, so nothing was counted."),
             Self::NoThreadsAvailable { side, error } => write!(f, "The operating system refused every {side} thread, so the run could not start: {error}"),
             Self::IncompleteRun { worker_panic } => write!(f, "A worker thread died mid-run, so the counts would have been incomplete and were discarded: {worker_panic}")
@@ -171,7 +186,14 @@ impl std::fmt::Display for RunError {
     }
 }
 
-impl std::error::Error for RunError {}
+impl std::error::Error for RunError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidTargets(x) => Some(x),
+            _ => None
+        }
+    }
+}
 
 impl FinalStats {
     pub fn new(files: usize, lines: usize, code_lines: usize, comment_lines: usize, bytes_size: usize) -> Self
@@ -282,7 +304,7 @@ mod tests {
     fn result_with(relevant: usize, unreadable: Vec<String>) -> RunResult {
         let mut result = RunResult::of_nothing(
                 FilesPresent { total_files: relevant, relevant_files: relevant, excluded_files: 0 },
-                0, &Modules::of(&[]), unreadable, Threads::new(1, 1));
+                0, &Modules::of(&[]), Vec::new(), unreadable, Threads::new(1, 1));
         result.files_present.relevant_files = relevant;
         result
     }
