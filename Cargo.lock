@@ -331,8 +331,16 @@ version = "3.0.0"
 dependencies = [
  "chrono",
  "colored",
- "crossbeam-deque",
  "directories",
+ "include_dir",
+ "mezura-core",
+]
+
+[[package]]
+name = "mezura-core"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-deque",
  "glob",
  "globset",
  "ignore",

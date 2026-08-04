@@ -50,7 +50,7 @@ jobs:
           $name = "mezura-${{ github.ref_name }}-${{ matrix.platform }}"
           New-Item -ItemType Directory -Path $name | Out-Null
           Copy-Item target/release/mezura.exe -Destination $name
-          Copy-Item LICENSE, Changelog, README.md -Destination $name
+          Copy-Item LICENSE-MIT, LICENSE-APACHE, mezura/Changelog, README.md -Destination $name
           Compress-Archive -Path $name -DestinationPath "$name.zip"
 
       # The release profile keeps the debug symbols, so that flamegraphs can be taken from a
@@ -63,7 +63,7 @@ jobs:
           strip target/release/mezura
           mkdir "$name"
           cp target/release/mezura "$name/"
-          cp LICENSE Changelog README.md "$name/"
+          cp LICENSE-MIT LICENSE-APACHE mezura/Changelog README.md "$name/"
           tar czf "$name.tar.gz" "$name"
 
       - name: Upload the archive

@@ -42,7 +42,7 @@ jobs:
       # too_many_arguments is the one lint deliberately left unfixed: silencing it would mean
       # restructuring the producer and consumer signatures for no benefit
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings -A clippy::too_many_arguments
+        run: cargo clippy --workspace --all-targets -- -D warnings -A clippy::too_many_arguments
 
       # The runners start with no persistent app dir, which is exactly the state that
       # used to break the program and that the test suite has to keep covering.
@@ -50,4 +50,4 @@ jobs:
         run: cargo test --verbose
 
       - name: Run against the repository itself
-        run: cargo run --release -- ./src --hide bar
+        run: cargo run --release -p mezura -- ./mezura-core/src --hide bar

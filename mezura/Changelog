@@ -1,0 +1,475 @@
+v3.0.0 - unreleased
+
+Main changes:
+  -> A target can now be given a name, and the report is grouped by it as well as by language:
+      "mezura frontend=./web backend=./api" answers how much of the project each part is, in one
+      view and with one total. "mezura ./project tests=./project/tests" separates one part and keeps
+      the rest under a row called "(unnamed)". Name nothing and the output is exactly what it was.
+      A space separates one target from the next only once you have named one, so a path with a
+      space in it still needs nothing but a comma next to it while you name nothing.
+  -> Every piece of printed text can now be styled, not just the four colors of the overview.
+      46 tokens are exposed, and each takes a color plus any of bold, italic, underline, dim and
+      reverse, in any order. Run "--help style" for the full list.
+  -> Comment lines are now counted and reported separately, with their own percentage.
+  -> Language files are now updated automatically when you install a new version, so a correction to
+      a language reaches you without you having to do anything. One you had changed yourself is
+      replaced too, since an out of date language file counts wrongly, but your copy is kept under
+      "data/replaced/<version>/" and the program names it, so you can carry your changes over.
+      A language file of your own is never touched, and neither are your themes, your default
+      configuration or "extension_priority.txt".
+  -> 32 new languages: Objective-C, MATLAB, Lua, Perl, Prolog, Pascal, Delphi, OCaml, F#, Elm,
+      Clojure, Lisp, Scheme, Julia, D, Carbon, COBOL, Fortran, Ada, VHDL, Erlang, GraphQL,
+      PowerShell, Svelte, JSX, WebAssembly text, Assembly, and the shader languages HLSL, GLSL,
+      WGSL, Metal and Slang.
+  -> Objective-C takes ".m" and Perl takes ".pl", while ".h" stays with C Header. If you write
+      MATLAB or Prolog instead, or want your headers counted as Objective-C, swap the line for it
+      in "extension_priority.txt", or run with "--force-lang m=matlab".
+  -> Two languages that claim the same extension no longer settle it silently. The winner is named
+      in the new "extension_priority.txt" file of the data directory, and when nothing names it, the
+      program says which language it gave the extension to and that it only did so alphabetically.
+  -> New "--force-lang" command: "--force-lang m=matlab,pl=perl" decides which language an extension
+      belongs to for this run, whether or not another language claims it. It overrides the priority
+      file and, like every other command, can be saved in a configuration file.
+  -> Extensions are now matched without regard to case, so a file named "MAIN.RS" counts as Rust.
+
+(Breaking!)
+  -> Color palettes are now called themes, and carry a whole look instead of four bar colors.
+      "--color-palette" is now "--theme", "--show-palettes" is "--show-themes", "--tune-palettes"
+      is "--theme-editor", and the files live in "data/themes" instead of "data/palettes".
+      A theme file is a list of "token = value" lines and nothing else, the same tokens that
+      "--style" takes. Palettes from older versions have to be rewritten in the new format.
+  -> --colors is removed. The colors of the overview are now five ordinary style tokens,
+      "language-1" to "language-4" and "language-others", so they are set like every other style
+      and can carry bold or italic on the language name. A theme that names "language-4" and not
+      "language-others" gets the same style for both, since the two never appear together.
+  -> A configuration file declares "theme" instead of "color-palette", and can no longer declare
+      "colors". Its "style" block stays, as the per project tweaks on top of the named theme.
+  -> --no-visual and --no-keywords are removed, replaced by --hide. Use '--hide bar' and
+      '--hide keywords'.
+  -> The default order of the languages is now the number of lines, and ties are broken
+      alphabetically. Use '--sort size' to get the old order back.
+  -> The "details" section is now a table by default: one aligned row per language, with a
+      percentage next to its files, lines, code and comments, and the keywords in their own block
+      underneath. Use '--layout list' for one block per language instead, which is where the
+      older shape went.
+  -> The overview bar is drawn with the 'medium' character by default. Use '--bar-thickness slim'
+      for the old bar, which is the one that renders on every terminal.
+  -> "extra" no longer includes the comments: it is the blank lines plus the lines that carry
+      no content.
+  -> Lines that carry no content are recognised consistently now, whatever punctuation they are
+      made of. The old rule covered only a few shapes, so a small number of lines move between
+      "code" and "extra". '--braces-as-code' counts them all as code, as before.
+  -> Log entries gained a "Comments" key. An entry written by an older version does not have one,
+      so it is printed without an extra comparison instead of reporting a drop that never happened.
+  -> Warnings and errors are written to the error output instead of the standard one, so that a
+      redirected or piped run carries the report and nothing else. On screen nothing changes.
+  -> mezura exits with code 1 when the run failed: an unrecognised command, a wrong value for one,
+      a configuration, theme or language name that does not exist, a path that is not there, or a
+      set of files where every single one failed to be parsed. Finding no code to count is not a
+      failure and still exits 0, and so does a run where only some files failed.
+
+New commands:
+  -> --hide <list> : leaves parts of the output unprinted. Takes any of version, directory-info,
+      parsing-info, keywords, overview, bar, progress and timing, separated by commas or spaces.
+      Errors and warnings are never hidden, so hiding the parsing info still reports files that
+      failed to be parsed.
+  -> --style <token>=<value>,... : overrides the style of one or more categories of printed text,
+      for a single run. Can also be stored in a configuration file and is kept by --save.
+  -> --bar-thickness slim|medium|fat|low : chooses the character the overview bar is drawn with.
+      'slim' is the default and the only ASCII one, so it is the fallback for terminals that
+      cannot render box drawing characters.
+  -> --layout table|boxed|list|matrix : chooses the shape of the "details" section. 'boxed' is the
+      table inside a drawn frame, where each number shares a cell with its percentage. 'list' is the
+      block of three rows per language that older versions printed. 'matrix' puts the languages down
+      and the modules across, one number per cell, for comparing folders that are several answers to
+      the same problem rather than several parts of one thing.
+  -> --output text|json : 'json' replaces the whole printed report, status lines and overview
+      included, with one JSON document, so a run can be read by another program. The counts go in
+      as plain numbers of lines and bytes, with no separators, no KB or MB and no percentages, and
+      warnings go to the error output so they never land inside the document as stray text. They are
+      carried inside it under "warnings", each with a code, the subject it is about, the readable
+      message, and whether it puts the counts or only the settings in doubt. A configuration file
+      cannot declare it.
+  -> --save-theme <name> : writes the way this run looks into a theme file, flattened into values,
+      so it stands on its own and can be shared. Combined with --save, the configuration that is
+      written points at that theme and carries no styles of its own.
+  -> --number-separator comma|underscore|dot|none : chooses the character that groups the digits of
+      every printed number. The character itself is accepted too, as in '--number-separator _'.
+  -> --decimal-separator dot|comma : chooses the character that separates the decimals of the sizes,
+      the percentages and the execution time. Together with the one above, '1.559.486' and '716,2'.
+  -> --sort lines|files|code|size|name : chooses the order of the languages.
+  -> --version : prints the version of the binary and the date it was released on.
+  -> --restore : writes back every file that ships with mezura and is not in your data directory
+      any more, the language files, the themes and the default configuration, and says which ones.
+      It only creates what is missing: your own files and your edits to the shipped ones are never
+      touched. A missing language file is the reason it exists, since that language just stops
+      being counted without a word.
+  -> --show-themes now previews a theme on a sample of the real details rows and a mock overview,
+      instead of the overview alone, so the headings, labels, numbers, percentages and size figures
+      it declares can be seen before it is picked. It also takes an optional thickness
+      ('--show-themes fat'), so the preview bar matches what --bar-thickness would print.
+  -> --top <n> : shows only the first n languages, and states underneath how many were hidden.
+      The total keeps counting all of them, and the overview never shows more than n either.
+
+Change in commands:
+  -> The progress section marks an entry that was counted with different settings: "modified:"
+      followed by the names of the ones that changed. The comparison is still shown, because the
+      point is to say whether it can be trusted. Log entries also record '--no-gitignore' now, the
+      one setting that changes the numbers and was not being written down.
+  -> A size in bytes is printed as a whole number now, "900 Bytes" instead of "900.0 Bytes". Only a
+      figure that was divided down to KBs, MBs or GBs has a decimal.
+  -> 'details-language' is split in two: 'details-language-header' is the word "Language" over the
+      first column of the two tables, 'details-language-name' is the name of a language wherever it
+      appears. The header now reads like the other six instead of standing out on its own.
+  -> The "Size" column header now reads like the other five instead of being darker than them, and
+      the unit next to a size ("KBs", "MBs") has its own token, 'size-unit', which is the part that
+      stays quiet. A theme that set 'total-size-label' to dim it was dimming the header too.
+  -> Styles are applied in this order: built-in defaults, then the theme, then your configuration
+      file, then --style. So a theme can carry a complete look, your own config can keep a few
+      tweaks that survive switching themes, and --style wins over both.
+
+Performance:
+  -> Counting uses well under half the processor time it did, while counting more languages than
+      before, and the counts themselves are unchanged. How much of that reaches the clock is decided
+      by your disk: a large repository on a fast NVMe was already close to what the processor can
+      do, while on a slower drive, or with antivirus scanning every file that is opened, the same
+      repository is now counted in a little over half the time.
+  -> mezura now uses many more threads for reading files, because a thread spends most of its time
+      waiting for a file to open rather than working. This is worth nothing on a fast disk whose
+      files were read recently, and up to twice the speed on a slow disk or on the first run after
+      a reboot. '--threads' accepts up to 32 producers and 128 consumers now, instead of 8 and 30,
+      so it is worth raising if your files live on a slow drive.
+
+Bugfixes:
+  -> Naming the same directory twice, once with a slash at the end, counted everything in it twice.
+      "mezura ./src,./src/" now reports what "mezura ./src" reports.
+  -> "--exclude-languages" now says so when it is given a name that is not a language, instead of
+      silently excluding nothing. Asking for one with "--languages" always did.
+  -> A directory that cannot be opened during the scan is now reported, instead of taking everything
+      inside it out of the counts without a word. It is told the same way a file that fails to parse
+      is: the count, and the paths themselves with "--show-faulty-files".
+  -> The paths of faulty files are now written with forward slashes throughout, instead of mixing
+      them with backslashes halfway through on Windows. This also applies to the JSON document.
+  -> A scan that finds nothing after failing to open a directory now exits with a failure code,
+      the same way a run where every file failed to parse always has: that zero is not a count of
+      anything. Finding nothing in directories that could actually be read still exits 0.
+  -> A path with "--" inside it, like the folder names some tools generate, is no longer cut at it
+      and refused. A command begins only where "--" follows a space or starts the line, and the
+      message-only commands answer only when written as whole words, so "--helpme" is an
+      unrecognised command instead of the help, and a path containing "--version" does not print
+      the version instead of counting.
+  -> A configuration file that stops being readable partway, most often because it was saved in an
+      encoding other than UTF-8, now stops the run and names the file and the line. It used to be
+      applied up to the unreadable line and silently lose everything after it.
+  -> A worker thread dying mid-run now stops the run with an error that carries the reason,
+      instead of returning counts that are silently missing that thread's share, or in one
+      arrangement never returning at all. If the operating system refuses some of the requested
+      threads the run simply carries on with fewer, and only refusing every one of them is an error.
+  -> A configuration file's "no-gitignore" and "search-in-dotted" now apply when the targets are
+      being worked out, not only during the counting. A config that declared "no-gitignore" beside
+      a glob of gitignored paths died with "doesn't exist anymore", while the same command line
+      counted; the settings of the command line, the loaded configuration and the default one are
+      now merged before any pattern is expanded, wherever the pattern came from.
+  -> "--save" now writes a glob pattern as the pattern, made absolute, instead of the paths it
+      happened to match at the moment of saving. Every load expands it fresh, so a configuration
+      saved with "services/*" keeps meaning that as services come and go.
+  -> "--search-in-dotted" no longer walks into ".git". It opens the dotted directories somebody made,
+      like ".github", and leaves the one git keeps alone, at any depth. On this machine that is six
+      thousand fewer files read for exactly the same counts. Naming ".git" as a target yourself still
+      works, as writing out any path always has.
+  -> A run that names its parts and finds nothing in them now lists them, empty, instead of leaving
+      them out of the report and the document altogether.
+  -> "--output json" now writes the whole document when every file fails to parse, faulty files and
+      warnings included, where it used to write nothing at all. The exit code still says failure.
+  -> A symbolic link, or a Windows junction, that the scan comes across is no longer followed, so
+      whatever it points at is not counted a second time through it. The same goes for one that a
+      glob pattern matched. Expect a smaller count on a project that links one of its own
+      directories in. One that you name as a target yourself is still followed.
+  -> CSS, HTML and SCSS are counted at all now. A language file that declares multiline comments but
+      no keywords was rejected as badly formatted, so those three were dropped from every run with a
+      one line warning and nothing else. Expect them to appear in stats where they were missing.
+  -> The shipped language files describe their languages better. Python now declares triple quotes,
+      so a docstring containing a single quote no longer swallows the lines after it: on the Linux
+      kernel that alone moves 146 lines from "code" to "comments". JavaScript, TypeScript, TSX, Vue
+      and Go declare their backtick strings, so a '//' inside a template literal or a raw string is
+      no longer read as a comment. Java, Kotlin, Scala, Swift, C# and Elixir declare their triple
+      quoted blocks. More extensions are recognised too: cc, cxx and c++ for C++, hh, hxx and h++
+      for C++ headers, mjs, cjs and jsx for JavaScript, mts and cts for TypeScript, pyw and pyi for
+      Python, zsh and ksh for Shell, csx for C#, and sc for Scala.
+  -> If you are upgrading and not installing for the first time, delete the "languages" folder in
+      your data directory: the improved language files above only reach a machine that does not
+      already have them, and the folder is regenerated in full on the next run.
+  -> A language file can declare any number of string and single line comment symbols now. Only the
+      first one or two of each were ever used, and anything past them was ignored without a word.
+  -> A string that stays open because every symbol that could close it is escaped is no longer cut
+      short at a different string symbol on the same line. Languages with more than one string
+      symbol, Python and Shell among them, count a few such lines differently than before.
+  -> Deleting the languages or the configuration folder no longer costs you your themes and your
+      default configuration. The program used to treat that as a fresh installation and write every
+      shipped file over the top; now it only puts back what is missing.
+  -> The percentage bar of the overview is now more accurate
+  -> The dashed line above the total now matches the width of the total line.
+  -> A theme file that cannot be fully read no longer stops the program. The lines that do not
+      parse are reported and skipped, and the rest of the file still applies. A palette used to be
+      rejected whole, and the run with it, without saying what was wrong.
+  -> A section a config file declares that is not a command is now reported instead of being
+      ignored in silence.
+  -> A name that does not exist now says what it is close to, instead of only that it is wrong.
+      This covers an unrecognised command, a theme, a configuration and the names given to
+      '--languages'. When nothing is close, it points at the command that lists what exists.
+  -> '--help' now has an entry of its own in the help, and '--help --help' prints it instead of
+      printing nothing at all.
+
+Other:
+  -> Updated default styling. The 'list' layout was rebuilt too: each language is a block of three
+      rows, with the file count and size above the name, the line breakdown beside it and the
+      keywords below. It is about 50 columns narrower than the same block was before.
+  -> Sizes of a gigabyte and above are reported in GBs.
+  -> A language with many keywords wraps its keyword row, instead of making the details section
+      wider than every other line in it.
+  -> The test suite gained per-language parser fixtures that declare their own hand-verified counts,
+      and a byte-exact comparison of the whole fixture corpus against a recorded result.
+  -> mezura is now dual-licensed as MIT OR Apache-2.0, at your option.
+
+
+
+-----------------------------------------------------------------------------------------------------------
+
+
+
+v2.0.1 - 27/7/2026
+
+  6,320 Total lines  -  4,531 Code lines
+
+Bugfixes:
+  -> Fixed the program refusing to start on a machine where it had never been executed before, but
+      where the test suite had, reporting that the language dir "has been deleted". Merely reading
+      the persistent paths used to create the application folder as a side effect, so the test suite
+      created an empty one, which every subsequent run then mistook for a complete installation.
+      The paths are now created only during the actual initialization, and an installation counts as
+      complete only when the language, config and log dirs are really there.
+  -> An incomplete application folder is now completed on the next execution, instead of the program
+      either failing or wiping the whole folder. A missing or emptied "languages" dir is regenerated
+      in place, leaving the "config" and "logs" folders untouched, and a failure in the middle of the
+      initialization no longer deletes the saved configurations and logs.
+  -> Fixed two tests that only passed on a machine with an already initialized application folder,
+      since they wrote to the persistent config dir without creating it.
+
+Other:
+  -> The error messages about unreadable language files now suggest deleting only the "languages"
+      folder, which is regenerated automatically, instead of the whole application folder.
+
+
+
+-----------------------------------------------------------------------------------------------------------
+
+
+
+v2.0.0 - 26/7/2026
+
+  6,312 Total lines  -  4,534 Code lines
+
+Main changes:
+  -> (Breaking!) The program now respects .gitignore files by default: ignored files and folders are
+      skipped, with support for nested .gitignore files and negated patterns. Explicitly given
+      target dirs are always traversed, even if a .gitignore would ignore them. Expect different
+      (more meaningful) stats and much faster runs on directories containing build artifacts or
+      dependencies. The --no-gitignore flag restores the old behavior.
+
+Performance:
+  -> Various optimizations that yielded significant performance improvements, especially when
+      analyzing large directory trees. You can expect a ~2x performance increase on hot runs,
+      and much more consistent run times, since the worst cases were eliminated.
+      Runs on repositories are additionally much faster now, because of the .gitignore support.
+
+Bugfixes:
+  -> Fixed nondeterministic language attribution for extensions claimed by multiple language files.
+      Each run could previously assign such files to a different language, changing the reported
+      stats between identical runs on the same directory. Files are now always counted under the
+      alphabetically first language that claims the extension.
+  -> Fixed nondeterministic ordering of keyword occurrences in the results. Keywords are now
+      printed in alphabetical order, stable across runs.
+  -> Fixed a race condition in the parallel directory traversal and file parsing, that could slow down
+      the end of a run and, in rare cases, skip files entirely.
+  -> Fixed the detection of mutually exclusive --languages and --exclude-languages combinations.
+      It was previously missed when the excluded list was the larger one, resulting in a misleading
+      "No relevant files found" report.
+  -> Fixed the rewriting of configuration and language files, which could leave stale content at the
+      end of a file when the new content was shorter, corrupting it. Errors while writing files are
+      also no longer silently ignored.
+  -> Fixed the default configuration file never actually being loaded (the program was looking for
+      a file named "default.txt.txt"), which meant that any preferences saved in it were silently
+      ignored on every run.
+  -> Fixed the same files being counted twice when a target path was given more than once, or when
+      a target path was contained in another one, like 'mezura src, src/utils'. Such targets are
+      now dropped, keeping only the topmost one.
+
+New commands:
+  -> Added the --no-gitignore flag, that disables the new default of respecting .gitignore files.
+  -> Added the --colors command, that overrides the colors of the "overview" section with
+      1 to 5 custom colors (hex values or standard terminal color names).
+  -> Added the --color-palette command, that applies a named color palette to the "overview"
+      section. 8 palettes are bundled by default (Mezura, Dracula, Nord, Gruvbox, Catppuccin,
+      Sunset, Neon, Ocean), as editable files in the new "data/palettes" folder, where custom
+      palettes can also be added.
+  -> Added the --show-palettes command, that displays the color palettes that were found,
+      each one previewed on a mock overview with its own colors.
+  -> Added the --tune-palettes command, that generates an interactive HTML page with all the
+      detected color palettes and opens it in the browser, where their colors can be adjusted
+      with live contrast metrics and turned into ready commands.
+
+Change in commands:
+  -> The target paths (--dirs) now support glob patterns (* ? [..] {..}), which are expanded to every
+      existing directory and file that they match, so 'services/*/src' is a valid target. The matches
+      of a pattern are skipped if a .gitignore ignores them or if they are dotted, exactly like every
+      other path that the program discovers, while the paths that are written out explicitly are
+      always used.
+  -> The --exclude command now supports glob patterns (* ? [..] {..}), and applies one consistent
+      rule for both files and folders: a pattern without a slash matches a name at any depth, and a
+      pattern with slashes matches the end of the path, anchored at path components. Previously,
+      folder patterns only matched exact names or full paths, and file patterns could silently
+      match mid-name path suffixes.
+  -> The --threads command now accepts up to 8 producers (instead of 4) and up to 30 consumers
+      (instead of 12), and the automatically chosen numbers were tuned accordingly, since
+      oversubscribing the consumers hides the latency of opening files.
+  -> The --changelog command now prints only the changes of the current version.
+      The full version history (most recent first) is available through '--changelog full'.
+
+Dependencies:
+  -> memchr = "2.8" was introduced, for more efficient substring matching
+  -> globset = "0.4.19" and ignore = "0.4.20" were introduced, for the glob patterns of the
+      --exclude command and for the .gitignore support, respectively
+  -> glob = "0.3.3" was introduced, for the expansion of the glob patterns of the target paths
+  -> lazy_static was removed, since the standard library now covers its functionality
+  -> chrono and crossbeam-deque were updated to their latest versions, and the versions of all
+      the dependencies are now pinned to the ones the program is tested with
+
+Other:
+  -> 9 more language files bundled by default: Ruby, Dart, Zig, Scala, SQL, Haskell, Shell,
+      Elixir and Vue.
+  -> Header files are now counted under dedicated "C Header" (.h) and "C++ Header" (.hpp) languages,
+      instead of being ambiguously attributed to C or C++.
+  -> Project migrated to 2024 language edition and now uses some more modern features
+  -> Invalid values in configuration files are no longer silently replaced:
+      the program now stops and reports exactly which value, in which config file, needs fixing,
+      unless a valid command line argument overrides the faulty value (a warning is shown instead).
+  -> The palette tuner is also available online, without having to install anything:
+      https://subamanis.github.io/mezura/palette-tuner/
+
+
+
+-----------------------------------------------------------------------------------------------------------
+
+
+
+v1.0.1 - 27/3/2022
+
+  5,375 Total lines  -  3,895 Code lines
+
+New commands:
+-> Added the --exclude-languages command, that specifies languages to be ignored
+
+Change in commands:
+-> --log command is no longer automatically saved to a configuration file, if it is specified along
+  with the --save command, but can be still added manually in configuration files
+
+Other:
+  -> Added SCSS language file
+  -> Removed sass and scss file extensions from css file
+  -> Changed paths to application's files to contain platform specific environment variables
+
+
+
+-----------------------------------------------------------------------------------------------------------
+
+
+
+v1.0.0 - 16/12/2022
+
+  5,322 Total lines  -  3,853 Code lines
+
+Bugfixes:
+  -> Fixed a bug where saving and loading a config file in the same program execution was producing a panic
+  -> Fixed a runtime panic related to the file parser
+
+Other:
+  -> Added C language file
+  -> Running the program with no target dir provided (either explicitly, or through a configuration file),
+  will now assume the current working dir as the target dir, in contrast to printing the --help message.
+  -> Added some tests
+  -> Minor help message and readme changes
+
+
+
+-----------------------------------------------------------------------------------------------------------
+
+
+
+v0.9.9 (v1.0.0-beta1)  -  17/10/2021
+
+  4,766 Total lines  -  3,464 Code lines
+
+Bugfixes:
+  -> Saving a configuration will now only save the specified flags, and not the rest with
+      default values, so that they can be overriden by the default configuration.
+
+Main changes:
+  -> The previously necessary "data" folder, gets now baked in the executable, at compile time.
+      On the first execution, the folder gets written on a persistent path in the user's machine,
+      according to platform specifications, and for every other execution, the necessary data
+      is read from there, so the user can manually modify the languages.
+  -> The producer (the part that traverses the given dirs to find relevant files) is now parallelized.
+      Performance may increase on cold runs, especially on machines with logical core count > 4.
+  -> Language files now support up to 2 comment symbols.
+
+New commands:
+  -> Added the --no-keywords flag, that disables keyword counting and printing.
+  -> Added the --changelog command, that displays the changelog history and terminates execution.
+  -> Added the --show-languages command, that displays the language files that were found.
+  -> Added the --show-configs commands, that displays the configuration files that were found.
+
+Change in commands:
+  -> (Breaking: update config files) Change on the --threads command's arguments, to reflect the ability
+      to specify the amount of producers and consumers, separately.
+  -> Added support for log descriptions. Now, after the '--log' command, you can write a word or a sentence
+      that describes the state of the codebase at the time the logging was done.
+  -> Normal program executions and --help command, will now display the version ID of the program.
+  -> Running the --help command will now work even if there is no data dir.
+  -> If a command was provided with invalid arguments, the help message for this command
+      will also be displayed.
+
+Dependencies:
+  -> num_cpus = "1.13.0"  was introduced, so that the program can automatically detect
+      an optimal number of threads for producers and consumers.
+  -> directories = "4.0.1"  was introduced, so that platform-specific and suitable paths can be chosen for
+      saving the persistent data of the application in the user machine.
+  -> include_dir = "0.6.2"  was introduced, so that the "data" folder provided with the repository can be
+      conveniently baked in the executable.
+
+Other:
+  -> Running the program with no arguments will now just display the help message.
+  -> The program will now also display how many files it ignored due to the '--exclude' command.
+  -> 7 more language files bundled by default.
+  -> Added the .h extension in the C++ language file, along with the .cpp and .hpp extensions.
+
+
+
+-----------------------------------------------------------------------------------------------------------
+
+
+
+v0.9.2  -  22/9/2021
+
+  4,260 Total lines  -  3,098 Code lines
+
+Bugfixes:
+  -> Added multiline comments in the Rust language file, that were missing by mistake
+
+Major/Functionality changes:
+  -> Running the program by double clicking on the exe is no longer supported.
+  -> The program will now terminate after execution at all times
+      (no longer accepting inputs from stdin on error).
+
+Change in commands:
+  -> Running the program with the --help command, shows information about the other provided commands,
+      or if none were provided, shows the information of all the commands.

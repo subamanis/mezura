@@ -197,7 +197,10 @@ WHAT IS COUNTED
     or 'no' to disable. Default: no
 
     Specifies whether the program should traverse directories that are prefixed with a dot,
-    like .vscode or .git.
+    like .vscode or .github.
+
+    The '.git' directory is never traversed, with or without this command, at any depth. Nothing
+    inside it is source, and walking it is thousands of files for no count at all.
 
 --braces-as-code
 
@@ -611,11 +614,13 @@ TUNING AND DIAGNOSTICS
     or 'no' to disable. Default: no
 
     Sometimes it happens that an error occurs when trying to parse a file, either while opening it,
-    or while reading its contents. The default behavior when this happens is to count all of
-    the faulty files and display their count.
+    or while reading its contents. A directory can also fail to be opened at all, most often because
+    of its permissions, or because something removed it while the scan was running. The default
+    behavior in both cases is to count them and display the count, since everything under a directory
+    that could not be read is missing from every number in the report.
 
     This flag specifies that their path, along with information about the exact error is displayed too.
-    The most common reason for this error is if a file contains non UTF-8 characters.
+    The most common reason for a faulty file is if it contains non UTF-8 characters.
 
 THE PROGRAM ITSELF
 
@@ -651,7 +656,9 @@ THE PROGRAM ITSELF
 `--output json` writes a single JSON document instead of the printed report, so that a build step, a
 badge or a dashboard can read a run instead of a person. Everything that is not the document itself,
 warnings included, goes to the error output, so `mezura ./src --output json > stats.json` leaves a file
-that a parser accepts.
+that a parser accepts. The document is written even when there was nothing to count, and even when
+every file failed to parse: a consumer never has to tell "no output" apart from "no code found", and
+a run that failed says so in the document instead of leaving an empty file.
 
 ```
 mezura ./src --output json | jq '.total.code'
@@ -665,6 +672,13 @@ produced with a different `--exclude` or with `--braces-as-code`. `format` is th
 document itself, separate from `mezura_version`, and it only moves when a key is removed or changes
 meaning, so a parser can check that one and ignore which build wrote the file.
 
+`faulty_files` names every file that was found and could not be parsed, and `unreadable_dirs` every
+directory the scan could not open, whose whole contents are therefore missing from every number in
+the document. Both are empty on an ordinary run, and either being non-empty means the counts are
+short by something the document tells you the name of. Both are always written in full, whether or
+not `--show-faulty-files` was given: that flag is a decision about how much to print on a terminal,
+and two runs over the same code have to produce the same document.
+
 `warnings` carries what the run said on the error output, which whoever reads the document never
 sees. Each entry has a `code` that is safe to branch on, a `message` that is safe to show and free to
 be reworded, the `subject` it is about, and an `affects` of `counts` or `settings`. That last one is
@@ -677,8 +691,11 @@ mezura ./src --output json | jq -e '[.warnings[] | select(.affects == "counts")]
 ```
 
 **Exit codes.** 0 means mezura ran and told you what it found, including when it found nothing,
-because zero is an answer. 1 means it did not run: a mistake in what was asked for, a name that does
-not exist, or a set of files where every one of them failed to be parsed.
+because zero is an answer. 1 means the run failed: a mistake in what was asked for, a name that does
+not exist, a set of files where every one of them failed to be parsed, or a scan that found nothing
+after failing to open a directory, since that zero is not a count of anything. The failing cases
+still write the whole JSON document, faulty files and unreadable directories included, so the
+failure can be read and not only detected.
 
 
 ## Configuration Files
@@ -847,3 +864,18 @@ Other alternative projects you can check are:
 - [cloc](https://github.com/AlDanial/cloc)
 - [sloc](https://github.com/flosse/sloc)
 - [tokei](https://github.com/XAMPPRocky/tokei)
+
+<br>
+
+## License
+
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or https://www.apache.org/licenses/LICENSE-2.0)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or https://opensource.org/licenses/MIT)
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in
+this work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any
+additional terms or conditions.

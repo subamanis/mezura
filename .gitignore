@@ -15,12 +15,12 @@
 
 # Custom
 roadmap.txt
-data/config/*
-data/logs/*
+mezura/data/config/*
+mezura/data/logs/*
 mezura.exe
 src/benchmarks.rs
 bench
 bench_dir
-test_dir/config/auto-generated.txt
+mezura/test_dir/config/auto-generated.txt
 archive
-test_dir/migration-*/
+mezura/test_dir/migration-*/

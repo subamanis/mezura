@@ -1,0 +1,16 @@
+[package]
+name = "mezura"
+version = "3.0.0"
+authors = ["subamanis <petrospapa21@gmail.com>"]
+edition = "2024"
+description = "A fast, accurate and very customizable stats generator for programming projects"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/subamanis/mezura"
+readme = "../README.md"
+
+[dependencies]
+mezura-core = { path = "../mezura-core", version = "0.1.0" }
+colored = "2"
+chrono = "0.4.45"
+directories = "4.0.1"
+include_dir = "0.6.2"

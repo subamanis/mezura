@@ -1,0 +1,17 @@
+[package]
+name = "mezura-core"
+version = "0.1.0"
+authors = ["subamanis <petrospapa21@gmail.com>"]
+edition = "2024"
+description = "The counting engine behind mezura: a multithreaded, customizable code stats generator"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/subamanis/mezura"
+
+[dependencies]
+memchr = "2.8"
+globset = "0.4.19"
+ignore = "0.4.20"
+glob = "0.3.3"
+crossbeam-deque = "0.8.7"
+num_cpus = "1.13.0"
+include_dir = "0.6.2"

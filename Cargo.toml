@@ -1,25 +1,6 @@
-[package]
-name = "mezura"
-version = "3.0.0"
-authors = ["subamanis <petrospapa21@gmail.com>"]
-edition = "2024"
-default-run = "mezura"
-
-[[bin]]
-name = "mezura"
-path = "src/cli/main.rs"
+[workspace]
+resolver = "3"
+members = ["mezura-core", "mezura"]
 
 [profile.release]
 debug = true
-
-[dependencies]
-colored = "2"
-memchr = "2.8"
-globset = "0.4.19"
-ignore = "0.4.20"
-glob = "0.3.3"
-chrono = "0.4.45"
-crossbeam-deque = "0.8.7"
-num_cpus = "1.13.0"
-directories = "4.0.1"
-include_dir = "0.6.2"
