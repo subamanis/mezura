@@ -738,7 +738,7 @@ pub fn print_whole_help_message() {
 }
 
 pub fn print_help_message_for_given_args(args_line: &str) {
-    let options = args_line.split("--").skip(1).collect::<Vec<_>>();
+    let options = crate::args::split_into_command_segments(args_line).into_iter().skip(1).collect::<Vec<_>>();
     if options.len() == 1 {
         print_whole_help_message();
         return;

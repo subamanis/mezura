@@ -13,7 +13,23 @@ use mezura::engine::config::{Target, Threads};
 
 #[derive(Debug)]
 pub enum ConfigFileParseError {
-    FileNotFound(String)
+    FileNotFound(String),
+    // The file and the number of the first line the reader could not deliver. An error and not a
+    // warning, because everything after that line was never seen, and blocks that decide what gets
+    // counted may be among what was lost: a half-applied configuration is a wrong answer wearing a
+    // valid one's clothes.
+    UnreadableLine(String, usize, UnreadableCause)
+}
+
+// The two things that can actually stop 'read_line', and they deserve different sentences: bytes
+// that are not UTF-8 are a permanent property of the file, there every time until it is re-saved,
+// while an I/O failure is an event of this run, a network drive dropping or a disk failing, and has
+// nothing to do with the line's content. Blaming the encoding for the second would send somebody
+// re-saving a file that was never the problem.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum UnreadableCause {
+    NotUtf8,
+    Io(String)
 }
 
 // 'invalid_fields' are the ones whose value decides what the program does, so a bad one stops the
@@ -32,10 +48,10 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
     let config_path = if let Some(dir) = config_dir_path {dir} else {PERSISTENT_APP_PATHS.config_dir.clone()};
     let file_name = if let Some(x) = file_name {x} else {DEFAULT_CONFIG_NAME.trim_end_matches(".txt")};
     let file_path = (config_path + file_name + ".txt").replace("\\", "/");
-    let mut reader = BufReader::new(match fs::File::open(file_path){
+    let mut reader = CountingReader { line: 0, failed_at: None, reader: BufReader::new(match fs::File::open(file_path){
         Ok(f) => f,
         Err(_) => return Err(ConfigFileParseError::FileNotFound(file_name.to_owned()))
-    });
+    })};
 
     let (mut dirs, mut braces_as_code, mut should_search_in_dotted, mut threads, mut exclude_dirs,
          mut languages_of_interest, mut excluded_languages, mut forced_languages, mut should_show_faulty_files, mut hidden,
@@ -44,7 +60,8 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
     let mut issues = ConfigFileIssues::default();
     let mut buf = String::with_capacity(150);
 
-    while let Ok(size) = reader.read_line(&mut buf) {
+    loop {
+        let size = reader.read_line(&mut buf);
         if size == 0 {break};
         if buf.trim().starts_with("===>") {
             let id = buf.trim().trim_start_matches("===>").split_whitespace().next().unwrap_or("");
@@ -215,6 +232,14 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
         ..Default::default()
     };
 
+    // After the whole walk of the file, so that the number reported is the first failure and not
+    // whichever one a nested block happened to meet
+    if let Some((line, error)) = reader.failed_at {
+        let cause = if error.kind() == std::io::ErrorKind::InvalidData {UnreadableCause::NotUtf8}
+                else {UnreadableCause::Io(error.to_string())};
+        return Err(ConfigFileParseError::UnreadableLine(file_name.to_owned(), line, cause));
+    }
+
     Ok((builder, issues))
 }
 
@@ -353,7 +378,7 @@ pub fn names_in_dir(dir: &str) -> Vec<String> {
     names
 }
 
-fn read_bool_value_from_file(reader: &mut BufReader<File>, buf: &mut String) -> Result<Option<bool>, ()> {
+fn read_bool_value_from_file(reader: &mut CountingReader, buf: &mut String) -> Result<Option<bool>, ()> {
     buf.clear();
     let _ = reader.read_line(buf);
     let buf = buf.trim();
@@ -371,7 +396,33 @@ fn read_bool_value_from_file(reader: &mut BufReader<File>, buf: &mut String) -> 
 }
 
 //Keep parsing new lines as relevant, until an empty one appears.
-fn read_lines_from_file_to_vec<T>(reader: &mut BufReader<File>, buf: &mut String, parser_func: fn(&str) -> Vec<T>) -> Vec<T> {
+// The reader 'parse_config_file' hands around: it counts lines, and one it cannot deliver is
+// remembered instead of vanishing. From then on it reads as an ended file, which every caller
+// already treats as the end of its block, so nothing after the bad line is applied and the file is
+// refused as a whole by the single check at the end. The old shape ended whichever loop met the
+// error and carried on, so a config saved in the wrong encoding kept its first blocks and silently
+// lost the rest.
+struct CountingReader {
+    reader: BufReader<File>,
+    line: usize,
+    failed_at: Option<(usize, std::io::Error)>
+}
+
+impl CountingReader {
+    fn read_line(&mut self, buf: &mut String) -> usize {
+        if self.failed_at.is_some() {
+            return 0;
+        }
+        self.line += 1;
+        match self.reader.read_line(buf) {
+            Ok(0) => { self.line -= 1; 0 },
+            Ok(size) => size,
+            Err(error) => { self.failed_at = Some((self.line, error)); 0 }
+        }
+    }
+}
+
+fn read_lines_from_file_to_vec<T>(reader: &mut CountingReader, buf: &mut String, parser_func: fn(&str) -> Vec<T>) -> Vec<T> {
     let mut vec = Vec::new();
     loop {
         buf.clear();
@@ -389,6 +440,8 @@ impl Formatted for ConfigFileParseError {
     fn formatted(&self) -> ColoredString {
         match self {
             Self::FileNotFound(x) => format!("'{x}' config file not found, defaults will be used.").yellow(),
+            Self::UnreadableLine(file, line, UnreadableCause::NotUtf8) => format!("Configuration '{file}' stops being readable at line {line}, so none of it was used: the file is not saved as UTF-8.").red(),
+            Self::UnreadableLine(file, line, UnreadableCause::Io(error)) => format!("Configuration '{file}' could not be read past line {line}, so none of it was used: {error}").red(),
         }
     }
 }
@@ -401,6 +454,35 @@ mod tests {
     use mezura::Target;
     use crate::paths::test_paths::CONFIG_DIR;
     use super::super::config_manager::ConfigurationBuilder;
+    // A line the reader could not deliver used to end the loop as if the file ended there, and the
+    // half that had been read was applied without a word: a config saved in the wrong encoding kept
+    // its first blocks and silently lost the rest. The realistic cause is not a failing disk, it is
+    // an editor writing a path with non-ASCII characters as something other than UTF-8. A mistake
+    // that decides what gets counted stops the run, so this is an error naming the file and the
+    // line, not a warning.
+    #[test]
+    fn a_config_that_stops_being_readable_mid_file_is_an_error_not_a_half_applied_config() {
+        let dir = std::env::temp_dir().join("mezura_unreadable_config_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_str = dir.to_str().unwrap().to_owned() + "/";
+
+        let mut contents = b"===> threads\n2 8\n\n===> dirs\n".to_vec();
+        contents.extend([0xCF, 0xE1, 0xE8, 0xFF, b'\n']);
+        contents.extend(b"\n===> braces-as-code\nyes\n");
+        std::fs::write(dir.join("halfway.txt"), contents).unwrap();
+
+        let result = super::super::config_files::parse_config_file(Some("halfway"), Some(dir_str));
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        match result {
+            Err(ConfigFileParseError::UnreadableLine(file, line, cause)) => {
+                assert_eq!(("halfway", 5), (file.as_str(), line));
+                assert_eq!(UnreadableCause::NotUtf8, cause);
+            },
+            other => panic!("the half-readable config was not refused: {other:?}")
+        }
+    }
+
     #[test]
     fn test_save_config_file_and_then_parse_it() -> std::io::Result<()> {
         let command = "./ --exclude a,b,c.txt,d.txt, --braces-as-code --threads 1 1 --hide keywords,timing \

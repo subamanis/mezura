@@ -45,7 +45,7 @@ fn document(result: &RunResult, datetime_now: &DateTime<Local>, config: &Configu
     // The only volatile block apart from the timestamp, so hiding the timing is also what makes the
     // document repeatable enough to hash or to compare against a stored one
     if !config.view.hidden.timing {
-        members.push(format!("  \"performance\": {}", performance_object(result.scan_duration_millis, config)));
+        members.push(format!("  \"performance\": {}", performance_object(result.scan_duration_millis, &result.threads)));
     }
 
     format!("{{\n{}\n}}", members.join(",\n"))
@@ -229,9 +229,13 @@ fn faulty_files_array(faulty_files: &[FaultyFileDetails]) -> String {
 // 'scan_ms' and not the 'Exec time' of the footer: what is measured here is the interval that starts
 // before the producers and ends when the consumers are done, which is the phase 'scan' describes.
 // The total is not known yet at this point, and the shell can measure it honestly anyway.
-fn performance_object(scan_ms: u128, config: &Configuration) -> String {
+// The thread counts come from the result and not from the configuration, because they sit beside
+// the measurement they exist to interpret: the configuration holds what was asked for, and the
+// operating system is allowed to grant fewer. A document stating the requested counts next to
+// 'scan_ms' would be lying about the conditions of its own timing.
+fn performance_object(scan_ms: u128, threads: &mezura::Threads) -> String {
     let threads = format!("{{\n      \"producers\": {},\n      \"consumers\": {}\n    }}",
-            config.engine.threads.producers(), config.engine.threads.consumers());
+            threads.producers(), threads.consumers());
 
     format!("{{\n    \"scan_ms\": {scan_ms},\n    \"threads\": {threads}\n  }}")
 }
@@ -279,7 +283,7 @@ mod tests {
             faulty_files: Vec<FaultyFileDetails>, files_present: FilesPresent) -> RunResult
     {
         RunResult {content_info_map, languages_metadata_map, modules: Vec::new(), final_stats, faulty_files,
-                files_present, scan_duration_millis: 1180, metrics: None, unreadable_dirs: Vec::new()}
+                files_present, scan_duration_millis: 1180, metrics: None, unreadable_dirs: Vec::new(), threads: mezura::Threads::new(2, 8)}
     }
 
     fn document_of(config: &crate::config_manager::Configuration) -> String {

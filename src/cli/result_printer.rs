@@ -1698,7 +1698,7 @@ mod tests {
     fn groups_from<'a>(modules: &'a [ModuleResult], config: &crate::config_manager::Configuration) -> Vec<Group<'a>> {
         let result = RunResult {content_info_map: HashMap::new(), languages_metadata_map: HashMap::new(),
                 modules: Vec::new(), final_stats: FinalStats::new_extended(0,0,0,0,0,0,0), faulty_files: Vec::new(),
-                files_present: FilesPresent::default(), scan_duration_millis: 0, metrics: None, unreadable_dirs: Vec::new()};
+                files_present: FilesPresent::default(), scan_duration_millis: 0, metrics: None, unreadable_dirs: Vec::new(), threads: mezura::Threads::new(1, 1)};
         let mut result = result;
         result.modules = modules.iter().map(|x| ModuleResult {
             name: x.name.clone(),
@@ -1853,7 +1853,7 @@ mod tests {
         let of_modules = |modules: Vec<ModuleResult>| RunResult {
             content_info_map: content_info.clone(), languages_metadata_map: metadata.clone(), modules,
             final_stats: FinalStats::new_extended(23, 10934, 7643, 650, 2641, 485500, 21108),
-            faulty_files: Vec::new(), files_present: FilesPresent::default(), scan_duration_millis: 0, metrics: None, unreadable_dirs: Vec::new()};
+            faulty_files: Vec::new(), files_present: FilesPresent::default(), scan_duration_millis: 0, metrics: None, unreadable_dirs: Vec::new(), threads: mezura::Threads::new(1, 1)};
         let single = || vec![ModuleResult {name: None, content_info_map: content_info.clone(),
                 languages_metadata_map: metadata.clone(),
                 final_stats: FinalStats::calculate(&content_info, &metadata)}];
@@ -2220,7 +2220,7 @@ mod tests {
     fn result_of(final_stats: FinalStats, modules: Vec<ModuleResult>) -> RunResult {
         RunResult {content_info_map: HashMap::new(), languages_metadata_map: HashMap::new(), modules,
                 final_stats, faulty_files: Vec::new(), files_present: FilesPresent::default(),
-                scan_duration_millis: 0, metrics: None, unreadable_dirs: Vec::new()}
+                scan_duration_millis: 0, metrics: None, unreadable_dirs: Vec::new(), threads: mezura::Threads::new(1, 1)}
     }
 
     #[test]

@@ -168,6 +168,7 @@ pub fn run(config: &EngineConfig, languages: Languages,
         return Err(RunError::NoThreadsAvailable { side: "consumer", error: last_refusal.unwrap() });
     }
 
+    let threads_used = Threads::new(producer_handles.len(), consumer_handles.len());
     for handle in producer_handles {
         let _ = handle.join();
     }
@@ -205,7 +206,7 @@ pub fn run(config: &EngineConfig, languages: Languages,
     on_traversal_done(files_present);
     if relevant_files_num == 0 {
         return Ok(RunResult::of_nothing(files_present, parsing_duration_millis, &modules,
-                std::mem::take(&mut unreadable_dirs.lock().unwrap())));
+                std::mem::take(&mut unreadable_dirs.lock().unwrap()), threads_used));
     }
 
     let mut global_languages_metadata_map_guard = global_languages_metadata_map.lock();
@@ -249,7 +250,8 @@ pub fn run(config: &EngineConfig, languages: Languages,
         files_present,
         scan_duration_millis: parsing_duration_millis,
         metrics,
-        unreadable_dirs: std::mem::take(&mut unreadable_dirs.lock().unwrap())
+        unreadable_dirs: std::mem::take(&mut unreadable_dirs.lock().unwrap()),
+        threads: threads_used
     })
 }
 

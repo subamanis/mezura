@@ -150,6 +150,14 @@ Bugfixes:
       is: the count, and the paths themselves with "--show-faulty-files".
   -> The paths of faulty files are now written with forward slashes throughout, instead of mixing
       them with backslashes halfway through on Windows. This also applies to the JSON document.
+  -> A path with "--" inside it, like the folder names some tools generate, is no longer cut at it
+      and refused. A command begins only where "--" follows a space or starts the line, and the
+      message-only commands answer only when written as whole words, so "--helpme" is an
+      unrecognised command instead of the help, and a path containing "--version" does not print
+      the version instead of counting.
+  -> A configuration file that stops being readable partway, most often because it was saved in an
+      encoding other than UTF-8, now stops the run and names the file and the line. It used to be
+      applied up to the unreadable line and silently lose everything after it.
   -> A worker thread dying mid-run now stops the run with an error that carries the reason,
       instead of returning counts that are silently missing that thread's share, or in one
       arrangement never returning at all. If the operating system refuses some of the requested

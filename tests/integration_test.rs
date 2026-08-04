@@ -158,3 +158,32 @@ fn a_thread_count_outside_the_supported_range_cannot_reach_the_run() {
     config.set_threads(0, 100_000);
     assert_eq!((1, 128), (config.threads.producers(), config.threads.consumers()));
 }
+
+// What the run actually used, which the caller cannot know: the requested counts are their own
+// config, but the operating system is allowed to grant fewer, and the run carries on with what it
+// was given. On a result that exists this is also how many finished whole, because a worker that
+// dies turns the whole run into an error instead.
+#[test]
+fn the_result_reports_the_threads_the_run_actually_used() {
+    let current_dir = env!("CARGO_MANIFEST_DIR").replace("\\", "/");
+    let mut config = EngineConfig::new(vec![format!("{current_dir}/src")]);
+    config.set_threads(2, 3);
+
+    let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
+    let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
+    let result = run(&config, languages, |_| {}).unwrap();
+    assert_eq!(Threads::new(2, 3), result.threads);
+
+    // and the empty scan reports its threads too, since they ran all the same
+    let empty = std::env::temp_dir().join("mezura-threads-empty");
+    let _ = std::fs::remove_dir_all(&empty);
+    std::fs::create_dir_all(&empty).unwrap();
+    let mut config = EngineConfig::new(vec![empty.to_string_lossy().replace("\\", "/")]);
+    config.set_threads(1, 2);
+    let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
+    let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
+    let result = run(&config, languages, |_| {}).unwrap();
+    std::fs::remove_dir_all(&empty).unwrap();
+    assert_eq!(0, result.files_present.relevant_files);
+    assert_eq!(Threads::new(1, 2), result.threads);
+}

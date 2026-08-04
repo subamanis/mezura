@@ -2,6 +2,7 @@
 // 'Language' exists before anything has been counted; a 'FinalStats' does not.
 use std::collections::HashMap;
 
+use crate::engine::config::Threads;
 use crate::engine::modules::{ModuleId, Modules};
 
 #[derive(Debug)]
@@ -27,7 +28,13 @@ pub struct RunResult {
     pub metrics: Option<Metrics>,
     // Directories the walk found and could not open, so everything under them is missing from every
     // number above. Empty on an ordinary run, and the one thing that says the counts are short.
-    pub unreadable_dirs: Vec<String>
+    pub unreadable_dirs: Vec<String>,
+    // The threads the run actually used, which the caller cannot know: the requested counts are
+    // their own configuration, but the operating system is allowed to grant fewer and the run
+    // carries on with what it was given. On a result that exists this is also how many finished
+    // whole, because a worker that dies turns the whole run into an error instead. Next to
+    // 'scan_duration_millis' this is what makes the timing interpretable.
+    pub threads: Threads
 }
 
 // One part of the run, counted on its own. 'name' is None for the leftovers of the named ones, which
@@ -49,7 +56,7 @@ impl RunResult {
     // than as an empty part. Leaving them out also made the two answers disagree, since 'has_modules'
     // then said no and the whole block vanished from the document exactly when the scan was empty.
     pub(crate) fn of_nothing(files_present: FilesPresent, scan_duration_millis: u128, modules: &Modules,
-            unreadable_dirs: Vec<String>) -> Self {
+            unreadable_dirs: Vec<String>, threads: Threads) -> Self {
         RunResult {
             content_info_map: HashMap::new(),
             languages_metadata_map: HashMap::new(),
@@ -64,7 +71,8 @@ impl RunResult {
             files_present,
             scan_duration_millis,
             metrics: None,
-            unreadable_dirs
+            unreadable_dirs,
+            threads
         }
     }
 

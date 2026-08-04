@@ -205,8 +205,92 @@ fn remove_dot_prefix(str: &str) -> &str {
 }
 
 
+// Where a command begins: '--' at the start of the line or after whitespace, which is the only way
+// anybody writes one. A '--' inside a word belongs to the word, because paths made by tools that
+// encode a hierarchy into a single folder name carry them, and the old substring split cut such a
+// target into a piece that does not exist and a command that does not parse. The pieces come back
+// shaped exactly as `line.split("--")` shaped them, one leading piece before any command and then
+// one piece per command, so a caller iterates them the same way.
+pub fn split_into_command_segments(line: &str) -> Vec<&str> {
+    let bytes = line.as_bytes();
+    let mut boundaries = Vec::new();
+    let mut at_token_start = true;
+    let mut i = 0;
+    while i < bytes.len() {
+        if at_token_start && bytes[i..].starts_with(b"--") {
+            boundaries.push(i);
+            i += 2;
+            at_token_start = false;
+            continue;
+        }
+        // Multibyte characters have no ASCII whitespace inside them, so walking bytes cannot split
+        // one, and '-' itself is ASCII
+        at_token_start = bytes[i].is_ascii_whitespace();
+        i += 1;
+    }
+
+    let mut segments = Vec::with_capacity(boundaries.len() + 1);
+    segments.push(&line[..boundaries.first().copied().unwrap_or(line.len())]);
+    for (position, boundary) in boundaries.iter().enumerate() {
+        let end = boundaries.get(position + 1).copied().unwrap_or(line.len());
+        segments.push(&line[boundary + 2..end]);
+    }
+    segments
+}
+
+// The position of '--name' written as a command: after whitespace or at the start, and with nothing
+// but whitespace or the end after the name, so that a path containing the text never matches and
+// '--help' does not answer for '--helpme'.
+pub fn find_command(line: &str, name: &str) -> Option<usize> {
+    let mut from = 0;
+    while let Some(found) = line[from..].find("--") {
+        let at = from + found;
+        let starts_a_token = at == 0 || line[..at].chars().last().is_some_and(char::is_whitespace);
+        let after_marker = &line[at + 2..];
+        if starts_a_token && after_marker.starts_with(name) {
+            let after_name = &after_marker[name.len()..];
+            if after_name.is_empty() || after_name.chars().next().is_some_and(char::is_whitespace) {
+                return Some(at);
+            }
+        }
+        from = at + 2;
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
+    use super::{find_command, split_into_command_segments};
+
+    // The shape `line.split("--")` produced, minus the cuts inside words
+    #[test]
+    fn commands_begin_at_token_boundaries_and_nowhere_else() {
+        assert_eq!(vec!["./src ", "threads 2 8 ", "top 5"],
+                split_into_command_segments("./src --threads 2 8 --top 5"));
+        assert_eq!(vec!["", "help"], split_into_command_segments("--help"));
+        assert_eq!(vec!["./src"], split_into_command_segments("./src"));
+
+        // the ones the substring split got wrong
+        assert_eq!(vec!["C:/t/D--dev-Rusty-mezura/scratch"],
+                split_into_command_segments("C:/t/D--dev-Rusty-mezura/scratch"));
+        assert_eq!(vec!["C:/t/my--project ", "threads 1 2"],
+                split_into_command_segments("C:/t/my--project --threads 1 2"));
+        assert_eq!(vec!["", "dirs C:/t/a--b, C:/t/c--d ", "top 3"],
+                split_into_command_segments("--dirs C:/t/a--b, C:/t/c--d --top 3"));
+    }
+
+    #[test]
+    fn a_command_is_found_only_as_a_whole_word() {
+        assert_eq!(Some(0), find_command("--help", "help"));
+        assert_eq!(Some(6), find_command("./src --help style", "help"));
+        // a path carrying the text is not the command
+        assert_eq!(None, find_command("./a--version-dir", "version"));
+        assert_eq!(None, find_command("./x/some--help-docs", "help"));
+        // and a longer command is not the shorter one
+        assert_eq!(None, find_command("--helpme", "help"));
+        assert_eq!(None, find_command("--save-theme dark", "save"));
+    }
+
     use super::*;
 
 

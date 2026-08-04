@@ -522,7 +522,7 @@ fn read_args_as_str() -> Option<String> {
 // below report a mistake, and a bool could not tell the caller to stop with a failure instead of
 // handing arguments it has already rejected to the configuration parser.
 fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Language>) -> Option<ExitCode> {
-    let is_present = |command: &str| args_str.contains(&(String::from("--") + command));
+    let is_present = |command: &str| crate::args::find_command(args_str, command).is_some();
     if ![HELP, VERSION, CHANGELOG, SHOW_LANGUAGES, SHOW_CONFIGS, SHOW_THEMES, THEME_EDITOR, RESTORE].iter().any(|x| is_present(x)) {
         return None;
     }
@@ -536,10 +536,10 @@ fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Lan
     }
     println!("\n{}", crate::theme::active().version.paint(VERSION_ID));
 
-    if args_str.contains(&(String::from("--") + HELP)) {
+    if is_present(HELP) {
         crate::message_printer::print_help_message_for_given_args(args_str);
         return Some(ExitCode::SUCCESS);
-    } else if let Some(pos) = args_str.find(&(String::from("--") + CHANGELOG)) {
+    } else if let Some(pos) = crate::args::find_command(args_str, CHANGELOG) {
         return match args_str[pos + CHANGELOG.len() + 2..].split_whitespace().next() {
             Some("full") => {
                 crate::message_printer::print_changelog(true);
@@ -555,13 +555,13 @@ fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Lan
                 Some(ExitCode::SUCCESS)
             },
         };
-    } else if args_str.contains(&(String::from("--") + SHOW_LANGUAGES)) {
+    } else if is_present(SHOW_LANGUAGES) {
         crate::message_printer::print_supported_languages(language_map);
         return Some(ExitCode::SUCCESS);
-    } else if args_str.contains(&(String::from("--") + SHOW_CONFIGS)) {
+    } else if is_present(SHOW_CONFIGS) {
         crate::message_printer::print_existing_configs();
         return Some(ExitCode::SUCCESS);
-    } else if args_str.contains(&(String::from("--") + RESTORE)) {
+    } else if is_present(RESTORE) {
         // The same pass a version change performs, asked for by hand: useful when something was
         // damaged inside one version, where nothing would otherwise trigger it
         return match migrate_data_files(&crate::paths::PERSISTENT_APP_PATHS.data_dir, true) {
@@ -587,7 +587,7 @@ fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Lan
                 Some(ExitCode::FAILURE)
             }
         };
-    } else if args_str.contains(&(String::from("--") + THEME_EDITOR)) {
+    } else if is_present(THEME_EDITOR) {
         return match crate::theme_files::generate_theme_editor_page() {
             Ok(path) => {
                 println!("\nTheme editor page generated at:\n{path}");
@@ -599,10 +599,10 @@ fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Lan
                 Some(ExitCode::FAILURE)
             }
         };
-    } else if let Some(pos) = args_str.find(&(String::from("--") + SHOW_THEMES)) {
+    } else if let Some(pos) = crate::args::find_command(args_str, SHOW_THEMES) {
         // The preview follows '--layout', so that what it shows is what a run would print. Read here
         // by hand, because a message-only command runs before there is a configuration to ask.
-        let layout = args_str.find(&(String::from("--") + LAYOUT))
+        let layout = crate::args::find_command(args_str, LAYOUT)
                 .and_then(|at| args_str[at + LAYOUT.len() + 2..].split_whitespace().next())
                 .and_then(config_manager::Layout::parse)
                 .unwrap_or_default();

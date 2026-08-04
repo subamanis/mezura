@@ -367,6 +367,7 @@ pub enum ArgParsingError {
     IncorrectCommandArgs(String),
     UnexpectedCommandArgs(String),
     NonExistantConfig(String),
+    UnreadableConfig(String, usize, super::config_files::UnreadableCause),
     NonExistantTheme(String),
     InvalidStyle(String),
     InvalidHideTarget(String),
@@ -426,7 +427,7 @@ pub fn targets_to_string(targets: &[Target]) -> String {
 
 pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilder, ArgParsingError> {
     let mut dirs = None;
-    let mut options = line.split("--");
+    let mut options = super::args::split_into_command_segments(line).into_iter();
 
     if line.trim().starts_with("--") {
         //ignoring the empty first element that is caused by splitting
@@ -638,11 +639,16 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 return Err(ArgParsingError::IncorrectCommandArgs(LOAD.to_owned()));
             }
 
-            if let Ok((options, issues)) = super::config_files::parse_config_file(Some(config_name), None) {
-                custom_config = Some((options, issues));
-                config_name_to_load = Some(config_name.to_owned());
-            } else {
-                return Err(ArgParsingError::NonExistantConfig(config_name.to_owned()))
+            match super::config_files::parse_config_file(Some(config_name), None) {
+                Ok((options, issues)) => {
+                    custom_config = Some((options, issues));
+                    config_name_to_load = Some(config_name.to_owned());
+                },
+                // The file is there, it just cannot be read whole; calling it missing sends the
+                // user looking for a typo in the name instead of at the file's encoding
+                Err(super::config_files::ConfigFileParseError::UnreadableLine(file, line, cause)) =>
+                    return Err(ArgParsingError::UnreadableConfig(file, line, cause)),
+                Err(_) => return Err(ArgParsingError::NonExistantConfig(config_name.to_owned()))
             }
         } else if command_name == SAVE {
             let name = arguments.trim();
@@ -696,14 +702,22 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         }
     }
 
-    if config_builder.has_missing_fields()
-        && let Ok((default_config, issues)) = super::config_files::parse_config_file(None, None) {
-        print_config_file_warnings(&issues.warnings, DEFAULT_CONFIG_LABEL);
-        resolve_invalid_config_fields(&config_builder, &issues.invalid_fields, DEFAULT_CONFIG_LABEL)?;
-        let dirs_were_missing = config_builder.dirs.is_none();
-        config_builder.add_missing_fields(default_config);
-        if dirs_were_missing && config_builder.dirs.is_some() {
-            dirs_config_source = Some(DEFAULT_CONFIG_LABEL.to_owned());
+    if config_builder.has_missing_fields() {
+        match super::config_files::parse_config_file(None, None) {
+            Ok((default_config, issues)) => {
+                print_config_file_warnings(&issues.warnings, DEFAULT_CONFIG_LABEL);
+                resolve_invalid_config_fields(&config_builder, &issues.invalid_fields, DEFAULT_CONFIG_LABEL)?;
+                let dirs_were_missing = config_builder.dirs.is_none();
+                config_builder.add_missing_fields(default_config);
+                if dirs_were_missing && config_builder.dirs.is_some() {
+                    dirs_config_source = Some(DEFAULT_CONFIG_LABEL.to_owned());
+                }
+            },
+            // An absent default configuration is an ordinary machine. A half-readable one is not,
+            // and skipping it in silence would run with whatever defaults it no longer supplies.
+            Err(super::config_files::ConfigFileParseError::UnreadableLine(file, line, cause)) =>
+                return Err(ArgParsingError::UnreadableConfig(file, line, cause)),
+            Err(_) => {}
         }
     }
 
@@ -1087,6 +1101,8 @@ impl Formatted for ArgParsingError {
                 ColoredString::from(format!("{error}\n\n{tail}").as_str())
             },
             Self::IncorrectCommandArgs(p) => format!("Incorrect arguments provided for the command '--{p}'.").red(),
+            Self::UnreadableConfig(name, line, super::config_files::UnreadableCause::NotUtf8) => format!("Configuration '{name}' stops being readable at line {line}, so none of it was used: the file is not saved as UTF-8.").red(),
+            Self::UnreadableConfig(name, line, super::config_files::UnreadableCause::Io(error)) => format!("Configuration '{name}' could not be read past line {line}, so none of it was used: {error}").red(),
             Self::UnexpectedCommandArgs(p) => format!("Command '--{p}' does not expect any arguments.").red(),
             Self::NonExistantConfig(p) => {
                 let names = super::config_files::names_in_dir(&crate::paths::PERSISTENT_APP_PATHS.config_dir);
@@ -1530,6 +1546,49 @@ mod tests {
                 "the pattern is not in the saved file:\n{saved}");
         assert!(!saved.contains("sub1"), "the saved file holds the expansion, not the pattern:\n{saved}");
         assert_eq!(2, loaded.unwrap().engine.dirs.len());
+    }
+
+    // Through '--load', the same file must not be reported as non-existent: it exists, it just
+    // cannot be read whole, and telling the user it is not there sends them looking for a typo in
+    // the name instead of at the file's encoding.
+    #[test]
+    fn an_unreadable_config_is_not_reported_as_a_missing_one() {
+        std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
+        let config_path = crate::paths::PERSISTENT_APP_PATHS.config_dir.clone() + "a3halfway.txt";
+        let mut contents = b"===> threads\n2 8\n".to_vec();
+        contents.extend([0xCF, 0xE1, b'\n']);
+        std::fs::write(&config_path, contents).unwrap();
+
+        let result = create_config_from_args("./ --load a3halfway").map(|_| ());
+        std::fs::remove_file(&config_path).unwrap();
+
+        assert_eq!(Err(ArgParsingError::UnreadableConfig("a3halfway".to_owned(), 3,
+                super::super::config_files::UnreadableCause::NotUtf8)), result);
+    }
+
+    // A '--' inside a word belongs to the word. The old substring split cut any path carrying one
+    // into a target that does not exist and a command that does not parse: tools that encode a
+    // hierarchy into a single folder name produce exactly such paths, and this program's own
+    // scratchpad directory was one. A command still begins wherever '--' follows whitespace or
+    // starts the line, which is the only way anybody writes one.
+    #[test]
+    fn a_double_dash_inside_a_path_is_not_the_start_of_a_command() {
+        let root = std::env::temp_dir().join("mezura--double--dash");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.rs"), "fn a() {}\n").unwrap();
+        let root_str = root.to_str().unwrap().replace('\\', "/");
+
+        let bare = create_config_from_args(&root_str).unwrap();
+        let with_flag = create_config_from_args(&format!("{root_str} --threads 2 3")).unwrap();
+        let through_dirs = create_config_from_args(&format!("--dirs {root_str} --threads 2 3")).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+
+        assert_eq!(vec![Target::of(root_str.clone())], bare.engine.dirs);
+        assert_eq!(vec![Target::of(root_str.clone())], with_flag.engine.dirs);
+        assert_eq!(Threads::new(2, 3), with_flag.engine.threads);
+        assert_eq!(vec![Target::of(root_str)], through_dirs.engine.dirs);
+        assert_eq!(Threads::new(2, 3), through_dirs.engine.threads);
     }
 
     #[test]
