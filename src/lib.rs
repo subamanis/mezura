@@ -112,16 +112,16 @@ pub fn run(config: &EngineConfig, languages: Languages,
     let files_stats = Arc::new(Mutex::new(files_present));
     let unreadable_dirs = Arc::new(Mutex::new(Vec::new()));
 
-    let mut producer_handles = Vec::with_capacity(config.threads.producers);
-    let mut consumer_handles = Vec::with_capacity(config.threads.consumers);
+    let mut producer_handles = Vec::with_capacity(config.threads.producers());
+    let mut consumer_handles = Vec::with_capacity(config.threads.consumers());
 
     let parsing_started_instant = Instant::now();
-    for i in 0..config.threads.producers {
+    for i in 0..config.threads.producers() {
         producer_handles.push(engine::producer::start_producer_thread(i, files_injector.clone(), dirs_injector.clone(), Worker::new_fifo(),
             idle_producers.clone(), extension_lang_map.clone(), exclude_matcher.clone(),
             config.clone(), files_stats.clone(), modules.clone(), unreadable_dirs.clone()));
     }
-    for i in 0..config.threads.consumers {
+    for i in 0..config.threads.consumers() {
         consumer_handles.push(engine::consumer::start_parser_thread(i, files_injector.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
         languages_content_info_ref.clone(), global_languages_metadata_map.clone(), language_map_ref.clone(), config.clone()));
     }

@@ -126,3 +126,35 @@ fn a_run_where_every_file_fails_to_parse_is_an_answer_not_an_error() {
 
     assert!(!result.all_relevant_files_were_faulty());
 }
+
+// Nobody can ask for a thread count the run cannot work with. Zero producers left every directory
+// sitting in the queue with nothing to drain it, so a scan of a real tree came back saying it found
+// nothing at all; zero consumers was worse, returning a result that claimed relevant files and zero
+// of everything in the same breath. Both are silent wrong answers, which is the one thing a counter
+// must never produce, and the command line never saw either because it validates its own input.
+#[test]
+fn a_thread_count_outside_the_supported_range_cannot_reach_the_run() {
+    let current_dir = env!("CARGO_MANIFEST_DIR").replace("\\", "/");
+    let count_with = |producers: usize, consumers: usize| {
+        let mut config = EngineConfig::new(vec![format!("{current_dir}/src")]);
+        config.set_threads(producers, consumers);
+        let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
+        let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
+        let result = run(&config, languages, |_| {}).unwrap();
+        (result.files_present.relevant_files, result.final_stats.lines)
+    };
+
+    let sane = count_with(1, 2);
+    assert!(sane.0 > 0 && sane.1 > 0, "the control run counted nothing");
+
+    assert_eq!(sane, count_with(0, 0), "zero of both");
+    assert_eq!(sane, count_with(0, 4), "zero producers");
+    assert_eq!(sane, count_with(2, 0), "zero consumers");
+    // Far above the cap, which used to reach Vec::with_capacity and the spawn loop as written
+    assert_eq!(sane, count_with(usize::MAX, usize::MAX), "absurdly many");
+
+    // And what was actually used is readable, rather than the number that was asked for
+    let mut config = EngineConfig::new(vec![format!("{current_dir}/src")]);
+    config.set_threads(0, 100_000);
+    assert_eq!((1, 128), (config.threads.producers(), config.threads.consumers()));
+}

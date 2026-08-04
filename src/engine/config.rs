@@ -64,25 +64,38 @@ impl std::fmt::Display for Target {
     }
 }
 
+// The counts are read and never written from outside, which is what lets them be private: a number
+// the run cannot work with then has no way in. Zero producers left every directory in the queue with
+// nothing to drain it and the scan of a real tree answered "nothing found"; zero consumers returned a
+// result claiming relevant files and zero of everything at once. Both were silent wrong answers, and
+// only the command line was stopping them, which a library caller never goes through.
 #[derive(Debug,PartialEq,Clone)]
 pub struct Threads {
-    pub producers: usize,
-    pub consumers: usize
+    producers: usize,
+    consumers: usize
 }
 
 impl Threads {
+    // Clamped rather than refused. What was asked for is readable back through the two methods
+    // below, so nothing is hidden, and a count outside the range is a preference the machine cannot
+    // honour rather than a mistake worth ending a run over.
     pub fn new(producers: usize, consumers: usize) -> Self {
         Threads {
-            producers,
-            consumers
+            producers: producers.clamp(MIN_PRODUCERS_VALUE, MAX_PRODUCERS_VALUE),
+            consumers: consumers.clamp(MIN_CONSUMERS_VALUE, MAX_CONSUMERS_VALUE)
         }
     }
 
     pub fn from(threads: (usize,usize)) -> Self {
-        Threads {
-            producers: threads.0,
-            consumers: threads.1
-        }
+        Threads::new(threads.0, threads.1)
+    }
+
+    pub fn producers(&self) -> usize {
+        self.producers
+    }
+
+    pub fn consumers(&self) -> usize {
+        self.consumers
     }
 }
 

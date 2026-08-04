@@ -82,7 +82,7 @@ pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>,
                 should_terminate = true;
                 idle_producers.fetch_add(1, Ordering::SeqCst);
             }
-            if idle_producers.load(Ordering::SeqCst) == config.threads.producers {
+            if idle_producers.load(Ordering::SeqCst) == config.threads.producers() {
                 break;
             }
 

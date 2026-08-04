@@ -231,7 +231,7 @@ fn faulty_files_array(faulty_files: &[FaultyFileDetails]) -> String {
 // The total is not known yet at this point, and the shell can measure it honestly anyway.
 fn performance_object(scan_ms: u128, config: &Configuration) -> String {
     let threads = format!("{{\n      \"producers\": {},\n      \"consumers\": {}\n    }}",
-            config.engine.threads.producers, config.engine.threads.consumers);
+            config.engine.threads.producers(), config.engine.threads.consumers());
 
     format!("{{\n    \"scan_ms\": {scan_ms},\n    \"threads\": {threads}\n  }}")
 }

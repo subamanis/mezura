@@ -254,7 +254,7 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
     }
     if let Some(threads) = &config_builder.threads {
         writer.write_all(&[b"\n\n===> ",config_manager::THREADS.as_bytes(),b"\n"].concat())?;
-        writer.write_all((threads.producers.to_string() + " " + &threads.consumers.to_string()).as_bytes())?;
+        writer.write_all((threads.producers().to_string() + " " + &threads.consumers().to_string()).as_bytes())?;
     }
     if let Some(braces_as_code) = &config_builder.braces_as_code {
         writer.write_all(&[b"\n\n===> ",config_manager::BRACES_AS_CODE.as_bytes(),b"\n"].concat())?;
