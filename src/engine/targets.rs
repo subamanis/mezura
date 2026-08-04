@@ -109,26 +109,53 @@ pub enum TargetError {
 pub fn resolve(entries: &[(Option<String>, String)], respect_gitignore: bool, search_in_dotted: bool)
 -> Result<Vec<Target>, TargetError>
 {
-    fn is_dotted(path: &Path) -> bool {
-        path.file_name().and_then(|x| x.to_str()).is_some_and(|x| x.starts_with('.'))
-    }
+    expand_patterns(prepare(entries)?, respect_gitignore, search_in_dotted)
+}
 
-    let mut resolved = Vec::with_capacity(entries.len());
+// The half of resolution that no setting can change: names are taken apart, two spellings of one
+// module are unified, a literal path is demanded to exist and made absolute, and a relative pattern
+// is joined to the working directory, so that a saved configuration still names the same places when
+// it is loaded from some other one. Patterns are expanded in 'expand_patterns' and not here, because
+// which of their matches survive depends on settings that every source of a run has to be heard on
+// first. Idempotent, so a target that has been through it, or through the whole of 'resolve', can be
+// put through again unchanged.
+pub fn prepare(entries: &[(Option<String>, String)]) -> Result<Vec<Target>, TargetError> {
+    let mut prepared: Vec<Target> = Vec::with_capacity(entries.len());
     for (module, entry) in entries {
         let trimmed = entry.trim();
         // Two spellings of one name are one module, the way two spellings of one extension are one
         // extension. The first one seen is the one the report prints.
-        let module = module.as_ref().map(|name| resolved.iter()
+        let module = module.as_ref().map(|name| prepared.iter()
                 .find_map(|x: &Target| x.module.clone().filter(|seen| seen.to_lowercase() == name.to_lowercase()))
                 .unwrap_or_else(|| name.clone()));
         if has_glob_metacharacters(trimmed) {
-            let paths = match glob::glob(&trimmed.replace('\\', "/")) {
+            prepared.push(Target { module, path: absolutize_pattern(trimmed) });
+        } else if is_valid_path(trimmed) {
+            prepared.push(Target { module, path: convert_to_absolute(trimmed) });
+        } else {
+            return Err(TargetError::InvalidPath(trimmed.to_owned()));
+        }
+    }
+    Ok(prepared)
+}
+
+fn expand_patterns(targets: Vec<Target>, respect_gitignore: bool, search_in_dotted: bool)
+-> Result<Vec<Target>, TargetError>
+{
+    fn is_dotted(path: &Path) -> bool {
+        path.file_name().and_then(|x| x.to_str()).is_some_and(|x| x.starts_with('.'))
+    }
+
+    let mut resolved = Vec::with_capacity(targets.len());
+    for target in targets {
+        if has_glob_metacharacters(&target.path) {
+            let paths = match glob::glob(&target.path) {
                 Ok(x) => x,
-                Err(_) => return Err(TargetError::InvalidGlob(trimmed.to_owned()))
+                Err(_) => return Err(TargetError::InvalidGlob(target.path.clone()))
             };
             let matches = paths.flatten().filter(|x| x.is_dir() || x.is_file()).collect::<Vec<_>>();
             if matches.is_empty() {
-                return Err(TargetError::NoGlobMatches(trimmed.to_owned()));
+                return Err(TargetError::NoGlobMatches(target.path.clone()));
             }
 
             let relevant = matches.iter()
@@ -139,15 +166,13 @@ pub fn resolve(entries: &[(Option<String>, String)], respect_gitignore: bool, se
                     // points at. Named on its own it is still followed, as any target is.
                     .filter(|x| !x.is_symlink())
                     .filter_map(|x| x.to_str().map(convert_to_absolute))
-                    .map(|path| Target { module: module.clone(), path }).collect::<Vec<_>>();
+                    .map(|path| Target { module: target.module.clone(), path }).collect::<Vec<_>>();
             if relevant.is_empty() {
-                return Err(TargetError::AllGlobMatchesIgnored(trimmed.to_owned()));
+                return Err(TargetError::AllGlobMatchesIgnored(target.path.clone()));
             }
             resolved.extend(relevant);
-        } else if is_valid_path(trimmed) {
-            resolved.push(Target { module: module.clone(), path: convert_to_absolute(trimmed) });
         } else {
-            return Err(TargetError::InvalidPath(trimmed.to_owned()));
+            resolved.push(target);
         }
     }
 
@@ -163,6 +188,22 @@ pub fn resolve(entries: &[(Option<String>, String)], respect_gitignore: bool, se
     }
 
     Ok(remove_overlapping_targets(resolved))
+}
+
+// 'convert_to_absolute' cannot do this one, because it asks the file system and a pattern is not a
+// path that exists. Joining with the working directory changes nothing about how the pattern
+// expands, since a relative one was expanded against that directory anyway; what it buys is that
+// the pattern still means the same thing written into a file and read back somewhere else.
+fn absolutize_pattern(pattern: &str) -> String {
+    let normalized = pattern.replace('\\', "/");
+    if Path::new(&normalized).is_absolute() {
+        return normalized;
+    }
+    match std::env::current_dir() {
+        Ok(cwd) => format!("{}/{}", cwd.to_string_lossy().replace('\\', "/").trim_end_matches('/'),
+                normalized.trim_start_matches("./")),
+        Err(_) => normalized
+    }
 }
 
 fn name_or_rest(module: &Option<String>) -> String {

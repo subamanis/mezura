@@ -427,15 +427,12 @@ pub fn targets_to_string(targets: &[Target]) -> String {
 pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilder, ArgParsingError> {
     let mut dirs = None;
     let mut options = line.split("--");
-    // The target paths can be given before these flags are parsed, so they are detected up front
-    let respect_gitignore = !line.contains(&(String::from("--") + NO_GITIGNORE));
-    let dotted_are_targetable = line.contains(&(String::from("--") + SEARCH_IN_DOTTED));
 
     if line.trim().starts_with("--") {
         //ignoring the empty first element that is caused by splitting
         options.next();
     } else {
-        match parse_dirs(options.next().unwrap(), respect_gitignore, dotted_are_targetable) {
+        match parse_dirs(options.next().unwrap()) {
             Ok(x) => {
                 if !x.is_empty() {
                     dirs = Some(x);
@@ -463,7 +460,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 return Err(ArgParsingError::DoublePath);
             }
 
-            let parse_result = parse_dirs(arguments, respect_gitignore, dotted_are_targetable);
+            let parse_result = parse_dirs(arguments);
             if let Ok(x) = parse_result {
                 if x.is_empty() {
                     message_printer::print_help_message_for_command(DIRS);
@@ -641,8 +638,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 return Err(ArgParsingError::IncorrectCommandArgs(LOAD.to_owned()));
             }
 
-            if let Ok((mut options, issues)) = super::config_files::parse_config_file(Some(config_name), None) {
-                resolve_dirs_of_config(&mut options, config_name, respect_gitignore, dotted_are_targetable)?;
+            if let Ok((options, issues)) = super::config_files::parse_config_file(Some(config_name), None) {
                 custom_config = Some((options, issues));
                 config_name_to_load = Some(config_name.to_owned());
             } else {
@@ -677,11 +673,16 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         config_styles: None, theme_styles: None
     };
 
+    let mut dirs_config_source = None;
     if let Some((custom, issues)) = custom_config {
         let config_name = config_builder.config_name_to_load.clone().unwrap_or_default();
         print_config_file_warnings(&issues.warnings, &config_name);
         resolve_invalid_config_fields(&config_builder, &issues.invalid_fields, &config_name)?;
+        let dirs_were_missing = config_builder.dirs.is_none();
         config_builder.add_missing_fields(custom);
+        if dirs_were_missing && config_builder.dirs.is_some() {
+            dirs_config_source = Some(config_name);
+        }
     }
 
     if let Some(name) = &config_builder.config_name_to_save {
@@ -696,15 +697,38 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     }
 
     if config_builder.has_missing_fields()
-        && let Ok((mut default_config, issues)) = super::config_files::parse_config_file(None, None) {
+        && let Ok((default_config, issues)) = super::config_files::parse_config_file(None, None) {
         print_config_file_warnings(&issues.warnings, DEFAULT_CONFIG_LABEL);
         resolve_invalid_config_fields(&config_builder, &issues.invalid_fields, DEFAULT_CONFIG_LABEL)?;
-        // Only when they are going to be used. A 'dirs' block sitting unused in the default
-        // configuration is not something a run that named its own targets should die over.
-        if config_builder.dirs.is_none() {
-            resolve_dirs_of_config(&mut default_config, DEFAULT_CONFIG_LABEL, respect_gitignore, dotted_are_targetable)?;
-        }
+        let dirs_were_missing = config_builder.dirs.is_none();
         config_builder.add_missing_fields(default_config);
+        if dirs_were_missing && config_builder.dirs.is_some() {
+            dirs_config_source = Some(DEFAULT_CONFIG_LABEL.to_owned());
+        }
+    }
+
+    // One resolution, after every source has spoken. The two settings that decide which of a
+    // pattern's matches survive are read from the merged configuration, so the walk and the
+    // resolution cannot answer to different flags. Resolving per source is the bug this replaced:
+    // the flags were scanned off the raw command line before anything else was known, so a
+    // configuration declaring 'no-gitignore' beside its own glob died over matches the walk was
+    // about to count. A mistake in a configuration's dirs still names the configuration, and a
+    // 'dirs' block sitting unused in one is still never resolved at all, because it never enters
+    // the builder.
+    if let Some(dirs) = &config_builder.dirs {
+        let engine_defaults = EngineConfig::default();
+        let respect_gitignore = !config_builder.no_gitignore.unwrap_or(engine_defaults.no_gitignore);
+        let dotted_are_targetable = config_builder.should_search_in_dotted
+                .unwrap_or(engine_defaults.should_search_in_dotted);
+        match reparse_targets(dirs, respect_gitignore, dotted_are_targetable) {
+            Ok(x) => config_builder.dirs = Some(x),
+            Err(x) => return Err(match (x, dirs_config_source) {
+                (ArgParsingError::InvalidPath(p), Some(name)) | (ArgParsingError::InvalidGlobPattern(p), Some(name))
+                | (ArgParsingError::NoGlobMatches(p), Some(name)) | (ArgParsingError::AllGlobMatchesIgnored(p), Some(name)) =>
+                        ArgParsingError::InvalidPathInConfig(p, name),
+                (other, _) => other
+            })
+        }
     }
 
     if let Some(name) = &config_builder.theme_name {
@@ -729,26 +753,6 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
 }
 
 
-// The targets a configuration file declares are text like any other, and they have to go through the
-// same resolution the command line does: made absolute, checked for existing, expanded if they are
-// patterns, and refused when two names claim one path. The default configuration was reaching
-// 'add_missing_fields' without any of it, so a 'dirs' block written there was used raw, and with
-// modules that meant a contest the command line refuses being accepted in silence.
-fn resolve_dirs_of_config(options: &mut ConfigurationBuilder, config_name: &str, respect_gitignore: bool,
-        dotted_are_targetable: bool) -> Result<(), ArgParsingError>
-{
-    let Some(dirs) = &options.dirs else { return Ok(()) };
-
-    match reparse_targets(dirs, respect_gitignore, dotted_are_targetable) {
-        Ok(x) => options.dirs = Some(x),
-        Err(ArgParsingError::InvalidPath(p)) | Err(ArgParsingError::InvalidGlobPattern(p))
-                | Err(ArgParsingError::NoGlobMatches(p)) | Err(ArgParsingError::AllGlobMatchesIgnored(p)) =>
-                return Err(ArgParsingError::InvalidPathInConfig(p, config_name.to_owned())),
-        Err(x) => return Err(x)
-    }
-
-    Ok(())
-}
 
 fn print_config_file_warnings(issues: &[(&'static str, String)], config_name: &str) {
     for (code, warning) in issues {
@@ -834,9 +838,11 @@ fn has_any_args(command: &str) -> bool {
     command.split(' ').skip(1).filter_map(super::args::get_trimmed_if_not_empty).count() != 0
 }
 
-fn parse_dirs(s: &str, respect_gitignore: bool, search_in_dotted: bool) -> Result<Vec<Target>, ArgParsingError> {
+// Only the half of resolution that no setting can change: patterns are expanded once, at the end of
+// 'create_config_builder_from_args', when every source of the run's settings has been merged.
+fn parse_dirs(s: &str) -> Result<Vec<Target>, ArgParsingError> {
     let declared = super::args::parse_targets(s).map_err(ArgParsingError::MalformedTarget)?;
-    resolve_targets(&declared, respect_gitignore, search_in_dotted)
+    mezura::engine::targets::prepare(&declared).map_err(map_target_error)
 }
 
 // A target that a configuration file declared, or that a run has already resolved once, is read back
@@ -846,17 +852,15 @@ fn reparse_targets(targets: &[Target], respect_gitignore: bool, search_in_dotted
 -> Result<Vec<Target>, ArgParsingError>
 {
     let declared = targets.iter().map(|x| (x.module.clone(), x.path.clone())).collect::<Vec<_>>();
-    resolve_targets(&declared, respect_gitignore, search_in_dotted)
+    mezura::engine::targets::resolve(&declared, respect_gitignore, search_in_dotted).map_err(map_target_error)
 }
 
 
 // The engine decides which paths are walkable; this turns what it says into the wording a person
 // reads on the command line.
-fn resolve_targets(entries: &[(Option<String>, String)], respect_gitignore: bool, search_in_dotted: bool)
--> Result<Vec<Target>, ArgParsingError>
-{
+fn map_target_error(x: mezura::engine::targets::TargetError) -> ArgParsingError {
     use mezura::engine::targets::TargetError;
-    mezura::engine::targets::resolve(entries, respect_gitignore, search_in_dotted).map_err(|x| match x {
+    match x {
         TargetError::InvalidPath(p) => ArgParsingError::InvalidPath(p),
         TargetError::InvalidGlob(p) => ArgParsingError::InvalidGlobPattern(p),
         TargetError::NoGlobMatches(p) => ArgParsingError::NoGlobMatches(p),
@@ -865,7 +869,7 @@ fn resolve_targets(entries: &[(Option<String>, String)], respect_gitignore: bool
         // 'TargetError' is non_exhaustive, so a variant added later stops here rather than
         // in the middle of a run
         other => ArgParsingError::InvalidPath(format!("{other:?}"))
-    })
+    }
 }
 
 
@@ -1126,8 +1130,11 @@ mod tests {
         parse_dirs_with(s, true, false)
     }
 
+    // Preparation and expansion composed the way 'create_config_builder_from_args' composes them:
+    // the flags reach the expansion at the end now, not the parse
     fn parse_dirs_with(s: &str, respect_gitignore: bool, search_in_dotted: bool) -> Result<Vec<String>, ArgParsingError> {
-        super::parse_dirs(s, respect_gitignore, search_in_dotted)
+        super::parse_dirs(s)
+                .and_then(|targets| super::reparse_targets(&targets, respect_gitignore, search_in_dotted))
                 .map(|targets| targets.iter().map(Target::to_string).collect())
     }
 
@@ -1329,29 +1336,35 @@ mod tests {
     }
 
     // The targets a configuration declares are text like any other and go through the same
-    // resolution the command line does. The default configuration was reaching the builder without
-    // any of it, so a contest the command line refuses was accepted there in silence and the paths
-    // stayed relative, which is not what the boundary table of the modules is built to match.
+    // resolution the command line does, once, at the end, after every source of the run's settings
+    // has been merged. A mistake in them still names the configuration it came from, and a contest
+    // the command line refuses is refused from a file too.
     #[test]
     fn the_targets_of_a_configuration_are_resolved_before_they_are_used() {
-        let config_of = |dirs: Vec<Target>| ConfigurationBuilder { dirs: Some(dirs), ..Default::default() };
+        std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
+        let write_config = |name: &str, dirs: &str| {
+            let path = crate::paths::PERSISTENT_APP_PATHS.config_dir.clone() + name + ".txt";
+            std::fs::write(&path, format!("===> dirs\n{dirs}\n")).unwrap();
+            path
+        };
 
-        let mut options = config_of(vec![Target::named("frontend", "./src".to_owned()),
-                Target::named("backend", "./src".to_owned())]);
-        assert_eq!(Err(ArgParsingError::ContestedTarget(mezura::engine::targets::convert_to_absolute("./src"), "frontend".to_owned(), "backend".to_owned())),
-                resolve_dirs_of_config(&mut options, "x", true, false));
+        let path = write_config("a2resolve1", "./does-not-exist-a2");
+        let result = create_config_from_args("--load a2resolve1").map(|_| ());
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(Err(ArgParsingError::InvalidPathInConfig("./does-not-exist-a2".to_owned(), "a2resolve1".to_owned())),
+                result);
 
-        let mut options = config_of(vec![Target::of("./does-not-exist".to_owned())]);
-        assert_eq!(Err(ArgParsingError::InvalidPathInConfig("./does-not-exist".to_owned(), "x".to_owned())),
-                resolve_dirs_of_config(&mut options, "x", true, false));
+        let path = write_config("a2resolve2", "frontend=./src\nbackend=./src");
+        let result = create_config_from_args("--load a2resolve2").map(|_| ());
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(Err(ArgParsingError::ContestedTarget(mezura::engine::targets::convert_to_absolute("./src"),
+                "frontend".to_owned(), "backend".to_owned())), result);
 
-        let mut options = config_of(vec![Target::named("code", "./src".to_owned())]);
-        assert_eq!(Ok(()), resolve_dirs_of_config(&mut options, "x", true, false));
-        assert_eq!(Some(vec![Target::named("code", mezura::engine::targets::convert_to_absolute("./src"))]), options.dirs);
-
-        // A configuration that declares no target has nothing to resolve and nothing to complain of
-        let mut options = ConfigurationBuilder::default();
-        assert_eq!(Ok(()), resolve_dirs_of_config(&mut options, "x", true, false));
+        let path = write_config("a2resolve3", "code=./src");
+        let result = create_config_from_args("--load a2resolve3").unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(vec![Target::named("code", mezura::engine::targets::convert_to_absolute("./src"))],
+                result.engine.dirs);
     }
 
     // There is no more specific one of the two to decide it, and whichever won would take the
@@ -1390,7 +1403,12 @@ mod tests {
 
         assert_eq!(Err(ArgParsingError::NoGlobMatches(format!("{root}/*/nope"))),
                 parse_dirs(&format!("{root}/*/nope")));
-        assert_eq!(Err(ArgParsingError::InvalidGlobPattern("a[".to_owned())), parse_dirs("a["));
+        // Named in its prepared form, joined to the working directory: that is what a saved
+        // configuration holds, so the error names what is actually written wherever it lives,
+        // and for a typed one it also says where the expansion looked
+        assert_eq!(Err(ArgParsingError::InvalidGlobPattern(
+                mezura::engine::targets::convert_to_absolute("./").trim_end_matches('/').to_owned() + "/a[")),
+                parse_dirs("a["));
 
         std::fs::remove_dir_all(&root).unwrap();
     }
@@ -1426,6 +1444,92 @@ mod tests {
                 parse_dirs(&format!("{root}/build/*")));
 
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn a2_corpus(name: &str) -> (std::path::PathBuf, String) {
+        let corpus = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_dir_all(&corpus);
+        std::fs::create_dir_all(corpus.join("target")).unwrap();
+        // A bare directory named '.git' bounds the gitignore stack, so nothing above the corpus
+        // takes part in the test
+        std::fs::create_dir_all(corpus.join(".git")).unwrap();
+        std::fs::write(corpus.join(".gitignore"), "target/\n").unwrap();
+        std::fs::write(corpus.join("target").join("lib.rs"), "fn hidden() {}\n").unwrap();
+        let corpus_str = corpus.to_str().unwrap().replace('\\', "/");
+        (corpus, corpus_str)
+    }
+
+    // A configuration that declared 'no-gitignore' beside its own dirs had the two halves honoured
+    // differently: the walk respected the flag, while the resolution of the dirs written next to it
+    // read the flags from the raw command line only. A glob whose matches are all gitignored then
+    // died with "doesn't exist anymore", when the identical command line counted them.
+    #[test]
+    fn a_configs_own_flags_apply_when_its_own_dirs_are_resolved() {
+        std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
+        let (corpus, corpus_str) = a2_corpus("mezura-a2-config-corpus");
+
+        let config_path = crate::paths::PERSISTENT_APP_PATHS.config_dir.clone() + "a2gitignore.txt";
+        std::fs::write(&config_path, format!(
+                "===> dirs\n{corpus_str}/target/*\n\n===> no-gitignore\nyes\n")).unwrap();
+
+        let config = create_config_from_args("--load a2gitignore");
+        std::fs::remove_file(&config_path).unwrap();
+        std::fs::remove_dir_all(&corpus).unwrap();
+
+        let config = config.expect("the config's own no-gitignore was not applied to its own dirs");
+        assert!(config.engine.no_gitignore);
+        assert_eq!(1, config.engine.dirs.len());
+        assert!(config.engine.dirs[0].path.ends_with("target/lib.rs"), "resolved to {:?}", config.engine.dirs);
+    }
+
+    // The merged settings drive the walk, so they drive the resolution of every target too,
+    // whichever source the target came from: a glob typed on the command line is expanded under
+    // the 'no-gitignore' that a loaded configuration declared.
+    #[test]
+    fn a_loaded_configs_flags_apply_to_a_command_line_glob() {
+        std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
+        let (corpus, corpus_str) = a2_corpus("mezura-a2-cli-corpus");
+
+        let config_path = crate::paths::PERSISTENT_APP_PATHS.config_dir.clone() + "a2cliflag.txt";
+        std::fs::write(&config_path, "===> no-gitignore\nyes\n").unwrap();
+
+        let config = create_config_from_args(&format!("{corpus_str}/target/* --load a2cliflag"));
+        std::fs::remove_file(&config_path).unwrap();
+        std::fs::remove_dir_all(&corpus).unwrap();
+
+        let config = config.expect("the loaded config's no-gitignore was not applied to the command line glob");
+        assert!(config.engine.no_gitignore);
+        assert_eq!(1, config.engine.dirs.len());
+        assert!(config.engine.dirs[0].path.ends_with("target/lib.rs"), "resolved to {:?}", config.engine.dirs);
+    }
+
+    // '--save' used to write the matches a pattern had expanded to at the moment of saving, so the
+    // pattern was lost and the configuration was a snapshot pretending to be a rule. The saved file
+    // carries the pattern itself now, absolute, and every load expands it fresh.
+    #[test]
+    fn saving_a_glob_saves_the_pattern_and_not_todays_matches() {
+        std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
+        let corpus = std::env::temp_dir().join("mezura-a2-save-corpus");
+        let _ = std::fs::remove_dir_all(&corpus);
+        std::fs::create_dir_all(corpus.join("sub1")).unwrap();
+        std::fs::create_dir_all(corpus.join("sub2")).unwrap();
+        std::fs::write(corpus.join("sub1").join("a.rs"), "fn a() {}\n").unwrap();
+        std::fs::write(corpus.join("sub2").join("b.rs"), "fn b() {}\n").unwrap();
+        let corpus_str = corpus.to_str().unwrap().replace('\\', "/");
+
+        let config_path = crate::paths::PERSISTENT_APP_PATHS.config_dir.clone() + "a2save.txt";
+        create_config_from_args(&format!("{corpus_str}/sub* --save a2save")).unwrap();
+        let saved = std::fs::read_to_string(&config_path).unwrap();
+
+        // and a later load expands the pattern to whatever exists by then
+        let loaded = create_config_from_args("--load a2save");
+        std::fs::remove_file(&config_path).unwrap();
+        std::fs::remove_dir_all(&corpus).unwrap();
+
+        assert!(saved.contains(&format!("{corpus_str}/sub*")),
+                "the pattern is not in the saved file:\n{saved}");
+        assert!(!saved.contains("sub1"), "the saved file holds the expansion, not the pattern:\n{saved}");
+        assert_eq!(2, loaded.unwrap().engine.dirs.len());
     }
 
     #[test]

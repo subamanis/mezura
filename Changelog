@@ -150,6 +150,14 @@ Bugfixes:
       is: the count, and the paths themselves with "--show-faulty-files".
   -> The paths of faulty files are now written with forward slashes throughout, instead of mixing
       them with backslashes halfway through on Windows. This also applies to the JSON document.
+  -> A configuration file's "no-gitignore" and "search-in-dotted" now apply when the targets are
+      being worked out, not only during the counting. A config that declared "no-gitignore" beside
+      a glob of gitignored paths died with "doesn't exist anymore", while the same command line
+      counted; the settings of the command line, the loaded configuration and the default one are
+      now merged before any pattern is expanded, wherever the pattern came from.
+  -> "--save" now writes a glob pattern as the pattern, made absolute, instead of the paths it
+      happened to match at the moment of saving. Every load expands it fresh, so a configuration
+      saved with "services/*" keeps meaning that as services come and go.
   -> "--search-in-dotted" no longer walks into ".git". It opens the dotted directories somebody made,
       like ".github", and leaves the one git keeps alone, at any depth. On this machine that is six
       thousand fewer files read for exactly the same counts. Naming ".git" as a target yourself still
