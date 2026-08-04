@@ -193,11 +193,13 @@ fn convert_to_absolute(s: &str) -> String {
         return s.replace("\\", "/");
     }
 
-    if let Ok(buf) = std::fs::canonicalize(p) {
-        let str_path = buf.to_str().unwrap();
-        str_path.strip_prefix(r"\\?\").unwrap_or(str_path).replace("\\", "/")
-    } else {
-        s.replace("\\", "/")
+    // The canonical form of a path that was typed as valid UTF-8 need not be valid UTF-8 itself,
+    // since canonicalizing resolves links and the target's real name is whatever the file system
+    // holds. Falling back to what was typed keeps a string that still names the place, which
+    // 'to_string_lossy' would not: this one is handed back to 'is_dir' and 'is_file' further down.
+    match std::fs::canonicalize(p).ok().and_then(|buf| buf.to_str().map(str::to_owned)) {
+        Some(str_path) => str_path.strip_prefix(r"\\?\").unwrap_or(&str_path).replace("\\", "/"),
+        None => s.replace("\\", "/")
     }
 }
 

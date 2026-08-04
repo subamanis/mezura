@@ -2,6 +2,8 @@
 // 'Language' exists before anything has been counted; a 'FinalStats' does not.
 use std::collections::HashMap;
 
+use crate::engine::modules::{ModuleId, Modules};
+
 #[derive(Debug)]
 pub struct Metrics {
     pub files_per_sec: usize,
@@ -22,7 +24,10 @@ pub struct RunResult {
     pub faulty_files: Vec<FaultyFileDetails>,
     pub files_present: FilesPresent,
     pub scan_duration_millis: u128,
-    pub metrics: Option<Metrics>
+    pub metrics: Option<Metrics>,
+    // Directories the walk found and could not open, so everything under them is missing from every
+    // number above. Empty on an ordinary run, and the one thing that says the counts are short.
+    pub unreadable_dirs: Vec<String>
 }
 
 // One part of the run, counted on its own. 'name' is None for the leftovers of the named ones, which
@@ -38,17 +43,36 @@ pub struct ModuleResult {
 impl RunResult {
     // Nothing of interest was found, which is an answer and not a failure: the counts are zero and
     // the file numbers still say how many were looked at and how many were excluded.
-    pub(crate) fn of_nothing(files_present: FilesPresent, scan_duration_millis: u128) -> Self {
+    //
+    // The modules are built here for the same reason the ordinary path builds them: one that found
+    // nothing was still asked for by name, and its absence reads as a mistake in the report rather
+    // than as an empty part. Leaving them out also made the two answers disagree, since 'has_modules'
+    // then said no and the whole block vanished from the document exactly when the scan was empty.
+    pub(crate) fn of_nothing(files_present: FilesPresent, scan_duration_millis: u128, modules: &Modules,
+            unreadable_dirs: Vec<String>) -> Self {
         RunResult {
             content_info_map: HashMap::new(),
             languages_metadata_map: HashMap::new(),
-            modules: Vec::new(),
+            modules: (0..modules.count()).map(|id| ModuleResult {
+                name: modules.name_of(id as ModuleId).map(str::to_owned),
+                content_info_map: HashMap::new(),
+                languages_metadata_map: HashMap::new(),
+                final_stats: FinalStats::new_extended(0, 0, 0, 0, 0, 0, 0)
+            }).collect(),
             final_stats: FinalStats::new_extended(0, 0, 0, 0, 0, 0, 0),
             faulty_files: Vec::new(),
             files_present,
             scan_duration_millis,
-            metrics: None
+            metrics: None,
+            unreadable_dirs
         }
+    }
+
+    // Whether files were found and every one of them failed to parse, which is a different answer
+    // from the empty scan: there nothing failed, because there was nothing. Offered here because the
+    // obvious comparison is wrong exactly there, the two counts being equal when both are zero.
+    pub fn all_relevant_files_were_faulty(&self) -> bool {
+        !self.faulty_files.is_empty() && self.faulty_files.len() == self.files_present.relevant_files
     }
 
     // Whether the report has a second axis at all. One name is enough for the column to appear, and
@@ -88,12 +112,14 @@ pub struct FaultyFileDetails {
     pub size: u64
 }
 
-// The failure carries the faulty files with it, so that the report of what went wrong is printed by
-// whoever is doing the printing, and 'run' does not have to print on its way out
+// A mistake in the configuration itself, which only a library caller can make: the command line
+// validates its own input before it ever builds a run. Finding nothing is a result, and every file
+// failing to parse is a result with the reasons attached, so neither lives here.
 #[derive(Debug)]
-pub enum ParseFilesError {
-    NoRelevantFiles(String),
-    AllAreFaultyFiles(Vec<FaultyFileDetails>)
+#[non_exhaustive]
+pub enum RunError {
+    // The pattern as the caller wrote it, not the anchored form the matcher builds from it
+    InvalidExcludePattern(String)
 }
 
 #[derive(Debug,Default,Clone,Copy)]
@@ -103,16 +129,15 @@ pub struct FilesPresent {
     pub excluded_files: usize
 }
 
-impl std::fmt::Display for ParseFilesError {
+impl std::fmt::Display for RunError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NoRelevantFiles(x) => write!(f, "No relevant files found in the given directory. {x}"),
-            Self::AllAreFaultyFiles(_) => write!(f, "None of the files were able to be parsed")
+            Self::InvalidExcludePattern(x) => write!(f, "'{x}' is not a valid exclude pattern, so nothing was counted.")
         }
     }
 }
 
-impl std::error::Error for ParseFilesError {}
+impl std::error::Error for RunError {}
 
 impl FinalStats {
     pub fn new(files: usize, lines: usize, code_lines: usize, comment_lines: usize, bytes_size: usize) -> Self

@@ -68,8 +68,15 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                                     (LanguageContentInfo::from_file_stats(x, keywords), LanguageMetadata::new(1, bytes))); }
                         }
                     },
+                    // Lossily and with the separators normalised: the walk joins its components
+                    // with the platform's own, while the target it started from was resolved to
+                    // forward slashes, so the two halves of one path disagreed in every report and
+                    // inside the JSON document. Lossy because a path is not required to be UTF-8 on
+                    // every platform, and this string is only ever shown: 'to_str().unwrap()' here
+                    // panicked on such a name, while holding the lock it had just taken.
                     Err(x) => faulty_files.lock().unwrap().push(FaultyFileDetails::new(
-                            parsable_file.path.to_str().unwrap().to_owned(),x,parsable_file.path.metadata().map_or(0, |m| m.len())))
+                            parsable_file.path.to_string_lossy().replace('\\', "/"), x,
+                            parsable_file.path.metadata().map_or(0, |m| m.len())))
                 }
                 // Shrinking belongs to whoever owns the buffer, and it has to happen after its
                 // length has been read as the file's size

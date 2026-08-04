@@ -61,7 +61,11 @@ impl PersistentAppPaths {
         let data_dir = if cfg!(test) {
             std::env::temp_dir().join(APP_NAME.to_owned() + "-test").to_string_lossy().into_owned() + "/"
         } else {
-            proj_dirs.data_dir().to_str().unwrap().to_owned() + "/"
+            // Every path in this struct is a String, so a data directory that is not valid UTF-8
+            // cannot be represented at all and nothing below would work. Said out loud rather than
+            // left as a bare unwrap, because the message is the only clue anyone would get.
+            proj_dirs.data_dir().to_str()
+                    .expect("the application data directory path is not valid UTF-8").to_owned() + "/"
         };
         let languages_dir = data_dir.clone() + LANGUAGES_DIR_NAME + "/";
         let config_dir = data_dir.clone() + CONFIG_DIR_NAME + "/";

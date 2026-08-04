@@ -35,7 +35,7 @@ use std::{collections::HashMap, process::ExitCode, time::Instant};
 use colored::*;
 use include_dir::{File, include_dir};
 
-use mezura::{EXTENSION_PRIORITY_FILE_NAME, FilesPresent, Language, ParseFilesError};
+use mezura::{EXTENSION_PRIORITY_FILE_NAME, FilesPresent, Language};
 use crate::paths::{CONFIG_DIR_NAME, DEFAULT_CONFIG_NAME, LANGUAGES_DIR_NAME, LOGS_DIR_NAME,
         MANIFEST_FILE_NAME, REPLACED_DIR_NAME, THEMES_DIR_NAME};
 use crate::formatted::Formatted;
@@ -184,6 +184,11 @@ fn main() -> ExitCode {
     match mezura::run(&config.engine, languages, |scan| announce_traversal(&config, scan)) {
         Ok(result) => {
             crate::present::present(&result, &config);
+            // Presented above like the failure it is; the exit code keeps its documented meaning,
+            // that 1 is a run which did not happen
+            if result.all_relevant_files_were_faulty() {
+                return ExitCode::FAILURE;
+            }
             // The document carries its own 'scan_ms', measured inside the run, and this is the only
             // place that knows what the whole thing took. A run that found nothing to count says so
             // and stops there, with no timing under it
@@ -197,13 +202,10 @@ fn main() -> ExitCode {
             }
             ExitCode::SUCCESS
         },
-        // Finding no code is an answer and not a failure, so it comes back as a result with nothing
-        // in it. Only every single file failing to be parsed reaches this, and there is a real
-        // error behind each one of them
+        // A mistake in the configuration that only a library caller can make: the command line
+        // validated its exclude patterns before it built the run, so this arm is a safety net and
+        // not a path anything is expected to take
         Err(x) => {
-            if let ParseFilesError::AllAreFaultyFiles(faulty_files) = &x {
-                crate::present::print_faulty_files_or_ok(faulty_files, &config);
-            }
             eprintln!("{}",x.formatted());
             ExitCode::FAILURE
         }

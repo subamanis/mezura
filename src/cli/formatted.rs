@@ -2,13 +2,13 @@
 // it describes. The library gives those a plain 'Display'; this is the same text with a style on it.
 use colored::{ColoredString, Colorize};
 
-use mezura::{ParseFilesError, language_file::LanguageDirParseError};
+use mezura::{RunError, language_file::LanguageDirParseError};
 
 pub trait Formatted {
     fn formatted(&self) -> ColoredString;
 }
 
-impl Formatted for ParseFilesError {
+impl Formatted for RunError {
     fn formatted(&self) -> ColoredString {
         super::theme::active().warning.paint(&self.to_string())
     }

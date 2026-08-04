@@ -29,7 +29,7 @@ pub mod warnings;
 pub use engine::config::{EngineConfig, Target, Threads};
 pub use languages::Languages;
 pub use domain::{Language, LanguageContentInfo, LanguageMetadata, FileStats, Keyword};
-pub use result::{FaultyFileDetails, FilesPresent, FinalStats, Metrics, ModuleResult, ParseFilesError, RunResult};
+pub use result::{FaultyFileDetails, FilesPresent, FinalStats, Metrics, ModuleResult, RunError, RunResult};
 pub use warnings::{Affects, Warning};
 
 pub(crate) type FaultyFilesListMut = Arc<Mutex<Vec<FaultyFileDetails>>>;
@@ -75,7 +75,7 @@ pub(crate) mod test_paths {
 // before or after. Everything else a caller wants to say it can say around the call. A caller with
 // nothing to say passes '|_| {}' and the compiler removes it.
 pub fn run(config: &EngineConfig, languages: Languages,
-        on_traversal_done: impl FnOnce(FilesPresent)) -> Result<RunResult, ParseFilesError>
+        on_traversal_done: impl FnOnce(FilesPresent)) -> Result<RunResult, RunError>
 {
     let config = Arc::new(config.clone());
     let faulty_files_ref : FaultyFilesListMut  = Arc::new(Mutex::new(Vec::with_capacity(10)));
@@ -98,11 +98,19 @@ pub fn run(config: &EngineConfig, languages: Languages,
     let files_injector = Arc::new(Injector::<ParsableFile>::new());
     let dirs_injector = Arc::new(Injector::<TraversedDir>::new());
     let exclude_matcher = Arc::new(engine::targets::build_exclude_matcher(&config.exclude_dirs)
-            .expect("exclude patterns are validated during argument parsing"));
+            .map_err(|_| {
+                // The builder's own error names the anchored form, which the caller never wrote,
+                // so the culprit is found by asking about each pattern on its own
+                let culprit = config.exclude_dirs.iter()
+                        .find(|x| engine::targets::build_exclude_matcher(std::slice::from_ref(x)).is_err())
+                        .cloned().unwrap_or_default();
+                RunError::InvalidExcludePattern(culprit)
+            })?);
     calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector, &mut files_present,
             &extension_lang_map, &modules);
 
     let files_stats = Arc::new(Mutex::new(files_present));
+    let unreadable_dirs = Arc::new(Mutex::new(Vec::new()));
 
     let mut producer_handles = Vec::with_capacity(config.threads.producers);
     let mut consumer_handles = Vec::with_capacity(config.threads.consumers);
@@ -111,7 +119,7 @@ pub fn run(config: &EngineConfig, languages: Languages,
     for i in 0..config.threads.producers {
         producer_handles.push(engine::producer::start_producer_thread(i, files_injector.clone(), dirs_injector.clone(), Worker::new_fifo(),
             idle_producers.clone(), extension_lang_map.clone(), exclude_matcher.clone(),
-            config.clone(), files_stats.clone(), modules.clone()));
+            config.clone(), files_stats.clone(), modules.clone(), unreadable_dirs.clone()));
     }
     for i in 0..config.threads.consumers {
         consumer_handles.push(engine::consumer::start_parser_thread(i, files_injector.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
@@ -143,11 +151,8 @@ pub fn run(config: &EngineConfig, languages: Languages,
     // when it found nothing. Whether that is worth printing is the caller's question and not ours.
     on_traversal_done(files_present);
     if relevant_files_num == 0 {
-        return Ok(RunResult::of_nothing(files_present, parsing_duration_millis));
-    }
-
-    if faulty_files_ref.lock().unwrap().len() == relevant_files_num {
-        return Err(ParseFilesError::AllAreFaultyFiles(std::mem::take(&mut faulty_files_ref.lock().unwrap())));
+        return Ok(RunResult::of_nothing(files_present, parsing_duration_millis, &modules,
+                std::mem::take(&mut unreadable_dirs.lock().unwrap())));
     }
 
     let mut global_languages_metadata_map_guard = global_languages_metadata_map.lock();
@@ -190,7 +195,8 @@ pub fn run(config: &EngineConfig, languages: Languages,
         faulty_files: std::mem::take(&mut faulty_files_ref.lock().unwrap()),
         files_present,
         scan_duration_millis: parsing_duration_millis,
-        metrics
+        metrics,
+        unreadable_dirs: std::mem::take(&mut unreadable_dirs.lock().unwrap())
     })
 }
 

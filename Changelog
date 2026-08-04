@@ -63,10 +63,10 @@ Main changes:
       so it is printed without an extra comparison instead of reporting a drop that never happened.
   -> Warnings and errors are written to the error output instead of the standard one, so that a
       redirected or piped run carries the report and nothing else. On screen nothing changes.
-  -> mezura exits with code 1 when the run did not happen: an unrecognised command, a wrong value
-      for one, a configuration, theme or language name that does not exist, a path that is not
-      there, or a set of files where every single one failed to be parsed. Finding no code to count
-      is not a failure and still exits 0, and so does a run where only some files failed.
+  -> mezura exits with code 1 when the run failed: an unrecognised command, a wrong value for one,
+      a configuration, theme or language name that does not exist, a path that is not there, or a
+      set of files where every single one failed to be parsed. Finding no code to count is not a
+      failure and still exits 0, and so does a run where only some files failed.
 
 New commands:
   -> --hide <list> : leaves parts of the output unprinted. Takes any of version, directory-info,
@@ -145,6 +145,19 @@ Bugfixes:
       "mezura ./src,./src/" now reports what "mezura ./src" reports.
   -> "--exclude-languages" now says so when it is given a name that is not a language, instead of
       silently excluding nothing. Asking for one with "--languages" always did.
+  -> A directory that cannot be opened during the scan is now reported, instead of taking everything
+      inside it out of the counts without a word. It is told the same way a file that fails to parse
+      is: the count, and the paths themselves with "--show-faulty-files".
+  -> The paths of faulty files are now written with forward slashes throughout, instead of mixing
+      them with backslashes halfway through on Windows. This also applies to the JSON document.
+  -> "--search-in-dotted" no longer walks into ".git". It opens the dotted directories somebody made,
+      like ".github", and leaves the one git keeps alone, at any depth. On this machine that is six
+      thousand fewer files read for exactly the same counts. Naming ".git" as a target yourself still
+      works, as writing out any path always has.
+  -> A run that names its parts and finds nothing in them now lists them, empty, instead of leaving
+      them out of the report and the document altogether.
+  -> "--output json" now writes the whole document when every file fails to parse, faulty files and
+      warnings included, where it used to write nothing at all. The exit code still says failure.
   -> A symbolic link, or a Windows junction, that the scan comes across is no longer followed, so
       whatever it points at is not counted a second time through it. The same goes for one that a
       glob pattern matched. Expect a smaller count on a project that links one of its own

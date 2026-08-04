@@ -170,7 +170,10 @@ pub const SEARCH_IN_DOTTED_HELP  :  &str =
     or 'no' to disable. Default: no
 
     Specifies whether the program should traverse directories that are prefixed with a dot,
-    like .vscode or .git.
+    like .vscode or .github.
+
+    The '.git' directory is never traversed, with or without this command, at any depth. Nothing
+    inside it is source, and walking it is thousands of files for no count at all.
 
 ";
 pub const SHOW_FAULTY_FILES_HELP  :  &str =
@@ -180,11 +183,13 @@ pub const SHOW_FAULTY_FILES_HELP  :  &str =
     or 'no' to disable. Default: no
 
     Sometimes it happens that an error occurs when trying to parse a file, either while opening it,
-    or while reading its contents. The default behavior when this happens is to count all of
-    the faulty files and display their count.
+    or while reading its contents. A directory can also fail to be opened at all, most often because
+    of its permissions, or because something removed it while the scan was running. The default
+    behavior in both cases is to count them and display the count, since everything under a directory
+    that could not be read is missing from every number in the report.
 
     This flag specifies that their path, along with information about the exact error is displayed too.
-    The most common reason for this error is if a file contains non UTF-8 characters.
+    The most common reason for a faulty file is if it contains non UTF-8 characters.
 
 ";
 pub const HIDE_HELP  :  &str =
@@ -876,7 +881,8 @@ pub fn print_existing_configs() {
         }
     }
     let mut config_names = config_names.iter().filter_map(|x| {
-        let str = x.to_str().unwrap();
+        // Skipped rather than shown lossily: this list exists to be typed back into '--load'
+        let str = x.to_str()?;
         if str != "default.txt" {
             Some(str)
         } else {

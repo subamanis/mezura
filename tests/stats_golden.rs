@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use mezura::{EngineConfig, LanguageContentInfo, LanguageMetadata, Languages, ParseFilesError,
-        language_file, run};
+use mezura::{EngineConfig, LanguageContentInfo, LanguageMetadata, Languages, language_file, run};
 
 const LANGUAGES_DIR : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/languages/");
 
@@ -59,11 +58,10 @@ fn collect_stats() -> String {
 
     let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
 
-    let result = match run(&config, languages, |_| {}) {
-        Ok(x) => x,
-        Err(ParseFilesError::AllAreFaultyFiles(files)) => panic!("all {} fixtures failed to parse", files.len()),
-        Err(x) => panic!("the fixture corpus could not be counted: {x:?}")
-    };
+    // The all-faulty guard lives on the asserts below: that case comes back as a result now, and
+    // the empty faulty list is already demanded a few lines down
+    let result = run(&config, languages, |_| {})
+            .unwrap_or_else(|x| panic!("the fixture corpus could not be counted: {x:?}"));
 
     assert!(result.files_present.relevant_files > 0, "the fixture corpus produced no relevant files");
     assert!(result.faulty_files.is_empty(), "{} fixture(s) failed to parse", result.faulty_files.len());

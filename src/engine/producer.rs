@@ -11,12 +11,16 @@ use crate::engine::extensions::find_language_of_extension;
 
 pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<TraversedDir>>, worker: Worker<TraversedDir>,
         idle_producers: Arc<AtomicUsize>, extension_lang_map: ExtensionLangMap, exclude_matcher: Arc<globset::GlobSet>,
-        config: Arc<EngineConfig>, files_stats: Arc<Mutex<FilesPresent>>, modules: Arc<Modules>)
+        config: Arc<EngineConfig>, files_stats: Arc<Mutex<FilesPresent>>, modules: Arc<Modules>,
+        unreadable_dirs: Arc<Mutex<Vec<String>>>)
 -> JoinHandle<()>
 {
     thread::Builder::new().name(format!("producer-{id}")).spawn(move || {
-        let (total_files, relevant_files, excluded_files) =
+        let (total_files, relevant_files, excluded_files, unreadable) =
                 search_for_files(id, files_injector, dirs_injector, worker, idle_producers, extension_lang_map, exclude_matcher, config, modules);
+        if !unreadable.is_empty() {
+            unreadable_dirs.lock().unwrap().extend(unreadable);
+        }
         let mut file_stats_guard = files_stats.lock().unwrap(); 
         file_stats_guard.total_files += total_files;
         file_stats_guard.relevant_files += relevant_files;
@@ -27,11 +31,12 @@ pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFil
 
 pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<TraversedDir>>, worker: Worker<TraversedDir>, idle_producers: Arc<AtomicUsize>,
         extension_lang_map: ExtensionLangMap, exclude_matcher: Arc<globset::GlobSet>, config: Arc<EngineConfig>, modules: Arc<Modules>)
--> (usize,usize,usize)
+-> (usize,usize,usize,Vec<String>)
 {
     let mut total_files = 0;
     let mut relevant_files = 0;
     let mut excluded_files = 0;
+    let mut unreadable_dirs = Vec::new();
     let mut should_terminate = false;
     // let mut times_slept = 0;
 
@@ -57,14 +62,20 @@ pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>,
                 idle_producers.fetch_sub(1, Ordering::SeqCst);
             }
 
-            if let Ok(entries) = fs::read_dir(&dir.path) {
-                let gitignore_stack = if config.no_gitignore {
-                    None
-                } else {
-                    GitignoreStack::extended(&dir.path, dir.gitignore_stack.clone())
-                };
-                traverse_dir(&files_injector, entries, &dirs_injector, &extension_lang_map, &exclude_matcher, &gitignore_stack,
-                        &config, &modules, dir.module, &mut total_files, &mut relevant_files, &mut excluded_files)
+            match fs::read_dir(&dir.path) {
+                Ok(entries) => {
+                    let gitignore_stack = if config.no_gitignore {
+                        None
+                    } else {
+                        GitignoreStack::extended(&dir.path, dir.gitignore_stack.clone())
+                    };
+                    traverse_dir(&files_injector, entries, &dirs_injector, &extension_lang_map, &exclude_matcher, &gitignore_stack,
+                            &config, &modules, dir.module, &mut total_files, &mut relevant_files, &mut excluded_files)
+                },
+                // Everything under it is now uncounted, and nothing else in the run would ever say
+                // so: it contributes to no total, not even to the number of files that were looked
+                // at. Named lossily because this list is only ever shown.
+                Err(_) => unreadable_dirs.push(dir.path.to_string_lossy().replace('\\', "/"))
             }
         } else {
             if !should_terminate {
@@ -83,7 +94,7 @@ pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>,
     // print_thread_colored_msg(id, format!("Thread {} |  Exits with findings: {:?}",id,(total_files,relevant_files)));
     // print_thread_colored_msg(id, format!("Thread {} |  Slept {} times. ",id,times_slept));
 
-    (total_files,relevant_files,excluded_files)
+    (total_files,relevant_files,excluded_files,unreadable_dirs)
 }
 
 // 'module' is the one this directory belongs to, decided when it was queued. Its entries inherit it,
@@ -131,8 +142,18 @@ fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, 
                     files_injector.push(ParsableFile::new(path_buf, lang_name, module));
                 }
             } else { //is directory
+                // Read lossily and only to ask whether it is dotted, which a lossy reading answers
+                // correctly because a leading '.' is ASCII and survives any replacement. Demanding
+                // valid UTF-8 here skipped the whole directory, and everything under it went
+                // uncounted over a name that is used for nothing else. Borrowed and not allocated
+                // while the name is valid, which is every name on an ordinary run.
                 let file_name = e.file_name();
-                let Some(dir_name) = file_name.to_str() else { continue };
+                let dir_name = file_name.to_string_lossy();
+                // Whatever was asked for. '--search-in-dotted' opens the directories somebody made,
+                // and git's object database is not one of them: nothing in it is source, and walking
+                // it is thousands of files for no count at all. Tested by name at every depth, so a
+                // submodule or a clone nested inside the tree is covered too.
+                if dir_name == ".git" { continue; }
                 if !config.should_search_in_dotted && dir_name.starts_with('.') { continue; }
 
                 let pathbuf = e.path();
@@ -203,7 +224,7 @@ mod tests {
         calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector, &mut files_present, &extension_lang_map, &modules);
 
         let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs).unwrap());
-        let (total, relevant, excluded) = search_for_files(0, files_injector.clone(), dirs_injector,
+        let (total, relevant, excluded, _) = search_for_files(0, files_injector.clone(), dirs_injector,
                 Worker::new_fifo(), idle_producers, extension_lang_map, exclude_matcher, config, modules.clone());
 
         let mut found_files = Vec::new();
@@ -214,6 +235,78 @@ mod tests {
         found_files.sort();
 
         (total, relevant, excluded, found_files)
+    }
+
+    // A directory the walk cannot open takes its whole subtree out of the count, and the run says
+    // nothing at all: no warning, no faulty entry, and 'total_files' does not even record that it was
+    // there. The numbers come back looking complete. This is the one case where mezura returns a
+    // figure it already knows is short, which is the single thing a counter must never do.
+    //
+    // Reproduced with a queued path that does not exist, which is the same 'read_dir' failure a
+    // directory deleted or made unreadable between being queued and being opened produces.
+    #[test]
+    fn a_directory_that_cannot_be_read_is_reported_and_not_silently_dropped() {
+        let root = std::env::temp_dir().join("mezura_unreadable_dir_test");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("a.rs"), "fn main() {}\n").unwrap();
+        let root_str = root.to_str().unwrap().replace('\\', "/");
+        let vanished = format!("{root_str}/gone");
+
+        let mut config = EngineConfig::new(vec![root_str.clone()]);
+        config.set_threads(1, 1);
+        let config = Arc::new(config);
+        let language_map = Arc::new(crate::language_file::parse_dir(LANGUAGES_DIR).unwrap().0);
+        let extension_lang_map: ExtensionLangMap =
+                Arc::new(make_extension_language_map(&language_map, &HashMap::new(), &HashMap::new()).0);
+        let modules = Arc::new(Modules::of(&config.dirs));
+        let (files_injector, dirs_injector) = (Arc::new(Injector::new()), Arc::new(Injector::new()));
+        let mut files_present = FilesPresent::default();
+        calculate_single_file_stats_or_add_to_injector(&config, &dirs_injector, &files_injector,
+                &mut files_present, &extension_lang_map, &modules);
+        // Queued and then gone, which the walk finds out only when it tries to open it
+        dirs_injector.push(TraversedDir::new(std::path::PathBuf::from(&vanished), None, 0));
+
+        let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs).unwrap());
+        let (total, relevant, _, unreadable) = search_for_files(0, files_injector, dirs_injector,
+                Worker::new_fifo(), Arc::new(AtomicUsize::new(0)), extension_lang_map, exclude_matcher,
+                config, modules);
+
+        fs::remove_dir_all(&root).unwrap();
+
+        // What it did manage to read is still counted, and the one it could not is named
+        assert_eq!((1, 1), (total, relevant));
+        assert_eq!(vec![vanished], unreadable, "the directory that could not be read went unreported");
+    }
+
+    // The object database is never source, and naming it is not something a walk should be able to
+    // do by accident: '--search-in-dotted' asks for the directories somebody made, not for the one
+    // git keeps. At any depth, so that a submodule or a nested clone is covered as well.
+    #[test]
+    fn the_git_directory_is_never_walked_even_when_dotted_ones_are() {
+        let root = std::env::temp_dir().join("mezura_git_skip_test");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".git").join("hooks")).unwrap();
+        fs::create_dir_all(root.join("sub").join(".git")).unwrap();
+        fs::create_dir_all(root.join(".github")).unwrap();
+        fs::write(root.join("a.rs"), "fn main() {}
+").unwrap();
+        fs::write(root.join(".git").join("hooks").join("pre.rs"), "fn main() {}
+").unwrap();
+        fs::write(root.join("sub").join(".git").join("nested.rs"), "fn main() {}
+").unwrap();
+        fs::write(root.join(".github").join("deploy.rs"), "fn main() {}
+").unwrap();
+        let root_str = root.to_str().unwrap().replace('\\', "/");
+
+        let (_, _, _, found) = count_files_of(&root_str, "");
+        assert_eq!(vec!["a.rs"], found, "the dotted rule alone should have kept all three out");
+
+        // The flag opens the ones somebody created and still not the one git keeps, at either depth
+        let (_, _, _, found) = count_files_of(&root_str, "--search-in-dotted");
+        assert_eq!(vec!["a.rs", "deploy.rs"], found, "the object database was walked");
+
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

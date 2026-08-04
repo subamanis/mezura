@@ -18,7 +18,8 @@ pub fn print_as_json(result: &RunResult, datetime_now: &DateTime<Local>, config:
 }
 
 fn document(result: &RunResult, datetime_now: &DateTime<Local>, config: &Configuration) -> String {
-    let RunResult {content_info_map, languages_metadata_map, final_stats, faulty_files, files_present, ..} = result;
+    let RunResult {content_info_map, languages_metadata_map, final_stats, faulty_files, files_present,
+            unreadable_dirs, ..} = result;
     let names = result_printer::get_sorted_language_names(content_info_map, languages_metadata_map, config.view.sort_by);
     let hidden = config.view.top_n.map_or(0, |top| names.len().saturating_sub(top));
     let shown = &names[..names.len() - hidden];
@@ -33,6 +34,7 @@ fn document(result: &RunResult, datetime_now: &DateTime<Local>, config: &Configu
         format!("  \"languages\": {}", languages_array(shown, content_info_map, languages_metadata_map, config)),
         format!("  \"languages_hidden\": {hidden}"),
         format!("  \"faulty_files\": {}", faulty_files_array(faulty_files)),
+        format!("  \"unreadable_dirs\": {}", string_array(unreadable_dirs)),
         format!("  \"warnings\": {}", warnings_array()),
     ];
     // Absent from a run that named no module, the same way the section is absent from the printed
@@ -277,7 +279,7 @@ mod tests {
             faulty_files: Vec<FaultyFileDetails>, files_present: FilesPresent) -> RunResult
     {
         RunResult {content_info_map, languages_metadata_map, modules: Vec::new(), final_stats, faulty_files,
-                files_present, scan_duration_millis: 1180, metrics: None}
+                files_present, scan_duration_millis: 1180, metrics: None, unreadable_dirs: Vec::new()}
     }
 
     fn document_of(config: &crate::config_manager::Configuration) -> String {
