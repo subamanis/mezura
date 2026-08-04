@@ -143,6 +143,8 @@ Performance:
 Bugfixes:
   -> A target whose path exists is now always taken literally: a directory with '[' or '{' in its
       name, or a run started inside one, used to be refused as an invalid glob pattern.
+  -> A size of exactly 1,000 bytes, or a million, or a billion, is now shown in the larger unit:
+      "1.0 KBs" instead of "1,000 Bytes", which is what every value one byte above it already said.
   -> Naming the same directory twice, once with a slash at the end, counted everything in it twice.
       "mezura ./src,./src/" now reports what "mezura ./src" reports.
   -> "--exclude-languages" now says so when it is given a name that is not a language, instead of

@@ -107,10 +107,15 @@ impl RunResult {
 
 // 'extra_lines' is what is left after the code and the comments: blank lines, and lines that the
 // language required but that say nothing, like a closing brace. The three add up to 'lines'.
-// '#[non_exhaustive]' because the fields are not independent: 'size' is 'bytes_size' in another unit,
-// and 'extra_lines' is what the other two leave over. Every number is readable from outside and only
-// this crate can put one together, so no caller can build a set that disagrees with itself. The types
-// above are plain bags and are constructible by anyone who wants to test their own rendering.
+// '#[non_exhaustive]' because the fields are not independent: 'extra_lines' is what the other two
+// leave over, and the average is the total over the file count. Every number is readable from
+// outside and only this crate can put one together, so no caller can build a set that disagrees
+// with itself. The types above are plain bags and are constructible by anyone testing their own
+// rendering.
+//
+// Sizes are here in bytes and in no other unit. A figure like '2.4 MBs' is a way of showing the
+// same number, so it belongs to whoever is showing it: 'render::size_with_unit' does it, and doing
+// it here as well is what let a report say '1000 Bytes' where the document said '1.0 KBs'.
 #[derive(Debug, PartialEq)]
 #[non_exhaustive]
 pub struct FinalStats {
@@ -120,11 +125,7 @@ pub struct FinalStats {
     pub comment_lines: usize,
     pub extra_lines: usize,
     pub bytes_size: usize,
-    pub bytes_average_size: usize,
-    pub size: f64,
-    pub size_measurement: String,
-    pub average_size: f64,
-    pub average_size_measurement: String
+    pub bytes_average_size: usize
 }
 
 #[derive(Debug)]
@@ -200,10 +201,6 @@ impl FinalStats {
     {
         // A result with no files is an answer and not a mistake, and this is a public door
         let bytes_average_size = bytes_size.checked_div(files).unwrap_or(0);
-        let (size, size_measurement) = FinalStats::get_formatted_size_and_measurement(bytes_size);
-        let size = round_1(size);
-        let (average_size, average_size_measurement) = Self::get_formatted_size_and_measurement(bytes_average_size);
-        let average_size = round_1(average_size);
         FinalStats {
             files,
             lines,
@@ -213,21 +210,12 @@ impl FinalStats {
             // and three counts that do not add up are the caller's arithmetic, not a reason to panic.
             extra_lines: lines.saturating_sub(code_lines).saturating_sub(comment_lines),
             bytes_size,
-            bytes_average_size,
-            size,
-            size_measurement,
-            average_size,
-            average_size_measurement,
+            bytes_average_size
         }
     }
 
     pub fn new_extended(files: usize, lines: usize, code_lines: usize, comment_lines: usize, extra_lines: usize,
             bytes_size: usize, bytes_average_size: usize) -> Self {
-        let (size, size_measurement) = FinalStats::get_formatted_size_and_measurement(bytes_size);
-        let size = round_1(size);
-        let (average_size, average_size_measurement) = Self::get_formatted_size_and_measurement(bytes_average_size);
-        let average_size = round_1(average_size);
-
         FinalStats {
             files,
             lines,
@@ -235,11 +223,7 @@ impl FinalStats {
             comment_lines,
             extra_lines,
             bytes_size,
-            bytes_average_size,
-            size,
-            size_measurement,
-            average_size,
-            average_size_measurement,
+            bytes_average_size
         }
     }
 
@@ -248,34 +232,15 @@ impl FinalStats {
         languages_metadata_map.values().for_each(|e| {total_files += e.files; total_bytes += e.bytes});
         content_info_map.values().for_each(|c| {total_lines += c.lines; total_code_lines += c.code_lines;
                 total_comment_lines += c.comment_lines});
-        let bytes_size = total_bytes;
-        let bytes_average_size = total_bytes.checked_div(total_files).unwrap_or(0);
-        let (total_size, size_measurement) = Self::get_formatted_size_and_measurement(total_bytes);
-        let (average_size, average_size_measurement) = Self::get_formatted_size_and_measurement(bytes_average_size);
-        let total_size = round_1(total_size);
-        let average_size = round_1(average_size);
-
-
         FinalStats {
             files: total_files,
             lines: total_lines,
             code_lines: total_code_lines,
             comment_lines: total_comment_lines,
             extra_lines: total_lines - total_code_lines - total_comment_lines,
-            bytes_size,
-            bytes_average_size,
-            size: total_size,
-            size_measurement,
-            average_size,
-            average_size_measurement
+            bytes_size: total_bytes,
+            bytes_average_size: total_bytes.checked_div(total_files).unwrap_or(0)
         }
-    }
-
-    fn get_formatted_size_and_measurement(value: usize) -> (f64, String) {
-        if value >= 1000000000 {(value as f64 / 1000000000f64, "GBs".to_owned())}
-        else if value >= 1000000 {(value as f64 / 1000000f64, "MBs".to_owned())}
-        else if value >= 1000 {(value as f64 / 1000f64, "KBs".to_owned())}
-        else {(value as f64, "Bytes".to_owned())}
     }
 }
 
@@ -289,10 +254,6 @@ impl FaultyFileDetails {
     }
 }
 
-
-pub fn round_1(num: f64) -> f64 {
-    (num * 10.0).round() / 10.0
-}
 
 use crate::{LanguageContentInfo, LanguageMetadata};
 

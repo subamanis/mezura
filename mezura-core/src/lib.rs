@@ -17,6 +17,10 @@ macro_rules! hashmap {
 mod domain;
 mod result;
 mod phase_timing;
+// The arithmetic of showing a result, which the counting does not need and a caller drawing its own
+// view does. Optional in the sense the layout of this crate uses: one caller wants it, another has
+// its own way of showing things and never looks.
+pub mod render;
 // Still open, and each is its own decision: see B0c and B0d in RESTRUCTURE.md section 12.
 pub mod engine;
 pub mod languages;
@@ -598,11 +602,7 @@ mod tests {
             comment_lines: 0,
             extra_lines: 1000,
             bytes_size: 200000,
-            bytes_average_size: 5000,
-            size: 200.0,
-            size_measurement: "KBs".to_owned(),
-            average_size: 5.0,
-            average_size_measurement: "KBs".to_owned()
+            bytes_average_size: 5000
         };
         assert_eq!(customf, f);
         assert_eq!(customf, ef);
@@ -629,11 +629,7 @@ mod tests {
             comment_lines: 0,
             extra_lines: 1000,
             bytes_size: 2417403,
-            bytes_average_size: 49334,
-            size: 2.4,
-            size_measurement: "MBs".to_owned(),
-            average_size: 49.3,
-            average_size_measurement: "KBs".to_owned()
+            bytes_average_size: 49334
         };
         assert_eq!(customf, f);
         assert_eq!(customf, ef);

@@ -4,11 +4,11 @@ use chrono::{DateTime, Local};
 
 use super::config_manager::Configuration;
 use colored::{Color, ColoredString, Colorize};
-use mezura_core::{FinalStats, LanguageContentInfo, LanguageMetadata, RunResult, UNNAMED_MODULE_NAME};
+use mezura_core::{FinalStats, LanguageContentInfo, LanguageMetadata, RunResult, UNNAMED_MODULE_NAME, render};
 use super::config_manager;
 use super::config_manager::{Layout, SortCriterion};
 use super::theme::Theme;
-use super::format::{round_2, with_decimal_separator, with_seperators};
+use super::format::with_seperators;
 
 type ColorFunc = Box<dyn Fn(&str) -> String>;
 
@@ -20,7 +20,6 @@ const OVERVIEW_LANGUAGES : usize = 3;
 
 const OTHERS_NAME : &str = "others";
 
-const BYTES_UNIT : &str = "Bytes";
 
 // The keys of the settings block of a log entry, which are the command names that
 // 'super::log::counting_settings' writes. Kept as a list so that a line of the stats block can never
@@ -30,7 +29,6 @@ const SETTING_KEYS : [&str; 7] = [config_manager::DIRS, config_manager::EXCLUDE,
         config_manager::NO_GITIGNORE];
 
 //a language that is present but whose share rounds away to zero: shown as "<0.01", given no cell
-const PRESENT_BUT_TINY : f64 = 0.001;
 
 const TOTAL_NAME : &str = "Total";
 
@@ -247,7 +245,7 @@ fn table_lines(theme: &Theme, groups: &[Group], final_stats: &FinalStats, print_
             percent_cell(if whole == 0 {0.0} else {part as f64 / whole as f64 * 100.0})
         }
 
-        let (size, unit) = scaled(bytes);
+        let (size, unit) = super::format::active().size(bytes);
         let (code_percentage, comment_percentage) = percentages(lines, code, comments);
         [name.to_owned(),
          with_seperators(files), share(files, total_files),
@@ -255,7 +253,7 @@ fn table_lines(theme: &Theme, groups: &[Group], final_stats: &FinalStats, print_
          with_seperators(code), percent_cell(code_percentage),
          with_seperators(comments), percent_cell(comment_percentage),
          with_seperators(lines - code - comments),
-         size_figure(size, unit) + " " + &theme.size_unit.paint(unit).to_string()]
+         size + " " + &theme.size_unit.paint(unit).to_string()]
     }
 
     let described = named_rows(groups, print_total);
@@ -594,7 +592,7 @@ fn boxed_lines(theme: &Theme, groups: &[Group], final_stats: &FinalStats, print_
             Cell { number, percent }
         }
 
-        let (size, unit) = scaled(bytes);
+        let (size, unit) = super::format::active().size(bytes);
         let (code_percentage, comment_percentage) = percentages(lines, code, comments);
         (name.to_owned(), [
             cell(with_seperators(files), share(files, total_files)),
@@ -602,7 +600,7 @@ fn boxed_lines(theme: &Theme, groups: &[Group], final_stats: &FinalStats, print_
             cell(with_seperators(code), percent_text(code_percentage) + "%"),
             cell(with_seperators(comments), percent_text(comment_percentage) + "%"),
             cell(with_seperators(lines - code - comments), String::new()),
-            cell(size_figure(size, unit) + " " + &theme.size_unit.paint(unit).to_string(), String::new())])
+            cell(size + " " + &theme.size_unit.paint(unit).to_string(), String::new())])
     }
 
     let described = named_rows(groups, print_total);
@@ -1008,9 +1006,9 @@ fn overview_lines(sorted_language_names: &[String], content_info_map: &HashMap<S
     let lines_percentages = get_lines_percentages(content_info_map, sorted_language_vec);
     let sizes_percentages = get_sizes_percentages(languages_metadata_map, sorted_language_vec);
 
-    let files_verticals = if config.view.hidden.bar {vec![]} else{get_num_of_verticals(&files_percentages, NUM_OF_VERTICALS)};
-    let lines_verticals = if config.view.hidden.bar {vec![]} else{get_num_of_verticals(&lines_percentages, NUM_OF_VERTICALS)};
-    let size_verticals = if config.view.hidden.bar {vec![]} else{get_num_of_verticals(&sizes_percentages, NUM_OF_VERTICALS)};
+    let files_verticals = if config.view.hidden.bar {vec![]} else{render::apportion(&files_percentages, NUM_OF_VERTICALS)};
+    let lines_verticals = if config.view.hidden.bar {vec![]} else{render::apportion(&lines_percentages, NUM_OF_VERTICALS)};
+    let size_verticals = if config.view.hidden.bar {vec![]} else{render::apportion(&sizes_percentages, NUM_OF_VERTICALS)};
 
     // Each percentage is padded to the widest of the three rows in its own position, so the same
     // language stays in the same column down the section without paying for a gap nobody needs
@@ -1178,27 +1176,7 @@ fn split_minutes_to_D_H_M(mut minutes: i64) -> (i64, i64, i64) {
 }
 
 fn difference_as_signed_percentage_str_of_usize(older: usize, newer: usize) -> String {
-    let (difference, sign) = if newer > older {(newer-older, "+".to_owned())} else if older > newer {(older-newer, "-".to_owned())} else {(0,String::new())};
-    let mut percentage = (difference as f64 / older as f64) * 100.0;
-    let mut prefix_symbol = "";
-    if percentage > 0.0 && percentage < 0.01 {
-        prefix_symbol = " <";
-        percentage = 0.01;
-    }
-    
-    sign + prefix_symbol + &with_decimal_separator(round_2(percentage).to_string())
-}
-
-
-#[cfg(test)]
-fn difference_as_signed_percentage_str_of_f64(older: f64, newer: f64) -> String {
-    let (difference, sign) = if newer > older {(newer-older, "+".to_owned())} else if older > newer {(older-newer, "-".to_owned())} else {(0.0,String::new())};
-    let mut percentage = (difference / older) * 100.0;
-    if percentage > 0.0 && percentage < 0.01 {
-        percentage = 0.01;
-    }
-
-    sign + &round_2(percentage).to_string()
+    super::format::active().signed_percent(render::relative_change(older, newer))
 }
 
 // Only what a module line prints. Files and Extra are on the total and not repeated per module.
@@ -1383,42 +1361,18 @@ fn create_keyword_sum_map(content_info_map: &HashMap<String,LanguageContentInfo>
     collective_keywords_map
 }
 
-// The language rows and the total go through the same formatting, so a value on the border of a
-// unit cannot be reported as MBs on one line and KBs on another
-fn scaled(value: usize) -> (f64, &'static str) {
-    if value > 1_000_000_000 {(value as f64 / 1_000_000_000f64, "GBs")}
-    else if value > 1_000_000 {(value as f64 / 1_000_000f64, "MBs")}
-    else if value > 1000 {(value as f64 / 1000f64, "KBs")}
-    else {(value as f64, BYTES_UNIT)}
-}
-
-// A count of bytes is a whole number, so '430.0 Bytes' would be claiming a precision the figure does
-// not have. Only a scaled one is divided, and only a divided one has a decimal to show.
-fn size_figure(value: f64, unit: &str) -> String {
-    if unit == BYTES_UNIT {
-        with_seperators(value as usize)
-    } else {
-        with_decimal_separator(format!("{value:.1}"))
-    }
-}
-
 fn size_text(theme: &Theme, total_bytes: usize, average_bytes: usize) -> String {
-    let (total, total_unit) = scaled(total_bytes);
-    let (average, average_unit) = scaled(average_bytes);
+    let (total, total_unit) = super::format::active().size(total_bytes);
+    let (average, average_unit) = super::format::active().size(average_bytes);
     format!("{} {} {} - {} {} {}",
-            theme.total_size_number.paint(&size_figure(total, total_unit)),
+            theme.total_size_number.paint(&total),
             theme.size_unit.paint(total_unit), theme.total_size_label.paint("total"),
-            theme.avg_size_number.paint(&size_figure(average, average_unit)),
+            theme.avg_size_number.paint(&average),
             theme.size_unit.paint(average_unit), theme.avg_size_label.paint("average"))
 }
 
-// A language that is present but rounds to 0.00 would read as absent, while the bar still shows a
-// cell for it because of the minimum-one rule. '<0.01' is the same convention the progress section
-// already uses for tiny differences. Comparing the formatted text rather than the number keeps this
-// independent of how the formatter rounds a halfway value.
 fn percent_text(value: f64) -> String {
-    let text = format!("{value:.2}");
-    with_decimal_separator(if value > 0.0 && text == "0.00" { "<0.01".to_owned() } else { text })
+    super::format::active().percent(value)
 }
 
 // The '%' is painted with the number: leaving it outside made it keep the default colour while
@@ -1463,46 +1417,6 @@ pub(crate) fn get_sorted_language_names(content_info_map: &HashMap<String, Langu
     }
 
     names
-}
-
-// Largest remainder apportionment. Every language takes the whole part of its exact share, a
-// language with any presence at all keeps at least one cell so that it cannot vanish from the bar,
-// and the remaining cells go one at a time to whichever language sits furthest from its exact
-// share. Exact by construction, in both directions: the minimum-one rule can push the total over
-// the target (97/1/1/1 wants 51 cells), and that is corrected without ever emptying a language.
-fn get_num_of_verticals(percentages: &[f64], width: usize) -> Vec<usize> {
-    let exact = percentages.iter().map(|x| x * width as f64 / 100.0).collect::<Vec<_>>();
-    let mut verticals = percentages.iter().zip(exact.iter())
-            .map(|(percentage, exact)| if *percentage < 0.01 {0} else {(*exact as usize).max(1)})
-            .collect::<Vec<_>>();
-
-    let mut sum = verticals.iter().sum::<usize>();
-
-    while sum < width {
-        let distance_below = |i: &usize| exact[*i] - verticals[*i] as f64;
-        let furthest_below = (0..verticals.len()).filter(|i| percentages[*i] >= 0.01)
-                .max_by(|a, b| distance_below(a).total_cmp(&distance_below(b)));
-        match furthest_below {
-            Some(i) => verticals[i] += 1,
-            None => break
-        }
-        sum += 1;
-    }
-
-    // The cell comes off whoever holds the most, not off whoever is closest to its exact share.
-    // What matters in a bar is relative fidelity: one cell missing from a language holding 96 is
-    // invisible, while the same cell taken from a language holding 3 understates it by a third.
-    while sum > width {
-        let largest = (0..verticals.len()).filter(|i| verticals[*i] > 1)
-                .max_by(|a, b| verticals[*a].cmp(&verticals[*b]).then(exact[*a].total_cmp(&exact[*b])));
-        match largest {
-            Some(i) => verticals[i] -= 1,
-            None => break
-        }
-        sum -= 1;
-    }
-
-    verticals
 }
 
 fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize], languages_name: &[String],
@@ -1589,7 +1503,7 @@ fn get_files_percentages(languages_metadata_map: &HashMap<String,LanguageMetadat
         language_files[pos] = e.1.files;
     });
     
-    get_percentages(&language_files)
+    render::percentages(&language_files)
 }
 
 fn get_lines_percentages(content_info_map: &HashMap<String,LanguageContentInfo>, languages_name: &[String]) -> Vec<f64> {
@@ -1599,7 +1513,7 @@ fn get_lines_percentages(content_info_map: &HashMap<String,LanguageContentInfo>,
         language_lines[pos] = e.1.lines;
     });
 
-    get_percentages(&language_lines)
+    render::percentages(&language_lines)
 }
 
 fn get_sizes_percentages(languages_metadata_map: &HashMap<String,LanguageMetadata>, languages_name: &[String]) -> Vec<f64> {
@@ -1609,35 +1523,8 @@ fn get_sizes_percentages(languages_metadata_map: &HashMap<String,LanguageMetadat
         language_size[pos] = e.1.bytes;
     });
     
-    get_percentages(&language_size)
+    render::percentages(&language_size)
 }
-
-fn get_percentages(numbers: &[usize]) -> Vec<f64> {
-    let total_files :usize = numbers.iter().sum();
-    let mut language_percentages = Vec::with_capacity(4);
-    let mut sum = 0.0;
-    for (counter,files) in numbers.iter().enumerate() {
-        if counter == numbers.len() - 1 {
-            let remainder = if sum > 99.99 {0.0} else {((100f64 - sum) * 100f64).round() / 100f64};
-            // The last entry is the one that absorbs the rounding, and it is usually 'others', so
-            // it needs the same marker as the rest when it is present but too small to print
-            language_percentages.push(if remainder == 0.0 && *files > 0 {PRESENT_BUT_TINY} else {remainder});
-        } else {
-            let percentage = *files as f64/total_files as f64;
-            let canonicalized = (percentage * 10000f64).round() / 100f64;
-            // A language that exists but rounds away to zero keeps a value just above zero, so
-            // that the printed text can say "<0.01" instead of claiming it is absent. The running
-            // sum still takes the rounded value, so the arithmetic of the last entry is untouched,
-            // and the marker stays below the threshold that earns a cell in the bar.
-            let canonicalized = if canonicalized == 0.0 && *files > 0 {PRESENT_BUT_TINY} else {canonicalized};
-            sum += (canonicalized * 100f64).round() / 100f64;
-            language_percentages.push(canonicalized);
-        }
-    }
-    language_percentages
-}
-
-
 
 #[cfg(test)]
 mod tests {
@@ -1929,93 +1816,6 @@ mod tests {
     }
 
     #[test]
-    fn test_get_num_of_verticals() {
-        let percentages = vec![49.6,50.4];
-        let verticals = get_num_of_verticals(&percentages, NUM_OF_VERTICALS);
-        assert!(verticals.iter().sum::<usize>() == 50);
-        assert_eq!(vec![25,25], verticals);
-
-        let percentages = vec![0.0,100.0];
-        let verticals = get_num_of_verticals(&percentages, NUM_OF_VERTICALS);
-        assert!(verticals.iter().sum::<usize>() == 50);
-        assert_eq!(vec![0,50], verticals);
-
-
-        let percentages = vec![33.33,33.33,33.34];
-        assert_eq!(vec![16,17,17], get_num_of_verticals(&percentages, NUM_OF_VERTICALS));
-
-        let percentages = vec![0.3,65.67,34.3];
-        let verticals = get_num_of_verticals(&percentages, NUM_OF_VERTICALS);
-        assert!(verticals.iter().sum::<usize>() == 50);
-        assert_eq!(vec![1,32,17], verticals);
-        
-        let percentages = vec![0.0,0.0,100.0];
-        let verticals = get_num_of_verticals(&percentages, NUM_OF_VERTICALS);
-        assert!(verticals.iter().sum::<usize>() == 50);
-        assert_eq!(vec![0,0,50], verticals);
-
-        let percentages = vec![0.2,49.9,49.9];
-        let verticals = get_num_of_verticals(&percentages, NUM_OF_VERTICALS);
-        assert!(verticals.iter().sum::<usize>() == 50);
-        assert_eq!(vec![1,24,25], verticals);
-
-
-        let percentages = vec![12.5,50.0,25.0,12.5];
-        let verticals = get_num_of_verticals(&percentages, NUM_OF_VERTICALS);
-        assert!(verticals.iter().sum::<usize>() == 50);
-        assert_eq!(vec![6,25,13,6], verticals);
-
-        let percentages = vec![0.1,0.1,49.9,49.9];
-        let verticals = get_num_of_verticals(&percentages, NUM_OF_VERTICALS);
-        assert!(verticals.iter().sum::<usize>() == 50);
-        assert_eq!(vec![1,1,24,24], verticals);
-
-        // The minimum-one rule wants 48+1+1+1 here, which is one cell over the target. The excess
-        // has to come off the largest share rather than emptying one of the small ones.
-        let verticals = get_num_of_verticals(&[97.0,1.0,1.0,1.0], NUM_OF_VERTICALS);
-        assert_eq!(vec![47,1,1,1], verticals);
-
-        // Every protected minimum is paid for by the only entry that has cells to spare
-        assert_eq!(vec![47,1,1,1], get_num_of_verticals(&[99.4,0.2,0.2,0.2], NUM_OF_VERTICALS));
-
-        let verticals = get_num_of_verticals(&[99.7,0.1,0.1,0.1], NUM_OF_VERTICALS);
-        assert_eq!(50, verticals.iter().sum::<usize>());
-        assert!(verticals.iter().all(|x| *x >= 1), "a language that is present must never lose its last cell");
-    }
-
-    #[test]
-    fn a_language_that_rounds_away_is_shown_as_less_than_a_hundredth_and_gets_no_cell() {
-        // 3 files out of 800000 is 0.000375%, which used to print as a flat 0.00. Checked in the
-        // middle and in the last position, which are computed by different branches
-        for numbers in [vec![500_000, 3, 299_997], vec![500_000, 299_997, 3]] {
-            let percentages = get_percentages(&numbers);
-            let tiny = numbers.iter().position(|x| *x == 3).unwrap();
-            assert_eq!("<0.01", percent_text(percentages[tiny]), "for {numbers:?}");
-            let verticals = get_num_of_verticals(&percentages, NUM_OF_VERTICALS);
-            assert_eq!(0, verticals[tiny], "a share too small to be printed must not claim a cell either");
-            assert_eq!(NUM_OF_VERTICALS, verticals.iter().sum::<usize>());
-        }
-
-        // A language that really is absent stays at a flat zero and keeps no cell
-        let percentages = get_percentages(&[500_000, 299_997, 0]);
-        assert_eq!("0.00", percent_text(percentages[2]));
-        assert_eq!(0, get_num_of_verticals(&percentages, NUM_OF_VERTICALS)[2]);
-
-        // A genuine zero stays a zero, and anything printable is left alone
-        assert_eq!("0.00", percent_text(0.0));
-        assert_eq!("0.01", percent_text(0.01));
-        assert_eq!("12.35", percent_text(12.345));
-        assert_eq!("100.00", percent_text(100.0));
-
-        // The overview pads every percentage into a 5 column field, so the marker has to fit in it.
-        // 100.00 is the one value that does not, which is why that padding saturates.
-        for value in [0.0, PRESENT_BUT_TINY, 0.01, 9.9, 99.99] {
-            assert!(percent_text(value).len() <= 5, "'{}' does not fit the column", percent_text(value));
-        }
-        assert_eq!(6, percent_text(100.0).len());
-    }
-
-    #[test]
     fn sorting_uses_the_chosen_criterion_and_breaks_ties_by_name() {
         let content = hashmap![
             "Zig".to_owned() => LanguageContentInfo::new(100, 50, 0, HashMap::new()),
@@ -2034,42 +1834,6 @@ mod tests {
 
         // Ada and Zig both have 100 lines, so the name decides, not the iteration order of the map
         assert_eq!(vec!["Rust","Ada","Zig"], get_sorted_language_names(&content, &meta, SortCriterion::Lines));
-    }
-
-    #[test]
-    fn the_cell_that_a_protected_minimum_costs_comes_off_the_largest_share() {
-        // Six entries at 100 cells: the second language deserves 3 and must keep them, because
-        // losing one understates it by a third while the first barely notices
-        let percentages = vec![96.96, 3.0, 0.01, 0.01, 0.01, 0.01];
-        assert_eq!(vec![93,3,1,1,1,1], get_num_of_verticals(&percentages, 100));
-        assert_eq!(vec![45,1,1,1,1,1], get_num_of_verticals(&percentages, NUM_OF_VERTICALS));
-
-        // The width is a parameter, so the same shares scale to any bar
-        assert_eq!(25, get_num_of_verticals(&[50.0,50.0], 50)[0]);
-        assert_eq!(50, get_num_of_verticals(&[50.0,50.0], 100)[0]);
-        assert_eq!(10, get_num_of_verticals(&[50.0,50.0], 20)[0]);
-    }
-
-    #[test]
-    fn verticals_always_sum_to_the_bar_width_and_keep_present_languages_visible() {
-        let cases: Vec<Vec<f64>> = vec![
-            vec![100.0], vec![50.0,50.0], vec![0.01,99.99], vec![0.0,0.0,0.0,100.0],
-            vec![25.0,25.0,25.0,25.0], vec![70.0,10.0,10.0,10.0], vec![1.0,1.0,1.0,97.0],
-            vec![0.04,0.04,0.04,99.88], vec![33.34,33.33,33.33], vec![60.5,39.5],
-            vec![98.0,2.0], vec![2.0,98.0], vec![0.0,100.0,0.0]
-        ];
-
-        for percentages in cases {
-            let verticals = get_num_of_verticals(&percentages, NUM_OF_VERTICALS);
-            assert_eq!(NUM_OF_VERTICALS, verticals.iter().sum::<usize>(), "wrong total for {percentages:?}");
-            for (i, percentage) in percentages.iter().enumerate() {
-                if *percentage > 0.0 {
-                    assert!(verticals[i] >= 1, "{percentages:?} made a present language disappear");
-                } else {
-                    assert_eq!(0, verticals[i], "{percentages:?} gave cells to an absent language");
-                }
-            }
-        }
     }
 
     #[test]
@@ -2162,11 +1926,9 @@ mod tests {
         assert_eq!("-10",difference_as_signed_percentage_str_of_usize(100, 90));
         assert_eq!("+100",difference_as_signed_percentage_str_of_usize(100, 200));
         assert_eq!("+ <0.01",difference_as_signed_percentage_str_of_usize(22819, 22820));
-        
-        assert_eq!("0",difference_as_signed_percentage_str_of_f64(100.0, 100.0));
-        assert_eq!("-10",difference_as_signed_percentage_str_of_f64(100.0, 90.0));
-        assert_eq!("+100",difference_as_signed_percentage_str_of_f64(100.0, 200.0));
-        assert_eq!("+0.01",difference_as_signed_percentage_str_of_f64(22819.0, 22820.0));
+        // A first run to compare against has nothing to have grown from, and 'inf%' is not a
+        // reading of that
+        assert_eq!("0",difference_as_signed_percentage_str_of_usize(0, 500));
     }
 
     #[test]
@@ -2179,11 +1941,7 @@ mod tests {
         assert_eq!(100, log_entries[0].stats.code_lines);
         assert_eq!(100, log_entries[0].stats.extra_lines);
         assert_eq!(100000, log_entries[0].stats.bytes_size);
-        assert_eq!(100.0, log_entries[0].stats.size);
-        assert_eq!("KBs".to_owned(), log_entries[0].stats.size_measurement);
         assert_eq!(10000, log_entries[0].stats.bytes_average_size);
-        assert_eq!(10.0, log_entries[0].stats.average_size);
-        assert_eq!("KBs".to_owned(), log_entries[0].stats.average_size_measurement);
         let datetime: DateTime<Local> = chrono::DateTime::from_str("2021-09-12 16:42:00 +0300").unwrap();
         assert_eq!(datetime, log_entries[0].datetime);
         assert_eq!(Some("entry one".to_owned()),log_entries[0].name);
@@ -2193,11 +1951,7 @@ mod tests {
         assert_eq!(111, log_entries[1].stats.code_lines);
         assert_eq!(111, log_entries[1].stats.extra_lines);
         assert_eq!(111100, log_entries[1].stats.bytes_size);
-        assert_eq!(111.1, log_entries[1].stats.size);
-        assert_eq!("KBs".to_owned(), log_entries[1].stats.size_measurement);
         assert_eq!(11100, log_entries[1].stats.bytes_average_size);
-        assert_eq!(11.1, log_entries[1].stats.average_size);
-        assert_eq!("KBs".to_owned(), log_entries[1].stats.average_size_measurement);
         let datetime: DateTime<Local> = chrono::DateTime::from_str("2021-09-12 16:23:50 +03:00").unwrap();
         assert_eq!(datetime, log_entries[1].datetime);
         assert_eq!(None,log_entries[1].name);
@@ -2207,11 +1961,7 @@ mod tests {
         assert_eq!(122, log_entries[2].stats.code_lines);
         assert_eq!(122, log_entries[2].stats.extra_lines);
         assert_eq!(122200, log_entries[2].stats.bytes_size);
-        assert_eq!(122.2, log_entries[2].stats.size);
-        assert_eq!("KBs".to_owned(), log_entries[2].stats.size_measurement);
         assert_eq!(12200, log_entries[2].stats.bytes_average_size);
-        assert_eq!(12.2, log_entries[2].stats.average_size);
-        assert_eq!("KBs".to_owned(), log_entries[2].stats.average_size_measurement);
         let datetime: DateTime<Local> = chrono::DateTime::from_str("2021-09-12 04:01:56 +03:00").unwrap();
         assert_eq!(datetime, log_entries[2].datetime);
         assert_eq!(Some("entry three".to_owned()),log_entries[2].name);
@@ -2245,11 +1995,7 @@ mod tests {
         assert_eq!(100, log_entries[0].stats.code_lines);
         assert_eq!(900, log_entries[0].stats.extra_lines);
         assert_eq!(100, log_entries[0].stats.bytes_size);
-        assert_eq!(100.0, log_entries[0].stats.size);
-        assert_eq!("Bytes".to_owned(), log_entries[0].stats.size_measurement);
         assert_eq!(10, log_entries[0].stats.bytes_average_size);
-        assert_eq!(10.0, log_entries[0].stats.average_size);
-        assert_eq!("Bytes".to_owned(), log_entries[0].stats.average_size_measurement);
         assert_eq!(Some("test name".to_owned()),log_entries[0].name);
         assert!(log_entries[0].modules.is_empty());
 
