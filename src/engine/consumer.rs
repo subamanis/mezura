@@ -8,11 +8,11 @@ use crate::engine::file_parser;
 
 pub fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
         languages_content_info: ContentInfoMapMut, languages_metadata_map: MetadataMapMut, language_map: Arc<HashMap<String,Language>>,
-        config: Arc<EngineConfig>) -> JoinHandle<()>
+        config: Arc<EngineConfig>) -> std::io::Result<JoinHandle<()>>
 {
     thread::Builder::new().name(format!("consumer-{id}")).spawn(move || {
         start_parsing_files(id, files_injector, faulty_files, finish_condition, languages_content_info, languages_metadata_map, language_map, config);
-    }).unwrap()
+    })
 }
 
 pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
@@ -44,6 +44,15 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
         };
         match next {
             Steal::Success(parsable_file) => {
+                // A worker that dies mid-run is unreachable from the public surface on purpose,
+                // so the test for what 'run' does about one causes it here. Triggered by the name
+                // of the file and not by shared state, because tests run in parallel and other
+                // ones drive this loop directly: a flag either of them could trip is a race, a
+                // name only one corpus carries is not. Compiled out of every real build.
+                #[cfg(test)]
+                if parsable_file.path.to_string_lossy().contains("mezura-dead-consumer") {
+                    panic!("test-induced consumer panic");
+                }
                 idle_iterations = 0;
                 let lang_name = parsable_file.language_name.as_ref();
                 if !keyword_matchers.contains_key(lang_name) {

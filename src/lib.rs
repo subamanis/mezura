@@ -70,6 +70,18 @@ pub(crate) mod test_paths {
 }
 
 
+// What a panic left behind, as text. 'panic!' with a literal carries a '&str', everything formatted
+// carries a 'String', and anything else is somebody's typed payload, which has no text to give.
+pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(text) = payload.downcast_ref::<&'static str>() {
+        (*text).to_owned()
+    } else if let Some(text) = payload.downcast_ref::<String>() {
+        text.clone()
+    } else {
+        "a worker died with a panic payload that is not text".to_owned()
+    }
+}
+
 // 'on_traversal_done' is called exactly once, with what the walk found, at the only moment a caller
 // cannot reach on its own: the two phases overlap, so the counts are known part way through and not
 // before or after. Everything else a caller wants to say it can say around the call. A caller with
@@ -114,16 +126,46 @@ pub fn run(config: &EngineConfig, languages: Languages,
 
     let mut producer_handles = Vec::with_capacity(config.threads.producers());
     let mut consumer_handles = Vec::with_capacity(config.threads.consumers());
+    // Producers terminate when the idle count reaches this, so it must hold the number that
+    // actually started, and it must be fixed before any producer can finish: comparing against a
+    // count that is still growing lets an early finisher see itself as the last one standing.
+    // Until the spawns are done it holds a value the idle count cannot reach.
+    let producers_total = Arc::new(AtomicUsize::new(usize::MAX));
+    let worker_panics: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
+    // A thread the operating system refuses is a slower run, not a different answer, so the run
+    // carries on with what it was given. Zero of either side is the exception: nothing would be
+    // discovered, or nothing counted, and the result would dress the refusal up as an empty answer.
     let parsing_started_instant = Instant::now();
+    let mut last_refusal = None;
     for i in 0..config.threads.producers() {
-        producer_handles.push(engine::producer::start_producer_thread(i, files_injector.clone(), dirs_injector.clone(), Worker::new_fifo(),
-            idle_producers.clone(), extension_lang_map.clone(), exclude_matcher.clone(),
-            config.clone(), files_stats.clone(), modules.clone(), unreadable_dirs.clone()));
+        match engine::producer::start_producer_thread(i, files_injector.clone(), dirs_injector.clone(), Worker::new_fifo(),
+                idle_producers.clone(), extension_lang_map.clone(), exclude_matcher.clone(),
+                config.clone(), files_stats.clone(), modules.clone(), unreadable_dirs.clone(),
+                producers_total.clone(), worker_panics.clone()) {
+            Ok(handle) => producer_handles.push(handle),
+            Err(x) => last_refusal = Some(x)
+        }
     }
+    if producer_handles.is_empty() {
+        return Err(RunError::NoThreadsAvailable { side: "producer", error: last_refusal.unwrap() });
+    }
+    producers_total.store(producer_handles.len(), Ordering::SeqCst);
+
     for i in 0..config.threads.consumers() {
-        consumer_handles.push(engine::consumer::start_parser_thread(i, files_injector.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
-        languages_content_info_ref.clone(), global_languages_metadata_map.clone(), language_map_ref.clone(), config.clone()));
+        match engine::consumer::start_parser_thread(i, files_injector.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
+                languages_content_info_ref.clone(), global_languages_metadata_map.clone(), language_map_ref.clone(), config.clone()) {
+            Ok(handle) => consumer_handles.push(handle),
+            Err(x) => last_refusal = Some(x)
+        }
+    }
+    if consumer_handles.is_empty() {
+        // The producers are already walking and will finish on their own; they are collected so
+        // that no thread outlives the call that started it
+        for handle in producer_handles {
+            let _ = handle.join();
+        }
+        return Err(RunError::NoThreadsAvailable { side: "consumer", error: last_refusal.unwrap() });
     }
 
     for handle in producer_handles {
@@ -135,7 +177,9 @@ pub fn run(config: &EngineConfig, languages: Languages,
 
     finish_condition_ref.store(true,Ordering::Relaxed);
     for handle in consumer_handles {
-        let _ = handle.join();
+        if let Err(payload) = handle.join() {
+            worker_panics.lock().unwrap().push(panic_message(payload.as_ref()));
+        }
     }
     let parsing_duration_millis = parsing_started_instant.elapsed().as_millis();
 
@@ -143,6 +187,15 @@ pub fn run(config: &EngineConfig, languages: Languages,
         eprintln!("[phase] producers alive: {} ms | drain after producers: {} ms | queue size at producer exit: {}",
             producers_done_millis, parsing_duration_millis - producers_done_millis, queued_at_producer_exit);
         eprintln!("{}", phase_timing::report());
+    }
+
+    // Before anything shared is read: a worker that died may have poisoned whichever lock it held,
+    // and the locks below would then panic in the caller's thread with a message about a mutex,
+    // three calls away from what actually happened. Nothing after this line runs unless every
+    // worker finished whole, which is also what keeps those locks clean by construction.
+    let worker_panics = std::mem::take(&mut *worker_panics.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+    if !worker_panics.is_empty() {
+        return Err(RunError::IncompleteRun { worker_panic: worker_panics.join(" | ") });
     }
 
     let files_present = *files_stats.lock().unwrap();
@@ -565,5 +618,63 @@ mod tests {
         assert_eq!(customf, f);
         assert_eq!(customf, ef);
         assert_eq!(customf, cf);
+    }
+}
+
+
+// What 'run' owes its caller when a worker thread dies: an error, never a number it knows is short.
+// A worker merges its counters at the end, so one that dies mid-run takes its share of the counting
+// with it, and the old 'let _ = handle.join()' threw the only evidence away. The two hooks that
+// cause the deaths fire on the corpus names used here and on nothing else.
+#[cfg(test)]
+mod worker_death_tests {
+    use crate::{EngineConfig, Languages, RunError, run};
+
+    fn corpus(name: &str) -> (std::path::PathBuf, EngineConfig) {
+        let root = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.rs"), "fn a() { let x = 1; }\n").unwrap();
+        let mut config = EngineConfig::new(vec![root.to_string_lossy().replace('\\', "/")]);
+        config.set_threads(2, 2);
+        (root, config)
+    }
+
+    fn languages_for(config: &EngineConfig) -> Languages {
+        let map = crate::language_file::parse_dir(crate::test_paths::LANGUAGES_DIR).unwrap().0;
+        Languages::resolve(map, &std::collections::HashMap::new(), config).0
+    }
+
+    #[test]
+    fn a_dead_consumer_is_an_error_and_not_a_short_count() {
+        let (root, config) = corpus("mezura-dead-consumer");
+
+        let err = run(&config, languages_for(&config), |_| {});
+        std::fs::remove_dir_all(&root).unwrap();
+        let (clean_root, clean_config) = corpus("mezura-alive-consumer");
+        let clean = run(&clean_config, languages_for(&clean_config), |_| {});
+        std::fs::remove_dir_all(&clean_root).unwrap();
+
+        let err = err.expect_err("a consumer died and run returned a result anyway");
+        assert!(matches!(&err, RunError::IncompleteRun { worker_panic } if worker_panic.contains("test-induced consumer panic")),
+                "got: {err:?}");
+        // and the hook answers to that corpus name alone, so an ordinary run is untouched
+        assert_eq!(1, clean.unwrap().final_stats.files);
+    }
+
+    #[test]
+    fn a_dead_producer_is_an_error_and_the_run_still_terminates() {
+        let (root, config) = corpus("mezura-dead-producer");
+
+        let err = run(&config, languages_for(&config), |_| {});
+        std::fs::remove_dir_all(&root).unwrap();
+        let (clean_root, clean_config) = corpus("mezura-alive-producer");
+        let clean = run(&clean_config, languages_for(&clean_config), |_| {});
+        std::fs::remove_dir_all(&clean_root).unwrap();
+
+        let err = err.expect_err("a producer died and run returned a result anyway");
+        assert!(matches!(&err, RunError::IncompleteRun { worker_panic } if worker_panic.contains("test-induced producer panic")),
+                "got: {err:?}");
+        assert_eq!(1, clean.unwrap().final_stats.files);
     }
 }

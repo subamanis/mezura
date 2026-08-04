@@ -119,7 +119,17 @@ pub struct FaultyFileDetails {
 #[non_exhaustive]
 pub enum RunError {
     // The pattern as the caller wrote it, not the anchored form the matcher builds from it
-    InvalidExcludePattern(String)
+    InvalidExcludePattern(String),
+    // The operating system refused every thread of one side. A refusal of some but not all is not
+    // an error at all: fewer threads is the same answer arriving slower, so the run degrades and
+    // carries on. Zero is different, because zero producers discover nothing and zero consumers
+    // count nothing, and either would dress a non-answer up as an empty one.
+    NoThreadsAvailable { side: &'static str, error: std::io::Error },
+    // A worker died mid-run. It merges its share of the counting at the end, so whatever it had
+    // done is lost with it, and a number known to be short is never returned as an answer. The
+    // message of the panic travels here; its location has already reached the error output through
+    // the panic hook, at the moment it happened.
+    IncompleteRun { worker_panic: String }
 }
 
 #[derive(Debug,Default,Clone,Copy)]
@@ -132,7 +142,9 @@ pub struct FilesPresent {
 impl std::fmt::Display for RunError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidExcludePattern(x) => write!(f, "'{x}' is not a valid exclude pattern, so nothing was counted.")
+            Self::InvalidExcludePattern(x) => write!(f, "'{x}' is not a valid exclude pattern, so nothing was counted."),
+            Self::NoThreadsAvailable { side, error } => write!(f, "The operating system refused every {side} thread, so the run could not start: {error}"),
+            Self::IncompleteRun { worker_panic } => write!(f, "A worker thread died mid-run, so the counts would have been incomplete and were discarded: {worker_panic}")
         }
     }
 }

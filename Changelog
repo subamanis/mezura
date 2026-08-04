@@ -150,6 +150,10 @@ Bugfixes:
       is: the count, and the paths themselves with "--show-faulty-files".
   -> The paths of faulty files are now written with forward slashes throughout, instead of mixing
       them with backslashes halfway through on Windows. This also applies to the JSON document.
+  -> A worker thread dying mid-run now stops the run with an error that carries the reason,
+      instead of returning counts that are silently missing that thread's share, or in one
+      arrangement never returning at all. If the operating system refuses some of the requested
+      threads the run simply carries on with fewer, and only refusing every one of them is an error.
   -> A configuration file's "no-gitignore" and "search-in-dotted" now apply when the targets are
       being worked out, not only during the counting. A config that declared "no-gitignore" beside
       a glob of gitignored paths died with "doesn't exist anymore", while the same command line

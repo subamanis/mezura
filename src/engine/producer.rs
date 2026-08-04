@@ -9,28 +9,44 @@ use crate::{EngineConfig, ExtensionLangMap, FilesPresent, GitignoreStack,
 use crate::engine::extensions::find_language_of_extension;
 
 
+// The panic of a producer is caught in its own thread and not read back from 'join', because the
+// survivors terminate by counting idle producers against how many started: one that dies without
+// ever going idle makes that count unreachable, and every other producer then waits on it forever.
+// The catch marks the dead one idle on its way out, records what killed it, and the run turns the
+// record into an error once the joins are done. 'catch_unwind' does not silence the panic hook, so
+// the location still reaches the error output the moment it happens.
 pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<TraversedDir>>, worker: Worker<TraversedDir>,
         idle_producers: Arc<AtomicUsize>, extension_lang_map: ExtensionLangMap, exclude_matcher: Arc<globset::GlobSet>,
         config: Arc<EngineConfig>, files_stats: Arc<Mutex<FilesPresent>>, modules: Arc<Modules>,
-        unreadable_dirs: Arc<Mutex<Vec<String>>>)
--> JoinHandle<()>
+        unreadable_dirs: Arc<Mutex<Vec<String>>>, producers_total: Arc<AtomicUsize>,
+        worker_panics: Arc<Mutex<Vec<String>>>)
+-> std::io::Result<JoinHandle<()>>
 {
     thread::Builder::new().name(format!("producer-{id}")).spawn(move || {
-        let (total_files, relevant_files, excluded_files, unreadable) =
-                search_for_files(id, files_injector, dirs_injector, worker, idle_producers, extension_lang_map, exclude_matcher, config, modules);
-        if !unreadable.is_empty() {
-            unreadable_dirs.lock().unwrap().extend(unreadable);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(||
+                search_for_files(id, files_injector, dirs_injector, worker, idle_producers.clone(),
+                        extension_lang_map, exclude_matcher, config, modules, &producers_total)));
+        match outcome {
+            Ok((total_files, relevant_files, excluded_files, unreadable)) => {
+                if !unreadable.is_empty() {
+                    unreadable_dirs.lock().unwrap().extend(unreadable);
+                }
+                let mut file_stats_guard = files_stats.lock().unwrap();
+                file_stats_guard.total_files += total_files;
+                file_stats_guard.relevant_files += relevant_files;
+                file_stats_guard.excluded_files += excluded_files;
+            },
+            Err(payload) => {
+                worker_panics.lock().unwrap().push(crate::panic_message(payload.as_ref()));
+                idle_producers.fetch_add(1, Ordering::SeqCst);
+            }
         }
-        let mut file_stats_guard = files_stats.lock().unwrap(); 
-        file_stats_guard.total_files += total_files;
-        file_stats_guard.relevant_files += relevant_files;
-        file_stats_guard.excluded_files += excluded_files;
-
-    }).unwrap()
+    })
 }
 
 pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<TraversedDir>>, worker: Worker<TraversedDir>, idle_producers: Arc<AtomicUsize>,
-        extension_lang_map: ExtensionLangMap, exclude_matcher: Arc<globset::GlobSet>, config: Arc<EngineConfig>, modules: Arc<Modules>)
+        extension_lang_map: ExtensionLangMap, exclude_matcher: Arc<globset::GlobSet>, config: Arc<EngineConfig>, modules: Arc<Modules>,
+        producers_total: &AtomicUsize)
 -> (usize,usize,usize,Vec<String>)
 {
     let mut total_files = 0;
@@ -57,6 +73,12 @@ pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>,
         };
 
         if let Some(dir) = &next_dir {
+            // The producer's twin of the hook in the consumer, and by name for the same reason:
+            // the walk tests below drive this loop directly, so shared state would be a race
+            #[cfg(test)]
+            if dir.path.to_string_lossy().contains("mezura-dead-producer") {
+                panic!("test-induced producer panic");
+            }
            if should_terminate {
                 should_terminate = false;
                 idle_producers.fetch_sub(1, Ordering::SeqCst);
@@ -82,7 +104,7 @@ pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>,
                 should_terminate = true;
                 idle_producers.fetch_add(1, Ordering::SeqCst);
             }
-            if idle_producers.load(Ordering::SeqCst) == config.threads.producers() {
+            if idle_producers.load(Ordering::SeqCst) == producers_total.load(Ordering::SeqCst) {
                 break;
             }
 
@@ -225,7 +247,8 @@ mod tests {
 
         let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs).unwrap());
         let (total, relevant, excluded, _) = search_for_files(0, files_injector.clone(), dirs_injector,
-                Worker::new_fifo(), idle_producers, extension_lang_map, exclude_matcher, config, modules.clone());
+                Worker::new_fifo(), idle_producers, extension_lang_map, exclude_matcher, config, modules.clone(),
+                &AtomicUsize::new(1));
 
         let mut found_files = Vec::new();
         while let Steal::Success(f) = files_injector.steal() {
@@ -270,7 +293,7 @@ mod tests {
         let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs).unwrap());
         let (total, relevant, _, unreadable) = search_for_files(0, files_injector, dirs_injector,
                 Worker::new_fifo(), Arc::new(AtomicUsize::new(0)), extension_lang_map, exclude_matcher,
-                config, modules);
+                config, modules, &AtomicUsize::new(1));
 
         fs::remove_dir_all(&root).unwrap();
 
