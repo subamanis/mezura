@@ -83,8 +83,13 @@ fn stats_of_the_fixture_corpus_match_the_golden_byte_for_byte() {
         return;
     }
 
+    // The line endings are normalised on the way in, the way the layouts golden beside this one
+    // already does it. The file is written with '\n' and git hands it back with '\r\n' on a Windows
+    // checkout, so the two differ in every line ending and in nothing else: the comparison failed
+    // while every line matched, and a fresh clone on this platform failed on its first run.
     let expected = std::fs::read_to_string(&golden).unwrap_or_else(|x|
-            panic!("cannot read {}: {x}\nRun with {UPDATE_ENV_VAR}=1 to create it.", golden.display()));
+            panic!("cannot read {}: {x}\nRun with {UPDATE_ENV_VAR}=1 to create it.", golden.display()))
+            .replace("\r\n", "\n");
 
     if expected != report {
         let mut differences = Vec::new();
@@ -94,6 +99,13 @@ fn stats_of_the_fixture_corpus_match_the_golden_byte_for_byte() {
             if before != after {
                 differences.push(format!("line {}: expected \"{before}\", got \"{after}\"", i + 1));
             }
+        }
+        // Two files can differ while no line of one differs from the same line of the other, since
+        // 'lines' hands back neither the ending nor a final empty line. Left unsaid, the report was
+        // a heading with nothing under it and no way to guess what had changed.
+        if differences.is_empty() {
+            differences.push(format!("no line differs, so the two differ only in whitespace: {} bytes recorded against {} produced",
+                    expected.len(), report.len()));
         }
         panic!("\nthe fixture corpus no longer produces the recorded stats:\n  {}\n\nIf the change is intended, rerun with {UPDATE_ENV_VAR}=1 and review the diff of {}.\n",
                 differences.join("\n  "), golden.display());
