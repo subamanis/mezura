@@ -154,38 +154,7 @@ impl Hidden {
     }
 }
 
-#[derive(Debug,PartialEq,Eq,Clone,Copy,Default)]
-pub enum SortCriterion {
-    Files,
-    #[default]
-    Lines,
-    Code,
-    Size,
-    Name
-}
-
-impl SortCriterion {
-    pub fn parse(value: &str) -> Option<SortCriterion> {
-        match value.trim().to_lowercase().as_str() {
-            "files" => Some(Self::Files),
-            "lines" => Some(Self::Lines),
-            "code" => Some(Self::Code),
-            "size" => Some(Self::Size),
-            "name" => Some(Self::Name),
-            _ => None
-        }
-    }
-
-    pub fn name(&self) -> &'static str {
-        match self {
-            Self::Files => "files",
-            Self::Lines => "lines",
-            Self::Code => "code",
-            Self::Size => "size",
-            Self::Name => "name"
-        }
-    }
-}
+pub use mezura_core::SortCriterion;
 
 // Only Slim is ASCII, so it is the one guaranteed to render on every terminal
 #[derive(Debug,PartialEq,Eq,Clone,Copy,Default)]
@@ -1143,12 +1112,12 @@ mod tests {
         super::parse_dirs(s).map(|targets| targets.iter().map(Target::to_string).collect())
     }
 
-    // The counting driven the way 'main' drives it, with the shipped language definitions read
+    // The counting driven the way 'main' drives it, with the shipped language files read
     // from the workspace checkout
     fn counted(config: &Configuration) -> mezura_core::RunResult {
         let languages_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../mezura-core/data/languages/");
-        let map = mezura_core::language_file::parse_languages_in_dir(languages_dir).unwrap().0;
-        let (languages, _) = mezura_core::Languages::resolve(map, &std::collections::HashMap::new(), &config.engine);
+        let parsed = mezura_core::language_file::parse_languages_in_dir(languages_dir).unwrap().0;
+        let (languages, _) = mezura_core::Languages::resolve(&config.engine, parsed, &std::collections::HashMap::new());
         mezura_core::run(&config.engine, languages, |_| {}).unwrap()
     }
 
@@ -1212,23 +1181,23 @@ mod tests {
 
         assert_eq!(new_conf("./"), create_config_from_args("./").unwrap());
         assert_eq!(new_conf("./"), create_config_from_args("--dirs ./").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.set_threads(1,1);}), create_config_from_args("./ --threads 1 1").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.set_threads(1,1);}), create_config_from_args("./ --threads   1   1 ").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.set_threads(1,1).set_braces_as_code(true);}),
+        assert_eq!(conf("./", |c| {c.engine.threads = Threads::new(1,1);}), create_config_from_args("./ --threads 1 1").unwrap());
+        assert_eq!(conf("./", |c| {c.engine.threads = Threads::new(1,1);}), create_config_from_args("./ --threads   1   1 ").unwrap());
+        assert_eq!(conf("./", |c| {c.engine.threads = Threads::new(1,1); c.engine.braces_as_code = true;}),
                 create_config_from_args("./ --threads 1 1 --braces-as-code").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.set_should_search_in_dotted(true);}),
+        assert_eq!(conf("./", |c| {c.engine.should_search_in_dotted = true;}),
                 create_config_from_args("./ --search-in-dotted").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.set_no_gitignore(true);}),
+        assert_eq!(conf("./", |c| {c.engine.no_gitignore = true;}),
                 create_config_from_args("./ --no-gitignore").unwrap());
         assert_eq!(conf("./", |c| {c.view.set_should_show_faulty_files(true);}),
                 create_config_from_args("./ --show-faulty-files").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.set_exclude_dirs(vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]);}),
+        assert_eq!(conf("./", |c| {c.engine.exclude_dirs = vec!["a".to_owned(),"b".to_owned(),"c".to_owned()];}),
                 create_config_from_args("./ --exclude a,b ,  c ").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.set_exclude_dirs(vec!["a/path".to_owned(),"b/path".to_owned()]);}),
+        assert_eq!(conf("./", |c| {c.engine.exclude_dirs = vec!["a/path".to_owned(),"b/path".to_owned()];}),
                 create_config_from_args("./ --exclude \"a\\path\", \"b\\path\"").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.set_languages_of_interest(vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]);}),
+        assert_eq!(conf("./", |c| {c.engine.languages_of_interest = vec!["a".to_owned(),"b".to_owned(),"c".to_owned()];}),
                 create_config_from_args("./ --languages a,b,c").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.set_languages_of_interest(vec!["a".to_owned()]);}),
+        assert_eq!(conf("./", |c| {c.engine.languages_of_interest = vec!["a".to_owned()];}),
                 create_config_from_args("./ --languages a, ").unwrap());
         assert_eq!(conf("./", |c| {c.view.set_log_option(LogOption::new(Some("this is a test".to_owned())));}),
                 create_config_from_args("./ --log   this is a test ").unwrap());
@@ -1360,13 +1329,13 @@ mod tests {
         let path = write_config("a2resolve1", "./does-not-exist-a2");
         let config = create_config_from_args("--load a2resolve1").unwrap();
         std::fs::remove_file(&path).unwrap();
-        assert_eq!(vec![Target::of("./does-not-exist-a2".to_owned())], config.engine.dirs);
+        assert_eq!(vec![Target::of("./does-not-exist-a2")], config.engine.dirs);
         assert_eq!(Some("a2resolve1".to_owned()), config.view.dirs_source);
 
         // the error a real run returns, through the same join 'main' prints it with
         let languages_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../mezura-core/data/languages/");
-        let map = mezura_core::language_file::parse_languages_in_dir(languages_dir).unwrap().0;
-        let (languages, _) = mezura_core::Languages::resolve(map, &std::collections::HashMap::new(), &config.engine);
+        let parsed = mezura_core::language_file::parse_languages_in_dir(languages_dir).unwrap().0;
+        let (languages, _) = mezura_core::Languages::resolve(&config.engine, parsed, &std::collections::HashMap::new());
         let mezura_core::RunError::InvalidTargets(inner) = mezura_core::run(&config.engine, languages, |_| {}).unwrap_err()
                 else { panic!("the run did not refuse the config's dirs") };
         assert_eq!(ArgParsingError::InvalidPathInConfig("./does-not-exist-a2".to_owned(), "a2resolve1".to_owned()),
@@ -1383,7 +1352,7 @@ mod tests {
         let path = write_config("a2resolve3", "code=./src");
         let result = create_config_from_args("--load a2resolve3").unwrap();
         std::fs::remove_file(&path).unwrap();
-        assert_eq!(vec![Target::named("code", "./src".to_owned())], result.engine.dirs);
+        assert_eq!(vec![Target::named("code", "./src")], result.engine.dirs);
     }
 
     fn a2_corpus(name: &str) -> (std::path::PathBuf, String) {
@@ -1420,7 +1389,7 @@ mod tests {
         assert_eq!(vec![Target::of(format!("{corpus_str}/target/*"))], config.engine.dirs);
         let result = counted(&config);
         std::fs::remove_dir_all(&corpus).unwrap();
-        assert_eq!(1, result.final_stats.files, "the gitignored match was not counted");
+        assert_eq!(1, result.total.files, "the gitignored match was not counted");
     }
 
     // The same flag, loaded from a configuration, reaches a glob typed on the command line, since
@@ -1441,7 +1410,7 @@ mod tests {
         assert_eq!(vec![Target::of(format!("{corpus_str}/target/*"))], config.engine.dirs);
         let result = counted(&config);
         std::fs::remove_dir_all(&corpus).unwrap();
-        assert_eq!(1, result.final_stats.files, "the gitignored match was not counted");
+        assert_eq!(1, result.total.files, "the gitignored match was not counted");
     }
 
     // '--save' used to write the matches a pattern had expanded to at the moment of saving, so the
@@ -1472,7 +1441,7 @@ mod tests {
         assert_eq!(vec![Target::of(format!("{corpus_str}/sub*"))], loaded.engine.dirs);
         let result = counted(&loaded);
         std::fs::remove_dir_all(&corpus).unwrap();
-        assert_eq!(2, result.final_stats.files);
+        assert_eq!(2, result.total.files);
     }
 
     // Through '--load', the same file must not be reported as non-existent: it exists, it just

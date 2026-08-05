@@ -51,7 +51,7 @@ fn main() -> ExitCode {
     #[cfg(target_os = "windows")]
     control::set_virtual_terminal(true).unwrap();
 
-    let language_map: HashMap<String, Language>;
+    let languages_available: Vec<Language>;
 
     // Before the languages are read, or the run that performs it would still count with the old
     // files and the change would appear to take two runs to arrive
@@ -66,24 +66,22 @@ fn main() -> ExitCode {
         // A first execution reads the baked-in copies for this run, because the paths were resolved,
         // and the directory judged, before the migration above created anything. The contents are
         // the same ones it just wrote, so nothing is lost by not re-reading them.
-        language_map = read_baked_in_languages_dir();
+        languages_available = mezura_core::languages::shipped_languages();
     } else {
         match mezura_core::language_file::parse_languages_in_dir(&crate::paths::PERSISTENT_APP_PATHS.languages_dir) {
-            Ok((_language_map, faulty_files)) => {
+            Ok((parsed, faulty_files)) => {
                 if !faulty_files.is_empty() {
-                    let mut warn_msg = String::from("\nFormatting problems detected in language files: ");
-                    warn_msg.push_str(&faulty_files.join(", "));
-                    warn_msg.push_str(".\nThese files will not be taken into consideration.");
-                    eprintln!("{}",warn_msg.yellow());
-                    // One per file and not one for the list, since each is a whole language whose
-                    // files went uncounted and a reader of the document wants to know which
-                    for file in &faulty_files {
+                    eprintln!("{}", crate::message_printer::faulty_language_files_message(&faulty_files).yellow());
+                    // One warning per file and not one for the list, since each is a whole language
+                    // whose files went uncounted and a reader of the document wants to know which
+                    for faulty in &faulty_files {
+                        let (file, reason) = (&faulty.file_name, &faulty.error);
                         crate::warnings::keep(mezura_core::warnings::Warning::new(mezura_core::warnings::LANGUAGE_FILE_UNREADABLE, mezura_core::warnings::Affects::Counts, file,
-                                format!("'{file}' could not be read as a language file, so the files of that language were not counted.")));
+                                format!("'{file}' could not be used as a language file, so the files of that language were not counted: {reason}.")));
                     }
                 }
 
-                language_map = _language_map;
+                languages_available = parsed;
             },
             Err(x) => {
                 eprintln!("\n{}", x.formatted());
@@ -101,7 +99,7 @@ fn main() -> ExitCode {
         }
     };
 
-    if let Some(code) = handle_message_only_command(&args_str, &language_map) {
+    if let Some(code) = handle_message_only_command(&args_str, &languages_available) {
         return code;
     }
 
@@ -138,7 +136,7 @@ fn main() -> ExitCode {
     }
 
     if !config.engine.languages_of_interest.is_empty() {
-        match report_unknown_languages(&language_map, &config.engine.languages_of_interest) {
+        match report_unknown_languages(&languages_available, &config.engine.languages_of_interest) {
             Ok(x) => {
                 if let Some(msg) = x {
                     eprintln!("\n {msg}");
@@ -164,7 +162,7 @@ fn main() -> ExitCode {
     // Which languages are in play and who owns a contested extension is worked out here and not
     // inside the run, so that what it has to complain about lands beside the other complaints about
     // settings rather than in the middle of the status lines.
-    let (languages, reported) = mezura_core::Languages::resolve(language_map, &extension_priority, &config.engine);
+    let (languages, reported) = mezura_core::Languages::resolve(&config.engine, languages_available, &extension_priority);
     for warning in reported {
         // A name that does not exist was already put on the screen by 'report_unknown_languages',
         // in colour and with a suggested spelling under it, so this one is only kept for the
@@ -195,9 +193,17 @@ fn main() -> ExitCode {
             // and stops there, with no timing under it
             if !config.view.hidden.timing && config.view.prints_text() && result.files_present.relevant_files > 0 {
                 let perf = format!("Exec time: {} secs ", crate::format::with_decimal_separator(format!("{:.2}", instant.elapsed().as_secs_f32())));
-                let metrics = match result.metrics {
-                    Some(x) => format!("(Parsing {} files/s | {} lines/s)", crate::format::with_seperators(x.files_per_sec), crate::format::with_seperators(x.lines_per_sec)),
-                    None => String::new()
+                // Worked out here and not carried on the result: the rates are arithmetic on the
+                // duration and the counts, and the one second rule under which they are worth
+                // showing at all is a decision about the report and not about the counting.
+                let millis = result.performance.duration_millis;
+                let metrics = if millis > 1000 {
+                    let seconds = millis as f32 / 1000f32;
+                    format!("(Parsing {} files/s | {} lines/s)",
+                            crate::format::with_seperators((result.files_present.relevant_files as f32 / seconds) as usize),
+                            crate::format::with_seperators((result.total.lines as f32 / seconds) as usize))
+                } else {
+                    String::new()
                 };
                 println!("\n{}",crate::theme::active().footer.paint(&(perf + &metrics)));
             }
@@ -242,13 +248,17 @@ fn announce_traversal(config: &Configuration, scan: FilesPresent) {
 //
 // The filtering itself belongs to the run, so that a caller which is not this binary gets the same
 // selection. What is left here is the part that only a person needs: the colour and the correction.
-fn report_unknown_languages(language_map: &HashMap<String, Language>, languages_of_interest: &[String])
+fn report_unknown_languages(languages_available: &[Language], languages_of_interest: &[String])
         -> Result<Option<String>, String>
 {
-    let unknown = mezura_core::languages::unknown_language_names(language_map, languages_of_interest);
+    let unknown = mezura_core::languages::unknown_language_names(languages_available, languages_of_interest);
 
-    let mut all_names = language_map.keys().cloned().collect::<Vec<_>>();
+    // Deduplicated for the same reason the list of supported languages is: an installation holding
+    // two files that declare one name is one language however many files describe it, and offering
+    // the same correction twice reads as two different things to try.
+    let mut all_names = languages_available.iter().map(|x| x.name.clone()).collect::<Vec<_>>();
     all_names.sort_by_key(|x| x.to_lowercase());
+    all_names.dedup();
     let candidates = all_names.iter().map(String::as_str).collect::<Vec<_>>();
 
     // Only the mistake is coloured. What to do about it is not an error, it is the way out.
@@ -269,17 +279,14 @@ fn report_unknown_languages(language_map: &HashMap<String, Language>, languages_
 }
 
 
-fn read_baked_in_languages_dir() -> HashMap<String, Language> {
-    let mut lang_files = HashMap::with_capacity(20);
-    for (_, contents) in mezura_core::languages::shipped_language_files() {
-        // These are ours and every one of them parses, which the test suite is what actually
-        // guarantees. A file that somehow did not would be left out rather than take the run down.
-        if let Some(language) = mezura_core::language_file::parse_language(&String::from_utf8_lossy(contents)) {
-            lang_files.insert(language.name.to_owned(), language);
-        }
-    }
-
-    lang_files
+// Three bytes that mean "this is UTF-8" and carry no text. 'trim' leaves them where they are, since
+// they are not whitespace, so a header written on the first line of a file stops matching the moment
+// somebody re-saves that file with PowerShell's 'Set-Content' or an older Notepad, which is the
+// ordinary way of editing one of these on Windows. Every parser of a text format here strips it on
+// the way in, and the library does the same for the files it owns: leaving it to each parser is how
+// two of the four came to be missing it, and one of those failed by quietly reading no rules at all.
+fn without_byte_order_mark(contents: &str) -> &str {
+    contents.trim_start_matches('\u{feff}')
 }
 
 fn read_baked_in_default_config_contents() -> String {
@@ -287,7 +294,7 @@ fn read_baked_in_default_config_contents() -> String {
 }
 
 fn read_baked_in_extension_priority_contents() -> String {
-    String::from_utf8_lossy(mezura_core::languages::shipped_extension_priority()).to_string()
+    String::from_utf8_lossy(mezura_core::languages::shipped_extension_priority_raw()).to_string()
 }
 
 // An installation made by an earlier version has no such file, and the baked-in copy is not used as
@@ -385,7 +392,7 @@ fn named(dir_name: &str, file: &File<'static>) -> (String, &'static [u8]) {
 }
 
 fn shipped_files() -> Vec<(String, &'static [u8])> {
-    mezura_core::languages::shipped_language_files().into_iter()
+    mezura_core::languages::shipped_language_files_raw().into_iter()
             .map(|(name, contents)| (LANGUAGES_DIR_NAME.to_owned() + "/" + name, contents)).collect()
 }
 
@@ -420,7 +427,7 @@ fn archive(data_dir: &str, relative: &str, contents: &[u8]) -> Result<(), std::i
 }
 
 // Brings the data directory to what this version ships. The shipped copy always wins and the user's
-// is kept, so that every installation runs with the definitions we last corrected, and nothing of
+// is kept, so that every installation runs with the language files we last corrected, and nothing of
 // theirs is destroyed. A file we never wrote is never touched, which is what makes a language of
 // their own safe. 'force' is '--restore': do it again even though the version says there is nothing
 // to do.
@@ -527,7 +534,7 @@ fn read_args_as_str() -> Option<String> {
 // 'None' means the args are not one of them, and not that nothing went wrong: three of the branches
 // below report a mistake, and a bool could not tell the caller to stop with a failure instead of
 // handing arguments it has already rejected to the configuration parser.
-fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Language>) -> Option<ExitCode> {
+fn handle_message_only_command(args_str: &str, languages_available: &[Language]) -> Option<ExitCode> {
     let is_present = |command: &str| crate::args::find_command(args_str, command).is_some();
     if ![HELP, VERSION, CHANGELOG, SHOW_LANGUAGES, SHOW_CONFIGS, SHOW_THEMES, THEME_EDITOR, RESTORE].iter().any(|x| is_present(x)) {
         return None;
@@ -562,7 +569,7 @@ fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Lan
             },
         };
     } else if is_present(SHOW_LANGUAGES) {
-        crate::message_printer::print_supported_languages(language_map);
+        crate::message_printer::print_supported_languages(languages_available);
         return Some(ExitCode::SUCCESS);
     } else if is_present(SHOW_CONFIGS) {
         crate::message_printer::print_existing_configs();
@@ -637,8 +644,6 @@ fn handle_message_only_command(args_str: &str, language_map: &HashMap<String,Lan
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use mezura_core::Language;
     use crate::paths::test_paths::SCRATCH_DIR;
 
@@ -818,27 +823,39 @@ third
 "));
     }
 
-    fn java_and_csharp() -> HashMap<String, Language> {
-        hashmap![
-                "Java".to_owned() => Language::new("Java".to_owned(),vec![],vec![],vec!["\"".to_owned()],None,None,vec![]),
-                "C#".to_owned() => Language::new("C#".to_owned(),vec![],vec![],vec!["\"".to_owned()],None,None,vec![])]
+    fn java_and_csharp() -> Vec<Language> {
+        vec![Language::new("Java", [""; 0], ["\""], [""; 0], None, []),
+             Language::new("C#", [""; 0], ["\""], [""; 0], None, [])]
     }
 
-    // The counterpart of this, that the map really is narrowed, is asserted next to the run, which
+    // The counterpart of this, that the list really is narrowed, is asserted next to the run, which
     // is where the narrowing happens now. What is left here is the part a person reads.
     #[test]
     fn test_report_unknown_languages() {
-        let map = java_and_csharp();
+        let available = java_and_csharp();
 
         // every name exists, so there is nothing to say
-        assert!(report_unknown_languages(&map, &["java".to_owned()]).unwrap().is_none());
+        assert!(report_unknown_languages(&available, &["java".to_owned()]).unwrap().is_none());
 
         // one of the three is real, so the other two are reported and the run goes on
         let some_unknown = ["java".to_owned(), "c++".to_owned(), "Rust".to_owned()];
-        assert!(report_unknown_languages(&map, &some_unknown).unwrap().is_some());
+        assert!(report_unknown_languages(&available, &some_unknown).unwrap().is_some());
 
         // none of them is, and that stops the run
         let all_unknown = ["c++".to_owned(), "Rust".to_owned()];
-        assert!(report_unknown_languages(&map, &all_unknown).is_err());
+        assert!(report_unknown_languages(&available, &all_unknown).is_err());
+    }
+
+    // An installation that has been given a second file declaring a name it already had is one
+    // language described twice, and the correction offered for a misspelling of it has to say so
+    // once. The list used to arrive as a map, which deduplicated it without anybody deciding to.
+    #[test]
+    fn a_language_declared_by_two_files_is_suggested_once() {
+        let mut available = java_and_csharp();
+        available.push(Language::new("Java", [""; 0], ["\""], [""; 0], None, []));
+
+        let report = report_unknown_languages(&available, &["jaava".to_owned(), "C#".to_owned()])
+                .unwrap().expect("a misspelling was not reported at all");
+        assert_eq!(1, report.matches("Java").count(), "'Java' was offered more than once:\n{report}");
     }
 }

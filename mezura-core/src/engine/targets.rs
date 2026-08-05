@@ -316,14 +316,14 @@ mod target_path_tests {
     }
 
     fn dedupe(paths: &[&str]) -> Vec<String> {
-        kept_paths(remove_overlapping_targets(paths.iter().map(|x| Target::of((*x).to_owned())).collect()))
+        kept_paths(remove_overlapping_targets(paths.iter().map(|x| Target::of(*x)).collect()))
     }
 
     // 'name path' declares the module, a bare path declares none
     fn dedupe_named(entries: &[&str]) -> Vec<String> {
         let targets = entries.iter().map(|entry| match entry.split_once(' ') {
-            Some((name, path)) => Target::named(name, path.to_owned()),
-            None => Target::of((*entry).to_owned())
+            Some((name, path)) => Target::named(name, path),
+            None => Target::of(*entry)
         }).collect();
         kept_paths(remove_overlapping_targets(targets))
     }
@@ -473,7 +473,7 @@ mod target_path_tests {
                 Err(TargetError::NoGlobMatches(_))));
         // Named in its prepared form, joined to the working directory: that is what a saved
         // configuration holds, so the error names what is actually written wherever it lives
-        assert!(matches!(resolved_paths(vec![Target::of("a[".to_owned())], true),
+        assert!(matches!(resolved_paths(vec![Target::of("a[")], true),
                 Err(TargetError::InvalidGlob(p)) if p == convert_to_absolute("./").trim_end_matches('/').to_owned() + "/a["));
 
         std::fs::remove_dir_all(&root).unwrap();
@@ -555,8 +555,8 @@ mod target_path_tests {
 
     #[test]
     fn the_roots_of_the_traversal_never_contain_one_another() {
-        let targets = vec![Target::named("backend", "D:/api".to_owned()),
-                Target::named("tests", "D:/api/tests".to_owned())];
+        let targets = vec![Target::named("backend", "D:/api"),
+                Target::named("tests", "D:/api/tests")];
         assert_eq!(vec!["backend=D:/api"], kept_paths(topmost_targets(&targets)));
     }
 }

@@ -1,4 +1,6 @@
-Numerical inaccuracies don't matter here
+The figures add up the way a real entry's do: 'extra' is what is left of the lines once
+the code and the comments are taken off, and it is read back that way rather than from the line
+below, so an entry whose numbers disagreed with themselves would be read as its own arithmetic.
 
 ===> entry one
 2021-09-12 16:42:00 +0300
@@ -12,7 +14,7 @@ Stats:
     Files: 10
     Lines: 1000
         Code: 100
-        Extra: 100
+        Extra: 900
     Total Size: 100000
         Average Size: 10000
 
@@ -32,9 +34,9 @@ Stats:
     Files: 11
     Lines: 1111
         Code: 111
-        Extra: 111
+        Extra: 1000
     Total Size: 111100
-        Average Size: 11100
+        Average Size: 10100
 
 
 --------------------------------------------------------------------------------------------
@@ -52,9 +54,9 @@ Stats:
     Files: 12
     Lines: 1222
         Code: 122
-        Extra: 122
+        Extra: 1100
     Total Size: 122200
-        Average Size: 12200
+        Average Size: 10183
 
 
 --------------------------------------------------------------------------------------------

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Local, SecondsFormat};
 
-use mezura_core::{FaultyFileDetails, FilesPresent, FinalStats, LanguageContentInfo, LanguageMetadata, RunResult};
+use mezura_core::{FaultyFileDetails, FilesPresent, RunResult, Stats};
 use super::config_manager::Configuration;
 use super::result_printer;
 
@@ -18,9 +18,8 @@ pub fn print_as_json(result: &RunResult, datetime_now: &DateTime<Local>, config:
 }
 
 fn document(result: &RunResult, datetime_now: &DateTime<Local>, config: &Configuration) -> String {
-    let RunResult {content_info_map, languages_metadata_map, final_stats, faulty_files, files_present,
-            unreadable_dirs, ..} = result;
-    let names = result_printer::get_sorted_language_names(content_info_map, languages_metadata_map, config.view.sort_by);
+    let RunResult {per_language, total, faulty_files, files_present, unreadable_dirs, ..} = result;
+    let names = result_printer::get_sorted_language_names(per_language, config.view.sort_by);
     let hidden = config.view.top_n.map_or(0, |top| names.len().saturating_sub(top));
     let shown = &names[..names.len() - hidden];
 
@@ -30,11 +29,11 @@ fn document(result: &RunResult, datetime_now: &DateTime<Local>, config: &Configu
         format!("  \"generated_at\": \"{}\"", datetime_now.to_rfc3339_opts(SecondsFormat::Secs, false)),
         format!("  \"scope\": {}", scope_object(config, &result.targets)),
         format!("  \"scan\": {}", scan_object(files_present, faulty_files.len())),
-        format!("  \"total\": {}", total_object(final_stats)),
-        format!("  \"languages\": {}", languages_array(shown, content_info_map, languages_metadata_map, config)),
+        format!("  \"total\": {}", total_object(total)),
+        format!("  \"languages\": {}", languages_array(shown, per_language, config)),
         format!("  \"languages_hidden\": {hidden}"),
         format!("  \"faulty_files\": {}", faulty_files_array(faulty_files)),
-        format!("  \"unreadable_dirs\": {}", string_array(unreadable_dirs)),
+        format!("  \"unreadable_dirs\": {}", unreadable_dirs_array(unreadable_dirs)),
         format!("  \"warnings\": {}", warnings_array()),
     ];
     // Absent from a run that named no module, the same way the section is absent from the printed
@@ -45,7 +44,7 @@ fn document(result: &RunResult, datetime_now: &DateTime<Local>, config: &Configu
     // The only volatile block apart from the timestamp, so hiding the timing is also what makes the
     // document repeatable enough to hash or to compare against a stored one
     if !config.view.hidden.timing {
-        members.push(format!("  \"performance\": {}", performance_object(result.scan_duration_millis, &result.threads)));
+        members.push(format!("  \"performance\": {}", performance_object(&result.performance)));
     }
 
     format!("{{\n{}\n}}", members.join(",\n"))
@@ -85,15 +84,15 @@ fn scan_object(files: &FilesPresent, faulty: usize) -> String {
     format!("{{\n{}\n  }}", members.join(",\n"))
 }
 
-fn total_object(final_stats: &FinalStats) -> String {
+fn total_object(total: &Stats) -> String {
     let members = [
-        format!("    \"files\": {}", final_stats.files),
-        format!("    \"lines\": {}", final_stats.lines),
-        format!("    \"code\": {}", final_stats.code_lines),
-        format!("    \"comments\": {}", final_stats.comment_lines),
-        format!("    \"extra\": {}", final_stats.extra_lines),
-        format!("    \"bytes\": {}", final_stats.bytes_size),
-        format!("    \"average_bytes\": {}", final_stats.bytes_average_size),
+        format!("    \"files\": {}", total.files),
+        format!("    \"lines\": {}", total.lines),
+        format!("    \"code\": {}", total.code_lines),
+        format!("    \"comments\": {}", total.comment_lines),
+        format!("    \"extra\": {}", total.extra_lines()),
+        format!("    \"bytes\": {}", total.bytes),
+        format!("    \"average_bytes\": {}", total.average_size()),
     ];
 
     format!("{{\n{}\n  }}", members.join(",\n"))
@@ -104,15 +103,14 @@ fn total_object(final_stats: &FinalStats) -> String {
 // key would silently merge the two.
 fn modules_array(result: &RunResult, config: &Configuration) -> String {
     let entries = result.modules.iter().map(|module| {
-        let names = result_printer::get_sorted_language_names(&module.content_info_map, &module.languages_metadata_map, config.view.sort_by);
+        let names = result_printer::get_sorted_language_names(&module.per_language, config.view.sort_by);
         let hidden = config.view.top_n.map_or(0, |top| names.len().saturating_sub(top));
         let shown = &names[..names.len() - hidden];
         let name = module.name.as_ref().map_or("null".to_owned(), |x| format!("\"{}\"", escaped(x)));
         let members = [
             format!("      \"name\": {name}"),
-            format!("      \"total\": {}", indented(&total_object(&module.final_stats))),
-            format!("      \"languages\": {}", indented(&languages_array(shown, &module.content_info_map,
-                    &module.languages_metadata_map, config))),
+            format!("      \"total\": {}", indented(&total_object(&module.total))),
+            format!("      \"languages\": {}", indented(&languages_array(shown, &module.per_language, config))),
             format!("      \"languages_hidden\": {hidden}"),
         ];
         format!("    {{\n{}\n    }}", members.join(",\n"))
@@ -129,35 +127,29 @@ fn indented(block: &str) -> String {
 
 // An array and not an object keyed by language name, so that the order '--sort' chose survives and
 // so that no language can collide with a key of the document.
-fn languages_array(shown: &[String], content_info_map: &HashMap<String, LanguageContentInfo>,
-        languages_metadata_map: &HashMap<String, LanguageMetadata>, config: &Configuration) -> String
+fn languages_array(shown: &[String], per_language: &HashMap<String, Stats>, config: &Configuration) -> String
 {
     if shown.is_empty() {
         return String::from("[]");
     }
 
     let entries = shown.iter().filter_map(|name| {
-        let info = content_info_map.get(name)?;
-        let metadata = languages_metadata_map.get(name)?;
-        Some(language_object(name, info, metadata, !config.view.hidden.keywords))
+        Some(language_object(name, per_language.get(name)?, !config.view.hidden.keywords))
     }).collect::<Vec<_>>();
 
     format!("[\n{}\n  ]", entries.join(",\n"))
 }
 
-fn language_object(name: &str, info: &LanguageContentInfo, metadata: &LanguageMetadata, keywords_counted: bool) -> String {
-    let extra = info.lines - info.code_lines - info.comment_lines;
-    let average_bytes = metadata.bytes.checked_div(metadata.files).unwrap_or(0);
-
+fn language_object(name: &str, info: &Stats, keywords_counted: bool) -> String {
     let mut members = vec![
         format!("      \"name\": \"{}\"", escaped(name)),
-        format!("      \"files\": {}", metadata.files),
+        format!("      \"files\": {}", info.files),
         format!("      \"lines\": {}", info.lines),
         format!("      \"code\": {}", info.code_lines),
         format!("      \"comments\": {}", info.comment_lines),
-        format!("      \"extra\": {extra}"),
-        format!("      \"bytes\": {}", metadata.bytes),
-        format!("      \"average_bytes\": {average_bytes}"),
+        format!("      \"extra\": {}", info.extra_lines()),
+        format!("      \"bytes\": {}", info.bytes),
+        format!("      \"average_bytes\": {}", info.average_size()),
     ];
     // Absent when they were not counted, since '--hide keywords' also stops the counting. An empty
     // object means the opposite: they were counted and the language declares none.
@@ -229,6 +221,27 @@ fn faulty_files_array(faulty_files: &[FaultyFileDetails]) -> String {
     format!("[\n{}\n  ]", entries.join(",\n"))
 }
 
+// Objects and not bare paths, and sorted for the same reason as the faulty files above. A consumer
+// that wants only the paths reads one key of each; one that wants to tell a permission apart from a
+// directory that went away mid-walk could not do it at all while this was an array of strings.
+fn unreadable_dirs_array(unreadable_dirs: &[mezura_core::UnreadableDirDetails]) -> String {
+    if unreadable_dirs.is_empty() {
+        return String::from("[]");
+    }
+
+    let mut sorted = unreadable_dirs.iter().collect::<Vec<_>>();
+    sorted.sort_unstable_by(|a, b| a.path.cmp(&b.path));
+    let entries = sorted.into_iter().map(|dir| {
+        let members = [
+            format!("      \"path\": \"{}\"", escaped(&dir.path)),
+            format!("      \"error\": \"{}\"", escaped(&dir.error_msg)),
+        ];
+        format!("    {{\n{}\n    }}", members.join(",\n"))
+    }).collect::<Vec<_>>();
+
+    format!("[\n{}\n  ]", entries.join(",\n"))
+}
+
 // 'scan_ms' and not the 'Exec time' of the footer: what is measured here is the interval that starts
 // before the producers and ends when the consumers are done, which is the phase 'scan' describes.
 // The total is not known yet at this point, and the shell can measure it honestly anyway.
@@ -236,11 +249,11 @@ fn faulty_files_array(faulty_files: &[FaultyFileDetails]) -> String {
 // the measurement they exist to interpret: the configuration holds what was asked for, and the
 // operating system is allowed to grant fewer. A document stating the requested counts next to
 // 'scan_ms' would be lying about the conditions of its own timing.
-fn performance_object(scan_ms: u128, threads: &mezura_core::Threads) -> String {
+fn performance_object(performance: &mezura_core::Performance) -> String {
     let threads = format!("{{\n      \"producers\": {},\n      \"consumers\": {}\n    }}",
-            threads.producers(), threads.consumers());
+            performance.threads.producers(), performance.threads.consumers());
 
-    format!("{{\n    \"scan_ms\": {scan_ms},\n    \"threads\": {threads}\n  }}")
+    format!("{{\n    \"scan_ms\": {},\n    \"threads\": {threads}\n  }}", performance.duration_millis)
 }
 
 fn string_array(values: &[String]) -> String {
@@ -277,27 +290,24 @@ mod tests {
 
     use super::*;
 
-    fn stats_of(lines: usize, code: usize, comments: usize, keywords: HashMap<String,usize>) -> LanguageContentInfo {
-        LanguageContentInfo {lines, code_lines: code, comment_lines: comments, keyword_occurences: keywords}
+    fn stats_of(files: usize, bytes: usize, lines: usize, code: usize, comments: usize, keywords: HashMap<String,usize>) -> Stats {
+        Stats::new(files, bytes, lines, code, comments, keywords)
     }
 
-    fn result_of(content_info_map: HashMap<String, LanguageContentInfo>,
-            languages_metadata_map: HashMap<String, LanguageMetadata>, final_stats: FinalStats,
+    fn result_of(per_language: HashMap<String, Stats>, total: Stats,
             faulty_files: Vec<FaultyFileDetails>, files_present: FilesPresent) -> RunResult
     {
-        RunResult {content_info_map, languages_metadata_map, modules: Vec::new(), final_stats, faulty_files,
-                files_present, scan_duration_millis: 1180, metrics: None, targets: Vec::new(), unreadable_dirs: Vec::new(), threads: mezura_core::Threads::new(2, 8)}
+        RunResult {per_language, modules: Vec::new(), total, faulty_files,
+                files_present, targets: Vec::new(), unreadable_dirs: Vec::new(),
+                performance: mezura_core::Performance { duration_millis: 1180, threads: mezura_core::Threads::new(2, 8) }}
     }
 
     fn document_of(config: &crate::config_manager::Configuration) -> String {
         let result = result_of(
             hashmap![
-                "Rust".to_owned() => stats_of(100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 1]),
-                "HTML".to_owned() => stats_of(40, 30, 0, HashMap::new())],
-            hashmap![
-                "Rust".to_owned() => LanguageMetadata {files: 2, bytes: 5000},
-                "HTML".to_owned() => LanguageMetadata {files: 1, bytes: 900}],
-            FinalStats::new_extended(3, 140, 100, 10, 30, 5900, 1966), Vec::new(),
+                "Rust".to_owned() => stats_of(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 1]),
+                "HTML".to_owned() => stats_of(1, 900, 40, 30, 0, HashMap::new())],
+            Stats::new(3, 5900, 140, 100, 10, HashMap::new()), Vec::new(),
             FilesPresent {total_files: 5, relevant_files: 3, excluded_files: 2});
         let datetime = DateTime::parse_from_rfc3339("2026-07-30T14:22:07+03:00").unwrap().with_timezone(&Local);
 
@@ -388,17 +398,14 @@ mod tests {
         assert!(!document_of(&config).contains("\"modules\""));
 
         let module_of = |name: Option<&str>, language: &str, lines: usize, files: usize| {
-            let content_info_map = hashmap![language.to_owned() => stats_of(lines, lines, 0, HashMap::new())];
-            let languages_metadata_map = hashmap![language.to_owned() => LanguageMetadata {files, bytes: lines * 10}];
-            let final_stats = FinalStats::calculate(&content_info_map, &languages_metadata_map);
-            mezura_core::ModuleResult {name: name.map(str::to_owned), content_info_map, languages_metadata_map, final_stats}
+            let per_language = hashmap![language.to_owned() => stats_of(files, lines * 10, lines, lines, 0, HashMap::new())];
+            let total = Stats::total_of(&per_language);
+            mezura_core::ModuleResult {name: name.map(str::to_owned), per_language, total}
         };
         let mut result = result_of(
-            hashmap!["Rust".to_owned() => stats_of(100, 100, 0, HashMap::new()),
-                     "HTML".to_owned() => stats_of(40, 40, 0, HashMap::new())],
-            hashmap!["Rust".to_owned() => LanguageMetadata {files: 2, bytes: 1000},
-                     "HTML".to_owned() => LanguageMetadata {files: 1, bytes: 400}],
-            FinalStats::new_extended(3, 140, 140, 0, 0, 1400, 466), Vec::new(),
+            hashmap!["Rust".to_owned() => stats_of(2, 1000, 100, 100, 0, HashMap::new()),
+                     "HTML".to_owned() => stats_of(1, 400, 40, 40, 0, HashMap::new())],
+            Stats::new(3, 1400, 140, 140, 0, HashMap::new()), Vec::new(),
             FilesPresent {total_files: 3, relevant_files: 3, excluded_files: 0});
         result.modules = vec![module_of(Some("backend"), "Rust", 100, 2), module_of(None, "HTML", 40, 1)];
 
@@ -448,7 +455,7 @@ mod tests {
     #[test]
     fn a_run_with_nothing_to_count_is_still_a_whole_document() {
         let config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
-        let result = result_of(HashMap::new(), HashMap::new(), FinalStats::new_extended(0,0,0,0,0,0,0),
+        let result = result_of(HashMap::new(), Stats::default(),
                 Vec::new(), FilesPresent {total_files: 12, relevant_files: 0, excluded_files: 12});
         let document = document(&result, &Local::now(), &config);
 
@@ -462,9 +469,8 @@ mod tests {
     fn the_faulty_files_are_reported_with_their_reason_in_a_stable_order() {
         let config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         let result = result_of(
-            hashmap!["Rust".to_owned() => stats_of(10, 5, 0, HashMap::new())],
-            hashmap!["Rust".to_owned() => LanguageMetadata {files: 1, bytes: 30}],
-            FinalStats::new_extended(1, 10, 5, 0, 5, 30, 30),
+            hashmap!["Rust".to_owned() => stats_of(1, 30, 10, 5, 0, HashMap::new())],
+            Stats::new(1, 30, 10, 5, 0, HashMap::new()),
             vec![FaultyFileDetails::new("src\\z.rs".to_owned(), "no".to_owned(), 20),
                  FaultyFileDetails::new("src\\a.rs".to_owned(), "nope".to_owned(), 10)],
             FilesPresent {total_files: 3, relevant_files: 3, excluded_files: 0});
@@ -473,5 +479,32 @@ mod tests {
         assert!(document.contains("\"files_faulty\": 2"));
         assert!(document.contains("\"path\": \"src\\\\a.rs\""));
         assert!(document.find("a.rs").unwrap() < document.find("z.rs").unwrap());
+    }
+
+    // Objects and not bare paths, so that a consumer can tell a permission apart from a directory
+    // that went away between being queued and being opened. As strings there was one sentence for
+    // every reason, and on a whole drive that is hundreds of rows saying the same word.
+    #[test]
+    fn the_unreadable_directories_carry_their_reason_in_a_stable_order() {
+        let config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        let mut result = result_of(HashMap::new(), Stats::default(), Vec::new(),
+                FilesPresent {total_files: 0, relevant_files: 0, excluded_files: 0});
+        result.unreadable_dirs = vec![
+            mezura_core::UnreadableDirDetails::new("D:/z".to_owned(),
+                    "Access is denied. (os error 5)".to_owned()),
+            mezura_core::UnreadableDirDetails::new("D:/a".to_owned(),
+                    "The system cannot find the path specified. (os error 3)".to_owned())];
+        let written = document(&result, &Local::now(), &config);
+
+        assert!(written.contains("\"path\": \"D:/a\""), "{written}");
+        assert!(written.contains("\"error\": \"Access is denied. (os error 5)\""), "{written}");
+        assert!(written.contains("\"error\": \"The system cannot find the path specified. (os error 3)\""), "{written}");
+        // sorted by path, since the walk collects these in whichever order its threads hit them
+        assert!(written.find("D:/a").unwrap() < written.find("D:/z").unwrap(), "{written}");
+
+        // and a run that opened everything still writes the key, empty
+        let clean = result_of(HashMap::new(), Stats::default(), Vec::new(),
+                FilesPresent {total_files: 0, relevant_files: 0, excluded_files: 0});
+        assert!(document(&clean, &Local::now(), &config).contains("\"unreadable_dirs\": []"));
     }
 }

@@ -1,10 +1,11 @@
-use std::{collections::HashMap, fs};
+use std::fs;
 
 use colored::Colorize;
 
 use super::formatted::Formatted;
 use crate::paths::PERSISTENT_APP_PATHS;
 use mezura_core::Language;
+use mezura_core::language_file::FaultyLanguageFile;
 
 // The file itself, so that the command never depends on an installation having a copy of it.
 static CHANGELOG_BYTES : &[u8] = include_bytes!("../Changelog");
@@ -863,11 +864,18 @@ pub fn print_existing_themes(bar_thickness: BarThickness, layout: Layout) {
     println!("{msg}");
 }
 
-pub fn print_supported_languages(languages_map: &HashMap<String,Language>) {
-    let mut lang_names = languages_map.keys().map(|x| x.to_owned()).collect::<Vec<_>>();
+pub fn print_supported_languages(languages_available: &[Language]) {
+    println!("{}", supported_languages_message(languages_available));
+}
+
+// Split from the printing so that the deduplication below can be asserted. Two files declaring one
+// language is a broken installation, and naming it twice here would read as two languages rather
+// than as the one it is.
+fn supported_languages_message(languages_available: &[Language]) -> String {
+    let mut lang_names = languages_available.iter().map(|x| x.name.to_owned()).collect::<Vec<_>>();
     lang_names.sort();
-    let prefix = get_data_dir_str();
-    println!("{}The supported languages found are:\n  {}\n",prefix,lang_names.join("\n  "));
+    lang_names.dedup();
+    format!("{}The supported languages found are:\n  {}\n", get_data_dir_str(), lang_names.join("\n  "))
 }
 
 pub fn print_existing_configs() {
@@ -892,10 +900,36 @@ pub fn print_existing_configs() {
         }
     }).collect::<Vec<_>>();
     config_names.sort_unstable();
-    let prefix = get_data_dir_str();
-    println!("{}Found these configurations:\n  {}\n",prefix,config_names.join("\n  "));
+    println!("{}", existing_configs_message(&config_names));
 }
 
+// Split from the printing above so that the empty case can be asserted: the names were joined with
+// the same two spaces that indent the first one, so with nothing to list it printed the heading and
+// then a line holding those two spaces and nothing else. That reads as a configuration whose name
+// failed to appear rather than as none existing. The data dir is named either way, since it is the
+// answer to "where would I put one".
+fn existing_configs_message(config_names: &[&str]) -> String {
+    if config_names.is_empty() {
+        format!("{}No configurations found.\n", get_data_dir_str())
+    } else {
+        format!("{}Found these configurations:\n  {}\n", get_data_dir_str(), config_names.join("\n  "))
+    }
+}
+
+
+// Split from the printing for the same reason as the two above: this is a message nothing else could
+// see. It used to open with "Formatting problems detected in language files" over both reasons a file
+// can fail, which is true of one of them: a file saved in an encoding that cannot be read as text was
+// announced as a file with a typo in it, and its owner went hunting for a mistake that is not there.
+// The reason now travels beside each name, which is the shape the faulty counted files already use.
+pub fn faulty_language_files_message(faulty_files: &[FaultyLanguageFile]) -> String {
+    let mut message = format!("\n{} language {} could not be used, and will not be taken into consideration.",
+            faulty_files.len(), if faulty_files.len() == 1 {"file"} else {"files"});
+    for faulty in faulty_files {
+        message += &format!("\n-- {}: {}", faulty.file_name, faulty.error);
+    }
+    message + "\n"
+}
 
 fn get_data_dir_str() -> String {
     format!("\nData dir path: {}\n\n", PERSISTENT_APP_PATHS.data_dir)
@@ -910,6 +944,65 @@ fn get_help_msg_of_command(command: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // An installation holding two files that declare one language is one language however many
+    // files describe it. The list used to arrive as a map, which deduplicated it without anybody
+    // deciding to, and the line that took that job over had nothing asserting it.
+    #[test]
+    fn a_language_declared_by_two_files_is_listed_once() {
+        let twice = vec![Language::new("Java", ["java"], ["\""], ["//"], None, []),
+                Language::new("Rust", ["rs"], ["\""], ["//"], None, []),
+                Language::new("Java", ["jav"], ["\""], ["//"], None, [])];
+        let listed = supported_languages_message(&twice);
+
+        assert_eq!(1, listed.matches("Java").count(), "'Java' was listed more than once:\n{listed}");
+        assert!(listed.contains("Rust"));
+    }
+
+    // The one message that only appears when something in the user's languages folder is wrong, so
+    // no ordinary run prints it and no comparison of two builds can see it. Both reasons a file can
+    // fail used to arrive under one heading calling them formatting problems, which sent the owner of
+    // a file saved in the wrong encoding looking for a typo that was not there.
+    #[test]
+    fn a_language_file_that_could_not_be_read_is_not_called_a_formatting_problem() {
+        let unreadable = FaultyLanguageFile {
+            file_name: "Utf16.txt".to_owned(),
+            error: mezura_core::language_file::LanguageFileError::Unreadable(
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, "stream did not contain valid UTF-8"))
+        };
+        let malformed = FaultyLanguageFile {
+            file_name: "Garbage.txt".to_owned(),
+            error: mezura_core::language_file::LanguageFileError::Malformed
+        };
+
+        let both = faulty_language_files_message(&[unreadable, malformed]);
+        assert!(both.contains("2 language files could not be used"), "{both}");
+        // each named on its own line, with the reason that belongs to it and not to the other
+        assert!(both.contains("-- Utf16.txt: the language file could not be read"), "{both}");
+        assert!(both.contains("-- Garbage.txt: the language file is not written in the format mezura reads"), "{both}");
+        assert!(!both.contains("Formatting problems"), "the two reasons are under one wrong heading again:\n{both}");
+
+        let one = faulty_language_files_message(&[FaultyLanguageFile {
+            file_name: "Garbage.txt".to_owned(),
+            error: mezura_core::language_file::LanguageFileError::Malformed}]);
+        assert!(one.contains("1 language file could not be used"), "{one}");
+    }
+
+    // With nothing to list, '--show-configs' printed the heading and then a line holding the two
+    // spaces that indent a name, which reads as a name that failed to print rather than as an
+    // empty data dir.
+    #[test]
+    fn an_empty_config_dir_says_so_instead_of_listing_nothing() {
+        let none = existing_configs_message(&[]);
+        assert!(none.contains("No configurations found."), "{none}");
+        assert!(!none.contains("Found these configurations"), "{none}");
+        assert!(!none.contains("\n  \n"), "an empty bullet was printed:\n{none}");
+
+        let some = existing_configs_message(&["mezura.txt", "portal.txt"]);
+        assert!(some.contains("Found these configurations:\n  mezura.txt\n  portal.txt"), "{some}");
+        // and either way the reader is told where the directory is
+        assert!(none.contains("Data dir path:") && some.contains("Data dir path:"));
+    }
 
     const README_HEADING : &str = "## Cmd Commands";
     const FENCE : &str = "```";

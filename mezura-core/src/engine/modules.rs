@@ -118,8 +118,8 @@ mod tests {
     // nested target is a directory or a file to decide which of the two lookups will find it.
     fn modules_of(entries: &[&str]) -> Modules {
         let targets = entries.iter().map(|entry| match entry.split_once(' ') {
-            Some((name, path)) => crate::engine::config::Target::named(name, path.to_owned()),
-            None => crate::engine::config::Target::of((*entry).to_owned())
+            Some((name, path)) => crate::engine::config::Target::named(name, path),
+            None => crate::engine::config::Target::of(*entry)
         }).collect::<Vec<_>>();
     
         Modules::of(&targets)

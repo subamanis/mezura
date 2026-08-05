@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use mezura_core::{EngineConfig, LanguageContentInfo, LanguageMetadata, Languages, language_file, run};
+use mezura_core::{EngineConfig, Languages, Stats, language_file, run};
 
 const LANGUAGES_DIR : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/languages/");
 
@@ -18,22 +18,21 @@ fn golden_path() -> PathBuf {
 
 // Byte sizes are deliberately absent from the report: they are the one figure that differs between a
 // CRLF and an LF checkout of the same fixtures, which would break the golden on the CI matrix.
-fn render_report(content_info: &HashMap<String, LanguageContentInfo>, metadata: &HashMap<String, LanguageMetadata>) -> String {
-    let mut names = content_info.keys().cloned().collect::<Vec<_>>();
+fn render_report(per_language: &HashMap<String, Stats>) -> String {
+    let mut names = per_language.keys().cloned().collect::<Vec<_>>();
     names.sort();
 
     let (mut total_files, mut total_lines, mut total_code, mut total_comments) = (0, 0, 0, 0);
     let mut report = String::with_capacity(500);
     for name in &names {
-        let info = content_info.get(name).unwrap();
-        let meta = metadata.get(name).unwrap();
-        total_files += meta.files;
+        let info = per_language.get(name).unwrap();
+        total_files += info.files;
         total_lines += info.lines;
         total_code += info.code_lines;
         total_comments += info.comment_lines;
 
         report.push_str(&format!("{name}\n  files={} lines={} code={} comments={}\n",
-                meta.files, info.lines, info.code_lines, info.comment_lines));
+                info.files, info.lines, info.code_lines, info.comment_lines));
 
         let mut keywords = info.keyword_occurences.iter().collect::<Vec<_>>();
         keywords.sort_by_key(|(name, _)| name.as_str());
@@ -51,12 +50,16 @@ fn render_report(content_info: &HashMap<String, LanguageContentInfo>, metadata: 
 // that what is measured is the wiring the program actually uses.
 fn collect_stats() -> String {
     // Only the counting half, since nothing here is printed.
-    let mut config = EngineConfig::new(vec![fixtures_root().to_str().unwrap().replace('\\', "/")]);
-    config.set_threads(1, CONSUMER_THREADS);
+    let config = EngineConfig {
+        threads: mezura_core::Threads::new(1, CONSUMER_THREADS),
+        ..EngineConfig::new([fixtures_root().to_str().unwrap().replace('\\', "/")])
+    };
 
-    let language_map = language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0;
+    // The repository's own files and not the copies baked into the library, so that editing one of
+    // them and rerunning the golden measures the edit.
+    let languages_on_disk = language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0;
 
-    let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
+    let (languages, _) = Languages::resolve(&config, languages_on_disk, &HashMap::new());
 
     // The all-faulty guard lives on the asserts below: that case comes back as a result now, and
     // the empty faulty list is already demanded a few lines down
@@ -66,7 +69,7 @@ fn collect_stats() -> String {
     assert!(result.files_present.relevant_files > 0, "the fixture corpus produced no relevant files");
     assert!(result.faulty_files.is_empty(), "{} fixture(s) failed to parse", result.faulty_files.len());
 
-    render_report(&result.content_info_map, &result.languages_metadata_map)
+    render_report(&result.per_language)
 }
 
 #[test]

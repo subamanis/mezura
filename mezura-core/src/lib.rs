@@ -33,22 +33,22 @@ pub mod warnings;
 pub use engine::config::{EngineConfig, Target, Threads};
 pub use engine::targets::TargetError;
 pub use languages::Languages;
-pub use domain::{Language, LanguageContentInfo, LanguageMetadata, FileStats, Keyword};
-pub use result::{FaultyFileDetails, FilesPresent, FinalStats, Metrics, ModuleResult, RunError, RunResult};
+pub use domain::{FileStats, Keyword, Language, Stats};
+pub use result::{FaultyFileDetails, FilesPresent, ModuleResult, Performance, RunError, RunResult,
+        SortCriterion, UnreadableDirDetails};
 pub use warnings::{Affects, Warning};
 
 pub(crate) type FaultyFilesListMut = Arc<Mutex<Vec<FaultyFileDetails>>>;
 pub(crate) type ExtensionLangMap = Arc<HashMap<String, Arc<str>>>;
 // One bucket per module, and a run that declared none has exactly one, so that nothing downstream
 // has two shapes to handle
-pub(crate) type ContentInfoMapMut  = Arc<Mutex<Vec<HashMap<String,LanguageContentInfo>>>>;
-pub(crate) type MetadataMapMut     = Arc<Mutex<Vec<HashMap<String,LanguageMetadata>>>>;
+pub(crate) type StatsMapMut = Arc<Mutex<Vec<HashMap<String,Stats>>>>;
 
 use engine::extensions::find_language_of_extension;
 use engine::modules::{ModuleId, Modules};
 
 use crossbeam_deque::{Worker,Injector};
-use std::{collections::HashMap, path::{Path, PathBuf}, sync::atomic::{AtomicBool, AtomicUsize, Ordering}, time::Instant};
+use std::{collections::HashMap, path::{Path, PathBuf}, sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}, time::Instant};
 use std::sync::{Arc, Mutex};
 
 
@@ -93,15 +93,37 @@ pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
 // the forced extensions are applied during resolution, so a different config would count one set of
 // languages while the settings claim another.
 //
-// 'on_traversal_done' is called exactly once, with what the walk found, at the only moment a caller
-// cannot reach on its own: the two phases overlap, so the counts are known part way through and not
-// before or after. Everything else a caller wants to say it can say around the call. A caller with
-// nothing to say passes '|_| {}' and the compiler removes it.
+// 'on_traversal_done' is called with what the walk found, the moment the walk ends and while the
+// counting of what it queued is still going on. That instant is the only thing a caller cannot
+// reach around the call, and it is why the callback exists rather than the same figures being read
+// off the result, where they also are. A caller with nothing to say at that moment passes '|_| {}'
+// and the compiler removes it.
+//
+// **Exactly once on every run that returns 'Ok'.** A walk that found nothing is still announced,
+// because what is being reported is the walk and not the haul. The one case it does not fire is a
+// walk whose own thread died, and that run returns 'Err(IncompleteRun)': the figures such a walk
+// left behind are short of what is on disk, since a producer that died never merged its share, and
+// announcing them puts a number on the screen that the error a moment later contradicts. Measured on
+// a tree of 60 files with one of two producers dying, it announced 30.
+//
+// So there is no silent case and nothing for a caller to guard: not firing is always accompanied by
+// the error, which the caller has to handle anyway, and firing is a promise that the figures are
+// final. What is deliberately not offered is the third shape, firing with a marker saying the walk
+// was partial, which hands the caller the same wrong number and one more thing to remember.
+//
+// The time it spends is its own and is charged to nobody. 'Performance.duration_millis' is measured
+// by the consumers rather than by this thread precisely so that it cannot contain any of it.
 pub fn run(config: &EngineConfig, languages: Languages,
         on_traversal_done: impl FnOnce(FilesPresent)) -> Result<RunResult, RunError>
 {
     if config.dirs.is_empty() {
         return Err(RunError::NoTargets);
+    }
+    // Before anything is walked, because the two arguments describing different runs is not a
+    // failure that shows up in the answer: it shows up as a perfectly ordinary answer to a question
+    // nobody asked.
+    if !languages.describe_the_same_selection_as(config) {
+        return Err(RunError::LanguagesFromAnotherConfig);
     }
     // The declared targets become places to walk here, with the settings of the same configuration
     // the walk itself obeys, so the two can never disagree. Resolution is existence-first and
@@ -113,16 +135,15 @@ pub fn run(config: &EngineConfig, languages: Languages,
     let finish_condition_ref = Arc::new(AtomicBool::new(false));
     // Already narrowed and already resolved, by whoever built it. Nothing about which languages
     // exist is decided in here, so nothing in here has anything to complain about.
-    let (definitions, extension_map) = languages.into_parts();
-    let language_map_ref = Arc::new(definitions);
+    let (by_name, extension_map) = languages.into_parts();
+    let language_map_ref = Arc::new(by_name);
     let extension_lang_map: ExtensionLangMap = Arc::new(extension_map);
     // Pre-built for every module and language pair, and not only for every language: the merge that
     // ends a consumer reaches straight into this map and unwraps, so a pair that was never foreseen
     // would kill the thread rather than miscount
     let modules = Arc::new(Modules::of(&dirs));
-    let languages_content_info_ref : ContentInfoMapMut =
-            Arc::new(Mutex::new(make_language_stats(language_map_ref.clone(), modules.count())));
-    let global_languages_metadata_map = Arc::new(Mutex::new(make_language_metadata(&language_map_ref, modules.count())));
+    let stats_per_module : StatsMapMut =
+            Arc::new(Mutex::new(make_language_stats(&language_map_ref, modules.count())));
 
     let mut files_present = FilesPresent::default();
     let idle_producers = Arc::new(AtomicUsize::new(0));
@@ -171,9 +192,13 @@ pub fn run(config: &EngineConfig, languages: Languages,
     }
     producers_total.store(producer_handles.len(), Ordering::SeqCst);
 
+    // Written by whichever consumer stops last and read once they have all been joined. It is the
+    // measurement itself and not a correction applied to one: see the comment where it is read.
+    let counting_ended = Arc::new(AtomicU64::new(0));
     for i in 0..config.threads.consumers() {
         match engine::consumer::start_parser_thread(i, files_injector.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
-                languages_content_info_ref.clone(), global_languages_metadata_map.clone(), language_map_ref.clone(), config.clone()) {
+                stats_per_module.clone(), language_map_ref.clone(), config.clone(),
+                parsing_started_instant, counting_ended.clone()) {
             Ok(handle) => consumer_handles.push(handle),
             Err(x) => last_refusal = Some(x)
         }
@@ -196,17 +221,62 @@ pub fn run(config: &EngineConfig, languages: Languages,
     let queued_at_producer_exit = files_injector.len();
 
     finish_condition_ref.store(true,Ordering::Relaxed);
+
+    // Here and not at the end, which is the only moment a caller cannot reach on its own: the walk
+    // is over, so its counts are final and nothing writes to them again, while the consumers are
+    // still draining what it queued. Announced before the run has an answer, since that is the whole
+    // of what it is worth. Unconditionally too, so a walk that found nothing still says so.
+    //
+    // **Below the two lines above and never above them.** This is caller code and it may panic, and
+    // a panic here unwinds past the joins with the consumers still running: they leave their loop
+    // only on the flag that is now already raised, so they finish instead of spinning on one nobody
+    // will ever raise. Measured, with 16 consumers over this crate's own 'src': raised first, the
+    // process is back to 4 threads and no CPU; raised after, 20 threads were still alive and burning
+    // ten seconds later. The queue size just above is a diagnostic and is read before the callback
+    // for a smaller reason of the same kind: it is a measurement of the run, not of the printing.
+    //
+    // Both lists are read the way the panic list is read further down and for the same reason: this
+    // is above the guard that turns a dead worker into an error, so a poisoned lock here would panic
+    // in the caller's thread with a message about a mutex instead of letting that error be returned.
+    //
+    // A producer that died never merged its share of the walk, so what is in these counters is short
+    // of what is out there, and the run is about to refuse them anyway. Announcing them would put a
+    // count on the screen that the error two steps down contradicts: measured on a tree of 60 files
+    // with one of two producers dying, it announced 30.
+    let walk_was_whole = worker_panics.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_empty();
+    let files_present = *files_stats.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if walk_was_whole {
+        on_traversal_done(files_present);
+    }
+
     for handle in consumer_handles {
         if let Err(payload) = handle.join() {
             worker_panics.lock().unwrap().push(panic_message(payload.as_ref()));
         }
     }
-    let parsing_duration_millis = parsing_started_instant.elapsed().as_millis();
+    // What the counting cost, taken from the consumers themselves rather than from the clock at the
+    // join above. That clock is not a measurement of the counting: the callback runs on this thread
+    // while the consumers are still draining, so it holds whichever of the two finished last, and a
+    // caller doing something slow in there was charged to the parser. Measured, 50 files really
+    // counted in 9 ms were reported as 41 files per second, and a rate line that only appears for
+    // runs over a second was fabricated out of the caller's own wait.
+    //
+    // Subtracting the callback's elapsed time was the first answer to that and it is only right when
+    // the callback finished last. When the consumers did, the callback delayed nothing and the
+    // subtraction took real counting off the figure: 3,100 ms of counting under a 500 ms callback
+    // came back as 2,600 ms, and the files per second went up by the same sixth. There is no
+    // correction to apply from here, because this thread cannot see when the consumers stopped. They
+    // can, so they say so.
+    //
+    // The floor is kept because the debug timing line below subtracts the two, and because a run
+    // whose consumers all died records nothing at all: that is an error two steps down, and it
+    // should stay one rather than becoming an underflow here.
+    let parsing_duration_millis = u128::from(counting_ended.load(Ordering::Relaxed)).max(producers_done_millis);
 
     if *phase_timing::ENABLED {
         eprintln!("[phase] producers alive: {} ms | drain after producers: {} ms | queue size at producer exit: {}",
             producers_done_millis, parsing_duration_millis - producers_done_millis, queued_at_producer_exit);
-        eprintln!("{}", phase_timing::report());
+        eprintln!("{}", phase_timing::report(threads_used.consumers(), parsing_duration_millis));
     }
 
     // Before anything shared is read: a worker that died may have poisoned whichever lock it held,
@@ -218,81 +288,62 @@ pub fn run(config: &EngineConfig, languages: Languages,
         return Err(RunError::IncompleteRun { worker_panic: worker_panics.join(" | ") });
     }
 
-    let files_present = *files_stats.lock().unwrap();
     let relevant_files_num = files_present.relevant_files;
-    // Unconditionally, and before the answer below, so that a caller is told the walk finished even
-    // when it found nothing. Whether that is worth printing is the caller's question and not ours.
-    on_traversal_done(files_present);
     if relevant_files_num == 0 {
-        return Ok(RunResult::of_nothing(files_present, parsing_duration_millis, &modules,
-                dirs.to_vec(), std::mem::take(&mut unreadable_dirs.lock().unwrap()), threads_used));
+        return Ok(RunResult::of_nothing(files_present,
+                Performance { duration_millis: parsing_duration_millis, threads: threads_used }, &modules,
+                dirs.to_vec(), std::mem::take(&mut unreadable_dirs.lock().unwrap())));
     }
 
-    let mut global_languages_metadata_map_guard = global_languages_metadata_map.lock();
-    let per_module_metadata = global_languages_metadata_map_guard.as_deref_mut().unwrap();
+    let mut stats_guard = stats_per_module.lock();
+    let per_module = stats_guard.as_deref_mut().unwrap();
 
-    let mut content_info_map_guard = languages_content_info_ref.lock();
-    let per_module_content_info = content_info_map_guard.as_deref_mut().unwrap();
+    let mut per_language = merged_over_modules(per_module);
+    // Before the total, and the order matters now that a total carries keywords. Every language the
+    // run selected was given a bucket with its own keyword names set to zero, so summing first put
+    // the union of every declared name into the total: a Rust-only tree came back reporting nought
+    // classes and nought interfaces, from languages that had not appeared at all. The module totals
+    // are summed after their own filtering and always were, so the two disagreed about which
+    // keywords existed within one result. The numbers are the same either way, since an empty
+    // language adds nothing to any of them.
+    remove_languages_with_0_files(&mut per_language);
+    let total = Stats::total_of(&per_language);
 
-    let (content_info_map, languages_metadata_map) = merged_over_modules(per_module_content_info, per_module_metadata);
-    let metrics = generate_metrics_if_parsing_took_more_than_one_sec(parsing_duration_millis, relevant_files_num, &content_info_map);
-    let final_stats = FinalStats::calculate(&content_info_map, &languages_metadata_map);
-
-    let mut modules_result = Vec::with_capacity(modules.count());
-    for id in 0..modules.count() {
-        let (mut content_info, mut metadata) = (std::mem::take(&mut per_module_content_info[id]),
-                std::mem::take(&mut per_module_metadata[id]));
-        remove_languages_with_0_files(&mut content_info, &mut metadata);
+    let modules_result = per_module.iter_mut().enumerate().map(|(id, bucket)| {
+        let mut of_this_module = std::mem::take(bucket);
+        remove_languages_with_0_files(&mut of_this_module);
         // A module that found nothing still gets its row, since it was asked for by name and its
         // absence from the report would read as a mistake in the report
-        let final_stats = if metadata.is_empty() {FinalStats::new_extended(0, 0, 0, 0, 0, 0, 0)}
-                else {FinalStats::calculate(&content_info, &metadata)};
-        modules_result.push(ModuleResult {
+        ModuleResult {
             name: modules.name_of(id as ModuleId).map(str::to_owned),
-            content_info_map: content_info,
-            languages_metadata_map: metadata,
-            final_stats
-        });
-    }
-
-    let (mut content_info_map, mut languages_metadata_map) = (content_info_map, languages_metadata_map);
-    // After the total has been calculated from them, since the empty ones add nothing to it and
-    // dropping them first would only make the same sum out of fewer entries
-    remove_languages_with_0_files(&mut content_info_map, &mut languages_metadata_map);
+            total: Stats::total_of(&of_this_module),
+            per_language: of_this_module
+        }
+    }).collect::<Vec<_>>();
 
     Ok(RunResult {
-        content_info_map,
-        languages_metadata_map,
+        per_language,
+        total,
         modules: modules_result,
-        final_stats,
         faulty_files: std::mem::take(&mut faulty_files_ref.lock().unwrap()),
         files_present,
-        scan_duration_millis: parsing_duration_millis,
-        metrics,
+        performance: Performance { duration_millis: parsing_duration_millis, threads: threads_used },
         targets: dirs.to_vec(),
-        unreadable_dirs: std::mem::take(&mut unreadable_dirs.lock().unwrap()),
-        threads: threads_used
+        unreadable_dirs: std::mem::take(&mut unreadable_dirs.lock().unwrap())
     })
 }
 
 // The totals across every module, which is what the overview, the sum and the document's own
 // language list are about: those questions are asked of the whole run and not of one part of it
-fn merged_over_modules(per_module_content_info: &[HashMap<String,LanguageContentInfo>],
-        per_module_metadata: &[HashMap<String,LanguageMetadata>])
--> (HashMap<String,LanguageContentInfo>, HashMap<String,LanguageMetadata>)
-{
-    let mut content_info = per_module_content_info[0].clone();
-    let mut metadata = per_module_metadata[0].clone();
-    for id in 1..per_module_content_info.len() {
-        for (name, info) in &per_module_content_info[id] {
-            content_info.get_mut(name).unwrap().add_content_info(info);
-        }
-        for (name, meta) in &per_module_metadata[id] {
-            metadata.get_mut(name).unwrap().add_metadata(meta);
+fn merged_over_modules(per_module: &[HashMap<String,Stats>]) -> HashMap<String,Stats> {
+    let mut merged = per_module[0].clone();
+    for of_a_module in &per_module[1..] {
+        for (name, stats) in of_a_module {
+            merged.entry(name.clone()).or_default().add(stats);
         }
     }
 
-    (content_info, metadata)
+    merged
 }
 
 
@@ -322,80 +373,21 @@ pub(crate) fn calculate_single_file_stats_or_add_to_injector(config: &EngineConf
     })
 }
 
-pub(crate) fn remove_languages_with_0_files(content_info_map: &mut HashMap<String,LanguageContentInfo>,
-    languages_metadata_map: &mut HashMap<String, LanguageMetadata>)
-{
-   let mut empty_languages = Vec::new();
-   for element in languages_metadata_map.iter() {
-       if element.1.files == 0 {
-           empty_languages.push(element.0.to_owned());
-       }
-   }
-
-   for ext in empty_languages {
-       languages_metadata_map.remove(&ext);
-       content_info_map.remove(&ext);
-   }
+// A language nobody wrote a file in adds nothing to any total and would take a row in every report.
+// Removed after the totals are worked out, since the empty ones contribute nothing to them and
+// dropping them first would only make the same sum out of fewer entries.
+pub(crate) fn remove_languages_with_0_files(languages: &mut HashMap<String,Stats>) {
+    languages.retain(|_, stats| stats.files > 0);
 }
 
-
-
-
-
-
-
-
-
-fn generate_metrics_if_parsing_took_more_than_one_sec(parsing_duration_millis: u128, relevant_files: usize,
-        content_info_map: &HashMap<String, LanguageContentInfo>) -> Option<Metrics>
-{
-    if parsing_duration_millis <= 1000 {
-        return None;
-    }
-
-    let duration_secs = parsing_duration_millis as f32/ 1000f32;
-    let mut total_lines = 0;
-    content_info_map.iter().for_each(|x| total_lines += x.1.lines);
-    let lines_per_sec = (total_lines as f32 / duration_secs) as usize;
-    let files_per_sec = (relevant_files as f32 / duration_secs) as usize;
-
-    Some(
-        Metrics {
-            files_per_sec,
-            lines_per_sec
-        }
-    )
+// One bucket per language in every module, and not only per language: the merge that ends a
+// consumer reaches into this map by name, so a language that was never given a slot would kill the
+// thread rather than miscount.
+pub(crate) fn make_language_stats(languages: &HashMap<String,Language>, modules: usize) -> Vec<HashMap<String,Stats>> {
+    let of_one_module = languages.iter().map(|(name, language)| (name.to_owned(), Stats::from(language)))
+            .collect::<HashMap<_,_>>();
+    vec![of_one_module; modules]
 }
-
-
-
-
-
-pub(crate) fn make_language_stats(languages_map: Arc<HashMap<String,Language>>, modules: usize) -> Vec<HashMap<String,LanguageContentInfo>> {
-    let mut map = HashMap::<String,LanguageContentInfo>::new();
-    for (key, value) in languages_map.iter() {
-        map.insert(key.to_owned(), LanguageContentInfo::from(value));
-    }
-    vec![map; modules]
-}
-
-pub(crate) fn make_language_metadata(language_map: &Arc<HashMap<String,Language>>, modules: usize) -> Vec<HashMap<String, LanguageMetadata>> {
-    let mut map = HashMap::<String,LanguageMetadata>::new();
-    for name in language_map.keys() {
-        map.insert(name.to_owned(), LanguageMetadata::default());
-    }
-    vec![map; modules]
-}
-
-
-
-
-
-
-
-
-
-
 
 #[derive(Debug,Clone)]
 pub(crate) struct ParsableFile {
@@ -535,9 +527,8 @@ impl GitignoreStack {
 // Shared by the tests of three modules, so it cannot live inside any one of their 'mod tests'
 #[cfg(test)]
 pub(crate) fn languages_claiming(claims: &[(&str, &[&str])]) -> HashMap<String, Language> {
-    claims.iter().map(|(name, extensions)| ((*name).to_owned(), Language::new((*name).to_owned(),
-            extensions.iter().map(|x| (*x).to_owned()).collect(),
-            vec!["\"".to_owned()], vec!["//".to_owned()], None, None, Vec::new()))).collect()
+    languages::keyed_by_name(claims.iter().map(|(name, extensions)|
+            Language::new(name, *extensions, ["\""], ["//"], None, [])))
 }
 
 #[cfg(test)]
@@ -561,79 +552,50 @@ mod tests {
     // not through a run, since a result has had the empty languages removed from it by then.
     #[test]
     fn every_language_gets_a_bucket_in_every_module() {
-        let languages = Arc::new(languages_claiming(&[("Rust", &["rs"]), ("Go", &["go"]), ("Zig", &["zig"])]));
-        let modules = Modules::of(&[crate::engine::config::Target::named("backend", "./api".to_owned()),
-                crate::engine::config::Target::named("frontend", "./web".to_owned()),
-                crate::engine::config::Target::of("./docs".to_owned())]);
+        let languages = languages_claiming(&[("Rust", &["rs"]), ("Go", &["go"]), ("Zig", &["zig"])]);
+        let modules = Modules::of(&[crate::engine::config::Target::named("backend", "./api"),
+                crate::engine::config::Target::named("frontend", "./web"),
+                crate::engine::config::Target::of("./docs")]);
         assert_eq!(3, modules.count());
 
-        let stats = make_language_stats(languages.clone(), modules.count());
-        let metadata = make_language_metadata(&languages, modules.count());
+        let stats = make_language_stats(&languages, modules.count());
         assert_eq!(modules.count(), stats.len());
-        assert_eq!(modules.count(), metadata.len());
 
-        for id in 0..modules.count() {
+        for (id, of_a_module) in stats.iter().enumerate() {
             for name in languages.keys() {
-                assert!(stats[id].contains_key(name), "'{name}' has no content bucket in module {id}");
-                assert!(metadata[id].contains_key(name), "'{name}' has no metadata bucket in module {id}");
+                assert!(of_a_module.contains_key(name), "'{name}' has no bucket in module {id}");
             }
         }
     }
 
+    // The total is the same measurement summed, in the same type, which is the whole point of there
+    // being one. The two derived figures are methods and not stored, so they cannot drift from what
+    // they are derived from, and the keywords add up now where the totals used to carry none.
     #[test]
-    fn test_FinalStats_creation() {
-        let content_info_map = hashmap![
-            "a".to_owned() => LanguageContentInfo::new(2000, 1400, 0, hashmap![]),
-            "b".to_owned() => LanguageContentInfo::new(1000, 800, 0, hashmap![]),
-            "c".to_owned() => LanguageContentInfo::new(1000, 800, 0, hashmap![])
+    fn the_total_is_the_languages_added_together() {
+        let languages = hashmap![
+            "a".to_owned() => Stats::new(20, 100_000, 2000, 1400, 100, hashmap!["classes".to_owned() => 7]),
+            "b".to_owned() => Stats::new(10, 50_000, 1000, 800, 50, hashmap!["classes".to_owned() => 2]),
+            "c".to_owned() => Stats::new(10, 50_000, 1000, 800, 50, hashmap!["structs".to_owned() => 5])
         ];
-        let languages_metadata_map = hashmap![
-            "a".to_owned() => LanguageMetadata::new(20, 100000),
-            "b".to_owned() => LanguageMetadata::new(10, 50000),
-            "c".to_owned() => LanguageMetadata::new(10, 50000)
-        ];
-        let f = FinalStats::new(40, 4000, 3000, 0, 200000);
-        let ef = FinalStats::new_extended(40, 4000, 3000, 0, 1000, 200000, 5000);
-        let cf = FinalStats::calculate(&content_info_map, &languages_metadata_map);
-        let customf = FinalStats {
-            files: 40,
-            lines: 4000,
-            code_lines: 3000,
-            comment_lines: 0,
-            extra_lines: 1000,
-            bytes_size: 200000,
-            bytes_average_size: 5000
-        };
-        assert_eq!(customf, f);
-        assert_eq!(customf, ef);
-        assert_eq!(customf, cf);
+        let total = Stats::total_of(&languages);
 
+        assert_eq!(40, total.files);
+        assert_eq!(200_000, total.bytes);
+        assert_eq!(4000, total.lines);
+        assert_eq!(3000, total.code_lines);
+        assert_eq!(200, total.comment_lines);
+        // what is neither code nor comment, worked out and not stored
+        assert_eq!(800, total.extra_lines());
+        assert_eq!(5000, total.average_size());
+        // 'classes' exists in two of the three, which is the question the totals could not answer
+        // at all before: they carried no keywords.
+        assert_eq!(Some(&9), total.keyword_occurences.get("classes"));
+        assert_eq!(Some(&5), total.keyword_occurences.get("structs"));
 
-        let content_info_map = hashmap![
-            "a".to_owned() => LanguageContentInfo::new(2000, 1400, 0, hashmap![]),
-            "b".to_owned() => LanguageContentInfo::new(1000, 800, 0, hashmap![]),
-            "c".to_owned() => LanguageContentInfo::new(1000, 800, 0, hashmap![])
-        ];
-        let languages_metadata_map = hashmap![
-            "a".to_owned() => LanguageMetadata::new(25, 1417403),
-            "b".to_owned() => LanguageMetadata::new(12, 500000),
-            "c".to_owned() => LanguageMetadata::new(12, 500000)
-        ];
-        let f = FinalStats::new(49, 4000, 3000, 0, 2417403);
-        let ef = FinalStats::new_extended(49, 4000, 3000, 0, 1000, 2417403, 49334);
-        let cf = FinalStats::calculate(&content_info_map, &languages_metadata_map);
-        let customf = FinalStats {
-            files: 49,
-            lines: 4000,
-            code_lines: 3000,
-            comment_lines: 0,
-            extra_lines: 1000,
-            bytes_size: 2417403,
-            bytes_average_size: 49334
-        };
-        assert_eq!(customf, f);
-        assert_eq!(customf, ef);
-        assert_eq!(customf, cf);
+        // and nothing counted is a zero rather than a division by zero
+        assert_eq!(0, Stats::default().average_size());
+        assert_eq!(0, Stats::total_of(&HashMap::new()).files);
     }
 }
 
@@ -651,14 +613,16 @@ mod worker_death_tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("a.rs"), "fn a() { let x = 1; }\n").unwrap();
-        let mut config = EngineConfig::new(vec![root.to_string_lossy().replace('\\', "/")]);
-        config.set_threads(2, 2);
+        let config = EngineConfig {
+            threads: crate::Threads::new(2, 2),
+            ..EngineConfig::new([root.to_string_lossy().replace('\\', "/")])
+        };
         (root, config)
     }
 
     fn languages_for(config: &EngineConfig) -> Languages {
-        let map = crate::language_file::parse_languages_in_dir(crate::test_paths::LANGUAGES_DIR).unwrap().0;
-        Languages::resolve(map, &std::collections::HashMap::new(), config).0
+        let languages = crate::language_file::parse_languages_in_dir(crate::test_paths::LANGUAGES_DIR).unwrap().0;
+        Languages::resolve(config, languages, &std::collections::HashMap::new()).0
     }
 
     #[test]
@@ -675,7 +639,7 @@ mod worker_death_tests {
         assert!(matches!(&err, RunError::IncompleteRun { worker_panic } if worker_panic.contains("test-induced consumer panic")),
                 "got: {err:?}");
         // and the hook answers to that corpus name alone, so an ordinary run is untouched
-        assert_eq!(1, clean.unwrap().final_stats.files);
+        assert_eq!(1, clean.unwrap().total.files);
     }
 
     #[test]
@@ -691,6 +655,75 @@ mod worker_death_tests {
         let err = err.expect_err("a producer died and run returned a result anyway");
         assert!(matches!(&err, RunError::IncompleteRun { worker_panic } if worker_panic.contains("test-induced producer panic")),
                 "got: {err:?}");
-        assert_eq!(1, clean.unwrap().final_stats.files);
+        assert_eq!(1, clean.unwrap().total.files);
+    }
+
+    // A dead producer takes its share of the walk with it and merges nothing, so the counters left
+    // behind are short. The announcement fires before the guard that turns the death into an error,
+    // which is what it is for, so it is the one thing that could put a wrong number on the screen a
+    // moment before the run refuses it. Measured on a tree of 60 with one of two producers dying: it
+    // announced 30 and then errored.
+    #[test]
+    fn a_walk_whose_own_thread_died_is_never_announced() {
+        let (root, config) = corpus("mezura-dead-producer-announce");
+        let mut announced = Vec::new();
+        let outcome = run(&config, languages_for(&config), |scan| announced.push(scan));
+        std::fs::remove_dir_all(&root).unwrap();
+
+        // the hook answers to 'mezura-dead-producer' as a prefix, so this corpus dies the same way
+        assert!(matches!(&outcome, Err(RunError::IncompleteRun { .. })), "got: {outcome:?}");
+        assert!(announced.is_empty(), "a walk that lost a thread was announced anyway: {announced:?}");
+
+        // and the same run with every thread intact does announce, so the guard above is the
+        // difference and not some other reason nothing was said
+        let (clean_root, clean_config) = corpus("mezura-alive-producer-announce");
+        let mut announced = Vec::new();
+        let clean = run(&clean_config, languages_for(&clean_config), |scan| announced.push(scan));
+        std::fs::remove_dir_all(&clean_root).unwrap();
+        assert_eq!(1, clean.unwrap().total.files);
+        assert_eq!(1, announced.len(), "an intact walk was not announced");
+    }
+
+    // The other half of what a run reports as its duration, and the half that was wrong. The
+    // integration test beside this one holds that a slow callback is not charged to the counting,
+    // and it can only see the case where the callback is the last thing running: twenty tiny files
+    // are consumed long before its sleep is over. The fix that answered it subtracted the callback's
+    // elapsed time from the clock, which is right in exactly that case and wrong in the other one.
+    //
+    // Here the counting outlasts the callback, which is what every run over a real tree looks like.
+    // The callback delayed nothing, so nothing should come off the figure. Ten files at forty
+    // milliseconds through one consumer is four hundred milliseconds of counting under a callback
+    // that sleeps a hundred and fifty: subtracting gives two hundred and fifty, and the rate the
+    // command line prints from it is a third too high.
+    #[test]
+    fn a_callback_that_finishes_before_the_counting_takes_nothing_off_the_duration() {
+        const SLEPT_PER_FILE : u128 = 40;
+        const FILES : u128 = 10;
+        let callback_holds = std::time::Duration::from_millis(150);
+
+        let root = std::env::temp_dir().join("mezura-slow-consumer-clock");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        for i in 0..FILES {
+            std::fs::write(root.join(format!("f{i}.rs")), "fn a() { let x = 1; }\n").unwrap();
+        }
+        // One consumer, so the sleeps add up instead of overlapping and the expected floor is
+        // arithmetic rather than a guess about how many cores are free
+        let config = EngineConfig {
+            threads: crate::Threads::new(1, 1),
+            ..EngineConfig::new([root.to_string_lossy().replace('\\', "/")])
+        };
+
+        let counted = run(&config, languages_for(&config), |_| std::thread::sleep(callback_holds)).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+
+        assert_eq!(FILES as usize, counted.total.files);
+        let counting_took = SLEPT_PER_FILE * FILES;
+        // Only the sleeps are asserted on, never the parsing around them, so a slow machine can only
+        // push the figure up and the floor holds wherever this runs
+        assert!(counted.performance.duration_millis >= counting_took,
+                "{} ms of counting under a callback that held {} ms was reported as {} ms, so the \
+                 callback was taken off a run it never delayed", counting_took,
+                callback_holds.as_millis(), counted.performance.duration_millis);
     }
 }

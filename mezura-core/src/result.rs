@@ -1,31 +1,26 @@
 // What one run produced, as opposed to the vocabulary it produced it in, which is 'domain.rs'. A
-// 'Language' exists before anything has been counted; a 'FinalStats' does not.
+// 'Language' exists before anything has been counted; a 'Stats' of it does not.
 use std::collections::HashMap;
 
+use crate::Stats;
 use crate::engine::config::{Target, Threads};
 use crate::engine::modules::{ModuleId, Modules};
-
-#[derive(Debug)]
-pub struct Metrics {
-    pub files_per_sec: usize,
-    pub lines_per_sec: usize
-}
 
 // What one run produces, and the only thing 'run' returns. Presentation is a separate call, so the
 // same result can be printed, written as JSON, compared with another one, or read by a caller that
 // wants none of those.
 #[derive(Debug)]
 pub struct RunResult {
-    // The totals across every module. A run that named none has exactly one module holding the same
-    // numbers, and reading these is what every question about the whole run goes through.
-    pub content_info_map: HashMap<String, LanguageContentInfo>,
-    pub languages_metadata_map: HashMap<String, LanguageMetadata>,
+    // What each language came to, across every module. A run that named none has exactly one module
+    // holding the same numbers, and reading these is what every question about the whole run goes
+    // through. 'total' is the same measurement summed, in the same type, so the last row of a report
+    // is built the way its other rows are.
+    pub per_language: HashMap<String, Stats>,
+    pub total: Stats,
     pub modules: Vec<ModuleResult>,
-    pub final_stats: FinalStats,
     pub faulty_files: Vec<FaultyFileDetails>,
     pub files_present: FilesPresent,
-    pub scan_duration_millis: u128,
-    pub metrics: Option<Metrics>,
+    pub performance: Performance,
     // The places the run actually walked: the declared targets, resolved, with every pattern
     // expanded to what it matched at the moment of the run. This is what a log or a document that
     // wants to say "these two runs measured the same thing" has to record, because the declared
@@ -34,13 +29,7 @@ pub struct RunResult {
     pub targets: Vec<Target>,
     // Directories the walk found and could not open, so everything under them is missing from every
     // number above. Empty on an ordinary run, and the one thing that says the counts are short.
-    pub unreadable_dirs: Vec<String>,
-    // The threads the run actually used, which the caller cannot know: the requested counts are
-    // their own configuration, but the operating system is allowed to grant fewer and the run
-    // carries on with what it was given. On a result that exists this is also how many finished
-    // whole, because a worker that dies turns the whole run into an error instead. Next to
-    // 'scan_duration_millis' this is what makes the timing interpretable.
-    pub threads: Threads
+    pub unreadable_dirs: Vec<UnreadableDirDetails>
 }
 
 // One part of the run, counted on its own. 'name' is None for the leftovers of the named ones, which
@@ -48,12 +37,102 @@ pub struct RunResult {
 #[derive(Debug)]
 pub struct ModuleResult {
     pub name: Option<String>,
-    pub content_info_map: HashMap<String, LanguageContentInfo>,
-    pub languages_metadata_map: HashMap<String, LanguageMetadata>,
-    pub final_stats: FinalStats
+    pub per_language: HashMap<String, Stats>,
+    pub total: Stats
+}
+
+impl ModuleResult {
+    // The same order as the run's own, asked of this one part of it
+    pub fn languages_sorted_by(&self, criterion: SortCriterion) -> Vec<(&str, &Stats)> {
+        sorted_by(&self.per_language, criterion)
+    }
+}
+
+// Shared by the whole run and by one module of it, which are the same question asked of two maps
+fn sorted_by(per_language: &HashMap<String, Stats>, criterion: SortCriterion) -> Vec<(&str, &Stats)> {
+    let value_of = |stats: &Stats| match criterion {
+        SortCriterion::Files => stats.files,
+        SortCriterion::Size => stats.bytes,
+        SortCriterion::Lines => stats.lines,
+        SortCriterion::Code => stats.code_lines,
+        SortCriterion::Name => 0
+    };
+
+    let mut rows = per_language.iter().map(|(name, stats)| (name.as_str(), stats)).collect::<Vec<_>>();
+    if criterion == SortCriterion::Name {
+        rows.sort_by_key(|(name, _)| name.to_lowercase());
+    } else {
+        // The name breaks every tie, folded, so that two languages of equal size cannot swap places
+        // between two runs of the same command because a map happened to iterate differently
+        rows.sort_by(|a, b| value_of(b.1).cmp(&value_of(a.1))
+                .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+    }
+
+    rows
+}
+
+// How long the counting took and what it had to work with, which is the pair that makes either
+// number worth anything: a duration says nothing without the threads behind it. The threads are
+// what the run actually used and not what was asked for, since the operating system is allowed to
+// grant fewer and the run carries on with what it was given.
+//
+// The rates a report shows are arithmetic on these two and are worked out by whoever shows them,
+// rather than living here as an Option that reads as "could not be measured" when what it meant was
+// "your run was quick".
+#[derive(Debug)]
+pub struct Performance {
+    pub duration_millis: u128,
+    pub threads: Threads
+}
+
+// Which number decides the order of a report's rows. Here rather than in whatever draws one,
+// because every consumer of a result sorts it and there is only one sensible way to break a tie:
+// by name, folded, so that two languages of equal size never swap places between two runs of the
+// same command. The command line's '--sort' parses into this.
+#[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
+pub enum SortCriterion {
+    Files,
+    #[default]
+    Lines,
+    Code,
+    Size,
+    Name
+}
+
+impl SortCriterion {
+    // The spelling a person types and the one a configuration stores, which are the same word. Here
+    // with the enum rather than beside the argument parser, so that the name a run was sorted by can
+    // be written into a log or a document without the enum's own vocabulary being copied out.
+    pub fn parse(value: &str) -> Option<SortCriterion> {
+        match value.trim().to_lowercase().as_str() {
+            "files" => Some(Self::Files),
+            "lines" => Some(Self::Lines),
+            "code" => Some(Self::Code),
+            "size" => Some(Self::Size),
+            "name" => Some(Self::Name),
+            _ => None
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Files => "files",
+            Self::Lines => "lines",
+            Self::Code => "code",
+            Self::Size => "size",
+            Self::Name => "name"
+        }
+    }
 }
 
 impl RunResult {
+    // The languages in the order a report shows them, largest first by the chosen figure and ties
+    // broken by name. Offered here because the alternative is what every caller was writing: pull
+    // the map into a vector of pairs, sort it, and then map it back to whichever number was wanted.
+    pub fn languages_sorted_by(&self, criterion: SortCriterion) -> Vec<(&str, &Stats)> {
+        sorted_by(&self.per_language, criterion)
+    }
+
     // Nothing of interest was found, which is an answer and not a failure: the counts are zero and
     // the file numbers still say how many were looked at and how many were excluded.
     //
@@ -61,25 +140,21 @@ impl RunResult {
     // nothing was still asked for by name, and its absence reads as a mistake in the report rather
     // than as an empty part. Leaving them out also made the two answers disagree, since 'has_modules'
     // then said no and the whole block vanished from the document exactly when the scan was empty.
-    pub(crate) fn of_nothing(files_present: FilesPresent, scan_duration_millis: u128, modules: &Modules,
-            targets: Vec<Target>, unreadable_dirs: Vec<String>, threads: Threads) -> Self {
+    pub(crate) fn of_nothing(files_present: FilesPresent, performance: Performance, modules: &Modules,
+            targets: Vec<Target>, unreadable_dirs: Vec<UnreadableDirDetails>) -> Self {
         RunResult {
-            content_info_map: HashMap::new(),
-            languages_metadata_map: HashMap::new(),
+            per_language: HashMap::new(),
+            total: Stats::default(),
             modules: (0..modules.count()).map(|id| ModuleResult {
                 name: modules.name_of(id as ModuleId).map(str::to_owned),
-                content_info_map: HashMap::new(),
-                languages_metadata_map: HashMap::new(),
-                final_stats: FinalStats::new_extended(0, 0, 0, 0, 0, 0, 0)
+                per_language: HashMap::new(),
+                total: Stats::default()
             }).collect(),
-            final_stats: FinalStats::new_extended(0, 0, 0, 0, 0, 0, 0),
             faulty_files: Vec::new(),
             files_present,
-            scan_duration_millis,
-            metrics: None,
+            performance,
             targets,
-            unreadable_dirs,
-            threads
+            unreadable_dirs
         }
     }
 
@@ -105,35 +180,26 @@ impl RunResult {
     }
 }
 
-// 'extra_lines' is what is left after the code and the comments: blank lines, and lines that the
-// language required but that say nothing, like a closing brace. The three add up to 'lines'.
-// '#[non_exhaustive]' because the fields are not independent: 'extra_lines' is what the other two
-// leave over, and the average is the total over the file count. Every number is readable from
-// outside and only this crate can put one together, so no caller can build a set that disagrees
-// with itself. The types above are plain bags and are constructible by anyone testing their own
-// rendering.
-//
-// Sizes are here in bytes and in no other unit. A figure like '2.4 MBs' is a way of showing the
-// same number, so it belongs to whoever is showing it: 'render::NumberFormat' does that, and doing
-// it here as well is what let a report say '1000 Bytes' where the document said '1.0 KBs'.
-#[derive(Debug, PartialEq)]
-#[non_exhaustive]
-pub struct FinalStats {
-    pub files: usize,
-    pub lines: usize,
-    pub code_lines: usize,
-    pub comment_lines: usize,
-    pub extra_lines: usize,
-    pub bytes_size: usize,
-    pub bytes_average_size: usize
-}
-
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct FaultyFileDetails {
     pub path: String,
     pub error_msg: String,
     pub size: u64
+}
+
+// A place the walk could not open, and why. The reason used to be discarded at the one line that
+// records these, so every one of them was reported with the same sentence whether it was a
+// permission, a path that had gone away between being queued and being opened, or a name the
+// filesystem refused. On a whole drive that is hundreds of directories under one word.
+//
+// The same shape as the faulty files above and for the same reason: what a reader needs is the place
+// and the reason, in one row, without a second list to cross-reference.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct UnreadableDirDetails {
+    pub path: String,
+    pub error_msg: String
 }
 
 // A mistake in the configuration itself, as opposed to something the counting found. What can be
@@ -150,6 +216,13 @@ pub enum RunError {
     // built a configuration without dirs almost certainly forgot them, and an Ok full of zeros
     // would dress the mistake up as a measurement.
     NoTargets,
+    // The languages were resolved against a configuration that names a different set from the one
+    // handed here. Refused rather than counted, because the answer would be about a question nobody
+    // asked and would look exactly like the answer to the one they did: resolving with a
+    // configuration naming Rust and running with one naming Python counted Rust and said nothing.
+    // Only the three fields resolution reads are compared, and case and order are folded, so
+    // resolving once and then counting several directories is untouched.
+    LanguagesFromAnotherConfig,
     // The declared targets could not be turned into places to walk: a path that names nothing, a
     // pattern that does not parse or matches nothing, or one place declared under two names. Found
     // at the run's entry, where the targets are resolved with the same configuration the walk obeys.
@@ -168,7 +241,7 @@ pub enum RunError {
     IncompleteRun { worker_panic: String }
 }
 
-#[derive(Debug,Default,Clone,Copy)]
+#[derive(Debug,Default,Clone,Copy,PartialEq,Eq)]
 pub struct FilesPresent {
     pub total_files: usize,
     pub relevant_files: usize,
@@ -179,6 +252,7 @@ impl std::fmt::Display for RunError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NoTargets => write!(f, "The configuration names no directories or files, so there is nothing to count."),
+            Self::LanguagesFromAnotherConfig => write!(f, "The languages were resolved against a configuration that selects a different set of them than the one this run was given, so the counts would not be the ones the settings describe. Resolve them against the same configuration you are counting with."),
             Self::InvalidTargets(x) => write!(f, "{x} Nothing was counted."),
             Self::InvalidExcludePattern(x) => write!(f, "'{x}' is not a valid exclude pattern, so nothing was counted."),
             Self::NoThreadsAvailable { side, error } => write!(f, "The operating system refused every {side} thread, so the run could not start: {error}"),
@@ -196,51 +270,16 @@ impl std::error::Error for RunError {
     }
 }
 
-impl FinalStats {
-    pub fn new(files: usize, lines: usize, code_lines: usize, comment_lines: usize, bytes_size: usize) -> Self
-    {
-        // A result with no files is an answer and not a mistake, and this is a public door
-        let bytes_average_size = bytes_size.checked_div(files).unwrap_or(0);
-        FinalStats {
-            files,
-            lines,
-            code_lines,
-            comment_lines,
-            // Saturating for the same reason the division above is checked: this is a public door,
-            // and three counts that do not add up are the caller's arithmetic, not a reason to panic.
-            extra_lines: lines.saturating_sub(code_lines).saturating_sub(comment_lines),
-            bytes_size,
-            bytes_average_size
+impl Stats {
+    // Every language added together, which is what the last row of a report holds. The keywords add
+    // up with the rest now: 'classes' exists in several languages, so the question "how many in this
+    // project" has an answer, where before the totals carried no keywords at all.
+    pub fn total_of(languages: &HashMap<String, Stats>) -> Self {
+        let mut total = Stats::default();
+        for stats in languages.values() {
+            total.add(stats);
         }
-    }
-
-    pub fn new_extended(files: usize, lines: usize, code_lines: usize, comment_lines: usize, extra_lines: usize,
-            bytes_size: usize, bytes_average_size: usize) -> Self {
-        FinalStats {
-            files,
-            lines,
-            code_lines,
-            comment_lines,
-            extra_lines,
-            bytes_size,
-            bytes_average_size
-        }
-    }
-
-    pub fn calculate(content_info_map: &HashMap<String,LanguageContentInfo>, languages_metadata_map: &HashMap<String,LanguageMetadata>) -> Self {
-        let (mut total_files, mut total_lines, mut total_code_lines, mut total_comment_lines, mut total_bytes) = (0, 0, 0, 0, 0);
-        languages_metadata_map.values().for_each(|e| {total_files += e.files; total_bytes += e.bytes});
-        content_info_map.values().for_each(|c| {total_lines += c.lines; total_code_lines += c.code_lines;
-                total_comment_lines += c.comment_lines});
-        FinalStats {
-            files: total_files,
-            lines: total_lines,
-            code_lines: total_code_lines,
-            comment_lines: total_comment_lines,
-            extra_lines: total_lines - total_code_lines - total_comment_lines,
-            bytes_size: total_bytes,
-            bytes_average_size: total_bytes.checked_div(total_files).unwrap_or(0)
-        }
+        total
     }
 }
 
@@ -254,18 +293,32 @@ impl FaultyFileDetails {
     }
 }
 
+// The constructor exists for the same reason the one above does: the struct is non-exhaustive, so a
+// crate outside this one cannot build it field by field, and the command line's own tests do.
+impl UnreadableDirDetails {
+    pub fn new(path: String, error_msg: String) -> Self {
+        UnreadableDirDetails {
+            path,
+            error_msg
+        }
+    }
+}
 
-use crate::{LanguageContentInfo, LanguageMetadata};
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::engine::modules::Modules;
 
-    fn result_with(relevant: usize, unreadable: Vec<String>) -> RunResult {
+    fn result_with(relevant: usize, unreadable: &[&str]) -> RunResult {
+        let unreadable = unreadable.iter().map(|path| UnreadableDirDetails {
+            path: (*path).to_owned(), error_msg: "Access is denied. (os error 5)".to_owned()
+        }).collect();
         let mut result = RunResult::of_nothing(
                 FilesPresent { total_files: relevant, relevant_files: relevant, excluded_files: 0 },
-                0, &Modules::of(&[]), Vec::new(), unreadable, Threads::new(1, 1));
+                Performance { duration_millis: 0, threads: Threads::new(1, 1) },
+                &Modules::of(&[]), Vec::new(), unreadable);
         result.files_present.relevant_files = relevant;
         result
     }
@@ -274,9 +327,9 @@ mod tests {
     // that failed to open something is not, and finding files makes the question moot
     #[test]
     fn an_empty_scan_is_suspect_only_when_something_was_unreadable() {
-        assert!(!result_with(0, Vec::new()).nothing_could_be_read());
-        assert!(result_with(0, vec!["D:/gone".to_owned()]).nothing_could_be_read());
-        assert!(!result_with(3, vec!["D:/gone".to_owned()]).nothing_could_be_read());
-        assert!(!result_with(3, Vec::new()).nothing_could_be_read());
+        assert!(!result_with(0, &[]).nothing_could_be_read());
+        assert!(result_with(0, &["D:/gone"]).nothing_could_be_read());
+        assert!(!result_with(3, &["D:/gone"]).nothing_could_be_read());
+        assert!(!result_with(3, &[]).nothing_could_be_read());
     }
 }

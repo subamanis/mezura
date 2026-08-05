@@ -1,33 +1,38 @@
-use std::{collections::HashMap, sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, thread::JoinHandle, time::Duration};
+use std::{collections::HashMap, sync::{Arc, atomic::{AtomicBool, AtomicU64, Ordering}}, thread, thread::JoinHandle, time::{Duration, Instant}};
 
 use crossbeam_deque::{Injector, Steal, Worker};
 
-use crate::{EngineConfig, ContentInfoMapMut, FaultyFileDetails, FaultyFilesListMut, Language, LanguageContentInfo,
-        LanguageMetadata, MetadataMapMut, ParsableFile, phase_timing};
+use crate::{EngineConfig, FaultyFileDetails, FaultyFilesListMut, Language, ParsableFile, Stats,
+        StatsMapMut, phase_timing};
 use crate::engine::file_parser;
 
 pub fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
-        languages_content_info: ContentInfoMapMut, languages_metadata_map: MetadataMapMut, language_map: Arc<HashMap<String,Language>>,
-        config: Arc<EngineConfig>) -> std::io::Result<JoinHandle<()>>
+        stats_per_module: StatsMapMut, language_map: Arc<HashMap<String,Language>>,
+        config: Arc<EngineConfig>, started: Instant, counting_ended: Arc<AtomicU64>) -> std::io::Result<JoinHandle<()>>
 {
     thread::Builder::new().name(format!("consumer-{id}")).spawn(move || {
-        start_parsing_files(id, files_injector, faulty_files, finish_condition, languages_content_info, languages_metadata_map, language_map, config);
+        start_parsing_files(id, files_injector, faulty_files, finish_condition, stats_per_module, language_map, config);
+        // The last thing this thread does, and the only honest answer to how long the counting took.
+        // 'run' cannot ask: it joins these threads after calling the caller's callback, so the clock
+        // it reads there holds the callback as well whenever the callback finished last, and holds
+        // nothing of it whenever the consumers did. Subtracting the callback's own elapsed time was
+        // right in the first case and wrong in the second, which is every long run.
+        counting_ended.fetch_max(started.elapsed().as_millis() as u64, Ordering::Relaxed);
     })
 }
 
 pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
-    languages_content_info: ContentInfoMapMut, languages_metadata_map: MetadataMapMut, language_map: Arc<HashMap<String,Language>>,
-    config: Arc<EngineConfig>) 
+    stats_per_module: StatsMapMut, language_map: Arc<HashMap<String,Language>>,
+    config: Arc<EngineConfig>)
 {
     let mut buf = String::with_capacity(150);
     let mut parse_buffers = file_parser::ParseBuffers::default();
     let mut idle_iterations = 0u32;
     let mut keyword_matchers: HashMap<String, Option<file_parser::KeywordMatcher>> = HashMap::new();
-    // One entry per language holding both halves, so a file still costs a single lookup. The module
-    // is an index into the outer vector and never part of the key: a composite one would be an
-    // allocation on every file, and a run without modules simply has a vector of one.
-    let modules = languages_content_info.lock().unwrap().len();
-    let mut local_content_info: Vec<HashMap<String, (LanguageContentInfo, LanguageMetadata)>> =
+    // The module is an index into the outer vector and never part of the key: a composite one would
+    // be an allocation on every file, and a run without modules simply has a vector of one.
+    let modules = stats_per_module.lock().unwrap().len();
+    let mut local_stats: Vec<HashMap<String, Stats>> =
             vec![HashMap::new(); modules];
     // A batch and not a file at a time, because the consumers outnumber the cores four to one and
     // every one of them was reaching for the same injector head between one file and the next. The
@@ -53,6 +58,15 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                 if parsable_file.path.to_string_lossy().contains("mezura-dead-consumer") {
                     panic!("test-induced consumer panic");
                 }
+                // The same door, for the opposite question. What a run reports as its duration can
+                // only be checked against counting that visibly outlasts the caller's callback, and
+                // a corpus large enough to take a known number of milliseconds is a corpus whose
+                // timing depends on the machine. This makes the counting slow by an amount the test
+                // chose, so the assertion is about arithmetic and not about how fast the disk is.
+                #[cfg(test)]
+                if parsable_file.path.to_string_lossy().contains("mezura-slow-consumer") {
+                    thread::sleep(Duration::from_millis(40));
+                }
                 idle_iterations = 0;
                 let lang_name = parsable_file.language_name.as_ref();
                 if !keyword_matchers.contains_key(lang_name) {
@@ -70,12 +84,8 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                     Ok(x) => {
                         let keywords = &language_map.get(lang_name).unwrap().keywords;
                         let bytes = buf.len();
-                        let bucket = &mut local_content_info[parsable_file.module as usize];
-                        match bucket.get_mut(lang_name) {
-                            Some((info, meta)) => { info.add_file_stats(x, keywords); meta.add_file_meta(bytes); },
-                            None => { bucket.insert(lang_name.to_owned(),
-                                    (LanguageContentInfo::from_file_stats(x, keywords), LanguageMetadata::new(1, bytes))); }
-                        }
+                        local_stats[parsable_file.module as usize].entry(lang_name.to_owned())
+                                .or_default().add_file(x, bytes, keywords);
                     },
                     // Lossily and with the separators normalised: the walk joins its components
                     // with the platform's own, while the target it started from was resolved to
@@ -122,19 +132,12 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
         parse_buffers.timing.publish();
     }
 
-    if local_content_info.iter().any(|bucket| !bucket.is_empty()) {
-        {
-            let mut global_content_info_guard = languages_content_info.lock().unwrap();
-            for (module, bucket) in local_content_info.iter().enumerate() {
-                for (lang_name, (info, _)) in bucket.iter() {
-                    global_content_info_guard[module].get_mut(lang_name).unwrap().add_content_info(info);
-                }
-            }
-        }
-        let mut global_metadata_guard = languages_metadata_map.lock().unwrap();
-        for (module, bucket) in local_content_info.iter().enumerate() {
-            for (lang_name, (_, meta)) in bucket.iter() {
-                global_metadata_guard[module].get_mut(lang_name).unwrap().add_metadata(meta);
+    // One lock and one pass, where the two halves used to need two of each
+    if local_stats.iter().any(|bucket| !bucket.is_empty()) {
+        let mut global = stats_per_module.lock().unwrap();
+        for (module, bucket) in local_stats.iter().enumerate() {
+            for (lang_name, stats) in bucket.iter() {
+                global[module].entry(lang_name.clone()).or_default().add(stats);
             }
         }
     }

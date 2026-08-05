@@ -285,7 +285,7 @@ pub fn parse_theme_file(contents: &str) -> ThemeFile {
     let mut validation_theme = Theme::default();
     let (mut styles, mut errors) = (Vec::new(), Vec::new());
 
-    for line in contents.lines() {
+    for line in super::without_byte_order_mark(contents).lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
@@ -424,6 +424,21 @@ mod tests {
         assert_eq!(None, Style::parse("default cyan"));
         assert_eq!(None, Style::parse("italic blinking"));
         assert_eq!(None, Style::parse("b5a98"));
+    }
+
+    // The mark lands in front of the first token name, so that line stops being a token anybody
+    // recognises and is reported as a malformed line instead. A theme is lenient by design, which is
+    // what makes this the mildest of the four and also the least likely to be noticed: the rest of
+    // the file applies, and exactly one style silently does not.
+    #[test]
+    fn a_theme_file_saved_with_a_byte_order_mark_still_reads() {
+        let good = "heading = cyan bold\nlanguage-1 = b5a98a\n";
+        let (styles, errors) = parse_theme_file(good);
+        let (styles_with_mark, errors_with_mark) = parse_theme_file(&("\u{feff}".to_owned() + good));
+
+        assert_eq!(styles, styles_with_mark, "a style read differently depending on how the editor saved it");
+        assert!(errors.is_empty() && errors_with_mark.is_empty(), "{errors:?} / {errors_with_mark:?}");
+        assert_eq!(2, styles_with_mark.len());
     }
 
     #[test]

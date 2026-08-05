@@ -141,6 +141,59 @@ Performance:
       so it is worth raising if your files live on a slow drive.
 
 Bugfixes:
+  -> A log is never emptied by a run that could not read it. It used to be cleared and rebuilt from
+      what had just been read, so a file that was locked, held open by an editor, or damaged came
+      back holding that one run where it had held every previous one, without a word. It is now
+      written beside the old one and moved over it only once it is whole, and a run that cannot read
+      what is there leaves it alone and says why.
+  -> "--show-configs" with no configurations saved now says so, instead of printing the heading
+      followed by an empty line.
+  -> A language file with a mistyped heading is now reported as a formatting problem instead of
+      being read half way. "Multiline comment start" in place of "Multi line comment start" used to
+      be accepted, and everything below it was dropped without a word, so that language counted its
+      block comments as code. The README documented that exact misspelling and has been corrected.
+  -> A language file saved with a byte order mark now reads. PowerShell's "Set-Content" and older
+      versions of Notepad write one, so editing a language file the ordinary way on Windows used to
+      make the language disappear from the count. The same now holds for "extension_priority.txt",
+      for a configuration and for a theme file: a mark in front of the first line used to make the
+      whole file do nothing, and for the priority file and the configuration it did so in silence.
+  -> A log you emptied by hand is written to again. Every ordinary way of clearing a file leaves a
+      newline behind, and the program read that as a log it had failed to read and refused to touch,
+      on that run and on every run after it.
+  -> Two runs logging to the same file at the same moment no longer damage it.
+  -> A run that met both unreadable directories and faulty files now names "--show-faulty-files"
+      once at the end instead of once under each of the two counts.
+  -> A directory that could not be read now says why. "--show-faulty-files" prints the reason beside
+      the path, so a permission is told apart from a directory that was deleted while the scan was
+      running, and "--output json" carries the same two as an object instead of a bare path.
+  -> A language file that could not be read at all is no longer reported as a formatting problem.
+      A file saved in an encoding mezura cannot read now says so, instead of sending you looking for
+      a mistake in a file whose format is fine, and the reason is now printed beside each file name.
+  -> Two language files whose names differ only in upper and lower case are now reported, and
+      "--force-lang" and "extension_priority.txt" now give the extension to the one you named. Both
+      used to fold the case away and pick the other one, so naming a language exactly as it is
+      spelled could hand your files to a different one, with its comment symbols and without a word.
+  -> A language that claims one extension in two spellings, such as "h" and ".h", no longer reports
+      itself as contesting the extension with itself.
+  -> The progress section now reports "--force-lang" among the settings that changed since an
+      earlier run. It was written into the log and thrown away on the way back in, so numbers moved
+      with nothing to say why.
+  -> The time a run reports is no longer shortened by a slow "on traversal done" callback that the
+      counting outlasted. This only affects a program using mezura as a library.
+  -> An extension can now be written with the dot in front of it. ".rs" in a language file, and
+      ".m" in "extension_priority.txt", used to match nothing at all and say nothing about it, while
+      "--force-lang .m=matlab" had always accepted the dot.
+  -> An extension is now matched whatever its length. One longer than 24 characters that also had a
+      capital letter in it was never recognised, so those files were silently not counted.
+  -> Two language files that declare the same language name are now reported. One of them was used
+      and the other discarded in silence, and which one won depended on the file names, so renaming
+      a file could change your counts.
+  -> "--exclude-languages" no longer says that a language does not exist when it does. It said so
+      for every excluded language on any run that also used "--languages", and, separately, for any
+      language whose name has a letter outside the English alphabet, which it was excluding anyway.
+  -> The "N files found" and "Parsing files" lines now appear the moment the directories have been
+      walked, while the files are still being counted. They used to wait until the counting was over
+      and arrive together with the results.
   -> A target whose path exists is now always taken literally: a directory with '[' or '{' in its
       name, or a run started inside one, used to be refused as an invalid glob pattern.
   -> A size of exactly 1,000 bytes, or a million, or a billion, is now shown in the larger unit:

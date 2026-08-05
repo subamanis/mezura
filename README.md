@@ -676,8 +676,9 @@ meaning, so a parser can check that one and ignore which build wrote the file.
 
 `faulty_files` names every file that was found and could not be parsed, and `unreadable_dirs` every
 directory the scan could not open, whose whole contents are therefore missing from every number in
-the document. Both are empty on an ordinary run, and either being non-empty means the counts are
-short by something the document tells you the name of. Both are always written in full, whether or
+the document. Both are arrays of objects carrying the path and the reason, so a permission is told
+apart from a directory that was deleted while the scan was running. Both are empty on an ordinary
+run, and either being non-empty means the counts are short by something the document names. Both are always written in full, whether or
 not `--show-faulty-files` was given: that flag is a decision about how much to print on a terminal,
 and two runs over the same code have to produce the same document.
 
@@ -777,10 +778,10 @@ Comment symbols
 ```
 All the following lines are optional and can be omitted. You can also specify an arbitrary amount of keywords.
 ```
-Multiline comment start symbol
+Multi line comment start
 <a symbol like: /*>
 
-Multiline comment end symbol
+Multi line comment end
 <a symbol like: */>
 
 Keyword

@@ -5,7 +5,7 @@ use crossbeam_deque::{Injector, Steal, Worker};
 
 use crate::engine::modules::{ModuleId, Modules};
 use crate::{EngineConfig, ExtensionLangMap, FilesPresent, GitignoreStack,
-        ParsableFile, TraversedDir};
+        ParsableFile, TraversedDir, UnreadableDirDetails};
 use crate::engine::extensions::find_language_of_extension;
 
 
@@ -18,7 +18,7 @@ use crate::engine::extensions::find_language_of_extension;
 pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<TraversedDir>>, worker: Worker<TraversedDir>,
         idle_producers: Arc<AtomicUsize>, extension_lang_map: ExtensionLangMap, exclude_matcher: Arc<globset::GlobSet>,
         config: Arc<EngineConfig>, files_stats: Arc<Mutex<FilesPresent>>, modules: Arc<Modules>,
-        unreadable_dirs: Arc<Mutex<Vec<String>>>, producers_total: Arc<AtomicUsize>,
+        unreadable_dirs: Arc<Mutex<Vec<UnreadableDirDetails>>>, producers_total: Arc<AtomicUsize>,
         worker_panics: Arc<Mutex<Vec<String>>>)
 -> std::io::Result<JoinHandle<()>>
 {
@@ -47,7 +47,7 @@ pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFil
 pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<TraversedDir>>, worker: Worker<TraversedDir>, idle_producers: Arc<AtomicUsize>,
         extension_lang_map: ExtensionLangMap, exclude_matcher: Arc<globset::GlobSet>, config: Arc<EngineConfig>, modules: Arc<Modules>,
         producers_total: &AtomicUsize)
--> (usize,usize,usize,Vec<String>)
+-> (usize,usize,usize,Vec<UnreadableDirDetails>)
 {
     let mut total_files = 0;
     let mut relevant_files = 0;
@@ -97,7 +97,14 @@ pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>,
                 // Everything under it is now uncounted, and nothing else in the run would ever say
                 // so: it contributes to no total, not even to the number of files that were looked
                 // at. Named lossily because this list is only ever shown.
-                Err(_) => unreadable_dirs.push(dir.path.to_string_lossy().replace('\\', "/"))
+                //
+                // The reason travels with the path. Discarded, it made a permission, a directory
+                // that went away between being queued and being opened, and a name the filesystem
+                // refused into one sentence, and a walk of a whole drive reports hundreds of these.
+                Err(error) => unreadable_dirs.push(UnreadableDirDetails {
+                    path: dir.path.to_string_lossy().replace('\\', "/"),
+                    error_msg: error.to_string()
+                })
             }
         } else {
             if !should_terminate {
@@ -227,18 +234,22 @@ mod tests {
                 else {target.split(',').collect::<Vec<_>>()};
         let declared = pieces.into_iter().map(str::trim).filter(|x| !x.is_empty())
                 .map(|piece| match piece.split_once('=').filter(|_| declares_a_module) {
-                    Some((name, path)) => Target::named(name.trim(), path.trim().to_owned()),
-                    None => Target::of(piece.to_owned())
+                    Some((name, path)) => Target::named(name.trim(), path.trim()),
+                    None => Target::of(piece)
                 }).collect::<Vec<_>>();
-        let mut config = EngineConfig { dirs: declared, ..Default::default() };
-        config.set_threads(1, 1)
-                .set_no_gitignore(extra_args.contains("--no-gitignore"))
-                .set_should_search_in_dotted(extra_args.contains("--search-in-dotted"));
+        let config = EngineConfig {
+            dirs: declared,
+            threads: crate::Threads::new(1, 1),
+            no_gitignore: extra_args.contains("--no-gitignore"),
+            should_search_in_dotted: extra_args.contains("--search-in-dotted"),
+            ..Default::default()
+        };
         // The same first step 'run' takes: the declared targets, resolved with the flags of the
         // configuration the walk is about to obey
         let dirs = crate::engine::targets::resolve(&config.dirs, !config.no_gitignore, config.should_search_in_dotted).unwrap();
         let config = Arc::new(config);
-        let language_map = Arc::new(crate::language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0);
+        let language_map = Arc::new(crate::languages::keyed_by_name(
+                crate::language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0));
         let files_injector = Arc::new(Injector::new());
         let dirs_injector = Arc::new(Injector::new());
         let idle_producers = Arc::new(AtomicUsize::new(0));
@@ -278,11 +289,11 @@ mod tests {
         let root_str = root.to_str().unwrap().replace('\\', "/");
         let vanished = format!("{root_str}/gone");
 
-        let mut config = EngineConfig::new(vec![root_str.clone()]);
-        config.set_threads(1, 1);
+        let config = EngineConfig { threads: crate::Threads::new(1, 1), ..EngineConfig::new([&root_str]) };
         let dirs = crate::engine::targets::resolve(&config.dirs, !config.no_gitignore, config.should_search_in_dotted).unwrap();
         let config = Arc::new(config);
-        let language_map = Arc::new(crate::language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0);
+        let language_map = Arc::new(crate::languages::keyed_by_name(
+                crate::language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0));
         let extension_lang_map: ExtensionLangMap =
                 Arc::new(make_extension_language_map(&language_map, &HashMap::new(), &HashMap::new()).0);
         let modules = Arc::new(Modules::of(&dirs));
@@ -302,7 +313,10 @@ mod tests {
 
         // What it did manage to read is still counted, and the one it could not is named
         assert_eq!((1, 1), (total, relevant));
-        assert_eq!(vec![vanished], unreadable, "the directory that could not be read went unreported");
+        assert_eq!(vec![vanished], unreadable.iter().map(|x| x.path.clone()).collect::<Vec<_>>(),
+                "the directory that could not be read went unreported");
+        // with the reason beside it, so that a permission and a path that went away are told apart
+        assert!(!unreadable[0].error_msg.is_empty(), "the reason it could not be read was dropped");
     }
 
     // The object database is never source, and naming it is not something a walk should be able to

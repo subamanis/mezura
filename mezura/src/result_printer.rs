@@ -4,7 +4,7 @@ use chrono::{DateTime, Local};
 
 use super::config_manager::Configuration;
 use colored::{Color, ColoredString, Colorize};
-use mezura_core::{FinalStats, LanguageContentInfo, LanguageMetadata, RunResult, UNNAMED_MODULE_NAME, render};
+use mezura_core::{RunResult, Stats, UNNAMED_MODULE_NAME, render};
 use super::config_manager;
 use super::config_manager::{Layout, SortCriterion};
 use super::theme::Theme;
@@ -24,9 +24,14 @@ const OTHERS_NAME : &str = "others";
 // The keys of the settings block of a log entry, which are the command names that
 // 'super::log::counting_settings' writes. Kept as a list so that a line of the stats block can never
 // be mistaken for one of them.
-const SETTING_KEYS : [&str; 7] = [config_manager::DIRS, config_manager::EXCLUDE, config_manager::LANGUAGES,
-        config_manager::EXCLUDE_LANGUAGES, config_manager::BRACES_AS_CODE, config_manager::SEARCH_IN_DOTTED,
-        config_manager::NO_GITIGNORE];
+// What the reader accepts back out of a log, and it has to be every key the writer puts in: a key
+// missing here is a line written and then silently dropped, so a run that differs from the one
+// before it in exactly that setting shows changed numbers and no 'modified:' tag to say why.
+// 'force-lang' was missing, and it is the setting most able to move a figure on its own.
+// 'the_settings_written_to_a_log_are_the_settings_read_back' holds the two together.
+const SETTING_KEYS : [&str; 8] = [config_manager::DIRS, config_manager::EXCLUDE, config_manager::LANGUAGES,
+        config_manager::EXCLUDE_LANGUAGES, config_manager::FORCE_LANG, config_manager::BRACES_AS_CODE,
+        config_manager::SEARCH_IN_DOTTED, config_manager::NO_GITIGNORE];
 
 //a language that is present but whose share rounds away to zero: shown as "<0.01", given no cell
 
@@ -48,9 +53,8 @@ struct Group<'a> {
     name: Option<&'a str>,
     languages: Vec<String>,
     hidden: usize,
-    content_info_map: &'a HashMap<String, LanguageContentInfo>,
-    languages_metadata_map: &'a HashMap<String, LanguageMetadata>,
-    final_stats: &'a FinalStats
+    per_language: &'a HashMap<String, Stats>,
+    total: &'a Stats
 }
 
 impl Group<'_> {
@@ -75,15 +79,14 @@ fn groups_of<'a>(result: &'a RunResult, config: &Configuration) -> Vec<Group<'a>
     // takes away the only way of arranging the columns of a matrix that they had. The leftovers are
     // last because they were never declared at all.
     result.modules.iter().map(|module| {
-        let languages = get_sorted_language_names(&module.content_info_map, &module.languages_metadata_map, config.view.sort_by);
+        let languages = get_sorted_language_names(&module.per_language, config.view.sort_by);
         let hidden = config.view.top_n.map_or(0, |top| languages.len().saturating_sub(top));
         Group {
             name: module.name.as_deref(),
             languages: languages[..languages.len() - hidden].to_vec(),
             hidden,
-            content_info_map: &module.content_info_map,
-            languages_metadata_map: &module.languages_metadata_map,
-            final_stats: &module.final_stats
+            per_language: &module.per_language,
+            total: &module.total
         }
     }).collect()
 }
@@ -91,7 +94,7 @@ fn groups_of<'a>(result: &'a RunResult, config: &Configuration) -> Vec<Group<'a>
 pub fn format_and_print_results(result: &RunResult, existing_log_content: &Option<String>,
         datetime_now: &DateTime<Local>, config: &Configuration)
 {
-    let RunResult {content_info_map, languages_metadata_map, final_stats, ..} = result;
+    let RunResult {per_language, total, ..} = result;
     let groups = groups_of(result, config);
 
     // The rows of the matrix are the languages of the whole run and not of one module, so that is
@@ -101,7 +104,7 @@ pub fn format_and_print_results(result: &RunResult, existing_log_content: &Optio
     // past its own limit into 'others' itself and needs to see what it is folding. Handing it the
     // cut one made it return early with a short name list next to the full maps, and the first
     // language it could not find in that list took the run down with it.
-    let global_names = get_sorted_language_names(content_info_map, languages_metadata_map, config.view.sort_by);
+    let global_names = get_sorted_language_names(per_language, config.view.sort_by);
     let matrix_hidden = config.view.top_n.map_or(0, |top| global_names.len().saturating_sub(top));
     let matrix_names = global_names[..global_names.len() - matrix_hidden].to_vec();
 
@@ -111,7 +114,7 @@ pub fn format_and_print_results(result: &RunResult, existing_log_content: &Optio
             else {groups.iter().map(|x| x.hidden).sum::<usize>()};
 
     let theme = super::theme::active();
-    let columns = Columns::of(&groups, final_stats);
+    let columns = Columns::of(&groups, total);
     let block_width = columns.width(theme);
     let should_print_keywords = !config.view.hidden.keywords;
     // The matrix has nothing to cross when no module was named, so it prints the table instead of a
@@ -129,12 +132,12 @@ so the 'table' layout was printed. Use the modules feature to get a matrix: 'mez
     let is_table = layout != Layout::List;
     // With modules there is a sum of the module rows to be shown even when one language made all of
     // them, and without them a single language would only be repeated by a total under it
-    let print_total = languages_metadata_map.len() > 1 || groups.len() > 1;
+    let print_total = per_language.len() > 1 || groups.len() > 1;
 
     match layout {
-        Layout::Matrix => print_as_matrix(theme, &groups, &matrix_names, final_stats, print_total, should_print_keywords),
-        Layout::Boxed => print_as_boxed_table(theme, &groups, final_stats, print_total, should_print_keywords),
-        Layout::Table => print_as_table(theme, &groups, final_stats, print_total, should_print_keywords),
+        Layout::Matrix => print_as_matrix(theme, &groups, &matrix_names, total, print_total, should_print_keywords),
+        Layout::Boxed => print_as_boxed_table(theme, &groups, total, print_total, should_print_keywords),
+        Layout::Table => print_as_table(theme, &groups, total, print_total, should_print_keywords),
         Layout::List => print_individually(theme, &groups, &columns, block_width, should_print_keywords)
     }
 
@@ -145,15 +148,20 @@ so the 'table' layout was printed. Use the modules feature to get a matrix: 'mez
 
     if print_total {
         if !is_table {
-            print_sum(theme, content_info_map, final_stats, &columns, block_width, should_print_keywords);
+            print_sum(theme, per_language, total, &columns, block_width, should_print_keywords);
         }
         // The overview is the overview: it stays global however the details were grouped
         if !config.view.hidden.overview {
-            print_visual_overview(&global_names, content_info_map, languages_metadata_map, final_stats, config);
+            print_visual_overview(&global_names, per_language, total, config);
         }
     }
 
-    if !config.view.hidden.progress && let Some(content) = existing_log_content && config.view.compare_level != 0 {
+    // Emptiness is asked about here and not by whoever read the file, because this is the only place
+    // it means anything: a log of nothing but whitespace has nothing to compare against, and the
+    // section would otherwise be a heading with no rows under it. To the log itself that same file
+    // is history it must not destroy, which is the opposite answer to the same bytes.
+    if !config.view.hidden.progress && let Some(content) = existing_log_content
+        && !content.trim().is_empty() && config.view.compare_level != 0 {
         print_comparison_to_previous_runs(result, content, config, datetime_now);
     }
 }
@@ -163,11 +171,11 @@ so the 'table' layout was printed. Use the modules feature to get a matrix: 'mez
 // README or a ticket, which is what tokei, scc and cloc print for the same reason.
 // The header cells reuse the label token of the quantity underneath them and the body cells its
 // number token, so the table needs no styling of its own.
-fn print_as_table(theme: &Theme, groups: &[Group], final_stats: &FinalStats,
+fn print_as_table(theme: &Theme, groups: &[Group], total: &Stats,
         print_total: bool, should_print_keywords: bool)
 {
     println!("{}.\n", theme.heading.paint("Details"));
-    for line in table_lines(theme, groups, final_stats, print_total) {
+    for line in table_lines(theme, groups, total, print_total) {
         println!("{line}");
     }
 
@@ -222,7 +230,7 @@ enum RowKind {
     Total
 }
 
-fn table_lines(theme: &Theme, groups: &[Group], final_stats: &FinalStats, print_total: bool) -> Vec<String>
+fn table_lines(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool) -> Vec<String>
 {
     // Every counted column carries its own percentage instead of one lonely 'Code%' column. The two
     // that compare languages ('Files' and 'Lines') take a share of the total, the two that describe
@@ -260,17 +268,16 @@ fn table_lines(theme: &Theme, groups: &[Group], final_stats: &FinalStats, print_
     let rows = described.iter().map(|(cell, kind, group, language)| match kind {
             // A module's share is of the whole, a language's is of the module it is in: a module
             // reading 100% of itself would say nothing, which is the whole point of the two levels
-            RowKind::Module => row_of(theme, cell, group.final_stats.files, group.final_stats.lines,
-                    group.final_stats.code_lines, group.final_stats.comment_lines, group.final_stats.bytes_size,
-                    final_stats.files, final_stats.lines),
-            RowKind::Total => row_of(theme, cell, final_stats.files, final_stats.lines, final_stats.code_lines,
-                    final_stats.comment_lines, final_stats.bytes_size, final_stats.files, final_stats.lines),
+            RowKind::Module => row_of(theme, cell, group.total.files, group.total.lines,
+                    group.total.code_lines, group.total.comment_lines, group.total.bytes,
+                    total.files, total.lines),
+            RowKind::Total => row_of(theme, cell, total.files, total.lines, total.code_lines,
+                    total.comment_lines, total.bytes, total.files, total.lines),
             RowKind::Language => {
                 let name = language.unwrap();
-                let content_info = group.content_info_map.get(name).unwrap();
-                let metadata = group.languages_metadata_map.get(name).unwrap();
-                row_of(theme, cell, metadata.files, content_info.lines, content_info.code_lines, content_info.comment_lines,
-                        metadata.bytes, group.final_stats.files, group.final_stats.lines)
+                let content_info = group.per_language.get(name).unwrap();
+                row_of(theme, cell, content_info.files, content_info.lines, content_info.code_lines, content_info.comment_lines,
+                        content_info.bytes, group.total.files, group.total.lines)
             }
         }).collect::<Vec<_>>();
 
@@ -343,11 +350,11 @@ fn table_lines(theme: &Theme, groups: &[Group], final_stats: &FinalStats, print_
 // One number per cell is the whole constraint, so the cells carry whatever '--sort' is already
 // ordering by: the axis you are comparing on is the one you chose, and a line under the heading says
 // which it is rather than leaving the reader to guess.
-fn print_as_matrix(theme: &Theme, groups: &[Group], languages: &[String], final_stats: &FinalStats,
+fn print_as_matrix(theme: &Theme, groups: &[Group], languages: &[String], total: &Stats,
         print_total: bool, should_print_keywords: bool)
 {
     println!("{}.\n", theme.heading.paint("Details"));
-    for line in matrix_lines(theme, groups, languages, final_stats, print_total) {
+    for line in matrix_lines(theme, groups, languages, total, print_total) {
         println!("{line}");
     }
 
@@ -357,11 +364,10 @@ fn print_as_matrix(theme: &Theme, groups: &[Group], languages: &[String], final_
         // named a language that had no row above it: the two halves of one report disagreeing.
         let shown = groups.iter().map(|group| Group {
             name: group.name,
-            languages: languages.iter().filter(|x| group.content_info_map.contains_key(*x)).cloned().collect(),
+            languages: languages.iter().filter(|x| group.per_language.contains_key(*x)).cloned().collect(),
             hidden: group.hidden,
-            content_info_map: group.content_info_map,
-            languages_metadata_map: group.languages_metadata_map,
-            final_stats: group.final_stats
+            per_language: group.per_language,
+            total: group.total
         }).collect::<Vec<_>>();
         print_keyword_block(theme, &shown);
     }
@@ -382,7 +388,7 @@ const MATRIX_METRICS : [&str; 3] = ["files", "lines", "code"];
 // marks with a dash. Blanking the other two keeps a sparse matrix from filling up with punctuation.
 const MATRIX_LINES_ROW : usize = 1;
 
-fn matrix_lines<'a>(theme: &'a Theme, groups: &[Group], languages: &[String], final_stats: &FinalStats,
+fn matrix_lines<'a>(theme: &'a Theme, groups: &[Group], languages: &[String], total: &Stats,
         print_total: bool) -> Vec<String>
 {
     const GAP : usize = 4;
@@ -391,14 +397,14 @@ fn matrix_lines<'a>(theme: &'a Theme, groups: &[Group], languages: &[String], fi
     // 'None' is a module that does not have the language at all, which is not the same as one that
     // has it and counts zero
     let of_group = |group: &Group, language: &str, metric: usize| -> Option<usize> {
-        let content_info = group.content_info_map.get(language)?;
+        let content_info = group.per_language.get(language)?;
         Some(match metric {
-            0 => group.languages_metadata_map.get(language).map_or(0, |x| x.files),
+            0 => group.per_language.get(language).map_or(0, |x| x.files),
             1 => content_info.lines,
             _ => content_info.code_lines
         })
     };
-    let of_stats = |stats: &FinalStats, metric: usize| match metric {
+    let of_stats = |stats: &Stats, metric: usize| match metric {
         0 => stats.files,
         1 => stats.lines,
         _ => stats.code_lines
@@ -429,8 +435,8 @@ fn matrix_lines<'a>(theme: &'a Theme, groups: &[Group], languages: &[String], fi
     // The total counts every language, including the ones '--top' left out of the rows above
     let totals = MATRIX_METRICS.iter().enumerate().map(|(metric, label)| {
         let mut cells = vec![if metric == 0 {TOTAL_HEADER.to_owned()} else {String::new()}, (*label).to_owned()];
-        cells.extend(groups.iter().map(|group| cell_of(Some(of_stats(group.final_stats, metric)), metric)));
-        cells.push(cell_of(Some(of_stats(final_stats, metric)), metric));
+        cells.extend(groups.iter().map(|group| cell_of(Some(of_stats(group.total, metric)), metric)));
+        cells.push(cell_of(Some(of_stats(total, metric)), metric));
         (cells, metric)
     }).collect::<Vec<_>>();
 
@@ -528,7 +534,7 @@ fn keyword_block_lines(theme: &Theme, groups: &[Group]) -> Vec<String> {
 
     let grouped = is_grouped(groups);
     let rows = groups.iter().map(|group| (group, group.languages.iter().filter_map(|name| {
-            let keywords = get_keywords_as_str(theme, &group.content_info_map.get(name).unwrap().keyword_occurences, 0, usize::MAX);
+            let keywords = get_keywords_as_str(theme, &group.per_language.get(name).unwrap().keyword_occurences, 0, usize::MAX);
             if keywords.is_empty() {None} else {Some((name, keywords))}
         }).collect::<Vec<_>>())).filter(|(_, rows)| !rows.is_empty()).collect::<Vec<_>>();
 
@@ -556,12 +562,12 @@ fn keyword_block_lines(theme: &Theme, groups: &[Group]) -> Vec<String> {
 // The same figures as the borderless table, in a drawn frame. Each number and its percentage share
 // one cell here, since the borders already do the grouping that the tight gap does over there, and
 // that brings the whole thing down from eleven columns to seven.
-fn print_as_boxed_table(theme: &Theme, groups: &[Group], final_stats: &FinalStats,
+fn print_as_boxed_table(theme: &Theme, groups: &[Group], total: &Stats,
         print_total: bool, should_print_keywords: bool)
 {
     println!("{}.
 ", theme.heading.paint("Details"));
-    for line in boxed_lines(theme, groups, final_stats, print_total) {
+    for line in boxed_lines(theme, groups, total, print_total) {
         println!("{line}");
     }
 
@@ -571,7 +577,7 @@ fn print_as_boxed_table(theme: &Theme, groups: &[Group], final_stats: &FinalStat
     println!();
 }
 
-fn boxed_lines(theme: &Theme, groups: &[Group], final_stats: &FinalStats, print_total: bool) -> Vec<String>
+fn boxed_lines(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool) -> Vec<String>
 {
     const HEADERS : [&str; 7] = ["Language", "Files", "Lines", "Code", "Comments", "Extra", "Size"];
     // The columns that carry a percentage next to their number
@@ -605,17 +611,16 @@ fn boxed_lines(theme: &Theme, groups: &[Group], final_stats: &FinalStats, print_
 
     let described = named_rows(groups, print_total);
     let rows = described.iter().map(|(cell, kind, group, language)| match kind {
-            RowKind::Module => row_of(theme, cell, group.final_stats.files, group.final_stats.lines,
-                    group.final_stats.code_lines, group.final_stats.comment_lines, group.final_stats.bytes_size,
-                    final_stats.files, final_stats.lines),
-            RowKind::Total => row_of(theme, cell, final_stats.files, final_stats.lines, final_stats.code_lines,
-                    final_stats.comment_lines, final_stats.bytes_size, final_stats.files, final_stats.lines),
+            RowKind::Module => row_of(theme, cell, group.total.files, group.total.lines,
+                    group.total.code_lines, group.total.comment_lines, group.total.bytes,
+                    total.files, total.lines),
+            RowKind::Total => row_of(theme, cell, total.files, total.lines, total.code_lines,
+                    total.comment_lines, total.bytes, total.files, total.lines),
             RowKind::Language => {
                 let name = language.unwrap();
-                let content_info = group.content_info_map.get(name).unwrap();
-                let metadata = group.languages_metadata_map.get(name).unwrap();
-                row_of(theme, cell, metadata.files, content_info.lines, content_info.code_lines, content_info.comment_lines,
-                        metadata.bytes, group.final_stats.files, group.final_stats.lines)
+                let content_info = group.per_language.get(name).unwrap();
+                row_of(theme, cell, content_info.files, content_info.lines, content_info.code_lines, content_info.comment_lines,
+                        content_info.bytes, group.total.files, group.total.lines)
             }
         }).collect::<Vec<_>>();
 
@@ -733,11 +738,10 @@ pub fn theme_sample_rows(theme: &Theme, layout: Layout) -> Vec<String> {
     const BYTES   : usize  = 3_412_500;
 
     let keywords = hashmap!("structs".to_owned() => 284usize, "traits".to_owned() => 31);
-    let content_info_map = hashmap!(NAME.to_owned() => LanguageContentInfo::new(LINES, CODE, COMMENTS, keywords.clone()));
-    let metadata_map = hashmap!(NAME.to_owned() => LanguageMetadata::new(FILES, BYTES));
-    let final_stats = FinalStats::calculate(&content_info_map, &metadata_map);
+    let per_language = hashmap!(NAME.to_owned() => Stats::new(FILES, BYTES, LINES, CODE, COMMENTS, keywords.clone()));
+    let total = Stats::total_of(&per_language);
     let groups = vec![Group {name: None, languages: vec![NAME.to_owned()], hidden: 0,
-            content_info_map: &content_info_map, languages_metadata_map: &metadata_map, final_stats: &final_stats}];
+            per_language: &per_language, total: &total}];
 
     // The two tables keep their keywords in a block of their own, so the sample has to ask for it or
     // the keyword tokens would go unshown in exactly the two layouts that are now the common ones.
@@ -748,11 +752,11 @@ pub fn theme_sample_rows(theme: &Theme, layout: Layout) -> Vec<String> {
         lines
     };
     match layout {
-        Layout::Table => with_keywords(table_lines(theme, &groups, &final_stats, false)),
-        Layout::Boxed => with_keywords(boxed_lines(theme, &groups, &final_stats, false)),
+        Layout::Table => with_keywords(table_lines(theme, &groups, &total, false)),
+        Layout::Boxed => with_keywords(boxed_lines(theme, &groups, &total, false)),
         // The matrix has no second axis to show for one made-up language of one unnamed module, and
         // the tokens it paints are the ones the table already previews
-        Layout::Matrix => with_keywords(table_lines(theme, &groups, &final_stats, false)),
+        Layout::Matrix => with_keywords(table_lines(theme, &groups, &total, false)),
         Layout::List => {
             let len_of = |value: usize| with_seperators(value).len();
             let columns = Columns {
@@ -789,22 +793,21 @@ fn individual_lines(theme: &Theme, groups: &[Group], columns: &Columns, block_wi
         }
         if grouped {
             let name = group.displayed_name();
-            let stats = group.final_stats;
+            let stats = group.total;
             lines.push(columns.files_row(theme, stats.files,
-                    &size_text(theme, stats.bytes_size, stats.bytes_average_size), block_width));
+                    &size_text(theme, stats.bytes, stats.average_size()), block_width));
             lines.push(columns.breakdown_row(theme, &theme.details_module.paint(name).to_string(),
                     name.chars().count(), stats.lines, stats.code_lines, stats.comment_lines));
         }
 
         for (i, lang_name) in group.languages.iter().enumerate() {
-            let content_info = group.content_info_map.get(lang_name).unwrap();
-            let metadata = group.languages_metadata_map.get(lang_name).unwrap();
+            let content_info = group.per_language.get(lang_name).unwrap();
             if grouped || i > 0 {
                 lines.push(String::new());
             }
 
-            lines.push(columns.files_row(theme, metadata.files,
-                    &size_text(theme, metadata.bytes, metadata.bytes / metadata.files), block_width));
+            lines.push(columns.files_row(theme, content_info.files,
+                    &size_text(theme, content_info.bytes, content_info.average_size()), block_width));
             lines.push(columns.breakdown_row(theme, &(indent.to_owned() + &theme.details_language_name.paint(lang_name).to_string()),
                     lang_name.chars().count() + indent.len(), content_info.lines, content_info.code_lines, content_info.comment_lines));
             if should_print_keywords {
@@ -835,17 +838,17 @@ struct Columns {
 const NAME_GAP : usize = 3;
 
 impl Columns {
-    fn of(groups: &[Group], final_stats: &FinalStats) -> Self
+    fn of(groups: &[Group], total: &Stats) -> Self
     {
         let grouped = is_grouped(groups);
         let indent = if grouped {LIST_INDENT.len()} else {0};
         let len_of = |value: usize| with_seperators(value).len();
         let mut columns = Columns {
             name: TOTAL_NAME.len(),
-            headline: len_of(final_stats.files).max(len_of(final_stats.lines)),
-            code: len_of(final_stats.code_lines),
-            comments: len_of(final_stats.comment_lines),
-            extra: len_of(final_stats.extra_lines)
+            headline: len_of(total.files).max(len_of(total.lines)),
+            code: len_of(total.code_lines),
+            comments: len_of(total.comment_lines),
+            extra: len_of(total.extra_lines())
         };
 
         // The total holds the largest of every column, except when --top hid the language that made
@@ -858,9 +861,9 @@ impl Columns {
                 columns.name = columns.name.max(group.displayed_name().chars().count());
             }
             for name in &group.languages {
-                let content_info = group.content_info_map.get(name).unwrap();
+                let content_info = group.per_language.get(name).unwrap();
                 columns.name = columns.name.max(name.chars().count() + indent);
-                columns.headline = columns.headline.max(len_of(group.languages_metadata_map.get(name).unwrap().files))
+                columns.headline = columns.headline.max(len_of(group.per_language.get(name).unwrap().files))
                         .max(len_of(content_info.lines));
                 columns.code = columns.code.max(len_of(content_info.code_lines));
                 columns.comments = columns.comments.max(len_of(content_info.comment_lines));
@@ -934,25 +937,25 @@ fn widest_visible_line(text: &str) -> usize {
 }
 
 
-fn print_sum(theme: &Theme, content_info_map: &HashMap<String,LanguageContentInfo>, final_stats: &FinalStats, columns: &Columns,
+fn print_sum(theme: &Theme, per_language: &HashMap<String,Stats>, total: &Stats, columns: &Columns,
         block_width: usize, should_print_keywords: bool)
 {
-    print_lines(&sum_lines(theme, content_info_map, final_stats, columns, block_width, should_print_keywords));
+    print_lines(&sum_lines(theme, per_language, total, columns, block_width, should_print_keywords));
 }
 
-fn sum_lines(theme: &Theme, content_info_map: &HashMap<String,LanguageContentInfo>, final_stats: &FinalStats, columns: &Columns,
+fn sum_lines(theme: &Theme, per_language: &HashMap<String,Stats>, total: &Stats, columns: &Columns,
         block_width: usize, should_print_keywords: bool) -> Vec<String>
 {
     // The separator spans the block, which every row of the details section already fits exactly
     let mut lines = vec![
         format!("{} ",theme.separator.paint(&"-".repeat(block_width))),
-        columns.files_row(theme, final_stats.files,
-                &size_text(theme, final_stats.bytes_size, final_stats.bytes_average_size), block_width),
+        columns.files_row(theme, total.files,
+                &size_text(theme, total.bytes, total.average_size()), block_width),
         columns.breakdown_row(theme, &theme.details_total.paint(TOTAL_NAME).to_string(),
-                TOTAL_NAME.len(), final_stats.lines, final_stats.code_lines, final_stats.comment_lines)];
+                TOTAL_NAME.len(), total.lines, total.code_lines, total.comment_lines)];
 
     if should_print_keywords {
-        let keywords_line = get_keywords_as_str(theme, &create_keyword_sum_map(content_info_map), columns.words_start(), block_width);
+        let keywords_line = get_keywords_as_str(theme, &create_keyword_sum_map(per_language), columns.words_start(), block_width);
         if !keywords_line.is_empty() {
             lines.push(keywords_line);
         }
@@ -969,20 +972,18 @@ fn sum_lines(theme: &Theme, content_info_map: &HashMap<String,LanguageContentInf
 // Lines: ...
 //
 // Size : ...
-fn print_visual_overview(sorted_language_names: &[String], content_info_map: &HashMap<String, LanguageContentInfo>,
-        languages_metadata_map: &HashMap<String, LanguageMetadata>, final_stats: &FinalStats, config: &Configuration)
+fn print_visual_overview(sorted_language_names: &[String], per_language: &HashMap<String, Stats>, total: &Stats, config: &Configuration)
 {
-    print_lines(&overview_lines(sorted_language_names, content_info_map, languages_metadata_map, final_stats, config));
+    print_lines(&overview_lines(sorted_language_names, per_language, total, config));
 }
 
-fn overview_lines(sorted_language_names: &[String], content_info_map: &HashMap<String, LanguageContentInfo>,
-        languages_metadata_map: &HashMap<String, LanguageMetadata>, final_stats: &FinalStats, config: &Configuration) -> Vec<String>
+fn overview_lines(sorted_language_names: &[String], per_language: &HashMap<String, Stats>, total: &Stats, config: &Configuration) -> Vec<String>
 {
     // The function itself decides whether there is anything to fold
-    let (sorted_language_vec, content_info_map, languages_metadata_map) =
-            most_relevant_with_others_for_rest(sorted_language_names, content_info_map, languages_metadata_map, final_stats, config.view.top_n);
-    let (sorted_language_vec, content_info_map, languages_metadata_map) =
-            (&sorted_language_vec, &content_info_map, &languages_metadata_map);
+    let (sorted_language_vec, per_language) =
+            most_relevant_with_others_for_rest(sorted_language_names, per_language, total, config.view.top_n);
+    let (sorted_language_vec, per_language) =
+            (&sorted_language_vec, &per_language);
 
     // 'others' takes its style by identity and not by position, because --top moves it: with
     // --top 2 it sits third and used to steal the slot meant for the third language.
@@ -1002,9 +1003,9 @@ fn overview_lines(sorted_language_names: &[String], content_info_map: &HashMap<S
             }) as ColorFunc
         }).collect();
 
-    let files_percentages = get_files_percentages(languages_metadata_map, sorted_language_vec);
-    let lines_percentages = get_lines_percentages(content_info_map, sorted_language_vec);
-    let sizes_percentages = get_sizes_percentages(languages_metadata_map, sorted_language_vec);
+    let files_percentages = get_files_percentages(per_language, sorted_language_vec);
+    let lines_percentages = get_lines_percentages(per_language, sorted_language_vec);
+    let sizes_percentages = get_sizes_percentages(per_language, sorted_language_vec);
 
     let files_verticals = if config.view.hidden.bar {vec![]} else{render::apportion(&files_percentages, NUM_OF_VERTICALS)};
     let lines_verticals = if config.view.hidden.bar {vec![]} else{render::apportion(&lines_percentages, NUM_OF_VERTICALS)};
@@ -1081,7 +1082,7 @@ fn module_comparison_lines(entry: &LogEntry, groups: &[Group]) -> String {
     for name in &names {
         let padded = format!("       {}{}   ", theme.details_module.paint(name),
                 " ".repeat(width - name.chars().count()));
-        let now = groups.iter().find(|x| x.displayed_name() == name).map(|x| x.final_stats);
+        let now = groups.iter().find(|x| x.displayed_name() == name).map(|x| x.total);
         let then = entry.modules.iter().find(|x| &x.name == name);
         // A module compared against nothing would read '+100%', which is false: it did not grow, it
         // started being counted on its own. The ones that are not in both are named as what they are.
@@ -1120,7 +1121,7 @@ fn color_percentage(percentage: &str) -> ColoredString {
 fn print_comparison_to_previous_runs(result: &RunResult, log_content: &str, config: &Configuration, datetime_now: &DateTime<Local>) {
     println!("\n{}.\n", super::theme::active().heading.paint("Progress"));
 
-    let final_stats = &result.final_stats;
+    let total = &result.total;
     let log_entries = parse_N_previous_entries(log_content, config.view.compare_level);
     // Silent until used: a run that named no module says nothing about them here either, and the
     // 'modified: dirs' tag is what already reports that the targets are not the ones they were
@@ -1144,16 +1145,16 @@ fn print_comparison_to_previous_runs(result: &RunResult, log_content: &str, conf
         // else, so it is named and left uncompared instead of being reported as a collapse
         let tail = if entry.splits_comments {
             format!("Comments: {}({}%), Extra: {}({}%)",
-                super::theme::active().comments_number.paint(&with_seperators(entry.stats.comment_lines)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.comment_lines, final_stats.comment_lines)),
-                super::theme::active().extra_number.paint(&with_seperators(entry.stats.extra_lines)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.extra_lines, final_stats.extra_lines)))
+                super::theme::active().comments_number.paint(&with_seperators(entry.stats.comment_lines)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.comment_lines, total.comment_lines)),
+                super::theme::active().extra_number.paint(&with_seperators(entry.stats.extra_lines())), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.extra_lines(), total.extra_lines())))
         } else {
             format!("Non-code: {} (logged before comments were counted separately)",
-                super::theme::active().extra_number.paint(&with_seperators(entry.stats.extra_lines)))
+                super::theme::active().extra_number.paint(&with_seperators(entry.stats.extra_lines())))
         };
         comparison_str.push_str(&format!("     Files: {}({}%) Lines: {}({}%) {{Code: {}({}%), {}}}\n",
-                super::theme::active().files_number.paint(&with_seperators(entry.stats.files)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.files, final_stats.files)),
-                super::theme::active().lines_number.paint(&with_seperators(entry.stats.lines)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.lines, final_stats.lines)),
-                super::theme::active().code_number.paint(&with_seperators(entry.stats.code_lines)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.code_lines, final_stats.code_lines)),
+                super::theme::active().files_number.paint(&with_seperators(entry.stats.files)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.files, total.files)),
+                super::theme::active().lines_number.paint(&with_seperators(entry.stats.lines)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.lines, total.lines)),
+                super::theme::active().code_number.paint(&with_seperators(entry.stats.code_lines)), color_percentage(&difference_as_signed_percentage_str_of_usize(entry.stats.code_lines, total.code_lines)),
                 tail));
         if !groups.is_empty() {
             comparison_str.push_str(&module_comparison_lines(entry, &groups));
@@ -1191,7 +1192,7 @@ struct ModuleEntry {
 #[derive(Debug)]
 struct LogEntry {
     name: Option<String>,
-    stats: FinalStats,
+    stats: Stats,
     // Empty for every entry written before modules existed, and for every run that named none
     modules: Vec<ModuleEntry>,
     datetime: DateTime<Local>,
@@ -1207,7 +1208,7 @@ struct LogEntry {
 
 fn parse_N_previous_entries(log_content: &str, n: usize) -> Vec<LogEntry> {
     let mut log_entries : Vec<LogEntry> = Vec::with_capacity(15);
-    let (mut files, mut lines, mut code_lines, mut comment_lines, mut extra_lines, mut bytes_size) = (0, 0, 0, 0, 0, 0);
+    let (mut files, mut lines, mut code_lines, mut comment_lines, mut bytes_size) = (0, 0, 0, 0, 0);
     let mut splits_comments = false;
     let mut counter = 0;
     let mut is_expecting_date = false;
@@ -1264,15 +1265,22 @@ fn parse_N_previous_entries(log_content: &str, n: usize) -> Vec<LogEntry> {
             comment_lines = value.trim().parse::<usize>().unwrap();
             splits_comments = true;
         } else if let Some(value) = line.strip_prefix(EXTRA) {
-            extra_lines = value.trim().parse::<usize>().unwrap();
+            // Read back from the three it comes from and not from the line the entry stores, which
+            // is the same number: an entry from before the comments were counted has none of them,
+            // so 'lines - code - 0' is exactly the 'extra' it wrote.
+            let _ = value.trim().parse::<usize>().unwrap();
         } else if let Some(value) = line.strip_prefix(TOTAL_SIZE) {
             bytes_size = value.trim().parse::<usize>().unwrap();
         } else if let Some(value) = line.strip_prefix(AVERAGE_SIZE) {
-            let bytes_average_size = value.trim().parse::<usize>().unwrap();
-            let stats = FinalStats::new_extended(files, lines, code_lines, comment_lines, extra_lines, bytes_size, bytes_average_size);
+            let _ = value.trim().parse::<usize>().unwrap();
+            let stats = Stats::new(files, bytes_size, lines, code_lines, comment_lines, HashMap::new());
             log_entries.push(LogEntry{name: entry_name.clone(), stats, modules: Vec::new(), datetime,
                     settings: settings.clone(), splits_comments});
-            (comment_lines, splits_comments) = (0, false);
+            // Every one of them, and not only the two an older version had a reason to clear. Each
+            // is written by the entry above it, so a complete entry overwrites them all and the
+            // reset changes nothing; an entry missing a line took the number of the entry before it
+            // instead, and one figure of one run was then read as another run's.
+            (files, lines, code_lines, comment_lines, bytes_size, splits_comments) = (0, 0, 0, 0, 0, false);
             counter += 1;
         }
     }
@@ -1345,9 +1353,9 @@ fn get_keywords_as_str(theme: &Theme, keyword_occurencies: &HashMap<String,usize
     keyword_info
 }
 
-fn create_keyword_sum_map(content_info_map: &HashMap<String,LanguageContentInfo>) -> HashMap<String,usize> {
+fn create_keyword_sum_map(per_language: &HashMap<String,Stats>) -> HashMap<String,usize> {
     let mut collective_keywords_map : HashMap<String,usize> = HashMap::new();
-    for content_info in content_info_map.values() {
+    for content_info in per_language.values() {
         for keyword in &content_info.keyword_occurences {
             if *keyword.1 == 0 {continue;}
             if let Some(x) = collective_keywords_map.get_mut(keyword.0) {
@@ -1398,18 +1406,17 @@ fn percentages(lines: usize, code_lines: usize, comment_lines: usize) -> (f64, f
 
 // Ties are broken by name rather than left to the iteration order of the maps, which would make
 // the printed order differ between runs on the very projects where languages are evenly matched
-pub(crate) fn get_sorted_language_names(content_info_map: &HashMap<String, LanguageContentInfo>,
-        languages_metadata_map: &HashMap<String, LanguageMetadata>, criterion: SortCriterion) -> Vec<String>
+pub(crate) fn get_sorted_language_names(per_language: &HashMap<String, Stats>, criterion: SortCriterion) -> Vec<String>
 {
     let value_of = |name: &String| match criterion {
-        SortCriterion::Files => languages_metadata_map.get(name).map_or(0, |x| x.files),
-        SortCriterion::Size => languages_metadata_map.get(name).map_or(0, |x| x.bytes),
-        SortCriterion::Lines => content_info_map.get(name).map_or(0, |x| x.lines),
-        SortCriterion::Code => content_info_map.get(name).map_or(0, |x| x.code_lines),
+        SortCriterion::Files => per_language.get(name).map_or(0, |x| x.files),
+        SortCriterion::Size => per_language.get(name).map_or(0, |x| x.bytes),
+        SortCriterion::Lines => per_language.get(name).map_or(0, |x| x.lines),
+        SortCriterion::Code => per_language.get(name).map_or(0, |x| x.code_lines),
         SortCriterion::Name => 0
     };
 
-    let mut names = languages_metadata_map.keys().cloned().collect::<Vec<_>>();
+    let mut names = per_language.keys().cloned().collect::<Vec<_>>();
     if criterion == SortCriterion::Name {
         names.sort_by_key(|x| x.to_lowercase());
     } else {
@@ -1455,50 +1462,37 @@ fn add_verticals_str(line: &mut String, files_verticals: &[usize], color_func_ve
 // creature of the overview and of nothing else, and a result that has been printed once has to still
 // be the result: the in-place version left the caller holding three languages and a fiction.
 fn most_relevant_with_others_for_rest(sorted_language_names: &[String],
-        content_info_map: &HashMap<String, LanguageContentInfo>,
-        languages_metadata_map: &HashMap<String, LanguageMetadata>,
-        final_stats: &FinalStats, top_n: Option<usize>)
--> (Vec<String>, HashMap<String, LanguageContentInfo>, HashMap<String, LanguageMetadata>)
+        per_language: &HashMap<String, Stats>, total: &Stats, top_n: Option<usize>)
+-> (Vec<String>, HashMap<String, Stats>)
 {
-    fn get_files_lines_size(content_info_map: &HashMap<String, LanguageContentInfo>,
-        languages_metadata_map: &HashMap<String, LanguageMetadata>) -> (usize,usize,usize) 
-   {
-       let (mut files, mut lines, mut size) = (0,0,0);
-       content_info_map.iter().for_each(|x| lines += x.1.lines);
-       languages_metadata_map.iter().for_each(|x| {files += x.1.files; size += x.1.bytes});
-       (files, lines, size) 
-   }
-
     // --top never widens the overview past its own cap, it only narrows it, so that asking for the
     // top 2 does not leave three languages sitting in the bar
     let to_keep = OVERVIEW_LANGUAGES.min(top_n.unwrap_or(OVERVIEW_LANGUAGES));
     if sorted_language_names.len() <= to_keep + 1 {
-        return (sorted_language_names.to_vec(), content_info_map.clone(), languages_metadata_map.clone());
+        return (sorted_language_names.to_vec(), per_language.clone());
     }
 
     let mut sorted_language_names = sorted_language_names[..to_keep].to_vec();
     sorted_language_names.push(OTHERS_NAME.to_owned());
-    let mut content_info_map = content_info_map.clone();
-    let mut languages_metadata_map = languages_metadata_map.clone();
-    content_info_map.retain(|x,_| sorted_language_names.contains(x));
-    languages_metadata_map.retain(|x,_| sorted_language_names.contains(x));
+    let mut per_language = per_language.clone();
+    per_language.retain(|name, _| sorted_language_names.contains(name));
 
-    let (relevant_files, relevant_lines, relevant_size) = get_files_lines_size(&content_info_map, &languages_metadata_map);
-    let (other_files, other_lines, other_size) =
-        (final_stats.files - relevant_files, final_stats.lines - relevant_lines,
-         final_stats.bytes_size - relevant_size);
+    // Whatever the kept ones do not account for, which is what keeps the shares of the overview
+    // shares of the whole run and not of the few it draws
+    let mut others = Stats::default();
+    let shown = Stats::total_of(&per_language);
+    others.files = total.files - shown.files;
+    others.bytes = total.bytes - shown.bytes;
+    others.lines = total.lines - shown.lines;
+    per_language.insert(OTHERS_NAME.to_string(), others);
 
-    //We only care about the total lines of code for the "others" field, this is the only field involved with calculations
-    content_info_map.insert(OTHERS_NAME.to_string(), LanguageContentInfo::dummy(other_lines));
-    languages_metadata_map.insert(OTHERS_NAME.to_string(), LanguageMetadata::new(other_files, other_size));
-
-    (sorted_language_names, content_info_map, languages_metadata_map)
+    (sorted_language_names, per_language)
 }
 
 
-fn get_files_percentages(languages_metadata_map: &HashMap<String,LanguageMetadata>, sorted_language_names: &[String]) -> Vec<f64> {
-    let mut language_files = [0].repeat(languages_metadata_map.len());
-    languages_metadata_map.iter().for_each(|e| {
+fn get_files_percentages(per_language: &HashMap<String,Stats>, sorted_language_names: &[String]) -> Vec<f64> {
+    let mut language_files = [0].repeat(per_language.len());
+    per_language.iter().for_each(|e| {
         let pos = sorted_language_names.iter().position(|name| name == e.0).unwrap();
         language_files[pos] = e.1.files;
     });
@@ -1506,9 +1500,9 @@ fn get_files_percentages(languages_metadata_map: &HashMap<String,LanguageMetadat
     render::percentages(&language_files)
 }
 
-fn get_lines_percentages(content_info_map: &HashMap<String,LanguageContentInfo>, languages_name: &[String]) -> Vec<f64> {
-    let mut language_lines = [0].repeat(content_info_map.len());
-    content_info_map.iter().for_each(|e| {
+fn get_lines_percentages(per_language: &HashMap<String,Stats>, languages_name: &[String]) -> Vec<f64> {
+    let mut language_lines = [0].repeat(per_language.len());
+    per_language.iter().for_each(|e| {
         let pos = languages_name.iter().position(|name| name == e.0).unwrap();
         language_lines[pos] = e.1.lines;
     });
@@ -1516,9 +1510,9 @@ fn get_lines_percentages(content_info_map: &HashMap<String,LanguageContentInfo>,
     render::percentages(&language_lines)
 }
 
-fn get_sizes_percentages(languages_metadata_map: &HashMap<String,LanguageMetadata>, languages_name: &[String]) -> Vec<f64> {
-    let mut language_size = [0].repeat(languages_metadata_map.len());
-    languages_metadata_map.iter().for_each(|e| {
+fn get_sizes_percentages(per_language: &HashMap<String,Stats>, languages_name: &[String]) -> Vec<f64> {
+    let mut language_size = [0].repeat(per_language.len());
+    per_language.iter().for_each(|e| {
         let pos = languages_name.iter().position(|name| name == e.0).unwrap();
         language_size[pos] = e.1.bytes;
     });
@@ -1543,39 +1537,32 @@ mod tests {
     // long language name next to a short one, figures wide enough to move the shared right edge, a
     // keyword row long enough to wrap, a language with no keywords at all, and five languages, which
     // is one more than the overview can show without folding into "others".
-    fn sample_data() -> (Vec<String>, HashMap<String, LanguageContentInfo>, HashMap<String, LanguageMetadata>, FinalStats) {
-        let content_info_map = hashmap![
-            "Rust".to_owned() => LanguageContentInfo::new(9008, 6122, 505,
+    fn sample_data() -> (Vec<String>, HashMap<String, Stats>, Stats) {
+        let per_language = hashmap![
+            "Rust".to_owned() => Stats::new(13, 416800, 9008, 6122, 505,
                     hashmap!["enums".to_owned() => 11, "structs".to_owned() => 29, "traits".to_owned() => 1]),
-            "JavaScript".to_owned() => LanguageContentInfo::new(1200, 900, 120,
+            "JavaScript".to_owned() => Stats::new(4, 40000, 1200, 900, 120,
                     hashmap!["classes".to_owned() => 805, "functions".to_owned() => 1204, "generators".to_owned() => 17,
                              "promises".to_owned() => 96, "imports".to_owned() => 342]),
-            "HTML".to_owned() => LanguageContentInfo::new(396, 361, 0, hashmap![]),
-            "Python".to_owned() => LanguageContentInfo::new(250, 200, 20, hashmap!["classes".to_owned() => 2]),
-            "Java".to_owned() => LanguageContentInfo::new(80, 60, 5,
+            "HTML".to_owned() => Stats::new(2, 18800, 396, 361, 0, hashmap![]),
+            "Python".to_owned() => Stats::new(3, 9000, 250, 200, 20, hashmap!["classes".to_owned() => 2]),
+            "Java".to_owned() => Stats::new(1, 900, 80, 60, 5,
                     hashmap!["classes".to_owned() => 2, "interfaces".to_owned() => 1])];
-        let languages_metadata_map = hashmap![
-            "Rust".to_owned() => LanguageMetadata::new(13, 416800),
-            "JavaScript".to_owned() => LanguageMetadata::new(4, 40000),
-            "HTML".to_owned() => LanguageMetadata::new(2, 18800),
-            "Python".to_owned() => LanguageMetadata::new(3, 9000),
-            "Java".to_owned() => LanguageMetadata::new(1, 900)];
-        let final_stats = FinalStats::new_extended(23, 10934, 7643, 650, 2641, 485500, 21108);
-        let sorted = get_sorted_language_names(&content_info_map, &languages_metadata_map, SortCriterion::Lines);
+        let total = Stats::total_of(&per_language);
+        let sorted = get_sorted_language_names(&per_language, SortCriterion::Lines);
 
-        (sorted, content_info_map, languages_metadata_map, final_stats)
+        (sorted, per_language, total)
     }
 
     // The same five languages, split into the shape a run with modules produces: two named ones and
     // the leftovers. The totals are unchanged by construction, so any difference between the grouped
     // cases and the ungrouped ones below is the grouping and nothing else.
     fn sample_modules() -> Vec<ModuleResult> {
-        let (_, content_info, metadata, _) = sample_data();
+        let (_, content_info, _) = sample_data();
         let of = |name: Option<&str>, languages: &[&str]| {
-            let content_info_map = languages.iter().map(|x| ((*x).to_owned(), content_info[*x].clone())).collect::<HashMap<_,_>>();
-            let languages_metadata_map = languages.iter().map(|x| ((*x).to_owned(), metadata[*x].clone())).collect::<HashMap<_,_>>();
-            let final_stats = FinalStats::calculate(&content_info_map, &languages_metadata_map);
-            ModuleResult {name: name.map(str::to_owned), content_info_map, languages_metadata_map, final_stats}
+            let per_language = languages.iter().map(|x| ((*x).to_owned(), content_info[*x].clone())).collect::<HashMap<_,_>>();
+            let total = Stats::total_of(&per_language);
+            ModuleResult {name: name.map(str::to_owned), per_language, total}
         };
 
         vec![of(Some("frontend"), &["JavaScript", "HTML"]), of(Some("backend"), &["Rust"]),
@@ -1583,15 +1570,14 @@ mod tests {
     }
 
     fn groups_from<'a>(modules: &'a [ModuleResult], config: &crate::config_manager::Configuration) -> Vec<Group<'a>> {
-        let result = RunResult {content_info_map: HashMap::new(), languages_metadata_map: HashMap::new(),
-                modules: Vec::new(), final_stats: FinalStats::new_extended(0,0,0,0,0,0,0), faulty_files: Vec::new(),
-                files_present: FilesPresent::default(), scan_duration_millis: 0, metrics: None, targets: Vec::new(), unreadable_dirs: Vec::new(), threads: mezura_core::Threads::new(1, 1)};
+        let result = RunResult {per_language: HashMap::new(),
+                modules: Vec::new(), total: Stats::default(), faulty_files: Vec::new(),
+                files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(), performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
         let mut result = result;
         result.modules = modules.iter().map(|x| ModuleResult {
             name: x.name.clone(),
-            content_info_map: x.content_info_map.clone(),
-            languages_metadata_map: x.languages_metadata_map.clone(),
-            final_stats: FinalStats::calculate(&x.content_info_map, &x.languages_metadata_map)
+            per_language: x.per_language.clone(),
+            total: Stats::total_of(&x.per_language)
         }).collect();
         // The borrow has to outlive the temporary, so the groups are built against the caller's slice
         let order = groups_of(&result, config).into_iter().map(|x| (x.name.map(str::to_owned), x.languages, x.hidden))
@@ -1599,8 +1585,7 @@ mod tests {
 
         order.into_iter().map(|(name, languages, hidden)| {
             let module = modules.iter().find(|x| x.name == name).unwrap();
-            Group {name: module.name.as_deref(), languages, hidden, content_info_map: &module.content_info_map,
-                    languages_metadata_map: &module.languages_metadata_map, final_stats: &module.final_stats}
+            Group {name: module.name.as_deref(), languages, hidden, per_language: &module.per_language, total: &module.total}
         }).collect()
     }
 
@@ -1610,67 +1595,66 @@ mod tests {
         // comparison would otherwise fail this test with a wall of escape codes
         colored::control::set_override(false);
 
-        let (sorted, content_info, metadata, final_stats) = sample_data();
+        let (sorted, content_info, total) = sample_data();
         let theme = &Theme::default();
         let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
-        let plain = vec![Group {name: None, languages: sorted.clone(), hidden: 0, content_info_map: &content_info,
-                languages_metadata_map: &metadata, final_stats: &final_stats}];
-        let columns = Columns::of(&plain, &final_stats);
+        let plain = vec![Group {name: None, languages: sorted.clone(), hidden: 0, per_language: &content_info, total: &total}];
+        let columns = Columns::of(&plain, &total);
         let width = columns.width(theme);
 
         let mut cases: Vec<(String, Vec<String>)> = Vec::new();
         let mut list = individual_lines(theme, &plain, &columns, width, true);
-        list.extend(sum_lines(theme, &content_info, &final_stats, &columns, width, true));
+        list.extend(sum_lines(theme, &content_info, &total, &columns, width, true));
         cases.push(("list".to_owned(), list));
         cases.push(("list, keywords hidden".to_owned(),
                 individual_lines(theme, &plain, &columns, width, false)));
 
-        let mut table = table_lines(theme, &plain, &final_stats, true);
+        let mut table = table_lines(theme, &plain, &total, true);
         table.extend(keyword_block_lines(theme, &plain));
         cases.push(("table".to_owned(), table));
 
-        let mut boxed = boxed_lines(theme, &plain, &final_stats, true);
+        let mut boxed = boxed_lines(theme, &plain, &total, true);
         boxed.extend(keyword_block_lines(theme, &plain));
         cases.push(("boxed".to_owned(), boxed));
 
-        cases.push(("overview".to_owned(), overview_lines(&sorted, &content_info, &metadata, &final_stats, &config)));
+        cases.push(("overview".to_owned(), overview_lines(&sorted, &content_info, &total, &config)));
 
         config.view.top_n = Some(2);
-        cases.push(("overview, top 2".to_owned(), overview_lines(&sorted, &content_info, &metadata, &final_stats, &config)));
+        cases.push(("overview, top 2".to_owned(), overview_lines(&sorted, &content_info, &total, &config)));
 
         config.view.top_n = None;
         config.view.hidden.bar = true;
-        cases.push(("overview, bar hidden".to_owned(), overview_lines(&sorted, &content_info, &metadata, &final_stats, &config)));
+        cases.push(("overview, bar hidden".to_owned(), overview_lines(&sorted, &content_info, &total, &config)));
 
         // The same data with a second axis through it. Every layout groups, and the total under them
         // is the same total, which is what makes the two halves of this file comparable by eye.
         let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
         let modules = sample_modules();
         let groups = groups_from(&modules, &config);
-        let columns = Columns::of(&groups, &final_stats);
+        let columns = Columns::of(&groups, &total);
         let width = columns.width(theme);
 
         let mut list = individual_lines(theme, &groups, &columns, width, true);
-        list.extend(sum_lines(theme, &content_info, &final_stats, &columns, width, true));
+        list.extend(sum_lines(theme, &content_info, &total, &columns, width, true));
         cases.push(("modules, list".to_owned(), list));
 
-        let mut table = table_lines(theme, &groups, &final_stats, true);
+        let mut table = table_lines(theme, &groups, &total, true);
         table.extend(keyword_block_lines(theme, &groups));
         cases.push(("modules, table".to_owned(), table));
 
-        let mut boxed = boxed_lines(theme, &groups, &final_stats, true);
+        let mut boxed = boxed_lines(theme, &groups, &total, true);
         boxed.extend(keyword_block_lines(theme, &groups));
         cases.push(("modules, boxed".to_owned(), boxed));
 
         // '--top' is per module, so it cuts inside each one and not across the report
         config.view.top_n = Some(1);
         let groups = groups_from(&modules, &config);
-        cases.push(("modules, table, top 1".to_owned(), table_lines(theme, &groups, &final_stats, true)));
+        cases.push(("modules, table, top 1".to_owned(), table_lines(theme, &groups, &total, true)));
 
         config.view.top_n = None;
         config.view.sort_by = SortCriterion::Name;
         let groups = groups_from(&modules, &config);
-        cases.push(("modules, table, sorted by name".to_owned(), table_lines(theme, &groups, &final_stats, true)));
+        cases.push(("modules, table, sorted by name".to_owned(), table_lines(theme, &groups, &total, true)));
 
         // The rows of the matrix are the languages of the whole run, and each of them is three
         // physical rows, so the second case is the one where a module does not have the language
@@ -1678,11 +1662,11 @@ mod tests {
         config.view.sort_by = SortCriterion::Lines;
         let groups = groups_from(&modules, &config);
         cases.push(("modules, matrix".to_owned(),
-                matrix_lines(theme, &groups, &sorted, &final_stats, true)));
+                matrix_lines(theme, &groups, &sorted, &total, true)));
         cases.push(("modules, matrix, top 2".to_owned(),
-                matrix_lines(theme, &groups, &sorted[..2], &final_stats, true)));
+                matrix_lines(theme, &groups, &sorted[..2], &total, true)));
         cases.push(("modules, matrix, no total".to_owned(),
-                matrix_lines(theme, &groups, &sorted[..1], &final_stats, false)));
+                matrix_lines(theme, &groups, &sorted[..1], &total, false)));
 
         let mut rendered = String::with_capacity(4000);
         for (name, lines) in cases {
@@ -1705,19 +1689,17 @@ mod tests {
     fn the_leftovers_row_fits_the_column_even_when_every_other_name_is_shorter() {
         colored::control::set_override(false);
 
-        let content_info = hashmap!["D".to_owned() => LanguageContentInfo::new(2, 2, 0, hashmap![])];
-        let metadata = hashmap!["D".to_owned() => LanguageMetadata::new(1, 24)];
-        let final_stats = FinalStats::calculate(&content_info, &metadata);
-        fn group<'a>(name: Option<&'a str>, content_info: &'a HashMap<String, LanguageContentInfo>,
-                metadata: &'a HashMap<String, LanguageMetadata>, final_stats: &'a FinalStats) -> Group<'a> {
-            Group {name, languages: vec!["D".to_owned()], hidden: 0, content_info_map: content_info,
-                    languages_metadata_map: metadata, final_stats}
+        let content_info = hashmap!["D".to_owned() => Stats::new(1, 24, 2, 2, 0, hashmap![])];
+        let total = Stats::total_of(&content_info);
+        fn group<'a>(name: Option<&'a str>, content_info: &'a HashMap<String, Stats>,
+                total: &'a Stats) -> Group<'a> {
+            Group {name, languages: vec!["D".to_owned()], hidden: 0, per_language: content_info, total}
         }
-        let groups = vec![group(Some("a"), &content_info, &metadata, &final_stats),
-                group(None, &content_info, &metadata, &final_stats)];
+        let groups = vec![group(Some("a"), &content_info, &total),
+                group(None, &content_info, &total)];
 
         let theme = &Theme::default();
-        let columns = Columns::of(&groups, &final_stats);
+        let columns = Columns::of(&groups, &total);
         assert!(columns.name >= UNNAMED_MODULE_NAME.len());
 
         let lines = individual_lines(theme, &groups, &columns, columns.width(theme), false);
@@ -1736,14 +1718,13 @@ mod tests {
     fn every_layout_survives_a_top_that_hides_languages() {
         colored::control::set_override(false);
 
-        let (_, content_info, metadata, _) = sample_data();
+        let (_, content_info, _) = sample_data();
         let of_modules = |modules: Vec<ModuleResult>| RunResult {
-            content_info_map: content_info.clone(), languages_metadata_map: metadata.clone(), modules,
-            final_stats: FinalStats::new_extended(23, 10934, 7643, 650, 2641, 485500, 21108),
-            faulty_files: Vec::new(), files_present: FilesPresent::default(), scan_duration_millis: 0, metrics: None, targets: Vec::new(), unreadable_dirs: Vec::new(), threads: mezura_core::Threads::new(1, 1)};
-        let single = || vec![ModuleResult {name: None, content_info_map: content_info.clone(),
-                languages_metadata_map: metadata.clone(),
-                final_stats: FinalStats::calculate(&content_info, &metadata)}];
+            per_language: content_info.clone(), modules,
+            total: Stats::new(23, 485500, 10934, 7643, 650, hashmap![]),
+            faulty_files: Vec::new(), files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(), performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
+        let single = || vec![ModuleResult {name: None, per_language: content_info.clone(),
+                total: Stats::total_of(&content_info)}];
 
         for layout in [Layout::List, Layout::Table, Layout::Boxed, Layout::Matrix] {
             // One past the five languages of the sample, so the boundary where nothing is hidden is
@@ -1782,103 +1763,90 @@ mod tests {
     fn test_get_lines_percentages() {
         let ext_names = ["py".to_string(),"java".to_string(),"cs".to_string()];
 
-        let content_info_map = hashmap!("cs".to_string() => LanguageContentInfo::dummy(100),
-            "java".to_string() => LanguageContentInfo::dummy(100), "py".to_string() => LanguageContentInfo::dummy(0));
-        assert_eq!(vec![0f64,50f64,50f64], get_lines_percentages(&content_info_map, &ext_names));
-        let content_info_map = hashmap!("cs".to_string() => LanguageContentInfo::dummy(0),
-        "java".to_string() => LanguageContentInfo::dummy(0), "py".to_string() => LanguageContentInfo::dummy(1));
-        assert_eq!(vec![100f64,0f64,0f64], get_lines_percentages(&content_info_map, &ext_names));
-        let content_info_map = hashmap!("cs".to_string() => LanguageContentInfo::dummy(20),
-        "java".to_string() => LanguageContentInfo::dummy(20), "py".to_string() => LanguageContentInfo::dummy(20));
-        assert_eq!(vec![33.33f64,33.33f64,33.34f64], get_lines_percentages(&content_info_map, &ext_names));
+        let per_language = hashmap!("cs".to_string() => Stats { lines: 100, ..Default::default() },
+            "java".to_string() => Stats { lines: 100, ..Default::default() }, "py".to_string() => Stats { lines: 0, ..Default::default() });
+        assert_eq!(vec![0f64,50f64,50f64], get_lines_percentages(&per_language, &ext_names));
+        let per_language = hashmap!("cs".to_string() => Stats { lines: 0, ..Default::default() },
+        "java".to_string() => Stats { lines: 0, ..Default::default() }, "py".to_string() => Stats { lines: 1, ..Default::default() });
+        assert_eq!(vec![100f64,0f64,0f64], get_lines_percentages(&per_language, &ext_names));
+        let per_language = hashmap!("cs".to_string() => Stats { lines: 20, ..Default::default() },
+        "java".to_string() => Stats { lines: 20, ..Default::default() }, "py".to_string() => Stats { lines: 20, ..Default::default() });
+        assert_eq!(vec![33.33f64,33.33f64,33.34f64], get_lines_percentages(&per_language, &ext_names));
         
         let ext_names = ["py".to_string(),"java".to_string(),"cs".to_string(),"rs".to_string()];
 
-        let content_info_map = hashmap!("cs".to_string() => LanguageContentInfo::dummy(100),
-            "java".to_string() => LanguageContentInfo::dummy(100), "py".to_string() => LanguageContentInfo::dummy(0),
-            "rs".to_string() => LanguageContentInfo::dummy(0));
-        assert_eq!(vec![0f64,50f64,50f64,0f64], get_lines_percentages(&content_info_map, &ext_names));
-        let content_info_map = hashmap!("cs".to_string() => LanguageContentInfo::dummy(100),
-            "java".to_string() => LanguageContentInfo::dummy(100), "py".to_string() => LanguageContentInfo::dummy(100),
-            "rs".to_string() => LanguageContentInfo::dummy(0));
-        assert_eq!(vec![33.33,33.33,33.33,0.01], get_lines_percentages(&content_info_map, &ext_names));
-        let content_info_map = hashmap!("cs".to_string() => LanguageContentInfo::dummy(201),
-            "java".to_string() => LanguageContentInfo::dummy(200), "py".to_string() => LanguageContentInfo::dummy(200),
-            "rs".to_string() => LanguageContentInfo::dummy(0));
-        assert_eq!(vec![33.28,33.28,33.44,0.0], get_lines_percentages(&content_info_map, &ext_names));
+        let per_language = hashmap!("cs".to_string() => Stats { lines: 100, ..Default::default() },
+            "java".to_string() => Stats { lines: 100, ..Default::default() }, "py".to_string() => Stats { lines: 0, ..Default::default() },
+            "rs".to_string() => Stats { lines: 0, ..Default::default() });
+        assert_eq!(vec![0f64,50f64,50f64,0f64], get_lines_percentages(&per_language, &ext_names));
+        let per_language = hashmap!("cs".to_string() => Stats { lines: 100, ..Default::default() },
+            "java".to_string() => Stats { lines: 100, ..Default::default() }, "py".to_string() => Stats { lines: 100, ..Default::default() },
+            "rs".to_string() => Stats { lines: 0, ..Default::default() });
+        assert_eq!(vec![33.33,33.33,33.33,0.01], get_lines_percentages(&per_language, &ext_names));
+        let per_language = hashmap!("cs".to_string() => Stats { lines: 201, ..Default::default() },
+            "java".to_string() => Stats { lines: 200, ..Default::default() }, "py".to_string() => Stats { lines: 200, ..Default::default() },
+            "rs".to_string() => Stats { lines: 0, ..Default::default() });
+        assert_eq!(vec![33.28,33.28,33.44,0.0], get_lines_percentages(&per_language, &ext_names));
 
         let ext_names = ["py".to_string(),"java".to_string(),"cs".to_string(),"rs".to_string(),"cpp".to_string()];
 
-        let content_info_map = hashmap!("cs".to_string() => LanguageContentInfo::dummy(100),
-            "java".to_string() => LanguageContentInfo::dummy(100), "py".to_string() => LanguageContentInfo::dummy(0),
-            "rs".to_string() => LanguageContentInfo::dummy(0), "cpp".to_string() => LanguageContentInfo::dummy(0));
-        assert_eq!(vec![0.0,50f64,50f64,0f64,0f64], get_lines_percentages(&content_info_map, &ext_names));
+        let per_language = hashmap!("cs".to_string() => Stats { lines: 100, ..Default::default() },
+            "java".to_string() => Stats { lines: 100, ..Default::default() }, "py".to_string() => Stats { lines: 0, ..Default::default() },
+            "rs".to_string() => Stats { lines: 0, ..Default::default() }, "cpp".to_string() => Stats { lines: 0, ..Default::default() });
+        assert_eq!(vec![0.0,50f64,50f64,0f64,0f64], get_lines_percentages(&per_language, &ext_names));
     }
 
     #[test]
     fn sorting_uses_the_chosen_criterion_and_breaks_ties_by_name() {
         let content = hashmap![
-            "Zig".to_owned() => LanguageContentInfo::new(100, 50, 0, HashMap::new()),
-            "Ada".to_owned() => LanguageContentInfo::new(100, 90, 0, HashMap::new()),
-            "Rust".to_owned() => LanguageContentInfo::new(300, 10, 0, HashMap::new())];
-        let meta = hashmap![
-            "Zig".to_owned() => LanguageMetadata::new(9, 10),
-            "Ada".to_owned() => LanguageMetadata::new(1, 900),
-            "Rust".to_owned() => LanguageMetadata::new(5, 50)];
+            "Zig".to_owned() => Stats::new(9, 10, 100, 50, 0, HashMap::new()),
+            "Ada".to_owned() => Stats::new(1, 900, 100, 90, 0, HashMap::new()),
+            "Rust".to_owned() => Stats::new(5, 50, 300, 10, 0, HashMap::new())];
 
-        assert_eq!(vec!["Rust","Ada","Zig"], get_sorted_language_names(&content, &meta, SortCriterion::Lines));
-        assert_eq!(vec!["Zig","Rust","Ada"], get_sorted_language_names(&content, &meta, SortCriterion::Files));
-        assert_eq!(vec!["Ada","Rust","Zig"], get_sorted_language_names(&content, &meta, SortCriterion::Size));
-        assert_eq!(vec!["Ada","Zig","Rust"], get_sorted_language_names(&content, &meta, SortCriterion::Code));
-        assert_eq!(vec!["Ada","Rust","Zig"], get_sorted_language_names(&content, &meta, SortCriterion::Name));
+        assert_eq!(vec!["Rust","Ada","Zig"], get_sorted_language_names(&content, SortCriterion::Lines));
+        assert_eq!(vec!["Zig","Rust","Ada"], get_sorted_language_names(&content, SortCriterion::Files));
+        assert_eq!(vec!["Ada","Rust","Zig"], get_sorted_language_names(&content, SortCriterion::Size));
+        assert_eq!(vec!["Ada","Zig","Rust"], get_sorted_language_names(&content, SortCriterion::Code));
+        assert_eq!(vec!["Ada","Rust","Zig"], get_sorted_language_names(&content, SortCriterion::Name));
 
         // Ada and Zig both have 100 lines, so the name decides, not the iteration order of the map
-        assert_eq!(vec!["Rust","Ada","Zig"], get_sorted_language_names(&content, &meta, SortCriterion::Lines));
+        assert_eq!(vec!["Rust","Ada","Zig"], get_sorted_language_names(&content, SortCriterion::Lines));
     }
 
     #[test]
     fn test_retain_most_relevant_and_add_others_field_for_rest() {
         let sorted_language_names = vec!["a".to_owned(), "b".to_owned(), "c".to_owned(), "d".to_owned(), "e".to_owned()];
-        let content_info_map = hashmap![
-            "a".to_owned() => LanguageContentInfo::new(1000, 800, 0, hashmap![]),
-            "b".to_owned() => LanguageContentInfo::new(900, 700, 0, hashmap![]),
-            "c".to_owned() => LanguageContentInfo::new(800, 600, 0, hashmap![]),
-            "d".to_owned() => LanguageContentInfo::new(700, 500, 0, hashmap![]),
-            "e".to_owned() => LanguageContentInfo::new(600, 400, 0, hashmap![])
+        let per_language = hashmap![
+            "a".to_owned() => Stats::new(10, 60000, 1000, 800, 0, hashmap![]),
+            "b".to_owned() => Stats::new(9, 50000, 900, 700, 0, hashmap![]),
+            "c".to_owned() => Stats::new(8, 40000, 800, 600, 0, hashmap![]),
+            "d".to_owned() => Stats::new(7, 30000, 700, 500, 0, hashmap![]),
+            "e".to_owned() => Stats::new(6, 20000, 600, 400, 0, hashmap![])
         ];
-        let languages_metadata_map = hashmap![
-            "a".to_owned() => LanguageMetadata::new(10, 60000),
-            "b".to_owned() => LanguageMetadata::new(9, 50000),
-            "c".to_owned() => LanguageMetadata::new(8, 40000),
-            "d".to_owned() => LanguageMetadata::new(7, 30000),
-            "e".to_owned() => LanguageMetadata::new(6, 20000)
-        ];
-        let final_stats = FinalStats::new(40, 4000, 3000, 0, 200000);
+        let total = Stats::total_of(&per_language);
 
-        let (folded_names, folded_content_info_map, folded_languages_metadata_map) = most_relevant_with_others_for_rest(
-                &sorted_language_names, &content_info_map, &languages_metadata_map, &final_stats, None);
+        let (folded_names, folded_per_language) = most_relevant_with_others_for_rest(
+                &sorted_language_names, &per_language, &total, None);
 
         // The caller's own data is untouched, so the same result can be printed again or handed to
         // a second consumer. Folding into "others" produces a separate view and nothing more.
         assert_eq!(5, sorted_language_names.len());
-        assert_eq!(5, content_info_map.len());
-        assert_eq!(5, languages_metadata_map.len());
+        assert_eq!(5, per_language.len());
         assert_eq!(vec!["a".to_owned(), "b".to_owned(), "c".to_owned(), "others".to_owned()], folded_names);
 
-        let (content_info_map, languages_metadata_map) = (folded_content_info_map, folded_languages_metadata_map);
         assert_eq!(hashmap![
-            "a".to_owned() => LanguageContentInfo::new(1000, 800, 0, hashmap![]),
-            "b".to_owned() => LanguageContentInfo::new(900, 700, 0, hashmap![]),
-            "c".to_owned() => LanguageContentInfo::new(800, 600, 0, hashmap![]),
-            "others".to_owned() => LanguageContentInfo::new(1300, 0, 0, hashmap![])
-            ], content_info_map);
-        
-        assert_eq!(hashmap![
-            "a".to_owned() => LanguageMetadata::new(10, 60000),
-            "b".to_owned() => LanguageMetadata::new(9, 50000),
-            "c".to_owned() => LanguageMetadata::new(8, 40000),
-            "others".to_owned() => LanguageMetadata::new(13, 50000)
-            ], languages_metadata_map);
+            "a".to_owned() => Stats::new(10, 60000, 1000, 800, 0, hashmap![]),
+            "b".to_owned() => Stats::new(9, 50000, 900, 700, 0, hashmap![]),
+            "c".to_owned() => Stats::new(8, 40000, 800, 600, 0, hashmap![]),
+            // The leftovers carry the files and the bytes of what was folded away as well as the
+            // lines, so the overview's shares are shares of the whole run in all three of its bars
+            "others".to_owned() => Stats::new(13, 50000, 1300, 0, 0, hashmap![])
+            ], folded_per_language);
+
+        // and what was folded plus what was kept is still the whole
+        assert_eq!(total.lines, Stats::total_of(&folded_per_language).lines);
+        assert_eq!(total.files, Stats::total_of(&folded_per_language).files);
+        assert_eq!(total.bytes, Stats::total_of(&folded_per_language).bytes);
     }
 
     // The rule that keeps every old entry from being accused of a change nobody recorded: a setting
@@ -1886,7 +1854,7 @@ mod tests {
     #[test]
     fn a_setting_an_entry_never_recorded_is_never_reported_as_changed() {
         let entry_of = |settings: Vec<(&str, &str)>| LogEntry {
-            name: None, stats: FinalStats::new_extended(1, 1, 1, 0, 0, 1, 1), modules: Vec::new(), datetime: Local::now(),
+            name: None, stats: Stats::new(1, 1, 1, 1, 0, hashmap![]), modules: Vec::new(), datetime: Local::now(),
             settings: settings.into_iter().map(|(k, v)| (k.to_owned(), v.to_owned())).collect(),
             splits_comments: true};
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
@@ -1907,6 +1875,25 @@ mod tests {
 
         // An entry with no settings block at all, which is every entry written before this existed
         assert!(settings_changed_since(&entry_of(vec![]), &config, &[]).is_empty());
+    }
+
+    // Two lists that have to hold the same names, kept in two files. The writer had eight and the
+    // reader accepted seven, so every log ever written carried a 'force-lang' line that the reader
+    // threw away: two runs of one tree, one of them with '--force-lang rs=Java', recorded settings
+    // that genuinely differed and the progress section reported no change beside numbers that had
+    // moved by everything. Written as a comparison of the two lists rather than as a case per key,
+    // so that the next setting to be added cannot be added to one of them alone.
+    #[test]
+    fn the_settings_written_to_a_log_are_the_settings_read_back() {
+        let config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
+        let mut written = super::super::log::counting_settings(&config.engine, &[])
+                .into_iter().map(|(key, _)| key).collect::<Vec<_>>();
+        let mut accepted = SETTING_KEYS.to_vec();
+        written.sort();
+        accepted.sort();
+
+        assert_eq!(written, accepted,
+                "the log writes settings the reader drops, or accepts names nothing ever writes");
     }
 
     #[test]
@@ -1931,6 +1918,25 @@ mod tests {
         assert_eq!("0",difference_as_signed_percentage_str_of_usize(0, 500));
     }
 
+    // Only two of the six figures used to be cleared when an entry closed, so an entry that was
+    // missing a line silently took that number from the entry above it. A whole entry writes all six
+    // and hides it; the fixture here is a log cut in the middle of a write, which is the shape the
+    // rest of the logging works to avoid producing and which older versions did produce.
+    #[test]
+    fn a_figure_missing_from_an_entry_is_not_taken_from_the_entry_before_it() {
+        let contents = super::super::log::extract_file_contents(&(FIXTURES_DIR.to_owned()+"logs/truncated")).unwrap();
+        let log_entries = parse_N_previous_entries(&contents, 2);
+
+        assert_eq!(2, log_entries.len());
+        assert_eq!((10, 1000), (log_entries[0].stats.files, log_entries[0].stats.lines));
+
+        assert_eq!(0, log_entries[1].stats.files, "the file count of the entry above it was reused");
+        assert_eq!(0, log_entries[1].stats.lines, "the line count of the entry above it was reused");
+        // And the arithmetic over what is left says nothing rather than a number the size of the
+        // address space, which is what the same entry printed before 'extra_lines' saturated
+        assert_eq!(0, log_entries[1].stats.extra_lines());
+    }
+
     #[test]
     fn test_parse_N_previous_entries() {
         let contents = super::super::log::extract_file_contents(&(FIXTURES_DIR.to_owned()+"logs/test1")).unwrap();
@@ -1939,9 +1945,9 @@ mod tests {
         assert_eq!(10, log_entries[0].stats.files);
         assert_eq!(1000, log_entries[0].stats.lines);
         assert_eq!(100, log_entries[0].stats.code_lines);
-        assert_eq!(100, log_entries[0].stats.extra_lines);
-        assert_eq!(100000, log_entries[0].stats.bytes_size);
-        assert_eq!(10000, log_entries[0].stats.bytes_average_size);
+        assert_eq!(900, log_entries[0].stats.extra_lines());
+        assert_eq!(100000, log_entries[0].stats.bytes);
+        assert_eq!(10000, log_entries[0].stats.average_size());
         let datetime: DateTime<Local> = chrono::DateTime::from_str("2021-09-12 16:42:00 +0300").unwrap();
         assert_eq!(datetime, log_entries[0].datetime);
         assert_eq!(Some("entry one".to_owned()),log_entries[0].name);
@@ -1949,9 +1955,9 @@ mod tests {
         assert_eq!(11, log_entries[1].stats.files);
         assert_eq!(1111, log_entries[1].stats.lines);
         assert_eq!(111, log_entries[1].stats.code_lines);
-        assert_eq!(111, log_entries[1].stats.extra_lines);
-        assert_eq!(111100, log_entries[1].stats.bytes_size);
-        assert_eq!(11100, log_entries[1].stats.bytes_average_size);
+        assert_eq!(1000, log_entries[1].stats.extra_lines());
+        assert_eq!(111100, log_entries[1].stats.bytes);
+        assert_eq!(10100, log_entries[1].stats.average_size());
         let datetime: DateTime<Local> = chrono::DateTime::from_str("2021-09-12 16:23:50 +03:00").unwrap();
         assert_eq!(datetime, log_entries[1].datetime);
         assert_eq!(None,log_entries[1].name);
@@ -1959,18 +1965,18 @@ mod tests {
         assert_eq!(12, log_entries[2].stats.files);
         assert_eq!(1222, log_entries[2].stats.lines);
         assert_eq!(122, log_entries[2].stats.code_lines);
-        assert_eq!(122, log_entries[2].stats.extra_lines);
-        assert_eq!(122200, log_entries[2].stats.bytes_size);
-        assert_eq!(12200, log_entries[2].stats.bytes_average_size);
+        assert_eq!(1100, log_entries[2].stats.extra_lines());
+        assert_eq!(122200, log_entries[2].stats.bytes);
+        assert_eq!(10183, log_entries[2].stats.average_size());
         let datetime: DateTime<Local> = chrono::DateTime::from_str("2021-09-12 04:01:56 +03:00").unwrap();
         assert_eq!(datetime, log_entries[2].datetime);
         assert_eq!(Some("entry three".to_owned()),log_entries[2].name);
     }
 
-    fn result_of(final_stats: FinalStats, modules: Vec<ModuleResult>) -> RunResult {
-        RunResult {content_info_map: HashMap::new(), languages_metadata_map: HashMap::new(), modules,
-                final_stats, faulty_files: Vec::new(), files_present: FilesPresent::default(),
-                scan_duration_millis: 0, metrics: None, targets: Vec::new(), unreadable_dirs: Vec::new(), threads: mezura_core::Threads::new(1, 1)}
+    fn result_of(total: Stats, modules: Vec<ModuleResult>) -> RunResult {
+        RunResult {per_language: HashMap::new(), modules,
+                total, faulty_files: Vec::new(), files_present: FilesPresent::default(),
+                targets: Vec::new(), unreadable_dirs: Vec::new(), performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }}
     }
 
     #[test]
@@ -1983,7 +1989,7 @@ mod tests {
 
         let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
         config.view.set_log_option(LogOption::new(Some("test name".to_owned())));
-        let result = result_of(FinalStats::new(10, 1000, 100, 0, 100), Vec::new());
+        let result = result_of(Stats::new(10, 100, 1000, 100, 0, HashMap::new()), Vec::new());
 
         log_stats(&test_log_dir, &None, &result, &chrono::DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap(), &config).unwrap();
 
@@ -1993,13 +1999,77 @@ mod tests {
         assert_eq!(10, log_entries[0].stats.files);
         assert_eq!(1000, log_entries[0].stats.lines);
         assert_eq!(100, log_entries[0].stats.code_lines);
-        assert_eq!(900, log_entries[0].stats.extra_lines);
-        assert_eq!(100, log_entries[0].stats.bytes_size);
-        assert_eq!(10, log_entries[0].stats.bytes_average_size);
+        assert_eq!(900, log_entries[0].stats.extra_lines());
+        assert_eq!(100, log_entries[0].stats.bytes);
+        assert_eq!(10, log_entries[0].stats.average_size());
         assert_eq!(Some("test name".to_owned()),log_entries[0].name);
         assert!(log_entries[0].modules.is_empty());
 
         Ok(())
+    }
+
+    // The log is the one output that cannot be measured again: the trees those runs counted have
+    // moved on. It used to be truncated first and rebuilt from a string read earlier, so a file it
+    // had failed to read came back holding one entry where it had held twenty, and nothing said so.
+    // 'extract_file_contents' answers None to "there is nothing" and to "I could not read it"
+    // alike, which are opposite instructions.
+    #[test]
+    fn a_log_that_could_not_be_read_is_kept_rather_than_replaced_by_the_run() {
+        std::fs::create_dir_all(SCRATCH_LOG_DIR).unwrap();
+        let path = SCRATCH_LOG_DIR.to_owned() + "test_unreadable";
+        let config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
+        let result = result_of(Stats::new(10, 100, 1000, 100, 0, HashMap::new()), Vec::new());
+        let now = chrono::DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap();
+
+        // What a run finds when the history is there and readable: the new entry, then all of it
+        std::fs::write(&path, "===>\nAN ENTRY FROM BEFORE\n").unwrap();
+        let history = super::super::log::extract_file_contents(&path);
+        assert!(history.is_some());
+        log_stats(&path, &history, &result, &now, &config).unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.contains("AN ENTRY FROM BEFORE"), "the history was dropped:\n{written}");
+
+        // And what it finds when the same file cannot be read. The bytes below are not UTF-8, which
+        // is one way in; a lock or an antivirus holding the file is the same answer through the
+        // same door, and on this platform far likelier.
+        std::fs::write(&path, [b"===>\nAN ENTRY FROM BEFORE\n".to_vec(), vec![0xFF, 0xFE, 0x80]].concat()).unwrap();
+        let unreadable = super::super::log::extract_file_contents(&path);
+        assert!(unreadable.is_none(), "the probe no longer reproduces an unreadable log");
+
+        let refused = log_stats(&path, &unreadable, &result, &now, &config);
+        assert!(refused.is_err(), "a log that could not be read was overwritten anyway");
+        let after = std::fs::read(&path).unwrap();
+        assert!(String::from_utf8_lossy(&after).contains("AN ENTRY FROM BEFORE"),
+                "the entries were destroyed by a run that could not read them");
+        // and nothing half written is left lying beside it, under the name this process would use
+        assert!(!Path::new(&format!("{path}.writing.{}", std::process::id())).exists());
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    // The other side of the same guard, and the case it used to get wrong. Emptying a log is an
+    // ordinary thing to want, and every ordinary way of doing it on this platform leaves a newline
+    // behind rather than nothing at all: the refusal above then saw bytes on disk with no contents
+    // read back, concluded the file was unreadable, and declined to write. On that run and on every
+    // one after it, since nothing the program does would ever remove those two bytes.
+    #[test]
+    fn a_log_emptied_by_hand_is_written_again_rather_than_refused_forever() {
+        std::fs::create_dir_all(SCRATCH_LOG_DIR).unwrap();
+        let path = SCRATCH_LOG_DIR.to_owned() + "test_emptied";
+        let config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
+        let result = result_of(Stats::new(10, 100, 1000, 100, 0, HashMap::new()), Vec::new());
+        let now = chrono::DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap();
+
+        for emptied in ["", "\r\n", "\n\n   \n", "   "] {
+            std::fs::write(&path, emptied).unwrap();
+            let history = super::super::log::extract_file_contents(&path);
+            let written = log_stats(&path, &history, &result, &now, &config);
+            assert!(written.is_ok(), "a log holding {emptied:?} was refused: {:?}", written.err());
+            assert!(std::fs::read_to_string(&path).unwrap().contains("==="),
+                    "a log holding {emptied:?} was left without the entry of this run");
+        }
+
+        std::fs::remove_file(&path).unwrap();
     }
 
     // The block is written under the totals of the entry it belongs to, which is already complete by
@@ -2017,9 +2087,9 @@ mod tests {
         let older = "===>\n2021-09-12 04:00:00 +0300\nStats:\n    Files: 4\n    Lines: 400\n        Code: 300\n        \
 Extra: 100\n    Total Size: 4000\n        Average Size: 1000\n\n\n";
         let module_of = |name: Option<&str>, lines: usize, code: usize, comments: usize| ModuleResult {
-            name: name.map(str::to_owned), content_info_map: HashMap::new(), languages_metadata_map: HashMap::new(),
-            final_stats: FinalStats::new_extended(1, lines, code, comments, lines - code - comments, 10, 10)};
-        let result = result_of(FinalStats::new_extended(10, 1000, 700, 200, 100, 5000, 500),
+            name: name.map(str::to_owned), per_language: HashMap::new(),
+            total: Stats::new(1, 10, lines, code, comments, HashMap::new())};
+        let result = result_of(Stats::new(10, 5000, 1000, 700, 200, hashmap![]),
                 vec![module_of(Some("frontend"), 600, 400, 150), module_of(None, 400, 300, 50)]);
 
         let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);

@@ -63,8 +63,11 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
     loop {
         let size = reader.read_line(&mut buf);
         if size == 0 {break};
-        if buf.trim().starts_with("===>") {
-            let id = buf.trim().trim_start_matches("===>").split_whitespace().next().unwrap_or("");
+        // Only the first line of the file can carry the mark, but asking on every line costs a
+        // comparison and spares the reader a special case that would have to be got right once
+        let line = super::without_byte_order_mark(buf.trim());
+        if line.starts_with("===>") {
+            let id = line.trim_start_matches("===>").split_whitespace().next().unwrap_or("");
 
             if id == config_manager::DIRS {
                 // The line is what ends a target here, and a space never does, so a path with one in
@@ -529,8 +532,35 @@ mod tests {
         std::fs::remove_file(&path)
     }
 
+    // A byte order mark is what PowerShell's 'Set-Content' and older Notepad put at the front of a
+    // file they save, and it is not whitespace, so 'trim' leaves it in front of the '===>' of the
+    // first block. That block is then not a block, and every setting under it is read as loose text
+    // and dropped, which for a configuration means the run silently uses the defaults instead. Both
+    // orderings are here because only the first line of the file can carry it.
+    #[test]
+    fn a_configuration_saved_with_a_byte_order_mark_still_reads() -> std::io::Result<()> {
+        let dir = SCRATCH_CONFIG_DIR.to_owned();
+        std::fs::create_dir_all(&dir)?;
+        let body = "===> dirs\n./\n\n===> exclude-languages\njava\n";
+
+        let plain = dir.clone() + "no-mark.txt";
+        let marked = dir.clone() + "with-mark.txt";
+        std::fs::write(&plain, body)?;
+        std::fs::write(&marked, "\u{feff}".to_owned() + body)?;
+
+        let (without, _) = super::super::config_files::parse_config_file(Some("no-mark"), Some(dir.clone())).unwrap();
+        let (with, issues) = super::super::config_files::parse_config_file(Some("with-mark"), Some(dir)).unwrap();
+
+        assert!(issues.invalid_fields.is_empty());
+        assert_eq!(without.dirs, with.dirs, "the targets of the file were dropped, and in silence");
+        assert_eq!(without.excluded_languages, with.excluded_languages);
+        assert_eq!(Some(vec!["java".to_owned()]), with.excluded_languages);
+
+        std::fs::remove_file(&plain).and(std::fs::remove_file(&marked))
+    }
+
     // The whole point of putting the name inside the target rather than in a field of its own: what
-    // '--save' writes has to be what a load reads, or the definitions would drift away from the
+    // '--save' writes has to be what a load reads, or the saved settings would drift away from the
     // paths they belong to on the first round trip.
     #[test]
     fn the_modules_of_a_saved_configuration_survive_being_read_back() -> std::io::Result<()> {
@@ -540,10 +570,10 @@ mod tests {
 
         // The last two are the ones that break: an unnamed target after a named one, and a path
         // with a space in it now that whitespace is what separates one target from the next
-        let declared = vec![Target::named("frontend", "D:/x/web".to_owned()),
-                Target::named("frontend", "D:/x/ui".to_owned()),
-                Target::named("backend", "D:/x/my api".to_owned()),
-                Target::of("D:/x/loose".to_owned())];
+        let declared = vec![Target::named("frontend", "D:/x/web"),
+                Target::named("frontend", "D:/x/ui"),
+                Target::named("backend", "D:/x/my api"),
+                Target::of("D:/x/loose")];
         // The one line form that the log entry carries. Whitespace and not commas, or the unnamed
         // target at the end would be read back as one more directory of 'backend'.
         assert_eq!("frontend=D:/x/web frontend=D:/x/ui backend=\"D:/x/my api\" D:/x/loose",
@@ -551,7 +581,7 @@ mod tests {
         // and while nothing is named it is what it always was, so an entry logged by an older
         // version is not reported as having had its targets changed
         assert_eq!("D:/x/web,D:/x/api", config_manager::targets_to_string(
-                &[Target::of("D:/x/web".to_owned()), Target::of("D:/x/api".to_owned())]));
+                &[Target::of("D:/x/web"), Target::of("D:/x/api")]));
 
         let builder = ConfigurationBuilder { dirs: Some(declared.clone()), ..Default::default() };
         save_existing_commands_from_config_builder_to_file(Some(dir.clone()), "modules-round-trip", &builder)?;
@@ -574,15 +604,15 @@ mod tests {
 
         let (options, issues) = parse_config_file(Some("dirs-block"), Some(dir.clone())).unwrap();
         assert!(issues.invalid_fields.is_empty());
-        assert_eq!(Some(vec![Target::named("tests", "D:/x/api/tests".to_owned()),
-                Target::named("tests", "D:/x/web/tests".to_owned()),
-                Target::named("backend", "D:/x/api".to_owned())]), options.dirs);
+        assert_eq!(Some(vec![Target::named("tests", "D:/x/api/tests"),
+                Target::named("tests", "D:/x/web/tests"),
+                Target::named("backend", "D:/x/api")]), options.dirs);
 
         // and a trailing comma still continues the list over the line break
         std::fs::write(&path, "===> dirs\ntests=D:/x/api/tests,\nD:/x/web/tests\n")?;
         let (options, _) = parse_config_file(Some("dirs-block"), Some(dir.clone())).unwrap();
-        assert_eq!(Some(vec![Target::named("tests", "D:/x/api/tests".to_owned()),
-                Target::named("tests", "D:/x/web/tests".to_owned())]), options.dirs);
+        assert_eq!(Some(vec![Target::named("tests", "D:/x/api/tests"),
+                Target::named("tests", "D:/x/web/tests")]), options.dirs);
 
         std::fs::write(&path, "===> dirs\nfrontend=\n")?;
         let (options, issues) = parse_config_file(Some("dirs-block"), Some(dir)).unwrap();
@@ -599,12 +629,11 @@ mod tests {
     #[test]
     fn test_read_config_file() -> std::io::Result<()> {
         let mut config = Configuration::new(vec![]);
-        let declared_dirs = vec![Target::of("C:/Some/Path/a".to_owned()), Target::of("C:/Some/Path/b".to_owned()),
-                Target::of("C:/Some/Path/c".to_owned()), Target::of("C:/Some/Path/d".to_owned())];
-        config.engine
-            .set_exclude_dirs(vec!["a".to_owned(), "b".to_owned(), "c.txt".to_owned(), "d.txt".to_owned()])
-            .set_threads(1,1)
-            .set_braces_as_code(true);
+        let declared_dirs = vec![Target::of("C:/Some/Path/a"), Target::of("C:/Some/Path/b"),
+                Target::of("C:/Some/Path/c"), Target::of("C:/Some/Path/d")];
+        config.engine.exclude_dirs = vec!["a".to_owned(), "b".to_owned(), "c.txt".to_owned(), "d.txt".to_owned()];
+        config.engine.threads = mezura_core::Threads::new(1, 1);
+        config.engine.braces_as_code = true;
         config
             .set_hidden(config_manager::Hidden {bar: true, timing: true, ..Default::default()});
 

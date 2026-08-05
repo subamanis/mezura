@@ -28,12 +28,12 @@ pub struct Target {
 }
 
 impl Target {
-    pub fn of(path: String) -> Self {
-        Target { module: None, path }
+    pub fn of(path: impl AsRef<str>) -> Self {
+        Target { module: None, path: path.as_ref().to_owned() }
     }
 
-    pub fn named(module: &str, path: String) -> Self {
-        Target { module: Some(module.to_owned()), path }
+    pub fn named(module: impl AsRef<str>, path: impl AsRef<str>) -> Self {
+        Target { module: Some(module.as_ref().to_owned()), path: path.as_ref().to_owned() }
     }
 }
 
@@ -124,7 +124,16 @@ impl Default for Threads {
 }
 
 // Everything the counting needs, and nothing else. This is what a library caller builds, and it is
-// plain data: nothing in it has to be computed, in any order, before anything else.
+// plain data: nothing in it has to be computed, in any order, before anything else. Every field is
+// public and there are no setters, so a configuration that differs from the default is written in
+// one expression, and the list can never fall behind the struct:
+//
+//     let config = EngineConfig { count_keywords: false, ..EngineConfig::new(["./src"]) };
+//
+// Every field but one answers what gets counted. 'threads' answers how fast, and the same tree
+// counted by more of them is the same tree: it is here because it is a setting somebody saves and
+// reloads beside the others, not because it belongs to the same question. The log knows the
+// difference and leaves it out of what makes two runs comparable.
 #[derive(Debug,PartialEq,Clone)]
 pub struct EngineConfig {
     // The places to count, as declared: paths or glob patterns, relative or absolute, exactly as
@@ -169,47 +178,10 @@ impl Default for EngineConfig {
 impl EngineConfig {
     // What a caller with nothing to say but where to look writes. Everything else has a default
     // that matches what the command line would have produced.
-    pub fn new(dirs: Vec<String>) -> Self {
+    pub fn new(dirs: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
         EngineConfig {
             dirs: dirs.into_iter().map(Target::of).collect(),
             ..Default::default()
         }
-    }
-
-    //Setters used mainly in tests, for the ability to chain many config changes
-
-    pub fn set_exclude_dirs(&mut self, exclude_dirs: Vec<String>) -> &mut Self {
-        self.exclude_dirs = exclude_dirs;
-        self
-    }
-
-    pub fn set_languages_of_interest(&mut self, languages_of_interest: Vec<String>) -> &mut Self {
-        self.languages_of_interest = languages_of_interest;
-        self
-    }
-
-    pub fn set_threads(&mut self, producers: usize, consumers: usize) -> &mut Self {
-        self.threads = Threads::new(producers, consumers);
-        self
-    }
-
-    pub fn set_braces_as_code(&mut self, braces_as_code: bool) -> &mut Self {
-        self.braces_as_code = braces_as_code;
-        self
-    }
-
-    pub fn set_should_search_in_dotted(&mut self, should_search_in_dotted: bool) -> &mut Self {
-        self.should_search_in_dotted = should_search_in_dotted;
-        self
-    }
-
-    pub fn set_no_gitignore(&mut self, no_gitignore: bool) -> &mut Self {
-        self.no_gitignore = no_gitignore;
-        self
-    }
-
-    pub fn set_count_keywords(&mut self, count_keywords: bool) -> &mut Self {
-        self.count_keywords = count_keywords;
-        self
     }
 }

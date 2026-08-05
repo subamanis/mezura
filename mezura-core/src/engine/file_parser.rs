@@ -958,7 +958,7 @@ mod tests {
     use std::sync::{Arc, LazyLock};
 
     use super::*;
-    use crate::{Keyword, LanguageContentInfo};
+    use crate::{Keyword, Stats};
     use crate::test_paths::{FIXTURES_DIR, LANGUAGES_DIR};
     use crate::engine::extensions::{find_language_of_extension, make_extension_language_map};
 
@@ -1131,8 +1131,8 @@ mod tests {
         scan_plan : std::sync::OnceLock::new()
     });
 
-    static LANGUAGE_MAP_REF : LazyLock<Arc<HashMap<String,Language>>> =
-            LazyLock::new(|| Arc::new(crate::language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0));
+    static LANGUAGE_MAP_REF : LazyLock<Arc<HashMap<String,Language>>> = LazyLock::new(||
+            Arc::new(crate::languages::keyed_by_name(crate::language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0)));
 
     static JAVA_MATCHER : LazyLock<KeywordMatcher> = LazyLock::new(|| KeywordMatcher::build(&JAVA).unwrap());
 
@@ -1140,8 +1140,14 @@ mod tests {
         KeywordMatcher::build(LANGUAGE_MAP_REF.get(lang_name).unwrap())
     }
 
-    fn content_info_of(stats: FileStats, lang_name: &str) -> LanguageContentInfo {
-        LanguageContentInfo::from_file_stats(stats, &LANGUAGE_MAP_REF.get(lang_name).unwrap().keywords)
+    // Seeded from the language and then given the one file, which is what a real run does: the seed
+    // is what puts a slot in for every keyword the language declares, so one that never occurs still
+    // reports its zero instead of being missing.
+    fn content_info_of(file: FileStats, lang_name: &str) -> Stats {
+        let language = LANGUAGE_MAP_REF.get(lang_name).unwrap();
+        let mut stats = Stats::from(language);
+        stats.add_file(file, 0, &language.keywords);
+        stats
     }
 
     #[test]
@@ -1151,36 +1157,39 @@ mod tests {
         let mut config = EngineConfig::default();
         let result = parse_file(&sample_file("a.txt"), "Java", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &config);
         let result = content_info_of(result.unwrap(), "Java");
-        assert_eq!(LanguageContentInfo::new(44, 13, 15, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
+        assert_eq!(Stats::new(1, 0, 44, 13, 15, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         buf.clear();
-        config.set_count_keywords(false);
+        // The keywords keep their slots and stay at zero, which is what a run produces: the seed
+        // comes from the language and not from the file, so hiding them stops the counting and not
+        // the language's own list of what it would have counted.
+        config.count_keywords = false;
         let result = parse_file(&sample_file("a.txt"), "Java", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &config);
         let result = content_info_of(result.unwrap(), "Java");
-        assert_eq!(LanguageContentInfo::new(44, 13, 15, hashmap!()), result);
+        assert_eq!(Stats::new(1, 0, 44, 13, 15, hashmap!("classes".to_owned()=>0,"interfaces".to_owned()=>0)), result);
         buf.clear();
-        config.set_count_keywords(true);
+        config.count_keywords = true;
         let result = parse_file(&sample_file("a.txt"), "C#", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("C#").as_ref(), &EngineConfig::default());
         let result = content_info_of(result.unwrap(), "C#");
-        assert_eq!(LanguageContentInfo::new(44, 13, 15, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
+        assert_eq!(Stats::new(1, 0, 44, 13, 15, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         buf.clear();
         
         let result = parse_file(&sample_file("d.txt"), "C#", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("C#").as_ref(), &EngineConfig::default());
         let result = content_info_of(result.unwrap(), "C#");
-        assert_eq!(LanguageContentInfo::new(19, 7, 10, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
+        assert_eq!(Stats::new(1, 0, 19, 7, 10, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         buf.clear();
         let result = parse_file(&sample_file("d.txt"), "Java", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &EngineConfig::default());
         let result = content_info_of(result.unwrap(), "Java");
-        assert_eq!(LanguageContentInfo::new(19, 7, 10, hashmap!("classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
+        assert_eq!(Stats::new(1, 0, 19, 7, 10, hashmap!("classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         buf.clear();
 
         let result = parse_file(&sample_file("b.txt"), "Java", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &EngineConfig::default());
         let result = content_info_of(result.unwrap(), "Java");
-        assert_eq!(LanguageContentInfo::new(19, 11, 5, hashmap!("classes".to_owned()=>7,"interfaces".to_owned()=>0)), result);
+        assert_eq!(Stats::new(1, 0, 19, 11, 5, hashmap!("classes".to_owned()=>7,"interfaces".to_owned()=>0)), result);
         buf.clear();
 
         let result = parse_file(&sample_file("c.txt"), "Python", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Python").as_ref(), &EngineConfig::default());
         let result = content_info_of(result.unwrap(), "Python");
-        assert_eq!(LanguageContentInfo::new(11, 6, 3, hashmap!("classes".to_owned()=>2)), result);
+        assert_eq!(Stats::new(1, 0, 11, 6, 3, hashmap!("classes".to_owned()=>2)), result);
         buf.clear();
     }
 
@@ -1192,8 +1201,7 @@ mod tests {
         let mut buf = String::with_capacity(150);
         let path = sample_file("a.txt");
         let count_with = |flag: bool, buf: &mut String| {
-            let mut config = EngineConfig::default();
-            config.set_braces_as_code(flag);
+            let config = EngineConfig { braces_as_code: flag, ..Default::default() };
             let stats = parse_file(&path, "Java", buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &config).unwrap();
             (stats.lines, stats.code_lines, stats.comment_lines)
         };

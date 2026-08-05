@@ -6,19 +6,13 @@
 // Nothing here reads a global. What a person prefers to see, the digit grouping and the decimal
 // mark, is a 'NumberFormat' the caller holds and passes.
 
-// What a share gets when it exists but rounds away to nothing. A language that is one file in a
-// million is not absent, and printing it as '0.00' says it is; this value survives the rounding so
-// the text can say '<0.01' instead. It stays below the threshold that earns a cell in a bar,
-// because a share too small to be printed has no business taking a cell from one that was printed.
-pub const PRESENT_BUT_TINY : f64 = 0.001;
-
 const TINY_THRESHOLD : f64 = 0.01;
 
 
-// How many cells of a bar of 'width' each share is worth, by largest remainder: every share takes
-// the whole part of its exact claim, anything visible keeps at least one cell so that it cannot
+// How many cells of a bar of 'total_cells' each share is worth, by largest remainder: every share
+// takes the whole part of its exact claim, anything visible keeps at least one cell so that it cannot
 // vanish, and the cells still unspent go one at a time to whoever sits furthest below their exact
-// claim. The result always sums to 'width' exactly.
+// claim. The result always sums to 'total_cells' exactly.
 //
 // Exact in both directions, which is the part that is easy to get wrong: the minimum-one rule can
 // push the total over the target, since 97/1/1/1 wants fifty-one cells in a bar of fifty. The
@@ -28,15 +22,15 @@ const TINY_THRESHOLD : f64 = 0.01;
 //
 // 'shares' are percentages, so they are expected to sum to about 100; a list that does not simply
 // gets a bar that is not full.
-pub fn apportion(shares: &[f64], width: usize) -> Vec<usize> {
-    let exact = shares.iter().map(|x| x * width as f64 / 100.0).collect::<Vec<_>>();
+pub fn apportion(shares: &[f64], total_cells: usize) -> Vec<usize> {
+    let exact = shares.iter().map(|x| x * total_cells as f64 / 100.0).collect::<Vec<_>>();
     let mut cells = shares.iter().zip(exact.iter())
             .map(|(share, exact)| if *share < TINY_THRESHOLD {0} else {(*exact as usize).max(1)})
             .collect::<Vec<_>>();
 
     let mut sum = cells.iter().sum::<usize>();
 
-    while sum < width {
+    while sum < total_cells {
         let distance_below = |i: &usize| exact[*i] - cells[*i] as f64;
         let furthest_below = (0..cells.len()).filter(|i| shares[*i] >= TINY_THRESHOLD)
                 .max_by(|a, b| distance_below(a).total_cmp(&distance_below(b)));
@@ -47,7 +41,7 @@ pub fn apportion(shares: &[f64], width: usize) -> Vec<usize> {
         sum += 1;
     }
 
-    while sum > width {
+    while sum > total_cells {
         let largest = (0..cells.len()).filter(|i| cells[*i] > 1)
                 .max_by(|a, b| cells[*a].cmp(&cells[*b]).then(exact[*a].total_cmp(&exact[*b])));
         match largest {
@@ -60,26 +54,49 @@ pub fn apportion(shares: &[f64], width: usize) -> Vec<usize> {
     cells
 }
 
-// The share of the whole each number holds, rounded to two decimals and summing to 100. The last
-// entry absorbs whatever the rounding of the others left over, which is why the order matters and
-// why a list that ends in a leftovers row wants that row last. A number that is present but rounds
-// to zero comes back as 'PRESENT_BUT_TINY' rather than 0.0, in every position.
+// The share of the whole each number holds, where the whole is the sum of the numbers themselves.
+// That is the right answer only when the list is everything, so a caller that has cut its list must
+// say what it cut it from and use 'percentages_of' below: taking the top few and asking this gives
+// shares of the few, which look like shares of the whole and are not.
+//
+// Rounded to two decimals and summing to 100. The last entry absorbs whatever the rounding of the
+// others left over, which is why the order matters and why a list that ends in a leftovers row
+// wants that row last.
 pub fn percentages(numbers: &[usize]) -> Vec<f64> {
-    let total : usize = numbers.iter().sum();
+    percentages_of(numbers, numbers.iter().sum())
+}
+
+// The same, against a total the caller names: what each number is worth out of everything there
+// was, whether or not everything there was is in the list. A report that shows the largest few and
+// folds the rest into a leftovers row can use either, since the row makes the list whole again.
+//
+// A share that rounds to zero comes back as the true small number and not as zero, so that whoever
+// formats it can tell "none" from "too little to show": 'NumberFormat::percent' writes '<0.01' for
+// anything positive that rounds away, and 'apportion' gives no cell to anything under a hundredth,
+// so both answers are reached from the honest figure rather than from a marker standing in for it.
+pub fn percentages_of(numbers: &[usize], total: usize) -> Vec<f64> {
+    if total == 0 {
+        return vec![0.0; numbers.len()];
+    }
+
+    // The last entry mops up the rounding of the others only when the list really is the whole of
+    // the total, which is the case that owes the reader exactly 100. A list that is a part of
+    // something larger owes 100 nothing, and handing its last entry the remainder is the very
+    // renormalisation this function exists to let a caller avoid.
+    let accounts_for_everything = numbers.iter().sum::<usize>() == total;
+    let exact = |number: usize| number as f64 / total as f64 * 100f64;
     let mut shares = Vec::with_capacity(numbers.len());
     let mut sum = 0.0;
     for (position, number) in numbers.iter().enumerate() {
-        if position == numbers.len() - 1 {
+        if accounts_for_everything && position == numbers.len() - 1 {
             let remainder = if sum > 99.99 {0.0} else {((100f64 - sum) * 100f64).round() / 100f64};
-            shares.push(if remainder == 0.0 && *number > 0 {PRESENT_BUT_TINY} else {remainder});
+            shares.push(if remainder == 0.0 && *number > 0 {exact(*number)} else {remainder});
         } else {
-            let share = *number as f64 / total as f64;
-            let rounded = (share * 10000f64).round() / 100f64;
-            // The running sum takes the rounded value and not the marker, so that the arithmetic of
-            // the last entry is untouched by a share too small to print
-            let rounded = if rounded == 0.0 && *number > 0 {PRESENT_BUT_TINY} else {rounded};
-            sum += (rounded * 100f64).round() / 100f64;
-            shares.push(rounded);
+            let rounded = (exact(*number) * 100f64).round() / 100f64;
+            // The running sum takes the rounded value, so that a share too small to print leaves
+            // the arithmetic of the last entry untouched
+            sum += rounded;
+            shares.push(if rounded == 0.0 && *number > 0 {exact(*number)} else {rounded});
         }
     }
 
@@ -200,7 +217,7 @@ mod tests {
     const BAR : usize = 50;
 
     #[test]
-    fn apportionment_is_exact_and_scales_to_any_width() {
+    fn apportionment_is_exact_and_scales_to_any_number_of_cells() {
         assert_eq!(vec![25,25], apportion(&[49.6,50.4], BAR));
         assert_eq!(vec![0,50], apportion(&[0.0,100.0], BAR));
         assert_eq!(vec![16,17,17], apportion(&[33.33,33.33,33.34], BAR));
@@ -210,7 +227,7 @@ mod tests {
         assert_eq!(vec![6,25,13,6], apportion(&[12.5,50.0,25.0,12.5], BAR));
         assert_eq!(vec![1,1,24,24], apportion(&[0.1,0.1,49.9,49.9], BAR));
 
-        // The width is a parameter, so the same shares scale to any bar
+        // The count is a parameter, so the same shares scale to any bar
         assert_eq!(25, apportion(&[50.0,50.0], 50)[0]);
         assert_eq!(50, apportion(&[50.0,50.0], 100)[0]);
         assert_eq!(10, apportion(&[50.0,50.0], 20)[0]);
@@ -234,7 +251,7 @@ mod tests {
     }
 
     #[test]
-    fn the_cells_always_sum_to_the_width_and_keep_visible_shares_visible() {
+    fn the_cells_always_sum_to_the_total_and_keep_visible_shares_visible() {
         let cases: Vec<Vec<f64>> = vec![
             vec![100.0], vec![50.0,50.0], vec![0.01,99.99], vec![0.0,0.0,0.0,100.0],
             vec![25.0,25.0,25.0,25.0], vec![70.0,10.0,10.0,10.0], vec![1.0,1.0,1.0,97.0],
@@ -289,9 +306,22 @@ mod tests {
         assert_eq!("12.35", format.percent(12.345));
         assert_eq!("100.00", format.percent(100.0));
 
-        // A report pads every percentage into a five column field, so the marker has to fit in it.
+        // The figure a caller reads is the true one and not a marker: it used to come back as a
+        // flat 0.001 whatever the real share was, which is 2.7 times this one and sums past 100.
+        let shares = percentages(&[500_000, 3, 299_997]);
+        assert!((shares[1] - 0.000375).abs() < 1e-9, "the share was replaced by a marker: {}", shares[1]);
+        assert!((shares.iter().sum::<f64>() - 100.0).abs() < 0.01, "the shares no longer sum to 100: {shares:?}");
+
+        // And the denominator is stated when the list is not everything. Taking the largest two of
+        // three and asking for their shares of the whole is not the same question as their shares
+        // of each other, and the plain call answers the second.
+        assert_eq!(vec![62.5, 37.5], percentages(&[500_000, 300_000]));
+        assert_eq!(vec![50.0, 30.0], percentages_of(&[500_000, 300_000], 1_000_000));
+        assert_eq!(vec![0.0, 0.0], percentages_of(&[0, 0], 0));
+
+        // A report pads every percentage into a five column field, so '<0.01' has to fit in it.
         // 100.00 is the one value that does not, which is why such padding saturates.
-        for value in [0.0, PRESENT_BUT_TINY, 0.01, 9.9, 99.99] {
+        for value in [0.0, 0.000375, 0.01, 9.9, 99.99] {
             assert!(format.percent(value).len() <= 5, "'{}' does not fit the column", format.percent(value));
         }
         assert_eq!(6, format.percent(100.0).len());
