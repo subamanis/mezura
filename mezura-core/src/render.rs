@@ -198,10 +198,17 @@ impl NumberFormat {
     }
 }
 
-// Plain digits and a dot, which is what a caller that never says otherwise gets
+// What the program itself prints, so a caller that says nothing gets numbers that look like mezura's
+// rather than something it would have to correct.
+//
+// It used to group nothing at all, on the reading that a default should be the absence of a choice.
+// It is not one: the dot was already the English convention, so refusing the comma beside it was
+// half a decision rather than neutrality. And nobody reaches for a type called 'NumberFormat' to be
+// handed plain digits, which '{}' gives them already; grouping is the thing they came for. A caller
+// who does want them ungrouped asks for it by name, with 'NumberFormat::new(None, '.')'.
 impl Default for NumberFormat {
     fn default() -> Self {
-        NumberFormat { thousands: None, decimal: '.' }
+        NumberFormat { thousands: Some(','), decimal: '.' }
     }
 }
 
@@ -351,7 +358,8 @@ mod tests {
 
     #[test]
     fn a_number_is_grouped_and_marked_the_way_the_caller_asked() {
-        let plain = NumberFormat::default();
+        // Ungrouped is a thing a caller asks for by name, and no longer what saying nothing gets
+        let plain = NumberFormat::new(None, '.');
         assert_eq!("1234567", plain.integer(1234567));
         assert_eq!("1.5", plain.grouped("1.5"));
 
@@ -372,6 +380,11 @@ mod tests {
         // A whole number of bytes is not divided, so it shows no decimal at all
         assert_eq!(("430".to_owned(), "Bytes"), english.size_with_unit(430));
         assert_eq!(("999".to_owned(), "Bytes"), english.size_with_unit(999));
+
+        // And saying nothing is the same as asking for the one above, which is what the program
+        // prints. A caller writing its own view got ungrouped digits here and had to correct them.
+        assert_eq!(english.integer(1234567), NumberFormat::default().integer(1234567));
+        assert_eq!("1,234,567", NumberFormat::default().integer(1234567));
     }
 
     #[test]
