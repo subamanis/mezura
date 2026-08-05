@@ -68,7 +68,7 @@ fn main() -> ExitCode {
         // the same ones it just wrote, so nothing is lost by not re-reading them.
         language_map = read_baked_in_languages_dir();
     } else {
-        match mezura_core::language_file::parse_dir(&crate::paths::PERSISTENT_APP_PATHS.languages_dir) {
+        match mezura_core::language_file::parse_languages_in_dir(&crate::paths::PERSISTENT_APP_PATHS.languages_dir) {
             Ok((_language_map, faulty_files)) => {
                 if !faulty_files.is_empty() {
                     let mut warn_msg = String::from("\nFormatting problems detected in language files: ");
@@ -274,7 +274,7 @@ fn read_baked_in_languages_dir() -> HashMap<String, Language> {
     for (_, contents) in mezura_core::languages::shipped_language_files() {
         // These are ours and every one of them parses, which the test suite is what actually
         // guarantees. A file that somehow did not would be left out rather than take the run down.
-        if let Some(language) = mezura_core::language_file::parse_definition(&String::from_utf8_lossy(contents)) {
+        if let Some(language) = mezura_core::language_file::parse_language(&String::from_utf8_lossy(contents)) {
             lang_files.insert(language.name.to_owned(), language);
         }
     }
@@ -396,7 +396,7 @@ fn shipped_files() -> Vec<(String, &'static [u8])> {
 // that change a count, which is the only reason to take somebody's file away from them.
 fn means_the_same(on_disk: &[u8], shipped: &[u8]) -> bool {
     let (theirs, ours) = (String::from_utf8_lossy(on_disk), String::from_utf8_lossy(shipped));
-    match (mezura_core::language_file::parse_definition(&theirs), mezura_core::language_file::parse_definition(&ours)) {
+    match (mezura_core::language_file::parse_language(&theirs), mezura_core::language_file::parse_language(&ours)) {
         (Some(theirs), Some(ours)) => theirs == ours,
         // Ours always parses, so this is a file edited into something that no longer does, and
         // replacing it is a repair

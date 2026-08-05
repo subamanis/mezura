@@ -15,7 +15,7 @@ fn a_run_over_two_directories_counts_files_lines_and_keywords() {
     assert_eq!(Threads::new(1, 3), config.threads);
     assert_eq!(vec![Target::of(format!("{current_dir}/src")), Target::of(format!("{current_dir}/tests"))], config.dirs);
 
-    let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
+    let language_map = language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0;
     assert!(!language_map.is_empty());
 
     let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
@@ -54,7 +54,7 @@ fn a_run_that_names_modules_and_finds_nothing_still_reports_them() {
     };
     config.set_threads(1, 2);
 
-    let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
+    let language_map = language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0;
     let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
     let result = run(&config, languages, |_| {}).unwrap();
 
@@ -78,7 +78,7 @@ fn an_exclude_pattern_that_does_not_parse_is_an_error_not_a_panic() {
     config.set_exclude_dirs(vec!["target".to_owned(), "[invalid".to_owned()]);
     config.set_threads(1, 1);
 
-    let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
+    let language_map = language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0;
     let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
 
     let err = run(&config, languages, |_| {}).unwrap_err();
@@ -102,7 +102,7 @@ fn a_run_where_every_file_fails_to_parse_is_an_answer_not_an_error() {
 
     let mut config = EngineConfig::new(vec![root_str]);
     config.set_threads(1, 2);
-    let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
+    let language_map = language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0;
     let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
 
     let result = run(&config, languages, |_| {}).unwrap();
@@ -119,7 +119,7 @@ fn a_run_where_every_file_fails_to_parse_is_an_answer_not_an_error() {
     std::fs::create_dir_all(&empty).unwrap();
     let mut config = EngineConfig::new(vec![empty.to_str().unwrap().replace('\\', "/")]);
     config.set_threads(1, 1);
-    let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
+    let language_map = language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0;
     let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
     let result = run(&config, languages, |_| {}).unwrap();
     std::fs::remove_dir_all(&empty).unwrap();
@@ -133,7 +133,7 @@ fn a_run_where_every_file_fails_to_parse_is_an_answer_not_an_error() {
 // measurement.
 #[test]
 fn a_run_with_no_targets_is_an_error_not_an_empty_answer() {
-    let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
+    let language_map = language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0;
     let config = EngineConfig::default();
     let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
 
@@ -146,7 +146,7 @@ fn a_run_with_no_targets_is_an_error_not_an_empty_answer() {
 // each kind of mistake keeps its own variant so a caller can tell them apart.
 #[test]
 fn a_target_that_names_nothing_is_a_run_error() {
-    let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
+    let language_map = language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0;
     let config = EngineConfig::new(vec!["./does-not-exist-run".to_owned()]);
     let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
 
@@ -163,7 +163,7 @@ fn a_target_that_names_nothing_is_a_run_error() {
         dirs: vec![Target::named("a", root_str.clone()), Target::named("b", root_str)],
         ..Default::default()
     };
-    let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
+    let language_map = language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0;
     let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
     let err = run(&config, languages, |_| {}).unwrap_err();
     std::fs::remove_dir_all(&root).unwrap();
@@ -185,7 +185,7 @@ fn the_result_reports_the_resolved_targets_the_run_walked() {
 
     let mut config = EngineConfig::new(vec![format!("{root_str}/sub*")]);
     config.set_threads(1, 1);
-    let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
+    let language_map = language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0;
     let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
     let result = run(&config, languages, |_| {}).unwrap();
     std::fs::remove_dir_all(&root).unwrap();
@@ -211,7 +211,7 @@ fn a_resolved_match_named_like_a_pattern_is_counted_not_re_expanded() {
 
     let mut config = EngineConfig::new(vec![pattern]);
     config.set_threads(1, 1);
-    let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
+    let language_map = language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0;
     let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
     let result = run(&config, languages, |_| {}).unwrap();
     std::fs::remove_dir_all(&root).unwrap();
@@ -230,7 +230,7 @@ fn a_thread_count_outside_the_supported_range_cannot_reach_the_run() {
     let count_with = |producers: usize, consumers: usize| {
         let mut config = EngineConfig::new(vec![format!("{current_dir}/src")]);
         config.set_threads(producers, consumers);
-        let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
+        let language_map = language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0;
         let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
         let result = run(&config, languages, |_| {}).unwrap();
         (result.files_present.relevant_files, result.final_stats.lines)
@@ -261,7 +261,7 @@ fn the_result_reports_the_threads_the_run_actually_used() {
     let mut config = EngineConfig::new(vec![format!("{current_dir}/src")]);
     config.set_threads(2, 3);
 
-    let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
+    let language_map = language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0;
     let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
     let result = run(&config, languages, |_| {}).unwrap();
     assert_eq!(Threads::new(2, 3), result.threads);
@@ -272,7 +272,7 @@ fn the_result_reports_the_threads_the_run_actually_used() {
     std::fs::create_dir_all(&empty).unwrap();
     let mut config = EngineConfig::new(vec![empty.to_string_lossy().replace("\\", "/")]);
     config.set_threads(1, 2);
-    let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
+    let language_map = language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0;
     let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
     let result = run(&config, languages, |_| {}).unwrap();
     std::fs::remove_dir_all(&empty).unwrap();

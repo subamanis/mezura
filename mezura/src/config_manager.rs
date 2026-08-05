@@ -1147,7 +1147,7 @@ mod tests {
     // from the workspace checkout
     fn counted(config: &Configuration) -> mezura_core::RunResult {
         let languages_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../mezura-core/data/languages/");
-        let map = mezura_core::language_file::parse_dir(languages_dir).unwrap().0;
+        let map = mezura_core::language_file::parse_languages_in_dir(languages_dir).unwrap().0;
         let (languages, _) = mezura_core::Languages::resolve(map, &std::collections::HashMap::new(), &config.engine);
         mezura_core::run(&config.engine, languages, |_| {}).unwrap()
     }
@@ -1365,7 +1365,7 @@ mod tests {
 
         // the error a real run returns, through the same join 'main' prints it with
         let languages_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../mezura-core/data/languages/");
-        let map = mezura_core::language_file::parse_dir(languages_dir).unwrap().0;
+        let map = mezura_core::language_file::parse_languages_in_dir(languages_dir).unwrap().0;
         let (languages, _) = mezura_core::Languages::resolve(map, &std::collections::HashMap::new(), &config.engine);
         let mezura_core::RunError::InvalidTargets(inner) = mezura_core::run(&config.engine, languages, |_| {}).unwrap_err()
                 else { panic!("the run did not refuse the config's dirs") };

@@ -54,7 +54,7 @@ fn collect_stats() -> String {
     let mut config = EngineConfig::new(vec![fixtures_root().to_str().unwrap().replace('\\', "/")]);
     config.set_threads(1, CONSUMER_THREADS);
 
-    let language_map = language_file::parse_dir(LANGUAGES_DIR).unwrap().0;
+    let language_map = language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0;
 
     let (languages, _) = Languages::resolve(language_map, &HashMap::new(), &config);
 

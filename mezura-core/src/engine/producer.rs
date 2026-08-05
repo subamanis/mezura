@@ -238,7 +238,7 @@ mod tests {
         // configuration the walk is about to obey
         let dirs = crate::engine::targets::resolve(&config.dirs, !config.no_gitignore, config.should_search_in_dotted).unwrap();
         let config = Arc::new(config);
-        let language_map = Arc::new(crate::language_file::parse_dir(LANGUAGES_DIR).unwrap().0);
+        let language_map = Arc::new(crate::language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0);
         let files_injector = Arc::new(Injector::new());
         let dirs_injector = Arc::new(Injector::new());
         let idle_producers = Arc::new(AtomicUsize::new(0));
@@ -282,7 +282,7 @@ mod tests {
         config.set_threads(1, 1);
         let dirs = crate::engine::targets::resolve(&config.dirs, !config.no_gitignore, config.should_search_in_dotted).unwrap();
         let config = Arc::new(config);
-        let language_map = Arc::new(crate::language_file::parse_dir(LANGUAGES_DIR).unwrap().0);
+        let language_map = Arc::new(crate::language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0);
         let extension_lang_map: ExtensionLangMap =
                 Arc::new(make_extension_language_map(&language_map, &HashMap::new(), &HashMap::new()).0);
         let modules = Arc::new(Modules::of(&dirs));

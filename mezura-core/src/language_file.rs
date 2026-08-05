@@ -51,7 +51,7 @@ impl std::fmt::Display for LanguageDirParseError {
 
 impl std::error::Error for LanguageDirParseError {}
 
-pub fn parse_dir(target_path: &str) -> Result<(HashMap<String, Language>, Vec<String>), LanguageDirParseError> {
+pub fn parse_languages_in_dir(target_path: &str) -> Result<(HashMap<String, Language>, Vec<String>), LanguageDirParseError> {
     fn add_file_name_to_faulty_files(entry: &DirEntry, faulty_files: &mut Vec<String>) {
         let file_name = entry.file_name().to_str().map_or(String::new(), |x| x.to_owned());
         if !file_name.is_empty() {faulty_files.push(file_name.to_lowercase())}
@@ -59,8 +59,7 @@ pub fn parse_dir(target_path: &str) -> Result<(HashMap<String, Language>, Vec<St
 
     let mut language_map = HashMap::with_capacity(30);
     let mut faulty_files : Vec<String> = Vec::new();
-    let mut buffer = String::with_capacity(200);
-    
+
     let entries = fs::read_dir(target_path);
     if entries.is_err() {
         return Err(LanguageDirParseError::PathMissing(target_path.to_owned()));
@@ -71,17 +70,12 @@ pub fn parse_dir(target_path: &str) -> Result<(HashMap<String, Language>, Vec<St
         let path = entry.path();
         if !Path::new(&path).is_file() {continue;}
 
-        let Ok(reader) = line_reader::LineReader::open(path) else {
-            add_file_name_to_faulty_files(&entry, &mut faulty_files);
-            continue;
-        };
-
-        let Ok(language) = parse_file_to_language(reader, &mut buffer) else {
-            add_file_name_to_faulty_files(&entry, &mut faulty_files);
-            continue;
-        };
-
-        language_map.insert(language.name.to_owned(), language);
+        // Read whole and parsed as a string, the one way the format is parsed: a definition on
+        // disk and one baked into the binary go through the same 'parse_language'.
+        match fs::read_to_string(&path).ok().and_then(|contents| parse_language(&contents)) {
+            Some(language) => { language_map.insert(language.name.to_owned(), language); },
+            None => add_file_name_to_faulty_files(&entry, &mut faulty_files)
+        }
     }
 
     if language_map.is_empty() && faulty_files.is_empty() {
@@ -93,59 +87,75 @@ pub fn parse_dir(target_path: &str) -> Result<(HashMap<String, Language>, Vec<St
     }
 }
 
-// Returns None instead of panicking on anything it does not recognise, because it is no longer only
-// read over the baked-in files, which are ours and are correct by construction. The migration reads
-// what is on the user's disk through it, to ask whether their copy of a file still means what our
-// copy means, and a file that somebody edited into something unparseable must come back as "not the
-// same" rather than take the run down with it.
-pub fn parse_definition(contents: &str) -> Option<Language> {
-    let mut lines = contents.lines().map(str::trim_end);
+// The one parser of the language file format, over a string. 'parse_languages_in_dir' reads each
+// file into one and calls this, so a file on disk and the baked-in bytes go through identical code:
+// there is no second parser to drift from, which is what let one read every keyword and one none.
+//
+// Two rules keep it robust. A value sits on the line right after its header, taken as it is even
+// when empty, because a language with only multiline comments has an empty 'Comment symbols' value
+// and that empty line is the value, not a separator. Blank lines are skipped only before a header,
+// between blocks, so an extra one, or the one that always separates the keyword blocks from the
+// symbols above them, never derails the parse.
+//
+// Returns None on anything it does not recognise rather than panicking, because the migration reads
+// what is on the user's disk through it to ask whether their copy still means what ours means, and a
+// file edited into something unparseable must come back as "not the same" and not take the run down.
+pub fn parse_language(contents: &str) -> Option<Language> {
+    let mut lines = contents.lines();
 
-    if lines.next()? != LANGUAGE {return None;}
-    let lang_name = lines.next()?.trim().to_owned();
+    if next_header(&mut lines)? != LANGUAGE {return None;}
+    let lang_name = value_line(&mut lines)?;
     if lang_name.is_empty() {return None;}
-    lines.next()?;
 
-    if lines.next()? != EXTENSIONS {return None;}
-    let extensions = split_line_on_whitespace(lines.next()?);
+    if next_header(&mut lines)? != EXTENSIONS {return None;}
+    let extensions = split_line_on_whitespace(&value_line(&mut lines)?);
     if extensions.is_empty() {return None;}
-    lines.next()?;
 
-    if lines.next()? != STRING_SYMBOLS {return None;}
-    let string_symbols = split_line_on_whitespace(lines.next()?);
+    if next_header(&mut lines)? != STRING_SYMBOLS {return None;}
+    let string_symbols = split_line_on_whitespace(&value_line(&mut lines)?);
     if string_symbols.is_empty() {return None;}
-    lines.next()?;
 
-    if lines.next()? != COMMENT_SYMBOLS {return None;}
-    let comment_symbols = split_line_on_whitespace(lines.next()?);
+    if next_header(&mut lines)? != COMMENT_SYMBOLS {return None;}
+    // Deliberately allowed to be empty: a language whose only comments are multiline has no line
+    // comment symbol, and the value here is the empty line that says so.
+    let comment_symbols = split_line_on_whitespace(&value_line(&mut lines)?);
 
     let (mut mult_start, mut mult_end) = (None, None);
-    let mut next_line = lines.next();
-    if next_line == Some(MULTILINE_COMMENT_START) {
-        let start = lines.next()?.trim().to_owned();
-        if start.is_empty() || lines.next()? != MULTILINE_COMMENT_END {return None;}
-        let end = lines.next()?.trim().to_owned();
+    let mut header = next_header(&mut lines);
+    if header.as_deref() == Some(MULTILINE_COMMENT_START) {
+        let start = value_line(&mut lines)?;
+        if start.is_empty() || next_header(&mut lines)?.as_str() != MULTILINE_COMMENT_END {return None;}
+        let end = value_line(&mut lines)?;
         if end.is_empty() {return None;}
         (mult_start, mult_end) = (Some(start), Some(end));
-        // The blank line that separates the multiline symbols from the keyword blocks, and which a
-        // language declaring no keywords does not have at all
-        next_line = lines.next();
+        header = next_header(&mut lines);
     }
 
     let mut keywords = Vec::new();
-    while let Some(line) = next_line {
-        if line != KEYWORD {break;}
-        if lines.next()? != KEYWORD_NAME {return None;}
-        let name = lines.next()?.trim().to_owned();
-        if lines.next()? != KEYWORD_ALIASES {return None;}
-        let aliases = split_line_on_whitespace(lines.next()?);
+    while header.as_deref() == Some(KEYWORD) {
+        if next_header(&mut lines)?.as_str() != KEYWORD_NAME {return None;}
+        let name = value_line(&mut lines)?;
+        if next_header(&mut lines)?.as_str() != KEYWORD_ALIASES {return None;}
+        let aliases = split_line_on_whitespace(&value_line(&mut lines)?);
         if name.is_empty() || aliases.is_empty() {return None;}
 
         keywords.push(Keyword{descriptive_name: name, aliases});
-        next_line = lines.next();
+        header = next_header(&mut lines);
     }
 
     Some(Language::new(lang_name, extensions, string_symbols, comment_symbols, mult_start, mult_end, keywords))
+}
+
+// The next line that carries a header, with the blank lines between blocks skipped. Trimmed, so an
+// indented sub-header like the 'NAME' of a keyword block is recognised.
+fn next_header(lines: &mut std::str::Lines) -> Option<String> {
+    lines.by_ref().map(str::trim).find(|line| !line.is_empty()).map(str::to_owned)
+}
+
+// The value that belongs to the header just read: the very next line, trimmed, empty or not. Never
+// skips a blank, because for the comment symbols the blank line is the value.
+fn value_line(lines: &mut std::str::Lines) -> Option<String> {
+    lines.next().map(|line| line.trim().to_owned())
 }
 
 // A missing file is not a mistake: an installation made by an earlier version has none, and the
@@ -207,142 +217,44 @@ fn split_line_on_whitespace(line: &str) -> Vec<String> {
     line.split_whitespace().map(str::trim).filter(|x| !x.is_empty()).map(str::to_owned).collect()
 }
 
-fn parse_file_to_language(mut reader :line_reader::LineReader, buffer :&mut String) -> Result<Language,()> {
-    if !reader.read_line_and_compare(buffer, LANGUAGE) {return Err(());}
-    if !reader.read_line_exists(buffer) {return Err(());}
-    let lang_name = buffer.trim_end().to_owned();
-    if !reader.read_line_exists(buffer) {return Err(());}
-
-    if !reader.read_line_and_compare(buffer, EXTENSIONS) {return Err(());}
-    let Ok(identifiers) = reader.get_line_sliced(buffer) else { return Err(()) };
-    if !reader.read_line_exists(buffer) {return Err(());}
-
-    if !reader.read_line_and_compare(buffer, STRING_SYMBOLS) {return Err(());}
-    let Ok(string_symbols) = reader.get_line_sliced(buffer) else { return Err(()) };
-    if string_symbols.is_empty() {return Err(());}
-
-    if !reader.read_line_exists(buffer) {return Err(());}
-    if !reader.read_line_and_compare(buffer, COMMENT_SYMBOLS) {return Err(());}
-    let Ok(comment_symbols) = reader.get_line_sliced(buffer) else { return Err(()) };
-    
-    let mut multi_start :Option<String> = None;
-    let mut multi_end :Option<String> = None;
-    if reader.read_line_and_compare(buffer, MULTILINE_COMMENT_START) {
-        if !reader.read_line_exists(buffer) {return Err(());}
-        let symbol = buffer.trim_end().to_owned();
-        if symbol.is_empty() {return Err(());}
-        multi_start = Some(symbol);
-        if !reader.read_line_and_compare(buffer, MULTILINE_COMMENT_END) {return Err(());}
-        if !reader.read_line_exists(buffer) {return Err(());}
-        let symbol = buffer.trim_end().to_owned();
-        if symbol.is_empty() {return Err(());}
-        multi_end = Some(symbol);
-        // The blank line that separates the multiline symbols from the keyword blocks. A language
-        // that declares no keywords ends here instead, and that is not a formatting mistake: CSS,
-        // HTML and SCSS were rejected outright for it, on a clean installation as much as an old one.
-        reader.read_line_exists(buffer);
-    }
-    
-    let mut keywords = Vec::new();
-    while reader.read_line_exists(buffer) {
-        if !reader.read_lines_exist(2, buffer) {return Err(());}
-        let name = buffer.trim().to_string().clone();
-        if name.is_empty() {return Err(());}
-        if !reader.read_line_exists(buffer) {return Err(());}
-        let Ok(aliases) = reader.get_line_sliced(buffer) else { return Err(()) };
-        if aliases.is_empty() {return Err(());}
-        
-        let keyword = Keyword {
-            descriptive_name : name,
-            aliases
-        };
-        keywords.push(keyword);
-    }
-    
-    Ok(Language {
-        name: lang_name,
-        extensions: identifiers,
-        string_symbols,
-        comment_symbols,
-        multiline_comment_start_symbol : multi_start,
-        multiline_comment_end_symbol : multi_end,
-        keywords,
-        scan_plan : std::sync::OnceLock::new()
-    })
-}
-
-// A line at a time over a file, into a buffer the caller owns and this clears, which is how the
-// language file format is read: every rule in it is one line.
-mod line_reader {
-    use std::{fs::File, io::{self, prelude::*}};
-
-    pub struct LineReader {
-        reader: io::BufReader<File>,
-    }
-
-    impl LineReader {
-        pub fn open(path: impl AsRef<std::path::Path>) -> io::Result<Self> {
-            let file = File::open(path)?;
-            let reader = io::BufReader::new(file);
-
-            Ok(Self { reader })
-        }
-
-        pub fn read_line_exists(&mut self, buffer: &mut String) -> bool {
-            match self.read_line(buffer) {
-                Err(_) => false,
-                Ok(x) => {
-                    x != 0 
-                }
-            }
-        }
-
-        pub fn read_line_and_compare(&mut self, buffer: &mut String, other : &str) -> bool {
-            match self.read_line(buffer) {
-                Ok(_) => {
-                    buffer.trim_end() == other
-                },
-                Err(_) => false
-            }
-        }
-
-        pub fn read_line(&mut self, buffer: &mut String) -> Result<usize, io::Error> {
-            buffer.clear();
-            self.reader.read_line(buffer)
-        }
-
-        pub fn read_lines_exist(&mut self, num :usize, buffer: &mut String) -> bool {
-            for _ in 0..num {
-                if !self.read_line_exists(buffer) {return false;}
-            }
-            
-            true
-        }
-
-        pub fn get_line_sliced(&mut self, buffer: &mut String) -> Result<Vec<String>, ()> {
-            if self.read_line_exists(buffer) {
-                let buffer = buffer.trim_end();
-                let mut vec = buffer.split_whitespace().filter_map(|s| if s.is_empty() {None} else {Some(s.to_string())})
-                    .collect::<Vec<String>>();
-                if vec.is_empty() {return Ok(vec![String::new()]);}
-                let last_index = vec.len()-1;
-                vec[last_index] = vec[last_index].trim_end().to_owned();
-                Ok(vec) 
-            } else {
-                Err(())
-            }
-        }
-    }
-}
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_paths::{DATA_DIR, FIXTURES_DIR, LANGUAGES_DIR};
+
+    // The parser reads the real shipped files correctly, which is where the weight belongs: a
+    // hand-written string that copies the format is a second source of truth that rots. There is
+    // one parser, 'parse_language'; 'parse_languages_in_dir' is not a second one, it reads each file and calls
+    // it, so reading the languages directory is reading the files through it.
+    #[test]
+    fn the_parser_reads_the_shipped_files_and_a_blank_line_never_costs_a_block() {
+        let (languages, faulty) = parse_languages_in_dir(LANGUAGES_DIR).unwrap();
+        assert!(faulty.is_empty(), "shipped files that did not parse: {faulty:?}");
+
+        // The bug this fixed: the keywords sit below a blank line, and every one of them was dropped.
+        let rust = languages.get("Rust").expect("Rust is shipped");
+        assert!(rust.keywords.iter().any(|k| k.descriptive_name == "structs"),
+                "Rust lost its keywords: {:?}", rust.keywords);
+
+        // A language whose only comments are multiline has an empty 'Comment symbols' value, and
+        // that empty line is the value and not a separator to skip, or the symbols one line down
+        // would read as it.
+        let css = languages.get("CSS").expect("CSS is shipped");
+        assert!(css.comment_symbols.is_empty() && css.multiline_comment_start_symbol.is_some(),
+                "CSS was the empty-comment-symbols case and its shape changed");
+
+        // The one thing no shipped file can show, because a stray blank line in one would be tidied
+        // away as a mistake: an extra blank line between blocks does not derail the parse. Fed as a
+        // string, which is what 'parse_language' takes and what 'parse_languages_in_dir' hands it per file.
+        let padded = "Language\nJava\n\n\nExtensions\njava\n\n\n\nString symbols\n\"\n\n\
+Comment symbols\n//\n\n\nKeyword\n    NAME\n    classes\n    ALIASES\n    class\n";
+        let java = parse_language(padded).expect("an extra blank line broke the parse");
+        assert_eq!(vec!["classes"], java.keywords.iter().map(|k| k.descriptive_name.clone()).collect::<Vec<_>>());
+    }
     #[test]
     fn every_contest_between_the_shipped_languages_is_settled_by_the_shipped_priority_file() {
-        let (languages, _) = crate::language_file::parse_dir(LANGUAGES_DIR).unwrap();
+        let (languages, _) = crate::language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap();
         let (priority, faulty) = crate::language_file::parse_priority_file(
                 &(DATA_DIR.to_owned() + crate::EXTENSION_PRIORITY_FILE_NAME));
         assert!(faulty.is_empty(), "the shipped priority file has lines that do not parse: {faulty:?}");
@@ -399,25 +311,27 @@ pl      Perl, Prolog
     #[test]
     fn a_language_that_does_not_parse_comes_back_as_none() {
         let good = "Language\nLua\n\nExtensions\nlua\n\nString symbols\n\" '\n\nComment symbols\n--\n";
-        assert!(crate::language_file::parse_definition(good).is_some());
+        assert!(crate::language_file::parse_language(good).is_some());
         // and the carriage returns of a windows checkout change nothing about it
-        assert_eq!(crate::language_file::parse_definition(good),
-                crate::language_file::parse_definition(&good.replace('\n', "\r\n")));
+        assert_eq!(crate::language_file::parse_language(good),
+                crate::language_file::parse_language(&good.replace('\n', "\r\n")));
 
         let broken = [
             String::new(),
             "Language\n".to_owned(),
             good.replace("Extensions", "Extension"),
-            // an extra blank line, which the loader itself rejects just as flatly
-            good.replace("lua\n", "lua\n\n"),
             // no name, no extensions, and no string symbols, each on its own
             good.replace("Lua\n", "\n"),
             good.replace("lua\n\n", "\n\n"),
             good.replace("\" '\n", "\n")
         ];
         for contents in broken {
-            assert!(crate::language_file::parse_definition(&contents).is_none(), "accepted:\n{contents}");
+            assert!(crate::language_file::parse_language(&contents).is_none(), "accepted:\n{contents}");
         }
+
+        // An extra blank line between blocks is no longer a mistake: the parser skips blanks before
+        // a header, so a stray one does not cost a language its whole definition.
+        assert!(crate::language_file::parse_language(&good.replace("lua\n", "lua\n\n")).is_some());
     }
     #[test]
     fn a_missing_priority_file_is_not_a_mistake() {
@@ -425,8 +339,8 @@ pl      Perl, Prolog
         assert!(rules.is_empty() && faulty.is_empty());
     }
     #[test]
-    fn test_parse_dir() {
-        let (lang_map, faulty_files) = crate::language_file::parse_dir(
+    fn test_parse_languages_in_dir() {
+        let (lang_map, faulty_files) = crate::language_file::parse_languages_in_dir(
                 &(FIXTURES_DIR.to_owned() + "definitions/")).unwrap();
         assert!(lang_map.len() == 2);
         assert!(faulty_files.len() == 1);
@@ -439,7 +353,7 @@ pl      Perl, Prolog
     #[test]
     fn every_shipped_language_file_parses() {
         let dir = LANGUAGES_DIR;
-        let (languages, faulty) = crate::language_file::parse_dir(dir)
+        let (languages, faulty) = crate::language_file::parse_languages_in_dir(dir)
                 .unwrap_or_else(|e| panic!("the shipped languages dir did not parse at all: {e:?}"));
 
         assert!(faulty.is_empty(), "these shipped language files do not parse: {faulty:?}");

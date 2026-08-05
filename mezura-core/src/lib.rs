@@ -657,7 +657,7 @@ mod worker_death_tests {
     }
 
     fn languages_for(config: &EngineConfig) -> Languages {
-        let map = crate::language_file::parse_dir(crate::test_paths::LANGUAGES_DIR).unwrap().0;
+        let map = crate::language_file::parse_languages_in_dir(crate::test_paths::LANGUAGES_DIR).unwrap().0;
         Languages::resolve(map, &std::collections::HashMap::new(), config).0
     }
 

@@ -1132,7 +1132,7 @@ mod tests {
     });
 
     static LANGUAGE_MAP_REF : LazyLock<Arc<HashMap<String,Language>>> =
-            LazyLock::new(|| Arc::new(crate::language_file::parse_dir(LANGUAGES_DIR).unwrap().0));
+            LazyLock::new(|| Arc::new(crate::language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0));
 
     static JAVA_MATCHER : LazyLock<KeywordMatcher> = LazyLock::new(|| KeywordMatcher::build(&JAVA).unwrap());
 
