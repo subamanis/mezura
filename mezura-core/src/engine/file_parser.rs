@@ -2,7 +2,8 @@ use std::{collections::HashMap, fs::File, io::Read as IoRead, path::Path, str};
 
 use memchr::memmem;
 
-use crate::{EngineConfig, FileStats, Language, phase_timing};
+use crate::{EngineConfig, Language, phase_timing};
+use crate::domain::FileStats;
 
 pub const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
 
@@ -362,7 +363,7 @@ fn parse_lines(contents: &str, language: &Language, keyword_matcher: Option<&Key
     let mut is_comment_closed = true;
     let mut open_str_symbol = None;
     for (line_start, raw_line) in lines_of(contents) {
-        file_stats.incr_lines();
+        file_stats.lines += 1;
 
         // Ascii-only trimming, since the unicode whitespace classification of trim() costs
         // a significant part of the total run time, for lines that are code either way
@@ -392,15 +393,15 @@ fn parse_lines(contents: &str, language: &Language, keyword_matcher: Option<&Key
                     && !scan.code_ranges.iter().any(|(from, to)|
                             line.as_bytes()[*from..*to].iter().any(|b| b.is_ascii_alphanumeric() || *b >= 0x80));
             if config.braces_as_code || !is_no_content {
-                file_stats.incr_code_lines();
+                file_stats.code_lines += 1;
                 if counting_keywords {
                     push_trimmed_spans(code_spans, &scan.code_ranges, line, base);
                 }
             }
         } else if line_info.has_string_literal {
-            file_stats.incr_code_lines();
+            file_stats.code_lines += 1;
         } else {
-            file_stats.incr_comment_lines();
+            file_stats.comment_lines += 1;
         }
     }
 
@@ -848,7 +849,7 @@ fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher
             let before = if *at > from { bytes.get(*at - 1) } else { None };
             let after = if at + alias_len < to { bytes.get(at + alias_len) } else { None };
             if is_acceptable_before(before) && is_acceptable_after(after) {
-                file_stats.incr_keyword(*keyword_index);
+                file_stats.keyword_occurences[*keyword_index] += 1;
             }
         }
     }

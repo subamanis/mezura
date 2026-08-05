@@ -60,8 +60,17 @@ pub struct Stats {
     pub keyword_occurences : HashMap<String,usize>
 }
 
+// What one file came to, on its way into a 'Stats'. Not public, and not merged into 'Stats' either,
+// for the one difference that is the whole of its reason: the parser identifies a keyword by its
+// **index** in the language's list, because that is what the matcher yields, so this counts into a
+// vector position and pays no hash and no string clone in the innermost loop it runs in. The names
+// are attached once per file, in 'Stats::add_file', and only for the keywords that were found.
+//
+// Whether a 'HashMap<String, usize>' here would cost anything measurable is exactly that, a
+// measurement, and nobody has taken it. Until somebody does, the merge is not a simplification
+// that is known to be free.
 #[derive(Debug,PartialEq,Default)]
-pub struct FileStats {
+pub(crate) struct FileStats {
     pub lines : usize,
     pub code_lines : usize,
     pub comment_lines : usize,
@@ -153,7 +162,10 @@ impl Stats {
         self.bytes.checked_div(self.files).unwrap_or(0)
     }
 
-    pub fn add_file(&mut self, stats: FileStats, bytes: usize, keywords: &[Keyword]) {
+    // Not public, because its argument is not: the one thing outside this crate could do with it is
+    // hand-build a file's counts and get the keyword indices to line up with a slice it also has to
+    // supply. The way in from outside is 'run'.
+    pub(crate) fn add_file(&mut self, stats: FileStats, bytes: usize, keywords: &[Keyword]) {
         self.files += 1;
         self.bytes += bytes;
         self.lines += stats.lines;
@@ -189,29 +201,13 @@ impl From<&Language> for Stats {
 }
 
 impl FileStats {
-    pub fn with_keywords(keywords: &[Keyword]) -> Self {
+    pub(crate) fn with_keywords(keywords: &[Keyword]) -> Self {
         FileStats {
             lines : 0,
             code_lines : 0,
             comment_lines : 0,
             keyword_occurences : vec![0; keywords.len()]
         }
-    }
-
-    pub fn incr_lines(&mut self) {
-        self.lines += 1;
-    }
-
-    pub fn incr_code_lines(&mut self) {
-        self.code_lines += 1;
-    }
-
-    pub fn incr_comment_lines(&mut self) {
-        self.comment_lines += 1;
-    }
-
-    pub fn incr_keyword(&mut self, keyword_index: usize) {
-        self.keyword_occurences[keyword_index] += 1;
     }
 }
 

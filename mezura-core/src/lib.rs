@@ -33,7 +33,7 @@ pub mod warnings;
 pub use engine::config::{EngineConfig, Target, Threads};
 pub use engine::targets::TargetError;
 pub use languages::Languages;
-pub use domain::{FileStats, Keyword, Language, Stats};
+pub use domain::{Keyword, Language, Stats};
 pub use result::{FaultyFileDetails, FilesPresent, ModuleResult, Performance, RunError, RunResult,
         SortCriterion, UnreadableDirDetails};
 pub use warnings::{Affects, Warning};

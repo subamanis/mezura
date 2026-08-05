@@ -125,6 +125,17 @@ pub fn shipped_extension_priority() -> HashMap<String, Vec<String>> {
     crate::language_file::parse_priority(&String::from_utf8_lossy(shipped_extension_priority_raw())).0
 }
 
+// The two below are for writing these files out to somebody's disk, which is what lets them edit a
+// language, add one of their own, or change which language wins a contested extension. Whoever
+// wants to *count* wants 'shipped_languages' and 'shipped_extension_priority' above, which hand back
+// parsed values; these hand back the bytes as they were authored, comments and layout included, so
+// that what lands in the user's folder is a file made to be read and edited rather than something
+// re-serialised from a struct.
+//
+// They exist as public because the program that installs them is a separate crate and cannot reach
+// into this one's 'data/' directory. Without them it would keep a second copy of every language
+// file, which is the thing the split was done to avoid.
+//
 // The file name travels with the bytes because the installer writes them under it. Plain tuples and
 // not the embedder's own file type, so that a release of 'include_dir' is never a breaking change
 // of ours.
