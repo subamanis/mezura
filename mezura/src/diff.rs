@@ -1,24 +1,90 @@
 use std::collections::HashMap;
 
-use mezura_core::{Stats, render};
+use mezura_core::{RunResult, Stats, render};
 
-use super::config_manager::Configuration;
-use super::json_reader::{Document, DocumentError};
+use super::config_manager::SortCriterion;
+use super::json_reader::{DocumentError, DocumentWarning, Scope};
 
 // The half of a document's warnings that says the numbers themselves may be wrong, as the document
 // spells it
 const COUNTS_AFFECTED : &str = "counts";
 
-// A reading to compare this run against, and the name to call it by, which is the file's own.
-pub struct Baseline {
-    pub name: String,
-    pub document: Document
+// What the column of the run being made right now is called. Not a date, because it is the one
+// reading whose date says nothing: it is this one.
+const THIS_RUN_NAME : &str = "this run";
+
+// What a reading is, which its consumers on a screen never ask and a consumer of a saved comparison
+// cannot ask anything else: with the file gone from the disk and 'HEAD' pointing somewhere new,
+// these fields are the identity, and each source's identity has its own shape.
+pub enum Source {
+    Run,
+    Document { path: String },
+    // Both halves, because neither derives from the other: the hash is what the comparison really
+    // measured, 'asked_for' is what makes it readable six months later, 'v2.0.1' over '030e6e72a1'.
+    Revision { commit: String, asked_for: String }
+}
+
+// One reading, whole: where it came from, when it was taken, which mezura counted it, under what
+// settings, what that run said about its own counts, and the counts. Every source fills the same
+// six; a comparison is two of these and the only difference between its sides is which one was
+// written first in the command.
+pub struct Reading {
+    pub source: Source,
+    // As the document writes it, so both sides are read by one function: the file's 'generated_at',
+    // the commit's own date, the clock for this run
+    pub taken: String,
+    pub version: String,
+    pub scope: Scope,
+    // Empty for a reading counted by this very run, whose warnings were printed as they happened
+    pub warnings: Vec<DocumentWarning>,
+    pub result: RunResult
+}
+
+impl Reading {
+    // A revision is counted by this build, over a checkout of it, under the settings of this run,
+    // so everything but the counts and the commit's own two facts is this run's own.
+    pub fn of_revision(asked_for: &str, commit: String, taken: String, result: RunResult,
+            engine: &mezura_core::EngineConfig) -> Self {
+        Reading {
+            source: Source::Revision { commit, asked_for: asked_for.to_owned() },
+            taken,
+            version: super::config_manager::VERSION_ID.trim_start_matches('v').to_owned(),
+            scope: scope_of(engine),
+            warnings: Vec::new(),
+            result
+        }
+    }
+
+    // The one clone in the whole feature: the run's result is still being presented and logged
+    // around the comparison, so the reading takes a copy rather than the thing itself.
+    pub fn of_this_run(result: &RunResult, taken: &chrono::DateTime<chrono::Local>,
+            engine: &mezura_core::EngineConfig) -> Self {
+        Reading {
+            source: Source::Run,
+            taken: taken.to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
+            version: super::config_manager::VERSION_ID.trim_start_matches('v').to_owned(),
+            scope: scope_of(engine),
+            warnings: Vec::new(),
+            result: result.clone()
+        }
+    }
+
+    // The identity as a person reads it in a heading or a warning, derived at the moment of
+    // printing: the identity itself is the source, and a label is a way of showing one.
+    pub fn display_name(&self) -> String {
+        match &self.source {
+            Source::Run => THIS_RUN_NAME.to_owned(),
+            Source::Document { path } => std::path::Path::new(path).file_name()
+                    .map_or_else(|| path.clone(), |x| x.to_string_lossy().into_owned()),
+            Source::Revision { asked_for, .. } => asked_for.clone()
+        }
+    }
 }
 
 // Every one of these stops the run before a single file is counted, so that a mistake in the
 // baseline is not paid for by a scan of the whole tree first.
 #[derive(Debug)]
-pub enum BaselineError {
+pub enum LoadError {
     Unreadable { path: String, error: std::io::Error },
     NotADocument { path: String, error: DocumentError },
     // A document written with '--top' holds some of its languages and all of its total, so the ones
@@ -26,18 +92,23 @@ pub enum BaselineError {
     Incomplete { path: String, missing: usize }
 }
 
-impl std::fmt::Display for BaselineError {
+impl std::fmt::Display for LoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unreadable { path, error } => write!(f, "'{path}' could not be read: {error}."),
-            Self::NotADocument { path, error } => write!(f, "'{path}' is not a document mezura wrote. {error}"),
+            // A key that is absent gets its own sentence, because it has a likelier story than the
+            // other three: nothing needs to have gone wrong, an older mezura simply had not met it
+            Self::NotADocument { path, error: DocumentError::Missing(at) } => write!(f, "'{path}' is incomplete \
+and will not be parsed. Maybe it was written by an older version of mezura, or it has been modified. \
+It is missing '{at}'."),
+            Self::NotADocument { path, error } => write!(f, "'{path}' could not be read as a mezura document. {error}"),
             Self::Incomplete { path, missing } => write!(f, "'{path}' was written with '--top' and is missing {missing} of \
 its languages, so comparing against it would report every one of them as deleted. Write it again without '--top'.")
         }
     }
 }
 
-impl std::error::Error for BaselineError {
+impl std::error::Error for LoadError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Unreadable { error, .. } => Some(error),
@@ -97,19 +168,18 @@ separator between the two readings. Write the paths out without the '..' that cl
     }
 }
 
-pub fn load(path: &str) -> Result<Baseline, BaselineError> {
+pub fn load(path: &str) -> Result<Reading, LoadError> {
     let contents = std::fs::read_to_string(path)
-            .map_err(|error| BaselineError::Unreadable { path: path.to_owned(), error })?;
+            .map_err(|error| LoadError::Unreadable { path: path.to_owned(), error })?;
     let document = super::json_reader::parse(&contents)
-            .map_err(|error| BaselineError::NotADocument { path: path.to_owned(), error })?;
+            .map_err(|error| LoadError::NotADocument { path: path.to_owned(), error })?;
     if document.languages_hidden > 0 {
-        return Err(BaselineError::Incomplete { path: path.to_owned(), missing: document.languages_hidden });
+        return Err(LoadError::Incomplete { path: path.to_owned(), missing: document.languages_hidden });
     }
 
-    let name = std::path::Path::new(path).file_name()
-            .map_or_else(|| path.to_owned(), |x| x.to_string_lossy().into_owned());
-
-    Ok(Baseline { name, document })
+    Ok(Reading { source: Source::Document { path: path.to_owned() }, taken: document.generated_at,
+            version: document.mezura_version, scope: document.scope, warnings: document.warnings,
+            result: document.result })
 }
 
 pub fn change_of(before: usize, now: usize) -> Change {
@@ -121,10 +191,11 @@ pub fn change_of(before: usize, now: usize) -> Change {
     }
 }
 
-// Every language of either reading, sorted and cut the way the report would have been, so that a
-// comparison holds the rows a plain run of the same command would have held.
+// Every language of either reading, sorted the way the report would have been. 'top' is the screen's
+// cut and is not applied when a document is being written, which holds every row the same way the
+// run's own document does.
 pub fn comparison_rows(baseline: &HashMap<String, Stats>, now: &HashMap<String, Stats>,
-        config: &Configuration) -> Vec<Row>
+        sort_by: SortCriterion, top: Option<usize>) -> Vec<Row>
 {
     // Held at what each is now, so one that disappeared sorts to the bottom where a zero belongs
     let mut merged = now.clone();
@@ -132,8 +203,8 @@ pub fn comparison_rows(baseline: &HashMap<String, Stats>, now: &HashMap<String, 
         merged.entry(name.clone()).or_default();
     }
 
-    let names = super::result_printer::get_sorted_language_names(&merged, config.view.sort_by);
-    let shown = config.view.top_n.map_or(names.len(), |top| top.min(names.len()));
+    let names = super::result_printer::get_sorted_language_names(&merged, sort_by);
+    let shown = top.map_or(names.len(), |x| x.min(names.len()));
 
     names[..shown].iter().map(|name| Row {
         before: baseline.get(name).cloned().unwrap_or_default(),
@@ -142,10 +213,25 @@ pub fn comparison_rows(baseline: &HashMap<String, Stats>, now: &HashMap<String, 
     }).collect()
 }
 
-// The settings that decided what got counted, as the baseline had them against as this run has them.
+// The settings of a run in the shape a document records them, so that a comparison asks the same
+// question of both its sides whatever each of them came from.
+//
+// The gitignore flag is turned around here and nowhere else: a document records whether the file was
+// obeyed, and the command line records whether it was not.
+pub fn scope_of(engine: &mezura_core::EngineConfig) -> Scope {
+    Scope {
+        exclude: engine.exclude_dirs.clone(),
+        languages: engine.languages_of_interest.clone(),
+        excluded_languages: engine.excluded_languages.clone(),
+        forced_languages: engine.forced_languages.clone(),
+        braces_as_code: engine.braces_as_code,
+        search_in_dotted: engine.should_search_in_dotted,
+        gitignore: !engine.no_gitignore
+    }
+}
+
 // A difference here is not a change in the code, and every one of these can move a count on its own.
-pub fn settings_that_differ(baseline: &Document, config: &Configuration) -> Vec<&'static str> {
-    let (scope, engine) = (&baseline.scope, &config.engine);
+pub fn settings_that_differ(baseline: &Scope, subject: &Scope) -> Vec<&'static str> {
     let same = |a: &[String], b: &[String]| {
         let (mut a, mut b) = (a.to_vec(), b.to_vec());
         a.sort();
@@ -154,13 +240,13 @@ pub fn settings_that_differ(baseline: &Document, config: &Configuration) -> Vec<
     };
 
     let mut differ = Vec::new();
-    if !same(&scope.exclude, &engine.exclude_dirs) {differ.push("--exclude")}
-    if !same(&scope.languages, &engine.languages_of_interest) {differ.push("--languages")}
-    if !same(&scope.excluded_languages, &engine.excluded_languages) {differ.push("--exclude-languages")}
-    if scope.braces_as_code != engine.braces_as_code {differ.push("--braces-as-code")}
-    if scope.search_in_dotted != engine.should_search_in_dotted {differ.push("--search-in-dotted")}
-    // The document records whether the file was obeyed, and the flag records whether it was not
-    if scope.gitignore == engine.no_gitignore {differ.push("--no-gitignore")}
+    if !same(&baseline.exclude, &subject.exclude) {differ.push("--exclude")}
+    if !same(&baseline.languages, &subject.languages) {differ.push("--languages")}
+    if !same(&baseline.excluded_languages, &subject.excluded_languages) {differ.push("--exclude-languages")}
+    if baseline.forced_languages != subject.forced_languages {differ.push("--force-lang")}
+    if baseline.braces_as_code != subject.braces_as_code {differ.push("--braces-as-code")}
+    if baseline.search_in_dotted != subject.search_in_dotted {differ.push("--search-in-dotted")}
+    if baseline.gitignore != subject.gitignore {differ.push("--no-gitignore")}
 
     differ
 }
@@ -169,8 +255,8 @@ pub fn settings_that_differ(baseline: &Document, config: &Configuration) -> Vec<
 // a run nobody is looking at any more, and a reading taken under a doubt is not something the next
 // one can be measured against: an unreadable language file leaves a whole language at zero, which
 // this run would report as a language that appeared out of nowhere.
-pub fn doubts_about(baseline: &Document) -> Vec<String> {
-    baseline.warnings.iter().filter(|x| x.affects == COUNTS_AFFECTED)
+pub fn doubts_about(warnings: &[DocumentWarning]) -> Vec<String> {
+    warnings.iter().filter(|x| x.affects == COUNTS_AFFECTED)
             .map(|x| format!("{} ({})", x.message, x.code)).collect()
 }
 
@@ -230,11 +316,10 @@ mod tests {
     // row saying so, and one added has no row in the baseline to be found under.
     #[test]
     fn every_language_of_either_reading_gets_a_row_in_the_order_the_report_uses() {
-        let mut config = Configuration::new(vec!["./src".to_owned()]);
         let before = hashmap!["Rust".to_owned() => stats(100, 70, 2), "Java".to_owned() => stats(40, 30, 1)];
         let now = hashmap!["Rust".to_owned() => stats(150, 100, 3), "Go".to_owned() => stats(60, 50, 1)];
 
-        let rows = comparison_rows(&before, &now, &config);
+        let rows = comparison_rows(&before, &now, SortCriterion::Lines, None);
         assert_eq!(vec!["Rust".to_owned(), "Go".to_owned(), "Java".to_owned()],
                 rows.iter().map(|x| x.name.clone()).collect::<Vec<_>>());
         // the one that is gone sorts last, holding the zero it is now, and keeps every figure it had
@@ -245,22 +330,21 @@ mod tests {
         assert_eq!(0, rows[1].before.lines);
         assert_eq!(60, rows[1].now.lines);
 
-        // '--top' cuts these rows the way it cuts the report
-        config.view.top_n = Some(2);
-        assert_eq!(2, comparison_rows(&before, &now, &config).len());
+        // '--top' cuts these rows the way it cuts the report, and a document asks for no cut
+        assert_eq!(2, comparison_rows(&before, &now, SortCriterion::Lines, Some(2)).len());
+        assert_eq!(3, comparison_rows(&before, &now, SortCriterion::Lines, None).len());
 
         // and '--sort' orders them, as it does everywhere else
-        config.view.top_n = None;
-        config.view.sort_by = SortCriterion::Name;
         assert_eq!(vec!["Go".to_owned(), "Java".to_owned(), "Rust".to_owned()],
-                comparison_rows(&before, &now, &config).iter().map(|x| x.name.clone()).collect::<Vec<_>>());
+                comparison_rows(&before, &now, SortCriterion::Name, None).iter()
+                        .map(|x| x.name.clone()).collect::<Vec<_>>());
     }
 
     // Two readings taken under different rules are two measurements, and the difference between them
     // is not a change in the code. Only what can move a count is asked about.
     #[test]
     fn the_settings_the_two_readings_were_taken_under_are_compared() {
-        let mut config = Configuration::new(vec!["./src".to_owned()]);
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         let per_language = hashmap!["Rust".to_owned() => stats(100, 70, 2)];
         let result = mezura_core::RunResult {
             total: Stats::total_of(&per_language), per_language, modules: Vec::new(),
@@ -269,22 +353,28 @@ mod tests {
             performance: mezura_core::Performance {duration_millis: 0, threads: mezura_core::Threads::new(1, 1)}
         };
         let document = crate::json_reader::parse(&crate::json_printer::document(&result,
-                &chrono::Local::now(), &Configuration::new(vec!["./src".to_owned()]))).unwrap();
-        assert!(settings_that_differ(&document, &config).is_empty());
+                &chrono::Local::now(), &crate::config_manager::Configuration::new(vec!["./src".to_owned()]))).unwrap();
+        assert!(settings_that_differ(&document.scope, &scope_of(&config.engine)).is_empty());
 
         // the order they were written in is not a difference
         config.engine.exclude_dirs = vec!["target".to_owned()];
-        assert_eq!(vec!["--exclude"], settings_that_differ(&document, &config));
+        assert_eq!(vec!["--exclude"], settings_that_differ(&document.scope, &scope_of(&config.engine)));
 
+        // It decides which language a file is counted as, so a run that forced one and a run that
+        // did not measured different things and the difference is not code that changed
         config.engine.exclude_dirs = Vec::new();
+        config.engine.forced_languages = hashmap!["m".to_owned() => "matlab".to_owned()];
+        assert_eq!(vec!["--force-lang"], settings_that_differ(&document.scope, &scope_of(&config.engine)));
+
+        config.engine.forced_languages = HashMap::new();
         config.engine.braces_as_code = true;
         config.engine.no_gitignore = true;
-        assert_eq!(vec!["--braces-as-code", "--no-gitignore"], settings_that_differ(&document, &config));
+        assert_eq!(vec!["--braces-as-code", "--no-gitignore"], settings_that_differ(&document.scope, &scope_of(&config.engine)));
 
         // and hiding the keywords is not among them, since it moves no count that is compared here
         config.engine.braces_as_code = false;
         config.engine.no_gitignore = false;
         config.engine.count_keywords = false;
-        assert!(settings_that_differ(&document, &config).is_empty());
+        assert!(settings_that_differ(&document.scope, &scope_of(&config.engine)).is_empty());
     }
 }

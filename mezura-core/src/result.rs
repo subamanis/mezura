@@ -6,7 +6,7 @@ use crate::Stats;
 use crate::engine::config::{Target, Threads};
 use crate::engine::modules::{ModuleId, Modules};
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub struct RunResult {
     // Across every module. A run where nothing was named has one module holding these same numbers.
     pub per_language: HashMap<String, Stats>,
@@ -76,7 +76,7 @@ impl RunResult {
 
 // 'name' is None for whatever the named parts left over, which is also the single part of a run
 // where nothing was named at all.
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub struct ModuleResult {
     pub name: Option<String>,
     pub per_language: HashMap<String, Stats>,
@@ -91,7 +91,7 @@ impl ModuleResult {
 
 // 'threads' is what the run actually got, not what was asked for: the operating system may grant
 // fewer and the run carries on with those.
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub struct Performance {
     pub duration_millis: u128,
     pub threads: Threads
@@ -143,7 +143,7 @@ impl SortCriterion {
 }
 
 // Its lines are in no total, but it is counted among the files that were seen.
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 #[non_exhaustive]
 pub struct FaultyFileDetails {
     pub path: String,
@@ -163,7 +163,7 @@ impl FaultyFileDetails {
 
 // The reason belongs beside the path because a permission and a directory deleted mid-scan send the
 // reader to different places, and on a whole drive there are hundreds of these.
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 #[non_exhaustive]
 pub struct UnreadableDirDetails {
     pub path: String,

@@ -28,6 +28,8 @@ pub struct Scope {
     pub exclude: Vec<String>,
     pub languages: Vec<String>,
     pub excluded_languages: Vec<String>,
+    // The extension is the key, as the run is asked about it: 'm' to 'matlab'
+    pub forced_languages: HashMap<String, String>,
     pub braces_as_code: bool,
     pub search_in_dotted: bool,
     pub gitignore: bool
@@ -52,6 +54,10 @@ pub enum DocumentError {
     // Not "unsupported": the format is only bumped when a key is removed or changes meaning, so a
     // higher one may be missing something read here or may spell it differently.
     FormatTooNew { found: usize },
+    // A valid document of another kind, which without this check would be reported as a broken one
+    // of this kind: a comparison has no 'scan', and "missing 'scan'" sends the reader hunting for
+    // damage in a file with nothing wrong with it.
+    NotARun { kind: String },
     // Both carry the path of the offending member, as 'total.lines' or 'languages[2].name'
     Missing(String),
     WrongType { at: String, wanted: &'static str }
@@ -62,7 +68,8 @@ impl std::fmt::Display for DocumentError {
         match self {
             Self::NotJson(x) => write!(f, "The file is not valid JSON: {x}."),
             Self::FormatTooNew { found } => write!(f, "The document is written in format {found} and this mezura reads up to format {FORMAT_VERSION}, so a newer version wrote it. Update mezura to read it."),
-            Self::Missing(at) => write!(f, "The document has no '{at}', which every document mezura writes carries, so it was not written by mezura or it was edited."),
+            Self::NotARun { kind } => write!(f, "The document holds a {kind}, not the counts of a run, so there is nothing in it to compare against."),
+            Self::Missing(at) => write!(f, "The document has no '{at}', so it cannot be read."),
             Self::WrongType { at, wanted } => write!(f, "'{at}' is not {wanted}.")
         }
     }
@@ -96,6 +103,11 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
     if format > FORMAT_VERSION {
         return Err(DocumentError::FormatTooNew { found: format });
     }
+    // Absent from a document of the first builds, which held nothing but runs, so only a kind that
+    // is present and says something else refuses
+    if let Some(kind) = root.get("kind").and_then(Value::as_str) && kind != "run" {
+        return Err(DocumentError::NotARun { kind: kind.to_owned() });
+    }
 
     let scope = nested(root, "scope", "")?;
     let scan = nested(root, "scan", "")?;
@@ -122,6 +134,7 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
             exclude: strings(scope, "exclude", "scope")?,
             languages: strings(scope, "languages", "scope")?,
             excluded_languages: strings(scope, "excluded_languages", "scope")?,
+            forced_languages: forced_languages_of(nested(scope, "forced_languages", "scope")?)?,
             braces_as_code: flag(scope, "braces_as_code", "scope")?,
             search_in_dotted: flag(scope, "search_in_dotted", "scope")?,
             gitignore: flag(scope, "gitignore", "scope")?
@@ -158,6 +171,11 @@ fn stats_of(entry: &Map<String, Value>, at: &str) -> Result<Stats, DocumentError
         number(entry, "code", at)?,
         number(entry, "comments", at)?,
         keywords))
+}
+
+fn forced_languages_of(entry: &Map<String, Value>) -> Result<HashMap<String, String>, DocumentError> {
+    entry.keys().map(|extension| Ok((extension.clone(), text(entry, extension, "scope.forced_languages")?)))
+            .collect()
 }
 
 fn keywords_of(entry: &Map<String, Value>, at: &str) -> Result<HashMap<String, usize>, DocumentError> {
@@ -501,8 +519,9 @@ mod tests {
 
         // a target is an object of two members, and either of them being wrong names that target
         let scope_with = |dirs: &str| format!("\"scope\": {{\"dirs\": {dirs}, \"exclude\": [], \
-                \"languages\": [], \"excluded_languages\": [], \"braces_as_code\": false, \
-                \"search_in_dotted\": false, \"gitignore\": true, \"keywords_counted\": true}}");
+                \"languages\": [], \"excluded_languages\": [], \"forced_languages\": {{}}, \
+                \"braces_as_code\": false, \"search_in_dotted\": false, \"gitignore\": true, \
+                \"keywords_counted\": true}}");
         assert!(error(&scope_with("[{\"module\": null}]")).contains("'scope.dirs[0].path'"));
         assert!(error(&scope_with("[{\"module\": 7, \"path\": \"x\"}]")).contains("'scope.dirs[0].module' is not a string or null"));
 
@@ -519,8 +538,8 @@ mod tests {
         let document = format!("{{\"format\": 1, \"mezura_version\": \"3.0.0\", \
             \"generated_at\": \"2026-07-30T14:22:07+03:00\", \
             \"scope\": {{\"dirs\": [], \"exclude\": [], \"languages\": [], \"excluded_languages\": [], \
-                \"braces_as_code\": false, \"search_in_dotted\": false, \"gitignore\": true, \
-                \"keywords_counted\": true}}, \
+                \"forced_languages\": {{}}, \"braces_as_code\": false, \"search_in_dotted\": false, \
+                \"gitignore\": true, \"keywords_counted\": true}}, \
             \"scan\": {{\"files_found\": 0, \"files_of_interest\": 0, \"files_excluded\": 0, \"files_faulty\": 0}}, \
             \"total\": {{\"files\": 0, \"lines\": 0, \"code\": 0, \"comments\": 0, \"bytes\": 0}}, \
             \"languages\": [], \"languages_hidden\": 0, \"faulty_files\": [], \"unreadable_dirs\": [], \

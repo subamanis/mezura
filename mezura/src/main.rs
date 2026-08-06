@@ -16,6 +16,7 @@ mod config_files;
 mod config_manager;
 mod diff;
 mod format;
+mod git;
 mod formatted;
 mod json_printer;
 mod json_reader;
@@ -36,7 +37,7 @@ use include_dir::{File, include_dir};
 use mezura_core::{EXTENSION_PRIORITY_FILE_NAME, FilesPresent, Language};
 
 use crate::config_manager::{Configuration, OutputFormat};
-use crate::config_manager::{CHANGELOG, DIFF, HELP, LAYOUT, OUTPUT, RESTORE, SHOW_CONFIGS,
+use crate::config_manager::{CHANGELOG, HELP, LAYOUT, OUTPUT, RESTORE, SHOW_CONFIGS,
         SHOW_LANGUAGES, SHOW_THEMES, THEME_EDITOR, VERSION, VERSION_ID};
 use crate::formatted::Formatted;
 use crate::paths::{CONFIG_DIR_NAME, DEFAULT_CONFIG_NAME, LANGUAGES_DIR_NAME, LOGS_DIR_NAME,
@@ -146,54 +147,6 @@ fn main() -> ExitCode {
         }
     }
 
-    // Read here and not where it is printed, so that a baseline which turns out not to be one costs
-    // nothing: everything below this walks directories.
-    let baseline = match config.view.diff_against.as_deref() {
-        Some(_) if !config.view.prints_text() => {
-            eprintln!("\n{}\n", crate::theme::active().error.paint(&format!(
-                    "'--{DIFF}' draws a comparison for a person to read and '--{OUTPUT} json' writes a document for \
-a program, and mezura has no document that carries a comparison, so only one of the two can be asked for.")));
-            return ExitCode::FAILURE;
-        },
-        // Two readings named on one line is the form where nothing is counted at all, and neither
-        // the loading below nor the run under it is arranged for that yet. Told apart here so that
-        // it is refused by name, rather than reported as a file called 'a.json..b.json'.
-        Some(value) if !matches!(crate::diff::split_operand(value), Ok((_, None))) => {
-            let complaint = match crate::diff::split_operand(value) {
-                Err(x) => x,
-                _ => format!("'--{DIFF} <before>..<after>' names two readings and this version compares one \
-against the run it is given to. Drop the '..' and the reading before it: '--{DIFF} <before>'.")
-            };
-            eprintln!("\n{}\n", crate::theme::active().error.paint(&complaint));
-            return ExitCode::FAILURE;
-        },
-        Some(path) => match crate::diff::load(path) {
-            Ok(x) => Some(x),
-            Err(x) => {
-                eprintln!("\n{}\n", crate::theme::active().error.paint(&x.to_string()));
-                return ExitCode::FAILURE;
-            }
-        },
-        None => None
-    };
-    // A warning and not a refusal: the two readings are still both real, and which of the differences
-    // between them is worth explaining is the reader's judgement and not mezura's.
-    if let Some(baseline) = &baseline {
-        let differing = crate::diff::settings_that_differ(&baseline.document, &config);
-        if !differing.is_empty() {
-            eprintln!("\n{}", crate::theme::active().warning.paint(&format!(
-                    "'{}' was written by a run that had {} set differently, so part of the difference reported \
-below is those settings and not code that changed.", baseline.name, differing.join(", "))));
-        }
-        // Said on the error output of a run that is over, so nobody would see it otherwise
-        let doubts = crate::diff::doubts_about(&baseline.document);
-        if !doubts.is_empty() {
-            eprintln!("\n{}\n{}", crate::theme::active().warning.paint(&format!(
-                    "The run that wrote '{}' was not sure of its own counts:", baseline.name)),
-                    doubts.iter().map(|x| format!("-- {x}")).collect::<Vec<_>>().join("\n"));
-        }
-    }
-
     let (extension_priority, faulty_priority_lines) = read_extension_priority();
     if !faulty_priority_lines.is_empty() {
         eprintln!("{}", format!("\nLines that could not be read in '{EXTENSION_PRIORITY_FILE_NAME}', and were skipped:\n{}",
@@ -204,8 +157,27 @@ below is those settings and not code that changed.", baseline.name, differing.jo
         }
     }
 
+    // Both readings named is the third thing this program can be asked to do, beside answering with
+    // a message and counting a tree: the run below never happens, and each side is read or counted
+    // by the same rule the single form uses. It sits below the extension priority because a side
+    // that is a revision is counted with it.
+    if let Some(value) = config.view.diff_against.as_deref() {
+        match crate::diff::split_operand(value) {
+            Ok((before, Some(after))) =>
+                return compare_two_readings(before, after, &config, languages_available, &extension_priority),
+            Err(complaint) => {
+                eprintln!("\n{}\n", crate::theme::active().error.paint(&complaint));
+                return ExitCode::FAILURE;
+            },
+            Ok((_, None)) => ()
+        }
+    }
+
     // Worked out here and not inside the run, so its complaints land beside the other complaints
     // about settings rather than in the middle of the status lines.
+    // Kept only when there is a revision to count, which needs its own resolution: 'run' takes the
+    // languages by value and they cannot be handed to two runs.
+    let languages_of_a_revision = config.view.diff_against.as_ref().map(|_| languages_available.clone());
     let (languages, reported) = mezura_core::Languages::resolve(&config.engine, languages_available, &extension_priority);
     for warning in reported {
         // A name that does not exist was already put on the screen by 'report_unknown_languages',
@@ -217,6 +189,20 @@ below is those settings and not code that changed.", baseline.name, differing.jo
             crate::warnings::emit(warning);
         }
     }
+
+    // Below the languages because a revision is counted with them, and above the run because a
+    // baseline that turns out not to be one must cost no scan of the tree. Its complaints wait and
+    // are printed just above the comparison they are about.
+    let baseline = match config.view.diff_against.as_deref() {
+        Some(name) => match load_baseline(name, &config, languages_of_a_revision.unwrap_or_default(), &extension_priority) {
+            Ok(x) => Some(x),
+            Err(x) => {
+                eprintln!("\n{}\n", crate::theme::active().error.paint(&x));
+                return ExitCode::FAILURE;
+            }
+        },
+        None => None
+    };
 
     if !config.view.hidden.directory_info && config.view.prints_text() {
         println!("\n{}...",crate::theme::active().heading.paint("Analyzing directories"));
@@ -685,6 +671,96 @@ program to read, and both of them go to the output, so only one of the two can b
     }
 
     None
+}
+
+// A name that is a file on disk is a document, and anything else is asked of git. The same order
+// 'split_operand' uses, and for the same reason: what is really there wins over what a name could
+// have meant. The error names both attempts, since a misspelt file and a misspelt branch look alike.
+fn load_baseline(name: &str, config: &Configuration, languages: Vec<Language>,
+        extension_priority: &HashMap<String,Vec<String>>) -> Result<crate::diff::Reading, String>
+{
+    if std::path::Path::new(name).exists() {
+        return crate::diff::load(name).map_err(|x| x.to_string());
+    }
+
+    counted_revision(name, config, languages, extension_priority).map_err(|x| format!("{x}"))
+}
+
+// A revision is counted the way anything else is: its files are written out, the targets are found
+// again inside them, and 'run' does the rest. The settings are this run's, which is what makes the
+// comparison mean something, and so is the mezura doing the counting.
+fn counted_revision(revision: &str, config: &Configuration, languages: Vec<Language>,
+        extension_priority: &HashMap<String,Vec<String>>) -> Result<crate::diff::Reading, crate::git::GitError>
+{
+    let declared = config.engine.dirs.iter().map(|x| x.path.clone()).collect::<Vec<_>>();
+    let repository = crate::git::one_repository_of(&declared)?;
+    let checkout = crate::git::checkout(&repository, revision)?;
+
+    // A target the revision never had counts as nothing rather than stopping the run, so everything
+    // in it reads as new, which is what it is. Named out loud, because a column of 'new' with no
+    // reason given reads as a fault.
+    let mut dirs = Vec::with_capacity(config.engine.dirs.len());
+    let mut missing = Vec::new();
+    for target in &config.engine.dirs {
+        let (_, prefix) = crate::git::repository_of(&target.path)?;
+        match checkout.target_of(&prefix) {
+            Some(path) => dirs.push(mezura_core::Target { module: target.module.clone(), path }),
+            None => missing.push(target.path.clone())
+        }
+    }
+    if !missing.is_empty() {
+        eprintln!("\n{}", crate::theme::active().warning.paint(&format!(
+                "'{revision}' has no {}, so everything counted there now is reported as new.",
+                missing.join("', no '"))));
+    }
+
+    let of_revision = mezura_core::EngineConfig { dirs, ..config.engine.clone() };
+    // Nothing to count is a reading of zero and not a failure: it is what a revision older than
+    // every target really holds.
+    let result = if of_revision.dirs.is_empty() {
+        mezura_core::RunResult {
+            per_language: HashMap::new(), total: mezura_core::Stats::default(), modules: Vec::new(),
+            faulty_files: Vec::new(), unreadable_dirs: Vec::new(), targets: Vec::new(),
+            files_present: FilesPresent::default(),
+            performance: mezura_core::Performance { duration_millis: 0, threads: config.engine.threads.clone() }
+        }
+    } else {
+        // Resolved against this configuration, as 'run' demands: the two differ in nothing but where
+        // they look, and the complaints were already printed by the resolution of the run itself.
+        let resolved = mezura_core::Languages::resolve(&of_revision, languages, extension_priority).0;
+        mezura_core::run(&of_revision, resolved, |_| {})
+                .map_err(|x| crate::git::GitError::Refused { doing: "counting the revision", message: x.to_string() })?
+    };
+
+    Ok(crate::diff::Reading::of_revision(revision, checkout.commit.clone(), checkout.taken_at.clone(),
+            result, &config.engine))
+}
+
+// Two readings that were both handed over: each is a document read or a revision counted, by the
+// same rule the single form uses, and this run's own scan never happens. A side that is counted
+// counts quietly, its complaints being the pair's own to print above the table.
+fn compare_two_readings(before: &str, after: &str, config: &Configuration, languages: Vec<Language>,
+        extension_priority: &HashMap<String,Vec<String>>) -> ExitCode
+{
+    // Two revisions are two countings, and 'run' takes the languages by value, so the first side
+    // takes a copy and the second the thing itself
+    let outcome = load_baseline(before, config, languages.clone(), extension_priority)
+            .and_then(|baseline| Ok((baseline, load_baseline(after, config, languages, extension_priority)?)));
+    let (baseline, subject) = match outcome {
+        Ok(x) => x,
+        Err(x) => {
+            eprintln!("\n{}\n", crate::theme::active().error.paint(&x));
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if config.view.prints_text() {
+        println!();
+        crate::result_printer::print_comparison(&baseline, &subject, config);
+    } else {
+        crate::json_printer::print_comparison_as_json(&baseline, &subject, &chrono::Local::now(), config);
+    }
+    ExitCode::SUCCESS
 }
 
 // Read off the arguments by hand, the way '--show-themes' reads '--layout' above: a message-only

@@ -55,28 +55,15 @@ const TOTAL_SIZE    : &str  = "Total Size:";
 const AVERAGE_SIZE  : &str  = "Average Size:";
 const MODULES       : &str  = "Modules:";
 
-pub fn format_and_print_results(result: &RunResult, baseline: Option<&super::diff::Baseline>,
+pub fn format_and_print_results(result: &RunResult, baseline: Option<&super::diff::Reading>,
         existing_log_content: &Option<String>, datetime_now: &DateTime<Local>, config: &Configuration)
 {
     // A comparison answers a different question from the report, so it takes the report's place
     // rather than sitting under it: every language would otherwise be listed twice, and the overview
     // would put a bar of shares under a run whose subject is what moved.
     if let Some(baseline) = baseline {
-        let theme = super::theme::active();
-        // A comparison has one shape, so the layouts have nothing to choose between. Said out loud
-        // rather than ignored, the way a matrix with nothing to cross is.
-        if config.view.layout != Layout::default() {
-            eprintln!("\n{}", theme.warning.paint(&format!("'--{}' has one shape, so '--{} {}' was not used.",
-                    config_manager::DIFF, config_manager::LAYOUT, config.view.layout.name())));
-        }
-        println!("{}.\n", theme.heading.paint("Details"));
-        for line in comparison_lines(theme, baseline, result, config) {
-            println!("{line}");
-        }
-        if !config.view.hidden.keywords {
-            print_keyword_block(theme, &groups_of(result, config), Some(baseline));
-        }
-        println!();
+        print_comparison(baseline,
+                &super::diff::Reading::of_this_run(result, datetime_now, &config.engine), config);
         if !config.view.hidden.progress && let Some(content) = existing_log_content
             && !content.trim().is_empty() && config.view.compare_level != 0 {
             print_comparison_to_previous_runs(result, content, config, datetime_now);
@@ -376,13 +363,67 @@ fn table_lines(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool
             &TIGHT_AFTER, &header_styles, &body_styles, is_grouped(groups))
 }
 
+// The whole of what '--diff' prints, and the only thing printed at all when both readings were
+// given, since then nothing was counted and there is no report for this to take the place of.
+pub fn print_comparison(baseline: &super::diff::Reading, subject: &super::diff::Reading, config: &Configuration) {
+    let theme = super::theme::active();
+    // A comparison has one shape, so the layouts have nothing to choose between. Said out loud
+    // rather than ignored, the way a matrix with nothing to cross is.
+    if config.view.layout != Layout::default() {
+        eprintln!("\n{}", theme.warning.paint(&format!("'--{}' has one shape, so '--{} {}' was not used.",
+                config_manager::DIFF, config_manager::LAYOUT, config.view.layout.name())));
+    }
+    report_what_makes_the_readings_two_measurements(theme, baseline, subject);
+
+    println!("{}.\n", theme.heading.paint("Details"));
+    for line in comparison_lines(theme, baseline, subject, config) {
+        println!("{line}");
+    }
+    if !config.view.hidden.keywords {
+        print_keyword_block(theme, &groups_of(&subject.result, config), Some(&baseline.result.per_language));
+    }
+    println!();
+}
+
+// Everything that makes the two readings two measurements rather than two moments of one, on the
+// error output just above the table it is about. Symmetric, because the sides are: a reading counted
+// by this very run carries no warnings, having printed its own as they happened, so nothing here
+// says the same thing twice.
+fn report_what_makes_the_readings_two_measurements(theme: &Theme, baseline: &super::diff::Reading,
+        subject: &super::diff::Reading)
+{
+    let differing = super::diff::settings_that_differ(&baseline.scope, &subject.scope);
+    if !differing.is_empty() {
+        eprintln!("\n{}", theme.warning.paint(&format!(
+                "'{}' and '{}' were not taken with the same {}, so part of the difference below is \
+those settings and not code that changed.", baseline.display_name(), subject.display_name(), differing.join(", "))));
+    }
+    // A build whose language files were corrected counts the same tree differently, and the
+    // Changelog is full of exactly that
+    if baseline.version != subject.version {
+        eprintln!("\n{}", theme.warning.paint(&format!(
+                "'{}' was counted by mezura {} and '{}' by {}, so part of the difference below may be \
+a language counted better since, and not code that changed.", baseline.display_name(), baseline.version,
+                subject.display_name(), subject.version)));
+    }
+    // Said on the error output of a run that is over, so nobody would see it otherwise
+    for reading in [baseline, subject] {
+        let doubts = super::diff::doubts_about(&reading.warnings);
+        if !doubts.is_empty() {
+            eprintln!("\n{}\n{}", theme.warning.paint(&format!(
+                    "The run that took '{}' was not sure of its own counts:", reading.display_name())),
+                    doubts.iter().map(|x| format!("-- {x}")).collect::<Vec<_>>().join("\n"));
+        }
+    }
+}
+
 // What '--diff' prints in place of the details, and why it is the details table with columns taken
 // out rather than a block of its own: every figure has room for the change beside it only because the
 // share percentages, 'Extra' and 'Size' are gone. The shares are what the change replaces, 'Extra' is
 // the three columns left over subtracted from the lines, and the size is the one figure genuinely
 // dropped. Measured on this repository, the result is 108 characters wide, which is what the details
 // table is today.
-fn comparison_lines(theme: &Theme, baseline: &super::diff::Baseline, result: &RunResult,
+fn comparison_lines(theme: &Theme, baseline: &super::diff::Reading, subject: &super::diff::Reading,
         config: &Configuration) -> Vec<String>
 {
     // The change columns are left unnamed: their values are two to five characters and the word would
@@ -414,10 +455,11 @@ fn comparison_lines(theme: &Theme, baseline: &super::diff::Baseline, result: &Ru
         row
     };
 
-    let rows_of = super::diff::comparison_rows(&baseline.document.result.per_language, &result.per_language, config);
+    let rows_of = super::diff::comparison_rows(&baseline.result.per_language, &subject.result.per_language,
+            config.view.sort_by, config.view.top_n);
     let mut rows = rows_of.iter().map(|row| cells(row.name.clone(), &row.before, &row.now)).collect::<Vec<_>>();
     let mut kinds = vec![RowKind::Language; rows.len()];
-    rows.push(cells(TOTAL_NAME.to_owned(), &baseline.document.result.total, &result.total));
+    rows.push(cells(TOTAL_NAME.to_owned(), &baseline.result.total, &subject.result.total));
     kinds.push(RowKind::Total);
 
     let mut headers = HEADERS.map(str::to_owned).to_vec();
@@ -430,9 +472,11 @@ fn comparison_lines(theme: &Theme, baseline: &super::diff::Baseline, result: &Ru
     headers[0] = "Language".to_owned();
 
     let mut lines = vec![
-        format!("{} '{}', written {} by mezura {}", theme.progress_entry.paint("Compared to"),
-                baseline.name, readable_time(&baseline.document.generated_at),
-                baseline.document.mezura_version),
+        // 'From A to B' and not 'compared A to B': the columns hold B's counts and the signs are the
+        // journey, so a sentence that puts A first as its subject says the opposite of the table.
+        format!("{} '{}' ({}) {} '{}' ({})", theme.progress_entry.paint("From"),
+                baseline.display_name(), readable_time(&baseline.taken), theme.progress_entry.paint("to"),
+                subject.display_name(), readable_time(&subject.taken)),
         String::new()];
     lines.extend(aligned_table(theme, &headers, &rows, &kinds, &TIGHT_AFTER, &header_styles, &body_styles, false));
 
@@ -462,7 +506,7 @@ fn signed_size(theme: &Theme, before: usize, now: usize) -> String {
 
 fn change_text(before: usize, now: usize) -> String {
     if before == now {
-        return String::new();
+        return NO_CHANGE.to_owned();
     }
     match super::diff::change_of(before, now) {
         super::diff::Change::Appeared => "new".to_owned(),
@@ -1030,8 +1074,8 @@ fn sum_lines(theme: &Theme, per_language: &HashMap<String,Stats>, total: &Stats,
 // alignment a table exists for. Not aligned by position either: a column of the table means one
 // thing all the way down, while the first keyword of one language and the first of the next are
 // unrelated, so aligning them promises a comparison that does not exist.
-fn print_keyword_block(theme: &Theme, groups: &[Group], baseline: Option<&super::diff::Baseline>) {
-    let lines = keyword_block_lines(theme, groups, baseline);
+fn print_keyword_block(theme: &Theme, groups: &[Group], before: Option<&HashMap<String, Stats>>) {
+    let lines = keyword_block_lines(theme, groups, before);
     if !lines.is_empty() {
         println!("
 {}.
@@ -1045,16 +1089,15 @@ fn print_keyword_block(theme: &Theme, groups: &[Group], baseline: Option<&super:
 // Nested the way the table is, because ungrouped keywords under a grouped table cannot be read:
 // 'Rust structs: 210' with no way to tell whose they are. A language appears only under the modules
 // it is in, which keeps the block from growing by the product of the two.
-fn keyword_block_lines(theme: &Theme, groups: &[Group], baseline: Option<&super::diff::Baseline>) -> Vec<String> {
+fn keyword_block_lines(theme: &Theme, groups: &[Group], before: Option<&HashMap<String, Stats>>) -> Vec<String> {
     const GAP : usize = 3;
 
     let grouped = is_grouped(groups);
     let rows = groups.iter().map(|group| (group, group.languages.iter().filter_map(|name| {
             // A language that only the baseline had has no row here at all, having no keywords now
-            let before = baseline.and_then(|x| x.document.result.per_language.get(name))
-                    .map(|x| &x.keyword_occurences);
+            let was = before.and_then(|x| x.get(name)).map(|x| &x.keyword_occurences);
             let keywords = get_keywords_as_str(theme, &group.per_language.get(name).unwrap().keyword_occurences,
-                    before, 0, usize::MAX);
+                    was, 0, usize::MAX);
             if keywords.is_empty() {None} else {Some((name, keywords))}
         }).collect::<Vec<_>>())).filter(|(_, rows)| !rows.is_empty()).collect::<Vec<_>>();
 

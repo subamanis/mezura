@@ -94,13 +94,17 @@ New commands:
       even when there was nothing to count and even when every file failed to parse, so that nobody
       has to tell an empty file apart from an empty answer, and the exit code still says the run
       failed. A configuration file cannot declare it.
-  -> --diff <file> : compares this run against a JSON document that an earlier one wrote. The
+  -> --diff <reading> or <older>..<newer> : compares this run against another reading, or two
+      readings against each other. A reading is a JSON document an earlier run wrote, or a git
+      revision: "mezura ./src --diff main" counts what "./src" held on "main", on the spot and with
+      this run's settings, and "--diff v2.0.1..v3.0.0" compares two tags to each other. The
       comparison takes the place of the report, a row per language and one for the total, and every
       figure carries what it is now and how much it moved. The keywords are marked the same way in
       the section they already have. A language that only one of the two readings has is marked
       "new" or "gone" instead of being given a percentage. When the two runs did not obey the same
-      settings mezura says so, since that difference is not code that changed. A configuration file
-      cannot declare it, and it cannot be combined with "--output json".
+      settings mezura says so, since that difference is not code that changed. With "--output json"
+      the comparison is written as a JSON document, every count carrying "from", "to" and "change".
+      A configuration file cannot declare it.
   -> --save-theme <name> : writes the way this run looks into a theme file, flattened into values,
       so it stands on its own and can be shared. Combined with --save, the configuration that is
       written points at that theme and carries no styles of its own.

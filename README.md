@@ -539,13 +539,30 @@ TAKING THE RESULT ELSEWHERE
 
 --diff
 
-    One argument: the path to a JSON document that an earlier run wrote.
+    One argument: a reading, or two of them with '..' between, oldest first. A reading is the
+    path of a JSON document that an earlier run wrote, or a git revision: a branch, a tag, or
+    enough of a commit hash to be unique.
 
-    Compares this run against that document. The comparison takes the place of the report
-    rather than sitting under it, so no language is listed twice.
+    Compares this run against that reading, or the two readings against each other. The
+    comparison takes the place of the report rather than sitting under it, so no language is
+    listed twice.
 
       mezura ./src --output json > baseline.json
       mezura ./src --diff baseline.json
+      mezura ./src --diff main
+      mezura ./src --diff v2.0.1..v3.0.0
+      mezura --diff january.json..june.json
+
+    A revision is counted on the spot, over its own files, with this run's settings and its
+    targets: 'mezura ./src --diff main' counts what './src' held on 'main'. The targets must
+    all be inside one git repository, and a directory the revision does not have counts as
+    zero, so everything in it reads as new. What was found on disk decides which of the two a
+    reading is: a name that is a file is a document, anything else is asked of git.
+
+    Only one '..' is allowed, and it is the separator. A path that climbs through one on its
+    way to a file is taken whole when the file is really there, so '--diff ../old.json' reads
+    as you would expect; two of them cannot be told apart from a separator and are refused, so
+    write such a path out without the climb.
 
     Every figure carries what it is now and how much it moved, and the three counted in
     thousands carry the percentage as well; a file count and a size are read whole, so '+2
@@ -563,16 +580,22 @@ TAKING THE RESULT ELSEWHERE
     asked for. A language that only one of the two readings has is marked 'new' or 'gone'
     instead of being given a percentage, since a count that grew out of nothing has none.
 
-    A document records the settings the counting obeyed, and mezura says so when they are not
-    the ones this run used. A baseline written without '--braces-as-code' has a different idea
-    of what a line of code is, and that difference would otherwise read as code that changed.
+    A document records the settings the counting obeyed and which mezura counted it, and the
+    comparison says so when the two readings disagree on either. A baseline written without
+    '--braces-as-code' has a different idea of what a line of code is, and that difference
+    would otherwise read as code that changed.
 
     A document written with '--top' is refused, because the languages it left out would read as
     languages that were deleted since. Write the baseline without it.
 
+    With '--output json' the comparison itself is written as a document: the same vocabulary as
+    a run's document, with every count carrying 'from', 'to' and 'change', and the two readings
+    identified under 'from' and 'to' by their source, so a build step can ask questions like
+    'did the code shrink' of the change directly. '--top' does not cut that document, being a
+    decision about a screen.
+
     This is not a display setting a configuration file can carry, so that no saved
-    configuration can silently turn every later run into a comparison. It cannot be combined
-    with '--output json' either, since both of them write to the output.
+    configuration can silently turn every later run into a comparison.
 
 YOUR DATA DIRECTORY
 

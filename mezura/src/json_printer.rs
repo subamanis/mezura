@@ -25,6 +25,9 @@ pub fn document(result: &RunResult, datetime_now: &DateTime<Local>, config: &Con
 
     let mut members = vec![
         format!("  \"format\": {FORMAT_VERSION}"),
+        // What the document holds, so a consumer handed a file can tell a run from a comparison
+        // without guessing from which keys exist
+        String::from("  \"kind\": \"run\""),
         format!("  \"mezura_version\": \"{}\"", escaped(config.view.version.trim_start_matches('v'))),
         format!("  \"generated_at\": \"{}\"", datetime_now.to_rfc3339_opts(SecondsFormat::Secs, false)),
         format!("  \"scope\": {}", scope_object(config, &result.targets)),
@@ -50,6 +53,177 @@ pub fn document(result: &RunResult, datetime_now: &DateTime<Local>, config: &Con
     format!("{{\n{}\n}}", members.join(",\n"))
 }
 
+pub fn print_comparison_as_json(baseline: &super::diff::Reading, subject: &super::diff::Reading,
+        datetime_now: &DateTime<Local>, config: &Configuration) {
+    println!("{}", comparison_document(baseline, subject, datetime_now, config));
+}
+
+// The comparison as a document: the same vocabulary as a run's document, with every count a triad of
+// 'from', 'to' and 'change'. The sides carry identity and nothing else, since their counts are the
+// halves of the triads; '--top' is not applied, being a decision about a screen, so this document
+// always holds every language of either reading.
+fn comparison_document(baseline: &super::diff::Reading, subject: &super::diff::Reading,
+        datetime_now: &DateTime<Local>, config: &Configuration) -> String
+{
+    let rows = super::diff::comparison_rows(&baseline.result.per_language, &subject.result.per_language,
+            config.view.sort_by, None);
+    let keywords_counted = !config.view.hidden.keywords;
+
+    let languages = if rows.is_empty() {String::from("[]")} else {
+        let entries = rows.iter().map(|row| {
+            let mut members = vec![format!("      \"name\": \"{}\"", escaped(&row.name))];
+            members.extend(triad_members("      ", &row.before, &row.now));
+            if keywords_counted {
+                members.push(format!("      \"keywords\": {}", keyword_triads(&row.before.keyword_occurences,
+                        &row.now.keyword_occurences)));
+            }
+            format!("    {{\n{}\n    }}", members.join(",\n"))
+        }).collect::<Vec<_>>();
+        format!("[\n{}\n  ]", entries.join(",\n"))
+    };
+
+    let mut total = triad_members("    ", &baseline.result.total, &subject.result.total);
+    if keywords_counted {
+        total.push(format!("    \"keywords\": {}", indented(&keyword_triads(&baseline.result.total.keyword_occurences,
+                &subject.result.total.keyword_occurences)).replace("\n    ", "\n  ")));
+    }
+
+    let members = [
+        format!("  \"format\": {FORMAT_VERSION}"),
+        String::from("  \"kind\": \"comparison\""),
+        format!("  \"mezura_version\": \"{}\"", escaped(config.view.version.trim_start_matches('v'))),
+        format!("  \"generated_at\": \"{}\"", datetime_now.to_rfc3339_opts(SecondsFormat::Secs, false)),
+        format!("  \"from\": {}", side_object(baseline)),
+        format!("  \"to\": {}", side_object(subject)),
+        format!("  \"total\": {{\n{}\n  }}", total.join(",\n")),
+        format!("  \"languages\": {languages}"),
+        format!("  \"warnings\": {}", comparison_warnings_array(baseline, subject)),
+    ];
+
+    format!("{{\n{}\n}}", members.join(",\n"))
+}
+
+// Identity, and the identity of each source has its own shape: 'source' is the discriminator, so a
+// consumer never guesses from which keys exist. The counts are not here, being the triads' halves.
+fn side_object(reading: &super::diff::Reading) -> String {
+    let mut members = vec![match &reading.source {
+        super::diff::Source::Run => String::from("    \"source\": \"run\""),
+        super::diff::Source::Document { path } =>
+            format!("    \"source\": \"document\",\n    \"path\": \"{}\"", escaped(path)),
+        // Both halves, because neither derives from the other: the hash is what was measured, and
+        // what was asked for is what a person recognises later
+        super::diff::Source::Revision { commit, asked_for } =>
+            format!("    \"source\": \"revision\",\n    \"commit\": \"{}\",\n    \"asked_for\": \"{}\"",
+                    escaped(commit), escaped(asked_for))
+    }];
+    members.push(format!("    \"taken_at\": \"{}\"", escaped(&reading.taken)));
+    members.push(format!("    \"mezura_version\": \"{}\"", escaped(reading.version.trim_start_matches('v'))));
+    members.push(format!("    \"scope\": {}", indented(&scope_object_of(&reading.scope))));
+    // A side counted by this very run said its warnings on the error output as they happened, and
+    // for the document's sake they are in the collector, the same place the run document reads
+    members.push(format!("    \"warnings\": {}", indented(&match reading.source {
+        super::diff::Source::Run => warnings_array(),
+        _ => document_warnings_array(&reading.warnings)
+    })));
+
+    format!("{{\n{}\n  }}", members.join(",\n"))
+}
+
+// The scope in the shape the run document writes it, from wherever the reading carried it
+fn scope_object_of(scope: &super::json_reader::Scope) -> String {
+    let members = [
+        format!("    \"exclude\": {}", string_array(&scope.exclude)),
+        format!("    \"languages\": {}", string_array(&scope.languages)),
+        format!("    \"excluded_languages\": {}", string_array(&scope.excluded_languages)),
+        format!("    \"forced_languages\": {}", forced_languages_object(&scope.forced_languages)),
+        format!("    \"braces_as_code\": {}", scope.braces_as_code),
+        format!("    \"search_in_dotted\": {}", scope.search_in_dotted),
+        format!("    \"gitignore\": {}", scope.gitignore),
+    ];
+
+    format!("{{\n{}\n  }}", members.join(",\n"))
+}
+
+fn document_warnings_array(warnings: &[super::json_reader::DocumentWarning]) -> String {
+    if warnings.is_empty() {
+        return String::from("[]");
+    }
+
+    let entries = warnings.iter().map(|warning| {
+        let members = [
+            format!("      \"code\": \"{}\"", escaped(&warning.code)),
+            format!("      \"affects\": \"{}\"", escaped(&warning.affects)),
+            format!("      \"message\": \"{}\"", escaped(&warning.message)),
+        ];
+        format!("    {{\n{}\n    }}", members.join(",\n"))
+    }).collect::<Vec<_>>();
+
+    format!("[\n{}\n  ]", entries.join(",\n"))
+}
+
+// What makes the two readings two measurements rather than two moments of one: the same facts the
+// screen says above the table, as entries a program can key on.
+fn comparison_warnings_array(baseline: &super::diff::Reading, subject: &super::diff::Reading) -> String {
+    let mut entries = super::diff::settings_that_differ(&baseline.scope, &subject.scope).into_iter()
+            .map(|setting| (String::from("setting-differs"), setting.to_owned(),
+                format!("The two readings were not taken with the same '{setting}', so part of the difference is that setting and not code that changed.")))
+            .collect::<Vec<_>>();
+    if baseline.version != subject.version {
+        entries.push((String::from("versions-differ"), format!("{} -> {}", baseline.version, subject.version),
+                format!("The readings were counted by mezura {} and {}, so part of the difference may be a language counted better since.",
+                        baseline.version, subject.version)));
+    }
+    if entries.is_empty() {
+        return String::from("[]");
+    }
+
+    let rendered = entries.into_iter().map(|(code, subject_of, message)| {
+        let members = [
+            format!("      \"code\": \"{code}\""),
+            String::from("      \"affects\": \"counts\""),
+            format!("      \"subject\": \"{}\"", escaped(&subject_of)),
+            format!("      \"message\": \"{}\"", escaped(&message)),
+        ];
+        format!("    {{\n{}\n    }}", members.join(",\n"))
+    }).collect::<Vec<_>>();
+
+    format!("[\n{}\n  ]", rendered.join(",\n"))
+}
+
+// The five figures a comparison compares, each as '{"from": a, "to": b, "change": b - a}'. 'change'
+// is derived and written anyway, because the comparison is the product: handing back two numbers
+// and leaving the subtraction to the reader is handing back the input.
+fn triad_members(indent: &str, before: &Stats, now: &Stats) -> Vec<String> {
+    [("files", before.files, now.files), ("lines", before.lines, now.lines),
+     ("code", before.code_lines, now.code_lines), ("comments", before.comment_lines, now.comment_lines),
+     ("bytes", before.bytes, now.bytes)]
+            .into_iter().map(|(name, from, to)| format!("{indent}\"{name}\": {}", triad(from, to)))
+            .collect()
+}
+
+fn triad(from: usize, to: usize) -> String {
+    format!("{{\"from\": {from}, \"to\": {to}, \"change\": {}}}", to as i128 - from as i128)
+}
+
+// The union of both sides' keywords, without the ones that are zero on both: a slot every selected
+// language declares and nothing ever used is a row about nothing.
+fn keyword_triads(before: &HashMap<String, usize>, now: &HashMap<String, usize>) -> String {
+    let mut names = before.keys().chain(now.keys()).cloned().collect::<Vec<_>>();
+    names.sort_unstable();
+    names.dedup();
+    names.retain(|name| before.get(name).copied().unwrap_or(0) > 0 || now.get(name).copied().unwrap_or(0) > 0);
+    if names.is_empty() {
+        return String::from("{}");
+    }
+
+    let members = names.into_iter().map(|name| {
+        let (from, to) = (before.get(&name).copied().unwrap_or(0), now.get(&name).copied().unwrap_or(0));
+        format!("        \"{}\": {}", escaped(&name), triad(from, to))
+    }).collect::<Vec<_>>();
+
+    format!("{{\n{}\n      }}", members.join(",\n"))
+}
+
 // Only what can change a number: no theme, no layout, no separators. Without it, two documents that
 // differ by an '--exclude' look like a code change.
 fn scope_object(config: &Configuration, targets: &[mezura_core::Target]) -> String {
@@ -60,6 +234,9 @@ fn scope_object(config: &Configuration, targets: &[mezura_core::Target]) -> Stri
         format!("    \"exclude\": {}", string_array(&config.engine.exclude_dirs)),
         format!("    \"languages\": {}", string_array(&config.engine.languages_of_interest)),
         format!("    \"excluded_languages\": {}", string_array(&config.engine.excluded_languages)),
+        // '--force-lang m=matlab' decides which language a file is counted as, so it moves numbers
+        // the same way an exclusion does, and two runs that disagree about it are not comparable
+        format!("    \"forced_languages\": {}", forced_languages_object(&config.engine.forced_languages)),
         format!("    \"braces_as_code\": {}", config.engine.braces_as_code),
         format!("    \"search_in_dotted\": {}", config.engine.should_search_in_dotted),
         format!("    \"gitignore\": {}", !config.engine.no_gitignore),
@@ -277,6 +454,22 @@ fn targets_array(targets: &[mezura_core::Target]) -> String {
     format!("[\n{}\n    ]", entries.join(",\n"))
 }
 
+// The extension is the key, since that is what a run is asked about and what can only be claimed
+// once. Sorted, so that two runs over the same tree produce the same bytes.
+fn forced_languages_object(forced: &HashMap<String, String>) -> String {
+    if forced.is_empty() {
+        return String::from("{}");
+    }
+
+    let mut sorted = forced.iter().collect::<Vec<_>>();
+    sorted.sort_unstable_by_key(|(extension, _)| extension.as_str());
+    let members = sorted.into_iter()
+            .map(|(extension, language)| format!("      \"{}\": \"{}\"", escaped(extension), escaped(language)))
+            .collect::<Vec<_>>();
+
+    format!("{{\n{}\n    }}", members.join(",\n"))
+}
+
 fn string_array(values: &[String]) -> String {
     if values.is_empty() {
         return String::from("[]");
@@ -484,6 +677,23 @@ mod tests {
 
     // One entry per target, so a module given several paths is several entries carrying one name,
     // and a consumer never has to split a string to find out where a run looked.
+    // It decides which language a file is counted as, so it moves numbers exactly the way an
+    // exclusion does. The log has recorded it among the settings from the start and the document did
+    // not, so two runs that disagreed about it compared silently.
+    #[test]
+    fn the_extensions_that_were_forced_to_a_language_are_among_the_settings() {
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        assert!(document_of(&config).contains("\"forced_languages\": {}"));
+
+        config.engine.forced_languages = hashmap!["m".to_owned() => "matlab".to_owned(),
+                "h".to_owned() => "objective-c".to_owned()];
+        let document = document_of(&config);
+        assert!(document.contains("\"m\": \"matlab\""), "{document}");
+        // by extension, which is the thing a run is asked about and can only be claimed once, and
+        // sorted so that two runs over the same tree produce the same bytes
+        assert!(document.find("\"h\":").unwrap() < document.find("\"m\":").unwrap());
+    }
+
     #[test]
     fn the_targets_are_written_one_by_one_with_the_module_that_claimed_each() {
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
@@ -506,6 +716,73 @@ mod tests {
         // and a run over the working directory alone still writes the key, empty
         result.targets = Vec::new();
         assert!(document(&result, &Local::now(), &config).contains("\"dirs\": []"));
+    }
+
+    fn reading_of(source: crate::diff::Source, per_language: HashMap<String, Stats>) -> crate::diff::Reading {
+        crate::diff::Reading {
+            source,
+            taken: "2026-08-05T21:14:03+03:00".to_owned(),
+            version: "3.0.0".to_owned(),
+            scope: crate::diff::scope_of(&mezura_core::EngineConfig::default()),
+            warnings: Vec::new(),
+            result: result_of(per_language.clone(), Stats::total_of(&per_language), Vec::new(),
+                    FilesPresent {total_files: 2, relevant_files: 2, excluded_files: 0})
+        }
+    }
+
+    // Every count is a triad, the sides carry identity and never counts, and each source's identity
+    // has its own shape behind the 'source' discriminator.
+    #[test]
+    fn a_comparison_document_holds_both_sides_of_every_figure_and_who_the_sides_were() {
+        let config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        let datetime = DateTime::parse_from_rfc3339("2026-08-06T15:00:00+03:00").unwrap().with_timezone(&Local);
+        let from = reading_of(crate::diff::Source::Revision {
+                commit: "030e6e72a1b4c9d8e7f6a5b4c3d2e1f0a9b8c7d6".to_owned(), asked_for: "v2.0.1".to_owned() },
+                hashmap!["Rust".to_owned() => stats_of(2, 3000, 100, 70, 10, hashmap!["structs".to_owned() => 3]),
+                         "Java".to_owned() => stats_of(1, 400, 40, 30, 0, HashMap::new())]);
+        let to = reading_of(crate::diff::Source::Run,
+                hashmap!["Rust".to_owned() => stats_of(3, 4500, 150, 100, 20, hashmap!["structs".to_owned() => 5]),
+                         "Go".to_owned() => stats_of(1, 600, 60, 50, 0, HashMap::new())]);
+
+        let document = comparison_document(&from, &to, &datetime, &config);
+        assert!(document.contains("\"kind\": \"comparison\""));
+        assert!(document.contains("\"source\": \"revision\""), "{document}");
+        assert!(document.contains("\"commit\": \"030e6e72a1b4c9d8e7f6a5b4c3d2e1f0a9b8c7d6\""));
+        assert!(document.contains("\"asked_for\": \"v2.0.1\""));
+        assert!(document.contains("\"source\": \"run\""));
+
+        // every figure is the pair and the journey, so nothing has to be subtracted by the reader
+        assert!(document.contains("\"lines\": {\"from\": 140, \"to\": 210, \"change\": 70}"), "{document}");
+        // a language of only one side has a whole zero side, and the change can be negative
+        assert!(document.contains("\"lines\": {\"from\": 40, \"to\": 0, \"change\": -40}"), "{document}");
+        assert!(document.contains("\"structs\": {\"from\": 3, \"to\": 5, \"change\": 2}"), "{document}");
+
+        // and it is a document, not a description of one
+        assert!(serde_json::from_str::<serde_json::Value>(&document).is_ok(), "{document}");
+    }
+
+    // The same facts the screen says above the table, as entries a program can key on: the sides'
+    // own warnings stay inside the sides, and what differs between them is the comparison's own.
+    #[test]
+    fn a_comparison_says_what_makes_its_sides_two_measurements() {
+        let config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        let datetime = Local::now();
+        let from = reading_of(crate::diff::Source::Document { path: "D:/old.json".to_owned() }, HashMap::new());
+        let mut to = reading_of(crate::diff::Source::Run, HashMap::new());
+        to.version = "3.1.0".to_owned();
+        to.scope.braces_as_code = true;
+
+        let document = comparison_document(&from, &to, &datetime, &config);
+        assert!(document.contains("\"code\": \"setting-differs\""), "{document}");
+        assert!(document.contains("\"subject\": \"--braces-as-code\""));
+        assert!(document.contains("\"code\": \"versions-differ\""));
+        assert!(document.contains("\"subject\": \"3.0.0 -> 3.1.0\""));
+        assert!(document.contains("\"path\": \"D:/old.json\""));
+
+        // nothing differing writes the key empty rather than leaving the reader to ask for it
+        let same = comparison_document(&from, &reading_of(crate::diff::Source::Run, HashMap::new()),
+                &datetime, &config);
+        assert!(same.contains("\"warnings\": []"), "{same}");
     }
 
     #[test]
