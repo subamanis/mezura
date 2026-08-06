@@ -1,7 +1,6 @@
-// The vocabulary of the problem, and the bottom of the dependency graph: it knows nothing about
-// threads, configuration or printing, and both halves of the program speak it. A 'Language' and a
-// 'Keyword' exist before anything has been counted, which is what separates this file from
-// 'result.rs' next to it.
+// The words the problem is described in, and the bottom of the dependency graph: nothing here knows
+// about threads, settings or printing. These exist before anything has been counted, which is what
+// separates this file from 'result.rs' beside it.
 use std::{collections::HashMap, sync::OnceLock};
 
 #[derive(Debug, Clone)]
@@ -13,92 +12,11 @@ pub struct Language {
     pub multiline_comment_start_symbol : Option<String>,
     pub multiline_comment_end_symbol : Option<String>,
     pub keywords : Vec<Keyword>,
-    // What the parser works out once from the symbols above and then reuses for every file of this
-    // language. A cache and not part of the vocabulary: it is filled on the first file parsed, its
-    // type belongs to the engine, and 'Language::new' is how anyone builds one of these.
+    // Worked out from the symbols above and reused for every file of this language.
     pub(crate) scan_plan : OnceLock<crate::engine::file_parser::ScanPlan>
 }
 
-impl PartialEq for Language {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
-            && self.extensions == other.extensions
-            && self.string_symbols == other.string_symbols
-            && self.comment_symbols == other.comment_symbols
-            && self.multiline_comment_start_symbol == other.multiline_comment_start_symbol
-            && self.multiline_comment_end_symbol == other.multiline_comment_end_symbol
-            && self.keywords == other.keywords
-    }
-}
-
-#[derive(Debug,PartialEq)]
-pub struct Keyword{
-    pub descriptive_name : String,
-    pub aliases : Vec<String>
-}
-
-// What was counted, of one language or of a whole run: the total is the same measurement added up,
-// so it is the same type and not a second one that has to be kept in step with this.
-//
-// It used to be three: the lines in one struct, the files and bytes in another, and the totals in a
-// third that carried neither the keywords nor the same field names. A caller wanting a row of a
-// report had to look a language up in two maps by the same key and unwrap the second, which the
-// types gave it no reason to believe would be there.
-//
-// 'extra_lines' and the average size are methods and not fields, because both are arithmetic on
-// what is already here and a stored copy is a second answer waiting to disagree.
-#[derive(Debug,PartialEq,Default,Clone)]
-pub struct Stats {
-    pub files : usize,
-    pub bytes : usize,
-    pub lines : usize,
-    pub code_lines : usize,
-    pub comment_lines : usize,
-    // Per language these are its own keywords; summed over a run they are every keyword that any
-    // language declared, which is what answers "how many classes in this project" across the
-    // several languages that have such a thing.
-    pub keyword_occurences : HashMap<String,usize>
-}
-
-// What one file came to, on its way into a 'Stats'. Not public, and not merged into 'Stats' either,
-// for the one difference that is the whole of its reason: the parser identifies a keyword by its
-// **index** in the language's list, because that is what the matcher yields, so this counts into a
-// vector position and pays no hash and no string clone in the innermost loop it runs in. The names
-// are attached once per file, in 'Stats::add_file', and only for the keywords that were found.
-//
-// Whether a 'HashMap<String, usize>' here would cost anything measurable is exactly that, a
-// measurement, and nobody has taken it. Until somebody does, the merge is not a simplification
-// that is known to be free.
-#[derive(Debug,PartialEq,Default)]
-pub(crate) struct FileStats {
-    pub lines : usize,
-    pub code_lines : usize,
-    pub comment_lines : usize,
-    pub keyword_occurences : Vec<usize>
-}
-
-impl Clone for Keyword {
-    fn clone(&self) -> Self {
-        Keyword {
-            descriptive_name : self.descriptive_name.to_owned(),
-            aliases : self.aliases.to_owned()
-        }
-    }
-}
-
-impl Keyword {
-    pub fn new(descriptive_name: impl AsRef<str>, aliases: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
-        Keyword {
-            descriptive_name : descriptive_name.as_ref().to_owned(),
-            aliases : owned_strings(aliases)
-        }
-    }
-}
-
 impl Language {
-    // The multiline comment is the pair or it is nothing, and never one half of it. Two separate
-    // options let a caller declare an opener with no closer, which opens a comment that is never
-    // closed and hands the rest of every file of that language to it.
     pub fn new(name: impl AsRef<str>,
         extensions: impl IntoIterator<Item = impl AsRef<str>>,
         string_symbols: impl IntoIterator<Item = impl AsRef<str>>,
@@ -140,6 +58,60 @@ impl Language {
     }
 }
 
+// Hand written to leave 'scan_plan' out: it is a cache, filled when a language parses its first
+// file, so comparing it would make one language stop equalling its own untouched copy.
+impl PartialEq for Language {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.extensions == other.extensions
+            && self.string_symbols == other.string_symbols
+            && self.comment_symbols == other.comment_symbols
+            && self.multiline_comment_start_symbol == other.multiline_comment_start_symbol
+            && self.multiline_comment_end_symbol == other.multiline_comment_end_symbol
+            && self.keywords == other.keywords
+    }
+}
+
+// 'descriptive_name' is what the report shows, 'aliases' are the spellings that count towards it, so
+// 'classes' can be counted from both 'class' and 'record'.
+#[derive(Debug,PartialEq)]
+pub struct Keyword {
+    pub descriptive_name : String,
+    pub aliases : Vec<String>
+}
+
+impl Keyword {
+    pub fn new(descriptive_name: impl AsRef<str>, aliases: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        Keyword {
+            descriptive_name : descriptive_name.as_ref().to_owned(),
+            aliases : owned_strings(aliases)
+        }
+    }
+}
+
+impl Clone for Keyword {
+    fn clone(&self) -> Self {
+        Keyword {
+            descriptive_name : self.descriptive_name.to_owned(),
+            aliases : self.aliases.to_owned()
+        }
+    }
+}
+
+// 'extra_lines' and the average size are methods rather than fields, so a stored copy cannot drift
+// from the numbers it comes from.
+#[derive(Debug,PartialEq,Default,Clone)]
+pub struct Stats {
+    pub files : usize,
+    pub bytes : usize,
+    pub lines : usize,
+    pub code_lines : usize,
+    pub comment_lines : usize,
+    // Added up over a run these are every keyword any language declared, which answers "how many
+    // classes are in this project" across the several languages that have such a thing.
+    pub keyword_occurences : HashMap<String,usize>
+}
+
 impl Stats {
     pub fn new(files: usize, bytes: usize, lines: usize, code_lines: usize, comment_lines: usize,
             keyword_occurences: HashMap<String,usize>) -> Self
@@ -147,12 +119,10 @@ impl Stats {
         Stats { files, bytes, lines, code_lines, comment_lines, keyword_occurences }
     }
 
-    // Everything on a line that is neither code nor a comment: the blank ones and the ones that
-    // carry no content. Derived rather than stored, so it cannot drift from the three it comes from.
+    // The blank lines and the ones carrying no content.
     //
-    // Saturating for the same reason the division below is checked: the fields are public and this
-    // type is built from numbers read off a log file as well as from the parser, so three counts
-    // that do not add up are the caller's arithmetic and not a reason to take the process down.
+    // Saturating because the fields are public and this is also built from numbers read off a log
+    // file: three counts that do not add up are the caller's arithmetic, not a reason to panic.
     pub fn extra_lines(&self) -> usize {
         self.lines.saturating_sub(self.code_lines).saturating_sub(self.comment_lines)
     }
@@ -191,13 +161,25 @@ impl Stats {
     }
 }
 
-// A language with every keyword it declares set to zero, which is what a run starts from: the merge
-// that ends a consumer reaches for a keyword by name, and one that was never given a slot would
-// make it a language that counted nothing.
+// What a run starts each language from: every keyword it declares, at zero. The merge that ends a
+// counting thread reaches for a keyword by name, and one with no slot waiting would make that
+// language count nothing.
 impl From<&Language> for Stats {
     fn from(language: &Language) -> Self {
-        Stats { keyword_occurences: get_keyword_stats_map(language), ..Default::default() }
+        Stats { keyword_occurences: keyword_slots(language), ..Default::default() }
     }
+}
+
+// What one file came to, on its way into a 'Stats'. Kept apart from it for one reason: the parser
+// identifies a keyword by its position in the language's list, because that is what the matcher
+// hands back, so counting into a vector slot costs no hashing and no string copying in the innermost
+// loop of the parse. The names are attached once per file, in 'add_file'.
+#[derive(Debug,PartialEq,Default)]
+pub(crate) struct FileStats {
+    pub lines : usize,
+    pub code_lines : usize,
+    pub comment_lines : usize,
+    pub keyword_occurences : Vec<usize>
 }
 
 impl FileStats {
@@ -211,17 +193,16 @@ impl FileStats {
     }
 }
 
-// What every constructor of this crate does with the text it is handed. Taken as 'AsRef<str>' and
-// not 'Into<String>', because everything ends up owned anyway and the borrowed form accepts more:
-// a literal, a String, a Cow off a path, and a reference to any of them.
+// 'AsRef<str>' and not 'Into<String>': everything ends up owned anyway, and the borrowed form also
+// takes a Cow off a path and a reference to any of them.
 pub(crate) fn owned_strings(items: impl IntoIterator<Item = impl AsRef<str>>) -> Vec<String> {
     items.into_iter().map(|x| x.as_ref().to_owned()).collect()
 }
 
-fn get_keyword_stats_map(extension: &Language) -> HashMap<String,usize> {
+fn keyword_slots(language: &Language) -> HashMap<String,usize> {
     let mut map = HashMap::<String,usize>::new();
-    for k in &extension.keywords {
-        map.insert(k.descriptive_name.to_owned(), 0);
+    for keyword in &language.keywords {
+        map.insert(keyword.descriptive_name.to_owned(), 0);
     }
     map
 }
@@ -230,10 +211,8 @@ fn get_keyword_stats_map(extension: &Language) -> HashMap<String,usize> {
 mod tests {
     use super::*;
 
-    // The engine cannot produce these: a line is counted once and then falls into exactly one of the
-    // three. They arrive from outside, off a log file whose head was lost, and the arithmetic runs
-    // before anybody has looked at them. Under 'cargo test' the plain '-' panics here rather than
-    // wrapping, which is why this asserts the value and not merely that it returned.
+    // The parser cannot produce these: a line is counted once and falls into exactly one of the
+    // three. They come off a log file whose head was lost.
     #[test]
     fn three_counts_that_do_not_add_up_give_no_extra_lines_rather_than_a_panic() {
         assert_eq!(0, Stats::new(1, 0, 0, 0, 900, HashMap::new()).extra_lines());

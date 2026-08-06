@@ -1,3 +1,11 @@
+// Reading one file and deciding what each of its lines is: code, comment, or neither. The hot path
+// of the whole program, and the only file here where the work is the algorithm rather than the
+// arrangement.
+//
+// A line is scanned once for every symbol the language declares, in as few memchr passes as the
+// symbols allow, and what comes back are the positions of string delimiters, comment openers and the
+// two multiline markers. The rest of the file decides what those positions mean when they overlap,
+// which is where every language-specific trap lives.
 use std::{collections::HashMap, fs::File, io::Read as IoRead, path::Path, str};
 
 use memchr::memmem;
@@ -9,6 +17,7 @@ pub const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
 
 const NO_SLOT : u16 = u16::MAX;
 
+// The four kinds of declared symbol, as indices into the per-kind arrays of a scan
 const STRINGS    : u8 = 0;
 const COMMENTS   : u8 = 1;
 const COM_STARTS : u8 = 2;
@@ -31,11 +40,10 @@ struct Chunk {
     len: u8,
 }
 
-// A line used to be scanned once per symbol. Every symbol begins with one byte, and memchr searches
-// up to three bytes in a single SIMD pass, so the symbols are grouped by their first byte and the
-// groups are packed into as few passes as the language allows: one for most, two for the handful
-// that declare more than three distinct first bytes. The pass gives candidate positions, and only
-// there is the rest of a symbol compared.
+// Every symbol begins with one byte and memchr searches up to three bytes in a single SIMD pass, so
+// symbols are grouped by their first byte and the groups packed into as few passes as the language
+// allows: one for most, two for the handful declaring more than three distinct first bytes. A pass
+// yields candidate positions, and only there is the rest of a symbol compared.
 #[derive(Debug, Clone)]
 pub struct ScanPlan {
     chunks: Vec<Chunk>,
@@ -90,11 +98,10 @@ impl ScanPlan {
     }
 }
 
-// Two kinds that share a first byte have to be searched in the same pass, otherwise that byte would
-// be visited twice. Kinds are merged into groups by that overlap, and the groups are then packed
-// whole, which is what keeps every output vector in the order the positions appear on the line and
-// lets the sorting go away. A group of more than three distinct bytes cannot be one pass, so it is
-// split and the kinds it holds are marked as needing a sort after all.
+// Two kinds sharing a first byte must be searched in the same pass, or that byte gets visited twice.
+// Kinds are grouped by that overlap and the groups packed whole, which is what leaves every output
+// vector already in the order the positions appear on the line. A group of more than three distinct
+// bytes cannot be one pass, so it is split and its kinds are marked as needing a sort after all.
 fn pack_into_chunks(entries: &[(u8, u8, Box<[u8]>)]) -> (Vec<Chunk>, [bool; 4]) {
     let mut bytes_of_kind : [Vec<u8>; 4] = Default::default();
     for (kind, _, bytes) in entries {
@@ -162,18 +169,6 @@ pub struct ScanBuffers {
     code_ranges: Vec<(usize, usize)>,
 }
 
-// The keyword scratch cannot live in ScanBuffers: while a LineInfo borrows the cleansed line out of
-// it, the whole struct is borrowed, and counting the keywords of that very line needs a free one.
-#[derive(Debug, Default)]
-pub struct ParseBuffers {
-    scan: ScanBuffers,
-    alias_indices: Vec<usize>,
-    // every stretch of the file that is code, gathered line by line so that the keywords can be
-    // searched once over the whole buffer instead of once per alias per line
-    code_spans: Vec<(u32, u32)>,
-    pub timing: phase_timing::Totals,
-}
-
 impl ScanBuffers {
     fn reset(&mut self, slots: usize) {
         self.raw_strings.clear();
@@ -186,6 +181,18 @@ impl ScanBuffers {
         self.consumed.resize(slots, 0);
         self.code_ranges.clear();
     }
+}
+
+// The keyword scratch cannot live in ScanBuffers: while a LineInfo borrows the cleansed line out of
+// it, the whole struct is borrowed, and counting the keywords of that very line needs a free one.
+#[derive(Debug, Default)]
+pub struct ParseBuffers {
+    scan: ScanBuffers,
+    alias_indices: Vec<usize>,
+    // every stretch of the file that is code, gathered line by line so that the keywords can be
+    // searched once over the whole buffer instead of once per alias per line
+    code_spans: Vec<(u32, u32)>,
+    pub timing: phase_timing::Totals,
 }
 
 fn is_not_escaped(pos: usize, bytes: &[u8]) -> bool {
@@ -276,7 +283,6 @@ impl KeywordMatcher {
     }
 }
 
-
 pub fn parse_file(path: &Path, lang_name: &str, buf: &mut String, buffers: &mut ParseBuffers,
     language_map: &HashMap<String,Language>, keyword_matcher: Option<&KeywordMatcher>, config: &EngineConfig)
 -> Result<FileStats,String>
@@ -310,9 +316,9 @@ pub fn parse_file(path: &Path, lang_name: &str, buf: &mut String, buffers: &mut 
     Ok(file_stats)
 }
 
-// str::lines() splits on a char pattern, which reaches the standard library's own byte search: a
-// SWAR loop over two usize words at a time. The memchr crate is already a dependency and searches
-// the same byte with SIMD. Same lines out, including the trailing '\r' that lines() drops.
+// 'str::lines' splits through the standard library's own byte search, a SWAR loop over two words at
+// a time; memchr is already a dependency and does the same with SIMD. Same lines out, including the
+// trailing '\r' that 'lines' drops.
 struct LineIter<'a> {
     contents: &'a str,
     newlines: memchr::Memchr<'a>,
@@ -371,8 +377,8 @@ fn parse_lines(contents: &str, language: &Language, keyword_matcher: Option<&Key
         if line.is_empty() { continue; }
         let base = line_start + (raw_line.len() - raw_line.trim_ascii_start().len());
 
-        // Two different parsing functions to skip the unnecessary checks for langs that don't support multiline comments
-        // for performance reasons
+        // Two functions rather than one with a branch, so a language without multiline comments never
+        // pays for the checks that only they need
         let line_info =
         if language.supports_multiline_comments() {
             get_bounds_w_multiline_comments(line, language, is_comment_closed, &open_str_symbol, scan)
@@ -384,11 +390,10 @@ fn parse_lines(contents: &str, language: &Language, keyword_matcher: Option<&Key
         open_str_symbol = line_info.open_str_sybol_after;
 
         if line_info.code.is_some() {
-            // A line with no letter and no digit left after the strings and the comments were
-            // stripped is punctuation that the language required, not something the programmer
-            // said: '}', '});', '],', ')'. Bytes above 0x7f count as content, so that an identifier
-            // written in a non-latin alphabet reads as code instead of looking like punctuation.
-            // Leading and trailing whitespace never decides this, so the ranges are read untrimmed.
+            // With the strings and comments stripped, a line holding no letter and no digit is
+            // punctuation the language required rather than anything the programmer said: '}',
+            // '});', '],', ')'. Bytes above 0x7f count as content, so an identifier in a non-latin
+            // alphabet reads as code and not as punctuation.
             let is_no_content = !line_info.has_string_literal
                     && !scan.code_ranges.iter().any(|(from, to)|
                             line.as_bytes()[*from..*to].iter().any(|b| b.is_ascii_alphanumeric() || *b >= 0x80));
@@ -412,7 +417,6 @@ fn parse_lines(contents: &str, language: &Language, keyword_matcher: Option<&Key
     file_stats
 }
 
-
 // 'code' is the span of ScanBuffers::code_ranges that belongs to this line. None means the line left
 // no code behind at all, which is not the same as an empty span: a line whose code is only whitespace
 // still produced a cleansed line, and counts as neither code nor comment.
@@ -424,9 +428,35 @@ struct LineInfo {
     open_str_sybol_after: Option<u8>
 }
 
+impl LineInfo {
+    pub fn none_str(is_comment_open_after: bool, has_string_literal: bool, open_str_sybol_after: Option<u8>) -> LineInfo {
+        LineInfo { code: None, has_string_literal, is_comment_open_after, open_str_sybol_after }
+    }
 
-// An empty stretch is not recorded, so that "did this line leave any code behind" stays the same
-// question it was when the answer was a String that had nothing pushed into it
+    pub fn code_span(span: (usize, usize), has_string_literal: bool) -> LineInfo {
+        LineInfo { code: Some(span), has_string_literal, is_comment_open_after: false, open_str_sybol_after: None }
+    }
+
+    pub fn code_span_with(span: (usize, usize), has_string_literal: bool, is_comment_open_after: bool,
+        open_str_sybol_after: Option<u8>) -> LineInfo
+    {
+        LineInfo { code: Some(span), has_string_literal, is_comment_open_after, open_str_sybol_after }
+    }
+
+    pub fn with_open_comment() -> LineInfo {
+        LineInfo { code: None, has_string_literal: false, is_comment_open_after: true, open_str_sybol_after: None }
+    }
+
+    pub fn with_open_symbol(symbol: u8) -> LineInfo {
+        LineInfo { code: None, has_string_literal: true, is_comment_open_after: false, open_str_sybol_after: Some(symbol) }
+    }
+
+    pub fn none_all(has_string_literal: bool) -> LineInfo {
+        LineInfo { code: None, has_string_literal, is_comment_open_after: false, open_str_sybol_after: None }
+    }
+}
+
+// An empty stretch is not recorded, so that "did this line leave any code behind" is one question
 fn push_code(ranges: &mut Vec<(usize, usize)>, from: usize, to: usize) {
     if to > from {
         ranges.push((from, to));
@@ -697,7 +727,6 @@ fn get_bounds_w_multiline_comments(line: &str, language: &Language, is_comment_c
     }
 }
 
-
 fn resolve_double_counting_of_adjacent_start_and_end_symbols(start_indices: &mut Vec<usize>,
     end_indices: &mut Vec<usize>, is_comment_open: bool, multiline_len: usize) 
 {
@@ -758,11 +787,9 @@ fn resolve_double_counting_of_adjacent_start_and_end_symbols(start_indices: &mut
    }
 }
 
-
-// The cleansed line was trimmed before its keywords were counted, and that trim decides whether a
-// keyword at the start of it has an acceptable prefix: a tab is not one, but an empty prefix is.
-// Trimming a concatenation means trimming the front of the first stretch and the back of the last,
-// dropping any that empty out completely.
+// The trim decides whether a keyword at the start of the line has an acceptable prefix: a tab is not
+// one, an empty prefix is. Trimming a concatenation means trimming the front of the first stretch and
+// the back of the last, dropping any that empty out completely.
 fn push_trimmed_spans(spans: &mut Vec<(u32, u32)>, ranges: &[(usize, usize)], line: &str, base: usize) {
     let bytes = line.as_bytes();
     let (mut head, mut tail) = (0usize, ranges.len());
@@ -793,21 +820,18 @@ fn push_trimmed_spans(spans: &mut Vec<(u32, u32)>, ranges: &[(usize, usize)], li
     }
 }
 
-// One search per alias over the whole file, instead of one per alias per code line: the same needle
-// against a haystack that memmem is good at, called sixty thousand times instead of twenty million.
-// A hit counts only if it lies entirely inside one stretch of code, and its neighbours are read
-// inside that same stretch, so what a string literal removed is not treated as adjacent to what
-// follows it.
+// One search per alias over the whole file rather than one per alias per line, which is the shape
+// memmem is good at. A hit counts only if it lies entirely inside one stretch of code, and its
+// neighbours are read inside that same stretch, so what a string literal removed is not treated as
+// touching what follows it.
 fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher,
     file_stats: &mut FileStats, indices: &mut Vec<usize>)
 {
-    // The two sides are not the same question, and '(' is where they part. After the word it opens
-    // an argument or an inheritance list and is part of the declaration: Delphi writes
-    // 'TFoo = class(TObject)' and Erlang writes '-module(greeter).', and both were counted as
-    // nothing at all while the word sat against a bracket. Before the word it means the word is the
-    // head of an s-expression, which is already handled by declaring the bracket inside the alias,
-    // as Clojure and Lisp do with '(defn'. Accepting it on that side as well would count '(defn'
-    // through the bracketed alias and again through the bare one.
+    // The two sides are different questions and '(' is where they part. After the word it opens an
+    // argument list and belongs to the declaration: Delphi's 'TFoo = class(TObject)' and Erlang's
+    // '-module(greeter).' count as nothing at all if it is refused. Before the word it means the word
+    // heads an s-expression, which the alias already handles by including the bracket, as Clojure
+    // does with '(defn'; accepting it there too counts '(defn' twice, once through each alias.
     fn is_acceptable_before(byte: Option<&u8>) -> bool {
         match byte {
             None => true,
@@ -827,7 +851,7 @@ fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher
         indices.extend(alias_finder.find_iter(bytes));
         if indices.is_empty() { continue; }
 
-        //ignore indices that are directly next to each other
+        // Indices directly next to each other are one hit
         let mut counter = 0;
         while !indices.is_empty() && counter < indices.len()-1 {
             if indices[counter] + alias_len == indices[counter+1] {
@@ -881,12 +905,11 @@ fn resolve_string_delimiters(language: &Language, open_str_symbol: &Option<u8>, 
     }
 }
 
-// A comment symbol and the multiline start can overlap, and then only one of them is real: whichever
-// begins first swallows the other, and when they begin in the same place the longer one wins. All
-// three shapes occur. A '/*' inside a '//' opens nothing, which is the plain case. PowerShell's '<#'
-// holds a whole '#' comment inside it, and reading that '#' as a comment of its own stops the block
-// from ever opening, which is how every block comment of a language silently stops working. Lua's
-// '--[[' begins exactly where its own '--' does, and the shorter one winning has the same effect.
+// When a comment symbol and a multiline start overlap only one of them is real: whichever begins
+// first swallows the other, and on a tie the longer one wins. All three shapes occur. A '/*' inside a
+// '//' opens nothing. PowerShell's '<#' contains a '#', and reading that as a comment of its own
+// stops the block ever opening, which silently breaks every block comment in the language. Lua's
+// '--[[' begins exactly where its own '--' does, with the same result if the shorter one wins.
 fn resolve_comment_and_multiline_start_overlap(line: &str, language: &Language,
     comment_indices: &mut Vec<usize>, com_start_indices: &mut Vec<usize>)
 {
@@ -923,37 +946,6 @@ fn is_intersecting_with_multi_line_end_symbol(index: usize, symbol_len: usize, e
     false
 }
 
-
-
-impl LineInfo {
-    pub fn none_str(is_comment_open_after: bool, has_string_literal: bool, open_str_sybol_after: Option<u8>) -> LineInfo {
-        LineInfo { code: None, has_string_literal, is_comment_open_after, open_str_sybol_after }
-    }
-
-    pub fn code_span(span: (usize, usize), has_string_literal: bool) -> LineInfo {
-        LineInfo { code: Some(span), has_string_literal, is_comment_open_after: false, open_str_sybol_after: None }
-    }
-
-    pub fn code_span_with(span: (usize, usize), has_string_literal: bool, is_comment_open_after: bool,
-        open_str_sybol_after: Option<u8>) -> LineInfo
-    {
-        LineInfo { code: Some(span), has_string_literal, is_comment_open_after, open_str_sybol_after }
-    }
-
-    pub fn with_open_comment() -> LineInfo {
-        LineInfo { code: None, has_string_literal: false, is_comment_open_after: true, open_str_sybol_after: None }
-    }
-
-    pub fn with_open_symbol(symbol: u8) -> LineInfo {
-        LineInfo { code: None, has_string_literal: true, is_comment_open_after: false, open_str_sybol_after: Some(symbol) }
-    }
-
-    pub fn none_all(has_string_literal: bool) -> LineInfo {
-        LineInfo { code: None, has_string_literal, is_comment_open_after: false, open_str_sybol_after: None }
-    }
-}
-
-
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, LazyLock};
@@ -970,10 +962,9 @@ mod tests {
         Path::new(FIXTURES_DIR).join("parser").join(name)
     }
 
-    // The parser is handed its working memory by the consumer thread that owns it. A test cares
-    // about one line at a time, so it gets a fresh one and reads the result out.
-    // The parser hands back ranges into the line now. A test still wants to read the cleansed text,
-    // so it is rebuilt here, which is exactly the concatenation the parser used to build itself.
+    // The working memory belongs to the counting thread, so a test that cares about one line gets a
+    // fresh one. The parser hands back ranges into the line, and the text a test wants to read is
+    // rebuilt from them here.
     #[derive(Debug, PartialEq)]
     struct TextInfo {
         cleansed_string: Option<String>,
@@ -1118,9 +1109,7 @@ mod tests {
         scan_plan : std::sync::OnceLock::new()
     });
 
-    // Four string symbols and three comment ones, which no language file could express before: with
-    // three the old merge silently scanned for the first alone, and with more than two comment
-    // symbols it scanned for the first two.
+    // Four string symbols and three comment ones, past the two of each that most languages declare.
     static PYTHON_FULL : LazyLock<Language> = LazyLock::new(|| Language {
         name : "py".to_owned(),
         extensions : vec!["py".to_owned()],
@@ -1194,9 +1183,8 @@ mod tests {
         buf.clear();
     }
 
-    // The flag had no test at all: everything that mentioned it checked that it could be parsed
-    // from the command line or written to a config file, and nothing checked that it counts
-    // anything differently, so it could have been disconnected from the parser entirely.
+    // That the flag reaches the parser at all, rather than only that it parses from the command line
+    // and survives a config file, which is all anything else checks.
     #[test]
     fn braces_as_code_moves_the_no_content_lines_into_code() {
         let mut buf = String::with_capacity(150);
@@ -1214,9 +1202,8 @@ mod tests {
         assert_eq!((44, 23, 15), count_with(true, &mut buf));
     }
 
-    // The cleansed line used to be a copy of the surviving pieces glued together, so a keyword cut
-    // in half by a string literal was counted as if the literal had never been there. The pieces are
-    // ranges now and each is searched where it lies, so it is not.
+    // A keyword cut in half by a string literal must not count: each surviving stretch is searched
+    // where it lies rather than glued to the next one.
     #[test]
     fn a_keyword_split_by_a_string_is_not_a_keyword() {
         let line = "str\"X\"uct a;";
@@ -1852,7 +1839,6 @@ mod tests {
         assert_eq!(TextInfo::new(Some(" ".to_string()), true, false, Some(0u8)), bounds_multi(&line, &JAVA, false, &None));
         assert_eq!(TextInfo::new(Some(" */ ".to_string()), true, false, Some(0u8)), bounds_multi(&line, &JAVA, true, double_str_opt));
     }
-
 
     const MARKER: &str = "mezura-expect";
 

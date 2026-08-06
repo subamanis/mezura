@@ -1,8 +1,6 @@
 // Reading and writing theme files, and the page that lets somebody build one by eye.
 use std::{fs, io};
 
-
-
 // None means the theme is not there at all, which is a mistake in the name and not in the file.
 // A theme that exists always loads, carrying whatever its parser could not read.
 pub fn load_theme(name: &str, themes_dir: &str) -> Option<super::theme::ThemeFile> {
@@ -66,16 +64,12 @@ pub fn generate_theme_editor_page() -> io::Result<String> {
     Ok(out_path)
 }
 
-
 #[cfg(test)]
 mod tests {
-
-
-    // The template exists twice: the copy above, embedded so 'cargo package' can carry it, and
-    // 'docs/theme-editor/index.html' at the repository root, which GitHub Pages publishes as
-    // https://subamanis.github.io/mezura/theme-editor/ and the README links to. Neither can replace
-    // the other: Pages only serves from the repository's 'docs/', and the package refuses paths
-    // outside its own directory. Same guard as the README command list against the help texts.
+    // The page exists twice: embedded above so 'cargo package' can carry it, and at
+    // 'docs/theme-editor/index.html' which GitHub Pages publishes and the README links to. Neither
+    // can replace the other, since Pages serves only from the repository's 'docs/' and the package
+    // refuses paths outside its own directory.
     #[test]
     fn the_published_theme_editor_is_the_embedded_one() {
         let template = include_str!("../docs/theme-editor/index.html");

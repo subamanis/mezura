@@ -2,30 +2,39 @@
 use std::{fs::{self, File}, io::{BufRead, BufReader, BufWriter, Write}};
 
 use colored::{ColoredString, Colorize};
-
-use super::formatted::Formatted;
-use crate::paths::PERSISTENT_APP_PATHS;
-use crate::paths::DEFAULT_CONFIG_NAME;
-use super::theme_files;
-use super::config_manager::{self, ConfigurationBuilder, LogOption, MAX_COMPARE_LEVEL, MIN_COMPARE_LEVEL};
-use mezura_core::engine::config::{MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE};
 use mezura_core::engine::config::{Target, Threads};
+use mezura_core::engine::config::{MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE,
+        MIN_PRODUCERS_VALUE};
+
+use super::config_manager::{self, ConfigurationBuilder, LogOption};
+use super::config_manager::{MAX_COMPARE_LEVEL, MIN_COMPARE_LEVEL};
+use super::formatted::Formatted;
+use super::theme_files;
+use crate::paths::{DEFAULT_CONFIG_NAME, PERSISTENT_APP_PATHS};
 
 #[derive(Debug)]
 pub enum ConfigFileParseError {
     FileNotFound(String),
-    // The file and the number of the first line the reader could not deliver. An error and not a
-    // warning, because everything after that line was never seen, and blocks that decide what gets
-    // counted may be among what was lost: a half-applied configuration is a wrong answer wearing a
-    // valid one's clothes.
+    // An error and not a warning, because everything after that line was never seen and the blocks
+    // deciding what gets counted may be among them: a half-applied configuration is a wrong answer
+    // in a valid one's clothes.
     UnreadableLine(String, usize, UnreadableCause)
 }
 
-// The two things that can actually stop 'read_line', and they deserve different sentences: bytes
-// that are not UTF-8 are a permanent property of the file, there every time until it is re-saved,
-// while an I/O failure is an event of this run, a network drive dropping or a disk failing, and has
-// nothing to do with the line's content. Blaming the encoding for the second would send somebody
-// re-saving a file that was never the problem.
+impl Formatted for ConfigFileParseError {
+    fn formatted(&self) -> ColoredString {
+        match self {
+            Self::FileNotFound(x) => format!("'{x}' config file not found, defaults will be used.").yellow(),
+            Self::UnreadableLine(file, line, UnreadableCause::NotUtf8) => format!("Configuration '{file}' stops being readable at line {line}, so none of it was used: the file is not saved as UTF-8.").red(),
+            Self::UnreadableLine(file, line, UnreadableCause::Io(error)) => format!("Configuration '{file}' could not be read past line {line}, so none of it was used: {error}").red(),
+        }
+    }
+}
+
+// The two need different sentences: bytes that are not UTF-8 are a property of the file and will be
+// there every time until it is re-saved, while an I/O failure belongs to this run and has nothing to
+// do with the line. Blaming the encoding for the second sends somebody re-saving a file that was
+// never the problem.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum UnreadableCause {
     NotUtf8,
@@ -38,9 +47,8 @@ pub enum UnreadableCause {
 #[derive(Debug, Default)]
 pub struct ConfigFileIssues {
     pub invalid_fields: Vec<&'static str>,
-    // The code travels with the message from where the kind is known. Recovering it later by
-    // looking for a phrase inside the English would tie the machine readable half of a warning to
-    // the wording of the human one, which is the exact coupling the pair exists to avoid.
+    // The code travels with the message from where the kind is known. Recovering it later by looking
+    // for a phrase inside the English is the exact coupling the pair exists to avoid.
     pub warnings: Vec<(&'static str, String)>
 }
 
@@ -70,10 +78,9 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
             let id = line.trim_start_matches("===>").split_whitespace().next().unwrap_or("");
 
             if id == config_manager::DIRS {
-                // The line is what ends a target here, and a space never does, so a path with one in
-                // it needs no quoting and a configuration written by any earlier version still
-                // reads. A target that does not parse is a target that would silently not be
-                // counted, so it stops the run rather than warning.
+                // The line ends a target here and a space never does, so a path with one in it needs
+                // no quoting. A target that does not parse would silently not be counted, so it
+                // stops the run rather than warning.
                 let declared = read_lines_from_file_to_vec(&mut reader, &mut buf, |line| vec![line.trim().to_owned()]);
                 match super::args::parse_targets_in_block(&declared.join("\n")) {
                     Ok(targets) if !targets.is_empty() => dirs = Some(targets.into_iter()
@@ -99,9 +106,9 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                     excluded_languages = Some(langs);
                 }
             } else if id == config_manager::FORCE_LANG {
-                // Read as a block and not as a single line, like the other lists: a value written
-                // across two lines was otherwise cut down to its first line in silence, since the
-                // remainder does not begin with '===>' and the outer loop simply skips it.
+                // Read as a block like the other lists: a value written across two lines is otherwise
+                // cut to its first in silence, since the rest does not begin with '===>' and the
+                // outer loop skips it.
                 let declared = read_lines_from_file_to_vec(&mut reader, &mut buf, |line| vec![line.trim().to_owned()]).join(",");
                 // An empty value is the command left in the file without being used, which is not a
                 // mistake. Anything else that does not parse is one.
@@ -371,7 +378,6 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
     Ok(())
 }
 
-
 // The names a directory offers, for the close-match suggestions of one that was not found
 pub fn names_in_dir(dir: &str) -> Vec<String> {
     let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
@@ -381,30 +387,10 @@ pub fn names_in_dir(dir: &str) -> Vec<String> {
     names
 }
 
-fn read_bool_value_from_file(reader: &mut CountingReader, buf: &mut String) -> Result<Option<bool>, ()> {
-    buf.clear();
-    let _ = reader.read_line(buf);
-    let buf = buf.trim();
-    if buf.is_empty() {
-        return Ok(None);
-    }
-    let buf = buf.to_ascii_lowercase();
-    if buf == "yes" || buf ==  "true" {
-        Ok(Some(true))
-    } else if buf == "no" || buf == "false" {
-        Ok(Some(false))
-    } else {
-        Err(())
-    }
-}
-
-//Keep parsing new lines as relevant, until an empty one appears.
 // The reader 'parse_config_file' hands around: it counts lines, and one it cannot deliver is
 // remembered instead of vanishing. From then on it reads as an ended file, which every caller
 // already treats as the end of its block, so nothing after the bad line is applied and the file is
-// refused as a whole by the single check at the end. The old shape ended whichever loop met the
-// error and carried on, so a config saved in the wrong encoding kept its first blocks and silently
-// lost the rest.
+// refused as a whole by the single check at the end.
 struct CountingReader {
     reader: BufReader<File>,
     line: usize,
@@ -425,6 +411,24 @@ impl CountingReader {
     }
 }
 
+fn read_bool_value_from_file(reader: &mut CountingReader, buf: &mut String) -> Result<Option<bool>, ()> {
+    buf.clear();
+    let _ = reader.read_line(buf);
+    let buf = buf.trim();
+    if buf.is_empty() {
+        return Ok(None);
+    }
+    let buf = buf.to_ascii_lowercase();
+    if buf == "yes" || buf ==  "true" {
+        Ok(Some(true))
+    } else if buf == "no" || buf == "false" {
+        Ok(Some(false))
+    } else {
+        Err(())
+    }
+}
+
+// Every line of the block is relevant until an empty one ends it
 fn read_lines_from_file_to_vec<T>(reader: &mut CountingReader, buf: &mut String, parser_func: fn(&str) -> Vec<T>) -> Vec<T> {
     let mut vec = Vec::new();
     loop {
@@ -439,22 +443,12 @@ fn read_lines_from_file_to_vec<T>(reader: &mut CountingReader, buf: &mut String,
     vec
 }
 
-impl Formatted for ConfigFileParseError {
-    fn formatted(&self) -> ColoredString {
-        match self {
-            Self::FileNotFound(x) => format!("'{x}' config file not found, defaults will be used.").yellow(),
-            Self::UnreadableLine(file, line, UnreadableCause::NotUtf8) => format!("Configuration '{file}' stops being readable at line {line}, so none of it was used: the file is not saved as UTF-8.").red(),
-            Self::UnreadableLine(file, line, UnreadableCause::Io(error)) => format!("Configuration '{file}' could not be read past line {line}, so none of it was used: {error}").red(),
-        }
-    }
-}
-
-
 #[cfg(test)]
 mod tests {
+    use mezura_core::Target;
+
     use super::super::config_manager::Configuration;
     use super::*;
-    use mezura_core::Target;
     use crate::paths::test_paths::{FIXTURES_DIR, SCRATCH_CONFIG_DIR};
     use super::super::config_manager::ConfigurationBuilder;
     // A line the reader could not deliver used to end the loop as if the file ended there, and the
@@ -636,7 +630,6 @@ mod tests {
         config.engine.braces_as_code = true;
         config
             .set_hidden(config_manager::Hidden {bar: true, timing: true, ..Default::default()});
-
 
         let (options, issues) = super::super::config_files::parse_config_file(Some("test"), Some(FIXTURES_DIR.to_owned() + "config/")).unwrap();
         assert!(issues.invalid_fields.is_empty() && issues.warnings.is_empty());

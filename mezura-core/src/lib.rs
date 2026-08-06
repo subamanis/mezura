@@ -1,146 +1,90 @@
 #![forbid(unsafe_code)]
-
 #![allow(non_snake_case)]
 
-// Test scaffolding, and every call site in this crate is in a test module. Exported it was published
-// API: '#[macro_export]' is unconditional and puts the macro at the root of whoever depends on us.
 #[cfg(test)]
-macro_rules! hashmap {
-    ($( $key: expr => $val: expr ),*) => {{
-        #[allow(unused_mut)]
-        let mut map = ::std::collections::HashMap::new();
-        $( map.insert($key, $val); )*
-        map
-    }}
-}
+#[macro_use]
+mod test_support;
 
 mod domain;
-mod result;
 mod phase_timing;
-// The arithmetic of showing a result, which the counting does not need and a caller drawing its own
-// view does. Optional in the sense the layout of this crate uses: one caller wants it, another has
-// its own way of showing things and never looks.
-pub mod render;
-// Still open, and each is its own decision: see B0c and B0d in RESTRUCTURE.md section 12.
+mod result;
+
 pub mod engine;
-pub mod languages;
 pub mod language_file;
-// The codes are what one caller wants and another does not, so they stay behind the module. The two
-// types every caller meets are re-exported below.
+pub mod languages;
+pub mod render;
 pub mod warnings;
 
-
+pub use domain::{Keyword, Language, Stats};
 pub use engine::config::{EngineConfig, Target, Threads};
 pub use engine::targets::TargetError;
 pub use languages::Languages;
-pub use domain::{Keyword, Language, Stats};
 pub use result::{FaultyFileDetails, FilesPresent, ModuleResult, Performance, RunError, RunResult,
         SortCriterion, UnreadableDirDetails};
 pub use warnings::{Affects, Warning};
 
-pub(crate) type FaultyFilesListMut = Arc<Mutex<Vec<FaultyFileDetails>>>;
-pub(crate) type ExtensionLangMap = Arc<HashMap<String, Arc<str>>>;
-// One bucket per module, and a run that declared none has exactly one, so that nothing downstream
-// has two shapes to handle
-pub(crate) type StatsMapMut = Arc<Mutex<Vec<HashMap<String,Stats>>>>;
+#[cfg(test)]
+pub(crate) use test_support::{languages_claiming, test_paths};
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::time::Instant;
+
+use crossbeam_deque::{Injector, Worker};
 
 use engine::extensions::find_language_of_extension;
 use engine::modules::{ModuleId, Modules};
 
-use crossbeam_deque::{Worker,Injector};
-use std::{collections::HashMap, path::{Path, PathBuf}, sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}, time::Instant};
-use std::sync::{Arc, Mutex};
-
-
-// Named here and not with the rest of the file layout, which belongs to the command line, because a
-// warning this crate emits tells the reader to declare the contested extension in it. Whoever acts
-// on that warning needs the name as much as whoever writes the file.
+// The file that decides which language gets an extension that two of them claim. Nothing here reads
+// or writes it: the command line creates it in the user's data directory and parses it, and hands
+// the rules in as a plain map. The name lives here because the warning about an unsettled extension
+// is written here and points the reader at the file.
 pub const EXTENSION_PRIORITY_FILE_NAME : &str = "extension_priority.txt";
-// Marked rather than named, because naming it after its directory would be a lie: with
-// './project tests=./project/tests' a row called 'project' is everything in it except the tests.
-// Being one marked row is also what settles two unnamed targets ending in the same folder name.
-// It says what the row is and not what is left in it, which is the only wording that holds in both
-// shapes: with './project tests=./project/tests' the row really is the rest of the project, but
-// with 'frontend=./web ./docs' the './docs' did not survive anything, it was simply never named.
+// The name of the report row holding everything no target was given a name for. Not the directory's
+// own name, which would claim files that a named target has already taken out of it.
 pub const UNNAMED_MODULE_NAME : &str = "(unnamed)";
 
-// What the tests read: the repository's own 'data/', which the program itself never reads (it reads
-// the persistent directory, and that one belongs to the command line), and the checked-in inputs
-// under 'tests/fixtures'. Nothing here is ever written to. Both are anchored on the manifest rather
-// than on the working directory, which cargo happens to set to the package root: a test that leans
-// on that passes from cargo and nowhere else.
-#[cfg(test)]
-pub(crate) mod test_paths {
-    pub const DATA_DIR      : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/");
-    pub const LANGUAGES_DIR : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/languages/");
-    pub const FIXTURES_DIR  : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/");
-}
+pub(crate) type FaultyFilesListMut = Arc<Mutex<Vec<FaultyFileDetails>>>;
+pub(crate) type ExtensionLangMap = Arc<HashMap<String, Arc<str>>>;
+// One bucket per module. A run where the user named no modules at all has exactly one bucket, so
+// nothing further down has two shapes to handle.
+pub(crate) type StatsMapMut = Arc<Mutex<Vec<HashMap<String,Stats>>>>;
 
-
-// What a panic left behind, as text. 'panic!' with a literal carries a '&str', everything formatted
-// carries a 'String', and anything else is somebody's typed payload, which has no text to give.
-pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
-    if let Some(text) = payload.downcast_ref::<&'static str>() {
-        (*text).to_owned()
-    } else if let Some(text) = payload.downcast_ref::<String>() {
-        text.clone()
-    } else {
-        "a worker died with a panic payload that is not text".to_owned()
-    }
-}
-
-// 'languages' must have been resolved with the same 'config' handed here: the narrowing by name and
-// the forced extensions are applied during resolution, so a different config would count one set of
-// languages while the settings claim another.
+// Counts the directories and files named in 'config' and returns the figures.
 //
-// 'on_traversal_done' is called with what the walk found, the moment the walk ends and while the
-// counting of what it queued is still going on. That instant is the only thing a caller cannot
-// reach around the call, and it is why the callback exists rather than the same figures being read
-// off the result, where they also are. A caller with nothing to say at that moment passes '|_| {}'
-// and the compiler removes it.
+// 'languages' has to have been resolved against this same 'config'. Resolving is what applies the
+// chosen and excluded languages and the forced extensions, so an ill-matched pair would count one
+// set of languages while the settings say another: no error, just wrong numbers. The run refuses
+// such a pair instead of answering it.
 //
-// **Exactly once on every run that returns 'Ok'.** A walk that found nothing is still announced,
-// because what is being reported is the walk and not the haul. The one case it does not fire is a
-// walk whose own thread died, and that run returns 'Err(IncompleteRun)': the figures such a walk
-// left behind are short of what is on disk, since a producer that died never merged its share, and
-// announcing them puts a number on the screen that the error a moment later contradicts. Measured on
-// a tree of 60 files with one of two producers dying, it announced 30.
-//
-// So there is no silent case and nothing for a caller to guard: not firing is always accompanied by
-// the error, which the caller has to handle anyway, and firing is a promise that the figures are
-// final. What is deliberately not offered is the third shape, firing with a marker saying the walk
-// was partial, which hands the caller the same wrong number and one more thing to remember.
-//
-// The time it spends is its own and is charged to nobody. 'Performance.duration_millis' is measured
-// by the consumers rather than by this thread precisely so that it cannot contain any of it.
+// 'on_traversal_done' is called once, as soon as the directories have been scanned, and is told how
+// many files were found. The counting of those files is still going on at that point, which is why
+// this is a callback: afterwards there is no way to know what was found before the counting ended.
+// It is called on every run that returns 'Ok', including one that found nothing to count. It is not
+// called when one of the scanning threads died, because the figures such a run leaves behind are
+// lower than what is really on disk. Pass '|_| {}' to ignore it.
 pub fn run(config: &EngineConfig, languages: Languages,
         on_traversal_done: impl FnOnce(FilesPresent)) -> Result<RunResult, RunError>
 {
     if config.dirs.is_empty() {
         return Err(RunError::NoTargets);
     }
-    // Before anything is walked, because the two arguments describing different runs is not a
-    // failure that shows up in the answer: it shows up as a perfectly ordinary answer to a question
-    // nobody asked.
+    // Checked before anything is read from disk. Left to run, this pair would produce counts that
+    // look perfectly normal and are for a different set of languages than the settings describe.
     if !languages.describe_the_same_selection_as(config) {
         return Err(RunError::LanguagesFromAnotherConfig);
     }
-    // The declared targets become places to walk here, with the settings of the same configuration
-    // the walk itself obeys, so the two can never disagree. Resolution is existence-first and
-    // idempotent, so a caller that resolved early for its own reasons loses nothing by this pass.
+    // Idempotent, so a caller that resolved its own targets earlier loses nothing here.
     let dirs = engine::targets::resolve(&config.dirs, !config.no_gitignore, config.should_search_in_dotted)
             .map_err(RunError::InvalidTargets)?;
     let config = Arc::new(config.clone());
     let faulty_files_ref : FaultyFilesListMut  = Arc::new(Mutex::new(Vec::with_capacity(10)));
     let finish_condition_ref = Arc::new(AtomicBool::new(false));
-    // Already narrowed and already resolved, by whoever built it. Nothing about which languages
-    // exist is decided in here, so nothing in here has anything to complain about.
     let (by_name, extension_map) = languages.into_parts();
     let language_map_ref = Arc::new(by_name);
     let extension_lang_map: ExtensionLangMap = Arc::new(extension_map);
-    // Pre-built for every module and language pair, and not only for every language: the merge that
-    // ends a consumer reaches straight into this map and unwraps, so a pair that was never foreseen
-    // would kill the thread rather than miscount
     let modules = Arc::new(Modules::of(&dirs));
     let stats_per_module : StatsMapMut =
             Arc::new(Mutex::new(make_language_stats(&language_map_ref, modules.count())));
@@ -151,8 +95,10 @@ pub fn run(config: &EngineConfig, languages: Languages,
     let dirs_injector = Arc::new(Injector::<TraversedDir>::new());
     let exclude_matcher = Arc::new(engine::targets::build_exclude_matcher(&config.exclude_dirs)
             .map_err(|_| {
-                // The builder's own error names the anchored form, which the caller never wrote,
-                // so the culprit is found by asking about each pattern on its own
+                // The builder rewrites every pattern into a longer form before compiling it, and its
+                // error quotes that rewritten text, which the user never typed. Trying the patterns
+                // one at a time finds which of them is the broken one, so the error can quote it as
+                // it was written.
                 let culprit = config.exclude_dirs.iter()
                         .find(|x| engine::targets::build_exclude_matcher(std::slice::from_ref(x)).is_err())
                         .cloned().unwrap_or_default();
@@ -166,16 +112,14 @@ pub fn run(config: &EngineConfig, languages: Languages,
 
     let mut producer_handles = Vec::with_capacity(config.threads.producers());
     let mut consumer_handles = Vec::with_capacity(config.threads.consumers());
-    // Producers terminate when the idle count reaches this, so it must hold the number that
-    // actually started, and it must be fixed before any producer can finish: comparing against a
-    // count that is still growing lets an early finisher see itself as the last one standing.
-    // Until the spawns are done it holds a value the idle count cannot reach.
+    // Producers stop when the idle count reaches this, so until every spawn is done it holds a value
+    // that count can never reach: against a total still growing, the first producer to go idle would
+    // see itself as the last one standing.
     let producers_total = Arc::new(AtomicUsize::new(usize::MAX));
     let worker_panics: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
-    // A thread the operating system refuses is a slower run, not a different answer, so the run
-    // carries on with what it was given. Zero of either side is the exception: nothing would be
-    // discovered, or nothing counted, and the result would dress the refusal up as an empty answer.
+    // A thread the operating system refuses is a slower run and not a different answer, so the run
+    // carries on with what it was given. Zero of either side is the exception, below.
     let parsing_started_instant = Instant::now();
     let mut last_refusal = None;
     for i in 0..config.threads.producers() {
@@ -192,8 +136,7 @@ pub fn run(config: &EngineConfig, languages: Languages,
     }
     producers_total.store(producer_handles.len(), Ordering::SeqCst);
 
-    // Written by whichever consumer stops last and read once they have all been joined. It is the
-    // measurement itself and not a correction applied to one: see the comment where it is read.
+    // Written by whichever consumer stops last, read once they have all been joined.
     let counting_ended = Arc::new(AtomicU64::new(0));
     for i in 0..config.threads.consumers() {
         match engine::consumer::start_parser_thread(i, files_injector.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
@@ -204,8 +147,7 @@ pub fn run(config: &EngineConfig, languages: Languages,
         }
     }
     if consumer_handles.is_empty() {
-        // The producers are already walking and will finish on their own; they are collected so
-        // that no thread outlives the call that started it
+        // Joined so that no thread outlives the call that started it.
         for handle in producer_handles {
             let _ = handle.join();
         }
@@ -222,27 +164,18 @@ pub fn run(config: &EngineConfig, languages: Languages,
 
     finish_condition_ref.store(true,Ordering::Relaxed);
 
-    // Here and not at the end, which is the only moment a caller cannot reach on its own: the walk
-    // is over, so its counts are final and nothing writes to them again, while the consumers are
-    // still draining what it queued. Announced before the run has an answer, since that is the whole
-    // of what it is worth. Unconditionally too, so a walk that found nothing still says so.
+    // **The callback goes below the flag above and never above it.** It is the caller's code, it may
+    // panic, and a panic here unwinds past the joins with the consumers still running: they leave
+    // their loop only on that flag, so raising it first is what lets them finish instead of spinning
+    // forever. Measured with 16 consumers: raised first, the process is idle a moment later; raised
+    // after, 20 threads were still burning ten seconds on.
     //
-    // **Below the two lines above and never above them.** This is caller code and it may panic, and
-    // a panic here unwinds past the joins with the consumers still running: they leave their loop
-    // only on the flag that is now already raised, so they finish instead of spinning on one nobody
-    // will ever raise. Measured, with 16 consumers over this crate's own 'src': raised first, the
-    // process is back to 4 threads and no CPU; raised after, 20 threads were still alive and burning
-    // ten seconds later. The queue size just above is a diagnostic and is read before the callback
-    // for a smaller reason of the same kind: it is a measurement of the run, not of the printing.
+    // A producer that died merged none of its share, so these counters are short of what is on disk
+    // and the run is about to refuse them anyway. Announcing them would put a number on screen that
+    // the error two steps down contradicts.
     //
-    // Both lists are read the way the panic list is read further down and for the same reason: this
-    // is above the guard that turns a dead worker into an error, so a poisoned lock here would panic
-    // in the caller's thread with a message about a mutex instead of letting that error be returned.
-    //
-    // A producer that died never merged its share of the walk, so what is in these counters is short
-    // of what is out there, and the run is about to refuse them anyway. Announcing them would put a
-    // count on the screen that the error two steps down contradicts: measured on a tree of 60 files
-    // with one of two producers dying, it announced 30.
+    // Poisoning is tolerated on both locks because this sits above the guard that turns a dead worker
+    // into an error: panicking here would report a mutex instead of what actually happened.
     let walk_was_whole = worker_panics.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_empty();
     let files_present = *files_stats.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if walk_was_whole {
@@ -254,23 +187,11 @@ pub fn run(config: &EngineConfig, languages: Languages,
             worker_panics.lock().unwrap().push(panic_message(payload.as_ref()));
         }
     }
-    // What the counting cost, taken from the consumers themselves rather than from the clock at the
-    // join above. That clock is not a measurement of the counting: the callback runs on this thread
-    // while the consumers are still draining, so it holds whichever of the two finished last, and a
-    // caller doing something slow in there was charged to the parser. Measured, 50 files really
-    // counted in 9 ms were reported as 41 files per second, and a rate line that only appears for
-    // runs over a second was fabricated out of the caller's own wait.
+    // From the consumers and not from the clock here, which cannot tell the counting apart from the
+    // callback: both run on their own side of this thread, and it holds whichever finished last.
     //
-    // Subtracting the callback's elapsed time was the first answer to that and it is only right when
-    // the callback finished last. When the consumers did, the callback delayed nothing and the
-    // subtraction took real counting off the figure: 3,100 ms of counting under a 500 ms callback
-    // came back as 2,600 ms, and the files per second went up by the same sixth. There is no
-    // correction to apply from here, because this thread cannot see when the consumers stopped. They
-    // can, so they say so.
-    //
-    // The floor is kept because the debug timing line below subtracts the two, and because a run
-    // whose consumers all died records nothing at all: that is an error two steps down, and it
-    // should stay one rather than becoming an underflow here.
+    // The floor matters for a run whose consumers all died and recorded nothing. That is an error
+    // two steps down and should stay one rather than becoming an underflow in the line below.
     let parsing_duration_millis = u128::from(counting_ended.load(Ordering::Relaxed)).max(producers_done_millis);
 
     if *phase_timing::ENABLED {
@@ -279,10 +200,9 @@ pub fn run(config: &EngineConfig, languages: Languages,
         eprintln!("{}", phase_timing::report(threads_used.consumers(), parsing_duration_millis));
     }
 
-    // Before anything shared is read: a worker that died may have poisoned whichever lock it held,
-    // and the locks below would then panic in the caller's thread with a message about a mutex,
-    // three calls away from what actually happened. Nothing after this line runs unless every
-    // worker finished whole, which is also what keeps those locks clean by construction.
+    // Ahead of every lock below, so that a dead worker is reported as itself rather than as whichever
+    // mutex it poisoned. Nothing past this line runs unless every worker finished whole, which is
+    // what leaves those locks clean.
     let worker_panics = std::mem::take(&mut *worker_panics.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
     if !worker_panics.is_empty() {
         return Err(RunError::IncompleteRun { worker_panic: worker_panics.join(" | ") });
@@ -299,21 +219,17 @@ pub fn run(config: &EngineConfig, languages: Languages,
     let per_module = stats_guard.as_deref_mut().unwrap();
 
     let mut per_language = merged_over_modules(per_module);
-    // Before the total, and the order matters now that a total carries keywords. Every language the
-    // run selected was given a bucket with its own keyword names set to zero, so summing first put
-    // the union of every declared name into the total: a Rust-only tree came back reporting nought
-    // classes and nought interfaces, from languages that had not appeared at all. The module totals
-    // are summed after their own filtering and always were, so the two disagreed about which
-    // keywords existed within one result. The numbers are the same either way, since an empty
-    // language adds nothing to any of them.
+    // Dropped before the total is summed, or the total's keyword map would name the keywords of
+    // every language the run selected, including the ones no file was written in. The figures are
+    // the same either way, since an empty language adds nothing.
     remove_languages_with_0_files(&mut per_language);
     let total = Stats::total_of(&per_language);
 
     let modules_result = per_module.iter_mut().enumerate().map(|(id, bucket)| {
         let mut of_this_module = std::mem::take(bucket);
         remove_languages_with_0_files(&mut of_this_module);
-        // A module that found nothing still gets its row, since it was asked for by name and its
-        // absence from the report would read as a mistake in the report
+        // A module that found nothing still gets its row: it was asked for by name, and its absence
+        // would read as a mistake in the report.
         ModuleResult {
             name: modules.name_of(id as ModuleId).map(str::to_owned),
             total: Stats::total_of(&of_this_module),
@@ -333,24 +249,12 @@ pub fn run(config: &EngineConfig, languages: Languages,
     })
 }
 
-// The totals across every module, which is what the overview, the sum and the document's own
-// language list are about: those questions are asked of the whole run and not of one part of it
-fn merged_over_modules(per_module: &[HashMap<String,Stats>]) -> HashMap<String,Stats> {
-    let mut merged = per_module[0].clone();
-    for of_a_module in &per_module[1..] {
-        for (name, stats) in of_a_module {
-            merged.entry(name.clone()).or_default().add(stats);
-        }
-    }
-
-    merged
-}
-
-
-// The roots and not every target: a target that lies inside another is reached by the walk of the
-// one around it, and walking it again would count its files twice. Its module is not lost with it,
-// it is what the boundary table hands back on the way down. 'dirs' is the resolved list the run
-// built at its entry, never the declared one off the configuration.
+// Fills the two queues the threads work from: a target that is a single file is counted here and
+// now, a directory is put in the queue for a scanning thread to descend into.
+//
+// Only the outermost targets are queued. One that sits inside another is reached by the scan of the
+// one around it, and queueing both would count its files twice; the name it was given is not lost
+// with it, the module table still hands it back on the way down.
 pub(crate) fn calculate_single_file_stats_or_add_to_injector(config: &EngineConfig, dirs: &engine::targets::Targets,
         dirs_injector: &Arc<Injector<TraversedDir>>, files_injector: &Arc<Injector<ParsableFile>>,
         files_present: &mut FilesPresent, extension_lang_map: &HashMap<String, Arc<str>>, modules: &Modules)
@@ -373,16 +277,13 @@ pub(crate) fn calculate_single_file_stats_or_add_to_injector(config: &EngineConf
     })
 }
 
-// A language nobody wrote a file in adds nothing to any total and would take a row in every report.
-// Removed after the totals are worked out, since the empty ones contribute nothing to them and
-// dropping them first would only make the same sum out of fewer entries.
+// A language nobody wrote a file in would take a row in every report and add nothing to any figure.
 pub(crate) fn remove_languages_with_0_files(languages: &mut HashMap<String,Stats>) {
     languages.retain(|_, stats| stats.files > 0);
 }
 
-// One bucket per language in every module, and not only per language: the merge that ends a
-// consumer reaches into this map by name, so a language that was never given a slot would kill the
-// thread rather than miscount.
+// A bucket for every language in every module, built up front: the merge that ends a consumer
+// reaches into this map by name, and a pair with no slot would kill the thread rather than miscount.
 pub(crate) fn make_language_stats(languages: &HashMap<String,Language>, modules: usize) -> Vec<HashMap<String,Stats>> {
     let of_one_module = languages.iter().map(|(name, language)| (name.to_owned(), Stats::from(language)))
             .collect::<HashMap<_,_>>();
@@ -396,25 +297,6 @@ pub(crate) struct ParsableFile {
     pub module: ModuleId
 }
 
-#[derive(Debug,Clone)]
-pub(crate) struct TraversedDir {
-    pub path: PathBuf,
-    pub gitignore_stack: Option<Arc<GitignoreStack>>,
-    pub module: ModuleId
-}
-
-#[derive(Debug)]
-pub(crate) struct GitignoreStack {
-    matcher: ignore::gitignore::Gitignore,
-    parent: Option<Arc<GitignoreStack>>
-}
-
-
-
-
-
-
-
 impl ParsableFile {
     pub fn new(path: PathBuf, language_name: Arc<str>, module: ModuleId) -> Self {
         ParsableFile {
@@ -425,6 +307,13 @@ impl ParsableFile {
     }
 }
 
+#[derive(Debug,Clone)]
+pub(crate) struct TraversedDir {
+    pub path: PathBuf,
+    pub gitignore_stack: Option<Arc<GitignoreStack>>,
+    pub module: ModuleId
+}
+
 impl TraversedDir {
     pub fn new(path: PathBuf, gitignore_stack: Option<Arc<GitignoreStack>>, module: ModuleId) -> Self {
         TraversedDir {
@@ -433,6 +322,14 @@ impl TraversedDir {
             module
         }
     }
+}
+
+// The '.gitignore' files that apply at one depth, innermost first, each linked to the one above it.
+// The walk extends the chain as it descends so no directory reparses its parents' rules.
+#[derive(Debug)]
+pub(crate) struct GitignoreStack {
+    matcher: ignore::gitignore::Gitignore,
+    parent: Option<Arc<GitignoreStack>>
 }
 
 impl GitignoreStack {
@@ -523,29 +420,34 @@ impl GitignoreStack {
     }
 }
 
+// The per-language figures of every module added together, which is what a question about the whole
+// run reads.
+fn merged_over_modules(per_module: &[HashMap<String,Stats>]) -> HashMap<String,Stats> {
+    let mut merged = per_module[0].clone();
+    for of_a_module in &per_module[1..] {
+        for (name, stats) in of_a_module {
+            merged.entry(name.clone()).or_default().add(stats);
+        }
+    }
 
-// Shared by the tests of three modules, so it cannot live inside any one of their 'mod tests'
-#[cfg(test)]
-pub(crate) fn languages_claiming(claims: &[(&str, &[&str])]) -> HashMap<String, Language> {
-    languages::keyed_by_name(claims.iter().map(|(name, extensions)|
-            Language::new(name, *extensions, ["\""], ["//"], None, [])))
+    merged
+}
+
+// A panic's payload as text. 'panic!' with a literal carries a '&str' and everything formatted
+// carries a 'String'; anything else is somebody's own type and has no text to give.
+pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(text) = payload.downcast_ref::<&'static str>() {
+        (*text).to_owned()
+    } else if let Some(text) = payload.downcast_ref::<String>() {
+        text.clone()
+    } else {
+        "a worker died with a panic payload that is not text".to_owned()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-
-
-
-
-
-
-
-
-
-
-
 
     // The merge that ends a consumer reaches into these maps and unwraps, so a language or a module
     // that was never given an entry would kill the thread rather than miscount. Asserted here and
@@ -599,11 +501,9 @@ mod tests {
     }
 }
 
-
 // What 'run' owes its caller when a worker thread dies: an error, never a number it knows is short.
 // A worker merges its counters at the end, so one that dies mid-run takes its share of the counting
-// with it, and the old 'let _ = handle.join()' threw the only evidence away. The two hooks that
-// cause the deaths fire on the corpus names used here and on nothing else.
+// with it. The two hooks that cause the deaths fire on the corpus names used here and on nothing else.
 #[cfg(test)]
 mod worker_death_tests {
     use crate::{EngineConfig, Languages, RunError, run};

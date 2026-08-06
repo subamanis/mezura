@@ -3,18 +3,15 @@ use std::{collections::HashMap, fs, fs::ReadDir, sync::{Arc, Mutex, atomic::{Ato
 
 use crossbeam_deque::{Injector, Steal, Worker};
 
-use crate::engine::modules::{ModuleId, Modules};
 use crate::{EngineConfig, ExtensionLangMap, FilesPresent, GitignoreStack,
         ParsableFile, TraversedDir, UnreadableDirDetails};
 use crate::engine::extensions::find_language_of_extension;
+use crate::engine::modules::{ModuleId, Modules};
 
-
-// The panic of a producer is caught in its own thread and not read back from 'join', because the
-// survivors terminate by counting idle producers against how many started: one that dies without
-// ever going idle makes that count unreachable, and every other producer then waits on it forever.
-// The catch marks the dead one idle on its way out, records what killed it, and the run turns the
-// record into an error once the joins are done. 'catch_unwind' does not silence the panic hook, so
-// the location still reaches the error output the moment it happens.
+// A panic is caught here rather than read back from 'join', because these threads stop by counting
+// how many of them have gone idle against how many started: one that dies without ever going idle
+// makes that count unreachable and the rest wait on it forever. The catch marks the dead one idle on
+// its way out and records what killed it, which 'run' turns into an error after the joins.
 pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<TraversedDir>>, worker: Worker<TraversedDir>,
         idle_producers: Arc<AtomicUsize>, extension_lang_map: ExtensionLangMap, exclude_matcher: Arc<globset::GlobSet>,
         config: Arc<EngineConfig>, files_stats: Arc<Mutex<FilesPresent>>, modules: Arc<Modules>,
@@ -94,13 +91,10 @@ pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>,
                     traverse_dir(&files_injector, entries, &dirs_injector, &extension_lang_map, &exclude_matcher, &gitignore_stack,
                             &config, &modules, dir.module, &mut total_files, &mut relevant_files, &mut excluded_files)
                 },
-                // Everything under it is now uncounted, and nothing else in the run would ever say
-                // so: it contributes to no total, not even to the number of files that were looked
-                // at. Named lossily because this list is only ever shown.
-                //
-                // The reason travels with the path. Discarded, it made a permission, a directory
-                // that went away between being queued and being opened, and a name the filesystem
-                // refused into one sentence, and a walk of a whole drive reports hundreds of these.
+                // Everything under it is uncounted and nothing else would ever say so: it reaches no
+                // total, not even the number of files looked at. The reason travels with the path,
+                // or a permission, a directory that went away, and a name the filesystem refused all
+                // arrive as one sentence, hundreds of times over a whole drive.
                 Err(error) => unreadable_dirs.push(UnreadableDirDetails {
                     path: dir.path.to_string_lossy().replace('\\', "/"),
                     error_msg: error.to_string()
@@ -126,9 +120,8 @@ pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>,
     (total_files,relevant_files,excluded_files,unreadable_dirs)
 }
 
-// 'module' is the one this directory belongs to, decided when it was queued. Its entries inherit it,
-// and the two lookups below only happen in a run that declared a target inside another target, which
-// is the only way a child can belong somewhere other than where its parent does.
+// 'module' is decided when the directory is queued and its entries inherit it. The two lookups below
+// only happen in a run with a target inside another target.
 fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, dirs_injector: &Arc<Injector<TraversedDir>>,
         extension_lang_map: &HashMap<String, Arc<str>>, exclude_matcher: &globset::GlobSet, gitignore_stack: &Option<Arc<GitignoreStack>>,
         config: &EngineConfig, modules: &Modules, module: ModuleId,
@@ -140,13 +133,12 @@ fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, 
     let (dir_boundaries, file_boundaries) = (modules.has_dir_boundaries(), modules.has_file_boundaries());
     for e in entries.flatten(){
         if let Ok(ft) = e.file_type() {
-            // A link is where the files already counted somewhere else would be counted again. It
-            // has to be tested before the two arms below and not inside them, because the second
-            // one is reached by everything that is not a file: on Windows a junction answers no to
-            // both 'is_file' and 'is_dir', so it landed there and was walked as a directory, and a
-            // link to a single file landed there too, failed to open and vanished without a word.
-            // A target named explicitly is a different matter and is still followed: that one was
-            // asked for, and it is the walk's own discoveries that must not double back.
+            // A link is where files already counted elsewhere get counted again. Tested before the
+            // two arms below and not inside them, because the second is reached by everything that
+            // is not a file: on Windows a junction answers no to both 'is_file' and 'is_dir', so it
+            // landed there and was scanned as a directory, and a link to one file landed there too,
+            // failed to open, and vanished without a word. A target named explicitly is still
+            // followed; it is only what the scan finds by itself that must not double back.
             if ft.is_symlink() {
                 continue;
             }
@@ -166,22 +158,20 @@ fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, 
 
                     local_relevant_files += 1;
                     let module = if file_boundaries {modules.at_file(&path_buf, module)} else {module};
-                    // The size is not asked for here any more: the consumer reads the whole file
-                    // into a buffer anyway, so its length is the same number for free
+                    // The size is not asked for: the counting thread reads the file into a buffer
+                    // anyway, so its length is the same number for free.
                     files_injector.push(ParsableFile::new(path_buf, lang_name, module));
                 }
             } else { //is directory
-                // Read lossily and only to ask whether it is dotted, which a lossy reading answers
-                // correctly because a leading '.' is ASCII and survives any replacement. Demanding
-                // valid UTF-8 here skipped the whole directory, and everything under it went
-                // uncounted over a name that is used for nothing else. Borrowed and not allocated
-                // while the name is valid, which is every name on an ordinary run.
+                // Read lossily, and only to ask whether it is dotted, which a lossy reading answers
+                // correctly since a leading '.' is ASCII and survives any replacement. Demanding
+                // valid UTF-8 skipped the whole directory over a name used for nothing else.
                 let file_name = e.file_name();
                 let dir_name = file_name.to_string_lossy();
-                // Whatever was asked for. '--search-in-dotted' opens the directories somebody made,
-                // and git's object database is not one of them: nothing in it is source, and walking
-                // it is thousands of files for no count at all. Tested by name at every depth, so a
-                // submodule or a clone nested inside the tree is covered too.
+                // '--search-in-dotted' opens the directories somebody made, and git's object database
+                // is not one: nothing in it is source, and scanning it is thousands of files for no
+                // count at all. Tested by name at every depth, so a submodule or a nested clone is
+                // covered too.
                 if dir_name == ".git" { continue; }
                 if !config.should_search_in_dotted && dir_name.starts_with('.') { continue; }
 
@@ -202,7 +192,6 @@ fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, 
     *relevant_files += local_relevant_files;
     *excluded_files += local_excluded_files;
 }
-
 
 // These drive the traversal directly instead of going through 'run', because what they are about is
 // what the walk queued and under which module, and a result has folded that into buckets by the time

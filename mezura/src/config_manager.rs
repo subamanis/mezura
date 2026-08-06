@@ -1,15 +1,15 @@
 use std::collections::HashMap;
 
 use colored::{ColoredString, Colorize};
+#[cfg(test)]
+use colored::Color;
+use mezura_core::{EngineConfig, Target, Threads};
+use mezura_core::engine::config::{MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE};
 
 use super::formatted::Formatted;
 use super::{message_printer, suggestions, theme::Theme};
-use mezura_core::{EngineConfig, Target, Threads};
-use mezura_core::engine::config::{MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE};
-#[cfg(test)]
-use colored::Color;
 
-// Application version, to be displayed at startup and with --help command
+// Printed at startup and by '--version'. Also in mezura/Cargo.toml, and the two move together.
 pub const VERSION_ID : &str = "v3.0.0";
 
 // command flags
@@ -47,7 +47,6 @@ pub const SHOW_THEMES        :&str   = "show-themes";
 pub const THEME_EDITOR       :&str   = "theme-editor";
 pub const RESTORE            :&str   = "restore";
 
-
 pub const MIN_COMPARE_LEVEL   : usize = 0;
 pub const MAX_COMPARE_LEVEL   : usize = 10;
 
@@ -58,25 +57,31 @@ const DEF_COMPARE_LEVEL     : usize   = 1;
 // What the always-loaded configuration is called in a message about it
 const DEFAULT_CONFIG_LABEL  : &str    = "default";
 
-
-
-
-
-
-
-// Two halves and not one flat struct, because the two are asked different questions. The engine is
-// handed only what can change a number; the presentation is handed everything, since echoing what
-// the counting was done with is part of its job.
-//
-// The command line and the configuration file stay flat, because the distinction is ours and not the
-// user's. Only 'build' knows that one flag can answer both questions, which is what '--hide keywords'
-// does: it is 'count_keywords' to the engine and 'hidden' to the view.
+// Two halves, because the two are asked different questions: the engine is handed only what can
+// change a number, the presentation everything, since echoing what the counting was done with is
+// part of its job. The command line and the configuration file stay flat, the distinction being
+// ours and not the user's, and only 'build' knows that '--hide keywords' answers both.
 #[derive(Debug,PartialEq,Clone,Default)]
 pub struct Configuration {
     pub engine: EngineConfig,
     pub view: ViewConfig
 }
 
+impl Configuration {
+    #[cfg(test)]
+    pub fn new(dirs: Vec<String>) -> Self {
+        Configuration { engine: EngineConfig::new(dirs), view: ViewConfig::default() }
+    }
+
+    // One flag answering two questions, so the two halves are set together and never one without
+    // the other
+    #[cfg(test)]
+    pub fn set_hidden(&mut self, hidden: Hidden) -> &mut Self {
+        self.engine.count_keywords = !hidden.keywords;
+        self.view.hidden = hidden;
+        self
+    }
+}
 
 // Everything that decides how the answer is shown, saved and logged. The engine never sees it.
 #[derive(Debug,PartialEq,Clone)]
@@ -102,10 +107,53 @@ pub struct ViewConfig {
     pub theme: Theme
 }
 
+impl ViewConfig {
+    // Everything that is not the document itself stays off stdout when the output is machine
+    // readable, so that a single stray line cannot make it unparseable
+    pub fn prints_text(&self) -> bool {
+        self.output == OutputFormat::Text
+    }
+
+    #[cfg(test)]
+    pub fn set_should_show_faulty_files(&mut self, should_show_faulty_files: bool) -> &mut Self {
+        self.should_show_faulty_files = should_show_faulty_files;
+        self
+    }
+
+    #[cfg(test)]
+    pub fn set_log_option(&mut self, log: LogOption) -> &mut Self {
+        self.log = log;
+        self
+    }
+}
+
+impl Default for ViewConfig {
+    fn default() -> Self {
+        ViewConfig {
+            version: VERSION_ID,
+            dirs_source: None,
+            should_show_faulty_files: DEF_SHOW_FAULTY_FILES,
+            hidden: Hidden::default(),
+            log: LogOption::default(),
+            compare_level: DEF_COMPARE_LEVEL,
+            config_name_to_save: None,
+            config_name_to_load: None,
+            theme_name_to_save: None,
+            bar_thickness: BarThickness::default(),
+            layout: Layout::default(),
+            output: OutputFormat::default(),
+            number_separator: NumberSeparator::default(),
+            decimal_separator: DecimalSeparator::default(),
+            sort_by: SortCriterion::default(),
+            top_n: None,
+            theme: Theme::default()
+        }
+    }
+}
+
 // A hide list and not a show list: a show list would have to be re-enumerated every time a section
-// is added, and a configuration saved today would silently keep hiding it.
-// The list mixes whole sections with parts of them on purpose, because the user is pointing at what
-// they see and not at how the program is structured.
+// is added, and a configuration saved today would silently keep hiding it. Whole sections and parts
+// of them are mixed on purpose, since the user points at what they see.
 #[derive(Debug,PartialEq,Eq,Clone,Copy,Default)]
 pub struct Hidden {
     pub version: bool,
@@ -196,8 +244,6 @@ impl BarThickness {
     }
 }
 
-// 'compact' was specified once and dropped: it was "one line per language with no blank lines",
-// which is what 'table' already is, and aligned as well.
 #[derive(Debug,PartialEq,Eq,Clone,Copy,Default)]
 pub enum Layout {
     List,
@@ -328,6 +374,14 @@ pub struct LogOption {
     pub name: Option<String>
 }
 
+impl LogOption {
+    pub fn new(log_name: Option<String>) -> Self {
+        LogOption {
+            should_log: true,
+            name: log_name,
+        }
+    }
+}
 
 #[derive(Debug, PartialEq)]
 pub enum ArgParsingError {
@@ -351,7 +405,171 @@ pub enum ArgParsingError {
     ContestedTarget(String, String, String)
 }
 
-// Empty line argument is not supposed to be allowed, since this check is being performed in main
+impl Formatted for ArgParsingError {
+    fn formatted(&self) -> ColoredString {
+        match self {
+            Self::UnparsableWorkingDir => "The current working dir could not be parsed as target dir, try inputing it manually.".red(),
+            Self::InvalidPath(p) => format!("Path provided is not a valid directory or file:\n'{p}'.").red(),
+            Self::InvalidPathInConfig(dir,name) => format!("Specified path '{dir}', in config '{name}', doesn't exist anymore.").red(),
+            Self::DoublePath => "Directories already provided as first argument, but --dirs command also found.".red(),
+            // Only the mistake is red. What to do about it is not an error, it is the way out.
+            Self::UnrecognisedCommand(p) => {
+                let tail = suggestions::formatted_suggestion(p, &message_printer::command_names())
+                        .unwrap_or_else(|| format!("Run '--{HELP}' to see every command."));
+                let error = format!("--{p} is not recognised as a command.").red();
+                ColoredString::from(format!("{error}\n\n{tail}").as_str())
+            },
+            Self::IncorrectCommandArgs(p) => format!("Incorrect arguments provided for the command '--{p}'.").red(),
+            Self::UnreadableConfig(name, line, super::config_files::UnreadableCause::NotUtf8) => format!("Configuration '{name}' stops being readable at line {line}, so none of it was used: the file is not saved as UTF-8.").red(),
+            Self::UnreadableConfig(name, line, super::config_files::UnreadableCause::Io(error)) => format!("Configuration '{name}' could not be read past line {line}, so none of it was used: {error}").red(),
+            Self::UnexpectedCommandArgs(p) => format!("Command '--{p}' does not expect any arguments.").red(),
+            Self::NonExistantConfig(p) => {
+                let names = super::config_files::names_in_dir(&crate::paths::PERSISTENT_APP_PATHS.config_dir);
+                let tail = suggestions::formatted_suggestion(p, &names.iter().map(String::as_str).collect::<Vec<_>>())
+                        .unwrap_or_else(|| format!("Run '--{SHOW_CONFIGS}' to see the ones you have."));
+                let error = format!("Configuration '{p}' does not exist.").red();
+                ColoredString::from(format!("{error}\n\n{tail}").as_str())
+            },
+            Self::NonExistantTheme(p) => {
+                let names = super::config_files::names_in_dir(&crate::paths::PERSISTENT_APP_PATHS.themes_dir);
+                let tail = suggestions::formatted_suggestion(p, &names.iter().map(String::as_str).collect::<Vec<_>>())
+                        .unwrap_or_else(|| format!("Run '--{SHOW_THEMES}' to see the ones you have."));
+                let error = format!("Theme '{p}' was not found, or could not be read.").red();
+                ColoredString::from(format!("{error}\n\n{tail}").as_str())
+            },
+            Self::InvalidStyle(p) => p.clone().red(),
+            Self::InvalidHideTarget(p) => format!("'{p}' is not something that can be hidden.\nThe options are: {}.", Hidden::names()).red(),
+            Self::InvalidValueInConfig(cmd,conf) => format!("Invalid value for the command '--{cmd}', in config '{conf}'.\nFix the value in the config file, or override it by providing a valid '--{cmd}' argument.").red(),
+            Self::InvalidGlobPattern(p) => format!("'{p}' is not a valid glob pattern.").red(),
+            Self::NoGlobMatches(p) => format!("The pattern '{p}' did not match any existing directory or file.").red(),
+            Self::AllGlobMatchesIgnored(p) => format!("Everything that the pattern '{p}' matched is skipped, because a .gitignore file ignores it, because it is a dotted path, or because it is a link.\nUse the '--no-gitignore' or '--search-in-dotted' commands to include it, or provide the paths explicitly.").red(),
+            Self::MalformedTarget(p) => format!("'{p}' names a module with no path after it.\nA target is written as '<module>=<path>', and its paths are separated by commas: 'tests=./api/tests,./web/tests'.").red(),
+            Self::ContestedTarget(path, first, second) => format!("'{path}' is declared both as '{first}' and as '{second}'.\nEvery file belongs to exactly one module, and there is no more specific of the two to decide it.").red()
+        }
+    }
+}
+
+// One optional field per command, flat like the command line and the configuration file that fill
+// it, and merged from both before 'build' turns it into the two halves the program runs on.
+#[derive(Debug, PartialEq, Default)]
+pub struct ConfigurationBuilder {
+    pub dirs:                     Option<Vec<Target>>,
+    // Which configuration file supplied the dirs, when one did: the run resolves them, and its
+    // error has to name the file the reader cannot see failing. Deliberately absent from
+    // 'add_missing_fields', being bookkeeping about the merge and not a merged value.
+    pub dirs_source:              Option<String>,
+    pub exclude_dirs:             Option<Vec<String>>,
+    pub languages_of_interest:    Option<Vec<String>>,
+    pub excluded_languages:       Option<Vec<String>>,
+    pub forced_languages:         Option<HashMap<String,String>>,
+    pub threads:                  Option<Threads>,
+    pub braces_as_code:           Option<bool>,
+    pub should_search_in_dotted:  Option<bool>,
+    pub should_show_faulty_files: Option<bool>,
+    pub hidden:                   Option<Hidden>,
+    pub no_gitignore:             Option<bool>,
+    pub theme_name:               Option<String>,
+    pub log:                      Option<LogOption>,
+    pub compare_level:            Option<usize>,
+    pub config_name_to_save:      Option<String>,
+    pub config_name_to_load:      Option<String>,
+    pub theme_name_to_save:       Option<String>,
+    pub bar_thickness:            Option<BarThickness>,
+    pub number_separator:         Option<NumberSeparator>,
+    pub decimal_separator:        Option<DecimalSeparator>,
+    pub layout:                   Option<Layout>,
+    // Absent from 'add_missing_fields' and 'has_missing_fields' on purpose, like the save and load
+    // names: those two functions exist for what a configuration file can supply, and this is not it
+    pub output:                   Option<OutputFormat>,
+    pub sort_by:                  Option<SortCriterion>,
+    pub top_n:                    Option<usize>,
+    pub styles:                   Option<Vec<(String,String)>>,
+    pub config_styles:            Option<Vec<(String,String)>>,
+    pub theme_styles:             Option<Vec<(String,String)>>
+}
+
+impl ConfigurationBuilder {
+    pub fn add_missing_fields(&mut self, config: Self) -> &mut Self {
+        if self.dirs.is_none() {self.dirs = config.dirs};
+        if self.exclude_dirs.is_none() {self.exclude_dirs = config.exclude_dirs};
+        if self.languages_of_interest.is_none() {self.languages_of_interest = config.languages_of_interest};
+        if self.excluded_languages.is_none() {self.excluded_languages = config.excluded_languages};
+        if self.forced_languages.is_none() {self.forced_languages = config.forced_languages};
+        if self.threads.is_none() {self.threads = config.threads};
+        if self.braces_as_code.is_none() {self.braces_as_code = config.braces_as_code};
+        if self.should_search_in_dotted.is_none() {self.should_search_in_dotted = config.should_search_in_dotted};
+        if self.should_show_faulty_files.is_none() {self.should_show_faulty_files = config.should_show_faulty_files};
+        if self.hidden.is_none() {self.hidden = config.hidden};
+        if self.no_gitignore.is_none() {self.no_gitignore = config.no_gitignore};
+        if self.theme_name.is_none() {self.theme_name = config.theme_name};
+        if self.compare_level.is_none() {self.compare_level = config.compare_level};
+        if self.log.is_none() {self.log = config.log};
+        if self.config_styles.is_none() {self.config_styles = config.config_styles};
+        if self.bar_thickness.is_none() {self.bar_thickness = config.bar_thickness};
+        if self.number_separator.is_none() {self.number_separator = config.number_separator};
+        if self.decimal_separator.is_none() {self.decimal_separator = config.decimal_separator};
+        if self.layout.is_none() {self.layout = config.layout};
+        if self.sort_by.is_none() {self.sort_by = config.sort_by};
+        if self.top_n.is_none() {self.top_n = config.top_n};
+        self
+    }
+
+    pub fn has_missing_fields(&self) -> bool {
+        self.exclude_dirs.is_none() || self.languages_of_interest.is_none() || self.forced_languages.is_none() ||
+        self.threads.is_none() || self.braces_as_code.is_none() || self.should_search_in_dotted.is_none() ||
+        self.should_show_faulty_files.is_none() || self.hidden.is_none() || self.no_gitignore.is_none() ||
+        self.theme_name.is_none() || self.log.is_none() || self.compare_level.is_none() ||
+        self.config_styles.is_none() || self.bar_thickness.is_none() || self.number_separator.is_none() || self.decimal_separator.is_none() || self.layout.is_none() || self.sort_by.is_none()
+    }
+
+    // The only place that knows the flat form maps onto two halves. Everything above this stays one
+    // list, matching the command line and the configuration file.
+    pub fn build(&self) -> Configuration {
+        let hidden = self.hidden.unwrap_or_default();
+        // Asked of the engine rather than read from constants of its own, so the help text and the
+        // behaviour cannot answer differently. The literal below stays exhaustive on purpose: a new
+        // field of EngineConfig has to be decided here and not inherited silently.
+        let engine_defaults = EngineConfig::default();
+
+        Configuration {
+            engine: EngineConfig {
+                dirs: self.dirs.clone().unwrap_or_default(),
+                exclude_dirs: (self.exclude_dirs).clone().unwrap_or_default(),
+                languages_of_interest: (self.languages_of_interest).clone().unwrap_or_default(),
+                excluded_languages: (self.excluded_languages).clone().unwrap_or_default(),
+                forced_languages: (self.forced_languages).clone().unwrap_or_default(),
+                threads: self.threads.clone().unwrap_or_default(),
+                braces_as_code: self.braces_as_code.unwrap_or(engine_defaults.braces_as_code),
+                should_search_in_dotted: self.should_search_in_dotted.unwrap_or(engine_defaults.should_search_in_dotted),
+                no_gitignore: self.no_gitignore.unwrap_or(engine_defaults.no_gitignore),
+                // The one flag that answers both questions
+                count_keywords: !hidden.keywords
+            },
+            view: ViewConfig {
+                version: VERSION_ID,
+                dirs_source: self.dirs_source.clone(),
+                should_show_faulty_files: self.should_show_faulty_files.unwrap_or(DEF_SHOW_FAULTY_FILES),
+                hidden,
+                log: self.log.clone().unwrap_or_default(),
+                compare_level: self.compare_level.unwrap_or(DEF_COMPARE_LEVEL),
+                config_name_to_save: self.config_name_to_save.clone(),
+                config_name_to_load: self.config_name_to_load.clone(),
+                theme_name_to_save: self.theme_name_to_save.clone(),
+                bar_thickness: self.bar_thickness.unwrap_or_default(),
+                layout: self.layout.unwrap_or_default(),
+                output: self.output.unwrap_or_default(),
+                number_separator: self.number_separator.unwrap_or_default(),
+                decimal_separator: self.decimal_separator.unwrap_or_default(),
+                sort_by: self.sort_by.unwrap_or_default(),
+                top_n: self.top_n,
+                theme: super::theme::resolve(self.theme_styles.as_deref().unwrap_or_default(),
+                        self.config_styles.as_deref().unwrap_or_default(), self.styles.as_deref().unwrap_or_default())
+            }
+        }
+    }
+}
+
+// An empty line never reaches here: main checks for it first.
 pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError> {
     let config = create_config_builder_from_args(line)?.build();
 
@@ -382,18 +600,27 @@ pub fn declared_form(target: &Target) -> String {
     }
 }
 
-// Targets on one line, for the log entry that decides whether two runs are comparable.
-//
-// The separator is a comma while nothing is named, which is the only thing this ever wrote and what
-// keeps a run after an upgrade from reporting 'modified: dirs' over a difference in punctuation. The
-// moment a module exists it has to be whitespace: inside a comma list a name carries on to the paths
-// after it, so 'frontend=./web,./ui' is one module of two directories, and an unnamed target written
-// after a named one with a comma between them would be read back as part of it.
+// Targets on one line, for the log entry that decides whether two runs are comparable. The
+// separator is a comma while nothing is named, and whitespace the moment a module exists: inside a
+// comma list a name carries on to the paths after it, so 'frontend=./web,./ui' is one module of two
+// directories, and an unnamed target written after a named one would be read back as part of it.
 pub fn targets_to_string(targets: &[Target]) -> String {
     if targets.iter().all(|x| x.module.is_none()) {
         targets.iter().map(|x| x.path.clone()).collect::<Vec<_>>().join(",")
     } else {
         targets.iter().map(declared_form).collect::<Vec<_>>().join(" ")
+    }
+}
+
+// The run refused the declared targets. The wording is this crate's own, and a configuration file
+// that supplied the dirs is named as the culprit: otherwise a 'dirs' block nobody can see failing
+// sends the reader hunting through the command they typed.
+pub fn attributed_dirs_error(error: mezura_core::TargetError, dirs_source: &Option<String>) -> ArgParsingError {
+    match (map_target_error(error), dirs_source) {
+        (ArgParsingError::InvalidPath(p), Some(name)) | (ArgParsingError::InvalidGlobPattern(p), Some(name))
+        | (ArgParsingError::NoGlobMatches(p), Some(name)) | (ArgParsingError::AllGlobMatchesIgnored(p), Some(name)) =>
+                ArgParsingError::InvalidPathInConfig(p, name.clone()),
+        (other, _) => other
     }
 }
 
@@ -693,11 +920,10 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         }
     }
 
-    // No pattern is expanded here, or anywhere in this crate: the run resolves the declared
-    // targets at its entry, with the flags of the same configuration the walk obeys, so the two
-    // cannot answer differently whichever source each came from. What is kept is the name of the
-    // file that supplied the dirs, so the run's refusal can still name the configuration the
-    // reader cannot see failing.
+    // No pattern is expanded here, or anywhere in this crate: the run resolves the declared targets
+    // at its entry, under the flags of the same configuration the walk obeys, so the two cannot
+    // answer differently. Only the name of the file that supplied the dirs is kept, so that the
+    // run's refusal can name it.
     config_builder.dirs_source = dirs_config_source;
 
     if let Some(name) = &config_builder.theme_name {
@@ -721,8 +947,6 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     Ok(config_builder)
 }
 
-
-
 fn print_config_file_warnings(issues: &[(&'static str, String)], config_name: &str) {
     for (code, warning) in issues {
         super::warnings::emit(mezura_core::warnings::Warning::new(code, mezura_core::warnings::Affects::Settings, config_name,
@@ -733,15 +957,9 @@ fn print_config_file_warnings(issues: &[(&'static str, String)], config_name: &s
 // Every command that can end up in 'invalid_fields' belongs here. One that is missing is treated as
 // never overridden, so giving it correctly on the command line would still not rescue the run.
 fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_fields: &[&str], config_name: &str) -> Result<(), ArgParsingError> {
-    // Destructured with no '..' on purpose. This function decides whether a bad value in a config
-    // only warns or kills the run, by asking whether the command line already set the same field,
-    // and the match below ends in '_ => false', so a command missing from it counts as never
-    // overridden and giving it correctly on the command line does not rescue the run. 'sort', 'top'
-    // and 'bar-thickness' were all missing until v3.0.0 with nothing to point at the omission.
-    //
-    // Every command a configuration file can carry is a field here, so a new one stops the build in
-    // this spot until somebody decides whether it belongs in the match. Everything bound to '_'
-    // below is a written decision, with the reason next to it.
+    // Destructured with no '..', so a new field of the builder stops the build here until somebody
+    // decides whether it belongs in the match below. Everything bound to '_' is a decision, with
+    // its reason next to it.
     let ConfigurationBuilder {
             dirs, exclude_dirs, forced_languages, threads, braces_as_code, should_search_in_dotted,
             should_show_faulty_files, hidden, no_gitignore, theme_name, compare_level, bar_thickness,
@@ -816,19 +1034,6 @@ fn parse_dirs(s: &str) -> Result<Vec<Target>, ArgParsingError> {
     mezura_core::engine::targets::validate_and_absolutize(&declared).map_err(map_target_error)
 }
 
-// The run refused the declared targets. The wording is this crate's own, and when a configuration
-// file supplied the dirs it is named as the culprit: a 'dirs' block nobody can see failing quietly
-// sent people hunting through the command they typed.
-pub fn attributed_dirs_error(error: mezura_core::TargetError, dirs_source: &Option<String>) -> ArgParsingError {
-    match (map_target_error(error), dirs_source) {
-        (ArgParsingError::InvalidPath(p), Some(name)) | (ArgParsingError::InvalidGlobPattern(p), Some(name))
-        | (ArgParsingError::NoGlobMatches(p), Some(name)) | (ArgParsingError::AllGlobMatchesIgnored(p), Some(name)) =>
-                ArgParsingError::InvalidPathInConfig(p, name.clone()),
-        (other, _) => other
-    }
-}
-
-
 // The engine decides which paths are walkable; this turns what it says into the wording a person
 // reads on the command line.
 fn map_target_error(x: mezura_core::engine::targets::TargetError) -> ArgParsingError {
@@ -845,12 +1050,9 @@ fn map_target_error(x: mezura_core::engine::targets::TargetError) -> ArgParsingE
     }
 }
 
-
 // The working directory is not something anybody typed, so it skips the parser that takes typed
-// text apart: one that contains a space used to be split into two targets, neither of which
-// existed, which stopped a bare 'mezura' from running at all somewhere like
-// 'C:/Users/John Smith/project'. It exists by definition, so the run's existence-first resolution
-// takes it literally whatever characters its name carries.
+// text apart: one containing a space would be split into two targets, neither of which exists. It
+// exists by definition, so it is taken literally whatever characters its name carries.
 fn working_dir_as_targets() -> Result<Vec<Target>, ArgParsingError> {
     if let Ok(path_buf) = std::env::current_dir()
         && let Some(path_str) = path_buf.to_str() {
@@ -860,250 +1062,13 @@ fn working_dir_as_targets() -> Result<Vec<Target>, ArgParsingError> {
     Err(ArgParsingError::UnparsableWorkingDir)
 }
 
-
-
-#[derive(Debug, PartialEq, Default)]
-pub struct ConfigurationBuilder {
-    pub dirs:                     Option<Vec<Target>>,
-    // Which configuration file supplied the dirs, when one did: the run resolves them, and its
-    // error has to name the file the reader cannot see failing. Deliberately absent from
-    // 'add_missing_fields', because it is bookkeeping about the merge and not a merged value.
-    pub dirs_source:              Option<String>,
-    pub exclude_dirs:             Option<Vec<String>>,
-    pub languages_of_interest:    Option<Vec<String>>,
-    pub excluded_languages:       Option<Vec<String>>,
-    pub forced_languages:         Option<HashMap<String,String>>,
-    pub threads:                  Option<Threads>,
-    pub braces_as_code:           Option<bool>,
-    pub should_search_in_dotted:  Option<bool>,
-    pub should_show_faulty_files: Option<bool>,
-    pub hidden:                   Option<Hidden>,
-    pub no_gitignore:             Option<bool>,
-    pub theme_name:               Option<String>,
-    pub log:                      Option<LogOption>,
-    pub compare_level:            Option<usize>,
-    pub config_name_to_save:      Option<String>,
-    pub config_name_to_load:      Option<String>,
-    pub theme_name_to_save:       Option<String>,
-    pub bar_thickness:            Option<BarThickness>,
-    pub number_separator:         Option<NumberSeparator>,
-    pub decimal_separator:        Option<DecimalSeparator>,
-    pub layout:                   Option<Layout>,
-    // Absent from 'add_missing_fields' and 'has_missing_fields' on purpose, like the save and load
-    // names: those two functions exist for what a configuration file can supply, and this is not it
-    pub output:                   Option<OutputFormat>,
-    pub sort_by:                  Option<SortCriterion>,
-    pub top_n:                    Option<usize>,
-    pub styles:                   Option<Vec<(String,String)>>,
-    pub config_styles:            Option<Vec<(String,String)>>,
-    pub theme_styles:             Option<Vec<(String,String)>>
-}
-
-impl ConfigurationBuilder {
-    pub fn add_missing_fields(&mut self, config: Self) -> &mut Self {
-        if self.dirs.is_none() {self.dirs = config.dirs};
-        if self.exclude_dirs.is_none() {self.exclude_dirs = config.exclude_dirs};
-        if self.languages_of_interest.is_none() {self.languages_of_interest = config.languages_of_interest};
-        if self.excluded_languages.is_none() {self.excluded_languages = config.excluded_languages};
-        if self.forced_languages.is_none() {self.forced_languages = config.forced_languages};
-        if self.threads.is_none() {self.threads = config.threads};
-        if self.braces_as_code.is_none() {self.braces_as_code = config.braces_as_code};
-        if self.should_search_in_dotted.is_none() {self.should_search_in_dotted = config.should_search_in_dotted};
-        if self.should_show_faulty_files.is_none() {self.should_show_faulty_files = config.should_show_faulty_files};
-        if self.hidden.is_none() {self.hidden = config.hidden};
-        if self.no_gitignore.is_none() {self.no_gitignore = config.no_gitignore};
-        if self.theme_name.is_none() {self.theme_name = config.theme_name};
-        if self.compare_level.is_none() {self.compare_level = config.compare_level};
-        if self.log.is_none() {self.log = config.log};
-        if self.config_styles.is_none() {self.config_styles = config.config_styles};
-        if self.bar_thickness.is_none() {self.bar_thickness = config.bar_thickness};
-        if self.number_separator.is_none() {self.number_separator = config.number_separator};
-        if self.decimal_separator.is_none() {self.decimal_separator = config.decimal_separator};
-        if self.layout.is_none() {self.layout = config.layout};
-        if self.sort_by.is_none() {self.sort_by = config.sort_by};
-        if self.top_n.is_none() {self.top_n = config.top_n};
-        self
-    }
-
-    pub fn has_missing_fields(&self) -> bool {
-        self.exclude_dirs.is_none() || self.languages_of_interest.is_none() || self.forced_languages.is_none() ||
-        self.threads.is_none() || self.braces_as_code.is_none() || self.should_search_in_dotted.is_none() ||
-        self.should_show_faulty_files.is_none() || self.hidden.is_none() || self.no_gitignore.is_none() ||
-        self.theme_name.is_none() || self.log.is_none() || self.compare_level.is_none() ||
-        self.config_styles.is_none() || self.bar_thickness.is_none() || self.number_separator.is_none() || self.decimal_separator.is_none() || self.layout.is_none() || self.sort_by.is_none()
-    }
-
-    // The only place that knows the flat form maps onto two halves. Everything above this stays one
-    // list, matching the command line and the configuration file.
-    pub fn build(&self) -> Configuration {
-        let hidden = self.hidden.unwrap_or_default();
-        // Asked of the engine rather than read from constants of its own, so the help text and the
-        // behaviour cannot answer differently. The literal below stays exhaustive on purpose: a new
-        // field of EngineConfig has to be decided here and not inherited silently.
-        let engine_defaults = EngineConfig::default();
-
-        Configuration {
-            engine: EngineConfig {
-                dirs: self.dirs.clone().unwrap_or_default(),
-                exclude_dirs: (self.exclude_dirs).clone().unwrap_or_default(),
-                languages_of_interest: (self.languages_of_interest).clone().unwrap_or_default(),
-                excluded_languages: (self.excluded_languages).clone().unwrap_or_default(),
-                forced_languages: (self.forced_languages).clone().unwrap_or_default(),
-                threads: self.threads.clone().unwrap_or_default(),
-                braces_as_code: self.braces_as_code.unwrap_or(engine_defaults.braces_as_code),
-                should_search_in_dotted: self.should_search_in_dotted.unwrap_or(engine_defaults.should_search_in_dotted),
-                no_gitignore: self.no_gitignore.unwrap_or(engine_defaults.no_gitignore),
-                // The one flag that answers both questions
-                count_keywords: !hidden.keywords
-            },
-            view: ViewConfig {
-                version: VERSION_ID,
-                dirs_source: self.dirs_source.clone(),
-                should_show_faulty_files: self.should_show_faulty_files.unwrap_or(DEF_SHOW_FAULTY_FILES),
-                hidden,
-                log: self.log.clone().unwrap_or_default(),
-                compare_level: self.compare_level.unwrap_or(DEF_COMPARE_LEVEL),
-                config_name_to_save: self.config_name_to_save.clone(),
-                config_name_to_load: self.config_name_to_load.clone(),
-                theme_name_to_save: self.theme_name_to_save.clone(),
-                bar_thickness: self.bar_thickness.unwrap_or_default(),
-                layout: self.layout.unwrap_or_default(),
-                output: self.output.unwrap_or_default(),
-                number_separator: self.number_separator.unwrap_or_default(),
-                decimal_separator: self.decimal_separator.unwrap_or_default(),
-                sort_by: self.sort_by.unwrap_or_default(),
-                top_n: self.top_n,
-                theme: super::theme::resolve(self.theme_styles.as_deref().unwrap_or_default(),
-                        self.config_styles.as_deref().unwrap_or_default(), self.styles.as_deref().unwrap_or_default())
-            }
-        }
-    }
-}
-
-impl Default for ViewConfig {
-    fn default() -> Self {
-        ViewConfig {
-            version: VERSION_ID,
-            dirs_source: None,
-            should_show_faulty_files: DEF_SHOW_FAULTY_FILES,
-            hidden: Hidden::default(),
-            log: LogOption::default(),
-            compare_level: DEF_COMPARE_LEVEL,
-            config_name_to_save: None,
-            config_name_to_load: None,
-            theme_name_to_save: None,
-            bar_thickness: BarThickness::default(),
-            layout: Layout::default(),
-            output: OutputFormat::default(),
-            number_separator: NumberSeparator::default(),
-            decimal_separator: DecimalSeparator::default(),
-            sort_by: SortCriterion::default(),
-            top_n: None,
-            theme: Theme::default()
-        }
-    }
-}
-
-
-impl ViewConfig {
-    // Everything that is not the document itself stays off stdout when the output is machine
-    // readable, so that a single stray line cannot make it unparseable
-    pub fn prints_text(&self) -> bool {
-        self.output == OutputFormat::Text
-    }
-
-    // Used only by the tests of this crate, which is what marks them
-    #[cfg(test)]
-    pub fn set_should_show_faulty_files(&mut self, should_show_faulty_files: bool) -> &mut Self {
-        self.should_show_faulty_files = should_show_faulty_files;
-        self
-    }
-
-    #[cfg(test)]
-    pub fn set_log_option(&mut self, log: LogOption) -> &mut Self {
-        self.log = log;
-        self
-    }
-}
-
-impl Configuration {
-    #[cfg(test)]
-    pub fn new(dirs: Vec<String>) -> Self {
-        Configuration { engine: EngineConfig::new(dirs), view: ViewConfig::default() }
-    }
-
-    // One flag answering two questions, so the two halves are set together and never one without
-    // the other
-    #[cfg(test)]
-    pub fn set_hidden(&mut self, hidden: Hidden) -> &mut Self {
-        self.engine.count_keywords = !hidden.keywords;
-        self.view.hidden = hidden;
-        self
-    }
-}
-
-impl LogOption {
-    pub fn new(log_name: Option<String>) -> Self {
-        LogOption {
-            should_log: true,
-            name: log_name,
-        }
-    }
-}
-
-impl Formatted for ArgParsingError {
-    fn formatted(&self) -> ColoredString {
-        match self {
-            Self::UnparsableWorkingDir => "The current working dir could not be parsed as target dir, try inputing it manually.".red(),
-            Self::InvalidPath(p) => format!("Path provided is not a valid directory or file:\n'{p}'.").red(),
-            Self::InvalidPathInConfig(dir,name) => format!("Specified path '{dir}', in config '{name}', doesn't exist anymore.").red(),
-            Self::DoublePath => "Directories already provided as first argument, but --dirs command also found.".red(),
-            // Only the mistake is red. What to do about it is not an error, it is the way out.
-            Self::UnrecognisedCommand(p) => {
-                let tail = suggestions::formatted_suggestion(p, &message_printer::command_names())
-                        .unwrap_or_else(|| format!("Run '--{HELP}' to see every command."));
-                let error = format!("--{p} is not recognised as a command.").red();
-                ColoredString::from(format!("{error}\n\n{tail}").as_str())
-            },
-            Self::IncorrectCommandArgs(p) => format!("Incorrect arguments provided for the command '--{p}'.").red(),
-            Self::UnreadableConfig(name, line, super::config_files::UnreadableCause::NotUtf8) => format!("Configuration '{name}' stops being readable at line {line}, so none of it was used: the file is not saved as UTF-8.").red(),
-            Self::UnreadableConfig(name, line, super::config_files::UnreadableCause::Io(error)) => format!("Configuration '{name}' could not be read past line {line}, so none of it was used: {error}").red(),
-            Self::UnexpectedCommandArgs(p) => format!("Command '--{p}' does not expect any arguments.").red(),
-            Self::NonExistantConfig(p) => {
-                let names = super::config_files::names_in_dir(&crate::paths::PERSISTENT_APP_PATHS.config_dir);
-                let tail = suggestions::formatted_suggestion(p, &names.iter().map(String::as_str).collect::<Vec<_>>())
-                        .unwrap_or_else(|| format!("Run '--{SHOW_CONFIGS}' to see the ones you have."));
-                let error = format!("Configuration '{p}' does not exist.").red();
-                ColoredString::from(format!("{error}\n\n{tail}").as_str())
-            },
-            Self::NonExistantTheme(p) => {
-                let names = super::config_files::names_in_dir(&crate::paths::PERSISTENT_APP_PATHS.themes_dir);
-                let tail = suggestions::formatted_suggestion(p, &names.iter().map(String::as_str).collect::<Vec<_>>())
-                        .unwrap_or_else(|| format!("Run '--{SHOW_THEMES}' to see the ones you have."));
-                let error = format!("Theme '{p}' was not found, or could not be read.").red();
-                ColoredString::from(format!("{error}\n\n{tail}").as_str())
-            },
-            Self::InvalidStyle(p) => p.clone().red(),
-            Self::InvalidHideTarget(p) => format!("'{p}' is not something that can be hidden.\nThe options are: {}.", Hidden::names()).red(),
-            Self::InvalidValueInConfig(cmd,conf) => format!("Invalid value for the command '--{cmd}', in config '{conf}'.\nFix the value in the config file, or override it by providing a valid '--{cmd}' argument.").red(),
-            Self::InvalidGlobPattern(p) => format!("'{p}' is not a valid glob pattern.").red(),
-            Self::NoGlobMatches(p) => format!("The pattern '{p}' did not match any existing directory or file.").red(),
-            Self::AllGlobMatchesIgnored(p) => format!("Everything that the pattern '{p}' matched is skipped, because a .gitignore file ignores it, because it is a dotted path, or because it is a link.\nUse the '--no-gitignore' or '--search-in-dotted' commands to include it, or provide the paths explicitly.").red(),
-            Self::MalformedTarget(p) => format!("'{p}' names a module with no path after it.\nA target is written as '<module>=<path>', and its paths are separated by commas: 'tests=./api/tests,./web/tests'.").red(),
-            Self::ContestedTarget(path, first, second) => format!("'{path}' is declared both as '{first}' and as '{second}'.\nEvery file belongs to exactly one module, and there is no more specific of the two to decide it.").red()
-        }
-    }
-}
-
-
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
     use std::ops::Add;
+    use std::path::Path;
 
-    
-    use super::*;
     use super::super::theme::Style;
+    use super::*;
 
     // Rendered back into the form they were declared in, so that a test reads the same way whether
     // the target was named or not. Prepared and nothing more: expansion belongs to the run, and its
@@ -1368,10 +1333,9 @@ mod tests {
         (corpus, corpus_str)
     }
 
-    // A configuration that declared 'no-gitignore' beside its own dirs used to have the two halves
-    // honoured differently. The run resolves the dirs with the flags of the configuration it was
-    // handed, so a glob whose matches are all gitignored counts them when the flag next to it says
-    // to, whichever file or command line each of the two came from.
+    // The run resolves the dirs under the flags of the configuration it was handed, so a glob whose
+    // matches are all gitignored counts them when the flag beside it says to, whichever of the two
+    // came from a file and which from the command line.
     #[test]
     fn a_configs_own_flags_apply_when_its_own_dirs_are_resolved() {
         std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
@@ -1413,9 +1377,8 @@ mod tests {
         assert_eq!(1, result.total.files, "the gitignored match was not counted");
     }
 
-    // '--save' used to write the matches a pattern had expanded to at the moment of saving, so the
-    // pattern was lost and the configuration was a snapshot pretending to be a rule. The saved file
-    // carries the pattern itself now, absolute, and every load expands it fresh.
+    // The saved file carries the pattern itself, absolute, and every load expands it fresh. Writing
+    // the matches instead makes the configuration a snapshot pretending to be a rule.
     #[test]
     fn saving_a_glob_saves_the_pattern_and_not_todays_matches() {
         std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
@@ -1462,11 +1425,10 @@ mod tests {
                 super::super::config_files::UnreadableCause::NotUtf8)), result);
     }
 
-    // A '--' inside a word belongs to the word. The old substring split cut any path carrying one
-    // into a target that does not exist and a command that does not parse: tools that encode a
-    // hierarchy into a single folder name produce exactly such paths, and this program's own
-    // scratchpad directory was one. A command still begins wherever '--' follows whitespace or
-    // starts the line, which is the only way anybody writes one.
+    // A '--' inside a word belongs to the word: tools that encode a hierarchy into a single folder
+    // name produce such paths, and splitting on the substring cuts them into a target that does not
+    // exist and a command that does not parse. A command begins where '--' follows whitespace or
+    // opens the line, which is the only way anybody writes one.
     #[test]
     fn a_double_dash_inside_a_path_is_not_the_start_of_a_command() {
         let root = std::env::temp_dir().join("mezura--double--dash");

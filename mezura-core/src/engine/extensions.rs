@@ -1,16 +1,14 @@
 // Which language owns an extension, and how a contest between two of them is settled.
 use std::{collections::HashMap, sync::Arc};
 
-use crate::{EXTENSION_PRIORITY_FILE_NAME, Language, warnings};
+use crate::{Language, warnings};
 
 // Longer than any extension that exists, and the buffer that keeps the case-insensitive lookup from
 // allocating once per file
 const MAX_EXTENSION_LEN : usize = 24;
 
-// An extension claimed by more than one language, and how that was settled. The three outcomes are
-// not equally trustworthy and must never read alike: the first two are decisions somebody took, the
-// third is a tiebreak nobody asked for, and it is the one that can put a language's comments into
-// another language's 'code'.
+// The three outcomes must never read alike: the first two are decisions somebody took, the third is
+// a tiebreak nobody asked for and the one that can put a language's comments into another's code.
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 pub enum ResolvedBy {
     ForceLang,
@@ -35,40 +33,33 @@ pub struct ExtensionReport {
 }
 
 impl ExtensionReport {
-    // Only the tiebreak is reported. A collision that the priority file or '--force-lang' settled is
-    // a decision somebody took on purpose, and printing it on every run would turn the whole notice
-    // into noise that hides the one line that matters.
+    // Only the alphabetical tiebreak is reported. A rule or a forced pair is somebody's own decision,
+    // and saying so every run buries the one line that matters. One warning per extension, so
+    // whoever reads the document can key on it.
     //
-    // One warning per contested extension rather than one for the lot, because each names a
-    // different extension and that is what a reader of the document wants to key on. What reaches
-    // the terminal is unchanged: the blocks were joined by a blank line, and separate lines each
-    // carrying a leading one produce the same text.
-    //
-    // Returned as values and emitted by the caller, so that what a report is worth can be tested
-    // without going through the collector that the whole process shares.
+    // Each says what happened and stops. What to do about it depends on who is calling: the command
+    // line has a file and a flag for it and adds its own sentence, a library caller has neither.
     pub fn warnings(&self) -> Vec<warnings::Warning> {
         let mut reported = Vec::new();
         for collision in self.collisions.iter().filter(|x| x.resolved_by == ResolvedBy::AlphabeticalFallback) {
             reported.push(warnings::Warning::new(warnings::EXTENSION_TIEBREAK, warnings::Affects::Counts, &collision.extension,
                     format!("The extension '{}' is claimed by {} and {}. It was given to {} only because that name comes first \
-alphabetically, so the files of the rest are counted with the wrong comment and string symbols.\nDeclare it in '{}', or run with '--force-lang {}=<language>'.",
-                    collision.extension, collision.winner, collision.losers.join(", "), collision.winner,
-                    EXTENSION_PRIORITY_FILE_NAME, collision.extension)));
+alphabetically, so the files of the rest are counted with the wrong comment and string symbols.",
+                    collision.extension, collision.winner, collision.losers.join(", "), collision.winner)));
         }
 
         for (extension, wanted) in &self.unknown_forced_languages {
             reported.push(warnings::Warning::new(warnings::UNKNOWN_FORCED_LANGUAGE, warnings::Affects::Settings, extension,
-                    format!("'--force-lang {extension}={wanted}' names a language that is not available, so the extension was left as it was.")));
+                    format!("Nothing called '{wanted}' is among the languages in use, so '{extension}' was left as it was.")));
         }
 
         reported
     }
 }
 
-// Extensions are matched without regard to case, so the keys are lowercased here, once, and the
-// lookup lowercases what it is given. This has to happen before the claimants are counted: with the
-// declarations left as they were written, 'cs' and 'CS' would look like two different extensions,
-// would never be found to collide, and would each win silently in different files.
+// Keys are lowercased here, once, and the lookup lowercases what it is given. Before the claimants
+// are counted, not after: left as written, 'cs' and 'CS' look like two extensions, never collide,
+// and each wins silently in different files.
 pub fn make_extension_language_map(languages: &HashMap<String,Language>, priority: &HashMap<String,Vec<String>>,
         forced: &HashMap<String,String>) -> (HashMap<String, Arc<str>>, ExtensionReport)
 {
@@ -79,13 +70,10 @@ pub fn make_extension_language_map(languages: &HashMap<String,Language>, priorit
             .map(|name| (name.as_str(), Arc::from(name.as_str())))
             .collect();
 
-    // Normalised once, so that the two places that consult it cannot disagree about the shape of a
-    // key. A caller of the library sets this field directly and is under no obligation to lowercase
-    // it, and when only one of the two lookups did, the mapping was applied while the run also
-    // warned that the extension had been left to the alphabetical tiebreak.
-    // The leading dot is stripped here and not only where a command line is parsed, or a caller
-    // writing '.rs' would silently match no extension at all: the claimants below are keyed on the
-    // bare form.
+    // Normalised once, so the two places that consult it cannot disagree about the shape of a key.
+    // A library caller sets this field directly and owes nothing about case or the leading dot, and
+    // when only one of the two lookups folded them, the mapping was applied while the run warned in
+    // the same breath that the extension had been left to the tiebreak.
     let forced : HashMap<String, &str> = forced.iter()
             .map(|(extension, language)| (extension_key(extension), language.as_str()))
             .collect();
@@ -93,29 +81,21 @@ pub fn make_extension_language_map(languages: &HashMap<String,Language>, priorit
     // iteration order is arbitrary: two languages whose names differ only in case would otherwise
     // resolve to a different one of the two between runs of the same command.
     //
-    // The exact spelling wins before case is folded, because folding it first cannot be undone. With
-    // both 'Rust' and 'rust' declared, '--force-lang rs=rust' named one of them and got the other,
-    // the one whose capital sorts first, together with its comment symbols and in silence: the user
-    // had typed the whole name of a language that exists and there was no way left to select it. The
-    // fold stays as the fallback it was meant to be, for when nothing matches letter for letter.
+    // The exact spelling wins before case is folded, because folding first cannot be undone: with
+    // both 'Rust' and 'rust' declared, naming one of them got the other, the one whose capital sorts
+    // first, along with its comment symbols and without a word.
     let language_named = |wanted: &str| names.iter().find(|name| name.as_str() == wanted)
             .or_else(|| names.iter().find(|name| crate::languages::is_the_same_language_name(name, wanted)))
             .map(|x| x.as_str());
 
-    // The leading dot is stripped here as well as in the two other places an extension becomes a
-    // key, the forced pairs above and the rules of the priority file. It is the form every editor
-    // and every other counter writes, and while only one of the three understood it, a language
-    // declaring '.rs' claimed nothing at all and said nothing about it.
     let mut claimants : HashMap<String, Vec<&str>> = HashMap::with_capacity(languages.len() * 2);
     for name in &names {
         for extension in &languages[*name].extensions {
             let claiming = claimants.entry(extension_key(extension)).or_default();
-            // A language claiming the same extension twice is not a contest, and it became able to
-            // reach one the moment the key stopped keeping '.h' and 'h' apart. Left in, it made a
-            // language the rival of itself: the collision fired, the list of losers had every entry
-            // equal to the winner and came out empty, and the report read "claimed by Cish and ."
-            // The counts were right the whole time, which is what makes it worth dropping in silence
-            // rather than announcing: there is nothing here for the reader to go and fix.
+            // A language claiming one extension twice, as 'h' and '.h', is not a contest. Left in, it
+            // becomes its own rival: the collision fires, every loser equals the winner and is
+            // filtered out, and the warning reads "claimed by Cish and ." Dropped in silence because
+            // the counts were right and there is nothing for the reader to fix.
             if !claiming.contains(&name.as_str()) {
                 claiming.push(name.as_str());
             }
@@ -174,13 +154,6 @@ pub fn make_extension_language_map(languages: &HashMap<String,Language>, priorit
     (map, report)
 }
 
-// The one spelling of an extension that everything keys on: no leading dot, lowercased the way the
-// lookup lowercases what it is handed. Non-ASCII is left alone, since 'to_ascii_lowercase' is what
-// the lookup uses and the two must agree on every byte.
-pub(crate) fn extension_key(extension: &str) -> String {
-    extension.trim_start_matches('.').to_ascii_lowercase()
-}
-
 pub fn find_language_of_extension(extension_lang_map: &HashMap<String, Arc<str>>, extension: &str) -> Option<Arc<str>> {
     if let Some(x) = extension_lang_map.get(extension) {
         return Some(x.clone());
@@ -207,6 +180,12 @@ pub fn find_language_of_extension(extension_lang_map: &HashMap<String, Arc<str>>
             .cloned()
 }
 
+// The one spelling of an extension that everything keys on: no leading dot, lowercased the way the
+// lookup lowercases what it is handed. Non-ASCII is left alone, since 'to_ascii_lowercase' is what
+// the lookup uses and the two must agree on every byte.
+pub(crate) fn extension_key(extension: &str) -> String {
+    extension.trim_start_matches('.').to_ascii_lowercase()
+}
 
 #[cfg(test)]
 mod tests {
@@ -396,7 +375,10 @@ mod tests {
         // a mapping that did not apply leaves the counts alone, it is the settings that were not honoured
         assert_eq!("settings", reported[0].affects.name());
         assert_eq!("py", reported[0].subject);
-        assert!(reported[0].message.contains("not available"));
+        // Names what was asked for and what happened, and nothing a command line can do about it:
+        // that sentence belongs to whoever has a command line.
+        assert!(reported[0].message.contains("'cobol'"), "{}", reported[0].message);
+        assert!(!reported[0].message.contains("--force-lang"), "{}", reported[0].message);
     }
 
     // Two spellings of one extension are one extension, and they have to collide as one. Left as

@@ -3,8 +3,8 @@
 pub mod config;
 pub mod targets;
 
-pub(crate) mod modules;
-pub(crate) mod extensions;
-pub(crate) mod producer;
 pub(crate) mod consumer;
+pub(crate) mod extensions;
 pub(crate) mod file_parser;
+pub(crate) mod modules;
+pub(crate) mod producer;

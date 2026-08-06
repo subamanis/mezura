@@ -1,22 +1,14 @@
+// Where the counting threads spend their time, for answering "what should I set --threads to"
+// without reaching for a profiler. Off unless MEZURA_PHASE_TIMING says otherwise, and the report goes
+// to stderr.
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-// Diagnostic scaffolding behind MEZURA_PHASE_TIMING, to answer where the consumers spend their time
-// without a profiler. The flag is resolved once, so a normal run pays one predictable branch per
-// file. Per file is affordable at roughly 25 ns a reading; per line it would not be.
+// Resolved once, so an ordinary run pays one predictable branch per file. Per file is affordable at
+// roughly 25 ns a reading; per line it would not be.
 pub static ENABLED : LazyLock<bool> =
         LazyLock::new(|| enabled_by(std::env::var_os("MEZURA_PHASE_TIMING").as_deref()));
-
-// The value and not merely the presence of the name. Asking 'is_some' meant that
-// 'MEZURA_PHASE_TIMING=0' turned the report **on**, which is the opposite of what everything else a
-// person has ever typed does: RUST_BACKTRACE, RUST_LOG and every tool of that shape read 0 as off.
-// Setting it to zero is also the obvious way to turn it off without knowing how a shell unsets a
-// variable, and it is what somebody reaches for first.
-fn enabled_by(value: Option<&std::ffi::OsStr>) -> bool {
-    value.is_some_and(|value| !matches!(value.to_string_lossy().trim().to_ascii_lowercase().as_str(),
-            "" | "0" | "no" | "false" | "off"))
-}
 
 static OPEN_NANOS    : AtomicU64 = AtomicU64::new(0);
 static READ_NANOS    : AtomicU64 = AtomicU64::new(0);
@@ -77,6 +69,15 @@ pub fn report(consumers: usize, run_millis: u128) -> String {
         starved: STARVED.load(Ordering::Relaxed),
         starved_nanos: STARVED_NANOS.load(Ordering::Relaxed)
     }, consumers, run_millis)
+}
+
+// The value and not merely the presence of the name: asking 'is_some' makes
+// 'MEZURA_PHASE_TIMING=0' turn the report on, the opposite of what RUST_BACKTRACE, RUST_LOG and
+// every tool of that shape do. Setting it to zero is the obvious way to turn it off without knowing
+// how a shell unsets a variable, and it is what somebody reaches for first.
+fn enabled_by(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|value| !matches!(value.to_string_lossy().trim().to_ascii_lowercase().as_str(),
+            "" | "0" | "no" | "false" | "off"))
 }
 
 // Split from the reading of the statics so that the arithmetic can be asserted. Those are global to

@@ -6,24 +6,18 @@ use std::{collections::HashMap, fs::{self, DirEntry}, path::Path};
 
 use crate::{Keyword, Language};
 
-const LANGUAGE                 : &str = "Language";     
-
-const EXTENSIONS               : &str = "Extensions";     
-
-const STRING_SYMBOLS           : &str = "String symbols";     
-
-const COMMENT_SYMBOLS          : &str = "Comment symbols";     
-
-const MULTILINE_COMMENT_START  : &str = "Multi line comment start";     
-
-const MULTILINE_COMMENT_END    : &str = "Multi line comment end";     
-
+// The headers a language file is written with, spelled as they appear in it
+const LANGUAGE                 : &str = "Language";
+const EXTENSIONS               : &str = "Extensions";
+const STRING_SYMBOLS           : &str = "String symbols";
+const COMMENT_SYMBOLS          : &str = "Comment symbols";
+const MULTILINE_COMMENT_START  : &str = "Multi line comment start";
+const MULTILINE_COMMENT_END    : &str = "Multi line comment end";
 const KEYWORD                  : &str = "Keyword";
-
 const KEYWORD_NAME             : &str = "NAME";
-
 const KEYWORD_ALIASES          : &str = "ALIASES";
 
+// The marker that opens the rules block of the extension priority file
 const CONTESTED_EXTENSIONS     : &str = "contested-extensions";
 
 const REGENERATE_LANGUAGES_HINT : &str =
@@ -51,9 +45,9 @@ impl std::fmt::Display for LanguageDirParseError {
 
 impl std::error::Error for LanguageDirParseError {}
 
-// Why a file cannot become a language, which is two different mistakes: a path that is not there is
-// the caller's, and text that does not parse is the file's. Collapsing them into one answer sends
-// somebody looking for a formatting problem in a file they misspelled the name of.
+// Two different mistakes: a path that is not there is the caller's, text that does not parse is the
+// file's. Collapsed into one answer, somebody hunts for a formatting problem in a file they
+// misspelled the name of.
 #[derive(Debug)]
 pub enum LanguageFileError {
     Unreadable(std::io::Error),
@@ -78,19 +72,15 @@ impl std::error::Error for LanguageFileError {
     }
 }
 
-// A file that could not become a language, and why. The reason travels with the name because the
-// two reasons send the reader to different places: one is a file to open and correct, the other is
-// a file the program could not so much as read, and a file saved in UTF-16 reported as a formatting
-// mistake sends somebody hunting for a typo in a file whose format is fine.
 #[derive(Debug)]
 pub struct FaultyLanguageFile {
     pub file_name: String,
     pub error: LanguageFileError
 }
 
-// A list and not a map keyed by name: the name lives in the language and nowhere else, so there is
-// no second copy of it for a caller to disagree with. The files that could not be read come back
-// beside it, since a file that failed is a whole language gone missing from the count.
+// A list and not a map keyed by name, since the name lives in the language itself and a second copy
+// of it is a second thing to disagree. The files that failed come back beside it: each is a whole
+// language missing from the count.
 pub fn parse_languages_in_dir(target_path: impl AsRef<Path>)
 -> Result<(Vec<Language>, Vec<FaultyLanguageFile>), LanguageDirParseError> {
     // As it is spelled on disk. Lowercasing it named a file that does not exist anywhere the
@@ -130,38 +120,28 @@ pub fn parse_languages_in_dir(target_path: impl AsRef<Path>)
     }
 }
 
-// One file of your own, which is the shape a caller with a single language has. Read whole and
-// handed to 'parse_language', the one way the format is ever parsed: a definition on disk and one
-// baked into the binary go through identical code.
 pub fn parse_language_file(path: impl AsRef<Path>) -> Result<Language, LanguageFileError> {
     let contents = fs::read_to_string(path).map_err(LanguageFileError::Unreadable)?;
     parse_language(&contents).ok_or(LanguageFileError::Malformed)
 }
 
-// The one parser of the language file format, over a string. 'parse_languages_in_dir' reads each
-// file into one and calls this, so a file on disk and the baked-in bytes go through identical code:
-// there is no second parser to drift from, which is what let one read every keyword and one none.
+// The one parser of the language file format. A file on disk and the bytes baked into this crate go
+// through it alike, so there is no second parser to drift from.
 //
-// Three rules, and the third is the one that decides whether a mistake is loud or silent.
+// Three rules. A value sits on the line straight after its header and is taken as it is even when
+// empty, because a language with only multiline comments has an empty 'Comment symbols' value and
+// that empty line is the value, not a separator. Blank lines are skipped only before a header, so a
+// spare one never derails the parse.
 //
-// A value sits on the line right after its header, taken as it is even when empty, because a
-// language with only multiline comments has an empty 'Comment symbols' value and that empty line is
-// the value, not a separator. Blank lines are skipped only before a header, between blocks, so an
-// extra one, or the one that always separates the keyword blocks from the symbols above them, never
-// derails the parse. And **every line of the file has to be accounted for**: a header left over at
-// the end is one this parser did not understand, and it refuses the file rather than keeping what it
-// happened to recognise.
+// And **every line has to be accounted for**, which is the rule that decides whether a mistake is
+// loud or silent: a header left over at the end is one this did not understand, and the file is
+// refused rather than half kept. Without it, 'Multiline comment start' written for 'Multi line
+// comment start' was accepted with no multiline comments and no keywords at all, and that language
+// then counted its block comments as code.
 //
-// That last rule is not tidiness. Without it, a file writing 'Multiline comment start' for
-// 'Multi line comment start' was accepted with no multiline comments and no keywords at all, because
-// the unrecognised header fell through both blocks and everything below it was dropped in silence.
-// The language then counted its block comments as code. A bogus header, a stray heading above the
-// keywords and an end declared without a start all did the same, each one a plausible typo and each
-// one a wrong number nobody was told about.
-//
-// Returns None on anything it does not recognise rather than panicking, because the migration reads
-// what is on the user's disk through it to ask whether their copy still means what ours means, and a
-// file edited into something unparseable must come back as "not the same" and not take the run down.
+// Returns None rather than panicking on anything unrecognised: the version migration reads what is on
+// the user's disk through this to ask whether their copy still means what ours does, and a file
+// edited into nonsense has to come back as "not the same" and not take the run down.
 pub fn parse_language(contents: &str) -> Option<Language> {
     let contents = without_byte_order_mark(contents);
     let mut lines = contents.lines();
@@ -215,31 +195,6 @@ pub fn parse_language(contents: &str) -> Option<Language> {
 
     Some(Language::new(lang_name, extensions, string_symbols, comment_symbols,
             multiline_comments.as_ref().map(|(start, end)| (start.as_str(), end.as_str())), keywords))
-}
-
-// A byte order mark is three bytes that mean "this is UTF-8" and carry no text, and 'trim' does not
-// remove them because they are not whitespace. PowerShell's 'Set-Content' and older Notepad both
-// write one, so it arrives through the ordinary way of editing one of these files on Windows.
-//
-// Every parser of a text format in this crate calls this on the way in, and the reason is that
-// leaving it to each one is exactly how it went wrong: the language parser stripped it and the
-// priority parser, eighteen lines below, did not. A mark there made the '===>' of the first line
-// fail to match, so every rule in the file was skipped, and skipped without a faulty line to report
-// it, since a line that is never entered is never rejected either.
-fn without_byte_order_mark(contents: &str) -> &str {
-    contents.trim_start_matches('\u{feff}')
-}
-
-// The next line that carries a header, with the blank lines between blocks skipped. Trimmed, so an
-// indented sub-header like the 'NAME' of a keyword block is recognised.
-fn next_header(lines: &mut std::str::Lines) -> Option<String> {
-    lines.by_ref().map(str::trim).find(|line| !line.is_empty()).map(str::to_owned)
-}
-
-// The value that belongs to the header just read: the very next line, trimmed, empty or not. Never
-// skips a blank, because for the comment symbols the blank line is the value.
-fn value_line(lines: &mut std::str::Lines) -> Option<String> {
-    lines.next().map(|line| line.trim().to_owned())
 }
 
 // A missing file is not a mistake: an installation made by an earlier version has none, and the
@@ -299,10 +254,33 @@ pub fn parse_priority(contents: &str) -> (HashMap<String,Vec<String>>, Vec<Strin
     (rules, faulty_lines)
 }
 
+// A byte order mark is three bytes that mean "this is UTF-8" and carry no text, and 'trim' does not
+// remove them because they are not whitespace. PowerShell's 'Set-Content' and older Notepad both
+// write one, so it arrives through the ordinary way of editing one of these files on Windows.
+//
+// Every parser of a text format in this crate calls it, because leaving it to each one is how it
+// goes wrong: a mark in front of the '===>' of the priority file stops that line matching, and every
+// rule in the file is then skipped without so much as a faulty line to report it, a line never read
+// being a line never rejected.
+fn without_byte_order_mark(contents: &str) -> &str {
+    contents.trim_start_matches('\u{feff}')
+}
+
+// The next line that carries a header, with the blank lines between blocks skipped. Trimmed, so an
+// indented sub-header like the 'NAME' of a keyword block is recognised.
+fn next_header(lines: &mut std::str::Lines) -> Option<String> {
+    lines.by_ref().map(str::trim).find(|line| !line.is_empty()).map(str::to_owned)
+}
+
+// The value that belongs to the header just read: the very next line, trimmed, empty or not. Never
+// skips a blank, because for the comment symbols the blank line is the value.
+fn value_line(lines: &mut std::str::Lines) -> Option<String> {
+    lines.next().map(|line| line.trim().to_owned())
+}
+
 fn split_line_on_whitespace(line: &str) -> Vec<String> {
     line.split_whitespace().map(str::trim).filter(|x| !x.is_empty()).map(str::to_owned).collect()
 }
-
 
 #[cfg(test)]
 mod tests {

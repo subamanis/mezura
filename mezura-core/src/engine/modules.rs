@@ -2,19 +2,13 @@
 // one it is in.
 use std::{collections::HashMap, path::Path};
 
-
-// The module a file was counted under, carried through the queue as an index and never as a name.
-// A composite string key would be an allocation on every single file, which is what the whole
-// performance work of v3 was spent removing.
+// Carried through the queue as an index and never as a name: a string key would be an allocation on
+// every single file.
 pub type ModuleId = u16;
 
-// The names, in the order they were declared, and the places where the walk changes its mind about
-// which module it is in.
-//
-// The module of a directory is decided once, on the way in, and its children inherit it, so a run
-// that nests nothing looks up nothing at all: every root carries its own module and the walk never
-// asks again. Only a target that lies inside another target can change the answer part way down,
-// and those are the only paths this table holds.
+// A directory's module is decided once on the way in and its children inherit it, so a run that
+// nests nothing looks up nothing at all. Only a target lying inside another target can change the
+// answer part way down, and those are the only paths this table holds.
 #[derive(Debug,Default)]
 pub struct Modules {
     // Empty when nothing was named, and then everything belongs to the single bucket 0
@@ -24,10 +18,10 @@ pub struct Modules {
 }
 
 impl Modules {
-    // The boundaries are built from the resolved paths and never from what was typed, because
-    // 'starts_with' and an equality on a path are case sensitive on every platform: on Windows a
-    // 'frontend=./Web' over a real './web' would match nothing, the module would come out empty and
-    // every file would fall into '(unnamed)' with nothing printed to say why.
+    // Built from the resolved paths and never from what was typed, because comparing paths is case
+    // sensitive on every platform: on Windows 'frontend=./Web' over a real './web' would match
+    // nothing, that module would come out empty, and every file would fall into '(unnamed)' with
+    // nothing said about why.
     pub fn of(targets: &[crate::engine::config::Target]) -> Self {
         if targets.iter().all(|x| x.module.is_none()) {
             return Modules::default();
@@ -108,14 +102,12 @@ impl Modules {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // 'name path' declares the module, a bare path declares none. The paths are the repository's
-    // own, because a boundary is only a boundary if it is on disk: the table has to know whether a
-    // nested target is a directory or a file to decide which of the two lookups will find it.
+    // The paths are the repository's own, because the table has to know whether a nested target is a
+    // directory or a file to decide which of the two lookups will find it.
     fn modules_of(entries: &[&str]) -> Modules {
         let targets = entries.iter().map(|entry| match entry.split_once(' ') {
             Some((name, path)) => crate::engine::config::Target::named(name, path),

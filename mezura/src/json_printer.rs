@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Local, SecondsFormat};
-
 use mezura_core::{FaultyFileDetails, FilesPresent, RunResult, Stats};
+
 use super::config_manager::Configuration;
 use super::result_printer;
 
@@ -50,14 +50,12 @@ fn document(result: &RunResult, datetime_now: &DateTime<Local>, config: &Configu
     format!("{{\n{}\n}}", members.join(",\n"))
 }
 
-// Only what can change a number: no theme, no layout, no separators. Without it two documents that
-// differ because of an '--exclude' look like a code change, and a run with '--braces-as-code' looks
-// comparable with one without it.
+// Only what can change a number: no theme, no layout, no separators. Without it, two documents that
+// differ by an '--exclude' look like a code change.
 fn scope_object(config: &Configuration, targets: &[mezura_core::Target]) -> String {
     let members = [
-        // The resolved list off the result and not the declared one off the configuration: the
-        // same './src' declared over two different trees is two different measurements, and this
-        // block exists so two documents can be told comparable
+        // The resolved list off the result, not the declared one off the configuration: the same
+        // './src' over two different trees is two different measurements
         format!("    \"dirs\": {}", string_array(&targets.iter().map(|x| x.to_string()).collect::<Vec<_>>())),
         format!("    \"exclude\": {}", string_array(&config.engine.exclude_dirs)),
         format!("    \"languages\": {}", string_array(&config.engine.languages_of_interest)),
@@ -282,7 +280,6 @@ fn escaped(text: &str) -> String {
 
     escaped
 }
-
 
 #[cfg(test)]
 mod tests {

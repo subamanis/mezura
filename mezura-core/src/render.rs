@@ -1,27 +1,19 @@
-// The arithmetic behind showing a result, and nothing that decides a colour, a width or a word.
-// It lives here rather than in whatever draws the report because none of it is about a terminal: a
-// bar of fifty cells, a bar of two hundred, an HTML page and a spreadsheet all divide the same
-// shares the same way, and getting the division right is the only hard part of any of them.
-//
-// Nothing here reads a global. What a person prefers to see, the digit grouping and the decimal
-// mark, is a 'NumberFormat' the caller holds and passes.
+// The arithmetic behind showing a result: shares, percentages, and how a number reads to a person.
+// Nothing here decides a colour, a width or a word, and nothing reads a global.
 
 const TINY_THRESHOLD : f64 = 0.01;
 
-
-// How many cells of a bar of 'total_cells' each share is worth, by largest remainder: every share
-// takes the whole part of its exact claim, anything visible keeps at least one cell so that it cannot
-// vanish, and the cells still unspent go one at a time to whoever sits furthest below their exact
-// claim. The result always sums to 'total_cells' exactly.
+// How many cells of a bar of 'total_cells' each share is worth, by largest remainder: each takes the
+// whole part of its exact claim, anything visible keeps at least one cell so it cannot disappear, and
+// the leftover cells go one at a time to whoever sits furthest below their claim. Always sums to
+// 'total_cells' exactly.
 //
-// Exact in both directions, which is the part that is easy to get wrong: the minimum-one rule can
-// push the total over the target, since 97/1/1/1 wants fifty-one cells in a bar of fifty. The
-// excess comes off whoever holds the most and never empties anybody, because what a bar owes the
-// reader is relative fidelity: one cell missing from a share of 96 is invisible, while the same
-// cell taken from a share of 3 understates it by a third.
+// The minimum-one rule can push the total *over* the target, since 97/1/1/1 wants fifty-one cells in
+// a bar of fifty. The excess comes off whoever holds the most, and never empties anyone: a cell
+// missing from a share of 96 is invisible, the same cell taken from a share of 3 understates it by a
+// third.
 //
-// 'shares' are percentages, so they are expected to sum to about 100; a list that does not simply
-// gets a bar that is not full.
+// 'shares' are percentages, so a list that does not add up to about 100 gets a bar that is not full.
 pub fn apportion(shares: &[f64], total_cells: usize) -> Vec<usize> {
     let exact = shares.iter().map(|x| x * total_cells as f64 / 100.0).collect::<Vec<_>>();
     let mut cells = shares.iter().zip(exact.iter())
@@ -54,26 +46,22 @@ pub fn apportion(shares: &[f64], total_cells: usize) -> Vec<usize> {
     cells
 }
 
-// The share of the whole each number holds, where the whole is the sum of the numbers themselves.
-// That is the right answer only when the list is everything, so a caller that has cut its list must
-// say what it cut it from and use 'percentages_of' below: taking the top few and asking this gives
-// shares of the few, which look like shares of the whole and are not.
+// What share of the whole each number holds, the whole being the sum of the numbers themselves. Only
+// right when the list is everything: asking this of the top few gives shares of the few, which look
+// like shares of the whole and are not. A caller that cut its list wants 'percentages_of' below.
 //
-// Rounded to two decimals and summing to 100. The last entry absorbs whatever the rounding of the
-// others left over, which is why the order matters and why a list that ends in a leftovers row
-// wants that row last.
+// Rounded to two decimals and summing to 100, with the last entry absorbing what the rounding of the
+// others left over. So the order matters, and a list ending in a leftovers row wants that row last.
 pub fn percentages(numbers: &[usize]) -> Vec<f64> {
     percentages_of(numbers, numbers.iter().sum())
 }
 
-// The same, against a total the caller names: what each number is worth out of everything there
-// was, whether or not everything there was is in the list. A report that shows the largest few and
-// folds the rest into a leftovers row can use either, since the row makes the list whole again.
+// The same against a total the caller names: what each number is worth out of everything there was,
+// whether or not everything there was is in the list.
 //
-// A share that rounds to zero comes back as the true small number and not as zero, so that whoever
-// formats it can tell "none" from "too little to show": 'NumberFormat::percent' writes '<0.01' for
-// anything positive that rounds away, and 'apportion' gives no cell to anything under a hundredth,
-// so both answers are reached from the honest figure rather than from a marker standing in for it.
+// A share that rounds to zero comes back as the true small number rather than as zero, so whoever
+// formats it can tell "none" from "too little to show". 'NumberFormat::percent' writes '<0.01' for
+// anything positive that rounds away and 'apportion' gives it no cell, both from the honest figure.
 pub fn percentages_of(numbers: &[usize], total: usize) -> Vec<f64> {
     if total == 0 {
         return vec![0.0; numbers.len()];
@@ -112,7 +100,6 @@ pub fn relative_change(older: usize, newer: usize) -> f64 {
     }
     (newer as f64 - older as f64) / older as f64 * 100.0
 }
-
 
 // What a person expects a number to look like, which differs by country and settles nothing about
 // what was counted. Held as a value and passed, never read from a global: two callers in one
@@ -198,14 +185,9 @@ impl NumberFormat {
     }
 }
 
-// What the program itself prints, so a caller that says nothing gets numbers that look like mezura's
-// rather than something it would have to correct.
-//
-// It used to group nothing at all, on the reading that a default should be the absence of a choice.
-// It is not one: the dot was already the English convention, so refusing the comma beside it was
-// half a decision rather than neutrality. And nobody reaches for a type called 'NumberFormat' to be
-// handed plain digits, which '{}' gives them already; grouping is the thing they came for. A caller
-// who does want them ungrouped asks for it by name, with 'NumberFormat::new(None, '.')'.
+// What the program itself prints, so a caller that says nothing gets numbers that look like mezura's.
+// Grouped, because nobody reaches for a type called 'NumberFormat' to be handed plain digits, which
+// '{}' gives them already. Ungrouped is asked for by name, with 'NumberFormat::new(None, '.')'.
 impl Default for NumberFormat {
     fn default() -> Self {
         NumberFormat { thousands: Some(','), decimal: '.' }
@@ -215,7 +197,6 @@ impl Default for NumberFormat {
 fn round_2(number: f64) -> f64 {
     (number * 100.0).round() / 100.0
 }
-
 
 #[cfg(test)]
 mod tests {

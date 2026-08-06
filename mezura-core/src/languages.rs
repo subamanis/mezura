@@ -1,37 +1,121 @@
 // Which languages a run has in play, and which of them owns an extension two of them claim. The
 // format a language file is written in is 'language_file' next door.
 use std::collections::HashMap;
-
 use std::sync::Arc;
-
 
 use crate::{Language, warnings};
 use crate::engine::config::EngineConfig;
 use crate::engine::extensions::make_extension_language_map;
 use crate::warnings::Warning;
 
-
-// The one answer to "which languages exist, and which of them owns a contested extension".
-//
-// Resolved by the caller and not inside 'run', because working out that '--force-lang zz=Nope' names
-// nothing, or that two languages both claim '.m', is a judgement about the settings: it belongs
-// beside the other complaints about settings and not in the middle of a report. What comes back is a
-// list of warnings, and whoever asked decides what to do with them.
+// Built by the caller and handed to 'run', rather than inside it, so that its complaints about the
+// settings land with the other complaints about settings and not in the middle of a report.
 pub struct Languages {
     by_name: HashMap<String, Language>,
     extension_map: HashMap<String, Arc<str>>,
-    // Which configuration produced this set, so that 'run' can refuse one that would have produced
-    // a different one. See 'LanguageSelection' below.
+    // Which settings produced this set, so 'run' can refuse one that would have produced another.
     resolved_against: LanguageSelection
 }
 
-// The whole of what resolution reads from a configuration: which languages were asked for, which
-// were excluded, and which extensions were forced. Nothing else about a configuration can change
-// the set that comes out, which is why 'dirs' is not here and a caller may resolve once and then
-// count several directories with the same 'Languages'.
+impl Languages {
+    // The languages baked into this crate, so nothing on the machine is read. The command line reads
+    // its own folder instead, because a language file there is the user's to edit.
+    pub fn shipped(config: &EngineConfig) -> (Self, Vec<Warning>) {
+        Self::resolve(config, shipped_languages(), &shipped_extension_priority())
+    }
+
+    // For a caller with languages of its own. Keyed here by each language's own name rather than
+    // taken as a map somebody else keyed: in a map whose key and value disagree the key wins, and a
+    // language would be counted under a name it does not carry.
+    pub fn resolve(config: &EngineConfig, languages: impl IntoIterator<Item = Language>,
+            priority: &HashMap<String, Vec<String>>) -> (Self, Vec<Warning>)
+    {
+        // Unusable ones go first, so that a name nobody can ask for is not in the list when the
+        // narrowing below asks whether a name exists. Duplicates are reported last, after the
+        // narrowing, so a run that never asked for the language is not told about it.
+        let (languages, mut reported) = drop_the_unusable(languages.into_iter().collect());
+        let (languages, narrowing) = retain_languages_of_interest(languages, config);
+        reported.extend(narrowing);
+        reported.extend(duplicate_names(&languages));
+
+        let by_name = keyed_by_name(languages);
+        let (extension_map, report) = make_extension_language_map(&by_name, priority, &config.forced_languages);
+        reported.extend(report.warnings());
+
+        (Languages { by_name, extension_map, resolved_against: LanguageSelection::of(config) }, reported)
+    }
+
+    // Asked by 'run' before it counts anything. Resolved against settings naming Rust and then run
+    // with settings naming Python, it counted Rust, called it Rust, and said nothing.
+    pub(crate) fn describe_the_same_selection_as(&self, config: &EngineConfig) -> bool {
+        self.resolved_against == LanguageSelection::of(config)
+    }
+
+    pub(crate) fn into_parts(self) -> (HashMap<String, Language>, HashMap<String, Arc<str>>) {
+        (self.by_name, self.extension_map)
+    }
+}
+
+// What this crate ships, parsed for counting and raw for installing. A caller that wants nothing but
+// the default has 'Languages::shipped' and needs none of the four.
+
+pub fn shipped_languages() -> Vec<Language> {
+    // 'every_shipped_language_file_parses' is what guarantees these all parse. One that somehow did
+    // not would be left out rather than panic here.
+    shipped_language_files_raw().into_iter()
+            .filter_map(|(_, contents)| crate::language_file::parse_language(&String::from_utf8_lossy(contents)))
+            .collect()
+}
+
+// The rule this crate ships for settling an extension that two languages both claim.
+pub fn shipped_extension_priority() -> HashMap<String, Vec<String>> {
+    crate::language_file::parse_priority(&String::from_utf8_lossy(shipped_extension_priority_raw())).0
+}
+
+// The bytes as they were authored, comments and layout included, so what the installer puts in the
+// user's folder is a file made to be read and edited. Public because that installer is a separate
+// crate and cannot reach into this one's 'data/'.
 //
-// Normalised the way the matching normalises: order does not matter and neither does case, so two
-// configurations that would have produced this same set compare equal and no honest run is refused.
+// Plain tuples and not the embedder's own file type, so a release of 'include_dir' is never a
+// breaking change of ours.
+pub fn shipped_language_files_raw() -> Vec<(&'static str, &'static [u8])> {
+    include_dir::include_dir!("data/languages").files.iter()
+            .map(|file| (std::path::Path::new(file.path).file_name().and_then(|x| x.to_str()).unwrap_or(file.path),
+                    file.contents))
+            .collect()
+}
+
+pub fn shipped_extension_priority_raw() -> &'static [u8] {
+    include_bytes!("../data/extension_priority.txt")
+}
+
+// The names that were asked for and do not exist as language files, in the order they were given.
+pub fn unknown_language_names(languages: &[Language], wanted: &[String]) -> Vec<String> {
+    wanted.iter().filter(|name| !languages.iter().any(|x| is_the_same_language_name(&x.name, name)))
+            .cloned().collect()
+}
+
+// Every place that matches a name goes through this one: choosing, excluding, forcing an extension,
+// and the priority rules.
+//
+// 'to_lowercase' and not 'eq_ignore_ascii_case', which agree until a name has a letter outside ASCII:
+// with the two mixed, 'CAFÉ' excluded as 'café' was taken out of the count by one rule and reported
+// as a name that does not exist by the other, in the same run.
+pub(crate) fn is_the_same_language_name(one: &str, other: &str) -> bool {
+    one.to_lowercase() == other.to_lowercase()
+}
+
+// By the name each language carries. A later declaration of a name wins, which is what a directory
+// holding two files for one language has always done.
+pub(crate) fn keyed_by_name(languages: impl IntoIterator<Item = Language>) -> HashMap<String, Language> {
+    languages.into_iter().map(|language| (language.name.clone(), language)).collect()
+}
+
+// The whole of what building a 'Languages' reads from the settings. Nothing else can change the set
+// that comes out, which is why the directories are not here and one 'Languages' counts several.
+//
+// Normalised the way the matching is: neither order nor case matters, so two settings that would
+// have produced this same set compare equal and no honest run is refused.
 #[derive(PartialEq, Eq, Debug)]
 struct LanguageSelection {
     of_interest: Vec<String>,
@@ -56,127 +140,9 @@ impl LanguageSelection {
     }
 }
 
-impl Languages {
-    // What a caller who wants what mezura counts by default writes, and the whole of it. The
-    // languages are the ones baked into this crate, so nothing on the machine is read and nothing
-    // an installation has been given is seen: the command line reads its own directory on purpose,
-    // because a language file there is the user's to edit.
-    pub fn shipped(config: &EngineConfig) -> (Self, Vec<Warning>) {
-        Self::resolve(config, shipped_languages(), &shipped_extension_priority())
-    }
-
-    // The door for a caller with languages of its own, whether that is ours with one more added,
-    // a directory of its own, or a set that has nothing to do with the shipped one. The only way to
-    // build one either way, so the narrowing by '--languages' and the extension map can never
-    // disagree about which languages are in play.
-    //
-    // Keyed here, by each language's own name, rather than taken as a map somebody else keyed: a map
-    // whose key says one thing and whose value says another has a winner, and it was never the
-    // value, so a language would be counted and reported under a name it does not carry.
-    pub fn resolve(config: &EngineConfig, languages: impl IntoIterator<Item = Language>,
-            priority: &HashMap<String, Vec<String>>) -> (Self, Vec<Warning>)
-    {
-        // Unusable ones go first, so that a name nobody can ask for is not in the list when the
-        // narrowing below asks whether a name exists. Duplicates are reported last, after the
-        // narrowing, so a run that never asked for the language is not told about it.
-        let (languages, mut reported) = drop_the_unusable(languages.into_iter().collect());
-        let (languages, narrowing) = retain_languages_of_interest(languages, config);
-        reported.extend(narrowing);
-        reported.extend(duplicate_names(&languages));
-
-        let by_name = keyed_by_name(languages);
-        let (extension_map, report) = make_extension_language_map(&by_name, priority, &config.forced_languages);
-        reported.extend(report.warnings());
-
-        (Languages { by_name, extension_map, resolved_against: LanguageSelection::of(config) }, reported)
-    }
-
-    // Whether this set is the one the given configuration describes. 'run' asks before it counts
-    // anything, because the alternative is the worst answer a counter can give: resolving against a
-    // configuration naming Rust and then running with one naming Python counted Rust, called it
-    // Rust, and said nothing, and deriving one configuration from another is exactly what the
-    // struct update syntax on 'EngineConfig' exists for.
-    pub(crate) fn describe_the_same_selection_as(&self, config: &EngineConfig) -> bool {
-        self.resolved_against == LanguageSelection::of(config)
-    }
-
-    pub(crate) fn into_parts(self) -> (HashMap<String, Language>, HashMap<String, Arc<str>>) {
-        (self.by_name, self.extension_map)
-    }
-}
-
-// What this crate ships, in the two shapes anyone wants it in. The '_raw' pair is the bytes exactly
-// as they are written, for whoever installs the files rather than counts with them: the command line
-// writes those to disk unchanged and parses one at a time to ask whether a user's copy still means
-// what ours means. Everybody else wants the pair above, already parsed. A caller who wants nothing
-// but the default has 'Languages::shipped' and needs none of the four.
-
-// Ready to be handed to 'resolve', or to be added to first.
-pub fn shipped_languages() -> Vec<Language> {
-    // These are ours and every one of them parses, which 'every_shipped_language_file_parses' is
-    // what actually guarantees. One that somehow did not would be left out rather than panic here.
-    shipped_language_files_raw().into_iter()
-            .filter_map(|(_, contents)| crate::language_file::parse_language(&String::from_utf8_lossy(contents)))
-            .collect()
-}
-
-// The rule this crate ships for settling an extension that two languages both claim.
-pub fn shipped_extension_priority() -> HashMap<String, Vec<String>> {
-    crate::language_file::parse_priority(&String::from_utf8_lossy(shipped_extension_priority_raw())).0
-}
-
-// The two below are for writing these files out to somebody's disk, which is what lets them edit a
-// language, add one of their own, or change which language wins a contested extension. Whoever
-// wants to *count* wants 'shipped_languages' and 'shipped_extension_priority' above, which hand back
-// parsed values; these hand back the bytes as they were authored, comments and layout included, so
-// that what lands in the user's folder is a file made to be read and edited rather than something
-// re-serialised from a struct.
-//
-// They exist as public because the program that installs them is a separate crate and cannot reach
-// into this one's 'data/' directory. Without them it would keep a second copy of every language
-// file, which is the thing the split was done to avoid.
-//
-// The file name travels with the bytes because the installer writes them under it. Plain tuples and
-// not the embedder's own file type, so that a release of 'include_dir' is never a breaking change
-// of ours.
-pub fn shipped_language_files_raw() -> Vec<(&'static str, &'static [u8])> {
-    include_dir::include_dir!("data/languages").files.iter()
-            .map(|file| (std::path::Path::new(file.path).file_name().and_then(|x| x.to_str()).unwrap_or(file.path),
-                    file.contents))
-            .collect()
-}
-
-pub fn shipped_extension_priority_raw() -> &'static [u8] {
-    include_bytes!("../data/extension_priority.txt")
-}
-
-// The names that were asked for and do not exist as language files, in the order they were given.
-pub fn unknown_language_names(languages: &[Language], wanted: &[String]) -> Vec<String> {
-    wanted.iter().filter(|name| !languages.iter().any(|x| is_the_same_language_name(&x.name, name)))
-            .cloned().collect()
-}
-
-// The one rule for whether two spellings name the same language, and every place that matches a
-// name goes through it: the selection, the exclusion, '--force-lang' and the priority file.
-//
-// They used to disagree. The exclusion folded case with 'to_lowercase' and everything else with
-// 'eq_ignore_ascii_case', which are the same answer until a name carries a letter outside ASCII:
-// a language called 'CAFÉ' excluded as 'café' was dropped from the count by the first and reported
-// as a name that does not exist by the second, in the same run. The reader is then told the flag
-// did nothing while it was quietly removing a whole language from the total.
-pub(crate) fn is_the_same_language_name(one: &str, other: &str) -> bool {
-    one.to_lowercase() == other.to_lowercase()
-}
-
-// By the name each language carries. A later declaration of a name wins, which is what a directory
-// holding two files for one language has always done.
-pub(crate) fn keyed_by_name(languages: impl IntoIterator<Item = Language>) -> HashMap<String, Language> {
-    languages.into_iter().map(|language| (language.name.clone(), language)).collect()
-}
-
-// A language that can never match a file and can never be named. Both were accepted in silence:
-// they took a row in every internal map, contributed nothing, and an empty name went on to answer
-// to a '--force-lang' whose language was left blank. The file parser refuses both already, so what
+// A language that can never match a file, or can never be named. Both used to be accepted in
+// silence: they took a row in every internal map and contributed nothing, and a nameless one
+// answered to a forced pair whose language was left blank. The file parser refuses both, so what
 // this catches is a caller building one by hand.
 fn drop_the_unusable(languages: Vec<Language>) -> (Vec<Language>, Vec<Warning>) {
     let mut reported = Vec::new();
@@ -234,8 +200,7 @@ Which one is not decided by anything you can see, so the counts of '{name}' depe
 that takes one and {times} languages in the report, each counting part of the files.",
                     found.join("' and '"))
         };
-        Warning::new(warnings::DUPLICATE_LANGUAGE, warnings::Affects::Counts, name,
-                format!("{detail} Delete the copies you do not want from the languages folder."))
+        Warning::new(warnings::DUPLICATE_LANGUAGE, warnings::Affects::Counts, name, detail)
     }).collect()
 }
 
@@ -248,7 +213,7 @@ fn retain_languages_of_interest(mut languages: Vec<Language>, config: &EngineCon
     if !config.languages_of_interest.is_empty() {
         for name in unknown_language_names(&languages, &config.languages_of_interest) {
             reported.push(Warning::new(warnings::UNKNOWN_LANGUAGE, warnings::Affects::Settings, &name,
-                    format!("'{name}' does not exist as a language file, so nothing was counted for it.")));
+                    format!("'{name}' is not among the languages in use, so nothing was counted for it.")));
         }
     }
 
@@ -262,7 +227,7 @@ fn retain_languages_of_interest(mut languages: Vec<Language>, config: &EngineCon
     // has no other voice.
     for name in unknown_language_names(&languages, &config.excluded_languages) {
         reported.push(Warning::new(warnings::UNKNOWN_EXCLUDED_LANGUAGE, warnings::Affects::Settings, &name,
-                format!("'{name}' does not exist as a language file, so excluding it changed nothing.")));
+                format!("'{name}' is not among the languages in use, so excluding it changed nothing.")));
     }
 
     if !config.languages_of_interest.is_empty() {
@@ -274,7 +239,6 @@ fn retain_languages_of_interest(mut languages: Vec<Language>, config: &EngineCon
 
     (languages, reported)
 }
-
 
 #[cfg(test)]
 mod language_selection_tests {

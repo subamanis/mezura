@@ -7,9 +7,8 @@ use mezura_core::render::NumberFormat;
 
 use super::config_manager::{DecimalSeparator, NumberSeparator};
 
-// Reached from every printed figure, so it is set once instead of being threaded through the
-// printer, the same way the active theme is. The library takes the format as a value, which is what
-// lets this stay a decision of the command line and of nothing else.
+// Reached from every printed figure, so it is set once rather than threaded through the printer, the
+// same way the active theme is.
 static FORMAT : OnceLock<NumberFormat> = OnceLock::new();
 
 static NUMBER_SEPARATOR : OnceLock<NumberSeparator> = OnceLock::new();
@@ -41,8 +40,6 @@ pub fn with_decimal_separator(text: String) -> String {
 pub fn with_seperators(i: usize) -> String {
     active().integer(i)
 }
-
-
 
 #[cfg(test)]
 mod tests {

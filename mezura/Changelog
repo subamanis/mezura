@@ -161,6 +161,9 @@ Bugfixes:
       newline behind, and the program read that as a log it had failed to read and refused to touch,
       on that run and on every run after it.
   -> Two runs logging to the same file at the same moment no longer damage it.
+  -> The warnings about languages now end with what to do about them: an unknown name points at
+      "--show-languages", and two files declaring one language point at the folder to clean up.
+      The wording of three of them changed slightly to make room for it.
   -> A run that met both unreadable directories and faulty files now names "--show-faulty-files"
       once at the end instead of once under each of the two counts.
   -> A directory that could not be read now says why. "--show-faulty-files" prints the reason beside

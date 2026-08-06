@@ -1,15 +1,15 @@
 use std::fs;
 
 use colored::Colorize;
-
-use super::formatted::Formatted;
-use crate::paths::PERSISTENT_APP_PATHS;
 use mezura_core::Language;
 use mezura_core::language_file::FaultyLanguageFile;
 
+use super::config_manager::*;
+use super::formatted::Formatted;
+use crate::paths::PERSISTENT_APP_PATHS;
+
 // The file itself, so that the command never depends on an installation having a copy of it.
 static CHANGELOG_BYTES : &[u8] = include_bytes!("../Changelog");
-use super::config_manager::*;
 
 // These constants need to be maintained along with the readme's commands
 pub const DIRS_HELP  :  &str =
@@ -610,7 +610,6 @@ pub const SHOW_CONFIGS_HELP  :  &str =
 
 ";
 
-
 pub const VERSION_HELP  :  &str =
 "--version
 
@@ -633,12 +632,11 @@ pub const HELP_HELP  :  &str =
 
 ";
 
-// The one list of commands, grouped by what they are about and not by how they work, which is why
-// the ones that print instead of counting are spread across the groups they belong to rather than
-// sitting together: a reader looking for themes wants '--show-themes' next to '--theme', and does
-// not care that one of them overrides the run. The full help prints it in this order, the lookup for
-// a single command searches it, and the close-match suggestions take their candidates from it, so a
-// new command cannot appear in one of the three and be forgotten in the others.
+// Grouped by what the commands are about and not by how they work, so a reader looking for themes
+// finds '--show-themes' beside '--theme' and does not care that one of them overrides the run.
+//
+// The full help prints this, the lookup for one command searches it, and the close-match suggestions
+// take their candidates from it, so a new command cannot reach one of the three and miss the others.
 pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 6] = [
     ("What is counted", &[
         (DIRS, DIRS_HELP),
@@ -702,10 +700,9 @@ pub fn help_body() -> String {
     body
 }
 
-// The date lives in the first line of the Changelog, 'v3.0.0 - unreleased' or 'v2.0.1 - 27/7/2026',
-// and nowhere else. A separate constant would be a third place to remember on every release, next to
-// VERSION_ID and Cargo.toml, and the one most likely to be forgotten. The test in this module is
-// what keeps that first line and VERSION_ID from drifting apart.
+// The date lives in the Changelog's first line, 'v3.0.0 - unreleased', and nowhere else: a constant
+// would be a third place to remember on every release and the one most likely to be forgotten. A
+// test in this module keeps that line and VERSION_ID together.
 pub fn print_version() {
     let changelog = String::from_utf8_lossy(CHANGELOG_BYTES);
     let released = changelog.lines().next().unwrap_or_default().split_once(" - ")
@@ -731,7 +728,6 @@ pub fn print_whole_help_message() {
     │ $$ ╲$$$│ $$│ $$$$$$$$ ╱  $$$$_ │ $$__╱ $$│ $$     │  $$$$$$$
     │ $$  ╲$ │ $$ ╲$$     ╲│  $$    ╲ ╲$$    $$│ $$      ╲$$    $$
      ╲$$      ╲$$  ╲$$$$$$$ ╲$$$$$$$$  ╲$$$$$$  ╲$$       ╲$$$$$$$\n\n".to_owned();
-
 
     msg += get_data_dir_str().as_str();
     msg += "Format of arguments: <path_here> --optional_command1 --optional_commandN\n\n";
@@ -798,10 +794,9 @@ pub fn print_changelog(full: bool) {
     }
 }
 
-// A theme is 46 tokens and the listing used to show five of them, the language slots, on a mock
-// overview line. So the one place whose job is to show what a theme looks like before you pick it
-// said nothing about its headings, labels, numbers, percentages, arrow, separator or size figures.
-// It now prints a sample of the real details rows too, which is the densest line the program has.
+// A theme is 46 tokens, and the one place whose job is to show what one looks like before you pick
+// it has to show more than the four language slots of a mock overview line. The sample includes a
+// real details row, which is the densest line the program prints.
 pub fn print_existing_themes(bar_thickness: BarThickness, layout: Layout) {
     // Five entries, so that every language slot including the fold gets to show itself. The
     // verticals add up to the width of a real bar.
@@ -868,16 +863,6 @@ pub fn print_supported_languages(languages_available: &[Language]) {
     println!("{}", supported_languages_message(languages_available));
 }
 
-// Split from the printing so that the deduplication below can be asserted. Two files declaring one
-// language is a broken installation, and naming it twice here would read as two languages rather
-// than as the one it is.
-fn supported_languages_message(languages_available: &[Language]) -> String {
-    let mut lang_names = languages_available.iter().map(|x| x.name.to_owned()).collect::<Vec<_>>();
-    lang_names.sort();
-    lang_names.dedup();
-    format!("{}The supported languages found are:\n  {}\n", get_data_dir_str(), lang_names.join("\n  "))
-}
-
 pub fn print_existing_configs() {
     let mut config_names = Vec::with_capacity(10);
 
@@ -903,25 +888,10 @@ pub fn print_existing_configs() {
     println!("{}", existing_configs_message(&config_names));
 }
 
-// Split from the printing above so that the empty case can be asserted: the names were joined with
-// the same two spaces that indent the first one, so with nothing to list it printed the heading and
-// then a line holding those two spaces and nothing else. That reads as a configuration whose name
-// failed to appear rather than as none existing. The data dir is named either way, since it is the
-// answer to "where would I put one".
-fn existing_configs_message(config_names: &[&str]) -> String {
-    if config_names.is_empty() {
-        format!("{}No configurations found.\n", get_data_dir_str())
-    } else {
-        format!("{}Found these configurations:\n  {}\n", get_data_dir_str(), config_names.join("\n  "))
-    }
-}
-
-
-// Split from the printing for the same reason as the two above: this is a message nothing else could
-// see. It used to open with "Formatting problems detected in language files" over both reasons a file
-// can fail, which is true of one of them: a file saved in an encoding that cannot be read as text was
-// announced as a file with a typo in it, and its owner went hunting for a mistake that is not there.
-// The reason now travels beside each name, which is the shape the faulty counted files already use.
+// The reason travels beside each name, which is the shape the faulty counted files already use. One
+// heading over both reasons a file can fail is true of only one of them: a file saved in an encoding
+// that cannot be read as text would be announced as a file with a typo in it, and its owner would go
+// hunting for a mistake that is not there.
 pub fn faulty_language_files_message(faulty_files: &[FaultyLanguageFile]) -> String {
     let mut message = format!("\n{} language {} could not be used, and will not be taken into consideration.",
             faulty_files.len(), if faulty_files.len() == 1 {"file"} else {"files"});
@@ -929,6 +899,28 @@ pub fn faulty_language_files_message(faulty_files: &[FaultyLanguageFile]) -> Str
         message += &format!("\n-- {}: {}", faulty.file_name, faulty.error);
     }
     message + "\n"
+}
+
+// Split from the printing so that the deduplication can be asserted. Two files declaring one
+// language is a broken installation, and naming it twice here would read as two languages rather
+// than as the one it is.
+fn supported_languages_message(languages_available: &[Language]) -> String {
+    let mut lang_names = languages_available.iter().map(|x| x.name.to_owned()).collect::<Vec<_>>();
+    lang_names.sort();
+    lang_names.dedup();
+    format!("{}The supported languages found are:\n  {}\n", get_data_dir_str(), lang_names.join("\n  "))
+}
+
+// Split from the printing so that the empty case can be asserted: joining the names with the same
+// two spaces that indent the first one leaves a heading over a line holding those two spaces and
+// nothing else, which reads as a configuration whose name failed to appear rather than as none
+// existing. The data dir is named either way, being the answer to "where would I put one".
+fn existing_configs_message(config_names: &[&str]) -> String {
+    if config_names.is_empty() {
+        format!("{}No configurations found.\n", get_data_dir_str())
+    } else {
+        format!("{}Found these configurations:\n  {}\n", get_data_dir_str(), config_names.join("\n  "))
+    }
 }
 
 fn get_data_dir_str() -> String {
@@ -939,7 +931,6 @@ fn get_help_msg_of_command(command: &str) -> Option<&'static str> {
     COMMAND_HELP.iter().flat_map(|(_, commands)| commands.iter())
             .find(|(name, _)| *name == command).map(|(_, help)| *help)
 }
-
 
 #[cfg(test)]
 mod tests {

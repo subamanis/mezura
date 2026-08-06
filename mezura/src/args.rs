@@ -2,15 +2,12 @@
 // anything; it is the front door and it belongs to the command line.
 use std::collections::HashMap;
 
-
 // A command line, where a space separates one target from the next only once a module is named.
 //
-// It cannot separate them unconditionally, because by the time the arguments reach here the shell
-// has already split them and eaten the quotes, so a space inside one path and the space between two
-// paths look exactly alike and no amount of quoting by the user can tell them apart. Making it
-// conditional is the same rule the rest of the feature follows: name nothing and the grammar is
-// the one that was always there, commas and nothing else, so a path with a space in it keeps
-// working for everyone who never asked for a second axis.
+// It cannot separate them unconditionally: by the time the arguments arrive the shell has split them
+// and eaten the quotes, so a space inside a path and a space between two paths look identical and no
+// quoting by the user can tell them apart. Conditional means that whoever names nothing keeps the
+// old grammar, commas and nothing else, and a path with a space in it goes on working.
 pub fn parse_targets(s: &str) -> Result<Vec<(Option<String>, String)>, String> {
     let separated = split_targets(s, char::is_whitespace);
     let declares_a_module = separated.iter().flat_map(|token| token.split(','))
@@ -23,10 +20,10 @@ pub fn parse_targets(s: &str) -> Result<Vec<(Option<String>, String)>, String> {
     }
 }
 
-// The '===> dirs' block of a configuration file, where the line is what separates one target from
-// the next. A space never does, so a path with one in it needs no quoting here, which is also the
-// way out for the one thing a command line cannot express: a spaced path in a run that names
-// modules. A trailing comma still continues the list onto the next line.
+// The '===> dirs' block of a configuration file, where the line separates one target from the next
+// and a space never does. So a path with a space needs no quoting here, which is the way out for the
+// one thing a command line cannot express: a spaced path in a run that names modules. A trailing
+// comma continues the list onto the next line.
 pub fn parse_targets_in_block(block: &str) -> Result<Vec<(Option<String>, String)>, String> {
     targets_of(split_targets(block, |character| character == '\n'))
 }
@@ -41,10 +38,8 @@ pub fn parse_paths_to_vec(s: &str) -> Vec<String> {
     s.split(',').filter_map(cleaned_path).collect::<Vec<_>>()
 }
 
-// 'm=matlab,.pl=perl'. The extension is lowercased here, like every other extension the program
-// holds, so that the map it ends up in is keyed the same way the lookup asks for it. The language
-// name is kept as it was typed and compared without case later, since that is what '--languages'
-// already does with the names it is given.
+// 'm=matlab,.pl=perl'. The extension is lowercased here so the map is keyed the way the lookup asks
+// for it; the language name is kept as typed and compared without case later, as every other name is.
 pub fn parse_forced_languages(s: &str) -> Option<HashMap<String,String>> {
     let mut forced = HashMap::new();
     for pair in s.split(',').filter_map(get_trimmed_if_not_empty) {
@@ -101,12 +96,64 @@ pub fn get_trimmed_if_not_empty(str: &str) -> Option<String> {
     else {Some(str.to_owned())}
 }
 
+// Where a command begins: '--' at the start of the line or after whitespace, which is the only way
+// anybody writes one. A '--' inside a word belongs to the word, since paths made by tools that
+// encode a hierarchy into a single folder name carry them, and splitting on the substring cuts such
+// a target into a piece that does not exist and a command that does not parse. The pieces come back
+// shaped as `line.split("--")` shapes them, one leading piece before any command and then one piece
+// per command, so a caller iterates them the same way.
+pub fn split_into_command_segments(line: &str) -> Vec<&str> {
+    let bytes = line.as_bytes();
+    let mut boundaries = Vec::new();
+    let mut at_token_start = true;
+    let mut i = 0;
+    while i < bytes.len() {
+        if at_token_start && bytes[i..].starts_with(b"--") {
+            boundaries.push(i);
+            i += 2;
+            at_token_start = false;
+            continue;
+        }
+        // Multibyte characters have no ASCII whitespace inside them, so walking bytes cannot split
+        // one, and '-' itself is ASCII
+        at_token_start = bytes[i].is_ascii_whitespace();
+        i += 1;
+    }
 
-// The declared targets, each with the module it was named under. A name holds for the rest of the
-// comma list it opened, so 'frontend=./web,./ui' is one module of two directories, and it stops
-// where that list ends, so nothing written after a named target joins it by accident. Inside the
-// list a name still starts a new one, which is what lets a saved configuration write the whole
-// thing back as 'frontend=./web,backend=./api' and read it as the two targets it was.
+    let mut segments = Vec::with_capacity(boundaries.len() + 1);
+    segments.push(&line[..boundaries.first().copied().unwrap_or(line.len())]);
+    for (position, boundary) in boundaries.iter().enumerate() {
+        let end = boundaries.get(position + 1).copied().unwrap_or(line.len());
+        segments.push(&line[boundary + 2..end]);
+    }
+    segments
+}
+
+// The position of '--name' written as a command: after whitespace or at the start, and with nothing
+// but whitespace or the end after the name, so that a path containing the text never matches and
+// '--help' does not answer for '--helpme'.
+pub fn find_command(line: &str, name: &str) -> Option<usize> {
+    let mut from = 0;
+    while let Some(found) = line[from..].find("--") {
+        let at = from + found;
+        let starts_a_token = at == 0 || line[..at].chars().last().is_some_and(char::is_whitespace);
+        let after_marker = &line[at + 2..];
+        if starts_a_token && after_marker.starts_with(name) {
+            let after_name = &after_marker[name.len()..];
+            if after_name.is_empty() || after_name.chars().next().is_some_and(char::is_whitespace) {
+                return Some(at);
+            }
+        }
+        from = at + 2;
+    }
+    None
+}
+
+// A name holds for the rest of the comma list it opened, so 'frontend=./web,./ui' is one module of
+// two directories, and it stops where that list ends so nothing after a named target joins it by
+// accident. Inside the list a name still starts a new one, which is what lets a saved configuration
+// write 'frontend=./web,backend=./api' and read it back as the two targets it was.
+//
 // The error is the piece that could not be read, which is always a name with nothing after it.
 fn targets_of(tokens: Vec<String>) -> Result<Vec<(Option<String>, String)>, String> {
     let mut targets = Vec::new();
@@ -197,65 +244,11 @@ fn remove_dot_prefix(str: &str) -> &str {
     }
 }
 
-
-// Where a command begins: '--' at the start of the line or after whitespace, which is the only way
-// anybody writes one. A '--' inside a word belongs to the word, because paths made by tools that
-// encode a hierarchy into a single folder name carry them, and the old substring split cut such a
-// target into a piece that does not exist and a command that does not parse. The pieces come back
-// shaped exactly as `line.split("--")` shaped them, one leading piece before any command and then
-// one piece per command, so a caller iterates them the same way.
-pub fn split_into_command_segments(line: &str) -> Vec<&str> {
-    let bytes = line.as_bytes();
-    let mut boundaries = Vec::new();
-    let mut at_token_start = true;
-    let mut i = 0;
-    while i < bytes.len() {
-        if at_token_start && bytes[i..].starts_with(b"--") {
-            boundaries.push(i);
-            i += 2;
-            at_token_start = false;
-            continue;
-        }
-        // Multibyte characters have no ASCII whitespace inside them, so walking bytes cannot split
-        // one, and '-' itself is ASCII
-        at_token_start = bytes[i].is_ascii_whitespace();
-        i += 1;
-    }
-
-    let mut segments = Vec::with_capacity(boundaries.len() + 1);
-    segments.push(&line[..boundaries.first().copied().unwrap_or(line.len())]);
-    for (position, boundary) in boundaries.iter().enumerate() {
-        let end = boundaries.get(position + 1).copied().unwrap_or(line.len());
-        segments.push(&line[boundary + 2..end]);
-    }
-    segments
-}
-
-// The position of '--name' written as a command: after whitespace or at the start, and with nothing
-// but whitespace or the end after the name, so that a path containing the text never matches and
-// '--help' does not answer for '--helpme'.
-pub fn find_command(line: &str, name: &str) -> Option<usize> {
-    let mut from = 0;
-    while let Some(found) = line[from..].find("--") {
-        let at = from + found;
-        let starts_a_token = at == 0 || line[..at].chars().last().is_some_and(char::is_whitespace);
-        let after_marker = &line[at + 2..];
-        if starts_a_token && after_marker.starts_with(name) {
-            let after_name = &after_marker[name.len()..];
-            if after_name.is_empty() || after_name.chars().next().is_some_and(char::is_whitespace) {
-                return Some(at);
-            }
-        }
-        from = at + 2;
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{find_command, split_into_command_segments};
+    use super::*;
 
-    // The shape `line.split("--")` produced, minus the cuts inside words
+    // The shape `line.split("--")` produces, minus the cuts inside words
     #[test]
     fn commands_begin_at_token_boundaries_and_nowhere_else() {
         assert_eq!(vec!["./src ", "threads 2 8 ", "top 5"],
@@ -284,12 +277,6 @@ mod tests {
         assert_eq!(None, find_command("--save-theme dark", "save"));
     }
 
-    use super::*;
-
-
-#[cfg(test)]
-mod Tests{
-    use super::*;
     #[test]
     pub fn test_parse_languages_to_vec() {
         assert_eq!(Vec::<String>::new(), parse_languages_to_vec(","));
@@ -300,6 +287,7 @@ mod Tests{
         assert_eq!(vec!["a".to_owned(),"b".to_owned()], parse_languages_to_vec("  a ,  b "));
         assert_eq!(vec!["a".to_owned(),"b".to_owned()], parse_languages_to_vec(".A,.b "));
     }
+
     #[test]
     pub fn test_parse_paths_to_vec() {
         assert_eq!(vec!["a/a".to_owned(),"b/b".to_owned()], parse_paths_to_vec("a\\a,b\\b"));
@@ -355,6 +343,7 @@ mod Tests{
                         (Some("tests".to_owned()), "./web/tests".to_owned())],
                 parsed("tests=./api/tests,\n./web/tests"));
     }
+
     #[test]
     pub fn test_parse_usize_values() {
         assert_eq!(None,parse_usize_value("0", 1, 8));
@@ -366,8 +355,7 @@ mod Tests{
         assert_eq!(None,parse_usize_value("A", 1, 8));
         assert_eq!(Some(1),parse_usize_value("1", 1, 8));
         assert_eq!(Some(8),parse_usize_value("   8 ", 1, 8));
-        
-        
+
         assert_eq!(None,parse_two_usize_values("A", 1, 4, 1, 12));
         assert_eq!(None,parse_two_usize_values("A A", 1, 4, 1, 12));
         assert_eq!(None,parse_two_usize_values("1 A", 1, 4, 1, 12));
@@ -379,5 +367,4 @@ mod Tests{
         assert_eq!(Some((4,12)),parse_two_usize_values("4 12", 1, 4, 1, 12));
         assert_eq!(Some((2,6)),parse_two_usize_values("2 6", 1, 4, 1, 12));
     }
-}
 }

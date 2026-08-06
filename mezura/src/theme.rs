@@ -1,7 +1,9 @@
+// Every printed token and the style it carries. One list of tokens generates the struct, the
+// defaults, the name lookup and the name listing, so a new one cannot be added to some of them and
+// forgotten in the rest.
 use std::sync::{LazyLock, OnceLock};
 
 use colored::{Color, ColoredString, Colorize};
-
 
 const LABEL_GOLD: Color = Color::TrueColor { r: 181, g: 169, b: 138 };
 const SIZE_GOLD: Color = Color::TrueColor { r: 125, g: 119, b: 105 };
@@ -63,26 +65,12 @@ impl Style {
         self
     }
 
-
-    // Both used only by the tests of this file, which is what marks them
-    #[cfg(test)]
-    pub fn reverse(mut self) -> Style {
-        self.reverse = true;
-        self
-    }
-
-    #[cfg(test)]
-    pub fn paint_with_color(&self, text: &str, color: Color) -> ColoredString {
-        self.apply_attributes(ColoredString::from(text).color(color))
-    }
-
     pub fn paint(&self, text: &str) -> ColoredString {
         self.apply_attributes(match self.color {
             Some(color) => ColoredString::from(text).color(color),
             None => ColoredString::from(text)
         })
     }
-
 
     fn apply_attributes(&self, painted: ColoredString) -> ColoredString {
         let mut painted = painted;
@@ -127,7 +115,7 @@ impl Style {
                 _ => {
                     if color_was_given { return None; }
                     color_was_given = true;
-                    style.color = Some(super::theme::parse_single_color(token)?);
+                    style.color = Some(parse_single_color(token)?);
                 }
             }
         }
@@ -137,7 +125,7 @@ impl Style {
 
     pub fn to_config_string(&self) -> String {
         let mut parts = Vec::with_capacity(5);
-        parts.push(self.color.map_or("default".to_owned(), |x| super::theme::color_to_config_string(&x)));
+        parts.push(self.color.map_or("default".to_owned(), |x| color_to_config_string(&x)));
         if self.bold { parts.push("bold".to_owned()); }
         if self.italic { parts.push("italic".to_owned()); }
         if self.underline { parts.push("underline".to_owned()); }
@@ -146,10 +134,20 @@ impl Style {
 
         parts.join(" ")
     }
+
+    // Both used only by the tests of this file, which is what marks them
+    #[cfg(test)]
+    pub fn reverse(mut self) -> Style {
+        self.reverse = true;
+        self
+    }
+
+    #[cfg(test)]
+    pub fn paint_with_color(&self, text: &str, color: Color) -> ColoredString {
+        self.apply_attributes(ColoredString::from(text).color(color))
+    }
 }
 
-// The token list exists once, and the struct, the defaults, the name lookup and the name listing
-// are all generated from it, so a new token cannot be added to one of them and forgotten in another
 macro_rules! theme_tokens {
     ($($field:ident => $name:literal, $default:expr;)+) => {
         #[derive(Debug, Clone, PartialEq, Eq)]
@@ -276,10 +274,30 @@ impl Theme {
     }
 }
 
-// A theme file is a list of 'token = value' lines and nothing else, which is the same shape that
-// '--style' and a config's style block carry. Tokens it does not mention are left to whatever the
-// next layer of the precedence chain provides, so the overrides stay raw pairs instead of a Theme.
+// The same 'token = value' shape that '--style' and a config's style block carry. Tokens it does not
+// mention are left to the next layer of the chain, which is why the overrides stay raw pairs rather
+// than becoming a Theme.
 pub type ThemeFile = (Vec<(String, String)>, Vec<ThemeParseError>);
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ThemeParseError {
+    UnknownToken(String),
+    InvalidValue(String, String),
+    MalformedLine(String),
+    EmptyTheme,
+}
+
+impl ThemeParseError {
+    pub fn formatted(&self) -> String {
+        match self {
+            Self::UnknownToken(token) => format!("'{token}' is not a style token."),
+            Self::InvalidValue(token, value) =>
+                format!("'{value}' is not a valid style for '{token}'. Expected a color (hex or a terminal color name) and any of: bold, italic, underline, dim, reverse."),
+            Self::MalformedLine(line) => format!("'{line}' is not a 'token = value' line."),
+            Self::EmptyTheme => "the theme declares no styles at all.".to_owned()
+        }
+    }
+}
 
 pub fn parse_theme_file(contents: &str) -> ThemeFile {
     let mut validation_theme = Theme::default();
@@ -314,26 +332,6 @@ pub fn parse_theme_file(contents: &str) -> ThemeFile {
 
 pub fn theme_file_contents(styles: &[(String, String)]) -> String {
     styles.iter().map(|(token, value)| format!("{token} = {value}\n")).collect()
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum ThemeParseError {
-    UnknownToken(String),
-    InvalidValue(String, String),
-    MalformedLine(String),
-    EmptyTheme,
-}
-
-impl ThemeParseError {
-    pub fn formatted(&self) -> String {
-        match self {
-            Self::UnknownToken(token) => format!("'{token}' is not a style token."),
-            Self::InvalidValue(token, value) =>
-                format!("'{value}' is not a valid style for '{token}'. Expected a color (hex or a terminal color name) and any of: bold, italic, underline, dim, reverse."),
-            Self::MalformedLine(line) => format!("'{line}' is not a 'token = value' line."),
-            Self::EmptyTheme => "the theme declares no styles at all.".to_owned()
-        }
-    }
 }
 
 // The form used by '--style' and by the 'style' line of a config file: comma separated pairs, the
@@ -398,10 +396,61 @@ pub fn resolve(theme_styles: &[(String, String)], config_styles: &[(String, Stri
     theme
 }
 
+// A name, or six hex digits with or without the '#'. The underscore is accepted beside the hyphen
+// because a config file is typed by hand and both spellings read as the same name.
+pub fn parse_single_color(token: &str) -> Option<Color> {
+    match token.to_lowercase().replace('_', "-").as_str() {
+        "black" => Some(Color::Black),
+        "red" => Some(Color::Red),
+        "green" => Some(Color::Green),
+        "yellow" => Some(Color::Yellow),
+        "blue" => Some(Color::Blue),
+        "magenta" => Some(Color::Magenta),
+        "cyan" => Some(Color::Cyan),
+        "white" => Some(Color::White),
+        "bright-black" => Some(Color::BrightBlack),
+        "bright-red" => Some(Color::BrightRed),
+        "bright-green" => Some(Color::BrightGreen),
+        "bright-yellow" => Some(Color::BrightYellow),
+        "bright-blue" => Some(Color::BrightBlue),
+        "bright-magenta" => Some(Color::BrightMagenta),
+        "bright-cyan" => Some(Color::BrightCyan),
+        "bright-white" => Some(Color::BrightWhite),
+        other => {
+            let hex = other.strip_prefix('#').unwrap_or(other);
+            if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+                return None;
+            }
+            Some(Color::TrueColor {
+                r: u8::from_str_radix(&hex[0..2], 16).ok()?,
+                g: u8::from_str_radix(&hex[2..4], 16).ok()?,
+                b: u8::from_str_radix(&hex[4..6], 16).ok()?
+            })
+        }
+    }
+}
+
+// The form 'parse_single_color' reads back, so a theme saved and loaded is the theme it was
+pub fn color_to_config_string(color: &Color) -> String {
+    match color {
+        Color::TrueColor {r, g, b} => format!("{r:02x}{g:02x}{b:02x}"),
+        named => format!("{:?}", named).chars().enumerate().flat_map(|(i, c)| {
+            if i > 0 && c.is_ascii_uppercase() { vec!['-', c.to_ascii_lowercase()] }
+            else { vec![c.to_ascii_lowercase()] }
+        }).collect()
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_color_to_config_string() {
+        assert_eq!("cyan", color_to_config_string(&Color::Cyan));
+        assert_eq!("bright-magenta", color_to_config_string(&Color::BrightMagenta));
+        assert_eq!("ff0080", color_to_config_string(&Color::TrueColor{r:255,g:0,b:128}));
+    }
 
     #[test]
     fn parses_colors_and_attributes_in_any_order() {
@@ -564,57 +613,3 @@ mod tests {
 }
 
 
-pub fn parse_single_color(token: &str) -> Option<Color> {
-    match token.to_lowercase().replace('_', "-").as_str() {
-        "black" => Some(Color::Black),
-        "red" => Some(Color::Red),
-        "green" => Some(Color::Green),
-        "yellow" => Some(Color::Yellow),
-        "blue" => Some(Color::Blue),
-        "magenta" => Some(Color::Magenta),
-        "cyan" => Some(Color::Cyan),
-        "white" => Some(Color::White),
-        "bright-black" => Some(Color::BrightBlack),
-        "bright-red" => Some(Color::BrightRed),
-        "bright-green" => Some(Color::BrightGreen),
-        "bright-yellow" => Some(Color::BrightYellow),
-        "bright-blue" => Some(Color::BrightBlue),
-        "bright-magenta" => Some(Color::BrightMagenta),
-        "bright-cyan" => Some(Color::BrightCyan),
-        "bright-white" => Some(Color::BrightWhite),
-        other => {
-            let hex = other.strip_prefix('#').unwrap_or(other);
-            if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
-                return None;
-            }
-            Some(Color::TrueColor {
-                r: u8::from_str_radix(&hex[0..2], 16).ok()?,
-                g: u8::from_str_radix(&hex[2..4], 16).ok()?,
-                b: u8::from_str_radix(&hex[4..6], 16).ok()?
-            })
-        }
-    }
-}
-
-pub fn color_to_config_string(color: &Color) -> String {
-    match color {
-        Color::TrueColor {r, g, b} => format!("{r:02x}{g:02x}{b:02x}"),
-        named => format!("{:?}", named).chars().enumerate().flat_map(|(i, c)| {
-            if i > 0 && c.is_ascii_uppercase() { vec!['-', c.to_ascii_lowercase()] }
-            else { vec![c.to_ascii_lowercase()] }
-        }).collect()
-    }
-}
-
-
-#[cfg(test)]
-mod color_tests {
-    use super::*;
-
-    #[test]
-    fn test_color_to_config_string() {
-        assert_eq!("cyan", color_to_config_string(&Color::Cyan));
-        assert_eq!("bright-magenta", color_to_config_string(&Color::BrightMagenta));
-        assert_eq!("ff0080", color_to_config_string(&Color::TrueColor{r:255,g:0,b:128}));
-    }
-}

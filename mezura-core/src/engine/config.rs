@@ -3,27 +3,24 @@
 // in the binary, which is a crate of its own and never seen from here.
 use std::collections::HashMap;
 
-
 pub const MAX_PRODUCERS_VALUE : usize = 32;
 pub const MIN_PRODUCERS_VALUE : usize = 1;
 pub const MAX_CONSUMERS_VALUE : usize = 128;
 pub const MIN_CONSUMERS_VALUE : usize = 1;
+
 pub(crate) const DEF_BRACES_AS_CODE    : bool    = false;
 pub(crate) const DEF_SEARCH_IN_DOTTED  : bool    = false;
 pub(crate) const DEF_NO_GITIGNORE      : bool    = false;
 
-
-// A directory or file that was asked for, and the name it was asked for under. 'None' is a target
-// that was given no name, and every one of them shares the '(unnamed)' row of the report.
-// The name lives inside the target and not in a list of its own, so that everything which already
-// carries the targets carries the modules with them: the saved configuration, the log entry that
-// decides whether two runs are comparable, and the echo of the settings in the JSON document.
+// The name lives inside the target rather than in a list of its own, so everything that already
+// carries the targets carries the names with them: the saved configuration, the log entry that
+// decides whether two runs are comparable, and the settings echoed in the JSON document.
 #[derive(Debug,PartialEq,Eq,Clone)]
 pub struct Target {
+    // 'None' shares the '(unnamed)' row of the report with every other unnamed target.
     pub module: Option<String>,
-    // Whatever state its holder put it in: as declared it is what was written, prepared it is
-    // absolute with its pattern not yet expanded, and the list the run walks, which is also what
-    // 'RunResult.targets' reports, holds only resolved absolute paths.
+    // In whatever state its holder put it: as declared it is what was typed, and the list the run
+    // walks, which is what 'RunResult.targets' reports, holds resolved absolute paths.
     pub path: String
 }
 
@@ -37,11 +34,10 @@ impl Target {
     }
 }
 
-// By path first, case-insensitively where the file system is, so that two spellings of one place sort
-// together. The raw path and the name then break the tie, and they are not decoration: 'Ord' has to
-// agree with 'Eq', and 'Eq' is derived over both fields. Without them, two targets that differ only
-// in case, or only in name, compare Equal while '==' says false, and the first 'dedup' or
-// 'binary_search' written over a sorted list of them would quietly drop one.
+// By path first, ignoring case where the filesystem does, so two spellings of one place sort
+// together. The two tie-breakers are not decoration: 'Ord' has to agree with 'Eq', which is derived
+// over both fields, or targets differing only in case or only in name compare Equal while '==' says
+// otherwise, and the first 'dedup' over a sorted list drops one.
 impl Ord for Target {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         crate::engine::targets::path_comparison_key(&self.path)
@@ -66,11 +62,9 @@ impl std::fmt::Display for Target {
     }
 }
 
-// The counts are read and never written from outside, which is what lets them be private: a number
-// the run cannot work with then has no way in. Zero producers left every directory in the queue with
-// nothing to drain it and the scan of a real tree answered "nothing found"; zero consumers returned a
-// result claiming relevant files and zero of everything at once. Both were silent wrong answers, and
-// only the command line was stopping them, which a library caller never goes through.
+// The two counts are private so that a number the run cannot work with has no way in: zero scanning
+// threads leaves every directory in the queue and answers "nothing found" over a real tree, and zero
+// counting threads returns a result claiming files and zero of everything else.
 #[derive(Debug,PartialEq,Clone)]
 pub struct Threads {
     producers: usize,
@@ -78,9 +72,8 @@ pub struct Threads {
 }
 
 impl Threads {
-    // Clamped rather than refused. What was asked for is readable back through the two methods
-    // below, so nothing is hidden, and a count outside the range is a preference the machine cannot
-    // honour rather than a mistake worth ending a run over.
+    // Clamped rather than refused: a count outside the range is a preference the machine cannot
+    // honour, not a mistake worth ending a run over.
     pub fn new(producers: usize, consumers: usize) -> Self {
         Threads {
             producers: producers.clamp(MIN_PRODUCERS_VALUE, MAX_PRODUCERS_VALUE),
@@ -104,11 +97,10 @@ impl Threads {
 impl Default for Threads {
     fn default() -> Self {
         let threads = num_cpus::get();
-        // Consumers are oversubscribed hard, because what they wait on is a blocking file open and
-        // the number that matters is how many reads are in flight, not how many cores exist. On one
-        // machine, going from 22 consumers to 96 cost nothing measurable on a fast disk with a warm
-        // cache, won 1.20x on a slow disk, and won 1.97x from cold. The asymmetry is the whole
-        // argument: it is free where it does not help.
+        // Four counting threads per core. What they wait on is a blocking file open, so what decides
+        // the speed is how many reads are in flight and not how many cores exist. Measured, going
+        // from 22 to 96 of them costs nothing on a fast disk with a warm cache, wins 1.20x on a slow
+        // one and 1.97x from cold: free where it does not help, which is the whole argument.
         if threads <= 4 {
             Threads {
                 producers: 2,
@@ -123,24 +115,20 @@ impl Default for Threads {
     }
 }
 
-// Everything the counting needs, and nothing else. This is what a library caller builds, and it is
-// plain data: nothing in it has to be computed, in any order, before anything else. Every field is
-// public and there are no setters, so a configuration that differs from the default is written in
-// one expression, and the list can never fall behind the struct:
+// Plain data, so nothing has to be computed in any order before anything else, and no setters, so
+// one expression says everything and can never fall behind the struct:
 //
 //     let config = EngineConfig { count_keywords: false, ..EngineConfig::new(["./src"]) };
 //
-// Every field but one answers what gets counted. 'threads' answers how fast, and the same tree
-// counted by more of them is the same tree: it is here because it is a setting somebody saves and
-// reloads beside the others, not because it belongs to the same question. The log knows the
-// difference and leaves it out of what makes two runs comparable.
+// Every field but 'threads' answers what gets counted. That one answers how fast, and is here only
+// because it is saved and reloaded beside the others; the log leaves it out of what makes two runs
+// comparable.
 #[derive(Debug,PartialEq,Clone)]
 pub struct EngineConfig {
-    // The places to count, as declared: paths or glob patterns, relative or absolute, exactly as
-    // whoever built the configuration wrote them down. 'run' resolves them at its entry with the
-    // settings of this same configuration, so the flags that filter a pattern's matches and the
-    // flags the walk obeys can never disagree. A relative path is joined to the process working
-    // directory at that moment, and 'RunResult.targets' reports what the list resolved to.
+    // Paths or glob patterns, relative or absolute, exactly as they were written. 'run' resolves
+    // them at its entry with these same settings, so the flags that filter a pattern's matches and
+    // the flags the scan obeys cannot disagree. A relative path is joined to the working directory
+    // at that moment, and 'RunResult.targets' reports what they resolved to.
     pub dirs: Vec<Target>,
     pub exclude_dirs: Vec<String>,
     pub languages_of_interest: Vec<String>,
@@ -150,14 +138,13 @@ pub struct EngineConfig {
     pub braces_as_code: bool,
     pub should_search_in_dotted: bool,
     pub no_gitignore: bool,
-    // '--hide keywords' stops the counting as well as the printing, and nothing else reads the
-    // counts, so the work would be thrown away. To the engine that is a question about work.
+    // Hiding the keywords stops the counting too, since nothing else reads them and the work would
+    // be thrown away.
     pub count_keywords: bool
 }
 
-// Written out rather than derived: the derived 'count_keywords' would be false, which is the opposite
-// of what the program does by default, and a caller writing 'EngineConfig { dirs, ..Default::default() }'
-// would silently get no keywords counted.
+// Written out rather than derived, because a derived 'count_keywords' would be false and anyone
+// writing 'EngineConfig { dirs, ..Default::default() }' would silently get no keywords.
 impl Default for EngineConfig {
     fn default() -> Self {
         EngineConfig {
@@ -176,8 +163,7 @@ impl Default for EngineConfig {
 }
 
 impl EngineConfig {
-    // What a caller with nothing to say but where to look writes. Everything else has a default
-    // that matches what the command line would have produced.
+    // Everything but the places to look takes the default the command line would have produced.
     pub fn new(dirs: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
         EngineConfig {
             dirs: dirs.into_iter().map(Target::of).collect(),

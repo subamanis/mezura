@@ -1,14 +1,7 @@
-// Edit distance is the obvious strategy for "did you mean" and it fails on the case that motivates
-// this one: 'list-themes' and 'show-themes' are eleven characters apart by four edits, so a
-// threshold that finds them would match noise. The names here are hyphen-compounded, so a shared
-// token is the far stronger signal, and it answers with the whole family of related names instead of
-// one guess, which is also what someone who does not know what exists needs.
-
-// Two edits over a three letter name reaches most of the alphabet, so the tolerance grows with the
-// name: 'rst' offers 'Rust' alone, where a flat two would also offer 'CSS', 'JS', 'R' and 'TS'.
-fn max_edit_distance(input: &str) -> usize {
-    if input.chars().count() < 5 {1} else {2}
-}
+// Edit distance alone fails on the case that motivates this: 'list-themes' and 'show-themes' are
+// four edits apart, and a threshold that finds them matches noise. The names are hyphen-compounded,
+// so a shared token is the stronger signal, and it answers with the whole family of related names
+// rather than one guess.
 
 // Strategies in order of how much they tell us, stopping at the first that finds anything
 pub fn suggest<'a>(input: &str, candidates: &[&'a str]) -> Vec<&'a str> {
@@ -35,6 +28,23 @@ pub fn suggest<'a>(input: &str, candidates: &[&'a str]) -> Vec<&'a str> {
     let tolerance = max_edit_distance(&input);
     candidates.iter().filter(|candidate| edit_distance(&input, &candidate.to_lowercase()) <= tolerance)
             .copied().collect()
+}
+
+// None when nothing is close, so that the caller can point at its own listing command instead of
+// this printing every name there is
+pub fn formatted_suggestion(input: &str, candidates: &[&str]) -> Option<String> {
+    let matches = suggest(input, candidates);
+    if matches.is_empty() {
+        return None;
+    }
+
+    Some(format!("Did you mean:\n  {}", matches.join("\n  ")))
+}
+
+// The tolerance grows with the name, because two edits over three letters reaches most of the
+// alphabet: 'rst' offers 'Rust' alone, where a flat two also offers 'CSS', 'JS', 'R' and 'TS'.
+fn max_edit_distance(input: &str) -> usize {
+    if input.chars().count() < 5 {1} else {2}
 }
 
 // 'palette' and 'palettes' are the same word for this purpose, and so are 'lang' and 'languages',
@@ -67,18 +77,6 @@ fn edit_distance(a: &str, b: &str) -> usize {
 
     previous[b.len()]
 }
-
-// None when nothing is close, so that the caller can point at its own listing command instead of
-// this printing every name there is
-pub fn formatted_suggestion(input: &str, candidates: &[&str]) -> Option<String> {
-    let matches = suggest(input, candidates);
-    if matches.is_empty() {
-        return None;
-    }
-
-    Some(format!("Did you mean:\n  {}", matches.join("\n  ")))
-}
-
 
 #[cfg(test)]
 mod tests {

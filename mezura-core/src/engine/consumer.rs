@@ -12,11 +12,9 @@ pub fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>
 {
     thread::Builder::new().name(format!("consumer-{id}")).spawn(move || {
         start_parsing_files(id, files_injector, faulty_files, finish_condition, stats_per_module, language_map, config);
-        // The last thing this thread does, and the only honest answer to how long the counting took.
-        // 'run' cannot ask: it joins these threads after calling the caller's callback, so the clock
-        // it reads there holds the callback as well whenever the callback finished last, and holds
-        // nothing of it whenever the consumers did. Subtracting the callback's own elapsed time was
-        // right in the first case and wrong in the second, which is every long run.
+        // The last thing this thread does, and the only honest answer to how long the counting took:
+        // 'run' joins these threads after calling the caller's callback, so its own clock cannot tell
+        // the two apart.
         counting_ended.fetch_max(started.elapsed().as_millis() as u64, Ordering::Relaxed);
     })
 }
@@ -34,14 +32,12 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
     let modules = stats_per_module.lock().unwrap().len();
     let mut local_stats: Vec<HashMap<String, Stats>> =
             vec![HashMap::new(); modules];
-    // A batch and not a file at a time, because the consumers outnumber the cores four to one and
-    // every one of them was reaching for the same injector head between one file and the next. The
-    // cost is not the atomic, it is the losing side: a contended steal returns Retry, and the arm
-    // below answers it by yielding, which on an oversubscribed machine buys a scheduling round for
-    // every file. The batch halves whatever is left when the queue runs low, so the last files
-    // still spread out instead of ending up behind one thread.
+    // A batch and not one file at a time. With four of these threads per core they all reach for the
+    // same queue head between files, and the cost is not the atomic but the losing side: a contended
+    // steal comes back as Retry, which the arm below answers by yielding, buying a whole scheduling
+    // round per file. The batch halves what is left when the queue runs low, so the last files still
+    // spread out rather than queueing behind one thread.
     let worker = Worker::new_fifo();
-    // let mut share = 0;
     loop {
         let next = match worker.pop() {
             Some(parsable_file) => Steal::Success(parsable_file),
@@ -49,20 +45,17 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
         };
         match next {
             Steal::Success(parsable_file) => {
-                // A worker that dies mid-run is unreachable from the public surface on purpose,
-                // so the test for what 'run' does about one causes it here. Triggered by the name
-                // of the file and not by shared state, because tests run in parallel and other
-                // ones drive this loop directly: a flag either of them could trip is a race, a
-                // name only one corpus carries is not. Compiled out of every real build.
+                // Nothing public can kill one of these threads, so the test for what 'run' does about
+                // a dead one causes it here. Keyed on a corpus name and not on shared state, since
+                // tests run in parallel and a flag either could trip is a race.
                 #[cfg(test)]
                 if parsable_file.path.to_string_lossy().contains("mezura-dead-consumer") {
                     panic!("test-induced consumer panic");
                 }
-                // The same door, for the opposite question. What a run reports as its duration can
-                // only be checked against counting that visibly outlasts the caller's callback, and
-                // a corpus large enough to take a known number of milliseconds is a corpus whose
-                // timing depends on the machine. This makes the counting slow by an amount the test
-                // chose, so the assertion is about arithmetic and not about how fast the disk is.
+                // The same door for the opposite question: checking the reported duration needs
+                // counting that visibly outlasts the caller's callback, and a corpus big enough to
+                // take a known number of milliseconds is a corpus whose timing depends on the
+                // machine. This makes it slow by an amount the test chose.
                 #[cfg(test)]
                 if parsable_file.path.to_string_lossy().contains("mezura-slow-consumer") {
                     thread::sleep(Duration::from_millis(40));
@@ -70,8 +63,8 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                 idle_iterations = 0;
                 let lang_name = parsable_file.language_name.as_ref();
                 if !keyword_matchers.contains_key(lang_name) {
-                    // Hidden keywords are not counted either. Nothing else in the program reads
-                    // the counts, not even the log, so the work would be thrown away
+                    // Hidden keywords are not counted either: nothing else reads them, not even the
+                    // log, so the work would be thrown away.
                     let built = if config.count_keywords {
                         file_parser::KeywordMatcher::build(language_map.get(lang_name).unwrap())
                     } else {
@@ -87,12 +80,11 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                         local_stats[parsable_file.module as usize].entry(lang_name.to_owned())
                                 .or_default().add_file(x, bytes, keywords);
                     },
-                    // Lossily and with the separators normalised: the walk joins its components
-                    // with the platform's own, while the target it started from was resolved to
-                    // forward slashes, so the two halves of one path disagreed in every report and
-                    // inside the JSON document. Lossy because a path is not required to be UTF-8 on
-                    // every platform, and this string is only ever shown: 'to_str().unwrap()' here
-                    // panicked on such a name, while holding the lock it had just taken.
+                    // Separators normalised because the scan joins with the platform's own while the
+                    // target it started from was resolved to forward slashes, and the two halves of
+                    // one path then disagree in every report. Lossy because a path need not be UTF-8
+                    // and this string is only ever shown: 'to_str().unwrap()' panicked on such a
+                    // name while holding the lock it had just taken.
                     Err(x) => faulty_files.lock().unwrap().push(FaultyFileDetails::new(
                             parsable_file.path.to_string_lossy().replace('\\', "/"), x,
                             parsable_file.path.metadata().map_or(0, |m| m.len())))
@@ -132,7 +124,6 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
         parse_buffers.timing.publish();
     }
 
-    // One lock and one pass, where the two halves used to need two of each
     if local_stats.iter().any(|bucket| !bucket.is_empty()) {
         let mut global = stats_per_module.lock().unwrap();
         for (module, bucket) in local_stats.iter().enumerate() {

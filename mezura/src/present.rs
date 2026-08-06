@@ -1,13 +1,13 @@
 // Turning a result into something a person reads. Kept apart from the run itself, so that counting
 // is a function of its inputs and a caller which wants the numbers and not the report never comes
 // near any of this.
-use crate::paths::PERSISTENT_APP_PATHS;
 use mezura_core::{FaultyFileDetails, RunResult, UnreadableDirDetails};
-use super::config_manager::Configuration;
 
-// Everything that turns a result into something a person reads, kept out of 'run' so that the run
-// itself is a function of its inputs. A caller that wants the numbers and not the report never calls
-// this, and one that wants both gets the same result twice, since presenting reads and never writes.
+use super::config_manager::Configuration;
+use crate::paths::PERSISTENT_APP_PATHS;
+
+// Reads and never writes, so a caller wanting both the numbers and the report can have the same
+// result twice.
 pub fn present(result: &RunResult, config: &Configuration) {
     let datetime_now = chrono::Local::now();
     // Before anything else, because a scan can come back empty precisely because the directories
@@ -33,11 +33,10 @@ pub fn present(result: &RunResult, config: &Configuration) {
         return;
     }
 
-    // Every file failing to parse is presented as the failure it is, and the report of zeros the
-    // ordinary path would print under it is not printed: a table of nothing under a real failure
-    // reads as an answer. The document is still written whole, faulty files and warnings included,
-    // for the same reason the empty scan writes one. Returning here also keeps this run out of the
-    // log, where a row of zeros would make the next comparison report a collapse and a recovery.
+    // No table of zeros under a real failure, because a table reads as an answer. The document is
+    // still written whole, for the same reason the empty scan writes one. Returning here also keeps
+    // the run out of the log, where a row of zeros makes the next comparison report a collapse and
+    // then a recovery.
     if result.all_relevant_files_were_faulty() {
         print_faulty_files_or_ok(&result.faulty_files, config);
         print_detail_hint_if_anything_was_hidden(result, config);
@@ -70,10 +69,34 @@ pub fn present(result: &RunResult, config: &Configuration) {
     }
 }
 
-// The same kind of problem as a file that will not parse, and told in the same shape: how many, and
-// the same command for the detail. In the error colour and not a milder one because it is the worse
-// of the two, since a faulty file is at least counted among the files that were found while
-// everything under one of these appears in no total at all.
+// Hiding the status never hides a parsing failure: that would show wrong numbers with nothing
+// to indicate it
+pub fn print_faulty_files_or_ok(faulty_files: &[FaultyFileDetails], config: &Configuration) {
+    if faulty_files.is_empty() {
+        if !config.view.hidden.parsing_info && config.view.prints_text() {
+            println!("{}\n",super::theme::active().success.paint("ok"));
+        }
+    } else {
+        // A JSON run reports them inside the document as well, but they are a mistake and belong on
+        // the error output in every case, where '--hide' can never suppress them
+        let error = &super::theme::active().error;
+        let (count, subject, pronoun) = (faulty_files.len(),
+                if faulty_files.len() == 1 {"faulty file"} else {"faulty files"},
+                if faulty_files.len() == 1 {"It"} else {"They"});
+        eprintln!("{} {}", error.paint(&count.to_string()),
+                error.paint(&format!("{subject} detected. {pronoun} will be ignored in stat calculation.")));
+        if config.view.should_show_faulty_files {
+            for f in faulty_files {
+                eprintln!("-- Error: {} \n   for file: {}\n",f.error_msg,f.path);
+            }
+        }
+        eprintln!();
+    }
+}
+
+// In the error colour and not a milder one, because it is the worse of the two problems: a faulty
+// file is at least counted among the files that were found, while everything under one of these
+// appears in no total at all.
 fn print_unreadable_dirs(unreadable_dirs: &[UnreadableDirDetails], config: &Configuration) {
     if unreadable_dirs.is_empty() {return;}
 
@@ -101,14 +124,11 @@ fn print_detail_hint_if_anything_was_hidden(result: &RunResult, config: &Configu
     }
 }
 
-// Once for the run and not once for each kind of problem. A scan that meets both prints two counts,
-// and each of them used to be followed by the same sentence naming the same command, so the reader
-// was told twice to do one thing. It is the same flag either way, and it is offered whenever there
-// is anything at all for it to show.
+// Once for the run and not once per kind of problem: it is the same flag either way, and a scan that
+// meets both would otherwise tell the reader twice to do one thing.
 //
-// Split from the printing above so the decision can be asserted, which is the one thing worth
-// asserting here: three paths through 'present' call it and each reaches this with a different pair
-// of lists behind it.
+// Split from the printing so the decision can be asserted, which is the one thing worth asserting
+// here: three paths through 'present' reach it with a different pair of lists behind them.
 fn detail_hint(result: &RunResult, config: &Configuration) -> Option<String> {
     if config.view.should_show_faulty_files
         || (result.unreadable_dirs.is_empty() && result.faulty_files.is_empty()) {
@@ -116,31 +136,6 @@ fn detail_hint(result: &RunResult, config: &Configuration) -> Option<String> {
     }
 
     Some(format!("Run with command '--{}' to get detailed info.\n", super::config_manager::SHOW_FAULTY_FILES))
-}
-
-// Hiding the status never hides a parsing failure: that would show wrong numbers with nothing
-// to indicate it
-pub fn print_faulty_files_or_ok(faulty_files: &[FaultyFileDetails], config: &Configuration) {
-    if faulty_files.is_empty() {
-        if !config.view.hidden.parsing_info && config.view.prints_text() {
-            println!("{}\n",super::theme::active().success.paint("ok"));
-        }
-    } else {
-        // A JSON run reports them inside the document as well, but they are a mistake and belong on
-        // the error output in every case, where '--hide' can never suppress them
-        let error = &super::theme::active().error;
-        let (count, subject, pronoun) = (faulty_files.len(),
-                if faulty_files.len() == 1 {"faulty file"} else {"faulty files"},
-                if faulty_files.len() == 1 {"It"} else {"They"});
-        eprintln!("{} {}", error.paint(&count.to_string()),
-                error.paint(&format!("{subject} detected. {pronoun} will be ignored in stat calculation.")));
-        if config.view.should_show_faulty_files {
-            for f in faulty_files {
-                eprintln!("-- Error: {} \n   for file: {}\n",f.error_msg,f.path);
-            }
-        }
-        eprintln!();
-    }
 }
 
 fn get_activated_languages_as_str(config: &Configuration) -> String {
@@ -168,8 +163,9 @@ fn get_specified_config_file_path(config: &Configuration) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mezura_core::{FilesPresent, Performance, Stats, Threads};
+
+    use super::*;
 
     fn result_with(unreadable: usize, faulty: usize) -> RunResult {
         RunResult {

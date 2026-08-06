@@ -1,14 +1,13 @@
-// Where a user's own languages, themes, configurations and logs live. It belongs to the command line
-// and not to the library for two reasons: nothing about counting depends on it, and the decision
-// below is made with 'cfg!(test)', which is only true in the crate that is actually being tested. In
-// the library it silently stopped applying the moment the binary became a crate of its own, and the
-// tests went back to reading and writing the real directory.
+// Where a user's own languages, themes, configurations and logs live. Here and not in the library
+// for two reasons: nothing about counting depends on it, and the sandbox below is chosen with
+// 'cfg!(test)', which is only true in the crate actually being tested. In the library it would stop
+// applying the moment the binary is its own crate, and the tests would go back to reading and
+// writing the real directory without saying so.
 use std::{fs, path::Path, sync::LazyLock};
 
 use directories::ProjectDirs;
 
-// The layout of the application's own directory. None of it is a question about counting, so none of
-// it belongs to the library: a caller measuring lines of code has no use for where the logs go.
+// The layout of the application's own directory.
 pub const APP_NAME : &str = "mezura";
 pub const LANGUAGES_DIR_NAME : &str = "languages";
 pub const THEMES_DIR_NAME : &str = "themes";
@@ -20,21 +19,6 @@ pub const REPLACED_DIR_NAME : &str = "replaced";
 
 pub static PERSISTENT_APP_PATHS : LazyLock<PersistentAppPaths> = LazyLock::new(PersistentAppPaths::get);
 
-// What the tests read and what they write, kept apart. 'tests/fixtures' holds checked-in inputs and
-// is never written to; 'test_dir' is scratch, ignored by git as a whole, and a test that writes
-// there makes the directory it needs. Both are anchored on the manifest rather than on the
-// executable, so neither depends on where cargo put the test binary or on the working directory.
-//
-// Mixing the two hid a dependency for as long as they were mixed: two tests write a file without
-// creating its directory, and passed only because a checked-in fixture happened to be sitting in it.
-#[cfg(test)]
-pub mod test_paths {
-    pub const FIXTURES_DIR       : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/");
-    pub const SCRATCH_DIR        : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test_dir/");
-    pub const SCRATCH_CONFIG_DIR : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test_dir/config/");
-    pub const SCRATCH_LOG_DIR    : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test_dir/logs/");
-}
-
 #[derive(Debug)]
 pub struct PersistentAppPaths {
     pub data_dir: String,
@@ -45,11 +29,6 @@ pub struct PersistentAppPaths {
     pub are_initialized: bool
 }
 
-// Returns false both when the dir doesn't exist and when it exists but is empty.
-pub fn dir_contains_entries(path: &str) -> bool {
-    fs::read_dir(path).is_ok_and(|mut entries| entries.next().is_some())
-}
-
 impl PersistentAppPaths {
     //Persistent paths:
     // Windows:  C:/Users/<user_name>/AppData/Roaming/mezura
@@ -57,13 +36,13 @@ impl PersistentAppPaths {
     // MacOs:    /Users/<user_name>/Library/Application Support/mezura
     pub fn get() -> Self {
         let proj_dirs = ProjectDirs::from("", "",  APP_NAME).unwrap();
-        // A test writes real configuration and theme files through these paths, and one that is
-        // interrupted before its cleanup leaves them behind. In the real directory that is not
-        // litter: the leftovers are loadable configurations that '--show-configs' lists, and
-        // 'test_save_load_configs' begins by demanding that its own file is absent, so a single
-        // interrupted run makes it fail on every run after it until the file is deleted by hand.
-        // Pointing the whole thing at a temporary directory also stops the machine's own default
-        // configuration from taking part in the tests, which is what made them differ per machine.
+        // Tests write real configuration and theme files through these paths, and one interrupted
+        // before its cleanup leaves them behind. In the real directory those are not litter but
+        // loadable configurations that '--show-configs' lists, and 'test_save_load_configs' opens by
+        // demanding its own file is absent, so one interrupted run fails it forever after.
+        //
+        // A temporary directory also keeps the machine's own default configuration out of the tests,
+        // which is what made them behave differently per machine.
         let data_dir = if cfg!(test) {
             std::env::temp_dir().join(APP_NAME.to_owned() + "-test").to_string_lossy().into_owned() + "/"
         } else {
@@ -76,9 +55,9 @@ impl PersistentAppPaths {
         let languages_dir = data_dir.clone() + LANGUAGES_DIR_NAME + "/";
         let config_dir = data_dir.clone() + CONFIG_DIR_NAME + "/";
         let logs_dir = data_dir.clone() + LOGS_DIR_NAME + "/";
-        // The existence of the project dir alone means nothing, since any part of the program (or the test
-        // suite) that touches these paths can create it. The baked-in data must actually be present, otherwise
-        // a half-created dir would be mistaken for a valid installation and every run would fail.
+        // The project dir existing means nothing on its own, since anything that touches these paths
+        // creates it. The shipped data has to actually be there, or a half-made directory passes for
+        // an installation and every run fails.
         let are_initialized = dir_contains_entries(&languages_dir) && Path::new(&config_dir).exists()
                 && Path::new(&logs_dir).exists();
 
@@ -91,4 +70,24 @@ impl PersistentAppPaths {
             are_initialized
         }
     }
+}
+
+// Returns false both when the dir doesn't exist and when it exists but is empty.
+pub fn dir_contains_entries(path: &str) -> bool {
+    fs::read_dir(path).is_ok_and(|mut entries| entries.next().is_some())
+}
+
+// What the tests read and what they write, kept apart. 'tests/fixtures' holds checked-in inputs and
+// is never written to; 'test_dir' is scratch, ignored by git as a whole, and a test that writes
+// there makes the directory it needs. Both are anchored on the manifest rather than on the
+// executable, so neither depends on where cargo put the test binary or on the working directory.
+//
+// Mixing the two hides a dependency: two tests write a file without creating its directory, and
+// would pass only because a checked-in fixture happened to be sitting in it.
+#[cfg(test)]
+pub mod test_paths {
+    pub const FIXTURES_DIR       : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/");
+    pub const SCRATCH_DIR        : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test_dir/");
+    pub const SCRATCH_CONFIG_DIR : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test_dir/config/");
+    pub const SCRATCH_LOG_DIR    : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test_dir/logs/");
 }

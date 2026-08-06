@@ -1,10 +1,7 @@
 #![forbid(unsafe_code)]
-
 #![allow(non_snake_case)]
 
-// A binary publishes nothing, so this is a convenience and not a surface. The library's own copy is
-// gated behind cfg(test), because there every call site is a test and '#[macro_export]' was putting
-// it at the root of anyone who depends on us.
+// A binary publishes nothing, so this is a convenience and not a surface.
 macro_rules! hashmap {
     ($( $key: expr => $val: expr ),*) => {{
         #[allow(unused_mut)]
@@ -14,40 +11,39 @@ macro_rules! hashmap {
     }}
 }
 
+mod args;
+mod config_files;
+mod config_manager;
+mod format;
+mod formatted;
+mod json_printer;
+mod log;
+mod message_printer;
 mod paths;
 mod present;
-mod formatted;
-mod warnings;
-mod config_manager;
-mod config_files;
-mod theme_files;
-mod theme;
-mod log;
-mod args;
-mod format;
-mod message_printer;
-mod suggestions;
 mod result_printer;
-mod json_printer;
+mod suggestions;
+mod theme;
+mod theme_files;
+mod warnings;
 
 use std::{collections::HashMap, process::ExitCode, time::Instant};
 
 use colored::*;
 use include_dir::{File, include_dir};
-
 use mezura_core::{EXTENSION_PRIORITY_FILE_NAME, FilesPresent, Language};
+
+use crate::config_manager::Configuration;
+use crate::config_manager::{CHANGELOG, HELP, LAYOUT, RESTORE, SHOW_CONFIGS, SHOW_LANGUAGES,
+        SHOW_THEMES, THEME_EDITOR, VERSION, VERSION_ID};
+use crate::formatted::Formatted;
 use crate::paths::{CONFIG_DIR_NAME, DEFAULT_CONFIG_NAME, LANGUAGES_DIR_NAME, LOGS_DIR_NAME,
         MANIFEST_FILE_NAME, REPLACED_DIR_NAME, THEMES_DIR_NAME};
-use crate::formatted::Formatted;
-use crate::config_manager::Configuration;
-use crate::config_manager::{CHANGELOG, HELP, LAYOUT, RESTORE, SHOW_CONFIGS,
-        SHOW_LANGUAGES, SHOW_THEMES, THEME_EDITOR, VERSION, VERSION_ID};
 
-
-// A failure code is owed to whoever runs mezura from a script: everything that prints an error and
-// stops is a run that did not happen, and until now all of them were indistinguishable from success.
+// The exit code is owed to whoever runs mezura from a script: everything that prints an error and
+// stops is a run that did not happen, and a script has no other way to tell.
 fn main() -> ExitCode {
-    // Only on windows, it is required to enable a virtual terminal environment, so that the colors will display correctly
+    // Windows needs a virtual terminal enabled before it shows colours at all
     #[cfg(target_os = "windows")]
     control::set_virtual_terminal(true).unwrap();
 
@@ -63,9 +59,8 @@ fn main() -> ExitCode {
     }
 
     if !crate::paths::PERSISTENT_APP_PATHS.are_initialized {
-        // A first execution reads the baked-in copies for this run, because the paths were resolved,
-        // and the directory judged, before the migration above created anything. The contents are
-        // the same ones it just wrote, so nothing is lost by not re-reading them.
+        // A first execution reads the baked-in copies, since the paths were resolved and the
+        // directory judged before the migration above created anything. Same contents either way.
         languages_available = mezura_core::languages::shipped_languages();
     } else {
         match mezura_core::language_file::parse_languages_in_dir(&crate::paths::PERSISTENT_APP_PATHS.languages_dir) {
@@ -159,9 +154,8 @@ fn main() -> ExitCode {
         }
     }
 
-    // Which languages are in play and who owns a contested extension is worked out here and not
-    // inside the run, so that what it has to complain about lands beside the other complaints about
-    // settings rather than in the middle of the status lines.
+    // Worked out here and not inside the run, so its complaints land beside the other complaints
+    // about settings rather than in the middle of the status lines.
     let (languages, reported) = mezura_core::Languages::resolve(&config.engine, languages_available, &extension_priority);
     for warning in reported {
         // A name that does not exist was already put on the screen by 'report_unknown_languages',
@@ -182,20 +176,17 @@ fn main() -> ExitCode {
     match mezura_core::run(&config.engine, languages, |scan| announce_traversal(&config, scan)) {
         Ok(result) => {
             crate::present::present(&result, &config);
-            // Presented above like the failures they are; the exit code keeps its documented
-            // meaning, that 1 is a run which did not happen. The second is the mirror of the first
-            // one level up: every file unparseable, or every place unopenable.
+            // Already presented above as the failures they are, and the exit code keeps its meaning:
+            // 1 is a run that did not happen. Every file unparseable, or every place unopenable.
             if result.all_relevant_files_were_faulty() || result.nothing_could_be_read() {
                 return ExitCode::FAILURE;
             }
-            // The document carries its own 'scan_ms', measured inside the run, and this is the only
-            // place that knows what the whole thing took. A run that found nothing to count says so
-            // and stops there, with no timing under it
+            // The document has its own 'scan_ms' measured inside the run; this is the only place
+            // that knows what the whole command took. A run that found nothing prints no timing.
             if !config.view.hidden.timing && config.view.prints_text() && result.files_present.relevant_files > 0 {
                 let perf = format!("Exec time: {} secs ", crate::format::with_decimal_separator(format!("{:.2}", instant.elapsed().as_secs_f32())));
-                // Worked out here and not carried on the result: the rates are arithmetic on the
-                // duration and the counts, and the one second rule under which they are worth
-                // showing at all is a decision about the report and not about the counting.
+                // Worked out here and not carried on the result: these are arithmetic on the
+                // duration and the counts, and the one second rule is a decision about the report.
                 let millis = result.performance.duration_millis;
                 let metrics = if millis > 1000 {
                     let seconds = millis as f32 / 1000f32;
@@ -223,10 +214,8 @@ fn main() -> ExitCode {
     }
 }
 
-
-// The two lines that sit between the phases. They cannot be printed around the call, because the
-// traversal and the parsing overlap and these are known part way through. A run that found nothing
-// says so through the error that follows instead, which is why the counts are skipped here.
+// The two lines between the phases. They cannot be printed around the call, because the scanning and
+// the counting overlap and these figures are known part way through.
 fn announce_traversal(config: &Configuration, scan: FilesPresent) {
     if scan.relevant_files == 0 {
         return;
@@ -241,13 +230,9 @@ fn announce_traversal(config: &Configuration, scan: FilesPresent) {
     }
 }
 
-
-// Every name that did not match is reported with the names it is closest to, one at a time. With
-// one line for the whole list there was nothing to attach a suggestion to, and the number of
-// language files is only going to grow.
-//
-// The filtering itself belongs to the run, so that a caller which is not this binary gets the same
-// selection. What is left here is the part that only a person needs: the colour and the correction.
+// One at a time, each with the names it is closest to: one line for the whole list leaves nothing to
+// attach a suggestion to. The filtering itself belongs to the run, so a caller that is not this
+// binary gets the same selection; what is left here is the colour and the correction.
 fn report_unknown_languages(languages_available: &[Language], languages_of_interest: &[String])
         -> Result<Option<String>, String>
 {
@@ -277,7 +262,6 @@ fn report_unknown_languages(languages_available: &[Language], languages_of_inter
 
     Ok(if report.is_empty() {None} else {Some(report)})
 }
-
 
 // Three bytes that mean "this is UTF-8" and carry no text. 'trim' leaves them where they are, since
 // they are not whitespace, so a header written on the first line of a file stops matching the moment
