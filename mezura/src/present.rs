@@ -8,7 +8,7 @@ use crate::paths::PERSISTENT_APP_PATHS;
 
 // Reads and never writes, so a caller wanting both the numbers and the report can have the same
 // result twice.
-pub fn present(result: &RunResult, config: &Configuration) {
+pub fn present(result: &RunResult, baseline: Option<&super::diff::Baseline>, config: &Configuration) {
     let datetime_now = chrono::Local::now();
     // Before anything else, because a scan can come back empty precisely because the directories
     // could not be opened, and the report would otherwise say "no relevant files" with a straight face
@@ -58,7 +58,7 @@ pub fn present(result: &RunResult, config: &Configuration) {
 
     let log_file_path = log_file_path(config);
     let existing_log_contents = log_file_path.as_ref().and_then(|path| super::log::extract_file_contents(path));
-    super::result_printer::format_and_print_results(result, &existing_log_contents, &datetime_now, config);
+    super::result_printer::format_and_print_results(result, baseline, &existing_log_contents, &datetime_now, config);
 
     // The reason travels with the warning, because the two that can happen are opposite news: one
     // says this run was not recorded, the other says this run was not recorded and everything

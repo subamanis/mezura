@@ -29,6 +29,7 @@ pub const STYLE              :&str   = "style";
 pub const BAR_THICKNESS      :&str   = "bar-thickness";
 pub const LAYOUT             :&str   = "layout";
 pub const OUTPUT             :&str   = "output";
+pub const DIFF               :&str   = "diff";
 pub const NUMBER_SEPARATOR   :&str   = "number-separator";
 pub const DECIMAL_SEPARATOR  :&str   = "decimal-separator";
 pub const SORT               :&str   = "sort";
@@ -100,6 +101,9 @@ pub struct ViewConfig {
     pub bar_thickness: BarThickness,
     pub layout: Layout,
     pub output: OutputFormat,
+    // The document this run is compared against, as the path was typed. Read after the settings are
+    // built and before anything is counted, so a baseline that is not one costs no scan.
+    pub diff_against: Option<String>,
     pub number_separator: NumberSeparator,
     pub decimal_separator: DecimalSeparator,
     pub sort_by: SortCriterion,
@@ -142,6 +146,7 @@ impl Default for ViewConfig {
             bar_thickness: BarThickness::default(),
             layout: Layout::default(),
             output: OutputFormat::default(),
+            diff_against: None,
             number_separator: NumberSeparator::default(),
             decimal_separator: DecimalSeparator::default(),
             sort_by: SortCriterion::default(),
@@ -481,6 +486,9 @@ pub struct ConfigurationBuilder {
     // Absent from 'add_missing_fields' and 'has_missing_fields' on purpose, like the save and load
     // names: those two functions exist for what a configuration file can supply, and this is not it
     pub output:                   Option<OutputFormat>,
+    // Absent from those same two, and for the same reason: a configuration that silently turned
+    // every run into a comparison against a file saved months ago is not a setting anybody wants
+    pub diff_against:             Option<String>,
     pub sort_by:                  Option<SortCriterion>,
     pub top_n:                    Option<usize>,
     pub styles:                   Option<Vec<(String,String)>>,
@@ -558,6 +566,7 @@ impl ConfigurationBuilder {
                 bar_thickness: self.bar_thickness.unwrap_or_default(),
                 layout: self.layout.unwrap_or_default(),
                 output: self.output.unwrap_or_default(),
+                diff_against: self.diff_against.clone(),
                 number_separator: self.number_separator.unwrap_or_default(),
                 decimal_separator: self.decimal_separator.unwrap_or_default(),
                 sort_by: self.sort_by.unwrap_or_default(),
@@ -648,8 +657,8 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     let (mut exclude_dirs, mut languages_of_interest, mut excluded_languages, mut forced_languages, mut threads, mut braces_as_code,
          mut search_in_dotted, mut show_faulty_files, mut config_name_to_save, mut hidden, mut log,
          mut compare_level, mut config_name_to_load, mut no_gitignore, mut theme_name, mut theme_name_to_save, mut styles, mut bar_thickness,
-         mut number_separator, mut decimal_separator, mut layout, mut output, mut sort_by, mut top_n)
-         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
+         mut number_separator, mut decimal_separator, mut layout, mut output, mut diff_against, mut sort_by, mut top_n)
+         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
     for command in options {
         let (command_name, arguments) = match command.find(" ") {
             Some(index) => command.split_at(index),
@@ -800,6 +809,13 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                     return Err(ArgParsingError::IncorrectCommandArgs(OUTPUT.to_owned()))
                 }
             }
+        } else if command_name == DIFF {
+            let path = arguments.trim();
+            if path.is_empty() {
+                message_printer::print_help_message_for_command(DIFF);
+                return Err(ArgParsingError::IncorrectCommandArgs(DIFF.to_owned()))
+            }
+            diff_against = Some(path.to_owned());
         } else if command_name == NUMBER_SEPARATOR {
             match NumberSeparator::parse(arguments) {
                 Some(x) => number_separator = Some(x),
@@ -874,7 +890,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         dirs, dirs_source: None, exclude_dirs, languages_of_interest, excluded_languages, forced_languages, threads, braces_as_code,
         should_search_in_dotted: search_in_dotted, should_show_faulty_files: show_faulty_files,
         hidden, no_gitignore, theme_name, theme_name_to_save, log, compare_level,
-        config_name_to_save, config_name_to_load, styles, bar_thickness, number_separator, decimal_separator, layout, output, sort_by, top_n,
+        config_name_to_save, config_name_to_load, styles, bar_thickness, number_separator, decimal_separator, layout, output, diff_against, sort_by, top_n,
         config_styles: None, theme_styles: None
     };
 
@@ -968,7 +984,8 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             // them and they never reach 'invalid_fields'
             languages_of_interest: _, excluded_languages: _, log: _,
             // not carried by a configuration file at all
-            config_name_to_save: _, config_name_to_load: _, theme_name_to_save: _, output: _, dirs_source: _,
+            config_name_to_save: _, config_name_to_load: _, theme_name_to_save: _, output: _,
+            diff_against: _, dirs_source: _,
             // a style that does not parse is reported per line and skipped, and the rest of the file
             // still applies, so these warn instead of reaching here
             styles: _, config_styles: _, theme_styles: _ } = config_builder;

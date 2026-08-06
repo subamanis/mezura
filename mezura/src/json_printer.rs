@@ -8,7 +8,7 @@ use super::result_printer;
 
 // Bumped only when a key is removed or changes meaning. Adding one is not a bump, so a consumer can
 // check this and not the version of the binary, which moves for reasons that do not concern it.
-const FORMAT_VERSION : usize = 1;
+pub const FORMAT_VERSION : usize = 1;
 
 // The document is a designed shape and not a serialization of the structs the program happens to
 // have. It carries every number that was measured, in its raw unit, and nothing the printer computed
@@ -17,7 +17,7 @@ pub fn print_as_json(result: &RunResult, datetime_now: &DateTime<Local>, config:
     println!("{}", document(result, datetime_now, config));
 }
 
-fn document(result: &RunResult, datetime_now: &DateTime<Local>, config: &Configuration) -> String {
+pub fn document(result: &RunResult, datetime_now: &DateTime<Local>, config: &Configuration) -> String {
     let RunResult {per_language, total, faulty_files, files_present, unreadable_dirs, ..} = result;
     let names = result_printer::get_sorted_language_names(per_language, config.view.sort_by);
     let hidden = config.view.top_n.map_or(0, |top| names.len().saturating_sub(top));
@@ -29,7 +29,7 @@ fn document(result: &RunResult, datetime_now: &DateTime<Local>, config: &Configu
         format!("  \"generated_at\": \"{}\"", datetime_now.to_rfc3339_opts(SecondsFormat::Secs, false)),
         format!("  \"scope\": {}", scope_object(config, &result.targets)),
         format!("  \"scan\": {}", scan_object(files_present, faulty_files.len())),
-        format!("  \"total\": {}", total_object(total)),
+        format!("  \"total\": {}", total_object(total, !config.view.hidden.keywords)),
         format!("  \"languages\": {}", languages_array(shown, per_language, config)),
         format!("  \"languages_hidden\": {hidden}"),
         format!("  \"faulty_files\": {}", faulty_files_array(faulty_files)),
@@ -56,7 +56,7 @@ fn scope_object(config: &Configuration, targets: &[mezura_core::Target]) -> Stri
     let members = [
         // The resolved list off the result, not the declared one off the configuration: the same
         // './src' over two different trees is two different measurements
-        format!("    \"dirs\": {}", string_array(&targets.iter().map(|x| x.to_string()).collect::<Vec<_>>())),
+        format!("    \"dirs\": {}", targets_array(targets)),
         format!("    \"exclude\": {}", string_array(&config.engine.exclude_dirs)),
         format!("    \"languages\": {}", string_array(&config.engine.languages_of_interest)),
         format!("    \"excluded_languages\": {}", string_array(&config.engine.excluded_languages)),
@@ -82,8 +82,8 @@ fn scan_object(files: &FilesPresent, faulty: usize) -> String {
     format!("{{\n{}\n  }}", members.join(",\n"))
 }
 
-fn total_object(total: &Stats) -> String {
-    let members = [
+fn total_object(total: &Stats, keywords_counted: bool) -> String {
+    let mut members = vec![
         format!("    \"files\": {}", total.files),
         format!("    \"lines\": {}", total.lines),
         format!("    \"code\": {}", total.code_lines),
@@ -92,6 +92,11 @@ fn total_object(total: &Stats) -> String {
         format!("    \"bytes\": {}", total.bytes),
         format!("    \"average_bytes\": {}", total.average_size()),
     ];
+    // Every language of the run added up, which is the only place the figure survives '--top': the
+    // languages are cut there and the ones left cannot be added back up to it.
+    if keywords_counted {
+        members.push(format!("    \"keywords\": {}", keywords_object(&total.keyword_occurences, 6)));
+    }
 
     format!("{{\n{}\n  }}", members.join(",\n"))
 }
@@ -107,7 +112,7 @@ fn modules_array(result: &RunResult, config: &Configuration) -> String {
         let name = module.name.as_ref().map_or("null".to_owned(), |x| format!("\"{}\"", escaped(x)));
         let members = [
             format!("      \"name\": {name}"),
-            format!("      \"total\": {}", indented(&total_object(&module.total))),
+            format!("      \"total\": {}", indented(&total_object(&module.total, !config.view.hidden.keywords))),
             format!("      \"languages\": {}", indented(&languages_array(shown, &module.per_language, config))),
             format!("      \"languages_hidden\": {hidden}"),
         ];
@@ -152,13 +157,15 @@ fn language_object(name: &str, info: &Stats, keywords_counted: bool) -> String {
     // Absent when they were not counted, since '--hide keywords' also stops the counting. An empty
     // object means the opposite: they were counted and the language declares none.
     if keywords_counted {
-        members.push(format!("      \"keywords\": {}", keywords_object(&info.keyword_occurences)));
+        members.push(format!("      \"keywords\": {}", keywords_object(&info.keyword_occurences, 8)));
     }
 
     format!("    {{\n{}\n    }}", members.join(",\n"))
 }
 
-fn keywords_object(occurences: &HashMap<String, usize>) -> String {
+// 'indent' is the column its members sit at, and its closing brace goes two to the left of them, so
+// that the same object can be written under a language and under a total, which are at two depths.
+fn keywords_object(occurences: &HashMap<String, usize>, indent: usize) -> String {
     if occurences.is_empty() {
         return String::from("{}");
     }
@@ -166,10 +173,10 @@ fn keywords_object(occurences: &HashMap<String, usize>) -> String {
     let mut sorted = occurences.iter().collect::<Vec<_>>();
     sorted.sort_unstable_by_key(|(name, _)| name.as_str());
     let members = sorted.into_iter()
-            .map(|(name, count)| format!("        \"{}\": {count}", escaped(name)))
+            .map(|(name, count)| format!("{}\"{}\": {count}", " ".repeat(indent), escaped(name)))
             .collect::<Vec<_>>();
 
-    format!("{{\n{}\n      }}", members.join(",\n"))
+    format!("{{\n{}\n{}}}", members.join(",\n"), " ".repeat(indent - 2))
 }
 
 // Everything the run said on the error output, which a machine consumer never sees. Always present,
@@ -254,6 +261,22 @@ fn performance_object(performance: &mezura_core::Performance) -> String {
     format!("{{\n    \"scan_ms\": {},\n    \"threads\": {threads}\n  }}", performance.duration_millis)
 }
 
+// One entry per target and not one per module: a module given several paths is several targets that
+// share a name, and grouping them would lose the order they were declared in, which the columns of
+// the report follow. The unnamed ones carry 'null' for the same reason the modules do.
+fn targets_array(targets: &[mezura_core::Target]) -> String {
+    if targets.is_empty() {
+        return String::from("[]");
+    }
+
+    let entries = targets.iter().map(|target| {
+        let module = target.module.as_ref().map_or("null".to_owned(), |x| format!("\"{}\"", escaped(x)));
+        format!("      {{\"module\": {module}, \"path\": \"{}\"}}", escaped(&target.path))
+    }).collect::<Vec<_>>();
+
+    format!("[\n{}\n    ]", entries.join(",\n"))
+}
+
 fn string_array(values: &[String]) -> String {
     if values.is_empty() {
         return String::from("[]");
@@ -300,11 +323,12 @@ mod tests {
     }
 
     fn document_of(config: &crate::config_manager::Configuration) -> String {
-        let result = result_of(
-            hashmap![
-                "Rust".to_owned() => stats_of(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 1]),
-                "HTML".to_owned() => stats_of(1, 900, 40, 30, 0, HashMap::new())],
-            Stats::new(3, 5900, 140, 100, 10, HashMap::new()), Vec::new(),
+        // Summed rather than written out, so that the document is one a run could have produced and
+        // the keywords of the total are the keywords of the languages under it
+        let per_language = hashmap![
+            "Rust".to_owned() => stats_of(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 1]),
+            "HTML".to_owned() => stats_of(1, 900, 40, 30, 0, HashMap::new())];
+        let result = result_of(per_language.clone(), Stats::total_of(&per_language), Vec::new(),
             FilesPresent {total_files: 5, relevant_files: 3, excluded_files: 2});
         let datetime = DateTime::parse_from_rfc3339("2026-07-30T14:22:07+03:00").unwrap().with_timezone(&Local);
 
@@ -368,6 +392,13 @@ mod tests {
         assert!(document.contains("\"keywords_counted\": true"));
         // Sorted by name, so that two runs over the same tree produce the same bytes
         assert!(document.find("\"enums\"").unwrap() < document.find("\"structs\"").unwrap());
+
+        // The total carries them too, which is the only figure that survives a '--top' that cuts
+        // the languages they would otherwise have to be added back up from
+        let at = document.find("\"total\"").unwrap();
+        let total_block = &document[at..at + document[at..].find("\"languages\"").unwrap()];
+        assert!(total_block.contains("\"keywords\": {"), "{total_block}");
+        assert!(total_block.contains("\"structs\": 3") && total_block.contains("\"enums\": 1"), "{total_block}");
 
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         config.view.hidden.keywords = true;
@@ -449,6 +480,32 @@ mod tests {
         // The message is prose written for a person, so it goes through the same escaping as every
         // other string here or a quotation mark in it would break the document
         assert!(rendered.contains("quoted \\\"text\\\" and a \\\\ backslash"));
+    }
+
+    // One entry per target, so a module given several paths is several entries carrying one name,
+    // and a consumer never has to split a string to find out where a run looked.
+    #[test]
+    fn the_targets_are_written_one_by_one_with_the_module_that_claimed_each() {
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        config.view.hidden.timing = true;
+        let mut result = result_of(HashMap::new(), Stats::default(), Vec::new(),
+                FilesPresent {total_files: 0, relevant_files: 0, excluded_files: 0});
+        result.targets = vec![mezura_core::Target::named("tests", "D:/api/tests"),
+                mezura_core::Target::named("tests", "D:/web/tests"),
+                mezura_core::Target::of("D:\\web")];
+        let written = document(&result, &Local::now(), &config);
+
+        assert!(written.contains("{\"module\": \"tests\", \"path\": \"D:/api/tests\"}"), "{written}");
+        assert_eq!(2, written.matches("\"module\": \"tests\"").count());
+        // the unnamed one carries 'null' rather than a name a real module could be given, and a
+        // Windows path is escaped here as it is everywhere else
+        assert!(written.contains("{\"module\": null, \"path\": \"D:\\\\web\"}"), "{written}");
+        // in the order they were declared, which the report's columns follow, and not sorted
+        assert!(written.find("api/tests").unwrap() < written.find("web/tests").unwrap());
+
+        // and a run over the working directory alone still writes the key, empty
+        result.targets = Vec::new();
+        assert!(document(&result, &Local::now(), &config).contains("\"dirs\": []"));
     }
 
     #[test]

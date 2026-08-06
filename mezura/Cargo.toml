@@ -14,3 +14,4 @@ colored = "2"
 chrono = "0.4.45"
 directories = "4.0.1"
 include_dir = "0.6.2"
+serde_json = { version = "1", default-features = false, features = ["std"] }

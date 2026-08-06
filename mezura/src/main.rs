@@ -14,9 +14,11 @@ macro_rules! hashmap {
 mod args;
 mod config_files;
 mod config_manager;
+mod diff;
 mod format;
 mod formatted;
 mod json_printer;
+mod json_reader;
 mod log;
 mod message_printer;
 mod paths;
@@ -33,9 +35,9 @@ use colored::*;
 use include_dir::{File, include_dir};
 use mezura_core::{EXTENSION_PRIORITY_FILE_NAME, FilesPresent, Language};
 
-use crate::config_manager::Configuration;
-use crate::config_manager::{CHANGELOG, HELP, LAYOUT, RESTORE, SHOW_CONFIGS, SHOW_LANGUAGES,
-        SHOW_THEMES, THEME_EDITOR, VERSION, VERSION_ID};
+use crate::config_manager::{Configuration, OutputFormat};
+use crate::config_manager::{CHANGELOG, DIFF, HELP, LAYOUT, OUTPUT, RESTORE, SHOW_CONFIGS,
+        SHOW_LANGUAGES, SHOW_THEMES, THEME_EDITOR, VERSION, VERSION_ID};
 use crate::formatted::Formatted;
 use crate::paths::{CONFIG_DIR_NAME, DEFAULT_CONFIG_NAME, LANGUAGES_DIR_NAME, LOGS_DIR_NAME,
         MANIFEST_FILE_NAME, REPLACED_DIR_NAME, THEMES_DIR_NAME};
@@ -144,6 +146,54 @@ fn main() -> ExitCode {
         }
     }
 
+    // Read here and not where it is printed, so that a baseline which turns out not to be one costs
+    // nothing: everything below this walks directories.
+    let baseline = match config.view.diff_against.as_deref() {
+        Some(_) if !config.view.prints_text() => {
+            eprintln!("\n{}\n", crate::theme::active().error.paint(&format!(
+                    "'--{DIFF}' draws a comparison for a person to read and '--{OUTPUT} json' writes a document for \
+a program, and mezura has no document that carries a comparison, so only one of the two can be asked for.")));
+            return ExitCode::FAILURE;
+        },
+        // Two readings named on one line is the form where nothing is counted at all, and neither
+        // the loading below nor the run under it is arranged for that yet. Told apart here so that
+        // it is refused by name, rather than reported as a file called 'a.json..b.json'.
+        Some(value) if !matches!(crate::diff::split_operand(value), Ok((_, None))) => {
+            let complaint = match crate::diff::split_operand(value) {
+                Err(x) => x,
+                _ => format!("'--{DIFF} <before>..<after>' names two readings and this version compares one \
+against the run it is given to. Drop the '..' and the reading before it: '--{DIFF} <before>'.")
+            };
+            eprintln!("\n{}\n", crate::theme::active().error.paint(&complaint));
+            return ExitCode::FAILURE;
+        },
+        Some(path) => match crate::diff::load(path) {
+            Ok(x) => Some(x),
+            Err(x) => {
+                eprintln!("\n{}\n", crate::theme::active().error.paint(&x.to_string()));
+                return ExitCode::FAILURE;
+            }
+        },
+        None => None
+    };
+    // A warning and not a refusal: the two readings are still both real, and which of the differences
+    // between them is worth explaining is the reader's judgement and not mezura's.
+    if let Some(baseline) = &baseline {
+        let differing = crate::diff::settings_that_differ(&baseline.document, &config);
+        if !differing.is_empty() {
+            eprintln!("\n{}", crate::theme::active().warning.paint(&format!(
+                    "'{}' was written by a run that had {} set differently, so part of the difference reported \
+below is those settings and not code that changed.", baseline.name, differing.join(", "))));
+        }
+        // Said on the error output of a run that is over, so nobody would see it otherwise
+        let doubts = crate::diff::doubts_about(&baseline.document);
+        if !doubts.is_empty() {
+            eprintln!("\n{}\n{}", crate::theme::active().warning.paint(&format!(
+                    "The run that wrote '{}' was not sure of its own counts:", baseline.name)),
+                    doubts.iter().map(|x| format!("-- {x}")).collect::<Vec<_>>().join("\n"));
+        }
+    }
+
     let (extension_priority, faulty_priority_lines) = read_extension_priority();
     if !faulty_priority_lines.is_empty() {
         eprintln!("{}", format!("\nLines that could not be read in '{EXTENSION_PRIORITY_FILE_NAME}', and were skipped:\n{}",
@@ -175,7 +225,7 @@ fn main() -> ExitCode {
     let instant = Instant::now();
     match mezura_core::run(&config.engine, languages, |scan| announce_traversal(&config, scan)) {
         Ok(result) => {
-            crate::present::present(&result, &config);
+            crate::present::present(&result, baseline.as_ref(), &config);
             // Already presented above as the failures they are, and the exit code keeps its meaning:
             // 1 is a run that did not happen. Every file unparseable, or every place unopenable.
             if result.all_relevant_files_were_faulty() || result.nothing_could_be_read() {
@@ -520,8 +570,19 @@ fn read_args_as_str() -> Option<String> {
 // handing arguments it has already rejected to the configuration parser.
 fn handle_message_only_command(args_str: &str, languages_available: &[Language]) -> Option<ExitCode> {
     let is_present = |command: &str| crate::args::find_command(args_str, command).is_some();
-    if ![HELP, VERSION, CHANGELOG, SHOW_LANGUAGES, SHOW_CONFIGS, SHOW_THEMES, THEME_EDITOR, RESTORE].iter().any(|x| is_present(x)) {
-        return None;
+    let message_command = [HELP, VERSION, CHANGELOG, SHOW_LANGUAGES, SHOW_CONFIGS, SHOW_THEMES,
+            THEME_EDITOR, RESTORE].into_iter().find(|x| is_present(x))?;
+
+    // Refused rather than answered, and before the banner below, which would otherwise be the first
+    // thing written. The redirection that makes '--output json' worth asking for is what makes this
+    // dangerous: 'mezura --output json --help > stats.json' leaves a file named for a document that
+    // holds a help text, and nothing says it is not one until something tries to parse it. The two
+    // can only have been typed together, since a configuration file may not declare '--output'.
+    if asks_for_a_json_document(args_str) {
+        eprintln!("\n{}\n", crate::theme::active().error.paint(&format!(
+                "'--{message_command}' prints a message to read and '--output json' writes a document for a \
+program to read, and both of them go to the output, so only one of the two can be asked for at a time.")));
+        return Some(ExitCode::FAILURE);
     }
 
     // '--version' prints the line itself, with the release date next to it, so it is answered before
@@ -624,6 +685,14 @@ fn handle_message_only_command(args_str: &str, languages_available: &[Language])
     }
 
     None
+}
+
+// Read off the arguments by hand, the way '--show-themes' reads '--layout' above: a message-only
+// command runs before there is a configuration to ask.
+fn asks_for_a_json_document(args_str: &str) -> bool {
+    crate::args::find_command(args_str, OUTPUT)
+            .and_then(|at| args_str[at + OUTPUT.len() + 2..].split_whitespace().next())
+            .and_then(OutputFormat::parse) == Some(OutputFormat::Json)
 }
 
 #[cfg(test)]
@@ -805,6 +874,21 @@ second
 "), content_hash(b"first
 third
 "));
+    }
+
+    // What decides the refusal above. A message and a document both want the output, and the whole
+    // point of asking for a document is to redirect it, so the message would land in the file.
+    #[test]
+    fn a_message_and_a_json_document_are_never_asked_for_together() {
+        assert!(crate::asks_for_a_json_document("./src --output json"));
+        // the value is read the same way the configuration reads it, so the spelling is the same one
+        assert!(crate::asks_for_a_json_document("--output JSON --help"));
+        assert!(!crate::asks_for_a_json_document("./src --output text --help"));
+        assert!(!crate::asks_for_a_json_document("./src --help"));
+        // a value that is not one of the two is the configuration's mistake to report, not this one
+        assert!(!crate::asks_for_a_json_document("./src --output jsonn --help"));
+        // and '--output' written last of all is read without falling off the end of the line
+        assert!(!crate::asks_for_a_json_document("./src --output"));
     }
 
     fn java_and_csharp() -> Vec<Language> {

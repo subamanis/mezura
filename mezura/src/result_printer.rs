@@ -12,6 +12,9 @@ type ColorFunc = Box<dyn Fn(&str) -> String>;
 
 const TOTAL_NAME : &str = "Total";
 
+// What a comparison writes where a figure did not move
+const NO_CHANGE : &str = "-";
+
 // How far a language sits under the module it belongs to, in either table
 const GROUP_INDENT : &str = "  ";
 
@@ -52,9 +55,35 @@ const TOTAL_SIZE    : &str  = "Total Size:";
 const AVERAGE_SIZE  : &str  = "Average Size:";
 const MODULES       : &str  = "Modules:";
 
-pub fn format_and_print_results(result: &RunResult, existing_log_content: &Option<String>,
-        datetime_now: &DateTime<Local>, config: &Configuration)
+pub fn format_and_print_results(result: &RunResult, baseline: Option<&super::diff::Baseline>,
+        existing_log_content: &Option<String>, datetime_now: &DateTime<Local>, config: &Configuration)
 {
+    // A comparison answers a different question from the report, so it takes the report's place
+    // rather than sitting under it: every language would otherwise be listed twice, and the overview
+    // would put a bar of shares under a run whose subject is what moved.
+    if let Some(baseline) = baseline {
+        let theme = super::theme::active();
+        // A comparison has one shape, so the layouts have nothing to choose between. Said out loud
+        // rather than ignored, the way a matrix with nothing to cross is.
+        if config.view.layout != Layout::default() {
+            eprintln!("\n{}", theme.warning.paint(&format!("'--{}' has one shape, so '--{} {}' was not used.",
+                    config_manager::DIFF, config_manager::LAYOUT, config.view.layout.name())));
+        }
+        println!("{}.\n", theme.heading.paint("Details"));
+        for line in comparison_lines(theme, baseline, result, config) {
+            println!("{line}");
+        }
+        if !config.view.hidden.keywords {
+            print_keyword_block(theme, &groups_of(result, config), Some(baseline));
+        }
+        println!();
+        if !config.view.hidden.progress && let Some(content) = existing_log_content
+            && !content.trim().is_empty() && config.view.compare_level != 0 {
+            print_comparison_to_previous_runs(result, content, config, datetime_now);
+        }
+        return;
+    }
+
     let RunResult {per_language, total, ..} = result;
     let groups = groups_of(result, config);
 
@@ -145,7 +174,7 @@ pub fn theme_sample_rows(theme: &Theme, layout: Layout) -> Vec<String> {
     // language leaves nothing for a total to add up: it would only repeat the row above it.
     let with_keywords = |mut lines: Vec<String>| {
         lines.push(String::new());
-        lines.extend(keyword_block_lines(theme, &groups));
+        lines.extend(keyword_block_lines(theme, &groups, None));
         lines
     };
     match layout {
@@ -166,7 +195,7 @@ pub fn theme_sample_rows(theme: &Theme, layout: Layout) -> Vec<String> {
             let width = columns.width(theme);
             vec![columns.files_row(theme, FILES, &size_text(theme, BYTES, BYTES / FILES), width),
                  columns.breakdown_row(theme, &theme.details_language_name.paint(NAME).to_string(), NAME.len(), LINES, CODE, COMMENTS),
-                 get_keywords_as_str(theme, &keywords, columns.words_start(), width)]
+                 get_keywords_as_str(theme, &keywords, None, columns.words_start(), width)]
         }
     }
 }
@@ -280,7 +309,7 @@ fn print_as_table(theme: &Theme, groups: &[Group], total: &Stats,
     }
 
     if should_print_keywords {
-        print_keyword_block(theme, groups);
+        print_keyword_block(theme, groups, None);
     }
 
     // The 'list' layout closes with a blank line of its own, this one has to say so
@@ -293,13 +322,11 @@ fn table_lines(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool
     // 'Lines') take a share of the total, the two that describe one ('Code' and 'Comments') take a
     // share of that language's own lines.
     const HEADERS : [&str; 11] = ["Language", "Files", "%", "Lines", "%", "Code", "%", "Comments", "%", "Extra", "Size"];
-    const GAP : usize = 4;
     // The columns a percentage belongs to, kept against their number by a gap of their own
     const TIGHT_AFTER : [usize; 4] = [1, 3, 5, 7];
-    const TIGHT_GAP : usize = 2;
 
     fn row_of(theme: &Theme, name: &str, files: usize, lines: usize, code: usize, comments: usize, bytes: usize,
-            total_files: usize, total_lines: usize) -> [String; 11]
+            total_files: usize, total_lines: usize) -> Vec<String>
     {
         fn percent_cell(value: f64) -> String {
             percent_text(value) + "%"
@@ -311,7 +338,7 @@ fn table_lines(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool
 
         let (size, unit) = super::format::active().size_with_unit(bytes);
         let (code_percentage, comment_percentage) = percentages(lines, code, comments);
-        [name.to_owned(),
+        vec![name.to_owned(),
          with_seperators(files), share(files, total_files),
          with_seperators(lines), share(lines, total_lines),
          with_seperators(code), percent_cell(code_percentage),
@@ -337,60 +364,200 @@ fn table_lines(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool
             }
         }).collect::<Vec<_>>();
 
-    let mut headers = HEADERS.map(str::to_owned);
+    let mut headers = HEADERS.map(str::to_owned).to_vec();
     headers[0] = name_header(groups).to_owned();
-
-    // The size cell carries its own colour for the unit, so its width has to be measured with the
-    // escape sequences skipped rather than counted as characters
-    let widths = (0..headers.len()).map(|i|
-            rows.iter().map(|row| widest_visible_line(&row[i])).max().unwrap_or(0).max(headers[i].len())).collect::<Vec<_>>();
 
     let header_styles = [&theme.details_language_header, &theme.files_label, &theme.percent, &theme.lines_label, &theme.percent,
             &theme.code_label, &theme.percent, &theme.comments_label, &theme.percent, &theme.extra_label, &theme.total_size_label];
     let body_styles = [&theme.details_language_name, &theme.files_number, &theme.percent, &theme.lines_number, &theme.percent,
             &theme.code_number, &theme.percent, &theme.comments_number, &theme.percent, &theme.extra_number, &theme.total_size_number];
 
-    // The figures are right aligned so they can be compared down a column. The language name and the
-    // percentages are not: a percentage sits a fixed two spaces after the number it belongs to, and
-    // padding it on the left would push it away on exactly the rows where its column is wider.
-    let render = |cells: &[String], styles: &[&super::theme::Style; 11]| {
+    aligned_table(theme, &headers, &rows, &described.iter().map(|(_, kind, _, _)| *kind).collect::<Vec<_>>(),
+            &TIGHT_AFTER, &header_styles, &body_styles, is_grouped(groups))
+}
+
+// What '--diff' prints in place of the details, and why it is the details table with columns taken
+// out rather than a block of its own: every figure has room for the change beside it only because the
+// share percentages, 'Extra' and 'Size' are gone. The shares are what the change replaces, 'Extra' is
+// the three columns left over subtracted from the lines, and the size is the one figure genuinely
+// dropped. Measured on this repository, the result is 108 characters wide, which is what the details
+// table is today.
+fn comparison_lines(theme: &Theme, baseline: &super::diff::Baseline, result: &RunResult,
+        config: &Configuration) -> Vec<String>
+{
+    // The change columns are left unnamed: their values are two to five characters and the word would
+    // widen the table for nothing, while every one of them carries a sign that says what it is.
+    // The size carries no percentage of its own: it tracks the lines it is made of, so its share of
+    // the change is the one beside them, and a second copy of it costs eight columns
+    // The file count carries no percentage either: it is a handful of whole things, and "two more
+    // files" is the answer where "+5.26%" is the same fact with a decimal point put on it
+    const HEADERS : [&str; 14] = ["Language", "Files", "", "Lines", "", "%", "Code", "", "%",
+            "Comments", "", "%", "Size", ""];
+    // Both the change and the percentage belong to the number before them
+    const TIGHT_AFTER : [usize; 8] = [1, 3, 4, 6, 7, 9, 10, 12];
+
+    let plain = super::theme::Style::plain();
+    // The direction is a property of the value and not of the column, so these two cells arrive
+    // already painted and their column adds nothing
+    let cells = |name: String, before: &Stats, now: &Stats| {
+        let mut row = vec![name, with_seperators(now.files),
+                coloured_change(theme, before.files, now.files, &signed_difference(before.files, now.files))];
+        for (was, is) in [(before.lines, now.lines), (before.code_lines, now.code_lines),
+                (before.comment_lines, now.comment_lines)] {
+            row.push(with_seperators(is));
+            row.push(coloured_change(theme, was, is, &signed_difference(was, is)));
+            row.push(coloured_change(theme, was, is, &change_text(was, is)));
+        }
+        let (size, unit) = super::format::active().size_with_unit(now.bytes);
+        row.push(size + " " + &theme.size_unit.paint(unit).to_string());
+        row.push(coloured_change(theme, before.bytes, now.bytes, &signed_size(theme, before.bytes, now.bytes)));
+        row
+    };
+
+    let rows_of = super::diff::comparison_rows(&baseline.document.result.per_language, &result.per_language, config);
+    let mut rows = rows_of.iter().map(|row| cells(row.name.clone(), &row.before, &row.now)).collect::<Vec<_>>();
+    let mut kinds = vec![RowKind::Language; rows.len()];
+    rows.push(cells(TOTAL_NAME.to_owned(), &baseline.document.result.total, &result.total));
+    kinds.push(RowKind::Total);
+
+    let mut headers = HEADERS.map(str::to_owned).to_vec();
+    let header_styles = [&theme.details_language_header, &theme.files_label, &plain,
+            &theme.lines_label, &plain, &theme.percent, &theme.code_label, &plain, &theme.percent,
+            &theme.comments_label, &plain, &theme.percent, &theme.total_size_label, &plain];
+    let body_styles = [&theme.details_language_name, &theme.files_number, &plain,
+            &theme.lines_number, &plain, &plain, &theme.code_number, &plain, &plain,
+            &theme.comments_number, &plain, &plain, &theme.total_size_number, &plain];
+    headers[0] = "Language".to_owned();
+
+    let mut lines = vec![
+        format!("{} '{}', written {} by mezura {}", theme.progress_entry.paint("Compared to"),
+                baseline.name, readable_time(&baseline.document.generated_at),
+                baseline.document.mezura_version),
+        String::new()];
+    lines.extend(aligned_table(theme, &headers, &rows, &kinds, &TIGHT_AFTER, &header_styles, &body_styles, false));
+
+    lines
+}
+
+// A dash and not a zero, and nothing at all where the percentage would go: a column of dashes is
+// read past, while a column of zeros has to be read to find the rows that are not one.
+fn signed_difference(before: usize, now: usize) -> String {
+    if before == now {
+        return NO_CHANGE.to_owned();
+    }
+    let sign = if now > before {"+"} else {"-"};
+
+    format!("{sign}{}", with_seperators(now.abs_diff(before)))
+}
+
+fn signed_size(theme: &Theme, before: usize, now: usize) -> String {
+    if before == now {
+        return NO_CHANGE.to_owned();
+    }
+    let (text, unit) = super::format::active().size_with_unit(now.abs_diff(before));
+    let sign = if now > before {"+"} else {"-"};
+
+    format!("{sign}{text} {}", theme.size_unit.paint(unit))
+}
+
+fn change_text(before: usize, now: usize) -> String {
+    if before == now {
+        return String::new();
+    }
+    match super::diff::change_of(before, now) {
+        super::diff::Change::Appeared => "new".to_owned(),
+        super::diff::Change::Gone => "gone".to_owned(),
+        super::diff::Change::Percent(x) => super::format::active().signed_percent(x) + "%"
+    }
+}
+
+// The three cases already have tokens of their own, since the progress section colours the same
+// three. What is added here is only that a figure which did not move is dimmed as well: most rows of
+// a comparison are that, and they are there to be read past rather than read.
+fn coloured_change(theme: &Theme, before: usize, now: usize, text: &str) -> String {
+    match now.cmp(&before) {
+        std::cmp::Ordering::Greater => theme.progress_up.paint(text).to_string(),
+        std::cmp::Ordering::Less => theme.progress_down.paint(text).to_string(),
+        std::cmp::Ordering::Equal => theme.progress_same.clone().dim().paint(text).to_string()
+    }
+}
+
+// The moment the baseline was written, as a person reads a date. Left as it stands when it does not
+// parse, since a document somebody edited by hand is still worth comparing against.
+fn readable_time(generated_at: &str) -> String {
+    match DateTime::parse_from_rfc3339(generated_at) {
+        Ok(x) => x.format("%Y-%m-%d %H:%M").to_string(),
+        Err(_) => generated_at.to_owned()
+    }
+}
+
+// The alignment the details table and the comparison that replaces it under '--diff' both use: every
+// column as wide as its widest cell, the figures right aligned so that a column can be read down, and
+// the columns named in 'tight_after' sitting two spaces behind the one before them because they
+// belong to it rather than standing on their own.
+//
+// Widths are measured with the escape sequences skipped rather than counted, since a cell is allowed
+// to carry a colour of its own, which the size cell does for its unit.
+fn aligned_table(theme: &Theme, headers: &[String], rows: &[Vec<String>], kinds: &[RowKind],
+        tight_after: &[usize], header_styles: &[&super::theme::Style], body_styles: &[&super::theme::Style],
+        grouped: bool) -> Vec<String>
+{
+    const GAP : usize = 4;
+    const TIGHT_GAP : usize = 2;
+
+    let widths = (0..headers.len()).map(|i|
+            rows.iter().map(|row| widest_visible_line(&row[i])).max().unwrap_or(0).max(headers[i].len())).collect::<Vec<_>>();
+
+    // The language name and the percentages are not right aligned: a percentage sits a fixed two
+    // spaces after the number it belongs to, and padding it on the left would push it away on exactly
+    // the rows where its column is wider.
+    let render = |cells: &[String], styles: &[&super::theme::Style]| {
         let mut line = String::with_capacity(140);
         for (i, cell) in cells.iter().enumerate() {
             let padding = " ".repeat(widths[i] - widest_visible_line(cell));
             if i == 0 {
                 line.push_str(&format!("{}{}", styles[i].paint(cell), padding));
-            } else if TIGHT_AFTER.contains(&(i - 1)) {
+            } else if tight_after.contains(&(i - 1)) {
                 line.push_str(&format!("{}{}{}", " ".repeat(TIGHT_GAP), styles[i].paint(cell), padding));
             } else {
                 line.push_str(&format!("{}{}{}", " ".repeat(GAP), padding, styles[i].paint(cell)));
             }
         }
-        line
+        // A tight column pads on its right, so a table whose last column is one of those ends every
+        // row in whitespace, which survives being pasted anywhere
+        line.trim_end().to_owned()
     };
 
-    let table_width = widths.iter().sum::<usize>()
-            + GAP * (HEADERS.len() - 1 - TIGHT_AFTER.len()) + TIGHT_GAP * TIGHT_AFTER.len();
+    let rendered = std::iter::once(render(headers, header_styles))
+            .chain(rows.iter().zip(kinds.iter()).map(|(row, kind)| {
+                let mut styles = body_styles.to_vec();
+                styles[0] = match kind {
+                    RowKind::Module => &theme.details_module,
+                    RowKind::Total => &theme.details_total,
+                    RowKind::Language => &theme.details_language_name
+                };
+                render(row, &styles)
+            })).collect::<Vec<_>>();
 
-    let mut lines = vec![render(&headers, &header_styles)];
+    // Measured off the rows themselves rather than added up from the widths, which is the only way
+    // it stays right: a row ends where its last cell ends, and a table whose last column is a tight
+    // one has the padding of that column trimmed off the end of every row.
+    let table_width = rendered.iter().map(|x| widest_visible_line(x)).max().unwrap_or(0);
 
+    let mut lines = Vec::with_capacity(rendered.len() + kinds.len());
+    let mut rendered = rendered.into_iter();
+    lines.push(rendered.next().unwrap_or_default());
     // A blank line closes each module, so the sections are read apart at a glance instead of being
     // told apart only by the indentation of every second row. Without grouping there are no
     // sections and nothing changes.
-    let grouped = is_grouped(groups);
-    for (position, (row, (_, kind, _, _))) in rows.iter().zip(described.iter()).enumerate() {
+    for (position, (line, kind)) in rendered.zip(kinds.iter()).enumerate() {
         if grouped && position > 0 && *kind != RowKind::Language {
             lines.push(String::new());
         }
         if *kind == RowKind::Total {
             lines.push(theme.separator.paint(&"-".repeat(table_width)).to_string());
         }
-        let mut styles = body_styles;
-        styles[0] = match kind {
-            RowKind::Module => &theme.details_module,
-            RowKind::Total => &theme.details_total,
-            RowKind::Language => &theme.details_language_name
-        };
-        lines.push(render(row, &styles));
+        lines.push(line);
     }
 
     lines
@@ -416,7 +583,7 @@ fn print_as_matrix(theme: &Theme, groups: &[Group], languages: &[String], total:
             per_language: group.per_language,
             total: group.total
         }).collect::<Vec<_>>();
-        print_keyword_block(theme, &shown);
+        print_keyword_block(theme, &shown, None);
     }
     println!();
 }
@@ -550,7 +717,7 @@ fn print_as_boxed_table(theme: &Theme, groups: &[Group], total: &Stats,
     }
 
     if should_print_keywords {
-        print_keyword_block(theme, groups);
+        print_keyword_block(theme, groups, None);
     }
     println!();
 }
@@ -733,7 +900,7 @@ fn individual_lines(theme: &Theme, groups: &[Group], columns: &Columns, block_wi
             lines.push(columns.breakdown_row(theme, &(indent.to_owned() + &theme.details_language_name.paint(lang_name).to_string()),
                     lang_name.chars().count() + indent.len(), content_info.lines, content_info.code_lines, content_info.comment_lines));
             if should_print_keywords {
-                let keywords = get_keywords_as_str(theme, &content_info.keyword_occurences, columns.words_start(), block_width);
+                let keywords = get_keywords_as_str(theme, &content_info.keyword_occurences, None, columns.words_start(), block_width);
                 if !keywords.is_empty() {
                     lines.push(keywords);
                 }
@@ -849,7 +1016,7 @@ fn sum_lines(theme: &Theme, per_language: &HashMap<String,Stats>, total: &Stats,
                 TOTAL_NAME.len(), total.lines, total.code_lines, total.comment_lines)];
 
     if should_print_keywords {
-        let keywords_line = get_keywords_as_str(theme, &create_keyword_sum_map(per_language), columns.words_start(), block_width);
+        let keywords_line = get_keywords_as_str(theme, &create_keyword_sum_map(per_language), None, columns.words_start(), block_width);
         if !keywords_line.is_empty() {
             lines.push(keywords_line);
         }
@@ -863,8 +1030,8 @@ fn sum_lines(theme: &Theme, per_language: &HashMap<String,Stats>, total: &Stats,
 // alignment a table exists for. Not aligned by position either: a column of the table means one
 // thing all the way down, while the first keyword of one language and the first of the next are
 // unrelated, so aligning them promises a comparison that does not exist.
-fn print_keyword_block(theme: &Theme, groups: &[Group]) {
-    let lines = keyword_block_lines(theme, groups);
+fn print_keyword_block(theme: &Theme, groups: &[Group], baseline: Option<&super::diff::Baseline>) {
+    let lines = keyword_block_lines(theme, groups, baseline);
     if !lines.is_empty() {
         println!("
 {}.
@@ -878,12 +1045,16 @@ fn print_keyword_block(theme: &Theme, groups: &[Group]) {
 // Nested the way the table is, because ungrouped keywords under a grouped table cannot be read:
 // 'Rust structs: 210' with no way to tell whose they are. A language appears only under the modules
 // it is in, which keeps the block from growing by the product of the two.
-fn keyword_block_lines(theme: &Theme, groups: &[Group]) -> Vec<String> {
+fn keyword_block_lines(theme: &Theme, groups: &[Group], baseline: Option<&super::diff::Baseline>) -> Vec<String> {
     const GAP : usize = 3;
 
     let grouped = is_grouped(groups);
     let rows = groups.iter().map(|group| (group, group.languages.iter().filter_map(|name| {
-            let keywords = get_keywords_as_str(theme, &group.per_language.get(name).unwrap().keyword_occurences, 0, usize::MAX);
+            // A language that only the baseline had has no row here at all, having no keywords now
+            let before = baseline.and_then(|x| x.document.result.per_language.get(name))
+                    .map(|x| &x.keyword_occurences);
+            let keywords = get_keywords_as_str(theme, &group.per_language.get(name).unwrap().keyword_occurences,
+                    before, 0, usize::MAX);
             if keywords.is_empty() {None} else {Some((name, keywords))}
         }).collect::<Vec<_>>())).filter(|(_, rows)| !rows.is_empty()).collect::<Vec<_>>();
 
@@ -909,7 +1080,13 @@ fn keyword_block_lines(theme: &Theme, groups: &[Group]) -> Vec<String> {
 
 // Indented to where the word 'lines' starts on the row above, and wrapped to the width of the block
 // so that a language with many keywords cannot push the section wider than every other row
-fn get_keywords_as_str(theme: &Theme, keyword_occurencies: &HashMap<String,usize>, indent: usize, width: usize) -> String {
+// 'before' is the same keywords as an earlier reading counted them, and turns every entry that moved
+// into 'structs: 60 (+5)'. Only the ones that moved are marked: a comma separated sentence with a
+// dash on every entry is harder to read than the sentence, which is the opposite of the table above,
+// where a column of dashes is what lets the eye skip to the rows that are not one.
+fn get_keywords_as_str(theme: &Theme, keyword_occurencies: &HashMap<String,usize>,
+        before: Option<&HashMap<String,usize>>, indent: usize, width: usize) -> String
+{
     const SEPARATOR : &str = ", ";
 
     if keyword_occurencies.is_empty() {
@@ -919,8 +1096,12 @@ fn get_keywords_as_str(theme: &Theme, keyword_occurencies: &HashMap<String,usize
     let mut keyword_info = " ".repeat(indent);
     let mut used = indent;
     for (position, (name, count)) in keyword_entries(keyword_occurencies).into_iter().enumerate() {
-        let entry_len = name.chars().count() + 2 + count.chars().count();
-        let entry = format!("{}: {}", theme.keyword_label.paint(&name), theme.keyword_number.paint(&count));
+        let moved = before.map(|before| (before.get(&name).copied().unwrap_or(0), keyword_occurencies[&name]))
+                .filter(|(was, is)| was != is)
+                .map(|(was, is)| format!(" ({})", coloured_change(theme, was, is, &signed_difference(was, is))));
+        let change = moved.unwrap_or_default();
+        let entry_len = name.chars().count() + 2 + count.chars().count() + widest_visible_line(&change);
+        let entry = format!("{}: {}{change}", theme.keyword_label.paint(&name), theme.keyword_number.paint(&count));
 
         if position > 0 {
             // The comma stays on the line it ends, the way a sentence breaks
@@ -1538,11 +1719,11 @@ mod tests {
                 individual_lines(theme, &plain, &columns, width, false)));
 
         let mut table = table_lines(theme, &plain, &total, true);
-        table.extend(keyword_block_lines(theme, &plain));
+        table.extend(keyword_block_lines(theme, &plain, None));
         cases.push(("table".to_owned(), table));
 
         let mut boxed = boxed_lines(theme, &plain, &total, true);
-        boxed.extend(keyword_block_lines(theme, &plain));
+        boxed.extend(keyword_block_lines(theme, &plain, None));
         cases.push(("boxed".to_owned(), boxed));
 
         cases.push(("overview".to_owned(), overview_lines(&sorted, &content_info, &total, &config)));
@@ -1567,11 +1748,11 @@ mod tests {
         cases.push(("modules, list".to_owned(), list));
 
         let mut table = table_lines(theme, &groups, &total, true);
-        table.extend(keyword_block_lines(theme, &groups));
+        table.extend(keyword_block_lines(theme, &groups, None));
         cases.push(("modules, table".to_owned(), table));
 
         let mut boxed = boxed_lines(theme, &groups, &total, true);
-        boxed.extend(keyword_block_lines(theme, &groups));
+        boxed.extend(keyword_block_lines(theme, &groups, None));
         cases.push(("modules, boxed".to_owned(), boxed));
 
         // '--top' is per module, so it cuts inside each one and not across the report
@@ -1659,8 +1840,8 @@ mod tests {
                 config.view.layout = layout;
                 config.view.top_n = Some(top);
 
-                format_and_print_results(&of_modules(single()), &None, &Local::now(), &config);
-                format_and_print_results(&of_modules(sample_modules()), &None, &Local::now(), &config);
+                format_and_print_results(&of_modules(single()), None, &None, &Local::now(), &config);
+                format_and_print_results(&of_modules(sample_modules()), None, &None, &Local::now(), &config);
             }
         }
     }

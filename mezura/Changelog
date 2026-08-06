@@ -90,8 +90,17 @@ New commands:
       as plain numbers of lines and bytes, with no separators, no KB or MB and no percentages, and
       warnings go to the error output so they never land inside the document as stray text. They are
       carried inside it under "warnings", each with a code, the subject it is about, the readable
-      message, and whether it puts the counts or only the settings in doubt. A configuration file
-      cannot declare it.
+      message, and whether it puts the counts or only the settings in doubt. The document is written
+      even when there was nothing to count and even when every file failed to parse, so that nobody
+      has to tell an empty file apart from an empty answer, and the exit code still says the run
+      failed. A configuration file cannot declare it.
+  -> --diff <file> : compares this run against a JSON document that an earlier one wrote. The
+      comparison takes the place of the report, a row per language and one for the total, and every
+      figure carries what it is now and how much it moved. The keywords are marked the same way in
+      the section they already have. A language that only one of the two readings has is marked
+      "new" or "gone" instead of being given a percentage. When the two runs did not obey the same
+      settings mezura says so, since that difference is not code that changed. A configuration file
+      cannot declare it, and it cannot be combined with "--output json".
   -> --save-theme <name> : writes the way this run looks into a theme file, flattened into values,
       so it stands on its own and can be shared. Combined with --save, the configuration that is
       written points at that theme and carries no styles of its own.
@@ -166,11 +175,6 @@ Bugfixes:
   -> The warnings about languages now end with what to do about them: an unknown name points at
       "--show-languages", and two files declaring one language point at the folder to clean up.
       The wording of three of them changed slightly to make room for it.
-  -> A run that met both unreadable directories and faulty files now names "--show-faulty-files"
-      once at the end instead of once under each of the two counts.
-  -> A directory that could not be read now says why. "--show-faulty-files" prints the reason beside
-      the path, so a permission is told apart from a directory that was deleted while the scan was
-      running, and "--output json" carries the same two as an object instead of a bare path.
   -> A language file that could not be read at all is no longer reported as a formatting problem.
       A file saved in an encoding mezura cannot read now says so, instead of sending you looking for
       a mistake in a file whose format is fine, and the reason is now printed beside each file name.
@@ -211,7 +215,8 @@ Bugfixes:
       silently excluding nothing. Asking for one with "--languages" always did.
   -> A directory that cannot be opened during the scan is now reported, instead of taking everything
       inside it out of the counts without a word. It is told the same way a file that fails to parse
-      is: the count, and the paths themselves with "--show-faulty-files".
+      is: the count, and the paths themselves with "--show-faulty-files", each with the reason beside
+      it, so a permission is told apart from a directory that was deleted while the scan was running.
   -> The paths of faulty files are now written with forward slashes throughout, instead of mixing
       them with backslashes halfway through on Windows. This also applies to the JSON document.
   -> A scan that finds nothing after failing to open a directory now exits with a failure code,
@@ -241,10 +246,6 @@ Bugfixes:
       like ".github", and leaves the one git keeps alone, at any depth. On this machine that is six
       thousand fewer files read for exactly the same counts. Naming ".git" as a target yourself still
       works, as writing out any path always has.
-  -> A run that names its parts and finds nothing in them now lists them, empty, instead of leaving
-      them out of the report and the document altogether.
-  -> "--output json" now writes the whole document when every file fails to parse, faulty files and
-      warnings included, where it used to write nothing at all. The exit code still says failure.
   -> A symbolic link, or a Windows junction, that the scan comes across is no longer followed, so
       whatever it points at is not counted a second time through it. The same goes for one that a
       glob pattern matched. Expect a smaller count on a project that links one of its own

@@ -537,6 +537,43 @@ TAKING THE RESULT ELSEWHERE
     and the total did not. An entry written by a version that did not record a setting is never
     reported as having changed it.
 
+--diff
+
+    One argument: the path to a JSON document that an earlier run wrote.
+
+    Compares this run against that document. The comparison takes the place of the report
+    rather than sitting under it, so no language is listed twice.
+
+      mezura ./src --output json > baseline.json
+      mezura ./src --diff baseline.json
+
+    Every figure carries what it is now and how much it moved, and the three counted in
+    thousands carry the percentage as well; a file count and a size are read whole, so '+2
+    files' is the answer there and a decimal point would be the same fact dressed up. A figure
+    that did not move is a dash, so the eye goes to the rows that did. The columns that a plain
+    run gives to each figure's share of the whole are what the change is written in, and
+    'Extra' is gone, being the three columns beside it taken off the lines.
+
+    The keywords are marked the same way, in the section they already have, and only where one
+    moved: 'structs: 57 (+5), traits: 2'. The overview is not printed, being a picture of one
+    reading.
+
+    '--sort' and '--top' order and cut the rows as they do everywhere else. '--layout' has
+    nothing to choose between, since a comparison has one shape, and mezura says so if one was
+    asked for. A language that only one of the two readings has is marked 'new' or 'gone'
+    instead of being given a percentage, since a count that grew out of nothing has none.
+
+    A document records the settings the counting obeyed, and mezura says so when they are not
+    the ones this run used. A baseline written without '--braces-as-code' has a different idea
+    of what a line of code is, and that difference would otherwise read as code that changed.
+
+    A document written with '--top' is refused, because the languages it left out would read as
+    languages that were deleted since. Write the baseline without it.
+
+    This is not a display setting a configuration file can carry, so that no saved
+    configuration can silently turn every later run into a comparison. It cannot be combined
+    with '--output json' either, since both of them write to the output.
+
 YOUR DATA DIRECTORY
 
 --save
