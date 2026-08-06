@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use mezura_core::{RunResult, Stats, render};
+use mezura_core::{ModuleResult, RunResult, Stats, UNNAMED_MODULE_NAME, render};
 
 use super::config_manager::SortCriterion;
 use super::json_reader::{DocumentError, DocumentWarning, Scope};
@@ -126,6 +126,14 @@ pub struct Row {
     pub now: Stats
 }
 
+// One module as both readings counted it, in the order the later of the two declared them, which is
+// the order its own report would put them in.
+pub struct ModulePair<'a> {
+    pub name: Option<&'a str>,
+    pub before: &'a ModuleResult,
+    pub now: &'a ModuleResult
+}
+
 // A jump out of nothing is not a percentage and neither is a fall to nothing, and both have to be
 // told apart from standing still: 'relative_change' answers 0.0 when there was nothing to grow from,
 // which would print as "no change" for a figure that was not there at all.
@@ -211,6 +219,37 @@ pub fn comparison_rows(baseline: &HashMap<String, Stats>, now: &HashMap<String, 
         now: now.get(name).cloned().unwrap_or_default(),
         name: name.clone()
     }).collect()
+}
+
+// The modules of the two readings matched up by name, and None when they did not name the same set.
+//
+// Nothing short of the same set can be shown. A module only one of them has would be compared
+// against nothing, and every language in it would read as written from scratch or deleted whole.
+// This repository is that case: one tree became 'mezura-core' and 'mezura', and a comparison across
+// that commit would report both as infinite growth and the leftovers as infinite loss, for files
+// that only moved.
+pub fn paired_modules<'a>(baseline: &'a RunResult, subject: &'a RunResult) -> Option<Vec<ModulePair<'a>>> {
+    if baseline.modules.len() != subject.modules.len() {
+        return None;
+    }
+
+    // A name is claimed once, so finding every one of the second reading's in the first is the sets
+    // being equal, and collecting into an Option is the one that is missing answering for all of them
+    subject.modules.iter().map(|now| baseline.modules.iter().find(|x| x.name == now.name)
+            .map(|before| ModulePair { name: now.name.as_deref(), before, now })).collect()
+}
+
+// The modules of one reading as a sentence names them, for the message that has to say why they are
+// not being compared. The leftovers are in it: their being there on one side and not the other is
+// one of the ways the two sets differ, and a message that left them out would name two lists that
+// look identical.
+pub fn module_names(result: &RunResult) -> String {
+    if !result.has_modules() {
+        return "nothing".to_owned();
+    }
+
+    result.modules.iter().map(|x| x.name.as_deref().unwrap_or(UNNAMED_MODULE_NAME))
+            .collect::<Vec<_>>().join(", ")
 }
 
 // The settings of a run in the shape a document records them, so that a comparison asks the same
@@ -338,6 +377,52 @@ mod tests {
         assert_eq!(vec!["Go".to_owned(), "Java".to_owned(), "Rust".to_owned()],
                 comparison_rows(&before, &now, SortCriterion::Name, None).iter()
                         .map(|x| x.name.clone()).collect::<Vec<_>>());
+    }
+
+    // A module can only be compared against the same module, so the whole block is shown or none of
+    // it is. The interesting cases are all data, so they are all here.
+    #[test]
+    fn the_modules_are_paired_by_name_and_a_set_that_is_not_the_same_is_not_paired_at_all() {
+        let module = |name: Option<&str>, lines: usize| {
+            let per_language = hashmap!["Rust".to_owned() => stats(lines, lines, 1)];
+            ModuleResult {name: name.map(str::to_owned), total: Stats::total_of(&per_language), per_language}
+        };
+        let result = |modules: Vec<ModuleResult>| {
+            let per_language = hashmap!["Rust".to_owned() => stats(100, 70, 2)];
+            mezura_core::RunResult {
+                total: Stats::total_of(&per_language), per_language, modules,
+                faulty_files: Vec::new(), targets: Vec::new(), unreadable_dirs: Vec::new(),
+                files_present: mezura_core::FilesPresent {total_files: 2, relevant_files: 2, excluded_files: 0},
+                performance: mezura_core::Performance {duration_millis: 0, threads: mezura_core::Threads::new(1, 1)}
+            }
+        };
+
+        // The order they were declared in is the reader's choice and not a difference, so the pairs
+        // follow the second reading and find the first's wherever it put them
+        let before = result(vec![module(Some("cli"), 40), module(Some("core"), 100), module(None, 7)]);
+        let now = result(vec![module(Some("core"), 120), module(Some("cli"), 44), module(None, 9)]);
+        let pairs = paired_modules(&before, &now).unwrap();
+        assert_eq!(vec![Some("core"), Some("cli"), None], pairs.iter().map(|x| x.name).collect::<Vec<_>>());
+        assert_eq!(100, pairs[0].before.total.lines);
+        assert_eq!(120, pairs[0].now.total.lines);
+        assert_eq!(7, pairs[2].before.total.lines);
+
+        // One name that is not on both sides takes the whole block with it, whichever side has it,
+        // and so does the leftover, which is a member like any other
+        assert!(paired_modules(&before, &result(vec![module(Some("core"), 120), module(Some("web"), 44),
+                module(None, 9)])).is_none());
+        assert!(paired_modules(&before, &result(vec![module(Some("core"), 120), module(Some("cli"), 44)])).is_none());
+        assert!(paired_modules(&result(vec![module(None, 100)]), &now).is_none());
+
+        // A run that named nothing has the one module holding everything, which pairs with another
+        // such run: there is nothing to show for it, and that is the caller's question, not this one
+        let plain = result(vec![module(None, 100)]);
+        assert_eq!(1, paired_modules(&plain, &plain).unwrap().len());
+        assert!(!plain.has_modules());
+
+        // and the sentence that names them says which they were, the leftovers included
+        assert_eq!("core, cli, (unnamed)", module_names(&now));
+        assert_eq!("nothing", module_names(&plain));
     }
 
     // Two readings taken under different rules are two measurements, and the difference between them

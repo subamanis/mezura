@@ -194,7 +194,7 @@ fn main() -> ExitCode {
     // baseline that turns out not to be one must cost no scan of the tree. Its complaints wait and
     // are printed just above the comparison they are about.
     let baseline = match config.view.diff_against.as_deref() {
-        Some(name) => match load_baseline(name, &config, languages_of_a_revision.unwrap_or_default(), &extension_priority) {
+        Some(name) => match reading_of(name, &config, languages_of_a_revision.unwrap_or_default(), &extension_priority) {
             Ok(x) => Some(x),
             Err(x) => {
                 eprintln!("\n{}\n", crate::theme::active().error.paint(&x));
@@ -676,14 +676,14 @@ program to read, and both of them go to the output, so only one of the two can b
 // A name that is a file on disk is a document, and anything else is asked of git. The same order
 // 'split_operand' uses, and for the same reason: what is really there wins over what a name could
 // have meant. The error names both attempts, since a misspelt file and a misspelt branch look alike.
-fn load_baseline(name: &str, config: &Configuration, languages: Vec<Language>,
+fn reading_of(name: &str, config: &Configuration, languages: Vec<Language>,
         extension_priority: &HashMap<String,Vec<String>>) -> Result<crate::diff::Reading, String>
 {
     if std::path::Path::new(name).exists() {
         return crate::diff::load(name).map_err(|x| x.to_string());
     }
 
-    counted_revision(name, config, languages, extension_priority).map_err(|x| format!("{x}"))
+    counted_revision(name, config, languages, extension_priority).map_err(|x| x.to_string())
 }
 
 // A revision is counted the way anything else is: its files are written out, the targets are found
@@ -744,8 +744,8 @@ fn compare_two_readings(before: &str, after: &str, config: &Configuration, langu
 {
     // Two revisions are two countings, and 'run' takes the languages by value, so the first side
     // takes a copy and the second the thing itself
-    let outcome = load_baseline(before, config, languages.clone(), extension_priority)
-            .and_then(|baseline| Ok((baseline, load_baseline(after, config, languages, extension_priority)?)));
+    let outcome = reading_of(before, config, languages.clone(), extension_priority)
+            .and_then(|baseline| Ok((baseline, reading_of(after, config, languages, extension_priority)?)));
     let (baseline, subject) = match outcome {
         Ok(x) => x,
         Err(x) => {

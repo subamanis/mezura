@@ -511,15 +511,14 @@ TAKING THE RESULT ELSEWHERE
 --log
 
     Can take 0..n words as arguments in the cmd.
-    If specified in a configuration file use 'true' or 'yes' to enable,
-    or 'no' to disable. Default: no
 
     This flag only works if a configuration file is loaded. Specifies that a new log entry should be made
     with the stats of this program execution, inside the appropriate file in the 'data/logs' directory.
     If not log file exists for this configuration, one is created.
     All the provided arguments are used as a description of the log entry.
 
-    This flag will not be saved in a configuration file automatically, but it can be added manually.
+    A configuration file cannot declare it: logging is asked for per run, so that loading a
+    configuration never writes an entry on its own.
 
 --compare
 
@@ -573,12 +572,21 @@ TAKING THE RESULT ELSEWHERE
 
     The keywords are marked the same way, in the section they already have, and only where one
     moved: 'structs: 57 (+5), traits: 2'. The overview is not printed, being a picture of one
-    reading.
+    reading, and neither is the progress section, which is a comparison of its own against the
+    log's history: two of those under one another answer 'what changed since' twice with
+    different pasts.
 
-    '--sort' and '--top' order and cut the rows as they do everywhere else. '--layout' has
-    nothing to choose between, since a comparison has one shape, and mezura says so if one was
-    asked for. A language that only one of the two readings has is marked 'new' or 'gone'
-    instead of being given a percentage, since a count that grew out of nothing has none.
+    '--sort' and '--top' order and cut the rows as they do everywhere else. The comparison is
+    drawn as the table, or in the boxed frame with '--layout boxed'; 'list' and 'matrix' have
+    nothing to show for one, and mezura says so and prints the table. A language that only one
+    of the two readings has is marked 'new' or 'gone' instead of being given a percentage,
+    since a count that grew out of nothing has none.
+
+    The modules get a row each, with their languages under them, when the two readings named
+    the same ones. When they did not, there is no module the two of them share: the comparison
+    is of everything at once, and mezura says which each of them named. A module that one
+    reading has and the other does not would have every language in it read as written from
+    scratch or deleted whole, for files that in all likelihood only moved.
 
     A document records the settings the counting obeyed and which mezura counted it, and the
     comparison says so when the two readings disagree on either. A baseline written without

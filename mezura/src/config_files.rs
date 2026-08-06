@@ -6,7 +6,7 @@ use mezura_core::engine::config::{Target, Threads};
 use mezura_core::engine::config::{MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE,
         MIN_PRODUCERS_VALUE};
 
-use super::config_manager::{self, ConfigurationBuilder, LogOption};
+use super::config_manager::{self, ConfigurationBuilder};
 use super::config_manager::{MAX_COMPARE_LEVEL, MIN_COMPARE_LEVEL};
 use super::formatted::Formatted;
 use super::theme_files;
@@ -63,8 +63,8 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
 
     let (mut dirs, mut braces_as_code, mut should_search_in_dotted, mut threads, mut exclude_dirs,
          mut languages_of_interest, mut excluded_languages, mut forced_languages, mut should_show_faulty_files, mut hidden,
-         mut no_gitignore, mut theme_name, mut log, mut compare_level, mut config_styles, mut bar_thickness,
-         mut number_separator, mut decimal_separator, mut layout, mut sort_by, mut top_n) = (None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None);
+         mut no_gitignore, mut theme_name, mut compare_level, mut config_styles, mut bar_thickness,
+         mut number_separator, mut decimal_separator, mut layout, mut sort_by, mut top_n) = (None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None);
     let mut issues = ConfigFileIssues::default();
     let mut buf = String::with_capacity(150);
 
@@ -211,15 +211,6 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                 if !declared.is_empty() {
                     config_styles = Some(declared);
                 }
-            } else if id == config_manager::LOG {
-                buf.clear();
-                let _ = reader.read_line(&mut buf);
-                let name = &buf.trim().to_lowercase();
-                if name == "yes" || name == "true" {
-                    log = Some(LogOption::new(None));
-                } else if name != "no" && name != "false"{
-                    log = Some(LogOption::new(Some(name.to_owned())));
-                }
             } else if id == config_manager::COMPRARE_LEVEL {
                 buf.clear();
                 let _ = reader.read_line(&mut buf);
@@ -229,7 +220,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                 }
             } else {
                 issues.warnings.push((mezura_core::warnings::CONFIG_SECTION_UNKNOWN,
-                        format!("'{id}' is not a command, the section is ignored.")));
+                        format!("'{id}' is not something a configuration file can carry, the section is ignored.")));
             }
         }
         buf.clear();
@@ -237,7 +228,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
 
     let builder = ConfigurationBuilder {
         dirs, exclude_dirs, languages_of_interest, excluded_languages, forced_languages, threads, braces_as_code, should_search_in_dotted,
-        should_show_faulty_files, hidden, no_gitignore, theme_name, log, compare_level, config_styles, bar_thickness,
+        should_show_faulty_files, hidden, no_gitignore, theme_name, compare_level, config_styles, bar_thickness,
         number_separator, decimal_separator, layout, sort_by, top_n,
         ..Default::default()
     };
@@ -508,6 +499,32 @@ mod tests {
         assert_eq!(3, options.config_styles.as_ref().unwrap().len());
 
         Ok(())
+    }
+
+    // A configuration that carried its own log would write an entry on every run that loads it, so
+    // the section is refused like any other a file cannot carry, and out loud: silence would read as
+    // logging that mysteriously stopped for whoever wrote the line under an older version.
+    #[test]
+    fn a_log_section_written_into_a_config_file_never_takes_effect() -> std::io::Result<()> {
+        let dir = SCRATCH_CONFIG_DIR.to_owned();
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.clone() + "carries-a-log.txt";
+        std::fs::write(&path, "===> dirs\n./\n\n===> log\nyes\n\n===> braces-as-code\nyes\n")?;
+
+        let (options, issues) = super::super::config_files::parse_config_file(Some("carries-a-log"), Some(dir)).unwrap();
+        assert_eq!(None, options.log);
+        // the rest of the file still applies, so the one bad section costs itself and nothing else
+        assert_eq!(Some(true), options.braces_as_code);
+        assert!(issues.warnings.iter().any(|(code, message)|
+                *code == mezura_core::warnings::CONFIG_SECTION_UNKNOWN && message.contains("'log'")),
+                "the ignored section was not named: {:?}", issues.warnings);
+
+        // and through the real merge, a run that loads the file still does not log
+        let mut loaded = ConfigurationBuilder::default();
+        loaded.add_missing_fields(options);
+        assert!(!loaded.build().view.log.should_log);
+
+        std::fs::remove_file(&path)
     }
 
     #[test]

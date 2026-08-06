@@ -68,39 +68,86 @@ fn comparison_document(baseline: &super::diff::Reading, subject: &super::diff::R
     let rows = super::diff::comparison_rows(&baseline.result.per_language, &subject.result.per_language,
             config.view.sort_by, None);
     let keywords_counted = !config.view.hidden.keywords;
+    // Written only when both readings named the same modules, since a module only one of them has
+    // has nothing to be compared against
+    let pairs = super::diff::paired_modules(&baseline.result, &subject.result)
+            .filter(|x| x.iter().any(|pair| pair.name.is_some()));
 
-    let languages = if rows.is_empty() {String::from("[]")} else {
-        let entries = rows.iter().map(|row| {
-            let mut members = vec![format!("      \"name\": \"{}\"", escaped(&row.name))];
-            members.extend(triad_members("      ", &row.before, &row.now));
-            if keywords_counted {
-                members.push(format!("      \"keywords\": {}", keyword_triads(&row.before.keyword_occurences,
-                        &row.now.keyword_occurences)));
-            }
-            format!("    {{\n{}\n    }}", members.join(",\n"))
-        }).collect::<Vec<_>>();
-        format!("[\n{}\n  ]", entries.join(",\n"))
-    };
-
-    let mut total = triad_members("    ", &baseline.result.total, &subject.result.total);
-    if keywords_counted {
-        total.push(format!("    \"keywords\": {}", indented(&keyword_triads(&baseline.result.total.keyword_occurences,
-                &subject.result.total.keyword_occurences)).replace("\n    ", "\n  ")));
-    }
-
-    let members = [
+    let mut members = vec![
         format!("  \"format\": {FORMAT_VERSION}"),
         String::from("  \"kind\": \"comparison\""),
         format!("  \"mezura_version\": \"{}\"", escaped(config.view.version.trim_start_matches('v'))),
         format!("  \"generated_at\": \"{}\"", datetime_now.to_rfc3339_opts(SecondsFormat::Secs, false)),
         format!("  \"from\": {}", side_object(baseline)),
         format!("  \"to\": {}", side_object(subject)),
-        format!("  \"total\": {{\n{}\n  }}", total.join(",\n")),
-        format!("  \"languages\": {languages}"),
-        format!("  \"warnings\": {}", comparison_warnings_array(baseline, subject)),
+        format!("  \"total\": {}", compared_total_object(4, &baseline.result.total, &subject.result.total, keywords_counted)),
+        format!("  \"languages\": {}", compared_languages_array(4, &rows, keywords_counted)),
+        format!("  \"warnings\": {}", comparison_warnings_array(baseline, subject, pairs.is_none())),
     ];
+    if let Some(pairs) = &pairs {
+        members.push(format!("  \"modules\": {}", comparison_modules_array(pairs, config, keywords_counted)));
+    }
 
     format!("{{\n{}\n}}", members.join(",\n"))
+}
+
+// The same shape as a run document's modules, with every count a triad. '--top' does not cut these,
+// the way it does not cut the languages above.
+fn comparison_modules_array(pairs: &[super::diff::ModulePair], config: &Configuration,
+        keywords_counted: bool) -> String
+{
+    let entries = pairs.iter().map(|pair| {
+        let rows = super::diff::comparison_rows(&pair.before.per_language, &pair.now.per_language,
+                config.view.sort_by, None);
+        let name = pair.name.map_or("null".to_owned(), |x| format!("\"{}\"", escaped(x)));
+        let members = [
+            format!("      \"name\": {name}"),
+            format!("      \"total\": {}", compared_total_object(8, &pair.before.total, &pair.now.total, keywords_counted)),
+            format!("      \"languages\": {}", compared_languages_array(8, &rows, keywords_counted)),
+        ];
+        format!("    {{\n{}\n    }}", members.join(",\n"))
+    }).collect::<Vec<_>>();
+
+    format!("[\n{}\n  ]", entries.join(",\n"))
+}
+
+// 'brace' is the column each entry's opening brace sits at, so that the same array can be written at
+// the top level and under a module, which are at two depths.
+fn compared_languages_array(brace: usize, rows: &[super::diff::Row], keywords_counted: bool) -> String {
+    if rows.is_empty() {
+        return String::from("[]");
+    }
+
+    let entries = rows.iter().map(|row| compared_language_object(brace, &row.name, &row.before,
+            &row.now, keywords_counted)).collect::<Vec<_>>();
+
+    format!("[\n{}\n{}]", entries.join(",\n"), " ".repeat(brace - 2))
+}
+
+fn compared_language_object(brace: usize, name: &str, before: &Stats, now: &Stats,
+        keywords_counted: bool) -> String
+{
+    let pad = " ".repeat(brace + 2);
+    let mut members = vec![format!("{pad}\"name\": \"{}\"", escaped(name))];
+    members.extend(triad_members(&pad, before, now));
+    if keywords_counted {
+        members.push(format!("{pad}\"keywords\": {}", keyword_triads(&before.keyword_occurences,
+                &now.keyword_occurences, brace + 4)));
+    }
+
+    format!("{}{{\n{}\n{}}}", " ".repeat(brace), members.join(",\n"), " ".repeat(brace))
+}
+
+// 'members' is the column its members sit at, and its closing brace goes two to the left of them
+fn compared_total_object(members: usize, before: &Stats, now: &Stats, keywords_counted: bool) -> String {
+    let pad = " ".repeat(members);
+    let mut lines = triad_members(&pad, before, now);
+    if keywords_counted {
+        lines.push(format!("{pad}\"keywords\": {}", keyword_triads(&before.keyword_occurences,
+                &now.keyword_occurences, members + 2)));
+    }
+
+    format!("{{\n{}\n{}}}", lines.join(",\n"), " ".repeat(members - 2))
 }
 
 // Identity, and the identity of each source has its own shape: 'source' is the discriminator, so a
@@ -163,24 +210,35 @@ fn document_warnings_array(warnings: &[super::json_reader::DocumentWarning]) -> 
 
 // What makes the two readings two measurements rather than two moments of one: the same facts the
 // screen says above the table, as entries a program can key on.
-fn comparison_warnings_array(baseline: &super::diff::Reading, subject: &super::diff::Reading) -> String {
+fn comparison_warnings_array(baseline: &super::diff::Reading, subject: &super::diff::Reading,
+        modules_differ: bool) -> String
+{
+    let counts = mezura_core::warnings::Affects::Counts.name();
     let mut entries = super::diff::settings_that_differ(&baseline.scope, &subject.scope).into_iter()
-            .map(|setting| (String::from("setting-differs"), setting.to_owned(),
+            .map(|setting| (String::from("setting-differs"), counts, setting.to_owned(),
                 format!("The two readings were not taken with the same '{setting}', so part of the difference is that setting and not code that changed.")))
             .collect::<Vec<_>>();
     if baseline.version != subject.version {
-        entries.push((String::from("versions-differ"), format!("{} -> {}", baseline.version, subject.version),
+        entries.push((String::from("versions-differ"), counts, format!("{} -> {}", baseline.version, subject.version),
                 format!("The readings were counted by mezura {} and {}, so part of the difference may be a language counted better since.",
                         baseline.version, subject.version)));
+    }
+    // The counts are sound and one thing that was asked for is missing from the document, which is
+    // what 'settings' says: the key is absent, and its absence would otherwise read as a run that
+    // never named a module
+    if modules_differ && (baseline.result.has_modules() || subject.result.has_modules()) {
+        entries.push((String::from("modules-differ"), mezura_core::warnings::Affects::Settings.name(),
+                format!("{} -> {}", super::diff::module_names(&baseline.result), super::diff::module_names(&subject.result)),
+                String::from("The two readings did not name the same modules, so there is no module the two of them share and this document has no 'modules'.")));
     }
     if entries.is_empty() {
         return String::from("[]");
     }
 
-    let rendered = entries.into_iter().map(|(code, subject_of, message)| {
+    let rendered = entries.into_iter().map(|(code, affects, subject_of, message)| {
         let members = [
             format!("      \"code\": \"{code}\""),
-            String::from("      \"affects\": \"counts\""),
+            format!("      \"affects\": \"{affects}\""),
             format!("      \"subject\": \"{}\"", escaped(&subject_of)),
             format!("      \"message\": \"{}\"", escaped(&message)),
         ];
@@ -207,7 +265,7 @@ fn triad(from: usize, to: usize) -> String {
 
 // The union of both sides' keywords, without the ones that are zero on both: a slot every selected
 // language declares and nothing ever used is a row about nothing.
-fn keyword_triads(before: &HashMap<String, usize>, now: &HashMap<String, usize>) -> String {
+fn keyword_triads(before: &HashMap<String, usize>, now: &HashMap<String, usize>, indent: usize) -> String {
     let mut names = before.keys().chain(now.keys()).cloned().collect::<Vec<_>>();
     names.sort_unstable();
     names.dedup();
@@ -218,10 +276,10 @@ fn keyword_triads(before: &HashMap<String, usize>, now: &HashMap<String, usize>)
 
     let members = names.into_iter().map(|name| {
         let (from, to) = (before.get(&name).copied().unwrap_or(0), now.get(&name).copied().unwrap_or(0));
-        format!("        \"{}\": {}", escaped(&name), triad(from, to))
+        format!("{}\"{}\": {}", " ".repeat(indent), escaped(&name), triad(from, to))
     }).collect::<Vec<_>>();
 
-    format!("{{\n{}\n      }}", members.join(",\n"))
+    format!("{{\n{}\n{}}}", members.join(",\n"), " ".repeat(indent - 2))
 }
 
 // Only what can change a number: no theme, no layout, no separators. Without it, two documents that
@@ -759,6 +817,56 @@ mod tests {
 
         // and it is a document, not a description of one
         assert!(serde_json::from_str::<serde_json::Value>(&document).is_ok(), "{document}");
+    }
+
+    // The second axis of a comparison, which is there only when both readings named the same
+    // modules: one that only one of them has would be compared against nothing, and the key being
+    // absent has to be told apart from a run that named none, which is what the warning is for.
+    #[test]
+    fn the_modules_of_a_comparison_are_written_only_when_both_readings_named_the_same_ones() {
+        let config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        let datetime = Local::now();
+        let module = |name: Option<&str>, language: &str, lines: usize, structs: usize| {
+            let per_language = hashmap![language.to_owned() =>
+                    stats_of(1, lines * 10, lines, lines, 0, hashmap!["structs".to_owned() => structs])];
+            mezura_core::ModuleResult {name: name.map(str::to_owned), total: Stats::total_of(&per_language), per_language}
+        };
+        let with_modules = |source, modules: Vec<mezura_core::ModuleResult>| {
+            let mut reading = reading_of(source, HashMap::new());
+            reading.result.modules = modules;
+            reading
+        };
+
+        let from = with_modules(crate::diff::Source::Document {path: "D:/old.json".to_owned()},
+                vec![module(Some("backend"), "Rust", 100, 3), module(None, "HTML", 40, 0)]);
+        let to = with_modules(crate::diff::Source::Run,
+                vec![module(Some("backend"), "Rust", 150, 5), module(None, "HTML", 40, 0)]);
+
+        let document = comparison_document(&from, &to, &datetime, &config);
+        assert!(document.contains("\"modules\": ["), "{document}");
+        assert!(document.contains("\"name\": \"backend\"") && document.contains("\"name\": null"));
+        // every figure of a module is the same triad as the figures above it, keywords included, and
+        // the leftovers that did not move are in it as a triad of no change
+        let block = &document[document.find("\"modules\"").unwrap()..];
+        assert!(block.contains("\"lines\": {\"from\": 100, \"to\": 150, \"change\": 50}"), "{block}");
+        assert!(block.contains("\"structs\": {\"from\": 3, \"to\": 5, \"change\": 2}"), "{block}");
+        assert!(block.contains("\"lines\": {\"from\": 40, \"to\": 40, \"change\": 0}"), "{block}");
+        assert!(serde_json::from_str::<serde_json::Value>(&document).is_ok(), "{document}");
+
+        // A module only one of them has takes the whole key with it, and the reader is told why
+        // rather than left to read the absence as a run that named nothing
+        let renamed = with_modules(crate::diff::Source::Run,
+                vec![module(Some("api"), "Rust", 150, 5), module(None, "HTML", 40, 0)]);
+        let document = comparison_document(&from, &renamed, &datetime, &config);
+        assert!(!document.contains("\"modules\""), "{document}");
+        assert!(document.contains("\"code\": \"modules-differ\""), "{document}");
+        assert!(document.contains("\"affects\": \"settings\""));
+        assert!(document.contains("\"subject\": \"backend, (unnamed) -> api, (unnamed)\""), "{document}");
+
+        // and two readings that named nothing at all have no second axis and nothing to report
+        let plain = comparison_document(&reading_of(crate::diff::Source::Run, HashMap::new()),
+                &reading_of(crate::diff::Source::Run, HashMap::new()), &datetime, &config);
+        assert!(!plain.contains("modules"), "{plain}");
     }
 
     // The same facts the screen says above the table, as entries a program can key on: the sides'

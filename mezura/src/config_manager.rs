@@ -474,6 +474,9 @@ pub struct ConfigurationBuilder {
     pub hidden:                   Option<Hidden>,
     pub no_gitignore:             Option<bool>,
     pub theme_name:               Option<String>,
+    // Only the command line switches it on. A configuration that carried its own log would write an
+    // entry on every run that loads it, so it stays a per-run request and is absent from
+    // 'add_missing_fields', 'has_missing_fields' and the file parser.
     pub log:                      Option<LogOption>,
     pub compare_level:            Option<usize>,
     pub config_name_to_save:      Option<String>,
@@ -511,7 +514,6 @@ impl ConfigurationBuilder {
         if self.no_gitignore.is_none() {self.no_gitignore = config.no_gitignore};
         if self.theme_name.is_none() {self.theme_name = config.theme_name};
         if self.compare_level.is_none() {self.compare_level = config.compare_level};
-        if self.log.is_none() {self.log = config.log};
         if self.config_styles.is_none() {self.config_styles = config.config_styles};
         if self.bar_thickness.is_none() {self.bar_thickness = config.bar_thickness};
         if self.number_separator.is_none() {self.number_separator = config.number_separator};
@@ -526,7 +528,7 @@ impl ConfigurationBuilder {
         self.exclude_dirs.is_none() || self.languages_of_interest.is_none() || self.forced_languages.is_none() ||
         self.threads.is_none() || self.braces_as_code.is_none() || self.should_search_in_dotted.is_none() ||
         self.should_show_faulty_files.is_none() || self.hidden.is_none() || self.no_gitignore.is_none() ||
-        self.theme_name.is_none() || self.log.is_none() || self.compare_level.is_none() ||
+        self.theme_name.is_none() || self.compare_level.is_none() ||
         self.config_styles.is_none() || self.bar_thickness.is_none() || self.number_separator.is_none() || self.decimal_separator.is_none() || self.layout.is_none() || self.sort_by.is_none()
     }
 
@@ -980,12 +982,12 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             dirs, exclude_dirs, forced_languages, threads, braces_as_code, should_search_in_dotted,
             should_show_faulty_files, hidden, no_gitignore, theme_name, compare_level, bar_thickness,
             number_separator, decimal_separator, layout, sort_by, top_n,
-            // these three accept whatever they are given, so a config can hold no invalid value for
+            // these two accept whatever they are given, so a config can hold no invalid value for
             // them and they never reach 'invalid_fields'
-            languages_of_interest: _, excluded_languages: _, log: _,
+            languages_of_interest: _, excluded_languages: _,
             // not carried by a configuration file at all
             config_name_to_save: _, config_name_to_load: _, theme_name_to_save: _, output: _,
-            diff_against: _, dirs_source: _,
+            diff_against: _, log: _, dirs_source: _,
             // a style that does not parse is reported per line and skipped, and the rest of the file
             // still applies, so these warn instead of reaching here
             styles: _, config_styles: _, theme_styles: _ } = config_builder;

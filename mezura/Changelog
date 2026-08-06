@@ -44,6 +44,8 @@ Main changes:
       "language-others" gets the same style for both, since the two never appear together.
   -> A configuration file declares "theme" instead of "color-palette", and can no longer declare
       "colors". Its "style" block stays, as the per project tweaks on top of the named theme.
+  -> A configuration file can no longer turn on logging: a hand-added "log" line is ignored and
+      named when the file loads. Ask for an entry per run, with "--log".
   -> --no-visual and --no-keywords are removed, replaced by --hide. Use '--hide bar' and
       '--hide keywords'.
   -> The default order of the languages is now the number of lines, and ties are broken
@@ -102,9 +104,11 @@ New commands:
       figure carries what it is now and how much it moved. The keywords are marked the same way in
       the section they already have. A language that only one of the two readings has is marked
       "new" or "gone" instead of being given a percentage. When the two runs did not obey the same
-      settings mezura says so, since that difference is not code that changed. With "--output json"
-      the comparison is written as a JSON document, every count carrying "from", "to" and "change".
-      A configuration file cannot declare it.
+      settings mezura says so, since that difference is not code that changed. Named targets get a
+      row each with their languages under them, as long as both readings named the same modules;
+      when they did not, the comparison is of everything at once and mezura says which each of them
+      named. With "--output json" the comparison is written as a JSON document, every count carrying
+      "from", "to" and "change". A configuration file cannot declare it.
   -> --save-theme <name> : writes the way this run looks into a theme file, flattened into values,
       so it stands on its own and can be shared. Combined with --save, the configuration that is
       written points at that theme and carries no styles of its own.
