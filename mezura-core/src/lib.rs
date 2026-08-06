@@ -495,8 +495,8 @@ mod tests {
         assert_eq!(Some(&9), total.keyword_occurences.get("classes"));
         assert_eq!(Some(&5), total.keyword_occurences.get("structs"));
 
-        // and nothing counted is a zero rather than a division by zero
-        assert_eq!(0, Stats::default().average_size());
+        // and nothing to add up is a total of nothing. 'average_size' over no files is 'domain's
+        // own question and is asserted there.
         assert_eq!(0, Stats::total_of(&HashMap::new()).files);
     }
 }

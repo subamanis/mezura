@@ -538,6 +538,28 @@ mod target_path_tests {
         assert!(matches!(validate_and_absolutize(&[Target::of(plain_str.clone())]), Err(TargetError::InvalidPath(p)) if p == plain_str));
     }
 
+    // The first spelling seen is the one every later one folds into, so the report prints one row
+    // and not two, and 'remove_overlapping_targets' sees one module where the user meant one.
+    #[test]
+    fn two_spellings_of_a_module_name_are_one_module() {
+        let root = std::env::temp_dir().join("mezura-module-name-case");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("a")).unwrap();
+        std::fs::create_dir_all(root.join("b")).unwrap();
+        let path = |x: &str| root.join(x).to_str().unwrap().replace('\\', "/");
+
+        let prepared = validate_and_absolutize(&[Target::named("code", path("a")), Target::named("CODE", path("b"))]);
+        let separate = validate_and_absolutize(&[Target::named("code", path("a")), Target::named("suite", path("b"))]);
+        std::fs::remove_dir_all(&root).unwrap();
+
+        assert_eq!(vec![Some("code".to_owned()), Some("code".to_owned())],
+                prepared.unwrap().iter().map(|x| x.module.clone()).collect::<Vec<_>>(),
+                "'CODE' was kept apart from 'code'");
+        // and two names that really differ stay two
+        assert_eq!(vec![Some("code".to_owned()), Some("suite".to_owned())],
+                separate.unwrap().iter().map(|x| x.module.clone()).collect::<Vec<_>>());
+    }
+
     #[test]
     fn the_roots_of_the_traversal_never_contain_one_another() {
         let targets = vec![Target::named("backend", "D:/api"),

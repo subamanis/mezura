@@ -433,8 +433,10 @@ mod tests {
     #[test]
     fn a_warning_reaches_the_document_with_both_of_its_halves() {
         let config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
-        // Present even when there is nothing to say, so a consumer never has to test for the key
-        assert!(document_of(&config).contains("\"warnings\": []") || document_of(&config).contains("\"warnings\": ["));
+        // The key is always written, so a consumer never has to test for it. Whether the array is
+        // empty cannot be asserted: the collector belongs to the process and every other test of
+        // this binary adds to it.
+        assert!(document_of(&config).contains("\"warnings\": ["));
 
         super::super::warnings::keep(mezura_core::warnings::Warning::new(mezura_core::warnings::EXTENSION_TIEBREAK,
                 mezura_core::warnings::Affects::Counts, "a-subject-only-this-test-uses",

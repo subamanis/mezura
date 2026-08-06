@@ -396,8 +396,7 @@ pub fn resolve(theme_styles: &[(String, String)], config_styles: &[(String, Stri
     theme
 }
 
-// A name, or six hex digits with or without the '#'. The underscore is accepted beside the hyphen
-// because a config file is typed by hand and both spellings read as the same name.
+// 'bright_black' and 'bright-black' are one name, and so are '#ff0080' and 'ff0080'.
 pub fn parse_single_color(token: &str) -> Option<Color> {
     match token.to_lowercase().replace('_', "-").as_str() {
         "black" => Some(Color::Black),
@@ -611,5 +610,4 @@ mod tests {
         assert_eq!(Theme::default().summary, theme.summary);
     }
 }
-
 

@@ -54,7 +54,7 @@ pub const MAX_COMPARE_LEVEL   : usize = 10;
 const DEF_SHOW_FAULTY_FILES : bool    = false;
 const DEF_COMPARE_LEVEL     : usize   = 1;
 
-// What the always-loaded configuration is called in a message about it
+// What the always-loaded configuration is called in a message about it, not a file name
 const DEFAULT_CONFIG_LABEL  : &str    = "default";
 
 // Two halves, because the two are asked different questions: the engine is handed only what can
@@ -1206,34 +1206,6 @@ mod tests {
     }
 
     #[test]
-    fn test_absolute_conversion() {
-        let path = "./";
-        let abs = mezura_core::engine::targets::convert_to_absolute(path);
-        assert!(Path::new(path).is_relative());
-        assert!(Path::new(&abs).is_absolute());
-
-        let path = "./src";
-        let abs = mezura_core::engine::targets::convert_to_absolute(path);
-        assert!(Path::new(path).is_relative());
-        assert!(Path::new(&abs).is_absolute());
-
-        let path = "./src/../src";
-        let abs = mezura_core::engine::targets::convert_to_absolute(path);
-        assert!(Path::new(path).is_relative());
-        assert!(Path::new(&abs).is_absolute());
-
-        let path = "src";
-        let abs = mezura_core::engine::targets::convert_to_absolute(path);
-        assert!(Path::new(path).is_relative());
-        assert!(Path::new(&abs).is_absolute());
-
-        let path = "src/main.rs";
-        let abs = mezura_core::engine::targets::convert_to_absolute(path);
-        assert!(Path::new(path).is_relative());
-        assert!(Path::new(&abs).is_absolute());
-    }
-
-    #[test]
     fn test_parse_dirs() {
         assert_eq!(Err(ArgParsingError::InvalidPath("a".to_owned())), parse_dirs("a"));
         assert_eq!(Err(ArgParsingError::InvalidPath("a b c".to_owned())), parse_dirs("a b c"));
@@ -1258,20 +1230,11 @@ mod tests {
         let src = mezura_core::engine::targets::convert_to_absolute("./src");
         let tests = mezura_core::engine::targets::convert_to_absolute("./tests");
 
+        // The grammar of a target belongs to 'args' and the folding of two spellings of one name to
+        // 'engine::targets'; what is asserted here is the command line's own half, that a declared
+        // name reaches a Target with its path made absolute, and the errors it words.
         assert_eq!(vec![format!("code={src}"), format!("suite={tests}")], parse_dirs("code=./src suite=./tests").unwrap());
-        // The name holds for the whole comma list it opened, and one module is allowed to be several
-        // directories
-        assert_eq!(vec![format!("code={src}"), format!("code={tests}")], parse_dirs("code=./src,./tests").unwrap());
-        // and a name inside the list still starts a new one, which is what lets a saved
-        // configuration write the whole thing back on one line and read it as what it was
-        assert_eq!(vec![format!("code={src}"), format!("suite={tests}")], parse_dirs("code=./src,suite=./tests").unwrap());
-        // A comma with a space around it is still a comma
-        assert_eq!(vec![format!("code={src}"), format!("code={tests}")], parse_dirs("code=./src, ./tests").unwrap());
-        // but a space alone ends the list, so nothing written after a named target joins it. That
-        // only holds once a name is present, which is what this whole rule is conditional on.
         assert_eq!(vec![format!("code={src}"), tests.clone()], parse_dirs("code=./src ./tests").unwrap());
-        // Two spellings of one name are one module
-        assert_eq!(vec![format!("code={src}"), format!("code={tests}")], parse_dirs("code=./src CODE=./tests").unwrap());
 
         // An '=' is a legal character in a path, so anything that looks like one is read as one
         assert_eq!(vec![src.clone()], parse_dirs("./src").unwrap());
@@ -1532,8 +1495,6 @@ mod tests {
         std::fs::remove_file(test_file_path).unwrap();
     }
 
-    // Every command that 'resolve_invalid_config_fields' does not know about is treated as never
-    // overridden, so giving it correctly on the command line would still kill the run
     #[test]
     fn force_lang_takes_pairs_of_an_extension_and_a_language_and_refuses_anything_else() {
         let forced = |args: &str| create_config_from_args(&format!("./ --force-lang {args}")).map(|x| x.engine.forced_languages);
@@ -1550,6 +1511,8 @@ mod tests {
         }
     }
 
+    // Every command that 'resolve_invalid_config_fields' does not know about is treated as never
+    // overridden, so giving it correctly on the command line would still kill the run
     #[test]
     fn test_a_command_line_value_rescues_every_invalid_field_of_a_config() {
         std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();

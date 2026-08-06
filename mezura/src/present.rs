@@ -56,7 +56,7 @@ pub fn present(result: &RunResult, config: &Configuration) {
         return;
     }
 
-    let log_file_path = get_specified_config_file_path(config);
+    let log_file_path = log_file_path(config);
     let existing_log_contents = log_file_path.as_ref().and_then(|path| super::log::extract_file_contents(path));
     super::result_printer::format_and_print_results(result, &existing_log_contents, &datetime_now, config);
 
@@ -155,10 +155,12 @@ fn get_activated_languages_as_str(config: &Configuration) -> String {
     msg
 }
 
-fn get_specified_config_file_path(config: &Configuration) -> Option<String> {
-    if let Some(name) = &config.view.config_name_to_save {
-        Some(PERSISTENT_APP_PATHS.logs_dir.clone() + name)
-    } else { config.view.config_name_to_load.as_ref().map(|name|PERSISTENT_APP_PATHS.logs_dir.clone() + name) }
+// The log of the configuration this run saved, or failing that of the one it loaded.
+fn log_file_path(config: &Configuration) -> Option<String> {
+    let name = config.view.config_name_to_save.as_ref()
+            .or(config.view.config_name_to_load.as_ref())?;
+
+    Some(PERSISTENT_APP_PATHS.logs_dir.clone() + name + ".txt")
 }
 
 #[cfg(test)]
@@ -202,5 +204,23 @@ mod tests {
         config.view.should_show_faulty_files = true;
         assert!(detail_hint(&result_with(3, 5), &config).is_none(),
                 "the detail was printed and the reader was still told to ask for it");
+    }
+
+    // Only the file name is asserted: which directory it lands in is the data dir's business, and
+    // the separators around it differ by platform.
+    #[test]
+    fn a_logs_file_name_is_the_configuration_name_with_txt_on_it() {
+        let file_name = |config: &Configuration| log_file_path(config)
+                .map(|path| std::path::Path::new(&path).file_name().unwrap().to_string_lossy().into_owned());
+
+        let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
+        assert_eq!(None, file_name(&config), "a run naming no configuration asked for a log file");
+
+        config.view.config_name_to_load = Some("portal".to_owned());
+        assert_eq!(Some("portal.txt".to_owned()), file_name(&config));
+
+        config.view.config_name_to_save = Some("saved".to_owned());
+        assert_eq!(Some("saved.txt".to_owned()), file_name(&config),
+                "the name being saved did not win over the name being loaded");
     }
 }

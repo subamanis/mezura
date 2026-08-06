@@ -67,6 +67,8 @@ Main changes:
       a configuration, theme or language name that does not exist, a path that is not there, or a
       set of files where every single one failed to be parsed. Finding no code to count is not a
       failure and still exits 0, and so does a run where only some files failed.
+  -> Log files are now .txt files, like every other persistent file in the app. Existing log files
+      should be renamed
 
 New commands:
   -> --hide <list> : leaves parts of the output unprinted. Takes any of version, directory-info,

@@ -323,6 +323,8 @@ mod tests {
         // A name holds across commas and a new one ends it
         assert_eq!(vec![named("f", "./web"), named("f", "./ui"), named("b", "./api")],
                 targets("f=./web,./ui b=./api"));
+        // and a comma with a space around it is still a comma, so the list carries on under its name
+        assert_eq!(vec![named("f", "./web"), named("f", "./ui")], targets("f=./web, ./ui"));
     }
 
     // The way out of the one thing a command line cannot say: a spaced path in a run that also names

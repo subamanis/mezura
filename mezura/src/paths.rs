@@ -35,21 +35,24 @@ impl PersistentAppPaths {
     // Linux:    /home/<user_name>/.local/share/mezura
     // MacOs:    /Users/<user_name>/Library/Application Support/mezura
     pub fn get() -> Self {
-        let proj_dirs = ProjectDirs::from("", "",  APP_NAME).unwrap();
         // Tests write real configuration and theme files through these paths, and one interrupted
         // before its cleanup leaves them behind. In the real directory those are not litter but
         // loadable configurations that '--show-configs' lists, and 'test_save_load_configs' opens by
         // demanding its own file is absent, so one interrupted run fails it forever after.
         //
         // A temporary directory also keeps the machine's own default configuration out of the tests,
-        // which is what made them behave differently per machine.
+        // which is what made them behave differently per machine. Asking the system where the real
+        // one is belongs inside the other branch, or a machine with no home directory at all fails
+        // every test that reaches this, over a value the test half never uses.
         let data_dir = if cfg!(test) {
             std::env::temp_dir().join(APP_NAME.to_owned() + "-test").to_string_lossy().into_owned() + "/"
         } else {
             // Every path in this struct is a String, so a data directory that is not valid UTF-8
             // cannot be represented at all and nothing below would work. Said out loud rather than
             // left as a bare unwrap, because the message is the only clue anyone would get.
-            proj_dirs.data_dir().to_str()
+            ProjectDirs::from("", "", APP_NAME)
+                    .expect("no home directory could be found to put the application's data in")
+                    .data_dir().to_str()
                     .expect("the application data directory path is not valid UTF-8").to_owned() + "/"
         };
         let languages_dir = data_dir.clone() + LANGUAGES_DIR_NAME + "/";

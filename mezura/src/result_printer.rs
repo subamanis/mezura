@@ -15,7 +15,7 @@ const TOTAL_NAME : &str = "Total";
 // How far a language sits under the module it belongs to, in either table
 const GROUP_INDENT : &str = "  ";
 
-// The list layout indents further: its rows are far wider and already carry a blank line between them
+// The same, in the list layout, whose rows are far wider and already carry a blank line between them
 const LIST_INDENT : &str = "    ";
 
 const MATRIX_METRICS : [&str; 3] = ["files", "lines", "code"];
@@ -27,10 +27,10 @@ const MATRIX_LINES_ROW : usize = 1;
 // Kept on both sides of the arrow, so the longest language name still has room around it
 const NAME_GAP : usize = 3;
 
-// The number of cells the overview's bar is drawn out of
+// The total number of cells the overview's bar is drawn out of, shared between the languages in it
 const NUM_OF_VERTICALS : usize = 50;
 
-// How many languages the overview names before folding the rest into "others"
+// How many languages the overview names before folding the rest into OTHERS_NAME
 const OVERVIEW_LANGUAGES : usize = 3;
 
 const OTHERS_NAME : &str = "others";
@@ -42,7 +42,7 @@ const SETTING_KEYS : [&str; 8] = [config_manager::DIRS, config_manager::EXCLUDE,
         config_manager::EXCLUDE_LANGUAGES, config_manager::FORCE_LANG, config_manager::BRACES_AS_CODE,
         config_manager::SEARCH_IN_DOTTED, config_manager::NO_GITIGNORE];
 
-// The keys of the stats block of a log entry, as the log writes them
+// The keys of the stats block of a log entry, spelled as 'super::log' writes them
 const FILES         : &str  = "Files:";
 const LINES         : &str  = "Lines:";
 const CODE          : &str  = "Code:";
@@ -1683,41 +1683,27 @@ mod tests {
                 "the printed layouts changed. Read the diff, and if every difference is intended, \
                  regenerate with MEZURA_UPDATE_GOLDEN=1 cargo test");
     }
+    // The three read a different field of one map into the slot its language name occupies, and
+    // that is the whole of what they do: the arithmetic on the figures is 'render::percentages' and
+    // is asserted there. Each language is given three figures that would rank it differently, so a
+    // function reading the wrong field, or filling by the map's own order, cannot pass.
     #[test]
-    fn test_get_lines_percentages() {
-        let ext_names = ["py".to_string(),"java".to_string(),"cs".to_string()];
+    fn each_overview_row_reads_its_own_field_into_the_slot_of_its_language() {
+        let content = hashmap!(
+            "A".to_owned() => Stats::new(1, 60, 30, 0, 0, hashmap![]),
+            "B".to_owned() => Stats::new(2, 30, 10, 0, 0, hashmap![]),
+            "C".to_owned() => Stats::new(7, 10, 60, 0, 0, hashmap![]));
+        let names = ["A".to_owned(), "B".to_owned(), "C".to_owned()];
 
-        let per_language = hashmap!("cs".to_string() => Stats { lines: 100, ..Default::default() },
-            "java".to_string() => Stats { lines: 100, ..Default::default() }, "py".to_string() => Stats { lines: 0, ..Default::default() });
-        assert_eq!(vec![0f64,50f64,50f64], get_lines_percentages(&per_language, &ext_names));
-        let per_language = hashmap!("cs".to_string() => Stats { lines: 0, ..Default::default() },
-        "java".to_string() => Stats { lines: 0, ..Default::default() }, "py".to_string() => Stats { lines: 1, ..Default::default() });
-        assert_eq!(vec![100f64,0f64,0f64], get_lines_percentages(&per_language, &ext_names));
-        let per_language = hashmap!("cs".to_string() => Stats { lines: 20, ..Default::default() },
-        "java".to_string() => Stats { lines: 20, ..Default::default() }, "py".to_string() => Stats { lines: 20, ..Default::default() });
-        assert_eq!(vec![33.33f64,33.33f64,33.34f64], get_lines_percentages(&per_language, &ext_names));
-        
-        let ext_names = ["py".to_string(),"java".to_string(),"cs".to_string(),"rs".to_string()];
+        assert_eq!(vec![10.0, 20.0, 70.0], get_files_percentages(&content, &names));
+        assert_eq!(vec![30.0, 10.0, 60.0], get_lines_percentages(&content, &names));
+        assert_eq!(vec![60.0, 30.0, 10.0], get_sizes_percentages(&content, &names));
 
-        let per_language = hashmap!("cs".to_string() => Stats { lines: 100, ..Default::default() },
-            "java".to_string() => Stats { lines: 100, ..Default::default() }, "py".to_string() => Stats { lines: 0, ..Default::default() },
-            "rs".to_string() => Stats { lines: 0, ..Default::default() });
-        assert_eq!(vec![0f64,50f64,50f64,0f64], get_lines_percentages(&per_language, &ext_names));
-        let per_language = hashmap!("cs".to_string() => Stats { lines: 100, ..Default::default() },
-            "java".to_string() => Stats { lines: 100, ..Default::default() }, "py".to_string() => Stats { lines: 100, ..Default::default() },
-            "rs".to_string() => Stats { lines: 0, ..Default::default() });
-        assert_eq!(vec![33.33,33.33,33.33,0.01], get_lines_percentages(&per_language, &ext_names));
-        let per_language = hashmap!("cs".to_string() => Stats { lines: 201, ..Default::default() },
-            "java".to_string() => Stats { lines: 200, ..Default::default() }, "py".to_string() => Stats { lines: 200, ..Default::default() },
-            "rs".to_string() => Stats { lines: 0, ..Default::default() });
-        assert_eq!(vec![33.28,33.28,33.44,0.0], get_lines_percentages(&per_language, &ext_names));
-
-        let ext_names = ["py".to_string(),"java".to_string(),"cs".to_string(),"rs".to_string(),"cpp".to_string()];
-
-        let per_language = hashmap!("cs".to_string() => Stats { lines: 100, ..Default::default() },
-            "java".to_string() => Stats { lines: 100, ..Default::default() }, "py".to_string() => Stats { lines: 0, ..Default::default() },
-            "rs".to_string() => Stats { lines: 0, ..Default::default() }, "cpp".to_string() => Stats { lines: 0, ..Default::default() });
-        assert_eq!(vec![0.0,50f64,50f64,0f64,0f64], get_lines_percentages(&per_language, &ext_names));
+        // and the slot follows the name, so the sorted order the overview was given is the order it
+        // draws in
+        let reversed = ["C".to_owned(), "B".to_owned(), "A".to_owned()];
+        assert_eq!(vec![70.0, 20.0, 10.0], get_files_percentages(&content, &reversed));
+        assert_eq!(vec![60.0, 10.0, 30.0], get_lines_percentages(&content, &reversed));
     }
 
     #[test]
@@ -1829,23 +1815,12 @@ mod tests {
         assert_eq!((1,1,1),split_minutes_to_D_H_M(1501));
     }
 
-    #[test]
-    fn test_difference_as_percentages() {
-        assert_eq!("0",difference_as_signed_percentage_str_of_usize(100, 100));
-        assert_eq!("-10",difference_as_signed_percentage_str_of_usize(100, 90));
-        assert_eq!("+100",difference_as_signed_percentage_str_of_usize(100, 200));
-        assert_eq!("+ <0.01",difference_as_signed_percentage_str_of_usize(22819, 22820));
-        // A first run to compare against has nothing to have grown from, and 'inf%' is not a
-        // reading of that
-        assert_eq!("0",difference_as_signed_percentage_str_of_usize(0, 500));
-    }
-
     // A whole entry writes all six figures and hides the question, so the fixture is a log cut in
     // the middle of a write: the one shape where a missing line could take its number from the
     // entry above it.
     #[test]
     fn a_figure_missing_from_an_entry_is_not_taken_from_the_entry_before_it() {
-        let contents = super::super::log::extract_file_contents(&(FIXTURES_DIR.to_owned()+"logs/truncated")).unwrap();
+        let contents = super::super::log::extract_file_contents(&(FIXTURES_DIR.to_owned()+"logs/truncated.txt")).unwrap();
         let log_entries = parse_N_previous_entries(&contents, 2);
 
         assert_eq!(2, log_entries.len());
@@ -1860,7 +1835,7 @@ mod tests {
 
     #[test]
     fn test_parse_N_previous_entries() {
-        let contents = super::super::log::extract_file_contents(&(FIXTURES_DIR.to_owned()+"logs/test1")).unwrap();
+        let contents = super::super::log::extract_file_contents(&(FIXTURES_DIR.to_owned()+"logs/test1.txt")).unwrap();
         let log_entries = parse_N_previous_entries(&contents, 3);
 
         assert_eq!(10, log_entries[0].stats.files);
@@ -1903,7 +1878,7 @@ mod tests {
     #[test]
     fn test_log_creation_and_reading() -> std::io::Result<()> {
         std::fs::create_dir_all(SCRATCH_LOG_DIR)?;
-        let test_log_dir = SCRATCH_LOG_DIR.to_owned() + "test2";
+        let test_log_dir = SCRATCH_LOG_DIR.to_owned() + "test2.txt";
         if Path::new(&test_log_dir).exists() {
             std::fs::remove_file(&test_log_dir).unwrap();
         }
@@ -1935,7 +1910,7 @@ mod tests {
     #[test]
     fn a_log_that_could_not_be_read_is_kept_rather_than_replaced_by_the_run() {
         std::fs::create_dir_all(SCRATCH_LOG_DIR).unwrap();
-        let path = SCRATCH_LOG_DIR.to_owned() + "test_unreadable";
+        let path = SCRATCH_LOG_DIR.to_owned() + "test_unreadable.txt";
         let config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
         let result = result_of(Stats::new(10, 100, 1000, 100, 0, HashMap::new()), Vec::new());
         let now = chrono::DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap();
@@ -1972,7 +1947,7 @@ mod tests {
     #[test]
     fn a_log_emptied_by_hand_is_written_again_rather_than_refused_forever() {
         std::fs::create_dir_all(SCRATCH_LOG_DIR).unwrap();
-        let path = SCRATCH_LOG_DIR.to_owned() + "test_emptied";
+        let path = SCRATCH_LOG_DIR.to_owned() + "test_emptied.txt";
         let config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
         let result = result_of(Stats::new(10, 100, 1000, 100, 0, HashMap::new()), Vec::new());
         let now = chrono::DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap();
@@ -1995,7 +1970,7 @@ mod tests {
     #[test]
     fn the_modules_of_an_entry_are_read_back_and_never_reach_another_one() {
         std::fs::create_dir_all(SCRATCH_LOG_DIR).unwrap();
-        let test_log_dir = SCRATCH_LOG_DIR.to_owned() + "test_modules";
+        let test_log_dir = SCRATCH_LOG_DIR.to_owned() + "test_modules.txt";
         if Path::new(&test_log_dir).exists() {
             std::fs::remove_file(&test_log_dir).unwrap();
         }

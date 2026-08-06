@@ -428,7 +428,6 @@ fn read_bool_value_from_file(reader: &mut CountingReader, buf: &mut String) -> R
     }
 }
 
-// Every line of the block is relevant until an empty one ends it
 fn read_lines_from_file_to_vec<T>(reader: &mut CountingReader, buf: &mut String, parser_func: fn(&str) -> Vec<T>) -> Vec<T> {
     let mut vec = Vec::new();
     loop {
