@@ -304,6 +304,7 @@ HOW THE REPORT LOOKS
       version         the version line at the top
       directory-info  the 'Analyzing directories' line and the 'N files found' line under it
       parsing-info    the 'Parsing files' line and the 'ok' under it
+      parsing-bar     the progress bar and speed figures of a long parse, keeping its file count
       keywords        the keyword counts, keeping the rest of the details rows
       overview        the whole percentages section
       bar             only the [-|||-] bar of the overview, keeping the percentages and the colors

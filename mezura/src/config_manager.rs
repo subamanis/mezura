@@ -166,6 +166,7 @@ pub struct Hidden {
     pub version: bool,
     pub directory_info: bool,
     pub parsing_info: bool,
+    pub parsing_bar: bool,
     pub keywords: bool,
     pub overview: bool,
     pub bar: bool,
@@ -174,10 +175,10 @@ pub struct Hidden {
 }
 
 impl Hidden {
-    fn get_pairs(self) -> [(&'static str, bool); 8] {
+    fn get_pairs(self) -> [(&'static str, bool); 9] {
         [("version", self.version), ("directory-info", self.directory_info), ("parsing-info", self.parsing_info),
-         ("keywords", self.keywords), ("overview", self.overview), ("bar", self.bar),
-         ("progress", self.progress), ("timing", self.timing)]
+         ("parsing-bar", self.parsing_bar), ("keywords", self.keywords), ("overview", self.overview),
+         ("bar", self.bar), ("progress", self.progress), ("timing", self.timing)]
     }
 
     // Returns the unrecognised name, so that the error can say which one it was
@@ -188,6 +189,7 @@ impl Hidden {
                 "version" => hidden.version = true,
                 "directory-info" => hidden.directory_info = true,
                 "parsing-info" => hidden.parsing_info = true,
+                "parsing-bar" => hidden.parsing_bar = true,
                 "keywords" => hidden.keywords = true,
                 "overview" => hidden.overview = true,
                 "bar" => hidden.bar = true,

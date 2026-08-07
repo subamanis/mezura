@@ -201,10 +201,15 @@ fn main() -> ExitCode {
     let live = crate::live_progress::start_walk_display(&config, progress.clone());
 
     let instant = Instant::now();
-    let outcome = mezura_core::run(&config.engine, languages, Some(progress), |scan| {
+    let mut parsing_live = None;
+    let outcome = mezura_core::run(&config.engine, languages, Some(progress.clone()), |scan| {
         live.finish();
-        announce_traversal(&config, scan)
+        announce_traversal(&config, scan);
+        parsing_live = Some(crate::live_progress::start_parsing_display(&config, progress));
     });
+    if let Some(x) = &parsing_live {
+        x.finish();
+    }
     live.finish();
     match outcome {
         Ok(result) => {
