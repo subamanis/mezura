@@ -2,16 +2,17 @@ use std::{collections::HashMap, sync::{Arc, atomic::{AtomicBool, AtomicU64, Orde
 
 use crossbeam_deque::{Injector, Steal, Worker};
 
-use crate::{EngineConfig, FaultyFileDetails, FaultyFilesListMut, Language, ParsableFile, Stats,
-        StatsMapMut, phase_timing};
+use crate::{EngineConfig, FaultyFileDetails, FaultyFilesListMut, Language, ParsableFile, ScanProgress,
+        Stats, StatsMapMut, phase_timing};
 use crate::engine::file_parser;
 
 pub fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
         stats_per_module: StatsMapMut, language_map: Arc<HashMap<String,Language>>,
-        config: Arc<EngineConfig>, started: Instant, counting_ended: Arc<AtomicU64>) -> std::io::Result<JoinHandle<()>>
+        config: Arc<EngineConfig>, started: Instant, counting_ended: Arc<AtomicU64>,
+        progress: Arc<ScanProgress>) -> std::io::Result<JoinHandle<()>>
 {
     thread::Builder::new().name(format!("consumer-{id}")).spawn(move || {
-        start_parsing_files(id, files_injector, faulty_files, finish_condition, stats_per_module, language_map, config);
+        start_parsing_files(id, files_injector, faulty_files, finish_condition, stats_per_module, language_map, config, &progress);
         // The last thing this thread does, and the only honest answer to how long the counting took:
         // 'run' joins these threads after calling the caller's callback, so its own clock cannot tell
         // the two apart.
@@ -21,11 +22,12 @@ pub fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>
 
 pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
     stats_per_module: StatsMapMut, language_map: Arc<HashMap<String,Language>>,
-    config: Arc<EngineConfig>)
+    config: Arc<EngineConfig>, progress: &ScanProgress)
 {
     let mut buf = String::with_capacity(150);
     let mut parse_buffers = file_parser::ParseBuffers::default();
     let mut idle_iterations = 0u32;
+    let mut local_faulty: Vec<FaultyFileDetails> = Vec::new();
     let mut keyword_matchers: HashMap<String, Option<file_parser::KeywordMatcher>> = HashMap::new();
     // The module is an index into the outer vector and never part of the key: a composite one would
     // be an allocation on every file, and a run without modules simply has a vector of one.
@@ -75,6 +77,7 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                 let keyword_matcher = keyword_matchers.get(lang_name).unwrap().as_ref();
                 match file_parser::parse_file(&parsable_file.path, lang_name, &mut buf, &mut parse_buffers, &language_map, keyword_matcher, &config) {
                     Ok(x) => {
+                        progress.record_file_parsed(x.lines);
                         let keywords = &language_map.get(lang_name).unwrap().keywords;
                         let bytes = buf.len();
                         local_stats[parsable_file.module as usize].entry(lang_name.to_owned())
@@ -83,11 +86,13 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                     // Separators normalised because the scan joins with the platform's own while the
                     // target it started from was resolved to forward slashes, and the two halves of
                     // one path then disagree in every report. Lossy because a path need not be UTF-8
-                    // and this string is only ever shown: 'to_str().unwrap()' panicked on such a
-                    // name while holding the lock it had just taken.
-                    Err(x) => faulty_files.lock().unwrap().push(FaultyFileDetails::new(
-                            parsable_file.path.to_string_lossy().replace('\\', "/"), x,
-                            parsable_file.path.metadata().map_or(0, |m| m.len())))
+                    // and this string is only ever shown.
+                    Err(x) => {
+                        progress.record_file_parsed(0);
+                        local_faulty.push(FaultyFileDetails::new(
+                                parsable_file.path.to_string_lossy().replace('\\', "/"), x,
+                                parsable_file.path.metadata().map_or(0, |m| m.len())))
+                    }
                 }
                 // Shrinking belongs to whoever owns the buffer, and it has to happen after its
                 // length has been read as the file's size
@@ -122,6 +127,10 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
 
     if *phase_timing::ENABLED {
         parse_buffers.timing.publish();
+    }
+
+    if !local_faulty.is_empty() {
+        faulty_files.lock().unwrap().extend(local_faulty);
     }
 
     if local_stats.iter().any(|bucket| !bucket.is_empty()) {

@@ -440,6 +440,23 @@ pub fn color_to_config_string(color: &Color) -> String {
     }
 }
 
+// How many columns a painted line takes on the screen. The escape sequences the styles above
+// produce have their bytes in the string and nothing on the screen, so they are skipped.
+pub fn calculate_visible_len(line: &str) -> usize {
+    let mut len = 0;
+    let mut chars = line.chars();
+    while let Some(character) = chars.next() {
+        if character == '\x1b' {
+            for terminator in chars.by_ref() {
+                if terminator == 'm' {break}
+            }
+        } else {
+            len += 1;
+        }
+    }
+    len
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

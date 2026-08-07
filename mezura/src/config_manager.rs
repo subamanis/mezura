@@ -1150,7 +1150,7 @@ mod tests {
         let languages_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../mezura-core/data/languages/");
         let parsed = mezura_core::language_file::parse_languages_in_dir(languages_dir).unwrap().0;
         let (languages, _) = mezura_core::Languages::resolve(&config.engine, parsed, &std::collections::HashMap::new());
-        mezura_core::run(&config.engine, languages, |_| {}).unwrap()
+        mezura_core::run(&config.engine, languages, None, |_| {}).unwrap()
     }
 
     fn new_conf(dir: &str) -> Configuration {
@@ -1337,7 +1337,7 @@ mod tests {
         let languages_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../mezura-core/data/languages/");
         let parsed = mezura_core::language_file::parse_languages_in_dir(languages_dir).unwrap().0;
         let (languages, _) = mezura_core::Languages::resolve(&config.engine, parsed, &std::collections::HashMap::new());
-        let mezura_core::RunError::InvalidTargets(inner) = mezura_core::run(&config.engine, languages, |_| {}).unwrap_err()
+        let mezura_core::RunError::InvalidTargets(inner) = mezura_core::run(&config.engine, languages, None, |_| {}).unwrap_err()
                 else { panic!("the run did not refuse the config's dirs") };
         assert_eq!(ArgParsingError::InvalidPathInConfig("./does-not-exist-a2".to_owned(), "a2resolve1".to_owned()),
                 attribute_dirs_error(inner, &config.view.dirs_source));

@@ -23,7 +23,7 @@ fn a_run_over_two_directories_counts_files_lines_and_keywords() {
     assert!(!languages_on_disk.is_empty());
 
     let (languages, _) = Languages::resolve(&config, languages_on_disk, &HashMap::new());
-    let result = run(&config, languages, |_| {}).unwrap();
+    let result = run(&config, languages, None, |_| {}).unwrap();
 
     assert!(result.files_present.total_files != 0 && result.files_present.relevant_files != 0);
     assert!(result.faulty_files.is_empty());
@@ -75,7 +75,7 @@ fn a_language_of_my_own_is_counted_under_the_name_it_carries() {
             [mezura_core::Keyword::new("bindings", ["let"])]);
 
     let (languages, _) = Languages::resolve(&config, [mine], &HashMap::new());
-    let result = run(&config, languages, |_| {}).unwrap();
+    let result = run(&config, languages, None, |_| {}).unwrap();
     std::fs::remove_dir_all(&root).unwrap();
 
     assert_eq!(vec!["PetrosLang"], result.per_language.keys().collect::<Vec<_>>());
@@ -104,7 +104,7 @@ fn the_shipped_rule_for_a_contested_extension_is_actually_applied() {
             .expect("'m' is no longer settled by the shipped priority file, so pick another extension");
 
     let (languages, _) = Languages::shipped(&config);
-    let counted = run(&config, languages, |_| {}).unwrap();
+    let counted = run(&config, languages, None, |_| {}).unwrap();
     std::fs::remove_dir_all(&root).unwrap();
 
     assert_eq!(vec![&named_by_the_rule], counted.per_language.keys().collect::<Vec<_>>(),
@@ -132,7 +132,7 @@ fn the_run_total_names_the_same_keywords_as_the_modules_it_is_made_of() {
         ..EngineConfig::new([root.to_string_lossy().replace('\\', "/")])
     };
     let (languages, _) = Languages::shipped(&config);
-    let counted = run(&config, languages, |_| {}).unwrap();
+    let counted = run(&config, languages, None, |_| {}).unwrap();
     std::fs::remove_dir_all(&root).unwrap();
 
     let named = |keywords: &HashMap<String, usize>| {
@@ -182,7 +182,7 @@ fn two_spellings_of_one_name_are_reported_and_force_lang_still_picks_the_one_it_
         };
         let (languages, warnings) = Languages::resolve(&config,
                 [capital.clone(), lower.clone()], &HashMap::new());
-        (run(&config, languages, |_| {}).unwrap(), warnings)
+        (run(&config, languages, None, |_| {}).unwrap(), warnings)
     };
 
     let (as_capital, warnings) = counted_forcing("Pal");
@@ -211,7 +211,7 @@ fn asking_for_some_languages_leaves_the_others_out_of_the_result() {
         let mut config = EngineConfig { threads: Threads::new(1, 2), ..EngineConfig::new([&corpus]) };
         narrowing(&mut config);
         let (languages, _) = Languages::shipped(&config);
-        let mut names = run(&config, languages, |_| {}).unwrap()
+        let mut names = run(&config, languages, None, |_| {}).unwrap()
                 .per_language.into_keys().collect::<Vec<_>>();
         names.sort();
         names
@@ -246,7 +246,7 @@ fn languages_resolved_against_another_configuration_are_refused() {
     };
 
     let (languages, _) = Languages::shipped(&of("Rust"));
-    let err = run(&of("Python"), languages, |_| {}).unwrap_err();
+    let err = run(&of("Python"), languages, None, |_| {}).unwrap_err();
     assert!(matches!(err, mezura_core::RunError::LanguagesFromAnotherConfig), "got: {err:?}");
 
     // The same names in another order and another case are the same question, and refusing that
@@ -254,14 +254,14 @@ fn languages_resolved_against_another_configuration_are_refused() {
     let mut shuffled = of("Rust");
     shuffled.languages_of_interest = vec!["RUST".to_owned()];
     let (languages, _) = Languages::shipped(&of("Rust"));
-    assert!(run(&shuffled, languages, |_| {}).is_ok(), "a difference in case alone was refused");
+    assert!(run(&shuffled, languages, None, |_| {}).is_ok(), "a difference in case alone was refused");
 
     // And so is counting a second directory with the languages resolved for the first: 'dirs' is
     // not part of what resolution reads, so one resolve serves as many runs as you like
     let (languages, _) = Languages::shipped(&of("Rust"));
     let elsewhere = EngineConfig { ..of("Rust") };
     let elsewhere = EngineConfig { dirs: vec![Target::of(format!("{current_dir}/tests"))], ..elsewhere };
-    assert!(run(&elsewhere, languages, |_| {}).is_ok(), "changing only the directory was refused");
+    assert!(run(&elsewhere, languages, None, |_| {}).is_ok(), "changing only the directory was refused");
 }
 
 // A run that named its modules and found nothing in them still has to say which modules it was
@@ -283,7 +283,7 @@ fn a_run_that_names_modules_and_finds_nothing_still_reports_them() {
     };
 
     let (languages, _) = Languages::shipped(&config);
-    let result = run(&config, languages, |_| {}).unwrap();
+    let result = run(&config, languages, None, |_| {}).unwrap();
 
     std::fs::remove_dir_all(&root).unwrap();
 
@@ -309,7 +309,7 @@ fn an_exclude_pattern_that_does_not_parse_is_an_error_not_a_panic() {
 
     let (languages, _) = Languages::shipped(&config);
 
-    let err = run(&config, languages, |_| {}).unwrap_err();
+    let err = run(&config, languages, None, |_| {}).unwrap_err();
     // Named as the caller wrote it, not in the anchored form the matcher builds internally
     assert!(matches!(&err, mezura_core::RunError::InvalidExcludePattern(p) if p == "[invalid"),
             "expected InvalidExcludePattern carrying the pattern as written, got: {err:?}");
@@ -331,7 +331,7 @@ fn a_run_where_every_file_fails_to_parse_is_an_answer_not_an_error() {
     let config = EngineConfig { threads: Threads::new(1, 2), ..EngineConfig::new([root_str]) };
     let (languages, _) = Languages::shipped(&config);
 
-    let result = run(&config, languages, |_| {}).unwrap();
+    let result = run(&config, languages, None, |_| {}).unwrap();
     std::fs::remove_dir_all(&root).unwrap();
 
     assert_eq!(2, result.faulty_files.len());
@@ -348,7 +348,7 @@ fn a_run_where_every_file_fails_to_parse_is_an_answer_not_an_error() {
         ..EngineConfig::new([empty.to_str().unwrap().replace('\\', "/")])
     };
     let (languages, _) = Languages::shipped(&config);
-    let result = run(&config, languages, |_| {}).unwrap();
+    let result = run(&config, languages, None, |_| {}).unwrap();
     std::fs::remove_dir_all(&empty).unwrap();
 
     assert!(!result.all_relevant_files_were_faulty());
@@ -363,7 +363,7 @@ fn a_run_with_no_targets_is_an_error_not_an_empty_answer() {
     let config = EngineConfig::default();
     let (languages, _) = Languages::shipped(&config);
 
-    let err = run(&config, languages, |_| {}).unwrap_err();
+    let err = run(&config, languages, None, |_| {}).unwrap_err();
     assert!(matches!(err, mezura_core::RunError::NoTargets), "got: {err:?}");
 }
 
@@ -375,7 +375,7 @@ fn a_target_that_names_nothing_is_a_run_error() {
     let config = EngineConfig::new(["./does-not-exist-run"]);
     let (languages, _) = Languages::shipped(&config);
 
-    let err = run(&config, languages, |_| {}).unwrap_err();
+    let err = run(&config, languages, None, |_| {}).unwrap_err();
     assert!(matches!(&err, mezura_core::RunError::InvalidTargets(mezura_core::TargetError::InvalidPath(p)) if p == "./does-not-exist-run"),
             "got: {err:?}");
 
@@ -389,7 +389,7 @@ fn a_target_that_names_nothing_is_a_run_error() {
         ..Default::default()
     };
     let (languages, _) = Languages::shipped(&config);
-    let err = run(&config, languages, |_| {}).unwrap_err();
+    let err = run(&config, languages, None, |_| {}).unwrap_err();
     std::fs::remove_dir_all(&root).unwrap();
     assert!(matches!(&err, mezura_core::RunError::InvalidTargets(mezura_core::TargetError::Contested(..))), "got: {err:?}");
 }
@@ -412,7 +412,7 @@ fn the_result_reports_the_resolved_targets_the_run_walked() {
         ..EngineConfig::new([format!("{root_str}/sub*")])
     };
     let (languages, _) = Languages::shipped(&config);
-    let result = run(&config, languages, |_| {}).unwrap();
+    let result = run(&config, languages, None, |_| {}).unwrap();
     std::fs::remove_dir_all(&root).unwrap();
 
     let mut walked = result.targets.iter().map(|x| x.path.clone()).collect::<Vec<_>>();
@@ -436,7 +436,7 @@ fn a_resolved_match_named_like_a_pattern_is_counted_not_re_expanded() {
 
     let config = EngineConfig { threads: Threads::new(1, 1), ..EngineConfig::new([pattern]) };
     let (languages, _) = Languages::shipped(&config);
-    let result = run(&config, languages, |_| {}).unwrap();
+    let result = run(&config, languages, None, |_| {}).unwrap();
     std::fs::remove_dir_all(&root).unwrap();
 
     assert_eq!(1, result.total.files, "the directory the pattern matched was not counted");
@@ -456,7 +456,7 @@ fn a_thread_count_outside_the_supported_range_cannot_reach_the_run() {
             ..EngineConfig::new([format!("{current_dir}/src")])
         };
         let (languages, _) = Languages::shipped(&config);
-        let result = run(&config, languages, |_| {}).unwrap();
+        let result = run(&config, languages, None, |_| {}).unwrap();
         (result.files_present.relevant_files, result.total.lines)
     };
 
@@ -490,7 +490,7 @@ fn the_result_reports_the_threads_the_run_actually_used() {
     };
 
     let (languages, _) = Languages::shipped(&config);
-    let result = run(&config, languages, |_| {}).unwrap();
+    let result = run(&config, languages, None, |_| {}).unwrap();
     assert_eq!(Threads::new(2, 3), result.performance.threads);
 
     // and the empty scan reports its threads too, since they ran all the same
@@ -502,7 +502,7 @@ fn the_result_reports_the_threads_the_run_actually_used() {
         ..EngineConfig::new([empty.to_string_lossy().replace("\\", "/")])
     };
     let (languages, _) = Languages::shipped(&config);
-    let result = run(&config, languages, |_| {}).unwrap();
+    let result = run(&config, languages, None, |_| {}).unwrap();
     std::fs::remove_dir_all(&empty).unwrap();
     assert_eq!(0, result.files_present.relevant_files);
     assert_eq!(Threads::new(1, 2), result.performance.threads);
@@ -522,7 +522,7 @@ fn the_traversal_callback_fires_once_with_what_the_walk_found() {
     let (languages, _) = Languages::shipped(&config);
 
     let mut announced = Vec::new();
-    let result = run(&config, languages, |scan| announced.push(scan)).unwrap();
+    let result = run(&config, languages, None, |scan| announced.push(scan)).unwrap();
 
     assert_eq!(1, announced.len(), "the callback did not fire exactly once");
     assert_eq!(result.files_present, announced[0]);
@@ -546,7 +546,7 @@ fn the_traversal_callback_fires_even_when_the_walk_finds_nothing() {
     let (languages, _) = Languages::shipped(&config);
 
     let mut announced = Vec::new();
-    let result = run(&config, languages, |scan| announced.push(scan)).unwrap();
+    let result = run(&config, languages, None, |scan| announced.push(scan)).unwrap();
     std::fs::remove_dir_all(&empty).unwrap();
 
     assert_eq!(vec![result.files_present], announced, "an empty walk was never announced");
@@ -573,7 +573,7 @@ fn a_slow_traversal_callback_is_not_charged_to_the_counting() {
 
     let counted = |held_for: std::time::Duration| {
         let (languages, _) = Languages::shipped(&config);
-        run(&config, languages, move |_| std::thread::sleep(held_for)).unwrap()
+        run(&config, languages, None, move |_| std::thread::sleep(held_for)).unwrap()
     };
 
     let held_for = std::time::Duration::from_millis(600);

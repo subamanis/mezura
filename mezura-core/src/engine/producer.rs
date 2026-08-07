@@ -4,7 +4,7 @@ use std::{collections::HashMap, fs, fs::ReadDir, sync::{Arc, Mutex, atomic::{Ato
 use crossbeam_deque::{Injector, Steal, Worker};
 
 use crate::{EngineConfig, ExtensionLangMap, FilesPresent, GitignoreStack,
-        ParsableFile, TraversedDir, UnreadableDirDetails};
+        ParsableFile, ScanProgress, TraversedDir, UnreadableDirDetails};
 use crate::engine::extensions::find_language_of_extension;
 use crate::engine::modules::{ModuleId, Modules};
 
@@ -16,13 +16,13 @@ pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFil
         idle_producers: Arc<AtomicUsize>, extension_lang_map: ExtensionLangMap, exclude_matcher: Arc<globset::GlobSet>,
         config: Arc<EngineConfig>, files_stats: Arc<Mutex<FilesPresent>>, modules: Arc<Modules>,
         unreadable_dirs: Arc<Mutex<Vec<UnreadableDirDetails>>>, producers_total: Arc<AtomicUsize>,
-        worker_panics: Arc<Mutex<Vec<String>>>)
+        worker_panics: Arc<Mutex<Vec<String>>>, progress: Arc<ScanProgress>)
 -> std::io::Result<JoinHandle<()>>
 {
     thread::Builder::new().name(format!("producer-{id}")).spawn(move || {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(||
                 search_for_files(id, files_injector, dirs_injector, worker, idle_producers.clone(),
-                        extension_lang_map, exclude_matcher, config, modules, &producers_total)));
+                        extension_lang_map, exclude_matcher, config, modules, &producers_total, &progress)));
         match outcome {
             Ok((total_files, relevant_files, excluded_files, unreadable)) => {
                 if !unreadable.is_empty() {
@@ -43,7 +43,7 @@ pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFil
 
 pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<TraversedDir>>, worker: Worker<TraversedDir>, idle_producers: Arc<AtomicUsize>,
         extension_lang_map: ExtensionLangMap, exclude_matcher: Arc<globset::GlobSet>, config: Arc<EngineConfig>, modules: Arc<Modules>,
-        producers_total: &AtomicUsize)
+        producers_total: &AtomicUsize, progress: &ScanProgress)
 -> (usize,usize,usize,Vec<UnreadableDirDetails>)
 {
     let mut total_files = 0;
@@ -89,7 +89,7 @@ pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>,
                         GitignoreStack::extend_with_dir(&dir.path, dir.gitignore_stack.clone())
                     };
                     traverse_dir(&files_injector, entries, &dirs_injector, &extension_lang_map, &exclude_matcher, &gitignore_stack,
-                            &config, &modules, dir.module, &mut total_files, &mut relevant_files, &mut excluded_files)
+                            &config, &modules, dir.module, &mut total_files, &mut relevant_files, &mut excluded_files, progress)
                 },
                 // Everything under it is uncounted and nothing else would ever say so: it reaches no
                 // total, not even the number of files looked at. The reason travels with the path,
@@ -125,7 +125,7 @@ pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>,
 fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, dirs_injector: &Arc<Injector<TraversedDir>>,
         extension_lang_map: &HashMap<String, Arc<str>>, exclude_matcher: &globset::GlobSet, gitignore_stack: &Option<Arc<GitignoreStack>>,
         config: &EngineConfig, modules: &Modules, module: ModuleId,
-        total_files: &mut usize, relevant_files: &mut usize, excluded_files: &mut usize)
+        total_files: &mut usize, relevant_files: &mut usize, excluded_files: &mut usize, progress: &ScanProgress)
 {
     let mut local_total_files = 0;
     let mut local_relevant_files = 0;
@@ -161,6 +161,7 @@ fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, 
                     // The size is not asked for: the counting thread reads the file into a buffer
                     // anyway, so its length is the same number for free.
                     files_injector.push(ParsableFile::new(path_buf, lang_name, module));
+                    progress.record_file_found();
                 }
             } else { //is directory
                 // Read lossily, and only to ask whether it is dotted, which a lossy reading answers
@@ -245,12 +246,13 @@ mod tests {
         let extension_lang_map: ExtensionLangMap = Arc::new(make_extension_language_map(&language_map, &HashMap::new(), &HashMap::new()).0);
         let modules = Arc::new(Modules::of(&dirs));
         let mut files_present = FilesPresent::default();
-        calculate_single_file_stats_or_add_to_injector(&config, &dirs, &dirs_injector, &files_injector, &mut files_present, &extension_lang_map, &modules);
+        calculate_single_file_stats_or_add_to_injector(&config, &dirs, &dirs_injector, &files_injector, &mut files_present, &extension_lang_map, &modules,
+                &ScanProgress::default());
 
         let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs).unwrap());
         let (total, relevant, excluded, _) = search_for_files(0, files_injector.clone(), dirs_injector,
                 Worker::new_fifo(), idle_producers, extension_lang_map, exclude_matcher, config, modules.clone(),
-                &AtomicUsize::new(1));
+                &AtomicUsize::new(1), &ScanProgress::default());
 
         let mut found_files = Vec::new();
         while let Steal::Success(f) = files_injector.steal() {
@@ -289,14 +291,14 @@ mod tests {
         let (files_injector, dirs_injector) = (Arc::new(Injector::new()), Arc::new(Injector::new()));
         let mut files_present = FilesPresent::default();
         calculate_single_file_stats_or_add_to_injector(&config, &dirs, &dirs_injector, &files_injector,
-                &mut files_present, &extension_lang_map, &modules);
+                &mut files_present, &extension_lang_map, &modules, &ScanProgress::default());
         // Queued and then gone, which the walk finds out only when it tries to open it
         dirs_injector.push(TraversedDir::new(std::path::PathBuf::from(&vanished), None, 0));
 
         let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs).unwrap());
         let (total, relevant, _, unreadable) = search_for_files(0, files_injector, dirs_injector,
                 Worker::new_fifo(), Arc::new(AtomicUsize::new(0)), extension_lang_map, exclude_matcher,
-                config, modules, &AtomicUsize::new(1));
+                config, modules, &AtomicUsize::new(1), &ScanProgress::default());
 
         fs::remove_dir_all(&root).unwrap();
 

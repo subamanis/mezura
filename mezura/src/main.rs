@@ -18,6 +18,7 @@ mod error_colors;
 mod git;
 mod json_printer;
 mod json_reader;
+mod live_progress;
 mod log;
 mod message_printer;
 mod number_formatter;
@@ -30,7 +31,7 @@ mod theme;
 mod theme_files;
 mod warning_collector;
 
-use std::{collections::HashMap, process::ExitCode, time::Instant};
+use std::{collections::HashMap, process::ExitCode, sync::Arc, time::Instant};
 
 use colored::*;
 use include_dir::{File, include_dir};
@@ -196,12 +197,16 @@ fn main() -> ExitCode {
         None => None
     };
 
-    if !config.view.hidden.directory_info && config.view.prints_text() {
-        println!("\n{}...",crate::theme::get_active().heading.paint("Analyzing directories"));
-    }
+    let progress = Arc::new(mezura_core::ScanProgress::default());
+    let live = crate::live_progress::start_walk_display(&config, progress.clone());
 
     let instant = Instant::now();
-    match mezura_core::run(&config.engine, languages, |scan| announce_traversal(&config, scan)) {
+    let outcome = mezura_core::run(&config.engine, languages, Some(progress), |scan| {
+        live.finish();
+        announce_traversal(&config, scan)
+    });
+    live.finish();
+    match outcome {
         Ok(result) => {
             let comparison = counted_baseline.map(|baseline| baseline.with_subject(
                     crate::diff::Reading::of_this_run(&result, &chrono::Local::now(), &config.engine), &config));

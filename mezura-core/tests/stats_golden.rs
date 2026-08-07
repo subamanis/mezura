@@ -63,7 +63,7 @@ fn collect_stats() -> String {
 
     // The all-faulty guard lives on the asserts below: that case comes back as a result now, and
     // the empty faulty list is already demanded a few lines down
-    let result = run(&config, languages, |_| {})
+    let result = run(&config, languages, None, |_| {})
             .unwrap_or_else(|x| panic!("the fixture corpus could not be counted: {x:?}"));
 
     assert!(result.files_present.relevant_files > 0, "the fixture corpus produced no relevant files");

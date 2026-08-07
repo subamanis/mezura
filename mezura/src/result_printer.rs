@@ -1645,25 +1645,8 @@ fn print_lines(lines: &[String]) {
     }
 }
 
-// The text is already colored by the time it gets measured, so the escape sequences have to be
-// skipped: their bytes are in the string but not on the screen.
 fn calculate_widest_visible_line(text: &str) -> usize {
-    fn calculate_visible_len(line: &str) -> usize {
-        let mut len = 0;
-        let mut chars = line.chars();
-        while let Some(character) = chars.next() {
-            if character == '\x1b' {
-                for terminator in chars.by_ref() {
-                    if terminator == 'm' {break}
-                }
-            } else {
-                len += 1;
-            }
-        }
-        len
-    }
-
-    text.lines().map(calculate_visible_len).max().unwrap_or(0)
+    text.lines().map(crate::theme::calculate_visible_len).max().unwrap_or(0)
 }
 
 fn format_size(theme: &Theme, total_bytes: usize, average_bytes: usize) -> String {

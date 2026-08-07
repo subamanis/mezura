@@ -7,6 +7,7 @@ mod test_support;
 
 mod domain;
 mod phase_timing;
+mod progress;
 mod result;
 
 pub mod engine;
@@ -19,6 +20,7 @@ pub use domain::{Keyword, Language, Stats};
 pub use engine::config::{EngineConfig, Target, Threads};
 pub use engine::targets::TargetError;
 pub use languages::Languages;
+pub use progress::ScanProgress;
 pub use result::{FaultyFileDetails, FilesPresent, ModuleResult, Performance, RunError, RunResult,
         SortCriterion, UnreadableDirDetails};
 pub use warnings::{Affects, Warning};
@@ -59,15 +61,19 @@ pub(crate) type StatsMapMut = Arc<Mutex<Vec<HashMap<String,Stats>>>>;
 // set of languages while the settings say another: no error, just wrong numbers. The run refuses
 // such a pair instead of answering it.
 //
+// 'progress' is watched while the call blocks: the run moves its counters as files are found and
+// parsed, so a thread of the caller's can draw them. Pass 'None' when nobody is watching.
+//
 // 'on_traversal_done' is called once, as soon as the directories have been scanned, and is told how
 // many files were found. The counting of those files is still going on at that point, which is why
 // this is a callback: afterwards there is no way to know what was found before the counting ended.
 // It is called on every run that returns 'Ok', including one that found nothing to count. It is not
 // called when one of the scanning threads died, because the figures such a run leaves behind are
 // lower than what is really on disk. Pass '|_| {}' to ignore it.
-pub fn run(config: &EngineConfig, languages: Languages,
+pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<ScanProgress>>,
         on_traversal_done: impl FnOnce(FilesPresent)) -> Result<RunResult, RunError>
 {
+    let progress = progress.unwrap_or_default();
     if config.dirs.is_empty() {
         return Err(RunError::NoTargets);
     }
@@ -105,7 +111,7 @@ pub fn run(config: &EngineConfig, languages: Languages,
                 RunError::InvalidExcludePattern(culprit)
             })?);
     calculate_single_file_stats_or_add_to_injector(&config, &dirs, &dirs_injector, &files_injector, &mut files_present,
-            &extension_lang_map, &modules);
+            &extension_lang_map, &modules, &progress);
 
     let files_stats = Arc::new(Mutex::new(files_present));
     let unreadable_dirs = Arc::new(Mutex::new(Vec::new()));
@@ -126,7 +132,7 @@ pub fn run(config: &EngineConfig, languages: Languages,
         match engine::producer::start_producer_thread(i, files_injector.clone(), dirs_injector.clone(), Worker::new_fifo(),
                 idle_producers.clone(), extension_lang_map.clone(), exclude_matcher.clone(),
                 config.clone(), files_stats.clone(), modules.clone(), unreadable_dirs.clone(),
-                producers_total.clone(), worker_panics.clone()) {
+                producers_total.clone(), worker_panics.clone(), progress.clone()) {
             Ok(handle) => producer_handles.push(handle),
             Err(x) => last_refusal = Some(x)
         }
@@ -141,7 +147,7 @@ pub fn run(config: &EngineConfig, languages: Languages,
     for i in 0..config.threads.consumers() {
         match engine::consumer::start_parser_thread(i, files_injector.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
                 stats_per_module.clone(), language_map_ref.clone(), config.clone(),
-                parsing_started_instant, counting_ended.clone()) {
+                parsing_started_instant, counting_ended.clone(), progress.clone()) {
             Ok(handle) => consumer_handles.push(handle),
             Err(x) => last_refusal = Some(x)
         }
@@ -158,6 +164,7 @@ pub fn run(config: &EngineConfig, languages: Languages,
     for handle in producer_handles {
         let _ = handle.join();
     }
+    progress.mark_walk_done();
     let producers_done_millis = parsing_started_instant.elapsed().as_millis();
 
     let queued_at_producer_exit = files_injector.len();
@@ -257,7 +264,8 @@ pub fn run(config: &EngineConfig, languages: Languages,
 // with it, the module table still hands it back on the way down.
 pub(crate) fn calculate_single_file_stats_or_add_to_injector(config: &EngineConfig, dirs: &engine::targets::Targets,
         dirs_injector: &Arc<Injector<TraversedDir>>, files_injector: &Arc<Injector<ParsableFile>>,
-        files_present: &mut FilesPresent, extension_lang_map: &HashMap<String, Arc<str>>, modules: &Modules)
+        files_present: &mut FilesPresent, extension_lang_map: &HashMap<String, Arc<str>>, modules: &Modules,
+        progress: &ScanProgress)
 {
     crate::engine::targets::topmost_targets(dirs).iter().for_each(|target| {
         let dir_path = Path::new(&target.path);
@@ -269,6 +277,7 @@ pub(crate) fn calculate_single_file_stats_or_add_to_injector(config: &EngineConf
                 files_injector.push(ParsableFile::new(dir_path.to_path_buf(), lang_name, module));
                 files_present.total_files += 1;
                 files_present.relevant_files += 1;
+                progress.record_file_found();
             }
         } else if dir_path.is_dir() {
             let gitignore_stack = if config.no_gitignore { None } else { GitignoreStack::for_root_dir(dir_path) };
@@ -529,10 +538,10 @@ mod worker_death_tests {
     fn a_dead_consumer_is_an_error_and_not_a_short_count() {
         let (root, config) = corpus("mezura-dead-consumer");
 
-        let err = run(&config, languages_for(&config), |_| {});
+        let err = run(&config, languages_for(&config), None, |_| {});
         std::fs::remove_dir_all(&root).unwrap();
         let (clean_root, clean_config) = corpus("mezura-alive-consumer");
-        let clean = run(&clean_config, languages_for(&clean_config), |_| {});
+        let clean = run(&clean_config, languages_for(&clean_config), None, |_| {});
         std::fs::remove_dir_all(&clean_root).unwrap();
 
         let err = err.expect_err("a consumer died and run returned a result anyway");
@@ -546,10 +555,10 @@ mod worker_death_tests {
     fn a_dead_producer_is_an_error_and_the_run_still_terminates() {
         let (root, config) = corpus("mezura-dead-producer");
 
-        let err = run(&config, languages_for(&config), |_| {});
+        let err = run(&config, languages_for(&config), None, |_| {});
         std::fs::remove_dir_all(&root).unwrap();
         let (clean_root, clean_config) = corpus("mezura-alive-producer");
-        let clean = run(&clean_config, languages_for(&clean_config), |_| {});
+        let clean = run(&clean_config, languages_for(&clean_config), None, |_| {});
         std::fs::remove_dir_all(&clean_root).unwrap();
 
         let err = err.expect_err("a producer died and run returned a result anyway");
@@ -567,7 +576,7 @@ mod worker_death_tests {
     fn a_walk_whose_own_thread_died_is_never_announced() {
         let (root, config) = corpus("mezura-dead-producer-announce");
         let mut announced = Vec::new();
-        let outcome = run(&config, languages_for(&config), |scan| announced.push(scan));
+        let outcome = run(&config, languages_for(&config), None, |scan| announced.push(scan));
         std::fs::remove_dir_all(&root).unwrap();
 
         // the hook answers to 'mezura-dead-producer' as a prefix, so this corpus dies the same way
@@ -578,7 +587,7 @@ mod worker_death_tests {
         // difference and not some other reason nothing was said
         let (clean_root, clean_config) = corpus("mezura-alive-producer-announce");
         let mut announced = Vec::new();
-        let clean = run(&clean_config, languages_for(&clean_config), |scan| announced.push(scan));
+        let clean = run(&clean_config, languages_for(&clean_config), None, |scan| announced.push(scan));
         std::fs::remove_dir_all(&clean_root).unwrap();
         assert_eq!(1, clean.unwrap().total.files);
         assert_eq!(1, announced.len(), "an intact walk was not announced");
@@ -614,7 +623,7 @@ mod worker_death_tests {
             ..EngineConfig::new([root.to_string_lossy().replace('\\', "/")])
         };
 
-        let counted = run(&config, languages_for(&config), |_| std::thread::sleep(callback_holds)).unwrap();
+        let counted = run(&config, languages_for(&config), None, |_| std::thread::sleep(callback_holds)).unwrap();
         std::fs::remove_dir_all(&root).unwrap();
 
         assert_eq!(FILES as usize, counted.total.files);

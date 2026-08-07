@@ -74,7 +74,7 @@ pub fn count_git_revision(git_revision: &str, config: &Configuration, languages:
         // Resolved against this configuration, as 'run' demands: the two differ only in where they
         // look, and the complaints are voiced by whoever asked for the counting
         let resolved = mezura_core::Languages::resolve(&of_git_revision, languages, extension_priority).0;
-        let mut result = mezura_core::run(&of_git_revision, resolved, |_| {})
+        let mut result = mezura_core::run(&of_git_revision, resolved, None, |_| {})
                 .map_err(|x| GitError::Refused { doing: "counting the revision", message: x.to_string() })?;
         result.targets = counted_declared;
         result
