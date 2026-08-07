@@ -86,7 +86,7 @@ pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>,
                     let gitignore_stack = if config.no_gitignore {
                         None
                     } else {
-                        GitignoreStack::extended(&dir.path, dir.gitignore_stack.clone())
+                        GitignoreStack::extend_with_dir(&dir.path, dir.gitignore_stack.clone())
                     };
                     traverse_dir(&files_injector, entries, &dirs_injector, &extension_lang_map, &exclude_matcher, &gitignore_stack,
                             &config, &modules, dir.module, &mut total_files, &mut relevant_files, &mut excluded_files)

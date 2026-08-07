@@ -94,7 +94,7 @@ impl std::error::Error for DocumentError {
 // '--hide timing' has no timing in it, so 'result.performance' comes back holding a zero duration
 // and one thread of each kind, which is not something that was measured.
 pub fn parse(contents: &str) -> Result<Document, DocumentError> {
-    let value = serde_json::from_str::<Value>(super::without_byte_order_mark(contents))
+    let value = serde_json::from_str::<Value>(super::strip_byte_order_mark(contents))
             .map_err(DocumentError::NotJson)?;
     let Value::Object(root) = &value else {
         return Err(DocumentError::WrongType { at: "the document".to_owned(), wanted: "an object" });
@@ -102,7 +102,7 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
 
     // Before anything is read out of it, so that a document this build cannot understand is refused
     // rather than half read
-    let format = number(root, "format", "")?;
+    let format = read_number(root, "format", "")?;
     if format > FORMAT_VERSION {
         return Err(DocumentError::FormatTooNew { found: format });
     }
@@ -112,35 +112,35 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
         return Err(DocumentError::NotARun { kind: kind.to_owned() });
     }
 
-    let scope = nested(root, "scope", "")?;
-    let scan = nested(root, "scan", "")?;
-    let total = stats_of(nested(root, "total", "")?, "total")?;
-    let per_language = languages_of(list(root, "languages", "")?, "languages")?;
+    let scope = read_nested(root, "scope", "")?;
+    let scan = read_nested(root, "scan", "")?;
+    let total = parse_stats(read_nested(root, "total", "")?, "total")?;
+    let per_language = parse_languages(read_list(root, "languages", "")?, "languages")?;
 
     let performance = match root.get("performance") {
-        Some(x) => performance_of(object(x, "performance")?)?,
+        Some(x) => parse_performance(read_object(x, "performance")?)?,
         None => Performance { duration_millis: 0, threads: Threads::new(0, 0) }
     };
     // A document that named no module leaves the block out, and a run that named none has exactly
     // one module holding everything it counted, which is what the two blocks above already are.
     let modules = match root.get("modules") {
-        Some(x) => modules_of(array(x, "modules")?)?,
+        Some(x) => parse_modules(read_array(x, "modules")?)?,
         None => vec![ModuleResult { name: None, per_language: per_language.clone(), total: total.clone() }]
     };
 
     Ok(Document {
-        mezura_version: text(root, "mezura_version", "")?,
-        generated_at: text(root, "generated_at", "")?,
-        languages_hidden: number(root, "languages_hidden", "")?,
-        warnings: warnings_of(list(root, "warnings", "")?)?,
+        mezura_version: read_text(root, "mezura_version", "")?,
+        generated_at: read_text(root, "generated_at", "")?,
+        languages_hidden: read_number(root, "languages_hidden", "")?,
+        warnings: parse_warnings(read_list(root, "warnings", "")?)?,
         scope: Scope {
-            exclude: strings(scope, "exclude", "scope")?,
-            languages: strings(scope, "languages", "scope")?,
-            excluded_languages: strings(scope, "excluded_languages", "scope")?,
-            forced_languages: forced_languages_of(nested(scope, "forced_languages", "scope")?)?,
-            braces_as_code: flag(scope, "braces_as_code", "scope")?,
-            search_in_dotted: flag(scope, "search_in_dotted", "scope")?,
-            gitignore: flag(scope, "gitignore", "scope")?,
+            exclude: read_strings(scope, "exclude", "scope")?,
+            languages: read_strings(scope, "languages", "scope")?,
+            excluded_languages: read_strings(scope, "excluded_languages", "scope")?,
+            forced_languages: parse_forced_languages(read_nested(scope, "forced_languages", "scope")?)?,
+            braces_as_code: read_flag(scope, "braces_as_code", "scope")?,
+            search_in_dotted: read_flag(scope, "search_in_dotted", "scope")?,
+            gitignore: read_flag(scope, "gitignore", "scope")?,
             // Absent from a document of the first builds, which all counted them
             keywords_counted: match scope.get("keywords_counted") {
                 Some(x) => x.as_bool().ok_or(DocumentError::WrongType {
@@ -152,174 +152,183 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
             per_language,
             total,
             modules,
-            faulty_files: faulty_files_of(list(root, "faulty_files", "")?)?,
+            // The paths are written only when '--show-faulty-files' asked for them, so an absent
+            // list means they were not detailed, never that nothing went wrong: how many there
+            // were is in 'scan' and is read either way.
+            faulty_files: match root.get("faulty_files") {
+                Some(x) => parse_faulty_files(read_array(x, "faulty_files")?)?,
+                None => Vec::new()
+            },
             files_present: FilesPresent {
-                total_files: number(scan, "files_found", "scan")?,
-                relevant_files: number(scan, "files_of_interest", "scan")?,
-                excluded_files: number(scan, "files_excluded", "scan")?
+                total_files: read_number(scan, "files_found", "scan")?,
+                relevant_files: read_number(scan, "files_of_interest", "scan")?,
+                excluded_files: read_number(scan, "files_excluded", "scan")?
             },
             performance,
-            targets: targets_of(list(scope, "dirs", "scope")?)?,
-            unreadable_dirs: unreadable_dirs_of(list(root, "unreadable_dirs", "")?)?
+            targets: parse_targets(read_list(scope, "dirs", "scope")?)?,
+            unreadable_dirs: match root.get("unreadable_dirs") {
+                Some(x) => parse_unreadable_dirs(read_array(x, "unreadable_dirs")?)?,
+                None => Vec::new()
+            }
         }
     })
 }
 
 // 'extra' and 'average_bytes' are not read: both are worked out from the counts beside them, and a
 // stored copy is the one thing that can disagree with them.
-fn stats_of(entry: &Map<String, Value>, at: &str) -> Result<Stats, DocumentError> {
+fn parse_stats(entry: &Map<String, Value>, at: &str) -> Result<Stats, DocumentError> {
     let keywords = match entry.get("keywords") {
-        Some(x) => keywords_of(object(x, &joined(at, "keywords"))?, &joined(at, "keywords"))?,
+        Some(x) => parse_keywords(read_object(x, &join_location(at, "keywords"))?, &join_location(at, "keywords"))?,
         None => HashMap::new()
     };
 
     Ok(Stats::new(
-        number(entry, "files", at)?,
-        number(entry, "bytes", at)?,
-        number(entry, "lines", at)?,
-        number(entry, "code", at)?,
-        number(entry, "comments", at)?,
+        read_number(entry, "files", at)?,
+        read_number(entry, "bytes", at)?,
+        read_number(entry, "lines", at)?,
+        read_number(entry, "code", at)?,
+        read_number(entry, "comments", at)?,
         keywords))
 }
 
-fn forced_languages_of(entry: &Map<String, Value>) -> Result<HashMap<String, String>, DocumentError> {
-    entry.keys().map(|extension| Ok((extension.clone(), text(entry, extension, "scope.forced_languages")?)))
+fn parse_forced_languages(entry: &Map<String, Value>) -> Result<HashMap<String, String>, DocumentError> {
+    entry.keys().map(|extension| Ok((extension.clone(), read_text(entry, extension, "scope.forced_languages")?)))
             .collect()
 }
 
-fn keywords_of(entry: &Map<String, Value>, at: &str) -> Result<HashMap<String, usize>, DocumentError> {
-    entry.keys().map(|name| Ok((name.clone(), number(entry, name, at)?))).collect()
+fn parse_keywords(entry: &Map<String, Value>, at: &str) -> Result<HashMap<String, usize>, DocumentError> {
+    entry.keys().map(|name| Ok((name.clone(), read_number(entry, name, at)?))).collect()
 }
 
-fn languages_of(entries: &[Value], at: &str) -> Result<HashMap<String, Stats>, DocumentError> {
+fn parse_languages(entries: &[Value], at: &str) -> Result<HashMap<String, Stats>, DocumentError> {
     entries.iter().enumerate().map(|(i, entry)| {
         let at = format!("{at}[{i}]");
-        let entry = object(entry, &at)?;
-        Ok((text(entry, "name", &at)?, stats_of(entry, &at)?))
+        let entry = read_object(entry, &at)?;
+        Ok((read_text(entry, "name", &at)?, parse_stats(entry, &at)?))
     }).collect()
 }
 
-fn modules_of(entries: &[Value]) -> Result<Vec<ModuleResult>, DocumentError> {
+fn parse_modules(entries: &[Value]) -> Result<Vec<ModuleResult>, DocumentError> {
     entries.iter().enumerate().map(|(i, entry)| {
         let at = format!("modules[{i}]");
-        let entry = object(entry, &at)?;
+        let entry = read_object(entry, &at)?;
 
         Ok(ModuleResult {
-            name: optional_name(entry, "name", &at)?,
-            total: stats_of(nested(entry, "total", &at)?, &joined(&at, "total"))?,
-            per_language: languages_of(list(entry, "languages", &at)?, &joined(&at, "languages"))?
+            name: read_optional_name(entry, "name", &at)?,
+            total: parse_stats(read_nested(entry, "total", &at)?, &join_location(&at, "total"))?,
+            per_language: parse_languages(read_list(entry, "languages", &at)?, &join_location(&at, "languages"))?
         })
     }).collect()
 }
 
-fn performance_of(entry: &Map<String, Value>) -> Result<Performance, DocumentError> {
-    let threads = nested(entry, "threads", "performance")?;
+fn parse_performance(entry: &Map<String, Value>) -> Result<Performance, DocumentError> {
+    let threads = read_nested(entry, "threads", "performance")?;
 
     Ok(Performance {
-        duration_millis: number(entry, "scan_ms", "performance")? as u128,
-        threads: Threads::new(number(threads, "producers", "performance.threads")?,
-                number(threads, "consumers", "performance.threads")?)
+        duration_millis: read_number(entry, "scan_ms", "performance")? as u128,
+        threads: Threads::new(read_number(threads, "producers", "performance.threads")?,
+                read_number(threads, "consumers", "performance.threads")?)
     })
 }
 
-fn warnings_of(entries: &[Value]) -> Result<Vec<DocumentWarning>, DocumentError> {
+fn parse_warnings(entries: &[Value]) -> Result<Vec<DocumentWarning>, DocumentError> {
     entries.iter().enumerate().map(|(i, entry)| {
         let at = format!("warnings[{i}]");
-        let entry = object(entry, &at)?;
+        let entry = read_object(entry, &at)?;
 
         Ok(DocumentWarning {
-            code: text(entry, "code", &at)?,
-            affects: text(entry, "affects", &at)?,
-            message: text(entry, "message", &at)?
+            code: read_text(entry, "code", &at)?,
+            affects: read_text(entry, "affects", &at)?,
+            message: read_text(entry, "message", &at)?
         })
     }).collect()
 }
 
-fn faulty_files_of(entries: &[Value]) -> Result<Vec<FaultyFileDetails>, DocumentError> {
+fn parse_faulty_files(entries: &[Value]) -> Result<Vec<FaultyFileDetails>, DocumentError> {
     entries.iter().enumerate().map(|(i, entry)| {
         let at = format!("faulty_files[{i}]");
-        let entry = object(entry, &at)?;
+        let entry = read_object(entry, &at)?;
 
-        Ok(FaultyFileDetails::new(text(entry, "path", &at)?, text(entry, "error", &at)?,
-                number(entry, "bytes", &at)? as u64))
+        Ok(FaultyFileDetails::new(read_text(entry, "path", &at)?, read_text(entry, "error", &at)?,
+                read_number(entry, "bytes", &at)? as u64))
     }).collect()
 }
 
-fn unreadable_dirs_of(entries: &[Value]) -> Result<Vec<UnreadableDirDetails>, DocumentError> {
+fn parse_unreadable_dirs(entries: &[Value]) -> Result<Vec<UnreadableDirDetails>, DocumentError> {
     entries.iter().enumerate().map(|(i, entry)| {
         let at = format!("unreadable_dirs[{i}]");
-        let entry = object(entry, &at)?;
+        let entry = read_object(entry, &at)?;
 
-        Ok(UnreadableDirDetails::new(text(entry, "path", &at)?, text(entry, "error", &at)?))
+        Ok(UnreadableDirDetails::new(read_text(entry, "path", &at)?, read_text(entry, "error", &at)?))
     }).collect()
 }
 
-fn targets_of(entries: &[Value]) -> Result<Vec<Target>, DocumentError> {
+fn parse_targets(entries: &[Value]) -> Result<Vec<Target>, DocumentError> {
     entries.iter().enumerate().map(|(i, entry)| {
         let at = format!("scope.dirs[{i}]");
-        let entry = object(entry, &at)?;
-        let path = text(entry, "path", &at)?;
+        let entry = read_object(entry, &at)?;
+        let path = read_text(entry, "path", &at)?;
 
-        Ok(match optional_name(entry, "module", &at)? {
+        Ok(match read_optional_name(entry, "module", &at)? {
             Some(module) => Target::named(module, path),
             None => Target::of(path)
         })
     }).collect()
 }
 
-fn member<'a>(parent: &'a Map<String, Value>, key: &str, at: &str) -> Result<&'a Value, DocumentError> {
-    parent.get(key).ok_or_else(|| DocumentError::Missing(joined(at, key)))
+fn read_member<'a>(parent: &'a Map<String, Value>, key: &str, at: &str) -> Result<&'a Value, DocumentError> {
+    parent.get(key).ok_or_else(|| DocumentError::Missing(join_location(at, key)))
 }
 
-fn number(parent: &Map<String, Value>, key: &str, at: &str) -> Result<usize, DocumentError> {
-    member(parent, key, at)?.as_u64().and_then(|x| usize::try_from(x).ok())
-            .ok_or_else(|| DocumentError::WrongType { at: joined(at, key), wanted: "a whole number" })
+fn read_number(parent: &Map<String, Value>, key: &str, at: &str) -> Result<usize, DocumentError> {
+    read_member(parent, key, at)?.as_u64().and_then(|x| usize::try_from(x).ok())
+            .ok_or_else(|| DocumentError::WrongType { at: join_location(at, key), wanted: "a whole number" })
 }
 
-fn text(parent: &Map<String, Value>, key: &str, at: &str) -> Result<String, DocumentError> {
-    member(parent, key, at)?.as_str().map(str::to_owned)
-            .ok_or_else(|| DocumentError::WrongType { at: joined(at, key), wanted: "a string" })
+fn read_text(parent: &Map<String, Value>, key: &str, at: &str) -> Result<String, DocumentError> {
+    read_member(parent, key, at)?.as_str().map(str::to_owned)
+            .ok_or_else(|| DocumentError::WrongType { at: join_location(at, key), wanted: "a string" })
 }
 
 // A module that was never given a name, which is what the leftovers of the named ones are called and
 // what an ordinary target has. 'null' is the only place a member of a document may be empty.
-fn optional_name(parent: &Map<String, Value>, key: &str, at: &str) -> Result<Option<String>, DocumentError> {
-    match member(parent, key, at)? {
+fn read_optional_name(parent: &Map<String, Value>, key: &str, at: &str) -> Result<Option<String>, DocumentError> {
+    match read_member(parent, key, at)? {
         Value::Null => Ok(None),
         Value::String(x) => Ok(Some(x.clone())),
-        _ => Err(DocumentError::WrongType { at: joined(at, key), wanted: "a string or null" })
+        _ => Err(DocumentError::WrongType { at: join_location(at, key), wanted: "a string or null" })
     }
 }
 
-fn flag(parent: &Map<String, Value>, key: &str, at: &str) -> Result<bool, DocumentError> {
-    member(parent, key, at)?.as_bool()
-            .ok_or_else(|| DocumentError::WrongType { at: joined(at, key), wanted: "true or false" })
+fn read_flag(parent: &Map<String, Value>, key: &str, at: &str) -> Result<bool, DocumentError> {
+    read_member(parent, key, at)?.as_bool()
+            .ok_or_else(|| DocumentError::WrongType { at: join_location(at, key), wanted: "true or false" })
 }
 
-fn strings(parent: &Map<String, Value>, key: &str, at: &str) -> Result<Vec<String>, DocumentError> {
-    list(parent, key, at)?.iter().enumerate().map(|(i, value)| {
+fn read_strings(parent: &Map<String, Value>, key: &str, at: &str) -> Result<Vec<String>, DocumentError> {
+    read_list(parent, key, at)?.iter().enumerate().map(|(i, value)| {
         value.as_str().map(str::to_owned).ok_or_else(|| DocumentError::WrongType {
-                at: format!("{}[{i}]", joined(at, key)), wanted: "a string" })
+                at: format!("{}[{i}]", join_location(at, key)), wanted: "a string" })
     }).collect()
 }
 
-fn nested<'a>(parent: &'a Map<String, Value>, key: &str, at: &str) -> Result<&'a Map<String, Value>, DocumentError> {
-    object(member(parent, key, at)?, &joined(at, key))
+fn read_nested<'a>(parent: &'a Map<String, Value>, key: &str, at: &str) -> Result<&'a Map<String, Value>, DocumentError> {
+    read_object(read_member(parent, key, at)?, &join_location(at, key))
 }
 
-fn list<'a>(parent: &'a Map<String, Value>, key: &str, at: &str) -> Result<&'a Vec<Value>, DocumentError> {
-    array(member(parent, key, at)?, &joined(at, key))
+fn read_list<'a>(parent: &'a Map<String, Value>, key: &str, at: &str) -> Result<&'a Vec<Value>, DocumentError> {
+    read_array(read_member(parent, key, at)?, &join_location(at, key))
 }
 
-fn object<'a>(value: &'a Value, at: &str) -> Result<&'a Map<String, Value>, DocumentError> {
+fn read_object<'a>(value: &'a Value, at: &str) -> Result<&'a Map<String, Value>, DocumentError> {
     value.as_object().ok_or_else(|| DocumentError::WrongType { at: at.to_owned(), wanted: "an object" })
 }
 
-fn array<'a>(value: &'a Value, at: &str) -> Result<&'a Vec<Value>, DocumentError> {
+fn read_array<'a>(value: &'a Value, at: &str) -> Result<&'a Vec<Value>, DocumentError> {
     value.as_array().ok_or_else(|| DocumentError::WrongType { at: at.to_owned(), wanted: "an array" })
 }
 
-fn joined(at: &str, key: &str) -> String {
+fn join_location(at: &str, key: &str) -> String {
     if at.is_empty() {
         key.to_owned()
     } else {
@@ -333,11 +342,11 @@ mod tests {
     use mezura_core::SortCriterion;
 
     use crate::config_manager::Configuration;
-    use crate::json_printer::document;
+    use crate::json_printer::create_document;
 
     use super::*;
 
-    fn stats_of(files: usize, bytes: usize, lines: usize, code: usize, comments: usize,
+    fn parse_stats(files: usize, bytes: usize, lines: usize, code: usize, comments: usize,
             keywords: HashMap<String, usize>) -> Stats {
         Stats::new(files, bytes, lines, code, comments, keywords)
     }
@@ -347,14 +356,14 @@ mod tests {
     // leftovers, and paths carrying the backslashes and quotation marks that have to survive the
     // escaping on the way out and the way back in.
     fn populated() -> (RunResult, Configuration) {
-        let rust = stats_of(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 0]);
-        let html = stats_of(1, 900, 40, 30, 0, HashMap::new());
+        let rust = parse_stats(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 0]);
+        let html = parse_stats(1, 900, 40, 30, 0, HashMap::new());
         let per_language = hashmap!["Rust".to_owned() => rust.clone(), "HTML".to_owned() => html.clone()];
 
         let result = RunResult {
             total: Stats::total_of(&per_language),
             modules: vec![
-                ModuleResult { name: Some("backend".to_owned()), per_language: hashmap!["Rust".to_owned() => rust], total: Stats::total_of(&hashmap!["Rust".to_owned() => stats_of(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 0])]) },
+                ModuleResult { name: Some("backend".to_owned()), per_language: hashmap!["Rust".to_owned() => rust], total: Stats::total_of(&hashmap!["Rust".to_owned() => parse_stats(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 0])]) },
                 ModuleResult { name: None, per_language: hashmap!["HTML".to_owned() => html.clone()], total: Stats::total_of(&hashmap!["HTML".to_owned() => html]) }],
             per_language,
             faulty_files: vec![FaultyFileDetails::new("D:\\dev\\a \"b\".rs".to_owned(), "stream did not contain valid UTF-8".to_owned(), 412)],
@@ -373,6 +382,8 @@ mod tests {
         config.engine.should_search_in_dotted = true;
         config.engine.no_gitignore = true;
         config.view.sort_by = SortCriterion::Name;
+        // The two lists of paths are written only when they are asked for, and this asks
+        config.view.set_should_show_faulty_files(true);
 
         (result, config)
     }
@@ -387,7 +398,7 @@ mod tests {
     #[test]
     fn a_document_reads_back_into_the_result_that_wrote_it() {
         let (written, config) = populated();
-        let read = parse(&document(&written, &Local::now(), &config)).unwrap().result;
+        let read = parse(&create_document(&written, &Local::now(), &config)).unwrap().result;
 
         assert_same_stats(&written.per_language, &read.per_language);
         assert_eq!(written.total, read.total);
@@ -422,7 +433,7 @@ mod tests {
     #[test]
     fn the_settings_the_counting_obeyed_come_back_with_it() {
         let (result, config) = populated();
-        let read = parse(&document(&result, &Local::now(), &config)).unwrap();
+        let read = parse(&create_document(&result, &Local::now(), &config)).unwrap();
 
         assert_eq!(crate::config_manager::VERSION_ID.trim_start_matches('v'), read.mezura_version);
         assert_eq!(vec!["target".to_owned(), "*.min.js".to_owned()], read.scope.exclude);
@@ -438,7 +449,7 @@ mod tests {
 
         let timestamp = chrono::DateTime::parse_from_rfc3339("2026-07-30T14:22:07+03:00").unwrap().with_timezone(&Local);
         assert_eq!(timestamp.to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
-                parse(&document(&result, &timestamp, &config)).unwrap().generated_at);
+                parse(&create_document(&result, &timestamp, &config)).unwrap().generated_at);
     }
 
     // Three blocks are written only when there is something to say, so their absence is what carries
@@ -450,14 +461,14 @@ mod tests {
         // Nothing measured it, so what comes back is a zero and not a measurement of zero, which is
         // the one thing about a document that reading it cannot make honest
         config.view.hidden.timing = true;
-        let read = parse(&document(&result, &Local::now(), &config)).unwrap();
+        let read = parse(&create_document(&result, &Local::now(), &config)).unwrap();
         assert_eq!(0, read.result.performance.duration_millis);
 
         // '--hide keywords' stops the counting as well as the printing, so the map comes back empty
         // rather than as a set of zeros, and the scope says why it is empty
         config.view.hidden.timing = false;
         config.view.hidden.keywords = true;
-        let read = parse(&document(&result, &Local::now(), &config)).unwrap();
+        let read = parse(&create_document(&result, &Local::now(), &config)).unwrap();
         assert!(read.result.per_language["Rust"].keyword_occurences.is_empty());
         assert!(read.result.total.keyword_occurences.is_empty());
         assert!(!read.scope.keywords_counted);
@@ -465,7 +476,7 @@ mod tests {
         // A document from a build that had not met the key counted them, all of those builds did,
         // so its absence must not read as a refusal or as keywords that were hidden
         config.view.hidden.keywords = false;
-        let older = document(&result, &Local::now(), &config).replace(",\n    \"keywords_counted\": true", "");
+        let older = create_document(&result, &Local::now(), &config).replace(",\n    \"keywords_counted\": true", "");
         assert!(!older.contains("keywords_counted"));
         assert!(parse(&older).unwrap().scope.keywords_counted);
 
@@ -473,7 +484,7 @@ mod tests {
         // without the block reads back as has to be that and not an absence of modules
         let (mut plain, config) = populated();
         plain.modules = vec![ModuleResult { name: None, per_language: plain.per_language.clone(), total: plain.total.clone() }];
-        let written = document(&plain, &Local::now(), &config);
+        let written = create_document(&plain, &Local::now(), &config);
         assert!(!written.contains("\"modules\""));
 
         let read = parse(&written).unwrap().result;
@@ -489,7 +500,7 @@ mod tests {
     fn a_document_that_was_cut_by_top_says_how_many_languages_it_is_short() {
         let (result, mut config) = populated();
         config.view.top_n = Some(1);
-        let read = parse(&document(&result, &Local::now(), &config)).unwrap();
+        let read = parse(&create_document(&result, &Local::now(), &config)).unwrap();
 
         assert_eq!(1, read.languages_hidden);
         assert_eq!(1, read.result.per_language.len());

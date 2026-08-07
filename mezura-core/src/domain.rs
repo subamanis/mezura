@@ -37,7 +37,7 @@ impl Language {
         }
     }
 
-    pub fn multiline_start_len(&self) -> usize {
+    pub fn get_multiline_start_len(&self) -> usize {
         if let Some(x) = &self.multiline_comment_start_symbol {
             x.len()
         } else {
@@ -45,7 +45,7 @@ impl Language {
         }
     }
 
-    pub fn multiline_end_len(&self) -> usize {
+    pub fn get_multiline_end_len(&self) -> usize {
         if let Some(x) = &self.multiline_comment_end_symbol {
             x.len()
         } else {
@@ -98,7 +98,7 @@ impl Clone for Keyword {
     }
 }
 
-// 'extra_lines' and the average size are methods rather than fields, so a stored copy cannot drift
+// The extra lines and the average size are methods rather than fields, so a stored copy cannot drift
 // from the numbers it comes from.
 #[derive(Debug,PartialEq,Default,Clone)]
 pub struct Stats {
@@ -123,12 +123,12 @@ impl Stats {
     //
     // Saturating because the fields are public and this is also built from numbers read off a log
     // file: three counts that do not add up are the caller's arithmetic, not a reason to panic.
-    pub fn extra_lines(&self) -> usize {
+    pub fn calculate_extra_lines(&self) -> usize {
         self.lines.saturating_sub(self.code_lines).saturating_sub(self.comment_lines)
     }
 
     // Rounded to whole bytes, and zero rather than a division by zero when nothing was counted
-    pub fn average_size(&self) -> usize {
+    pub fn calculate_average_size(&self) -> usize {
         self.bytes.checked_div(self.files).unwrap_or(0)
     }
 
@@ -166,7 +166,7 @@ impl Stats {
 // language count nothing.
 impl From<&Language> for Stats {
     fn from(language: &Language) -> Self {
-        Stats { keyword_occurences: keyword_slots(language), ..Default::default() }
+        Stats { keyword_occurences: create_keyword_slots(language), ..Default::default() }
     }
 }
 
@@ -199,7 +199,7 @@ pub(crate) fn owned_strings(items: impl IntoIterator<Item = impl AsRef<str>>) ->
     items.into_iter().map(|x| x.as_ref().to_owned()).collect()
 }
 
-fn keyword_slots(language: &Language) -> HashMap<String,usize> {
+fn create_keyword_slots(language: &Language) -> HashMap<String,usize> {
     let mut map = HashMap::<String,usize>::new();
     for keyword in &language.keywords {
         map.insert(keyword.descriptive_name.to_owned(), 0);
@@ -215,15 +215,15 @@ mod tests {
     // three. They come off a log file whose head was lost.
     #[test]
     fn three_counts_that_do_not_add_up_give_no_extra_lines_rather_than_a_panic() {
-        assert_eq!(0, Stats::new(1, 0, 0, 0, 900, HashMap::new()).extra_lines());
-        assert_eq!(0, Stats::new(1, 0, 40, 900, 50, HashMap::new()).extra_lines());
-        assert_eq!(0, Stats::new(1, 0, 100, 60, 40, HashMap::new()).extra_lines());
-        assert_eq!(10, Stats::new(1, 0, 100, 60, 30, HashMap::new()).extra_lines());
+        assert_eq!(0, Stats::new(1, 0, 0, 0, 900, HashMap::new()).calculate_extra_lines());
+        assert_eq!(0, Stats::new(1, 0, 40, 900, 50, HashMap::new()).calculate_extra_lines());
+        assert_eq!(0, Stats::new(1, 0, 100, 60, 40, HashMap::new()).calculate_extra_lines());
+        assert_eq!(10, Stats::new(1, 0, 100, 60, 30, HashMap::new()).calculate_extra_lines());
     }
 
     #[test]
     fn an_average_size_over_no_files_is_zero_rather_than_a_division_by_zero() {
-        assert_eq!(0, Stats::default().average_size());
-        assert_eq!(250, Stats::new(4, 1000, 0, 0, 0, HashMap::new()).average_size());
+        assert_eq!(0, Stats::default().calculate_average_size());
+        assert_eq!(250, Stats::new(4, 1000, 0, 0, 0, HashMap::new()).calculate_average_size());
     }
 }

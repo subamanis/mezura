@@ -698,6 +698,11 @@ TUNING AND DIAGNOSTICS
     This flag specifies that their path, along with information about the exact error is displayed too.
     The most common reason for a faulty file is if it contains non UTF-8 characters.
 
+    It asks the same of '--output json', where the two lists of paths are written only when this
+    flag is given. How many there were is in the 'scan' block either way, so a document without
+    the lists never claims that nothing went wrong. A comparison document carries the counts of
+    each side and no lists at all.
+
 THE PROGRAM ITSELF
 
 --help

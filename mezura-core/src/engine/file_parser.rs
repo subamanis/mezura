@@ -150,7 +150,7 @@ fn pack_into_chunks(entries: &[(u8, u8, Box<[u8]>)]) -> (Vec<Chunk>, [bool; 4]) 
     (chunks, sorted_kinds)
 }
 
-fn plan_of(language: &Language) -> &ScanPlan {
+fn get_or_build_plan_of(language: &Language) -> &ScanPlan {
     language.scan_plan.get_or_init(|| ScanPlan::build(language))
 }
 
@@ -206,7 +206,7 @@ fn is_not_escaped(pos: usize, bytes: &[u8]) -> bool {
 }
 
 fn scan_line(line: &str, language: &Language, buffers: &mut ScanBuffers) {
-    let plan = plan_of(language);
+    let plan = get_or_build_plan_of(language);
     let line_bytes = line.as_bytes();
     buffers.reset(plan.slots.len());
 
@@ -351,7 +351,7 @@ impl<'a> Iterator for LineIter<'a> {
     }
 }
 
-fn lines_of(contents: &str) -> LineIter<'_> {
+fn get_lines_of(contents: &str) -> LineIter<'_> {
     LineIter { contents, newlines: memchr::memchr_iter(b'\n', contents.as_bytes()), start: 0 }
 }
 
@@ -368,7 +368,7 @@ fn parse_lines(contents: &str, language: &Language, keyword_matcher: Option<&Key
 
     let mut is_comment_closed = true;
     let mut open_str_symbol = None;
-    for (line_start, raw_line) in lines_of(contents) {
+    for (line_start, raw_line) in get_lines_of(contents) {
         file_stats.lines += 1;
 
         // Ascii-only trimming, since the unicode whitespace classification of trim() costs
@@ -570,13 +570,13 @@ fn get_bounds_w_multiline_comments(line: &str, language: &Language, is_comment_c
     }
 
     // A '//' that sits inside a '*/' is part of it and not a comment of its own
-    comment_indices.retain(|x| !is_intersecting_with_multi_line_end_symbol(*x, language.multiline_end_len(), com_end_indices));
+    comment_indices.retain(|x| !is_intersecting_with_multi_line_end_symbol(*x, language.get_multiline_end_len(), com_end_indices));
 
     resolve_comment_and_multiline_start_overlap(line, language, comment_indices, com_start_indices);
 
     if !com_end_indices.is_empty() && !com_start_indices.is_empty() {
         resolve_double_counting_of_adjacent_start_and_end_symbols(com_start_indices, com_end_indices,
-            !is_comment_closed, language.multiline_start_len());
+            !is_comment_closed, language.get_multiline_start_len());
     }
 
     if str_indices.is_empty() && comment_indices.is_empty() && com_start_indices.is_empty() && com_end_indices.is_empty() {
@@ -667,7 +667,7 @@ fn get_bounds_w_multiline_comments(line: &str, language: &Language, is_comment_c
                 return LineInfo::code_span_with((0, code_ranges.len()), has_string_literal, true, None);
             }
             last_symbol_index = com_end_indices[end_com_counter];
-            let index_after = last_symbol_index + language.multiline_end_len();
+            let index_after = last_symbol_index + language.get_multiline_end_len();
             if index_after >= line.len() {
                 if code_ranges.is_empty() {return LineInfo::none_all(has_string_literal);}
                 else {return LineInfo::code_span((0, code_ranges.len()), has_string_literal);}
@@ -916,7 +916,7 @@ fn resolve_comment_and_multiline_start_overlap(line: &str, language: &Language,
     if comment_indices.is_empty() || com_start_indices.is_empty() {
         return;
     }
-    let start_len = language.multiline_start_len();
+    let start_len = language.get_multiline_start_len();
     let longest_comment_at = |at: usize| {
         language.comment_symbols.iter()
                 .filter(|symbol| line.as_bytes()[at..].starts_with(symbol.as_bytes()))
@@ -1036,7 +1036,7 @@ mod tests {
     fn comment_delimiters_w_multiline(line: &str, language: &Language, com_end_indices: &[usize]) -> Vec<usize> {
         let mut buffers = ScanBuffers::default();
         scan_line(line, language, &mut buffers);
-        buffers.comments.retain(|x| !is_intersecting_with_multi_line_end_symbol(*x, language.multiline_end_len(), com_end_indices));
+        buffers.comments.retain(|x| !is_intersecting_with_multi_line_end_symbol(*x, language.get_multiline_end_len(), com_end_indices));
         buffers.comments
     }
 
@@ -1570,7 +1570,7 @@ mod tests {
                      "fn main() {\n    println!(\"hi\");\n}\n", "αβ\nγ"];
         for case in cases {
             let expected = case.lines().collect::<Vec<&str>>();
-            let actual = lines_of(case).map(|(_, line)| line).collect::<Vec<&str>>();
+            let actual = get_lines_of(case).map(|(_, line)| line).collect::<Vec<&str>>();
             assert_eq!(expected, actual, "disagreed on {case:?}");
         }
     }

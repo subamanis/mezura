@@ -21,7 +21,7 @@ impl Languages {
     // The languages baked into this crate, so nothing on the machine is read. The command line reads
     // its own folder instead, because a language file there is the user's to edit.
     pub fn shipped(config: &EngineConfig) -> (Self, Vec<Warning>) {
-        Self::resolve(config, shipped_languages(), &shipped_extension_priority())
+        Self::resolve(config, parse_shipped_languages(), &parse_shipped_extension_priority())
     }
 
     // For a caller with languages of its own. Keyed here by each language's own name rather than
@@ -36,11 +36,11 @@ impl Languages {
         let (languages, mut reported) = drop_the_unusable(languages.into_iter().collect());
         let (languages, narrowing) = retain_languages_of_interest(languages, config);
         reported.extend(narrowing);
-        reported.extend(duplicate_names(&languages));
+        reported.extend(find_duplicate_names(&languages));
 
         let by_name = keyed_by_name(languages);
         let (extension_map, report) = make_extension_language_map(&by_name, priority, &config.forced_languages);
-        reported.extend(report.warnings());
+        reported.extend(report.collect_warnings());
 
         (Languages { by_name, extension_map, resolved_against: LanguageSelection::of(config) }, reported)
     }
@@ -59,17 +59,17 @@ impl Languages {
 // What this crate ships, parsed for counting and raw for installing. A caller that wants nothing but
 // the default has 'Languages::shipped' and needs none of the four.
 
-pub fn shipped_languages() -> Vec<Language> {
+pub fn parse_shipped_languages() -> Vec<Language> {
     // 'every_shipped_language_file_parses' is what guarantees these all parse. One that somehow did
     // not would be left out rather than panic here.
-    shipped_language_files_raw().into_iter()
+    get_shipped_language_files_raw().into_iter()
             .filter_map(|(_, contents)| crate::language_file::parse_language(&String::from_utf8_lossy(contents)))
             .collect()
 }
 
 // The rule this crate ships for settling an extension that two languages both claim.
-pub fn shipped_extension_priority() -> HashMap<String, Vec<String>> {
-    crate::language_file::parse_priority(&String::from_utf8_lossy(shipped_extension_priority_raw())).0
+pub fn parse_shipped_extension_priority() -> HashMap<String, Vec<String>> {
+    crate::language_file::parse_priority(&String::from_utf8_lossy(get_shipped_extension_priority_raw())).0
 }
 
 // The bytes as they were authored, comments and layout included, so what the installer puts in the
@@ -78,19 +78,19 @@ pub fn shipped_extension_priority() -> HashMap<String, Vec<String>> {
 //
 // Plain tuples and not the embedder's own file type, so a release of 'include_dir' is never a
 // breaking change of ours.
-pub fn shipped_language_files_raw() -> Vec<(&'static str, &'static [u8])> {
+pub fn get_shipped_language_files_raw() -> Vec<(&'static str, &'static [u8])> {
     include_dir::include_dir!("data/languages").files.iter()
             .map(|file| (std::path::Path::new(file.path).file_name().and_then(|x| x.to_str()).unwrap_or(file.path),
                     file.contents))
             .collect()
 }
 
-pub fn shipped_extension_priority_raw() -> &'static [u8] {
+pub fn get_shipped_extension_priority_raw() -> &'static [u8] {
     include_bytes!("../data/extension_priority.txt")
 }
 
 // The names that were asked for and do not exist as language files, in the order they were given.
-pub fn unknown_language_names(languages: &[Language], wanted: &[String]) -> Vec<String> {
+pub fn find_unknown_language_names(languages: &[Language], wanted: &[String]) -> Vec<String> {
     wanted.iter().filter(|name| !languages.iter().any(|x| is_the_same_language_name(&x.name, name)))
             .cloned().collect()
 }
@@ -148,14 +148,14 @@ fn drop_the_unusable(languages: Vec<Language>) -> (Vec<Language>, Vec<Warning>) 
     let mut reported = Vec::new();
     let kept = languages.into_iter().filter(|language| {
         if language.name.trim().is_empty() {
-            reported.push(Warning::new(warnings::UNUSABLE_LANGUAGE, warnings::Affects::Settings,
+            reported.push(Warning::new(warnings::Code::LanguageWithoutName,
                     &language.extensions.join(","),
-                    format!("A language claiming '{}' has no name, so nothing could be counted or reported for it.",
+                    format!("A language claiming '{}' has no name, so the files carrying those extensions were not counted.",
                     language.extensions.join(", "))));
             return false;
         }
         if language.extensions.is_empty() {
-            reported.push(Warning::new(warnings::UNUSABLE_LANGUAGE, warnings::Affects::Settings, &language.name,
+            reported.push(Warning::new(warnings::Code::LanguageWithoutExtension, &language.name,
                     format!("'{}' claims no extension, so no file can ever be counted as it.", language.name)));
             return false;
         }
@@ -176,7 +176,7 @@ fn drop_the_unusable(languages: Vec<Language>) -> (Vec<Language>, Vec<Warning>) 
 // two definitions of one language to '--languages', to '--exclude-languages', to '--force-lang' and
 // to the priority file, all of which fold case; counting them apart here was the one place that did
 // not, so that pair went through unreported while every one of those flags treated them as one.
-fn duplicate_names(languages: &[Language]) -> Vec<Warning> {
+fn find_duplicate_names(languages: &[Language]) -> Vec<Warning> {
     let mut spellings : HashMap<String, Vec<&str>> = HashMap::new();
     for language in languages {
         spellings.entry(language.name.to_lowercase()).or_default().push(language.name.as_str());
@@ -200,7 +200,7 @@ Which one is not decided by anything you can see, so the counts of '{name}' depe
 that takes one and {times} languages in the report, each counting part of the files.",
                     found.join("' and '"))
         };
-        Warning::new(warnings::DUPLICATE_LANGUAGE, warnings::Affects::Counts, name, detail)
+        Warning::new(warnings::Code::DuplicateLanguage, name, detail)
     }).collect()
 }
 
@@ -211,8 +211,8 @@ fn retain_languages_of_interest(mut languages: Vec<Language>, config: &EngineCon
 {
     let mut reported = Vec::new();
     if !config.languages_of_interest.is_empty() {
-        for name in unknown_language_names(&languages, &config.languages_of_interest) {
-            reported.push(Warning::new(warnings::UNKNOWN_LANGUAGE, warnings::Affects::Settings, &name,
+        for name in find_unknown_language_names(&languages, &config.languages_of_interest) {
+            reported.push(Warning::new(warnings::Code::UnknownLanguage, &name,
                     format!("'{name}' is not among the languages in use, so nothing was counted for it.")));
         }
     }
@@ -225,8 +225,8 @@ fn retain_languages_of_interest(mut languages: Vec<Language>, config: &EngineCon
     // Under a code of its own, and not the one above it, because the command line has already put
     // that one on the screen with a suggested spelling and keeps it only for the document. This one
     // has no other voice.
-    for name in unknown_language_names(&languages, &config.excluded_languages) {
-        reported.push(Warning::new(warnings::UNKNOWN_EXCLUDED_LANGUAGE, warnings::Affects::Settings, &name,
+    for name in find_unknown_language_names(&languages, &config.excluded_languages) {
+        reported.push(Warning::new(warnings::Code::UnknownExcludedLanguage, &name,
                 format!("'{name}' is not among the languages in use, so excluding it changed nothing.")));
     }
 
@@ -272,11 +272,11 @@ mod language_selection_tests {
         config.languages_of_interest = Vec::new();
         assert_eq!(vec!["C#", "Java"], names_of(retain_languages_of_interest(languages(), &config).0));
 
-        assert_eq!(vec!["Erlang"], unknown_language_names(&languages(), &["java".to_owned(), "Erlang".to_owned()]));
-        assert!(unknown_language_names(&languages(), &["C#".to_owned()]).is_empty());
+        assert_eq!(vec!["Erlang"], find_unknown_language_names(&languages(), &["java".to_owned(), "Erlang".to_owned()]));
+        assert!(find_unknown_language_names(&languages(), &["C#".to_owned()]).is_empty());
     }
 
-    // Returned and not printed, because the command line puts its own coloured version on the
+    // Returned and not printed, because the command line puts its own colored version on the
     // screen with a suggested spelling next to it.
     #[test]
     fn a_language_that_does_not_exist_reaches_the_document_as_a_warning() {
@@ -288,9 +288,9 @@ mod language_selection_tests {
                 languages_claiming(&[("Java", &["java"])]).into_values().collect(), &config);
 
         let mine = reported.into_iter().find(|x| x.subject == "Nolang-Q9").unwrap();
-        assert_eq!(warnings::UNKNOWN_LANGUAGE, mine.code);
+        assert_eq!(warnings::Code::UnknownLanguage, mine.code);
         // the counts are sound for what does exist, it is the setting that was not honoured
-        assert_eq!("settings", mine.affects.name());
+        assert_eq!("settings", mine.affects().name());
     }
 
     // The names travel with the bytes because the command line writes each file to disk under the
@@ -298,7 +298,7 @@ mod language_selection_tests {
     // every test there was, and would have installed 'languages/data/languages/Rust.txt'.
     #[test]
     fn the_shipped_files_carry_bare_names_and_match_the_directory() {
-        let raw = shipped_language_files_raw();
+        let raw = get_shipped_language_files_raw();
         assert!(!raw.is_empty());
         for (name, contents) in &raw {
             assert!(!name.contains('/') && !name.contains('\\'), "'{name}' is a path and not a file name");
@@ -371,10 +371,10 @@ mod language_selection_tests {
                      Language::new("Same", ["bb"], ["\""], [""; 0], Some(("/*", "*/")), [])],
                 &HashMap::new()).1;
 
-        let mine = reported.iter().find(|x| x.code == warnings::DUPLICATE_LANGUAGE)
+        let mine = reported.iter().find(|x| x.code == warnings::Code::DuplicateLanguage)
                 .expect("a language declared twice was dropped in silence");
         assert_eq!("Same", mine.subject);
-        assert_eq!("counts", mine.affects.name(), "the choice changes numbers, not settings");
+        assert_eq!("counts", mine.affects().name(), "the choice changes numbers, not settings");
         // one of the two really is gone, which is what the warning is about
         assert_eq!(2, languages.into_parts().0.len());
     }
@@ -392,9 +392,14 @@ mod language_selection_tests {
         let (kept, reported) = drop_the_unusable(unusable);
         assert_eq!(vec!["Rust"], kept.into_iter().map(|x| x.name).collect::<Vec<_>>());
         assert_eq!(2, reported.len(), "{reported:?}");
-        assert!(reported.iter().all(|x| x.code == warnings::UNUSABLE_LANGUAGE));
-        assert!(reported.iter().any(|x| x.subject == "zz"), "the nameless one is named by what it claims");
-        assert!(reported.iter().any(|x| x.subject == "Nameless-Extensions"));
+        // Two codes and not one, because the consequences differ: dropping the nameless one leaves
+        // every '.zz' file counted by nobody, while the one claiming no extension could never have
+        // matched a file in the first place
+        assert_eq!(Some(warnings::Code::LanguageWithoutName),
+                reported.iter().find(|x| x.subject == "zz").map(|x| x.code),
+                "the nameless one is named by what it claims");
+        assert_eq!(Some(warnings::Code::LanguageWithoutExtension),
+                reported.iter().find(|x| x.subject == "Nameless-Extensions").map(|x| x.code));
     }
 
     // Excluding a name that does not exist did nothing and said nothing, while asking for one four
@@ -411,8 +416,8 @@ mod language_selection_tests {
 
         assert_eq!(vec!["Rust"], kept.into_iter().map(|x| x.name).collect::<Vec<_>>());
         let mine = reported.iter().find(|x| x.subject == "Nolang-Q9").unwrap();
-        assert_eq!(warnings::UNKNOWN_EXCLUDED_LANGUAGE, mine.code);
-        assert_eq!("settings", mine.affects.name());
+        assert_eq!(warnings::Code::UnknownExcludedLanguage, mine.code);
+        assert_eq!("settings", mine.affects().name());
         // and the one that does exist is excluded without a word about it
         assert!(!reported.iter().any(|x| x.subject == "Java"));
     }

@@ -39,17 +39,17 @@ impl ExtensionReport {
     //
     // Each says what happened and stops. What to do about it depends on who is calling: the command
     // line has a file and a flag for it and adds its own sentence, a library caller has neither.
-    pub fn warnings(&self) -> Vec<warnings::Warning> {
+    pub fn collect_warnings(&self) -> Vec<warnings::Warning> {
         let mut reported = Vec::new();
         for collision in self.collisions.iter().filter(|x| x.resolved_by == ResolvedBy::AlphabeticalFallback) {
-            reported.push(warnings::Warning::new(warnings::EXTENSION_TIEBREAK, warnings::Affects::Counts, &collision.extension,
+            reported.push(warnings::Warning::new(warnings::Code::ExtensionTiebreak, &collision.extension,
                     format!("The extension '{}' is claimed by {} and {}. It was given to {} only because that name comes first \
 alphabetically, so the files of the rest are counted with the wrong comment and string symbols.",
                     collision.extension, collision.winner, collision.losers.join(", "), collision.winner)));
         }
 
         for (extension, wanted) in &self.unknown_forced_languages {
-            reported.push(warnings::Warning::new(warnings::UNKNOWN_FORCED_LANGUAGE, warnings::Affects::Settings, extension,
+            reported.push(warnings::Warning::new(warnings::Code::UnknownForcedLanguage, extension,
                     format!("Nothing called '{wanted}' is among the languages in use, so '{extension}' was left as it was.")));
         }
 
@@ -249,7 +249,7 @@ mod tests {
         assert_eq!("Rust", winner_of(&map, "rs"));
         assert_eq!("Go", winner_of(&map, "go"));
         assert_eq!(ExtensionReport::default(), report);
-        assert!(report.warnings().is_empty());
+        assert!(report.collect_warnings().is_empty());
     }
 
     // The tiebreak is the outcome nobody chose, and the only one that is announced
@@ -266,8 +266,8 @@ mod tests {
             losers: vec!["Objective-C".to_owned()],
             resolved_by: ResolvedBy::AlphabeticalFallback
         }], report.collisions);
-        assert_eq!(vec![(warnings::EXTENSION_TIEBREAK, "counts")],
-                report.warnings().iter().map(|x| (x.code, x.affects.name())).collect::<Vec<_>>());
+        assert_eq!(vec![(warnings::Code::ExtensionTiebreak, "counts")],
+                report.collect_warnings().iter().map(|x| (x.code, x.affects().name())).collect::<Vec<_>>());
     }
 
     // One language, two spellings of one extension, which stopped being two keys the moment the
@@ -284,7 +284,7 @@ mod tests {
         assert_eq!("Cish", winner_of(&map, "h"));
         assert_eq!(1, map.len(), "the three spellings did not fold into one key");
         assert!(report.collisions.is_empty(), "a language was reported as contesting itself: {:?}", report.collisions);
-        assert!(report.warnings().is_empty(), "{:?}", report.warnings());
+        assert!(report.collect_warnings().is_empty(), "{:?}", report.collect_warnings());
 
         // and a real contest over the same extension is still announced, so what is gone is the
         // self-collision and not the check
@@ -308,7 +308,7 @@ mod tests {
         assert_eq!(ResolvedBy::ForceLang, report.collisions[0].resolved_by);
     
         // and neither of them is the tiebreak, so neither is announced
-        assert!(report.warnings().is_empty());
+        assert!(report.collect_warnings().is_empty());
     }
 
     // A rule whose every name has been renamed away, removed or misspelled settles nothing, and the
@@ -321,8 +321,8 @@ mod tests {
     
         assert_eq!("MATLAB", winner_of(&map, "m"));
         assert_eq!(ResolvedBy::AlphabeticalFallback, report.collisions[0].resolved_by);
-        let reported = report.warnings();
-        assert_eq!(warnings::EXTENSION_TIEBREAK, reported[0].code);
+        let reported = report.collect_warnings();
+        assert_eq!(warnings::Code::ExtensionTiebreak, reported[0].code);
         assert_eq!("m", reported[0].subject);
         assert!(reported[0].message.contains("only because"));
     }
@@ -359,7 +359,7 @@ mod tests {
     
         assert_eq!("MATLAB", winner_of(&map, "m"));
         assert_eq!(ResolvedBy::ForceLang, report.collisions[0].resolved_by);
-        assert!(report.warnings().is_empty());
+        assert!(report.collect_warnings().is_empty());
     }
 
     #[test]
@@ -370,10 +370,10 @@ mod tests {
     
         assert_eq!("Python", winner_of(&map, "py"));
         assert_eq!(vec![("py".to_owned(), "cobol".to_owned())], report.unknown_forced_languages);
-        let reported = report.warnings();
-        assert_eq!(warnings::UNKNOWN_FORCED_LANGUAGE, reported[0].code);
+        let reported = report.collect_warnings();
+        assert_eq!(warnings::Code::UnknownForcedLanguage, reported[0].code);
         // a mapping that did not apply leaves the counts alone, it is the settings that were not honoured
-        assert_eq!("settings", reported[0].affects.name());
+        assert_eq!("settings", reported[0].affects().name());
         assert_eq!("py", reported[0].subject);
         // Names what was asked for and what happened, and nothing a command line can do about it:
         // that sentence belongs to whoever has a command line.

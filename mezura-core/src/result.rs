@@ -27,8 +27,8 @@ pub struct RunResult {
 
 impl RunResult {
     // Largest first by the chosen figure, ties broken by name.
-    pub fn languages_sorted_by(&self, criterion: SortCriterion) -> Vec<(&str, &Stats)> {
-        sorted_by(&self.per_language, criterion)
+    pub fn sort_languages_by(&self, criterion: SortCriterion) -> Vec<(&str, &Stats)> {
+        sort_languages_by(&self.per_language, criterion)
     }
 
     // The emptiness check is not redundant: without it the two counts are equal when both are zero,
@@ -84,8 +84,8 @@ pub struct ModuleResult {
 }
 
 impl ModuleResult {
-    pub fn languages_sorted_by(&self, criterion: SortCriterion) -> Vec<(&str, &Stats)> {
-        sorted_by(&self.per_language, criterion)
+    pub fn sort_languages_by(&self, criterion: SortCriterion) -> Vec<(&str, &Stats)> {
+        sort_languages_by(&self.per_language, criterion)
     }
 }
 
@@ -251,7 +251,7 @@ impl Stats {
 }
 
 // Shared by the whole run and by one module of it, which are the same question asked of two maps.
-fn sorted_by(per_language: &HashMap<String, Stats>, criterion: SortCriterion) -> Vec<(&str, &Stats)> {
+fn sort_languages_by(per_language: &HashMap<String, Stats>, criterion: SortCriterion) -> Vec<(&str, &Stats)> {
     let value_of = |stats: &Stats| match criterion {
         SortCriterion::Files => stats.files,
         SortCriterion::Size => stats.bytes,

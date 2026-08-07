@@ -141,7 +141,7 @@ pub fn validate_and_absolutize(declared: &[Target]) -> Result<Vec<Target>, Targe
 pub fn convert_to_absolute(s: &str) -> String {
     let p = Path::new(s);
     if p.is_absolute() {
-        return without_trailing_slash(&s.replace("\\", "/")).to_owned();
+        return trim_trailing_slash(&s.replace("\\", "/")).to_owned();
     }
 
     // The canonical form of a path that was typed as valid UTF-8 need not be valid UTF-8 itself,
@@ -149,8 +149,8 @@ pub fn convert_to_absolute(s: &str) -> String {
     // holds. Falling back to what was typed keeps a string that still names the place, which
     // 'to_string_lossy' would not: this one is handed back to 'is_dir' and 'is_file' further down.
     match std::fs::canonicalize(p).ok().and_then(|buf| buf.to_str().map(str::to_owned)) {
-        Some(str_path) => without_trailing_slash(&str_path.strip_prefix(r"\\?\").unwrap_or(&str_path).replace("\\", "/")).to_owned(),
-        None => without_trailing_slash(&s.replace("\\", "/")).to_owned()
+        Some(str_path) => trim_trailing_slash(&str_path.strip_prefix(r"\\?\").unwrap_or(&str_path).replace("\\", "/")).to_owned(),
+        None => trim_trailing_slash(&s.replace("\\", "/")).to_owned()
     }
 }
 
@@ -275,7 +275,7 @@ fn is_valid_path(s: &str) -> bool {
 // record the same string or a comparison between them reports a change nobody made. Not taken off a
 // root, where the separator belongs to the name: 'D:/' is the root of the drive while 'D:' is the
 // current directory on it, and '/' is the root of the file system.
-fn without_trailing_slash(path: &str) -> &str {
+fn trim_trailing_slash(path: &str) -> &str {
     let trimmed = path.trim_end_matches('/');
     if trimmed.is_empty() || trimmed.ends_with(':') {path} else {trimmed}
 }
@@ -519,11 +519,11 @@ mod target_path_tests {
     // 'D:' is the current directory on it, and '/' is the root of the file system.
     #[test]
     fn the_trailing_separator_of_a_root_belongs_to_its_name() {
-        assert_eq!("D:/", without_trailing_slash("D:/"));
-        assert_eq!("/", without_trailing_slash("/"));
-        assert_eq!("D:/x", without_trailing_slash("D:/x/"));
-        assert_eq!("D:/x", without_trailing_slash("D:/x//"));
-        assert_eq!("//server/share", without_trailing_slash("//server/share/"));
+        assert_eq!("D:/", trim_trailing_slash("D:/"));
+        assert_eq!("/", trim_trailing_slash("/"));
+        assert_eq!("D:/x", trim_trailing_slash("D:/x/"));
+        assert_eq!("D:/x", trim_trailing_slash("D:/x//"));
+        assert_eq!("//server/share", trim_trailing_slash("//server/share/"));
     }
 
     // The other side of existence-first: text that names nothing on disk is a pattern when it

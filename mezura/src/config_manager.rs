@@ -6,7 +6,7 @@ use colored::Color;
 use mezura_core::{EngineConfig, Target, Threads};
 use mezura_core::engine::config::{MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE};
 
-use super::formatted::Formatted;
+use super::error_colors::Formatted;
 use super::{message_printer, suggestions, theme::Theme};
 
 // Printed at startup and by '--version'. Also in mezura/Cargo.toml, and the two move together.
@@ -66,26 +66,14 @@ const DEFAULT_CONFIG_LABEL  : &str    = "default";
 pub struct Configuration {
     pub engine: EngineConfig,
     pub view: ViewConfig,
-    // Which settings this run's own command line input set.
-    // It will be used for the resolution and merging of a json file's settings and the run's own settings
-    pub typed: TypedOnCommandLine,
-    // Configuration settings taken from a json file, during comparison (--diff) run.
-    // Any non-explicitly given settings from the cli, will be overriden by the adopted ones
-    // for the --diff view.
-    pub adopted_from_file: Option<AdoptedSettings>
-}
-
-#[derive(Debug,PartialEq,Clone)]
-pub struct AdoptedSettings {
-    pub from: String,
-    pub settings: Vec<&'static str>
+    pub typed_explicitly: TypedExplicitlyOnCommandLine
 }
 
 impl Configuration {
     #[cfg(test)]
     pub fn new(dirs: Vec<String>) -> Self {
         Configuration { engine: EngineConfig::new(dirs), view: ViewConfig::default(),
-                typed: TypedOnCommandLine::default(), adopted_from_file: None }
+                typed_explicitly: TypedExplicitlyOnCommandLine::default() }
     }
 
     // One flag answering two questions, so the two halves are set together and never one without
@@ -186,7 +174,7 @@ pub struct Hidden {
 }
 
 impl Hidden {
-    fn pairs(self) -> [(&'static str, bool); 8] {
+    fn get_pairs(self) -> [(&'static str, bool); 8] {
         [("version", self.version), ("directory-info", self.directory_info), ("parsing-info", self.parsing_info),
          ("keywords", self.keywords), ("overview", self.overview), ("bar", self.bar),
          ("progress", self.progress), ("timing", self.timing)]
@@ -213,11 +201,11 @@ impl Hidden {
     }
 
     pub fn to_list_string(self) -> String {
-        self.pairs().iter().filter(|(_,is_hidden)| *is_hidden).map(|(name,_)| *name).collect::<Vec<_>>().join(",")
+        self.get_pairs().iter().filter(|(_,is_hidden)| *is_hidden).map(|(name,_)| *name).collect::<Vec<_>>().join(",")
     }
 
-    pub fn names() -> String {
-        Hidden::default().pairs().iter().map(|(name,_)| *name).collect::<Vec<_>>().join(", ")
+    pub fn format_names() -> String {
+        Hidden::default().get_pairs().iter().map(|(name,_)| *name).collect::<Vec<_>>().join(", ")
     }
 }
 
@@ -234,7 +222,7 @@ pub enum BarThickness {
 }
 
 impl BarThickness {
-    pub fn character(&self) -> &'static str {
+    pub fn get_character(&self) ->&'static str {
         match self {
             Self::Slim => "|",
             Self::Medium => "┃",
@@ -325,7 +313,7 @@ pub enum NumberSeparator {
 }
 
 impl NumberSeparator {
-    pub fn character(&self) -> Option<char> {
+    pub fn get_character(&self) ->Option<char> {
         match self {
             Self::Comma => Some(','),
             Self::Underscore => Some('_'),
@@ -364,7 +352,7 @@ pub enum DecimalSeparator {
 }
 
 impl DecimalSeparator {
-    pub fn character(&self) -> char {
+    pub fn get_character(&self) ->char {
         match self {
             Self::Dot => '.',
             Self::Comma => ','
@@ -425,7 +413,7 @@ pub enum ArgParsingError {
 }
 
 impl Formatted for ArgParsingError {
-    fn formatted(&self) -> ColoredString {
+    fn format(&self) -> ColoredString {
         match self {
             Self::UnparsableWorkingDir => "The current working dir could not be parsed as target dir, try inputing it manually.".red(),
             Self::InvalidPath(p) => format!("Path provided is not a valid directory or file:\n'{p}'.").red(),
@@ -433,7 +421,7 @@ impl Formatted for ArgParsingError {
             Self::DoublePath => "Directories already provided as first argument, but --dirs command also found.".red(),
             // Only the mistake is red. What to do about it is not an error, it is the way out.
             Self::UnrecognisedCommand(p) => {
-                let tail = suggestions::formatted_suggestion(p, &message_printer::command_names())
+                let tail = suggestions::formatted_suggestion(p, &message_printer::get_command_names())
                         .unwrap_or_else(|| format!("Run '--{HELP}' to see every command."));
                 let error = format!("--{p} is not recognised as a command.").red();
                 ColoredString::from(format!("{error}\n\n{tail}").as_str())
@@ -443,21 +431,21 @@ impl Formatted for ArgParsingError {
             Self::UnreadableConfig(name, line, super::config_files::UnreadableCause::Io(error)) => format!("Configuration '{name}' could not be read past line {line}, so none of it was used: {error}").red(),
             Self::UnexpectedCommandArgs(p) => format!("Command '--{p}' does not expect any arguments.").red(),
             Self::NonExistantConfig(p) => {
-                let names = super::config_files::names_in_dir(&crate::paths::PERSISTENT_APP_PATHS.config_dir);
+                let names = super::config_files::read_names_in_dir(&crate::paths::PERSISTENT_APP_PATHS.config_dir);
                 let tail = suggestions::formatted_suggestion(p, &names.iter().map(String::as_str).collect::<Vec<_>>())
                         .unwrap_or_else(|| format!("Run '--{SHOW_CONFIGS}' to see the ones you have."));
                 let error = format!("Configuration '{p}' does not exist.").red();
                 ColoredString::from(format!("{error}\n\n{tail}").as_str())
             },
             Self::NonExistantTheme(p) => {
-                let names = super::config_files::names_in_dir(&crate::paths::PERSISTENT_APP_PATHS.themes_dir);
+                let names = super::config_files::read_names_in_dir(&crate::paths::PERSISTENT_APP_PATHS.themes_dir);
                 let tail = suggestions::formatted_suggestion(p, &names.iter().map(String::as_str).collect::<Vec<_>>())
                         .unwrap_or_else(|| format!("Run '--{SHOW_THEMES}' to see the ones you have."));
                 let error = format!("Theme '{p}' was not found, or could not be read.").red();
                 ColoredString::from(format!("{error}\n\n{tail}").as_str())
             },
             Self::InvalidStyle(p) => p.clone().red(),
-            Self::InvalidHideTarget(p) => format!("'{p}' is not something that can be hidden.\nThe options are: {}.", Hidden::names()).red(),
+            Self::InvalidHideTarget(p) => format!("'{p}' is not something that can be hidden.\nThe options are: {}.", Hidden::format_names()).red(),
             Self::InvalidValueInConfig(cmd,conf) => format!("Invalid value for the command '--{cmd}', in config '{conf}'.\nFix the value in the config file, or override it by providing a valid '--{cmd}' argument.").red(),
             Self::InvalidGlobPattern(p) => format!("'{p}' is not a valid glob pattern.").red(),
             Self::NoGlobMatches(p) => format!("The pattern '{p}' did not match any existing directory or file.").red(),
@@ -469,7 +457,7 @@ impl Formatted for ArgParsingError {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct TypedOnCommandLine {
+pub struct TypedExplicitlyOnCommandLine {
     pub exclude: bool,
     pub languages: bool,
     pub excluded_languages: bool,
@@ -480,7 +468,7 @@ pub struct TypedOnCommandLine {
     pub hide_keywords: bool
 }
 
-impl TypedOnCommandLine {
+impl TypedExplicitlyOnCommandLine {
     // Exhaustive on purpose: a new field of the builder has to be decided here, in or out, before
     // this compiles again.
     fn of(builder: &ConfigurationBuilder) -> Self {
@@ -490,9 +478,9 @@ impl TypedOnCommandLine {
             log: _, compare_level: _, config_name_to_save: _, config_name_to_load: _,
             theme_name_to_save: _, bar_thickness: _, number_separator: _, decimal_separator: _,
             layout: _, output: _, diff_against: _, sort_by: _, top_n: _, styles: _,
-            config_styles: _, theme_styles: _, typed: _ } = builder;
+            config_styles: _, theme_styles: _, typed_explicitly: _ } = builder;
 
-        TypedOnCommandLine {
+        TypedExplicitlyOnCommandLine {
             exclude: exclude_dirs.is_some(),
             languages: languages_of_interest.is_some(),
             excluded_languages: excluded_languages.is_some(),
@@ -549,7 +537,7 @@ pub struct ConfigurationBuilder {
     pub config_styles:            Option<Vec<(String,String)>>,
     pub theme_styles:             Option<Vec<(String,String)>>,
     // Not an Option: it is a fact about the command line, not a value a file can supply
-    pub typed:                    TypedOnCommandLine
+    pub typed_explicitly:         TypedExplicitlyOnCommandLine
 }
 
 impl ConfigurationBuilder {
@@ -595,8 +583,7 @@ impl ConfigurationBuilder {
         let engine_defaults = EngineConfig::default();
 
         Configuration {
-            typed: self.typed,
-            adopted_from_file: None,
+            typed_explicitly: self.typed_explicitly,
             engine: EngineConfig {
                 dirs: self.dirs.clone().unwrap_or_default(),
                 exclude_dirs: (self.exclude_dirs).clone().unwrap_or_default(),
@@ -658,7 +645,7 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
 // The form that reads back as this exact target, which is the syntax 'parse_dirs' below accepts. The
 // quotes go around the path and not around the whole thing, because the name is taken from before the
 // first '=' and a leading quote would end up inside it.
-pub fn declared_form(target: &Target) -> String {
+pub fn format_declared_form(target: &Target) -> String {
     let path = if target.path.contains(char::is_whitespace) {format!("\"{}\"", target.path)} else {target.path.clone()};
     match &target.module {
         Some(name) => format!("{name}={path}"),
@@ -674,14 +661,14 @@ pub fn targets_to_string(targets: &[Target]) -> String {
     if targets.iter().all(|x| x.module.is_none()) {
         targets.iter().map(|x| x.path.clone()).collect::<Vec<_>>().join(",")
     } else {
-        targets.iter().map(declared_form).collect::<Vec<_>>().join(" ")
+        targets.iter().map(format_declared_form).collect::<Vec<_>>().join(" ")
     }
 }
 
 // The run refused the declared targets. The wording is this crate's own, and a configuration file
 // that supplied the dirs is named as the culprit: otherwise a 'dirs' block nobody can see failing
 // sends the reader hunting through the command they typed.
-pub fn attributed_dirs_error(error: mezura_core::TargetError, dirs_source: &Option<String>) -> ArgParsingError {
+pub fn attribute_dirs_error(error: mezura_core::TargetError, dirs_source: &Option<String>) -> ArgParsingError {
     match (map_target_error(error), dirs_source) {
         (ArgParsingError::InvalidPath(p), Some(name)) | (ArgParsingError::InvalidGlobPattern(p), Some(name))
         | (ArgParsingError::NoGlobMatches(p), Some(name)) | (ArgParsingError::AllGlobMatchesIgnored(p), Some(name)) =>
@@ -823,7 +810,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 Ok(x) => styles = Some(x),
                 Err(x) => {
                     message_printer::print_help_message_for_command(STYLE);
-                    return Err(ArgParsingError::InvalidStyle(x.formatted()))
+                    return Err(ArgParsingError::InvalidStyle(x.format()))
                 }
             }
         } else if command_name == TOP {
@@ -948,11 +935,11 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         should_search_in_dotted: search_in_dotted, should_show_faulty_files: show_faulty_files,
         hidden, no_gitignore, theme_name, theme_name_to_save, log, compare_level,
         config_name_to_save, config_name_to_load, styles, bar_thickness, number_separator, decimal_separator, layout, output, diff_against, sort_by, top_n,
-        config_styles: None, theme_styles: None, typed: TypedOnCommandLine::default()
+        config_styles: None, theme_styles: None, typed_explicitly: TypedExplicitlyOnCommandLine::default()
     };
     // Before the configuration files below fill anything in, which is what makes the answer the
     // command line's own
-    config_builder.typed = TypedOnCommandLine::of(&config_builder);
+    config_builder.typed_explicitly = TypedExplicitlyOnCommandLine::of(&config_builder);
 
     let mut dirs_config_source = None;
     if let Some((custom, issues)) = custom_config {
@@ -968,7 +955,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
 
     if let Some(name) = &config_builder.config_name_to_save {
         if config_builder.dirs.is_none() {
-            config_builder.dirs = Some(working_dir_as_targets()?);
+            config_builder.dirs = Some(create_targets_from_working_dir()?);
         }
 
         match super::config_files::save_existing_commands_from_config_builder_to_file(None, name, &config_builder) {
@@ -1006,26 +993,26 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         match super::theme_files::load_theme(name, &crate::paths::PERSISTENT_APP_PATHS.themes_dir) {
             Some((styles, errors)) => {
                 for error in &errors {
-                    super::warnings::emit(mezura_core::warnings::Warning::new(mezura_core::warnings::CONFIG_STYLE_INVALID, mezura_core::warnings::Affects::Settings, name,
-                            format!("In theme '{name}': {}", error.formatted())));
+                    super::warnings::emit(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::ConfigStyleInvalid, name,
+                            format!("In theme '{name}': {}", error.format())));
                 }
                 config_builder.theme_styles = Some(styles);
             },
-            None => super::warnings::emit(mezura_core::warnings::Warning::new(mezura_core::warnings::THEME_UNAVAILABLE, mezura_core::warnings::Affects::Settings, name,
+            None => super::warnings::emit(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::ThemeUnavailable, name,
                     format!("Theme '{name}' could not be loaded, the default styles will be used.")))
         }
     }
 
     if config_builder.dirs.is_none() {
-        config_builder.dirs = Some(working_dir_as_targets()?);
+        config_builder.dirs = Some(create_targets_from_working_dir()?);
     }
 
     Ok(config_builder)
 }
 
-fn print_config_file_warnings(issues: &[(&'static str, String)], config_name: &str) {
+fn print_config_file_warnings(issues: &[(mezura_core::warnings::Code, String)], config_name: &str) {
     for (code, warning) in issues {
-        super::warnings::emit(mezura_core::warnings::Warning::new(code, mezura_core::warnings::Affects::Settings, config_name,
+        super::warnings::emit(mezura_core::warnings::Warning::new(*code, config_name,
                 format!("In config '{config_name}': {warning}")));
     }
 }
@@ -1045,7 +1032,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             languages_of_interest: _, excluded_languages: _,
             // not carried by a configuration file at all
             config_name_to_save: _, config_name_to_load: _, theme_name_to_save: _, output: _,
-            diff_against: _, log: _, dirs_source: _, typed: _,
+            diff_against: _, log: _, dirs_source: _, typed_explicitly: _,
             // a style that does not parse is reported per line and skipped, and the rest of the file
             // still applies, so these warn instead of reaching here
             styles: _, config_styles: _, theme_styles: _ } = config_builder;
@@ -1073,7 +1060,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
         };
 
         if is_overridden {
-            super::warnings::emit(mezura_core::warnings::Warning::new(mezura_core::warnings::CONFIG_VALUE_IGNORED, mezura_core::warnings::Affects::Settings, field,
+            super::warnings::emit(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::ConfigValueIgnored, field,
                     format!("Invalid value for the command '--{field}', in config '{config_name}'. The value will be ignored.")));
         } else {
             message_printer::print_help_message_for_command(field);
@@ -1087,19 +1074,28 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
 fn print_warnings_for_commands_that_need_a_loaded_configuration(config_name_to_save: &Option<String>, config_name_to_load: &Option<String>,
         log: &Option<LogOption>, compare_level: &Option<usize>, diff_against: &Option<String>)
 {
+    // Printed here rather than kept for later, because this runs before the theme is resolved and
+    // the plain color is the honest fallback; kept as well, so a machine consumer learns that a
+    // command it gave was dropped instead of reading an empty 'warnings'.
+    let ignored = |command: &str, message: String| {
+        eprintln!("\n{}", message.yellow());
+        super::warnings::keep(mezura_core::warnings::Warning::new(
+                mezura_core::warnings::Code::CommandIgnored, command, message));
+    };
+
     // A comparison is never logged, and saying so wins over the no-config sentence below: one
     // reason the entry will not be written is enough.
     if let Some(log) = log && log.should_log && diff_against.is_some() {
-        eprintln!("\n{}","'--log' command will be ignored: a comparison is not logged.".yellow());
+        ignored(LOG, "'--log' command will be ignored: a comparison is not logged.".to_owned());
     }
 
     if config_name_to_load.is_none() {
         if let Some(log) = log && config_name_to_save.is_none() && log.should_log && diff_against.is_none() {
-            eprintln!("\n{}","'--log' command will be ignored, since no config file was specified.".yellow());
+            ignored(LOG, "'--log' command will be ignored, since no config file was specified.".to_owned());
         }
 
         if compare_level.is_some() {
-            eprintln!("\n{}","'--compare' command will be ignored, since no config file was specified for loading.".yellow());
+            ignored(COMPRARE_LEVEL, "'--compare' command will be ignored, since no config file was specified for loading.".to_owned());
         }
     }
 }
@@ -1136,7 +1132,7 @@ fn map_target_error(x: mezura_core::engine::targets::TargetError) -> ArgParsingE
 // The working directory is not something anybody typed, so it skips the parser that takes typed
 // text apart: one containing a space would be split into two targets, neither of which exists. It
 // exists by definition, so it is taken literally whatever characters its name carries.
-fn working_dir_as_targets() -> Result<Vec<Target>, ArgParsingError> {
+fn create_targets_from_working_dir() -> Result<Vec<Target>, ArgParsingError> {
     if let Ok(path_buf) = std::env::current_dir()
         && let Some(path_str) = path_buf.to_str() {
         return Ok(vec![Target::of(mezura_core::engine::targets::convert_to_absolute(path_str))]);
@@ -1231,21 +1227,21 @@ mod tests {
         assert_eq!(new_conf("./"), create_config_from_args("--dirs ./").unwrap());
         assert_eq!(conf("./", |c| {c.engine.threads = Threads::new(1,1);}), create_config_from_args("./ --threads 1 1").unwrap());
         assert_eq!(conf("./", |c| {c.engine.threads = Threads::new(1,1);}), create_config_from_args("./ --threads   1   1 ").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.threads = Threads::new(1,1); c.engine.braces_as_code = true; c.typed.braces_as_code = true;}),
+        assert_eq!(conf("./", |c| {c.engine.threads = Threads::new(1,1); c.engine.braces_as_code = true; c.typed_explicitly.braces_as_code = true;}),
                 create_config_from_args("./ --threads 1 1 --braces-as-code").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.should_search_in_dotted = true; c.typed.search_in_dotted = true;}),
+        assert_eq!(conf("./", |c| {c.engine.should_search_in_dotted = true; c.typed_explicitly.search_in_dotted = true;}),
                 create_config_from_args("./ --search-in-dotted").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.no_gitignore = true; c.typed.no_gitignore = true;}),
+        assert_eq!(conf("./", |c| {c.engine.no_gitignore = true; c.typed_explicitly.no_gitignore = true;}),
                 create_config_from_args("./ --no-gitignore").unwrap());
         assert_eq!(conf("./", |c| {c.view.set_should_show_faulty_files(true);}),
                 create_config_from_args("./ --show-faulty-files").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.exclude_dirs = vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]; c.typed.exclude = true;}),
+        assert_eq!(conf("./", |c| {c.engine.exclude_dirs = vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]; c.typed_explicitly.exclude = true;}),
                 create_config_from_args("./ --exclude a,b ,  c ").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.exclude_dirs = vec!["a/path".to_owned(),"b/path".to_owned()]; c.typed.exclude = true;}),
+        assert_eq!(conf("./", |c| {c.engine.exclude_dirs = vec!["a/path".to_owned(),"b/path".to_owned()]; c.typed_explicitly.exclude = true;}),
                 create_config_from_args("./ --exclude \"a\\path\", \"b\\path\"").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.languages_of_interest = vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]; c.typed.languages = true;}),
+        assert_eq!(conf("./", |c| {c.engine.languages_of_interest = vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]; c.typed_explicitly.languages = true;}),
                 create_config_from_args("./ --languages a,b,c").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.languages_of_interest = vec!["a".to_owned()]; c.typed.languages = true;}),
+        assert_eq!(conf("./", |c| {c.engine.languages_of_interest = vec!["a".to_owned()]; c.typed_explicitly.languages = true;}),
                 create_config_from_args("./ --languages a, ").unwrap());
         assert_eq!(conf("./", |c| {c.view.set_log_option(LogOption::new(Some("this is a test".to_owned())));}),
                 create_config_from_args("./ --log   this is a test ").unwrap());
@@ -1278,9 +1274,9 @@ mod tests {
 
         // The mask asks whether keywords were hidden, not whether '--hide' was typed at all: a
         // '--hide timing' says nothing about them
-        assert!(create_config_from_args("./ --hide keywords,timing").unwrap().typed.hide_keywords);
-        assert!(!create_config_from_args("./ --hide timing").unwrap().typed.hide_keywords);
-        assert!(!create_config_from_args("./").unwrap().typed.hide_keywords);
+        assert!(create_config_from_args("./ --hide keywords,timing").unwrap().typed_explicitly.hide_keywords);
+        assert!(!create_config_from_args("./ --hide timing").unwrap().typed_explicitly.hide_keywords);
+        assert!(!create_config_from_args("./").unwrap().typed_explicitly.hide_keywords);
     }
 
     #[test]
@@ -1356,14 +1352,14 @@ mod tests {
         let mezura_core::RunError::InvalidTargets(inner) = mezura_core::run(&config.engine, languages, |_| {}).unwrap_err()
                 else { panic!("the run did not refuse the config's dirs") };
         assert_eq!(ArgParsingError::InvalidPathInConfig("./does-not-exist-a2".to_owned(), "a2resolve1".to_owned()),
-                attributed_dirs_error(inner, &config.view.dirs_source));
+                attribute_dirs_error(inner, &config.view.dirs_source));
 
         // typed on the command line there is no configuration to name, and a contest never gets
         // one, since naming a file would hide that both declarations are the user's own
         assert_eq!(ArgParsingError::InvalidPath("./gone".to_owned()),
-                attributed_dirs_error(mezura_core::TargetError::InvalidPath("./gone".to_owned()), &None));
+                attribute_dirs_error(mezura_core::TargetError::InvalidPath("./gone".to_owned()), &None));
         assert_eq!(ArgParsingError::ContestedTarget("./src".to_owned(), "frontend".to_owned(), "backend".to_owned()),
-                attributed_dirs_error(mezura_core::TargetError::Contested("./src".to_owned(),
+                attribute_dirs_error(mezura_core::TargetError::Contested("./src".to_owned(),
                         "frontend".to_owned(), "backend".to_owned()), &config.view.dirs_source));
 
         let path = write_config("a2resolve3", "code=./src");
@@ -1522,8 +1518,8 @@ mod tests {
         loaded_config.dirs_source = None;
         // A fact about each command line, not a value that was saved: the first typed its
         // languages, the second loaded them, and that is exactly what the mask is for
-        assert!(saved_config.typed.languages && !loaded_config.typed.languages);
-        saved_config.typed = TypedOnCommandLine::default();
+        assert!(saved_config.typed_explicitly.languages && !loaded_config.typed_explicitly.languages);
+        saved_config.typed_explicitly = TypedExplicitlyOnCommandLine::default();
         assert_eq!(saved_config, loaded_config);
 
         loaded_config = create_config_builder_from_args("--load test000 --threads 1 4 --dirs ./").unwrap();

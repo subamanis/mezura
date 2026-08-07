@@ -8,7 +8,7 @@ use crate::paths::PERSISTENT_APP_PATHS;
 
 // Reads and never writes, so a caller wanting both the numbers and the report can have the same
 // result twice.
-pub fn present(result: &RunResult, baseline: Option<&super::diff::Reading>, config: &Configuration) {
+pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>, config: &Configuration) {
     let datetime_now = chrono::Local::now();
     // Before anything else, because a scan can come back empty precisely because the directories
     // could not be opened, and the report would otherwise say "no relevant files" with a straight face
@@ -26,9 +26,12 @@ pub fn present(result: &RunResult, baseline: Option<&super::diff::Reading>, conf
             let activated = get_activated_languages_as_str(config);
             let message = if activated.is_empty() {"No relevant files found in the given directory.".to_owned()}
                     else {format!("No relevant files found in the given directory. {activated}")};
-            eprintln!("{}", super::theme::active().warning.paint(&message));
+            eprintln!("{}", super::theme::get_active().warning.paint(&message));
+            if comparison.is_some() {
+                println!();
+            }
         }
-        print_comparison_or_empty_document(result, baseline, &datetime_now, config);
+        print_comparison_or_empty_document(result, comparison, &datetime_now, config);
         return;
     }
 
@@ -40,36 +43,34 @@ pub fn present(result: &RunResult, baseline: Option<&super::diff::Reading>, conf
         print_faulty_files_or_ok(&result.faulty_files, config);
         print_detail_hint_if_anything_was_hidden(result, config);
         if config.view.prints_text() {
-            eprintln!("{}", super::theme::active().warning.paint("None of the files were able to be parsed"));
+            eprintln!("{}", super::theme::get_active().warning.paint("None of the files were able to be parsed"));
+            if comparison.is_some() {
+                println!();
+            }
         }
-        print_comparison_or_empty_document(result, baseline, &datetime_now, config);
+        print_comparison_or_empty_document(result, comparison, &datetime_now, config);
         return;
     }
 
     print_faulty_files_or_ok(&result.faulty_files, config);
     print_detail_hint_if_anything_was_hidden(result, config);
 
-    if !config.view.prints_text() {
-        // A machine run with a baseline asked for the comparison, so that is the document it gets
-        match baseline {
-            Some(baseline) => super::json_printer::print_comparison_as_json(baseline,
-                    &super::diff::Reading::of_this_run(result, &datetime_now, &config.engine), &datetime_now, config),
-            None => super::json_printer::print_as_json(result, &datetime_now, config)
-        }
+    // A comparison takes the report's place whole: no report, no progress section, no log entry
+    if comparison.is_some() || !config.view.prints_text() {
+        print_comparison_or_empty_document(result, comparison, &datetime_now, config);
         return;
     }
 
-    let log_file_path = log_file_path(config);
+    let log_file_path = determine_log_file_path(config);
     let existing_log_contents = log_file_path.as_ref().and_then(|path| super::log::extract_file_contents(path));
-    super::result_printer::format_and_print_results(result, baseline, &existing_log_contents, &datetime_now, config);
+    super::result_printer::format_and_print_results(result, &existing_log_contents, &datetime_now, config);
 
     // The reason travels with the warning, because the two that can happen are opposite news: one
     // says this run was not recorded, the other says this run was not recorded and everything
     // already in there was kept rather than replaced by it.
-    // A comparison is never logged, which was said when the command was read.
-    if config.view.log.should_log && baseline.is_none() && let Some(path) = log_file_path
+    if config.view.log.should_log && let Some(path) = log_file_path
         && let Err(reason) = super::log::log_stats(&path, &existing_log_contents, result, &datetime_now, config) {
-        eprintln!("\n{}",super::theme::active().warning.paint(&format!("Error while trying to save the log: {reason}")));
+        eprintln!("\n{}",super::theme::get_active().warning.paint(&format!("Error while trying to save the log: {reason}")));
     }
 }
 
@@ -78,12 +79,12 @@ pub fn present(result: &RunResult, baseline: Option<&super::diff::Reading>, conf
 pub fn print_faulty_files_or_ok(faulty_files: &[FaultyFileDetails], config: &Configuration) {
     if faulty_files.is_empty() {
         if !config.view.hidden.parsing_info && config.view.prints_text() {
-            println!("{}\n",super::theme::active().success.paint("ok"));
+            println!("{}\n",super::theme::get_active().success.paint("ok"));
         }
     } else {
         // A JSON run reports them inside the document as well, but they are a mistake and belong on
         // the error output in every case, where '--hide' can never suppress them
-        let error = &super::theme::active().error;
+        let error = &super::theme::get_active().error;
         let (count, subject, pronoun) = (faulty_files.len(),
                 if faulty_files.len() == 1 {"faulty file"} else {"faulty files"},
                 if faulty_files.len() == 1 {"It"} else {"They"});
@@ -98,13 +99,13 @@ pub fn print_faulty_files_or_ok(faulty_files: &[FaultyFileDetails], config: &Con
     }
 }
 
-// In the error colour and not a milder one, because it is the worse of the two problems: a faulty
+// In the error color and not a milder one, because it is the worse of the two problems: a faulty
 // file is at least counted among the files that were found, while everything under one of these
 // appears in no total at all.
 fn print_unreadable_dirs(unreadable_dirs: &[UnreadableDirDetails], config: &Configuration) {
     if unreadable_dirs.is_empty() {return;}
 
-    let error = &super::theme::active().error;
+    let error = &super::theme::get_active().error;
     let (count, subject, pronoun) = (unreadable_dirs.len(),
             if unreadable_dirs.len() == 1 {"directory"} else {"directories"},
             if unreadable_dirs.len() == 1 {"it"} else {"them"});
@@ -122,28 +123,22 @@ fn print_unreadable_dirs(unreadable_dirs: &[UnreadableDirDetails], config: &Conf
     eprintln!();
 }
 
-// A scan that came back with nothing still owes what was asked for. With a baseline that is the
-// comparison, since a tree that lost every file is the everything-gone reading and not a missing
-// answer, and a document that silently changed kind to 'run' broke whatever was parsing it. With
-// no baseline it is the empty document, and the text form has already said its sentence.
-fn print_comparison_or_empty_document(result: &RunResult, baseline: Option<&super::diff::Reading>,
+// A scan that found nothing still owes what was asked for: a tree that lost every file is the
+// everything-gone comparison, not a document that quietly changes kind to 'run'.
+fn print_comparison_or_empty_document(result: &RunResult, comparison: Option<&super::diff::Comparison>,
         datetime_now: &chrono::DateTime<chrono::Local>, config: &Configuration)
 {
-    match baseline {
-        Some(baseline) if config.view.prints_text() => {
-            println!();
-            super::result_printer::print_comparison(baseline,
-                    &super::diff::Reading::of_this_run(result, datetime_now, &config.engine), config);
-        },
-        Some(baseline) => super::json_printer::print_comparison_as_json(baseline,
-                &super::diff::Reading::of_this_run(result, datetime_now, &config.engine), datetime_now, config),
+    match comparison {
+        // The blank line above it is the caller's: only the caller knows what sits there
+        Some(comparison) if config.view.prints_text() => super::result_printer::print_comparison(comparison, config),
+        Some(comparison) => super::json_printer::print_comparison_as_json(comparison, datetime_now, config),
         None if config.view.prints_text() => (),
         None => super::json_printer::print_as_json(result, datetime_now, config)
     }
 }
 
 fn print_detail_hint_if_anything_was_hidden(result: &RunResult, config: &Configuration) {
-    if let Some(hint) = detail_hint(result, config) {
+    if let Some(hint) = determine_detail_hint(result, config) {
         eprintln!("{hint}");
     }
 }
@@ -153,7 +148,7 @@ fn print_detail_hint_if_anything_was_hidden(result: &RunResult, config: &Configu
 //
 // Split from the printing so the decision can be asserted, which is the one thing worth asserting
 // here: three paths through 'present' reach it with a different pair of lists behind them.
-fn detail_hint(result: &RunResult, config: &Configuration) -> Option<String> {
+fn determine_detail_hint(result: &RunResult, config: &Configuration) -> Option<String> {
     if config.view.should_show_faulty_files
         || (result.unreadable_dirs.is_empty() && result.faulty_files.is_empty()) {
         return None;
@@ -180,7 +175,7 @@ fn get_activated_languages_as_str(config: &Configuration) -> String {
 }
 
 // The log of the configuration this run saved, or failing that of the one it loaded.
-fn log_file_path(config: &Configuration) -> Option<String> {
+fn determine_log_file_path(config: &Configuration) -> Option<String> {
     let name = config.view.config_name_to_save.as_ref()
             .or(config.view.config_name_to_load.as_ref())?;
 
@@ -213,20 +208,20 @@ mod tests {
     fn the_offer_of_detail_is_made_once_however_many_kinds_of_problem_there_were() {
         let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
 
-        let both = detail_hint(&result_with(3, 5), &config).expect("a run with both kinds said nothing");
+        let both = determine_detail_hint(&result_with(3, 5), &config).expect("a run with both kinds said nothing");
         assert_eq!(1, both.matches("--show-faulty-files").count(), "the same flag was named twice:\n{both}");
 
         // and it is offered for either kind on its own, since the one flag shows both
-        assert!(detail_hint(&result_with(3, 0), &config).is_some(), "only unreadable directories said nothing");
-        assert!(detail_hint(&result_with(0, 5), &config).is_some(), "only faulty files said nothing");
+        assert!(determine_detail_hint(&result_with(3, 0), &config).is_some(), "only unreadable directories said nothing");
+        assert!(determine_detail_hint(&result_with(0, 5), &config).is_some(), "only faulty files said nothing");
 
         // Nothing to show, nothing offered. A clean run must not carry a line telling the reader to
         // go and look at problems it did not have.
-        assert!(detail_hint(&result_with(0, 0), &config).is_none(), "a clean run offered detail on nothing");
+        assert!(determine_detail_hint(&result_with(0, 0), &config).is_none(), "a clean run offered detail on nothing");
 
         // and the offer is gone once it has been taken up, or it would point at the output above it
         config.view.should_show_faulty_files = true;
-        assert!(detail_hint(&result_with(3, 5), &config).is_none(),
+        assert!(determine_detail_hint(&result_with(3, 5), &config).is_none(),
                 "the detail was printed and the reader was still told to ask for it");
     }
 
@@ -252,8 +247,10 @@ mod tests {
             warnings: Vec::new(),
             result: result_with(0, 0)
         };
+        let comparison = crate::diff::Comparison::of(baseline,
+                crate::diff::Reading::of_this_run(&result, &chrono::Local::now(), &config.engine), &config, Vec::new());
 
-        present(&result, Some(&baseline), &config);
+        present(&result, Some(&comparison), &config);
         assert!(!path.exists(), "the comparison run wrote a log entry");
 
         // and the same configuration without a comparison still logs, so the gate is the baseline
@@ -266,7 +263,7 @@ mod tests {
     // the separators around it differ by platform.
     #[test]
     fn a_logs_file_name_is_the_configuration_name_with_txt_on_it() {
-        let file_name = |config: &Configuration| log_file_path(config)
+        let file_name = |config: &Configuration| determine_log_file_path(config)
                 .map(|path| std::path::Path::new(&path).file_name().unwrap().to_string_lossy().into_owned());
 
         let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);

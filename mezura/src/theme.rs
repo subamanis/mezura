@@ -18,7 +18,7 @@ static DEFAULT_THEME: LazyLock<Theme> = LazyLock::new(Theme::default);
 
 // Messages printed before the configuration exists (failed initialization, unreadable language
 // files) fall back to the defaults rather than being left unstyled
-pub fn active() -> &'static Theme {
+pub fn get_active() -> &'static Theme {
     ACTIVE_THEME.get().unwrap_or(&DEFAULT_THEME)
 }
 
@@ -162,7 +162,7 @@ macro_rules! theme_tokens {
         }
 
         impl Theme {
-            pub fn style_of_token_mut(&mut self, token: &str) -> Option<&mut Style> {
+            pub fn get_style_of_token_mut(&mut self, token: &str) -> Option<&mut Style> {
                 match token.to_lowercase().replace('_', "-").as_str() {
                     $($name => Some(&mut self.$field),)+
                     _ => None
@@ -170,11 +170,11 @@ macro_rules! theme_tokens {
             }
 
             #[cfg(test)]
-            pub fn token_names() -> &'static [&'static str] {
+            pub fn get_token_names() -> &'static [&'static str] {
                 &[$($name,)+]
             }
 
-            pub fn non_default_tokens(&self) -> Vec<(&'static str, String)> {
+            pub fn find_non_default_tokens(&self) -> Vec<(&'static str, String)> {
                 let defaults = Theme::default();
                 let mut entries = Vec::new();
                 $(if self.$field != defaults.$field {
@@ -212,7 +212,7 @@ theme_tokens! {
     avg_size_number   => "avg-size-number",   Style::plain();
     avg_size_label    => "avg-size-label",    Style::of(LABEL_GOLD).italic();
     // One token for both the total and the average, since there is no reason to want KBs in one
-    // colour next to KBs in another. It is the one piece of the size that stays dim, because a unit
+    // color next to KBs in another. It is the one piece of the size that stays dim, because a unit
     // is the least informative part of a figure the reader is scanning past
     size_unit         => "size-unit",         Style::of(SIZE_GOLD);
     keyword_number    => "keyword-number",    Style::of(KEYWORD_GREY);
@@ -254,17 +254,17 @@ theme_tokens! {
 impl Theme {
     // The overview paints a language by the slot it occupies. The bar cells take the color alone,
     // since bold or underline on a block character is not something a terminal shows usefully.
-    pub fn language_slots(&self) -> [&Style; 5] {
+    pub fn get_language_slots(&self) -> [&Style; 5] {
         [&self.language_1, &self.language_2, &self.language_3, &self.language_4, &self.language_others]
     }
 
-    pub fn language_colors(&self) -> [Color; 5] {
-        self.language_slots().map(|x| x.color.unwrap_or(Color::White))
+    pub fn get_language_colors(&self) -> [Color; 5] {
+        self.get_language_slots().map(|x| x.color.unwrap_or(Color::White))
     }
 
     pub fn set_token(&mut self, token: &str, value: &str) -> Result<(), ThemeParseError> {
         let style = Style::parse(value).ok_or_else(|| ThemeParseError::InvalidValue(token.to_owned(), value.trim().to_owned()))?;
-        match self.style_of_token_mut(token) {
+        match self.get_style_of_token_mut(token) {
             Some(existing) => {
                 *existing = style;
                 Ok(())
@@ -288,7 +288,7 @@ pub enum ThemeParseError {
 }
 
 impl ThemeParseError {
-    pub fn formatted(&self) -> String {
+    pub fn format(&self) -> String {
         match self {
             Self::UnknownToken(token) => format!("'{token}' is not a style token."),
             Self::InvalidValue(token, value) =>
@@ -303,7 +303,7 @@ pub fn parse_theme_file(contents: &str) -> ThemeFile {
     let mut validation_theme = Theme::default();
     let (mut styles, mut errors) = (Vec::new(), Vec::new());
 
-    for line in super::without_byte_order_mark(contents).lines() {
+    for line in super::strip_byte_order_mark(contents).lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
@@ -330,7 +330,7 @@ pub fn parse_theme_file(contents: &str) -> ThemeFile {
     (styles, errors)
 }
 
-pub fn theme_file_contents(styles: &[(String, String)]) -> String {
+pub fn create_theme_file_contents(styles: &[(String, String)]) -> String {
     styles.iter().map(|(token, value)| format!("{token} = {value}\n")).collect()
 }
 
@@ -500,11 +500,11 @@ mod tests {
     #[test]
     fn token_names_resolve_and_unknown_ones_are_rejected() {
         let mut theme = Theme::default();
-        for name in Theme::token_names() {
-            assert!(theme.style_of_token_mut(name).is_some(), "'{name}' is listed but does not resolve");
+        for name in Theme::get_token_names() {
+            assert!(theme.get_style_of_token_mut(name).is_some(), "'{name}' is listed but does not resolve");
         }
-        assert!(theme.style_of_token_mut("details_language_name").is_some(), "underscores are accepted as separators");
-        assert!(theme.style_of_token_mut("DETAILS-LANGUAGE-NAME").is_some(), "token names are case insensitive");
+        assert!(theme.get_style_of_token_mut("details_language_name").is_some(), "underscores are accepted as separators");
+        assert!(theme.get_style_of_token_mut("DETAILS-LANGUAGE-NAME").is_some(), "token names are case insensitive");
         assert_eq!(Err(ThemeParseError::UnknownToken("headings".to_owned())), theme.set_token("headings", "cyan"));
         assert_eq!(Err(ThemeParseError::InvalidValue("heading".to_owned(), "nonsense".to_owned())), theme.set_token("heading", "nonsense"));
     }
@@ -527,11 +527,11 @@ mod tests {
     #[test]
     fn only_modified_tokens_are_reported_as_non_default() {
         let mut theme = Theme::default();
-        assert!(theme.non_default_tokens().is_empty());
+        assert!(theme.find_non_default_tokens().is_empty());
 
         theme.set_token("code-number", "bright-black").unwrap();
         theme.set_token("percent", "dim").unwrap();
-        let non_defaults = theme.non_default_tokens();
+        let non_defaults = theme.find_non_default_tokens();
         assert_eq!(2, non_defaults.len());
         assert!(non_defaults.contains(&("code-number", "bright-black".to_owned())));
         assert!(non_defaults.contains(&("percent", "default dim".to_owned())));
@@ -577,7 +577,7 @@ mod tests {
     #[test]
     fn a_theme_file_round_trips() {
         let original = parse_theme_file("language-1 = cyan\nheading = white bold\nkeyword-label = bright-yellow italic\n").0;
-        assert_eq!(original, parse_theme_file(&theme_file_contents(&original)).0);
+        assert_eq!(original, parse_theme_file(&create_theme_file_contents(&original)).0);
     }
 
     // The fold and the fourth language never share a screen, so a theme that names the four slots
@@ -610,4 +610,3 @@ mod tests {
         assert_eq!(Theme::default().summary, theme.summary);
     }
 }
-

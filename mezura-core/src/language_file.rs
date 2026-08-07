@@ -143,50 +143,50 @@ pub fn parse_language_file(path: impl AsRef<Path>) -> Result<Language, LanguageF
 // the user's disk through this to ask whether their copy still means what ours does, and a file
 // edited into nonsense has to come back as "not the same" and not take the run down.
 pub fn parse_language(contents: &str) -> Option<Language> {
-    let contents = without_byte_order_mark(contents);
+    let contents = strip_byte_order_mark(contents);
     let mut lines = contents.lines();
 
-    if next_header(&mut lines)? != LANGUAGE {return None;}
-    let lang_name = value_line(&mut lines)?;
+    if read_next_header(&mut lines)? != LANGUAGE {return None;}
+    let lang_name = read_value_line(&mut lines)?;
     // 'value_line' trims whitespace and nothing else, so an escape sequence on the name line came
     // through whole and ended up as a key of the result, which the command line then prints. A file
     // carrying one is damaged rather than unusual, and this is the only value that is displayed.
     if lang_name.is_empty() || lang_name.chars().any(char::is_control) {return None;}
 
-    if next_header(&mut lines)? != EXTENSIONS {return None;}
-    let extensions = split_line_on_whitespace(&value_line(&mut lines)?);
+    if read_next_header(&mut lines)? != EXTENSIONS {return None;}
+    let extensions = split_line_on_whitespace(&read_value_line(&mut lines)?);
     if extensions.is_empty() {return None;}
 
-    if next_header(&mut lines)? != STRING_SYMBOLS {return None;}
-    let string_symbols = split_line_on_whitespace(&value_line(&mut lines)?);
+    if read_next_header(&mut lines)? != STRING_SYMBOLS {return None;}
+    let string_symbols = split_line_on_whitespace(&read_value_line(&mut lines)?);
     if string_symbols.is_empty() {return None;}
 
-    if next_header(&mut lines)? != COMMENT_SYMBOLS {return None;}
+    if read_next_header(&mut lines)? != COMMENT_SYMBOLS {return None;}
     // Deliberately allowed to be empty: a language whose only comments are multiline has no line
     // comment symbol, and the value here is the empty line that says so.
-    let comment_symbols = split_line_on_whitespace(&value_line(&mut lines)?);
+    let comment_symbols = split_line_on_whitespace(&read_value_line(&mut lines)?);
 
     let mut multiline_comments = None;
-    let mut header = next_header(&mut lines);
+    let mut header = read_next_header(&mut lines);
     if header.as_deref() == Some(MULTILINE_COMMENT_START) {
-        let start = value_line(&mut lines)?;
-        if start.is_empty() || next_header(&mut lines)?.as_str() != MULTILINE_COMMENT_END {return None;}
-        let end = value_line(&mut lines)?;
+        let start = read_value_line(&mut lines)?;
+        if start.is_empty() || read_next_header(&mut lines)?.as_str() != MULTILINE_COMMENT_END {return None;}
+        let end = read_value_line(&mut lines)?;
         if end.is_empty() {return None;}
         multiline_comments = Some((start, end));
-        header = next_header(&mut lines);
+        header = read_next_header(&mut lines);
     }
 
     let mut keywords = Vec::new();
     while header.as_deref() == Some(KEYWORD) {
-        if next_header(&mut lines)?.as_str() != KEYWORD_NAME {return None;}
-        let name = value_line(&mut lines)?;
-        if next_header(&mut lines)?.as_str() != KEYWORD_ALIASES {return None;}
-        let aliases = split_line_on_whitespace(&value_line(&mut lines)?);
+        if read_next_header(&mut lines)?.as_str() != KEYWORD_NAME {return None;}
+        let name = read_value_line(&mut lines)?;
+        if read_next_header(&mut lines)?.as_str() != KEYWORD_ALIASES {return None;}
+        let aliases = split_line_on_whitespace(&read_value_line(&mut lines)?);
         if name.is_empty() || aliases.is_empty() {return None;}
 
         keywords.push(Keyword{descriptive_name: name, aliases});
-        header = next_header(&mut lines);
+        header = read_next_header(&mut lines);
     }
 
     // Anything still standing here is a header this parser has no block for, and the lines under it
@@ -215,7 +215,7 @@ pub fn parse_priority(contents: &str) -> (HashMap<String,Vec<String>>, Vec<Strin
     let mut faulty_lines = Vec::new();
     let mut inside_the_rules = false;
 
-    for line in without_byte_order_mark(contents).lines() {
+    for line in strip_byte_order_mark(contents).lines() {
         let line = line.trim();
         if line.is_empty() {continue;}
         // The '===>' of the configuration files and not the bare headers of the language files: a
@@ -262,19 +262,19 @@ pub fn parse_priority(contents: &str) -> (HashMap<String,Vec<String>>, Vec<Strin
 // goes wrong: a mark in front of the '===>' of the priority file stops that line matching, and every
 // rule in the file is then skipped without so much as a faulty line to report it, a line never read
 // being a line never rejected.
-fn without_byte_order_mark(contents: &str) -> &str {
+fn strip_byte_order_mark(contents: &str) -> &str {
     contents.trim_start_matches('\u{feff}')
 }
 
 // The next line that carries a header, with the blank lines between blocks skipped. Trimmed, so an
 // indented sub-header like the 'NAME' of a keyword block is recognised.
-fn next_header(lines: &mut std::str::Lines) -> Option<String> {
+fn read_next_header(lines: &mut std::str::Lines) -> Option<String> {
     lines.by_ref().map(str::trim).find(|line| !line.is_empty()).map(str::to_owned)
 }
 
 // The value that belongs to the header just read: the very next line, trimmed, empty or not. Never
 // skips a blank, because for the comment symbols the blank line is the value.
-fn value_line(lines: &mut std::str::Lines) -> Option<String> {
+fn read_value_line(lines: &mut std::str::Lines) -> Option<String> {
     lines.next().map(|line| line.trim().to_owned())
 }
 

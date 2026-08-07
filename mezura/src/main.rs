@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 #![allow(non_snake_case)]
 
-// A binary publishes nothing, so this is a convenience and not a surface.
 macro_rules! hashmap {
     ($( $key: expr => $val: expr ),*) => {{
         #[allow(unused_mut)]
@@ -15,16 +14,17 @@ mod args;
 mod config_files;
 mod config_manager;
 mod diff;
-mod format;
+mod error_colors;
 mod git;
-mod formatted;
 mod json_printer;
 mod json_reader;
 mod log;
 mod message_printer;
+mod number_formatter;
 mod paths;
 mod present;
 mod result_printer;
+mod sources;
 mod suggestions;
 mod theme;
 mod theme_files;
@@ -39,14 +39,12 @@ use mezura_core::{EXTENSION_PRIORITY_FILE_NAME, FilesPresent, Language};
 use crate::config_manager::{Configuration, OutputFormat};
 use crate::config_manager::{CHANGELOG, HELP, LAYOUT, OUTPUT, RESTORE, SHOW_CONFIGS,
         SHOW_LANGUAGES, SHOW_THEMES, THEME_EDITOR, VERSION, VERSION_ID};
-use crate::formatted::Formatted;
+use crate::error_colors::Formatted;
 use crate::paths::{CONFIG_DIR_NAME, DEFAULT_CONFIG_NAME, LANGUAGES_DIR_NAME, LOGS_DIR_NAME,
         MANIFEST_FILE_NAME, REPLACED_DIR_NAME, THEMES_DIR_NAME};
 
-// The exit code is owed to whoever runs mezura from a script: everything that prints an error and
-// stops is a run that did not happen, and a script has no other way to tell.
 fn main() -> ExitCode {
-    // Windows needs a virtual terminal enabled before it shows colours at all
+    // Windows needs a virtual terminal enabled before it shows colors at all
     #[cfg(target_os = "windows")]
     control::set_virtual_terminal(true).unwrap();
 
@@ -55,7 +53,7 @@ fn main() -> ExitCode {
     // Before the languages are read, or the run that performs it would still count with the old
     // files and the change would appear to take two runs to arrive
     match migrate_data_files(&crate::paths::PERSISTENT_APP_PATHS.data_dir, false) {
-        Ok(outcome) => if let Some(message) = outcome.formatted() {eprintln!("{message}")},
+        Ok(outcome) => if let Some(message) = outcome.format() {eprintln!("{message}")},
         // Whatever was written stays on disk, and the version is recorded only after a pass that
         // finished, so the next execution tries again instead of believing it is done
         Err(x) => eprintln!("{}",format!("\nUnable to update the data files: {x}\n").yellow())
@@ -64,17 +62,17 @@ fn main() -> ExitCode {
     if !crate::paths::PERSISTENT_APP_PATHS.are_initialized {
         // A first execution reads the baked-in copies, since the paths were resolved and the
         // directory judged before the migration above created anything. Same contents either way.
-        languages_available = mezura_core::languages::shipped_languages();
+        languages_available = mezura_core::languages::parse_shipped_languages();
     } else {
         match mezura_core::language_file::parse_languages_in_dir(&crate::paths::PERSISTENT_APP_PATHS.languages_dir) {
             Ok((parsed, faulty_files)) => {
                 if !faulty_files.is_empty() {
-                    eprintln!("{}", crate::message_printer::faulty_language_files_message(&faulty_files).yellow());
+                    eprintln!("{}", crate::message_printer::format_faulty_language_files_message(&faulty_files).yellow());
                     // One warning per file and not one for the list, since each is a whole language
                     // whose files went uncounted and a reader of the document wants to know which
                     for faulty in &faulty_files {
                         let (file, reason) = (&faulty.file_name, &faulty.error);
-                        crate::warnings::keep(mezura_core::warnings::Warning::new(mezura_core::warnings::LANGUAGE_FILE_UNREADABLE, mezura_core::warnings::Affects::Counts, file,
+                        crate::warnings::keep(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::LanguageFileUnreadable, file,
                                 format!("'{file}' could not be used as a language file, so the files of that language were not counted: {reason}.")));
                     }
                 }
@@ -82,7 +80,7 @@ fn main() -> ExitCode {
                 languages_available = parsed;
             },
             Err(x) => {
-                eprintln!("\n{}", x.formatted());
+                eprintln!("\n{}", x.format());
                 return ExitCode::FAILURE;
             }
         }
@@ -104,13 +102,13 @@ fn main() -> ExitCode {
     let mut config = match config_manager::create_config_from_args(&args_str) {
         Ok(config) => config,
         Err(x) => {
-            eprintln!("\n{}\n",x.formatted());
+            eprintln!("\n{}\n",x.format());
             return ExitCode::FAILURE;
         }
     };
     crate::theme::set_active(config.view.theme.clone());
-    crate::format::set_number_separator(config.view.number_separator);
-    crate::format::set_decimal_separator(config.view.decimal_separator);
+    crate::number_formatter::set_number_separator(config.view.number_separator);
+    crate::number_formatter::set_decimal_separator(config.view.decimal_separator);
 
     // A pipe already strips the escape codes, but CLICOLOR_FORCE overrides that and would put them
     // inside the strings of the document, so the machine format turns them off itself
@@ -124,12 +122,12 @@ fn main() -> ExitCode {
         // The status block opens with a blank line of its own, so the separation below the
         // version is only missing when that block is not printed
         let separator = if config.view.hidden.directory_info {"\n"} else {""};
-        println!("\n{}{separator}", crate::theme::active().version.paint(VERSION_ID));
+        println!("\n{}{separator}", crate::theme::get_active().version.paint(VERSION_ID));
     }
 
     if !config.engine.languages_of_interest.is_empty() &&
      config.engine.languages_of_interest.iter().all(|lang| config.engine.excluded_languages.contains(lang)) {
-        eprintln!("\n{}\n",crate::theme::active().error.paint("Included and excluded languages are mutually exclusive."));
+        eprintln!("\n{}\n",crate::theme::get_active().error.paint("Included and excluded languages are mutually exclusive."));
         return ExitCode::FAILURE;
     }
 
@@ -152,76 +150,62 @@ fn main() -> ExitCode {
         eprintln!("{}", format!("\nLines that could not be read in '{EXTENSION_PRIORITY_FILE_NAME}', and were skipped:\n{}",
                 faulty_priority_lines.join("\n")).yellow());
         for line in &faulty_priority_lines {
-            crate::warnings::keep(mezura_core::warnings::Warning::new(mezura_core::warnings::PRIORITY_LINE_SKIPPED, mezura_core::warnings::Affects::Settings, line,
+            crate::warnings::keep(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::PriorityLineSkipped, line,
                     format!("'{line}' could not be read in '{EXTENSION_PRIORITY_FILE_NAME}' and was skipped, so any contest it was meant to settle was left to the tiebreak.")));
         }
     }
 
-    // Both readings named is the third thing this program can be asked to do, beside answering with
-    // a message and counting a tree: the run below never happens, and each side is read or counted
-    // by the same rule the single form uses. It sits below the extension priority because a side
-    // that is a revision is counted with it.
-    if let Some(value) = config.view.diff_against.as_deref() {
-        match crate::diff::split_operand(value) {
-            Ok((before, Some(after))) => {
-                let (before, after) = (before.to_owned(), after.to_owned());
-                return compare_two_readings(&before, &after, &mut config, languages_available, &extension_priority);
-            },
-            Err(complaint) => {
-                eprintln!("\n{}\n", crate::theme::active().error.paint(&complaint));
-                return ExitCode::FAILURE;
-            },
-            Ok((_, None)) => ()
+    // Above the language resolution, whose selection a document's adopted settings can change, and
+    // below the extension priority, which a side that is a revision is counted with
+    let baseline_only = match crate::diff::DiffRequest::of(&mut config, &languages_available) {
+        Ok(Some(crate::diff::DiffRequest::BetweenTwoReadings(both))) => {
+            return match both.into_comparison(&config, &extension_priority) {
+                Ok(comparison) => {
+                    if config.view.prints_text() {
+                        println!();
+                        crate::result_printer::print_comparison(&comparison, &config);
+                    } else {
+                        crate::json_printer::print_comparison_as_json(&comparison, &chrono::Local::now(), &config);
+                    }
+                    ExitCode::SUCCESS
+                },
+                Err(complaint) => {
+                    eprintln!("\n{}\n", crate::theme::get_active().error.paint(&complaint));
+                    ExitCode::FAILURE
+                }
+            };
+        },
+        Ok(Some(crate::diff::DiffRequest::AgainstThisRun(baseline_only))) => Some(baseline_only),
+        Ok(None) => None,
+        Err(complaint) => {
+            eprintln!("\n{}\n", crate::theme::get_active().error.paint(&complaint));
+            return ExitCode::FAILURE;
         }
-    }
+    };
 
-    // A document baseline is read before anything else settles, because its settings have a say:
-    // what this command line did not set itself is taken from it, so the two readings measure the
-    // same thing, and that has to happen above the language resolution it can change.
-    let document_baseline = match config.view.diff_against.as_deref().map(document_reading) {
-        Some(Some(Ok(x))) => Some(x),
-        Some(Some(Err(x))) => {
-            eprintln!("\n{}\n", crate::theme::active().error.paint(&x));
+    let (languages, reported) = mezura_core::Languages::resolve(&config.engine, languages_available, &extension_priority);
+    crate::warnings::report_language_resolution_warnings(reported);
+
+    // Above the run, so that a baseline which turns out not to be one costs no scan of the tree
+    let counted_baseline = match baseline_only.map(|x| x.count_baseline(&config, &extension_priority)) {
+        Some(Ok(x)) => Some(x),
+        Some(Err(complaint)) => {
+            eprintln!("\n{}\n", crate::theme::get_active().error.paint(&complaint));
             return ExitCode::FAILURE;
         },
-        Some(None) | None => None
-    };
-    if let Some(reading) = &document_baseline {
-        keep_adopted_settings(reading, &mut config);
-    }
-
-    // Worked out here and not inside the run, so its complaints land beside the other complaints
-    // about settings rather than in the middle of the status lines.
-    // Kept only when there is a revision to count, which needs its own resolution: 'run' takes the
-    // languages by value and they cannot be handed to two runs.
-    let languages_of_a_revision = (config.view.diff_against.is_some() && document_baseline.is_none())
-            .then(|| languages_available.clone());
-    let (languages, reported) = mezura_core::Languages::resolve(&config.engine, languages_available, &extension_priority);
-    voice_language_warnings(reported);
-
-    // Below the languages because a revision is counted with them, and above the run because a
-    // baseline that turns out not to be one must cost no scan of the tree. Its complaints wait and
-    // are printed just above the comparison they are about.
-    let baseline = match (document_baseline, config.view.diff_against.as_deref()) {
-        (Some(x), _) => Some(x),
-        (None, Some(name)) => match counted_revision(name, &config, languages_of_a_revision.unwrap_or_default(), &extension_priority) {
-            Ok(x) => Some(x),
-            Err(x) => {
-                eprintln!("\n{}\n", crate::theme::active().error.paint(&x.to_string()));
-                return ExitCode::FAILURE;
-            }
-        },
-        (None, None) => None
+        None => None
     };
 
     if !config.view.hidden.directory_info && config.view.prints_text() {
-        println!("\n{}...",crate::theme::active().heading.paint("Analyzing directories"));
+        println!("\n{}...",crate::theme::get_active().heading.paint("Analyzing directories"));
     }
 
     let instant = Instant::now();
     match mezura_core::run(&config.engine, languages, |scan| announce_traversal(&config, scan)) {
         Ok(result) => {
-            crate::present::present(&result, baseline.as_ref(), &config);
+            let comparison = counted_baseline.map(|baseline| baseline.with_subject(
+                    crate::diff::Reading::of_this_run(&result, &chrono::Local::now(), &config.engine), &config));
+            crate::present::present(&result, comparison.as_ref(), &config);
             // Already presented above as the failures they are, and the exit code keeps its meaning:
             // 1 is a run that did not happen. Every file unparseable, or every place unopenable.
             if result.all_relevant_files_were_faulty() || result.nothing_could_be_read() {
@@ -230,19 +214,19 @@ fn main() -> ExitCode {
             // The document has its own 'scan_ms' measured inside the run; this is the only place
             // that knows what the whole command took. A run that found nothing prints no timing.
             if !config.view.hidden.timing && config.view.prints_text() && result.files_present.relevant_files > 0 {
-                let perf = format!("Exec time: {} secs ", crate::format::with_decimal_separator(format!("{:.2}", instant.elapsed().as_secs_f32())));
+                let perf = format!("Exec time: {} secs ", crate::number_formatter::format_with_decimal_separator(format!("{:.2}", instant.elapsed().as_secs_f32())));
                 // Worked out here and not carried on the result: these are arithmetic on the
                 // duration and the counts, and the one second rule is a decision about the report.
                 let millis = result.performance.duration_millis;
                 let metrics = if millis > 1000 {
                     let seconds = millis as f32 / 1000f32;
                     format!("(Parsing {} files/s | {} lines/s)",
-                            crate::format::with_seperators((result.files_present.relevant_files as f32 / seconds) as usize),
-                            crate::format::with_seperators((result.total.lines as f32 / seconds) as usize))
+                            crate::number_formatter::format_with_separators((result.files_present.relevant_files as f32 / seconds) as usize),
+                            crate::number_formatter::format_with_separators((result.total.lines as f32 / seconds) as usize))
                 } else {
                     String::new()
                 };
-                println!("\n{}",crate::theme::active().footer.paint(&(perf + &metrics)));
+                println!("\n{}",crate::theme::get_active().footer.paint(&(perf + &metrics)));
             }
             ExitCode::SUCCESS
         },
@@ -250,11 +234,11 @@ fn main() -> ExitCode {
         // declared targets: the wording is this crate's own, and a configuration file that
         // supplied the dirs is named as the culprit the reader cannot see failing
         Err(mezura_core::RunError::InvalidTargets(inner)) => {
-            eprintln!("{}", crate::config_manager::attributed_dirs_error(inner, &config.view.dirs_source).formatted());
+            eprintln!("{}", crate::config_manager::attribute_dirs_error(inner, &config.view.dirs_source).format());
             ExitCode::FAILURE
         },
         Err(x) => {
-            eprintln!("{}",x.formatted());
+            eprintln!("{}",x.format());
             ExitCode::FAILURE
         }
     }
@@ -267,22 +251,22 @@ fn announce_traversal(config: &Configuration, scan: FilesPresent) {
         return;
     }
     if !config.view.hidden.directory_info && config.view.prints_text() {
-        println!("{}\n",crate::theme::active().summary.paint(&format!("{} files found. {} of interest. {} excluded.",
-                crate::format::with_seperators(scan.total_files), crate::format::with_seperators(scan.relevant_files),
-                crate::format::with_seperators(scan.excluded_files))));
+        println!("{}\n",crate::theme::get_active().summary.paint(&format!("{} files found. {} of interest. {} excluded.",
+                crate::number_formatter::format_with_separators(scan.total_files), crate::number_formatter::format_with_separators(scan.relevant_files),
+                crate::number_formatter::format_with_separators(scan.excluded_files))));
     }
     if !config.view.hidden.parsing_info && config.view.prints_text() {
-        println!("{}...",crate::theme::active().heading.paint("Parsing files"));
+        println!("{}...",crate::theme::get_active().heading.paint("Parsing files"));
     }
 }
 
 // One at a time, each with the names it is closest to: one line for the whole list leaves nothing to
 // attach a suggestion to. The filtering itself belongs to the run, so a caller that is not this
-// binary gets the same selection; what is left here is the colour and the correction.
+// binary gets the same selection; what is left here is the color and the correction.
 fn report_unknown_languages(languages_available: &[Language], languages_of_interest: &[String])
         -> Result<Option<String>, String>
 {
-    let unknown = mezura_core::languages::unknown_language_names(languages_available, languages_of_interest);
+    let unknown = mezura_core::languages::find_unknown_language_names(languages_available, languages_of_interest);
 
     // Deduplicated for the same reason the list of supported languages is: an installation holding
     // two files that declare one name is one language however many files describe it, and offering
@@ -292,17 +276,17 @@ fn report_unknown_languages(languages_available: &[Language], languages_of_inter
     all_names.dedup();
     let candidates = all_names.iter().map(String::as_str).collect::<Vec<_>>();
 
-    // Only the mistake is coloured. What to do about it is not an error, it is the way out.
+    // Only the mistake is colored. What to do about it is not an error, it is the way out.
     let mut report = String::with_capacity(100);
     for name in &unknown {
-        report.push_str(&format!("\n{}", crate::theme::active().warning.paint(&format!("'{name}' does not exist as a language file."))));
+        report.push_str(&format!("\n{}", crate::theme::get_active().warning.paint(&format!("'{name}' does not exist as a language file."))));
         if let Some(x) = crate::suggestions::formatted_suggestion(name, &candidates) {
             report.push_str(&format!("\n{x}\n"));
         }
     }
 
     if unknown.len() == languages_of_interest.len() {
-        let headline = crate::theme::active().error.paint("None of the provided language names map to valid supported languages.");
+        let headline = crate::theme::get_active().error.paint("None of the provided language names map to valid supported languages.");
         return Err(format!("{headline}\n{report}"));
     }
 
@@ -315,7 +299,7 @@ fn report_unknown_languages(languages_available: &[Language], languages_of_inter
 // ordinary way of editing one of these on Windows. Every parser of a text format here strips it on
 // the way in, and the library does the same for the files it owns: leaving it to each parser is how
 // two of the four came to be missing it, and one of those failed by quietly reading no rules at all.
-fn without_byte_order_mark(contents: &str) -> &str {
+fn strip_byte_order_mark(contents: &str) -> &str {
     contents.trim_start_matches('\u{feff}')
 }
 
@@ -324,7 +308,7 @@ fn read_baked_in_default_config_contents() -> String {
 }
 
 fn read_baked_in_extension_priority_contents() -> String {
-    String::from_utf8_lossy(mezura_core::languages::shipped_extension_priority_raw()).to_string()
+    String::from_utf8_lossy(mezura_core::languages::get_shipped_extension_priority_raw()).to_string()
 }
 
 // An installation made by an earlier version has no such file, and the baked-in copy is not used as
@@ -358,7 +342,7 @@ struct MigrationOutcome {
 impl MigrationOutcome {
     // Silence is the ordinary outcome. Only a file of the user's that was moved aside is worth a
     // line, because it is the only part of this that asks something of them.
-    fn formatted(&self) -> Option<String> {
+    fn format(&self) -> Option<String> {
         if self.replaced.is_empty() {
             return None;
         }
@@ -422,7 +406,7 @@ fn named(dir_name: &str, file: &File<'static>) -> (String, &'static [u8]) {
 }
 
 fn shipped_files() -> Vec<(String, &'static [u8])> {
-    mezura_core::languages::shipped_language_files_raw().into_iter()
+    mezura_core::languages::get_shipped_language_files_raw().into_iter()
             .map(|(name, contents)| (LANGUAGES_DIR_NAME.to_owned() + "/" + name, contents)).collect()
 }
 
@@ -522,7 +506,7 @@ fn migrate_data_files(data_dir: &str, force: bool) -> Result<MigrationOutcome, s
     // the default settings, the answer given to a contested extension, which replacing would make
     // somebody give again at every release, and the themes, which are taste. A theme that has fallen
     // behind what we ship breaks nothing, since a token it does not name falls back to a default, so
-    // there is no correctness to weigh against somebody's own colours.
+    // there is no correctness to weigh against somebody's own colors.
     for (relative, contents) in include_dir!("data/themes").files.iter().map(|file| named(THEMES_DIR_NAME, file)) {
         let target = data_dir.to_owned() + &relative;
         if !std::path::Path::new(&target).exists() {
@@ -575,7 +559,7 @@ fn handle_message_only_command(args_str: &str, languages_available: &[Language])
     // holds a help text, and nothing says it is not one until something tries to parse it. The two
     // can only have been typed together, since a configuration file may not declare '--output'.
     if asks_for_a_json_document(args_str) {
-        eprintln!("\n{}\n", crate::theme::active().error.paint(&format!(
+        eprintln!("\n{}\n", crate::theme::get_active().error.paint(&format!(
                 "'--{message_command}' prints a message to read and '--output json' writes a document for a \
 program to read, and both of them go to the output, so only one of the two can be asked for at a time.")));
         return Some(ExitCode::FAILURE);
@@ -588,7 +572,7 @@ program to read, and both of them go to the output, so only one of the two can b
         crate::message_printer::print_version();
         return Some(ExitCode::SUCCESS);
     }
-    println!("\n{}", crate::theme::active().version.paint(VERSION_ID));
+    println!("\n{}", crate::theme::get_active().version.paint(VERSION_ID));
 
     if is_present(HELP) {
         crate::message_printer::print_help_message_for_given_args(args_str);
@@ -600,7 +584,7 @@ program to read, and both of them go to the output, so only one of the two can b
                 Some(ExitCode::SUCCESS)
             },
             Some(arg) if !arg.starts_with("--") => {
-                println!("\n{}", config_manager::ArgParsingError::IncorrectCommandArgs(CHANGELOG.to_owned()).formatted());
+                println!("\n{}", config_manager::ArgParsingError::IncorrectCommandArgs(CHANGELOG.to_owned()).format());
                 crate::message_printer::print_help_message_for_command(CHANGELOG);
                 Some(ExitCode::FAILURE)
             },
@@ -627,7 +611,7 @@ program to read, and both of them go to the output, so only one of the two can b
                     let plural = if outcome.installed.len() == 1 {"file"} else {"files"};
                     println!("\nRestored {} {plural}:\n{}", outcome.installed.len(), outcome.installed.join(", "));
                 }
-                if let Some(message) = outcome.formatted() {
+                if let Some(message) = outcome.format() {
                     println!("{message}");
                 }
                 if !outcome.withdrawn.is_empty() {
@@ -668,7 +652,7 @@ program to read, and both of them go to the output, so only one of the two can b
                     Some(ExitCode::SUCCESS)
                 },
                 None => {
-                    println!("\n{}", config_manager::ArgParsingError::IncorrectCommandArgs(SHOW_THEMES.to_owned()).formatted());
+                    println!("\n{}", config_manager::ArgParsingError::IncorrectCommandArgs(SHOW_THEMES.to_owned()).format());
                     crate::message_printer::print_help_message_for_command(SHOW_THEMES);
                     Some(ExitCode::FAILURE)
                 }
@@ -681,192 +665,6 @@ program to read, and both of them go to the output, so only one of the two can b
     }
 
     None
-}
-
-// A name that is a file on disk is a document, and anything else is asked of git. A file and not
-// merely something that exists: a directory called 'main' beside a branch called 'main' is a
-// collision waiting in every repository, and reading the directory as a document answers it with
-// an I/O error about permissions.
-fn document_reading(name: &str) -> Option<Result<crate::diff::Reading, String>> {
-    std::path::Path::new(name).is_file()
-            .then(|| crate::diff::load(name).map_err(|x| x.to_string()))
-}
-
-// A name that does not exist was already put on the screen by 'report_unknown_languages', in colour
-// and with a suggested spelling under it, so that one is only kept for the document. Everything
-// else has no other voice and is printed here.
-fn voice_language_warnings(reported: Vec<mezura_core::warnings::Warning>) {
-    for warning in reported {
-        if warning.code == mezura_core::warnings::UNKNOWN_LANGUAGE {
-            crate::warnings::keep(warning);
-        } else {
-            crate::warnings::emit(warning);
-        }
-    }
-}
-
-// Kept rather than said here, because it belongs with everything else that explains the numbers of
-// the table, which is printed once the counting is over.
-fn keep_adopted_settings(document: &crate::diff::Reading, config: &mut Configuration) {
-    let settings = crate::diff::resolve_settings(&document.scope, config);
-    if !settings.is_empty() {
-        config.adopted_from_file = Some(config_manager::AdoptedSettings { from: document.display_name(), settings });
-    }
-}
-
-// An exclusion written as a full path names a place in the working tree, and the checkout is the
-// same tree at another root, so the pattern moves with it: left alone it would exclude the files on
-// one side and count them on the other, and the difference would print as code that changed.
-fn excludes_inside(checkout: &str, repository: &str, patterns: &[String]) -> Vec<String> {
-    // Compared with the platform's own idea of case and of slashes, or a path typed with 'd:' on
-    // Windows would silently stay untranslated. ASCII folding only, so that folding never moves a
-    // byte and the remainder can be cut off the unfolded pattern at the root's own length.
-    let key = |path: &str| {
-        let path = path.replace('\\', "/");
-        if cfg!(windows) {path.to_ascii_lowercase()} else {path}
-    };
-    let root = repository.trim_end_matches('/');
-    let folded_root = key(root);
-
-    patterns.iter().map(|pattern| {
-        let normalized = pattern.replace('\\', "/");
-        let folded = key(&normalized);
-        if folded == folded_root {
-            checkout.to_owned()
-        } else if folded.starts_with(&(folded_root.clone() + "/")) {
-            checkout.to_owned() + &normalized[root.len()..]
-        } else {
-            pattern.clone()
-        }
-    }).collect()
-}
-
-// A revision is counted the way anything else is: its files are written out, the targets are found
-// again inside them, and 'run' does the rest. The settings are this run's, which is what makes the
-// comparison mean something, and so is the mezura doing the counting.
-fn counted_revision(revision: &str, config: &Configuration, languages: Vec<Language>,
-        extension_priority: &HashMap<String,Vec<String>>) -> Result<crate::diff::Reading, crate::git::GitError>
-{
-    // The run's own rule for telling a pattern from a folder that carries those characters in its
-    // name: what exists exactly as written is always literal
-    if let Some(target) = config.engine.dirs.iter().find(|x|
-            !std::path::Path::new(&x.path).exists() && x.path.contains(['*', '?', '[', '{'])) {
-        return Err(crate::git::GitError::PatternTarget { pattern: target.path.clone() });
-    }
-
-    let declared = config.engine.dirs.iter().map(|x| x.path.clone()).collect::<Vec<_>>();
-    let repository = crate::git::one_repository_of(&declared)?;
-    let checkout = crate::git::checkout(&repository, revision)?;
-
-    // Whatever asked for it, this side cannot deliver it: a checkout holds only what git tracks,
-    // so the ignored files exist on the other side alone and read as growth since the revision.
-    if config.engine.no_gitignore {
-        eprintln!("\n{}", crate::theme::active().warning.paint(&format!(
-                "'--no-gitignore' cannot reach '{revision}': a checkout holds only what git tracks, \
-so anything a .gitignore ignores is counted on one side alone.")));
-    }
-
-    // A target the revision never had counts as nothing rather than stopping the run, so everything
-    // in it reads as new, which is what it is. Named out loud, because a column of 'new' with no
-    // reason given reads as a fault.
-    let mut dirs = Vec::with_capacity(config.engine.dirs.len());
-    let mut missing = Vec::new();
-    for target in &config.engine.dirs {
-        let (_, prefix) = crate::git::repository_of(&target.path)?;
-        match checkout.target_of(&prefix) {
-            Some(path) => dirs.push(mezura_core::Target { module: target.module.clone(), path }),
-            None => missing.push(target.path.clone())
-        }
-    }
-    if !missing.is_empty() {
-        // Said about the revision alone, because in the 'a..b' form the missing side can be either
-        // one, and "reported as new" over a table of 'gone' would say the opposite of the numbers
-        let named = missing.iter().map(|x| format!("'{x}'")).collect::<Vec<_>>().join(", no ");
-        eprintln!("\n{}", crate::theme::active().warning.paint(&format!(
-                "'{revision}' has no {named}, so it counts as nothing there.")));
-    }
-
-    let of_revision = mezura_core::EngineConfig { dirs,
-            exclude_dirs: excludes_inside(&checkout.path, &repository, &config.engine.exclude_dirs),
-            ..config.engine.clone() };
-    // Nothing to count is a reading of zero and not a failure: it is what a revision older than
-    // every target really holds.
-    let result = if of_revision.dirs.is_empty() {
-        mezura_core::RunResult {
-            per_language: HashMap::new(), total: mezura_core::Stats::default(), modules: Vec::new(),
-            faulty_files: Vec::new(), unreadable_dirs: Vec::new(), targets: Vec::new(),
-            files_present: FilesPresent::default(),
-            performance: mezura_core::Performance { duration_millis: 0, threads: config.engine.threads.clone() }
-        }
-    } else {
-        // Resolved against this configuration, as 'run' demands: the two differ in nothing but where
-        // they look, and the complaints were already printed by the resolution of the run itself.
-        let resolved = mezura_core::Languages::resolve(&of_revision, languages, extension_priority).0;
-        mezura_core::run(&of_revision, resolved, |_| {})
-                .map_err(|x| crate::git::GitError::Refused { doing: "counting the revision", message: x.to_string() })?
-    };
-
-    Ok(crate::diff::Reading::of_revision(revision, checkout.commit.clone(), checkout.taken_at.clone(),
-            result, &config.engine))
-}
-
-// Two readings that were both handed over: each is a document read or a revision counted, by the
-// same rule the single form uses, and this run's own scan never happens. A side that is counted
-// counts quietly, its complaints being the pair's own to print above the table.
-//
-// The documents are read first whichever side they were written on, because a document among the
-// two has a say in how the other side is counted: 'rev..doc' counts the revision under the
-// document's settings, exactly as 'doc..rev' does.
-fn compare_two_readings(before: &str, after: &str, config: &mut Configuration, languages: Vec<Language>,
-        extension_priority: &HashMap<String,Vec<String>>) -> ExitCode
-{
-    let fail = |message: &str| {
-        eprintln!("\n{}\n", crate::theme::active().error.paint(message));
-        ExitCode::FAILURE
-    };
-    let (before_document, after_document) = (document_reading(before), document_reading(after));
-    let (before_document, after_document) = match (before_document.transpose(), after_document.transpose()) {
-        (Ok(x), Ok(y)) => (x, y),
-        (Err(x), _) | (_, Err(x)) => return fail(&x)
-    };
-    // With two documents there is nothing being counted for the settings to reach, and with none
-    // there is nothing to take them from; both sides then run as declared, and what differs is
-    // reported above the table
-    match (&before_document, &after_document) {
-        (Some(document), None) | (None, Some(document)) => keep_adopted_settings(document, config),
-        _ => ()
-    }
-
-    // Voiced here or nowhere: the run that would have said them never happens, and each side's own
-    // counting keeps quiet on purpose. After the adoption above, so the complaints are about the
-    // selection that is actually counted.
-    let (_, reported) = mezura_core::Languages::resolve(&config.engine, languages.clone(), extension_priority);
-    voice_language_warnings(reported);
-
-    // Two revisions are two countings, and 'run' takes the languages by value, so the first side
-    // takes a copy and the second the thing itself
-    let baseline = match before_document {
-        Some(x) => x,
-        None => match counted_revision(before, config, languages.clone(), extension_priority) {
-            Ok(x) => x,
-            Err(x) => return fail(&x.to_string())
-        }
-    };
-    let subject = match after_document {
-        Some(x) => x,
-        None => match counted_revision(after, config, languages, extension_priority) {
-            Ok(x) => x,
-            Err(x) => return fail(&x.to_string())
-        }
-    };
-
-    if config.view.prints_text() {
-        println!();
-        crate::result_printer::print_comparison(&baseline, &subject, config);
-    } else {
-        crate::json_printer::print_comparison_as_json(&baseline, &subject, &chrono::Local::now(), config);
-    }
-    ExitCode::SUCCESS
 }
 
 // Read off the arguments by hand, the way '--show-themes' reads '--layout' above: a message-only
@@ -884,47 +682,7 @@ mod tests {
 
     use crate::config_manager::VERSION_ID;
 
-    use crate::{content_hash, document_reading, excludes_inside, migrate_data_files, report_unknown_languages};
-
-    // A directory called 'main' beside a branch called 'main' must fall through to git, which is
-    // what the '--diff' help promises: a name that is a file is a document, anything else is asked
-    // of git.
-    #[test]
-    fn a_directory_is_never_read_as_a_document() {
-        let dir = SCRATCH_DIR.to_owned() + "a-directory-named-like-a-branch";
-        std::fs::create_dir_all(&dir).unwrap();
-        assert!(document_reading(&dir).is_none(), "a directory was taken for a document");
-        std::fs::remove_dir_all(&dir).unwrap();
-
-        // a file is still read, and a name that is nowhere on disk still falls through
-        let file = SCRATCH_DIR.to_owned() + "not-a-document.json";
-        std::fs::write(&file, "{ not a document").unwrap();
-        assert!(matches!(document_reading(&file), Some(Err(_))));
-        std::fs::remove_file(&file).unwrap();
-        assert!(document_reading("no-such-thing-anywhere").is_none());
-    }
-
-    // The checkout is the same tree at another root, so an exclusion written as a full path moves
-    // with it, and everything else is left exactly as typed.
-    #[test]
-    fn an_exclusion_inside_the_repository_is_carried_into_the_checkout() {
-        let moved = excludes_inside("C:/tmp/chk", "D:/repo",
-                &["fixtures".to_owned(), "*.min.js".to_owned(), "D:/repo/target".to_owned(),
-                  "D:/repo".to_owned(), "D:/elsewhere/target".to_owned(), "D:\\repo\\a\\b".to_owned()]);
-
-        assert_eq!(vec!["fixtures".to_owned(), "*.min.js".to_owned(), "C:/tmp/chk/target".to_owned(),
-                "C:/tmp/chk".to_owned(), "D:/elsewhere/target".to_owned(), "C:/tmp/chk/a/b".to_owned()], moved);
-
-        // 'D:/repository' is not inside 'D:/repo', whatever its first characters say
-        assert_eq!(vec!["D:/repository/x".to_owned()],
-                excludes_inside("C:/tmp/chk", "D:/repo", &["D:/repository/x".to_owned()]));
-
-        // the platform's own idea of case, so a drive letter typed either way still travels
-        if cfg!(windows) {
-            assert_eq!(vec!["C:/tmp/chk/target".to_owned()],
-                    excludes_inside("C:/tmp/chk", "D:/repo", &["d:/REPO/target".to_owned()]));
-        }
-    }
+    use crate::{content_hash, migrate_data_files, report_unknown_languages};
 
     // The shipped copy always wins and the user's is kept, which is the whole of the policy. What
     // this pins is the three ways a file can differ from what we ship, because only one of them is
@@ -936,7 +694,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         let first = migrate_data_files(&dir, false).unwrap();
-        assert!(!first.installed.is_empty() && first.replaced.is_empty() && first.formatted().is_none());
+        assert!(!first.installed.is_empty() && first.replaced.is_empty() && first.format().is_none());
         assert!(std::path::Path::new(&(dir.clone() + "installed.txt")).exists());
 
         // Nothing changed since, so the version alone stops it
@@ -962,7 +720,7 @@ mod tests {
 
         // A theme is taste, and one that has fallen behind what we ship breaks nothing, so somebody
         // who expanded the one we ship keeps what they wrote. This is the case that decided the
-        // split: a language file that has fallen behind gives wrong numbers, a theme gives colours.
+        // split: a language file that has fallen behind gives wrong numbers, a theme gives colors.
         let theme = dir.clone() + "themes/Dracula.txt";
         let mine = std::fs::read_to_string(&theme).unwrap() + "\nheading = #ff0000";
         std::fs::write(&theme, &mine).unwrap();

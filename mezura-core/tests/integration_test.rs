@@ -33,7 +33,7 @@ fn a_run_over_two_directories_counts_files_lines_and_keywords() {
 
     // Readable from outside at all, which they were not before the surface was chosen
     assert_eq!(result.total.lines, result.total.code_lines
-            + result.total.comment_lines + result.total.extra_lines());
+            + result.total.comment_lines + result.total.calculate_extra_lines());
 
     let keyword_num = result.per_language.values()
             .flat_map(|info| info.keyword_occurences.values()).copied().sum::<usize>();
@@ -46,7 +46,7 @@ fn a_run_over_two_directories_counts_files_lines_and_keywords() {
 #[test]
 fn the_shipped_languages_are_the_files_of_the_languages_directory() {
     let mut from_disk = language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0;
-    let mut baked_in = languages::shipped_languages();
+    let mut baked_in = languages::parse_shipped_languages();
     assert!(!baked_in.is_empty());
 
     from_disk.sort_by(|a, b| a.name.cmp(&b.name));
@@ -54,7 +54,7 @@ fn the_shipped_languages_are_the_files_of_the_languages_directory() {
     assert_eq!(from_disk, baked_in);
 
     // and the rule that settles a contested extension travels with them
-    assert!(!languages::shipped_extension_priority().is_empty());
+    assert!(!languages::parse_shipped_extension_priority().is_empty());
 }
 
 // A language a caller builds by hand is counted under the name it carries. It used to be counted
@@ -99,7 +99,7 @@ fn the_shipped_rule_for_a_contested_extension_is_actually_applied() {
         ..EngineConfig::new([root.to_string_lossy().replace('\\', "/")])
     };
 
-    let named_by_the_rule = languages::shipped_extension_priority().get("m")
+    let named_by_the_rule = languages::parse_shipped_extension_priority().get("m")
             .and_then(|order| order.first().cloned())
             .expect("'m' is no longer settled by the shipped priority file, so pick another extension");
 
@@ -195,7 +195,7 @@ fn two_spellings_of_one_name_are_reported_and_force_lang_still_picks_the_one_it_
     assert_eq!(1, as_lower.total.code_lines, "'--force-lang pal=pal' was given 'Pal' instead");
     assert_eq!(0, as_lower.total.comment_lines);
 
-    assert!(warnings.iter().any(|warning| warning.code == mezura_core::warnings::DUPLICATE_LANGUAGE),
+    assert!(warnings.iter().any(|warning| warning.code == mezura_core::warnings::Code::DuplicateLanguage),
             "two spellings of one name went unreported: {warnings:?}");
 }
 

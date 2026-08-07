@@ -1,45 +1,101 @@
 // What the run wants the caller to know without it being an error: an answer was produced, and this
 // says what to be careful about in it.
 
-// The 'code' of a warning, which is the half a caller can key on
-pub const EXTENSION_TIEBREAK        : &str = "extension-tiebreak";
-pub const UNKNOWN_FORCED_LANGUAGE   : &str = "unknown-forced-language";
-pub const UNKNOWN_LANGUAGE          : &str = "unknown-language";
-pub const UNKNOWN_EXCLUDED_LANGUAGE : &str = "unknown-excluded-language";
-pub const DUPLICATE_LANGUAGE        : &str = "duplicate-language";
-pub const UNUSABLE_LANGUAGE         : &str = "unusable-language";
-pub const LANGUAGE_FILE_UNREADABLE  : &str = "language-file-unreadable";
-pub const PRIORITY_LINE_SKIPPED     : &str = "priority-line-skipped";
-pub const CONFIG_VALUE_IGNORED      : &str = "config-value-ignored";
-pub const CONFIG_SECTION_UNKNOWN    : &str = "config-section-unknown";
-pub const CONFIG_STYLE_INVALID      : &str = "config-style-invalid";
-pub const THEME_UNAVAILABLE         : &str = "theme-unavailable";
+// What went wrong, as the one thing a script can key on: the name never changes while the message
+// is free to be reworded.
+//
+// A type and not a set of string constants, because what a code does to the answer is a fact about
+// the code and not something a caller decides at the point of complaining. Written the other way it
+// drifted inside an hour: one code was raised as 'Counts' in one place and 'Settings' in another,
+// which is how the two cases below were found to be two different problems sharing a name.
+#[derive(Debug,PartialEq,Eq,Clone,Copy)]
+#[non_exhaustive]
+pub enum Code {
+    ExtensionTiebreak,
+    UnknownForcedLanguage,
+    UnknownLanguage,
+    UnknownExcludedLanguage,
+    DuplicateLanguage,
+    // Every file carrying its extensions is left to be counted by nobody
+    LanguageWithoutName,
+    // Nothing is lost: with no extension it could never have matched a file
+    LanguageWithoutExtension,
+    LanguageFileUnreadable,
+    PriorityLineSkipped,
+    ConfigValueIgnored,
+    ConfigSectionUnknown,
+    CommandIgnored,
+    ConfigStyleInvalid,
+    ThemeUnavailable
+}
 
-// The four fields are for different readers. 'code' never changes, so a script can key on it, while
+impl Code {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::ExtensionTiebreak => "extension-tiebreak",
+            Self::UnknownForcedLanguage => "unknown-forced-language",
+            Self::UnknownLanguage => "unknown-language",
+            Self::UnknownExcludedLanguage => "unknown-excluded-language",
+            Self::DuplicateLanguage => "duplicate-language",
+            Self::LanguageWithoutName => "language-without-name",
+            Self::LanguageWithoutExtension => "language-without-extension",
+            Self::LanguageFileUnreadable => "language-file-unreadable",
+            Self::PriorityLineSkipped => "priority-line-skipped",
+            Self::ConfigValueIgnored => "config-value-ignored",
+            Self::ConfigSectionUnknown => "config-section-unknown",
+            Self::CommandIgnored => "command-ignored",
+            Self::ConfigStyleInvalid => "config-style-invalid",
+            Self::ThemeUnavailable => "theme-unavailable"
+        }
+    }
+
+    // Exhaustive on purpose: a code added without deciding what it does to the answer does not
+    // compile, which is the whole reason this is not a field somebody fills in per complaint.
+    pub fn affects(self) -> Affects {
+        match self {
+            Self::ExtensionTiebreak | Self::DuplicateLanguage | Self::LanguageWithoutName
+            | Self::LanguageFileUnreadable => Affects::Counts,
+
+            Self::UnknownForcedLanguage | Self::UnknownLanguage | Self::UnknownExcludedLanguage
+            | Self::LanguageWithoutExtension | Self::PriorityLineSkipped | Self::ConfigValueIgnored
+            | Self::ConfigSectionUnknown | Self::CommandIgnored | Self::ConfigStyleInvalid
+            | Self::ThemeUnavailable => Affects::Settings
+        }
+    }
+}
+
+// The three fields are for different readers. 'code' never changes, so a script can key on it, while
 // 'message' is free to be reworded. 'subject' is the one thing the warning is about, so nobody has to
 // dig it back out of the message with a regular expression.
 #[derive(Debug,PartialEq,Eq,Clone)]
 #[non_exhaustive]
 pub struct Warning {
-    pub code: &'static str,
-    pub affects: Affects,
+    pub code: Code,
     pub subject: String,
     pub message: String
 }
 
 impl Warning {
-    pub fn new(code: &'static str, affects: Affects, subject: &str, message: String) -> Self {
-        Warning { code, affects, subject: subject.to_owned(), message }
+    pub fn new(code: Code, subject: &str, message: String) -> Self {
+        Warning { code, subject: subject.to_owned(), message }
+    }
+
+    pub fn affects(&self) -> Affects {
+        self.code.affects()
     }
 }
 
 // Whether the numbers can be trusted, which is the question worth answering without knowing every
 // code: one written against this keeps working when a later version adds a code it never heard of.
+//
+// Both mean "not the numbers I wanted"; what separates them is whether the command can fix it.
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 pub enum Affects {
-    // The counts themselves may be wrong or incomplete.
+    // The numbers are wrong for the settings that were applied. Rewriting the command does not fix
+    // it, and nothing should be decided on figures raised with this.
     Counts,
-    // The counts are sound, but something that was asked for was not applied.
+    // The numbers are sound for what was applied, but what was applied is not what was asked for.
+    // Rewriting the command does fix it.
     Settings
 }
 
@@ -60,12 +116,21 @@ mod tests {
     // type, so both halves are asserted.
     #[test]
     fn a_warning_carries_a_stable_code_and_a_readable_message() {
-        let warning = Warning::new(EXTENSION_TIEBREAK, Affects::Counts, "m", "the readable half".to_owned());
+        let warning = Warning::new(Code::ExtensionTiebreak, "m", "the readable half".to_owned());
 
-        assert_eq!(EXTENSION_TIEBREAK, warning.code);
-        assert_eq!("counts", warning.affects.name());
+        assert_eq!("extension-tiebreak", warning.code.name());
+        assert_eq!("counts", warning.affects().name());
         assert_eq!("m", warning.subject);
         assert_eq!("the readable half", warning.message);
         assert_eq!("settings", Affects::Settings.name());
+    }
+
+    // What a code does to the answer is the code's own, so the two cases that used to share
+    // 'unusable-language' are two codes: one leaves files counted by nobody, the other could never
+    // have matched a file. Raised at one place each, they were free to disagree with themselves.
+    #[test]
+    fn a_language_that_cannot_be_named_puts_the_counts_in_doubt_and_one_with_no_extension_does_not() {
+        assert_eq!(Affects::Counts, Code::LanguageWithoutName.affects());
+        assert_eq!(Affects::Settings, Code::LanguageWithoutExtension.affects());
     }
 }

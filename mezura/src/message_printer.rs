@@ -5,7 +5,7 @@ use mezura_core::Language;
 use mezura_core::language_file::FaultyLanguageFile;
 
 use super::config_manager::*;
-use super::formatted::Formatted;
+use super::error_colors::Formatted;
 use crate::paths::PERSISTENT_APP_PATHS;
 
 // The file itself, so that the command never depends on an installation having a copy of it.
@@ -193,6 +193,11 @@ pub const SHOW_FAULTY_FILES_HELP  :  &str =
 
     This flag specifies that their path, along with information about the exact error is displayed too.
     The most common reason for a faulty file is if it contains non UTF-8 characters.
+
+    It asks the same of '--output json', where the two lists of paths are written only when this
+    flag is given. How many there were is in the 'scan' block either way, so a document without
+    the lists never claims that nothing went wrong. A comparison document carries the counts of
+    each side and no lists at all.
 
 ";
 pub const HIDE_HELP  :  &str =
@@ -764,7 +769,7 @@ pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 6] = [
 
 // Used both by the full help and by the test that writes the README's command list, so that the two
 // cannot describe the same commands differently or in a different order
-pub fn help_body() -> String {
+pub fn create_help_body() -> String {
     let mut body = String::with_capacity(20_000);
     for (group, commands) in COMMAND_HELP {
         body.push_str(&group.to_uppercase());
@@ -787,10 +792,10 @@ pub fn print_version() {
 
     println!("
 {} ({released})
-", super::theme::active().version.paint(VERSION_ID));
+", super::theme::get_active().version.paint(VERSION_ID));
 }
 
-pub fn command_names() -> Vec<&'static str> {
+pub fn get_command_names() -> Vec<&'static str> {
     COMMAND_HELP.iter().flat_map(|(_, commands)| commands.iter().map(|(name, _)| *name)).collect()
 }
 
@@ -808,7 +813,7 @@ pub fn print_whole_help_message() {
 
     msg += get_data_dir_str().as_str();
     msg += "Format of arguments: <path_here> --optional_command1 --optional_commandN\n\n";
-    msg += &help_body();
+    msg += &create_help_body();
 
     println!("{msg}");
 }
@@ -842,7 +847,7 @@ pub fn print_help_message_for_given_args(args_line: &str) {
             Some(x) => entries += x,
             // The same error the program gives without '--help', so that an unknown command does
             // not read as an ordinary line of help text
-            None => entries += &format!("{}\n\n", ArgParsingError::UnrecognisedCommand(name.to_owned()).formatted())
+            None => entries += &format!("{}\n\n", ArgParsingError::UnrecognisedCommand(name.to_owned()).format())
         }
     }
 
@@ -911,13 +916,13 @@ pub fn print_existing_themes(bar_thickness: BarThickness, layout: Layout) {
         let theme = super::theme::resolve(&styles, &[], &[]);
 
         msg.push_str(&format!("{INDENT}{}.\n", theme.heading.paint("Details")));
-        for row in super::result_printer::theme_sample_rows(&theme, layout) {
+        for row in super::result_printer::create_theme_sample_rows(&theme, layout) {
             msg.push_str(&format!("{INDENT}{row}\n"));
         }
 
         msg.push_str(&format!("\n{INDENT}{}.\n", theme.heading.paint("Overview")));
         msg.push_str(&format!("{INDENT}{}   ", theme.overview_label.paint("Lines:")));
-        let slots = theme.language_slots();
+        let slots = theme.get_language_slots();
         for (i, (lang, percentage, _)) in MOCK_PERCENTAGES.iter().enumerate() {
             msg.push_str(&format!("{} {}", theme.overview_percent.paint(&format!("{percentage:>5.2}%")), slots[i].paint(lang)));
             if i < MOCK_PERCENTAGES.len()-1 {msg.push_str(" - ")}
@@ -927,7 +932,7 @@ pub fn print_existing_themes(bar_thickness: BarThickness, layout: Layout) {
         // fit next to each other, and this listing has no reason to be the widest thing printed
         msg.push_str(&format!("\n{INDENT}{}{}", " ".repeat(BAR_INDENT), theme.bar_frame.paint("[-")));
         for (i, (_, _, verticals)) in MOCK_PERCENTAGES.iter().enumerate() {
-            let cell = bar_thickness.character().repeat(*verticals);
+            let cell = bar_thickness.get_character().repeat(*verticals);
             msg.push_str(&match slots[i].color {
                 Some(color) => cell.color(color).to_string(),
                 None => cell
@@ -940,7 +945,7 @@ pub fn print_existing_themes(bar_thickness: BarThickness, layout: Layout) {
 }
 
 pub fn print_supported_languages(languages_available: &[Language]) {
-    println!("{}", supported_languages_message(languages_available));
+    println!("{}", format_supported_languages_message(languages_available));
 }
 
 pub fn print_existing_configs() {
@@ -965,14 +970,14 @@ pub fn print_existing_configs() {
         }
     }).collect::<Vec<_>>();
     config_names.sort_unstable();
-    println!("{}", existing_configs_message(&config_names));
+    println!("{}", format_existing_configs_message(&config_names));
 }
 
 // The reason travels beside each name, which is the shape the faulty counted files already use. One
 // heading over both reasons a file can fail is true of only one of them: a file saved in an encoding
 // that cannot be read as text would be announced as a file with a typo in it, and its owner would go
 // hunting for a mistake that is not there.
-pub fn faulty_language_files_message(faulty_files: &[FaultyLanguageFile]) -> String {
+pub fn format_faulty_language_files_message(faulty_files: &[FaultyLanguageFile]) -> String {
     let mut message = format!("\n{} language {} could not be used, and will not be taken into consideration.",
             faulty_files.len(), if faulty_files.len() == 1 {"file"} else {"files"});
     for faulty in faulty_files {
@@ -984,7 +989,7 @@ pub fn faulty_language_files_message(faulty_files: &[FaultyLanguageFile]) -> Str
 // Split from the printing so that the deduplication can be asserted. Two files declaring one
 // language is a broken installation, and naming it twice here would read as two languages rather
 // than as the one it is.
-fn supported_languages_message(languages_available: &[Language]) -> String {
+fn format_supported_languages_message(languages_available: &[Language]) -> String {
     let mut lang_names = languages_available.iter().map(|x| x.name.to_owned()).collect::<Vec<_>>();
     lang_names.sort();
     lang_names.dedup();
@@ -995,7 +1000,7 @@ fn supported_languages_message(languages_available: &[Language]) -> String {
 // two spaces that indent the first one leaves a heading over a line holding those two spaces and
 // nothing else, which reads as a configuration whose name failed to appear rather than as none
 // existing. The data dir is named either way, being the answer to "where would I put one".
-fn existing_configs_message(config_names: &[&str]) -> String {
+fn format_existing_configs_message(config_names: &[&str]) -> String {
     if config_names.is_empty() {
         format!("{}No configurations found.\n", get_data_dir_str())
     } else {
@@ -1024,7 +1029,7 @@ mod tests {
         let twice = vec![Language::new("Java", ["java"], ["\""], ["//"], None, []),
                 Language::new("Rust", ["rs"], ["\""], ["//"], None, []),
                 Language::new("Java", ["jav"], ["\""], ["//"], None, [])];
-        let listed = supported_languages_message(&twice);
+        let listed = format_supported_languages_message(&twice);
 
         assert_eq!(1, listed.matches("Java").count(), "'Java' was listed more than once:\n{listed}");
         assert!(listed.contains("Rust"));
@@ -1046,14 +1051,14 @@ mod tests {
             error: mezura_core::language_file::LanguageFileError::Malformed
         };
 
-        let both = faulty_language_files_message(&[unreadable, malformed]);
+        let both = format_faulty_language_files_message(&[unreadable, malformed]);
         assert!(both.contains("2 language files could not be used"), "{both}");
         // each named on its own line, with the reason that belongs to it and not to the other
         assert!(both.contains("-- Utf16.txt: the language file could not be read"), "{both}");
         assert!(both.contains("-- Garbage.txt: the language file is not written in the format mezura reads"), "{both}");
         assert!(!both.contains("Formatting problems"), "the two reasons are under one wrong heading again:\n{both}");
 
-        let one = faulty_language_files_message(&[FaultyLanguageFile {
+        let one = format_faulty_language_files_message(&[FaultyLanguageFile {
             file_name: "Garbage.txt".to_owned(),
             error: mezura_core::language_file::LanguageFileError::Malformed}]);
         assert!(one.contains("1 language file could not be used"), "{one}");
@@ -1064,12 +1069,12 @@ mod tests {
     // empty data dir.
     #[test]
     fn an_empty_config_dir_says_so_instead_of_listing_nothing() {
-        let none = existing_configs_message(&[]);
+        let none = format_existing_configs_message(&[]);
         assert!(none.contains("No configurations found."), "{none}");
         assert!(!none.contains("Found these configurations"), "{none}");
         assert!(!none.contains("\n  \n"), "an empty bullet was printed:\n{none}");
 
-        let some = existing_configs_message(&["mezura.txt", "portal.txt"]);
+        let some = format_existing_configs_message(&["mezura.txt", "portal.txt"]);
         assert!(some.contains("Found these configurations:\n  mezura.txt\n  portal.txt"), "{some}");
         // and either way the reader is told where the directory is
         assert!(none.contains("Data dir path:") && some.contains("Data dir path:"));
@@ -1097,7 +1102,7 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("README.md");
         let readme = std::fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
         let (before, block, after) = readme_parts(&readme);
-        let generated = help_body();
+        let generated = create_help_body();
 
         if std::env::var_os("MEZURA_UPDATE_GOLDEN").is_some() {
             std::fs::write(&path, format!("{before}\n{}\n{after}", generated.trim_end())).unwrap();
@@ -1123,7 +1128,7 @@ mod tests {
     // The three lists of commands became one table, and nothing else may hold a fourth
     #[test]
     fn every_command_has_exactly_one_help_entry() {
-        let names = command_names();
+        let names = get_command_names();
         for name in &names {
             assert!(get_help_msg_of_command(name).is_some(), "'--{name}' has no help entry");
             assert_eq!(1, names.iter().filter(|x| *x == name).count(), "'--{name}' is listed twice");

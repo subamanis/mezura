@@ -8,7 +8,7 @@ use std::time::Instant;
 // Resolved once, so an ordinary run pays one predictable branch per file. Per file is affordable at
 // roughly 25 ns a reading; per line it would not be.
 pub static ENABLED : LazyLock<bool> =
-        LazyLock::new(|| enabled_by(std::env::var_os("MEZURA_PHASE_TIMING").as_deref()));
+        LazyLock::new(|| is_enabled_by(std::env::var_os("MEZURA_PHASE_TIMING").as_deref()));
 
 static OPEN_NANOS    : AtomicU64 = AtomicU64::new(0);
 static READ_NANOS    : AtomicU64 = AtomicU64::new(0);
@@ -75,7 +75,7 @@ pub fn report(consumers: usize, run_millis: u128) -> String {
 // 'MEZURA_PHASE_TIMING=0' turn the report on, the opposite of what RUST_BACKTRACE, RUST_LOG and
 // every tool of that shape do. Setting it to zero is the obvious way to turn it off without knowing
 // how a shell unsets a variable, and it is what somebody reaches for first.
-fn enabled_by(value: Option<&std::ffi::OsStr>) -> bool {
+fn is_enabled_by(value: Option<&std::ffi::OsStr>) -> bool {
     value.is_some_and(|value| !matches!(value.to_string_lossy().trim().to_ascii_lowercase().as_str(),
             "" | "0" | "no" | "false" | "off"))
 }
@@ -148,9 +148,9 @@ mod tests {
     // first thing somebody tries who does not know how their shell removes a variable.
     #[test]
     fn the_value_decides_and_not_merely_the_presence_of_the_name() {
-        let set_to = |value: &str| enabled_by(Some(std::ffi::OsStr::new(value)));
+        let set_to = |value: &str| is_enabled_by(Some(std::ffi::OsStr::new(value)));
 
-        assert!(!enabled_by(None), "the report is on without the variable at all");
+        assert!(!is_enabled_by(None), "the report is on without the variable at all");
         for off in ["0", "no", "false", "off", "", "  ", "OFF", "False"] {
             assert!(!set_to(off), "'{off}' left the report on");
         }

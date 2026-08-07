@@ -163,6 +163,25 @@ Performance:
       so it is worth raising if your files live on a slow drive.
 
 Bugfixes:
+  -> A comparison document now records the settings it took from the document it compares against,
+      under the code "setting-adopted". They were only ever said on screen, so with "--output json"
+      nothing at all was said, and both sides simply read alike: a value the command line gave
+      could not be told apart from one borrowed from the baseline.
+  -> The "scan" block of a JSON document now also says how many directories could not be read, and
+      every side of a comparison document carries that whole block, so a side that failed to read
+      half its files is no longer indistinguishable from a side whose code shrank.
+  -> "--show-faulty-files" now decides whether "--output json" writes the paths of the faulty files
+      and unreadable directories, as it already decided whether they are printed. The counts are in
+      the "scan" block either way, so a document without the lists never says that nothing went
+      wrong, and a document of a whole drive stops carrying hundreds of paths nobody asked for.
+  -> A language file that declares extensions but no name now reports that the counts are in doubt
+      instead of the settings: every file carrying those extensions goes uncounted, which is what
+      an unreadable language file already said. It also has a code of its own,
+      "language-without-name", separate from "language-without-extension", which is the harmless
+      case and replaces the "unusable-language" that used to cover both.
+  -> A command that is ignored, "--log" or "--compare" without a loaded configuration, now says so
+      in "--output json" as well, under the code "command-ignored". It was only ever said on screen,
+      so a build step reading the document could not tell that something it asked for was dropped.
   -> The help text printed beside a mistyped command value now goes to the error output, so
       "--output json > stats.json" with a mistake in the command leaves an empty file and an exit
       code instead of a stats.json that holds a help page.

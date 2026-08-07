@@ -8,7 +8,7 @@ use mezura_core::engine::config::{MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_
 
 use super::config_manager::{self, ConfigurationBuilder};
 use super::config_manager::{MAX_COMPARE_LEVEL, MIN_COMPARE_LEVEL};
-use super::formatted::Formatted;
+use super::error_colors::Formatted;
 use super::theme_files;
 use crate::paths::{DEFAULT_CONFIG_NAME, PERSISTENT_APP_PATHS};
 
@@ -22,7 +22,7 @@ pub enum ConfigFileParseError {
 }
 
 impl Formatted for ConfigFileParseError {
-    fn formatted(&self) -> ColoredString {
+    fn format(&self) -> ColoredString {
         match self {
             Self::FileNotFound(x) => format!("'{x}' config file not found, defaults will be used.").yellow(),
             Self::UnreadableLine(file, line, UnreadableCause::NotUtf8) => format!("Configuration '{file}' stops being readable at line {line}, so none of it was used: the file is not saved as UTF-8.").red(),
@@ -49,7 +49,7 @@ pub struct ConfigFileIssues {
     pub invalid_fields: Vec<&'static str>,
     // The code travels with the message from where the kind is known. Recovering it later by looking
     // for a phrase inside the English is the exact coupling the pair exists to avoid.
-    pub warnings: Vec<(&'static str, String)>
+    pub warnings: Vec<(mezura_core::warnings::Code, String)>
 }
 
 pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String>) -> Result<(ConfigurationBuilder, ConfigFileIssues),ConfigFileParseError> {
@@ -73,7 +73,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
         if size == 0 {break};
         // Only the first line of the file can carry the mark, but asking on every line costs a
         // comparison and spares the reader a special case that would have to be got right once
-        let line = super::without_byte_order_mark(buf.trim());
+        let line = super::strip_byte_order_mark(buf.trim());
         if line.starts_with("===>") {
             let id = line.trim_start_matches("===>").split_whitespace().next().unwrap_or("");
 
@@ -207,7 +207,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
             } else if id == config_manager::STYLE {
                 let declared = read_lines_from_file_to_vec(&mut reader, &mut buf, |line| vec![line.trim().to_owned()]);
                 let (declared, errors) = super::theme::parse_overrides_leniently(&declared.join("\n"));
-                issues.warnings.extend(errors.iter().map(|x| (mezura_core::warnings::CONFIG_STYLE_INVALID, x.formatted())));
+                issues.warnings.extend(errors.iter().map(|x| (mezura_core::warnings::Code::ConfigStyleInvalid, x.format())));
                 if !declared.is_empty() {
                     config_styles = Some(declared);
                 }
@@ -219,7 +219,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                     None => issues.invalid_fields.push(config_manager::COMPRARE_LEVEL)
                 }
             } else {
-                issues.warnings.push((mezura_core::warnings::CONFIG_SECTION_UNKNOWN,
+                issues.warnings.push((mezura_core::warnings::Code::ConfigSectionUnknown,
                         format!("'{id}' is not something a configuration file can carry, the section is ignored.")));
             }
         }
@@ -259,7 +259,7 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
     // from the next. It is the readable form and the unambiguous one at the same time: a name only
     // ever reaches the paths written after it with a comma between them.
     writer.write_all(&[b"\n\n===> ",config_manager::DIRS.as_bytes(),b"\n"].concat())?;
-    writer.write_all(config_builder.dirs.as_ref().unwrap().iter().map(config_manager::declared_form)
+    writer.write_all(config_builder.dirs.as_ref().unwrap().iter().map(config_manager::format_declared_form)
             .collect::<Vec<_>>().join("\n").as_bytes())?;
 
     if let Some(exclude_dirs) = &config_builder.exclude_dirs {
@@ -370,7 +370,7 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
 }
 
 // The names a directory offers, for the close-match suggestions of one that was not found
-pub fn names_in_dir(dir: &str) -> Vec<String> {
+pub fn read_names_in_dir(dir: &str) -> Vec<String> {
     let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
     let mut names = entries.flatten().filter(|x| x.path().is_file())
             .filter_map(|x| x.path().file_stem().and_then(|x| x.to_str()).map(str::to_owned)).collect::<Vec<_>>();
@@ -516,7 +516,7 @@ mod tests {
         // the rest of the file still applies, so the one bad section costs itself and nothing else
         assert_eq!(Some(true), options.braces_as_code);
         assert!(issues.warnings.iter().any(|(code, message)|
-                *code == mezura_core::warnings::CONFIG_SECTION_UNKNOWN && message.contains("'log'")),
+                *code == mezura_core::warnings::Code::ConfigSectionUnknown && message.contains("'log'")),
                 "the ignored section was not named: {:?}", issues.warnings);
 
         // and through the real merge, a run that loads the file still does not log

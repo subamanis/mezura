@@ -25,20 +25,20 @@ pub fn set_decimal_separator(separator: DecimalSeparator) {
 
 // Built on first use, by which time both commands have been read. Two separators arriving one at a
 // time is why they are not a single setter.
-pub fn active() -> &'static NumberFormat {
+pub fn get_active() -> &'static NumberFormat {
     FORMAT.get_or_init(|| NumberFormat::new(
-            NUMBER_SEPARATOR.get().copied().unwrap_or_default().character(),
-            DECIMAL_SEPARATOR.get().copied().unwrap_or_default().character()))
+            NUMBER_SEPARATOR.get().copied().unwrap_or_default().get_character(),
+            DECIMAL_SEPARATOR.get().copied().unwrap_or_default().get_character()))
 }
 
 // Applied to text that is already rounded, so that every rule about rounding stays written with a
 // dot and only the last step decides what the reader sees
-pub fn with_decimal_separator(text: String) -> String {
-    active().with_decimal_mark(&text)
+pub fn format_with_decimal_separator(text: String) -> String {
+    get_active().with_decimal_mark(&text)
 }
 
-pub fn with_seperators(i: usize) -> String {
-    active().integer(i)
+pub fn format_with_separators(i: usize) -> String {
+    get_active().integer(i)
 }
 
 #[cfg(test)]
@@ -48,10 +48,10 @@ mod tests {
     // The grouping itself is the library's and is asserted there. What this holds is the wiring:
     // the format this crate hands out is the one the commands asked for.
     #[test]
-    pub fn test_with_seperators() {
-        assert_eq!("123",with_seperators(123));
-        assert_eq!("1,234",with_seperators(1234));
-        assert_eq!("12,345",with_seperators(12345));
-        assert_eq!("1,234,567",with_seperators(1234567));
+    pub fn test_with_separators() {
+        assert_eq!("123",format_with_separators(123));
+        assert_eq!("1,234",format_with_separators(1234));
+        assert_eq!("12,345",format_with_separators(12345));
+        assert_eq!("1,234,567",format_with_separators(1234567));
     }
 }

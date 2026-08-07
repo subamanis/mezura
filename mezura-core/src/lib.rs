@@ -218,7 +218,7 @@ pub fn run(config: &EngineConfig, languages: Languages,
     let mut stats_guard = stats_per_module.lock();
     let per_module = stats_guard.as_deref_mut().unwrap();
 
-    let mut per_language = merged_over_modules(per_module);
+    let mut per_language = merge_over_modules(per_module);
     // Dropped before the total is summed, or the total's keyword map would name the keywords of
     // every language the run selected, including the ones no file was written in. The figures are
     // the same either way, since an empty language adds nothing.
@@ -333,7 +333,7 @@ pub(crate) struct GitignoreStack {
 }
 
 impl GitignoreStack {
-    pub fn extended(dir: &Path, parent: Option<Arc<GitignoreStack>>) -> Option<Arc<GitignoreStack>> {
+    pub fn extend_with_dir(dir: &Path, parent: Option<Arc<GitignoreStack>>) -> Option<Arc<GitignoreStack>> {
         let gitignore_path = dir.join(".gitignore");
         if !gitignore_path.is_file() {
             return parent;
@@ -363,7 +363,7 @@ impl GitignoreStack {
 
         let mut stack = None;
         for ancestor in relevant_ancestors.iter().rev() {
-            stack = Self::extended(ancestor, stack);
+            stack = Self::extend_with_dir(ancestor, stack);
         }
         stack
     }
@@ -382,7 +382,7 @@ impl GitignoreStack {
         let is_dir = path.is_dir();
         let Some(parent) = path.parent() else { return false };
 
-        let stack = Self::extended(parent, Self::of_ancestors(parent));
+        let stack = Self::extend_with_dir(parent, Self::of_ancestors(parent));
         match stack {
             Some(x) => x.is_ignored_with_ancestor_dirs(path, is_dir),
             None => false
@@ -422,7 +422,7 @@ impl GitignoreStack {
 
 // The per-language figures of every module added together, which is what a question about the whole
 // run reads.
-fn merged_over_modules(per_module: &[HashMap<String,Stats>]) -> HashMap<String,Stats> {
+fn merge_over_modules(per_module: &[HashMap<String,Stats>]) -> HashMap<String,Stats> {
     let mut merged = per_module[0].clone();
     for of_a_module in &per_module[1..] {
         for (name, stats) in of_a_module {
@@ -488,8 +488,8 @@ mod tests {
         assert_eq!(3000, total.code_lines);
         assert_eq!(200, total.comment_lines);
         // what is neither code nor comment, worked out and not stored
-        assert_eq!(800, total.extra_lines());
-        assert_eq!(5000, total.average_size());
+        assert_eq!(800, total.calculate_extra_lines());
+        assert_eq!(5000, total.calculate_average_size());
         // 'classes' exists in two of the three, which is the question the totals could not answer
         // at all before: they carried no keywords.
         assert_eq!(Some(&9), total.keyword_occurences.get("classes"));

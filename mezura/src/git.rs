@@ -48,12 +48,12 @@ impl std::error::Error for GitError {
 // The repository a path belongs to, and where the path sits inside it. Both come from git and
 // neither is worked out here: 'rev-parse' walks up looking for the repository the way every git
 // command does, and the prefix it answers with is already the path to use inside a checkout.
-pub fn repository_of(path: &str) -> Result<(String, String), GitError> {
+pub fn find_repository_of(path: &str) -> Result<(String, String), GitError> {
     // 'git -C' needs a directory, so a file asks from beside itself and puts its name back on the
     // prefix, which stays exactly the path to use inside a checkout
     let as_path = Path::new(path);
     if as_path.is_file() && let (Some(parent), Some(name)) = (as_path.parent(), as_path.file_name()) {
-        let (root, prefix) = repository_of(&parent.to_string_lossy())?;
+        let (root, prefix) = find_repository_of(&parent.to_string_lossy())?;
         return Ok((root, prefix + &name.to_string_lossy()));
     }
 
@@ -66,10 +66,10 @@ pub fn repository_of(path: &str) -> Result<(String, String), GitError> {
 }
 
 // The one repository every path belongs to, refusing the moment two of them disagree.
-pub fn one_repository_of(paths: &[String]) -> Result<String, GitError> {
+pub fn find_common_repository_of(paths: &[String]) -> Result<String, GitError> {
     let mut found : Option<String> = None;
     for path in paths {
-        let (root, _) = repository_of(path)?;
+        let (root, _) = find_repository_of(path)?;
         match &found {
             Some(first) if *first != root => return Err(GitError::TwoRepositories {
                     first: first.clone(), second: root }),
@@ -99,7 +99,7 @@ impl Checkout {
     // 'target_of' answers where a path of the working tree is to be found in here, which is what the
     // prefix from 'repository_of' is for. None when the revision predates it: a directory that did
     // not exist then counts zero rather than stopping the run.
-    pub fn target_of(&self, prefix: &str) -> Option<String> {
+    pub fn find_target_of(&self, prefix: &str) -> Option<String> {
         let inside = self.path.clone() + "/" + prefix.trim_end_matches('/');
         Path::new(&inside).exists().then_some(inside)
     }
@@ -178,24 +178,24 @@ mod tests {
 
     #[test]
     fn a_path_is_answered_with_its_repository_and_its_place_inside_it() {
-        let (root, prefix) = repository_of(&(PACKAGE.to_owned() + "/src")).unwrap();
+        let (root, prefix) = find_repository_of(&(PACKAGE.to_owned() + "/src")).unwrap();
         assert_eq!("mezura/src/", prefix);
         // the answer is a real ancestor of what was asked about, whichever slashes the platform uses
         assert!(PACKAGE.replace('\\', "/").starts_with(&root), "'{root}' is not above '{PACKAGE}'");
 
         // the root of the repository is in the repository and sits nowhere inside it
-        let (same, none) = repository_of(&root).unwrap();
+        let (same, none) = find_repository_of(&root).unwrap();
         assert_eq!(root, same);
         assert!(none.is_empty(), "'{none}'");
 
         // a file answers from beside itself, with its own name back on the prefix, so a single
         // tracked file can be found inside a checkout like any directory
-        let (file_root, file_prefix) = repository_of(&(PACKAGE.to_owned() + "/src/main.rs")).unwrap();
+        let (file_root, file_prefix) = find_repository_of(&(PACKAGE.to_owned() + "/src/main.rs")).unwrap();
         assert_eq!((root.as_str(), "mezura/src/main.rs"), (file_root.as_str(), file_prefix.as_str()));
 
         // and a place that is in no repository says so rather than climbing to one that is not its
         let outside = std::env::temp_dir().to_string_lossy().replace('\\', "/");
-        assert!(matches!(repository_of(&outside), Err(GitError::NotARepository { .. })),
+        assert!(matches!(find_repository_of(&outside), Err(GitError::NotARepository { .. })),
                 "'{outside}' was claimed by a repository");
     }
 
@@ -203,27 +203,27 @@ mod tests {
     // not accepted
     #[test]
     fn targets_from_two_repositories_are_refused_and_both_are_named() {
-        let (root, _) = repository_of(PACKAGE).unwrap();
+        let (root, _) = find_repository_of(PACKAGE).unwrap();
         let (here, sibling) = (PACKAGE.to_owned() + "/src", root.clone() + "/mezura-core");
-        assert_eq!(root, one_repository_of(&[here.clone(), sibling]).unwrap());
+        assert_eq!(root, find_common_repository_of(&[here.clone(), sibling]).unwrap());
 
         let outside = std::env::temp_dir().to_string_lossy().replace('\\', "/");
-        assert!(matches!(one_repository_of(&[here, outside]), Err(GitError::NotARepository { .. })));
+        assert!(matches!(find_common_repository_of(&[here, outside]), Err(GitError::NotARepository { .. })));
     }
 
     // What a comparison against a commit is made of: the files are written out, the place a target
     // sits in is found by its prefix, and everything goes away again.
     #[test]
     fn a_revision_is_written_out_and_taken_away_again() {
-        let (root, _) = repository_of(PACKAGE).unwrap();
+        let (root, _) = find_repository_of(PACKAGE).unwrap();
         let path = {
             let checkout = checkout(&root, "HEAD").unwrap();
             assert!(Path::new(&checkout.path).join("mezura/src/main.rs").exists(),
                     "the revision was not written out to {}", checkout.path);
             // the prefix of a target is where that target is inside here
-            assert!(checkout.target_of("mezura-core/src/").is_some());
+            assert!(checkout.find_target_of("mezura-core/src/").is_some());
             // and one the revision never had counts as nothing rather than stopping the run
-            assert_eq!(None, checkout.target_of("a-directory-this-commit-never-had/"));
+            assert_eq!(None, checkout.find_target_of("a-directory-this-commit-never-had/"));
             checkout.path.clone()
         };
         assert!(!Path::new(&path).exists(), "the checkout outlived the run that made it");

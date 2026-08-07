@@ -1,5 +1,5 @@
 // The arithmetic behind showing a result: shares, percentages, and how a number reads to a person.
-// Nothing here decides a colour, a width or a word, and nothing reads a global.
+// Nothing here decides a color, a width or a word, and nothing reads a global.
 
 const TINY_THRESHOLD : f64 = 0.01;
 
@@ -48,12 +48,12 @@ pub fn apportion(shares: &[f64], total_cells: usize) -> Vec<usize> {
 
 // What share of the whole each number holds, the whole being the sum of the numbers themselves. Only
 // right when the list is everything: asking this of the top few gives shares of the few, which look
-// like shares of the whole and are not. A caller that cut its list wants 'percentages_of' below.
+// like shares of the whole and are not. A caller that cut its list wants the one below.
 //
 // Rounded to two decimals and summing to 100, with the last entry absorbing what the rounding of the
 // others left over. So the order matters, and a list ending in a leftovers row wants that row last.
-pub fn percentages(numbers: &[usize]) -> Vec<f64> {
-    percentages_of(numbers, numbers.iter().sum())
+pub fn calculate_percentages_of_their_own_sum(numbers: &[usize]) -> Vec<f64> {
+    calculate_percentages_of_a_given_total(numbers, numbers.iter().sum())
 }
 
 // The same against a total the caller names: what each number is worth out of everything there was,
@@ -62,7 +62,7 @@ pub fn percentages(numbers: &[usize]) -> Vec<f64> {
 // A share that rounds to zero comes back as the true small number rather than as zero, so whoever
 // formats it can tell "none" from "too little to show". 'NumberFormat::percent' writes '<0.01' for
 // anything positive that rounds away and 'apportion' gives it no cell, both from the honest figure.
-pub fn percentages_of(numbers: &[usize], total: usize) -> Vec<f64> {
+pub fn calculate_percentages_of_a_given_total(numbers: &[usize], total: usize) -> Vec<f64> {
     if total == 0 {
         return vec![0.0; numbers.len()];
     }
@@ -94,7 +94,7 @@ pub fn percentages_of(numbers: &[usize], total: usize) -> Vec<f64> {
 // How much bigger or smaller the newer figure is, as a percentage of the older one. Signed, so a
 // shrinking count comes back negative, and zero when there was nothing to grow from: a jump out of
 // nothing is not a percentage, and calling it one prints 'inf'.
-pub fn relative_change(older: usize, newer: usize) -> f64 {
+pub fn calculate_relative_change(older: usize, newer: usize) -> f64 {
     if older == 0 {
         return 0.0;
     }
@@ -262,12 +262,12 @@ mod tests {
 
     #[test]
     fn percentages_sum_to_a_hundred_with_the_last_entry_absorbing_the_rounding() {
-        assert_eq!(vec![0f64,50f64,50f64], percentages(&[0,100,100]));
-        assert_eq!(vec![100f64,0f64,0f64], percentages(&[1,0,0]));
-        assert_eq!(vec![33.33,33.33,33.34], percentages(&[20,20,20]));
-        assert_eq!(vec![0f64,50f64,50f64,0f64], percentages(&[0,100,100,0]));
-        assert_eq!(vec![33.33,33.33,33.33,0.01], percentages(&[100,100,100,0]));
-        assert_eq!(vec![33.28,33.28,33.44,0.0], percentages(&[200,200,201,0]));
+        assert_eq!(vec![0f64,50f64,50f64], calculate_percentages_of_their_own_sum(&[0,100,100]));
+        assert_eq!(vec![100f64,0f64,0f64], calculate_percentages_of_their_own_sum(&[1,0,0]));
+        assert_eq!(vec![33.33,33.33,33.34], calculate_percentages_of_their_own_sum(&[20,20,20]));
+        assert_eq!(vec![0f64,50f64,50f64,0f64], calculate_percentages_of_their_own_sum(&[0,100,100,0]));
+        assert_eq!(vec![33.33,33.33,33.33,0.01], calculate_percentages_of_their_own_sum(&[100,100,100,0]));
+        assert_eq!(vec![33.28,33.28,33.44,0.0], calculate_percentages_of_their_own_sum(&[200,200,201,0]));
     }
 
     // 3 files out of 800000 is 0.000375%, which used to print as a flat 0.00. Checked in the middle
@@ -276,7 +276,7 @@ mod tests {
     fn a_share_that_rounds_away_is_named_rather_than_shown_as_absent() {
         let format = NumberFormat::default();
         for numbers in [vec![500_000, 3, 299_997], vec![500_000, 299_997, 3]] {
-            let shares = percentages(&numbers);
+            let shares = calculate_percentages_of_their_own_sum(&numbers);
             let tiny = numbers.iter().position(|x| *x == 3).unwrap();
             assert_eq!("<0.01", format.percent(shares[tiny]), "for {numbers:?}");
             let cells = apportion(&shares, BAR);
@@ -285,7 +285,7 @@ mod tests {
         }
 
         // One that really is absent stays a flat zero and keeps no cell
-        let shares = percentages(&[500_000, 299_997, 0]);
+        let shares = calculate_percentages_of_their_own_sum(&[500_000, 299_997, 0]);
         assert_eq!("0.00", format.percent(shares[2]));
         assert_eq!(0, apportion(&shares, BAR)[2]);
 
@@ -296,16 +296,16 @@ mod tests {
 
         // The figure a caller reads is the true one and not a marker: it used to come back as a
         // flat 0.001 whatever the real share was, which is 2.7 times this one and sums past 100.
-        let shares = percentages(&[500_000, 3, 299_997]);
+        let shares = calculate_percentages_of_their_own_sum(&[500_000, 3, 299_997]);
         assert!((shares[1] - 0.000375).abs() < 1e-9, "the share was replaced by a marker: {}", shares[1]);
         assert!((shares.iter().sum::<f64>() - 100.0).abs() < 0.01, "the shares no longer sum to 100: {shares:?}");
 
         // And the denominator is stated when the list is not everything. Taking the largest two of
         // three and asking for their shares of the whole is not the same question as their shares
         // of each other, and the plain call answers the second.
-        assert_eq!(vec![62.5, 37.5], percentages(&[500_000, 300_000]));
-        assert_eq!(vec![50.0, 30.0], percentages_of(&[500_000, 300_000], 1_000_000));
-        assert_eq!(vec![0.0, 0.0], percentages_of(&[0, 0], 0));
+        assert_eq!(vec![62.5, 37.5], calculate_percentages_of_their_own_sum(&[500_000, 300_000]));
+        assert_eq!(vec![50.0, 30.0], calculate_percentages_of_a_given_total(&[500_000, 300_000], 1_000_000));
+        assert_eq!(vec![0.0, 0.0], calculate_percentages_of_a_given_total(&[0, 0], 0));
 
         // A report pads every percentage into a five column field, so '<0.01' has to fit in it.
         // 100.00 is the one value that does not, which is why such padding saturates.
@@ -330,11 +330,11 @@ mod tests {
 
     #[test]
     fn a_change_out_of_nothing_is_not_a_percentage() {
-        assert_eq!(0.0, relative_change(0, 500));
-        assert_eq!(0.0, relative_change(0, 0));
-        assert_eq!(100.0, relative_change(100, 200));
-        assert_eq!(-10.0, relative_change(100, 90));
-        assert_eq!(0.0, relative_change(100, 100));
+        assert_eq!(0.0, calculate_relative_change(0, 500));
+        assert_eq!(0.0, calculate_relative_change(0, 0));
+        assert_eq!(100.0, calculate_relative_change(100, 200));
+        assert_eq!(-10.0, calculate_relative_change(100, 90));
+        assert_eq!(0.0, calculate_relative_change(100, 100));
     }
 
     #[test]
@@ -371,10 +371,10 @@ mod tests {
     #[test]
     fn a_signed_percentage_carries_its_direction_and_names_the_tiny_ones() {
         let format = NumberFormat::default();
-        assert_eq!("0", format.signed_percent(relative_change(100, 100)));
-        assert_eq!("-10", format.signed_percent(relative_change(100, 90)));
-        assert_eq!("+100", format.signed_percent(relative_change(100, 200)));
-        assert_eq!("+ <0.01", format.signed_percent(relative_change(22819, 22820)));
+        assert_eq!("0", format.signed_percent(calculate_relative_change(100, 100)));
+        assert_eq!("-10", format.signed_percent(calculate_relative_change(100, 90)));
+        assert_eq!("+100", format.signed_percent(calculate_relative_change(100, 200)));
+        assert_eq!("+ <0.01", format.signed_percent(calculate_relative_change(22819, 22820)));
         assert_eq!("+0.01", format.signed_percent(0.01));
     }
 }

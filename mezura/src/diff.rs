@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use mezura_core::{ModuleResult, RunResult, Stats, UNNAMED_MODULE_NAME, render};
+use mezura_core::{Language, Languages, ModuleResult, RunResult, Stats, UNNAMED_MODULE_NAME, render};
 
-use super::config_manager::SortCriterion;
+use super::config_manager::{Configuration, Layout, SortCriterion};
 use super::json_reader::{DocumentError, DocumentWarning, Scope};
 
 // The half of a document's warnings that says the numbers themselves may be wrong, as the document
@@ -13,25 +13,17 @@ const COUNTS_AFFECTED : &str = "counts";
 // reading whose date says nothing: it is this one.
 const THIS_RUN_NAME : &str = "this run";
 
-// What a reading is, which its consumers on a screen never ask and a consumer of a saved comparison
-// cannot ask anything else: with the file gone from the disk and 'HEAD' pointing somewhere new,
-// these fields are the identity, and each source's identity has its own shape.
 pub enum Source {
     Run,
     Document { path: String },
     // Both halves, because neither derives from the other: the hash is what the comparison really
     // measured, 'asked_for' is what makes it readable six months later, 'v2.0.1' over '030e6e72a1'.
-    Revision { commit: String, asked_for: String }
+    GitRevision { commit: String, asked_for: String }
 }
 
-// One reading, whole: where it came from, when it was taken, which mezura counted it, under what
-// settings, what that run said about its own counts, and the counts. Every source fills the same
-// six; a comparison is two of these and the only difference between its sides is which one was
-// written first in the command.
 pub struct Reading {
     pub source: Source,
-    // As the document writes it, so both sides are read by one function: the file's 'generated_at',
-    // the commit's own date, the clock for this run
+    // In the document's own format, whichever source filled it
     pub taken: String,
     pub version: String,
     pub scope: Scope,
@@ -41,12 +33,11 @@ pub struct Reading {
 }
 
 impl Reading {
-    // A revision is counted by this build, over a checkout of it, under the settings of this run,
-    // so everything but the counts and the commit's own two facts is this run's own.
-    pub fn of_revision(asked_for: &str, commit: String, taken: String, result: RunResult,
+    // Everything but the counts and the commit's own two facts is this run's own
+    pub fn of_git_revision(asked_for: &str, commit: String, taken: String, result: RunResult,
             engine: &mezura_core::EngineConfig) -> Self {
         Reading {
-            source: Source::Revision { commit, asked_for: asked_for.to_owned() },
+            source: Source::GitRevision { commit, asked_for: asked_for.to_owned() },
             taken,
             version: super::config_manager::VERSION_ID.trim_start_matches('v').to_owned(),
             scope: scope_of(engine),
@@ -55,8 +46,7 @@ impl Reading {
         }
     }
 
-    // The one clone in the whole feature: the run's result is still being presented and logged
-    // around the comparison, so the reading takes a copy rather than the thing itself.
+    // A copy, because the result is still being presented around the comparison
     pub fn of_this_run(result: &RunResult, taken: &chrono::DateTime<chrono::Local>,
             engine: &mezura_core::EngineConfig) -> Self {
         Reading {
@@ -69,16 +59,172 @@ impl Reading {
         }
     }
 
-    // The identity as a person reads it in a heading or a warning, derived at the moment of
-    // printing: the identity itself is the source, and a label is a way of showing one.
-    pub fn display_name(&self) -> String {
+    pub fn determine_display_name(&self) -> String {
         match &self.source {
             Source::Run => THIS_RUN_NAME.to_owned(),
             Source::Document { path } => std::path::Path::new(path).file_name()
                     .map_or_else(|| path.clone(), |x| x.to_string_lossy().into_owned()),
-            Source::Revision { asked_for, .. } => asked_for.clone()
+            Source::GitRevision { asked_for, .. } => asked_for.clone()
         }
     }
+}
+
+pub struct Comparison {
+    pub baseline: Reading,
+    pub subject: Reading,
+    pub notes: Vec<Note>
+}
+
+impl Comparison {
+    // 'notes_so_far' is the notes the acquisition already gathered, and they read first
+    pub fn of(baseline: Reading, subject: Reading, config: &Configuration, notes_so_far: Vec<Note>) -> Self {
+        let unpaired = pair_modules(&baseline.result, &subject.result).is_none();
+        let notes = determine_comparison_notes(&baseline, &subject, config, notes_so_far, unpaired);
+
+        Comparison { baseline, subject, notes }
+    }
+
+    // Computed rather than stored, because the pairs borrow the readings this struct owns
+    pub fn module_pairs(&self) -> Option<Vec<ModulePair<'_>>> {
+        pair_modules(&self.baseline.result, &self.subject.result)
+    }
+}
+
+// The two phases exist because the order is load-bearing: a document's settings reach the language
+// resolution and the counting that follow, and a baseline that is not one must cost no scan.
+pub enum DiffRequest {
+    BetweenTwoReadings(BothSidesNamed),
+    // The subject is this very run, which arrives after the scan
+    AgainstThisRun(BaselineOnly)
+}
+
+impl DiffRequest {
+    pub fn of(config: &mut Configuration, available: &[Language]) -> Result<Option<Self>, String> {
+        let Some(operand) = config.view.diff_against.clone() else {
+            return Ok(None);
+        };
+        let (baseline_name, subject_name) = split_operand(&operand)?;
+        let baseline = DiffSide::from_name(baseline_name)?;
+        // None when only one side was named: the subject is then this run, which has no name and
+        // has not been counted yet
+        let subject = subject_name.map(DiffSide::from_name).transpose()?;
+
+        // With two documents there is nothing being counted for the settings to reach, and with none
+        // there is nothing to take them from; both sides then run as declared, and what differs is
+        // reported above the table
+        let settings_source = match (&baseline, &subject) {
+            (DiffSide::Document(x), None) => Some(x),
+            (DiffSide::Document(x), Some(other)) | (other, Some(DiffSide::Document(x)))
+                    if other.needs_counting() => Some(x),
+            _ => None
+        };
+        let notes_so_far = settings_source.map(|document| adopt_settings_from(document, config))
+                .unwrap_or_default().into_iter().collect();
+
+        let languages = available.to_vec();
+        Ok(Some(match subject {
+            Some(subject) => DiffRequest::BetweenTwoReadings(
+                    BothSidesNamed { baseline, subject, notes_so_far, languages }),
+            None => DiffRequest::AgainstThisRun(BaselineOnly { baseline, notes_so_far, languages })
+        }))
+    }
+}
+
+// The languages travel with the request because 'Languages::resolve' and 'run' both consume what
+// they are handed, so every side that is counted needs a list of its own. Held here rather than
+// juggled by the caller, which had to know which kinds of source need counting in order to know
+// whether to copy at all.
+pub struct BothSidesNamed {
+    baseline: DiffSide,
+    subject: DiffSide,
+    notes_so_far: Vec<Note>,
+    languages: Vec<Language>
+}
+
+impl BothSidesNamed {
+    // The language complaints are reported here, this being the one form where no run of this
+    // program's own will report them
+    pub fn into_comparison(self, config: &Configuration,
+            extension_priority: &HashMap<String, Vec<String>>) -> Result<Comparison, String>
+    {
+        let (_, reported) = Languages::resolve(&config.engine, self.languages.clone(), extension_priority);
+        super::warnings::report_language_resolution_warnings(reported);
+
+        let (baseline, notes) = self.baseline.into_reading(config, self.languages.clone(), extension_priority)?;
+        let mut notes_so_far = self.notes_so_far;
+        notes_so_far.extend(notes);
+        let (subject, notes) = self.subject.into_reading(config, self.languages, extension_priority)?;
+        notes_so_far.extend(notes);
+
+        Ok(Comparison::of(baseline, subject, config, notes_so_far))
+    }
+}
+
+pub struct BaselineOnly {
+    baseline: DiffSide,
+    notes_so_far: Vec<Note>,
+    languages: Vec<Language>
+}
+
+impl BaselineOnly {
+    pub fn count_baseline(self, config: &Configuration,
+            extension_priority: &HashMap<String, Vec<String>>) -> Result<CountedBaseline, String>
+    {
+        let (baseline, notes) = self.baseline.into_reading(config, self.languages, extension_priority)?;
+        let mut notes_so_far = self.notes_so_far;
+        notes_so_far.extend(notes);
+
+        Ok(CountedBaseline { baseline, notes_so_far })
+    }
+}
+
+pub struct CountedBaseline {
+    baseline: Reading,
+    notes_so_far: Vec<Note>
+}
+
+impl CountedBaseline {
+    pub fn with_subject(self, subject: Reading, config: &Configuration) -> Comparison {
+        Comparison::of(self.baseline, subject, config, self.notes_so_far)
+    }
+}
+
+// Boxed for the size difference between the variants
+enum DiffSide {
+    Document(Box<Reading>),
+    GitRevision(String)
+}
+
+impl DiffSide {
+    // Which of the two a name is gets decided by what exists on disk: a file is read here and now as
+    // a document, and anything else goes to git exactly as it was written.
+    fn from_name(name: &str) -> Result<Self, String> {
+        match super::sources::read_document(name) {
+            Some(document) => document.map(|x| DiffSide::Document(Box::new(x))),
+            None => Ok(DiffSide::GitRevision(name.to_owned()))
+        }
+    }
+
+    // Asked instead of naming the variants that need it, so that a new kind of side joins the
+    // decision by existing rather than by being remembered
+    fn needs_counting(&self) -> bool {
+        !matches!(self, DiffSide::Document(_))
+    }
+
+    fn into_reading(self, config: &Configuration, languages: Vec<Language>,
+            extension_priority: &HashMap<String, Vec<String>>) -> Result<(Reading, Vec<Note>), String>
+    {
+        match self {
+            DiffSide::Document(reading) => Ok((*reading, Vec::new())),
+            DiffSide::GitRevision(name) => super::sources::count_git_revision(&name, config, languages,
+                    extension_priority).map_err(|x| x.to_string())
+        }
+    }
+}
+
+fn adopt_settings_from(document: &Reading, config: &mut Configuration) -> Option<Note> {
+    let settings = resolve_settings(&document.scope, config);
+    (!settings.is_empty()).then(|| Note::SettingsAdopted { from: document.determine_display_name(), settings })
 }
 
 // Every one of these stops the run before a single file is counted, so that a mistake in the
@@ -118,16 +264,13 @@ impl std::error::Error for LoadError {
     }
 }
 
-// What one language came to in the two readings. Both sides are the whole of what was counted, so
-// that every figure of the report has a change to put beside it and not only the one being sorted by.
-pub struct Row {
+pub struct LanguageStatsChange {
     pub name: String,
-    pub before: Stats,
-    pub now: Stats
+    pub baseline: Stats,
+    pub subject: Stats
 }
 
-// One module as both readings counted it, in the order the later of the two declared them, which is
-// the order its own report would put them in.
+// In the order the later reading declared them, which is the order its own report would use
 pub struct ModulePair<'a> {
     pub name: Option<&'a str>,
     pub before: &'a ModuleResult,
@@ -144,13 +287,27 @@ pub enum Change {
     Percent(f64)
 }
 
+// Rendered by the screen and the document each in its own shape, from this one list
+#[derive(Debug,PartialEq)]
+pub enum Note {
+    SettingsAdopted { from: String, settings: Vec<&'static str> },
+    SettingsDiffer { baseline: String, subject: String, settings: Vec<&'static str> },
+    VersionsDiffer { baseline: String, baseline_version: String, subject: String, subject_version: String },
+    CountsInDoubt { about: String, doubts: Vec<String> },
+    // None is a side that declared no modules at all
+    ModulesDiffer { baseline: String, subject: String, baseline_modules: Option<String>, subject_modules: Option<String> },
+    LayoutFallback { layout: &'static str },
+    NoGitignoreInCheckout { git_revision: String },
+    MissingInRevision { git_revision: String, targets: Vec<String> }
+}
+
 // Splits '--diff a.json..b.json' into the two readings it names, and answers None for the second
 // when only one was given, which is the form whose second reading is this run.
 //
 // The trap is that '..' is a separator here and a directory in every filesystem, so '--diff
 // ../old.json' must not come apart into an empty name and '/old.json'. The rule is git's own: what
 // was written is taken whole if it names something that exists, and only split if it does not.
-pub fn split_operand(value: &str) -> Result<(&str, Option<&str>), String> {
+fn split_operand(value: &str) -> Result<(&str, Option<&str>), String> {
     // What was written wins if it names something that is really there, which is what tells
     // 'a/../b.json', a path that climbs on its way to a file beside 'a', apart from a pair
     if std::path::Path::new(value).exists() {
@@ -195,18 +352,18 @@ pub fn change_of(before: usize, now: usize) -> Change {
         (0, 0) => Change::Percent(0.0),
         (0, _) => Change::Appeared,
         (_, 0) => Change::Gone,
-        (before, now) => Change::Percent(render::relative_change(before, now))
+        (before, now) => Change::Percent(render::calculate_relative_change(before, now))
     }
 }
 
 // Every language of either reading, sorted the way the report would have been. 'top' is the screen's
 // cut and is not applied when a document is being written, which holds every row the same way the
 // run's own document does.
-pub fn comparison_rows(baseline: &HashMap<String, Stats>, now: &HashMap<String, Stats>,
-        sort_by: SortCriterion, top: Option<usize>) -> Vec<Row>
+pub fn create_comparison_rows(baseline: &HashMap<String, Stats>, subject: &HashMap<String, Stats>,
+        sort_by: SortCriterion, top: Option<usize>) -> Vec<LanguageStatsChange>
 {
-    // Held at what each is now, so one that disappeared sorts to the bottom where a zero belongs
-    let mut merged = now.clone();
+    // Held at what the subject has, so one that disappeared sorts to the bottom where a zero belongs
+    let mut merged = subject.clone();
     for name in baseline.keys() {
         merged.entry(name.clone()).or_default();
     }
@@ -214,22 +371,23 @@ pub fn comparison_rows(baseline: &HashMap<String, Stats>, now: &HashMap<String, 
     let names = super::result_printer::get_sorted_language_names(&merged, sort_by);
     let shown = top.map_or(names.len(), |x| x.min(names.len()));
 
-    names[..shown].iter().map(|name| Row {
-        before: baseline.get(name).cloned().unwrap_or_default(),
-        now: now.get(name).cloned().unwrap_or_default(),
+    names[..shown].iter().map(|name| LanguageStatsChange {
+        baseline: baseline.get(name).cloned().unwrap_or_default(),
+        subject: subject.get(name).cloned().unwrap_or_default(),
         name: name.clone()
     }).collect()
 }
 
-// The modules of the two readings matched up by name, and None when they did not name the same set.
+// The modules of the two readings matched up by name, and None when there is nothing to show: the
+// sets differ, or nothing was ever named and the only pair is the one module holding everything.
 //
 // Nothing short of the same set can be shown. A module only one of them has would be compared
 // against nothing, and every language in it would read as written from scratch or deleted whole.
 // This repository is that case: one tree became 'mezura-core' and 'mezura', and a comparison across
 // that commit would report both as infinite growth and the leftovers as infinite loss, for files
 // that only moved.
-pub fn paired_modules<'a>(baseline: &'a RunResult, subject: &'a RunResult) -> Option<Vec<ModulePair<'a>>> {
-    if baseline.modules.len() != subject.modules.len() {
+pub fn pair_modules<'a>(baseline: &'a RunResult, subject: &'a RunResult) -> Option<Vec<ModulePair<'a>>> {
+    if baseline.modules.len() != subject.modules.len() || !subject.has_modules() {
         return None;
     }
 
@@ -243,7 +401,7 @@ pub fn paired_modules<'a>(baseline: &'a RunResult, subject: &'a RunResult) -> Op
 // nothing was declared, which the sentence says in words. The leftovers are in the list: their
 // being on one side and not the other is one of the ways the two sets differ, and a message that
 // left them out would name two lists that look identical.
-pub fn module_names(result: &RunResult) -> Option<String> {
+pub fn format_module_names(result: &RunResult) -> Option<String> {
     result.has_modules().then(|| result.modules.iter()
             .map(|x| format!("'{}'", x.name.as_deref().unwrap_or(UNNAMED_MODULE_NAME)))
             .collect::<Vec<_>>().join(", "))
@@ -268,7 +426,7 @@ pub fn scope_of(engine: &mezura_core::EngineConfig) -> Scope {
 }
 
 // A difference here is not a change in the code, and every one of these can move a count on its own.
-pub fn settings_that_differ(baseline: &Scope, subject: &Scope) -> Vec<&'static str> {
+pub fn find_settings_that_differ(baseline: &Scope, subject: &Scope) -> Vec<&'static str> {
     let same = |a: &[String], b: &[String]| {
         let (mut a, mut b) = (a.to_vec(), b.to_vec());
         a.sort();
@@ -299,7 +457,7 @@ pub fn resolve_settings(document: &Scope, config: &mut super::config_manager::Co
         a != b
     };
 
-    let typed = config.typed;
+    let typed = config.typed_explicitly;
     let mut adopted = Vec::new();
     if !typed.exclude && different(&document.exclude, &config.engine.exclude_dirs) {
         config.engine.exclude_dirs = document.exclude.clone();
@@ -341,13 +499,46 @@ pub fn resolve_settings(document: &Scope, config: &mut super::config_manager::Co
     adopted
 }
 
-// What the run that wrote the baseline said about its own counts. It said it on the error output of
-// a run nobody is looking at any more, and a reading taken under a doubt is not something the next
-// one can be measured against: an unreadable language file leaves a whole language at zero, which
-// this run would report as a language that appeared out of nowhere.
-pub fn doubts_about(warnings: &[DocumentWarning]) -> Vec<String> {
-    warnings.iter().filter(|x| x.affects == COUNTS_AFFECTED)
-            .map(|x| format!("{} ({})", x.message, x.code)).collect()
+// In the order they are read above the table
+fn determine_comparison_notes(baseline: &Reading, subject: &Reading, config: &Configuration,
+        notes_so_far: Vec<Note>, modules_unpaired: bool) -> Vec<Note>
+{
+    let mut notes = notes_so_far;
+
+    let differing = find_settings_that_differ(&baseline.scope, &subject.scope);
+    if !differing.is_empty() {
+        notes.push(Note::SettingsDiffer { baseline: baseline.determine_display_name(),
+                subject: subject.determine_display_name(), settings: differing });
+    }
+    // A build whose language files were corrected counts the same tree differently, and the
+    // Changelog is full of exactly that
+    if baseline.version != subject.version {
+        notes.push(Note::VersionsDiffer { baseline: baseline.determine_display_name(),
+                baseline_version: baseline.version.clone(), subject: subject.determine_display_name(),
+                subject_version: subject.version.clone() });
+    }
+    // What the run that wrote a reading said about its own counts: an unreadable language file
+    // leaves a whole language at zero, which this run would report as a language that appeared out
+    // of nowhere
+    for reading in [baseline, subject] {
+        let doubts = reading.warnings.iter().filter(|x| x.affects == COUNTS_AFFECTED)
+                .map(|x| format!("{} ({})", x.message, x.code)).collect::<Vec<_>>();
+        if !doubts.is_empty() {
+            notes.push(Note::CountsInDoubt { about: reading.determine_display_name(), doubts });
+        }
+    }
+    if modules_unpaired && (baseline.result.has_modules() || subject.result.has_modules()) {
+        notes.push(Note::ModulesDiffer { baseline: baseline.determine_display_name(),
+                subject: subject.determine_display_name(), baseline_modules: format_module_names(&baseline.result),
+                subject_modules: format_module_names(&subject.result) });
+    }
+    // The other two layouts have nothing to show for a comparison, and are told so rather than
+    // being ignored, the way a matrix with nothing to cross is
+    if matches!(config.view.layout, Layout::List | Layout::Matrix) {
+        notes.push(Note::LayoutFallback { layout: config.view.layout.name() });
+    }
+
+    notes
 }
 
 #[cfg(test)]
@@ -406,27 +597,27 @@ mod tests {
     // row saying so, and one added has no row in the baseline to be found under.
     #[test]
     fn every_language_of_either_reading_gets_a_row_in_the_order_the_report_uses() {
-        let before = hashmap!["Rust".to_owned() => stats(100, 70, 2), "Java".to_owned() => stats(40, 30, 1)];
-        let now = hashmap!["Rust".to_owned() => stats(150, 100, 3), "Go".to_owned() => stats(60, 50, 1)];
+        let baseline = hashmap!["Rust".to_owned() => stats(100, 70, 2), "Java".to_owned() => stats(40, 30, 1)];
+        let subject = hashmap!["Rust".to_owned() => stats(150, 100, 3), "Go".to_owned() => stats(60, 50, 1)];
 
-        let rows = comparison_rows(&before, &now, SortCriterion::Lines, None);
+        let rows = create_comparison_rows(&baseline, &subject, SortCriterion::Lines, None);
         assert_eq!(vec!["Rust".to_owned(), "Go".to_owned(), "Java".to_owned()],
                 rows.iter().map(|x| x.name.clone()).collect::<Vec<_>>());
         // the one that is gone sorts last, holding the zero it is now, and keeps every figure it had
-        assert_eq!(40, rows[2].before.lines);
-        assert_eq!(30, rows[2].before.code_lines);
-        assert_eq!(0, rows[2].now.lines);
+        assert_eq!(40, rows[2].baseline.lines);
+        assert_eq!(30, rows[2].baseline.code_lines);
+        assert_eq!(0, rows[2].subject.lines);
         // and the one that appeared has a whole empty reading behind it rather than a missing one
-        assert_eq!(0, rows[1].before.lines);
-        assert_eq!(60, rows[1].now.lines);
+        assert_eq!(0, rows[1].baseline.lines);
+        assert_eq!(60, rows[1].subject.lines);
 
         // '--top' cuts these rows the way it cuts the report, and a document asks for no cut
-        assert_eq!(2, comparison_rows(&before, &now, SortCriterion::Lines, Some(2)).len());
-        assert_eq!(3, comparison_rows(&before, &now, SortCriterion::Lines, None).len());
+        assert_eq!(2, create_comparison_rows(&baseline, &subject, SortCriterion::Lines, Some(2)).len());
+        assert_eq!(3, create_comparison_rows(&baseline, &subject, SortCriterion::Lines, None).len());
 
         // and '--sort' orders them, as it does everywhere else
         assert_eq!(vec!["Go".to_owned(), "Java".to_owned(), "Rust".to_owned()],
-                comparison_rows(&before, &now, SortCriterion::Name, None).iter()
+                create_comparison_rows(&baseline, &subject, SortCriterion::Name, None).iter()
                         .map(|x| x.name.clone()).collect::<Vec<_>>());
     }
 
@@ -452,7 +643,7 @@ mod tests {
         // follow the second reading and find the first's wherever it put them
         let before = result(vec![module(Some("cli"), 40), module(Some("core"), 100), module(None, 7)]);
         let now = result(vec![module(Some("core"), 120), module(Some("cli"), 44), module(None, 9)]);
-        let pairs = paired_modules(&before, &now).unwrap();
+        let pairs = pair_modules(&before, &now).unwrap();
         assert_eq!(vec![Some("core"), Some("cli"), None], pairs.iter().map(|x| x.name).collect::<Vec<_>>());
         assert_eq!(100, pairs[0].before.total.lines);
         assert_eq!(120, pairs[0].now.total.lines);
@@ -460,21 +651,147 @@ mod tests {
 
         // One name that is not on both sides takes the whole block with it, whichever side has it,
         // and so does the leftover, which is a member like any other
-        assert!(paired_modules(&before, &result(vec![module(Some("core"), 120), module(Some("web"), 44),
+        assert!(pair_modules(&before, &result(vec![module(Some("core"), 120), module(Some("web"), 44),
                 module(None, 9)])).is_none());
-        assert!(paired_modules(&before, &result(vec![module(Some("core"), 120), module(Some("cli"), 44)])).is_none());
-        assert!(paired_modules(&result(vec![module(None, 100)]), &now).is_none());
+        assert!(pair_modules(&before, &result(vec![module(Some("core"), 120), module(Some("cli"), 44)])).is_none());
+        assert!(pair_modules(&result(vec![module(None, 100)]), &now).is_none());
 
-        // A run that named nothing has the one module holding everything, which pairs with another
-        // such run: there is nothing to show for it, and that is the caller's question, not this one
+        // A run that named nothing has the one module holding everything, and a pair of those has
+        // nothing to show: both callers asked exactly this and answered it identically, so the
+        // question moved in here
         let plain = result(vec![module(None, 100)]);
-        assert_eq!(1, paired_modules(&plain, &plain).unwrap().len());
+        assert!(pair_modules(&plain, &plain).is_none());
         assert!(!plain.has_modules());
 
         // and the sentence that names them says which they were, the leftovers included, while a
         // run that declared none answers with the absence itself rather than a word for it
-        assert_eq!(Some("'core', 'cli', '(unnamed)'".to_owned()), module_names(&now));
-        assert_eq!(None, module_names(&plain));
+        assert_eq!(Some("'core', 'cli', '(unnamed)'".to_owned()), format_module_names(&now));
+        assert_eq!(None, format_module_names(&plain));
+    }
+
+    // The one list both surfaces render, so what it holds and in which order is the whole of what
+    // either can show. Every kind at once, so the order is pinned where it is decided.
+    #[test]
+    fn the_notes_carry_every_fact_the_reader_is_owed_in_reading_order() {
+        let reading = |name: &str, version: &str, modules: Vec<ModuleResult>| {
+            let per_language = hashmap!["Rust".to_owned() => stats(100, 70, 2)];
+            Reading {
+                source: Source::Document { path: name.to_owned() },
+                taken: "2026-08-07T10:00:00+03:00".to_owned(),
+                version: version.to_owned(),
+                scope: scope_of(&mezura_core::EngineConfig::default()),
+                warnings: Vec::new(),
+                result: RunResult {
+                    total: Stats::total_of(&per_language), per_language, modules,
+                    faulty_files: Vec::new(), targets: Vec::new(), unreadable_dirs: Vec::new(),
+                    files_present: mezura_core::FilesPresent {total_files: 2, relevant_files: 2, excluded_files: 0},
+                    performance: mezura_core::Performance {duration_millis: 0, threads: mezura_core::Threads::new(1, 1)}
+                }
+            }
+        };
+        let module = |name: &str| {
+            let per_language = hashmap!["Rust".to_owned() => stats(50, 40, 1)];
+            ModuleResult { name: Some(name.to_owned()), total: Stats::total_of(&per_language), per_language }
+        };
+
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        config.view.layout = crate::config_manager::Layout::List;
+        let adopted = Note::SettingsAdopted { from: "old.json".to_owned(), settings: vec!["--exclude"] };
+
+        let mut baseline = reading("old.json", "2.9.0", vec![module("api")]);
+        baseline.scope.braces_as_code = true;
+        baseline.warnings.push(DocumentWarning { code: "language-file-unreadable".to_owned(),
+                affects: "counts".to_owned(), message: "'Lua.txt' could not be used.".to_owned() });
+        let subject = reading("new.json", "3.0.0", vec![module("web")]);
+
+        let notes = determine_comparison_notes(&baseline, &subject, &config, vec![adopted], true);
+        assert_eq!(vec![
+            Note::SettingsAdopted { from: "old.json".to_owned(), settings: vec!["--exclude"] },
+            Note::SettingsDiffer { baseline: "old.json".to_owned(), subject: "new.json".to_owned(),
+                    settings: vec!["--braces-as-code"] },
+            Note::VersionsDiffer { baseline: "old.json".to_owned(), baseline_version: "2.9.0".to_owned(),
+                    subject: "new.json".to_owned(), subject_version: "3.0.0".to_owned() },
+            Note::CountsInDoubt { about: "old.json".to_owned(),
+                    doubts: vec!["'Lua.txt' could not be used. (language-file-unreadable)".to_owned()] },
+            Note::ModulesDiffer { baseline: "old.json".to_owned(), subject: "new.json".to_owned(),
+                    baseline_modules: Some("'api'".to_owned()), subject_modules: Some("'web'".to_owned()) },
+            Note::LayoutFallback { layout: "list" }
+        ], notes);
+
+        // and two readings with nothing between them owe the reader nothing
+        config.view.layout = crate::config_manager::Layout::Table;
+        let plain = reading("a.json", "3.0.0", Vec::new());
+        assert!(determine_comparison_notes(&plain, &reading("b.json", "3.0.0", Vec::new()), &config, Vec::new(), true).is_empty());
+
+        // a doubt about the settings alone is not a doubt about the counts
+        let mut settled = reading("a.json", "3.0.0", Vec::new());
+        settled.warnings.push(DocumentWarning { code: "config-value-ignored".to_owned(),
+                affects: "settings".to_owned(), message: "ignored.".to_owned() });
+        assert!(determine_comparison_notes(&settled, &reading("b.json", "3.0.0", Vec::new()), &config, Vec::new(), true).is_empty());
+    }
+
+    // Settings reach a side that is about to be counted and never a document, whose numbers are
+    // already fixed, so which combination of sources was named decides whether anything is adopted
+    // at all. Written out in full because the answer is a guard over an or-pattern, where the
+    // both-documents case is the one that quietly goes wrong.
+    #[test]
+    fn a_documents_settings_reach_a_side_that_is_counted_and_no_other() {
+        let dir = crate::paths::test_paths::SCRATCH_DIR.to_owned() + "diff-plan-sources/";
+        std::fs::create_dir_all(&dir).unwrap();
+        let document = |name: &str, braces: bool| {
+            let path = format!("{dir}{name}.json");
+            let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+            config.engine.braces_as_code = braces;
+            let per_language = hashmap!["Rust".to_owned() => stats(100, 70, 2)];
+            let result = mezura_core::RunResult {
+                total: Stats::total_of(&per_language), per_language, modules: Vec::new(),
+                faulty_files: Vec::new(), targets: Vec::new(), unreadable_dirs: Vec::new(),
+                files_present: mezura_core::FilesPresent {total_files: 2, relevant_files: 2, excluded_files: 0},
+                performance: mezura_core::Performance {duration_millis: 0, threads: mezura_core::Threads::new(1, 1)}
+            };
+            std::fs::write(&path, crate::json_printer::create_document(&result, &chrono::Local::now(), &config)).unwrap();
+            path
+        };
+        let with_braces = document("with-braces", true);
+        let without = document("without-braces", false);
+
+        // 'braces_as_code' is false on a fresh configuration, so a document that recorded it true
+        // is a real difference and every case below is asking whether that difference travels
+        let adopted_by = |operand: &str| {
+            let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+            config.view.diff_against = Some(operand.to_owned());
+            let request = DiffRequest::of(&mut config, &[]).unwrap().unwrap();
+            let notes = match request {
+                DiffRequest::BetweenTwoReadings(x) => x.notes_so_far,
+                DiffRequest::AgainstThisRun(x) => x.notes_so_far
+            };
+            (notes, config.engine.braces_as_code)
+        };
+
+        // one document beside something that will be counted, from either side and in the single
+        // form: the counting takes the document's value
+        for operand in [with_braces.clone(), format!("{with_braces}..HEAD"), format!("HEAD..{with_braces}")] {
+            let (notes, braces) = adopted_by(&operand);
+            assert_eq!(vec![Note::SettingsAdopted { from: "with-braces.json".to_owned(),
+                    settings: vec!["--braces-as-code"] }], notes, "nothing was adopted for '{operand}'");
+            assert!(braces, "the value was reported as adopted and not applied, for '{operand}'");
+        }
+
+        // Two documents: both sets of numbers are already fixed, so there is nothing to reach and
+        // the difference is reported instead. Both orders, because only the one whose first side
+        // carries the difference can tell a working guard from a missing one.
+        for operand in [format!("{with_braces}..{without}"), format!("{without}..{with_braces}")] {
+            let (notes, braces) = adopted_by(&operand);
+            assert!(notes.is_empty(), "a document was overridden by another document, for '{operand}': {notes:?}");
+            assert!(!braces);
+        }
+
+        // and two revisions have no document to take anything from
+        let (notes, braces) = adopted_by("HEAD~1..HEAD");
+        assert!(notes.is_empty(), "{notes:?}");
+        assert!(!braces);
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     // Two readings taken under different rules are two measurements, and the difference between them
@@ -489,31 +806,31 @@ mod tests {
             files_present: mezura_core::FilesPresent {total_files: 2, relevant_files: 2, excluded_files: 0},
             performance: mezura_core::Performance {duration_millis: 0, threads: mezura_core::Threads::new(1, 1)}
         };
-        let document = crate::json_reader::parse(&crate::json_printer::document(&result,
+        let document = crate::json_reader::parse(&crate::json_printer::create_document(&result,
                 &chrono::Local::now(), &crate::config_manager::Configuration::new(vec!["./src".to_owned()]))).unwrap();
-        assert!(settings_that_differ(&document.scope, &scope_of(&config.engine)).is_empty());
+        assert!(find_settings_that_differ(&document.scope, &scope_of(&config.engine)).is_empty());
 
         // the order they were written in is not a difference
         config.engine.exclude_dirs = vec!["target".to_owned()];
-        assert_eq!(vec!["--exclude"], settings_that_differ(&document.scope, &scope_of(&config.engine)));
+        assert_eq!(vec!["--exclude"], find_settings_that_differ(&document.scope, &scope_of(&config.engine)));
 
         // It decides which language a file is counted as, so a run that forced one and a run that
         // did not measured different things and the difference is not code that changed
         config.engine.exclude_dirs = Vec::new();
         config.engine.forced_languages = hashmap!["m".to_owned() => "matlab".to_owned()];
-        assert_eq!(vec!["--force-lang"], settings_that_differ(&document.scope, &scope_of(&config.engine)));
+        assert_eq!(vec!["--force-lang"], find_settings_that_differ(&document.scope, &scope_of(&config.engine)));
 
         config.engine.forced_languages = HashMap::new();
         config.engine.braces_as_code = true;
         config.engine.no_gitignore = true;
-        assert_eq!(vec!["--braces-as-code", "--no-gitignore"], settings_that_differ(&document.scope, &scope_of(&config.engine)));
+        assert_eq!(vec!["--braces-as-code", "--no-gitignore"], find_settings_that_differ(&document.scope, &scope_of(&config.engine)));
 
         // and hiding the keywords is among them: it moves no line or code count, but a side that
         // did not count keywords would read as every keyword written since
         config.engine.braces_as_code = false;
         config.engine.no_gitignore = false;
         config.engine.count_keywords = false;
-        assert_eq!(vec!["--hide keywords"], settings_that_differ(&document.scope, &scope_of(&config.engine)));
+        assert_eq!(vec!["--hide keywords"], find_settings_that_differ(&document.scope, &scope_of(&config.engine)));
     }
 
     // The settings of a document reach whatever is counted against it, unless this run's own
@@ -546,8 +863,8 @@ mod tests {
 
         // The same difference with the value typed stays as typed, and is not reported as taken
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
-        config.typed.braces_as_code = true;
-        config.typed.exclude = true;
+        config.typed_explicitly.braces_as_code = true;
+        config.typed_explicitly.exclude = true;
         assert_eq!(vec!["--no-gitignore"], resolve_settings(&document, &mut config));
         assert!(!config.engine.braces_as_code);
         assert!(config.engine.exclude_dirs.is_empty());
@@ -579,7 +896,7 @@ mod tests {
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         config.engine.count_keywords = false;
         config.view.hidden.keywords = true;
-        config.typed.hide_keywords = true;
+        config.typed_explicitly.hide_keywords = true;
         assert!(resolve_settings(&with_keywords, &mut config).is_empty());
         assert!(!config.engine.count_keywords && config.view.hidden.keywords);
     }

@@ -122,9 +122,9 @@ fn write_current_log(writer: &mut BufWriter<File>, config: &Configuration, datet
     writer.write_all(format!("    Lines: {}\n",total.lines).as_bytes())?;
     writer.write_all(format!("        Code: {}\n",total.code_lines).as_bytes())?;
     writer.write_all(format!("        Comments: {}\n",total.comment_lines).as_bytes())?;
-    writer.write_all(format!("        Extra: {}\n",total.extra_lines()).as_bytes())?;
+    writer.write_all(format!("        Extra: {}\n",total.calculate_extra_lines()).as_bytes())?;
     writer.write_all(format!("    Total Size: {}\n",total.bytes).as_bytes())?;
-    writer.write_all(format!("        Average Size: {}\n",total.average_size()).as_bytes())?;
+    writer.write_all(format!("        Average Size: {}\n",total.calculate_average_size()).as_bytes())?;
     if result.has_modules() {
         writer.write_all(b"    Modules:\n")?;
         for module in &result.modules {
@@ -134,7 +134,7 @@ fn write_current_log(writer: &mut BufWriter<File>, config: &Configuration, datet
             writer.write_all(format!("            Lines: {}\n", stats.lines).as_bytes())?;
             writer.write_all(format!("                Code: {}\n", stats.code_lines).as_bytes())?;
             writer.write_all(format!("                Comments: {}\n", stats.comment_lines).as_bytes())?;
-            writer.write_all(format!("                Extra: {}\n", stats.extra_lines()).as_bytes())?;
+            writer.write_all(format!("                Extra: {}\n", stats.calculate_extra_lines()).as_bytes())?;
         }
     }
     writer.write_all(b"\n\n")?;

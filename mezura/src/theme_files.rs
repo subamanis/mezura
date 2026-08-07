@@ -25,9 +25,9 @@ pub fn load_theme(name: &str, themes_dir: &str) -> Option<super::theme::ThemeFil
 // Flattened on purpose: the reason a theme file exists is that it can be handed to someone else, so
 // it carries values and not a reference to whatever it was built on top of.
 pub fn save_theme_to_file(themes_dir: &str, name: &str, theme: &super::theme::Theme) -> io::Result<()> {
-    let styles = theme.non_default_tokens().into_iter().map(|(token, value)| (token.to_owned(), value)).collect::<Vec<_>>();
+    let styles = theme.find_non_default_tokens().into_iter().map(|(token, value)| (token.to_owned(), value)).collect::<Vec<_>>();
     fs::create_dir_all(themes_dir)?;
-    fs::write(themes_dir.to_owned() + name + ".txt", super::theme::theme_file_contents(&styles))
+    fs::write(themes_dir.to_owned() + name + ".txt", super::theme::create_theme_file_contents(&styles))
 }
 
 pub fn generate_theme_editor_page() -> io::Result<String> {
@@ -47,7 +47,7 @@ pub fn generate_theme_editor_page() -> io::Result<String> {
         let Ok(contents) = fs::read_to_string(&path) else { continue };
         // The page edits the language slots only, so the rest of the theme is resolved and dropped
         let resolved = super::theme::resolve(&super::theme::parse_theme_file(&contents).0, &[], &[]);
-        entries.push((stem.to_owned(), resolved.language_colors().iter().map(super::theme::color_to_config_string).collect()));
+        entries.push((stem.to_owned(), resolved.get_language_colors().iter().map(super::theme::color_to_config_string).collect()));
     }
     entries.sort_by_key(|x| x.0.to_lowercase());
 
