@@ -800,12 +800,9 @@ The priorities of the specified flags are:
 
 ## Logs and Progress
 Inside the 'data/logs' folder, the program will save log files that correspond to saved configurations everytime the '--log' flag is used. <br>
-Inside the log files, the date and time of the execution and the name of the log (if specified) are saved, along with information about the current configuration (like the target directories, whether braces should be considered code, etc, so you can see if at some point the configuration got modified), and also the total files, lines, code lines,
-comment lines, extra lines, size and average size of the execution. They are in an easy to parse format for external use also. <br>
+A log is a .jsonl file: one JSON entry per line, the newest first, so it is read by any JSON tool one line at a time. Each entry records the date and time of the execution and the name of the log (if specified), the settings the run was counted with (the target directories, whether braces count as code, and so on, so you can see if at some point the configuration got modified), and the total files, lines, code lines, comment lines and size of the execution. <br>
 
-Entries written before v3.0.0 have no comment count, and their "Extra" included the comments. Such an entry is recognised and its extra lines are printed without a comparison, instead of reporting a drop that never happened. <br>
-
-A run that names its targets writes a "Modules" block under the totals of its entry, and the progress section then carries one narrow line per module: which of them grew, and by how much. A module that was not there last time, or that is not there any more, is named as such instead of being compared against nothing. An entry written by a run that named none has no such block, and is read exactly as it always was. <br>
+A run that names its targets records its modules in the entry, and the progress section then carries one narrow line per module: which of them grew, and by how much. A module that was not there last time, or that is not there any more, is named as such instead of being compared against nothing. An entry written by a run that named none has no such block. <br>
 
 By using the '--compare <N>' flag, the (N) previous logged executions will be retrieved from the file and will be compared and printed to the screen. For example
 for N = 3, it would look like this:
