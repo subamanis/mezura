@@ -168,6 +168,20 @@ Bugfixes:
   -> A setting named by a comparison is now spelled without its dashes, as "braces-as-code" rather
       than "--braces-as-code", both in the sentences above the table and in the "subject" of a JSON
       warning. It is the same name the progress section already used for the same thing.
+  -> Each side of a comparison document now records the directories it measured, under
+      "scope.dirs", the way a run document already did. Without it, two sides that measured
+      different trees could not be told apart from code that changed. A side counted from a git
+      revision records the directories as they were asked for, not the temporary checkout they
+      were counted in.
+  -> A comparison now says above its table when a side's own scan leaves the numbers in doubt:
+      a side that found no relevant files at all, one whose files failed to be parsed, and one
+      whose directories could not be read. Before, a baseline that failed to parse half its files
+      simply read as code that shrank. What this run's own scan found is reported as it happens,
+      as before.
+  -> The "scan" block a comparison writes for a side taken from a document now carries that run's
+      true faulty and unreadable counts. It used to say zero whenever the document had not been
+      written with "--show-faulty-files", which no longer decides the counts, only the lists of
+      paths.
   -> The "scan" block of a JSON document now also says how many directories could not be read, and
       every side of a comparison document carries that whole block, so a side that failed to read
       half its files is no longer indistinguishable from a side whose code shrank.

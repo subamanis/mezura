@@ -400,7 +400,8 @@ fn create_compared_rows(pairs: Option<&[super::diff::ModulePair]>, baseline: &Ru
         config: &Configuration) -> Vec<ComparedRow>
 {
     let languages_of = |baseline_languages: &HashMap<String, Stats>, subject_languages: &HashMap<String, Stats>, indent: &str| {
-        super::diff::create_comparison_rows(baseline_languages, subject_languages, config.view.sort_by, config.view.top_n).into_iter()
+        super::diff::create_comparison_rows(baseline_languages, subject_languages, config.view.sort_by, config.view.top_n)
+                .0.into_iter()
                 .map(|change| ComparedRow { name: indent.to_owned() + &change.name,
                         kind: RowKind::Language, baseline: change.baseline, subject: change.subject })
                 .collect::<Vec<_>>()
@@ -428,8 +429,8 @@ fn create_compared_rows(pairs: Option<&[super::diff::ModulePair]>, baseline: &Ru
 fn create_group_with_baseline<'a>(name: Option<&'a str>, baseline: &'a HashMap<String, Stats>,
         subject: &'a HashMap<String, Stats>, total: &'a Stats, config: &Configuration) -> Group<'a>
 {
-    let rows = super::diff::create_comparison_rows(baseline, subject, config.view.sort_by, config.view.top_n);
-    let hidden = (subject.len() + baseline.keys().filter(|x| !subject.contains_key(*x)).count()) - rows.len();
+    let (rows, union) = super::diff::create_comparison_rows(baseline, subject, config.view.sort_by, config.view.top_n);
+    let hidden = union - rows.len();
     let languages = rows.into_iter().map(|row| row.name)
             .filter(|language| subject.contains_key(language)).collect();
 
@@ -442,11 +443,12 @@ fn create_group_with_baseline<'a>(name: Option<&'a str>, baseline: &'a HashMap<S
 fn count_languages_hidden_by_top(pairs: Option<&[super::diff::ModulePair]>, baseline: &RunResult,
         subject: &RunResult, top: Option<usize>) -> usize
 {
-    let Some(top) = top else {
+    if top.is_none() {
         return 0;
-    };
+    }
     let cut = |before: &HashMap<String, Stats>, now: &HashMap<String, Stats>| {
-        (now.len() + before.keys().filter(|x| !now.contains_key(*x)).count()).saturating_sub(top)
+        let (rows, union) = super::diff::create_comparison_rows(before, now, SortCriterion::Lines, top);
+        union - rows.len()
     };
 
     match pairs {
@@ -474,6 +476,8 @@ so part of the difference below may be a language counted better since, and not 
         Note::CountsInDoubt { about, doubts } => format!("{}\n{}", theme.warning.paint(&format!(
                 "The run that took '{about}' was not sure of its own counts:")),
                 doubts.iter().map(|x| format!("-- {x}")).collect::<Vec<_>>().join("\n")),
+        Note::NothingCounted { about } => theme.warning.paint(&format!(
+                "'{about}' found no relevant files, so its side of every figure is zero.")).to_string(),
         Note::ModulesDiffer { baseline, subject, baseline_modules, subject_modules } => {
             // The word 'modules' is said once, by the first side, and the second reads on from it
             let first = match baseline_modules {
@@ -554,8 +558,7 @@ fn format_comparison_heading(theme: &Theme, baseline: &super::diff::Reading, sub
 // out rather than a block of its own: every figure has room for the change beside it only because the
 // share percentages, 'Extra' and 'Size' are gone. The shares are what the change replaces, 'Extra' is
 // the three columns left over subtracted from the lines, and the size is the one figure genuinely
-// dropped. Measured on this repository, the result is 108 characters wide, which is what the details
-// table is today.
+// dropped.
 fn format_comparison_lines(theme: &Theme, rows: &[ComparedRow]) -> Vec<String>
 {
     // The change columns are left unnamed: their values are two to five characters and the word would
@@ -1781,6 +1784,8 @@ mod tests {
 
     fn reading_of(name: &str, taken: &str, modules: Vec<ModuleResult>) -> crate::diff::Reading {
         let per_language = merged(&modules);
+        let total = Stats::total_of(&per_language);
+        let files_present = FilesPresent {total_files: total.files, relevant_files: total.files, excluded_files: 0};
 
         crate::diff::Reading {
             source: crate::diff::Source::Document {path: name.to_owned()},
@@ -1788,8 +1793,10 @@ mod tests {
             version: "3.0.0".to_owned(),
             scope: crate::diff::scope_of(&mezura_core::EngineConfig::default()),
             warnings: Vec::new(),
-            result: RunResult {total: Stats::total_of(&per_language), per_language, modules,
-                    faulty_files: Vec::new(), files_present: FilesPresent::default(), targets: Vec::new(),
+            faulty_files_count: 0,
+            unreadable_dirs_count: 0,
+            result: RunResult {total, per_language, modules,
+                    faulty_files: Vec::new(), files_present, targets: Vec::new(),
                     unreadable_dirs: Vec::new(),
                     performance: mezura_core::Performance {duration_millis: 0, threads: mezura_core::Threads::new(1, 1)}}
         }

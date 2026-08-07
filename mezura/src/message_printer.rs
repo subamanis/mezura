@@ -622,7 +622,7 @@ pub const LOG_HELP  :  &str =
     since a comparison is not logged, and mezura says so instead of writing an entry.
 
 ";
-pub const COMPRARE_LEVEL_HELP  :  &str =
+pub const COMPARE_LEVEL_HELP  :  &str =
 "--compare
 
     1 argument: a number between 0 and 10. Default: 1
@@ -746,7 +746,7 @@ pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 6] = [
     ("Taking the result elsewhere", &[
         (OUTPUT, OUTPUT_HELP),
         (LOG, LOG_HELP),
-        (COMPRARE_LEVEL, COMPRARE_LEVEL_HELP),
+        (COMPARE_LEVEL, COMPARE_LEVEL_HELP),
         (DIFF, DIFF_HELP),
     ]),
     ("Your data directory", &[

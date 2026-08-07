@@ -245,6 +245,8 @@ mod tests {
             version: "3.0.0".to_owned(),
             scope: crate::diff::scope_of(&mezura_core::EngineConfig::default()),
             warnings: Vec::new(),
+            faulty_files_count: 0,
+            unreadable_dirs_count: 0,
             result: result_with(0, 0)
         };
         let comparison = crate::diff::Comparison::of(baseline,

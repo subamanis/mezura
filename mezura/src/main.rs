@@ -28,7 +28,7 @@ mod sources;
 mod suggestions;
 mod theme;
 mod theme_files;
-mod warnings;
+mod warning_collector;
 
 use std::{collections::HashMap, process::ExitCode, time::Instant};
 
@@ -72,7 +72,7 @@ fn main() -> ExitCode {
                     // whose files went uncounted and a reader of the document wants to know which
                     for faulty in &faulty_files {
                         let (file, reason) = (&faulty.file_name, &faulty.error);
-                        crate::warnings::keep(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::LanguageFileUnreadable, file,
+                        crate::warning_collector::keep(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::LanguageFileUnreadable, file,
                                 format!("'{file}' could not be used as a language file, so the files of that language were not counted: {reason}.")));
                     }
                 }
@@ -150,7 +150,7 @@ fn main() -> ExitCode {
         eprintln!("{}", format!("\nLines that could not be read in '{EXTENSION_PRIORITY_FILE_NAME}', and were skipped:\n{}",
                 faulty_priority_lines.join("\n")).yellow());
         for line in &faulty_priority_lines {
-            crate::warnings::keep(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::PriorityLineSkipped, line,
+            crate::warning_collector::keep(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::PriorityLineSkipped, line,
                     format!("'{line}' could not be read in '{EXTENSION_PRIORITY_FILE_NAME}' and was skipped, so any contest it was meant to settle was left to the tiebreak.")));
         }
     }
@@ -184,7 +184,7 @@ fn main() -> ExitCode {
     };
 
     let (languages, reported) = mezura_core::Languages::resolve(&config.engine, languages_available, &extension_priority);
-    crate::warnings::report_language_resolution_warnings(reported);
+    crate::warning_collector::report_language_resolution_warnings(reported);
 
     // Above the run, so that a baseline which turns out not to be one costs no scan of the tree
     let counted_baseline = match baseline_only.map(|x| x.count_baseline(&config, &extension_priority)) {

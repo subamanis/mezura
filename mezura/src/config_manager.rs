@@ -35,7 +35,7 @@ pub const DECIMAL_SEPARATOR  :&str   = "decimal-separator";
 pub const SORT               :&str   = "sort";
 pub const TOP                :&str   = "top";
 pub const LOG                :&str   = "log";
-pub const COMPRARE_LEVEL     :&str   = "compare";
+pub const COMPARE_LEVEL     :&str   = "compare";
 pub const SAVE               :&str   = "save";
 pub const SAVE_THEME         :&str   = "save-theme";
 pub const LOAD               :&str   = "load";
@@ -871,11 +871,11 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             } else {
                 log = Some(LogOption::new(Some(value.to_owned())));
             }
-        } else if command_name == COMPRARE_LEVEL {
+        } else if command_name == COMPARE_LEVEL {
             let compare_num = super::args::parse_usize_value(arguments, MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL);
             if compare_num.is_none() {
-                message_printer::print_help_message_for_command(COMPRARE_LEVEL);
-                return Err(ArgParsingError::IncorrectCommandArgs(COMPRARE_LEVEL.to_owned()))
+                message_printer::print_help_message_for_command(COMPARE_LEVEL);
+                return Err(ArgParsingError::IncorrectCommandArgs(COMPARE_LEVEL.to_owned()))
             } else {
                 compare_level = compare_num
             }
@@ -981,12 +981,12 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         match super::theme_files::load_theme(name, &crate::paths::PERSISTENT_APP_PATHS.themes_dir) {
             Some((styles, errors)) => {
                 for error in &errors {
-                    super::warnings::emit(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::ConfigStyleInvalid, name,
+                    super::warning_collector::emit(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::ConfigStyleInvalid, name,
                             format!("In theme '{name}': {}", error.format())));
                 }
                 config_builder.theme_styles = Some(styles);
             },
-            None => super::warnings::emit(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::ThemeUnavailable, name,
+            None => super::warning_collector::emit(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::ThemeUnavailable, name,
                     format!("Theme '{name}' could not be loaded, the default styles will be used.")))
         }
     }
@@ -1000,7 +1000,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
 
 fn print_config_file_warnings(issues: &[(mezura_core::warnings::Code, String)], config_name: &str) {
     for (code, warning) in issues {
-        super::warnings::emit(mezura_core::warnings::Warning::new(*code, config_name,
+        super::warning_collector::emit(mezura_core::warnings::Warning::new(*code, config_name,
                 format!("In config '{config_name}': {warning}")));
     }
 }
@@ -1029,7 +1029,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
         let is_overridden = match *field {
             DIRS => dirs.is_some(),
             THREADS => threads.is_some(),
-            COMPRARE_LEVEL => compare_level.is_some(),
+            COMPARE_LEVEL => compare_level.is_some(),
             BRACES_AS_CODE => braces_as_code.is_some(),
             SEARCH_IN_DOTTED => should_search_in_dotted.is_some(),
             SHOW_FAULTY_FILES => should_show_faulty_files.is_some(),
@@ -1048,7 +1048,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
         };
 
         if is_overridden {
-            super::warnings::emit(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::ConfigValueIgnored, field,
+            super::warning_collector::emit(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::ConfigValueIgnored, field,
                     format!("Invalid value for the command '--{field}', in config '{config_name}'. The value will be ignored.")));
         } else {
             message_printer::print_help_message_for_command(field);
@@ -1067,7 +1067,7 @@ fn print_warnings_for_commands_that_need_a_loaded_configuration(config_name_to_s
     // command it gave was dropped instead of reading an empty 'warnings'.
     let ignored = |command: &str, message: String| {
         eprintln!("\n{}", message.yellow());
-        super::warnings::keep(mezura_core::warnings::Warning::new(
+        super::warning_collector::keep(mezura_core::warnings::Warning::new(
                 mezura_core::warnings::Code::CommandIgnored, command, message));
     };
 
@@ -1083,7 +1083,7 @@ fn print_warnings_for_commands_that_need_a_loaded_configuration(config_name_to_s
         }
 
         if compare_level.is_some() {
-            ignored(COMPRARE_LEVEL, "'--compare' command will be ignored, since no config file was specified for loading.".to_owned());
+            ignored(COMPARE_LEVEL, "'--compare' command will be ignored, since no config file was specified for loading.".to_owned());
         }
     }
 }

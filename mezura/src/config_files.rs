@@ -211,12 +211,12 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                 if !declared.is_empty() {
                     config_styles = Some(declared);
                 }
-            } else if id == config_manager::COMPRARE_LEVEL {
+            } else if id == config_manager::COMPARE_LEVEL {
                 buf.clear();
                 let _ = reader.read_line(&mut buf);
                 match super::args::parse_usize_value(&buf,MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL) {
                     Some(x) => compare_level = Some(x),
-                    None => issues.invalid_fields.push(config_manager::COMPRARE_LEVEL)
+                    None => issues.invalid_fields.push(config_manager::COMPARE_LEVEL)
                 }
             } else {
                 issues.warnings.push((mezura_core::warnings::Code::ConfigSectionUnknown,
@@ -359,7 +359,7 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
         writer.write_all(theme_name.as_bytes())?;
     }
     if let Some(compare_level) = &config_builder.compare_level {
-        writer.write_all(&[b"\n\n===> ",config_manager::COMPRARE_LEVEL.as_bytes(),b"\n"].concat())?;
+        writer.write_all(&[b"\n\n===> ",config_manager::COMPARE_LEVEL.as_bytes(),b"\n"].concat())?;
         writer.write_all(compare_level.to_string().as_bytes())?;
     }
 
@@ -673,7 +673,7 @@ mod tests {
 
         let (options, issues) = super::super::config_files::parse_config_file(Some("badcfg"), Some(dir_str)).unwrap();
         assert_eq!(issues.invalid_fields, vec![config_manager::THREADS, config_manager::BRACES_AS_CODE,
-                config_manager::COMPRARE_LEVEL, config_manager::SORT]);
+                config_manager::COMPARE_LEVEL, config_manager::SORT]);
         assert!(issues.warnings.is_empty());
         assert_eq!(options.threads, None);
         assert_eq!(options.braces_as_code, None);

@@ -31,7 +31,8 @@ pub fn create_document(result: &RunResult, datetime_now: &DateTime<Local>, confi
         format!("  \"mezura_version\": \"{}\"", escape(config.view.version.trim_start_matches('v'))),
         format!("  \"generated_at\": \"{}\"", datetime_now.to_rfc3339_opts(SecondsFormat::Secs, false)),
         format!("  \"scope\": {}", create_scope_object(config,&result.targets)),
-        format!("  \"scan\": {}", create_scan_object(4, result)),
+        format!("  \"scan\": {}", create_scan_object(4, &result.files_present,
+                result.faulty_files.len(), result.unreadable_dirs.len())),
         format!("  \"total\": {}", create_total_object(total, !config.view.hidden.keywords)),
         format!("  \"languages\": {}", create_languages_array(shown, per_language, config)),
         format!("  \"languages_hidden\": {hidden}"),
@@ -69,7 +70,7 @@ fn create_comparison_document(comparison: &super::diff::Comparison, datetime_now
         config: &Configuration) -> String
 {
     let (baseline, subject) = (&comparison.baseline, &comparison.subject);
-    let rows = super::diff::create_comparison_rows(&baseline.result.per_language, &subject.result.per_language,
+    let (rows, _) = super::diff::create_comparison_rows(&baseline.result.per_language, &subject.result.per_language,
             config.view.sort_by, None);
     let keywords_counted = !config.view.hidden.keywords;
     // Written only when both readings named the same modules, since a module only one of them has
@@ -100,7 +101,7 @@ fn create_comparison_modules_array(pairs: &[super::diff::ModulePair], config: &C
         keywords_counted: bool) -> String
 {
     let entries = pairs.iter().map(|pair| {
-        let rows = super::diff::create_comparison_rows(&pair.before.per_language, &pair.now.per_language,
+        let (rows, _) = super::diff::create_comparison_rows(&pair.before.per_language, &pair.now.per_language,
                 config.view.sort_by, None);
         let name = pair.name.map_or("null".to_owned(), |x| format!("\"{}\"", escape(x)));
         let members = [
@@ -173,8 +174,9 @@ fn create_side_object(reading: &super::diff::Reading) -> String {
     // How the scan of this side went, and only how: without it a side that failed to read half its
     // files looks like a side that shrank, and the triads above cannot say which. Which files those
     // were is a question for a run over that side, not for a comparison of two.
-    members.push(format!("    \"scan\": {}", create_scan_object(6, &reading.result)));
-    members.push(format!("    \"scope\": {}", indent(&create_scope_object_of(&reading.scope))));
+    members.push(format!("    \"scan\": {}", create_scan_object(6, &reading.result.files_present,
+            reading.faulty_files_count, reading.unreadable_dirs_count)));
+    members.push(format!("    \"scope\": {}", indent(&create_scope_object_of(&reading.scope, &reading.result.targets))));
     // Only what the side's own document recorded: what this very process warned about belongs to
     // the comparison and sits at its top level, wherever the run appears in it
     members.push(format!("    \"warnings\": {}", indent(&create_document_warnings_array(&reading.warnings))));
@@ -182,9 +184,12 @@ fn create_side_object(reading: &super::diff::Reading) -> String {
     format!("{{\n{}\n  }}", members.join(",\n"))
 }
 
-// The scope in the shape the run document writes it, from wherever the reading carried it
-fn create_scope_object_of(scope: &super::json_reader::Scope) -> String {
+// The scope in the shape the run document writes it, from wherever the reading carried it. The
+// directories are in it for the same reason they are in the run's: two sides that measured
+// different trees would otherwise read as code that changed.
+fn create_scope_object_of(scope: &super::json_reader::Scope, targets: &[mezura_core::Target]) -> String {
     let members = [
+        format!("    \"dirs\": {}", create_targets_array(targets)),
         format!("    \"exclude\": {}", create_string_array(&scope.exclude)),
         format!("    \"languages\": {}", create_string_array(&scope.languages)),
         format!("    \"excluded_languages\": {}", create_string_array(&scope.excluded_languages)),
@@ -228,7 +233,7 @@ fn create_comparison_warnings_array(notes: &[super::diff::Note]) -> String {
     // What this very process warned about comes first, having been said first: it belongs to the
     // comparison and not to either side, since a side that is a revision was counted by this
     // process too and a document's own warnings are already inside it
-    let mut entries = super::warnings::get_collected_warnings().into_iter()
+    let mut entries = super::warning_collector::get_collected_warnings().into_iter()
             .map(|x| WarningEntry {
                 code: x.code.name().to_owned(), affects: x.affects().name(),
                 subject: x.subject.clone(), message: x.message.clone()
@@ -286,7 +291,7 @@ fn create_note_entries(note: &super::diff::Note) -> Vec<WarningEntry> {
                 format!("{} -> {}", names(baseline_modules), names(subject_modules)),
                 String::from("Module declarations must match between the two readings for the modules to take effect, so this document has no 'modules'."))]
         },
-        Note::CountsInDoubt { .. } | Note::LayoutFallback { .. }
+        Note::CountsInDoubt { .. } | Note::NothingCounted { .. } | Note::LayoutFallback { .. }
         | Note::NoGitignoreInCheckout { .. } | Note::MissingInRevision { .. } => Vec::new()
     }
 }
@@ -355,14 +360,18 @@ fn create_scope_object(config: &Configuration, targets: &[mezura_core::Target]) 
 //
 // The names inside are '<what>_<state>', where the lists that carry the paths are natural English:
 // 'files_faulty' is the count, 'faulty_files' is the array.
-fn create_scan_object(indent: usize, result: &RunResult) -> String {
+// The counts arrive apart from the lists in the result, because for a side read from a document the
+// lists are only there when that run detailed them, while its scan block counted either way
+fn create_scan_object(indent: usize, files_present: &mezura_core::FilesPresent,
+        faulty_files_count: usize, unreadable_dirs_count: usize) -> String
+{
     let pad = " ".repeat(indent);
     let members = [
-        format!("{pad}\"files_found\": {}", result.files_present.total_files),
-        format!("{pad}\"files_of_interest\": {}", result.files_present.relevant_files),
-        format!("{pad}\"files_excluded\": {}", result.files_present.excluded_files),
-        format!("{pad}\"files_faulty\": {}", result.faulty_files.len()),
-        format!("{pad}\"dirs_unreadable\": {}", result.unreadable_dirs.len()),
+        format!("{pad}\"files_found\": {}", files_present.total_files),
+        format!("{pad}\"files_of_interest\": {}", files_present.relevant_files),
+        format!("{pad}\"files_excluded\": {}", files_present.excluded_files),
+        format!("{pad}\"files_faulty\": {faulty_files_count}"),
+        format!("{pad}\"dirs_unreadable\": {unreadable_dirs_count}"),
     ];
 
     format!("{{\n{}\n{}}}", members.join(",\n"), " ".repeat(indent - 2))
@@ -473,7 +482,7 @@ fn create_keywords_object(occurences: &HashMap<String, usize>, indent: usize) ->
 // has never heard of: the question is whether the counts can be trusted, not which of the codes are
 // the serious ones. In emission order, which is the order they were printed in.
 fn create_warnings_array() -> String {
-    let warnings = super::warnings::get_collected_warnings();
+    let warnings = super::warning_collector::get_collected_warnings();
     if warnings.is_empty() {
         return String::from("[]");
     }
@@ -773,7 +782,7 @@ mod tests {
         // this binary adds to it.
         assert!(document_of(&config).contains("\"warnings\": ["));
 
-        super::super::warnings::keep(mezura_core::warnings::Warning::new(
+        super::super::warning_collector::keep(mezura_core::warnings::Warning::new(
                 mezura_core::warnings::Code::ExtensionTiebreak, "a-subject-only-this-test-uses",
                 "quoted \"text\" and a \\ backslash".to_owned()));
 
@@ -836,6 +845,8 @@ mod tests {
             version: "3.0.0".to_owned(),
             scope: crate::diff::scope_of(&mezura_core::EngineConfig::default()),
             warnings: Vec::new(),
+            faulty_files_count: 0,
+            unreadable_dirs_count: 0,
             result: result_of(per_language.clone(), Stats::total_of(&per_language), Vec::new(),
                     FilesPresent {total_files: 2, relevant_files: 2, excluded_files: 0})
         }
@@ -847,10 +858,11 @@ mod tests {
     fn a_comparison_document_holds_both_sides_of_every_figure_and_who_the_sides_were() {
         let config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         let datetime = DateTime::parse_from_rfc3339("2026-08-06T15:00:00+03:00").unwrap().with_timezone(&Local);
-        let from = reading_of(crate::diff::Source::GitRevision {
+        let mut from = reading_of(crate::diff::Source::GitRevision {
                 commit: "030e6e72a1b4c9d8e7f6a5b4c3d2e1f0a9b8c7d6".to_owned(), asked_for: "v2.0.1".to_owned() },
                 hashmap!["Rust".to_owned() => stats_of(2, 3000, 100, 70, 10, hashmap!["structs".to_owned() => 3]),
                          "Java".to_owned() => stats_of(1, 400, 40, 30, 0, HashMap::new())]);
+        from.result.targets = vec![mezura_core::Target::named("core", "D:/proj/src")];
         let to = reading_of(crate::diff::Source::Run,
                 hashmap!["Rust".to_owned() => stats_of(3, 4500, 150, 100, 20, hashmap!["structs".to_owned() => 5]),
                          "Go".to_owned() => stats_of(1, 600, 60, 50, 0, HashMap::new())]);
@@ -861,6 +873,8 @@ mod tests {
         assert!(document.contains("\"commit\": \"030e6e72a1b4c9d8e7f6a5b4c3d2e1f0a9b8c7d6\""));
         assert!(document.contains("\"asked_for\": \"v2.0.1\""));
         assert!(document.contains("\"source\": \"run\""));
+        // each side says what it measured, or two sides over different trees would read as change
+        assert!(document.contains("{\"module\": \"core\", \"path\": \"D:/proj/src\"}"), "{document}");
 
         // every figure is the pair and the journey, so nothing has to be subtracted by the reader
         assert!(document.contains("\"lines\": {\"from\": 140, \"to\": 210, \"change\": 70}"), "{document}");
@@ -933,10 +947,10 @@ mod tests {
         let with_trouble = |source| {
             let mut reading = reading_of(source, hashmap!["Rust".to_owned() => stats_of(1, 30, 10, 5, 0, HashMap::new())]);
             reading.result.files_present = FilesPresent {total_files: 9, relevant_files: 4, excluded_files: 5};
-            reading.result.faulty_files = vec![FaultyFileDetails::new("a.rs".to_owned(), "no".to_owned(), 1),
-                    FaultyFileDetails::new("b.rs".to_owned(), "no".to_owned(), 1)];
-            reading.result.unreadable_dirs = vec![mezura_core::UnreadableDirDetails::new(
-                    "D:/locked".to_owned(), "Access is denied. (os error 5)".to_owned())];
+            // The counts and not the lists, which is what a document written without
+            // '--show-faulty-files' carries: the block has to be right for that side too
+            reading.faulty_files_count = 2;
+            reading.unreadable_dirs_count = 1;
             reading
         };
         let document = create_comparison_document(&crate::diff::Comparison::of(

@@ -17,6 +17,11 @@ pub struct Document {
     // either way, so with anything but zero here the languages do not add up to it.
     pub languages_hidden: usize,
     pub warnings: Vec<DocumentWarning>,
+    // The counts from the scan block, kept apart from the lists in 'result': the lists are written
+    // only when '--show-faulty-files' asked for them, so their length reads zero for a run that
+    // had failures and did not detail them, and these two do not.
+    pub faulty_files_count: usize,
+    pub unreadable_dirs_count: usize,
     pub result: RunResult
 }
 
@@ -134,6 +139,8 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
         generated_at: read_text(root, "generated_at", "")?,
         languages_hidden: read_number(root, "languages_hidden", "")?,
         warnings: parse_warnings(read_list(root, "warnings", "")?)?,
+        faulty_files_count: read_number(scan, "files_faulty", "scan")?,
+        unreadable_dirs_count: read_number(scan, "dirs_unreadable", "scan")?,
         scope,
         result: RunResult {
             per_language,
@@ -480,6 +487,16 @@ mod tests {
         assert!(read.result.total.keyword_occurences.is_empty());
         assert!(!read.scope.keywords_counted);
 
+        // The scan counts come back even when the lists were not asked for, because the lists are
+        // '--show-faulty-files' detail while the counts say whether the numbers are short
+        let mut short = populated().0;
+        short.faulty_files = vec![mezura_core::FaultyFileDetails::new("a.rs".to_owned(), "no".to_owned(), 1)];
+        short.unreadable_dirs = vec![mezura_core::UnreadableDirDetails::new("D:/locked".to_owned(), "no".to_owned())];
+        config.view.set_should_show_faulty_files(false);
+        let undetailed = parse(&create_document(&short, &Local::now(), &config)).unwrap();
+        assert!(undetailed.result.faulty_files.is_empty() && undetailed.result.unreadable_dirs.is_empty());
+        assert_eq!((1, 1), (undetailed.faulty_files_count, undetailed.unreadable_dirs_count));
+
         // A document from a build that had not met the key counted them, all of those builds did,
         // so its absence must not read as a refusal or as keywords that were hidden
         config.view.hidden.keywords = false;
@@ -576,7 +593,8 @@ mod tests {
             \"scope\": {{\"dirs\": [], \"exclude\": [], \"languages\": [], \"excluded_languages\": [], \
                 \"forced_languages\": {{}}, \"braces_as_code\": false, \"search_in_dotted\": false, \
                 \"gitignore\": true, \"keywords_counted\": true}}, \
-            \"scan\": {{\"files_found\": 0, \"files_of_interest\": 0, \"files_excluded\": 0, \"files_faulty\": 0}}, \
+            \"scan\": {{\"files_found\": 0, \"files_of_interest\": 0, \"files_excluded\": 0, \
+                \"files_faulty\": 0, \"dirs_unreadable\": 0}}, \
             \"total\": {{\"files\": 0, \"lines\": 0, \"code\": 0, \"comments\": 0, \"bytes\": 0}}, \
             \"languages\": [], \"languages_hidden\": 0, \"faulty_files\": [], \"unreadable_dirs\": [], \
             \"warnings\": [], {body}}}");

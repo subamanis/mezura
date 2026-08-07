@@ -38,13 +38,20 @@ pub fn count_git_revision(git_revision: &str, config: &Configuration, languages:
         notes.push(Note::NoGitignoreInCheckout { git_revision: git_revision.to_owned() });
     }
 
-    // A target the revision never had counts as nothing rather than stopping the run
+    // A target the revision never had counts as nothing rather than stopping the run. The declared
+    // form of each one that was found is kept beside its checkout path, because the checkout is a
+    // temporary directory: a reading that named it would say a different tree on every run, when
+    // what was measured is the declared tree as that commit held it.
     let mut dirs = Vec::with_capacity(config.engine.dirs.len());
+    let mut counted_declared = Vec::with_capacity(config.engine.dirs.len());
     let mut missing = Vec::new();
     for target in &config.engine.dirs {
         let (_, prefix) = super::git::find_repository_of(&target.path)?;
         match checkout.find_target_of(&prefix) {
-            Some(path) => dirs.push(mezura_core::Target { module: target.module.clone(), path }),
+            Some(path) => {
+                dirs.push(mezura_core::Target { module: target.module.clone(), path });
+                counted_declared.push(target.clone());
+            },
             None => missing.push(target.path.clone())
         }
     }
@@ -67,8 +74,10 @@ pub fn count_git_revision(git_revision: &str, config: &Configuration, languages:
         // Resolved against this configuration, as 'run' demands: the two differ only in where they
         // look, and the complaints are voiced by whoever asked for the counting
         let resolved = mezura_core::Languages::resolve(&of_git_revision, languages, extension_priority).0;
-        mezura_core::run(&of_git_revision, resolved, |_| {})
-                .map_err(|x| GitError::Refused { doing: "counting the revision", message: x.to_string() })?
+        let mut result = mezura_core::run(&of_git_revision, resolved, |_| {})
+                .map_err(|x| GitError::Refused { doing: "counting the revision", message: x.to_string() })?;
+        result.targets = counted_declared;
+        result
     };
 
     Ok((Reading::of_git_revision(git_revision, checkout.commit.clone(), checkout.taken_at.clone(),

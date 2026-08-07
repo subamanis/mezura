@@ -35,6 +35,11 @@ pub struct Reading {
     pub scope: Scope,
     // Empty for a reading counted by this very run, whose warnings were printed as they happened
     pub warnings: Vec<DocumentWarning>,
+    // Counts, not lists, because a document details the failures only when '--show-faulty-files'
+    // asked it to while its scan block counts them either way: the lists in 'result' can read
+    // empty for a side whose counts are short.
+    pub faulty_files_count: usize,
+    pub unreadable_dirs_count: usize,
     pub result: RunResult
 }
 
@@ -48,6 +53,8 @@ impl Reading {
             version: super::config_manager::VERSION_ID.trim_start_matches('v').to_owned(),
             scope: scope_of(engine),
             warnings: Vec::new(),
+            faulty_files_count: result.faulty_files.len(),
+            unreadable_dirs_count: result.unreadable_dirs.len(),
             result
         }
     }
@@ -61,6 +68,8 @@ impl Reading {
             version: super::config_manager::VERSION_ID.trim_start_matches('v').to_owned(),
             scope: scope_of(engine),
             warnings: Vec::new(),
+            faulty_files_count: result.faulty_files.len(),
+            unreadable_dirs_count: result.unreadable_dirs.len(),
             result: result.clone()
         }
     }
@@ -154,7 +163,7 @@ impl BothSidesNamed {
             extension_priority: &HashMap<String, Vec<String>>) -> Result<Comparison, String>
     {
         let (_, reported) = Languages::resolve(&config.engine, self.languages.clone(), extension_priority);
-        super::warnings::report_language_resolution_warnings(reported);
+        super::warning_collector::report_language_resolution_warnings(reported);
 
         let (baseline, notes) = self.baseline.into_reading(config, self.languages.clone(), extension_priority)?;
         let mut notes_so_far = self.notes_so_far;
@@ -300,6 +309,8 @@ pub enum Note {
     SettingsDiffer { baseline: String, subject: String, settings: Vec<&'static str> },
     VersionsDiffer { baseline: String, baseline_version: String, subject: String, subject_version: String },
     CountsInDoubt { about: String, doubts: Vec<String> },
+    // A side whose scan found nothing at all, which the table can only show as zeros
+    NothingCounted { about: String },
     // None is a side that declared no modules at all
     ModulesDiffer { baseline: String, subject: String, baseline_modules: Option<String>, subject_modules: Option<String> },
     LayoutFallback { layout: &'static str },
@@ -350,6 +361,7 @@ pub fn load(path: &str) -> Result<Reading, LoadError> {
 
     Ok(Reading { source: Source::Document { path: path.to_owned() }, taken: document.generated_at,
             version: document.mezura_version, scope: document.scope, warnings: document.warnings,
+            faulty_files_count: document.faulty_files_count, unreadable_dirs_count: document.unreadable_dirs_count,
             result: document.result })
 }
 
@@ -362,11 +374,12 @@ pub fn change_of(before: usize, now: usize) -> Change {
     }
 }
 
-// Every language of either reading, sorted the way the report would have been. 'top' is the screen's
-// cut and is not applied when a document is being written, which holds every row the same way the
-// run's own document does.
+// Every language of either reading, sorted the way the report would have been, and how many
+// languages that union holds: rows and union come from one place, so 'union - rows.len()' is what
+// '--top' hid and can never underflow. 'top' is the screen's cut and is not applied when a document
+// is being written, which holds every row the same way the run's own document does.
 pub fn create_comparison_rows(baseline: &HashMap<String, Stats>, subject: &HashMap<String, Stats>,
-        sort_by: SortCriterion, top: Option<usize>) -> Vec<LanguageStatsChange>
+        sort_by: SortCriterion, top: Option<usize>) -> (Vec<LanguageStatsChange>, usize)
 {
     // Held at what the subject has, so one that disappeared sorts to the bottom where a zero belongs
     let mut merged = subject.clone();
@@ -377,11 +390,11 @@ pub fn create_comparison_rows(baseline: &HashMap<String, Stats>, subject: &HashM
     let names = super::result_printer::get_sorted_language_names(&merged, sort_by);
     let shown = top.map_or(names.len(), |x| x.min(names.len()));
 
-    names[..shown].iter().map(|name| LanguageStatsChange {
+    (names[..shown].iter().map(|name| LanguageStatsChange {
         baseline: baseline.get(name).cloned().unwrap_or_default(),
         subject: subject.get(name).cloned().unwrap_or_default(),
         name: name.clone()
-    }).collect()
+    }).collect(), merged.len())
 }
 
 // The modules of the two readings matched up by name, and None when there is nothing to show: the
@@ -523,12 +536,30 @@ fn determine_comparison_notes(baseline: &Reading, subject: &Reading, config: &Co
                 baseline_version: baseline.version.clone(), subject: subject.determine_display_name(),
                 subject_version: subject.version.clone() });
     }
-    // What the run that wrote a reading said about its own counts: an unreadable language file
-    // leaves a whole language at zero, which this run would report as a language that appeared out
-    // of nowhere
+    // How each side's own scan went, said here because no other voice says it: the run's side is
+    // announced by 'present' as it happens, but a document or a revision counted on the spot is
+    // otherwise silent, and a side that failed to parse half its files reads as code that shrank.
     for reading in [baseline, subject] {
-        let doubts = reading.warnings.iter().filter(|x| x.affects == COUNTS_AFFECTED)
-                .map(|x| format!("{} ({})", x.message, x.code)).collect::<Vec<_>>();
+        let this_run = matches!(reading.source, Source::Run);
+        if !this_run && reading.result.files_present.relevant_files == 0 {
+            notes.push(Note::NothingCounted { about: reading.determine_display_name() });
+        }
+
+        let mut doubts = Vec::new();
+        if !this_run && reading.faulty_files_count > 0 {
+            doubts.push(format!("{} of its files could not be parsed, so its counts are short by that",
+                    reading.faulty_files_count));
+        }
+        if !this_run && reading.unreadable_dirs_count > 0 {
+            let (n, dirs) = (reading.unreadable_dirs_count,
+                    if reading.unreadable_dirs_count == 1 {"directory"} else {"directories"});
+            doubts.push(format!("{n} {dirs} could not be read, so nothing inside was counted"));
+        }
+        // What the run that wrote a reading said about its own counts: an unreadable language file
+        // leaves a whole language at zero, which this run would report as a language that appeared
+        // out of nowhere
+        doubts.extend(reading.warnings.iter().filter(|x| x.affects == COUNTS_AFFECTED)
+                .map(|x| format!("{} ({})", x.message, x.code)));
         if !doubts.is_empty() {
             notes.push(Note::CountsInDoubt { about: reading.determine_display_name(), doubts });
         }
@@ -606,7 +637,8 @@ mod tests {
         let baseline = hashmap!["Rust".to_owned() => stats(100, 70, 2), "Java".to_owned() => stats(40, 30, 1)];
         let subject = hashmap!["Rust".to_owned() => stats(150, 100, 3), "Go".to_owned() => stats(60, 50, 1)];
 
-        let rows = create_comparison_rows(&baseline, &subject, SortCriterion::Lines, None);
+        let (rows, union) = create_comparison_rows(&baseline, &subject, SortCriterion::Lines, None);
+        assert_eq!(3, union);
         assert_eq!(vec!["Rust".to_owned(), "Go".to_owned(), "Java".to_owned()],
                 rows.iter().map(|x| x.name.clone()).collect::<Vec<_>>());
         // the one that is gone sorts last, holding the zero it is now, and keeps every figure it had
@@ -617,13 +649,15 @@ mod tests {
         assert_eq!(0, rows[1].baseline.lines);
         assert_eq!(60, rows[1].subject.lines);
 
-        // '--top' cuts these rows the way it cuts the report, and a document asks for no cut
-        assert_eq!(2, create_comparison_rows(&baseline, &subject, SortCriterion::Lines, Some(2)).len());
-        assert_eq!(3, create_comparison_rows(&baseline, &subject, SortCriterion::Lines, None).len());
+        // '--top' cuts these rows the way it cuts the report, and never the union, so what it hid
+        // is always the difference of the two. A document asks for no cut.
+        let (cut, union) = create_comparison_rows(&baseline, &subject, SortCriterion::Lines, Some(2));
+        assert_eq!((2, 3), (cut.len(), union));
+        assert_eq!(3, create_comparison_rows(&baseline, &subject, SortCriterion::Lines, None).0.len());
 
         // and '--sort' orders them, as it does everywhere else
         assert_eq!(vec!["Go".to_owned(), "Java".to_owned(), "Rust".to_owned()],
-                create_comparison_rows(&baseline, &subject, SortCriterion::Name, None).iter()
+                create_comparison_rows(&baseline, &subject, SortCriterion::Name, None).0.iter()
                         .map(|x| x.name.clone()).collect::<Vec<_>>());
     }
 
@@ -687,6 +721,8 @@ mod tests {
                 version: version.to_owned(),
                 scope: scope_of(&mezura_core::EngineConfig::default()),
                 warnings: Vec::new(),
+                faulty_files_count: 0,
+                unreadable_dirs_count: 0,
                 result: RunResult {
                     total: Stats::total_of(&per_language), per_language, modules,
                     faulty_files: Vec::new(), targets: Vec::new(), unreadable_dirs: Vec::new(),
@@ -706,6 +742,9 @@ mod tests {
 
         let mut baseline = reading("old.json", "2.9.0", vec![module("api")]);
         baseline.scope.braces_as_code = true;
+        // The scan facts come first among the doubts, then what that run had said itself
+        baseline.faulty_files_count = 2;
+        baseline.unreadable_dirs_count = 1;
         baseline.warnings.push(DocumentWarning { code: "language-file-unreadable".to_owned(),
                 affects: "counts".to_owned(), message: "'Lua.txt' could not be used.".to_owned() });
         let subject = reading("new.json", "3.0.0", vec![module("web")]);
@@ -717,8 +756,10 @@ mod tests {
                     settings: vec!["braces-as-code"] },
             Note::VersionsDiffer { baseline: "old.json".to_owned(), baseline_version: "2.9.0".to_owned(),
                     subject: "new.json".to_owned(), subject_version: "3.0.0".to_owned() },
-            Note::CountsInDoubt { about: "old.json".to_owned(),
-                    doubts: vec!["'Lua.txt' could not be used. (language-file-unreadable)".to_owned()] },
+            Note::CountsInDoubt { about: "old.json".to_owned(), doubts: vec![
+                    "2 of its files could not be parsed, so its counts are short by that".to_owned(),
+                    "1 directory could not be read, so nothing inside was counted".to_owned(),
+                    "'Lua.txt' could not be used. (language-file-unreadable)".to_owned()] },
             Note::ModulesDiffer { baseline: "old.json".to_owned(), subject: "new.json".to_owned(),
                     baseline_modules: Some("'api'".to_owned()), subject_modules: Some("'web'".to_owned()) },
             Note::LayoutFallback { layout: "list" }
@@ -734,6 +775,19 @@ mod tests {
         settled.warnings.push(DocumentWarning { code: "config-value-ignored".to_owned(),
                 affects: "settings".to_owned(), message: "ignored.".to_owned() });
         assert!(determine_comparison_notes(&settled, &reading("b.json", "3.0.0", Vec::new()), &config, Vec::new(), true).is_empty());
+
+        // A side whose scan found nothing is said, or the zeros under it read as everything
+        // deleted. The run's own side is not: 'present' already announced that scan as it happened.
+        let mut empty = reading("a.json", "3.0.0", Vec::new());
+        empty.result.files_present.relevant_files = 0;
+        assert_eq!(vec![Note::NothingCounted { about: "a.json".to_owned() }],
+                determine_comparison_notes(&empty, &reading("b.json", "3.0.0", Vec::new()), &config, Vec::new(), true));
+
+        let mut this_run = reading("ignored-name", "3.0.0", Vec::new());
+        this_run.source = Source::Run;
+        this_run.result.files_present.relevant_files = 0;
+        this_run.faulty_files_count = 3;
+        assert!(determine_comparison_notes(&reading("a.json", "3.0.0", Vec::new()), &this_run, &config, Vec::new(), true).is_empty());
     }
 
     // Settings reach a side that is about to be counted and never a document, whose numbers are
