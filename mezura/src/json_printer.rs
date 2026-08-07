@@ -84,7 +84,7 @@ fn create_comparison_document(comparison: &super::diff::Comparison, datetime_now
         format!("  \"from\": {}", create_side_object(baseline)),
         format!("  \"to\": {}", create_side_object(subject)),
         format!("  \"total\": {}", create_compared_total_object(4, &baseline.result.total, &subject.result.total, keywords_counted)),
-        format!("  \"languages\": {}", create_compared_create_languages_array(4, &rows, keywords_counted)),
+        format!("  \"languages\": {}", create_compared_languages_array(4, &rows, keywords_counted)),
         format!("  \"warnings\": {}", create_comparison_warnings_array(&comparison.notes)),
     ];
     if let Some(pairs) = &pairs {
@@ -106,7 +106,7 @@ fn create_comparison_modules_array(pairs: &[super::diff::ModulePair], config: &C
         let members = [
             format!("      \"name\": {name}"),
             format!("      \"total\": {}", create_compared_total_object(8, &pair.before.total, &pair.now.total, keywords_counted)),
-            format!("      \"languages\": {}", create_compared_create_languages_array(8, &rows, keywords_counted)),
+            format!("      \"languages\": {}", create_compared_languages_array(8, &rows, keywords_counted)),
         ];
         format!("    {{\n{}\n    }}", members.join(",\n"))
     }).collect::<Vec<_>>();
@@ -116,7 +116,7 @@ fn create_comparison_modules_array(pairs: &[super::diff::ModulePair], config: &C
 
 // 'brace' is the column each entry's opening brace sits at, so that the same array can be written at
 // the top level and under a module, which are at two depths.
-fn create_compared_create_languages_array(brace_indent: usize, changes: &[super::diff::LanguageStatsChange],
+fn create_compared_languages_array(brace_indent: usize, changes: &[super::diff::LanguageStatsChange],
         keywords_counted: bool) -> String
 {
     if changes.is_empty() {
