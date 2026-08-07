@@ -653,18 +653,6 @@ pub fn format_declared_form(target: &Target) -> String {
     }
 }
 
-// Targets on one line, for the log entry that decides whether two runs are comparable. The
-// separator is a comma while nothing is named, and whitespace the moment a module exists: inside a
-// comma list a name carries on to the paths after it, so 'frontend=./web,./ui' is one module of two
-// directories, and an unnamed target written after a named one would be read back as part of it.
-pub fn targets_to_string(targets: &[Target]) -> String {
-    if targets.iter().all(|x| x.module.is_none()) {
-        targets.iter().map(|x| x.path.clone()).collect::<Vec<_>>().join(",")
-    } else {
-        targets.iter().map(format_declared_form).collect::<Vec<_>>().join(" ")
-    }
-}
-
 // The run refused the declared targets. The wording is this crate's own, and a configuration file
 // that supplied the dirs is named as the culprit: otherwise a 'dirs' block nobody can see failing
 // sends the reader hunting through the command they typed.

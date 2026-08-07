@@ -589,7 +589,7 @@ fn create_string_array(values: &[String]) -> String {
 
 // Paths are the reason this has to be right: on Windows they arrive with backslashes in them, so
 // every single document would be invalid JSON without the escape.
-fn escape(text: &str) -> String {
+pub(crate) fn escape(text: &str) -> String {
     let mut escaped = String::with_capacity(text.len());
     for character in text.chars() {
         match character {
@@ -982,16 +982,16 @@ mod tests {
         // A value the two readings were made to agree on is as much a fact about the numbers as one
         // they disagreed on, and after the adoption the two scopes read alike, so without this
         // nothing tells a value the command line gave apart from one it borrowed
-        let adopted = crate::diff::Note::SettingsAdopted { from: "old.json".to_owned(), settings: vec!["--exclude"] };
+        let adopted = crate::diff::Note::SettingsAdopted { from: "old.json".to_owned(), settings: vec!["exclude"] };
         let borrowed = create_comparison_document(&crate::diff::Comparison::of(from(),
                 reading_of(crate::diff::Source::Run, HashMap::new()), &config, vec![adopted]), &datetime, &config);
         assert!(borrowed.contains("\"code\": \"setting-adopted\""), "{borrowed}");
-        assert!(borrowed.contains("\"subject\": \"--exclude\""));
+        assert!(borrowed.contains("\"subject\": \"exclude\""));
         assert!(borrowed.contains("was taken from 'old.json'"), "{borrowed}");
 
         let document = create_comparison_document(&crate::diff::Comparison::of(from(), to, &config, Vec::new()), &datetime, &config);
         assert!(document.contains("\"code\": \"setting-differs\""), "{document}");
-        assert!(document.contains("\"subject\": \"--braces-as-code\""));
+        assert!(document.contains("\"subject\": \"braces-as-code\""));
         assert!(document.contains("\"code\": \"versions-differ\""));
         assert!(document.contains("\"subject\": \"3.0.0 -> 3.1.0\""));
         assert!(document.contains("\"path\": \"D:/old.json\""));

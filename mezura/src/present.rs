@@ -179,7 +179,7 @@ fn determine_log_file_path(config: &Configuration) -> Option<String> {
     let name = config.view.config_name_to_save.as_ref()
             .or(config.view.config_name_to_load.as_ref())?;
 
-    Some(PERSISTENT_APP_PATHS.logs_dir.clone() + name + ".txt")
+    Some(PERSISTENT_APP_PATHS.logs_dir.clone() + name + ".jsonl")
 }
 
 #[cfg(test)]
@@ -232,7 +232,7 @@ mod tests {
     fn a_run_that_compares_writes_no_log_entry() {
         let name = "zz-a-run-that-compares";
         std::fs::create_dir_all(&PERSISTENT_APP_PATHS.logs_dir).unwrap();
-        let path = std::path::Path::new(&PERSISTENT_APP_PATHS.logs_dir).join(name.to_owned() + ".txt");
+        let path = std::path::Path::new(&PERSISTENT_APP_PATHS.logs_dir).join(name.to_owned() + ".jsonl");
         let _ = std::fs::remove_file(&path);
 
         let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
@@ -262,7 +262,7 @@ mod tests {
     // Only the file name is asserted: which directory it lands in is the data dir's business, and
     // the separators around it differ by platform.
     #[test]
-    fn a_logs_file_name_is_the_configuration_name_with_txt_on_it() {
+    fn a_logs_file_name_is_the_configuration_name_with_jsonl_on_it() {
         let file_name = |config: &Configuration| determine_log_file_path(config)
                 .map(|path| std::path::Path::new(&path).file_name().unwrap().to_string_lossy().into_owned());
 
@@ -270,10 +270,10 @@ mod tests {
         assert_eq!(None, file_name(&config), "a run naming no configuration asked for a log file");
 
         config.view.config_name_to_load = Some("portal".to_owned());
-        assert_eq!(Some("portal.txt".to_owned()), file_name(&config));
+        assert_eq!(Some("portal.jsonl".to_owned()), file_name(&config));
 
         config.view.config_name_to_save = Some("saved".to_owned());
-        assert_eq!(Some("saved.txt".to_owned()), file_name(&config),
+        assert_eq!(Some("saved.jsonl".to_owned()), file_name(&config),
                 "the name being saved did not win over the name being loaded");
     }
 }

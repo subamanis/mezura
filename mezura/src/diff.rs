@@ -3,11 +3,17 @@ use std::collections::HashMap;
 use mezura_core::{Language, Languages, ModuleResult, RunResult, Stats, UNNAMED_MODULE_NAME, render};
 
 use super::config_manager::{Configuration, Layout, SortCriterion};
+use super::config_manager::{BRACES_AS_CODE, EXCLUDE, EXCLUDE_LANGUAGES, FORCE_LANG, LANGUAGES,
+        NO_GITIGNORE, SEARCH_IN_DOTTED};
 use super::json_reader::{DocumentError, DocumentWarning, Scope};
 
 // The half of a document's warnings that says the numbers themselves may be wrong, as the document
 // spells it
 const COUNTS_AFFECTED : &str = "counts";
+
+// The one compared setting that is not a config key of its own: it is the 'keywords' value of
+// '--hide', and the log's comparison filters it out because the log holds no keyword counts
+pub const HIDE_KEYWORDS : &str = "hide keywords";
 
 // What the column of the run being made right now is called. Not a date, because it is the one
 // reading whose date says nothing: it is this one.
@@ -435,14 +441,14 @@ pub fn find_settings_that_differ(baseline: &Scope, subject: &Scope) -> Vec<&'sta
     };
 
     let mut differ = Vec::new();
-    if !same(&baseline.exclude, &subject.exclude) {differ.push("--exclude")}
-    if !same(&baseline.languages, &subject.languages) {differ.push("--languages")}
-    if !same(&baseline.excluded_languages, &subject.excluded_languages) {differ.push("--exclude-languages")}
-    if baseline.forced_languages != subject.forced_languages {differ.push("--force-lang")}
-    if baseline.braces_as_code != subject.braces_as_code {differ.push("--braces-as-code")}
-    if baseline.search_in_dotted != subject.search_in_dotted {differ.push("--search-in-dotted")}
-    if baseline.gitignore != subject.gitignore {differ.push("--no-gitignore")}
-    if baseline.keywords_counted != subject.keywords_counted {differ.push("--hide keywords")}
+    if !same(&baseline.exclude, &subject.exclude) {differ.push(EXCLUDE)}
+    if !same(&baseline.languages, &subject.languages) {differ.push(LANGUAGES)}
+    if !same(&baseline.excluded_languages, &subject.excluded_languages) {differ.push(EXCLUDE_LANGUAGES)}
+    if baseline.forced_languages != subject.forced_languages {differ.push(FORCE_LANG)}
+    if baseline.braces_as_code != subject.braces_as_code {differ.push(BRACES_AS_CODE)}
+    if baseline.search_in_dotted != subject.search_in_dotted {differ.push(SEARCH_IN_DOTTED)}
+    if baseline.gitignore != subject.gitignore {differ.push(NO_GITIGNORE)}
+    if baseline.keywords_counted != subject.keywords_counted {differ.push(HIDE_KEYWORDS)}
 
     differ
 }
@@ -461,39 +467,39 @@ pub fn resolve_settings(document: &Scope, config: &mut super::config_manager::Co
     let mut adopted = Vec::new();
     if !typed.exclude && different(&document.exclude, &config.engine.exclude_dirs) {
         config.engine.exclude_dirs = document.exclude.clone();
-        adopted.push("--exclude");
+        adopted.push(EXCLUDE);
     }
     if !typed.languages && different(&document.languages, &config.engine.languages_of_interest) {
         config.engine.languages_of_interest = document.languages.clone();
-        adopted.push("--languages");
+        adopted.push(LANGUAGES);
     }
     if !typed.excluded_languages && different(&document.excluded_languages, &config.engine.excluded_languages) {
         config.engine.excluded_languages = document.excluded_languages.clone();
-        adopted.push("--exclude-languages");
+        adopted.push(EXCLUDE_LANGUAGES);
     }
     if !typed.forced_languages && document.forced_languages != config.engine.forced_languages {
         config.engine.forced_languages = document.forced_languages.clone();
-        adopted.push("--force-lang");
+        adopted.push(FORCE_LANG);
     }
     if !typed.braces_as_code && document.braces_as_code != config.engine.braces_as_code {
         config.engine.braces_as_code = document.braces_as_code;
-        adopted.push("--braces-as-code");
+        adopted.push(BRACES_AS_CODE);
     }
     if !typed.search_in_dotted && document.search_in_dotted != config.engine.should_search_in_dotted {
         config.engine.should_search_in_dotted = document.search_in_dotted;
-        adopted.push("--search-in-dotted");
+        adopted.push(SEARCH_IN_DOTTED);
     }
     // The document records whether the file was obeyed, the flag says the opposite
     if !typed.no_gitignore && document.gitignore == config.engine.no_gitignore {
         config.engine.no_gitignore = !document.gitignore;
-        adopted.push("--no-gitignore");
+        adopted.push(NO_GITIGNORE);
     }
     // Both halves of the one flag, or the counting and the printing would disagree: a standing
     // '--hide keywords' from a configuration yields here like any other supplied value
     if !typed.hide_keywords && document.keywords_counted != config.engine.count_keywords {
         config.engine.count_keywords = document.keywords_counted;
         config.view.hidden.keywords = !document.keywords_counted;
-        adopted.push("--hide keywords");
+        adopted.push(HIDE_KEYWORDS);
     }
 
     adopted
@@ -696,7 +702,7 @@ mod tests {
 
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         config.view.layout = crate::config_manager::Layout::List;
-        let adopted = Note::SettingsAdopted { from: "old.json".to_owned(), settings: vec!["--exclude"] };
+        let adopted = Note::SettingsAdopted { from: "old.json".to_owned(), settings: vec!["exclude"] };
 
         let mut baseline = reading("old.json", "2.9.0", vec![module("api")]);
         baseline.scope.braces_as_code = true;
@@ -706,9 +712,9 @@ mod tests {
 
         let notes = determine_comparison_notes(&baseline, &subject, &config, vec![adopted], true);
         assert_eq!(vec![
-            Note::SettingsAdopted { from: "old.json".to_owned(), settings: vec!["--exclude"] },
+            Note::SettingsAdopted { from: "old.json".to_owned(), settings: vec!["exclude"] },
             Note::SettingsDiffer { baseline: "old.json".to_owned(), subject: "new.json".to_owned(),
-                    settings: vec!["--braces-as-code"] },
+                    settings: vec!["braces-as-code"] },
             Note::VersionsDiffer { baseline: "old.json".to_owned(), baseline_version: "2.9.0".to_owned(),
                     subject: "new.json".to_owned(), subject_version: "3.0.0".to_owned() },
             Note::CountsInDoubt { about: "old.json".to_owned(),
@@ -773,7 +779,7 @@ mod tests {
         for operand in [with_braces.clone(), format!("{with_braces}..HEAD"), format!("HEAD..{with_braces}")] {
             let (notes, braces) = adopted_by(&operand);
             assert_eq!(vec![Note::SettingsAdopted { from: "with-braces.json".to_owned(),
-                    settings: vec!["--braces-as-code"] }], notes, "nothing was adopted for '{operand}'");
+                    settings: vec!["braces-as-code"] }], notes, "nothing was adopted for '{operand}'");
             assert!(braces, "the value was reported as adopted and not applied, for '{operand}'");
         }
 
@@ -812,25 +818,25 @@ mod tests {
 
         // the order they were written in is not a difference
         config.engine.exclude_dirs = vec!["target".to_owned()];
-        assert_eq!(vec!["--exclude"], find_settings_that_differ(&document.scope, &scope_of(&config.engine)));
+        assert_eq!(vec!["exclude"], find_settings_that_differ(&document.scope, &scope_of(&config.engine)));
 
         // It decides which language a file is counted as, so a run that forced one and a run that
         // did not measured different things and the difference is not code that changed
         config.engine.exclude_dirs = Vec::new();
         config.engine.forced_languages = hashmap!["m".to_owned() => "matlab".to_owned()];
-        assert_eq!(vec!["--force-lang"], find_settings_that_differ(&document.scope, &scope_of(&config.engine)));
+        assert_eq!(vec!["force-lang"], find_settings_that_differ(&document.scope, &scope_of(&config.engine)));
 
         config.engine.forced_languages = HashMap::new();
         config.engine.braces_as_code = true;
         config.engine.no_gitignore = true;
-        assert_eq!(vec!["--braces-as-code", "--no-gitignore"], find_settings_that_differ(&document.scope, &scope_of(&config.engine)));
+        assert_eq!(vec!["braces-as-code", "no-gitignore"], find_settings_that_differ(&document.scope, &scope_of(&config.engine)));
 
         // and hiding the keywords is among them: it moves no line or code count, but a side that
         // did not count keywords would read as every keyword written since
         config.engine.braces_as_code = false;
         config.engine.no_gitignore = false;
         config.engine.count_keywords = false;
-        assert_eq!(vec!["--hide keywords"], find_settings_that_differ(&document.scope, &scope_of(&config.engine)));
+        assert_eq!(vec!["hide keywords"], find_settings_that_differ(&document.scope, &scope_of(&config.engine)));
     }
 
     // The settings of a document reach whatever is counted against it, unless this run's own
@@ -853,7 +859,7 @@ mod tests {
         // Nothing typed: what differs is taken, what agrees is not reported
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         let adopted = resolve_settings(&document, &mut config);
-        assert_eq!(vec!["--exclude", "--braces-as-code", "--no-gitignore"], adopted);
+        assert_eq!(vec!["exclude", "braces-as-code", "no-gitignore"], adopted);
         assert_eq!(vec!["target".to_owned()], config.engine.exclude_dirs);
         assert!(config.engine.braces_as_code);
         // recorded as "the file was not obeyed", so the flag turns on
@@ -865,7 +871,7 @@ mod tests {
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         config.typed_explicitly.braces_as_code = true;
         config.typed_explicitly.exclude = true;
-        assert_eq!(vec!["--no-gitignore"], resolve_settings(&document, &mut config));
+        assert_eq!(vec!["no-gitignore"], resolve_settings(&document, &mut config));
         assert!(!config.engine.braces_as_code);
         assert!(config.engine.exclude_dirs.is_empty());
 
@@ -880,7 +886,7 @@ mod tests {
         let without_keywords = Scope { keywords_counted: false, gitignore: true,
                 braces_as_code: false, exclude: Vec::new(), ..document };
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
-        assert_eq!(vec!["--hide keywords"], resolve_settings(&without_keywords, &mut config));
+        assert_eq!(vec!["hide keywords"], resolve_settings(&without_keywords, &mut config));
         assert!(!config.engine.count_keywords);
         assert!(config.view.hidden.keywords);
 
@@ -890,7 +896,7 @@ mod tests {
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         config.engine.count_keywords = false;
         config.view.hidden.keywords = true;
-        assert_eq!(vec!["--hide keywords"], resolve_settings(&with_keywords, &mut config));
+        assert_eq!(vec!["hide keywords"], resolve_settings(&with_keywords, &mut config));
         assert!(config.engine.count_keywords && !config.view.hidden.keywords);
 
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);

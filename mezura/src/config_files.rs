@@ -584,15 +584,6 @@ mod tests {
                 Target::named("frontend", "D:/x/ui"),
                 Target::named("backend", "D:/x/my api"),
                 Target::of("D:/x/loose")];
-        // The one line form that the log entry carries. Whitespace and not commas, or the unnamed
-        // target at the end would be read back as one more directory of 'backend'.
-        assert_eq!("frontend=D:/x/web frontend=D:/x/ui backend=\"D:/x/my api\" D:/x/loose",
-                config_manager::targets_to_string(&declared));
-        // and while nothing is named it is what it always was, so an entry logged by an older
-        // version is not reported as having had its targets changed
-        assert_eq!("D:/x/web,D:/x/api", config_manager::targets_to_string(
-                &[Target::of("D:/x/web"), Target::of("D:/x/api")]));
-
         let builder = ConfigurationBuilder { dirs: Some(declared.clone()), ..Default::default() };
         save_existing_commands_from_config_builder_to_file(Some(dir.clone()), "modules-round-trip", &builder)?;
 

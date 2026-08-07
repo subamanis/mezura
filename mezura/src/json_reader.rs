@@ -128,26 +128,13 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
         None => vec![ModuleResult { name: None, per_language: per_language.clone(), total: total.clone() }]
     };
 
+    let (scope, targets) = parse_scope(scope)?;
     Ok(Document {
         mezura_version: read_text(root, "mezura_version", "")?,
         generated_at: read_text(root, "generated_at", "")?,
         languages_hidden: read_number(root, "languages_hidden", "")?,
         warnings: parse_warnings(read_list(root, "warnings", "")?)?,
-        scope: Scope {
-            exclude: read_strings(scope, "exclude", "scope")?,
-            languages: read_strings(scope, "languages", "scope")?,
-            excluded_languages: read_strings(scope, "excluded_languages", "scope")?,
-            forced_languages: parse_forced_languages(read_nested(scope, "forced_languages", "scope")?)?,
-            braces_as_code: read_flag(scope, "braces_as_code", "scope")?,
-            search_in_dotted: read_flag(scope, "search_in_dotted", "scope")?,
-            gitignore: read_flag(scope, "gitignore", "scope")?,
-            // Absent from a document of the first builds, which all counted them
-            keywords_counted: match scope.get("keywords_counted") {
-                Some(x) => x.as_bool().ok_or(DocumentError::WrongType {
-                        at: "scope.keywords_counted".to_owned(), wanted: "true or false" })?,
-                None => true
-            }
-        },
+        scope,
         result: RunResult {
             per_language,
             total,
@@ -165,7 +152,7 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
                 excluded_files: read_number(scan, "files_excluded", "scan")?
             },
             performance,
-            targets: parse_targets(read_list(scope, "dirs", "scope")?)?,
+            targets,
             unreadable_dirs: match root.get("unreadable_dirs") {
                 Some(x) => parse_unreadable_dirs(read_array(x, "unreadable_dirs")?)?,
                 None => Vec::new()
@@ -174,9 +161,29 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
     })
 }
 
+// The one block that travels beyond the run document: a log entry records the same scope, so both
+// kinds read it through here and a key cannot be added to one of them alone
+pub(crate) fn parse_scope(scope: &Map<String, Value>) -> Result<(Scope, Vec<Target>), DocumentError> {
+    Ok((Scope {
+        exclude: read_strings(scope, "exclude", "scope")?,
+        languages: read_strings(scope, "languages", "scope")?,
+        excluded_languages: read_strings(scope, "excluded_languages", "scope")?,
+        forced_languages: parse_forced_languages(read_nested(scope, "forced_languages", "scope")?)?,
+        braces_as_code: read_flag(scope, "braces_as_code", "scope")?,
+        search_in_dotted: read_flag(scope, "search_in_dotted", "scope")?,
+        gitignore: read_flag(scope, "gitignore", "scope")?,
+        // Absent from a document of the first builds, which all counted them
+        keywords_counted: match scope.get("keywords_counted") {
+            Some(x) => x.as_bool().ok_or(DocumentError::WrongType {
+                    at: "scope.keywords_counted".to_owned(), wanted: "true or false" })?,
+            None => true
+        }
+    }, parse_targets(read_list(scope, "dirs", "scope")?)?))
+}
+
 // 'extra' and 'average_bytes' are not read: both are worked out from the counts beside them, and a
 // stored copy is the one thing that can disagree with them.
-fn parse_stats(entry: &Map<String, Value>, at: &str) -> Result<Stats, DocumentError> {
+pub(crate) fn parse_stats(entry: &Map<String, Value>, at: &str) -> Result<Stats, DocumentError> {
     let keywords = match entry.get("keywords") {
         Some(x) => parse_keywords(read_object(x, &join_location(at, "keywords"))?, &join_location(at, "keywords"))?,
         None => HashMap::new()
@@ -280,19 +287,19 @@ fn read_member<'a>(parent: &'a Map<String, Value>, key: &str, at: &str) -> Resul
     parent.get(key).ok_or_else(|| DocumentError::Missing(join_location(at, key)))
 }
 
-fn read_number(parent: &Map<String, Value>, key: &str, at: &str) -> Result<usize, DocumentError> {
+pub(crate) fn read_number(parent: &Map<String, Value>, key: &str, at: &str) -> Result<usize, DocumentError> {
     read_member(parent, key, at)?.as_u64().and_then(|x| usize::try_from(x).ok())
             .ok_or_else(|| DocumentError::WrongType { at: join_location(at, key), wanted: "a whole number" })
 }
 
-fn read_text(parent: &Map<String, Value>, key: &str, at: &str) -> Result<String, DocumentError> {
+pub(crate) fn read_text(parent: &Map<String, Value>, key: &str, at: &str) -> Result<String, DocumentError> {
     read_member(parent, key, at)?.as_str().map(str::to_owned)
             .ok_or_else(|| DocumentError::WrongType { at: join_location(at, key), wanted: "a string" })
 }
 
 // A module that was never given a name, which is what the leftovers of the named ones are called and
 // what an ordinary target has. 'null' is the only place a member of a document may be empty.
-fn read_optional_name(parent: &Map<String, Value>, key: &str, at: &str) -> Result<Option<String>, DocumentError> {
+pub(crate) fn read_optional_name(parent: &Map<String, Value>, key: &str, at: &str) -> Result<Option<String>, DocumentError> {
     match read_member(parent, key, at)? {
         Value::Null => Ok(None),
         Value::String(x) => Ok(Some(x.clone())),
@@ -312,15 +319,15 @@ fn read_strings(parent: &Map<String, Value>, key: &str, at: &str) -> Result<Vec<
     }).collect()
 }
 
-fn read_nested<'a>(parent: &'a Map<String, Value>, key: &str, at: &str) -> Result<&'a Map<String, Value>, DocumentError> {
+pub(crate) fn read_nested<'a>(parent: &'a Map<String, Value>, key: &str, at: &str) -> Result<&'a Map<String, Value>, DocumentError> {
     read_object(read_member(parent, key, at)?, &join_location(at, key))
 }
 
-fn read_list<'a>(parent: &'a Map<String, Value>, key: &str, at: &str) -> Result<&'a Vec<Value>, DocumentError> {
+pub(crate) fn read_list<'a>(parent: &'a Map<String, Value>, key: &str, at: &str) -> Result<&'a Vec<Value>, DocumentError> {
     read_array(read_member(parent, key, at)?, &join_location(at, key))
 }
 
-fn read_object<'a>(value: &'a Value, at: &str) -> Result<&'a Map<String, Value>, DocumentError> {
+pub(crate) fn read_object<'a>(value: &'a Value, at: &str) -> Result<&'a Map<String, Value>, DocumentError> {
     value.as_object().ok_or_else(|| DocumentError::WrongType { at: at.to_owned(), wanted: "an object" })
 }
 

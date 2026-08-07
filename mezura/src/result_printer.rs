@@ -38,23 +38,6 @@ const OVERVIEW_LANGUAGES : usize = 3;
 
 const OTHERS_NAME : &str = "others";
 
-// Has to be every key 'super::log::counting_settings' writes, or the missing one is read and
-// dropped and a run whose settings changed shows moved numbers with no 'modified:' tag to say why.
-// 'the_settings_written_to_a_log_are_the_settings_read_back' holds the two lists together.
-const SETTING_KEYS : [&str; 8] = [config_manager::DIRS, config_manager::EXCLUDE, config_manager::LANGUAGES,
-        config_manager::EXCLUDE_LANGUAGES, config_manager::FORCE_LANG, config_manager::BRACES_AS_CODE,
-        config_manager::SEARCH_IN_DOTTED, config_manager::NO_GITIGNORE];
-
-// The keys of the stats block of a log entry, spelled as 'super::log' writes them
-const FILES         : &str  = "Files:";
-const LINES         : &str  = "Lines:";
-const CODE          : &str  = "Code:";
-const COMMENTS      : &str  = "Comments:";
-const EXTRA         : &str  = "Extra:";
-const TOTAL_SIZE    : &str  = "Total Size:";
-const AVERAGE_SIZE  : &str  = "Average Size:";
-const MODULES       : &str  = "Modules:";
-
 pub fn format_and_print_results(result: &RunResult, existing_log_content: &Option<String>,
         datetime_now: &DateTime<Local>, config: &Configuration)
 {
@@ -1507,11 +1490,27 @@ fn get_sizes_percentages(per_language: &HashMap<String,Stats>, languages_name: &
 // The settings this run counted with, against the ones the entry recorded. A setting the entry never
 // wrote is left alone rather than reported as changed, which is what keeps entries from older
 // versions from being accused of a difference nobody can know about.
-fn find_settings_changed_since(entry: &LogEntry, config: &Configuration, targets: &[mezura_core::Target]) -> Vec<&'static str> {
-    super::log::counting_settings(&config.engine, targets).into_iter()
-            .filter(|(key, value)| entry.settings.iter().any(|(k, v)| k == key && v != value))
-            .map(|(key, _)| key)
-            .collect()
+fn find_settings_changed_since(entry: &super::log::LogEntry, config: &Configuration,
+        targets: &[mezura_core::Target]) -> Vec<&'static str>
+{
+    let sort = |targets: &[mezura_core::Target]| {
+        let mut sorted = targets.to_vec();
+        sorted.sort();
+        sorted
+    };
+
+    let mut changed = Vec::new();
+    // The scope cannot carry the directories, so they are compared beside it: the same './src'
+    // declared over two different trees is two different measurements
+    if sort(&entry.targets) != sort(targets) {
+        changed.push(config_manager::DIRS);
+    }
+    // The log holds no keyword counts, so a run that only stopped counting them changed nothing
+    // the log records
+    changed.extend(super::diff::find_settings_that_differ(&entry.scope, &super::diff::scope_of(&config.engine))
+            .into_iter().filter(|setting| *setting != super::diff::HIDE_KEYWORDS));
+
+    changed
 }
 
 // At the end of the line of the entry it belongs to, since it is a statement about that entry and
@@ -1529,7 +1528,7 @@ fn format_modified_tag(changed: &[&'static str]) -> String {
 // One line per module under the line of the entry, and narrower than it: Files and Extra stay on
 // the total, since what is asked of a module is which part of it moved. With every column repeated,
 // one entry is five wide lines and '--compare 3' stops being readable.
-fn format_module_comparison_lines(entry: &LogEntry, groups: &[Group]) -> String {
+fn format_module_comparison_lines(entry: &super::log::LogEntry, groups: &[Group]) -> String {
     let theme = super::theme::get_active();
     let names = groups.iter().map(|x| x.get_displayed_name().to_owned())
             .chain(entry.modules.iter().map(|x| x.name.clone())
@@ -1540,7 +1539,7 @@ fn format_module_comparison_lines(entry: &LogEntry, groups: &[Group]) -> String 
     // Right aligned down the entry, since the whole reason these are three narrow columns and not
     // the full breakdown is that they are meant to be read down rather than across
     let compared = names.iter().filter_map(|name| entry.modules.iter().find(|x| &x.name == name)).collect::<Vec<_>>();
-    let number_width = |value: fn(&ModuleEntry) -> usize|
+    let number_width = |value: fn(&super::log::ModuleEntry) -> usize|
             compared.iter().map(|x| format_with_separators(value(x)).len()).max().unwrap_or(0);
     let (lines_width, code_width, comments_width) =
             (number_width(|x| x.lines), number_width(|x| x.code_lines), number_width(|x| x.comment_lines));
@@ -1589,7 +1588,7 @@ fn print_comparison_to_previous_runs(result: &RunResult, log_content: &str, conf
     println!("\n{}.\n", super::theme::get_active().heading.paint("Progress"));
 
     let total = &result.total;
-    let log_entries = parse_N_previous_entries(log_content, config.view.compare_level);
+    let log_entries = super::log::read_last_entries(log_content, config.view.compare_level);
     // Silent until used: a run that named no module says nothing about them here either, and the
     // 'modified: dirs' tag is what already reports that the targets are not the ones they were
     let groups = if result.has_modules() {create_groups_of(result, config)} else {Vec::new()};
@@ -1608,21 +1607,12 @@ fn print_comparison_to_previous_runs(result: &RunResult, log_content: &str, conf
             comparison_str.push_str(&format!("{} {} ({} days, {} hours and {} minutes ago){}\n",
                     arrow, then_str, days, hours, minutes, tag));
         }
-        // An entry from before the comments were split off has an 'extra' that meant something
-        // else, so it is named and left uncompared instead of being reported as a collapse
-        let tail = if entry.splits_comments {
-            format!("Comments: {}({}%), Extra: {}({}%)",
-                super::theme::get_active().comments_number.paint(&format_with_separators(entry.stats.comment_lines)), paint_percentage(&format_signed_percentage_difference(entry.stats.comment_lines, total.comment_lines)),
-                super::theme::get_active().extra_number.paint(&format_with_separators(entry.stats.calculate_extra_lines())), paint_percentage(&format_signed_percentage_difference(entry.stats.calculate_extra_lines(), total.calculate_extra_lines())))
-        } else {
-            format!("Non-code: {} (logged before comments were counted separately)",
-                super::theme::get_active().extra_number.paint(&format_with_separators(entry.stats.calculate_extra_lines())))
-        };
-        comparison_str.push_str(&format!("     Files: {}({}%) Lines: {}({}%) {{Code: {}({}%), {}}}\n",
-                super::theme::get_active().files_number.paint(&format_with_separators(entry.stats.files)), paint_percentage(&format_signed_percentage_difference(entry.stats.files, total.files)),
-                super::theme::get_active().lines_number.paint(&format_with_separators(entry.stats.lines)), paint_percentage(&format_signed_percentage_difference(entry.stats.lines, total.lines)),
-                super::theme::get_active().code_number.paint(&format_with_separators(entry.stats.code_lines)), paint_percentage(&format_signed_percentage_difference(entry.stats.code_lines, total.code_lines)),
-                tail));
+        comparison_str.push_str(&format!("     Files: {}({}%) Lines: {}({}%) {{Code: {}({}%), Comments: {}({}%), Extra: {}({}%)}}\n",
+                super::theme::get_active().files_number.paint(&format_with_separators(entry.total.files)), paint_percentage(&format_signed_percentage_difference(entry.total.files, total.files)),
+                super::theme::get_active().lines_number.paint(&format_with_separators(entry.total.lines)), paint_percentage(&format_signed_percentage_difference(entry.total.lines, total.lines)),
+                super::theme::get_active().code_number.paint(&format_with_separators(entry.total.code_lines)), paint_percentage(&format_signed_percentage_difference(entry.total.code_lines, total.code_lines)),
+                super::theme::get_active().comments_number.paint(&format_with_separators(entry.total.comment_lines)), paint_percentage(&format_signed_percentage_difference(entry.total.comment_lines, total.comment_lines)),
+                super::theme::get_active().extra_number.paint(&format_with_separators(entry.total.calculate_extra_lines())), paint_percentage(&format_signed_percentage_difference(entry.total.calculate_extra_lines(), total.calculate_extra_lines()))));
         if !groups.is_empty() {
             comparison_str.push_str(&format_module_comparison_lines(entry, &groups));
         }
@@ -1644,132 +1634,6 @@ fn split_minutes_to_D_H_M(mut minutes: i64) -> (i64, i64, i64) {
 
 fn format_signed_percentage_difference(older: usize, newer: usize) -> String {
     super::number_formatter::get_active().signed_percent(render::calculate_relative_change(older, newer))
-}
-
-// Only what a module line prints. Files and Extra are on the total and not repeated per module.
-#[derive(Debug,Default,Clone)]
-struct ModuleEntry {
-    name: String,
-    lines: usize,
-    code_lines: usize,
-    comment_lines: usize
-}
-
-#[derive(Debug)]
-struct LogEntry {
-    name: Option<String>,
-    stats: Stats,
-    // Empty for every entry written before modules existed, and for every run that named none
-    modules: Vec<ModuleEntry>,
-    datetime: DateTime<Local>,
-    // The counting settings as that run recorded them. A setting the entry does not mention is one
-    // that version did not write, and an absent setting can never be reported as changed: the older
-    // entries here have no 'excluded-languages' line at all, and none of them has 'gitignore'
-    settings: Vec<(String, String)>,
-    // Entries written before v3.0.0 have no 'Comments' key, and their 'Extra' counted the comments
-    // in as well, so comparing it against an extra that no longer does would report a drop that
-    // never happened
-    splits_comments: bool
-}
-
-fn parse_N_previous_entries(log_content: &str, n: usize) -> Vec<LogEntry> {
-    let mut log_entries : Vec<LogEntry> = Vec::with_capacity(15);
-    let (mut files, mut lines, mut code_lines, mut comment_lines, mut bytes_size) = (0, 0, 0, 0, 0);
-    let mut splits_comments = false;
-    let mut counter = 0;
-    let mut is_expecting_date = false;
-    // The block sits below the stats of the entry it belongs to, which has been pushed by the time
-    // it is read. Its own 'Lines' and 'Comments' lines are dispatched here and never through the
-    // branches below: left to them, a 'Comments' of a module would make the entry that follows,
-    // written by a version that had none, look like one that counted them.
-    let mut is_reading_modules = false;
-    let mut entry_name = None;
-    let mut datetime = chrono::Local::now();
-    let mut settings : Vec<(String, String)> = Vec::with_capacity(7);
-
-    for line in log_content.lines() {
-        let line = line.trim_start();
-
-        if let Some(entry) = line.strip_prefix("===>") {
-            // The count is checked here and not where an entry is pushed, so that the block under
-            // the last one asked for is still read before the walk stops
-            if counter == n {return log_entries}
-            (is_expecting_date, is_reading_modules) = (true, false);
-            settings.clear();
-            let _entry = entry.trim();
-            entry_name = if _entry.is_empty() {None} else {Some(_entry.to_owned())};
-            continue;
-        }
-
-        if is_expecting_date {
-            let fixed_datetime = chrono::DateTime::parse_from_str(line, "%Y-%m-%d %H:%M:%S %z").unwrap();
-            datetime = fixed_datetime.with_timezone(&Local);
-            is_expecting_date = false;
-            continue;
-        }
-
-        if is_reading_modules {
-            read_module_line(line, log_entries.last_mut());
-            continue;
-        }
-
-        if let Some((key, value)) = line.split_once(": ").or_else(|| line.strip_suffix(':').map(|key| (key, "")))
-            && SETTING_KEYS.contains(&key) {
-            settings.push((key.to_owned(), value.trim().to_owned()));
-            continue;
-        }
-
-        if line == MODULES {
-            is_reading_modules = true;
-        } else if let Some(value) = line.strip_prefix(FILES) {
-            files = value.trim().parse::<usize>().unwrap();
-        } else if let Some(value) = line.strip_prefix(LINES) {
-            lines = value.trim().parse::<usize>().unwrap();
-        } else if let Some(value) = line.strip_prefix(CODE) {
-            code_lines = value.trim().parse::<usize>().unwrap();
-        } else if let Some(value) = line.strip_prefix(COMMENTS) {
-            comment_lines = value.trim().parse::<usize>().unwrap();
-            splits_comments = true;
-        } else if let Some(value) = line.strip_prefix(EXTRA) {
-            // Read back from the three it comes from and not from the line the entry stores, which
-            // is the same number: an entry from before the comments were counted has none of them,
-            // so 'lines - code - 0' is exactly the 'extra' it wrote.
-            let _ = value.trim().parse::<usize>().unwrap();
-        } else if let Some(value) = line.strip_prefix(TOTAL_SIZE) {
-            bytes_size = value.trim().parse::<usize>().unwrap();
-        } else if let Some(value) = line.strip_prefix(AVERAGE_SIZE) {
-            let _ = value.trim().parse::<usize>().unwrap();
-            let stats = Stats::new(files, bytes_size, lines, code_lines, comment_lines, HashMap::new());
-            log_entries.push(LogEntry{name: entry_name.clone(), stats, modules: Vec::new(), datetime,
-                    settings: settings.clone(), splits_comments});
-            // All six. A complete entry overwrites them all and the reset changes nothing, but an
-            // entry missing a line would otherwise take that figure from the entry above it.
-            (files, lines, code_lines, comment_lines, bytes_size, splits_comments) = (0, 0, 0, 0, 0, false);
-            counter += 1;
-        }
-    }
-
-    log_entries
-}
-
-// A name is a line that ends in a colon with nothing after it, which is what tells it apart from the
-// figures under it however a module happens to be called
-fn read_module_line(line: &str, entry: Option<&mut LogEntry>) {
-    let Some(entry) = entry else { return };
-
-    if let Some(name) = line.strip_suffix(':') {
-        entry.modules.push(ModuleEntry {name: name.to_owned(), ..Default::default()});
-        return;
-    }
-
-    let Some(module) = entry.modules.last_mut() else { return };
-    if let Some(value) = line.strip_prefix(LINES) {
-        module.lines = value.trim().parse::<usize>().unwrap_or(0);
-    } else if let Some(value) = line.strip_prefix(CODE) {
-        module.code_lines = value.trim().parse::<usize>().unwrap_or(0);
-    } else if let Some(value) = line.strip_prefix(COMMENTS) {
-        module.comment_lines = value.trim().parse::<usize>().unwrap_or(0);
-    }
 }
 
 fn print_lines(lines: &[String]) {
@@ -1833,14 +1697,8 @@ fn calculate_code_and_comment_percentages(lines: usize, code_lines: usize, comme
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-    use std::str::FromStr;
-
     use mezura_core::{FilesPresent, ModuleResult};
 
-    use crate::config_manager::LogOption;
-    use crate::paths::test_paths::{FIXTURES_DIR, SCRATCH_LOG_DIR};
-    use super::super::log::log_stats;
     use super::*;
 
     // One dataset for every layout, chosen so that the things that break are all present at once: a
@@ -2300,49 +2158,44 @@ mod tests {
         assert_eq!(total.bytes, Stats::total_of(&folded_per_language).bytes);
     }
 
-    // The rule that keeps every old entry from being accused of a change nobody recorded: a setting
-    // the entry never wrote is unknown, not different.
+    // What the 'modified:' tag reports: the directories beside the scope, and never the keywords,
+    // which move nothing the log records
     #[test]
-    fn a_setting_an_entry_never_recorded_is_never_reported_as_changed() {
-        let entry_of = |settings: Vec<(&str, &str)>| LogEntry {
-            name: None, stats: Stats::new(1, 1, 1, 1, 0, hashmap![]), modules: Vec::new(), datetime: Local::now(),
-            settings: settings.into_iter().map(|(k, v)| (k.to_owned(), v.to_owned())).collect(),
-            splits_comments: true};
+    fn a_changed_setting_is_tagged_and_a_keyword_setting_never_is() {
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        let entry_of = |edit: fn(&mut crate::config_manager::Configuration)| {
+            let mut then = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+            edit(&mut then);
+            crate::log::LogEntry { name: None, datetime: Local::now(),
+                    scope: crate::diff::scope_of(&then.engine), targets: Vec::new(),
+                    total: Stats::new(1, 1, 1, 1, 0, hashmap![]), modules: Vec::new() }
+        };
+
+        // Taken with the same settings: nothing to say
+        let same = entry_of(|_| {});
+        assert!(find_settings_changed_since(&same, &config, &[]).is_empty());
+        assert!(format_modified_tag(&find_settings_changed_since(&same, &config, &[])).is_empty());
+
+        // One that differs is named, and the names are the ones the reader can look up
         config.engine.braces_as_code = true;
-
-        // Everything the entry knows about matches, and it knows nothing of the rest
-        let entry = entry_of(vec![("braces-as-code", "yes")]);
-        assert!(find_settings_changed_since(&entry, &config, &[]).is_empty());
-        assert!(format_modified_tag(&find_settings_changed_since(&entry, &config, &[])).is_empty());
-
-        let entry = entry_of(vec![("braces-as-code", "no"), ("no-gitignore", "no")]);
-        assert_eq!(vec!["braces-as-code"], find_settings_changed_since(&entry, &config, &[]));
-
         config.engine.no_gitignore = true;
-        let changed = find_settings_changed_since(&entry, &config, &[]);
+        let changed = find_settings_changed_since(&same, &config, &[]);
         assert_eq!(vec!["braces-as-code", "no-gitignore"], changed);
         assert!(format_modified_tag(&changed).contains("braces-as-code, no-gitignore"));
 
-        // An entry with no settings block at all, which is every entry written before this existed
-        assert!(find_settings_changed_since(&entry_of(vec![]), &config, &[]).is_empty());
-    }
+        // The targets are compared as a set: the same list reordered is the same measurement
+        let entry_with_dirs = crate::log::LogEntry {
+                targets: vec![mezura_core::Target::of("./b"), mezura_core::Target::of("./a")],
+                ..entry_of(|c| {c.engine.braces_as_code = true; c.engine.no_gitignore = true;}) };
+        assert!(find_settings_changed_since(&entry_with_dirs, &config,
+                &[mezura_core::Target::of("./a"), mezura_core::Target::of("./b")]).is_empty());
+        assert_eq!(vec!["dirs"], find_settings_changed_since(&entry_with_dirs, &config,
+                &[mezura_core::Target::of("./c")]));
 
-    // Two lists that have to hold the same names, kept in two files. Written as a comparison of the
-    // lists rather than as a case per key, so that the next setting cannot be added to one of them
-    // alone: a key the reader drops makes the progress section report no change beside numbers that
-    // moved by everything.
-    #[test]
-    fn the_settings_written_to_a_log_are_the_settings_read_back() {
-        let config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
-        let mut written = super::super::log::counting_settings(&config.engine, &[])
-                .into_iter().map(|(key, _)| key).collect::<Vec<_>>();
-        let mut accepted = SETTING_KEYS.to_vec();
-        written.sort();
-        accepted.sort();
-
-        assert_eq!(written, accepted,
-                "the log writes settings the reader drops, or accepts names nothing ever writes");
+        // and a run that only stopped counting keywords changed nothing the log holds
+        config.engine.count_keywords = false;
+        assert!(find_settings_changed_since(&entry_with_dirs, &config,
+                &[mezura_core::Target::of("./a"), mezura_core::Target::of("./b")]).is_empty());
     }
 
     #[test]
@@ -2356,203 +2209,4 @@ mod tests {
         assert_eq!((1,1,1),split_minutes_to_D_H_M(1501));
     }
 
-    // A whole entry writes all six figures and hides the question, so the fixture is a log cut in
-    // the middle of a write: the one shape where a missing line could take its number from the
-    // entry above it.
-    #[test]
-    fn a_figure_missing_from_an_entry_is_not_taken_from_the_entry_before_it() {
-        let contents = super::super::log::extract_file_contents(&(FIXTURES_DIR.to_owned()+"logs/truncated.txt")).unwrap();
-        let log_entries = parse_N_previous_entries(&contents, 2);
-
-        assert_eq!(2, log_entries.len());
-        assert_eq!((10, 1000), (log_entries[0].stats.files, log_entries[0].stats.lines));
-
-        assert_eq!(0, log_entries[1].stats.files, "the file count of the entry above it was reused");
-        assert_eq!(0, log_entries[1].stats.lines, "the line count of the entry above it was reused");
-        // And the arithmetic over what is left says nothing rather than a number the size of the
-        // address space, which is what the same entry printed before 'extra_lines' saturated
-        assert_eq!(0, log_entries[1].stats.calculate_extra_lines());
-    }
-
-    #[test]
-    fn test_parse_N_previous_entries() {
-        let contents = super::super::log::extract_file_contents(&(FIXTURES_DIR.to_owned()+"logs/test1.txt")).unwrap();
-        let log_entries = parse_N_previous_entries(&contents, 3);
-
-        assert_eq!(10, log_entries[0].stats.files);
-        assert_eq!(1000, log_entries[0].stats.lines);
-        assert_eq!(100, log_entries[0].stats.code_lines);
-        assert_eq!(900, log_entries[0].stats.calculate_extra_lines());
-        assert_eq!(100000, log_entries[0].stats.bytes);
-        assert_eq!(10000, log_entries[0].stats.calculate_average_size());
-        let datetime: DateTime<Local> = chrono::DateTime::from_str("2021-09-12 16:42:00 +0300").unwrap();
-        assert_eq!(datetime, log_entries[0].datetime);
-        assert_eq!(Some("entry one".to_owned()),log_entries[0].name);
-
-        assert_eq!(11, log_entries[1].stats.files);
-        assert_eq!(1111, log_entries[1].stats.lines);
-        assert_eq!(111, log_entries[1].stats.code_lines);
-        assert_eq!(1000, log_entries[1].stats.calculate_extra_lines());
-        assert_eq!(111100, log_entries[1].stats.bytes);
-        assert_eq!(10100, log_entries[1].stats.calculate_average_size());
-        let datetime: DateTime<Local> = chrono::DateTime::from_str("2021-09-12 16:23:50 +03:00").unwrap();
-        assert_eq!(datetime, log_entries[1].datetime);
-        assert_eq!(None,log_entries[1].name);
-
-        assert_eq!(12, log_entries[2].stats.files);
-        assert_eq!(1222, log_entries[2].stats.lines);
-        assert_eq!(122, log_entries[2].stats.code_lines);
-        assert_eq!(1100, log_entries[2].stats.calculate_extra_lines());
-        assert_eq!(122200, log_entries[2].stats.bytes);
-        assert_eq!(10183, log_entries[2].stats.calculate_average_size());
-        let datetime: DateTime<Local> = chrono::DateTime::from_str("2021-09-12 04:01:56 +03:00").unwrap();
-        assert_eq!(datetime, log_entries[2].datetime);
-        assert_eq!(Some("entry three".to_owned()),log_entries[2].name);
-    }
-
-    fn result_of(total: Stats, modules: Vec<ModuleResult>) -> RunResult {
-        RunResult {per_language: HashMap::new(), modules,
-                total, faulty_files: Vec::new(), files_present: FilesPresent::default(),
-                targets: Vec::new(), unreadable_dirs: Vec::new(), performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }}
-    }
-
-    #[test]
-    fn test_log_creation_and_reading() -> std::io::Result<()> {
-        std::fs::create_dir_all(SCRATCH_LOG_DIR)?;
-        let test_log_dir = SCRATCH_LOG_DIR.to_owned() + "test2.txt";
-        if Path::new(&test_log_dir).exists() {
-            std::fs::remove_file(&test_log_dir).unwrap();
-        }
-
-        let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
-        config.view.set_log_option(LogOption::new(Some("test name".to_owned())));
-        let result = result_of(Stats::new(10, 100, 1000, 100, 0, HashMap::new()), Vec::new());
-
-        log_stats(&test_log_dir, &None, &result, &chrono::DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap(), &config).unwrap();
-
-        let contents = super::super::log::extract_file_contents(&test_log_dir).unwrap();
-        let log_entries = parse_N_previous_entries(&contents, 1);
-
-        assert_eq!(10, log_entries[0].stats.files);
-        assert_eq!(1000, log_entries[0].stats.lines);
-        assert_eq!(100, log_entries[0].stats.code_lines);
-        assert_eq!(900, log_entries[0].stats.calculate_extra_lines());
-        assert_eq!(100, log_entries[0].stats.bytes);
-        assert_eq!(10, log_entries[0].stats.calculate_average_size());
-        assert_eq!(Some("test name".to_owned()),log_entries[0].name);
-        assert!(log_entries[0].modules.is_empty());
-
-        Ok(())
-    }
-
-    // The log is the one output that cannot be measured again: the trees those runs counted have
-    // moved on. 'extract_file_contents' answers None both to "there is nothing" and to "I could not
-    // read it", which are opposite instructions, so the refusal is what this holds.
-    #[test]
-    fn a_log_that_could_not_be_read_is_kept_rather_than_replaced_by_the_run() {
-        std::fs::create_dir_all(SCRATCH_LOG_DIR).unwrap();
-        let path = SCRATCH_LOG_DIR.to_owned() + "test_unreadable.txt";
-        let config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
-        let result = result_of(Stats::new(10, 100, 1000, 100, 0, HashMap::new()), Vec::new());
-        let now = chrono::DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap();
-
-        // What a run finds when the history is there and readable: the new entry, then all of it
-        std::fs::write(&path, "===>\nAN ENTRY FROM BEFORE\n").unwrap();
-        let history = super::super::log::extract_file_contents(&path);
-        assert!(history.is_some());
-        log_stats(&path, &history, &result, &now, &config).unwrap();
-        let written = std::fs::read_to_string(&path).unwrap();
-        assert!(written.contains("AN ENTRY FROM BEFORE"), "the history was dropped:\n{written}");
-
-        // And what it finds when the same file cannot be read. The bytes below are not UTF-8, which
-        // is one way in; a lock or an antivirus holding the file is the same answer through the
-        // same door, and on this platform far likelier.
-        std::fs::write(&path, [b"===>\nAN ENTRY FROM BEFORE\n".to_vec(), vec![0xFF, 0xFE, 0x80]].concat()).unwrap();
-        let unreadable = super::super::log::extract_file_contents(&path);
-        assert!(unreadable.is_none(), "the probe no longer reproduces an unreadable log");
-
-        let refused = log_stats(&path, &unreadable, &result, &now, &config);
-        assert!(refused.is_err(), "a log that could not be read was overwritten anyway");
-        let after = std::fs::read(&path).unwrap();
-        assert!(String::from_utf8_lossy(&after).contains("AN ENTRY FROM BEFORE"),
-                "the entries were destroyed by a run that could not read them");
-        // and nothing half written is left lying beside it, under the name this process would use
-        assert!(!Path::new(&format!("{path}.writing.{}", std::process::id())).exists());
-
-        std::fs::remove_file(&path).unwrap();
-    }
-
-    // The other side of the same guard. Emptying a log is an ordinary thing to want, and every
-    // ordinary way of doing it on this platform leaves a newline behind rather than nothing at all,
-    // which the refusal above must not read as a file it failed to parse.
-    #[test]
-    fn a_log_emptied_by_hand_is_written_again_rather_than_refused_forever() {
-        std::fs::create_dir_all(SCRATCH_LOG_DIR).unwrap();
-        let path = SCRATCH_LOG_DIR.to_owned() + "test_emptied.txt";
-        let config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
-        let result = result_of(Stats::new(10, 100, 1000, 100, 0, HashMap::new()), Vec::new());
-        let now = chrono::DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap();
-
-        for emptied in ["", "\r\n", "\n\n   \n", "   "] {
-            std::fs::write(&path, emptied).unwrap();
-            let history = super::super::log::extract_file_contents(&path);
-            let written = log_stats(&path, &history, &result, &now, &config);
-            assert!(written.is_ok(), "a log holding {emptied:?} was refused: {:?}", written.err());
-            assert!(std::fs::read_to_string(&path).unwrap().contains("==="),
-                    "a log holding {emptied:?} was left without the entry of this run");
-        }
-
-        std::fs::remove_file(&path).unwrap();
-    }
-
-    // The block is written under the totals of the entry it belongs to, which is already complete by
-    // then, so what this holds is that it reaches the right entry and that its own figures stay out
-    // of the ones above and below it
-    #[test]
-    fn the_modules_of_an_entry_are_read_back_and_never_reach_another_one() {
-        std::fs::create_dir_all(SCRATCH_LOG_DIR).unwrap();
-        let test_log_dir = SCRATCH_LOG_DIR.to_owned() + "test_modules.txt";
-        if Path::new(&test_log_dir).exists() {
-            std::fs::remove_file(&test_log_dir).unwrap();
-        }
-
-        // An entry from before any of this existed, with no 'Comments' line of its own
-        let older = "===>\n2021-09-12 04:00:00 +0300\nStats:\n    Files: 4\n    Lines: 400\n        Code: 300\n        \
-Extra: 100\n    Total Size: 4000\n        Average Size: 1000\n\n\n";
-        let module_of = |name: Option<&str>, lines: usize, code: usize, comments: usize| ModuleResult {
-            name: name.map(str::to_owned), per_language: HashMap::new(),
-            total: Stats::new(1, 10, lines, code, comments, HashMap::new())};
-        let result = result_of(Stats::new(10, 5000, 1000, 700, 200, hashmap![]),
-                vec![module_of(Some("frontend"), 600, 400, 150), module_of(None, 400, 300, 50)]);
-
-        let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
-        config.view.set_log_option(LogOption::new(None));
-        log_stats(&test_log_dir, &Some(older.to_owned()), &result,
-                &chrono::DateTime::from_str("2021-09-13 04:00:00 +03:00").unwrap(), &config).unwrap();
-
-        let contents = super::super::log::extract_file_contents(&test_log_dir).unwrap();
-        let entries = parse_N_previous_entries(&contents, 2);
-        assert_eq!(2, entries.len());
-
-        assert_eq!(1000, entries[0].stats.lines);
-        assert_eq!(200, entries[0].stats.comment_lines);
-        assert_eq!(vec!["frontend".to_owned(), UNNAMED_MODULE_NAME.to_owned()],
-                entries[0].modules.iter().map(|x| x.name.clone()).collect::<Vec<_>>());
-        assert_eq!((600, 400, 150), (entries[0].modules[0].lines, entries[0].modules[0].code_lines, entries[0].modules[0].comment_lines));
-        assert_eq!((400, 300, 50), (entries[0].modules[1].lines, entries[0].modules[1].code_lines, entries[0].modules[1].comment_lines));
-
-        // Nothing of the block above leaked into the entry below it, which is the one that would
-        // otherwise be reported as having lost every comment it never counted
-        assert_eq!(400, entries[1].stats.lines);
-        assert!(entries[1].modules.is_empty());
-        assert!(!entries[1].splits_comments);
-        assert!(entries[0].splits_comments);
-
-        // and the entry that carries the block is still complete when only one was asked for
-        let only_one = parse_N_previous_entries(&contents, 1);
-        assert_eq!(1, only_one.len());
-        assert_eq!(2, only_one[0].modules.len());
-
-        std::fs::remove_file(&test_log_dir).unwrap();
-    }
 }
