@@ -239,17 +239,14 @@ pub fn paired_modules<'a>(baseline: &'a RunResult, subject: &'a RunResult) -> Op
             .map(|before| ModulePair { name: now.name.as_deref(), before, now })).collect()
 }
 
-// The modules of one reading as a sentence names them, for the message that has to say why they are
-// not being compared. The leftovers are in it: their being there on one side and not the other is
-// one of the ways the two sets differ, and a message that left them out would name two lists that
-// look identical.
-pub fn module_names(result: &RunResult) -> String {
-    if !result.has_modules() {
-        return "nothing".to_owned();
-    }
-
-    result.modules.iter().map(|x| x.name.as_deref().unwrap_or(UNNAMED_MODULE_NAME))
-            .collect::<Vec<_>>().join(", ")
+// The modules of one reading as the message names them, each in its own quotes, and None when
+// nothing was declared, which the sentence says in words. The leftovers are in the list: their
+// being on one side and not the other is one of the ways the two sets differ, and a message that
+// left them out would name two lists that look identical.
+pub fn module_names(result: &RunResult) -> Option<String> {
+    result.has_modules().then(|| result.modules.iter()
+            .map(|x| format!("'{}'", x.name.as_deref().unwrap_or(UNNAMED_MODULE_NAME)))
+            .collect::<Vec<_>>().join(", "))
 }
 
 // The settings of a run in the shape a document records them, so that a comparison asks the same
@@ -265,7 +262,8 @@ pub fn scope_of(engine: &mezura_core::EngineConfig) -> Scope {
         forced_languages: engine.forced_languages.clone(),
         braces_as_code: engine.braces_as_code,
         search_in_dotted: engine.should_search_in_dotted,
-        gitignore: !engine.no_gitignore
+        gitignore: !engine.no_gitignore,
+        keywords_counted: engine.count_keywords
     }
 }
 
@@ -286,8 +284,61 @@ pub fn settings_that_differ(baseline: &Scope, subject: &Scope) -> Vec<&'static s
     if baseline.braces_as_code != subject.braces_as_code {differ.push("--braces-as-code")}
     if baseline.search_in_dotted != subject.search_in_dotted {differ.push("--search-in-dotted")}
     if baseline.gitignore != subject.gitignore {differ.push("--no-gitignore")}
+    if baseline.keywords_counted != subject.keywords_counted {differ.push("--hide keywords")}
 
     differ
+}
+
+// Takes the document's settings for everything this run's own command line did not explicitly set,
+// so that the two readings measure the same thing
+pub fn resolve_settings(document: &Scope, config: &mut super::config_manager::Configuration) -> Vec<&'static str> {
+    let different = |a: &[String], b: &[String]| {
+        let (mut a, mut b) = (a.to_vec(), b.to_vec());
+        a.sort();
+        b.sort();
+        a != b
+    };
+
+    let typed = config.typed;
+    let mut adopted = Vec::new();
+    if !typed.exclude && different(&document.exclude, &config.engine.exclude_dirs) {
+        config.engine.exclude_dirs = document.exclude.clone();
+        adopted.push("--exclude");
+    }
+    if !typed.languages && different(&document.languages, &config.engine.languages_of_interest) {
+        config.engine.languages_of_interest = document.languages.clone();
+        adopted.push("--languages");
+    }
+    if !typed.excluded_languages && different(&document.excluded_languages, &config.engine.excluded_languages) {
+        config.engine.excluded_languages = document.excluded_languages.clone();
+        adopted.push("--exclude-languages");
+    }
+    if !typed.forced_languages && document.forced_languages != config.engine.forced_languages {
+        config.engine.forced_languages = document.forced_languages.clone();
+        adopted.push("--force-lang");
+    }
+    if !typed.braces_as_code && document.braces_as_code != config.engine.braces_as_code {
+        config.engine.braces_as_code = document.braces_as_code;
+        adopted.push("--braces-as-code");
+    }
+    if !typed.search_in_dotted && document.search_in_dotted != config.engine.should_search_in_dotted {
+        config.engine.should_search_in_dotted = document.search_in_dotted;
+        adopted.push("--search-in-dotted");
+    }
+    // The document records whether the file was obeyed, the flag says the opposite
+    if !typed.no_gitignore && document.gitignore == config.engine.no_gitignore {
+        config.engine.no_gitignore = !document.gitignore;
+        adopted.push("--no-gitignore");
+    }
+    // Both halves of the one flag, or the counting and the printing would disagree: a standing
+    // '--hide keywords' from a configuration yields here like any other supplied value
+    if !typed.hide_keywords && document.keywords_counted != config.engine.count_keywords {
+        config.engine.count_keywords = document.keywords_counted;
+        config.view.hidden.keywords = !document.keywords_counted;
+        adopted.push("--hide keywords");
+    }
+
+    adopted
 }
 
 // What the run that wrote the baseline said about its own counts. It said it on the error output of
@@ -420,9 +471,10 @@ mod tests {
         assert_eq!(1, paired_modules(&plain, &plain).unwrap().len());
         assert!(!plain.has_modules());
 
-        // and the sentence that names them says which they were, the leftovers included
-        assert_eq!("core, cli, (unnamed)", module_names(&now));
-        assert_eq!("nothing", module_names(&plain));
+        // and the sentence that names them says which they were, the leftovers included, while a
+        // run that declared none answers with the absence itself rather than a word for it
+        assert_eq!(Some("'core', 'cli', '(unnamed)'".to_owned()), module_names(&now));
+        assert_eq!(None, module_names(&plain));
     }
 
     // Two readings taken under different rules are two measurements, and the difference between them
@@ -456,10 +508,79 @@ mod tests {
         config.engine.no_gitignore = true;
         assert_eq!(vec!["--braces-as-code", "--no-gitignore"], settings_that_differ(&document.scope, &scope_of(&config.engine)));
 
-        // and hiding the keywords is not among them, since it moves no count that is compared here
+        // and hiding the keywords is among them: it moves no line or code count, but a side that
+        // did not count keywords would read as every keyword written since
         config.engine.braces_as_code = false;
         config.engine.no_gitignore = false;
         config.engine.count_keywords = false;
-        assert!(settings_that_differ(&document.scope, &scope_of(&config.engine)).is_empty());
+        assert_eq!(vec!["--hide keywords"], settings_that_differ(&document.scope, &scope_of(&config.engine)));
+    }
+
+    // The settings of a document reach whatever is counted against it, unless this run's own
+    // command line spoke: the mask decides per setting, the values move with their spelling
+    // corrected ('gitignore' recorded as obeyed, the flag saying the opposite), and what was
+    // already agreed on is not reported as taken.
+    #[test]
+    fn a_documents_settings_are_taken_unless_the_command_line_set_its_own() {
+        let document = Scope {
+            exclude: vec!["target".to_owned()],
+            languages: Vec::new(),
+            excluded_languages: Vec::new(),
+            forced_languages: HashMap::new(),
+            braces_as_code: true,
+            search_in_dotted: false,
+            gitignore: false,
+            keywords_counted: true
+        };
+
+        // Nothing typed: what differs is taken, what agrees is not reported
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        let adopted = resolve_settings(&document, &mut config);
+        assert_eq!(vec!["--exclude", "--braces-as-code", "--no-gitignore"], adopted);
+        assert_eq!(vec!["target".to_owned()], config.engine.exclude_dirs);
+        assert!(config.engine.braces_as_code);
+        // recorded as "the file was not obeyed", so the flag turns on
+        assert!(config.engine.no_gitignore);
+        // and a second pass finds nothing left to take
+        assert!(resolve_settings(&document, &mut config).is_empty());
+
+        // The same difference with the value typed stays as typed, and is not reported as taken
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        config.typed.braces_as_code = true;
+        config.typed.exclude = true;
+        assert_eq!(vec!["--no-gitignore"], resolve_settings(&document, &mut config));
+        assert!(!config.engine.braces_as_code);
+        assert!(config.engine.exclude_dirs.is_empty());
+
+        // The order two lists were written in is not a difference
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        config.engine.exclude_dirs = vec!["target".to_owned()];
+        config.engine.no_gitignore = true;
+        config.engine.braces_as_code = true;
+        assert!(resolve_settings(&document, &mut config).is_empty());
+
+        // The keyword flag moves both halves, or the counting and the printing would disagree
+        let without_keywords = Scope { keywords_counted: false, gitignore: true,
+                braces_as_code: false, exclude: Vec::new(), ..document };
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        assert_eq!(vec!["--hide keywords"], resolve_settings(&without_keywords, &mut config));
+        assert!(!config.engine.count_keywords);
+        assert!(config.view.hidden.keywords);
+
+        // and in the other direction a standing '--hide keywords' from a configuration yields,
+        // while a typed one is kept
+        let with_keywords = Scope { keywords_counted: true, ..without_keywords.clone() };
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        config.engine.count_keywords = false;
+        config.view.hidden.keywords = true;
+        assert_eq!(vec!["--hide keywords"], resolve_settings(&with_keywords, &mut config));
+        assert!(config.engine.count_keywords && !config.view.hidden.keywords);
+
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        config.engine.count_keywords = false;
+        config.view.hidden.keywords = true;
+        config.typed.hide_keywords = true;
+        assert!(resolve_settings(&with_keywords, &mut config).is_empty());
+        assert!(!config.engine.count_keywords && config.view.hidden.keywords);
     }
 }

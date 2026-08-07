@@ -17,6 +17,9 @@ pub enum GitError {
     // roots, and the revision names a different commit in each.
     TwoRepositories { first: String, second: String },
     NoSuchRevision { revision: String, repository: String },
+    // Its matches in the working tree and at the commit are two different sets of files, and there
+    // is no place in a comparison to say which was meant, so it is refused rather than guessed.
+    PatternTarget { pattern: String },
     Refused { doing: &'static str, message: String }
 }
 
@@ -27,6 +30,7 @@ impl std::fmt::Display for GitError {
             Self::NotARepository { path } => write!(f, "'{path}' is not inside a git repository, so there is no revision of it to count."),
             Self::TwoRepositories { first, second } => write!(f, "the targets are in two different repositories, '{first}' and '{second}', so a revision names two different things. Count them one repository at a time."),
             Self::NoSuchRevision { revision, repository } => write!(f, "'{revision}' is not a branch, tag or commit of the repository at '{repository}', and there is no file by that name either."),
+            Self::PatternTarget { pattern } => write!(f, "'{pattern}' is a glob pattern, and what it matches in the working tree and what it would match at that commit are two different sets of files. Write out the paths it should mean."),
             Self::Refused { doing, message } => write!(f, "git refused while {doing}: {message}")
         }
     }
@@ -45,6 +49,14 @@ impl std::error::Error for GitError {
 // neither is worked out here: 'rev-parse' walks up looking for the repository the way every git
 // command does, and the prefix it answers with is already the path to use inside a checkout.
 pub fn repository_of(path: &str) -> Result<(String, String), GitError> {
+    // 'git -C' needs a directory, so a file asks from beside itself and puts its name back on the
+    // prefix, which stays exactly the path to use inside a checkout
+    let as_path = Path::new(path);
+    if as_path.is_file() && let (Some(parent), Some(name)) = (as_path.parent(), as_path.file_name()) {
+        let (root, prefix) = repository_of(&parent.to_string_lossy())?;
+        return Ok((root, prefix + &name.to_string_lossy()));
+    }
+
     let root = ask(path, &["rev-parse", "--show-toplevel"])?
             .ok_or_else(|| GitError::NotARepository { path: path.to_owned() })?;
     let prefix = ask(path, &["rev-parse", "--show-prefix"])?
@@ -71,7 +83,7 @@ pub fn one_repository_of(paths: &[String]) -> Result<String, GitError> {
 
 // A commit is compressed objects inside '.git' and mezura counts files, so a revision has to be
 // written out before it can be read. Removed when this goes out of scope, whichever way the run
-// ended, and a run that was killed before that is cleaned up by the prune of the next one.
+// ended, and a run that was killed before that is swept by the next one.
 pub struct Checkout {
     pub path: String,
     // The full hash the revision resolved to. 'HEAD' names a different commit next week, so what
@@ -105,12 +117,10 @@ pub fn checkout(repository: &str, revision: &str) -> Result<Checkout, GitError> 
             .ok_or_else(|| GitError::NoSuchRevision { revision: revision.to_owned(),
                     repository: repository.to_owned() })?;
 
-    // Whatever a run that was killed left behind under '.git/worktrees', before adding to it
-    let _ = Command::new("git").args(["-C", repository, "worktree", "prune"]).output();
-
     let path = std::env::temp_dir().join(CHECKOUT_PREFIX.to_owned() + &commit[..commit.len().min(12)]
             + "-" + &std::process::id().to_string()).to_string_lossy().replace('\\', "/");
     let _ = std::fs::remove_dir_all(&path);
+    remove_leftover_checkouts(repository);
 
     let outcome = Command::new("git").args(["-C", repository, "worktree", "add", "--detach", "--quiet",
             &path, &commit]).output().map_err(GitError::NotInstalled)?;
@@ -122,6 +132,26 @@ pub fn checkout(repository: &str, revision: &str) -> Result<Checkout, GitError> 
     let taken_at = ask(repository, &["show", "-s", "--format=%cI", &commit])?.unwrap_or_default();
 
     Ok(Checkout { path, commit, taken_at, repository: repository.to_owned() })
+}
+
+// What a killed run left behind: 'prune' alone clears nothing while the directory still exists, so
+// every registration under the temp directory that carries this prefix and another process's pid is
+// removed whole, directory and registration together. Ours is skipped, and the prune afterwards
+// drops whatever registration has already lost its directory, including the one deleted just above.
+fn remove_leftover_checkouts(repository: &str) {
+    let ours = format!("-{}", std::process::id());
+    let temp = std::env::temp_dir().to_string_lossy().replace('\\', "/").to_lowercase();
+    if let Ok(listed) = Command::new("git").args(["-C", repository, "worktree", "list", "--porcelain"]).output() {
+        for line in String::from_utf8_lossy(&listed.stdout).lines() {
+            let Some(path) = line.strip_prefix("worktree ") else { continue };
+            let name = Path::new(path).file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
+            if name.starts_with(CHECKOUT_PREFIX) && !name.ends_with(&ours)
+                    && path.replace('\\', "/").to_lowercase().starts_with(&temp) {
+                let _ = Command::new("git").args(["-C", repository, "worktree", "remove", "--force", path]).output();
+            }
+        }
+    }
+    let _ = Command::new("git").args(["-C", repository, "worktree", "prune"]).output();
 }
 
 // None when git ran and answered no, which every caller turns into its own words, and an error only
@@ -157,6 +187,11 @@ mod tests {
         let (same, none) = repository_of(&root).unwrap();
         assert_eq!(root, same);
         assert!(none.is_empty(), "'{none}'");
+
+        // a file answers from beside itself, with its own name back on the prefix, so a single
+        // tracked file can be found inside a checkout like any directory
+        let (file_root, file_prefix) = repository_of(&(PACKAGE.to_owned() + "/src/main.rs")).unwrap();
+        assert_eq!((root.as_str(), "mezura/src/main.rs"), (file_root.as_str(), file_prefix.as_str()));
 
         // and a place that is in no repository says so rather than climbing to one that is not its
         let outside = std::env::temp_dir().to_string_lossy().replace('\\', "/");

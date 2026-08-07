@@ -101,7 +101,7 @@ fn main() -> ExitCode {
         return code;
     }
 
-    let config = match config_manager::create_config_from_args(&args_str) {
+    let mut config = match config_manager::create_config_from_args(&args_str) {
         Ok(config) => config,
         Err(x) => {
             eprintln!("\n{}\n",x.formatted());
@@ -163,8 +163,10 @@ fn main() -> ExitCode {
     // that is a revision is counted with it.
     if let Some(value) = config.view.diff_against.as_deref() {
         match crate::diff::split_operand(value) {
-            Ok((before, Some(after))) =>
-                return compare_two_readings(before, after, &config, languages_available, &extension_priority),
+            Ok((before, Some(after))) => {
+                let (before, after) = (before.to_owned(), after.to_owned());
+                return compare_two_readings(&before, &after, &mut config, languages_available, &extension_priority);
+            },
             Err(complaint) => {
                 eprintln!("\n{}\n", crate::theme::active().error.paint(&complaint));
                 return ExitCode::FAILURE;
@@ -173,35 +175,43 @@ fn main() -> ExitCode {
         }
     }
 
+    // A document baseline is read before anything else settles, because its settings have a say:
+    // what this command line did not set itself is taken from it, so the two readings measure the
+    // same thing, and that has to happen above the language resolution it can change.
+    let document_baseline = match config.view.diff_against.as_deref().map(document_reading) {
+        Some(Some(Ok(x))) => Some(x),
+        Some(Some(Err(x))) => {
+            eprintln!("\n{}\n", crate::theme::active().error.paint(&x));
+            return ExitCode::FAILURE;
+        },
+        Some(None) | None => None
+    };
+    if let Some(reading) = &document_baseline {
+        keep_adopted_settings(reading, &mut config);
+    }
+
     // Worked out here and not inside the run, so its complaints land beside the other complaints
     // about settings rather than in the middle of the status lines.
     // Kept only when there is a revision to count, which needs its own resolution: 'run' takes the
     // languages by value and they cannot be handed to two runs.
-    let languages_of_a_revision = config.view.diff_against.as_ref().map(|_| languages_available.clone());
+    let languages_of_a_revision = (config.view.diff_against.is_some() && document_baseline.is_none())
+            .then(|| languages_available.clone());
     let (languages, reported) = mezura_core::Languages::resolve(&config.engine, languages_available, &extension_priority);
-    for warning in reported {
-        // A name that does not exist was already put on the screen by 'report_unknown_languages',
-        // in colour and with a suggested spelling under it, so this one is only kept for the
-        // document. Everything else has no other voice and is printed here.
-        if warning.code == mezura_core::warnings::UNKNOWN_LANGUAGE {
-            crate::warnings::keep(warning);
-        } else {
-            crate::warnings::emit(warning);
-        }
-    }
+    voice_language_warnings(reported);
 
     // Below the languages because a revision is counted with them, and above the run because a
     // baseline that turns out not to be one must cost no scan of the tree. Its complaints wait and
     // are printed just above the comparison they are about.
-    let baseline = match config.view.diff_against.as_deref() {
-        Some(name) => match reading_of(name, &config, languages_of_a_revision.unwrap_or_default(), &extension_priority) {
+    let baseline = match (document_baseline, config.view.diff_against.as_deref()) {
+        (Some(x), _) => Some(x),
+        (None, Some(name)) => match counted_revision(name, &config, languages_of_a_revision.unwrap_or_default(), &extension_priority) {
             Ok(x) => Some(x),
             Err(x) => {
-                eprintln!("\n{}\n", crate::theme::active().error.paint(&x));
+                eprintln!("\n{}\n", crate::theme::active().error.paint(&x.to_string()));
                 return ExitCode::FAILURE;
             }
         },
-        None => None
+        (None, None) => None
     };
 
     if !config.view.hidden.directory_info && config.view.prints_text() {
@@ -673,17 +683,62 @@ program to read, and both of them go to the output, so only one of the two can b
     None
 }
 
-// A name that is a file on disk is a document, and anything else is asked of git. The same order
-// 'split_operand' uses, and for the same reason: what is really there wins over what a name could
-// have meant. The error names both attempts, since a misspelt file and a misspelt branch look alike.
-fn reading_of(name: &str, config: &Configuration, languages: Vec<Language>,
-        extension_priority: &HashMap<String,Vec<String>>) -> Result<crate::diff::Reading, String>
-{
-    if std::path::Path::new(name).exists() {
-        return crate::diff::load(name).map_err(|x| x.to_string());
-    }
+// A name that is a file on disk is a document, and anything else is asked of git. A file and not
+// merely something that exists: a directory called 'main' beside a branch called 'main' is a
+// collision waiting in every repository, and reading the directory as a document answers it with
+// an I/O error about permissions.
+fn document_reading(name: &str) -> Option<Result<crate::diff::Reading, String>> {
+    std::path::Path::new(name).is_file()
+            .then(|| crate::diff::load(name).map_err(|x| x.to_string()))
+}
 
-    counted_revision(name, config, languages, extension_priority).map_err(|x| x.to_string())
+// A name that does not exist was already put on the screen by 'report_unknown_languages', in colour
+// and with a suggested spelling under it, so that one is only kept for the document. Everything
+// else has no other voice and is printed here.
+fn voice_language_warnings(reported: Vec<mezura_core::warnings::Warning>) {
+    for warning in reported {
+        if warning.code == mezura_core::warnings::UNKNOWN_LANGUAGE {
+            crate::warnings::keep(warning);
+        } else {
+            crate::warnings::emit(warning);
+        }
+    }
+}
+
+// Kept rather than said here, because it belongs with everything else that explains the numbers of
+// the table, which is printed once the counting is over.
+fn keep_adopted_settings(document: &crate::diff::Reading, config: &mut Configuration) {
+    let settings = crate::diff::resolve_settings(&document.scope, config);
+    if !settings.is_empty() {
+        config.adopted_from_file = Some(config_manager::AdoptedSettings { from: document.display_name(), settings });
+    }
+}
+
+// An exclusion written as a full path names a place in the working tree, and the checkout is the
+// same tree at another root, so the pattern moves with it: left alone it would exclude the files on
+// one side and count them on the other, and the difference would print as code that changed.
+fn excludes_inside(checkout: &str, repository: &str, patterns: &[String]) -> Vec<String> {
+    // Compared with the platform's own idea of case and of slashes, or a path typed with 'd:' on
+    // Windows would silently stay untranslated. ASCII folding only, so that folding never moves a
+    // byte and the remainder can be cut off the unfolded pattern at the root's own length.
+    let key = |path: &str| {
+        let path = path.replace('\\', "/");
+        if cfg!(windows) {path.to_ascii_lowercase()} else {path}
+    };
+    let root = repository.trim_end_matches('/');
+    let folded_root = key(root);
+
+    patterns.iter().map(|pattern| {
+        let normalized = pattern.replace('\\', "/");
+        let folded = key(&normalized);
+        if folded == folded_root {
+            checkout.to_owned()
+        } else if folded.starts_with(&(folded_root.clone() + "/")) {
+            checkout.to_owned() + &normalized[root.len()..]
+        } else {
+            pattern.clone()
+        }
+    }).collect()
 }
 
 // A revision is counted the way anything else is: its files are written out, the targets are found
@@ -692,9 +747,24 @@ fn reading_of(name: &str, config: &Configuration, languages: Vec<Language>,
 fn counted_revision(revision: &str, config: &Configuration, languages: Vec<Language>,
         extension_priority: &HashMap<String,Vec<String>>) -> Result<crate::diff::Reading, crate::git::GitError>
 {
+    // The run's own rule for telling a pattern from a folder that carries those characters in its
+    // name: what exists exactly as written is always literal
+    if let Some(target) = config.engine.dirs.iter().find(|x|
+            !std::path::Path::new(&x.path).exists() && x.path.contains(['*', '?', '[', '{'])) {
+        return Err(crate::git::GitError::PatternTarget { pattern: target.path.clone() });
+    }
+
     let declared = config.engine.dirs.iter().map(|x| x.path.clone()).collect::<Vec<_>>();
     let repository = crate::git::one_repository_of(&declared)?;
     let checkout = crate::git::checkout(&repository, revision)?;
+
+    // Whatever asked for it, this side cannot deliver it: a checkout holds only what git tracks,
+    // so the ignored files exist on the other side alone and read as growth since the revision.
+    if config.engine.no_gitignore {
+        eprintln!("\n{}", crate::theme::active().warning.paint(&format!(
+                "'--no-gitignore' cannot reach '{revision}': a checkout holds only what git tracks, \
+so anything a .gitignore ignores is counted on one side alone.")));
+    }
 
     // A target the revision never had counts as nothing rather than stopping the run, so everything
     // in it reads as new, which is what it is. Named out loud, because a column of 'new' with no
@@ -709,12 +779,16 @@ fn counted_revision(revision: &str, config: &Configuration, languages: Vec<Langu
         }
     }
     if !missing.is_empty() {
+        // Said about the revision alone, because in the 'a..b' form the missing side can be either
+        // one, and "reported as new" over a table of 'gone' would say the opposite of the numbers
+        let named = missing.iter().map(|x| format!("'{x}'")).collect::<Vec<_>>().join(", no ");
         eprintln!("\n{}", crate::theme::active().warning.paint(&format!(
-                "'{revision}' has no {}, so everything counted there now is reported as new.",
-                missing.join("', no '"))));
+                "'{revision}' has no {named}, so it counts as nothing there.")));
     }
 
-    let of_revision = mezura_core::EngineConfig { dirs, ..config.engine.clone() };
+    let of_revision = mezura_core::EngineConfig { dirs,
+            exclude_dirs: excludes_inside(&checkout.path, &repository, &config.engine.exclude_dirs),
+            ..config.engine.clone() };
     // Nothing to count is a reading of zero and not a failure: it is what a revision older than
     // every target really holds.
     let result = if of_revision.dirs.is_empty() {
@@ -739,18 +813,50 @@ fn counted_revision(revision: &str, config: &Configuration, languages: Vec<Langu
 // Two readings that were both handed over: each is a document read or a revision counted, by the
 // same rule the single form uses, and this run's own scan never happens. A side that is counted
 // counts quietly, its complaints being the pair's own to print above the table.
-fn compare_two_readings(before: &str, after: &str, config: &Configuration, languages: Vec<Language>,
+//
+// The documents are read first whichever side they were written on, because a document among the
+// two has a say in how the other side is counted: 'rev..doc' counts the revision under the
+// document's settings, exactly as 'doc..rev' does.
+fn compare_two_readings(before: &str, after: &str, config: &mut Configuration, languages: Vec<Language>,
         extension_priority: &HashMap<String,Vec<String>>) -> ExitCode
 {
+    let fail = |message: &str| {
+        eprintln!("\n{}\n", crate::theme::active().error.paint(message));
+        ExitCode::FAILURE
+    };
+    let (before_document, after_document) = (document_reading(before), document_reading(after));
+    let (before_document, after_document) = match (before_document.transpose(), after_document.transpose()) {
+        (Ok(x), Ok(y)) => (x, y),
+        (Err(x), _) | (_, Err(x)) => return fail(&x)
+    };
+    // With two documents there is nothing being counted for the settings to reach, and with none
+    // there is nothing to take them from; both sides then run as declared, and what differs is
+    // reported above the table
+    match (&before_document, &after_document) {
+        (Some(document), None) | (None, Some(document)) => keep_adopted_settings(document, config),
+        _ => ()
+    }
+
+    // Voiced here or nowhere: the run that would have said them never happens, and each side's own
+    // counting keeps quiet on purpose. After the adoption above, so the complaints are about the
+    // selection that is actually counted.
+    let (_, reported) = mezura_core::Languages::resolve(&config.engine, languages.clone(), extension_priority);
+    voice_language_warnings(reported);
+
     // Two revisions are two countings, and 'run' takes the languages by value, so the first side
     // takes a copy and the second the thing itself
-    let outcome = reading_of(before, config, languages.clone(), extension_priority)
-            .and_then(|baseline| Ok((baseline, reading_of(after, config, languages, extension_priority)?)));
-    let (baseline, subject) = match outcome {
-        Ok(x) => x,
-        Err(x) => {
-            eprintln!("\n{}\n", crate::theme::active().error.paint(&x));
-            return ExitCode::FAILURE;
+    let baseline = match before_document {
+        Some(x) => x,
+        None => match counted_revision(before, config, languages.clone(), extension_priority) {
+            Ok(x) => x,
+            Err(x) => return fail(&x.to_string())
+        }
+    };
+    let subject = match after_document {
+        Some(x) => x,
+        None => match counted_revision(after, config, languages, extension_priority) {
+            Ok(x) => x,
+            Err(x) => return fail(&x.to_string())
         }
     };
 
@@ -778,7 +884,47 @@ mod tests {
 
     use crate::config_manager::VERSION_ID;
 
-    use crate::{content_hash, migrate_data_files, report_unknown_languages};
+    use crate::{content_hash, document_reading, excludes_inside, migrate_data_files, report_unknown_languages};
+
+    // A directory called 'main' beside a branch called 'main' must fall through to git, which is
+    // what the '--diff' help promises: a name that is a file is a document, anything else is asked
+    // of git.
+    #[test]
+    fn a_directory_is_never_read_as_a_document() {
+        let dir = SCRATCH_DIR.to_owned() + "a-directory-named-like-a-branch";
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(document_reading(&dir).is_none(), "a directory was taken for a document");
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        // a file is still read, and a name that is nowhere on disk still falls through
+        let file = SCRATCH_DIR.to_owned() + "not-a-document.json";
+        std::fs::write(&file, "{ not a document").unwrap();
+        assert!(matches!(document_reading(&file), Some(Err(_))));
+        std::fs::remove_file(&file).unwrap();
+        assert!(document_reading("no-such-thing-anywhere").is_none());
+    }
+
+    // The checkout is the same tree at another root, so an exclusion written as a full path moves
+    // with it, and everything else is left exactly as typed.
+    #[test]
+    fn an_exclusion_inside_the_repository_is_carried_into_the_checkout() {
+        let moved = excludes_inside("C:/tmp/chk", "D:/repo",
+                &["fixtures".to_owned(), "*.min.js".to_owned(), "D:/repo/target".to_owned(),
+                  "D:/repo".to_owned(), "D:/elsewhere/target".to_owned(), "D:\\repo\\a\\b".to_owned()]);
+
+        assert_eq!(vec!["fixtures".to_owned(), "*.min.js".to_owned(), "C:/tmp/chk/target".to_owned(),
+                "C:/tmp/chk".to_owned(), "D:/elsewhere/target".to_owned(), "C:/tmp/chk/a/b".to_owned()], moved);
+
+        // 'D:/repository' is not inside 'D:/repo', whatever its first characters say
+        assert_eq!(vec!["D:/repository/x".to_owned()],
+                excludes_inside("C:/tmp/chk", "D:/repo", &["D:/repository/x".to_owned()]));
+
+        // the platform's own idea of case, so a drive letter typed either way still travels
+        if cfg!(windows) {
+            assert_eq!(vec!["C:/tmp/chk/target".to_owned()],
+                    excludes_inside("C:/tmp/chk", "D:/repo", &["d:/REPO/target".to_owned()]));
+        }
+    }
 
     // The shipped copy always wins and the user's is kept, which is the whole of the policy. What
     // this pins is the three ways a file can differ from what we ship, because only one of them is

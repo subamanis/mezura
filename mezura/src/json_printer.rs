@@ -166,12 +166,9 @@ fn side_object(reading: &super::diff::Reading) -> String {
     members.push(format!("    \"taken_at\": \"{}\"", escaped(&reading.taken)));
     members.push(format!("    \"mezura_version\": \"{}\"", escaped(reading.version.trim_start_matches('v'))));
     members.push(format!("    \"scope\": {}", indented(&scope_object_of(&reading.scope))));
-    // A side counted by this very run said its warnings on the error output as they happened, and
-    // for the document's sake they are in the collector, the same place the run document reads
-    members.push(format!("    \"warnings\": {}", indented(&match reading.source {
-        super::diff::Source::Run => warnings_array(),
-        _ => document_warnings_array(&reading.warnings)
-    })));
+    // Only what the side's own document recorded: what this very process warned about belongs to
+    // the comparison and sits at its top level, wherever the run appears in it
+    members.push(format!("    \"warnings\": {}", indented(&document_warnings_array(&reading.warnings))));
 
     format!("{{\n{}\n  }}", members.join(",\n"))
 }
@@ -186,6 +183,7 @@ fn scope_object_of(scope: &super::json_reader::Scope) -> String {
         format!("    \"braces_as_code\": {}", scope.braces_as_code),
         format!("    \"search_in_dotted\": {}", scope.search_in_dotted),
         format!("    \"gitignore\": {}", scope.gitignore),
+        format!("    \"keywords_counted\": {}", scope.keywords_counted),
     ];
 
     format!("{{\n{}\n  }}", members.join(",\n"))
@@ -214,10 +212,15 @@ fn comparison_warnings_array(baseline: &super::diff::Reading, subject: &super::d
         modules_differ: bool) -> String
 {
     let counts = mezura_core::warnings::Affects::Counts.name();
-    let mut entries = super::diff::settings_that_differ(&baseline.scope, &subject.scope).into_iter()
-            .map(|setting| (String::from("setting-differs"), counts, setting.to_owned(),
-                format!("The two readings were not taken with the same '{setting}', so part of the difference is that setting and not code that changed.")))
+    // What this very process warned about comes first, having been said first: it belongs to the
+    // comparison and not to either side, since a side that is a revision was counted by this
+    // process too and a document's own warnings are already inside it
+    let mut entries = super::warnings::collected().into_iter()
+            .map(|x| (x.code.to_owned(), x.affects.name(), x.subject.clone(), x.message.clone()))
             .collect::<Vec<_>>();
+    entries.extend(super::diff::settings_that_differ(&baseline.scope, &subject.scope).into_iter()
+            .map(|setting| (String::from("setting-differs"), counts, setting.to_owned(),
+                format!("The two readings were not taken with the same '{setting}', so part of the difference is that setting and not code that changed."))));
     if baseline.version != subject.version {
         entries.push((String::from("versions-differ"), counts, format!("{} -> {}", baseline.version, subject.version),
                 format!("The readings were counted by mezura {} and {}, so part of the difference may be a language counted better since.",
@@ -227,9 +230,10 @@ fn comparison_warnings_array(baseline: &super::diff::Reading, subject: &super::d
     // what 'settings' says: the key is absent, and its absence would otherwise read as a run that
     // never named a module
     if modules_differ && (baseline.result.has_modules() || subject.result.has_modules()) {
+        let names = |result| super::diff::module_names(result).unwrap_or_else(|| "none".to_owned());
         entries.push((String::from("modules-differ"), mezura_core::warnings::Affects::Settings.name(),
-                format!("{} -> {}", super::diff::module_names(&baseline.result), super::diff::module_names(&subject.result)),
-                String::from("The two readings did not name the same modules, so there is no module the two of them share and this document has no 'modules'.")));
+                format!("{} -> {}", names(&baseline.result), names(&subject.result)),
+                String::from("Module declarations must match between the two readings for the modules to take effect, so this document has no 'modules'.")));
     }
     if entries.is_empty() {
         return String::from("[]");
@@ -861,7 +865,7 @@ mod tests {
         assert!(!document.contains("\"modules\""), "{document}");
         assert!(document.contains("\"code\": \"modules-differ\""), "{document}");
         assert!(document.contains("\"affects\": \"settings\""));
-        assert!(document.contains("\"subject\": \"backend, (unnamed) -> api, (unnamed)\""), "{document}");
+        assert!(document.contains("\"subject\": \"'backend', '(unnamed)' -> 'api', '(unnamed)'\""), "{document}");
 
         // and two readings that named nothing at all have no second axis and nothing to report
         let plain = comparison_document(&reading_of(crate::diff::Source::Run, HashMap::new()),

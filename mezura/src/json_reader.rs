@@ -23,7 +23,7 @@ pub struct Document {
 // The settings that can change a number, as the run that wrote the document had them: two documents
 // that disagree here were not measuring the same thing. The directories are not among them, they
 // are the result's own targets.
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub struct Scope {
     pub exclude: Vec<String>,
     pub languages: Vec<String>,
@@ -32,7 +32,10 @@ pub struct Scope {
     pub forced_languages: HashMap<String, String>,
     pub braces_as_code: bool,
     pub search_in_dotted: bool,
-    pub gitignore: bool
+    pub gitignore: bool,
+    // Whether the keywords were counted at all: '--hide keywords' stops the counting, and a map
+    // that is empty because nothing measured it must not read as a count of zero
+    pub keywords_counted: bool
 }
 
 // Kept as text rather than as the library's own warning, whose code is a '&'static str': a document
@@ -137,7 +140,13 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
             forced_languages: forced_languages_of(nested(scope, "forced_languages", "scope")?)?,
             braces_as_code: flag(scope, "braces_as_code", "scope")?,
             search_in_dotted: flag(scope, "search_in_dotted", "scope")?,
-            gitignore: flag(scope, "gitignore", "scope")?
+            gitignore: flag(scope, "gitignore", "scope")?,
+            // Absent from a document of the first builds, which all counted them
+            keywords_counted: match scope.get("keywords_counted") {
+                Some(x) => x.as_bool().ok_or(DocumentError::WrongType {
+                        at: "scope.keywords_counted".to_owned(), wanted: "true or false" })?,
+                None => true
+            }
         },
         result: RunResult {
             per_language,
@@ -423,6 +432,7 @@ mod tests {
         assert!(read.scope.search_in_dotted);
         // written as whether the file is obeyed, which is the opposite of the flag that turns it off
         assert!(!read.scope.gitignore);
+        assert!(read.scope.keywords_counted);
         assert_eq!(0, read.languages_hidden);
         assert_eq!(1180, read.result.performance.duration_millis);
 
@@ -444,12 +454,20 @@ mod tests {
         assert_eq!(0, read.result.performance.duration_millis);
 
         // '--hide keywords' stops the counting as well as the printing, so the map comes back empty
-        // rather than as a set of zeros
+        // rather than as a set of zeros, and the scope says why it is empty
         config.view.hidden.timing = false;
         config.view.hidden.keywords = true;
         let read = parse(&document(&result, &Local::now(), &config)).unwrap();
         assert!(read.result.per_language["Rust"].keyword_occurences.is_empty());
         assert!(read.result.total.keyword_occurences.is_empty());
+        assert!(!read.scope.keywords_counted);
+
+        // A document from a build that had not met the key counted them, all of those builds did,
+        // so its absence must not read as a refusal or as keywords that were hidden
+        config.view.hidden.keywords = false;
+        let older = document(&result, &Local::now(), &config).replace(",\n    \"keywords_counted\": true", "");
+        assert!(!older.contains("keywords_counted"));
+        assert!(parse(&older).unwrap().scope.keywords_counted);
 
         // and a run that named no module still has the one holding everything, so what a document
         // without the block reads back as has to be that and not an absence of modules

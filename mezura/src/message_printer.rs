@@ -444,10 +444,15 @@ pub const DIFF_HELP  :  &str =
     reading has and the other does not would have every language in it read as written from
     scratch or deleted whole, for files that in all likelihood only moved.
 
-    A document records the settings the counting obeyed and which mezura counted it, and the
-    comparison says so when the two readings disagree on either. A baseline written without
-    '--braces-as-code' has a different idea of what a line of code is, and that difference
-    would otherwise read as code that changed.
+    A document records the settings the counting obeyed, and they reach whatever is counted
+    against it: comparing against a baseline taken with '--braces-as-code' counts this run
+    with it too, and says so, because the two readings would otherwise disagree about what a
+    line of code even is and that difference would read as code that changed. A setting given
+    on this very command line is kept instead, and the comparison then warns that the two
+    readings were not taken the same way, as it does when two documents disagree with each
+    other and there is nothing left to count. '--no-gitignore' never reaches a revision, and
+    mezura says so: a checkout holds only what git tracks. The comparison also says so when
+    the two readings were counted by different versions of mezura.
 
     A document written with '--top' is refused, because the languages it left out would read as
     languages that were deleted since. Write the baseline without it.
@@ -608,7 +613,8 @@ pub const LOG_HELP  :  &str =
     All the provided arguments are used as a description of the log entry.
 
     A configuration file cannot declare it: logging is asked for per run, so that loading a
-    configuration never writes an entry on its own.
+    configuration never writes an entry on its own. It does not apply to a '--diff' run either,
+    since a comparison is not logged, and mezura says so instead of writing an entry.
 
 ";
 pub const COMPRARE_LEVEL_HELP  :  &str =
@@ -849,9 +855,12 @@ pub fn print_help_message_for_given_args(args_line: &str) {
     }
 }
 
+// On the error output, where all 29 of its callers already are: every one is a path that returns a
+// failure, and on stdout this text was what a redirected '--output json > stats.json' ended up
+// holding instead of a document.
 pub fn print_help_message_for_command(arg: &str) {
     if let Some(x) = get_help_msg_of_command(arg) {
-        println!("\n{x}");
+        eprintln!("\n{x}");
     }
 }
 

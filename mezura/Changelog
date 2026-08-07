@@ -103,12 +103,15 @@ New commands:
       comparison takes the place of the report, a row per language and one for the total, and every
       figure carries what it is now and how much it moved. The keywords are marked the same way in
       the section they already have. A language that only one of the two readings has is marked
-      "new" or "gone" instead of being given a percentage. When the two runs did not obey the same
-      settings mezura says so, since that difference is not code that changed. Named targets get a
+      "new" or "gone" instead of being given a percentage. The settings recorded in the document
+      reach whatever is counted against it, so the two readings measure the same thing; a setting
+      given on the command line itself is kept, and mezura then says the two readings were not
+      taken the same way, since that difference is not code that changed. Named targets get a
       row each with their languages under them, as long as both readings named the same modules;
       when they did not, the comparison is of everything at once and mezura says which each of them
       named. With "--output json" the comparison is written as a JSON document, every count carrying
-      "from", "to" and "change". A configuration file cannot declare it.
+      "from", "to" and "change". A comparison run writes no log entry, and "--log" beside it says
+      so. A configuration file cannot declare it.
   -> --save-theme <name> : writes the way this run looks into a theme file, flattened into values,
       so it stands on its own and can be shared. Combined with --save, the configuration that is
       written points at that theme and carries no styles of its own.
@@ -160,6 +163,9 @@ Performance:
       so it is worth raising if your files live on a slow drive.
 
 Bugfixes:
+  -> The help text printed beside a mistyped command value now goes to the error output, so
+      "--output json > stats.json" with a mistake in the command leaves an empty file and an exit
+      code instead of a stats.json that holds a help page.
   -> A log is never emptied by a run that could not read it. It used to be cleared and rebuilt from
       what had just been read, so a file that was locked, held open by an editor, or damaged came
       back holding that one run where it had held every previous one, without a word. It is now

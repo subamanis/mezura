@@ -65,13 +65,27 @@ const DEFAULT_CONFIG_LABEL  : &str    = "default";
 #[derive(Debug,PartialEq,Clone,Default)]
 pub struct Configuration {
     pub engine: EngineConfig,
-    pub view: ViewConfig
+    pub view: ViewConfig,
+    // Which settings this run's own command line input set.
+    // It will be used for the resolution and merging of a json file's settings and the run's own settings
+    pub typed: TypedOnCommandLine,
+    // Configuration settings taken from a json file, during comparison (--diff) run.
+    // Any non-explicitly given settings from the cli, will be overriden by the adopted ones
+    // for the --diff view.
+    pub adopted_from_file: Option<AdoptedSettings>
+}
+
+#[derive(Debug,PartialEq,Clone)]
+pub struct AdoptedSettings {
+    pub from: String,
+    pub settings: Vec<&'static str>
 }
 
 impl Configuration {
     #[cfg(test)]
     pub fn new(dirs: Vec<String>) -> Self {
-        Configuration { engine: EngineConfig::new(dirs), view: ViewConfig::default() }
+        Configuration { engine: EngineConfig::new(dirs), view: ViewConfig::default(),
+                typed: TypedOnCommandLine::default(), adopted_from_file: None }
     }
 
     // One flag answering two questions, so the two halves are set together and never one without
@@ -454,6 +468,43 @@ impl Formatted for ArgParsingError {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct TypedOnCommandLine {
+    pub exclude: bool,
+    pub languages: bool,
+    pub excluded_languages: bool,
+    pub forced_languages: bool,
+    pub braces_as_code: bool,
+    pub search_in_dotted: bool,
+    pub no_gitignore: bool,
+    pub hide_keywords: bool
+}
+
+impl TypedOnCommandLine {
+    // Exhaustive on purpose: a new field of the builder has to be decided here, in or out, before
+    // this compiles again.
+    fn of(builder: &ConfigurationBuilder) -> Self {
+        let ConfigurationBuilder { exclude_dirs, languages_of_interest, excluded_languages,
+            forced_languages, braces_as_code, should_search_in_dotted, no_gitignore, hidden,
+            dirs: _, dirs_source: _, threads: _, should_show_faulty_files: _, theme_name: _,
+            log: _, compare_level: _, config_name_to_save: _, config_name_to_load: _,
+            theme_name_to_save: _, bar_thickness: _, number_separator: _, decimal_separator: _,
+            layout: _, output: _, diff_against: _, sort_by: _, top_n: _, styles: _,
+            config_styles: _, theme_styles: _, typed: _ } = builder;
+
+        TypedOnCommandLine {
+            exclude: exclude_dirs.is_some(),
+            languages: languages_of_interest.is_some(),
+            excluded_languages: excluded_languages.is_some(),
+            forced_languages: forced_languages.is_some(),
+            braces_as_code: braces_as_code.is_some(),
+            search_in_dotted: should_search_in_dotted.is_some(),
+            no_gitignore: no_gitignore.is_some(),
+            hide_keywords: hidden.as_ref().is_some_and(|x| x.keywords)
+        }
+    }
+}
+
 // One optional field per command, flat like the command line and the configuration file that fill
 // it, and merged from both before 'build' turns it into the two halves the program runs on.
 #[derive(Debug, PartialEq, Default)]
@@ -496,7 +547,9 @@ pub struct ConfigurationBuilder {
     pub top_n:                    Option<usize>,
     pub styles:                   Option<Vec<(String,String)>>,
     pub config_styles:            Option<Vec<(String,String)>>,
-    pub theme_styles:             Option<Vec<(String,String)>>
+    pub theme_styles:             Option<Vec<(String,String)>>,
+    // Not an Option: it is a fact about the command line, not a value a file can supply
+    pub typed:                    TypedOnCommandLine
 }
 
 impl ConfigurationBuilder {
@@ -542,6 +595,8 @@ impl ConfigurationBuilder {
         let engine_defaults = EngineConfig::default();
 
         Configuration {
+            typed: self.typed,
+            adopted_from_file: None,
             engine: EngineConfig {
                 dirs: self.dirs.clone().unwrap_or_default(),
                 exclude_dirs: (self.exclude_dirs).clone().unwrap_or_default(),
@@ -886,15 +941,18 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         }
     }
 
-    print_warnings_for_commands_that_need_a_loaded_configuration(&config_name_to_save, &config_name_to_load, &log, &compare_level);
+    print_warnings_for_commands_that_need_a_loaded_configuration(&config_name_to_save, &config_name_to_load, &log, &compare_level, &diff_against);
 
     let mut config_builder = ConfigurationBuilder {
         dirs, dirs_source: None, exclude_dirs, languages_of_interest, excluded_languages, forced_languages, threads, braces_as_code,
         should_search_in_dotted: search_in_dotted, should_show_faulty_files: show_faulty_files,
         hidden, no_gitignore, theme_name, theme_name_to_save, log, compare_level,
         config_name_to_save, config_name_to_load, styles, bar_thickness, number_separator, decimal_separator, layout, output, diff_against, sort_by, top_n,
-        config_styles: None, theme_styles: None
+        config_styles: None, theme_styles: None, typed: TypedOnCommandLine::default()
     };
+    // Before the configuration files below fill anything in, which is what makes the answer the
+    // command line's own
+    config_builder.typed = TypedOnCommandLine::of(&config_builder);
 
     let mut dirs_config_source = None;
     if let Some((custom, issues)) = custom_config {
@@ -987,7 +1045,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             languages_of_interest: _, excluded_languages: _,
             // not carried by a configuration file at all
             config_name_to_save: _, config_name_to_load: _, theme_name_to_save: _, output: _,
-            diff_against: _, log: _, dirs_source: _,
+            diff_against: _, log: _, dirs_source: _, typed: _,
             // a style that does not parse is reported per line and skipped, and the rest of the file
             // still applies, so these warn instead of reaching here
             styles: _, config_styles: _, theme_styles: _ } = config_builder;
@@ -1027,10 +1085,16 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
 }
 
 fn print_warnings_for_commands_that_need_a_loaded_configuration(config_name_to_save: &Option<String>, config_name_to_load: &Option<String>,
-        log: &Option<LogOption>, compare_level: &Option<usize>)
+        log: &Option<LogOption>, compare_level: &Option<usize>, diff_against: &Option<String>)
 {
+    // A comparison is never logged, and saying so wins over the no-config sentence below: one
+    // reason the entry will not be written is enough.
+    if let Some(log) = log && log.should_log && diff_against.is_some() {
+        eprintln!("\n{}","'--log' command will be ignored: a comparison is not logged.".yellow());
+    }
+
     if config_name_to_load.is_none() {
-        if let Some(log) = log && config_name_to_save.is_none() && log.should_log {
+        if let Some(log) = log && config_name_to_save.is_none() && log.should_log && diff_against.is_none() {
             eprintln!("\n{}","'--log' command will be ignored, since no config file was specified.".yellow());
         }
 
@@ -1167,21 +1231,21 @@ mod tests {
         assert_eq!(new_conf("./"), create_config_from_args("--dirs ./").unwrap());
         assert_eq!(conf("./", |c| {c.engine.threads = Threads::new(1,1);}), create_config_from_args("./ --threads 1 1").unwrap());
         assert_eq!(conf("./", |c| {c.engine.threads = Threads::new(1,1);}), create_config_from_args("./ --threads   1   1 ").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.threads = Threads::new(1,1); c.engine.braces_as_code = true;}),
+        assert_eq!(conf("./", |c| {c.engine.threads = Threads::new(1,1); c.engine.braces_as_code = true; c.typed.braces_as_code = true;}),
                 create_config_from_args("./ --threads 1 1 --braces-as-code").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.should_search_in_dotted = true;}),
+        assert_eq!(conf("./", |c| {c.engine.should_search_in_dotted = true; c.typed.search_in_dotted = true;}),
                 create_config_from_args("./ --search-in-dotted").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.no_gitignore = true;}),
+        assert_eq!(conf("./", |c| {c.engine.no_gitignore = true; c.typed.no_gitignore = true;}),
                 create_config_from_args("./ --no-gitignore").unwrap());
         assert_eq!(conf("./", |c| {c.view.set_should_show_faulty_files(true);}),
                 create_config_from_args("./ --show-faulty-files").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.exclude_dirs = vec!["a".to_owned(),"b".to_owned(),"c".to_owned()];}),
+        assert_eq!(conf("./", |c| {c.engine.exclude_dirs = vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]; c.typed.exclude = true;}),
                 create_config_from_args("./ --exclude a,b ,  c ").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.exclude_dirs = vec!["a/path".to_owned(),"b/path".to_owned()];}),
+        assert_eq!(conf("./", |c| {c.engine.exclude_dirs = vec!["a/path".to_owned(),"b/path".to_owned()]; c.typed.exclude = true;}),
                 create_config_from_args("./ --exclude \"a\\path\", \"b\\path\"").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.languages_of_interest = vec!["a".to_owned(),"b".to_owned(),"c".to_owned()];}),
+        assert_eq!(conf("./", |c| {c.engine.languages_of_interest = vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]; c.typed.languages = true;}),
                 create_config_from_args("./ --languages a,b,c").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.languages_of_interest = vec!["a".to_owned()];}),
+        assert_eq!(conf("./", |c| {c.engine.languages_of_interest = vec!["a".to_owned()]; c.typed.languages = true;}),
                 create_config_from_args("./ --languages a, ").unwrap());
         assert_eq!(conf("./", |c| {c.view.set_log_option(LogOption::new(Some("this is a test".to_owned())));}),
                 create_config_from_args("./ --log   this is a test ").unwrap());
@@ -1211,6 +1275,12 @@ mod tests {
         assert_eq!("parsing-info,bar,timing", expected.to_list_string());
         assert_eq!(Ok(expected), Hidden::parse(&expected.to_list_string()));
         assert_eq!(Ok(Hidden::default()), Hidden::parse(""));
+
+        // The mask asks whether keywords were hidden, not whether '--hide' was typed at all: a
+        // '--hide timing' says nothing about them
+        assert!(create_config_from_args("./ --hide keywords,timing").unwrap().typed.hide_keywords);
+        assert!(!create_config_from_args("./ --hide timing").unwrap().typed.hide_keywords);
+        assert!(!create_config_from_args("./").unwrap().typed.hide_keywords);
     }
 
     #[test]
@@ -1450,6 +1520,10 @@ mod tests {
         loaded_config.config_name_to_load = None;
         // Bookkeeping about where the dirs came from, not a value that was saved
         loaded_config.dirs_source = None;
+        // A fact about each command line, not a value that was saved: the first typed its
+        // languages, the second loaded them, and that is exactly what the mask is for
+        assert!(saved_config.typed.languages && !loaded_config.typed.languages);
+        saved_config.typed = TypedOnCommandLine::default();
         assert_eq!(saved_config, loaded_config);
 
         loaded_config = create_config_builder_from_args("--load test000 --threads 1 4 --dirs ./").unwrap();

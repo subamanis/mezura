@@ -373,30 +373,25 @@ fn table_lines(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool
 // given, since then nothing was counted and there is no report for this to take the place of.
 pub fn print_comparison(baseline: &super::diff::Reading, subject: &super::diff::Reading, config: &Configuration) {
     let theme = super::theme::active();
-    // A comparison is drawn as the table or in the boxed frame. The other two layouts have nothing
-    // to show for one, and say so rather than being ignored, the way a matrix with nothing to
-    // cross does.
-    if matches!(config.view.layout, Layout::List | Layout::Matrix) {
-        eprintln!("\n{}", theme.warning.paint(&format!("'--{} {}' has nothing to show for a comparison, \
-so the 'table' layout was printed.", config_manager::LAYOUT, config.view.layout.name())));
-    }
     // The modules are shown when both readings named the same ones, and the run that named none is
     // the pair of one module holding everything, which has nothing to show
     let pairs = super::diff::paired_modules(&baseline.result, &subject.result)
             .filter(|x| x.iter().any(|pair| pair.name.is_some()));
-    if pairs.is_none() && (baseline.result.has_modules() || subject.result.has_modules()) {
-        eprintln!("\n{}", theme.warning.paint(&format!("'{}' named {} and '{}' named {}, so there is no \
-module the two of them share and the comparison below is of everything at once.",
-                baseline.display_name(), super::diff::module_names(&baseline.result),
-                subject.display_name(), super::diff::module_names(&subject.result))));
-    }
-    report_what_makes_the_readings_two_measurements(theme, baseline, subject);
 
     println!("{}.\n", theme.heading.paint("Details"));
+    println!("{}", comparison_heading(theme, baseline, subject));
+    // Between the heading of the table and its rows, because every one of them is about the figures
+    // directly underneath: what this run borrowed to make them comparable, what makes them two
+    // measurements anyway, and what the table is not showing.
+    for note in notes_about_the_comparison(theme, baseline, subject, config, pairs.is_none()) {
+        eprintln!("\n{note}");
+    }
+    println!();
+
     let rows = compared_rows(pairs.as_deref(), &baseline.result, &subject.result, config);
     let lines = match config.view.layout {
-        Layout::Boxed => boxed_comparison_lines(theme, baseline, subject, &rows),
-        _ => comparison_lines(theme, baseline, subject, &rows)
+        Layout::Boxed => boxed_comparison_lines(theme, &rows),
+        _ => comparison_lines(theme, &rows)
     };
     for line in lines {
         println!("{line}");
@@ -448,16 +443,19 @@ fn compared_rows(pairs: Option<&[super::diff::ModulePair]>, baseline: &RunResult
     rows
 }
 
-// One part of a comparison as the keyword block reads it: what is there now, cut by '--top' the way
-// the rows above were, and what the earlier reading had of it.
+// One part of a comparison as the keyword block reads it: the languages of the rows the table
+// printed, so one cut governs both and the block cannot name a language with no row above it, and
+// what the earlier reading had of each. A language that is gone keeps its row in the table and has
+// no keywords now, so it leaves the list here.
 fn compared_group<'a>(name: Option<&'a str>, before: &'a HashMap<String, Stats>,
         now: &'a HashMap<String, Stats>, total: &'a Stats, config: &Configuration) -> Group<'a>
 {
-    let languages = get_sorted_language_names(now, config.view.sort_by);
-    let hidden = config.view.top_n.map_or(0, |top| languages.len().saturating_sub(top));
+    let rows = super::diff::comparison_rows(before, now, config.view.sort_by, config.view.top_n);
+    let hidden = (now.len() + before.keys().filter(|x| !now.contains_key(*x)).count()) - rows.len();
+    let languages = rows.into_iter().map(|row| row.name)
+            .filter(|language| now.contains_key(language)).collect();
 
-    Group { name, languages: languages[..languages.len() - hidden].to_vec(), hidden,
-            per_language: now, total, before: Some(before) }
+    Group { name, languages, hidden, per_language: now, total, before: Some(before) }
 }
 
 // What '--top' left out of the rows, counted where they were cut: inside each module when the
@@ -479,43 +477,77 @@ fn languages_hidden_by_top(pairs: Option<&[super::diff::ModulePair]>, baseline: 
     }
 }
 
-// Everything that makes the two readings two measurements rather than two moments of one, on the
-// error output just above the table it is about. Symmetric, because the sides are: a reading counted
-// by this very run carries no warnings, having printed its own as they happened, so nothing here
-// says the same thing twice.
-fn report_what_makes_the_readings_two_measurements(theme: &Theme, baseline: &super::diff::Reading,
-        subject: &super::diff::Reading)
+// Everything a reader needs in order to take the table underneath at face value, in the order the
+// questions arise: what this run borrowed so that the two are comparable, what makes them two
+// measurements anyway, and what the table leaves out. Symmetric where the sides are: a reading
+// counted by this very run carries no warnings, having printed its own as they happened.
+fn notes_about_the_comparison(theme: &Theme, baseline: &super::diff::Reading,
+        subject: &super::diff::Reading, config: &Configuration, modules_differ: bool) -> Vec<String>
 {
+    let mut notes = Vec::new();
+    // First, because it is why the settings below agree: this run counted with a value it was
+    // never given, and every figure of the table is the product of that
+    if let Some(adopted) = &config.adopted_from_file {
+        let one = adopted.settings.len() == 1;
+        let (was, value, it) = if one {("has", "value", "it")} else {("have", "values", "them")};
+        notes.push(theme.warning.paint(&format!("'{}' {was} been overridden by the {value} recorded \
+in '{}', so both readings are counted the same way. Provide {it} explicitly in the command line to \
+keep your own.", adopted.settings.join("', '"), adopted.from)).to_string());
+    }
+
     let differing = super::diff::settings_that_differ(&baseline.scope, &subject.scope);
     if !differing.is_empty() {
-        eprintln!("\n{}", theme.warning.paint(&format!(
+        notes.push(theme.warning.paint(&format!(
                 "'{}' and '{}' were not taken with the same {}, so part of the difference below is \
-those settings and not code that changed.", baseline.display_name(), subject.display_name(), differing.join(", "))));
+those settings and not code that changed.", baseline.display_name(), subject.display_name(), differing.join(", "))).to_string());
     }
     // A build whose language files were corrected counts the same tree differently, and the
     // Changelog is full of exactly that
     if baseline.version != subject.version {
-        eprintln!("\n{}", theme.warning.paint(&format!(
+        notes.push(theme.warning.paint(&format!(
                 "'{}' was counted by mezura {} and '{}' by {}, so part of the difference below may be \
 a language counted better since, and not code that changed.", baseline.display_name(), baseline.version,
-                subject.display_name(), subject.version)));
+                subject.display_name(), subject.version)).to_string());
     }
     // Said on the error output of a run that is over, so nobody would see it otherwise
     for reading in [baseline, subject] {
         let doubts = super::diff::doubts_about(&reading.warnings);
         if !doubts.is_empty() {
-            eprintln!("\n{}\n{}", theme.warning.paint(&format!(
+            notes.push(format!("{}\n{}", theme.warning.paint(&format!(
                     "The run that took '{}' was not sure of its own counts:", reading.display_name())),
-                    doubts.iter().map(|x| format!("-- {x}")).collect::<Vec<_>>().join("\n"));
+                    doubts.iter().map(|x| format!("-- {x}")).collect::<Vec<_>>().join("\n")));
         }
     }
+
+    if modules_differ && (baseline.result.has_modules() || subject.result.has_modules()) {
+        // The word 'modules' is said once, by the first side, and the second reads on from it
+        let first = match super::diff::module_names(&baseline.result) {
+            Some(names) => format!("'{}' declared modules {names}", baseline.display_name()),
+            None => format!("'{}' didn't declare any modules", baseline.display_name())
+        };
+        let second = match super::diff::module_names(&subject.result) {
+            Some(names) => format!("'{}' declared {names}", subject.display_name()),
+            None => format!("'{}' didn't declare any", subject.display_name())
+        };
+        notes.push(theme.warning.paint(&format!("{first}, whereas {second}. Module declarations \
+must match between the two sources for the modules to take effect in the comparison. Defaulting to \
+the normal comparison view.")).to_string());
+    }
+    // A comparison is drawn as the table or in the boxed frame. The other two layouts have nothing
+    // to show for one, and say so rather than being ignored, the way a matrix with nothing to
+    // cross does.
+    if matches!(config.view.layout, Layout::List | Layout::Matrix) {
+        notes.push(theme.warning.paint(&format!("'--{} {}' has nothing to show for a comparison, \
+so the 'table' layout was printed.", config_manager::LAYOUT, config.view.layout.name())).to_string());
+    }
+
+    notes
 }
 
 // The comparison in the boxed frame: the same triads as the table, with each figure's change in the
 // slot its share occupies on a plain run, and 'Extra' gone the same way. The change cells arrive
 // painted by their direction, so the frame's own slot style is plain.
-fn boxed_comparison_lines(theme: &Theme, baseline: &super::diff::Reading, subject: &super::diff::Reading,
-        rows: &[(String, RowKind, Stats, Stats)]) -> Vec<String>
+fn boxed_comparison_lines(theme: &Theme, rows: &[(String, RowKind, Stats, Stats)]) -> Vec<String>
 {
     const HEADERS : [&str; 6] = ["Language", "Files", "Lines", "Code", "Comments", "Size"];
 
@@ -549,15 +581,16 @@ fn boxed_comparison_lines(theme: &Theme, baseline: &super::diff::Reading, subjec
     let number_styles = [&theme.files_number, &theme.lines_number, &theme.code_number,
             &theme.comments_number, &theme.total_size_number];
 
-    let mut lines = vec![
-        format!("{} '{}' ({}) {} '{}' ({})", theme.progress_entry.paint("From"),
-                baseline.display_name(), readable_time(&baseline.taken), theme.progress_entry.paint("to"),
-                subject.display_name(), readable_time(&subject.taken)),
-        String::new()];
-    lines.extend(boxed_table(theme, name_of_the_first_column(&kinds), &HEADERS, &drawn, &kinds,
-            &header_styles, &number_styles, &plain));
+    boxed_table(theme, name_of_the_first_column(&kinds), &HEADERS, &drawn, &kinds,
+            &header_styles, &number_styles, &plain)
+}
 
-    lines
+// 'From A to B' and not 'compared A to B': the columns hold B's counts and the signs are the
+// journey, so a sentence that puts A first as its subject says the opposite of the table.
+fn comparison_heading(theme: &Theme, baseline: &super::diff::Reading, subject: &super::diff::Reading) -> String {
+    format!("{} '{}' ({}) {} '{}' ({})", theme.progress_entry.paint("From"),
+            baseline.display_name(), readable_time(&baseline.taken), theme.progress_entry.paint("to"),
+            subject.display_name(), readable_time(&subject.taken))
 }
 
 // What '--diff' prints in place of the details, and why it is the details table with columns taken
@@ -566,8 +599,7 @@ fn boxed_comparison_lines(theme: &Theme, baseline: &super::diff::Reading, subjec
 // the three columns left over subtracted from the lines, and the size is the one figure genuinely
 // dropped. Measured on this repository, the result is 108 characters wide, which is what the details
 // table is today.
-fn comparison_lines(theme: &Theme, baseline: &super::diff::Reading, subject: &super::diff::Reading,
-        rows: &[(String, RowKind, Stats, Stats)]) -> Vec<String>
+fn comparison_lines(theme: &Theme, rows: &[(String, RowKind, Stats, Stats)]) -> Vec<String>
 {
     // The change columns are left unnamed: their values are two to five characters and the word would
     // widen the table for nothing, while every one of them carries a sign that says what it is.
@@ -610,17 +642,8 @@ fn comparison_lines(theme: &Theme, baseline: &super::diff::Reading, subject: &su
             &theme.comments_number, &plain, &plain, &theme.total_size_number, &plain];
     headers[0] = name_of_the_first_column(&kinds).to_owned();
 
-    let mut lines = vec![
-        // 'From A to B' and not 'compared A to B': the columns hold B's counts and the signs are the
-        // journey, so a sentence that puts A first as its subject says the opposite of the table.
-        format!("{} '{}' ({}) {} '{}' ({})", theme.progress_entry.paint("From"),
-                baseline.display_name(), readable_time(&baseline.taken), theme.progress_entry.paint("to"),
-                subject.display_name(), readable_time(&subject.taken)),
-        String::new()];
-    lines.extend(aligned_table(theme, &headers, &drawn, &kinds, &TIGHT_AFTER, &header_styles,
-            &body_styles, kinds.contains(&RowKind::Module)));
-
-    lines
+    aligned_table(theme, &headers, &drawn, &kinds, &TIGHT_AFTER, &header_styles,
+            &body_styles, kinds.contains(&RowKind::Module))
 }
 
 // The counterpart of 'name_header' for a comparison, whose rows are already built: the column holds
@@ -2048,12 +2071,20 @@ mod tests {
         let earlier = earlier_modules();
         let (before, now) = (reading_of("older.json", EARLIER, without_modules(&earlier)),
                 reading_of("newer.json", LATER, without_modules(&modules)));
+        // The two lines 'print_comparison' puts above the rows, so that the heading is covered here
+        // and not only where it is called from
+        let headed = |lines: Vec<String>, before: &crate::diff::Reading, now: &crate::diff::Reading| {
+            let mut headed = vec![comparison_heading(theme, before, now), String::new()];
+            headed.extend(lines);
+            headed
+        };
+
         let rows = compared_rows(None, &before.result, &now.result, &config);
-        let mut comparison = comparison_lines(theme, &before, &now, &rows);
+        let mut comparison = comparison_lines(theme, &rows);
         comparison.extend(keyword_block_lines(theme, &[compared_group(None, &before.result.per_language,
                 &now.result.per_language, &now.result.total, &config)]));
-        cases.push(("comparison".to_owned(), comparison));
-        cases.push(("comparison, boxed".to_owned(), boxed_comparison_lines(theme, &before, &now, &rows)));
+        cases.push(("comparison".to_owned(), headed(comparison, &before, &now)));
+        cases.push(("comparison, boxed".to_owned(), headed(boxed_comparison_lines(theme, &rows), &before, &now)));
 
         // The same two readings with a second axis through them, which is shown because they named
         // the same modules
@@ -2065,18 +2096,18 @@ mod tests {
                         &pair.now.total, config)).collect::<Vec<_>>();
 
         let rows = compared_rows(Some(&pairs), &before.result, &now.result, &config);
-        let mut comparison = comparison_lines(theme, &before, &now, &rows);
+        let mut comparison = comparison_lines(theme, &rows);
         comparison.extend(keyword_block_lines(theme, &grouped_keywords(&config)));
-        cases.push(("comparison, modules".to_owned(), comparison));
+        cases.push(("comparison, modules".to_owned(), headed(comparison, &before, &now)));
 
-        let mut comparison = boxed_comparison_lines(theme, &before, &now, &rows);
+        let mut comparison = boxed_comparison_lines(theme, &rows);
         comparison.extend(keyword_block_lines(theme, &grouped_keywords(&config)));
-        cases.push(("comparison, modules, boxed".to_owned(), comparison));
+        cases.push(("comparison, modules, boxed".to_owned(), headed(comparison, &before, &now)));
 
         // '--top' cuts inside each module here as it does everywhere else
         config.view.top_n = Some(1);
-        cases.push(("comparison, modules, top 1".to_owned(), comparison_lines(theme, &before, &now,
-                &compared_rows(Some(&pairs), &before.result, &now.result, &config))));
+        cases.push(("comparison, modules, top 1".to_owned(), headed(comparison_lines(theme,
+                &compared_rows(Some(&pairs), &before.result, &now.result, &config)), &before, &now)));
 
         let mut rendered = String::with_capacity(4000);
         for (name, lines) in cases {

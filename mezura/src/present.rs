@@ -27,9 +27,8 @@ pub fn present(result: &RunResult, baseline: Option<&super::diff::Reading>, conf
             let message = if activated.is_empty() {"No relevant files found in the given directory.".to_owned()}
                     else {format!("No relevant files found in the given directory. {activated}")};
             eprintln!("{}", super::theme::active().warning.paint(&message));
-        } else {
-            super::json_printer::print_as_json(result, &datetime_now, config);
         }
+        print_comparison_or_empty_document(result, baseline, &datetime_now, config);
         return;
     }
 
@@ -42,9 +41,8 @@ pub fn present(result: &RunResult, baseline: Option<&super::diff::Reading>, conf
         print_detail_hint_if_anything_was_hidden(result, config);
         if config.view.prints_text() {
             eprintln!("{}", super::theme::active().warning.paint("None of the files were able to be parsed"));
-        } else {
-            super::json_printer::print_as_json(result, &datetime_now, config);
         }
+        print_comparison_or_empty_document(result, baseline, &datetime_now, config);
         return;
     }
 
@@ -68,7 +66,8 @@ pub fn present(result: &RunResult, baseline: Option<&super::diff::Reading>, conf
     // The reason travels with the warning, because the two that can happen are opposite news: one
     // says this run was not recorded, the other says this run was not recorded and everything
     // already in there was kept rather than replaced by it.
-    if config.view.log.should_log && let Some(path) = log_file_path
+    // A comparison is never logged, which was said when the command was read.
+    if config.view.log.should_log && baseline.is_none() && let Some(path) = log_file_path
         && let Err(reason) = super::log::log_stats(&path, &existing_log_contents, result, &datetime_now, config) {
         eprintln!("\n{}",super::theme::active().warning.paint(&format!("Error while trying to save the log: {reason}")));
     }
@@ -121,6 +120,26 @@ fn print_unreadable_dirs(unreadable_dirs: &[UnreadableDirDetails], config: &Conf
         }
     }
     eprintln!();
+}
+
+// A scan that came back with nothing still owes what was asked for. With a baseline that is the
+// comparison, since a tree that lost every file is the everything-gone reading and not a missing
+// answer, and a document that silently changed kind to 'run' broke whatever was parsing it. With
+// no baseline it is the empty document, and the text form has already said its sentence.
+fn print_comparison_or_empty_document(result: &RunResult, baseline: Option<&super::diff::Reading>,
+        datetime_now: &chrono::DateTime<chrono::Local>, config: &Configuration)
+{
+    match baseline {
+        Some(baseline) if config.view.prints_text() => {
+            println!();
+            super::result_printer::print_comparison(baseline,
+                    &super::diff::Reading::of_this_run(result, datetime_now, &config.engine), config);
+        },
+        Some(baseline) => super::json_printer::print_comparison_as_json(baseline,
+                &super::diff::Reading::of_this_run(result, datetime_now, &config.engine), datetime_now, config),
+        None if config.view.prints_text() => (),
+        None => super::json_printer::print_as_json(result, datetime_now, config)
+    }
 }
 
 fn print_detail_hint_if_anything_was_hidden(result: &RunResult, config: &Configuration) {
@@ -209,6 +228,38 @@ mod tests {
         config.view.should_show_faulty_files = true;
         assert!(detail_hint(&result_with(3, 5), &config).is_none(),
                 "the detail was printed and the reader was still told to ask for it");
+    }
+
+    // The log is the history of a configuration's own measurements, and a comparison run may borrow
+    // nothing but still answers a different question, so it never writes an entry. The refusal is
+    // asserted through the real 'present', because that is where the write happens or does not.
+    #[test]
+    fn a_run_that_compares_writes_no_log_entry() {
+        let name = "zz-a-run-that-compares";
+        std::fs::create_dir_all(&PERSISTENT_APP_PATHS.logs_dir).unwrap();
+        let path = std::path::Path::new(&PERSISTENT_APP_PATHS.logs_dir).join(name.to_owned() + ".txt");
+        let _ = std::fs::remove_file(&path);
+
+        let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
+        config.view.config_name_to_load = Some(name.to_owned());
+        config.view.log = crate::config_manager::LogOption::new(None);
+        let result = result_with(0, 0);
+        let baseline = crate::diff::Reading {
+            source: crate::diff::Source::Document { path: "old.json".to_owned() },
+            taken: "2026-08-06T10:00:00+03:00".to_owned(),
+            version: "3.0.0".to_owned(),
+            scope: crate::diff::scope_of(&mezura_core::EngineConfig::default()),
+            warnings: Vec::new(),
+            result: result_with(0, 0)
+        };
+
+        present(&result, Some(&baseline), &config);
+        assert!(!path.exists(), "the comparison run wrote a log entry");
+
+        // and the same configuration without a comparison still logs, so the gate is the baseline
+        present(&result, None, &config);
+        assert!(path.exists(), "the ordinary run stopped logging");
+        std::fs::remove_file(&path).unwrap();
     }
 
     // Only the file name is asserted: which directory it lands in is the data dir's business, and
