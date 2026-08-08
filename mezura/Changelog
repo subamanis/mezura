@@ -352,6 +352,14 @@ Bugfixes:
   -> '--help' now has an entry of its own in the help, and '--help --help' prints it instead of
       printing nothing at all.
 
+Dependencies:
+  -> serde_json = "1" was introduced, for the JSON the program now writes and reads: the log
+      entries, the "--output json" document and the documents "--diff" compares.
+  -> terminal_size = "0.4" was introduced, so the live lines can ask the terminal its width and
+      fit themselves to it.
+  -> unicode-width = "0.2" was introduced, so a revision name is measured in the terminal columns
+      it really occupies: CJK and emoji glyphs are two columns wide each.
+
 Other:
   -> Updated default styling. The 'list' layout was rebuilt too: each language is a block of three
       rows, with the file count and size above the name, the line breakdown beside it and the
