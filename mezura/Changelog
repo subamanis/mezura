@@ -73,6 +73,9 @@ Main changes:
   -> New "--progress-bar" command: "smooth", "dotted" or "hash" chooses the characters the live
       bar is drawn with. "hash" is plain ASCII, for a terminal that draws the block characters
       wrongly or not at all.
+  -> The live lines fit themselves to the terminal's width, and follow it while it is resized:
+      the bar narrows first, then the speed figures go one by one, until only the file count is
+      left. A revision name longer than 18 characters is shortened with "..".
   -> Counting a git revision for "--diff" is no longer silent on a terminal: a moving line names
       the phase, "Writing out '<revision>'" and then "Counting '<revision>'", with the files
       discovered and the progress bar when the counting is long enough to need one. It erases

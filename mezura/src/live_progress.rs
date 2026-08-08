@@ -6,6 +6,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use mezura_core::ScanProgress;
+use unicode_width::UnicodeWidthChar;
 
 use crate::config_manager::Configuration;
 
@@ -24,18 +25,38 @@ const COUNT_FIELD_WIDTH : usize = "9,999,999".len();
 // The parsing bar only exists when this many files are still queued when the walk ends: a queue
 // the consumers drain in a blink would only flash it
 const BAR_APPEARS_OVER_QUEUED : usize = 5_000;
-const BAR_CELLS : usize = 30;
+// A frame fits itself to the terminal: the bar gives resolution first, the speed figures go after,
+// then the label, then the count, and a frame that still does not fit is not drawn at all: a drawn
+// frame that wraps welds itself to the row below and a retreating display then erases the wrong row
+const MAX_BAR_CELLS : usize = 30;
+const MIN_BAR_CELLS : usize = 18;
+// What a terminal that will not answer its width is assumed to be
+const FALLBACK_WIDTH : usize = 80;
+// A revision name is the user's own text, so past this many terminal columns it is cut with '..':
+// a long branch name or a whole hash says nothing after its first characters that is worth a speed
+// figure's place
+const REVISION_NAME_MAX_COLUMNS : usize = 18;
 // Both rates sit right-aligned in reserved fields for the same reason as the walk count: a rate
 // crossing a digit boundary between two samples must not push the text beside it
 const FILES_RATE_FIELD_WIDTH : usize = "999,999".len();
-const LINES_RATE_FIELD_WIDTH : usize = "999,999,999".len();
-const ERASE_LINE : &str = "\r\x1b[2K";
+const LINES_RATE_FIELD_WIDTH : usize = "99,999,999".len();
+// Named once and read by both the format strings and the width arithmetic of 'fit_parsing_frame',
+// so the two cannot drift apart by a column
+const FILES_RATE_SUFFIX : &str = " files/s";
+const LINES_RATE_SUFFIX : &str = " lines/s";
+// Erases to the end of the screen and not just the line: a terminal that narrowed mid-run rewraps
+// the row by itself and welds what spilled onto the row below, and this is the one sequence that
+// clears the spill without moving the cursor. Safe because nothing permanent is ever printed below
+// a live line.
+const ERASE_BELOW : &str = "\r\x1b[0J";
 // One write: erase, then up onto the blank line the first frame opened, undoing the display whole
-const ERASE_LINE_AND_RETREAT : &str = "\r\x1b[2K\x1b[1A";
+const ERASE_BELOW_AND_RETREAT : &str = "\r\x1b[0J\x1b[1A";
 
 const _ : () = {
     assert!(TICK.as_millis() > 0);
     assert!(THREE_DOTS_STEP_MS > 0 && NUMBER_REFRESH_MS > 0);
+    assert!(MIN_BAR_CELLS > 0 && MIN_BAR_CELLS <= MAX_BAR_CELLS);
+    assert!(REVISION_NAME_MAX_COLUMNS > 2);
 };
 
 // The moving parts of a run on the terminal, drawn by a differnet thread of this crate.
@@ -106,8 +127,9 @@ pub fn start_revision_display(config: &Configuration, git_revision: &str, progre
     }
 
     // Only the word carries the heading style: the revision is data, not a header
-    let writing = format!("{} '{git_revision}'", crate::theme::get_active().heading.paint("Writing out"));
-    let counting = format!("{} '{git_revision}'", crate::theme::get_active().heading.paint("Counting"));
+    let shown_name = cap_revision_name(git_revision);
+    let writing = format!("{} '{shown_name}'", crate::theme::get_active().heading.paint("Writing out"));
+    let counting = format!("{} '{shown_name}'", crate::theme::get_active().heading.paint("Counting"));
     let show_bar_and_rates = !config.view.hidden.progress_bar;
     let charset = config.view.progress_bar.get_charset();
     let stop = Arc::new(AtomicBool::new(false));
@@ -159,9 +181,7 @@ impl LiveDisplay {
     pub fn finish(&self) {
         let Some(animator) = self.animator.lock().unwrap().take() else { return };
         self.should_stop.store(true, Ordering::Relaxed);
-        // The animator waits out its tick in 'park_timeout', so it is woken rather than waited for:
-        // joining a sleep would hold the report back by up to a whole tick, and that wait lands
-        // inside the elapsed time the run prints
+        // The animator waits out its tick in 'park_timeout', so it is woken rather than waited for.
         animator.thread().unpark();
         let _ = animator.join();
         if matches!(self.parting, Parting::Retreat) && !self.opened_own_line.load(Ordering::Relaxed) {
@@ -169,19 +189,6 @@ impl LiveDisplay {
         }
         write_parting(&self.parting);
     }
-}
-
-// The one place that knows what each parting is made of, shared with the removals line below,
-// which parts the same way without being a LiveDisplay
-fn write_parting(parting: &Parting) {
-    let text = match parting {
-        Parting::Settle(line) => format!("{ERASE_LINE}{line}\n"),
-        Parting::Erase => ERASE_LINE.to_owned(),
-        Parting::Retreat => ERASE_LINE_AND_RETREAT.to_owned()
-    };
-    let mut stderr = std::io::stderr().lock();
-    let _ = stderr.write_all(text.as_bytes());
-    let _ = stderr.flush();
 }
 
 impl Default for LiveDisplay {
@@ -217,40 +224,214 @@ impl Drop for RemovalsGuard {
     }
 }
 
+// The one place that knows what each parting is made of, shared with the removals line below,
+// which parts the same way without being a LiveDisplay
+fn write_parting(parting: &Parting) {
+    let text = match parting {
+        Parting::Settle(line) => format!("{ERASE_BELOW}{line}\n"),
+        Parting::Erase => ERASE_BELOW.to_owned(),
+        Parting::Retreat => ERASE_BELOW_AND_RETREAT.to_owned()
+    };
+    let mut stderr = std::io::stderr().lock();
+    let _ = stderr.write_all(text.as_bytes());
+    let _ = stderr.flush();
+}
+
+fn cap_revision_name(name: &str) -> String {
+    if measure_columns(name) <= REVISION_NAME_MAX_COLUMNS {
+        return name.to_owned();
+    }
+    let mut kept = String::new();
+    let mut columns = 0;
+    for character in name.chars() {
+        let next = columns + character.width().unwrap_or(0);
+        if next > REVISION_NAME_MAX_COLUMNS - 2 {
+            break;
+        }
+        columns = next;
+        kept.push(character);
+    }
+    kept + ".."
+}
+
+// Terminal columns and not characters, past the same escapes 'calculate_visible_len' skips: the
+// revision name is the one text a user writes into a frame, and CJK or emoji there occupy two
+// columns each, which a character count declares half as wide as they draw
+fn measure_columns(text: &str) -> usize {
+    let mut columns = 0;
+    let mut chars = text.chars();
+    while let Some(character) = chars.next() {
+        if character == '\x1b' {
+            for terminator in chars.by_ref() {
+                if terminator == 'm' {break}
+            }
+        } else {
+            columns += character.width().unwrap_or(0);
+        }
+    }
+    columns
+}
+
+// The columns a frame may occupy: one less than the terminal says, because the last column is
+// where terminals keep their pending-wrap quirks
+fn read_budget() -> usize {
+    match terminal_size::terminal_size_of(std::io::stderr()) {
+        Some((width, _)) => (width.0 as usize).saturating_sub(1),
+        None => FALLBACK_WIDTH - 1
+    }
+}
+
+// What of the parsing frame fits in 'budget' beside a label and the count: the bar takes whatever
+// is left within its clamp, the lines/s figure is given up first and the files/s after, and a plan
+// of nothing at all means the count stands alone
+#[derive(Debug, PartialEq, Eq)]
+struct FramePlan {
+    bar_cells: usize,
+    files_rate: bool,
+    lines_rate: bool
+}
+
+impl FramePlan {
+    const COUNT_ALONE : FramePlan = FramePlan { bar_cells: 0, files_rate: false, lines_rate: false };
+}
+
+fn fit_parsing_frame(budget: usize, label_width: usize, count_width: usize) -> FramePlan {
+    let count_block = 2 * count_width + 7;
+    let files_block = 2 + FILES_RATE_FIELD_WIDTH + FILES_RATE_SUFFIX.len();
+    let lines_block = 3 + LINES_RATE_FIELD_WIDTH + LINES_RATE_SUFFIX.len();
+    let bar_frame = 3;
+    let fixed = label_width + count_block;
+
+    let with_both = budget.saturating_sub(fixed + files_block + lines_block + bar_frame);
+    if with_both >= MIN_BAR_CELLS {
+        return FramePlan { bar_cells: with_both.min(MAX_BAR_CELLS), files_rate: true, lines_rate: true };
+    }
+    let with_files = budget.saturating_sub(fixed + files_block + bar_frame);
+    if with_files >= MIN_BAR_CELLS {
+        return FramePlan { bar_cells: with_files.min(MAX_BAR_CELLS), files_rate: true, lines_rate: false };
+    }
+    let bar_alone = budget.saturating_sub(fixed + bar_frame);
+    if bar_alone >= MIN_BAR_CELLS {
+        return FramePlan { bar_cells: bar_alone.min(MAX_BAR_CELLS), files_rate: false, lines_rate: false };
+    }
+    FramePlan::COUNT_ALONE
+}
+
+// One sampling window shared by both lines that show speed, so a fix to how a figure is worked out
+// cannot land in one and not the other
+struct RateSampler {
+    baseline: (Instant, usize, usize),
+    rates: Option<(usize, usize)>,
+    shown_parsed: usize
+}
+
+impl RateSampler {
+    fn start(progress: &ScanProgress) -> RateSampler {
+        let parsed = progress.get_files_parsed();
+        RateSampler {
+            baseline: (Instant::now(), parsed, progress.get_lines_counted()),
+            rates: None,
+            shown_parsed: parsed
+        }
+    }
+
+    // The delta between two samples and never the average since the start, so the figure follows
+    // what the disk is doing right now. A sample under the minimum interval leaves the baseline
+    // where it was: moving it would drop that window's work from the next delta.
+    fn sample(&mut self, progress: &ScanProgress) {
+        let (now, parsed, lines) = (Instant::now(), progress.get_files_parsed(), progress.get_lines_counted());
+        let seconds = now.duration_since(self.baseline.0).as_secs_f64();
+        if seconds > MIN_RATE_INTERVAL_SECS {
+            self.rates = Some((((parsed - self.baseline.1) as f64 / seconds) as usize,
+                    ((lines - self.baseline.2) as f64 / seconds) as usize));
+            self.baseline = (now, parsed, lines);
+        }
+        self.shown_parsed = parsed;
+    }
+}
+
+// The one seam every animator writes frames through, holding what stands on the row. An unchanged
+// frame on an unchanged budget is not written; a changed budget means the terminal may have
+// rewrapped the row on its own, so the frame is redrawn whether it changed or not, over an erase
+// that takes any spill with it; and a frame wider than the budget is not drawn at all, since a
+// wrapped frame is the very thing the erase exists to clean up.
+struct TransientRow {
+    last_written: String,
+    previous_width: usize,
+    last_budget: Option<usize>,
+    drew_first_frame: bool
+}
+
+impl TransientRow {
+    fn new() -> TransientRow {
+        TransientRow {
+            last_written: String::new(),
+            previous_width: 0,
+            last_budget: None,
+            drew_first_frame: false
+        }
+    }
+
+    // 'on_first_frame' runs once, right before the first frame reaches the screen: it is how a
+    // display opens its own line only if it ever draws anything
+    fn draw(&mut self, frame: &str, budget: usize, on_first_frame: impl FnOnce()) {
+        let resized = self.last_budget.is_some_and(|previous| previous != budget);
+        self.last_budget = Some(budget);
+        let width = measure_columns(frame);
+        if width > budget {
+            if !self.last_written.is_empty() {
+                write_parting(&Parting::Erase);
+                self.last_written.clear();
+                self.previous_width = 0;
+            }
+            return;
+        }
+        if !resized && frame == self.last_written {
+            return;
+        }
+        if !self.drew_first_frame {
+            on_first_frame();
+            self.drew_first_frame = true;
+        }
+        if resized && !self.last_written.is_empty() {
+            redraw_resized_line(frame);
+            self.previous_width = width;
+        } else {
+            self.previous_width = overwrite_transient_line(frame, self.previous_width, budget);
+        }
+        self.last_written = frame.to_owned();
+    }
+}
+
 // On the calling thread and not on an animator of its own, since the caller has nothing left to do
 // but wait for the same event: dots on a 'Cleaning up' line until every removal has finished,
 // naming the one still running
 fn animate_removals_line() {
     let started = Instant::now();
-    let mut last_written = String::new();
-    let mut previous_width = 0;
+    let mut row = TransientRow::new();
     while let Some(revision) = crate::git::find_running_removal() {
         thread::sleep(TICK);
         let elapsed = started.elapsed().as_millis();
         if elapsed < MOTION_APPEARS_AFTER_MS {
             continue;
         }
-        let label = format!("{} '{revision}'", crate::theme::get_active().heading.paint("Cleaning up"));
-        let frame = format_walk_frame(&label, elapsed, 0);
-        if frame != last_written {
-            if last_written.is_empty() {
-                open_line_below();
-            }
-            previous_width = overwrite_transient_line(&frame, previous_width);
-            last_written = frame;
-        }
+        let budget = read_budget();
+        let label = format!("{} '{}'", crate::theme::get_active().heading.paint("Cleaning up"),
+                cap_revision_name(&revision));
+        let frame = format_walk_frame(&label, elapsed, 0, budget);
+        row.draw(&frame, budget, open_line_below);
     }
-    if !last_written.is_empty() {
+    if row.drew_first_frame {
         write_parting(&Parting::Retreat);
     }
 }
 
 fn animate_walk_line(progress: &ScanProgress, stop: &AtomicBool, heading: &str) {
     let started = Instant::now();
-    let mut last_written = String::new();
-    let mut previous_width = 0;
+    let mut row = TransientRow::new();
     let mut shown_files = 0;
     let mut last_number_slot = 0;
+    let mut frozen_elapsed = None;
     while !stop.load(Ordering::Relaxed) {
         // Woken early by 'finish'. A spurious wake costs nothing: every figure below is worked out
         // from this thread's own clock, and an unchanged frame is not written.
@@ -259,16 +440,20 @@ fn animate_walk_line(progress: &ScanProgress, stop: &AtomicBool, heading: &str) 
         if elapsed < MOTION_APPEARS_AFTER_MS {
             continue;
         }
+        // When a scanning thread has died the mid-run finisher is never called, and this line lives
+        // on through the whole drain of a run about to be refused; still dots stop it claiming a
+        // scan that has ended
+        if frozen_elapsed.is_none() && progress.is_walk_done() {
+            frozen_elapsed = Some(elapsed);
+        }
+        let budget = read_budget();
         let number_slot = elapsed / NUMBER_REFRESH_MS;
         if number_slot != last_number_slot {
             last_number_slot = number_slot;
             shown_files = progress.get_files_found();
         }
-        let frame = format_walk_frame(heading, elapsed, shown_files);
-        if frame != last_written {
-            previous_width = overwrite_transient_line(&frame, previous_width);
-            last_written = frame;
-        }
+        let frame = format_walk_frame(heading, frozen_elapsed.unwrap_or(elapsed), shown_files, budget);
+        row.draw(&frame, budget, || {});
     }
 }
 
@@ -276,9 +461,11 @@ fn animate_walk_line(progress: &ScanProgress, stop: &AtomicBool, heading: &str) 
 // its rewrite is a blank the eye reads as flicker, and an unbuffered stderr sends every piece of a
 // format string as its own write. Overwriting changes each cell once, and the padding covers what
 // a shorter frame would leave behind. Returns the width it drew, which is the next frame's padding.
-fn overwrite_transient_line(text: &str, previous_width: usize) -> usize {
-    let width = crate::theme::calculate_visible_len(text);
-    let padding = " ".repeat(previous_width.saturating_sub(width));
+fn overwrite_transient_line(text: &str, previous_width: usize, budget: usize) -> usize {
+    let width = measure_columns(text);
+    // Never pad past the budget: covering the leftovers of a frame from before the terminal
+    // narrowed would wrap on its own, which is the very thing being covered up
+    let padding = " ".repeat(previous_width.min(budget).saturating_sub(width));
     let mut stderr = std::io::stderr().lock();
     // The trailing return parks the visible cursor at column 0, one still spot instead of a blink
     // hopping wherever the text's tail happens to end
@@ -287,19 +474,26 @@ fn overwrite_transient_line(text: &str, previous_width: usize) -> usize {
     width
 }
 
+// The one frame write that begins with an erase, taken after a resize, where flicker loses to the
+// alternative: the terminal rewraps the row on its own when it narrows, and what it welded onto
+// the row below only the erase-to-screen-end can take back
+fn redraw_resized_line(text: &str) {
+    let mut stderr = std::io::stderr().lock();
+    let _ = stderr.write_all(format!("{ERASE_BELOW}{text}\r").as_bytes());
+    let _ = stderr.flush();
+}
+
 // One line for the whole side, and the label follows the phase: 'Writing out' until the first file
 // of the inner run is found, which is when git has finished materialising the revision, 'Counting'
 // after, and the parsing frame on the same line when the scan ends with a queue over the threshold
 fn animate_revision_line(progress: &ScanProgress, stop: &AtomicBool, opened: &AtomicBool,
         writing_label: &str, counting_label: &str, show_bar_and_rates: bool, charset: &str) {
     let started = Instant::now();
-    let mut last_written = String::new();
-    let mut previous_width = 0;
+    let counting_label_width = measure_columns(counting_label) + 1;
+    let mut row = TransientRow::new();
     let mut shown_files = 0;
     let mut parsing: Option<(usize, usize)> = None;
-    let mut shown_parsed = 0;
-    let mut rates = None;
-    let mut last_sample = (started, 0, 0);
+    let mut sampler = RateSampler::start(progress);
     let mut last_number_slot = 0;
     while !stop.load(Ordering::Relaxed) {
         thread::park_timeout(TICK);
@@ -315,8 +509,7 @@ fn animate_revision_line(progress: &ScanProgress, stop: &AtomicBool, opened: &At
                 && progress.get_files_found().saturating_sub(progress.get_files_parsed()) > BAR_APPEARS_OVER_QUEUED {
             let total = progress.get_files_found();
             parsing = Some((total, crate::number_formatter::format_with_separators(total).chars().count()));
-            shown_parsed = progress.get_files_parsed();
-            last_sample = (Instant::now(), shown_parsed, progress.get_lines_counted());
+            sampler = RateSampler::start(progress);
         }
 
         let number_slot = elapsed / NUMBER_REFRESH_MS;
@@ -325,37 +518,36 @@ fn animate_revision_line(progress: &ScanProgress, stop: &AtomicBool, opened: &At
             last_number_slot = number_slot;
         }
 
+        let budget = read_budget();
         let frame = match parsing {
             None => {
                 if numbers_due {
                     shown_files = progress.get_files_found();
                 }
                 let label = if progress.get_files_found() == 0 {writing_label} else {counting_label};
-                format_walk_frame(label, elapsed, shown_files)
+                format_walk_frame(label, elapsed, shown_files, budget)
             },
             Some((total, count_width)) => {
                 if numbers_due {
-                    let (now, parsed, lines) = (Instant::now(), progress.get_files_parsed(), progress.get_lines_counted());
-                    let seconds = now.duration_since(last_sample.0).as_secs_f64();
-                    if seconds > MIN_RATE_INTERVAL_SECS {
-                        rates = Some((((parsed - last_sample.1) as f64 / seconds) as usize,
-                                ((lines - last_sample.2) as f64 / seconds) as usize));
-                    }
-                    last_sample = (now, parsed, lines);
-                    shown_parsed = parsed;
+                    sampler.sample(progress);
                 }
-                format!("{counting_label} {}", format_parsing_frame(progress.get_files_parsed(), shown_parsed, total,
-                        count_width, rates, show_bar_and_rates, charset))
+                let plan = if show_bar_and_rates {
+                    fit_parsing_frame(budget, counting_label_width, count_width)
+                } else {
+                    FramePlan::COUNT_ALONE
+                };
+                let bare = format_parsing_frame(progress.get_files_parsed(), sampler.shown_parsed, total,
+                        count_width, sampler.rates, &plan, charset);
+                let labeled = format!("{counting_label} {bare}");
+                // The label is the next thing given up under the ladder's last rung, ahead of the
+                // count it introduces
+                if measure_columns(&labeled) <= budget { labeled } else { bare }
             }
         };
-        if frame != last_written {
-            if last_written.is_empty() {
-                open_line_below();
-                opened.store(true, Ordering::Relaxed);
-            }
-            previous_width = overwrite_transient_line(&frame, previous_width);
-            last_written = frame;
-        }
+        row.draw(&frame, budget, || {
+            open_line_below();
+            opened.store(true, Ordering::Relaxed);
+        });
     }
 }
 
@@ -371,11 +563,8 @@ fn animate_parsing_line(progress: &ScanProgress, stop: &AtomicBool, show_bar_and
     let started = Instant::now();
     let total = progress.get_files_found();
     let count_width = crate::number_formatter::format_with_separators(total).chars().count();
-    let mut last_written = String::new();
-    let mut previous_width = 0;
-    let mut shown_parsed = progress.get_files_parsed();
-    let mut rates = None;
-    let mut last_sample = (started, shown_parsed, progress.get_lines_counted());
+    let mut row = TransientRow::new();
+    let mut sampler = RateSampler::start(progress);
     let mut last_number_slot = 0;
     while !stop.load(Ordering::Relaxed) {
         thread::park_timeout(TICK);
@@ -383,74 +572,73 @@ fn animate_parsing_line(progress: &ScanProgress, stop: &AtomicBool, show_bar_and
         if elapsed < MOTION_APPEARS_AFTER_MS {
             continue;
         }
+        let budget = read_budget();
         let number_slot = elapsed / NUMBER_REFRESH_MS;
         if number_slot != last_number_slot {
             last_number_slot = number_slot;
-            let (now, parsed, lines) = (Instant::now(), progress.get_files_parsed(), progress.get_lines_counted());
-            let seconds = now.duration_since(last_sample.0).as_secs_f64();
-            if seconds > MIN_RATE_INTERVAL_SECS {
-                // The delta between two samples and never the average since the start, so the
-                // figure follows what the disk is doing right now
-                rates = Some((((parsed - last_sample.1) as f64 / seconds) as usize,
-                        ((lines - last_sample.2) as f64 / seconds) as usize));
-            }
-            last_sample = (now, parsed, lines);
-            shown_parsed = parsed;
+            sampler.sample(progress);
         }
+        let plan = if show_bar_and_rates {
+            fit_parsing_frame(budget, 0, count_width)
+        } else {
+            FramePlan::COUNT_ALONE
+        };
         // The bar reads the live figure and moves whenever a quantum is crossed, while the count
         // beside it holds still between number refreshes
-        let frame = format_parsing_frame(progress.get_files_parsed(), shown_parsed, total, count_width,
-                rates, show_bar_and_rates, charset);
-        if frame != last_written {
-            previous_width = overwrite_transient_line(&frame, previous_width);
-            last_written = frame;
-        }
+        let frame = format_parsing_frame(progress.get_files_parsed(), sampler.shown_parsed, total, count_width,
+                sampler.rates, &plan, charset);
+        row.draw(&frame, budget, || {});
     }
 }
 
 fn format_parsing_frame(bar_parsed: usize, counted_parsed: usize, total: usize, count_width: usize,
-        rates: Option<(usize, usize)>, show_bar_and_rates: bool, charset: &str) -> String {
+        rates: Option<(usize, usize)>, plan: &FramePlan, charset: &str) -> String {
     let count = format!("{:>count_width$}/{} files",
             crate::number_formatter::format_with_separators(counted_parsed),
             crate::number_formatter::format_with_separators(total));
-    if !show_bar_and_rates {
+    if plan.bar_cells == 0 {
         return count;
     }
     let speed = match rates {
-        Some((files, lines)) => crate::theme::Style::plain().dim()
-                .paint(&format!("  {:>FILES_RATE_FIELD_WIDTH$} files/s | {:>LINES_RATE_FIELD_WIDTH$} lines/s",
-                        crate::number_formatter::format_with_separators(files),
-                        crate::number_formatter::format_with_separators(lines))).to_string(),
-        None => String::new()
+        Some((files, lines)) if plan.files_rate => {
+            let mut figures = format!("  {:>FILES_RATE_FIELD_WIDTH$}{FILES_RATE_SUFFIX}",
+                    crate::number_formatter::format_with_separators(files));
+            if plan.lines_rate {
+                figures += &format!(" | {:>LINES_RATE_FIELD_WIDTH$}{LINES_RATE_SUFFIX}",
+                        crate::number_formatter::format_with_separators(lines));
+            }
+            crate::theme::Style::plain().dim().paint(&figures).to_string()
+        },
+        _ => String::new()
     };
-    format!("[{}] {count}{speed}", build_bar(bar_parsed, total, charset))
+    format!("[{}] {count}{speed}", build_bar(bar_parsed, total, plan.bar_cells, charset))
 }
 
-// 'BAR_CELLS' cells with one quantum per character of the set: the last character is a full cell,
-// the ones before it are its sub-steps, so the tip advances through them before a new cell begins
-fn build_bar(parsed: usize, total: usize, charset: &str) -> String {
+// 'cells' cells with one quantum per character of the set: the last character is a full cell, the
+// ones before it are its sub-steps, so the tip advances through them before a new cell begins
+fn build_bar(parsed: usize, total: usize, cells: usize, charset: &str) -> String {
     let levels = charset.chars().collect::<Vec<_>>();
-    let filled_quanta = (parsed.min(total) * BAR_CELLS * levels.len()).checked_div(total).unwrap_or(0);
+    let filled_quanta = (parsed.min(total) * cells * levels.len()).checked_div(total).unwrap_or(0);
     let full_cells = filled_quanta / levels.len();
     let tip = filled_quanta % levels.len();
 
-    let mut bar = String::with_capacity(BAR_CELLS * 3);
-    let mut cells = 0;
+    let mut bar = String::with_capacity(cells * 3);
+    let mut drawn = 0;
     for _ in 0..full_cells {
         bar.push(*levels.last().unwrap());
-        cells += 1;
+        drawn += 1;
     }
     if tip > 0 {
         bar.push(levels[tip - 1]);
-        cells += 1;
+        drawn += 1;
     }
-    for _ in cells..BAR_CELLS {
+    for _ in drawn..cells {
         bar.push(' ');
     }
     bar
 }
 
-fn format_walk_frame(heading: &str, elapsed_ms: u128, files_found: usize) -> String {
+fn format_walk_frame(heading: &str, elapsed_ms: u128, files_found: usize, budget: usize) -> String {
     let dots = ".".repeat((elapsed_ms / THREE_DOTS_STEP_MS % 4) as usize);
     if files_found == 0 {
         return format!("{heading}{dots}");
@@ -459,59 +647,170 @@ fn format_walk_frame(heading: &str, elapsed_ms: u128, files_found: usize) -> Str
             .paint(&format!("{:>width$} files discovered",
                     crate::number_formatter::format_with_separators(files_found), width = COUNT_FIELD_WIDTH));
     // The dots are padded to their widest, so the count does not shift as they cycle
-    format!("{heading}{dots:<4}{count}")
+    let full = format!("{heading}{dots:<4}{count}");
+    // The count clause is this line's one expendable; below even the bare heading, the writer
+    // draws nothing at all
+    if measure_columns(&full) > budget {
+        return format!("{heading}{dots}");
+    }
+    full
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const ROOMY : usize = 200;
+
     #[test]
     fn the_dots_cycle_through_none_to_three() {
-        assert_eq!("h", format_walk_frame("h", 0, 0));
-        assert_eq!("h.", format_walk_frame("h", THREE_DOTS_STEP_MS, 0));
-        assert_eq!("h..", format_walk_frame("h", 2 * THREE_DOTS_STEP_MS, 0));
-        assert_eq!("h...", format_walk_frame("h", 3 * THREE_DOTS_STEP_MS, 0));
-        assert_eq!("h", format_walk_frame("h", 4 * THREE_DOTS_STEP_MS, 0));
+        assert_eq!("h", format_walk_frame("h", 0, 0, ROOMY));
+        assert_eq!("h.", format_walk_frame("h", THREE_DOTS_STEP_MS, 0, ROOMY));
+        assert_eq!("h..", format_walk_frame("h", 2 * THREE_DOTS_STEP_MS, 0, ROOMY));
+        assert_eq!("h...", format_walk_frame("h", 3 * THREE_DOTS_STEP_MS, 0, ROOMY));
+        assert_eq!("h", format_walk_frame("h", 4 * THREE_DOTS_STEP_MS, 0, ROOMY));
     }
 
     // Nothing found yet reads better as silence than as '0 files', and once the count is there it
     // sits in one column while the dots move beside it
     #[test]
     fn the_count_appears_once_files_were_found_and_holds_its_column() {
-        assert!(!format_walk_frame("h", 0, 0).contains("files"));
-        let one_dot = format_walk_frame("h", 0, 42);
-        let three_dots = format_walk_frame("h", 2 * THREE_DOTS_STEP_MS, 42);
+        assert!(!format_walk_frame("h", 0, 0, ROOMY).contains("files"));
+        let one_dot = format_walk_frame("h", 0, 42, ROOMY);
+        let three_dots = format_walk_frame("h", 2 * THREE_DOTS_STEP_MS, 42, ROOMY);
         assert!(one_dot.contains("42 files discovered") && three_dots.contains("42 files discovered"));
         assert_eq!(crate::theme::calculate_visible_len(&one_dot), crate::theme::calculate_visible_len(&three_dots));
 
         // and a count that grows a digit fills its reserved field instead of pushing the text
-        let five_digits = format_walk_frame("h", 0, 99_999);
-        let six_digits = format_walk_frame("h", 0, 100_000);
+        let five_digits = format_walk_frame("h", 0, 99_999, ROOMY);
+        let six_digits = format_walk_frame("h", 0, 100_000, ROOMY);
         assert_eq!(crate::theme::calculate_visible_len(&five_digits), crate::theme::calculate_visible_len(&six_digits));
+
+        // a budget too narrow for the count clause keeps the moving dots and gives the clause up
+        let narrow = format_walk_frame("h", THREE_DOTS_STEP_MS, 42, 10);
+        assert_eq!("h.", narrow);
+    }
+
+    // The plans a budget buys, walked down the ladder: the bar gives resolution first, lines/s
+    // goes next, files/s after, and the count outlives everything. Written against the ladder's
+    // promises and never against precomputed boundaries, so the width constants can move without
+    // this test naming their values; the rendered frame is the ground truth a mirrored formula
+    // could not give.
+    #[test]
+    fn the_frame_plan_steps_down_as_the_budget_narrows() {
+        let charset = crate::config_manager::ProgressBarStyle::default().get_charset();
+        let plan_at = |budget: usize| fit_parsing_frame(budget, 0, 6);
+        let render = |plan: &FramePlan| format_parsing_frame(3_000, 3_000, 80_000, 6,
+                Some((29_238, 14_406_917)), plan, charset);
+
+        assert_eq!(FramePlan::COUNT_ALONE, plan_at(0));
+        assert_eq!(FramePlan { bar_cells: MAX_BAR_CELLS, files_rate: true, lines_rate: true },
+                plan_at(10_000));
+
+        let mut previous = plan_at(0);
+        for budget in 1..=400 {
+            let plan = plan_at(budget);
+            assert!(plan.files_rate || !plan.lines_rate, "lines/s without files/s at {budget}");
+            assert!(plan.bar_cells == 0 || (MIN_BAR_CELLS..=MAX_BAR_CELLS).contains(&plan.bar_cells),
+                    "a bar of {} cells at {budget}", plan.bar_cells);
+
+            // a wider terminal never loses something a narrower one showed
+            assert!(!previous.files_rate || plan.files_rate, "files/s lost at {budget}");
+            assert!(!previous.lines_rate || plan.lines_rate, "lines/s lost at {budget}");
+            assert!(previous.bar_cells == 0 || plan.bar_cells > 0, "the bar lost at {budget}");
+
+            // whatever arrives, arrives with the bar back at its minimum: that is what it cost
+            if (plan.bar_cells > 0 && previous.bar_cells == 0)
+                    || (plan.files_rate && !previous.files_rate)
+                    || (plan.lines_rate && !previous.lines_rate) {
+                assert_eq!(MIN_BAR_CELLS, plan.bar_cells, "something arrived at {budget} without the bar at its minimum");
+            }
+
+            if plan.bar_cells > 0 {
+                // every plan really fits, and no plan leaves a column unspent that the bar could take
+                let width = crate::theme::calculate_visible_len(&render(&plan));
+                assert!(width <= budget, "a frame of {width} spilled over a budget of {budget}");
+                if plan.bar_cells < MAX_BAR_CELLS {
+                    let widened = FramePlan { bar_cells: plan.bar_cells + 1,
+                            files_rate: plan.files_rate, lines_rate: plan.lines_rate };
+                    assert!(crate::theme::calculate_visible_len(&render(&widened)) > budget,
+                            "a column was left unspent at {budget}");
+                }
+            }
+            previous = plan;
+        }
+
+        // a label shifts the whole ladder by exactly its own width
+        for budget in [40, 60, 90, 120] {
+            for label_width in [1, 16, 31] {
+                assert_eq!(plan_at(budget), fit_parsing_frame(budget + label_width, label_width, 6));
+            }
+        }
+
+        // the same sweep through the revision line's join, so the label's own separator column
+        // cannot drift between the fit arithmetic and the frame the label is joined to
+        let label = "Counting 'feature/live-rende..'";
+        let label_width = measure_columns(label) + 1;
+        for budget in 0..180 {
+            let plan = fit_parsing_frame(budget, label_width, 6);
+            if plan.bar_cells == 0 {
+                continue;
+            }
+            let frame = format!("{label} {}", format_parsing_frame(3_000, 3_000, 80_000, 6,
+                    Some((29_238, 14_406_917)), &plan,
+                    crate::config_manager::ProgressBarStyle::default().get_charset()));
+            assert!(crate::theme::calculate_visible_len(&frame) <= budget,
+                    "a labeled frame of {} spilled over a budget of {budget}", crate::theme::calculate_visible_len(&frame));
+        }
+    }
+
+    // Written against the cap and not against its value, so the constant can move freely: what is
+    // within it stays whole, what is over it lands exactly on it, and the cut counts columns
+    #[test]
+    fn a_long_revision_name_is_cut_with_dots_and_a_short_one_kept_whole() {
+        assert_eq!("HEAD", cap_revision_name("HEAD"));
+
+        let long = "feature/a-branch-name-that-cannot-possibly-fit-anywhere";
+        let cut = cap_revision_name(long);
+        assert!(cut.ends_with(".."), "'{cut}'");
+        assert!(long.starts_with(cut.trim_end_matches('.')), "'{cut}' is not how '{long}' begins");
+        assert_eq!(REVISION_NAME_MAX_COLUMNS, measure_columns(&cut));
+        assert_eq!(REVISION_NAME_MAX_COLUMNS, cap_revision_name("0123456789abcdef0123456789abcdef01234567").chars().count());
+
+        // the cut counts terminal columns and not characters: a fullwidth glyph occupies two, so
+        // half as many of them fit before the dots
+        let at_the_cap = "Ａ".repeat(REVISION_NAME_MAX_COLUMNS / 2);
+        assert_eq!(at_the_cap, cap_revision_name(&at_the_cap));
+        let wide_cut = cap_revision_name(&"Ａ".repeat(REVISION_NAME_MAX_COLUMNS));
+        assert!(wide_cut.ends_with(".."), "'{wide_cut}'");
+        assert!(measure_columns(&wide_cut) <= REVISION_NAME_MAX_COLUMNS);
+        assert_eq!((REVISION_NAME_MAX_COLUMNS - 2) / 2, wide_cut.chars().count() - 2);
     }
 
     // Written against the invariants and not the characters, over every charset the setting offers
+    // and both ends of the width clamp
     #[test]
     fn the_bar_holds_its_width_fills_monotonically_and_reaches_both_ends() {
         use crate::config_manager::ProgressBarStyle;
         for style in [ProgressBarStyle::Smooth, ProgressBarStyle::Dotted, ProgressBarStyle::Hash] {
-            let charset = style.get_charset();
-            let quanta = BAR_CELLS * charset.chars().count();
-            assert_eq!(" ".repeat(BAR_CELLS), build_bar(0, quanta, charset));
-            assert_eq!(charset.chars().last().unwrap().to_string().repeat(BAR_CELLS), build_bar(quanta, quanta, charset));
+            for cells in [MIN_BAR_CELLS, MAX_BAR_CELLS] {
+                let charset = style.get_charset();
+                let quanta = cells * charset.chars().count();
+                assert_eq!(" ".repeat(cells), build_bar(0, quanta, cells, charset));
+                assert_eq!(charset.chars().last().unwrap().to_string().repeat(cells), build_bar(quanta, quanta, cells, charset));
 
-            let mut previous_filled = 0;
-            for parsed in 0..=quanta {
-                let bar = build_bar(parsed, quanta, charset);
-                assert_eq!(BAR_CELLS, bar.chars().count(), "width moved at {parsed}/{quanta} ({charset})");
-                let filled = bar.chars().filter(|x| *x != ' ').count();
-                assert!(filled >= previous_filled, "the bar retreated at {parsed}/{quanta} ({charset})");
-                previous_filled = filled;
+                let mut previous_filled = 0;
+                for parsed in 0..=quanta {
+                    let bar = build_bar(parsed, quanta, cells, charset);
+                    assert_eq!(cells, bar.chars().count(), "width moved at {parsed}/{quanta} ({charset})");
+                    let filled = bar.chars().filter(|x| *x != ' ').count();
+                    assert!(filled >= previous_filled, "the bar retreated at {parsed}/{quanta} ({charset})");
+                    previous_filled = filled;
+                }
+
+                // one quantum in, the tip is the first sub-step of the set
+                assert_eq!(charset.chars().next().unwrap(), build_bar(1, quanta, cells, charset).chars().next().unwrap());
             }
-
-            // one quantum in, the tip is the first sub-step of the set
-            assert_eq!(charset.chars().next().unwrap(), build_bar(1, quanta, charset).chars().next().unwrap());
         }
     }
 
@@ -519,19 +818,24 @@ mod tests {
     fn the_parsing_frame_keeps_its_width_as_the_count_grows_and_drops_its_bar_and_rates_on_demand() {
         let charset = crate::config_manager::ProgressBarStyle::default().get_charset();
         let width = crate::number_formatter::format_with_separators(80_000).chars().count();
+        let full = FramePlan { bar_cells: MAX_BAR_CELLS, files_rate: true, lines_rate: true };
 
-        let early = format_parsing_frame(5, 5, 80_000, width, Some((29_238, 14_406_917)), true, charset);
-        let late = format_parsing_frame(79_999, 79_999, 80_000, width, Some((312, 9_154)), true, charset);
+        let early = format_parsing_frame(5, 5, 80_000, width, Some((29_238, 14_406_917)), &full, charset);
+        let late = format_parsing_frame(79_999, 79_999, 80_000, width, Some((312, 9_154)), &full, charset);
         assert!(early.contains("files/s") && early.contains("lines/s"));
         assert_eq!(crate::theme::calculate_visible_len(&early), crate::theme::calculate_visible_len(&late));
 
         // before the first sample there is no honest rate, so none is shown
-        assert!(!format_parsing_frame(5, 5, 80_000, width, None, true, charset).contains("files/s"));
+        assert!(!format_parsing_frame(5, 5, 80_000, width, None, &full, charset).contains("files/s"));
 
-        // The form a hidden bar leaves behind is the count alone, which is what the revision line
-        // reaches too now that the flag no longer decides whether that line gets there at all
-        let reduced = format_parsing_frame(5, 5, 80_000, width, Some((29_238, 14_406_917)), false, charset);
-        let reduced_late = format_parsing_frame(79_999, 79_999, 80_000, width, None, false, charset);
+        // a plan without lines/s keeps files/s and nothing after it
+        let one_rate = FramePlan { bar_cells: MAX_BAR_CELLS, files_rate: true, lines_rate: false };
+        let narrower = format_parsing_frame(5, 5, 80_000, width, Some((29_238, 14_406_917)), &one_rate, charset);
+        assert!(narrower.contains("files/s") && !narrower.contains("lines/s"));
+
+        // The form a hidden bar leaves behind is the count alone
+        let reduced = format_parsing_frame(5, 5, 80_000, width, Some((29_238, 14_406_917)), &FramePlan::COUNT_ALONE, charset);
+        let reduced_late = format_parsing_frame(79_999, 79_999, 80_000, width, None, &FramePlan::COUNT_ALONE, charset);
         assert!(!reduced.contains("files/s") && !reduced.contains(charset.chars().last().unwrap()));
         assert!(reduced.ends_with("files"));
         assert_eq!(crate::theme::calculate_visible_len(&reduced), crate::theme::calculate_visible_len(&reduced_late));
