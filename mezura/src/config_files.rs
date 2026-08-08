@@ -64,7 +64,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
     let (mut dirs, mut braces_as_code, mut should_search_in_dotted, mut threads, mut exclude_dirs,
          mut languages_of_interest, mut excluded_languages, mut forced_languages, mut should_show_faulty_files, mut hidden,
          mut no_gitignore, mut theme_name, mut compare_level, mut config_styles, mut bar_thickness,
-         mut number_separator, mut decimal_separator, mut layout, mut sort_by, mut top_n) = (None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None);
+         mut progress_bar, mut number_separator, mut decimal_separator, mut layout, mut sort_by, mut top_n) = (None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None);
     let mut issues = ConfigFileIssues::default();
     let mut buf = String::with_capacity(150);
 
@@ -183,6 +183,13 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                     Some(x) => bar_thickness = Some(x),
                     None => issues.invalid_fields.push(config_manager::BAR_THICKNESS)
                 }
+            } else if id == config_manager::PROGRESS_BAR {
+                buf.clear();
+                let _ = reader.read_line(&mut buf);
+                match config_manager::ProgressBarStyle::parse(&buf) {
+                    Some(x) => progress_bar = Some(x),
+                    None => issues.invalid_fields.push(config_manager::PROGRESS_BAR)
+                }
             } else if id == config_manager::NUMBER_SEPARATOR {
                 buf.clear();
                 let _ = reader.read_line(&mut buf);
@@ -229,7 +236,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
     let builder = ConfigurationBuilder {
         dirs, exclude_dirs, languages_of_interest, excluded_languages, forced_languages, threads, braces_as_code, should_search_in_dotted,
         should_show_faulty_files, hidden, no_gitignore, theme_name, compare_level, config_styles, bar_thickness,
-        number_separator, decimal_separator, layout, sort_by, top_n,
+        progress_bar, number_separator, decimal_separator, layout, sort_by, top_n,
         ..Default::default()
     };
 
@@ -324,6 +331,14 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
 ===> ",config_manager::BAR_THICKNESS.as_bytes(),b"
 "].concat())?;
         writer.write_all(bar_thickness.name().as_bytes())?;
+    }
+
+    if let Some(progress_bar) = &config_builder.progress_bar {
+        writer.write_all(&[b"
+
+===> ",config_manager::PROGRESS_BAR.as_bytes(),b"
+"].concat())?;
+        writer.write_all(progress_bar.name().as_bytes())?;
     }
 
     if let Some(number_separator) = &config_builder.number_separator {

@@ -69,7 +69,10 @@ Main changes:
       Redirected or piped output is unchanged.
   -> A parse with more than 5,000 files still waiting when the scan ends draws a live progress bar
       on a terminal: the files done against the files found, with the parsing speed beside them,
-      erased before the report prints. "--hide parsing-bar" keeps only the file count.
+      erased before the report prints. "--hide progress-bar" keeps only the file count.
+  -> New "--progress-bar" command: "smooth", "dotted" or "hash" chooses the characters the live
+      bar is drawn with. "hash" is plain ASCII, for a terminal that draws the block characters
+      wrongly or not at all.
   -> Counting a git revision for "--diff" is no longer silent on a terminal: a moving line names
       the phase, "Writing out '<revision>'" and then "Counting '<revision>'", with the files
       discovered and the progress bar when the counting is long enough to need one. It erases

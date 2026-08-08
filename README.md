@@ -304,7 +304,7 @@ HOW THE REPORT LOOKS
       version         the version line at the top
       directory-info  the 'Analyzing directories' line and the 'N files found' line under it
       parsing-info    the 'Parsing files' line and the 'ok' under it
-      parsing-bar     the progress bar and speed figures of a long parse, keeping its file count
+      progress-bar    the progress bar and speed figures of a long parse, keeping its file count
       keywords        the keyword counts, keeping the rest of the details rows
       overview        the whole percentages section
       bar             only the [-|||-] bar of the overview, keeping the percentages and the colors
@@ -420,6 +420,20 @@ HOW THE REPORT LOOKS
 
     All but 'slim' need a terminal and a font that can render box drawing characters.
     If the bar comes out as question marks or empty boxes, use 'slim'.
+
+--progress-bar
+
+    One argument: 'smooth', 'dotted' or 'hash'. Default: smooth
+
+    Chooses the characters that the live progress bar of a long parse is drawn with.
+
+      smooth   ▏▎▍▌▋▊▉█   the tip glides through eight sub-steps per cell
+      dotted   ░▒▓█       shade steps, four per cell
+      hash     .:#        the only one made of ASCII, so it is the one that is guaranteed
+                          to render on every terminal
+
+    The bar only appears on a terminal, on a parse long enough to watch; '--hide progress-bar'
+    keeps its file count and drops the rest.
 
 --number-separator
 

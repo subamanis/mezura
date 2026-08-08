@@ -27,6 +27,7 @@ pub const NO_GITIGNORE       :&str   = "no-gitignore";
 pub const THEME              :&str   = "theme";
 pub const STYLE              :&str   = "style";
 pub const BAR_THICKNESS      :&str   = "bar-thickness";
+pub const PROGRESS_BAR       :&str   = "progress-bar";
 pub const LAYOUT             :&str   = "layout";
 pub const OUTPUT             :&str   = "output";
 pub const DIFF               :&str   = "diff";
@@ -101,6 +102,7 @@ pub struct ViewConfig {
     pub config_name_to_load: Option<String>,
     pub theme_name_to_save: Option<String>,
     pub bar_thickness: BarThickness,
+    pub progress_bar: ProgressBarStyle,
     pub layout: Layout,
     pub output: OutputFormat,
     // The document this run is compared against, as the path was typed. Read after the settings are
@@ -146,6 +148,7 @@ impl Default for ViewConfig {
             config_name_to_load: None,
             theme_name_to_save: None,
             bar_thickness: BarThickness::default(),
+            progress_bar: ProgressBarStyle::default(),
             layout: Layout::default(),
             output: OutputFormat::default(),
             diff_against: None,
@@ -166,7 +169,7 @@ pub struct Hidden {
     pub version: bool,
     pub directory_info: bool,
     pub parsing_info: bool,
-    pub parsing_bar: bool,
+    pub progress_bar: bool,
     pub keywords: bool,
     pub overview: bool,
     pub bar: bool,
@@ -177,7 +180,7 @@ pub struct Hidden {
 impl Hidden {
     fn get_pairs(self) -> [(&'static str, bool); 9] {
         [("version", self.version), ("directory-info", self.directory_info), ("parsing-info", self.parsing_info),
-         ("parsing-bar", self.parsing_bar), ("keywords", self.keywords), ("overview", self.overview),
+         ("progress-bar", self.progress_bar), ("keywords", self.keywords), ("overview", self.overview),
          ("bar", self.bar), ("progress", self.progress), ("timing", self.timing)]
     }
 
@@ -189,7 +192,7 @@ impl Hidden {
                 "version" => hidden.version = true,
                 "directory-info" => hidden.directory_info = true,
                 "parsing-info" => hidden.parsing_info = true,
-                "parsing-bar" => hidden.parsing_bar = true,
+                "progress-bar" => hidden.progress_bar = true,
                 "keywords" => hidden.keywords = true,
                 "overview" => hidden.overview = true,
                 "bar" => hidden.bar = true,
@@ -249,6 +252,42 @@ impl BarThickness {
             Self::Medium => "medium",
             Self::Fat => "fat",
             Self::Low => "low"
+        }
+    }
+}
+
+// Only Hash is ASCII, for a terminal that draws the block characters wrongly or not at all
+#[derive(Debug,PartialEq,Eq,Clone,Copy,Default)]
+pub enum ProgressBarStyle {
+    #[default]
+    Smooth,
+    Dotted,
+    Hash
+}
+
+impl ProgressBarStyle {
+    pub fn get_charset(&self) -> &'static str {
+        match self {
+            Self::Smooth => "▏▎▍▌▋▊▉█",
+            Self::Dotted => "░▒▓█",
+            Self::Hash => ".:#"
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<ProgressBarStyle> {
+        match value.trim().to_lowercase().as_str() {
+            "smooth" => Some(Self::Smooth),
+            "dotted" => Some(Self::Dotted),
+            "hash" => Some(Self::Hash),
+            _ => None
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Smooth => "smooth",
+            Self::Dotted => "dotted",
+            Self::Hash => "hash"
         }
     }
 }
@@ -478,7 +517,7 @@ impl TypedExplicitlyOnCommandLine {
             forced_languages, braces_as_code, should_search_in_dotted, no_gitignore, hidden,
             dirs: _, dirs_source: _, threads: _, should_show_faulty_files: _, theme_name: _,
             log: _, compare_level: _, config_name_to_save: _, config_name_to_load: _,
-            theme_name_to_save: _, bar_thickness: _, number_separator: _, decimal_separator: _,
+            theme_name_to_save: _, bar_thickness: _, progress_bar: _, number_separator: _, decimal_separator: _,
             layout: _, output: _, diff_against: _, sort_by: _, top_n: _, styles: _,
             config_styles: _, theme_styles: _, typed_explicitly: _ } = builder;
 
@@ -524,6 +563,7 @@ pub struct ConfigurationBuilder {
     pub config_name_to_load:      Option<String>,
     pub theme_name_to_save:       Option<String>,
     pub bar_thickness:            Option<BarThickness>,
+    pub progress_bar:             Option<ProgressBarStyle>,
     pub number_separator:         Option<NumberSeparator>,
     pub decimal_separator:        Option<DecimalSeparator>,
     pub layout:                   Option<Layout>,
@@ -559,6 +599,7 @@ impl ConfigurationBuilder {
         if self.compare_level.is_none() {self.compare_level = config.compare_level};
         if self.config_styles.is_none() {self.config_styles = config.config_styles};
         if self.bar_thickness.is_none() {self.bar_thickness = config.bar_thickness};
+        if self.progress_bar.is_none() {self.progress_bar = config.progress_bar};
         if self.number_separator.is_none() {self.number_separator = config.number_separator};
         if self.decimal_separator.is_none() {self.decimal_separator = config.decimal_separator};
         if self.layout.is_none() {self.layout = config.layout};
@@ -572,7 +613,7 @@ impl ConfigurationBuilder {
         self.threads.is_none() || self.braces_as_code.is_none() || self.should_search_in_dotted.is_none() ||
         self.should_show_faulty_files.is_none() || self.hidden.is_none() || self.no_gitignore.is_none() ||
         self.theme_name.is_none() || self.compare_level.is_none() ||
-        self.config_styles.is_none() || self.bar_thickness.is_none() || self.number_separator.is_none() || self.decimal_separator.is_none() || self.layout.is_none() || self.sort_by.is_none()
+        self.config_styles.is_none() || self.bar_thickness.is_none() || self.progress_bar.is_none() || self.number_separator.is_none() || self.decimal_separator.is_none() || self.layout.is_none() || self.sort_by.is_none()
     }
 
     // The only place that knows the flat form maps onto two halves. Everything above this stays one
@@ -610,6 +651,7 @@ impl ConfigurationBuilder {
                 config_name_to_load: self.config_name_to_load.clone(),
                 theme_name_to_save: self.theme_name_to_save.clone(),
                 bar_thickness: self.bar_thickness.unwrap_or_default(),
+                progress_bar: self.progress_bar.unwrap_or_default(),
                 layout: self.layout.unwrap_or_default(),
                 output: self.output.unwrap_or_default(),
                 diff_against: self.diff_against.clone(),
@@ -691,8 +733,8 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     let (mut exclude_dirs, mut languages_of_interest, mut excluded_languages, mut forced_languages, mut threads, mut braces_as_code,
          mut search_in_dotted, mut show_faulty_files, mut config_name_to_save, mut hidden, mut log,
          mut compare_level, mut config_name_to_load, mut no_gitignore, mut theme_name, mut theme_name_to_save, mut styles, mut bar_thickness,
-         mut number_separator, mut decimal_separator, mut layout, mut output, mut diff_against, mut sort_by, mut top_n)
-         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
+         mut progress_bar, mut number_separator, mut decimal_separator, mut layout, mut output, mut diff_against, mut sort_by, mut top_n)
+         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
     for command in options {
         let (command_name, arguments) = match command.find(" ") {
             Some(index) => command.split_at(index),
@@ -827,6 +869,14 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                     return Err(ArgParsingError::IncorrectCommandArgs(BAR_THICKNESS.to_owned()))
                 }
             }
+        } else if command_name == PROGRESS_BAR {
+            match ProgressBarStyle::parse(arguments) {
+                Some(x) => progress_bar = Some(x),
+                None => {
+                    message_printer::print_help_message_for_command(PROGRESS_BAR);
+                    return Err(ArgParsingError::IncorrectCommandArgs(PROGRESS_BAR.to_owned()))
+                }
+            }
         } else if command_name == LAYOUT {
             match Layout::parse(arguments) {
                 Some(x) => layout = Some(x),
@@ -924,7 +974,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         dirs, dirs_source: None, exclude_dirs, languages_of_interest, excluded_languages, forced_languages, threads, braces_as_code,
         should_search_in_dotted: search_in_dotted, should_show_faulty_files: show_faulty_files,
         hidden, no_gitignore, theme_name, theme_name_to_save, log, compare_level,
-        config_name_to_save, config_name_to_load, styles, bar_thickness, number_separator, decimal_separator, layout, output, diff_against, sort_by, top_n,
+        config_name_to_save, config_name_to_load, styles, bar_thickness, progress_bar, number_separator, decimal_separator, layout, output, diff_against, sort_by, top_n,
         config_styles: None, theme_styles: None, typed_explicitly: TypedExplicitlyOnCommandLine::default()
     };
     // Before the configuration files below fill anything in, which is what makes the answer the
@@ -1016,7 +1066,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
     let ConfigurationBuilder {
             dirs, exclude_dirs, forced_languages, threads, braces_as_code, should_search_in_dotted,
             should_show_faulty_files, hidden, no_gitignore, theme_name, compare_level, bar_thickness,
-            number_separator, decimal_separator, layout, sort_by, top_n,
+            progress_bar, number_separator, decimal_separator, layout, sort_by, top_n,
             // these two accept whatever they are given, so a config can hold no invalid value for
             // them and they never reach 'invalid_fields'
             languages_of_interest: _, excluded_languages: _,
@@ -1043,6 +1093,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             SORT => sort_by.is_some(),
             TOP => top_n.is_some(),
             BAR_THICKNESS => bar_thickness.is_some(),
+            PROGRESS_BAR => progress_bar.is_some(),
             NUMBER_SEPARATOR => number_separator.is_some(),
             DECIMAL_SEPARATOR => decimal_separator.is_some(),
             LAYOUT => layout.is_some(),
@@ -1598,7 +1649,7 @@ mod tests {
         let test_file_path = &crate::paths::PERSISTENT_APP_PATHS.config_dir.clone().add("/test002.txt");
         let _ = std::fs::remove_file(test_file_path);
         std::fs::write(test_file_path, "===> dirs\nfrontend=\n\n===> sort\nnope\n\n===> top\nnope\n\n===> bar-thickness\nnope\n\n\
-                ===> number-separator\nnope\n\n===> decimal-separator\nnope\n\n===> force-lang\nnope\n").unwrap();
+                ===> progress-bar\nnope\n\n===> number-separator\nnope\n\n===> decimal-separator\nnope\n\n===> force-lang\nnope\n").unwrap();
 
         // A target that does not parse is a target whose files would not be counted, so with no
         // target on the command line to take its place the run stops instead of counting less
@@ -1609,11 +1660,12 @@ mod tests {
                 create_config_from_args("./ --load test002"));
 
         let rescued = create_config_from_args(
-                "./ --load test002 --sort name --top 3 --bar-thickness fat --number-separator dot --decimal-separator comma --force-lang m=matlab").unwrap();
+                "./ --load test002 --sort name --top 3 --bar-thickness fat --progress-bar hash --number-separator dot --decimal-separator comma --force-lang m=matlab").unwrap();
         assert_eq!(vec![Target::of(mezura_core::engine::targets::convert_to_absolute("./"))], rescued.engine.dirs);
         assert_eq!(SortCriterion::Name, rescued.view.sort_by);
         assert_eq!(Some(3), rescued.view.top_n);
         assert_eq!(BarThickness::Fat, rescued.view.bar_thickness);
+        assert_eq!(ProgressBarStyle::Hash, rescued.view.progress_bar);
         assert_eq!(NumberSeparator::Dot, rescued.view.number_separator);
         assert_eq!(DecimalSeparator::Comma, rescued.view.decimal_separator);
         assert_eq!(hashmap!("m".to_owned() => "matlab".to_owned()), rescued.engine.forced_languages);
