@@ -2,8 +2,9 @@
 // told travels back as notes and is said where the comparison is shown.
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
-use mezura_core::{FilesPresent, Language};
+use mezura_core::{FilesPresent, Language, ScanProgress};
 
 use super::config_manager::Configuration;
 use super::diff::{Note, Reading};
@@ -27,6 +28,11 @@ pub fn count_git_revision(git_revision: &str, config: &Configuration, languages:
             !Path::new(&x.path).exists() && x.path.contains(['*', '?', '[', '{'])) {
         return Err(GitError::PatternTarget { pattern: target.path.clone() });
     }
+
+    // Dropped, and with it erased, before this function returns anything: the whole phase is
+    // silent on the permanent output, and the motion is its only sign of life
+    let progress = Arc::new(ScanProgress::default());
+    let _live = super::live_progress::start_revision_display(config, git_revision, progress.clone());
 
     let declared = config.engine.dirs.iter().map(|x| x.path.clone()).collect::<Vec<_>>();
     let repository = super::git::find_common_repository_of(&declared)?;
@@ -74,7 +80,7 @@ pub fn count_git_revision(git_revision: &str, config: &Configuration, languages:
         // Resolved against this configuration, as 'run' demands: the two differ only in where they
         // look, and the complaints are voiced by whoever asked for the counting
         let resolved = mezura_core::Languages::resolve(&of_git_revision, languages, extension_priority).0;
-        let mut result = mezura_core::run(&of_git_revision, resolved, None, |_| {})
+        let mut result = mezura_core::run(&of_git_revision, resolved, Some(progress.clone()), |_| {})
                 .map_err(|x| GitError::Refused { doing: "counting the revision", message: x.to_string() })?;
         result.targets = counted_declared;
         result

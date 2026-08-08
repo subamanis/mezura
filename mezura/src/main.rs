@@ -45,6 +45,10 @@ use crate::paths::{CONFIG_DIR_NAME, DEFAULT_CONFIG_NAME, LANGUAGES_DIR_NAME, LOG
         MANIFEST_FILE_NAME, REPLACED_DIR_NAME, THEMES_DIR_NAME};
 
 fn main() -> ExitCode {
+    // Dropped last of all: a '--diff' removes its temporary checkouts on background threads, and
+    // exiting before they finish would leave a half-deleted tree in the temp directory
+    let _removals = crate::live_progress::RemovalsGuard;
+
     // Windows needs a virtual terminal enabled before it shows colors at all
     #[cfg(target_os = "windows")]
     control::set_virtual_terminal(true).unwrap();

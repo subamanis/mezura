@@ -420,6 +420,13 @@ pub const DIFF_HELP  :  &str =
     zero, so everything in it reads as new. What was found on disk decides which of the two a
     reading is: a name that is a file is a document, anything else is asked of git.
 
+    Counting a revision costs more than counting the same tree in place: the commit's files
+    are first written out whole to a temporary directory, and a file written moments ago is
+    slower to read back than one that has sat on disk. The checkout is removed in the
+    background after the comparison prints. Size can also move when no line did: git writes
+    the checkout with the line endings 'core.autocrlf' asks for, and a working tree saved
+    with the other ending then differs by one byte per line, in Size and nowhere else.
+
     Only one '..' is allowed, and it is the separator. A path that climbs through one on its
     way to a file is taken whole when the file is really there, so '--diff ../old.json' reads
     as you would expect; two of them cannot be told apart from a separator and are refused, so

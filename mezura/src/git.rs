@@ -3,6 +3,8 @@
 // the temp location, and cleans up after itself.
 use std::path::Path;
 use std::process::Command;
+use std::sync::Mutex;
+use std::thread::JoinHandle;
 
 // Named after the run rather than after the revision, since two runs of one revision can overlap and
 // a worktree cannot be added twice at one place
@@ -92,6 +94,8 @@ pub struct Checkout {
     // When the commit was made, which is when this reading was taken: the files in here are that
     // moment, whatever the clock says while they are being counted
     pub taken_at: String,
+    // As it was asked for, which is the name a message about this checkout goes by
+    revision: String,
     repository: String
 }
 
@@ -105,10 +109,39 @@ impl Checkout {
     }
 }
 
+// Removing a large tree takes seconds, and nothing that prints depends on it, so it runs on its
+// own thread and the comparison does not wait. One thread per checkout, of which a run has at most
+// two; the join happens at the very end of main, or the process could exit mid-delete and leave
+// the temporary directory half there.
 impl Drop for Checkout {
     fn drop(&mut self) {
-        let _ = Command::new("git").args(["-C", &self.repository, "worktree", "remove", "--force", &self.path])
-                .output();
+        let (repository, path) = (self.repository.clone(), self.path.clone());
+        match std::thread::Builder::new().name("checkout-removal".to_owned())
+                .spawn(move || remove_worktree(&repository, &path)) {
+            Ok(handle) => PENDING_REMOVALS.lock().unwrap().push((self.revision.clone(), handle)),
+            Err(_) => remove_worktree(&self.repository, &self.path)
+        }
+    }
+}
+
+static PENDING_REMOVALS : Mutex<Vec<(String, JoinHandle<()>)>> = Mutex::new(Vec::new());
+
+fn remove_worktree(repository: &str, path: &str) {
+    let _ = Command::new("git").args(["-C", repository, "worktree", "remove", "--force", path]).output();
+}
+
+// The revision whose removal is still running, for a message about the wait. None is the moment
+// the wait would be over.
+pub fn find_running_removal() -> Option<String> {
+    PENDING_REMOVALS.lock().unwrap().iter()
+            .find(|(_, removal)| !removal.is_finished())
+            .map(|(revision, _)| revision.clone())
+}
+
+pub fn await_checkout_removals() {
+    let pending = std::mem::take(&mut *PENDING_REMOVALS.lock().unwrap());
+    for (_, removal) in pending {
+        let _ = removal.join();
     }
 }
 
@@ -131,7 +164,7 @@ pub fn checkout(repository: &str, revision: &str) -> Result<Checkout, GitError> 
 
     let taken_at = ask(repository, &["show", "-s", "--format=%cI", &commit])?.unwrap_or_default();
 
-    Ok(Checkout { path, commit, taken_at, repository: repository.to_owned() })
+    Ok(Checkout { path, commit, taken_at, revision: revision.to_owned(), repository: repository.to_owned() })
 }
 
 // What a killed run left behind: 'prune' alone clears nothing while the directory still exists, so
@@ -226,6 +259,7 @@ mod tests {
             assert_eq!(None, checkout.find_target_of("a-directory-this-commit-never-had/"));
             checkout.path.clone()
         };
+        await_checkout_removals();
         assert!(!Path::new(&path).exists(), "the checkout outlived the run that made it");
 
         assert!(matches!(checkout(&root, "no-such-branch-anywhere"),

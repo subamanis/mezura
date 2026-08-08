@@ -31,6 +31,8 @@ const BAR_CHARS : &str = "▏▎▍▌▋▊▉█";   // eighth blocks, 8 quant
 const FILES_RATE_FIELD_WIDTH : usize = "999,999".len();
 const LINES_RATE_FIELD_WIDTH : usize = "999,999,999".len();
 const ERASE_LINE : &str = "\r\x1b[2K";
+// One write: erase, then up onto the blank line the first frame opened, undoing the display whole
+const ERASE_LINE_AND_RETREAT : &str = "\r\x1b[2K\x1b[1A";
 
 const _ : () = {
     assert!(TICK.as_millis() > 0);
@@ -46,9 +48,18 @@ const _ : () = {
 pub struct LiveDisplay {
     should_stop: Arc<AtomicBool>,
     animator: Mutex<Option<JoinHandle<()>>>,
-    // What the erased line is replaced with: the walk heading settles into its printed form, while
-    // 'None' leaves clean ground, which is all the parsing bar leaves behind
-    settled_line: Option<String>
+    parting: Parting,
+    opened_own_line: Arc<AtomicBool>
+}
+
+// What the erased line is replaced with when a display finishes: the walk heading settles into its
+// printed form, the parsing bar leaves the clean ground it found, and a display that opened its
+// own line under the previous output gives that line back, cursor and all, so the permanent output
+// is byte for byte what a run without the display prints.
+enum Parting {
+    Settle(String),
+    Erase,
+    Retreat
 }
 
 // Prints the walk heading, animated when both output streams are a terminal and static otherwise.
@@ -81,7 +92,36 @@ pub fn start_walk_display(config: &Configuration, progress: Arc<ScanProgress>) -
     LiveDisplay {
         should_stop: stop,
         animator: Mutex::new(animator),
-        settled_line: Some(format!("{heading}..."))
+        parting: Parting::Settle(format!("{heading}...")),
+        opened_own_line: Arc::new(AtomicBool::new(false))
+    }
+}
+
+// The transient line of a '--diff' side that is a git revision: its name with the files discovered
+// while the checkout is scanned, then the parsing frame once the scan ends and the queue is worth
+// watching. It erases itself completely, so the printed comparison carries no trace of it.
+pub fn start_revision_display(config: &Configuration, git_revision: &str, progress: Arc<ScanProgress>) -> LiveDisplay {
+    if !std::io::stderr().is_terminal() {
+        return LiveDisplay::default();
+    }
+
+    // Only the word carries the heading style: the revision is data, not a header
+    let writing = format!("{} '{git_revision}'", crate::theme::get_active().heading.paint("Writing out"));
+    let counting = format!("{} '{git_revision}'", crate::theme::get_active().heading.paint("Counting"));
+    let show_advanced = !config.view.hidden.parsing_bar;
+    let stop = Arc::new(AtomicBool::new(false));
+    let opened = Arc::new(AtomicBool::new(false));
+    let animator = {
+        let (progress, stop, opened) = (progress, stop.clone(), opened.clone());
+        thread::Builder::new().name("live-progress".to_owned())
+                .spawn(move || animate_revision_line(&progress, &stop, &opened, &writing, &counting, show_advanced)).ok()
+    };
+
+    LiveDisplay {
+        should_stop: stop,
+        animator: Mutex::new(animator),
+        parting: Parting::Retreat,
+        opened_own_line: opened
     }
 }
 
@@ -106,7 +146,8 @@ pub fn start_parsing_display(config: &Configuration, progress: Arc<ScanProgress>
     LiveDisplay {
         should_stop: stop,
         animator: Mutex::new(animator),
-        settled_line: None
+        parting: Parting::Erase,
+        opened_own_line: Arc::new(AtomicBool::new(false))
     }
 }
 
@@ -117,9 +158,15 @@ impl LiveDisplay {
         let Some(animator) = self.animator.lock().unwrap().take() else { return };
         self.should_stop.store(true, Ordering::Relaxed);
         let _ = animator.join();
-        let parting = match &self.settled_line {
-            Some(line) => format!("{ERASE_LINE}{line}\n"),
-            None => ERASE_LINE.to_owned()
+        let parting = match &self.parting {
+            Parting::Settle(line) => format!("{ERASE_LINE}{line}\n"),
+            Parting::Erase => ERASE_LINE.to_owned(),
+            Parting::Retreat => {
+                if !self.opened_own_line.load(Ordering::Relaxed) {
+                    return;
+                }
+                ERASE_LINE_AND_RETREAT.to_owned()
+            }
         };
         let mut stderr = std::io::stderr().lock();
         let _ = stderr.write_all(parting.as_bytes());
@@ -132,8 +179,60 @@ impl Default for LiveDisplay {
         LiveDisplay {
             should_stop: Arc::new(AtomicBool::new(false)),
             animator: Mutex::new(None),
-            settled_line: None
+            parting: Parting::Erase,
+            opened_own_line: Arc::new(AtomicBool::new(false))
         }
+    }
+}
+
+// A display that goes out of scope erases itself, so a function full of early returns cannot leave
+// a line animating over whatever its caller prints next
+impl Drop for LiveDisplay {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
+
+// Lives at the top of main, so its drop is the last thing before the process exits, on every path:
+// the checkout removals a '--diff' left running in the background must not be outlived, and a wait
+// long enough to notice says what it is waiting for.
+pub struct RemovalsGuard;
+
+impl Drop for RemovalsGuard {
+    fn drop(&mut self) {
+        if std::io::stderr().is_terminal() {
+            animate_removals_line();
+        }
+        crate::git::await_checkout_removals();
+    }
+}
+
+// On the calling thread, which has nothing left to do but wait: dots on a 'Cleaning up' line until
+// every removal has finished, naming the one still running
+fn animate_removals_line() {
+    let started = Instant::now();
+    let mut last_written = String::new();
+    let mut previous_width = 0;
+    while let Some(revision) = crate::git::find_running_removal() {
+        thread::sleep(TICK);
+        let elapsed = started.elapsed().as_millis();
+        if elapsed < MOTION_APPEARS_AFTER_MS {
+            continue;
+        }
+        let label = format!("{} '{revision}'", crate::theme::get_active().heading.paint("Cleaning up"));
+        let frame = format_walk_frame(&label, elapsed, 0);
+        if frame != last_written {
+            if last_written.is_empty() {
+                open_line_below();
+            }
+            previous_width = overwrite_transient_line(&frame, previous_width);
+            last_written = frame;
+        }
+    }
+    if !last_written.is_empty() {
+        let mut stderr = std::io::stderr().lock();
+        let _ = stderr.write_all(ERASE_LINE_AND_RETREAT.as_bytes());
+        let _ = stderr.flush();
     }
 }
 
@@ -170,9 +269,88 @@ fn overwrite_transient_line(text: &str, previous_width: usize) -> usize {
     let width = crate::theme::calculate_visible_len(text);
     let padding = " ".repeat(previous_width.saturating_sub(width));
     let mut stderr = std::io::stderr().lock();
-    let _ = stderr.write_all(format!("\r{text}{padding}").as_bytes());
+    // The trailing return parks the visible cursor at column 0, one still spot instead of a blink
+    // hopping wherever the text's tail happens to end
+    let _ = stderr.write_all(format!("\r{text}{padding}\r").as_bytes());
     let _ = stderr.flush();
     width
+}
+
+// One line for the whole side, and the label follows the phase: 'Writing out' until the first file
+// of the inner run is found, which is when git has finished materialising the revision, 'Counting'
+// after, and the parsing frame on the same line when the scan ends with a queue over the threshold
+fn animate_revision_line(progress: &ScanProgress, stop: &AtomicBool, opened: &AtomicBool,
+        writing_label: &str, counting_label: &str, show_advanced: bool) {
+    let started = Instant::now();
+    let mut last_written = String::new();
+    let mut previous_width = 0;
+    let mut shown_files = 0;
+    let mut parsing: Option<(usize, usize)> = None;
+    let mut shown_parsed = 0;
+    let mut rates = None;
+    let mut last_sample = (started, 0, 0);
+    let mut last_number_slot = 0;
+    while !stop.load(Ordering::Relaxed) {
+        thread::sleep(TICK);
+        let elapsed = started.elapsed().as_millis();
+        if elapsed < MOTION_APPEARS_AFTER_MS {
+            continue;
+        }
+
+        if parsing.is_none() && show_advanced && progress.is_walk_done()
+                && progress.get_files_found().saturating_sub(progress.get_files_parsed()) > BAR_APPEARS_OVER_QUEUED {
+            let total = progress.get_files_found();
+            parsing = Some((total, crate::number_formatter::format_with_separators(total).chars().count()));
+            shown_parsed = progress.get_files_parsed();
+            last_sample = (Instant::now(), shown_parsed, progress.get_lines_counted());
+        }
+
+        let number_slot = elapsed / NUMBER_REFRESH_MS;
+        let numbers_due = number_slot != last_number_slot;
+        if numbers_due {
+            last_number_slot = number_slot;
+        }
+
+        let frame = match parsing {
+            None => {
+                if numbers_due {
+                    shown_files = progress.get_files_found();
+                }
+                let label = if progress.get_files_found() == 0 {writing_label} else {counting_label};
+                format_walk_frame(label, elapsed, shown_files)
+            },
+            Some((total, count_width)) => {
+                if numbers_due {
+                    let (now, parsed, lines) = (Instant::now(), progress.get_files_parsed(), progress.get_lines_counted());
+                    let seconds = now.duration_since(last_sample.0).as_secs_f64();
+                    if seconds > 0.0 {
+                        rates = Some((((parsed - last_sample.1) as f64 / seconds) as usize,
+                                ((lines - last_sample.2) as f64 / seconds) as usize));
+                    }
+                    last_sample = (now, parsed, lines);
+                    shown_parsed = parsed;
+                }
+                format!("{counting_label} {}", format_parsing_frame(progress.get_files_parsed(), shown_parsed, total,
+                        count_width, rates, true))
+            }
+        };
+        if frame != last_written {
+            if last_written.is_empty() {
+                open_line_below();
+                opened.store(true, Ordering::Relaxed);
+            }
+            previous_width = overwrite_transient_line(&frame, previous_width);
+            last_written = frame;
+        }
+    }
+}
+
+// The blank line the permanent headings put above themselves, opened once before the first frame
+// and given back by 'Parting::Retreat'
+fn open_line_below() {
+    let mut stderr = std::io::stderr().lock();
+    let _ = stderr.write_all(b"\n");
+    let _ = stderr.flush();
 }
 
 fn animate_parsing_line(progress: &ScanProgress, stop: &AtomicBool, show_advanced: bool) {
@@ -259,7 +437,7 @@ fn build_bar(parsed: usize, total: usize) -> String {
 }
 
 fn format_walk_frame(heading: &str, elapsed_ms: u128, files_found: usize) -> String {
-    let dots = ".".repeat((elapsed_ms / THREE_DOTS_STEP_MS % 3) as usize + 1);
+    let dots = ".".repeat((elapsed_ms / THREE_DOTS_STEP_MS % 4) as usize);
     if files_found == 0 {
         return format!("{heading}{dots}");
     }
@@ -275,11 +453,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_dots_cycle_through_one_to_three() {
-        assert_eq!("h.", format_walk_frame("h", 0, 0));
-        assert_eq!("h..", format_walk_frame("h", THREE_DOTS_STEP_MS, 0));
-        assert_eq!("h...", format_walk_frame("h", 2 * THREE_DOTS_STEP_MS, 0));
-        assert_eq!("h.", format_walk_frame("h", 3 * THREE_DOTS_STEP_MS, 0));
+    fn the_dots_cycle_through_none_to_three() {
+        assert_eq!("h", format_walk_frame("h", 0, 0));
+        assert_eq!("h.", format_walk_frame("h", THREE_DOTS_STEP_MS, 0));
+        assert_eq!("h..", format_walk_frame("h", 2 * THREE_DOTS_STEP_MS, 0));
+        assert_eq!("h...", format_walk_frame("h", 3 * THREE_DOTS_STEP_MS, 0));
+        assert_eq!("h", format_walk_frame("h", 4 * THREE_DOTS_STEP_MS, 0));
     }
 
     // Nothing found yet reads better as silence than as '0 files', and once the count is there it
