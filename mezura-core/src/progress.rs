@@ -1,8 +1,9 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-// The counters a caller can watch from another thread while 'run' blocks. Everything is relaxed:
-// the figures are read for display, nothing synchronises through them, and a reader may be a file
-// behind at any moment.
+// The counters a caller can watch from another thread while 'run' blocks. The counters are
+// relaxed: they are read for display, and a reader may be a file behind at any moment. The flag is
+// the exception, release against acquire, so that a reader who sees the walk finished also sees
+// every file the walk found: 'files_found' is final at that moment and gets read as a total.
 #[derive(Debug, Default)]
 pub struct ScanProgress {
     files_found: AtomicUsize,
@@ -25,7 +26,7 @@ impl ScanProgress {
     }
 
     pub fn is_walk_done(&self) -> bool {
-        self.walk_done.load(Ordering::Relaxed)
+        self.walk_done.load(Ordering::Acquire)
     }
 
     pub(crate) fn record_file_found(&self) {
@@ -40,6 +41,6 @@ impl ScanProgress {
     }
 
     pub(crate) fn mark_walk_done(&self) {
-        self.walk_done.store(true, Ordering::Relaxed);
+        self.walk_done.store(true, Ordering::Release);
     }
 }

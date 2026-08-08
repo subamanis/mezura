@@ -74,6 +74,10 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
         on_traversal_done: impl FnOnce(FilesPresent)) -> Result<RunResult, RunError>
 {
     let progress = progress.unwrap_or_default();
+    // Guarded rather than called on each return: 'run' refuses in six places before the walk ever
+    // starts, and a watcher of the public flag must see it rise on every one of them, including
+    // the seventh that will be added without remembering this.
+    let _walk_ends = WalkDoneGuard(progress.clone());
     if config.dirs.is_empty() {
         return Err(RunError::NoTargets);
     }
@@ -254,6 +258,20 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
         targets: dirs.to_vec(),
         unreadable_dirs: std::mem::take(&mut unreadable_dirs.lock().unwrap())
     })
+}
+
+// Whether this run will print its phase report to the error output, as MEZURA_PHASE_TIMING asks.
+// Public so a caller drawing live lines of its own on stderr can keep them out of the report's way.
+pub fn prints_phase_timing() -> bool {
+    *phase_timing::ENABLED
+}
+
+struct WalkDoneGuard(Arc<ScanProgress>);
+
+impl Drop for WalkDoneGuard {
+    fn drop(&mut self) {
+        self.0.mark_walk_done();
+    }
 }
 
 // Fills the two queues the threads work from: a target that is a single file is counted here and
