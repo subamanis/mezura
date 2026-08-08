@@ -19,6 +19,7 @@ pub enum GitError {
     // roots, and the revision names a different commit in each.
     TwoRepositories { first: String, second: String },
     NoSuchRevision { revision: String, repository: String },
+    SameCommit { first: String, second: String, commit: String },
     // Its matches in the working tree and at the commit are two different sets of files, and there
     // is no place in a comparison to say which was meant, so it is refused rather than guessed.
     PatternTarget { pattern: String },
@@ -32,6 +33,7 @@ impl std::fmt::Display for GitError {
             Self::NotARepository { path } => write!(f, "'{path}' is not inside a git repository, so there is no revision of it to count."),
             Self::TwoRepositories { first, second } => write!(f, "the targets are in two different repositories, '{first}' and '{second}', so a revision names two different things. Count them one repository at a time."),
             Self::NoSuchRevision { revision, repository } => write!(f, "'{revision}' is not a branch, tag or commit of the repository at '{repository}', and there is no file by that name either."),
+            Self::SameCommit { first, second, commit } => write!(f, "'{first}' and '{second}' name the same commit, {}, so the comparison has nothing to say.", &commit[..commit.len().min(12)]),
             Self::PatternTarget { pattern } => write!(f, "'{pattern}' is a glob pattern, and what it matches in the working tree and what it would match at that commit are two different sets of files. Write out the paths it should mean."),
             Self::Refused { doing, message } => write!(f, "git refused while {doing}: {message}")
         }
@@ -81,6 +83,29 @@ pub fn find_common_repository_of(paths: &[String]) -> Result<String, GitError> {
     }
 
     found.ok_or_else(|| GitError::NotARepository { path: String::new() })
+}
+
+// What a revision name answers to before anything is written out: the repository it lives in, the
+// commit it is today, and when that commit was made. The name can answer differently a moment
+// later, 'HEAD' moves, so everything that acts on the revision takes this and never resolves again.
+#[derive(Debug)]
+pub struct ResolvedRevision {
+    pub repository: String,
+    pub revision: String,
+    pub commit: String,
+    pub taken_at: String
+}
+
+// One spawn answers both the hash and the date, and a name that is no commit fails it exactly as
+// it fails 'rev-parse --verify'.
+pub fn resolve_revision(repository: &str, revision: &str) -> Result<ResolvedRevision, GitError> {
+    let answer = ask(repository, &["show", "-s", "--format=%H%n%cI", &format!("{revision}^{{commit}}")])?
+            .ok_or_else(|| GitError::NoSuchRevision { revision: revision.to_owned(),
+                    repository: repository.to_owned() })?;
+    let (commit, taken_at) = answer.split_once('\n').unwrap_or((&answer, ""));
+
+    Ok(ResolvedRevision { repository: repository.to_owned(), revision: revision.to_owned(),
+            commit: commit.trim().to_owned(), taken_at: taken_at.trim().to_owned() })
 }
 
 // A commit is compressed objects inside '.git' and mezura counts files, so a revision has to be
@@ -145,26 +170,25 @@ pub fn await_checkout_removals() {
     }
 }
 
-pub fn checkout(repository: &str, revision: &str) -> Result<Checkout, GitError> {
-    let commit = ask(repository, &["rev-parse", "--verify", &format!("{revision}^{{commit}}")])?
-            .ok_or_else(|| GitError::NoSuchRevision { revision: revision.to_owned(),
-                    repository: repository.to_owned() })?;
-
-    let path = std::env::temp_dir().join(CHECKOUT_PREFIX.to_owned() + &commit[..commit.len().min(12)]
+pub fn checkout(resolved: &ResolvedRevision) -> Result<Checkout, GitError> {
+    let repository = resolved.repository.as_str();
+    let path = std::env::temp_dir().join(CHECKOUT_PREFIX.to_owned() + &resolved.commit[..resolved.commit.len().min(12)]
             + "-" + &std::process::id().to_string()).to_string_lossy().replace('\\', "/");
     let _ = std::fs::remove_dir_all(&path);
     remove_leftover_checkouts(repository);
 
-    let outcome = Command::new("git").args(["-C", repository, "worktree", "add", "--detach", "--quiet",
-            &path, &commit]).output().map_err(GitError::NotInstalled)?;
+    // git writes the tree out on one thread unless told otherwise; every core is a measured 2.7x
+    // on the linux kernel, and a git too old to know the option ignores it
+    let outcome = Command::new("git").args(["-C", repository, "-c", "checkout.workers=0",
+            "worktree", "add", "--detach", "--quiet", &path, &resolved.commit])
+            .output().map_err(GitError::NotInstalled)?;
     if !outcome.status.success() {
         return Err(GitError::Refused { doing: "writing out the revision",
                 message: String::from_utf8_lossy(&outcome.stderr).trim().to_owned() });
     }
 
-    let taken_at = ask(repository, &["show", "-s", "--format=%cI", &commit])?.unwrap_or_default();
-
-    Ok(Checkout { path, commit, taken_at, revision: revision.to_owned(), repository: repository.to_owned() })
+    Ok(Checkout { path, commit: resolved.commit.clone(), taken_at: resolved.taken_at.clone(),
+            revision: resolved.revision.clone(), repository: resolved.repository.clone() })
 }
 
 // What a killed run left behind: 'prune' alone clears nothing while the directory still exists, so
@@ -250,7 +274,7 @@ mod tests {
     fn a_revision_is_written_out_and_taken_away_again() {
         let (root, _) = find_repository_of(PACKAGE).unwrap();
         let path = {
-            let checkout = checkout(&root, "HEAD").unwrap();
+            let checkout = checkout(&resolve_revision(&root, "HEAD").unwrap()).unwrap();
             assert!(Path::new(&checkout.path).join("mezura/src/main.rs").exists(),
                     "the revision was not written out to {}", checkout.path);
             // the prefix of a target is where that target is inside here
@@ -261,8 +285,18 @@ mod tests {
         };
         await_checkout_removals();
         assert!(!Path::new(&path).exists(), "the checkout outlived the run that made it");
+    }
 
-        assert!(matches!(checkout(&root, "no-such-branch-anywhere"),
+    #[test]
+    fn every_spelling_of_one_commit_resolves_to_one_hash() {
+        let (root, _) = find_repository_of(PACKAGE).unwrap();
+        let by_name = resolve_revision(&root, "HEAD").unwrap();
+        let by_hash = resolve_revision(&root, &by_name.commit).unwrap();
+        assert_eq!(by_name.commit, by_hash.commit);
+        assert_eq!(40, by_name.commit.len(), "'{}'", by_name.commit);
+        assert!(!by_name.taken_at.is_empty(), "the commit date came back empty");
+
+        assert!(matches!(resolve_revision(&root, "no-such-branch-anywhere"),
                 Err(GitError::NoSuchRevision { .. })));
     }
 }

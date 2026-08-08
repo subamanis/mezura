@@ -5,6 +5,7 @@ use mezura_core::{Language, Languages, ModuleResult, RunResult, Stats, UNNAMED_M
 use super::config_manager::{Configuration, Layout, SortCriterion};
 use super::config_manager::{BRACES_AS_CODE, EXCLUDE, EXCLUDE_LANGUAGES, FORCE_LANG, LANGUAGES,
         NO_GITIGNORE, SEARCH_IN_DOTTED};
+use super::git::ResolvedRevision;
 use super::json_reader::{DocumentError, DocumentWarning, Scope};
 
 // The half of a document's warnings that says the numbers themselves may be wrong, as the document
@@ -165,10 +166,16 @@ impl BothSidesNamed {
         let (_, reported) = Languages::resolve(&config.engine, self.languages.clone(), extension_priority);
         super::warning_collector::report_language_resolution_warnings(reported);
 
-        let (baseline, notes) = self.baseline.into_reading(config, self.languages.clone(), extension_priority)?;
+        // Both revisions resolve before either is written out, which is where two spellings of one
+        // commit are refused and where a typo in the second side fails at once
+        let revisions = [&self.baseline, &self.subject].into_iter()
+                .filter_map(DiffSide::find_revision_name).collect::<Vec<_>>();
+        let prepared = super::sources::prepare_revisions(&revisions, &config.engine).map_err(|x| x.to_string())?;
+
+        let (baseline, notes) = self.baseline.into_reading(&prepared, config, self.languages.clone(), extension_priority)?;
         let mut notes_so_far = self.notes_so_far;
         notes_so_far.extend(notes);
-        let (subject, notes) = self.subject.into_reading(config, self.languages, extension_priority)?;
+        let (subject, notes) = self.subject.into_reading(&prepared, config, self.languages, extension_priority)?;
         notes_so_far.extend(notes);
 
         Ok(Comparison::of(baseline, subject, config, notes_so_far))
@@ -185,7 +192,10 @@ impl BaselineOnly {
     pub fn count_baseline(self, config: &Configuration,
             extension_priority: &HashMap<String, Vec<String>>) -> Result<CountedBaseline, String>
     {
-        let (baseline, notes) = self.baseline.into_reading(config, self.languages, extension_priority)?;
+        let revisions = self.baseline.find_revision_name().into_iter().collect::<Vec<_>>();
+        let prepared = super::sources::prepare_revisions(&revisions, &config.engine).map_err(|x| x.to_string())?;
+
+        let (baseline, notes) = self.baseline.into_reading(&prepared, config, self.languages, extension_priority)?;
         let mut notes_so_far = self.notes_so_far;
         notes_so_far.extend(notes);
 
@@ -226,13 +236,21 @@ impl DiffSide {
         !matches!(self, DiffSide::Document(_))
     }
 
-    fn into_reading(self, config: &Configuration, languages: Vec<Language>,
-            extension_priority: &HashMap<String, Vec<String>>) -> Result<(Reading, Vec<Note>), String>
+    fn find_revision_name(&self) -> Option<&str> {
+        match self {
+            DiffSide::GitRevision(name) => Some(name),
+            DiffSide::Document(_) => None
+        }
+    }
+
+    fn into_reading(self, prepared: &HashMap<String, ResolvedRevision>, config: &Configuration,
+            languages: Vec<Language>, extension_priority: &HashMap<String, Vec<String>>)
+            -> Result<(Reading, Vec<Note>), String>
     {
         match self {
             DiffSide::Document(reading) => Ok((*reading, Vec::new())),
-            DiffSide::GitRevision(name) => super::sources::count_git_revision(&name, config, languages,
-                    extension_priority).map_err(|x| x.to_string())
+            DiffSide::GitRevision(name) => super::sources::count_git_revision(&prepared[name.as_str()],
+                    config, languages, extension_priority).map_err(|x| x.to_string())
         }
     }
 }

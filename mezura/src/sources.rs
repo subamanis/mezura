@@ -4,11 +4,11 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use mezura_core::{FilesPresent, Language, ScanProgress};
+use mezura_core::{EngineConfig, FilesPresent, Language, ScanProgress};
 
 use super::config_manager::Configuration;
 use super::diff::{Note, Reading};
-use super::git::GitError;
+use super::git::{GitError, ResolvedRevision};
 
 // A file and not merely something that exists: a directory called 'main' beside a branch called
 // 'main' would otherwise be read as a document and fail with an I/O error about permissions.
@@ -17,26 +17,49 @@ pub fn read_document(name: &str) -> Option<Result<Reading, String>> {
             .then(|| super::diff::load(name).map_err(|x| x.to_string()))
 }
 
-// The files are written out, the targets are found again inside them, and 'run' does the rest,
-// under this run's settings and this build
-pub fn count_git_revision(git_revision: &str, config: &Configuration, languages: Vec<Language>,
-        extension_priority: &HashMap<String,Vec<String>>) -> Result<(Reading, Vec<Note>), GitError>
-{
+// Every revision of a '--diff' resolves here, before anything is written out: a typo in the second
+// side fails before the first is checked out and counted whole, and two spellings of one commit
+// are refused while both hashes are on hand. Equal commits would also share one checkout path and
+// race each other's background removal on it.
+pub fn prepare_revisions(names: &[&str], engine: &EngineConfig) -> Result<HashMap<String, ResolvedRevision>, GitError> {
+    if names.is_empty() {
+        return Ok(HashMap::new());
+    }
     // The run's own rule for telling a pattern from a folder that carries those characters in its
     // name: what exists exactly as written is always literal
-    if let Some(target) = config.engine.dirs.iter().find(|x|
+    if let Some(target) = engine.dirs.iter().find(|x|
             !Path::new(&x.path).exists() && x.path.contains(['*', '?', '[', '{'])) {
         return Err(GitError::PatternTarget { pattern: target.path.clone() });
     }
+    let declared = engine.dirs.iter().map(|x| x.path.clone()).collect::<Vec<_>>();
+    let repository = super::git::find_common_repository_of(&declared)?;
 
+    let mut prepared = HashMap::new();
+    for name in names {
+        if !prepared.contains_key(*name) {
+            prepared.insert((*name).to_owned(), super::git::resolve_revision(&repository, name)?);
+        }
+    }
+    if let [first, second] = names[..] && prepared[first].commit == prepared[second].commit {
+        return Err(GitError::SameCommit { first: first.to_owned(), second: second.to_owned(),
+                commit: prepared[first].commit.clone() });
+    }
+
+    Ok(prepared)
+}
+
+// The files are written out, the targets are found again inside them, and 'run' does the rest,
+// under this run's settings and this build
+pub fn count_git_revision(resolved: &ResolvedRevision, config: &Configuration, languages: Vec<Language>,
+        extension_priority: &HashMap<String,Vec<String>>) -> Result<(Reading, Vec<Note>), GitError>
+{
+    let git_revision = resolved.revision.as_str();
     // Dropped, and with it erased, before this function returns anything: the whole phase is
     // silent on the permanent output, and the motion is its only sign of life
     let progress = Arc::new(ScanProgress::default());
     let _live = super::live_progress::start_revision_display(config, git_revision, progress.clone());
 
-    let declared = config.engine.dirs.iter().map(|x| x.path.clone()).collect::<Vec<_>>();
-    let repository = super::git::find_common_repository_of(&declared)?;
-    let checkout = super::git::checkout(&repository, git_revision)?;
+    let checkout = super::git::checkout(resolved)?;
 
     let mut notes = Vec::new();
     // A checkout holds only what git tracks, so the ignored files exist on the other side alone
@@ -65,8 +88,8 @@ pub fn count_git_revision(git_revision: &str, config: &Configuration, languages:
         notes.push(Note::MissingInRevision { git_revision: git_revision.to_owned(), targets: missing });
     }
 
-    let of_git_revision = mezura_core::EngineConfig { dirs,
-            exclude_dirs: move_excludes_into_checkout(&checkout.path, &repository, &config.engine.exclude_dirs),
+    let of_git_revision = EngineConfig { dirs,
+            exclude_dirs: move_excludes_into_checkout(&checkout.path, &resolved.repository, &config.engine.exclude_dirs),
             ..config.engine.clone() };
     // A reading of zero and not a failure: it is what a revision older than every target holds
     let result = if of_git_revision.dirs.is_empty() {
@@ -135,6 +158,24 @@ mod tests {
         assert!(matches!(read_document(&file), Some(Err(_))));
         std::fs::remove_file(&file).unwrap();
         assert!(read_document("no-such-thing-anywhere").is_none());
+    }
+
+    // The dedup answers by hash and not by spelling, so a commit against itself is refused however
+    // the two sides wrote it
+    #[test]
+    fn two_spellings_of_one_commit_are_refused_and_distinct_names_are_resolved() {
+        let package = env!("CARGO_MANIFEST_DIR").replace('\\', "/");
+        let engine = EngineConfig::new([package.clone()]);
+        let (repository, _) = crate::git::find_repository_of(&package).unwrap();
+        let head = crate::git::resolve_revision(&repository, "HEAD").unwrap();
+
+        let refused = prepare_revisions(&["HEAD", &head.commit], &engine);
+        assert!(matches!(refused, Err(GitError::SameCommit { .. })), "{refused:?}");
+        assert!(matches!(prepare_revisions(&["HEAD", "HEAD"], &engine), Err(GitError::SameCommit { .. })));
+
+        let alone = prepare_revisions(&["HEAD"], &engine).unwrap();
+        assert_eq!(head.commit, alone["HEAD"].commit);
+        assert!(prepare_revisions(&[], &engine).unwrap().is_empty());
     }
 
     #[test]
