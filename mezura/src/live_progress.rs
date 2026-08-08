@@ -15,6 +15,9 @@ const MOTION_APPEARS_AFTER_MS : u128 = 150;
 const TICK : Duration = Duration::from_millis(50);
 const THREE_DOTS_STEP_MS : u128 = 300;
 const NUMBER_REFRESH_MS : u128 = 300;
+// A rate is a delta over an interval, and an interval of microseconds turns one finished file into
+// hundreds of millions of lines a second. Shorter than this and the sample is thrown away.
+const MIN_RATE_INTERVAL_SECS : f64 = 0.05;
 // The count sits right-aligned in this field, so a new digit fills reserved space to its left
 // instead of pushing the text beside it. Wide enough that only ten million files overflow it.
 const COUNT_FIELD_WIDTH : usize = "9,999,999".len();
@@ -65,7 +68,9 @@ pub fn start_walk_display(config: &Configuration, progress: Arc<ScanProgress>) -
         return LiveDisplay::default();
     }
     let heading = crate::theme::get_active().heading.paint(WALK_HEADING).to_string();
-    if !std::io::stdout().is_terminal() || !std::io::stderr().is_terminal() {
+    // Phase timing writes its report to stderr from inside the run, where no display can get out
+    // of its way, so while it is on every line here stays as still as a piped one
+    if !std::io::stdout().is_terminal() || !std::io::stderr().is_terminal() || mezura_core::prints_phase_timing() {
         println!("\n{heading}...");
         return LiveDisplay::default();
     }
@@ -96,21 +101,21 @@ pub fn start_walk_display(config: &Configuration, progress: Arc<ScanProgress>) -
 // while the checkout is scanned, then the parsing frame once the scan ends and the queue is worth
 // watching. It erases itself completely, so the printed comparison carries no trace of it.
 pub fn start_revision_display(config: &Configuration, git_revision: &str, progress: Arc<ScanProgress>) -> LiveDisplay {
-    if !std::io::stderr().is_terminal() {
+    if !std::io::stderr().is_terminal() || mezura_core::prints_phase_timing() {
         return LiveDisplay::default();
     }
 
     // Only the word carries the heading style: the revision is data, not a header
     let writing = format!("{} '{git_revision}'", crate::theme::get_active().heading.paint("Writing out"));
     let counting = format!("{} '{git_revision}'", crate::theme::get_active().heading.paint("Counting"));
-    let show_advanced = !config.view.hidden.progress_bar;
+    let show_bar_and_rates = !config.view.hidden.progress_bar;
     let charset = config.view.progress_bar.get_charset();
     let stop = Arc::new(AtomicBool::new(false));
     let opened = Arc::new(AtomicBool::new(false));
     let animator = {
         let (progress, stop, opened) = (progress, stop.clone(), opened.clone());
         thread::Builder::new().name("live-progress".to_owned())
-                .spawn(move || animate_revision_line(&progress, &stop, &opened, &writing, &counting, show_advanced, charset)).ok()
+                .spawn(move || animate_revision_line(&progress, &stop, &opened, &writing, &counting, show_bar_and_rates, charset)).ok()
     };
 
     LiveDisplay {
@@ -124,20 +129,20 @@ pub fn start_revision_display(config: &Configuration, git_revision: &str, progre
 // The transient line of a parse whose queue is worth watching: the bar, the files done against the
 // files found, and the parsing speed. It erases itself completely; nothing permanent is printed.
 pub fn start_parsing_display(config: &Configuration, progress: Arc<ScanProgress>) -> LiveDisplay {
-    if config.view.hidden.parsing_info || !std::io::stderr().is_terminal() {
+    if config.view.hidden.parsing_info || !std::io::stderr().is_terminal() || mezura_core::prints_phase_timing() {
         return LiveDisplay::default();
     }
     if progress.get_files_found().saturating_sub(progress.get_files_parsed()) <= BAR_APPEARS_OVER_QUEUED {
         return LiveDisplay::default();
     }
 
-    let show_advanced = !config.view.hidden.progress_bar;
+    let show_bar_and_rates = !config.view.hidden.progress_bar;
     let charset = config.view.progress_bar.get_charset();
     let stop = Arc::new(AtomicBool::new(false));
     let animator = {
         let (progress, stop) = (progress, stop.clone());
         thread::Builder::new().name("live-progress".to_owned())
-                .spawn(move || animate_parsing_line(&progress, &stop, show_advanced, charset)).ok()
+                .spawn(move || animate_parsing_line(&progress, &stop, show_bar_and_rates, charset)).ok()
     };
 
     LiveDisplay {
@@ -154,21 +159,29 @@ impl LiveDisplay {
     pub fn finish(&self) {
         let Some(animator) = self.animator.lock().unwrap().take() else { return };
         self.should_stop.store(true, Ordering::Relaxed);
+        // The animator waits out its tick in 'park_timeout', so it is woken rather than waited for:
+        // joining a sleep would hold the report back by up to a whole tick, and that wait lands
+        // inside the elapsed time the run prints
+        animator.thread().unpark();
         let _ = animator.join();
-        let parting = match &self.parting {
-            Parting::Settle(line) => format!("{ERASE_LINE}{line}\n"),
-            Parting::Erase => ERASE_LINE.to_owned(),
-            Parting::Retreat => {
-                if !self.opened_own_line.load(Ordering::Relaxed) {
-                    return;
-                }
-                ERASE_LINE_AND_RETREAT.to_owned()
-            }
-        };
-        let mut stderr = std::io::stderr().lock();
-        let _ = stderr.write_all(parting.as_bytes());
-        let _ = stderr.flush();
+        if matches!(self.parting, Parting::Retreat) && !self.opened_own_line.load(Ordering::Relaxed) {
+            return;
+        }
+        write_parting(&self.parting);
     }
+}
+
+// The one place that knows what each parting is made of, shared with the removals line below,
+// which parts the same way without being a LiveDisplay
+fn write_parting(parting: &Parting) {
+    let text = match parting {
+        Parting::Settle(line) => format!("{ERASE_LINE}{line}\n"),
+        Parting::Erase => ERASE_LINE.to_owned(),
+        Parting::Retreat => ERASE_LINE_AND_RETREAT.to_owned()
+    };
+    let mut stderr = std::io::stderr().lock();
+    let _ = stderr.write_all(text.as_bytes());
+    let _ = stderr.flush();
 }
 
 impl Default for LiveDisplay {
@@ -197,15 +210,16 @@ pub struct RemovalsGuard;
 
 impl Drop for RemovalsGuard {
     fn drop(&mut self) {
-        if std::io::stderr().is_terminal() {
+        if std::io::stderr().is_terminal() && !mezura_core::prints_phase_timing() {
             animate_removals_line();
         }
         crate::git::await_checkout_removals();
     }
 }
 
-// On the calling thread, which has nothing left to do but wait: dots on a 'Cleaning up' line until
-// every removal has finished, naming the one still running
+// On the calling thread and not on an animator of its own, since the caller has nothing left to do
+// but wait for the same event: dots on a 'Cleaning up' line until every removal has finished,
+// naming the one still running
 fn animate_removals_line() {
     let started = Instant::now();
     let mut last_written = String::new();
@@ -227,9 +241,7 @@ fn animate_removals_line() {
         }
     }
     if !last_written.is_empty() {
-        let mut stderr = std::io::stderr().lock();
-        let _ = stderr.write_all(ERASE_LINE_AND_RETREAT.as_bytes());
-        let _ = stderr.flush();
+        write_parting(&Parting::Retreat);
     }
 }
 
@@ -240,7 +252,9 @@ fn animate_walk_line(progress: &ScanProgress, stop: &AtomicBool, heading: &str) 
     let mut shown_files = 0;
     let mut last_number_slot = 0;
     while !stop.load(Ordering::Relaxed) {
-        thread::sleep(TICK);
+        // Woken early by 'finish'. A spurious wake costs nothing: every figure below is worked out
+        // from this thread's own clock, and an unchanged frame is not written.
+        thread::park_timeout(TICK);
         let elapsed = started.elapsed().as_millis();
         if elapsed < MOTION_APPEARS_AFTER_MS {
             continue;
@@ -277,7 +291,7 @@ fn overwrite_transient_line(text: &str, previous_width: usize) -> usize {
 // of the inner run is found, which is when git has finished materialising the revision, 'Counting'
 // after, and the parsing frame on the same line when the scan ends with a queue over the threshold
 fn animate_revision_line(progress: &ScanProgress, stop: &AtomicBool, opened: &AtomicBool,
-        writing_label: &str, counting_label: &str, show_advanced: bool, charset: &str) {
+        writing_label: &str, counting_label: &str, show_bar_and_rates: bool, charset: &str) {
     let started = Instant::now();
     let mut last_written = String::new();
     let mut previous_width = 0;
@@ -288,13 +302,16 @@ fn animate_revision_line(progress: &ScanProgress, stop: &AtomicBool, opened: &At
     let mut last_sample = (started, 0, 0);
     let mut last_number_slot = 0;
     while !stop.load(Ordering::Relaxed) {
-        thread::sleep(TICK);
+        thread::park_timeout(TICK);
         let elapsed = started.elapsed().as_millis();
         if elapsed < MOTION_APPEARS_AFTER_MS {
             continue;
         }
 
-        if parsing.is_none() && show_advanced && progress.is_walk_done()
+        // Whether the bar is wanted decides what the parsing frame holds and never whether this
+        // line reaches it: hiding the bar must still let the count of what has been parsed replace
+        // the count of what was discovered, which stopped moving when the walk ended.
+        if parsing.is_none() && progress.is_walk_done()
                 && progress.get_files_found().saturating_sub(progress.get_files_parsed()) > BAR_APPEARS_OVER_QUEUED {
             let total = progress.get_files_found();
             parsing = Some((total, crate::number_formatter::format_with_separators(total).chars().count()));
@@ -320,7 +337,7 @@ fn animate_revision_line(progress: &ScanProgress, stop: &AtomicBool, opened: &At
                 if numbers_due {
                     let (now, parsed, lines) = (Instant::now(), progress.get_files_parsed(), progress.get_lines_counted());
                     let seconds = now.duration_since(last_sample.0).as_secs_f64();
-                    if seconds > 0.0 {
+                    if seconds > MIN_RATE_INTERVAL_SECS {
                         rates = Some((((parsed - last_sample.1) as f64 / seconds) as usize,
                                 ((lines - last_sample.2) as f64 / seconds) as usize));
                     }
@@ -328,7 +345,7 @@ fn animate_revision_line(progress: &ScanProgress, stop: &AtomicBool, opened: &At
                     shown_parsed = parsed;
                 }
                 format!("{counting_label} {}", format_parsing_frame(progress.get_files_parsed(), shown_parsed, total,
-                        count_width, rates, true, charset))
+                        count_width, rates, show_bar_and_rates, charset))
             }
         };
         if frame != last_written {
@@ -350,7 +367,7 @@ fn open_line_below() {
     let _ = stderr.flush();
 }
 
-fn animate_parsing_line(progress: &ScanProgress, stop: &AtomicBool, show_advanced: bool, charset: &str) {
+fn animate_parsing_line(progress: &ScanProgress, stop: &AtomicBool, show_bar_and_rates: bool, charset: &str) {
     let started = Instant::now();
     let total = progress.get_files_found();
     let count_width = crate::number_formatter::format_with_separators(total).chars().count();
@@ -361,7 +378,7 @@ fn animate_parsing_line(progress: &ScanProgress, stop: &AtomicBool, show_advance
     let mut last_sample = (started, shown_parsed, progress.get_lines_counted());
     let mut last_number_slot = 0;
     while !stop.load(Ordering::Relaxed) {
-        thread::sleep(TICK);
+        thread::park_timeout(TICK);
         let elapsed = started.elapsed().as_millis();
         if elapsed < MOTION_APPEARS_AFTER_MS {
             continue;
@@ -371,7 +388,7 @@ fn animate_parsing_line(progress: &ScanProgress, stop: &AtomicBool, show_advance
             last_number_slot = number_slot;
             let (now, parsed, lines) = (Instant::now(), progress.get_files_parsed(), progress.get_lines_counted());
             let seconds = now.duration_since(last_sample.0).as_secs_f64();
-            if seconds > 0.0 {
+            if seconds > MIN_RATE_INTERVAL_SECS {
                 // The delta between two samples and never the average since the start, so the
                 // figure follows what the disk is doing right now
                 rates = Some((((parsed - last_sample.1) as f64 / seconds) as usize,
@@ -383,7 +400,7 @@ fn animate_parsing_line(progress: &ScanProgress, stop: &AtomicBool, show_advance
         // The bar reads the live figure and moves whenever a quantum is crossed, while the count
         // beside it holds still between number refreshes
         let frame = format_parsing_frame(progress.get_files_parsed(), shown_parsed, total, count_width,
-                rates, show_advanced, charset);
+                rates, show_bar_and_rates, charset);
         if frame != last_written {
             previous_width = overwrite_transient_line(&frame, previous_width);
             last_written = frame;
@@ -392,11 +409,11 @@ fn animate_parsing_line(progress: &ScanProgress, stop: &AtomicBool, show_advance
 }
 
 fn format_parsing_frame(bar_parsed: usize, counted_parsed: usize, total: usize, count_width: usize,
-        rates: Option<(usize, usize)>, show_advanced: bool, charset: &str) -> String {
+        rates: Option<(usize, usize)>, show_bar_and_rates: bool, charset: &str) -> String {
     let count = format!("{:>count_width$}/{} files",
             crate::number_formatter::format_with_separators(counted_parsed),
             crate::number_formatter::format_with_separators(total));
-    if !show_advanced {
+    if !show_bar_and_rates {
         return count;
     }
     let speed = match rates {
@@ -499,7 +516,7 @@ mod tests {
     }
 
     #[test]
-    fn the_parsing_frame_keeps_its_width_as_the_count_grows_and_hides_its_advanced_part_on_demand() {
+    fn the_parsing_frame_keeps_its_width_as_the_count_grows_and_drops_its_bar_and_rates_on_demand() {
         let charset = crate::config_manager::ProgressBarStyle::default().get_charset();
         let width = crate::number_formatter::format_with_separators(80_000).chars().count();
 
@@ -511,7 +528,8 @@ mod tests {
         // before the first sample there is no honest rate, so none is shown
         assert!(!format_parsing_frame(5, 5, 80_000, width, None, true, charset).contains("files/s"));
 
-        // the reduced form is the count alone: no bar, no rates, and the count still holds its column
+        // The form a hidden bar leaves behind is the count alone, which is what the revision line
+        // reaches too now that the flag no longer decides whether that line gets there at all
         let reduced = format_parsing_frame(5, 5, 80_000, width, Some((29_238, 14_406_917)), false, charset);
         let reduced_late = format_parsing_frame(79_999, 79_999, 80_000, width, None, false, charset);
         assert!(!reduced.contains("files/s") && !reduced.contains(charset.chars().last().unwrap()));
