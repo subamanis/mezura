@@ -922,10 +922,7 @@ With that said, it is important to mention the following limitations:
 
 - When two languages claim the same extension, only one of them can have it, and the choice changes the numbers rather than only the label, since the loser's files are then parsed with the winner's comment and string symbols. The program says so every time it has to break such a tie by itself. To decide it once, name the winner in the ```extension_priority.txt``` file of the data directory; to decide it for one run or for one project, use ```--force-lang```, which overrides that file.
 
-- Regural expressions are not handled in a special way, so if a regex contains a string or comment symbol, it may create some inaccurancies for the file.
-
-- Bug: If a file contains Unicode Strings, there is a possibility that a parser thread will panic, due to trying to slice a line in a non-valid way, thus creating
-non-valid unicode characters. (byte index is not a char boundary).  Bulletproof Unicode parsing is a very tricky problem that is not worth it to implement, but the existing behavior should work for 99.9% of files.
+- A regular expression written inside a string is read as a string, escapes included, and creates no inaccuracy. The regex literals of languages like JavaScript, Perl and Ruby are the ones that can miscount, and only through the symbols that language itself declares: a bare quote is legal inside ```/say "hi/``` and reads as an opened string, and a declared comment opener sitting inside a character class, like the ```/*``` of JavaScript in ```/a[/*]b/```, reads as an opened comment, so the lines after such a regex can be counted as string content or as comments.
 
 
 ## Windows Performance Note
