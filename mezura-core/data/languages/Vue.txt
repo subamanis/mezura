@@ -5,7 +5,10 @@ Extensions
 vue
 
 String symbols
-" ' `
+" '
+
+Multi line string symbols
+`
 
 Comment symbols
 //

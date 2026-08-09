@@ -320,8 +320,8 @@ mod language_selection_tests {
     // and reported as a name that removing changed nothing about.
     #[test]
     fn a_language_name_outside_ascii_is_excluded_and_not_reported_as_missing() {
-        let cafe = || vec![Language::new("CAFÉ", ["cf"], ["\""], ["//"], None, []),
-                Language::new("Rust", ["rs"], ["\""], ["//"], None, [])];
+        let cafe = || vec![Language::new("CAFÉ", ["cf"], ["\""], ["//"], &[], []),
+                Language::new("Rust", ["rs"], ["\""], ["//"], &[], [])];
         let names_of = |languages: Vec<Language>| languages.into_iter().map(|x| x.name).collect::<Vec<_>>();
 
         let config = EngineConfig { excluded_languages: vec!["café".to_owned()], ..Default::default() };
@@ -360,15 +360,15 @@ mod language_selection_tests {
     // the same source came back as comment=0 code=3 or comment=4 code=1 depending on the file names.
     #[test]
     fn two_definitions_of_one_name_are_reported_against_the_counts() {
-        let twice = vec![Language::new("Same", ["aa"], ["\""], ["//"], None, []),
-                Language::new("Same", ["bb"], ["\""], [""; 0], Some(("/*", "*/")), []),
-                Language::new("Rust", ["rs"], ["\""], ["//"], None, [])];
+        let twice = vec![Language::new("Same", ["aa"], ["\""], ["//"], &[], []),
+                Language::new("Same", ["bb"], ["\""], [""; 0], &[("/*", "*/")], []),
+                Language::new("Rust", ["rs"], ["\""], ["//"], &[], [])];
 
         let config = EngineConfig::default();
         let (languages, _) = Languages::resolve(&config, twice, &HashMap::new());
         let reported = Languages::resolve(&config,
-                vec![Language::new("Same", ["aa"], ["\""], ["//"], None, []),
-                     Language::new("Same", ["bb"], ["\""], [""; 0], Some(("/*", "*/")), [])],
+                vec![Language::new("Same", ["aa"], ["\""], ["//"], &[], []),
+                     Language::new("Same", ["bb"], ["\""], [""; 0], &[("/*", "*/")], [])],
                 &HashMap::new()).1;
 
         let mine = reported.iter().find(|x| x.code == warnings::Code::DuplicateLanguage)
@@ -385,9 +385,9 @@ mod language_selection_tests {
     #[test]
     fn a_language_that_cannot_be_named_or_matched_is_dropped_and_reported() {
         let unusable = vec![
-            Language::new("   ", ["zz"], ["\""], ["//"], None, []),
-            Language::new("Nameless-Extensions", [""; 0], ["\""], ["//"], None, []),
-            Language::new("Rust", ["rs"], ["\""], ["//"], None, [])];
+            Language::new("   ", ["zz"], ["\""], ["//"], &[], []),
+            Language::new("Nameless-Extensions", [""; 0], ["\""], ["//"], &[], []),
+            Language::new("Rust", ["rs"], ["\""], ["//"], &[], [])];
 
         let (kept, reported) = drop_the_unusable(unusable);
         assert_eq!(vec!["Rust"], kept.into_iter().map(|x| x.name).collect::<Vec<_>>());

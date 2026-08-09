@@ -5,6 +5,8 @@ Extensions
 clj cljs cljc
 
 String symbols
+
+Multi line string symbols
 "
 
 Comment symbols

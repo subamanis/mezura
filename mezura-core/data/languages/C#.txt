@@ -5,7 +5,15 @@ Extensions
 cs csx
 
 String symbols
-""" "
+"
+
+Multi line string symbols
+"""
+
+String symbol openers
+@"
+String symbol closers
+"
 
 Comment symbols
 //

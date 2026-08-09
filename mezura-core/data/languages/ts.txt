@@ -5,7 +5,10 @@ Extensions
 ts mts cts
 
 String symbols
-" ' `
+" '
+
+Multi line string symbols
+`
 
 Comment symbols
 //

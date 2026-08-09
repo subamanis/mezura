@@ -5,6 +5,8 @@ Extensions
 lisp lsp
 
 String symbols
+
+Multi line string symbols
 "
 
 Comment symbols

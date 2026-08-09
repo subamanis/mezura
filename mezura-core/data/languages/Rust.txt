@@ -5,7 +5,14 @@ Extensions
 rs
 
 String symbols
+
+Multi line string symbols
 "
+
+String symbol openers
+r" r#"
+String symbol closers
+" "#
 
 Comment symbols
 //

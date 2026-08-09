@@ -5,7 +5,10 @@ Extensions
 py pyw pyi
 
 String symbols
-""" ''' " '
+" '
+
+Multi line string symbols
+""" '''
 
 Comment symbols
 #

@@ -1,4 +1,4 @@
-files=31 lines=348 code=180 comments=85
+files=31 lines=363 code=185 comments=93
 
 Assembly
   files=1 lines=10 code=4 comments=5
@@ -12,7 +12,7 @@ Clojure
   files=1 lines=11 code=6 comments=2
   functions=2 macros=1 namespaces=1
 D
-  files=1 lines=8 code=3 comments=3
+  files=1 lines=12 code=3 comments=6
   classes=1 interfaces=0 structs=1 templates=0
 Elm
   files=1 lines=11 code=5 comments=4
@@ -47,7 +47,7 @@ Lisp
   files=1 lines=7 code=3 comments=3
   classes=1 functions=1 macros=0
 Lua
-  files=1 lines=12 code=6 comments=4
+  files=1 lines=15 code=7 comments=6
   functions=2
 OCaml
   files=1 lines=11 code=5 comments=4
@@ -56,7 +56,7 @@ Objective-C
   files=1 lines=12 code=8 comments=1
   classes=1 protocols=0
 Pascal
-  files=1 lines=12 code=8 comments=3
+  files=1 lines=15 code=8 comments=6
   classes=1 records=1
 Perl
   files=1 lines=10 code=5 comments=2
@@ -67,10 +67,10 @@ PowerShell
 Prolog
   files=1 lines=8 code=4 comments=3
 Python
-  files=2 lines=25 code=15 comments=5
+  files=2 lines=28 code=17 comments=5
   classes=3
 Rust
-  files=1 lines=22 code=10 comments=3
+  files=1 lines=24 code=12 comments=3
   enums=1 structs=1 traits=1
 ShaderLab
   files=1 lines=13 code=5 comments=3

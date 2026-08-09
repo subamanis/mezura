@@ -5,7 +5,7 @@ Extensions
 html htm
 
 String symbols
-" '
+
 
 Comment symbols
 

@@ -5,6 +5,8 @@ Extensions
 ps1 psm1 psd1
 
 String symbols
+
+Multi line string symbols
 " '
 
 Comment symbols

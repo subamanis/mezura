@@ -1,4 +1,4 @@
-# mezura-expect lines=14 code=9 comments=3 classes=2
+# mezura-expect lines=17 code=11 comments=3 classes=2
 import os
 
 class Foo:
@@ -12,3 +12,6 @@ class Bar(Foo):
         s = "# not a comment"
         t = 'also # not'
         return s + t
+
+broken = "unbalanced quote
+after = 1  # counted right again

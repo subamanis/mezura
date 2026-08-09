@@ -5,7 +5,10 @@ Extensions
 ex exs
 
 String symbols
-""" ''' " '
+" '
+
+Multi line string symbols
+""" '''
 
 Comment symbols
 #

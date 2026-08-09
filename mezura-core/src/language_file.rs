@@ -10,6 +10,9 @@ use crate::{Keyword, Language};
 const LANGUAGE                 : &str = "Language";
 const EXTENSIONS               : &str = "Extensions";
 const STRING_SYMBOLS           : &str = "String symbols";
+const MULTILINE_STRINGS        : &str = "Multi line string symbols";
+const STRING_SYMBOL_OPENERS    : &str = "String symbol openers";
+const STRING_SYMBOL_CLOSERS    : &str = "String symbol closers";
 const COMMENT_SYMBOLS          : &str = "Comment symbols";
 const MULTILINE_COMMENT_START  : &str = "Multi line comment start";
 const MULTILINE_COMMENT_END    : &str = "Multi line comment end";
@@ -159,21 +162,50 @@ pub fn parse_language(contents: &str) -> Option<Language> {
 
     if read_next_header(&mut lines)? != STRING_SYMBOLS {return None;}
     let string_symbols = split_line_on_whitespace(&read_value_line(&mut lines)?);
-    if string_symbols.is_empty() {return None;}
 
-    if read_next_header(&mut lines)? != COMMENT_SYMBOLS {return None;}
+    // A symbol belongs to exactly one of the lists, the way a comment symbol does: a string that
+    // ends with its line goes above, one that crosses lines goes here. Declaring the same symbol
+    // twice would leave the two answers to argue, so it refuses the file.
+    let mut multiline_strings = Vec::new();
+    let mut header = read_next_header(&mut lines)?;
+    if header == MULTILINE_STRINGS {
+        multiline_strings = split_line_on_whitespace(&read_value_line(&mut lines)?).into_iter()
+                .map(|symbol| (symbol.clone(), symbol)).collect::<Vec<_>>();
+        if multiline_strings.is_empty() {return None;}
+        header = read_next_header(&mut lines)?;
+    }
+
+    // Strings that open with one symbol and close with another, 'r#"' with '"#'. The two value
+    // lines are lists paired by position, the shape the multiline comment block also has.
+    if header == STRING_SYMBOL_OPENERS {
+        let openers = split_line_on_whitespace(&read_value_line(&mut lines)?);
+        if openers.is_empty() || read_next_header(&mut lines)?.as_str() != STRING_SYMBOL_CLOSERS {return None;}
+        let closers = split_line_on_whitespace(&read_value_line(&mut lines)?);
+        if closers.len() != openers.len() {return None;}
+        multiline_strings.extend(openers.into_iter().zip(closers));
+        header = read_next_header(&mut lines)?;
+    }
+
+    // Declaring no string at all is allowed and is what HTML needs: its quotes delimit attributes
+    // rather than strings, and the free text between its tags is full of apostrophes.
+    if string_symbols.iter().any(|symbol| multiline_strings.iter().any(|(open, _)| open == symbol)) {return None;}
+
+    if header != COMMENT_SYMBOLS {return None;}
     // Deliberately allowed to be empty: a language whose only comments are multiline has no line
     // comment symbol, and the value here is the empty line that says so.
     let comment_symbols = split_line_on_whitespace(&read_value_line(&mut lines)?);
 
-    let mut multiline_comments = None;
+    // The two value lines are lists paired by position: the first start closes with the first end.
+    // Unequal counts leave some symbol with no other half, and the file is refused rather than
+    // guessed at.
+    let mut multiline_comments = Vec::new();
     let mut header = read_next_header(&mut lines);
     if header.as_deref() == Some(MULTILINE_COMMENT_START) {
-        let start = read_value_line(&mut lines)?;
-        if start.is_empty() || read_next_header(&mut lines)?.as_str() != MULTILINE_COMMENT_END {return None;}
-        let end = read_value_line(&mut lines)?;
-        if end.is_empty() {return None;}
-        multiline_comments = Some((start, end));
+        let starts = split_line_on_whitespace(&read_value_line(&mut lines)?);
+        if starts.is_empty() || read_next_header(&mut lines)?.as_str() != MULTILINE_COMMENT_END {return None;}
+        let ends = split_line_on_whitespace(&read_value_line(&mut lines)?);
+        if ends.len() != starts.len() {return None;}
+        multiline_comments = starts.into_iter().zip(ends).collect();
         header = read_next_header(&mut lines);
     }
 
@@ -194,7 +226,10 @@ pub fn parse_language(contents: &str) -> Option<Language> {
     if header.is_some() {return None;}
 
     Some(Language::new(lang_name, extensions, string_symbols, comment_symbols,
-            multiline_comments.as_ref().map(|(start, end)| (start.as_str(), end.as_str())), keywords))
+            &multiline_comments.iter().map(|(start, end): &(String, String)| (start.as_str(), end.as_str()))
+                    .collect::<Vec<_>>(), keywords)
+            .with_string_pairs(&multiline_strings.iter().map(|(open, close)| (open.as_str(), close.as_str()))
+                    .collect::<Vec<_>>()))
 }
 
 // A missing file is not a mistake: an installation made by an earlier version has none, and the
@@ -307,7 +342,7 @@ mod tests {
         // that empty line is the value and not a separator to skip, or the symbols one line down
         // would read as it.
         let css = named("CSS");
-        assert!(css.comment_symbols.is_empty() && css.multiline_comment_start_symbol.is_some(),
+        assert!(css.comment_symbols.is_empty() && !css.multiline_comments.is_empty(),
                 "CSS was the empty-comment-symbols case and its shape changed");
 
         // The one thing no shipped file can show, because a stray blank line in one would be tidied
@@ -387,14 +422,17 @@ pl      Perl, Prolog
             String::new(),
             "Language\n".to_owned(),
             good.replace("Extensions", "Extension"),
-            // no name, no extensions, and no string symbols, each on its own
+            // no name and no extensions, each on its own
             good.replace("Lua\n", "\n"),
-            good.replace("lua\n\n", "\n\n"),
-            good.replace("\" '\n", "\n")
+            good.replace("lua\n\n", "\n\n")
         ];
         for contents in broken {
             assert!(crate::language_file::parse_language(&contents).is_none(), "accepted:\n{contents}");
         }
+
+        // Declaring no string symbol is not a mistake, it is what HTML does: its quotes delimit
+        // attributes rather than strings, and its text is full of apostrophes.
+        assert!(crate::language_file::parse_language(&good.replace("\" '\n", "\n")).is_some());
 
         // An extra blank line between blocks is no longer a mistake: the parser skips blanks before
         // a header, so a stray one does not cost a language its whole definition.
@@ -410,7 +448,7 @@ pl      Perl, Prolog
         // below is whatever the program actually reads today and cannot drift away from it.
         let good = std::fs::read_to_string(LANGUAGES_DIR.to_owned() + "Rust.txt").unwrap();
         let parsed = crate::language_file::parse_language(&good).expect("the control file must parse");
-        assert!(parsed.multiline_comment_start_symbol.is_some() && !parsed.keywords.is_empty(),
+        assert!(!parsed.multiline_comments.is_empty() && !parsed.keywords.is_empty(),
                 "Rust.txt no longer declares the two blocks this test truncates, so pick another file");
 
         // Line by line and never by replacing a run of text, because how many blank lines sit
@@ -529,6 +567,59 @@ pl      Perl, Prolog
         assert_eq!(1, rules_with_mark.len(), "the rules of the file were dropped, and in silence");
     }
 
+    // The two value lines are lists paired by position, so Pascal declares '{ }' beside '(* *)'
+    // on one line each. A count that does not match leaves a symbol with no other half, and the
+    // file is refused whole rather than paired by guesswork.
+    #[test]
+    fn multiline_comment_pairs_zip_by_position_and_unequal_counts_refuse_the_file() {
+        let two_pairs = "Language\nPascalish\n\nExtensions\npax\n\nString symbols\n'\n\n\
+Comment symbols\n//\n\nMulti line comment start\n{ (*\nMulti line comment end\n} *)\n";
+        let parsed = crate::language_file::parse_language(two_pairs).expect("two pairs must parse");
+        assert_eq!(vec![("{".to_owned(), "}".to_owned()), ("(*".to_owned(), "*)".to_owned())],
+                parsed.multiline_comments);
+
+        let one_end = two_pairs.replace("} *)", "}");
+        assert!(crate::language_file::parse_language(&one_end).is_none(), "one end for two starts was accepted");
+        let one_start = two_pairs.replace("{ (*", "{");
+        assert!(crate::language_file::parse_language(&one_start).is_none(), "one start for two ends was accepted");
+
+        // and the shipped files that need the second pair actually declare it
+        for name in ["Pascal.txt", "Delphi.txt", "D.txt"] {
+            let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
+            assert_eq!(2, language.multiline_comments.len(), "{name} no longer declares both of its pairs");
+        }
+    }
+
+    // A string symbol belongs to exactly one of the two lists, the way a comment symbol does, and
+    // the scan numbers the plain ones first and the crossing ones after them.
+    #[test]
+    fn a_string_symbol_is_declared_in_one_list_and_the_crossing_ones_are_numbered_last() {
+        let good = "Language\nPylike\n\nExtensions\npyl\n\nString symbols\n\" '\n\n\
+Multi line string symbols\n\"\"\"\n\nComment symbols\n#\n";
+        let parsed = crate::language_file::parse_language(good).expect("the declaration must parse");
+        assert_eq!(vec!["\"".to_owned(), "'".to_owned()], parsed.string_symbols);
+        assert_eq!(vec![("\"\"\"".to_owned(), "\"\"\"".to_owned())], parsed.multiline_strings);
+
+        let twice = good.replace("String symbols\n\" '", "String symbols\n\" ' \"\"\"");
+        assert!(crate::language_file::parse_language(&twice).is_none(),
+                "a symbol declared in both lists was accepted, leaving two answers to argue");
+        let empty = good.replace("Multi line string symbols\n\"\"\"", "Multi line string symbols\n");
+        assert!(crate::language_file::parse_language(&empty).is_none());
+
+        // a language that writes no string at all is allowed, which is what HTML needs: its quotes
+        // delimit attributes, and the free text between its tags is full of apostrophes
+        let stringless = good.replace("String symbols\n\" '", "String symbols\n")
+                .replace("Multi line string symbols\n\"\"\"\n\n", "");
+        let parsed = crate::language_file::parse_language(&stringless).expect("a language with no strings must parse");
+        assert!(parsed.string_symbols.is_empty() && parsed.multiline_strings.is_empty());
+
+        // and the shipped files that declare crossing strings still do
+        for name in ["python.txt", "js.txt", "java.txt", "Rust.txt", "C#.txt", "go.txt"] {
+            let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
+            assert!(!language.multiline_strings.is_empty(), "{name} lost its crossing string declaration");
+        }
+    }
+
     #[test]
     fn a_missing_priority_file_is_not_a_mistake() {
         let (rules, faulty) = crate::language_file::parse_priority_file("a/path/that/is/not/there.txt");
@@ -571,13 +662,16 @@ pl      Perl, Prolog
         assert!(duplicates.is_empty(), "these names are declared by more than one shipped file: {duplicates:?}");
 
         // and each one has to describe something countable. The two halves of a multiline comment
-        // are not checked here any more: 'Language::new' takes them as one pair, so a language
-        // holding one without the other cannot be built at all, and an assertion that cannot fail
-        // reads as cover that is not there.
+        // are not checked here any more: 'Language::new' takes them as pairs, so a start with no
+        // end cannot be built at all, and an assertion that cannot fail reads as cover that is
+        // not there.
+        // A language with no string symbol at all is HTML and only HTML, since nothing there is a
+        // string: naming it keeps a symbol lost from another file loud instead of allowed.
         for language in &languages {
             let name = &language.name;
             assert!(!language.extensions.is_empty(), "{name} declares no extension");
-            assert!(!language.string_symbols.is_empty(), "{name} declares no string symbol");
+            assert!(!language.string_symbols.is_empty() || !language.multiline_strings.is_empty()
+                    || name == "HTML", "{name} declares no string symbol");
         }
     }
 }

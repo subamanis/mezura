@@ -1,4 +1,4 @@
-// mezura-expect lines=22 code=10 comments=3 structs=1 enums=1 traits=1
+// mezura-expect lines=24 code=12 comments=3 structs=1 enums=1 traits=1
 use std::fmt;
 
 /* a block comment
@@ -18,5 +18,7 @@ pub trait Draw {
 impl Draw for Point {
     fn draw(&self) {
         println!("// still code");
+        let raw = r#"say "hi" and stay code"#;
+        let path = r#"C:\ends\in\backslash\"#;
     }
 }

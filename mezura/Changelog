@@ -12,6 +12,24 @@ Main changes:
       reverse, in any order. The cells of the live progress bar also take a "hex..hex" gradient
       or "rainbow". Run "--help style" for the full list.
   -> Comment lines are now counted and reported separately, with their own percentage.
+  -> A language can now declare more than one block comment pair: Pascal and Delphi count both
+      "{ }" and "(* *)", and D counts "/+ +/" beside "/* */". Only the end of the pair that opened
+      a block closes it. In a language file, the two "Multi line comment" lines now take
+      whitespace-separated lists, paired by position.
+  -> A block comment that closes and reopens on the same line no longer counts the rest of the
+      file as code. This hit Lua and HTML, whose opening and closing symbols differ in length.
+  -> A string can now open with one symbol and close with another, declared in a language file
+      under "String symbol openers" and "String symbol closers". Rust declares r" and r#" with
+      their closers and C# declares @" with ", so a raw or verbatim string holding quotes, or
+      ending in a backslash, no longer counts the rest of the file as string content.
+  -> String symbols now split by behavior the way comment symbols always did: the "String
+      symbols" list ends at the end of the line, and a "Multi line string symbols" list holds the
+      ones that cross lines, like Python's """ or a backtick template. An unbalanced quote now
+      costs its own line instead of everything below it. Languages whose plain quote legally
+      spans lines (Rust, Ruby, the shells, PHP, SQL and their kin) declare it crossing and keep
+      their behavior.
+  -> HTML now declares no string symbols at all: its quotes delimit attributes, not strings, so
+      an apostrophe in the text ("it's") no longer swallows the comments and markup below it.
   -> Language files are now updated automatically when you install a new version, so a correction to
       a language reaches you without you having to do anything. One you had changed yourself is
       replaced too, since an out of date language file counts wrongly, but your copy is kept under

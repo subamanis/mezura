@@ -23,5 +23,5 @@ pub(crate) mod test_paths {
 // Languages that differ only in the extensions they claim, for the tests about who wins one.
 pub(crate) fn languages_claiming(claims: &[(&str, &[&str])]) -> std::collections::HashMap<String, crate::Language> {
     crate::languages::keyed_by_name(claims.iter().map(|(name, extensions)|
-            crate::Language::new(name, *extensions, ["\""], ["//"], None, [])))
+            crate::Language::new(name, *extensions, ["\""], ["//"], &[], [])))
 }

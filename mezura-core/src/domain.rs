@@ -3,14 +3,21 @@
 // separates this file from 'result.rs' beside it.
 use std::{collections::HashMap, sync::OnceLock};
 
+// Both kinds of symbol are declared the same way: a plain list of symbols that end at the end of
+// the line, and beside it the ones that cross lines, which come in pairs. So 'string_symbols' is
+// to 'multiline_strings' what 'comment_symbols' is to 'multiline_comments'.
+//
+// A string that crosses lines is a pair of opener and closer, the same symbol twice for '"""',
+// two different ones for a raw form ('r#"' with '"#', '@"' with '"'). Inside a pair whose halves
+// differ the backslash does not escape, which is the reason such a form has a distinct opener.
 #[derive(Debug, Clone)]
 pub struct Language {
     pub name: String,
     pub extensions : Vec<String>,
     pub string_symbols : Vec<String>,
+    pub multiline_strings : Vec<(String, String)>,
     pub comment_symbols : Vec<String>,
-    pub multiline_comment_start_symbol : Option<String>,
-    pub multiline_comment_end_symbol : Option<String>,
+    pub multiline_comments : Vec<(String, String)>,
     pub keywords : Vec<Keyword>,
     // Worked out from the symbols above and reused for every file of this language.
     pub(crate) scan_plan : OnceLock<crate::engine::file_parser::ScanPlan>
@@ -21,40 +28,52 @@ impl Language {
         extensions: impl IntoIterator<Item = impl AsRef<str>>,
         string_symbols: impl IntoIterator<Item = impl AsRef<str>>,
         comment_symbols: impl IntoIterator<Item = impl AsRef<str>>,
-        multiline_comments: Option<(&str, &str)>,
+        multiline_comments: &[(&str, &str)],
         keywords: impl IntoIterator<Item = Keyword>) -> Self
     {
-        let (start, end) = multiline_comments.unzip();
         Language {
             name : name.as_ref().to_owned(),
             extensions : owned_strings(extensions),
             string_symbols : owned_strings(string_symbols),
+            multiline_strings : Vec::new(),
             comment_symbols : owned_strings(comment_symbols),
-            multiline_comment_start_symbol : start.map(str::to_owned),
-            multiline_comment_end_symbol : end.map(str::to_owned),
+            multiline_comments : multiline_comments.iter()
+                    .map(|(start, end)| ((*start).to_owned(), (*end).to_owned())).collect(),
             keywords : keywords.into_iter().collect(),
             scan_plan : OnceLock::new()
         }
     }
 
-    pub fn get_multiline_start_len(&self) -> usize {
-        if let Some(x) = &self.multiline_comment_start_symbol {
-            x.len()
-        } else {
-            0
-        }
+    pub fn with_multiline_strings(mut self, symbols: &[&str]) -> Self {
+        self.multiline_strings.extend(symbols.iter()
+                .map(|x| ((*x).to_owned(), (*x).to_owned())));
+        self
     }
 
-    pub fn get_multiline_end_len(&self) -> usize {
-        if let Some(x) = &self.multiline_comment_end_symbol {
-            x.len()
-        } else {
-            0
-        }
+    pub fn with_string_pairs(mut self, pairs: &[(&str, &str)]) -> Self {
+        self.multiline_strings.extend(pairs.iter()
+                .map(|(open, close)| ((*open).to_owned(), (*close).to_owned())));
+        self
     }
 
     pub fn supports_multiline_comments(&self) -> bool {
-        self.multiline_comment_start_symbol.is_some()
+        !self.multiline_comments.is_empty()
+    }
+
+    // The scan numbers every string symbol of a language in one sequence, the single line ones
+    // first and the crossing ones after them, which is the order the plan is built in.
+    pub(crate) fn get_string_pair_of(&self, symbol: u8) -> (&str, &str) {
+        match self.string_symbols.get(symbol as usize) {
+            Some(single) => (single, single),
+            None => {
+                let (open, close) = &self.multiline_strings[symbol as usize - self.string_symbols.len()];
+                (open, close)
+            }
+        }
+    }
+
+    pub(crate) fn string_crosses_lines(&self, symbol: u8) -> bool {
+        symbol as usize >= self.string_symbols.len()
     }
 }
 
@@ -65,9 +84,9 @@ impl PartialEq for Language {
         self.name == other.name
             && self.extensions == other.extensions
             && self.string_symbols == other.string_symbols
+            && self.multiline_strings == other.multiline_strings
             && self.comment_symbols == other.comment_symbols
-            && self.multiline_comment_start_symbol == other.multiline_comment_start_symbol
-            && self.multiline_comment_end_symbol == other.multiline_comment_end_symbol
+            && self.multiline_comments == other.multiline_comments
             && self.keywords == other.keywords
     }
 }

@@ -5,7 +5,10 @@ Extensions
 jl
 
 String symbols
-""" "
+"
+
+Multi line string symbols
+"""
 
 Comment symbols
 #

@@ -7,6 +7,9 @@ dart
 String symbols
 " '
 
+Multi line string symbols
+""" '''
+
 Comment symbols
 //
 Multi line comment start

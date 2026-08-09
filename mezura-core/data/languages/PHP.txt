@@ -5,6 +5,8 @@ Extensions
 php
 
 String symbols
+
+Multi line string symbols
 " '
 
 Comment symbols

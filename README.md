@@ -901,19 +901,29 @@ Extensions
 <name of file extensions like cpp hpp or py, separated by whitespace>
 
 String symbols
-<one or more string symbols, separated by whitespace, like: " ' >
+<string symbols whose string ends at the end of the line, separated by whitespace, like: " ' >
+<the value may be left empty, for a language whose quotes are not strings at all, like HTML>
 
 Comment symbols
 <one or more single line comment symbols, separated by whitespace, like: // # >
 
 ```
-All the following lines are optional and can be omitted. You can also specify an arbitrary amount of keywords.
+All the following lines are optional and can be omitted. You can also specify an arbitrary amount of keywords. A string symbol goes in exactly one of the three string lists.
 ```
+Multi line string symbols
+<string symbols whose string crosses lines, separated by whitespace, like: """ ` >
+
+String symbol openers
+<openers of strings whose closer is a different symbol, like: r#" >
+
+String symbol closers
+<their closers, one per opener and in the same order, like: "# >
+
 Multi line comment start
-<a symbol like: /*>
+<one or more block comment openers, separated by whitespace, like: { (* >
 
 Multi line comment end
-<a symbol like: */>
+<their closers, one per opener and in the same order, like: } *) >
 
 Keyword
     NAME
@@ -941,11 +951,11 @@ With that said, it is important to mention the following limitations:
 
 - If a target path contains another target path, the contained one is dropped, so that its files are not counted twice. A symbolic link (or a Windows junction) that the scan comes across is not followed, for the same reason: whatever it points at would be counted a second time through it. The same goes for one that a glob pattern matched, since those are found by the program rather than named by you. One that you name as a target yourself is followed, since that is what you asked for. Hard links are the case that stays: they are indistinguishable from an ordinary file, so the same content reached through two of them is counted twice.
 
-- The program assumes that if a line contains any odd number of the same string symbol, then this is an open multiline string, and only the symbol that opened a string can close it. This is why a language that has a distinct multiline string delimiter should declare it: Python declares ```"""``` and ```'''``` alongside ```"``` and ```'```, so a docstring that contains a single quote is read correctly. A language whose multiline strings cannot be written as a delimiter (a Rust ```r#"..."#```, a PHP heredoc, a C# verbatim string) still falls back to the odd-count assumption, which is right for most code and can miscount a line that deliberately breaks it.
+- A string opened by a symbol from the plain ```String symbols``` list ends at the end of its line, so an unbalanced quote costs that one line instead of everything below it. Only a symbol declared under ```Multi line string symbols``` carries a string across lines, and only the symbol that opened a string can close it: Python declares ```"""``` and ```'''``` crossing beside its plain ```"``` and ```'```, so a docstring containing a single quote is read correctly. A language whose plain string may legally span lines declares it crossing (Rust, Ruby, the shells, PHP, SQL and their kin), and there an unbalanced quote still reads the rest of the file as string content, since the program cannot know it was a mistake.
 
-- A language can declare only one multiline comment start symbol and one multiline comment end symbol in the .txt, however many string and single line comment symbols it declares.
+- Block comments do not nest: the first closing symbol ends the block. In a language where the same pair may nest inside itself (D's ```/+ +/```, Rust, Haskell, OCaml), everything after the first closer of a nested comment counts as code until the outer one turns up.
 
-- A string symbol is one symbol that both opens and closes, so a language whose string opens with one symbol and closes with another cannot declare it. That covers the Rust ```r#"..."#```, the C# ```@"..."```, the PowerShell here-string and the shell and PHP heredocs, whose terminator the programmer chooses anyway. In practice these forms contain the ordinary quote at both ends, so the odd-count rule above still opens and closes them correctly, and only a body with an odd number of quotes inside is miscounted.
+- A delimiter the programmer invents per string cannot be declared: a shell or PHP heredoc and the PowerShell here-string fall back to the ordinary quote rules, and so does any delimiter that varies in length, like Rust's ```r##"..."##``` and beyond or Lua's ```--[==[```. A fixed pair is declarable: Rust ships ```r"``` and ```r#"``` with their closers and C# ships ```@"``` with ```"```, and inside such a pair the backslash does not escape, which is what those raw forms mean. Every declared pair costs the scan a little work at every quote of the language, which is why Rust stops at the one-hash form.
 
 - Extensions are matched without regard to case, so a file named ```MAIN.RS``` is counted as Rust, and so is one named ```main.rs```. The one thing this loses is the Unix convention where an upper case ```.C``` means C++ while ```.c``` means C: to mezura they are the same extension.
 

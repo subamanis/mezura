@@ -71,7 +71,7 @@ fn a_language_of_my_own_is_counted_under_the_name_it_carries() {
         threads: Threads::new(1, 1),
         ..EngineConfig::new([root.to_string_lossy().replace('\\', "/")])
     };
-    let mine = mezura_core::Language::new("PetrosLang", ["pal"], ["\""], ["//"], None,
+    let mine = mezura_core::Language::new("PetrosLang", ["pal"], ["\""], ["//"], &[],
             [mezura_core::Keyword::new("bindings", ["let"])]);
 
     let (languages, _) = Languages::resolve(&config, [mine], &HashMap::new());
@@ -171,8 +171,8 @@ fn two_spellings_of_one_name_are_reported_and_force_lang_still_picks_the_one_it_
     std::fs::write(root.join("a.pal"), "/* only a comment */\n").unwrap();
 
     // Identical but for the multiline comment, which is what makes the one line count differently
-    let capital = mezura_core::Language::new("Pal", ["pal"], ["\""], ["//"], Some(("/*", "*/")), []);
-    let lower = mezura_core::Language::new("pal", ["pal"], ["\""], ["//"], None, []);
+    let capital = mezura_core::Language::new("Pal", ["pal"], ["\""], ["//"], &[("/*", "*/")], []);
+    let lower = mezura_core::Language::new("pal", ["pal"], ["\""], ["//"], &[], []);
 
     let counted_forcing = |wanted: &str| {
         let config = EngineConfig {

@@ -5,14 +5,16 @@ Extensions
 d di
 
 String symbols
+
+Multi line string symbols
 " `
 
 Comment symbols
 //
 Multi line comment start
-/*
+/* /+
 Multi line comment end
-*/
+*/ +/
 
 Keyword
 NAME

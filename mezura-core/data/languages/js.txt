@@ -5,7 +5,10 @@ Extensions
 js mjs cjs
 
 String symbols
-" ' `
+" '
+
+Multi line string symbols
+`
 
 Comment symbols
 //

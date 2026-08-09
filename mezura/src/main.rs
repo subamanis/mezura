@@ -908,8 +908,8 @@ third
     }
 
     fn java_and_csharp() -> Vec<Language> {
-        vec![Language::new("Java", [""; 0], ["\""], [""; 0], None, []),
-             Language::new("C#", [""; 0], ["\""], [""; 0], None, [])]
+        vec![Language::new("Java", [""; 0], ["\""], [""; 0], &[], []),
+             Language::new("C#", [""; 0], ["\""], [""; 0], &[], [])]
     }
 
     // The counterpart of this, that the list really is narrowed, is asserted next to the run, which
@@ -936,7 +936,7 @@ third
     #[test]
     fn a_language_declared_by_two_files_is_suggested_once() {
         let mut available = java_and_csharp();
-        available.push(Language::new("Java", [""; 0], ["\""], [""; 0], None, []));
+        available.push(Language::new("Java", [""; 0], ["\""], [""; 0], &[], []));
 
         let report = report_unknown_languages(&available, &["jaava".to_owned(), "C#".to_owned()])
                 .unwrap().expect("a misspelling was not reported at all");

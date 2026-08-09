@@ -1149,9 +1149,9 @@ mod tests {
     // deciding to, and the line that took that job over had nothing asserting it.
     #[test]
     fn a_language_declared_by_two_files_is_listed_once() {
-        let twice = vec![Language::new("Java", ["java"], ["\""], ["//"], None, []),
-                Language::new("Rust", ["rs"], ["\""], ["//"], None, []),
-                Language::new("Java", ["jav"], ["\""], ["//"], None, [])];
+        let twice = vec![Language::new("Java", ["java"], ["\""], ["//"], &[], []),
+                Language::new("Rust", ["rs"], ["\""], ["//"], &[], []),
+                Language::new("Java", ["jav"], ["\""], ["//"], &[], [])];
         let listed = format_supported_languages_message(&twice);
 
         assert_eq!(1, listed.matches("Java").count(), "'Java' was listed more than once:\n{listed}");

@@ -5,6 +5,8 @@ Extensions
 scm ss
 
 String symbols
+
+Multi line string symbols
 "
 
 Comment symbols

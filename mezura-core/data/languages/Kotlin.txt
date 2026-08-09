@@ -5,7 +5,10 @@ Extensions
 kt kts
 
 String symbols
-""" "
+"
+
+Multi line string symbols
+"""
 
 Comment symbols
 //

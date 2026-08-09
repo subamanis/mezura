@@ -5,6 +5,8 @@ Extensions
 pl pm
 
 String symbols
+
+Multi line string symbols
 " '
 
 Comment symbols
