@@ -8,7 +8,7 @@ use mezura_core::engine::config::{MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_
 
 use super::config_manager::{self, ConfigurationBuilder};
 use super::config_manager::{MAX_COMPARE_LEVEL, MIN_COMPARE_LEVEL};
-use super::error_colors::Formatted;
+use super::message_printer::{Formatted, wrap_message};
 use super::theme_files;
 use crate::paths::{DEFAULT_CONFIG_NAME, PERSISTENT_APP_PATHS};
 
@@ -24,9 +24,9 @@ pub enum ConfigFileParseError {
 impl Formatted for ConfigFileParseError {
     fn format(&self) -> ColoredString {
         match self {
-            Self::FileNotFound(x) => format!("'{x}' config file not found, defaults will be used.").yellow(),
-            Self::UnreadableLine(file, line, UnreadableCause::NotUtf8) => format!("Configuration '{file}' stops being readable at line {line}, so none of it was used: the file is not saved as UTF-8.").red(),
-            Self::UnreadableLine(file, line, UnreadableCause::Io(error)) => format!("Configuration '{file}' could not be read past line {line}, so none of it was used: {error}").red(),
+            Self::FileNotFound(x) => wrap_message(&format!("'{x}' config file not found, defaults will be used.")).yellow(),
+            Self::UnreadableLine(file, line, UnreadableCause::NotUtf8) => wrap_message(&format!("Configuration '{file}' stops being readable at line {line}, so none of it was used: the file is not saved as UTF-8.")).red(),
+            Self::UnreadableLine(file, line, UnreadableCause::Io(error)) => wrap_message(&format!("Configuration '{file}' could not be read past line {line}, so none of it was used: {error}")).red(),
         }
     }
 }

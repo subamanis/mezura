@@ -6,7 +6,7 @@ use colored::Color;
 use mezura_core::{EngineConfig, Target, Threads};
 use mezura_core::engine::config::{MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE};
 
-use super::error_colors::Formatted;
+use super::message_printer::{Formatted, wrap_message};
 use super::{message_printer, suggestions, theme::Theme};
 
 // Printed at startup and by '--version'. Also in mezura/Cargo.toml, and the two move together.
@@ -461,10 +461,10 @@ pub enum ArgParsingError {
 impl Formatted for ArgParsingError {
     fn format(&self) -> ColoredString {
         match self {
-            Self::UnparsableWorkingDir => "The current working dir could not be parsed as target dir, try inputing it manually.".red(),
-            Self::InvalidPath(p) => format!("Path provided is not a valid directory or file:\n'{p}'.").red(),
-            Self::InvalidPathInConfig(dir,name) => format!("Specified path '{dir}', in config '{name}', doesn't exist anymore.").red(),
-            Self::DoublePath => "Directories already provided as first argument, but --dirs command also found.".red(),
+            Self::UnparsableWorkingDir => wrap_message("The current working dir could not be parsed as target dir, try inputing it manually.").red(),
+            Self::InvalidPath(p) => wrap_message(&format!("Path provided is not a valid directory or file:\n'{p}'.")).red(),
+            Self::InvalidPathInConfig(dir,name) => wrap_message(&format!("Specified path '{dir}', in config '{name}', doesn't exist anymore.")).red(),
+            Self::DoublePath => wrap_message("Directories already provided as first argument, but --dirs command also found.").red(),
             // Only the mistake is red. What to do about it is not an error, it is the way out.
             Self::UnrecognisedCommand(p) => {
                 let tail = suggestions::formatted_suggestion(p, &message_printer::get_command_names())
@@ -472,10 +472,10 @@ impl Formatted for ArgParsingError {
                 let error = format!("--{p} is not recognised as a command.").red();
                 ColoredString::from(format!("{error}\n\n{tail}").as_str())
             },
-            Self::IncorrectCommandArgs(p) => format!("Incorrect arguments provided for the command '--{p}'.").red(),
-            Self::UnreadableConfig(name, line, super::config_files::UnreadableCause::NotUtf8) => format!("Configuration '{name}' stops being readable at line {line}, so none of it was used: the file is not saved as UTF-8.").red(),
-            Self::UnreadableConfig(name, line, super::config_files::UnreadableCause::Io(error)) => format!("Configuration '{name}' could not be read past line {line}, so none of it was used: {error}").red(),
-            Self::UnexpectedCommandArgs(p) => format!("Command '--{p}' does not expect any arguments.").red(),
+            Self::IncorrectCommandArgs(p) => wrap_message(&format!("Incorrect arguments provided for the command '--{p}'.")).red(),
+            Self::UnreadableConfig(name, line, super::config_files::UnreadableCause::NotUtf8) => wrap_message(&format!("Configuration '{name}' stops being readable at line {line}, so none of it was used: the file is not saved as UTF-8.")).red(),
+            Self::UnreadableConfig(name, line, super::config_files::UnreadableCause::Io(error)) => wrap_message(&format!("Configuration '{name}' could not be read past line {line}, so none of it was used: {error}")).red(),
+            Self::UnexpectedCommandArgs(p) => wrap_message(&format!("Command '--{p}' does not expect any arguments.")).red(),
             Self::NonExistantConfig(p) => {
                 let names = super::config_files::read_names_in_dir(&crate::paths::PERSISTENT_APP_PATHS.config_dir);
                 let tail = suggestions::formatted_suggestion(p, &names.iter().map(String::as_str).collect::<Vec<_>>())
@@ -490,14 +490,14 @@ impl Formatted for ArgParsingError {
                 let error = format!("Theme '{p}' was not found, or could not be read.").red();
                 ColoredString::from(format!("{error}\n\n{tail}").as_str())
             },
-            Self::InvalidStyle(p) => p.clone().red(),
-            Self::InvalidHideTarget(p) => format!("'{p}' is not something that can be hidden.\nThe options are: {}.", Hidden::format_names()).red(),
-            Self::InvalidValueInConfig(cmd,conf) => format!("Invalid value for the command '--{cmd}', in config '{conf}'.\nFix the value in the config file, or override it by providing a valid '--{cmd}' argument.").red(),
-            Self::InvalidGlobPattern(p) => format!("'{p}' is not a valid glob pattern.").red(),
-            Self::NoGlobMatches(p) => format!("The pattern '{p}' did not match any existing directory or file.").red(),
-            Self::AllGlobMatchesIgnored(p) => format!("Everything that the pattern '{p}' matched is skipped, because a .gitignore file ignores it, because it is a dotted path, or because it is a link.\nUse the '--no-gitignore' or '--search-in-dotted' commands to include it, or provide the paths explicitly.").red(),
-            Self::MalformedTarget(p) => format!("'{p}' names a module with no path after it.\nA target is written as '<module>=<path>', and its paths are separated by commas: 'tests=./api/tests,./web/tests'.").red(),
-            Self::ContestedTarget(path, first, second) => format!("'{path}' is declared both as '{first}' and as '{second}'.\nEvery file belongs to exactly one module, and there is no more specific of the two to decide it.").red()
+            Self::InvalidStyle(p) => wrap_message(p).red(),
+            Self::InvalidHideTarget(p) => wrap_message(&format!("'{p}' is not something that can be hidden.\nThe options are: {}.", Hidden::format_names())).red(),
+            Self::InvalidValueInConfig(cmd,conf) => wrap_message(&format!("Invalid value for the command '--{cmd}', in config '{conf}'.\nFix the value in the config file, or override it by providing a valid '--{cmd}' argument.")).red(),
+            Self::InvalidGlobPattern(p) => wrap_message(&format!("'{p}' is not a valid glob pattern.")).red(),
+            Self::NoGlobMatches(p) => wrap_message(&format!("The pattern '{p}' did not match any existing directory or file.")).red(),
+            Self::AllGlobMatchesIgnored(p) => wrap_message(&format!("Everything that the pattern '{p}' matched is skipped, because a .gitignore file ignores it, because it is a dotted path, or because it is a link.\nUse the '--no-gitignore' or '--search-in-dotted' commands to include it, or provide the paths explicitly.")).red(),
+            Self::MalformedTarget(p) => wrap_message(&format!("'{p}' names a module with no path after it.\nA target is written as '<module>=<path>', and its paths are separated by commas: 'tests=./api/tests,./web/tests'.")).red(),
+            Self::ContestedTarget(path, first, second) => wrap_message(&format!("'{path}' is declared both as '{first}' and as '{second}'.\nEvery file belongs to exactly one module, and there is no more specific of the two to decide it.")).red()
         }
     }
 }

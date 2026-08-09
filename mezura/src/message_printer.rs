@@ -1,15 +1,17 @@
 use std::fs;
 
-use colored::Colorize;
-use mezura_core::Language;
-use mezura_core::language_file::FaultyLanguageFile;
+use colored::{ColoredString, Colorize};
+use mezura_core::{Language, RunError};
+use mezura_core::language_file::{FaultyLanguageFile, LanguageDirParseError};
 
 use super::config_manager::*;
-use super::error_colors::Formatted;
 use crate::paths::PERSISTENT_APP_PATHS;
 
 // The file itself, so that the command never depends on an installation having a copy of it.
 static CHANGELOG_BYTES : &[u8] = include_bytes!("../Changelog");
+// Wide enough for a sentence to read as one, narrow enough that a terminal is unlikely to break it
+// somewhere of its own choosing, which is what a message wider than the window looks like
+const MESSAGE_WIDTH : usize = 110;
 
 // These constants need to be maintained along with the readme's commands
 pub const DIRS_HELP  :  &str =
@@ -610,10 +612,12 @@ pub const STYLE_HELP  :  &str =
                                and not this one gets the same style here, since the two
                                never appear together
 
+    A figure that moved, in the history section and in a '--diff' comparison alike:
+      change-up                an increase
+      change-down              a decrease
+      change-same              no change
+
     The history section, which compares this run with the ones before it:
-      history-up               an increase
-      history-down             a decrease
-      history-same             no change
       history-entry            the '->' of an entry
       history-modified         the word 'modified:' on an entry counted with other settings
       history-modified-field   the names of the settings that changed since that entry
@@ -822,6 +826,48 @@ pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 6] = [
         (CHANGELOG, CHANGELOG_HELP),
     ]),
 ];
+
+// The library gives its errors a plain 'Display'; this is the same text as this program says it,
+// in its colors and broken to a width a person reads comfortably.
+pub trait Formatted {
+    fn format(&self) -> ColoredString;
+}
+
+impl Formatted for RunError {
+    fn format(&self) -> ColoredString {
+        crate::theme::get_active().warning.paint(&wrap_message(&self.to_string()))
+    }
+}
+
+impl Formatted for LanguageDirParseError {
+    fn format(&self) -> ColoredString {
+        wrap_message(&format!("Error: {self}")).red()
+    }
+}
+
+// Broken between words and never inside one, and a line that was already short is left alone. Lines
+// the message wrote itself are kept, so a message that laid itself out is not laid out twice.
+pub fn wrap_message(message: &str) -> String {
+    message.split('\n').map(wrap_one_line).collect::<Vec<_>>().join("\n")
+}
+
+fn wrap_one_line(line: &str) -> String {
+    let mut wrapped = String::with_capacity(line.len());
+    let mut column = 0;
+    for word in line.split(' ') {
+        if column > 0 && column + 1 + word.chars().count() > MESSAGE_WIDTH {
+            wrapped.push('\n');
+            column = 0;
+        } else if column > 0 {
+            wrapped.push(' ');
+            column += 1;
+        }
+        wrapped.push_str(word);
+        column += word.chars().count();
+    }
+
+    wrapped
+}
 
 // Used both by the full help and by the test that writes the README's command list, so that the two
 // cannot describe the same commands differently or in a different order
@@ -1076,6 +1122,27 @@ fn get_help_msg_of_command(command: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_message_wraps_between_words_and_keeps_the_breaks_it_had() {
+        let short = "'x' is not a valid glob pattern.";
+        assert_eq!(short, wrap_message(short));
+
+        let long = "Everything that the pattern 'services/*' matched is skipped, because a .gitignore file \
+                ignores it, because it is a dotted path, or because it is a link.\nUse the '--no-gitignore' \
+                or '--search-in-dotted' commands to include it, or provide the paths explicitly.";
+        let wrapped = wrap_message(long);
+        for line in wrapped.lines() {
+            assert!(line.chars().count() <= MESSAGE_WIDTH, "'{line}' is {} columns", line.chars().count());
+        }
+        // the words survive whole and in order, and the two sentences still start on their own lines
+        assert_eq!(long.split_whitespace().collect::<Vec<_>>(), wrapped.split_whitespace().collect::<Vec<_>>());
+        assert!(wrapped.lines().any(|x| x.starts_with("Use the '--no-gitignore'")));
+
+        // a word longer than the width has nowhere to break, so it goes out whole on its own line
+        let path = "a/".repeat(MESSAGE_WIDTH);
+        assert_eq!(format!("see\n{path}"), wrap_message(&format!("see {path}")));
+    }
 
     // An installation holding two files that declare one language is one language however many
     // files describe it. The list used to arrive as a map, which deduplicated it without anybody

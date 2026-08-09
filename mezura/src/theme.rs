@@ -280,9 +280,10 @@ theme_tokens! {
     language_4        => "language-4",        Style::of(Color::TrueColor { r: 106, g: 217, b: 189 });
     language_others   => "language-others",   Style::of(Color::TrueColor { r: 215, g: 201, b: 240 });
 
-    history_up       => "history-up",        Style::of(Color::TrueColor { r: 201, g: 255, b: 189 });
-    history_down     => "history-down",      Style::of(Color::TrueColor { r: 219, g: 129, b: 129 });
-    history_same     => "history-same",      Style::of(Color::TrueColor { r: 255, g: 255, b: 255 });
+    // A figure that moved, wherever one is shown: the history section and a '--diff' comparison
+    change_up       => "change-up",         Style::of(Color::TrueColor { r: 201, g: 255, b: 189 });
+    change_down     => "change-down",       Style::of(Color::TrueColor { r: 219, g: 129, b: 129 });
+    change_same     => "change-same",       Style::of(Color::TrueColor { r: 255, g: 255, b: 255 });
     history_entry    => "history-entry",     Style::plain().bold();
     // Two tokens and not one per setting: the word is the flag, the names are the detail
     history_modified => "history-modified",  Style::of(Color::Yellow);

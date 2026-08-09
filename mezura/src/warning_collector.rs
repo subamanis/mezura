@@ -12,7 +12,8 @@ static EMITTED : OnceLock<Mutex<Vec<Warning>>> = OnceLock::new();
 // things about the same warning.
 pub fn emit(warning: Warning) {
     let warning = add_advice_to(warning);
-    eprintln!("\n{}", super::theme::get_active().warning.paint(&warning.message));
+    eprintln!("\n{}", super::theme::get_active().warning
+            .paint(&super::message_printer::wrap_message(&warning.message)));
     emitted().lock().unwrap().push(warning);
 }
 

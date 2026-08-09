@@ -18,10 +18,10 @@ Main changes:
       "data/replaced/<version>/" and the program names it, so you can carry your changes over.
       A language file of your own is never touched, and neither are your themes, your default
       configuration or "extension_priority.txt".
-  -> 32 new languages: Objective-C, MATLAB, Lua, Perl, Prolog, Pascal, Delphi, OCaml, F#, Elm,
+  -> 34 new languages: Objective-C, MATLAB, Lua, Perl, Prolog, Pascal, Delphi, OCaml, F#, Elm,
       Clojure, Lisp, Scheme, Julia, D, Carbon, COBOL, Fortran, Ada, VHDL, Erlang, GraphQL,
-      PowerShell, Svelte, JSX, WebAssembly text, Assembly, and the shader languages HLSL, GLSL,
-      WGSL, Metal and Slang.
+      PowerShell, Svelte, JSX, WebAssembly text, Assembly, GDScript, and the shader languages
+      HLSL, GLSL, WGSL, Metal, Slang and ShaderLab.
   -> Objective-C takes ".m" and Perl takes ".pl", while ".h" stays with C Header. If you write
       MATLAB or Prolog instead, or want your headers counted as Objective-C, swap the line for it
       in "extension_priority.txt", or run with "--force-lang m=matlab".
@@ -169,6 +169,10 @@ Change in commands:
       one setting that changes the numbers and was not being written down.
   -> A size in bytes is printed as a whole number now, "900 Bytes" instead of "900.0 Bytes". Only a
       figure that was divided down to KBs, MBs or GBs has a decimal.
+  -> A language whose keywords are all zero no longer takes a row in the keywords section: it only
+      ever said that the language has keywords your code never wrote.
+  -> A long warning or error is broken between words instead of wherever the terminal happens to
+      end the line.
   -> 'details-language' is split in two: 'details-language-header' is the word "Language" over the
       first column of the two tables, 'details-language-name' is the name of a language wherever it
       appears. The header now reads like the other six instead of standing out on its own.

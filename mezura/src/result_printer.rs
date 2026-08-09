@@ -650,9 +650,9 @@ fn format_change(before: usize, now: usize) -> String {
 // a comparison are that, and they are there to be read past rather than read.
 fn paint_change(theme: &Theme, before: usize, now: usize, text: &str) -> String {
     match now.cmp(&before) {
-        std::cmp::Ordering::Greater => theme.history_up.paint(text).to_string(),
-        std::cmp::Ordering::Less => theme.history_down.paint(text).to_string(),
-        std::cmp::Ordering::Equal => theme.history_same.clone().dim().paint(text).to_string()
+        std::cmp::Ordering::Greater => theme.change_up.paint(text).to_string(),
+        std::cmp::Ordering::Less => theme.change_down.paint(text).to_string(),
+        std::cmp::Ordering::Equal => theme.change_same.clone().dim().paint(text).to_string()
     }
 }
 
@@ -1240,8 +1240,13 @@ fn format_keyword_block_lines(theme: &Theme, groups: &[Group]) -> Vec<String> {
     let rows = groups.iter().map(|group| (group, group.languages.iter().filter_map(|name| {
             // A language that only the baseline had has no row here at all, having no keywords now
             let was = group.baseline.and_then(|x| x.get(name)).map(|x| &x.keyword_occurences);
-            let keywords = get_keywords_as_str(theme, &group.per_language.get(name).unwrap().keyword_occurences,
-                    was, 0, usize::MAX);
+            let occurrences = &group.per_language.get(name).unwrap().keyword_occurences;
+            // Nothing but zeros says only that the language declares keywords this code never
+            // wrote. A zero that moved keeps its row, the movement being the whole point of it.
+            if occurrences.values().all(|x| *x == 0) && was.is_none_or(|x| x.values().all(|y| *y == 0)) {
+                return None;
+            }
+            let keywords = get_keywords_as_str(theme, occurrences, was, 0, usize::MAX);
             if keywords.is_empty() {None} else {Some((name, keywords))}
         }).collect::<Vec<_>>())).filter(|(_, rows)| !rows.is_empty()).collect::<Vec<_>>();
 
@@ -1579,11 +1584,11 @@ fn format_module_comparison_lines(entry: &super::log::LogEntry, groups: &[Group]
 fn paint_percentage(percentage: &str) -> ColoredString {
     let theme = super::theme::get_active();
     if percentage.starts_with('+') {
-        theme.history_up.paint(percentage)
+        theme.change_up.paint(percentage)
     } else if percentage.starts_with('-') {
-        theme.history_down.paint(percentage)
+        theme.change_down.paint(percentage)
     } else {
-        theme.history_same.paint(percentage)
+        theme.change_same.paint(percentage)
     }
 }
 

@@ -15,7 +15,6 @@ mod args;
 mod config_files;
 mod config_manager;
 mod diff;
-mod error_colors;
 mod git;
 mod json_printer;
 mod json_reader;
@@ -40,7 +39,7 @@ use mezura_core::{EXTENSION_PRIORITY_FILE_NAME, FilesPresent, Language};
 use crate::config_manager::{Configuration, OutputFormat};
 use crate::config_manager::{CHANGELOG, HELP, LAYOUT, OUTPUT, RESTORE, SHOW_CONFIGS,
         SHOW_LANGUAGES, SHOW_THEMES, THEME_EDITOR, VERSION, VERSION_ID};
-use crate::error_colors::Formatted;
+use crate::message_printer::Formatted;
 use crate::paths::{CONFIG_DIR_NAME, DEFAULT_CONFIG_NAME, LANGUAGES_DIR_NAME, LOGS_DIR_NAME,
         MANIFEST_FILE_NAME, REPLACED_DIR_NAME, THEMES_DIR_NAME};
 
@@ -195,7 +194,7 @@ fn main() -> ExitCode {
                     ExitCode::SUCCESS
                 },
                 Err(complaint) => {
-                    eprintln!("\n{}\n", crate::theme::get_active().error.paint(&complaint));
+                    eprintln!("\n{}\n", crate::theme::get_active().error.paint(&crate::message_printer::wrap_message(&complaint)));
                     ExitCode::FAILURE
                 }
             };
@@ -203,7 +202,7 @@ fn main() -> ExitCode {
         Ok(Some(crate::diff::DiffRequest::AgainstThisRun(baseline_only))) => Some(baseline_only),
         Ok(None) => None,
         Err(complaint) => {
-            eprintln!("\n{}\n", crate::theme::get_active().error.paint(&complaint));
+            eprintln!("\n{}\n", crate::theme::get_active().error.paint(&crate::message_printer::wrap_message(&complaint)));
             return ExitCode::FAILURE;
         }
     };
@@ -215,7 +214,7 @@ fn main() -> ExitCode {
     let counted_baseline = match baseline_only.map(|x| x.count_baseline(&config, &extension_priority)) {
         Some(Ok(x)) => Some(x),
         Some(Err(complaint)) => {
-            eprintln!("\n{}\n", crate::theme::get_active().error.paint(&complaint));
+            eprintln!("\n{}\n", crate::theme::get_active().error.paint(&crate::message_printer::wrap_message(&complaint)));
             return ExitCode::FAILURE;
         },
         None => None

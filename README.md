@@ -411,10 +411,12 @@ HOW THE REPORT LOOKS
                                and not this one gets the same style here, since the two
                                never appear together
 
+    A figure that moved, in the history section and in a '--diff' comparison alike:
+      change-up                an increase
+      change-down              a decrease
+      change-same              no change
+
     The history section, which compares this run with the ones before it:
-      history-up               an increase
-      history-down             a decrease
-      history-same             no change
       history-entry            the '->' of an entry
       history-modified         the word 'modified:' on an entry counted with other settings
       history-modified-field   the names of the settings that changed since that entry
