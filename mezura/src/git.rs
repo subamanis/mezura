@@ -88,7 +88,7 @@ pub fn find_common_repository_of(paths: &[String]) -> Result<String, GitError> {
 // What a revision name answers to before anything is written out: the repository it lives in, the
 // commit it is today, and when that commit was made. The name can answer differently a moment
 // later, 'HEAD' moves, so everything that acts on the revision takes this and never resolves again.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ResolvedRevision {
     pub repository: String,
     pub revision: String,
@@ -113,15 +113,7 @@ pub fn resolve_revision(repository: &str, revision: &str) -> Result<ResolvedRevi
 // ended, and a run that was killed before that is swept by the next one.
 pub struct Checkout {
     pub path: String,
-    // The full hash the revision resolved to. 'HEAD' names a different commit next week, so what
-    // was asked for identifies nothing later, and this is the one thing that does.
-    pub commit: String,
-    // When the commit was made, which is when this reading was taken: the files in here are that
-    // moment, whatever the clock says while they are being counted
-    pub taken_at: String,
-    // As it was asked for, which is the name a message about this checkout goes by
-    revision: String,
-    repository: String
+    pub resolved: ResolvedRevision
 }
 
 impl Checkout {
@@ -140,11 +132,11 @@ impl Checkout {
 // the temporary directory half there.
 impl Drop for Checkout {
     fn drop(&mut self) {
-        let (repository, path) = (self.repository.clone(), self.path.clone());
+        let (repository, path) = (self.resolved.repository.clone(), self.path.clone());
         match std::thread::Builder::new().name("checkout-removal".to_owned())
                 .spawn(move || remove_worktree(&repository, &path)) {
-            Ok(handle) => PENDING_REMOVALS.lock().unwrap().push((self.revision.clone(), handle)),
-            Err(_) => remove_worktree(&self.repository, &self.path)
+            Ok(handle) => PENDING_REMOVALS.lock().unwrap().push((self.resolved.revision.clone(), handle)),
+            Err(_) => remove_worktree(&self.resolved.repository, &self.path)
         }
     }
 }
@@ -175,10 +167,9 @@ pub fn checkout(resolved: &ResolvedRevision) -> Result<Checkout, GitError> {
     let path = std::env::temp_dir().join(CHECKOUT_PREFIX.to_owned() + &resolved.commit[..resolved.commit.len().min(12)]
             + "-" + &std::process::id().to_string()).to_string_lossy().replace('\\', "/");
     let _ = std::fs::remove_dir_all(&path);
-    remove_leftover_checkouts(repository);
 
-    // git writes the tree out on one thread unless told otherwise; every core is a measured 2.7x
-    // on the linux kernel, and a git too old to know the option ignores it
+    // git writes the tree out on one thread unless told otherwise, and a git too old to know the
+    // option ignores it, so no version check guards it
     let outcome = Command::new("git").args(["-C", repository, "-c", "checkout.workers=0",
             "worktree", "add", "--detach", "--quiet", &path, &resolved.commit])
             .output().map_err(GitError::NotInstalled)?;
@@ -187,15 +178,16 @@ pub fn checkout(resolved: &ResolvedRevision) -> Result<Checkout, GitError> {
                 message: String::from_utf8_lossy(&outcome.stderr).trim().to_owned() });
     }
 
-    Ok(Checkout { path, commit: resolved.commit.clone(), taken_at: resolved.taken_at.clone(),
-            revision: resolved.revision.clone(), repository: resolved.repository.clone() })
+    Ok(Checkout { path, resolved: resolved.clone() })
 }
 
 // What a killed run left behind: 'prune' alone clears nothing while the directory still exists, so
 // every registration under the temp directory that carries this prefix and another process's pid is
 // removed whole, directory and registration together. Ours is skipped, and the prune afterwards
 // drops whatever registration has already lost its directory, including the one deleted just above.
-fn remove_leftover_checkouts(repository: &str) {
+// Called once per run and never from inside 'checkout': the prune walking the registrations while
+// a parallel write is half registered is the one interference between them.
+pub(crate) fn remove_leftover_checkouts(repository: &str) {
     let ours = format!("-{}", std::process::id());
     let temp = std::env::temp_dir().to_string_lossy().replace('\\', "/").to_lowercase();
     if let Ok(listed) = Command::new("git").args(["-C", repository, "worktree", "list", "--porcelain"]).output() {

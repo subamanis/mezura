@@ -4,6 +4,7 @@
 use std::sync::{LazyLock, OnceLock};
 
 use colored::{Color, ColoredString, Colorize};
+use unicode_width::UnicodeWidthChar;
 
 const LABEL_GOLD: Color = Color::TrueColor { r: 181, g: 169, b: 138 };
 const SIZE_GOLD: Color = Color::TrueColor { r: 125, g: 119, b: 105 };
@@ -443,18 +444,31 @@ pub fn color_to_config_string(color: &Color) -> String {
 // How many columns a painted line takes on the screen. The escape sequences the styles above
 // produce have their bytes in the string and nothing on the screen, so they are skipped.
 pub fn calculate_visible_len(line: &str) -> usize {
-    let mut len = 0;
+    visible_chars(line).count()
+}
+
+// Terminal columns and not characters: CJK and emoji occupy two each, which a character count
+// declares half as wide as they draw. The report keeps counting characters, since its layouts and
+// goldens are built on that; the live lines measure with this, because a revision name is the one
+// user-written text that reaches them.
+pub fn measure_columns(line: &str) -> usize {
+    visible_chars(line).map(|character| character.width().unwrap_or(0)).sum()
+}
+
+fn visible_chars(line: &str) -> impl Iterator<Item = char> + '_ {
     let mut chars = line.chars();
-    while let Some(character) = chars.next() {
-        if character == '\x1b' {
-            for terminator in chars.by_ref() {
-                if terminator == 'm' {break}
+    std::iter::from_fn(move || {
+        while let Some(character) = chars.next() {
+            if character == '\x1b' {
+                for terminator in chars.by_ref() {
+                    if terminator == 'm' {break}
+                }
+            } else {
+                return Some(character);
             }
-        } else {
-            len += 1;
         }
-    }
-    len
+        None
+    })
 }
 
 #[cfg(test)]

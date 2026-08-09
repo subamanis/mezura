@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
-use mezura_core::{Language, Languages, ModuleResult, RunResult, Stats, UNNAMED_MODULE_NAME, render};
+use mezura_core::{EngineConfig, Language, Languages, ModuleResult, RunResult, Stats, UNNAMED_MODULE_NAME, render};
 
 use super::config_manager::{Configuration, Layout, SortCriterion};
 use super::config_manager::{BRACES_AS_CODE, EXCLUDE, EXCLUDE_LANGUAGES, FORCE_LANG, LANGUAGES,
         NO_GITIGNORE, SEARCH_IN_DOTTED};
-use super::git::ResolvedRevision;
 use super::json_reader::{DocumentError, DocumentWarning, Scope};
+use super::sources::RevisionSide;
 
 // The half of a document's warnings that says the numbers themselves may be wrong, as the document
 // spells it
@@ -166,16 +166,14 @@ impl BothSidesNamed {
         let (_, reported) = Languages::resolve(&config.engine, self.languages.clone(), extension_priority);
         super::warning_collector::report_language_resolution_warnings(reported);
 
-        // Both revisions resolve before either is written out, which is where two spellings of one
-        // commit are refused and where a typo in the second side fails at once
-        let revisions = [&self.baseline, &self.subject].into_iter()
-                .filter_map(DiffSide::find_revision_name).collect::<Vec<_>>();
-        let prepared = super::sources::prepare_revisions(&revisions, &config.engine).map_err(|x| x.to_string())?;
+        let [baseline, subject] = <[PreparedSide; 2]>::try_from(
+                prepare_sides(vec![self.baseline, self.subject], &config.engine)?)
+                .ok().expect("two sides in, two sides out");
 
-        let (baseline, notes) = self.baseline.into_reading(&prepared, config, self.languages.clone(), extension_priority)?;
+        let (baseline, notes) = baseline.into_reading(config, self.languages.clone(), extension_priority)?;
         let mut notes_so_far = self.notes_so_far;
         notes_so_far.extend(notes);
-        let (subject, notes) = self.subject.into_reading(&prepared, config, self.languages, extension_priority)?;
+        let (subject, notes) = subject.into_reading(config, self.languages, extension_priority)?;
         notes_so_far.extend(notes);
 
         Ok(Comparison::of(baseline, subject, config, notes_so_far))
@@ -192,10 +190,9 @@ impl BaselineOnly {
     pub fn count_baseline(self, config: &Configuration,
             extension_priority: &HashMap<String, Vec<String>>) -> Result<CountedBaseline, String>
     {
-        let revisions = self.baseline.find_revision_name().into_iter().collect::<Vec<_>>();
-        let prepared = super::sources::prepare_revisions(&revisions, &config.engine).map_err(|x| x.to_string())?;
-
-        let (baseline, notes) = self.baseline.into_reading(&prepared, config, self.languages, extension_priority)?;
+        let [baseline] = <[PreparedSide; 1]>::try_from(prepare_sides(vec![self.baseline], &config.engine)?)
+                .ok().expect("one side in, one side out");
+        let (baseline, notes) = baseline.into_reading(config, self.languages, extension_priority)?;
         let mut notes_so_far = self.notes_so_far;
         notes_so_far.extend(notes);
 
@@ -242,15 +239,39 @@ impl DiffSide {
             DiffSide::Document(_) => None
         }
     }
+}
 
-    fn into_reading(self, prepared: &HashMap<String, ResolvedRevision>, config: &Configuration,
-            languages: Vec<Language>, extension_priority: &HashMap<String, Vec<String>>)
-            -> Result<(Reading, Vec<Note>), String>
+// The same sides after preparation, as their own type so that an unresolved side cannot reach the
+// counting: one enum with all three shapes would give 'into_reading' an arm for the unprepared one
+// that could only panic or quietly resolve on the spot. A revision owns its resolution and the
+// write started ahead; an error path just drops the unread side, which cleans up after itself.
+enum PreparedSide {
+    Document(Box<Reading>),
+    Revision(RevisionSide)
+}
+
+// Every side that is a revision resolves before anything is written out, which is where two
+// spellings of one commit are refused and where a typo in the second side fails at once
+fn prepare_sides(sides: Vec<DiffSide>, engine: &EngineConfig) -> Result<Vec<PreparedSide>, String> {
+    let names = sides.iter().filter_map(DiffSide::find_revision_name).collect::<Vec<_>>();
+    let resolved = super::sources::prepare_revisions(&names, engine).map_err(|x| x.to_string())?;
+    let mut acquiring = super::sources::start_acquiring_revisions(resolved).into_iter();
+
+    Ok(sides.into_iter().map(|side| match side {
+        DiffSide::Document(reading) => PreparedSide::Document(reading),
+        DiffSide::GitRevision(_) => PreparedSide::Revision(acquiring.next()
+                .expect("a resolution for every revision side"))
+    }).collect())
+}
+
+impl PreparedSide {
+    fn into_reading(self, config: &Configuration, languages: Vec<Language>,
+            extension_priority: &HashMap<String, Vec<String>>) -> Result<(Reading, Vec<Note>), String>
     {
         match self {
-            DiffSide::Document(reading) => Ok((*reading, Vec::new())),
-            DiffSide::GitRevision(name) => super::sources::count_git_revision(&prepared[name.as_str()],
-                    config, languages, extension_priority).map_err(|x| x.to_string())
+            PreparedSide::Document(reading) => Ok((*reading, Vec::new())),
+            PreparedSide::Revision(side) => super::sources::count_git_revision(side, config, languages,
+                    extension_priority).map_err(|x| x.to_string())
         }
     }
 }

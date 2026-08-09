@@ -3,12 +3,13 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::thread::JoinHandle;
 
 use mezura_core::{EngineConfig, FilesPresent, Language, ScanProgress};
 
 use super::config_manager::Configuration;
 use super::diff::{Note, Reading};
-use super::git::{GitError, ResolvedRevision};
+use super::git::{Checkout, GitError, ResolvedRevision};
 
 // A file and not merely something that exists: a directory called 'main' beside a branch called
 // 'main' would otherwise be read as a document and fail with an I/O error about permissions.
@@ -20,10 +21,10 @@ pub fn read_document(name: &str) -> Option<Result<Reading, String>> {
 // Every revision of a '--diff' resolves here, before anything is written out: a typo in the second
 // side fails before the first is checked out and counted whole, and two spellings of one commit
 // are refused while both hashes are on hand. Equal commits would also share one checkout path and
-// race each other's background removal on it.
-pub fn prepare_revisions(names: &[&str], engine: &EngineConfig) -> Result<HashMap<String, ResolvedRevision>, GitError> {
+// race each other's background removal on it. Answered in the order asked.
+pub fn prepare_revisions(names: &[&str], engine: &EngineConfig) -> Result<Vec<ResolvedRevision>, GitError> {
     if names.is_empty() {
-        return Ok(HashMap::new());
+        return Ok(Vec::new());
     }
     // The run's own rule for telling a pattern from a folder that carries those characters in its
     // name: what exists exactly as written is always literal
@@ -34,32 +35,74 @@ pub fn prepare_revisions(names: &[&str], engine: &EngineConfig) -> Result<HashMa
     let declared = engine.dirs.iter().map(|x| x.path.clone()).collect::<Vec<_>>();
     let repository = super::git::find_common_repository_of(&declared)?;
 
-    let mut prepared = HashMap::new();
-    for name in names {
-        if !prepared.contains_key(*name) {
-            prepared.insert((*name).to_owned(), super::git::resolve_revision(&repository, name)?);
-        }
-    }
-    if let [first, second] = names[..] && prepared[first].commit == prepared[second].commit {
-        return Err(GitError::SameCommit { first: first.to_owned(), second: second.to_owned(),
-                commit: prepared[first].commit.clone() });
+    let resolved = names.iter().map(|name| super::git::resolve_revision(&repository, name))
+            .collect::<Result<Vec<_>, _>>()?;
+    if let [first, second] = &resolved[..] && first.commit == second.commit {
+        return Err(GitError::SameCommit { first: first.revision.clone(), second: second.revision.clone(),
+                commit: first.commit.clone() });
     }
 
-    Ok(prepared)
+    Ok(resolved)
+}
+
+// One side's acquisition in flight: the resolved revision, and the write started ahead of its turn
+pub struct RevisionSide {
+    resolved: ResolvedRevision,
+    write: Option<JoinHandle<Result<Checkout, GitError>>>
+}
+
+// A side dropped uncounted still joins its write, so a checkout that completed queues its own
+// background removal instead of outliving the run as litter; an error path needs nothing but '?'
+impl Drop for RevisionSide {
+    fn drop(&mut self) {
+        if let Some(write) = self.write.take() {
+            let _ = write.join();
+        }
+    }
+}
+
+// The ground is cleared exactly once, before anything writes: the sweep's prune beside a half
+// registered parallel write is the one interference between them. With two sides both writes start
+// at once and the counting stays serial, so the second hides behind the first side's write and
+// count; a single side, or a thread that cannot spawn, writes inline at its turn.
+pub fn start_acquiring_revisions(resolved: Vec<ResolvedRevision>) -> Vec<RevisionSide> {
+    if let Some(first) = resolved.first() {
+        super::git::remove_leftover_checkouts(&first.repository);
+    }
+    let ahead = resolved.len() >= 2;
+    resolved.into_iter().map(|resolved| {
+        let write = if ahead {
+            let for_thread = resolved.clone();
+            std::thread::Builder::new().name("revision-write".to_owned())
+                    .spawn(move || super::git::checkout(&for_thread)).ok()
+        } else {
+            None
+        };
+        RevisionSide { resolved, write }
+    }).collect()
 }
 
 // The files are written out, the targets are found again inside them, and 'run' does the rest,
 // under this run's settings and this build
-pub fn count_git_revision(resolved: &ResolvedRevision, config: &Configuration, languages: Vec<Language>,
+pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, languages: Vec<Language>,
         extension_priority: &HashMap<String,Vec<String>>) -> Result<(Reading, Vec<Note>), GitError>
 {
-    let git_revision = resolved.revision.as_str();
     // Dropped, and with it erased, before this function returns anything: the whole phase is
     // silent on the permanent output, and the motion is its only sign of life
     let progress = Arc::new(ScanProgress::default());
-    let _live = super::live_progress::start_revision_display(config, git_revision, progress.clone());
+    let _live = super::live_progress::start_revision_display(config, &side.resolved.revision, progress.clone(),
+            side.write.as_ref().is_some_and(|x| x.is_finished()));
 
-    let checkout = super::git::checkout(resolved)?;
+    let checkout = match side.write.take() {
+        Some(write) => match write.join() {
+            Ok(outcome) => outcome?,
+            // A write whose thread died took its error with it; writing again answers instead
+            Err(_) => super::git::checkout(&side.resolved)?
+        },
+        None => super::git::checkout(&side.resolved)?
+    };
+    let resolved = &side.resolved;
+    let git_revision = resolved.revision.as_str();
 
     let mut notes = Vec::new();
     // A checkout holds only what git tracks, so the ignored files exist on the other side alone
@@ -109,7 +152,7 @@ pub fn count_git_revision(resolved: &ResolvedRevision, config: &Configuration, l
         result
     };
 
-    Ok((Reading::of_git_revision(git_revision, checkout.commit.clone(), checkout.taken_at.clone(),
+    Ok((Reading::of_git_revision(git_revision, resolved.commit.clone(), resolved.taken_at.clone(),
             result, &config.engine), notes))
 }
 
@@ -174,7 +217,7 @@ mod tests {
         assert!(matches!(prepare_revisions(&["HEAD", "HEAD"], &engine), Err(GitError::SameCommit { .. })));
 
         let alone = prepare_revisions(&["HEAD"], &engine).unwrap();
-        assert_eq!(head.commit, alone["HEAD"].commit);
+        assert_eq!(head.commit, alone[0].commit);
         assert!(prepare_revisions(&[], &engine).unwrap().is_empty());
     }
 

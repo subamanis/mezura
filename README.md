@@ -572,7 +572,10 @@ TAKING THE RESULT ELSEWHERE
     targets: 'mezura ./src --diff main' counts what './src' held on 'main'. The targets must
     all be inside one git repository, and a directory the revision does not have counts as
     zero, so everything in it reads as new. What was found on disk decides which of the two a
-    reading is: a name that is a file is a document, anything else is asked of git.
+    reading is: a name that is a file is a document, anything else is asked of git. A revision
+    is any spelling git itself resolves: a branch, a tag, a hash, or a remote-tracking name
+    like 'origin/main'. It has to have been fetched already; one that lives only on the remote
+    needs a 'git fetch' first, mezura never touches the network.
 
     Counting a revision costs more than counting the same tree in place: the commit's files
     are first written out whole to a temporary directory, and a file written moments ago is

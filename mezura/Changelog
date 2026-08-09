@@ -171,6 +171,7 @@ Change in commands:
   -> Styles are applied in this order: built-in defaults, then the theme, then your configuration
       file, then --style. So a theme can carry a complete look, your own config can keep a few
       tweaks that survive switching themes, and --style wins over both.
+  -> The "Exec time" figure now measures the whole command instead of only the scan.
 
 Performance:
   -> Counting uses well under half the processor time it did, while counting more languages than
