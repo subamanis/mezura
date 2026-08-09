@@ -28,7 +28,11 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
+      # Two commits and not one: the '--diff' step below counts a revision against another, and
+      # the default shallow clone has no HEAD~1 to name
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       - name: Install the Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -51,3 +55,43 @@ jobs:
 
       - name: Run against the repository itself
         run: cargo run --release -p mezura -- ./mezura-core/src --hide bar
+
+      # Everything git does happens outside this repository's own tests: a worktree is written to
+      # the temporary directory, two of them at once, counted, and taken away again on background
+      # threads. All of it was only ever run on Windows before this step existed.
+      # Bash on every platform, and not only for the pipes below: a windows step left to its own
+      # shell answers with the exit code of its last line alone, so a first line that failed
+      # passes unnoticed
+      - name: Count a revision, and two of them against each other
+        shell: bash
+        run: |
+          cargo run --release -p mezura -- ./mezura-core/src --diff HEAD~1
+          cargo run --release -p mezura -- ./mezura-core/src --diff HEAD~1..HEAD
+
+      # The unit tests parse the document with the same crate that wrote it, which says nothing
+      # about what actually leaves the process: one stray line printed to the wrong stream makes
+      # it unreadable and every one of those tests still passes. Node reads it because every
+      # runner is guaranteed to have one, the actions above being written in it.
+      - name: The JSON documents parse as JSON
+        shell: bash
+        run: |
+          parses='JSON.parse(require("fs").readFileSync(0, "utf8"))'
+          cargo run --release -q -p mezura -- ./mezura-core/src --output json | node -e "$parses"
+          cargo run --release -q -p mezura -- ./mezura-core/src --diff HEAD~1 --output json | node -e "$parses"
+
+      # 'main' returns the exit code and no test can reach it, so the promise that 1 means a run
+      # that did not happen is guarded by nothing else
+      - name: The exit codes say whether the run happened
+        shell: bash
+        run: |
+          cargo run --release -q -p mezura -- ./mezura-core/src > /dev/null
+          for bad in "--not-a-command" "./a-directory-that-is-not-there" "--diff HEAD..HEAD"; do
+            if cargo run --release -q -p mezura -- $bad > /dev/null 2>&1; then
+              echo "'$bad' exited 0, and it is not a run that happened"; exit 1
+            fi
+          done
+
+      # The two packages are published separately and 'mezura' depends on 'mezura-core' by path
+      # and version at once, which only matters here and at the moment of publishing
+      - name: Both packages still package
+        run: cargo package --workspace

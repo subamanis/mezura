@@ -34,7 +34,11 @@ jobs:
       - name: Cache the cargo registry and the build dir
         uses: Swatinem/rust-cache@v2
 
-      # A tag must never produce a release that does not pass its own test suite
+      # A tag must never produce a release that does not pass its own gates, and a tag can be
+      # pushed from a branch that never went through a pull request
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings -A clippy::too_many_arguments
+
       - name: Test
         run: cargo test --verbose
 
