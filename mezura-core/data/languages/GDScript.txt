@@ -1,0 +1,27 @@
+Language
+GDScript
+
+Extensions
+gd
+
+String symbols
+""" ' "
+
+Comment symbols
+#
+
+Keyword
+    NAME
+    classes
+    ALIASES
+    class class_name
+Keyword
+    NAME
+    functions
+    ALIASES
+    func
+Keyword
+    NAME
+    signals
+    ALIASES
+    signal

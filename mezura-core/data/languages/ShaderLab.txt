@@ -1,0 +1,31 @@
+Language
+ShaderLab
+
+Extensions
+shader
+
+String symbols
+"
+
+Comment symbols
+//
+Multi line comment start
+/*
+Multi line comment end
+*/
+
+Keyword
+    NAME
+    shaders
+    ALIASES
+    Shader
+Keyword
+    NAME
+    subshaders
+    ALIASES
+    SubShader
+Keyword
+    NAME
+    passes
+    ALIASES
+    Pass
