@@ -1364,7 +1364,7 @@ fn format_overview_lines(sorted_language_names: &[String], per_language: &HashMa
     // A bar cell takes the color of the slot and none of its attributes: bold or underline on a
     // block character is not something a terminal shows usefully
     let bar_func_vec : Vec<ColorFunc> = styles.iter().map(|style| {
-            let color = style.color;
+            let color = style.get_color();
             Box::new(move |s: &str| match color {
                 Some(color) => s.color(color).to_string(),
                 None => s.to_owned()

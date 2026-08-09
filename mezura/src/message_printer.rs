@@ -546,6 +546,13 @@ pub const STYLE_HELP  :  &str =
     'reverse' swaps the text and background colors, so it stands out strongly without committing
     to any color of its own, which means it adapts to whatever theme the terminal is using.
 
+    The cells of the live progress bar take two forms no other token does, being a run of cells
+    rather than one piece of text: two or more hex values separated by '..' fill them with a
+    gradient through every one of them, evenly spread, and 'rainbow' walks a spectrum along them
+    while they are drawn. A gradient takes hex values only, because a terminal color name is
+    whatever the terminal's own scheme maps it to and there is no shade to interpolate. Every
+    other token takes one color and says so if it is given either form.
+
     Every counted quantity owns two tokens, one for the number and one for the word beside it,
     so either can be picked out without touching the other. Each is named after the word that
     appears on screen:
@@ -557,44 +564,60 @@ pub const STYLE_HELP  :  &str =
       extra-number       extra-label
       total-size-number  total-size-label
       avg-size-number    avg-size-label
+      keyword-number     keyword-label
 
     'size-unit' is the unit next to a size, the 'KBs' of '430.5 KBs total', and it is one token for
     both sizes since there is no reason to want two colors of KBs on one line. It is separate from
     the labels so that it can stay quiet while 'Size' reads like every other column header.
-      keyword-number     keyword-label
 
     The numbers of the \"progress\" section are the same quantities, so they follow the same tokens.
 
-    The rest:
-      version            the version line at the top
-      heading            the section titles and the 'Analyzing directories' lines
-      separator          the dashed line above the total
-      arrow              the '->' after a language name, in the 'list' layout only
-      bar-frame          the '[-' and '-]' around the overview bar
-      percent            the percentages of the details rows
+    The rest, by where they appear.
+
+    The page:
+      version                  the version line at the top
+      heading                  the section titles and the 'Analyzing directories' lines
+      separator                the dashed line above the total
+      summary                  the found / of interest / excluded line
+      note                     the '(+N more languages hidden by --top N)' line
+      success                  the 'ok' after parsing
+      warning                  warnings
+      error                    errors
+      footer                   the execution time line
+
+    The details tables:
       details-language-header  the word 'Language' over the first column of the two tables
       details-language-name    the name of a language, in a row and in the keywords block
-      details-total      the word 'Total'
-      overview-label     the 'Files:', 'Lines:' and 'Size :' row labels of the overview
-      overview-percent   the percentages of the overview
-      language-1         the first language of the overview, its name and the color of its bar cells
-      language-2         the second
-      language-3         the third
-      language-4         the fourth, shown only when nothing was folded into 'others'
-      language-others    the folded 'others' entry. A theme that names 'language-4' and not this one
-                         gets the same style here, since the two never appear together
-      progress-up        an increase in the progress section
-      progress-down      a decrease
-      progress-same      no change
-      progress-entry     the '->' of a progress entry
-      progress-modified  the word 'modified:' on an entry that was counted with other settings
+      details-module           the name of a module, wherever one is printed
+      details-total            the word 'Total'
+      percent                  the percentages of the details rows
+      arrow                    the '->' after a language name, in the 'list' layout only
+
+    The overview:
+      overview-label           the 'Files:', 'Lines:' and 'Size :' row labels
+      overview-percent         the percentages of the overview
+      bar-frame                the brackets around the overview bar and the live one
+      language-1               the first language, its name and the color of its bar cells
+      language-2               the second
+      language-3               the third
+      language-4               the fourth, shown only when nothing was folded into 'others'
+      language-others          the folded 'others' entry. A theme that names 'language-4'
+                               and not this one gets the same style here, since the two
+                               never appear together
+
+    The progress section:
+      progress-up              an increase
+      progress-down            a decrease
+      progress-same            no change
+      progress-entry           the '->' of a progress entry
+      progress-modified        the word 'modified:' on an entry counted with other settings
       progress-modified-field  the names of the settings that changed since that entry
-      summary            the found / of interest / excluded line
-      note               the '(+N more languages hidden by --top N)' line
-      success            the 'ok' after parsing
-      warning            warnings
-      error              errors
-      footer             the execution time line
+
+    The live lines, which only a terminal ever sees:
+      progress-bar-fill        the cells the progress bar has drawn
+      progress-bar-empty       the cells it has not reached. They are blank until this is
+                               styled, and styling it lays a track behind the whole bar
+      progress-bar-figures     the file counts and the speed figures beside the bar
 
     Only the color of a 'language-' token reaches the cells of the overview bar; bold, italic and
     the rest apply to the language name alone.
@@ -961,7 +984,7 @@ pub fn print_existing_themes(bar_thickness: BarThickness, layout: Layout) {
         msg.push_str(&format!("\n{INDENT}{}{}", " ".repeat(BAR_INDENT), theme.bar_frame.paint("[-")));
         for (i, (_, _, verticals)) in MOCK_PERCENTAGES.iter().enumerate() {
             let cell = bar_thickness.get_character().repeat(*verticals);
-            msg.push_str(&match slots[i].color {
+            msg.push_str(&match slots[i].get_color() {
                 Some(color) => cell.color(color).to_string(),
                 None => cell
             });
@@ -1140,6 +1163,15 @@ mod tests {
         assert_eq!(block.trim(), generated.trim(),
                 "the command list in the README no longer matches the help texts, which are the source. \
                  Regenerate it with MEZURA_UPDATE_GOLDEN=1 cargo test -p mezura readme");
+    }
+
+    // A token nobody can find is a token nobody can use, and the help is the only place that lists
+    // them. The README carries the same list by being generated from this text.
+    #[test]
+    fn every_style_token_is_named_in_the_help() {
+        for token in crate::theme::Theme::get_token_names() {
+            assert!(STYLE_HELP.contains(token), "'{token}' is a style token that the help never names");
+        }
     }
 
     // '--version' reads the release date from the first line of the Changelog, so that line has to

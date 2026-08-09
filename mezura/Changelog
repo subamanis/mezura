@@ -8,8 +8,9 @@ Main changes:
       A space separates one target from the next only once you have named one, so a path with a
       space in it still needs nothing but a comma next to it while you name nothing.
   -> Every piece of printed text can now be styled, not just the four colors of the overview.
-      46 tokens are exposed, and each takes a color plus any of bold, italic, underline, dim and
-      reverse, in any order. Run "--help style" for the full list.
+      49 tokens are exposed, and each takes a color plus any of bold, italic, underline, dim and
+      reverse, in any order. The cells of the live progress bar also take a "hex..hex" gradient
+      or "rainbow". Run "--help style" for the full list.
   -> Comment lines are now counted and reported separately, with their own percentage.
   -> Language files are now updated automatically when you install a new version, so a correction to
       a language reaches you without you having to do anything. One you had changed yourself is

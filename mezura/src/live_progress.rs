@@ -9,7 +9,7 @@ use mezura_core::ScanProgress;
 use unicode_width::UnicodeWidthChar;
 
 use crate::config_manager::Configuration;
-use crate::theme::measure_columns;
+use crate::theme::{Style, measure_columns};
 
 const WALK_HEADING : &str = "Analyzing directories";
 const MOTION_APPEARS_AFTER_MS : u128 = 150;
@@ -20,15 +20,20 @@ const NUMBER_REFRESH_MS : u128 = 300;
 // A rate is a delta over an interval, and an interval of microseconds turns one finished file into
 // hundreds of millions of lines a second. Shorter than this and the sample is thrown away.
 const MIN_RATE_INTERVAL_SECS : f64 = 0.05;
+// How long a 'rainbow' fill takes to travel the bar once
+const RAINBOW_CYCLE_MS : u128 = 3_000;
 // The count sits right-aligned in this field, so a new digit fills reserved space to its left
 // instead of pushing the text beside it. Wide enough that only ten million files overflow it.
 const COUNT_FIELD_WIDTH : usize = "9,999,999".len();
-// The parsing bar only exists when this many files are still queued when the walk ends: a queue
-// the consumers drain in a blink would only flash it
-const BAR_APPEARS_OVER_QUEUED : usize = 5_000;
+// The bar only exists when what remains is estimated to outlast this: a queue size would say
+// something different on every machine (the same tree leaves 0 files queued with an antivirus
+// exclusion and 56,000 without one), while half a second means half a second everywhere. The
+// pace is measured after the walk ended, so it is the drain's own pace: 'run' joins the
+// producers before it raises the flag, and nothing else competes for the cores again.
+const BAR_APPEARS_OVER_ESTIMATED_MS : u128 = 500;
 // The bar's width clamp when a frame has room for it at all; the ladder that decides what else
 // fits is 'fit_parsing_frame'
-const MAX_BAR_CELLS : usize = 30;
+const MAX_BAR_CELLS : usize = 49;
 const MIN_BAR_CELLS : usize = 18;
 // What a terminal that will not answer its width is assumed to be
 const FALLBACK_WIDTH : usize = 80;
@@ -187,13 +192,13 @@ pub fn start_revision_display(config: &Configuration, git_revision: &str, progre
     }
 }
 
-// The transient line of a parse whose queue is worth watching: the bar, the files done against the
-// files found, and the parsing speed. It erases itself completely; nothing permanent is printed.
+// The transient line of a parse that outlives the walk: the bar, the files done against the files
+// found, and the parsing speed. It erases itself completely; nothing permanent is printed.
 pub fn start_parsing_display(config: &Configuration, progress: Arc<ScanProgress>) -> LiveDisplay {
     if config.view.hidden.parsing_info || !std::io::stderr().is_terminal() || mezura_core::prints_phase_timing() {
         return LiveDisplay::default();
     }
-    if progress.get_files_found().saturating_sub(progress.get_files_parsed()) <= BAR_APPEARS_OVER_QUEUED {
+    if progress.get_files_found() == progress.get_files_parsed() {
         return LiveDisplay::default();
     }
 
@@ -279,6 +284,12 @@ struct FramePlan {
 
 impl FramePlan {
     const COUNT_ALONE : FramePlan = FramePlan { bar_cells: 0, files_rate: false, lines_rate: false };
+}
+
+// Cross-multiplied, so no pace is ever divided out of nothing: files not yet moving are a pace of
+// zero, and at a pace of zero any remainder at all outlasts the threshold
+fn needs_a_bar(remaining: usize, done: usize, elapsed_ms: u128) -> bool {
+    remaining as u128 * elapsed_ms > done as u128 * BAR_APPEARS_OVER_ESTIMATED_MS
 }
 
 fn fit_parsing_frame(budget: usize, label_width: usize, count_width: usize) -> FramePlan {
@@ -476,7 +487,7 @@ fn animate_walk_line(progress: &ScanProgress, stop: &AtomicBool, heading: &str) 
 
 // One line for the whole side, and the label follows the phase: 'Writing out' until the first file
 // of the inner run is found, which is when git has finished materialising the revision, 'Counting'
-// after, and the parsing frame on the same line when the scan ends with a queue over the threshold
+// after, and the parsing frame on the same line the moment the scan ends
 fn animate_revision_line(progress: &ScanProgress, stop: &AtomicBool, opened: &AtomicBool,
         writing_label: Option<&str>, counting_label: &str, show_bar_and_rates: bool, charset: &str) {
     let started = Instant::now();
@@ -486,6 +497,9 @@ fn animate_revision_line(progress: &ScanProgress, stop: &AtomicBool, opened: &At
     let mut parsing: Option<(usize, usize)> = None;
     let mut sampler = RateSampler::start(progress);
     let mut last_number_slot = 0;
+    let mut drain_started = started;
+    let mut parsed_at_walk_end = 0;
+    let mut earned = false;
     while !stop.load(Ordering::Relaxed) {
         thread::park_timeout(TICK);
         let elapsed = started.elapsed().as_millis();
@@ -493,14 +507,15 @@ fn animate_revision_line(progress: &ScanProgress, stop: &AtomicBool, opened: &At
             continue;
         }
 
-        // Whether the bar is wanted decides what the parsing frame holds and never whether this
-        // line reaches it: hiding the bar must still let the count of what has been parsed replace
-        // the count of what was discovered, which stopped moving when the walk ended.
-        if parsing.is_none() && progress.is_walk_done()
-                && progress.get_files_found().saturating_sub(progress.get_files_parsed()) > BAR_APPEARS_OVER_QUEUED {
+        // The count of what has been parsed replaces the count of what was discovered the moment
+        // the walk ends; the bar and the rates join it only once the drain has shown it will
+        // outlast the threshold
+        if parsing.is_none() && progress.is_walk_done() {
             let total = progress.get_files_found();
             parsing = Some((total, crate::number_formatter::format_with_separators(total).chars().count()));
             sampler = RateSampler::start(progress);
+            drain_started = Instant::now();
+            parsed_at_walk_end = progress.get_files_parsed();
         }
 
         let number_slot = elapsed / NUMBER_REFRESH_MS;
@@ -527,13 +542,18 @@ fn animate_revision_line(progress: &ScanProgress, stop: &AtomicBool, opened: &At
                 if numbers_due {
                     sampler.sample(progress);
                 }
-                let plan = if show_bar_and_rates {
+                if !earned {
+                    let parsed = progress.get_files_parsed();
+                    earned = needs_a_bar(total.saturating_sub(parsed), parsed - parsed_at_walk_end,
+                            drain_started.elapsed().as_millis());
+                }
+                let plan = if show_bar_and_rates && earned {
                     fit_parsing_frame(budget, counting_label_width, count_width)
                 } else {
                     FramePlan::COUNT_ALONE
                 };
                 let bare = format_parsing_frame(progress.get_files_parsed(), sampler.shown_parsed, total,
-                        count_width, sampler.rates, &plan, charset);
+                        count_width, sampler.rates, &plan, charset, calculate_rainbow_phase(elapsed));
                 let labeled = format!("{counting_label} {bare}");
                 // The label is the next thing given up under the ladder's last rung, ahead of the
                 // count it introduces
@@ -552,14 +572,22 @@ fn animate_parsing_line(progress: &ScanProgress, stop: &AtomicBool, show_bar_and
     let started = Instant::now();
     let total = progress.get_files_found();
     let count_width = crate::number_formatter::format_with_separators(total).chars().count();
+    let start_parsed = progress.get_files_parsed();
     let mut row = TransientRow::new();
     let mut sampler = RateSampler::start(progress);
     let mut last_number_slot = 0;
+    let mut earned = false;
     while !stop.load(Ordering::Relaxed) {
         thread::park_timeout(TICK);
         let elapsed = started.elapsed().as_millis();
-        if elapsed < MOTION_APPEARS_AFTER_MS {
-            continue;
+        // Asked again every tick until it is earned, from what the drain itself has shown so far:
+        // a fast one never earns it, a slow start earns it on the spot
+        if !earned {
+            let parsed = progress.get_files_parsed();
+            if !needs_a_bar(total.saturating_sub(parsed), parsed - start_parsed, elapsed) {
+                continue;
+            }
+            earned = true;
         }
         let budget = read_budget();
         let number_slot = elapsed / NUMBER_REFRESH_MS;
@@ -575,16 +603,17 @@ fn animate_parsing_line(progress: &ScanProgress, stop: &AtomicBool, show_bar_and
         // The bar reads the live figure and moves whenever a quantum is crossed, while the count
         // beside it holds still between number refreshes
         let frame = format_parsing_frame(progress.get_files_parsed(), sampler.shown_parsed, total, count_width,
-                sampler.rates, &plan, charset);
+                sampler.rates, &plan, charset, calculate_rainbow_phase(elapsed));
         row.draw(&frame, budget, || {});
     }
 }
 
 fn format_parsing_frame(bar_parsed: usize, counted_parsed: usize, total: usize, count_width: usize,
-        rates: Option<(usize, usize)>, plan: &FramePlan, charset: &str) -> String {
-    let count = format!("{:>count_width$}/{} files",
+        rates: Option<(usize, usize)>, plan: &FramePlan, charset: &str, phase: f32) -> String {
+    let theme = crate::theme::get_active();
+    let count = theme.progress_bar_figures.paint(&format!("{:>count_width$}/{} files",
             crate::number_formatter::format_with_separators(counted_parsed),
-            crate::number_formatter::format_with_separators(total));
+            crate::number_formatter::format_with_separators(total))).to_string();
     if plan.bar_cells == 0 {
         return count;
     }
@@ -596,11 +625,42 @@ fn format_parsing_frame(bar_parsed: usize, counted_parsed: usize, total: usize, 
                 figures += &format!(" | {:>LINES_RATE_FIELD_WIDTH$}{LINES_RATE_SUFFIX}",
                         crate::number_formatter::format_with_separators(lines));
             }
-            crate::theme::Style::plain().dim().paint(&figures).to_string()
+            theme.progress_bar_figures.paint(&figures).to_string()
         },
         _ => String::new()
     };
-    format!("[{}] {count}{speed}", build_bar(bar_parsed, total, plan.bar_cells, charset))
+    format!("{}{}{} {count}{speed}", theme.bar_frame.paint("["),
+            paint_bar_cells(&build_bar(bar_parsed, total, plan.bar_cells, charset), charset,
+                    &theme.progress_bar_fill, &theme.progress_bar_empty, phase),
+            theme.bar_frame.paint("]"))
+}
+
+// One escape per cell, the way the overview bar is painted next door: the fill answers per cell,
+// so a gradient and a rainbow cost what a flat color costs. A cell the bar has not reached is
+// blank until its own token is styled, and then it is a track of full cells in the track's own
+// color. Full and not the lightest character of the set: that one is also the first sub-step of
+// the tip, so a cell the bar reached would keep the shape it had and change only its color.
+fn paint_bar_cells(cells: &str, charset: &str, fill: &Style, empty: &Style, phase: f32) -> String {
+    let track = charset.chars().last().unwrap_or(' ');
+    let width = cells.chars().count();
+    cells.chars().enumerate().map(|(at, cell)| {
+        let (style, cell) = if cell == ' ' {
+            if *empty == Style::plain() {
+                return " ".to_owned();
+            }
+            (empty, track)
+        } else {
+            (fill, cell)
+        };
+        match style.get_color_of_cell(at, width, phase) {
+            Some(color) => style.paint_with_color(&cell.to_string(), color).to_string(),
+            None => style.paint(&cell.to_string()).to_string()
+        }
+    }).collect()
+}
+
+fn calculate_rainbow_phase(elapsed_ms: u128) -> f32 {
+    (elapsed_ms % RAINBOW_CYCLE_MS) as f32 / RAINBOW_CYCLE_MS as f32
 }
 
 // 'cells' cells with one quantum per character of the set: the last character is a full cell, the
@@ -632,7 +692,7 @@ fn format_walk_frame(heading: &str, elapsed_ms: u128, files_found: usize, budget
     if files_found == 0 {
         return format!("{heading}{dots}");
     }
-    let count = crate::theme::Style::plain().dim()
+    let count = crate::theme::get_active().progress_bar_figures
             .paint(&format!("{:>width$} files discovered",
                     crate::number_formatter::format_with_separators(files_found), width = COUNT_FIELD_WIDTH));
     // The dots are padded to their widest, so the count does not shift as they cycle
@@ -690,7 +750,7 @@ mod tests {
         let charset = crate::config_manager::ProgressBarStyle::default().get_charset();
         let plan_at = |budget: usize| fit_parsing_frame(budget, 0, 6);
         let render = |plan: &FramePlan| format_parsing_frame(3_000, 3_000, 80_000, 6,
-                Some((29_238, 14_406_917)), plan, charset);
+                Some((29_238, 14_406_917)), plan, charset, 0.0);
 
         assert_eq!(FramePlan::COUNT_ALONE, plan_at(0));
         assert_eq!(FramePlan { bar_cells: MAX_BAR_CELLS, files_rate: true, lines_rate: true },
@@ -747,10 +807,26 @@ mod tests {
             }
             let frame = format!("{label} {}", format_parsing_frame(3_000, 3_000, 80_000, 6,
                     Some((29_238, 14_406_917)), &plan,
-                    crate::config_manager::ProgressBarStyle::default().get_charset()));
+                    crate::config_manager::ProgressBarStyle::default().get_charset(), 0.0));
             assert!(measure_columns(&frame) <= budget,
                     "a labeled frame of {} spilled over a budget of {budget}", measure_columns(&frame));
         }
+    }
+
+    // The bar is earned by the time the remainder will take and never by its size: a queue of any
+    // length that drains fast is no reason to draw anything
+    #[test]
+    fn the_bar_is_earned_by_the_estimated_remaining_time_and_not_by_the_queue() {
+        // 1,000 files in 50ms: 5,000 more are a quarter second, 20,000 are a whole one
+        assert!(!needs_a_bar(5_000, 1_000, 50));
+        assert!(needs_a_bar(20_000, 1_000, 50));
+        // an estimate that lands exactly on the threshold does not earn it
+        assert!(!needs_a_bar(10_000, 1_000, 50));
+        // nothing moving yet reads as a pace of zero, which any remainder outlasts
+        assert!(needs_a_bar(1, 0, 50));
+        // and an empty queue earns nothing, however slow the start, nor does a clock at zero
+        assert!(!needs_a_bar(0, 0, 1_000));
+        assert!(!needs_a_bar(1_000, 0, 0));
     }
 
     // Written against the cap and not against its value, so the constant can move freely: what is
@@ -809,24 +885,49 @@ mod tests {
         let width = crate::number_formatter::format_with_separators(80_000).chars().count();
         let full = FramePlan { bar_cells: MAX_BAR_CELLS, files_rate: true, lines_rate: true };
 
-        let early = format_parsing_frame(5, 5, 80_000, width, Some((29_238, 14_406_917)), &full, charset);
-        let late = format_parsing_frame(79_999, 79_999, 80_000, width, Some((312, 9_154)), &full, charset);
+        let early = format_parsing_frame(5, 5, 80_000, width, Some((29_238, 14_406_917)), &full, charset, 0.0);
+        let late = format_parsing_frame(79_999, 79_999, 80_000, width, Some((312, 9_154)), &full, charset, 0.0);
         assert!(early.contains("files/s") && early.contains("lines/s"));
         assert_eq!(measure_columns(&early), measure_columns(&late));
 
         // before the first sample there is no honest rate, so none is shown
-        assert!(!format_parsing_frame(5, 5, 80_000, width, None, &full, charset).contains("files/s"));
+        assert!(!format_parsing_frame(5, 5, 80_000, width, None, &full, charset, 0.0).contains("files/s"));
 
         // a plan without lines/s keeps files/s and nothing after it
         let one_rate = FramePlan { bar_cells: MAX_BAR_CELLS, files_rate: true, lines_rate: false };
-        let narrower = format_parsing_frame(5, 5, 80_000, width, Some((29_238, 14_406_917)), &one_rate, charset);
+        let narrower = format_parsing_frame(5, 5, 80_000, width, Some((29_238, 14_406_917)), &one_rate, charset, 0.0);
         assert!(narrower.contains("files/s") && !narrower.contains("lines/s"));
 
         // The form a hidden bar leaves behind is the count alone
-        let reduced = format_parsing_frame(5, 5, 80_000, width, Some((29_238, 14_406_917)), &FramePlan::COUNT_ALONE, charset);
-        let reduced_late = format_parsing_frame(79_999, 79_999, 80_000, width, None, &FramePlan::COUNT_ALONE, charset);
+        let reduced = format_parsing_frame(5, 5, 80_000, width, Some((29_238, 14_406_917)), &FramePlan::COUNT_ALONE, charset, 0.0);
+        let reduced_late = format_parsing_frame(79_999, 79_999, 80_000, width, None, &FramePlan::COUNT_ALONE, charset, 0.0);
         assert!(!reduced.contains("files/s") && !reduced.contains(charset.chars().last().unwrap()));
-        assert!(reduced.ends_with("files"));
+        assert!(reduced.contains("files"));
         assert_eq!(measure_columns(&reduced), measure_columns(&reduced_late));
+    }
+
+    // What the cells look like is asserted on the colors themselves in 'theme', since a test binary
+    // is not a terminal and the escapes may not be emitted at all. What is left here is what holds
+    // either way: a painted bar takes the columns of a plain one, an unstyled one is untouched, and
+    // a styled empty cell becomes a track.
+    #[test]
+    fn a_bar_is_painted_cell_by_cell_and_only_where_a_token_asks_for_it() {
+        let charset = crate::config_manager::ProgressBarStyle::default().get_charset();
+        let plain = Style::plain();
+        for parsed in [0, 1, 40, 120] {
+            let cells = build_bar(parsed, 120, MIN_BAR_CELLS, charset);
+            assert_eq!(cells, paint_bar_cells(&cells, charset, &plain, &plain, 0.0));
+        }
+
+        let cells = build_bar(40, 120, MIN_BAR_CELLS, charset);
+        let gradient = Style::parse("ff0000..0000ff").unwrap();
+        let track = Style::parse("333333").unwrap();
+        let painted = paint_bar_cells(&cells, charset, &gradient, &track, 0.0);
+        assert_eq!(measure_columns(&cells), measure_columns(&painted), "the paint took columns of its own");
+        assert!(!painted.contains(' '), "a styled empty cell is still blank instead of a track");
+        // the track is a full cell, so nothing of it survives where the bar has reached
+        assert!(painted.contains(charset.chars().last().unwrap()));
+        // and an unstyled empty cell stays a blank beside a painted fill
+        assert!(paint_bar_cells(&cells, charset, &gradient, &plain, 0.0).contains(' '));
     }
 }

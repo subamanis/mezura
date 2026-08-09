@@ -6,6 +6,9 @@ use std::sync::{LazyLock, OnceLock};
 use colored::{Color, ColoredString, Colorize};
 use unicode_width::UnicodeWidthChar;
 
+// A sweep is a color per cell, so it says something only where a run of cells is painted one at a
+// time. Today that is the live progress bar; the overview's own bar is the natural next one.
+const SWEEPABLE_TOKENS : [&str; 2] = ["progress-bar-fill", "progress-bar-empty"];
 const LABEL_GOLD: Color = Color::TrueColor { r: 181, g: 169, b: 138 };
 const SIZE_GOLD: Color = Color::TrueColor { r: 125, g: 119, b: 105 };
 // A step below the terminal's foreground, not a step above black. 'bright-black' and the 'dim'
@@ -27,9 +30,22 @@ pub fn set_active(theme: Theme) {
     let _ = ACTIVE_THEME.set(theme);
 }
 
+// How a style gets its color: one color for everything it paints, or, where a run of cells is
+// painted one at a time, a sweep across them. A gradient holds the channels themselves and never
+// a named color, because interpolation needs them and 'cyan' is whatever the terminal's own
+// scheme maps it to; two stops or more, spread evenly over the run.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Fill {
+    #[default]
+    Terminal,
+    Flat(Color),
+    Gradient(Vec<(u8, u8, u8)>),
+    Rainbow
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Style {
-    pub color: Option<Color>,
+    pub fill: Fill,
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
@@ -43,7 +59,7 @@ impl Style {
     }
 
     pub fn of(color: Color) -> Style {
-        Style { color: Some(color), ..Style::default() }
+        Style { fill: Fill::Flat(color), ..Style::default() }
     }
 
     pub fn bold(mut self) -> Style {
@@ -67,10 +83,37 @@ impl Style {
     }
 
     pub fn paint(&self, text: &str) -> ColoredString {
-        self.apply_attributes(match self.color {
-            Some(color) => ColoredString::from(text).color(color),
-            None => ColoredString::from(text)
-        })
+        match self.get_color() {
+            Some(color) => self.paint_with_color(text, color),
+            None => self.apply_attributes(ColoredString::from(text))
+        }
+    }
+
+    pub fn paint_with_color(&self, text: &str, color: Color) -> ColoredString {
+        self.apply_attributes(ColoredString::from(text).color(color))
+    }
+
+    // The one color a style paints everything with. A sweep has none, since it answers per cell,
+    // and its first stop is the closest thing to an answer for a caller painting text.
+    pub fn get_color(&self) -> Option<Color> {
+        match &self.fill {
+            Fill::Flat(color) => Some(*color),
+            Fill::Gradient(stops) => stops.first().map(|&(r, g, b)| Color::TrueColor { r, g, b }),
+            Fill::Terminal | Fill::Rainbow => None
+        }
+    }
+
+    // The color of one cell of a run of them. 'phase' turns once per rainbow cycle and is the
+    // caller's clock: the cells of a still frame are one moment of it.
+    pub fn get_color_of_cell(&self, at: usize, cells: usize, phase: f32) -> Option<Color> {
+        let across = if cells > 1 {at as f32 / (cells - 1) as f32} else {0.0};
+        match &self.fill {
+            Fill::Gradient(stops) => Some(interpolate_stops(stops, across)),
+            // The spectrum spans the run, and the phase carries it along: every cell has moved a
+            // whole cycle by the time the animation repeats
+            Fill::Rainbow => Some(color_of_hue((across + phase) * 360.0)),
+            _ => self.get_color()
+        }
     }
 
     fn apply_attributes(&self, painted: ColoredString) -> ColoredString {
@@ -116,7 +159,7 @@ impl Style {
                 _ => {
                     if color_was_given { return None; }
                     color_was_given = true;
-                    style.color = Some(parse_single_color(token)?);
+                    style.fill = parse_fill(token)?;
                 }
             }
         }
@@ -126,7 +169,13 @@ impl Style {
 
     pub fn to_config_string(&self) -> String {
         let mut parts = Vec::with_capacity(5);
-        parts.push(self.color.map_or("default".to_owned(), |x| color_to_config_string(&x)));
+        parts.push(match &self.fill {
+            Fill::Terminal => "default".to_owned(),
+            Fill::Flat(color) => color_to_config_string(color),
+            Fill::Gradient(stops) => stops.iter().map(|(r, g, b)| format!("{r:02x}{g:02x}{b:02x}"))
+                    .collect::<Vec<_>>().join(".."),
+            Fill::Rainbow => "rainbow".to_owned()
+        });
         if self.bold { parts.push("bold".to_owned()); }
         if self.italic { parts.push("italic".to_owned()); }
         if self.underline { parts.push("underline".to_owned()); }
@@ -136,16 +185,11 @@ impl Style {
         parts.join(" ")
     }
 
-    // Both used only by the tests of this file, which is what marks them
+    // Used only by the tests of this file, which is what marks it
     #[cfg(test)]
     pub fn reverse(mut self) -> Style {
         self.reverse = true;
         self
-    }
-
-    #[cfg(test)]
-    pub fn paint_with_color(&self, text: &str, color: Color) -> ColoredString {
-        self.apply_attributes(ColoredString::from(text).color(color))
     }
 }
 
@@ -244,6 +288,12 @@ theme_tokens! {
     progress_modified => "progress-modified", Style::of(Color::Yellow);
     progress_modified_field => "progress-modified-field", Style::plain();
 
+    // The live lines, which only a terminal ever sees. The cells the bar has not reached are
+    // blank until this is styled, and styling it draws them as a track instead.
+    progress_bar_fill    => "progress-bar-fill",    Style::plain();
+    progress_bar_empty   => "progress-bar-empty",   Style::plain();
+    progress_bar_figures => "progress-bar-figures", Style::plain().dim();
+
     summary           => "summary",           Style::plain();
     note              => "note",              Style::plain().dim().italic();
     success           => "success",           Style::of(Color::BrightGreen);
@@ -260,11 +310,15 @@ impl Theme {
     }
 
     pub fn get_language_colors(&self) -> [Color; 5] {
-        self.get_language_slots().map(|x| x.color.unwrap_or(Color::White))
+        self.get_language_slots().map(|x| x.get_color().unwrap_or(Color::White))
     }
 
     pub fn set_token(&mut self, token: &str, value: &str) -> Result<(), ThemeParseError> {
         let style = Style::parse(value).ok_or_else(|| ThemeParseError::InvalidValue(token.to_owned(), value.trim().to_owned()))?;
+        if matches!(style.fill, Fill::Gradient(_) | Fill::Rainbow)
+                && !SWEEPABLE_TOKENS.contains(&token.to_lowercase().replace('_', "-").as_str()) {
+            return Err(ThemeParseError::OneColorOnly(token.trim().to_owned()));
+        }
         match self.get_style_of_token_mut(token) {
             Some(existing) => {
                 *existing = style;
@@ -284,6 +338,7 @@ pub type ThemeFile = (Vec<(String, String)>, Vec<ThemeParseError>);
 pub enum ThemeParseError {
     UnknownToken(String),
     InvalidValue(String, String),
+    OneColorOnly(String),
     MalformedLine(String),
     EmptyTheme,
 }
@@ -293,7 +348,9 @@ impl ThemeParseError {
         match self {
             Self::UnknownToken(token) => format!("'{token}' is not a style token."),
             Self::InvalidValue(token, value) =>
-                format!("'{value}' is not a valid style for '{token}'. Expected a color (hex or a terminal color name) and any of: bold, italic, underline, dim, reverse."),
+                format!("'{value}' is not a valid style for '{token}'. Expected a color (hex or a terminal color name), or for the progress bar cells a gradient of two or more hex values separated by '..', or 'rainbow', and any of: bold, italic, underline, dim, reverse."),
+            Self::OneColorOnly(token) =>
+                format!("'{token}' takes one color. A gradient and 'rainbow' give a color to each cell of a run, which today only the cells of the live progress bar are."),
             Self::MalformedLine(line) => format!("'{line}' is not a 'token = value' line."),
             Self::EmptyTheme => "the theme declares no styles at all.".to_owned()
         }
@@ -398,6 +455,52 @@ pub fn resolve(theme_styles: &[(String, String)], config_styles: &[(String, Stri
 }
 
 // 'bright_black' and 'bright-black' are one name, and so are '#ff0080' and 'ff0080'.
+fn parse_fill(token: &str) -> Option<Fill> {
+    if token == "rainbow" {
+        return Some(Fill::Rainbow);
+    }
+    if !token.contains("..") {
+        return Some(Fill::Flat(parse_single_color(token)?));
+    }
+    // A stop that is a name, or an empty one from a doubled separator, takes the whole value down
+    let stops = token.split("..").map(|stop| match parse_single_color(stop) {
+        Some(Color::TrueColor { r, g, b }) => Some((r, g, b)),
+        _ => None
+    }).collect::<Option<Vec<_>>>()?;
+
+    (stops.len() > 1).then_some(Fill::Gradient(stops))
+}
+
+// 'across' is where the cell sits in the run, from 0 at the first to 1 at the last. It lands
+// inside one pair of stops, and the color is that pair mixed by how far into it the cell is.
+fn interpolate_stops(stops: &[(u8, u8, u8)], across: f32) -> Color {
+    let scaled = across * (stops.len() - 1) as f32;
+    let pair = (scaled as usize).min(stops.len() - 2);
+    let ratio = scaled - pair as f32;
+    let (from, to) = (stops[pair], stops[pair + 1]);
+    let channel = |from: u8, to: u8| (f32::from(from) + (f32::from(to) - f32::from(from)) * ratio) as u8;
+
+    Color::TrueColor { r: channel(from.0, to.0), g: channel(from.1, to.1), b: channel(from.2, to.2) }
+}
+
+// Full saturation and brightness, so the sweep is the rainbow everybody pictures rather than a
+// pastel one. Six sectors of the circle, each holding one channel still while another moves.
+fn color_of_hue(hue: f32) -> Color {
+    let sector = (hue / 60.0).rem_euclid(6.0);
+    let rising = (sector.fract() * 255.0) as u8;
+    let falling = 255 - rising;
+    let (r, g, b) = match sector as u8 {
+        0 => (255, rising, 0),
+        1 => (falling, 255, 0),
+        2 => (0, 255, rising),
+        3 => (0, falling, 255),
+        4 => (rising, 0, 255),
+        _ => (255, 0, falling)
+    };
+
+    Color::TrueColor { r, g, b }
+}
+
 pub fn parse_single_color(token: &str) -> Option<Color> {
     match token.to_lowercase().replace('_', "-").as_str() {
         "black" => Some(Color::Black),
@@ -495,6 +598,58 @@ mod tests {
         assert_eq!(Some(Style::of(Color::Cyan).reverse().bold()), Style::parse("reverse cyan bold"));
     }
 
+    // A gradient answers per cell: its ends land on the first and the last, and the middle is
+    // between them. A rainbow answers per cell and per moment.
+    #[test]
+    fn a_sweep_gives_every_cell_of_a_run_its_own_color() {
+        let gradient = Style::parse("ff0000..0000ff").unwrap();
+        assert_eq!(Fill::Gradient(vec![(255, 0, 0), (0, 0, 255)]), gradient.fill);
+        assert_eq!(Some(Color::TrueColor { r: 255, g: 0, b: 0 }), gradient.get_color_of_cell(0, 5, 0.0));
+        assert_eq!(Some(Color::TrueColor { r: 0, g: 0, b: 255 }), gradient.get_color_of_cell(4, 5, 0.0));
+        assert_eq!(Some(Color::TrueColor { r: 127, g: 0, b: 127 }), gradient.get_color_of_cell(2, 5, 0.0));
+        // a run of one cell has nowhere to travel and takes the colour it starts from
+        assert_eq!(Some(Color::TrueColor { r: 255, g: 0, b: 0 }), gradient.get_color_of_cell(0, 1, 0.0));
+
+        // every stop of a longer gradient lands on its own cell, and the pairs mix between them
+        let three = Style::parse("ff0000..00ff00..0000ff").unwrap();
+        assert_eq!(Fill::Gradient(vec![(255, 0, 0), (0, 255, 0), (0, 0, 255)]), three.fill);
+        assert_eq!(Some(Color::TrueColor { r: 255, g: 0, b: 0 }), three.get_color_of_cell(0, 5, 0.0));
+        assert_eq!(Some(Color::TrueColor { r: 0, g: 255, b: 0 }), three.get_color_of_cell(2, 5, 0.0));
+        assert_eq!(Some(Color::TrueColor { r: 0, g: 0, b: 255 }), three.get_color_of_cell(4, 5, 0.0));
+        assert_eq!(Some(Color::TrueColor { r: 127, g: 127, b: 0 }), three.get_color_of_cell(1, 5, 0.0));
+        assert_eq!(Some(Color::TrueColor { r: 0, g: 127, b: 127 }), three.get_color_of_cell(3, 5, 0.0));
+
+        let rainbow = Style::parse("rainbow").unwrap();
+        let still = rainbow.get_color_of_cell(3, 10, 0.0);
+        assert_ne!(still, rainbow.get_color_of_cell(4, 10, 0.0), "two cells of one frame share a color");
+        assert_ne!(still, rainbow.get_color_of_cell(3, 10, 0.25), "the same cell stands still over time");
+        assert_eq!(still, rainbow.get_color_of_cell(3, 10, 1.0), "a whole cycle does not come back around");
+
+        // and a flat style answers the same for every cell, which is what makes this one question
+        let flat = Style::parse("cyan").unwrap();
+        assert_eq!(flat.get_color_of_cell(0, 9, 0.0), flat.get_color_of_cell(8, 9, 0.7));
+    }
+
+    // Interpolation needs the channels of both ends, and a terminal color name has none we know
+    #[test]
+    fn a_sweep_is_refused_where_it_could_not_be_honoured() {
+        assert_eq!(None, Style::parse("red..blue"));
+        assert_eq!(None, Style::parse("ff0000..cyan"));
+        assert_eq!(None, Style::parse("ff0000..zzzzzz"));
+        assert_eq!(None, Style::parse("ff0000..00ff00..red"));
+        // a doubled separator leaves an empty stop, which is no color at all
+        assert_eq!(None, Style::parse("ff0000....0000ff"));
+        assert_eq!(None, Style::parse("ff0000.."));
+
+        let mut theme = Theme::default();
+        assert!(theme.set_token("progress-bar-fill", "ff0000..0000ff").is_ok());
+        assert!(theme.set_token("progress-bar-empty", "rainbow").is_ok());
+        assert_eq!(Err(ThemeParseError::OneColorOnly("heading".to_owned())),
+                theme.set_token("heading", "rainbow"));
+        assert_eq!(Err(ThemeParseError::OneColorOnly("language-1".to_owned())),
+                theme.set_token("language-1", "ff0000..0000ff"));
+    }
+
     #[test]
     fn rejects_malformed_styles() {
         assert_eq!(None, Style::parse(""));
@@ -522,7 +677,9 @@ mod tests {
 
     #[test]
     fn round_trips_through_its_config_representation() {
-        for value in ["cyan", "b5a98a italic", "bright-yellow bold underline dim", "default", "default bold", "reverse", "cyan reverse bold"] {
+        for value in ["cyan", "b5a98a italic", "bright-yellow bold underline dim", "default", "default bold",
+                "reverse", "cyan reverse bold", "ff0000..0000ff", "rainbow", "ff0000..0000ff dim",
+                "ff0000..00ff00..0000ff"] {
             let style = Style::parse(value).unwrap();
             assert_eq!(Some(style.clone()), Style::parse(&style.to_config_string()), "round trip failed for '{value}'");
         }
