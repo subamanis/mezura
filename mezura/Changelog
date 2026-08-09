@@ -18,6 +18,11 @@ Main changes:
       whitespace-separated lists, paired by position.
   -> A block comment that closes and reopens on the same line no longer counts the rest of the
       file as code. This hit Lua and HTML, whose opening and closing symbols differ in length.
+  -> Block comments can now nest, declared per pair under "Nesting comment start" and "Nesting
+      comment end": the block ends only when as many closers as openers have passed, so an OCaml
+      "(* (* *) *)" or a commented-out block in Rust, Haskell, Scala, Kotlin, Swift, Julia, Elm,
+      Lisp, Scheme, MATLAB, WebAssembly text or D's "/+ +/" is read to its real end instead of
+      its first closer.
   -> A string can now open with one symbol and close with another, declared in a language file
       under "String symbol openers" and "String symbol closers". Rust declares r" and r#" with
       their closers and C# declares @" with ", so a raw or verbatim string holding quotes, or

@@ -18,6 +18,9 @@ pub struct Language {
     pub multiline_strings : Vec<(String, String)>,
     pub comment_symbols : Vec<String>,
     pub multiline_comments : Vec<(String, String)>,
+    // The pairs that nest inside themselves, so a closer only ends the block when it has closed
+    // as many as were opened: OCaml's whole comment syntax, D's '/+ +/' beside its plain '/* */'
+    pub nesting_comments : Vec<(String, String)>,
     pub keywords : Vec<Keyword>,
     // Worked out from the symbols above and reused for every file of this language.
     pub(crate) scan_plan : OnceLock<crate::engine::file_parser::ScanPlan>
@@ -39,6 +42,7 @@ impl Language {
             comment_symbols : owned_strings(comment_symbols),
             multiline_comments : multiline_comments.iter()
                     .map(|(start, end)| ((*start).to_owned(), (*end).to_owned())).collect(),
+            nesting_comments : Vec::new(),
             keywords : keywords.into_iter().collect(),
             scan_plan : OnceLock::new()
         }
@@ -56,12 +60,19 @@ impl Language {
         self
     }
 
+    pub fn with_nesting_comments(mut self, pairs: &[(&str, &str)]) -> Self {
+        self.nesting_comments.extend(pairs.iter()
+                .map(|(start, end)| ((*start).to_owned(), (*end).to_owned())));
+        self
+    }
+
     pub fn supports_multiline_comments(&self) -> bool {
-        !self.multiline_comments.is_empty()
+        !self.multiline_comments.is_empty() || !self.nesting_comments.is_empty()
     }
 
     // The scan numbers every string symbol of a language in one sequence, the single line ones
-    // first and the crossing ones after them, which is the order the plan is built in.
+    // first and the crossing ones after them, which is the order the plan is built in. The
+    // comment pairs are numbered the same way, plain first and nesting after.
     pub(crate) fn get_string_pair_of(&self, symbol: u8) -> (&str, &str) {
         match self.string_symbols.get(symbol as usize) {
             Some(single) => (single, single),
@@ -74,6 +85,18 @@ impl Language {
 
     pub(crate) fn string_crosses_lines(&self, symbol: u8) -> bool {
         symbol as usize >= self.string_symbols.len()
+    }
+
+    pub(crate) fn get_comment_pair_of(&self, symbol: u8) -> (&str, &str) {
+        let (start, end) = match self.multiline_comments.get(symbol as usize) {
+            Some(pair) => pair,
+            None => &self.nesting_comments[symbol as usize - self.multiline_comments.len()]
+        };
+        (start, end)
+    }
+
+    pub(crate) fn comment_nests(&self, symbol: u8) -> bool {
+        symbol as usize >= self.multiline_comments.len()
     }
 }
 

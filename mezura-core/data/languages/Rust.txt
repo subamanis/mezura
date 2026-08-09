@@ -16,9 +16,9 @@ String symbol closers
 
 Comment symbols
 //
-Multi line comment start
+Nesting comment start
 /*
-Multi line comment end
+Nesting comment end
 */
 
 Keyword

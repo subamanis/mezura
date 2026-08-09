@@ -12,9 +12,13 @@ Multi line string symbols
 Comment symbols
 //
 Multi line comment start
-/* /+
+/*
 Multi line comment end
-*/ +/
+*/
+Nesting comment start
+/+
+Nesting comment end
++/
 
 Keyword
 NAME

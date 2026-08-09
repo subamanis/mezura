@@ -1,4 +1,4 @@
-files=31 lines=363 code=185 comments=93
+files=31 lines=366 code=185 comments=96
 
 Assembly
   files=1 lines=10 code=4 comments=5
@@ -12,7 +12,7 @@ Clojure
   files=1 lines=11 code=6 comments=2
   functions=2 macros=1 namespaces=1
 D
-  files=1 lines=12 code=3 comments=6
+  files=1 lines=13 code=3 comments=7
   classes=1 interfaces=0 structs=1 templates=0
 Elm
   files=1 lines=11 code=5 comments=4
@@ -50,7 +50,7 @@ Lua
   files=1 lines=15 code=7 comments=6
   functions=2
 OCaml
-  files=1 lines=11 code=5 comments=4
+  files=1 lines=13 code=5 comments=6
   modules=1 types=1
 Objective-C
   files=1 lines=12 code=8 comments=1

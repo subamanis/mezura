@@ -16,6 +16,8 @@ const STRING_SYMBOL_CLOSERS    : &str = "String symbol closers";
 const COMMENT_SYMBOLS          : &str = "Comment symbols";
 const MULTILINE_COMMENT_START  : &str = "Multi line comment start";
 const MULTILINE_COMMENT_END    : &str = "Multi line comment end";
+const NESTING_COMMENT_START    : &str = "Nesting comment start";
+const NESTING_COMMENT_END      : &str = "Nesting comment end";
 const KEYWORD                  : &str = "Keyword";
 const KEYWORD_NAME             : &str = "NAME";
 const KEYWORD_ALIASES          : &str = "ALIASES";
@@ -209,6 +211,22 @@ pub fn parse_language(contents: &str) -> Option<Language> {
         header = read_next_header(&mut lines);
     }
 
+    // The pairs that nest inside themselves, so a closer only ends the block once it has closed
+    // as many as were opened. Same zip shape; a pair belongs to one block or the other, since
+    // whether '/* /* */' is still open is exactly what the two declarations disagree about.
+    let mut nesting_comments : Vec<(String, String)> = Vec::new();
+    if header.as_deref() == Some(NESTING_COMMENT_START) {
+        let starts = split_line_on_whitespace(&read_value_line(&mut lines)?);
+        if starts.is_empty() || read_next_header(&mut lines)?.as_str() != NESTING_COMMENT_END {return None;}
+        let ends = split_line_on_whitespace(&read_value_line(&mut lines)?);
+        if ends.len() != starts.len() {return None;}
+        nesting_comments = starts.into_iter().zip(ends).collect();
+        header = read_next_header(&mut lines);
+    }
+    if multiline_comments.iter().any(|(start, _)| nesting_comments.iter().any(|(other, _)| start == other)) {
+        return None;
+    }
+
     let mut keywords = Vec::new();
     while header.as_deref() == Some(KEYWORD) {
         if read_next_header(&mut lines)?.as_str() != KEYWORD_NAME {return None;}
@@ -229,6 +247,8 @@ pub fn parse_language(contents: &str) -> Option<Language> {
             &multiline_comments.iter().map(|(start, end): &(String, String)| (start.as_str(), end.as_str()))
                     .collect::<Vec<_>>(), keywords)
             .with_string_pairs(&multiline_strings.iter().map(|(open, close)| (open.as_str(), close.as_str()))
+                    .collect::<Vec<_>>())
+            .with_nesting_comments(&nesting_comments.iter().map(|(start, end)| (start.as_str(), end.as_str()))
                     .collect::<Vec<_>>()))
 }
 
@@ -446,10 +466,10 @@ pl      Perl, Prolog
     fn a_header_the_parser_does_not_know_refuses_the_file_instead_of_truncating_it() {
         // A shipped file and not a copy of the format written here, so that the shape being mutated
         // below is whatever the program actually reads today and cannot drift away from it.
-        let good = std::fs::read_to_string(LANGUAGES_DIR.to_owned() + "Rust.txt").unwrap();
+        let good = std::fs::read_to_string(LANGUAGES_DIR.to_owned() + "java.txt").unwrap();
         let parsed = crate::language_file::parse_language(&good).expect("the control file must parse");
         assert!(!parsed.multiline_comments.is_empty() && !parsed.keywords.is_empty(),
-                "Rust.txt no longer declares the two blocks this test truncates, so pick another file");
+                "java.txt no longer declares the two blocks this test truncates, so pick another file");
 
         // Line by line and never by replacing a run of text, because how many blank lines sit
         // between two blocks is the file's business and not this test's: written the other way, the
@@ -583,11 +603,15 @@ Comment symbols\n//\n\nMulti line comment start\n{ (*\nMulti line comment end\n}
         let one_start = two_pairs.replace("{ (*", "{");
         assert!(crate::language_file::parse_language(&one_start).is_none(), "one start for two ends was accepted");
 
-        // and the shipped files that need the second pair actually declare it
-        for name in ["Pascal.txt", "Delphi.txt", "D.txt"] {
+        // and the shipped files that need the second pair actually declare it; D's second pair is
+        // the nesting one, which is the case that makes the distinction per pair
+        for name in ["Pascal.txt", "Delphi.txt"] {
             let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
             assert_eq!(2, language.multiline_comments.len(), "{name} no longer declares both of its pairs");
         }
+        let d = parse_language_file(LANGUAGES_DIR.to_owned() + "D.txt").unwrap();
+        assert_eq!((1, 1), (d.multiline_comments.len(), d.nesting_comments.len()),
+                "D.txt no longer declares its plain pair beside its nesting one");
     }
 
     // A string symbol belongs to exactly one of the two lists, the way a comment symbol does, and
