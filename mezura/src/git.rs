@@ -32,7 +32,7 @@ impl std::fmt::Display for GitError {
             Self::NotInstalled(x) => write!(f, "git could not be run, so a revision cannot be counted: {x}."),
             Self::NotARepository { path } => write!(f, "'{path}' is not inside a git repository, so there is no revision of it to count."),
             Self::TwoRepositories { first, second } => write!(f, "the targets are in two different repositories, '{first}' and '{second}', so a revision names two different things. Count them one repository at a time."),
-            Self::NoSuchRevision { revision, repository } => write!(f, "'{revision}' is not a branch, tag or commit of the repository at '{repository}', and there is no file by that name either."),
+            Self::NoSuchRevision { revision, repository } => write!(f, "'{revision}' is not a branch, tag or commit of the repository at '{repository}', and there is no file by that name either. One that lives only on a remote needs a 'git fetch' first."),
             Self::SameCommit { first, second, commit } => write!(f, "'{first}' and '{second}' name the same commit, {}, so the comparison has nothing to say.", &commit[..commit.len().min(12)]),
             Self::PatternTarget { pattern } => write!(f, "'{pattern}' is a glob pattern, and what it matches in the working tree and what it would match at that commit are two different sets of files. Write out the paths it should mean."),
             Self::Refused { doing, message } => write!(f, "git refused while {doing}: {message}")

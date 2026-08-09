@@ -1,12 +1,15 @@
 Configuration file that will always be loaded.
 
-After every "===>" symbol, there is as command and in the next line there is the argument of the command.
+After every "===>" symbol, there is a command and in the next line there is the argument of the command.
 You can add any other command-argument pair to use as default in every program execution.
-For all the possible commands, run the '--help' command.
+For every command there is, and the values each one takes, run the '--help' command.
 
 Do not modify the name of the commands and the name of this file.
 
 
+
+The two below are here as an example, and both carry the value the program already uses when
+nothing is set. Change them, delete them, or add any of the other commands underneath.
 
 Whether or not to count braces '{' , '}' as lines of code.
 If used from cmd, dont use any arguments, just the name of the command
