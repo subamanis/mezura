@@ -174,14 +174,15 @@ pub struct Hidden {
     pub overview: bool,
     pub bar: bool,
     pub history: bool,
-    pub timing: bool
+    pub timing: bool,
+    pub animations: bool
 }
 
 impl Hidden {
-    fn get_pairs(self) -> [(&'static str, bool); 9] {
+    fn get_pairs(self) -> [(&'static str, bool); 10] {
         [("version", self.version), ("directory-info", self.directory_info), ("parsing-info", self.parsing_info),
-         ("progress-bar", self.progress_bar), ("keywords", self.keywords), ("overview", self.overview),
-         ("bar", self.bar), ("history", self.history), ("timing", self.timing)]
+         ("progress-bar", self.progress_bar), ("animations", self.animations), ("keywords", self.keywords),
+         ("overview", self.overview), ("bar", self.bar), ("history", self.history), ("timing", self.timing)]
     }
 
     // Returns the unrecognised name, so that the error can say which one it was
@@ -193,6 +194,7 @@ impl Hidden {
                 "directory-info" => hidden.directory_info = true,
                 "parsing-info" => hidden.parsing_info = true,
                 "progress-bar" => hidden.progress_bar = true,
+                "animations" => hidden.animations = true,
                 "keywords" => hidden.keywords = true,
                 "overview" => hidden.overview = true,
                 "bar" => hidden.bar = true,
@@ -1299,6 +1301,7 @@ mod tests {
 
         assert_eq!(Hidden::default(), hidden("./"));
         assert_eq!(Hidden {keywords: true, ..Default::default()}, hidden("./ --hide keywords"));
+        assert_eq!(Hidden {animations: true, ..Default::default()}, hidden("./ --hide animations"));
         // Commas and spaces both separate, so the Powershell comma escaping is never needed
         let expected = Hidden {parsing_info: true, bar: true, timing: true, ..Default::default()};
         assert_eq!(expected, hidden("./ --hide parsing-info,bar,timing"));

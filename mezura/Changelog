@@ -101,8 +101,9 @@ Main changes:
       failure and still exits 0, and so does a run where only some files failed.
 New commands:
   -> --hide <list> : leaves parts of the output unprinted. Takes any of version, directory-info,
-      parsing-info, progress-bar, keywords, overview, bar, history and timing, separated by
-      commas or spaces.
+      parsing-info, progress-bar, animations, keywords, overview, bar, history and timing,
+      separated by commas or spaces. "animations" stops every moving line while keeping what
+      they settle into, which a TERM=dumb terminal also gets on its own.
       Errors and warnings are never hidden, so hiding the parsing info still reports files that
       failed to be parsed.
   -> --style <token>=<value>,... : overrides the style of one or more categories of printed text,

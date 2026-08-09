@@ -306,6 +306,9 @@ HOW THE REPORT LOOKS
       parsing-info    the 'Parsing files' line and the 'ok' under it
       progress-bar    the bar, the share done and the speed figures of a long parse, keeping
                       its file count
+      animations      every moving line: the scan's dots, the live progress bar, and the
+                      'Writing out', 'Counting' and 'Cleaning up' lines of a '--diff'. What
+                      they settle into still prints. A TERM=dumb terminal gets this on its own
       keywords        the keyword counts, keeping the rest of the details rows
       overview        the whole percentages section
       bar             only the [-|||-] bar of the overview, keeping the percentages and the colors

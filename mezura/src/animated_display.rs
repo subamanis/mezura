@@ -58,6 +58,10 @@ const LINES_RATE_SUFFIX : &str = " lines/s";
 const ERASE_BELOW : &str = "\r\x1b[0J";
 // One write: erase, then up onto the blank line the first frame opened, undoing the display whole
 const ERASE_BELOW_AND_RETREAT : &str = "\r\x1b[0J\x1b[1A";
+// Answered by every display before it starts, and set once from main: the guard that waits for the
+// checkout removals is built before there is a configuration to ask, since it has to be the last
+// thing this process drops, so the answer lives here rather than travelling as an argument.
+static ANIMATIONS_HIDDEN : AtomicBool = AtomicBool::new(false);
 
 const _ : () = {
     assert!(TICK.as_millis() > 0);
@@ -123,6 +127,17 @@ impl Drop for AnimatedDisplay {
     }
 }
 
+pub fn set_animations_hidden(hidden: bool) {
+    ANIMATIONS_HIDDEN.store(hidden, Ordering::Relaxed);
+}
+
+// Every line here is silent when this holds, phase timing prints its own report over anything
+// moving, and none of it exists outside a terminal
+fn animations_are_hidden() -> bool {
+    ANIMATIONS_HIDDEN.load(Ordering::Relaxed) || !std::io::stderr().is_terminal()
+            || mezura_core::prints_phase_timing()
+}
+
 // Prints the walk heading, animated when both output streams are a terminal and static otherwise.
 // Owning both forms is the point: the text exists once, and the piped form is untouched by the
 // live one existing.
@@ -131,9 +146,8 @@ pub fn start_walk_display(config: &Configuration, progress: Arc<ScanProgress>) -
         return AnimatedDisplay::default();
     }
     let heading = crate::theme::get_active().heading.paint(WALK_HEADING).to_string();
-    // Phase timing writes its report to stderr from inside the run, where no display can get out
-    // of its way, so while it is on every line here stays as still as a piped one
-    if !std::io::stdout().is_terminal() || !std::io::stderr().is_terminal() || mezura_core::prints_phase_timing() {
+    // The one line with something to say when it does not move, so it says it and stops there
+    if !std::io::stdout().is_terminal() || animations_are_hidden() {
         println!("\n{heading}...");
         return AnimatedDisplay::default();
     }
@@ -165,7 +179,7 @@ pub fn start_walk_display(config: &Configuration, progress: Arc<ScanProgress>) -
 // watching. It erases itself completely, so the printed comparison carries no trace of it.
 pub fn start_revision_display(config: &Configuration, git_revision: &str, progress: Arc<ScanProgress>,
         already_written: bool) -> AnimatedDisplay {
-    if !std::io::stderr().is_terminal() || mezura_core::prints_phase_timing() {
+    if animations_are_hidden() {
         return AnimatedDisplay::default();
     }
 
@@ -197,7 +211,7 @@ pub fn start_revision_display(config: &Configuration, git_revision: &str, progre
 // The transient line of a parse that outlives the walk: the bar, the files done against the files
 // found, and the parsing speed. It erases itself completely; nothing permanent is printed.
 pub fn start_parsing_display(config: &Configuration, progress: Arc<ScanProgress>) -> AnimatedDisplay {
-    if config.view.hidden.parsing_info || !std::io::stderr().is_terminal() || mezura_core::prints_phase_timing() {
+    if config.view.hidden.parsing_info || animations_are_hidden() {
         return AnimatedDisplay::default();
     }
     if progress.get_files_found() == progress.get_files_parsed() {
@@ -228,7 +242,7 @@ pub struct RemovalsGuard;
 
 impl Drop for RemovalsGuard {
     fn drop(&mut self) {
-        if std::io::stderr().is_terminal() && !mezura_core::prints_phase_timing() {
+        if !animations_are_hidden() {
             animate_removals_line();
         }
         crate::git::await_checkout_removals();

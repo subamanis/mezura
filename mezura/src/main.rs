@@ -118,6 +118,17 @@ fn main() -> ExitCode {
     crate::theme::set_active(config.view.theme.clone());
     crate::number_formatter::set_number_separator(config.view.number_separator);
     crate::number_formatter::set_decimal_separator(config.view.decimal_separator);
+    // A terminal that names itself dumb (an Emacs shell buffer, some CI shells) is a tty with no
+    // cursor addressing, so nothing moving can be drawn on it; the 'dumb-emacs-ansi' form does
+    // understand colors and keeps them, the bare 'dumb' cannot show those either. The removals
+    // guard above was built before any of this existed, so it reads the answer from where the
+    // setter leaves it rather than from the configuration.
+    let terminal_kind = std::env::var("TERM").unwrap_or_default();
+    crate::animated_display::set_animations_hidden(
+            config.view.hidden.animations || terminal_kind.starts_with("dumb"));
+    if terminal_kind == "dumb" {
+        control::set_override(false);
+    }
 
     // A pipe already strips the escape codes, but CLICOLOR_FORCE overrides that and would put them
     // inside the strings of the document, so the machine format turns them off itself
