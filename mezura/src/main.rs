@@ -49,6 +49,10 @@ fn main() -> ExitCode {
     // exiting before they finish would leave a half-deleted tree in the temp directory
     let _removals = crate::live_progress::RemovalsGuard;
 
+    // Started here and not at the scan, so the footer answers for the whole command: a '--diff'
+    // pays for checkouts and baseline counting long before any scan of this run begins
+    let instant = Instant::now();
+
     // Windows needs a virtual terminal enabled before it shows colors at all
     #[cfg(target_os = "windows")]
     control::set_virtual_terminal(true).unwrap();
@@ -169,6 +173,11 @@ fn main() -> ExitCode {
                     if config.view.prints_text() {
                         println!();
                         crate::result_printer::print_comparison(&comparison, &config);
+                        // The exec time alone, without the parsing figures: those describe one
+                        // scan, and a comparison had up to two
+                        if !config.view.hidden.timing {
+                            println!("\n{}", crate::theme::get_active().footer.paint(&format_exec_time(&instant)));
+                        }
                     } else {
                         crate::json_printer::print_comparison_as_json(&comparison, &chrono::Local::now(), &config);
                     }
@@ -204,7 +213,6 @@ fn main() -> ExitCode {
     let progress = Arc::new(mezura_core::ScanProgress::default());
     let live = crate::live_progress::start_walk_display(&config, progress.clone());
 
-    let instant = Instant::now();
     let mut parsing_live = None;
     let outcome = mezura_core::run(&config.engine, languages, Some(progress.clone()), |scan| {
         live.finish();
@@ -228,7 +236,7 @@ fn main() -> ExitCode {
             // The document has its own 'scan_ms' measured inside the run; this is the only place
             // that knows what the whole command took. A run that found nothing prints no timing.
             if !config.view.hidden.timing && config.view.prints_text() && result.files_present.relevant_files > 0 {
-                let perf = format!("Exec time: {} secs ", crate::number_formatter::format_with_decimal_separator(format!("{:.2}", instant.elapsed().as_secs_f32())));
+                let perf = format_exec_time(&instant);
                 // Worked out here and not carried on the result: these are arithmetic on the
                 // duration and the counts, and the one second rule is a decision about the report.
                 let millis = result.performance.duration_millis;
@@ -256,6 +264,10 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn format_exec_time(instant: &Instant) -> String {
+    format!("Exec time: {} secs ", crate::number_formatter::format_with_decimal_separator(format!("{:.2}", instant.elapsed().as_secs_f32())))
 }
 
 // The two lines between the phases. They cannot be printed around the call, because the scanning and
