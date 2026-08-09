@@ -28,7 +28,7 @@ pub struct LogEntry {
     pub modules: Vec<ModuleEntry>
 }
 
-// Only what a module line of the progress section prints. Files and Extra are on the total and not
+// Only what a module line of the history section prints. Files and Extra are on the total and not
 // repeated per module.
 pub struct ModuleEntry {
     pub name: String,
@@ -105,7 +105,7 @@ fn write_whole_log(path: &str, contents: &Option<String>, result: &RunResult,
     writer.flush()
 }
 
-// One line, holding everything the progress section reads back: the identity, the scope the run
+// One line, holding everything the history section reads back: the identity, the scope the run
 // obeyed, the totals and the module totals. No derived figure is written: 'extra' and the average
 // size are worked out from the counts beside them, and a stored copy is the one thing that can
 // disagree with them.

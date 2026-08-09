@@ -41,6 +41,8 @@ const FALLBACK_WIDTH : usize = 80;
 // a long branch name or a whole hash says nothing after its first characters that is worth a speed
 // figure's place
 const REVISION_NAME_MAX_COLUMNS : usize = 18;
+// The share done, beside the bar it belongs to, in a field wide enough for every value it takes
+const PERCENT_FIELD_WIDTH : usize = "100".len();
 // Both rates sit right-aligned in reserved fields for the same reason as the walk count: a rate
 // crossing a digit boundary between two samples must not push the text beside it
 const FILES_RATE_FIELD_WIDTH : usize = "999,999".len();
@@ -69,7 +71,7 @@ const _ : () = {
 // unless the output is a terminal: a piped run stays byte-identical with a build that had none of
 // this. The gate is 'is_terminal' and never CLICOLOR_FORCE, which forces color into pipes and must
 // not force motion into them.
-pub struct LiveDisplay {
+pub struct AnimatedDisplay {
     should_stop: Arc<AtomicBool>,
     animator: Mutex<Option<JoinHandle<()>>>,
     parting: Parting,
@@ -86,7 +88,7 @@ enum Parting {
     Retreat
 }
 
-impl LiveDisplay {
+impl AnimatedDisplay {
     // Idempotent, and called on every path out of the run: the report and the errors both print on
     // ground the animator has left for good.
     pub fn finish(&self) {
@@ -102,9 +104,9 @@ impl LiveDisplay {
     }
 }
 
-impl Default for LiveDisplay {
+impl Default for AnimatedDisplay {
     fn default() -> Self {
-        LiveDisplay {
+        AnimatedDisplay {
             should_stop: Arc::new(AtomicBool::new(false)),
             animator: Mutex::new(None),
             parting: Parting::Erase,
@@ -115,7 +117,7 @@ impl Default for LiveDisplay {
 
 // A display that goes out of scope erases itself, so a function full of early returns cannot leave
 // a line animating over whatever its caller prints next
-impl Drop for LiveDisplay {
+impl Drop for AnimatedDisplay {
     fn drop(&mut self) {
         self.finish();
     }
@@ -124,16 +126,16 @@ impl Drop for LiveDisplay {
 // Prints the walk heading, animated when both output streams are a terminal and static otherwise.
 // Owning both forms is the point: the text exists once, and the piped form is untouched by the
 // live one existing.
-pub fn start_walk_display(config: &Configuration, progress: Arc<ScanProgress>) -> LiveDisplay {
+pub fn start_walk_display(config: &Configuration, progress: Arc<ScanProgress>) -> AnimatedDisplay {
     if config.view.hidden.directory_info || !config.view.prints_text() {
-        return LiveDisplay::default();
+        return AnimatedDisplay::default();
     }
     let heading = crate::theme::get_active().heading.paint(WALK_HEADING).to_string();
     // Phase timing writes its report to stderr from inside the run, where no display can get out
     // of its way, so while it is on every line here stays as still as a piped one
     if !std::io::stdout().is_terminal() || !std::io::stderr().is_terminal() || mezura_core::prints_phase_timing() {
         println!("\n{heading}...");
-        return LiveDisplay::default();
+        return AnimatedDisplay::default();
     }
 
     // The line begins on stdout, dotless and unfinished; the animator redraws it in place from
@@ -143,14 +145,14 @@ pub fn start_walk_display(config: &Configuration, progress: Arc<ScanProgress>) -
     let stop = Arc::new(AtomicBool::new(false));
     let animator = {
         let (progress, stop, heading) = (progress, stop.clone(), heading.clone());
-        thread::Builder::new().name("live-progress".to_owned())
+        thread::Builder::new().name("animated-display".to_owned())
                 .spawn(move || animate_walk_line(&progress, &stop, &heading)).ok()
     };
     if animator.is_none() {
         println!("...");
     }
 
-    LiveDisplay {
+    AnimatedDisplay {
         should_stop: stop,
         animator: Mutex::new(animator),
         parting: Parting::Settle(format!("{heading}...")),
@@ -162,9 +164,9 @@ pub fn start_walk_display(config: &Configuration, progress: Arc<ScanProgress>) -
 // while the checkout is scanned, then the parsing frame once the scan ends and the queue is worth
 // watching. It erases itself completely, so the printed comparison carries no trace of it.
 pub fn start_revision_display(config: &Configuration, git_revision: &str, progress: Arc<ScanProgress>,
-        already_written: bool) -> LiveDisplay {
+        already_written: bool) -> AnimatedDisplay {
     if !std::io::stderr().is_terminal() || mezura_core::prints_phase_timing() {
-        return LiveDisplay::default();
+        return AnimatedDisplay::default();
     }
 
     // Only the word carries the heading style: the revision is data, not a header. A write that
@@ -179,12 +181,12 @@ pub fn start_revision_display(config: &Configuration, git_revision: &str, progre
     let opened = Arc::new(AtomicBool::new(false));
     let animator = {
         let (progress, stop, opened) = (progress, stop.clone(), opened.clone());
-        thread::Builder::new().name("live-progress".to_owned())
+        thread::Builder::new().name("animated-display".to_owned())
                 .spawn(move || animate_revision_line(&progress, &stop, &opened, writing.as_deref(),
                         &counting, show_bar_and_rates, charset)).ok()
     };
 
-    LiveDisplay {
+    AnimatedDisplay {
         should_stop: stop,
         animator: Mutex::new(animator),
         parting: Parting::Retreat,
@@ -194,12 +196,12 @@ pub fn start_revision_display(config: &Configuration, git_revision: &str, progre
 
 // The transient line of a parse that outlives the walk: the bar, the files done against the files
 // found, and the parsing speed. It erases itself completely; nothing permanent is printed.
-pub fn start_parsing_display(config: &Configuration, progress: Arc<ScanProgress>) -> LiveDisplay {
+pub fn start_parsing_display(config: &Configuration, progress: Arc<ScanProgress>) -> AnimatedDisplay {
     if config.view.hidden.parsing_info || !std::io::stderr().is_terminal() || mezura_core::prints_phase_timing() {
-        return LiveDisplay::default();
+        return AnimatedDisplay::default();
     }
     if progress.get_files_found() == progress.get_files_parsed() {
-        return LiveDisplay::default();
+        return AnimatedDisplay::default();
     }
 
     let show_bar_and_rates = !config.view.hidden.progress_bar;
@@ -207,11 +209,11 @@ pub fn start_parsing_display(config: &Configuration, progress: Arc<ScanProgress>
     let stop = Arc::new(AtomicBool::new(false));
     let animator = {
         let (progress, stop) = (progress, stop.clone());
-        thread::Builder::new().name("live-progress".to_owned())
+        thread::Builder::new().name("animated-display".to_owned())
                 .spawn(move || animate_parsing_line(&progress, &stop, show_bar_and_rates, charset)).ok()
     };
 
-    LiveDisplay {
+    AnimatedDisplay {
         should_stop: stop,
         animator: Mutex::new(animator),
         parting: Parting::Erase,
@@ -234,7 +236,7 @@ impl Drop for RemovalsGuard {
 }
 
 // The one place that knows what each parting is made of, shared with the removals line below,
-// which parts the same way without being a LiveDisplay
+// which parts the same way without being a AnimatedDisplay
 fn write_parting(parting: &Parting) {
     let text = match parting {
         Parting::Settle(line) => format!("{ERASE_BELOW}{line}\n"),
@@ -296,18 +298,18 @@ fn fit_parsing_frame(budget: usize, label_width: usize, count_width: usize) -> F
     let count_block = 2 * count_width + "/".len() + " files".len();
     let files_block = "  ".len() + FILES_RATE_FIELD_WIDTH + FILES_RATE_SUFFIX.len();
     let lines_block = " | ".len() + LINES_RATE_FIELD_WIDTH + LINES_RATE_SUFFIX.len();
-    let bar_frame = "[] ".len();
+    let bar_block = "[] ".len() + PERCENT_FIELD_WIDTH + "% ".len();
     let fixed = label_width + count_block;
 
-    let with_both = budget.saturating_sub(fixed + files_block + lines_block + bar_frame);
+    let with_both = budget.saturating_sub(fixed + files_block + lines_block + bar_block);
     if with_both >= MIN_BAR_CELLS {
         return FramePlan { bar_cells: with_both.min(MAX_BAR_CELLS), files_rate: true, lines_rate: true };
     }
-    let with_files = budget.saturating_sub(fixed + files_block + bar_frame);
+    let with_files = budget.saturating_sub(fixed + files_block + bar_block);
     if with_files >= MIN_BAR_CELLS {
         return FramePlan { bar_cells: with_files.min(MAX_BAR_CELLS), files_rate: true, lines_rate: false };
     }
-    let bar_alone = budget.saturating_sub(fixed + bar_frame);
+    let bar_alone = budget.saturating_sub(fixed + bar_block);
     if bar_alone >= MIN_BAR_CELLS {
         return FramePlan { bar_cells: bar_alone.min(MAX_BAR_CELLS), files_rate: false, lines_rate: false };
     }
@@ -629,7 +631,11 @@ fn format_parsing_frame(bar_parsed: usize, counted_parsed: usize, total: usize, 
         },
         _ => String::new()
     };
-    format!("{}{}{} {count}{speed}", theme.bar_frame.paint("["),
+    // The share follows the count beside it and not the bar, so every figure on the line moves
+    // at once: the bar is the one part that answers every tick
+    let share = theme.progress_bar_figures.paint(&format!("{:>PERCENT_FIELD_WIDTH$}%",
+            calculate_percentage_done(counted_parsed, total)));
+    format!("{}{}{} {share} {count}{speed}", theme.bar_frame.paint("["),
             paint_bar_cells(&build_bar(bar_parsed, total, plan.bar_cells, charset), charset,
                     &theme.progress_bar_fill, &theme.progress_bar_empty, phase),
             theme.bar_frame.paint("]"))
@@ -661,6 +667,12 @@ fn paint_bar_cells(cells: &str, charset: &str, fill: &Style, empty: &Style, phas
 
 fn calculate_rainbow_phase(elapsed_ms: u128) -> f32 {
     (elapsed_ms % RAINBOW_CYCLE_MS) as f32 / RAINBOW_CYCLE_MS as f32
+}
+
+// Rounded down, so that only the last file makes it a hundred: a line reading 100% while the
+// counting is still going is the one figure a reader would call a lie
+fn calculate_percentage_done(parsed: usize, total: usize) -> usize {
+    (parsed.min(total) * 100).checked_div(total).unwrap_or(0)
 }
 
 // 'cells' cells with one quantum per character of the set: the last character is a full cell, the
@@ -813,6 +825,17 @@ mod tests {
         }
     }
 
+    // Only the last file makes it a hundred, and nothing to count is not a finished job
+    #[test]
+    fn the_share_done_rounds_down_and_reaches_a_hundred_only_at_the_end() {
+        assert_eq!(0, calculate_percentage_done(0, 80_000));
+        assert_eq!(99, calculate_percentage_done(79_999, 80_000));
+        assert_eq!(100, calculate_percentage_done(80_000, 80_000));
+        // a count that overshot its total, which a walk that found more files can do
+        assert_eq!(100, calculate_percentage_done(80_001, 80_000));
+        assert_eq!(0, calculate_percentage_done(0, 0));
+    }
+
     // The bar is earned by the time the remainder will take and never by its size: a queue of any
     // length that drains fast is no reason to draw anything
     #[test]
@@ -857,7 +880,7 @@ mod tests {
     #[test]
     fn the_bar_holds_its_width_fills_monotonically_and_reaches_both_ends() {
         use crate::config_manager::ProgressBarStyle;
-        for style in [ProgressBarStyle::Smooth, ProgressBarStyle::Dotted, ProgressBarStyle::Hash] {
+        for style in [ProgressBarStyle::Smooth, ProgressBarStyle::Blocky, ProgressBarStyle::Hash] {
             for cells in [MIN_BAR_CELLS, MAX_BAR_CELLS] {
                 let charset = style.get_charset();
                 let quanta = cells * charset.chars().count();
@@ -889,6 +912,10 @@ mod tests {
         let late = format_parsing_frame(79_999, 79_999, 80_000, width, Some((312, 9_154)), &full, charset, 0.0);
         assert!(early.contains("files/s") && early.contains("lines/s"));
         assert_eq!(measure_columns(&early), measure_columns(&late));
+
+        // the share is beside the bar and holds its column from one digit to three
+        assert!(early.contains("  0%") && late.contains(" 99%"));
+        assert!(format_parsing_frame(80_000, 80_000, 80_000, width, None, &full, charset, 0.0).contains("100%"));
 
         // before the first sample there is no honest rate, so none is shown
         assert!(!format_parsing_frame(5, 5, 80_000, width, None, &full, charset, 0.0).contains("files/s"));

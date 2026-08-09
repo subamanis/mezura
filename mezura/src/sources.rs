@@ -90,7 +90,7 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
     // Dropped, and with it erased, before this function returns anything: the whole phase is
     // silent on the permanent output, and the motion is its only sign of life
     let progress = Arc::new(ScanProgress::default());
-    let _live = super::live_progress::start_revision_display(config, &side.resolved.revision, progress.clone(),
+    let _live = super::animated_display::start_revision_display(config, &side.resolved.revision, progress.clone(),
             side.write.as_ref().is_some_and(|x| x.is_finished()));
 
     let checkout = match side.write.take() {

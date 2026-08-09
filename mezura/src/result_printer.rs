@@ -102,7 +102,7 @@ so the 'table' layout was printed. Use the modules feature to get a matrix: 'mez
     // A log of nothing but whitespace has nothing to compare against, and the section would be a
     // heading with no rows under it. The same file is history the log itself must not destroy, so
     // the emptiness is asked about here rather than by whoever read it.
-    if !config.view.hidden.progress && let Some(content) = existing_log_content
+    if !config.view.hidden.history && let Some(content) = existing_log_content
         && !content.trim().is_empty() && config.view.compare_level != 0 {
         print_comparison_to_previous_runs(result, content, config, datetime_now);
     }
@@ -549,8 +549,8 @@ fn format_boxed_comparison_lines(theme: &Theme, rows: &[ComparedRow]) -> Vec<Str
 // 'From A to B' and not 'compared A to B': the columns hold B's counts and the signs are the
 // journey, so a sentence that puts A first as its subject says the opposite of the table.
 fn format_comparison_heading(theme: &Theme, baseline: &super::diff::Reading, subject: &super::diff::Reading) -> String {
-    format!("{} '{}' ({}) {} '{}' ({})", theme.progress_entry.paint("From"),
-            baseline.determine_display_name(), format_readable_time(&baseline.taken), theme.progress_entry.paint("to"),
+    format!("{} '{}' ({}) {} '{}' ({})", theme.history_entry.paint("From"),
+            baseline.determine_display_name(), format_readable_time(&baseline.taken), theme.history_entry.paint("to"),
             subject.determine_display_name(), format_readable_time(&subject.taken))
 }
 
@@ -645,14 +645,14 @@ fn format_change(before: usize, now: usize) -> String {
     }
 }
 
-// The three cases already have tokens of their own, since the progress section colors the same
+// The three cases already have tokens of their own, since the history section colors the same
 // three. What is added here is only that a figure which did not move is dimmed as well: most rows of
 // a comparison are that, and they are there to be read past rather than read.
 fn paint_change(theme: &Theme, before: usize, now: usize, text: &str) -> String {
     match now.cmp(&before) {
-        std::cmp::Ordering::Greater => theme.progress_up.paint(text).to_string(),
-        std::cmp::Ordering::Less => theme.progress_down.paint(text).to_string(),
-        std::cmp::Ordering::Equal => theme.progress_same.clone().dim().paint(text).to_string()
+        std::cmp::Ordering::Greater => theme.history_up.paint(text).to_string(),
+        std::cmp::Ordering::Less => theme.history_down.paint(text).to_string(),
+        std::cmp::Ordering::Equal => theme.history_same.clone().dim().paint(text).to_string()
     }
 }
 
@@ -1524,8 +1524,8 @@ fn format_modified_tag(changed: &[&'static str]) -> String {
     }
 
     let theme = super::theme::get_active();
-    format!("   {} {}", theme.progress_modified.paint("modified:"),
-            theme.progress_modified_field.paint(&changed.join(", ")))
+    format!("   {} {}", theme.history_modified.paint("modified:"),
+            theme.history_modified_field.paint(&changed.join(", ")))
 }
 
 // One line per module under the line of the entry, and narrower than it: Files and Extra stay on
@@ -1579,16 +1579,16 @@ fn format_module_comparison_lines(entry: &super::log::LogEntry, groups: &[Group]
 fn paint_percentage(percentage: &str) -> ColoredString {
     let theme = super::theme::get_active();
     if percentage.starts_with('+') {
-        theme.progress_up.paint(percentage)
+        theme.history_up.paint(percentage)
     } else if percentage.starts_with('-') {
-        theme.progress_down.paint(percentage)
+        theme.history_down.paint(percentage)
     } else {
-        theme.progress_same.paint(percentage)
+        theme.history_same.paint(percentage)
     }
 }
 
 fn print_comparison_to_previous_runs(result: &RunResult, log_content: &str, config: &Configuration, datetime_now: &DateTime<Local>) {
-    println!("\n{}.\n", super::theme::get_active().heading.paint("Progress"));
+    println!("\n{}.\n", super::theme::get_active().heading.paint("History"));
 
     let total = &result.total;
     let log_entries = super::log::read_last_entries(log_content, config.view.compare_level);
@@ -1600,7 +1600,7 @@ fn print_comparison_to_previous_runs(result: &RunResult, log_content: &str, conf
     for entry in log_entries.iter() {
         let duration = datetime_now.signed_duration_since(entry.datetime);
         let (days, hours, minutes) = split_minutes_to_D_H_M(duration.num_minutes());
-        let arrow = super::theme::get_active().progress_entry.paint("->");
+        let arrow = super::theme::get_active().history_entry.paint("->");
         let tag = format_modified_tag(&find_settings_changed_since(entry, config, &result.targets));
         if let Some(name) = &entry.name {
             comparison_str.push_str(&format!("{} \"{}\" ({} days, {} hours and {} minutes ago){}\n",

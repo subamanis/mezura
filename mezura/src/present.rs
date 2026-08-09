@@ -55,7 +55,7 @@ pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>,
     print_faulty_files_or_ok(&result.faulty_files, config);
     print_detail_hint_if_anything_was_hidden(result, config);
 
-    // A comparison takes the report's place whole: no report, no progress section, no log entry
+    // A comparison takes the report's place whole: no report, no history section, no log entry
     if comparison.is_some() || !config.view.prints_text() {
         print_comparison_or_empty_document(result, comparison, &datetime_now, config);
         return;

@@ -57,6 +57,9 @@ Main changes:
       older shape went.
   -> The overview bar is drawn with the 'medium' character by default. Use '--bar-thickness slim'
       for the old bar, which is the one that renders on every terminal.
+  -> The section that compares this run with previous ones is now called "History" instead of
+      "Progress", since it is the past and not the state of the run in front of you. "Progress"
+      now means the live bar of the run itself, and nothing else.
   -> "extra" no longer includes the comments: it is the blank lines plus the lines that carry
       no content.
   -> Lines that carry no content are recognised consistently now, whatever punctuation they are
@@ -68,10 +71,11 @@ Main changes:
   -> On a terminal, the "Analyzing directories" line now moves while the scan runs: the dots cycle,
       and a count of the files found so far appears beside them on a scan long enough to need one.
       Redirected or piped output is unchanged.
-  -> A parse with more than 5,000 files still waiting when the scan ends draws a live progress bar
-      on a terminal: the files done against the files found, with the parsing speed beside them,
-      erased before the report prints. "--hide progress-bar" keeps only the file count.
-  -> New "--progress-bar" command: "smooth", "dotted" or "hash" chooses the characters the live
+  -> A parse that will outlast the scan by more than half a second draws a live progress bar on a
+      terminal: the share done and the files done against the files found, with the parsing speed
+      beside them, erased before the report prints. "--hide progress-bar" keeps only the file
+      count.
+  -> New "--progress-bar" command: "smooth", "blocky" or "hash" chooses the characters the live
       bar is drawn with. "hash" is plain ASCII, for a terminal that draws the block characters
       wrongly or not at all.
   -> The live lines fit themselves to the terminal's width, and follow it while it is resized:
@@ -97,7 +101,8 @@ Main changes:
       failure and still exits 0, and so does a run where only some files failed.
 New commands:
   -> --hide <list> : leaves parts of the output unprinted. Takes any of version, directory-info,
-      parsing-info, keywords, overview, bar, progress and timing, separated by commas or spaces.
+      parsing-info, progress-bar, keywords, overview, bar, history and timing, separated by
+      commas or spaces.
       Errors and warnings are never hidden, so hiding the parsing info still reports files that
       failed to be parsed.
   -> --style <token>=<value>,... : overrides the style of one or more categories of printed text,
@@ -157,7 +162,7 @@ New commands:
       The total keeps counting all of them, and the overview never shows more than n either.
 
 Change in commands:
-  -> The progress section marks an entry that was counted with different settings: "modified:"
+  -> The history section marks an entry that was counted with different settings: "modified:"
       followed by the names of the ones that changed. The comparison is still shown, because the
       point is to say whether it can be trusted. Log entries also record '--no-gitignore' now, the
       one setting that changes the numbers and was not being written down.
@@ -193,7 +198,7 @@ Bugfixes:
       could not be told apart from one borrowed from the baseline.
   -> A setting named by a comparison is now spelled without its dashes, as "braces-as-code" rather
       than "--braces-as-code", both in the sentences above the table and in the "subject" of a JSON
-      warning. It is the same name the progress section already used for the same thing.
+      warning. It is the same name the history section already used for the same thing.
   -> Each side of a comparison document now records the directories it measured, under
       "scope.dirs", the way a run document already did. Without it, two sides that measured
       different trees could not be told apart from code that changed. A side counted from a git
@@ -258,7 +263,7 @@ Bugfixes:
       spelled could hand your files to a different one, with its comment symbols and without a word.
   -> A language that claims one extension in two spellings, such as "h" and ".h", no longer reports
       itself as contesting the extension with itself.
-  -> The progress section now reports "--force-lang" among the settings that changed since an
+  -> The history section now reports "--force-lang" among the settings that changed since an
       earlier run. It was written into the log and thrown away on the way back in, so numbers moved
       with nothing to say why.
   -> The time a run reports is no longer shortened by a slow "on traversal done" callback that the

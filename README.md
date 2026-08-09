@@ -16,7 +16,7 @@ Example run on entire Linux Kernel: </br>
 * [Cmd Commands](#cmd-commands)
 * [Scripting](#scripting)
 * [Configuration Files](#configuration-files)
-* [Logs and Progress](#logs-and-progress)
+* [Logs and History](#logs-and-history)
 * [Themes](#themes)
 * [Supported Languages](#supported-languages)
 * [Accuracy and Limitations](#accuracy-and-limitations)
@@ -304,11 +304,12 @@ HOW THE REPORT LOOKS
       version         the version line at the top
       directory-info  the 'Analyzing directories' line and the 'N files found' line under it
       parsing-info    the 'Parsing files' line and the 'ok' under it
-      progress-bar    the progress bar and speed figures of a long parse, keeping its file count
+      progress-bar    the bar, the share done and the speed figures of a long parse, keeping
+                      its file count
       keywords        the keyword counts, keeping the rest of the details rows
       overview        the whole percentages section
       bar             only the [-|||-] bar of the overview, keeping the percentages and the colors
-      progress        the comparison with previous runs (the same as '--compare 0')
+      history         the comparison with previous runs (the same as '--compare 0')
       timing          the execution time line at the bottom
 
     The list mixes whole sections with parts of them on purpose: you are pointing at what you
@@ -372,7 +373,7 @@ HOW THE REPORT LOOKS
     both sizes since there is no reason to want two colors of KBs on one line. It is separate from
     the labels so that it can stay quiet while 'Size' reads like every other column header.
 
-    The numbers of the "progress" section are the same quantities, so they follow the same tokens.
+    The numbers of the "history" section are the same quantities, so they follow the same tokens.
 
     The rest, by where they appear.
 
@@ -407,19 +408,19 @@ HOW THE REPORT LOOKS
                                and not this one gets the same style here, since the two
                                never appear together
 
-    The progress section:
-      progress-up              an increase
-      progress-down            a decrease
-      progress-same            no change
-      progress-entry           the '->' of a progress entry
-      progress-modified        the word 'modified:' on an entry counted with other settings
-      progress-modified-field  the names of the settings that changed since that entry
+    The history section, which compares this run with the ones before it:
+      history-up               an increase
+      history-down             a decrease
+      history-same             no change
+      history-entry            the '->' of an entry
+      history-modified         the word 'modified:' on an entry counted with other settings
+      history-modified-field   the names of the settings that changed since that entry
 
     The live lines, which only a terminal ever sees:
       progress-bar-fill        the cells the progress bar has drawn
-      progress-bar-empty       the cells it has not reached. They are blank until this is
-                               styled, and styling it lays a track behind the whole bar
-      progress-bar-figures     the file counts and the speed figures beside the bar
+      progress-bar-empty       the cells it has not reached, a faint track behind the whole
+                               bar. 'default' takes the track away and leaves them blank
+      progress-bar-figures     the file counts, the share done and the speed figures
 
     Only the color of a 'language-' token reaches the cells of the overview bar; bold, italic and
     the rest apply to the language name alone.
@@ -446,17 +447,18 @@ HOW THE REPORT LOOKS
 
 --progress-bar
 
-    One argument: 'smooth', 'dotted' or 'hash'. Default: smooth
+    One argument: 'smooth', 'blocky' or 'hash'. Default: smooth
 
     Chooses the characters that the live progress bar of a long parse is drawn with.
 
-      smooth   ▏▎▍▌▋▊▉█   the tip glides through eight sub-steps per cell
-      dotted   ░▒▓█       shade steps, four per cell
+      smooth   ▏▎▍▌▋▊▉█   one unbroken bar, its tip gliding through eight sub-steps per cell
+      blocky   ▪▮         separate boxes, each drawn narrower than its cell, so a small gap
+                          falls between them
       hash     .:#        the only one made of ASCII, so it is the one that is guaranteed
                           to render on every terminal
 
-    The bar only appears on a terminal, on a parse long enough to watch; '--hide progress-bar'
-    keeps its file count and drops the rest.
+    The bar only appears on a terminal, on a parse long enough to watch, with the share done
+    beside it; '--hide progress-bar' keeps its file count and drops the rest.
 
 --number-separator
 
@@ -566,7 +568,7 @@ TAKING THE RESULT ELSEWHERE
     This flag only works if a configuration file is loaded. Specifies with how many previous logs this
     program execution should be compared to (see '--save' and '--load' commands).
 
-    Providing 0 as argument will disable the progress report (comparison).
+    Providing 0 as argument will disable the history section (comparison).
 
     Every log entry records the settings that decide what is counted, and an entry that was written
     with different ones is marked 'modified:' followed by their names. The comparison is still shown,
@@ -621,8 +623,8 @@ TAKING THE RESULT ELSEWHERE
 
     The keywords are marked the same way, in the section they already have, and only where one
     moved: 'structs: 57 (+5), traits: 2'. The overview is not printed, being a picture of one
-    reading, and neither is the progress section, which is a comparison of its own against the
-    log's history: two of those under one another answer 'what changed since' twice with
+    reading, and neither is the history section, which is a comparison of its own against the
+    log's entries: two of those under one another answer 'what changed since' twice with
     different pasts.
 
     '--sort' and '--top' order and cut the rows as they do everywhere else. The comparison is
@@ -846,11 +848,11 @@ The priorities of the specified flags are:
 
 
 
-## Logs and Progress
+## Logs and History
 Inside the 'data/logs' folder, the program will save log files that correspond to saved configurations everytime the '--log' flag is used. <br>
 A log is a .jsonl file: one JSON entry per line, the newest first, so it is read by any JSON tool one line at a time. Each entry records the date and time of the execution and the name of the log (if specified), the settings the run was counted with (the target directories, whether braces count as code, and so on, so you can see if at some point the configuration got modified), and the total files, lines, code lines, comment lines and size of the execution. <br>
 
-A run that names its targets records its modules in the entry, and the progress section then carries one narrow line per module: which of them grew, and by how much. A module that was not there last time, or that is not there any more, is named as such instead of being compared against nothing. An entry written by a run that named none has no such block. <br>
+A run that names its targets records its modules in the entry, and the history section then carries one narrow line per module: which of them grew, and by how much. A module that was not there last time, or that is not there any more, is named as such instead of being compared against nothing. An entry written by a run that named none has no such block. <br>
 
 By using the '--compare <N>' flag, the (N) previous logged executions will be retrieved from the file and will be compared and printed to the screen. For example
 for N = 3, it would look like this:
@@ -981,7 +983,7 @@ Remove-MpPreference -ExclusionProcess "mezura.exe"
 
 ## Similar Projects
 
-If you don't require the keyword counting functionality of this program, the progress tracking feature, or the alternate-than-usual visualization, use the [scc](https://github.com/boyter/scc) project written in GO, that is honestly impressive.
+If you don't require the keyword counting functionality of this program, the history tracking feature, or the alternate-than-usual visualization, use the [scc](https://github.com/boyter/scc) project written in GO, that is honestly impressive.
 
 Other alternative projects you can check are:
 - [loc](https://github.com/cgag/loc)

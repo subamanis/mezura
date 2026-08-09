@@ -10,6 +10,7 @@ macro_rules! hashmap {
     }}
 }
 
+mod animated_display;
 mod args;
 mod config_files;
 mod config_manager;
@@ -18,7 +19,6 @@ mod error_colors;
 mod git;
 mod json_printer;
 mod json_reader;
-mod live_progress;
 mod log;
 mod message_printer;
 mod number_formatter;
@@ -47,7 +47,7 @@ use crate::paths::{CONFIG_DIR_NAME, DEFAULT_CONFIG_NAME, LANGUAGES_DIR_NAME, LOG
 fn main() -> ExitCode {
     // Dropped last of all: a '--diff' removes its temporary checkouts on background threads, and
     // exiting before they finish would leave a half-deleted tree in the temp directory
-    let _removals = crate::live_progress::RemovalsGuard;
+    let _removals = crate::animated_display::RemovalsGuard;
 
     // Started here and not at the scan, so the footer answers for the whole command: a '--diff'
     // pays for checkouts and baseline counting long before any scan of this run begins
@@ -211,13 +211,13 @@ fn main() -> ExitCode {
     };
 
     let progress = Arc::new(mezura_core::ScanProgress::default());
-    let live = crate::live_progress::start_walk_display(&config, progress.clone());
+    let live = crate::animated_display::start_walk_display(&config, progress.clone());
 
     let mut parsing_live = None;
     let outcome = mezura_core::run(&config.engine, languages, Some(progress.clone()), |scan| {
         live.finish();
         announce_traversal(&config, scan);
-        parsing_live = Some(crate::live_progress::start_parsing_display(&config, progress));
+        parsing_live = Some(crate::animated_display::start_parsing_display(&config, progress));
     });
     if let Some(x) = &parsing_live {
         x.finish();

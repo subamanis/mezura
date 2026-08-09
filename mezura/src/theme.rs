@@ -268,7 +268,7 @@ theme_tokens! {
     details_language_header => "details-language-header", Style::of(LABEL_GOLD).italic();
     details_language_name   => "details-language-name",   Style::plain().bold();
     // The name of a module, wherever one is printed: the row that opens its section in the details,
-    // its heading in the keywords, and its line in the progress section
+    // its heading in the keywords, and its line in the history section
     details_module    => "details-module",    Style::of(LABEL_GOLD).bold();
     details_total     => "details-total",     Style::plain().bold();
     overview_label    => "overview-label",    Style::plain();
@@ -280,18 +280,20 @@ theme_tokens! {
     language_4        => "language-4",        Style::of(Color::TrueColor { r: 106, g: 217, b: 189 });
     language_others   => "language-others",   Style::of(Color::TrueColor { r: 215, g: 201, b: 240 });
 
-    progress_up       => "progress-up",       Style::of(Color::TrueColor { r: 201, g: 255, b: 189 });
-    progress_down     => "progress-down",     Style::of(Color::TrueColor { r: 219, g: 129, b: 129 });
-    progress_same     => "progress-same",     Style::of(Color::TrueColor { r: 255, g: 255, b: 255 });
-    progress_entry    => "progress-entry",    Style::plain().bold();
+    history_up       => "history-up",        Style::of(Color::TrueColor { r: 201, g: 255, b: 189 });
+    history_down     => "history-down",      Style::of(Color::TrueColor { r: 219, g: 129, b: 129 });
+    history_same     => "history-same",      Style::of(Color::TrueColor { r: 255, g: 255, b: 255 });
+    history_entry    => "history-entry",     Style::plain().bold();
     // Two tokens and not one per setting: the word is the flag, the names are the detail
-    progress_modified => "progress-modified", Style::of(Color::Yellow);
-    progress_modified_field => "progress-modified-field", Style::plain();
+    history_modified => "history-modified",  Style::of(Color::Yellow);
+    history_modified_field => "history-modified-field", Style::plain();
 
-    // The live lines, which only a terminal ever sees. The cells the bar has not reached are
-    // blank until this is styled, and styling it draws them as a track instead.
+    // The live lines, which only a terminal ever sees. The track is a step above a dark
+    // terminal's own background and no more: the bar has to be readable as a length, and the
+    // part not reached yet is the quietest thing on the line. 'default' turns it off, leaving
+    // those cells blank.
     progress_bar_fill    => "progress-bar-fill",    Style::plain();
-    progress_bar_empty   => "progress-bar-empty",   Style::plain();
+    progress_bar_empty   => "progress-bar-empty",   Style::of(Color::TrueColor { r: 34, g: 34, b: 34 });
     progress_bar_figures => "progress-bar-figures", Style::plain().dim();
 
     summary           => "summary",           Style::plain();

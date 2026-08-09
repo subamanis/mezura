@@ -173,7 +173,7 @@ pub struct Hidden {
     pub keywords: bool,
     pub overview: bool,
     pub bar: bool,
-    pub progress: bool,
+    pub history: bool,
     pub timing: bool
 }
 
@@ -181,7 +181,7 @@ impl Hidden {
     fn get_pairs(self) -> [(&'static str, bool); 9] {
         [("version", self.version), ("directory-info", self.directory_info), ("parsing-info", self.parsing_info),
          ("progress-bar", self.progress_bar), ("keywords", self.keywords), ("overview", self.overview),
-         ("bar", self.bar), ("progress", self.progress), ("timing", self.timing)]
+         ("bar", self.bar), ("history", self.history), ("timing", self.timing)]
     }
 
     // Returns the unrecognised name, so that the error can say which one it was
@@ -196,7 +196,7 @@ impl Hidden {
                 "keywords" => hidden.keywords = true,
                 "overview" => hidden.overview = true,
                 "bar" => hidden.bar = true,
-                "progress" => hidden.progress = true,
+                "history" => hidden.history = true,
                 "timing" => hidden.timing = true,
                 _ => return Err(entry.to_owned())
             }
@@ -261,15 +261,18 @@ impl BarThickness {
 pub enum ProgressBarStyle {
     #[default]
     Smooth,
-    Dotted,
+    Blocky,
     Hash
 }
 
 impl ProgressBarStyle {
+    // Each set runs from its faintest step to the one that fills a cell, and a cell is filled
+    // through them in order. 'blocky' owes its gaps to the glyphs themselves: a box is drawn
+    // narrower than the cell it sits in, so a run of them reads as separate boxes.
     pub fn get_charset(&self) -> &'static str {
         match self {
             Self::Smooth => "▏▎▍▌▋▊▉█",
-            Self::Dotted => "░▒▓█",
+            Self::Blocky => "▪▮",
             Self::Hash => ".:#"
         }
     }
@@ -277,7 +280,7 @@ impl ProgressBarStyle {
     pub fn parse(value: &str) -> Option<ProgressBarStyle> {
         match value.trim().to_lowercase().as_str() {
             "smooth" => Some(Self::Smooth),
-            "dotted" => Some(Self::Dotted),
+            "blocky" => Some(Self::Blocky),
             "hash" => Some(Self::Hash),
             _ => None
         }
@@ -286,7 +289,7 @@ impl ProgressBarStyle {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Smooth => "smooth",
-            Self::Dotted => "dotted",
+            Self::Blocky => "blocky",
             Self::Hash => "hash"
         }
     }

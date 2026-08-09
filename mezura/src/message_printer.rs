@@ -211,11 +211,12 @@ pub const HIDE_HELP  :  &str =
       version         the version line at the top
       directory-info  the 'Analyzing directories' line and the 'N files found' line under it
       parsing-info    the 'Parsing files' line and the 'ok' under it
-      progress-bar    the progress bar and speed figures of a long parse, keeping its file count
+      progress-bar    the bar, the share done and the speed figures of a long parse, keeping
+                      its file count
       keywords        the keyword counts, keeping the rest of the details rows
       overview        the whole percentages section
       bar             only the [-|||-] bar of the overview, keeping the percentages and the colors
-      progress        the comparison with previous runs (the same as '--compare 0')
+      history         the comparison with previous runs (the same as '--compare 0')
       timing          the execution time line at the bottom
 
     The list mixes whole sections with parts of them on purpose: you are pointing at what you
@@ -312,17 +313,18 @@ pub const BAR_THICKNESS_HELP  :  &str =
 pub const PROGRESS_BAR_HELP  :  &str =
 "--progress-bar
 
-    One argument: 'smooth', 'dotted' or 'hash'. Default: smooth
+    One argument: 'smooth', 'blocky' or 'hash'. Default: smooth
 
     Chooses the characters that the live progress bar of a long parse is drawn with.
 
-      smooth   ▏▎▍▌▋▊▉█   the tip glides through eight sub-steps per cell
-      dotted   ░▒▓█       shade steps, four per cell
+      smooth   ▏▎▍▌▋▊▉█   one unbroken bar, its tip gliding through eight sub-steps per cell
+      blocky   ▪▮         separate boxes, each drawn narrower than its cell, so a small gap
+                          falls between them
       hash     .:#        the only one made of ASCII, so it is the one that is guaranteed
                           to render on every terminal
 
-    The bar only appears on a terminal, on a parse long enough to watch; '--hide progress-bar'
-    keeps its file count and drops the rest.
+    The bar only appears on a terminal, on a parse long enough to watch, with the share done
+    beside it; '--hide progress-bar' keeps its file count and drops the rest.
 
 ";
 pub const LAYOUT_HELP  :  &str =
@@ -460,8 +462,8 @@ pub const DIFF_HELP  :  &str =
 
     The keywords are marked the same way, in the section they already have, and only where one
     moved: 'structs: 57 (+5), traits: 2'. The overview is not printed, being a picture of one
-    reading, and neither is the progress section, which is a comparison of its own against the
-    log's history: two of those under one another answer 'what changed since' twice with
+    reading, and neither is the history section, which is a comparison of its own against the
+    log's entries: two of those under one another answer 'what changed since' twice with
     different pasts.
 
     '--sort' and '--top' order and cut the rows as they do everywhere else. The comparison is
@@ -570,7 +572,7 @@ pub const STYLE_HELP  :  &str =
     both sizes since there is no reason to want two colors of KBs on one line. It is separate from
     the labels so that it can stay quiet while 'Size' reads like every other column header.
 
-    The numbers of the \"progress\" section are the same quantities, so they follow the same tokens.
+    The numbers of the \"history\" section are the same quantities, so they follow the same tokens.
 
     The rest, by where they appear.
 
@@ -605,19 +607,19 @@ pub const STYLE_HELP  :  &str =
                                and not this one gets the same style here, since the two
                                never appear together
 
-    The progress section:
-      progress-up              an increase
-      progress-down            a decrease
-      progress-same            no change
-      progress-entry           the '->' of a progress entry
-      progress-modified        the word 'modified:' on an entry counted with other settings
-      progress-modified-field  the names of the settings that changed since that entry
+    The history section, which compares this run with the ones before it:
+      history-up               an increase
+      history-down             a decrease
+      history-same             no change
+      history-entry            the '->' of an entry
+      history-modified         the word 'modified:' on an entry counted with other settings
+      history-modified-field   the names of the settings that changed since that entry
 
     The live lines, which only a terminal ever sees:
       progress-bar-fill        the cells the progress bar has drawn
-      progress-bar-empty       the cells it has not reached. They are blank until this is
-                               styled, and styling it lays a track behind the whole bar
-      progress-bar-figures     the file counts and the speed figures beside the bar
+      progress-bar-empty       the cells it has not reached, a faint track behind the whole
+                               bar. 'default' takes the track away and leaves them blank
+      progress-bar-figures     the file counts, the share done and the speed figures
 
     Only the color of a 'language-' token reaches the cells of the overview bar; bold, italic and
     the rest apply to the language name alone.
@@ -680,7 +682,7 @@ pub const COMPARE_LEVEL_HELP  :  &str =
     This flag only works if a configuration file is loaded. Specifies with how many previous logs this
     program execution should be compared to (see '--save' and '--load' commands).
 
-    Providing 0 as argument will disable the progress report (comparison).
+    Providing 0 as argument will disable the history section (comparison).
 
     Every log entry records the settings that decide what is counted, and an entry that was written
     with different ones is marked 'modified:' followed by their names. The comparison is still shown,
