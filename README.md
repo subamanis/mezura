@@ -941,8 +941,6 @@ With that said, it is important to mention the following limitations:
 
 - If a target path contains another target path, the contained one is dropped, so that its files are not counted twice. A symbolic link (or a Windows junction) that the scan comes across is not followed, for the same reason: whatever it points at would be counted a second time through it. The same goes for one that a glob pattern matched, since those are found by the program rather than named by you. One that you name as a target yourself is followed, since that is what you asked for. Hard links are the case that stays: they are indistinguishable from an ordinary file, so the same content reached through two of them is counted twice.
 
-- Glob patterns (* ? [..] {..}) are supported both by the target paths (```--dirs```) and by the ```--exclude``` command, but full regular expressions are not supported anywhere.
-
 - The program assumes that if a line contains any odd number of the same string symbol, then this is an open multiline string, and only the symbol that opened a string can close it. This is why a language that has a distinct multiline string delimiter should declare it: Python declares ```"""``` and ```'''``` alongside ```"``` and ```'```, so a docstring that contains a single quote is read correctly. A language whose multiline strings cannot be written as a delimiter (a Rust ```r#"..."#```, a PHP heredoc, a C# verbatim string) still falls back to the odd-count assumption, which is right for most code and can miscount a line that deliberately breaks it.
 
 - A language can declare only one multiline comment start symbol and one multiline comment end symbol in the .txt, however many string and single line comment symbols it declares.
