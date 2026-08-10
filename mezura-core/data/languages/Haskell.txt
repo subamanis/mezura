@@ -7,6 +7,9 @@ hs
 String symbols
 "
 
+Character literal symbols
+'
+
 Comment symbols
 --
 Nesting comment start

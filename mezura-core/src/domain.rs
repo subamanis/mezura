@@ -31,6 +31,10 @@ pub struct Language {
     // where the run of '=' is counted at the opener and only an end carrying the same count
     // closes, so a ']]' inside a '--[==[' block is text
     pub leveled_comments : Vec<LeveledPair>,
+    // The symbol that joins a line to the next one when it is the last thing on it, and what it
+    // joins. C splices anything, including a line comment; JavaScript and Python only continue a
+    // string literal; Java, Go and C# have no such thing at all.
+    pub line_continuation : Option<LineContinuation>,
     pub keywords : Vec<Keyword>,
     // Worked out from the symbols above and reused for every file of this language.
     pub(crate) scan_plan : OnceLock<crate::engine::file_parser::ScanPlan>
@@ -56,6 +60,7 @@ impl Language {
                     .map(|(start, end)| ((*start).to_owned(), (*end).to_owned())).collect(),
             nesting_comments : Vec::new(),
             leveled_comments : Vec::new(),
+            line_continuation : None,
             keywords : keywords.into_iter().collect(),
             scan_plan : OnceLock::new()
         }
@@ -70,6 +75,12 @@ impl Language {
 
     pub fn with_filenames(mut self, names: &[&str]) -> Self {
         self.filenames.extend(names.iter().map(|x| (*x).to_owned()));
+        self
+    }
+
+    pub fn with_line_continuation(mut self, symbol: &str, in_strings: bool, in_comments: bool) -> Self {
+        self.line_continuation = Some(LineContinuation {
+            symbol: symbol.to_owned(), in_strings, in_comments });
         self
     }
 
@@ -178,6 +189,16 @@ pub(crate) enum CommentPair<'a> {
     Leveled(&'a LeveledPair)
 }
 
+// A line ending in this symbol is joined to the one after it, before anything is decided about
+// either. 'in_comments' is what separates C, where the join happens whatever the line held, from
+// JavaScript and Python, where a line comment ends at the newline whatever follows it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LineContinuation {
+    pub symbol : String,
+    pub in_strings : bool,
+    pub in_comments : bool
+}
+
 // One half of a long-bracket pair: the fixed bytes before the counted run of '=', and the single
 // byte that closes the opener after it. '--[=*[' is prefix "--[", suffix '['.
 #[derive(Debug, Clone, PartialEq)]
@@ -219,6 +240,7 @@ impl PartialEq for Language {
             && self.multiline_comments == other.multiline_comments
             && self.nesting_comments == other.nesting_comments
             && self.leveled_comments == other.leveled_comments
+            && self.line_continuation == other.line_continuation
             && self.keywords == other.keywords
     }
 }

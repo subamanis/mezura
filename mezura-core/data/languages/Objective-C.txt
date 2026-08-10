@@ -7,6 +7,11 @@ m mm h
 String symbols
 "
 
+Line continuation
+\
+Continues
+strings comments
+
 Comment symbols
 //
 Multi line comment start

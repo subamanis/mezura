@@ -2,7 +2,7 @@ Language
 Pascal
 
 Extensions
-pas pp lpr
+pas lpr
 
 String symbols
 '

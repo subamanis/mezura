@@ -25,6 +25,10 @@ const MULTILINE_STRINGS        : &str = "Multi line string symbols";
 const PAIRED_STRING_OPENERS    : &str = "Paired string openers";
 const PAIRED_STRING_CLOSERS    : &str = "Paired string closers";
 const CHARACTER_LITERALS       : &str = "Character literal symbols";
+const LINE_CONTINUATION        : &str = "Line continuation";
+const CONTINUES                : &str = "Continues";
+const CONTINUES_STRINGS        : &str = "strings";
+const CONTINUES_COMMENTS       : &str = "comments";
 const COMMENT_SYMBOLS          : &str = "Comment symbols";
 const MULTILINE_COMMENT_START  : &str = "Multi line comment start";
 const MULTILINE_COMMENT_END    : &str = "Multi line comment end";
@@ -234,6 +238,23 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         header = read_next_header(lines)?;
     }
 
+    // The symbol that joins a line to the next, and what the joining reaches. Read before the
+    // comment symbols because it is a property of the line and not of either kind of delimiter.
+    let mut line_continuation = None;
+    if header == LINE_CONTINUATION {
+        let symbol = read_value_line(lines)?;
+        if symbol.is_empty() || read_next_header(lines)?.as_str() != CONTINUES {return None;}
+        let reaches = split_line_on_whitespace(&read_value_line(lines)?);
+        let (in_strings, in_comments) = (reaches.iter().any(|x| x == CONTINUES_STRINGS),
+                reaches.iter().any(|x| x == CONTINUES_COMMENTS));
+        // A named thing it reaches nothing of is a mistake somebody made, not a declaration
+        if reaches.len() != usize::from(in_strings) + usize::from(in_comments) || reaches.is_empty() {
+            return None;
+        }
+        line_continuation = Some(crate::domain::LineContinuation { symbol, in_strings, in_comments });
+        header = read_next_header(lines)?;
+    }
+
     // Declaring no string at all is allowed and is what HTML needs: its quotes delimit attributes
     // rather than strings, and the free text between its tags is full of apostrophes.
     if string_symbols.iter().any(|symbol| multiline_strings.iter().any(|(open, _)| open == symbol)) {return None;}
@@ -310,9 +331,12 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
     // were never read. Keeping the half it recognised is what made a typo silently change a count.
     if header.is_some() {return None;}
 
-    Some(Language::new(lang_name, extensions, string_symbols, comment_symbols,
+    let mut language = Language::new(lang_name, extensions, string_symbols, comment_symbols,
             &multiline_comments.iter().map(|(start, end): &(String, String)| (start.as_str(), end.as_str()))
-                    .collect::<Vec<_>>(), keywords)
+                    .collect::<Vec<_>>(), keywords);
+    language.line_continuation = line_continuation;
+
+    Some(language
             .with_char_literals(&char_literals.iter().map(String::as_str).collect::<Vec<_>>())
             .with_string_pairs(&multiline_strings.iter().map(|(open, close)| (open.as_str(), close.as_str()))
                     .collect::<Vec<_>>())

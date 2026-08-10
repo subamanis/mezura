@@ -7,6 +7,9 @@ ml mli
 String symbols
 "
 
+Character literal symbols
+'
+
 Comment symbols
 
 Nesting comment start

@@ -10,6 +10,11 @@ String symbols
 Multi line string symbols
 """ '''
 
+Line continuation
+\
+Continues
+strings
+
 Comment symbols
 #
 

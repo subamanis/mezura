@@ -50,10 +50,20 @@ Main changes:
       costs its own line instead of everything below it. Languages whose plain quote legally
       spans lines (Rust, Ruby, the shells, PHP, SQL and their kin) declare it crossing and keep
       their behavior.
+  -> A line ending in a backslash now continues onto the next one where the language says it does,
+      declared in a language file under "Line continuation" and "Continues". A C string written
+      across three lines with backslashes is one string, so a "//" inside it is no longer read as a
+      comment, and a C line comment ending in a backslash carries on to the next line as it really
+      does. C, C++, both header languages and Objective-C continue both strings and comments;
+      JavaScript, TypeScript and Python continue strings only, since their comments end at the
+      newline whatever follows.
   -> A language file can now name the symbol of a character literal, in a "Character literal
-      symbols" line. One that does not close on its own line is not a literal at all, so Rust's
-      and D's '"' keeps its quote to itself while a lifetime's lone ' opens nothing. Erlang's
-      quoted atoms are declared as the single line strings they behave as.
+      symbols" line. A literal has to close on its own line and hold one character or an escape,
+      so Rust's and D's '"' keeps its quote to itself while a lifetime's lone ' opens nothing, and
+      a line like "let msg: &'static str = "don't panic";" no longer counts everything below it as
+      code. Rust, D, F#, OCaml, Haskell and Julia declare it, so a primed name like "x'" and
+      Julia's transpose operator cost nothing. Erlang's quoted atoms are declared as the single
+      line strings they behave as.
   -> HTML now declares no string symbols at all: its quotes delimit attributes, not strings, so
       an apostrophe in the text ("it's") no longer swallows the comments and markup below it.
   -> Language files are now updated automatically when you install a new version, so a correction to
@@ -68,6 +78,11 @@ Main changes:
       Clojure, Lisp, Scheme, Julia, D, Carbon, COBOL, Fortran, Ada, VHDL, Erlang, GraphQL,
       PowerShell, Svelte, JSX, WebAssembly text, Assembly, GDScript, and the shader languages
       HLSL, GLSL, WGSL, Metal, Slang and ShaderLab.
+  -> VHDL now counts its block comments. VHDL-2008 writes them as "/* */" and mezura knew only the
+      "--" line comments, so every block comment in a modern VHDL file was counted as code.
+  -> Pascal no longer claims ".pp". Almost every ".pp" file in the wild is a Puppet manifest, which
+      mezura does not support, and counting one as Pascal gave numbers that looked fine and were
+      read with the wrong comment symbols. Pascal keeps ".pas" and ".lpr".
   -> Objective-C takes ".m" and Perl takes ".pl", while ".h" stays with C Header. If you write
       MATLAB or Prolog instead, or want your headers counted as Objective-C, swap the line for it
       in "extension_priority.txt", or run with "--force-language m=matlab".

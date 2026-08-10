@@ -395,7 +395,8 @@ fn take_symbols_at(at: usize, line_bytes: &[u8], plan: &ScanPlan, buffers: &mut 
             let closed_at = loop {
                 let Some(offset) = memchr::memchr(symbol_bytes[0], &line_bytes[cursor..]) else { break None };
                 let candidate = cursor + offset;
-                if line_bytes[candidate..].starts_with(symbol_bytes) && is_not_escaped(candidate, line_bytes) {
+                if line_bytes[candidate..].starts_with(symbol_bytes) && is_not_escaped(candidate, line_bytes)
+                        && holds_one_character(&line_bytes[start + width..candidate]) {
                     break Some(candidate);
                 }
                 cursor = candidate + 1;
@@ -525,14 +526,25 @@ fn parse_lines(contents: &str, language: &Language, keyword_matcher: Option<&Key
 
     let mut open_comment = None;
     let mut open_str_symbol = None;
+    let mut continued_comment = false;
     for (line_start, raw_line) in get_lines_of(contents) {
         file_stats.lines += 1;
 
         // Ascii-only trimming, since the unicode whitespace classification of trim() costs
         // a significant part of the total run time, for lines that are code either way
         let line = raw_line.trim_ascii();
-        if line.is_empty() { continue; }
+        if line.is_empty() { continued_comment = false; continue; }
         let base = line_start + (raw_line.len() - raw_line.trim_ascii_start().len());
+
+        // A line joined to the one before it by a continuation symbol is the tail of that line's
+        // comment, and nothing on it is read: in C '// a comment \' makes the whole next line
+        // comment too, however it is written.
+        if continued_comment {
+            file_stats.comment_lines += 1;
+            continued_comment = ends_with_continuation(line, language);
+            continue;
+        }
+        let continued = ends_with_continuation(line, language);
 
         // Two functions rather than one with a branch, so a language without multiline comments never
         // pays for the checks that only they need
@@ -545,9 +557,19 @@ fn parse_lines(contents: &str, language: &Language, keyword_matcher: Option<&Key
 
         open_comment = line_info.open_comment_after;
         // Only a symbol declared to cross lines carries its string to the next one, so the damage
-        // of an unbalanced quote is this line and not the rest of the file
+        // of an unbalanced quote is this line and not the rest of the file. A line ending in the
+        // continuation symbol is the exception: there the quote has not been left open by mistake,
+        // the language says the line goes on.
+        let continues_a_string = continued && language.line_continuation.as_ref()
+                .is_some_and(|continuation| continuation.in_strings);
         open_str_symbol = line_info.open_str_sybol_after
-                .filter(|symbol| language.string_crosses_lines(*symbol));
+                .filter(|symbol| language.string_crosses_lines(*symbol) || continues_a_string);
+
+        // Whether this line ended inside a comment that the next one carries on. Only asked of a
+        // line that left no code and no open string behind, which is what a line comment leaves.
+        continued_comment = continued && open_str_symbol.is_none() && open_comment.is_none()
+                && line_info.code.is_none() && !line_info.has_string_literal
+                && language.line_continuation.as_ref().is_some_and(|continuation| continuation.in_comments);
 
         if line_info.code.is_some() {
             // With the strings and comments stripped, a line holding no letter and no digit is
@@ -623,6 +645,30 @@ impl LineInfo {
 }
 
 // An empty stretch is not recorded, so that "did this line leave any code behind" is one question
+// What a character literal is allowed to hold: one character, or an escape sequence, which is what
+// tells a real literal from two unrelated symbols that happen to sit on one line. Without it a
+// lifetime's tick pairs with the apostrophe of a word inside a string, the false literal swallows
+// that string's opening quote, and the quote left over carries to the end of the file. A single
+// byte above ASCII cannot be judged alone, so anything that is one whole character passes.
+fn holds_one_character(between: &[u8]) -> bool {
+    match between.first() {
+        None => false,
+        Some(b'\\') => true,
+        Some(byte) if byte.is_ascii() => between.len() == 1,
+        // The leading byte of a multi-byte character, so the run has to be exactly that character
+        Some(_) => std::str::from_utf8(between).is_ok_and(|text| text.chars().count() == 1)
+    }
+}
+
+// The symbol has to be the last thing on the line and not itself escaped, so a Windows path ending
+// in a backslash inside a raw string does not join the next line to it.
+fn ends_with_continuation(line: &str, language: &Language) -> bool {
+    let Some(continuation) = &language.line_continuation else { return false };
+    let bytes = line.as_bytes();
+    bytes.ends_with(continuation.symbol.as_bytes())
+            && is_not_escaped(bytes.len() - continuation.symbol.len(), bytes)
+}
+
 fn push_code(ranges: &mut Vec<(usize, usize)>, from: usize, to: usize) {
     if to > from {
         ranges.push((from, to));
@@ -1328,6 +1374,7 @@ mod tests {
         filenames : vec![],
         string_symbols : vec!["\"".to_owned()],
         char_literal_symbols : vec![],
+        line_continuation : None,
         multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned()],
         multiline_comments : vec![("/*".to_owned(), "*/".to_owned())],
@@ -1343,6 +1390,7 @@ mod tests {
         filenames : vec![],
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         char_literal_symbols : vec![],
+        line_continuation : None,
         multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned(),"#".to_owned()],
         multiline_comments : vec![("/*".to_owned(), "*/".to_owned())],
@@ -1358,6 +1406,7 @@ mod tests {
         filenames : vec![],
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         char_literal_symbols : vec![],
+        line_continuation : None,
         multiline_strings : vec![],
         comment_symbols : vec!["#".to_owned()],
         multiline_comments : vec![],
@@ -1373,6 +1422,7 @@ mod tests {
         filenames : vec![],
         string_symbols : vec!["\"".to_owned()],
         char_literal_symbols : vec![],
+        line_continuation : None,
         multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned()],
         multiline_comments : vec![("/*".to_owned(), "*/".to_owned())],
@@ -1391,6 +1441,7 @@ mod tests {
         filenames : vec![],
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         char_literal_symbols : vec![],
+        line_continuation : None,
         multiline_strings : vec![("\"\"\"".to_owned(), "\"\"\"".to_owned()), ("'''".to_owned(), "'''".to_owned())],
         comment_symbols : vec!["#".to_owned(), "//".to_owned(), "--".to_owned()],
         multiline_comments : vec![],
@@ -1707,6 +1758,7 @@ mod tests {
         filenames : vec![],
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         char_literal_symbols : vec![],
+        line_continuation : None,
         multiline_strings : vec![],
         comment_symbols : vec!["--".to_owned()],
         multiline_comments : vec![("--[[".to_owned(), "]]".to_owned())],
@@ -1739,6 +1791,7 @@ mod tests {
         filenames : vec![],
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         char_literal_symbols : vec![],
+        line_continuation : None,
         multiline_strings : vec![],
         comment_symbols : vec!["#".to_owned()],
         multiline_comments : vec![("<#".to_owned(), "#>".to_owned())],
@@ -1773,6 +1826,7 @@ mod tests {
         filenames : vec![],
         string_symbols : vec!["'".to_owned()],
         char_literal_symbols : vec![],
+        line_continuation : None,
         multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned()],
         multiline_comments : vec![("{".to_owned(), "}".to_owned()), ("(*".to_owned(), "*)".to_owned())],
@@ -1790,6 +1844,7 @@ mod tests {
         filenames : vec![],
         string_symbols : vec!["\"".to_owned()],
         char_literal_symbols : vec![],
+        line_continuation : None,
         multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned()],
         multiline_comments : vec![("/*".to_owned(), "*/".to_owned())],
@@ -1937,10 +1992,17 @@ mod tests {
         // a lone ' is a lifetime, not an open literal: the whole line is plain code
         assert_eq!(TextInfo::from_slice("let x: &'a str = y;"),
                 bounds_multi("let x: &'a str = y;", &RUST_CHARS, None, &None));
-        // two lone ticks on one line pair up and the span between them reads as a literal. Accepted:
-        // such a line has code around the ticks either way, and carries nothing to the next line
-        assert_eq!(TextInfo::new(Some("fn get<a str) -> &'a str {".to_owned()), true, None, None),
+        // two lone ticks on one line do not pair either, because what sits between them is not one
+        // character. Without that rule a lifetime pairs with the apostrophe of a word inside a
+        // string, the false literal swallows that string's opening quote, and the quote left over
+        // carries to the end of the file.
+        assert_eq!(TextInfo::from_slice("fn get<'a>(x: &'a str) -> &'a str {"),
                 bounds_multi("fn get<'a>(x: &'a str) -> &'a str {", &RUST_CHARS, None, &None));
+        assert_eq!(TextInfo::from_slice_w_literal("let msg: &'static str = ;"),
+                bounds_multi("let msg: &'static str = \"don't panic\";", &RUST_CHARS, None, &None));
+        // and an escape sequence of any length is still one character
+        assert_eq!(TextInfo::from_slice_w_literal("let u = ;"),
+                bounds_multi("let u = '\\u{1F600}';", &RUST_CHARS, None, &None));
         // escapes inside the literal behave as in any string: '\'' and '\\' close where Rust says
         assert_eq!(TextInfo::from_slice_w_literal("let q = ;"),
                 bounds_multi("let q = '\\'';", &RUST_CHARS, None, &None));
@@ -2078,6 +2140,7 @@ mod tests {
         filenames : vec![],
         string_symbols : vec!["\"".to_owned()],
         char_literal_symbols : vec![],
+        line_continuation : None,
         multiline_strings : vec![],
         comment_symbols : vec![";".to_owned()],
         multiline_comments : vec![],
@@ -2562,6 +2625,78 @@ mod tests {
 
         assert!(checked > 0, "no fixtures were checked, is {} populated?", root.display());
         assert!(failures.is_empty(), "\n{} fixture check(s) failed:\n  {}\n", failures.len(), failures.join("\n  "));
+    }
+
+    // The stress corpus is not a fixture of this crate: its files carry a pair of counts per
+    // counting tool and are meant to be run by any of them, so it lives at the top of the
+    // repository and outside both packages. That also means it is absent from a crate downloaded
+    // off crates.io, which is why this returns nothing rather than failing there.
+    fn stress_corpus_dir() -> Option<std::path::PathBuf> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("stress-corpus");
+        root.is_dir().then_some(root)
+    }
+
+    // '7 lines 1 code 6 comment', the shape every counter writes its own numbers in, read by the
+    // word that follows each number so the order in the line does not matter
+    fn parse_stress_counts(line: &str, marker: &str) -> Option<(usize, usize, usize)> {
+        let words = line.split_once(marker)?.1.split_whitespace().collect::<Vec<_>>();
+        let value_before = |name: &str| words.iter().position(|word| *word == name)
+                .and_then(|at| at.checked_sub(1))
+                .and_then(|at| words[at].parse::<usize>().ok());
+        Some((value_before("lines")?, value_before("code")?, value_before("comment")?))
+    }
+
+    // Each file of the corpus declares the honest answer and the answer mezura gives today. The
+    // assertion is on the second, so a case mezura gets wrong keeps the suite green while saying
+    // so out loud, and the moment the answer changes at all somebody has to look: a fix has to
+    // promote the file in the same commit, and a wrong answer that changed shape is not a fix.
+    #[test]
+    fn the_stress_corpus_answers_are_the_ones_declared() {
+        let Some(root) = stress_corpus_dir() else { return };
+        let lookup = fixture_lookup();
+        let config = EngineConfig::default();
+
+        let (mut failures, mut known_wrong, mut checked) = (Vec::new(), 0, 0);
+        for path in fixture_paths(&root) {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if name.ends_with(".md") { continue; }
+
+            let contents = std::fs::read_to_string(&path).unwrap();
+            // Generous, since a case that carries another counter's numbers as well as ours has a
+            // header of more than the three lines the plainest one needs
+            let header = contents.lines().take(12).collect::<Vec<_>>().join("\n");
+            let (Some(real), Some(declared)) = (parse_stress_counts(&header, "mezura-real"),
+                    parse_stress_counts(&header, "mezura-count")) else {
+                failures.push(format!("{name}: needs a 'mezura-real' and a 'mezura-count' line, each \
+                        written as 'N lines N code N comment'"));
+                continue;
+            };
+            let Some(lang_name) = lookup.of_path(&path) else {
+                failures.push(format!("{name}: no supported language claims this name or its extension"));
+                continue;
+            };
+
+            let keyword_matcher = KeywordMatcher::build(&LANGUAGE_MAP_REF[lang_name.as_ref()]);
+            let mut buf = String::new();
+            let stats = parse_file(&path, lang_name.as_ref(), &mut buf, &mut ParseBuffers::default(),
+                    &LANGUAGE_MAP_REF, keyword_matcher.as_ref(), &config)
+                    .unwrap_or_else(|x| panic!("{name} could not be parsed: {x}"));
+            let counted = (stats.lines, stats.code_lines, stats.comment_lines);
+
+            if counted != declared {
+                let verdict = if counted == real {"it is now right, so promote the file"}
+                        else {"it is wrong in a new way"};
+                failures.push(format!("{name} ({lang_name}): declared {declared:?}, counted {counted:?}, \
+                        honest {real:?}. {verdict}"));
+            } else if declared != real {
+                known_wrong += 1;
+            }
+            checked += 1;
+        }
+
+        println!("stress corpus: {checked} cases, {known_wrong} of them known wrong");
+        assert!(checked > 0, "no stress cases were found in {}", root.display());
+        assert!(failures.is_empty(), "\n{} stress case(s) moved:\n  {}\n", failures.len(), failures.join("\n  "));
     }
 
     fn fixture_lookup() -> LanguageLookup {

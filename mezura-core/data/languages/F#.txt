@@ -6,6 +6,9 @@ fs fsi fsx
 
 String symbols
 
+Character literal symbols
+'
+
 Multi line string symbols
 """ "
 
