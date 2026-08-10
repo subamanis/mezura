@@ -2659,7 +2659,9 @@ mod tests {
         let (mut failures, mut known_wrong, mut checked) = (Vec::new(), 0, 0);
         for path in fixture_paths(&root) {
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
-            if name.ends_with(".md") { continue; }
+            // The folder describes and licenses itself beside the cases; only a file with an
+            // extension is one, since every case is source in some language
+            if !name.contains('.') || name.ends_with(".md") { continue; }
 
             let contents = std::fs::read_to_string(&path).unwrap();
             // Generous, since a case that carries another counter's numbers as well as ours has a

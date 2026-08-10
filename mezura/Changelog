@@ -78,6 +78,9 @@ Main changes:
       Clojure, Lisp, Scheme, Julia, D, Carbon, COBOL, Fortran, Ada, VHDL, Erlang, GraphQL,
       PowerShell, Svelte, JSX, WebAssembly text, Assembly, GDScript, and the shader languages
       HLSL, GLSL, WGSL, Metal, Slang and ShaderLab.
+  -> Go is called "Go" in the report and no longer "GO". Five language files that were named in
+      lower case, go, java, js, python and ts, are now named like the other sixty-two, so the
+      "languages" folder reads the same way throughout.
   -> VHDL now counts its block comments. VHDL-2008 writes them as "/* */" and mezura knew only the
       "--" line comments, so every block comment in a modern VHDL file was counted as code.
   -> Pascal no longer claims ".pp". Almost every ".pp" file in the wild is a Puppet manifest, which

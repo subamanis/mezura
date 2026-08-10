@@ -583,9 +583,18 @@ fn migrate_data_files(data_dir: &str, force: bool) -> Result<MigrationOutcome, s
     let still_shipped = shipped_files().into_iter().map(|(relative, _)| relative)
             .chain(written_once_files())
             .collect::<std::collections::HashSet<_>>();
+    // What the pass above just wrote, by content. A file we once shipped as 'go.txt' and now ship
+    // as 'Go.txt' is one file on Windows and on macOS, so the new name was written over the old
+    // one and the record still names the old: deleting by name alone would take away what was
+    // written a moment ago. Where the filesystem really does keep the two apart, the old one holds
+    // its old bytes, is not in this set, and is withdrawn as it should be.
+    let ours_now = manifest.values().copied().collect::<std::collections::HashSet<_>>();
     for relative in recorded.keys().filter(|relative| !still_shipped.contains(*relative)) {
         let target = data_dir.to_owned() + relative;
         if let Ok(on_disk) = std::fs::read(&target) {
+            if ours_now.contains(&content_hash(&on_disk)) {
+                continue;
+            }
             archive(data_dir, &outcome.archived_under, relative, &on_disk)?;
             std::fs::remove_file(&target)?;
             outcome.withdrawn.push(relative.clone());
@@ -914,6 +923,32 @@ mod tests {
 
         assert_eq!("my first edit", read_back(&first.archived_under, "Rust.txt").unwrap());
         assert_eq!("my second edit", read_back(&second.archived_under, "Rust.txt").unwrap());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // A file we shipped under one spelling and now ship under another is one file on Windows and on
+    // macOS, so the pass writes the new name over it and the withdrawal, comparing spellings
+    // exactly, then reads that same file through the old name and deletes what was just written.
+    // Decided by content rather than by folding the case, so that on a filesystem where the two
+    // names really are two files the old one is still withdrawn instead of left to be counted as a
+    // second definition of the same language.
+    #[test]
+    fn a_shipped_file_renamed_only_in_its_case_is_not_withdrawn_after_being_written() {
+        let dir = SCRATCH_DIR.to_owned() + "migration-recased/";
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        migrate_data_files(&dir, false).unwrap();
+
+        // What an earlier version would have recorded had it shipped the name in another case
+        let manifest = dir.clone() + "installed.txt";
+        let recorded = std::fs::read_to_string(&manifest).unwrap();
+        std::fs::write(&manifest, recorded + "languages/RUST.txt 1\n").unwrap();
+
+        let outcome = migrate_data_files(&dir, true).unwrap();
+        assert!(std::path::Path::new(&(dir.clone() + "languages/Rust.txt")).exists(),
+                "the language file was written and then deleted through its other spelling: {:?}", outcome.withdrawn);
+        assert!(outcome.withdrawn.is_empty(), "{:?}", outcome.withdrawn);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
