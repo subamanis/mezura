@@ -38,6 +38,8 @@ const ROLE_CLOSE  : u8 = 2;
 // and 'return' in a Rust file and add a second memchr pass to every line. Such a symbol is
 // searched by its last punctuation byte instead, the quote it already shares with the other
 // string symbols, and checked backwards from there.
+// 'filler' is zero for every ordinary symbol. For a leveled one it is the counted byte: the slot's
+// bytes are the prefix, and a match must find a run of the filler after it, then 'suffix'.
 #[derive(Debug, Clone, Copy)]
 struct Slot {
     symbol: u8,
@@ -46,6 +48,8 @@ struct Slot {
     len: u8,
     second: u8,
     anchor: u8,
+    filler: u8,
+    suffix: u8,
     next: u16,
 }
 
@@ -53,6 +57,26 @@ struct Slot {
 struct Chunk {
     bytes: [u8; 3],
     len: u8,
+}
+
+// One declared symbol on its way into the plan, before it becomes a slot
+struct PlanEntry {
+    kind: u8,
+    symbol: u8,
+    role: u8,
+    filler: u8,
+    suffix: u8,
+    bytes: Box<[u8]>,
+}
+
+impl PlanEntry {
+    fn of(kind: u8, symbol: u8, role: u8, bytes: &[u8]) -> PlanEntry {
+        PlanEntry { kind, symbol, role, filler: 0, suffix: 0, bytes: bytes.into() }
+    }
+
+    fn leveled(kind: u8, symbol: u8, prefix: &[u8], suffix: u8) -> PlanEntry {
+        PlanEntry { kind, symbol, role: ROLE_EITHER, filler: b'=', suffix, bytes: prefix.into() }
+    }
 }
 
 // Every symbol begins with one byte and memchr searches up to three bytes in a single SIMD pass, so
@@ -72,49 +96,57 @@ impl ScanPlan {
     pub fn build(language: &Language) -> ScanPlan {
         // The single line symbols first and the crossing ones after them, which is the numbering
         // 'Language::get_string_pair_of' answers to
-        let mut entries : Vec<(u8, u8, u8, Box<[u8]>)> = Vec::new();
+        let mut entries : Vec<PlanEntry> = Vec::new();
         for (i, symbol) in language.string_symbols.iter().enumerate() {
-            entries.push((STRINGS, i as u8, ROLE_EITHER, symbol.as_bytes().into()));
+            entries.push(PlanEntry::of(STRINGS, i as u8, ROLE_EITHER, symbol.as_bytes()));
         }
         for (i, (open, close)) in language.multiline_strings.iter().enumerate() {
             let index = (language.string_symbols.len() + i) as u8;
             if open == close {
-                entries.push((STRINGS, index, ROLE_EITHER, open.as_bytes().into()));
+                entries.push(PlanEntry::of(STRINGS, index, ROLE_EITHER, open.as_bytes()));
             } else {
-                entries.push((STRINGS, index, ROLE_OPEN, open.as_bytes().into()));
-                entries.push((STRINGS, index, ROLE_CLOSE, close.as_bytes().into()));
+                entries.push(PlanEntry::of(STRINGS, index, ROLE_OPEN, open.as_bytes()));
+                entries.push(PlanEntry::of(STRINGS, index, ROLE_CLOSE, close.as_bytes()));
             }
         }
         for (i, symbol) in language.comment_symbols.iter().enumerate() {
-            entries.push((COMMENTS, i as u8, ROLE_EITHER, symbol.as_bytes().into()));
+            entries.push(PlanEntry::of(COMMENTS, i as u8, ROLE_EITHER, symbol.as_bytes()));
         }
-        // Plain pairs first and nesting pairs after them, the numbering 'get_comment_pair_of'
-        // answers to
+        // Plain pairs first, nesting after them and leveled last, the numbering the comment
+        // helpers of Language answer to. A leveled slot holds its prefix as the bytes.
         for (i, (start, end)) in language.multiline_comments.iter()
                 .chain(language.nesting_comments.iter()).enumerate() {
-            entries.push((COM_STARTS, i as u8, ROLE_EITHER, start.as_bytes().into()));
-            entries.push((COM_ENDS, i as u8, ROLE_EITHER, end.as_bytes().into()));
+            entries.push(PlanEntry::of(COM_STARTS, i as u8, ROLE_EITHER, start.as_bytes()));
+            entries.push(PlanEntry::of(COM_ENDS, i as u8, ROLE_EITHER, end.as_bytes()));
         }
-        entries.retain(|(_, _, _, bytes)| !bytes.is_empty());
-        entries.sort_by_key(|(_, _, _, bytes)| std::cmp::Reverse(bytes.len()));
+        let plain_pairs = language.multiline_comments.len() + language.nesting_comments.len();
+        for (i, pair) in language.leveled_comments.iter().enumerate() {
+            let index = (plain_pairs + i) as u8;
+            entries.push(PlanEntry::leveled(COM_STARTS, index, pair.start_prefix.as_bytes(), pair.start_suffix));
+            entries.push(PlanEntry::leveled(COM_ENDS, index, pair.end_prefix.as_bytes(), pair.end_suffix));
+        }
+        entries.retain(|entry| !entry.bytes.is_empty());
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.bytes.len()));
 
         let anchors = anchors_of(&entries);
         let mut first = [NO_SLOT; 256];
         let (mut slots, mut symbols) = (Vec::with_capacity(entries.len()), Vec::with_capacity(entries.len()));
-        for ((kind, symbol, role, bytes), anchor) in entries.iter().zip(&anchors) {
+        for (entry, anchor) in entries.iter().zip(&anchors) {
             let index = slots.len() as u16;
             let anchor = *anchor;
             slots.push(Slot {
-                symbol: *symbol,
-                kind: *kind,
-                role: *role,
-                len: bytes.len() as u8,
-                second: if bytes.len() > 1 { bytes[1] } else { 0 },
+                symbol: entry.symbol,
+                kind: entry.kind,
+                role: entry.role,
+                len: entry.bytes.len() as u8,
+                second: if entry.bytes.len() > 1 { entry.bytes[1] } else { 0 },
                 anchor,
+                filler: entry.filler,
+                suffix: entry.suffix,
                 next: NO_SLOT,
             });
-            symbols.push(bytes.clone());
-            let head = &mut first[bytes[anchor as usize] as usize];
+            symbols.push(entry.bytes.clone());
+            let head = &mut first[entry.bytes[anchor as usize] as usize];
             if *head == NO_SLOT {
                 *head = index;
             } else {
@@ -127,8 +159,8 @@ impl ScanPlan {
         let (chunks, mut sorted_kinds) = pack_into_chunks(&entries, &anchors);
         // An anchored match begins behind the byte that found it, so its position can come out
         // behind one already recorded; the kind is sorted afterwards to put it back in line order
-        for ((kind, _, _, _), anchor) in entries.iter().zip(&anchors) {
-            if *anchor != 0 { sorted_kinds[*kind as usize] = true }
+        for (entry, anchor) in entries.iter().zip(&anchors) {
+            if *anchor != 0 { sorted_kinds[entry.kind as usize] = true }
         }
         ScanPlan { chunks, first, slots, symbols, sorted_kinds }
     }
@@ -141,16 +173,16 @@ impl ScanPlan {
 // for anyway, which is why declaring 'r#"' or 'R"(' adds nothing to the passes: both are found by
 // the quote the language already declares. Anchoring 'R"(' on its bracket instead would put '(' in
 // front of every call in a C++ file.
-fn anchors_of(entries: &[(u8, u8, u8, Box<[u8]>)]) -> Vec<u8> {
-    let searched_anyway = entries.iter().map(|(_, _, _, bytes)| bytes[0])
+fn anchors_of(entries: &[PlanEntry]) -> Vec<u8> {
+    let searched_anyway = entries.iter().map(|entry| entry.bytes[0])
             .filter(|byte| !byte.is_ascii_alphanumeric()).collect::<Vec<u8>>();
 
-    entries.iter().map(|(_, _, _, bytes)| {
-        if !bytes[0].is_ascii_alphanumeric() {
+    entries.iter().map(|entry| {
+        if !entry.bytes[0].is_ascii_alphanumeric() {
             return 0;
         }
-        bytes.iter().position(|byte| searched_anyway.contains(byte))
-                .or_else(|| bytes.iter().rposition(|byte| !byte.is_ascii_alphanumeric()))
+        entry.bytes.iter().position(|byte| searched_anyway.contains(byte))
+                .or_else(|| entry.bytes.iter().rposition(|byte| !byte.is_ascii_alphanumeric()))
                 .unwrap_or(0) as u8
     }).collect()
 }
@@ -159,11 +191,11 @@ fn anchors_of(entries: &[(u8, u8, u8, Box<[u8]>)]) -> Vec<u8> {
 // Kinds are grouped by that overlap and the groups packed whole, which is what leaves every output
 // vector already in the order the positions appear on the line. A group of more than three distinct
 // bytes cannot be one pass, so it is split and its kinds are marked as needing a sort after all.
-fn pack_into_chunks(entries: &[(u8, u8, u8, Box<[u8]>)], anchors: &[u8]) -> (Vec<Chunk>, [bool; 4]) {
+fn pack_into_chunks(entries: &[PlanEntry], anchors: &[u8]) -> (Vec<Chunk>, [bool; 4]) {
     let mut bytes_of_kind : [Vec<u8>; 4] = Default::default();
-    for ((kind, _, _, bytes), anchor) in entries.iter().zip(anchors) {
-        let searched = bytes[*anchor as usize];
-        let set = &mut bytes_of_kind[*kind as usize];
+    for (entry, anchor) in entries.iter().zip(anchors) {
+        let searched = entry.bytes[*anchor as usize];
+        let set = &mut bytes_of_kind[entry.kind as usize];
         if !set.contains(&searched) { set.push(searched) }
     }
 
@@ -219,8 +251,9 @@ pub struct ScanBuffers {
     strings: Vec<usize>,
     string_symbols: Vec<u8>,
     comments: Vec<usize>,
-    com_starts: Vec<(usize, u8)>,
-    com_ends: Vec<(usize, u8)>,
+    // Position, pair, and the level a leveled occurrence carried, zero for every other pair
+    com_starts: Vec<(usize, u8, u8)>,
+    com_ends: Vec<(usize, u8, u8)>,
     consumed: Vec<usize>,
     // The stretches of the line that are code, as ranges into it, instead of a copy of them
     // concatenated into a String
@@ -294,14 +327,14 @@ fn scan_line(line: &str, language: &Language, buffers: &mut ScanBuffers) {
     }
     if plan.sorted_kinds[COMMENTS as usize] { buffers.comments.sort_unstable() }
     if plan.sorted_kinds[COM_STARTS as usize] {
-        let length_of = |symbol: u8| language.get_comment_pair_of(symbol).0.len();
-        buffers.com_starts.sort_unstable_by(|(a_at, a_symbol), (b_at, b_symbol)|
-                a_at.cmp(b_at).then_with(|| length_of(*b_symbol).cmp(&length_of(*a_symbol))));
+        buffers.com_starts.sort_unstable_by(|(a_at, a_symbol, a_level), (b_at, b_symbol, b_level)|
+                a_at.cmp(b_at).then_with(|| language.comment_start_len(*b_symbol, *b_level)
+                        .cmp(&language.comment_start_len(*a_symbol, *a_level))));
     }
     if plan.sorted_kinds[COM_ENDS as usize] {
-        let length_of = |symbol: u8| language.get_comment_pair_of(symbol).1.len();
-        buffers.com_ends.sort_unstable_by(|(a_at, a_symbol), (b_at, b_symbol)|
-                a_at.cmp(b_at).then_with(|| length_of(*b_symbol).cmp(&length_of(*a_symbol))));
+        buffers.com_ends.sort_unstable_by(|(a_at, a_symbol, a_level), (b_at, b_symbol, b_level)|
+                a_at.cmp(b_at).then_with(|| language.comment_end_len(*b_symbol, *b_level)
+                        .cmp(&language.comment_end_len(*a_symbol, *a_level))));
     }
 }
 
@@ -318,21 +351,34 @@ fn take_symbols_at(at: usize, line_bytes: &[u8], plan: &ScanPlan, buffers: &mut 
         // behave: "///" holds one "//" and not two
         if start < buffers.consumed[index] { continue }
         let matched = match (slot.anchor, slot.len) {
-            (0, 1) => true,
-            (0, 2) => line_bytes.get(at + 1) == Some(&slot.second),
+            (0, 1) if slot.filler == 0 => true,
+            (0, 2) if slot.filler == 0 => line_bytes.get(at + 1) == Some(&slot.second),
             _ => line_bytes[start..].starts_with(&plan.symbols[index])
         };
         if !matched { continue }
+        // A leveled symbol is its prefix, a counted run of the filler, and the closing byte; the
+        // count is carried beside the position so only an end with the same count can answer it
+        let mut level = 0u8;
+        let mut width = slot.len as usize;
+        if slot.filler != 0 {
+            let mut cursor = start + slot.len as usize;
+            while line_bytes.get(cursor) == Some(&slot.filler) && level < u8::MAX {
+                cursor += 1;
+                level += 1;
+            }
+            if line_bytes.get(cursor) != Some(&slot.suffix) { continue }
+            width = cursor + 1 - start;
+        }
         // An escape cancels a string symbol and nothing else, and never the half of a two-sided
         // pair: a distinct opener means a raw form, and inside those the backslash is a byte
         if slot.kind == STRINGS && slot.role == ROLE_EITHER && start != 0 && !is_not_escaped(start, line_bytes) { continue }
 
-        buffers.consumed[index] = start + slot.len as usize;
+        buffers.consumed[index] = start + width;
         match slot.kind {
             STRINGS => buffers.raw_strings.push((start, slot.symbol, slot.role)),
             COMMENTS => buffers.comments.push(start),
-            COM_STARTS => buffers.com_starts.push((start, slot.symbol)),
-            _ => buffers.com_ends.push((start, slot.symbol))
+            COM_STARTS => buffers.com_starts.push((start, slot.symbol, level)),
+            _ => buffers.com_ends.push((start, slot.symbol, level))
         }
     }
 }
@@ -465,7 +511,6 @@ fn parse_lines(contents: &str, language: &Language, keyword_matcher: Option<&Key
         // of an unbalanced quote is this line and not the rest of the file
         open_str_symbol = line_info.open_str_sybol_after
                 .filter(|symbol| language.string_crosses_lines(*symbol));
-        debug_assert!(open_comment.is_none_or(|(_, depth)| depth > 0));
 
         if line_info.code.is_some() {
             // With the strings and comments stripped, a line holding no letter and no digit is
@@ -650,13 +695,16 @@ fn get_bounds_w_multiline_comments(line: &str, language: &Language, open_comment
         },
         // Only the end of the pair that opened the block closes it, so a line holding none of
         // those is comment through and through, whatever other symbols sit on it. For a pair
-        // that nests, another of its own starts changes the depth, so it counts as an event too.
-        Some((open_pair, depth)) => {
-            let has_end = com_end_indices.iter().any(|(_, symbol)| *symbol == open_pair);
+        // that nests, another of its own starts changes the depth, so it counts as an event too;
+        // for a leveled pair, an end only counts when it carries the level the opener did.
+        Some((open_pair, carried)) => {
+            let leveled = language.comment_is_leveled(open_pair);
+            let has_end = com_end_indices.iter().any(|(_, symbol, level)|
+                    *symbol == open_pair && (!leveled || *level as u32 == carried));
             let deepens = language.comment_nests(open_pair)
-                    && com_start_indices.iter().any(|(_, symbol)| *symbol == open_pair);
+                    && com_start_indices.iter().any(|(_, symbol, _)| *symbol == open_pair);
             if !has_end && !deepens {
-                return LineInfo::open_comment_at(open_pair, depth);
+                return LineInfo::open_comment_at(open_pair, carried);
             }
         }
     }
@@ -755,20 +803,25 @@ fn get_bounds_w_multiline_comments(line: &str, language: &Language, open_comment
             str_counter += 1;
             has_string_literal = true;
             slice_start_index = index_after;
-        } else if let Some((open_pair, entry_depth)) = open_com_m {
+        } else if let Some((open_pair, carried)) = open_com_m {
             // Ends of the other pairs inside this block are text. Walking the counters past them
             // is safe: everything before the closing position is dead once the block closes there.
             // For a pair that nests, each of its own starts before an end deepens the block, and
-            // the closer is the end at which the count comes back to zero.
-            let mut depth = entry_depth;
+            // the closer is the end at which the count comes back to zero. For a leveled pair,
+            // 'carried' is the level and only an end with the same count is looked at.
+            let leveled = language.comment_is_leveled(open_pair);
+            let nests = language.comment_nests(open_pair);
+            let mut depth = if leveled { 1 } else { carried };
             let closing = loop {
-                while end_com_counter < com_end_indices.len() && com_end_indices[end_com_counter].1 != open_pair {
+                while end_com_counter < com_end_indices.len()
+                        && (com_end_indices[end_com_counter].1 != open_pair
+                            || (leveled && com_end_indices[end_com_counter].2 as u32 != carried)) {
                     end_com_counter += 1;
                 }
                 if end_com_counter == com_end_indices.len() { break None; }
                 let end_at = com_end_indices[end_com_counter].0;
 
-                if language.comment_nests(open_pair) {
+                if nests {
                     while start_com_counter < com_start_indices.len() && com_start_indices[start_com_counter].0 < end_at {
                         if com_start_indices[start_com_counter].1 == open_pair { depth = depth.saturating_add(1); }
                         start_com_counter += 1;
@@ -779,21 +832,24 @@ fn get_bounds_w_multiline_comments(line: &str, language: &Language, open_comment
                 end_com_counter += 1;
             };
             let Some(closed_at) = closing else {
-                if language.comment_nests(open_pair) {
+                let mut carry = carried;
+                if nests {
                     while start_com_counter < com_start_indices.len() {
                         if com_start_indices[start_com_counter].1 == open_pair { depth = depth.saturating_add(1); }
                         start_com_counter += 1;
                     }
-                    // A nesting block that only deepened is comment through and through; the
-                    // empty-span shape below is kept only for the plain pairs that always had it
-                    if code_ranges.is_empty() {
-                        return LineInfo::open_comment_at(open_pair, depth);
-                    }
+                    carry = depth;
                 }
-                return LineInfo::code_span_with((0, code_ranges.len()), has_string_literal, Some((open_pair, depth)), None);
+                // A nesting or leveled block that stays open is comment through and through; the
+                // empty-span shape below is kept only for the plain pairs that always had it
+                if (nests || leveled) && code_ranges.is_empty() {
+                    return LineInfo::open_comment_at(open_pair, carry);
+                }
+                return LineInfo::code_span_with((0, code_ranges.len()), has_string_literal, Some((open_pair, carry)), None);
             };
             last_symbol_index = closed_at;
-            let index_after = last_symbol_index + language.get_comment_pair_of(open_pair).1.len();
+            let end_level = if leveled { carried as u8 } else { 0 };
+            let index_after = last_symbol_index + language.comment_end_len(open_pair, end_level);
             if index_after >= line.len() {
                 if code_ranges.is_empty() {return LineInfo::none_all(has_string_literal);}
                 else {return LineInfo::code_span((0, code_ranges.len()), has_string_literal);}
@@ -807,7 +863,8 @@ fn get_bounds_w_multiline_comments(line: &str, language: &Language, open_comment
             if has_more_strs(str_counter) && str_indices[str_counter] == index_after {
                 is_str_open_m = true;
             } else if has_more_starts(start_com_counter) && com_start_indices[start_com_counter].0 == index_after {
-                open_com_m = Some((com_start_indices[start_com_counter].1, 1));
+                let (_, symbol, level) = com_start_indices[start_com_counter];
+                open_com_m = Some((symbol, if language.comment_is_leveled(symbol) { level as u32 } else { 1 }));
             } else {
                 slice_start_index = index_after;
             }
@@ -831,20 +888,23 @@ fn get_bounds_w_multiline_comments(line: &str, language: &Language, open_comment
                 has_string_literal = true;
                 last_symbol_index = this_index;
             } else if next_symbol_is_com_start(comment_counter, str_counter, start_com_counter) {
-                let (this_index, this_symbol) = com_start_indices[start_com_counter];
+                let (this_index, this_symbol, this_level) = com_start_indices[start_com_counter];
                 if skipped_com_end_symbol(last_symbol_index, end_com_counter, this_index) {
                     end_com_counter += 1;
                 }
 
                 push_code(code_ranges, slice_start_index, this_index);
-                // A nesting pair falls through to the open branch even with no ends left, since
-                // any further starts of it on the line still deepen the carried state
-                if !has_more_ends(end_com_counter) && !language.comment_nests(this_symbol) {
+                // A nesting or leveled pair falls through to the open branch even with no ends
+                // left: further starts of a nesting one still deepen the carried state, and the
+                // leveled one carries its level either way
+                if !has_more_ends(end_com_counter) && !language.comment_nests(this_symbol)
+                        && !language.comment_is_leveled(this_symbol) {
                     if code_ranges.is_empty() {return LineInfo::with_open_comment(this_symbol);}
                     else {return LineInfo::code_span_with((0, code_ranges.len()), has_string_literal, Some((this_symbol, 1)), None);}
                 }
 
-                open_com_m = Some((this_symbol, 1));
+                open_com_m = Some((this_symbol,
+                        if language.comment_is_leveled(this_symbol) { this_level as u32 } else { 1 }));
                 start_com_counter += 1;
                 last_symbol_index = this_index;
             } else {
@@ -860,23 +920,23 @@ fn get_bounds_w_multiline_comments(line: &str, language: &Language, open_comment
 // miscounted Lua and HTML, whose pairs have unequal lengths, whenever a block closed and reopened
 // on one line: the oversized window saw a collision where ']]--[[' merely touches, discarded the
 // reopening start, and the rest of the file counted as code.
-fn resolve_double_counting_of_adjacent_start_and_end_symbols(start_indices: &mut Vec<(usize, u8)>,
-    end_indices: &mut Vec<(usize, u8)>, is_comment_open: bool, language: &Language)
+fn resolve_double_counting_of_adjacent_start_and_end_symbols(start_indices: &mut Vec<(usize, u8, u8)>,
+    end_indices: &mut Vec<(usize, u8, u8)>, is_comment_open: bool, language: &Language)
 {
-   fn resolve_collision(start_indices: &mut Vec<(usize, u8)>, end_indices: &mut Vec<(usize, u8)>, start_counter: &mut usize,
+   fn resolve_collision(start_indices: &mut Vec<(usize, u8, u8)>, end_indices: &mut Vec<(usize, u8, u8)>, start_counter: &mut usize,
        end_counter: &mut usize, is_comment_open_m: &mut bool, language: &Language)
    {
        if *is_comment_open_m {
            start_indices.remove(*start_counter);
            if *start_counter < start_indices.len() && start_indices[*start_counter].0 <
-                   end_indices[*end_counter].0 + language.get_comment_pair_of(end_indices[*end_counter].1).1.len() {
+                   end_indices[*end_counter].0 + language.comment_end_len(end_indices[*end_counter].1, end_indices[*end_counter].2) {
                start_indices.remove(*start_counter);
            }
            *end_counter += 1;
        } else {
            end_indices.remove(*end_counter);
            if *end_counter < end_indices.len() && end_indices[*end_counter].0 <
-                   start_indices[*start_counter].0 + language.get_comment_pair_of(start_indices[*start_counter].1).0.len() {
+                   start_indices[*start_counter].0 + language.comment_start_len(start_indices[*start_counter].1, start_indices[*start_counter].2) {
                end_indices.remove(*end_counter);
            }
            *start_counter += 1;
@@ -889,11 +949,11 @@ fn resolve_double_counting_of_adjacent_start_and_end_symbols(start_indices: &mut
    loop {
        if start_counter == start_indices.len() || end_counter == end_indices.len() {break;}
 
-       let (start_index, start_symbol) = start_indices[start_counter];
-       let (end_index, end_symbol) = end_indices[end_counter];
+       let (start_index, start_symbol, start_level) = start_indices[start_counter];
+       let (end_index, end_symbol, end_level) = end_indices[end_counter];
 
-       if end_index > start_index && end_index < start_index + language.get_comment_pair_of(start_symbol).0.len() ||
-                start_index > end_index && start_index < end_index + language.get_comment_pair_of(end_symbol).1.len() {
+       if end_index > start_index && end_index < start_index + language.comment_start_len(start_symbol, start_level) ||
+                start_index > end_index && start_index < end_index + language.comment_end_len(end_symbol, end_level) {
             resolve_collision(start_indices, end_indices, &mut start_counter, &mut end_counter, &mut is_comment_open_m, language);
        } else {
            if start_index < end_index {
@@ -1052,12 +1112,11 @@ fn resolve_string_delimiters(language: &Language, open_str_symbol: &Option<u8>, 
 // stops the block ever opening, which silently breaks every block comment in the language. Lua's
 // '--[[' begins exactly where its own '--' does, with the same result if the shorter one wins.
 fn resolve_comment_and_multiline_start_overlap(line: &str, language: &Language,
-    comment_indices: &mut Vec<usize>, com_start_indices: &mut Vec<(usize, u8)>)
+    comment_indices: &mut Vec<usize>, com_start_indices: &mut Vec<(usize, u8, u8)>)
 {
     if comment_indices.is_empty() || com_start_indices.is_empty() {
         return;
     }
-    let start_len_of = |symbol: u8| language.get_comment_pair_of(symbol).0.len();
     let longest_comment_at = |at: usize| {
         language.comment_symbols.iter()
                 .filter(|symbol| line.as_bytes()[at..].starts_with(symbol.as_bytes()))
@@ -1066,23 +1125,23 @@ fn resolve_comment_and_multiline_start_overlap(line: &str, language: &Language,
                 .unwrap_or(0)
     };
 
-    com_start_indices.retain(|(start, _)| !comment_indices.iter()
+    com_start_indices.retain(|(start, _, _)| !comment_indices.iter()
             .any(|at| start > at && *start < at + longest_comment_at(*at)));
     comment_indices.retain(|at| !com_start_indices.iter()
-            .any(|(start, symbol)| at > start && *at < start + start_len_of(*symbol)));
+            .any(|(start, symbol, level)| at > start && *at < start + language.comment_start_len(*symbol, *level)));
 
     // On a tie the longer symbol wins, and with several pairs the start at that position is the
     // longest of them, since same-position candidates arrive longest first
-    comment_indices.retain(|at| match com_start_indices.iter().find(|(start, _)| start == at) {
-        Some((_, symbol)) => longest_comment_at(*at) >= start_len_of(*symbol),
+    comment_indices.retain(|at| match com_start_indices.iter().find(|(start, _, _)| start == at) {
+        Some((_, symbol, level)) => longest_comment_at(*at) >= language.comment_start_len(*symbol, *level),
         None => true
     });
-    com_start_indices.retain(|(at, _)| !comment_indices.contains(at));
+    com_start_indices.retain(|(at, _, _)| !comment_indices.contains(at));
 }
 
-fn is_intersecting_with_multi_line_end_symbol(index: usize, language: &Language, end_vec: &[(usize, u8)]) -> bool {
-    for (i, symbol) in end_vec {
-        let symbol_len = language.get_comment_pair_of(*symbol).1.len();
+fn is_intersecting_with_multi_line_end_symbol(index: usize, language: &Language, end_vec: &[(usize, u8, u8)]) -> bool {
+    for (i, symbol, level) in end_vec {
+        let symbol_len = language.comment_end_len(*symbol, *level);
         if index < symbol_len {
             if *i == 0 {return true;}
         } else {
@@ -1188,7 +1247,7 @@ mod tests {
     }
 
     fn comment_delimiters_w_multiline(line: &str, language: &Language, com_end_indices: &[usize]) -> Vec<usize> {
-        let ends = com_end_indices.iter().map(|at| (*at, 0u8)).collect::<Vec<_>>();
+        let ends = com_end_indices.iter().map(|at| (*at, 0u8, 0u8)).collect::<Vec<_>>();
         let mut buffers = ScanBuffers::default();
         scan_line(line, language, &mut buffers);
         buffers.comments.retain(|x| !is_intersecting_with_multi_line_end_symbol(*x, language, &ends));
@@ -1228,6 +1287,7 @@ mod tests {
         comment_symbols : vec!["//".to_owned()],
         multiline_comments : vec![("/*".to_owned(), "*/".to_owned())],
         nesting_comments : vec![],
+        leveled_comments : vec![],
         keywords : vec![CLASS.clone(),INTERFACE.clone()],
         scan_plan : std::sync::OnceLock::new()
     });
@@ -1240,6 +1300,7 @@ mod tests {
         comment_symbols : vec!["//".to_owned(),"#".to_owned()],
         multiline_comments : vec![("/*".to_owned(), "*/".to_owned())],
         nesting_comments : vec![],
+        leveled_comments : vec![],
         keywords : vec![CLASS.clone()],
         scan_plan : std::sync::OnceLock::new()
     });
@@ -1252,6 +1313,7 @@ mod tests {
         comment_symbols : vec!["#".to_owned()],
         multiline_comments : vec![],
         nesting_comments : vec![],
+        leveled_comments : vec![],
         keywords : vec![CLASS.clone()],
         scan_plan : std::sync::OnceLock::new()
     });
@@ -1264,6 +1326,7 @@ mod tests {
         comment_symbols : vec!["//".to_owned()],
         multiline_comments : vec![("/*".to_owned(), "*/".to_owned())],
         nesting_comments : vec![],
+        leveled_comments : vec![],
         keywords : vec![STRUCT.clone(),ENUM.clone(),TRAIT.clone()],
         scan_plan : std::sync::OnceLock::new()
     });
@@ -1279,6 +1342,7 @@ mod tests {
         comment_symbols : vec!["#".to_owned(), "//".to_owned(), "--".to_owned()],
         multiline_comments : vec![],
         nesting_comments : vec![],
+        leveled_comments : vec![],
         keywords : vec![CLASS.clone()],
         scan_plan : std::sync::OnceLock::new()
     });
@@ -1592,6 +1656,7 @@ mod tests {
         comment_symbols : vec!["--".to_owned()],
         multiline_comments : vec![("--[[".to_owned(), "]]".to_owned())],
         nesting_comments : vec![],
+        leveled_comments : vec![],
         keywords : vec![],
         scan_plan : std::sync::OnceLock::new()
     });
@@ -1621,6 +1686,7 @@ mod tests {
         comment_symbols : vec!["#".to_owned()],
         multiline_comments : vec![("<#".to_owned(), "#>".to_owned())],
         nesting_comments : vec![],
+        leveled_comments : vec![],
         keywords : vec![],
         scan_plan : std::sync::OnceLock::new()
     });
@@ -1652,6 +1718,7 @@ mod tests {
         comment_symbols : vec!["//".to_owned()],
         multiline_comments : vec![("{".to_owned(), "}".to_owned()), ("(*".to_owned(), "*)".to_owned())],
         nesting_comments : vec![],
+        leveled_comments : vec![],
         keywords : vec![],
         scan_plan : std::sync::OnceLock::new()
     });
@@ -1666,9 +1733,42 @@ mod tests {
         comment_symbols : vec!["//".to_owned()],
         multiline_comments : vec![("/*".to_owned(), "*/".to_owned())],
         nesting_comments : vec![("/+".to_owned(), "+/".to_owned())],
+        leveled_comments : vec![],
         keywords : vec![],
         scan_plan : std::sync::OnceLock::new()
     });
+
+    // Lua's long bracket, one declaration covering '--[[ ]]', '--[=[ ]=]' and every level above:
+    // the run of '=' is counted at the opener and only an end with the same count closes.
+    static LUA_LEVELED : LazyLock<Language> = LazyLock::new(|| Language::new(
+            "lua-leveled", ["lua"], ["\"", "'"], ["--"], &[], [])
+            .with_leveled_comments(&[("--[=*[", "]=*]")]));
+
+    #[test]
+    fn a_leveled_pair_closes_only_at_an_end_carrying_the_same_count() {
+        // level zero is the plain '--[[ ]]' shape
+        assert_eq!(TextInfo::from_slice_w_literal("x = 1  y = "),
+                bounds_multi("x = 1 --[[ note ]] y = ''", &LUA_LEVELED, None, &None));
+        // a ']]' inside a level-two block is text, and the block closes at ']==]'
+        assert_eq!(TextInfo::none_all(false), bounds_multi("--[==[ a ]] b ]==]", &LUA_LEVELED, None, &None));
+
+        // the level crosses lines: a lower end does not close, the matching one does
+        assert_eq!(TextInfo::with_open_comment_at(0, 1), bounds_multi("--[=[ open", &LUA_LEVELED, None, &None));
+        assert_eq!(TextInfo::with_open_comment_at(0, 1),
+                bounds_multi_deep("]] not yet", &LUA_LEVELED, Some((0, 1)), &None));
+        assert_eq!(TextInfo::from_slice(" done"),
+                bounds_multi_deep("]=] done", &LUA_LEVELED, Some((0, 1)), &None));
+
+        // '--[=' with no second bracket is no opener at all, just a line comment
+        assert_eq!(TextInfo::from_slice("x = 1 "), bounds_multi("x = 1 --[= not a block", &LUA_LEVELED, None, &None));
+
+        // level zero crossing lines carries zero, which is a level and not an absence
+        assert_eq!(TextInfo::with_open_comment_at(0, 0), bounds_multi("--[[ open", &LUA_LEVELED, None, &None));
+        assert_eq!(TextInfo::from_slice(" done"),
+                bounds_multi_deep("]] done", &LUA_LEVELED, Some((0, 0)), &None));
+        // and a language whose only pair is the leveled one still takes the multiline path
+        assert!(LUA_LEVELED.supports_multiline_comments());
+    }
 
     static OCAML : LazyLock<Language> = LazyLock::new(|| Language::new(
             "ocaml-like", ["ml"], [""; 0], [""; 0], &[], [])
@@ -1884,6 +1984,7 @@ mod tests {
         comment_symbols : vec![";".to_owned()],
         multiline_comments : vec![],
         nesting_comments : vec![],
+        leveled_comments : vec![],
         keywords : vec![DEFN.clone()],
         scan_plan : std::sync::OnceLock::new()
     });
@@ -1986,10 +2087,10 @@ mod tests {
     fn resolved_double_counting(start_indices: Vec<usize>, end_indices: Vec<usize>, is_comment_open: bool)
     -> (Vec<usize>, Vec<usize>) {
         let language = Language::new("one-pair", ["x"], ["\""], ["//"], &[("/*", "*/")], []);
-        let mut starts = start_indices.into_iter().map(|x| (x, 0u8)).collect::<Vec<_>>();
-        let mut ends = end_indices.into_iter().map(|x| (x, 0u8)).collect::<Vec<_>>();
+        let mut starts = start_indices.into_iter().map(|x| (x, 0u8, 0u8)).collect::<Vec<_>>();
+        let mut ends = end_indices.into_iter().map(|x| (x, 0u8, 0u8)).collect::<Vec<_>>();
         resolve_double_counting_of_adjacent_start_and_end_symbols(&mut starts, &mut ends, is_comment_open, &language);
-        (starts.into_iter().map(|(x, _)| x).collect(), ends.into_iter().map(|(x, _)| x).collect())
+        (starts.into_iter().map(|(x, _, _)| x).collect(), ends.into_iter().map(|(x, _, _)| x).collect())
     }
 
     #[test]
@@ -2038,9 +2139,9 @@ mod tests {
     fn a_close_that_touches_a_reopen_is_not_a_collision_when_the_lengths_differ() {
         let lua_like = Language::new("lua-like", ["x"], ["\""], ["--"], &[("--[[", "]]")], []);
         // ]]--[[ with the block open from the line before: both symbols are real
-        let (mut starts, mut ends) = (vec![(2usize, 0u8)], vec![(0usize, 0u8)]);
+        let (mut starts, mut ends) = (vec![(2usize, 0u8, 0u8)], vec![(0usize, 0u8, 0u8)]);
         resolve_double_counting_of_adjacent_start_and_end_symbols(&mut starts, &mut ends, true, &lua_like);
-        assert_eq!((vec![(2, 0)], vec![(0, 0)]), (starts, ends));
+        assert_eq!((vec![(2, 0, 0)], vec![(0, 0, 0)]), (starts, ends));
 
         // and the whole shape through the walk: the line closes and reopens, so it ends still open.
         // The whitespace between the two symbols is a code stretch with nothing in it, the same as

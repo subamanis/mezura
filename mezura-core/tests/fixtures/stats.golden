@@ -1,4 +1,4 @@
-files=31 lines=366 code=185 comments=96
+files=31 lines=369 code=185 comments=99
 
 Assembly
   files=1 lines=10 code=4 comments=5
@@ -47,7 +47,7 @@ Lisp
   files=1 lines=7 code=3 comments=3
   classes=1 functions=1 macros=0
 Lua
-  files=1 lines=15 code=7 comments=6
+  files=1 lines=18 code=7 comments=9
   functions=2
 OCaml
   files=1 lines=13 code=5 comments=6

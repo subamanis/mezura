@@ -21,6 +21,10 @@ pub struct Language {
     // The pairs that nest inside themselves, so a closer only ends the block when it has closed
     // as many as were opened: OCaml's whole comment syntax, D's '/+ +/' beside its plain '/* */'
     pub nesting_comments : Vec<(String, String)>,
+    // Lua's long brackets: a pair written with '=*' in a language file, '--[=*[' with ']=*]',
+    // where the run of '=' is counted at the opener and only an end carrying the same count
+    // closes, so a ']]' inside a '--[==[' block is text
+    pub leveled_comments : Vec<LeveledPair>,
     pub keywords : Vec<Keyword>,
     // Worked out from the symbols above and reused for every file of this language.
     pub(crate) scan_plan : OnceLock<crate::engine::file_parser::ScanPlan>
@@ -43,9 +47,16 @@ impl Language {
             multiline_comments : multiline_comments.iter()
                     .map(|(start, end)| ((*start).to_owned(), (*end).to_owned())).collect(),
             nesting_comments : Vec::new(),
+            leveled_comments : Vec::new(),
             keywords : keywords.into_iter().collect(),
             scan_plan : OnceLock::new()
         }
+    }
+
+    pub fn with_leveled_comments(mut self, pairs: &[(&str, &str)]) -> Self {
+        self.leveled_comments.extend(pairs.iter().map(|(start, end)|
+                LeveledPair::of(start, end).expect("a leveled pair is written as prefix, '=*', one closing byte")));
+        self
     }
 
     pub fn with_multiline_strings(mut self, symbols: &[&str]) -> Self {
@@ -68,6 +79,7 @@ impl Language {
 
     pub fn supports_multiline_comments(&self) -> bool {
         !self.multiline_comments.is_empty() || !self.nesting_comments.is_empty()
+                || !self.leveled_comments.is_empty()
     }
 
     // The scan numbers every string symbol of a language in one sequence, the single line ones
@@ -95,9 +107,62 @@ impl Language {
         (start, end)
     }
 
-    pub(crate) fn comment_nests(&self, symbol: u8) -> bool {
-        symbol as usize >= self.multiline_comments.len()
+    pub(crate) fn get_leveled_pair_of(&self, symbol: u8) -> &LeveledPair {
+        &self.leveled_comments[symbol as usize - self.multiline_comments.len() - self.nesting_comments.len()]
     }
+
+    pub(crate) fn comment_nests(&self, symbol: u8) -> bool {
+        symbol as usize >= self.multiline_comments.len() && !self.comment_is_leveled(symbol)
+    }
+
+    pub(crate) fn comment_is_leveled(&self, symbol: u8) -> bool {
+        symbol as usize >= self.multiline_comments.len() + self.nesting_comments.len()
+    }
+
+    // The whole width of one occurrence, which for a leveled pair depends on how many '=' it
+    // carried; a plain or nesting pair ignores the level
+    pub(crate) fn comment_start_len(&self, symbol: u8, level: u8) -> usize {
+        if self.comment_is_leveled(symbol) {
+            self.get_leveled_pair_of(symbol).start_prefix.len() + level as usize + 1
+        } else {
+            self.get_comment_pair_of(symbol).0.len()
+        }
+    }
+
+    pub(crate) fn comment_end_len(&self, symbol: u8, level: u8) -> usize {
+        if self.comment_is_leveled(symbol) {
+            self.get_leveled_pair_of(symbol).end_prefix.len() + level as usize + 1
+        } else {
+            self.get_comment_pair_of(symbol).1.len()
+        }
+    }
+}
+
+// One half of a long-bracket pair: the fixed bytes before the counted run of '=', and the single
+// byte that closes the opener after it. '--[=*[' is prefix "--[", suffix '['.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LeveledPair {
+    pub start_prefix : String,
+    pub start_suffix : u8,
+    pub end_prefix : String,
+    pub end_suffix : u8,
+}
+
+impl LeveledPair {
+    pub fn of(start: &str, end: &str) -> Option<LeveledPair> {
+        let (start_prefix, start_suffix) = split_leveled_half(start)?;
+        let (end_prefix, end_suffix) = split_leveled_half(end)?;
+        Some(LeveledPair { start_prefix, start_suffix, end_prefix, end_suffix })
+    }
+}
+
+// The half before '=*' and the one byte after it; anything else is not a leveled symbol
+fn split_leveled_half(pattern: &str) -> Option<(String, u8)> {
+    let (prefix, rest) = pattern.split_once("=*")?;
+    if prefix.is_empty() || rest.len() != 1 || rest.contains("=*") {
+        return None;
+    }
+    Some((prefix.to_owned(), rest.as_bytes()[0]))
 }
 
 // Hand written to leave 'scan_plan' out: it is a cache, filled when a language parses its first
@@ -110,6 +175,8 @@ impl PartialEq for Language {
             && self.multiline_strings == other.multiline_strings
             && self.comment_symbols == other.comment_symbols
             && self.multiline_comments == other.multiline_comments
+            && self.nesting_comments == other.nesting_comments
+            && self.leveled_comments == other.leveled_comments
             && self.keywords == other.keywords
     }
 }

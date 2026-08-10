@@ -23,6 +23,10 @@ Main changes:
       "(* (* *) *)" or a commented-out block in Rust, Haskell, Scala, Kotlin, Swift, Julia, Elm,
       Lisp, Scheme, MATLAB, WebAssembly text or D's "/+ +/" is read to its real end instead of
       its first closer.
+  -> Lua's counted comment brackets now work at every level: a pair written with "=*" in a
+      language file, like --[=*[ with ]=*], matches any run of "=" and closes only at an end
+      carrying the same count, so a "]]" inside a --[==[ block is text and the block ends where
+      Lua says it ends.
   -> A string can now open with one symbol and close with another, declared in a language file
       under "String symbol openers" and "String symbol closers". Rust declares r" and r#" with
       their closers and C# declares @" with ", so a raw or verbatim string holding quotes, or

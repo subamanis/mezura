@@ -227,6 +227,21 @@ pub fn parse_language(contents: &str) -> Option<Language> {
         return None;
     }
 
+    // A pair written with '=*' is Lua's long bracket: the run of '=' is counted at the opener and
+    // only an end with the same count closes. It is declared in the multiline block, since the
+    // counting is what such a pair has instead of nesting. Half a marker is a typo, refused.
+    let mut leveled_comments = Vec::new();
+    multiline_comments.retain(|(start, end)| {
+        if !start.contains("=*") && !end.contains("=*") {
+            return true;
+        }
+        leveled_comments.push((start.clone(), end.clone()));
+        false
+    });
+    if !leveled_comments.iter().all(|(start, end)| crate::domain::LeveledPair::of(start, end).is_some()) {
+        return None;
+    }
+
     let mut keywords = Vec::new();
     while header.as_deref() == Some(KEYWORD) {
         if read_next_header(&mut lines)?.as_str() != KEYWORD_NAME {return None;}
@@ -249,6 +264,8 @@ pub fn parse_language(contents: &str) -> Option<Language> {
             .with_string_pairs(&multiline_strings.iter().map(|(open, close)| (open.as_str(), close.as_str()))
                     .collect::<Vec<_>>())
             .with_nesting_comments(&nesting_comments.iter().map(|(start, end)| (start.as_str(), end.as_str()))
+                    .collect::<Vec<_>>())
+            .with_leveled_comments(&leveled_comments.iter().map(|(start, end)| (start.as_str(), end.as_str()))
                     .collect::<Vec<_>>()))
 }
 
@@ -642,6 +659,25 @@ Multi line string symbols\n\"\"\"\n\nComment symbols\n#\n";
             let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
             assert!(!language.multiline_strings.is_empty(), "{name} lost its crossing string declaration");
         }
+    }
+
+    // '=*' inside a pair symbol is the counted run of Lua's long brackets: one declaration covers
+    // '--[[', '--[=[' and every level above. Half a marker is a typo and refuses the file.
+    #[test]
+    fn a_pair_written_with_the_counted_marker_is_leveled() {
+        let good = "Language\nLualike\n\nExtensions\nlux\n\nString symbols\n\" '\n\n\
+Comment symbols\n--\nMulti line comment start\n--[=*[\nMulti line comment end\n]=*]\n";
+        let parsed = crate::language_file::parse_language(good).expect("the leveled declaration must parse");
+        assert!(parsed.multiline_comments.is_empty());
+        assert_eq!(1, parsed.leveled_comments.len());
+        assert_eq!(("--[", b'['), (parsed.leveled_comments[0].start_prefix.as_str(), parsed.leveled_comments[0].start_suffix));
+        assert_eq!(("]", b']'), (parsed.leveled_comments[0].end_prefix.as_str(), parsed.leveled_comments[0].end_suffix));
+
+        let half = good.replace("]=*]", "]]");
+        assert!(crate::language_file::parse_language(&half).is_none(), "one leveled half was accepted");
+
+        let lua = parse_language_file(LANGUAGES_DIR.to_owned() + "Lua.txt").unwrap();
+        assert_eq!(1, lua.leveled_comments.len(), "Lua.txt no longer declares its long bracket");
     }
 
     #[test]

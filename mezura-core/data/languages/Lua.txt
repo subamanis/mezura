@@ -10,9 +10,9 @@ String symbols
 Comment symbols
 --
 Multi line comment start
---[[
+--[=*[
 Multi line comment end
-]]
+]=*]
 
 Keyword
 NAME
