@@ -119,13 +119,16 @@ pub const EXCLUDE_LANGUAGES_HELP  :  &str =
     The given language names will be ignored from the stats calculation, if they exist.
 
 ";
-pub const FORCE_LANG_HELP  :  &str =
-"--force-lang
+pub const FORCE_LANGUAGE_HELP  :  &str =
+"--force-language
 
-    1..n pairs of 'extension=language' separated by commas, case-insensitive
+    1..n pairs of 'extension=language' or 'filename=language' separated by commas, case-insensitive
 
     Decides which language an extension is counted as, whether or not another language claims it:
-    '--force-lang m=matlab,pl=perl,txt=python'
+    '--force-language m=matlab,pl=perl,txt=python'
+
+    A whole filename works the same way, for the files that have no extension worth reading:
+    '--force-language Makefile=python,Jenkinsfile=groovy'
 
     Overrides the 'extension_priority.txt' file of the data dir.
 
@@ -783,7 +786,7 @@ pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 6] = [
         (EXCLUDE, EXCLUDE_HELP),
         (LANGUAGES, LANGUAGES_HELP),
         (EXCLUDE_LANGUAGES, EXCLUDE_LANGUAGES_HELP),
-        (FORCE_LANG, FORCE_LANG_HELP),
+        (FORCE_LANGUAGE, FORCE_LANGUAGE_HELP),
         (NO_GITIGNORE, NO_GITIGNORE_HELP),
         (SEARCH_IN_DOTTED, SEARCH_IN_DOTTED_HELP),
         (BRACES_AS_CODE, BRACES_AS_CODE_HELP),

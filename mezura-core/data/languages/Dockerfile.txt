@@ -1,0 +1,25 @@
+Language
+Dockerfile
+
+Extensions
+dockerfile
+
+Filenames
+Dockerfile Containerfile
+
+String symbols
+" '
+
+Comment symbols
+#
+
+Keyword
+    NAME
+    stages
+    ALIASES
+    FROM
+Keyword
+    NAME
+    commands
+    ALIASES
+    RUN

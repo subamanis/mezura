@@ -22,7 +22,7 @@ fn a_run_over_two_directories_counts_files_lines_and_keywords() {
     let languages_on_disk = language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0;
     assert!(!languages_on_disk.is_empty());
 
-    let (languages, _) = Languages::resolve(&config, languages_on_disk, &HashMap::new());
+    let (languages, _) = Languages::resolve(&config, languages_on_disk, &Default::default());
     let result = run(&config, languages, None, |_| {}).unwrap();
 
     assert!(result.files_present.total_files != 0 && result.files_present.relevant_files != 0);
@@ -54,7 +54,7 @@ fn the_shipped_languages_are_the_files_of_the_languages_directory() {
     assert_eq!(from_disk, baked_in);
 
     // and the rule that settles a contested extension travels with them
-    assert!(!languages::parse_shipped_extension_priority().is_empty());
+    assert!(!languages::parse_shipped_extension_priority().by_extension.is_empty());
 }
 
 // A language a caller builds by hand is counted under the name it carries. It used to be counted
@@ -74,7 +74,7 @@ fn a_language_of_my_own_is_counted_under_the_name_it_carries() {
     let mine = mezura_core::Language::new("PetrosLang", ["pal"], ["\""], ["//"], &[],
             [mezura_core::Keyword::new("bindings", ["let"])]);
 
-    let (languages, _) = Languages::resolve(&config, [mine], &HashMap::new());
+    let (languages, _) = Languages::resolve(&config, [mine], &Default::default());
     let result = run(&config, languages, None, |_| {}).unwrap();
     std::fs::remove_dir_all(&root).unwrap();
 
@@ -99,7 +99,7 @@ fn the_shipped_rule_for_a_contested_extension_is_actually_applied() {
         ..EngineConfig::new([root.to_string_lossy().replace('\\', "/")])
     };
 
-    let named_by_the_rule = languages::parse_shipped_extension_priority().get("m")
+    let named_by_the_rule = languages::parse_shipped_extension_priority().by_extension.get("m")
             .and_then(|order| order.first().cloned())
             .expect("'m' is no longer settled by the shipped priority file, so pick another extension");
 
@@ -154,7 +154,7 @@ fn the_run_total_names_the_same_keywords_as_the_modules_it_is_made_of() {
 
 // Two spellings of one name, both claiming the same extension, is the case where every mechanism
 // for choosing between claimants had nothing left to say. The name folded case before it was
-// matched, so the two were indistinguishable to '--force-lang' and to the priority file, and what
+// matched, so the two were indistinguishable to '--force-language' and to the priority file, and what
 // answered was the alphabetical fallback, which prefers the capital: a user who typed the whole name
 // of the language they wanted got the other one, with its comment symbols, and the only warning on
 // the screen advised the two flags that had just failed. Nothing said the pair existed either, since
@@ -181,7 +181,7 @@ fn two_spellings_of_one_name_are_reported_and_force_lang_still_picks_the_one_it_
             ..EngineConfig::new([root.to_string_lossy().replace('\\', "/")])
         };
         let (languages, warnings) = Languages::resolve(&config,
-                [capital.clone(), lower.clone()], &HashMap::new());
+                [capital.clone(), lower.clone()], &Default::default());
         (run(&config, languages, None, |_| {}).unwrap(), warnings)
     };
 
@@ -189,10 +189,10 @@ fn two_spellings_of_one_name_are_reported_and_force_lang_still_picks_the_one_it_
     let (as_lower, _) = counted_forcing("pal");
     std::fs::remove_dir_all(&root).unwrap();
 
-    assert_eq!(1, as_capital.total.comment_lines, "'--force-lang pal=Pal' did not use 'Pal'");
+    assert_eq!(1, as_capital.total.comment_lines, "'--force-language pal=Pal' did not use 'Pal'");
     assert_eq!(0, as_capital.total.code_lines);
 
-    assert_eq!(1, as_lower.total.code_lines, "'--force-lang pal=pal' was given 'Pal' instead");
+    assert_eq!(1, as_lower.total.code_lines, "'--force-language pal=pal' was given 'Pal' instead");
     assert_eq!(0, as_lower.total.comment_lines);
 
     assert!(warnings.iter().any(|warning| warning.code == mezura_core::warnings::Code::DuplicateLanguage),

@@ -5,10 +5,21 @@
 use std::{collections::HashMap, fs::{self, DirEntry}, path::Path};
 
 use crate::{Keyword, Language};
+use crate::engine::identity::IdentifiedBy;
+
+// What a run knows about extensions and filenames that more than one language claims. Two blocks
+// because they are two questions: a rule for the extension 'm' says nothing about a file called
+// 'm', and one map for both would let the two answer for each other.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct PriorityRules {
+    pub by_extension : HashMap<String, Vec<String>>,
+    pub by_filename : HashMap<String, Vec<String>>
+}
 
 // The headers a language file is written with, spelled as they appear in it
 const LANGUAGE                 : &str = "Language";
 const EXTENSIONS               : &str = "Extensions";
+const FILENAMES                : &str = "Filenames";
 const STRING_SYMBOLS           : &str = "String symbols";
 const MULTILINE_STRINGS        : &str = "Multi line string symbols";
 const STRING_SYMBOL_OPENERS    : &str = "String symbol openers";
@@ -22,8 +33,9 @@ const KEYWORD                  : &str = "Keyword";
 const KEYWORD_NAME             : &str = "NAME";
 const KEYWORD_ALIASES          : &str = "ALIASES";
 
-// The marker that opens the rules block of the extension priority file
+// The markers that open the two rule blocks of the extension priority file
 const CONTESTED_EXTENSIONS     : &str = "contested-extensions";
+const CONTESTED_FILENAMES      : &str = "contested-filenames";
 
 const REGENERATE_LANGUAGES_HINT : &str =
         "Delete the \"languages\" folder and it will be generated again on the next execution.\nThe \"config\" and \"logs\" folders will not be affected.";
@@ -160,9 +172,18 @@ pub fn parse_language(contents: &str) -> Option<Language> {
 
     if read_next_header(&mut lines)? != EXTENSIONS {return None;}
     let extensions = split_line_on_whitespace(&read_value_line(&mut lines)?);
-    if extensions.is_empty() {return None;}
 
-    if read_next_header(&mut lines)? != STRING_SYMBOLS {return None;}
+    // Whole names, for the files an extension cannot describe. Optional, and the value may be
+    // empty for a language that is nothing but names, which is what Make and Dockerfile are.
+    let mut filenames = Vec::new();
+    let mut next = read_next_header(&mut lines)?;
+    if next == FILENAMES {
+        filenames = split_line_on_whitespace(&read_value_line(&mut lines)?);
+        next = read_next_header(&mut lines)?;
+    }
+    if extensions.is_empty() && filenames.is_empty() {return None;}
+
+    if next != STRING_SYMBOLS {return None;}
     let string_symbols = split_line_on_whitespace(&read_value_line(&mut lines)?);
 
     // A symbol belongs to exactly one of the lists, the way a comment symbol does: a string that
@@ -266,43 +287,50 @@ pub fn parse_language(contents: &str) -> Option<Language> {
             .with_nesting_comments(&nesting_comments.iter().map(|(start, end)| (start.as_str(), end.as_str()))
                     .collect::<Vec<_>>())
             .with_leveled_comments(&leveled_comments.iter().map(|(start, end)| (start.as_str(), end.as_str()))
-                    .collect::<Vec<_>>()))
+                    .collect::<Vec<_>>())
+            .with_filenames(&filenames.iter().map(String::as_str).collect::<Vec<_>>()))
 }
 
 // A missing file is not a mistake: an installation made by an earlier version has none, and the
 // only consequence is that contested extensions fall back to the alphabetical tiebreak, which
 // announces itself anyway.
-pub fn parse_priority_file(path: impl AsRef<Path>) -> (HashMap<String,Vec<String>>, Vec<String>) {
+pub fn parse_priority_file(path: impl AsRef<Path>) -> (PriorityRules, Vec<String>) {
     match fs::read_to_string(path) {
         Ok(contents) => parse_priority(&contents),
-        Err(_) => (HashMap::new(), Vec::new())
+        Err(_) => (PriorityRules::default(), Vec::new())
     }
 }
 
 // A line that does not parse is reported and skipped while the rest of the file applies, because a
 // mistake here cannot produce a wrong number in silence: the extension it failed to settle falls
 // through to the tiebreak, which says so by name.
-pub fn parse_priority(contents: &str) -> (HashMap<String,Vec<String>>, Vec<String>) {
-    let mut rules : HashMap<String,Vec<String>> = HashMap::new();
+pub fn parse_priority(contents: &str) -> (PriorityRules, Vec<String>) {
+    let mut rules = PriorityRules::default();
     let mut faulty_lines = Vec::new();
-    let mut inside_the_rules = false;
+    let mut block = None;
 
     for line in strip_byte_order_mark(contents).lines() {
         let line = line.trim();
         if line.is_empty() {continue;}
         // The '===>' of the configuration files and not the bare headers of the language files: a
-        // language file has no prose in it and needs nothing to separate the two, while this one
-        // explains itself above its rules exactly as a configuration does. A marker also ends the
-        // block, so that a section added later is skipped rather than read as a rule for an
-        // extension named '===>', which is neither applied nor reported.
+        // language file has nothing to separate its blocks with, while this one explains itself
+        // above its rules exactly as a configuration does. A marker also ends the block, so that a
+        // section added later is skipped rather than read as a rule for an extension named '===>',
+        // which is neither applied nor reported.
         if line.starts_with("===>") {
-            inside_the_rules = line.trim_start_matches("===>").split_whitespace().next()
-                    .is_some_and(|id| id.eq_ignore_ascii_case(CONTESTED_EXTENSIONS));
+            let name = line.trim_start_matches("===>").split_whitespace().next().unwrap_or_default();
+            block = if name.eq_ignore_ascii_case(CONTESTED_EXTENSIONS) {
+                Some(IdentifiedBy::Extension)
+            } else if name.eq_ignore_ascii_case(CONTESTED_FILENAMES) {
+                Some(IdentifiedBy::Filename)
+            } else {
+                None
+            };
             continue;
         }
-        if !inside_the_rules {continue;}
+        let Some(block) = block else { continue };
 
-        let Some((extension, claimants)) = line.split_once(char::is_whitespace) else {
+        let Some((claimed, claimants)) = line.split_once(char::is_whitespace) else {
             faulty_lines.push(line.to_owned());
             continue;
         };
@@ -313,11 +341,15 @@ pub fn parse_priority(contents: &str) -> (HashMap<String,Vec<String>>, Vec<Strin
             continue;
         }
 
-        // The first declaration of an extension is the one that counts, so that a second one cannot
-        // silently undo a decision that is sitting a few lines above it in the same file
-        // Keyed the way a language's own declaration is keyed, dot and case alike, or a rule written
-        // '.m' would settle nothing and never say why
-        match rules.entry(crate::engine::extensions::extension_key(extension)) {
+        // The first declaration is the one that counts, so that a second one cannot silently undo a
+        // decision sitting a few lines above it in the same file. Keyed the way a language's own
+        // declaration is keyed, dot and case alike, or a rule written '.m' would settle nothing and
+        // never say why.
+        let of_block = match block {
+            IdentifiedBy::Extension => &mut rules.by_extension,
+            IdentifiedBy::Filename => &mut rules.by_filename
+        };
+        match of_block.entry(crate::engine::identity::identity_key(block, claimed)) {
             std::collections::hash_map::Entry::Occupied(_) => faulty_lines.push(line.to_owned()),
             std::collections::hash_map::Entry::Vacant(slot) => { slot.insert(names); }
         }
@@ -397,12 +429,18 @@ Comment symbols\n//\n\n\nKeyword\n    NAME\n    classes\n    ALIASES\n    class\
                 DATA_DIR.to_owned() + crate::EXTENSION_PRIORITY_FILE_NAME);
         assert!(faulty.is_empty(), "the shipped priority file has lines that do not parse: {faulty:?}");
 
-        let (_, report) = crate::engine::extensions::make_extension_language_map(
-                &crate::languages::keyed_by_name(languages), &priority, &HashMap::new());
-        let unsettled = report.collisions.iter()
-                .filter(|x| x.resolved_by == crate::engine::extensions::ResolvedBy::AlphabeticalFallback)
-                .map(|x| format!("'{}' between {} and {}", x.extension, x.winner, x.losers.join(", ")))
-                .collect::<Vec<_>>();
+        // Both maps, since a filename two languages both claim is settled in the same file and
+        // would otherwise be the one contest nothing here notices
+        let by_name = crate::languages::keyed_by_name(languages);
+        let mut unsettled = Vec::new();
+        for (identified_by, rules) in [(IdentifiedBy::Extension, &priority.by_extension),
+                (IdentifiedBy::Filename, &priority.by_filename)] {
+            let (_, report) = crate::engine::identity::build_language_map_by(identified_by, &by_name, rules, &HashMap::new());
+            unsettled.extend(report.contested.iter()
+                    .filter(|x| x.resolved_by == crate::engine::identity::ResolvedBy::AlphabeticalFallback)
+                    .map(|x| format!("the {} '{}' between {} and {}", x.identified_by.name(), x.identity, x.winner,
+                            x.losers.join(", "))));
+        }
 
         assert!(unsettled.is_empty(),
                 "these contests are left to the alphabetical tiebreak, so a clean installation is \
@@ -413,19 +451,27 @@ Comment symbols\n//\n\n\nKeyword\n    NAME\n    classes\n    ALIASES\n    class\
     // Everything above the header is explanation and has to stay explanation, including an example
     // written in the very shape of a rule
     #[test]
-    fn the_priority_file_reads_only_what_is_under_its_header() {
+    fn the_priority_file_reads_only_what_is_under_its_headers() {
         let (rules, faulty) = crate::language_file::parse_priority(
-"Anything up here is prose, and this looks exactly like a rule:
+"Anything up here is explanation, and this looks exactly like a rule:
     m       Objective-C, MATLAB
 
 ===> contested-extensions
 M        Objective-C , MATLAB
 pl       Perl
+
+===> contested-filenames
+Makefile   Make, Automake
 ");
         assert!(faulty.is_empty());
-        assert_eq!(2, rules.len());
-        assert_eq!(Some(&vec!["Objective-C".to_owned(), "MATLAB".to_owned()]), rules.get("m"));
-        assert_eq!(Some(&vec!["Perl".to_owned()]), rules.get("pl"));
+        assert_eq!(2, rules.by_extension.len());
+        assert_eq!(Some(&vec!["Objective-C".to_owned(), "MATLAB".to_owned()]), rules.by_extension.get("m"));
+        assert_eq!(Some(&vec!["Perl".to_owned()]), rules.by_extension.get("pl"));
+
+        // The two blocks are two questions: a name lands in its own map, keeps its dots, and is
+        // not answered by a rule about extensions
+        assert_eq!(Some(&vec!["Make".to_owned(), "Automake".to_owned()]), rules.by_filename.get("makefile"));
+        assert!(!rules.by_extension.contains_key("makefile"));
     }
     #[test]
     fn a_line_of_the_priority_file_that_does_not_parse_is_skipped_and_the_rest_applies() {
@@ -440,10 +486,10 @@ pl      Perl, Prolog
 ");
         // A marker ends the block, so the section after it is skipped whole instead of becoming a
         // rule for an extension called '===>'
-        assert!(!rules.contains_key("===>") && !rules.contains_key("pl"));
-        assert_eq!(1, rules.len());
+        assert!(!rules.by_extension.contains_key("===>") && !rules.by_extension.contains_key("pl"));
+        assert_eq!(1, rules.by_extension.len());
         // the second declaration is the one that loses, and the decision above it stands
-        assert_eq!(Some(&vec!["Objective-C".to_owned(), "MATLAB".to_owned()]), rules.get("m"));
+        assert_eq!(Some(&vec!["Objective-C".to_owned(), "MATLAB".to_owned()]), rules.by_extension.get("m"));
         assert_eq!(vec!["justoneword".to_owned(), "m       Prolog".to_owned(), "v       ,  ,".to_owned()], faulty);
     }
 
@@ -601,7 +647,7 @@ pl      Perl, Prolog
 
         assert_eq!(rules, rules_with_mark, "the same rules read differently depending on how the editor saved it");
         assert_eq!(faulty, faulty_with_mark);
-        assert_eq!(1, rules_with_mark.len(), "the rules of the file were dropped, and in silence");
+        assert_eq!(1, rules_with_mark.by_extension.len(), "the rules of the file were dropped, and in silence");
     }
 
     // The two value lines are lists paired by position, so Pascal declares '{ }' beside '(* *)'
@@ -683,7 +729,7 @@ Comment symbols\n--\nMulti line comment start\n--[=*[\nMulti line comment end\n]
     #[test]
     fn a_missing_priority_file_is_not_a_mistake() {
         let (rules, faulty) = crate::language_file::parse_priority_file("a/path/that/is/not/there.txt");
-        assert!(rules.is_empty() && faulty.is_empty());
+        assert_eq!((PriorityRules::default(), Vec::<String>::new()), (rules, faulty));
     }
     #[test]
     fn test_parse_languages_in_dir() {
@@ -729,7 +775,8 @@ Comment symbols\n--\nMulti line comment start\n--[=*[\nMulti line comment end\n]
         // string: naming it keeps a symbol lost from another file loud instead of allowed.
         for language in &languages {
             let name = &language.name;
-            assert!(!language.extensions.is_empty(), "{name} declares no extension");
+            assert!(!language.extensions.is_empty() || !language.filenames.is_empty(),
+                    "{name} declares neither an extension nor a filename");
             assert!(!language.string_symbols.is_empty() || !language.multiline_strings.is_empty()
                     || name == "HTML", "{name} declares no string symbol");
         }

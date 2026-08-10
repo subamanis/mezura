@@ -17,7 +17,8 @@ capitalisation. A language you have removed, or one that never existed, is skipp
 on the line is tried.
 
 This settles the question for every run. To decide it for one run, or for one project through its
-configuration file, use '--force-lang', as in '--force-lang m=matlab', which overrides this file.
+configuration file, use '--force-language', as in '--force-language m=matlab', which overrides this
+file.
 
 The four that ship are the only contests the shipped languages have between them, and none of the
 four has an answer that is right for everybody:
@@ -29,11 +30,19 @@ four has an answer that is right for everybody:
   pl    Perl over Prolog. Prolog also answers to '.pro'.
   pas   Pascal over Delphi. Delphi also answers to '.dpr' and '.dpk'.
 
+A file known by its whole name, like 'Makefile' or 'CMakeLists.txt', is settled the same way, under
+the second marker. Nothing that ships contests a name, so that block is empty and is there for the
+languages you add:
+
+    Makefile    Make, Automake
+
 Everything above is explanation and is ignored, exactly as in a configuration file. The rules
-are the lines below the marker.
+are the lines below each marker.
 
 ===> contested-extensions
 h       C Header, Objective-C
 m       Objective-C, MATLAB
 pl      Perl, Prolog
 pas     Pascal, Delphi
+
+===> contested-filenames

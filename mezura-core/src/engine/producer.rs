@@ -1,11 +1,11 @@
-use std::{collections::HashMap, fs, fs::ReadDir, sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}},
+use std::{fs, fs::ReadDir, sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}},
         thread, thread::JoinHandle, time::Duration};
 
 use crossbeam_deque::{Injector, Steal, Worker};
 
-use crate::{EngineConfig, ExtensionLangMap, FilesPresent, GitignoreStack,
-        ParsableFile, ScanProgress, TraversedDir, UnreadableDirDetails};
-use crate::engine::extensions::find_language_of_extension;
+use crate::{EngineConfig, FilesPresent, GitignoreStack, ParsableFile, ScanProgress,
+        SharedLanguageLookup, TraversedDir, UnreadableDirDetails};
+use crate::engine::identity::LanguageLookup;
 use crate::engine::modules::{ModuleId, Modules};
 
 // A panic is caught here rather than read back from 'join', because these threads stop by counting
@@ -13,7 +13,7 @@ use crate::engine::modules::{ModuleId, Modules};
 // makes that count unreachable and the rest wait on it forever. The catch marks the dead one idle on
 // its way out and records what killed it, which 'run' turns into an error after the joins.
 pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<TraversedDir>>, worker: Worker<TraversedDir>,
-        idle_producers: Arc<AtomicUsize>, extension_lang_map: ExtensionLangMap, exclude_matcher: Arc<globset::GlobSet>,
+        idle_producers: Arc<AtomicUsize>, language_lookup: SharedLanguageLookup, exclude_matcher: Arc<globset::GlobSet>,
         config: Arc<EngineConfig>, files_stats: Arc<Mutex<FilesPresent>>, modules: Arc<Modules>,
         unreadable_dirs: Arc<Mutex<Vec<UnreadableDirDetails>>>, producers_total: Arc<AtomicUsize>,
         worker_panics: Arc<Mutex<Vec<String>>>, progress: Arc<ScanProgress>)
@@ -22,7 +22,7 @@ pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFil
     thread::Builder::new().name(format!("producer-{id}")).spawn(move || {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(||
                 search_for_files(id, files_injector, dirs_injector, worker, idle_producers.clone(),
-                        extension_lang_map, exclude_matcher, config, modules, &producers_total, &progress)));
+                        language_lookup, exclude_matcher, config, modules, &producers_total, &progress)));
         match outcome {
             Ok((total_files, relevant_files, excluded_files, unreadable)) => {
                 if !unreadable.is_empty() {
@@ -42,7 +42,7 @@ pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFil
 }
 
 pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<TraversedDir>>, worker: Worker<TraversedDir>, idle_producers: Arc<AtomicUsize>,
-        extension_lang_map: ExtensionLangMap, exclude_matcher: Arc<globset::GlobSet>, config: Arc<EngineConfig>, modules: Arc<Modules>,
+        language_lookup: SharedLanguageLookup, exclude_matcher: Arc<globset::GlobSet>, config: Arc<EngineConfig>, modules: Arc<Modules>,
         producers_total: &AtomicUsize, progress: &ScanProgress)
 -> (usize,usize,usize,Vec<UnreadableDirDetails>)
 {
@@ -88,7 +88,7 @@ pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>,
                     } else {
                         GitignoreStack::extend_with_dir(&dir.path, dir.gitignore_stack.clone())
                     };
-                    traverse_dir(&files_injector, entries, &dirs_injector, &extension_lang_map, &exclude_matcher, &gitignore_stack,
+                    traverse_dir(&files_injector, entries, &dirs_injector, &language_lookup, &exclude_matcher, &gitignore_stack,
                             &config, &modules, dir.module, &mut total_files, &mut relevant_files, &mut excluded_files, progress)
                 },
                 // Everything under it is uncounted and nothing else would ever say so: it reaches no
@@ -123,7 +123,7 @@ pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>,
 // 'module' is decided when the directory is queued and its entries inherit it. The two lookups below
 // only happen in a run with a target inside another target.
 fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, dirs_injector: &Arc<Injector<TraversedDir>>,
-        extension_lang_map: &HashMap<String, Arc<str>>, exclude_matcher: &globset::GlobSet, gitignore_stack: &Option<Arc<GitignoreStack>>,
+        language_lookup: &LanguageLookup, exclude_matcher: &globset::GlobSet, gitignore_stack: &Option<Arc<GitignoreStack>>,
         config: &EngineConfig, modules: &Modules, module: ModuleId,
         total_files: &mut usize, relevant_files: &mut usize, excluded_files: &mut usize, progress: &ScanProgress)
 {
@@ -145,8 +145,7 @@ fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, 
             if ft.is_file() {
                 local_total_files += 1;
                 let path_buf = e.path();
-                let Some(extension_name) = path_buf.extension().and_then(|x| x.to_str()) else { continue };
-                if let Some(lang_name) = find_language_of_extension(extension_lang_map, extension_name) {
+                if let Some(lang_name) = language_lookup.of_path(&path_buf) {
                     if !exclude_matcher.is_empty() && exclude_matcher.is_match(&path_buf) {
                         local_excluded_files += 1;
                         continue;
@@ -206,7 +205,7 @@ mod tests {
     use crate::engine::targets::build_exclude_matcher;
     use crate::calculate_single_file_stats_or_add_to_injector;
     use crate::test_paths::LANGUAGES_DIR;
-    use crate::engine::extensions::make_extension_language_map;
+    use crate::engine::identity::build_extension_language_map;
 
     fn count_files_of(target: &str, extra_args: &str) -> (usize, usize, usize, Vec<String>) {
         let (total, relevant, excluded, found) = walk(target, extra_args);
@@ -243,15 +242,16 @@ mod tests {
         let files_injector = Arc::new(Injector::new());
         let dirs_injector = Arc::new(Injector::new());
         let idle_producers = Arc::new(AtomicUsize::new(0));
-        let extension_lang_map: ExtensionLangMap = Arc::new(make_extension_language_map(&language_map, &HashMap::new(), &HashMap::new()).0);
+        let language_lookup: SharedLanguageLookup = Arc::new(LanguageLookup { by_extension: build_extension_language_map(&language_map, &Default::default(), &Default::default()).0,
+                        ..Default::default() });
         let modules = Arc::new(Modules::of(&dirs));
         let mut files_present = FilesPresent::default();
-        calculate_single_file_stats_or_add_to_injector(&config, &dirs, &dirs_injector, &files_injector, &mut files_present, &extension_lang_map, &modules,
+        calculate_single_file_stats_or_add_to_injector(&config, &dirs, &dirs_injector, &files_injector, &mut files_present, &language_lookup, &modules,
                 &ScanProgress::default());
 
         let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs).unwrap());
         let (total, relevant, excluded, _) = search_for_files(0, files_injector.clone(), dirs_injector,
-                Worker::new_fifo(), idle_producers, extension_lang_map, exclude_matcher, config, modules.clone(),
+                Worker::new_fifo(), idle_producers, language_lookup, exclude_matcher, config, modules.clone(),
                 &AtomicUsize::new(1), &ScanProgress::default());
 
         let mut found_files = Vec::new();
@@ -285,19 +285,20 @@ mod tests {
         let config = Arc::new(config);
         let language_map = Arc::new(crate::languages::keyed_by_name(
                 crate::language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0));
-        let extension_lang_map: ExtensionLangMap =
-                Arc::new(make_extension_language_map(&language_map, &HashMap::new(), &HashMap::new()).0);
+        let language_lookup: SharedLanguageLookup =
+                Arc::new(LanguageLookup { by_extension: build_extension_language_map(&language_map, &Default::default(), &Default::default()).0,
+                        ..Default::default() });
         let modules = Arc::new(Modules::of(&dirs));
         let (files_injector, dirs_injector) = (Arc::new(Injector::new()), Arc::new(Injector::new()));
         let mut files_present = FilesPresent::default();
         calculate_single_file_stats_or_add_to_injector(&config, &dirs, &dirs_injector, &files_injector,
-                &mut files_present, &extension_lang_map, &modules, &ScanProgress::default());
+                &mut files_present, &language_lookup, &modules, &ScanProgress::default());
         // Queued and then gone, which the walk finds out only when it tries to open it
         dirs_injector.push(TraversedDir::new(std::path::PathBuf::from(&vanished), None, 0));
 
         let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs).unwrap());
         let (total, relevant, _, unreadable) = search_for_files(0, files_injector, dirs_injector,
-                Worker::new_fifo(), Arc::new(AtomicUsize::new(0)), extension_lang_map, exclude_matcher,
+                Worker::new_fifo(), Arc::new(AtomicUsize::new(0)), language_lookup, exclude_matcher,
                 config, modules, &AtomicUsize::new(1), &ScanProgress::default());
 
         fs::remove_dir_all(&root).unwrap();

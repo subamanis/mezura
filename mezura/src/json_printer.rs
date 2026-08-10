@@ -340,7 +340,7 @@ fn create_scope_object(config: &Configuration, targets: &[mezura_core::Target]) 
         format!("    \"exclude\": {}", create_string_array(&config.engine.exclude_dirs)),
         format!("    \"languages\": {}", create_string_array(&config.engine.languages_of_interest)),
         format!("    \"excluded_languages\": {}", create_string_array(&config.engine.excluded_languages)),
-        // '--force-lang m=matlab' decides which language a file is counted as, so it moves numbers
+        // '--force-language m=matlab' decides which language a file is counted as, so it moves numbers
         // the same way an exclusion does, and two runs that disagree about it are not comparable
         format!("    \"forced_languages\": {}", create_forced_languages_object(&config.engine.forced_languages)),
         format!("    \"braces_as_code\": {}", config.engine.braces_as_code),
@@ -783,12 +783,12 @@ mod tests {
         assert!(document_of(&config).contains("\"warnings\": ["));
 
         super::super::warning_collector::keep(mezura_core::warnings::Warning::new(
-                mezura_core::warnings::Code::ExtensionTiebreak, "a-subject-only-this-test-uses",
+                mezura_core::warnings::Code::LanguageTiebreak, "a-subject-only-this-test-uses",
                 "quoted \"text\" and a \\ backslash".to_owned()));
 
         let rendered = create_warnings_array();
         assert!(rendered.contains("\"subject\": \"a-subject-only-this-test-uses\""));
-        assert!(rendered.contains("\"code\": \"extension-tiebreak\""));
+        assert!(rendered.contains("\"code\": \"language-tiebreak\""));
         assert!(rendered.contains("\"affects\": \"counts\""));
         // The message is prose written for a person, so it goes through the same escaping as every
         // other string here or a quotation mark in it would break the document

@@ -1,11 +1,44 @@
-// Which language owns an extension, and how a contest between two of them is settled.
-use std::{collections::HashMap, sync::Arc};
+// Which language owns an extension or a whole filename, and how a contest between two of them is
+// settled.
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 use crate::{Language, warnings};
 
-// Longer than any extension that exists, and the buffer that keeps the case-insensitive lookup from
-// allocating once per file
-const MAX_EXTENSION_LEN : usize = 24;
+// Longer than any extension that exists and than the filenames anybody writes, and the buffer that
+// keeps the case-insensitive lookup from allocating once per file
+const MAX_IDENTITY_LEN : usize = 32;
+
+// The two ways a file says which language it is. They go through the same contest machinery and
+// differ in one thing each: what a language declares, and how the text is keyed.
+#[derive(Debug,PartialEq,Eq,Clone,Copy)]
+pub enum IdentifiedBy {
+    Extension,
+    Filename
+}
+
+impl IdentifiedBy {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Extension => "extension",
+            Self::Filename => "filename"
+        }
+    }
+
+    fn declared_by<'a>(&self, language: &'a Language) -> &'a [String] {
+        match self {
+            Self::Extension => &language.extensions,
+            Self::Filename => &language.filenames
+        }
+    }
+
+    // A filename keeps its dots, since '.gitignore' is a name and not an extension of nothing
+    fn key_of(&self, text: &str) -> String {
+        match self {
+            Self::Extension => extension_key(text),
+            Self::Filename => text.to_ascii_lowercase()
+        }
+    }
+}
 
 // The three outcomes must never read alike: the first two are decisions somebody took, the third is
 // a tiebreak nobody asked for and the one that can put a language's comments into another's code.
@@ -16,10 +49,12 @@ pub enum ResolvedBy {
     AlphabeticalFallback
 }
 
+// One text more than one language claims, and how it was settled.
 #[derive(Debug,PartialEq,Eq,Clone)]
 #[non_exhaustive]
-pub struct ExtensionCollision {
-    pub extension: String,
+pub struct ContestedIdentity {
+    pub identity: String,
+    pub identified_by: IdentifiedBy,
     pub winner: String,
     pub losers: Vec<String>,
     pub resolved_by: ResolvedBy
@@ -27,12 +62,19 @@ pub struct ExtensionCollision {
 
 #[derive(Debug,PartialEq,Eq,Clone,Default)]
 #[non_exhaustive]
-pub struct ExtensionReport {
-    pub collisions: Vec<ExtensionCollision>,
+pub struct IdentityReport {
+    pub contested: Vec<ContestedIdentity>,
     pub unknown_forced_languages: Vec<(String,String)>
 }
 
-impl ExtensionReport {
+impl IdentityReport {
+    // The forced pairs are given to both maps, since nobody writing '--force-language Makefile=python'
+    // owes us the difference, so the map that could not use them must not report them again.
+    pub fn contested_only(mut self) -> Self {
+        self.unknown_forced_languages.clear();
+        self
+    }
+
     // Only the alphabetical tiebreak is reported. A rule or a forced pair is somebody's own decision,
     // and saying so every run buries the one line that matters. One warning per extension, so
     // whoever reads the document can key on it.
@@ -41,11 +83,12 @@ impl ExtensionReport {
     // line has a file and a flag for it and adds its own sentence, a library caller has neither.
     pub fn collect_warnings(&self) -> Vec<warnings::Warning> {
         let mut reported = Vec::new();
-        for collision in self.collisions.iter().filter(|x| x.resolved_by == ResolvedBy::AlphabeticalFallback) {
-            reported.push(warnings::Warning::new(warnings::Code::ExtensionTiebreak, &collision.extension,
-                    format!("The extension '{}' is claimed by {} and {}. It was given to {} only because that name comes first \
+        for contested in self.contested.iter().filter(|x| x.resolved_by == ResolvedBy::AlphabeticalFallback) {
+            reported.push(warnings::Warning::new(warnings::Code::LanguageTiebreak, &contested.identity,
+                    format!("The {} '{}' is claimed by {} and {}. It was given to {} only because that name comes first \
 alphabetically, so the files of the rest are counted with the wrong comment and string symbols.",
-                    collision.extension, collision.winner, collision.losers.join(", "), collision.winner)));
+                    contested.identified_by.name(), contested.identity, contested.winner, contested.losers.join(", "),
+                    contested.winner)));
         }
 
         for (extension, wanted) in &self.unknown_forced_languages {
@@ -60,8 +103,9 @@ alphabetically, so the files of the rest are counted with the wrong comment and 
 // Keys are lowercased here, once, and the lookup lowercases what it is given. Before the claimants
 // are counted, not after: left as written, 'cs' and 'CS' look like two extensions, never collide,
 // and each wins silently in different files.
-pub fn make_extension_language_map(languages: &HashMap<String,Language>, priority: &HashMap<String,Vec<String>>,
-        forced: &HashMap<String,String>) -> (HashMap<String, Arc<str>>, ExtensionReport)
+pub fn build_language_map_by(identified_by: IdentifiedBy, languages: &HashMap<String,Language>,
+        priority: &HashMap<String,Vec<String>>, forced: &HashMap<String,String>)
+        -> (HashMap<String, Arc<str>>, IdentityReport)
 {
     let mut names = languages.keys().collect::<Vec<_>>();
     names.sort_unstable();
@@ -75,7 +119,7 @@ pub fn make_extension_language_map(languages: &HashMap<String,Language>, priorit
     // when only one of the two lookups folded them, the mapping was applied while the run warned in
     // the same breath that the extension had been left to the tiebreak.
     let forced : HashMap<String, &str> = forced.iter()
-            .map(|(extension, language)| (extension_key(extension), language.as_str()))
+            .map(|(identity, language)| (identified_by.key_of(identity), language.as_str()))
             .collect();
     // Searched in the sorted order the names already have, and not through the keys of a map, whose
     // iteration order is arbitrary: two languages whose names differ only in case would otherwise
@@ -90,8 +134,8 @@ pub fn make_extension_language_map(languages: &HashMap<String,Language>, priorit
 
     let mut claimants : HashMap<String, Vec<&str>> = HashMap::with_capacity(languages.len() * 2);
     for name in &names {
-        for extension in &languages[*name].extensions {
-            let claiming = claimants.entry(extension_key(extension)).or_default();
+        for declared in identified_by.declared_by(&languages[*name]) {
+            let claiming = claimants.entry(identified_by.key_of(declared)).or_default();
             // A language claiming one extension twice, as 'h' and '.h', is not a contest. Left in, it
             // becomes its own rival: the collision fires, every loser equals the winner and is
             // filtered out, and the warning reads "claimed by Cish and ." Dropped in silence because
@@ -103,13 +147,13 @@ pub fn make_extension_language_map(languages: &HashMap<String,Language>, priorit
     }
 
     let mut map : HashMap<String, Arc<str>> = HashMap::with_capacity(claimants.len());
-    let mut report = ExtensionReport::default();
+    let mut report = IdentityReport::default();
 
-    for (extension, claimants) in claimants {
-        let forced_winner = forced.get(&extension).and_then(|wanted| language_named(wanted));
+    for (identity, claimants) in claimants {
+        let forced_winner = forced.get(&identity).and_then(|wanted| language_named(wanted));
         // Exact before folded, for the same reason as the lookup above: a rule of the priority file
         // naming one of two spellings has no other way to say which it meant.
-        let priority_winner = priority.get(&extension)
+        let priority_winner = priority.get(&identity)
                 .and_then(|order| order.iter()
                         .find_map(|wanted| claimants.iter().find(|name| **name == wanted.as_str())
                                 .or_else(|| claimants.iter().find(|name| crate::languages::is_the_same_language_name(name, wanted))))
@@ -129,54 +173,79 @@ pub fn make_extension_language_map(languages: &HashMap<String,Language>, priorit
         };
 
         if claimants.len() > 1 {
-            report.collisions.push(ExtensionCollision {
-                extension: extension.clone(),
+            report.contested.push(ContestedIdentity {
+                identity: identity.clone(),
+                identified_by,
                 winner: winner.to_owned(),
                 losers: claimants.iter().filter(|name| **name != winner).map(|name| (*name).to_owned()).collect(),
                 resolved_by
             });
         }
 
-        map.insert(extension, shared_names[winner].clone());
+        map.insert(identity, shared_names[winner].clone());
     }
 
-    // '--force-lang txt=python' is meant to work whether or not anything else claims the extension,
+    // '--force-language txt=python' is meant to work whether or not anything else claims the extension,
     // so a forced entry that no language claims is added rather than ignored
-    for (extension, wanted) in &forced {
+    for (identity, wanted) in &forced {
         match language_named(wanted) {
-            Some(name) => { map.insert(extension.clone(), shared_names[name].clone()); },
-            None => report.unknown_forced_languages.push((extension.clone(), (*wanted).to_owned()))
+            Some(name) => { map.insert(identity.clone(), shared_names[name].clone()); },
+            None => report.unknown_forced_languages.push((identity.clone(), (*wanted).to_owned()))
         }
     }
 
-    report.collisions.sort_by(|a, b| a.extension.cmp(&b.extension));
+    report.contested.sort_by(|a, b| a.identity.cmp(&b.identity));
     report.unknown_forced_languages.sort();
     (map, report)
 }
 
-pub fn find_language_of_extension(extension_lang_map: &HashMap<String, Arc<str>>, extension: &str) -> Option<Arc<str>> {
-    if let Some(x) = extension_lang_map.get(extension) {
+// The two maps a run counts with, and the one question a file is asked. Together because the answer
+// is one answer: a file whose whole name is claimed is that language whatever its extension says,
+// which is what makes 'CMakeLists.txt' CMake rather than text.
+#[derive(Debug, Default)]
+pub struct LanguageLookup {
+    pub by_extension: HashMap<String, Arc<str>>,
+    pub by_filename: HashMap<String, Arc<str>>
+}
+
+impl LanguageLookup {
+    pub fn of_path(&self, path: &Path) -> Option<Arc<str>> {
+        // The name is asked first and only when something claims one, so a run whose languages
+        // declare no filename pays one branch and no lookup
+        if !self.by_filename.is_empty()
+                && let Some(name) = path.file_name().and_then(|x| x.to_str())
+                && let Some(language) = find_language_of_identity(&self.by_filename, name) {
+            return Some(language);
+        }
+        let extension = path.extension().and_then(|x| x.to_str())?;
+        find_language_of_identity(&self.by_extension, extension)
+    }
+}
+
+pub fn find_language_of_identity(language_of: &HashMap<String, Arc<str>>, identity: &str) -> Option<Arc<str>> {
+    if let Some(x) = language_of.get(identity) {
         return Some(x.clone());
     }
 
     // Every key is already lowercase, so anything that is too, has simply not been found
-    if !extension.bytes().any(|b| b.is_ascii_uppercase()) {
+    if !identity.bytes().any(|b| b.is_ascii_uppercase()) {
         return None;
     }
 
-    // The buffer below is the hot path and covers every extension anybody actually writes. One
-    // longer than it comes from somebody's own language file, and is worth the allocation rather
-    // than the silent miss it used to be: the file was simply never counted and nothing said so.
-    if extension.len() > MAX_EXTENSION_LEN {
-        return extension_lang_map.get(&extension.to_ascii_lowercase()).cloned();
+    // The buffer below is the hot path and covers every extension and filename anybody actually
+    // writes. One longer than it comes from somebody's own language file, and is worth the
+    // allocation rather than the silent miss it used to be: the file was simply never counted and
+    // nothing said so.
+    if identity.len() > MAX_IDENTITY_LEN {
+        return language_of.get(&identity.to_ascii_lowercase()).cloned();
     }
 
-    let mut buffer = [0u8; MAX_EXTENSION_LEN];
-    let length = extension.len();
-    buffer[..length].copy_from_slice(extension.as_bytes());
+    let mut buffer = [0u8; MAX_IDENTITY_LEN];
+    let length = identity.len();
+    buffer[..length].copy_from_slice(identity.as_bytes());
     buffer[..length].make_ascii_lowercase();
     std::str::from_utf8(&buffer[..length]).ok()
-            .and_then(|lowercased| extension_lang_map.get(lowercased))
+            .and_then(|lowercased| language_of.get(lowercased))
             .cloned()
 }
 
@@ -187,19 +256,32 @@ pub(crate) fn extension_key(extension: &str) -> String {
     extension.trim_start_matches('.').to_ascii_lowercase()
 }
 
+pub(crate) fn identity_key(identified_by: IdentifiedBy, text: &str) -> String {
+    identified_by.key_of(text)
+}
+
+// Every test here and in the walk is about extensions, and naming the side each time reads as though
+// the choice mattered to what is being asserted.
+#[cfg(test)]
+pub fn build_extension_language_map(languages: &HashMap<String,Language>, priority: &HashMap<String,Vec<String>>,
+        forced: &HashMap<String,String>) -> (HashMap<String, Arc<str>>, IdentityReport)
+{
+    build_language_map_by(IdentifiedBy::Extension, languages, priority, forced)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::languages_claiming;
 
-    // Three places turn an extension into a key: a language's own declaration, a '--force-lang'
+    // Three places turn an extension into a key: a language's own declaration, a '--force-language'
     // pair, and a rule of the priority file. Only the forced one used to strip a leading dot, so a
     // language declaring '.dot' claimed nothing and a rule written '.m' settled nothing, both in
     // silence. The dotted form is what every editor and every other counter writes.
     #[test]
     fn an_extension_is_keyed_the_same_way_wherever_it_is_declared() {
         let dotted = languages_claiming(&[("Dotty", &[".dot"])]);
-        let (map, _) = make_extension_language_map(&dotted, &HashMap::new(), &HashMap::new());
+        let (map, _) = build_extension_language_map(&dotted, &HashMap::new(), &HashMap::new());
         assert_eq!(Some("Dotty"), map.get("dot").map(|x| x.as_ref()),
                 "a language declaring '.dot' claims nothing: {map:?}");
 
@@ -207,13 +289,13 @@ mod tests {
         let (rules, faulty) = crate::language_file::parse_priority(
                 "===> contested-extensions\n.m       MATLAB, Objective-C\n");
         assert!(faulty.is_empty());
-        assert_eq!(Some(&vec!["MATLAB".to_owned(), "Objective-C".to_owned()]), rules.get("m"));
+        assert_eq!(Some(&vec!["MATLAB".to_owned(), "Objective-C".to_owned()]), rules.by_extension.get("m"));
 
         let contested = languages_claiming(&[("MATLAB", &["m"]), ("Objective-C", &[".m"])]);
-        let (map, report) = make_extension_language_map(&contested, &rules, &HashMap::new());
+        let (map, report) = build_extension_language_map(&contested, &rules.by_extension, &HashMap::new());
         assert_eq!(Some("MATLAB"), map.get("m").map(|x| x.as_ref()));
-        assert_eq!(1, report.collisions.len(), "one declared with a dot and one without did not meet");
-        assert_eq!(ResolvedBy::PriorityFile, report.collisions[0].resolved_by);
+        assert_eq!(1, report.contested.len(), "one declared with a dot and one without did not meet");
+        assert_eq!(ResolvedBy::PriorityFile, report.contested[0].resolved_by);
     }
 
     // The stack buffer is sized for every extension that exists today, and anything longer with a
@@ -221,15 +303,15 @@ mod tests {
     // and nothing said so.
     #[test]
     fn an_extension_longer_than_the_buffer_is_still_matched_case_insensitively() {
-        let long = "A".repeat(MAX_EXTENSION_LEN + 6);
+        let long = "A".repeat(MAX_IDENTITY_LEN + 6);
         let languages = languages_claiming(&[("Longy", &[long.as_str()])]);
-        let (map, _) = make_extension_language_map(&languages, &HashMap::new(), &HashMap::new());
+        let (map, _) = build_extension_language_map(&languages, &HashMap::new(), &HashMap::new());
 
-        assert_eq!(Some("Longy"), find_language_of_extension(&map, &long.to_lowercase()).as_deref());
-        assert_eq!(Some("Longy"), find_language_of_extension(&map, &long).as_deref(),
+        assert_eq!(Some("Longy"), find_language_of_identity(&map, &long.to_lowercase()).as_deref());
+        assert_eq!(Some("Longy"), find_language_of_identity(&map, &long).as_deref(),
                 "an extension of {} bytes was given up on instead of lowercased", long.len());
         // and one that is genuinely absent is still absent, whatever its length
-        assert_eq!(None, find_language_of_extension(&map, &"B".repeat(MAX_EXTENSION_LEN + 6)));
+        assert_eq!(None, find_language_of_identity(&map, &"B".repeat(MAX_IDENTITY_LEN + 6)));
     }
 
     fn priority(rules: &[(&str, &[&str])]) -> HashMap<String,Vec<String>> {
@@ -238,17 +320,17 @@ mod tests {
     }
 
     fn winner_of(map: &HashMap<String, Arc<str>>, extension: &str) -> String {
-        find_language_of_extension(map, extension).map(|x| x.to_string()).unwrap_or_default()
+        find_language_of_identity(map, extension).map(|x| x.to_string()).unwrap_or_default()
     }
 
     #[test]
     fn an_extension_that_only_one_language_claims_is_never_reported() {
         let languages = languages_claiming(&[("Rust", &["rs"]), ("Go", &["go"])]);
-        let (map, report) = make_extension_language_map(&languages, &HashMap::new(), &HashMap::new());
+        let (map, report) = build_extension_language_map(&languages, &HashMap::new(), &HashMap::new());
     
         assert_eq!("Rust", winner_of(&map, "rs"));
         assert_eq!("Go", winner_of(&map, "go"));
-        assert_eq!(ExtensionReport::default(), report);
+        assert_eq!(IdentityReport::default(), report);
         assert!(report.collect_warnings().is_empty());
     }
 
@@ -256,17 +338,18 @@ mod tests {
     #[test]
     fn a_contested_extension_falls_back_to_the_first_name_alphabetically_and_says_so() {
         let languages = languages_claiming(&[("Objective-C", &["m", "mm"]), ("MATLAB", &["m"])]);
-        let (map, report) = make_extension_language_map(&languages, &HashMap::new(), &HashMap::new());
+        let (map, report) = build_extension_language_map(&languages, &HashMap::new(), &HashMap::new());
     
         assert_eq!("MATLAB", winner_of(&map, "m"));
         assert_eq!("Objective-C", winner_of(&map, "mm"));
-        assert_eq!(vec![ExtensionCollision {
-            extension: "m".to_owned(),
+        assert_eq!(vec![ContestedIdentity {
+            identity: "m".to_owned(),
+            identified_by: IdentifiedBy::Extension,
             winner: "MATLAB".to_owned(),
             losers: vec!["Objective-C".to_owned()],
             resolved_by: ResolvedBy::AlphabeticalFallback
-        }], report.collisions);
-        assert_eq!(vec![(warnings::Code::ExtensionTiebreak, "counts")],
+        }], report.contested);
+        assert_eq!(vec![(warnings::Code::LanguageTiebreak, "counts")],
                 report.collect_warnings().iter().map(|x| (x.code, x.affects().name())).collect::<Vec<_>>());
     }
 
@@ -279,33 +362,33 @@ mod tests {
     #[test]
     fn a_language_claiming_one_extension_twice_does_not_contest_it_with_itself() {
         let languages = languages_claiming(&[("Cish", &["h", ".h", "H"])]);
-        let (map, report) = make_extension_language_map(&languages, &HashMap::new(), &HashMap::new());
+        let (map, report) = build_extension_language_map(&languages, &HashMap::new(), &HashMap::new());
 
         assert_eq!("Cish", winner_of(&map, "h"));
         assert_eq!(1, map.len(), "the three spellings did not fold into one key");
-        assert!(report.collisions.is_empty(), "a language was reported as contesting itself: {:?}", report.collisions);
+        assert!(report.contested.is_empty(), "a language was reported as contesting itself: {:?}", report.contested);
         assert!(report.collect_warnings().is_empty(), "{:?}", report.collect_warnings());
 
         // and a real contest over the same extension is still announced, so what is gone is the
         // self-collision and not the check
         let contested = languages_claiming(&[("Cish", &[".h"]), ("Bish", &["h"])]);
-        let (_, report) = make_extension_language_map(&contested, &HashMap::new(), &HashMap::new());
-        assert_eq!(vec!["Cish".to_owned()], report.collisions[0].losers);
+        let (_, report) = build_extension_language_map(&contested, &HashMap::new(), &HashMap::new());
+        assert_eq!(vec!["Cish".to_owned()], report.contested[0].losers);
     }
 
     #[test]
     fn the_priority_file_decides_it_and_force_lang_overrules_the_priority_file() {
         let languages = languages_claiming(&[("Objective-C", &["m"]), ("MATLAB", &["m"])]);
     
-        let (map, report) = make_extension_language_map(&languages, &priority(&[("m", &["Objective-C", "MATLAB"])]), &HashMap::new());
+        let (map, report) = build_extension_language_map(&languages, &priority(&[("m", &["Objective-C", "MATLAB"])]), &HashMap::new());
         assert_eq!("Objective-C", winner_of(&map, "m"));
-        assert_eq!(ResolvedBy::PriorityFile, report.collisions[0].resolved_by);
-        assert_eq!(vec!["MATLAB".to_owned()], report.collisions[0].losers);
+        assert_eq!(ResolvedBy::PriorityFile, report.contested[0].resolved_by);
+        assert_eq!(vec!["MATLAB".to_owned()], report.contested[0].losers);
     
         let forced = hashmap!("m".to_owned() => "matlab".to_owned());
-        let (map, report) = make_extension_language_map(&languages, &priority(&[("m", &["Objective-C", "MATLAB"])]), &forced);
+        let (map, report) = build_extension_language_map(&languages, &priority(&[("m", &["Objective-C", "MATLAB"])]), &forced);
         assert_eq!("MATLAB", winner_of(&map, "m"));
-        assert_eq!(ResolvedBy::ForceLang, report.collisions[0].resolved_by);
+        assert_eq!(ResolvedBy::ForceLang, report.contested[0].resolved_by);
     
         // and neither of them is the tiebreak, so neither is announced
         assert!(report.collect_warnings().is_empty());
@@ -317,12 +400,12 @@ mod tests {
     #[test]
     fn a_priority_rule_that_names_no_claimant_falls_through_to_the_tiebreak_and_says_so() {
         let languages = languages_claiming(&[("MATLAB", &["m"]), ("Objective-C", &["m"])]);
-        let (map, report) = make_extension_language_map(&languages, &priority(&[("m", &["ObjC"])]), &HashMap::new());
+        let (map, report) = build_extension_language_map(&languages, &priority(&[("m", &["ObjC"])]), &HashMap::new());
     
         assert_eq!("MATLAB", winner_of(&map, "m"));
-        assert_eq!(ResolvedBy::AlphabeticalFallback, report.collisions[0].resolved_by);
+        assert_eq!(ResolvedBy::AlphabeticalFallback, report.contested[0].resolved_by);
         let reported = report.collect_warnings();
-        assert_eq!(warnings::Code::ExtensionTiebreak, reported[0].code);
+        assert_eq!(warnings::Code::LanguageTiebreak, reported[0].code);
         assert_eq!("m", reported[0].subject);
         assert!(reported[0].message.contains("only because"));
     }
@@ -331,7 +414,7 @@ mod tests {
     #[test]
     fn the_priority_file_moves_on_to_the_next_name_when_the_first_is_not_there() {
         let languages = languages_claiming(&[("Prolog", &["pl"]), ("Raku", &["pl"])]);
-        let (map, _) = make_extension_language_map(&languages, &priority(&[("pl", &["Perl", "Raku", "Prolog"])]), &HashMap::new());
+        let (map, _) = build_extension_language_map(&languages, &priority(&[("pl", &["Perl", "Raku", "Prolog"])]), &HashMap::new());
     
         assert_eq!("Raku", winner_of(&map, "pl"));
     }
@@ -340,12 +423,12 @@ mod tests {
     fn a_forced_extension_is_taken_even_when_no_language_claims_it() {
         let languages = languages_claiming(&[("Python", &["py"])]);
         let forced = hashmap!("txt".to_owned() => "python".to_owned());
-        let (map, report) = make_extension_language_map(&languages, &HashMap::new(), &forced);
+        let (map, report) = build_extension_language_map(&languages, &HashMap::new(), &forced);
     
         assert_eq!("Python", winner_of(&map, "txt"));
         assert_eq!("Python", winner_of(&map, "py"));
         // nothing was contested, so there is nothing to report
-        assert!(report.collisions.is_empty());
+        assert!(report.contested.is_empty());
     }
 
     // A caller of the library sets the field directly and is under no obligation to lowercase its
@@ -355,10 +438,10 @@ mod tests {
     fn a_forced_extension_is_normalised_before_it_is_looked_up() {
         let languages = languages_claiming(&[("MATLAB", &["m"]), ("Objective-C", &["m"])]);
         let forced = hashmap!("M".to_owned() => "MatLab".to_owned());
-        let (map, report) = make_extension_language_map(&languages, &HashMap::new(), &forced);
+        let (map, report) = build_extension_language_map(&languages, &HashMap::new(), &forced);
     
         assert_eq!("MATLAB", winner_of(&map, "m"));
-        assert_eq!(ResolvedBy::ForceLang, report.collisions[0].resolved_by);
+        assert_eq!(ResolvedBy::ForceLang, report.contested[0].resolved_by);
         assert!(report.collect_warnings().is_empty());
     }
 
@@ -366,7 +449,7 @@ mod tests {
     fn a_forced_language_that_is_not_available_is_reported_and_changes_nothing() {
         let languages = languages_claiming(&[("Python", &["py"])]);
         let forced = hashmap!("py".to_owned() => "cobol".to_owned());
-        let (map, report) = make_extension_language_map(&languages, &HashMap::new(), &forced);
+        let (map, report) = build_extension_language_map(&languages, &HashMap::new(), &forced);
     
         assert_eq!("Python", winner_of(&map, "py"));
         assert_eq!(vec![("py".to_owned(), "cobol".to_owned())], report.unknown_forced_languages);
@@ -378,7 +461,7 @@ mod tests {
         // Names what was asked for and what happened, and nothing a command line can do about it:
         // that sentence belongs to whoever has a command line.
         assert!(reported[0].message.contains("'cobol'"), "{}", reported[0].message);
-        assert!(!reported[0].message.contains("--force-lang"), "{}", reported[0].message);
+        assert!(!reported[0].message.contains("--force-language"), "{}", reported[0].message);
     }
 
     // Two spellings of one extension are one extension, and they have to collide as one. Left as
@@ -387,10 +470,10 @@ mod tests {
     #[test]
     fn extensions_are_matched_without_case_and_contest_each_other_across_it() {
         let languages = languages_claiming(&[("Zig", &["ZIG"]), ("Ziggy", &["zig"])]);
-        let (map, report) = make_extension_language_map(&languages, &HashMap::new(), &HashMap::new());
+        let (map, report) = build_extension_language_map(&languages, &HashMap::new(), &HashMap::new());
     
-        assert_eq!(1, report.collisions.len());
-        assert_eq!("zig", report.collisions[0].extension);
+        assert_eq!(1, report.contested.len());
+        assert_eq!("zig", report.contested[0].identity);
         assert_eq!("Zig", winner_of(&map, "zig"));
         assert_eq!("Zig", winner_of(&map, "ZIG"));
         assert_eq!("Zig", winner_of(&map, "Zig"));

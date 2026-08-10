@@ -35,6 +35,7 @@ use std::{collections::HashMap, process::ExitCode, sync::Arc, time::Instant};
 use colored::*;
 use include_dir::{File, include_dir};
 use mezura_core::{EXTENSION_PRIORITY_FILE_NAME, FilesPresent, Language};
+use mezura_core::language_file::PriorityRules;
 
 use crate::config_manager::{Configuration, OutputFormat};
 use crate::config_manager::{CHANGELOG, HELP, LAYOUT, OUTPUT, RESTORE, SHOW_CONFIGS,
@@ -64,7 +65,8 @@ fn main() -> ExitCode {
         Ok(outcome) => if let Some(message) = outcome.format() {eprintln!("{message}")},
         // Whatever was written stays on disk, and the version is recorded only after a pass that
         // finished, so the next execution tries again instead of believing it is done
-        Err(x) => eprintln!("{}",format!("\nUnable to update the data files: {x}\n").yellow())
+        Err(x) => eprintln!("\n{}\n", crate::message_printer::wrap_message(
+                &format!("Unable to update the data files: {x}")).yellow())
     }
 
     if !crate::paths::PERSISTENT_APP_PATHS.are_initialized {
@@ -75,7 +77,8 @@ fn main() -> ExitCode {
         match mezura_core::language_file::parse_languages_in_dir(&crate::paths::PERSISTENT_APP_PATHS.languages_dir) {
             Ok((parsed, faulty_files)) => {
                 if !faulty_files.is_empty() {
-                    eprintln!("{}", crate::message_printer::format_faulty_language_files_message(&faulty_files).yellow());
+                    eprintln!("{}", crate::message_printer::wrap_message(
+                            &crate::message_printer::format_faulty_language_files_message(&faulty_files)).yellow());
                     // One warning per file and not one for the list, since each is a whole language
                     // whose files went uncounted and a reader of the document wants to know which
                     for faulty in &faulty_files {
@@ -154,11 +157,11 @@ fn main() -> ExitCode {
         match report_unknown_languages(&languages_available, &config.engine.languages_of_interest) {
             Ok(x) => {
                 if let Some(msg) = x {
-                    eprintln!("\n {msg}");
+                    eprintln!("\n {}", crate::message_printer::wrap_message(&msg));
                 }
             },
             Err(x) => {
-                eprintln!("\n{x}\n");
+                eprintln!("\n{}\n", crate::message_printer::wrap_message(&x));
                 return ExitCode::FAILURE;
             }
         }
@@ -166,8 +169,9 @@ fn main() -> ExitCode {
 
     let (extension_priority, faulty_priority_lines) = read_extension_priority();
     if !faulty_priority_lines.is_empty() {
-        eprintln!("{}", format!("\nLines that could not be read in '{EXTENSION_PRIORITY_FILE_NAME}', and were skipped:\n{}",
-                faulty_priority_lines.join("\n")).yellow());
+        eprintln!("\n{}", crate::message_printer::wrap_message(
+                &format!("Lines that could not be read in '{EXTENSION_PRIORITY_FILE_NAME}', and were skipped:\n{}",
+                faulty_priority_lines.join("\n"))).yellow());
         for line in &faulty_priority_lines {
             crate::warning_collector::keep(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::PriorityLineSkipped, line,
                     format!("'{line}' could not be read in '{EXTENSION_PRIORITY_FILE_NAME}' and was skipped, so any contest it was meant to settle was left to the tiebreak.")));
@@ -351,7 +355,7 @@ fn read_baked_in_extension_priority_contents() -> String {
 // a substitute: the user is meant to edit the one on disk, and reading a different one would make
 // their edits look like they had no effect. It is written by the same restore that writes everything
 // else, and until it is there every contested extension simply announces its tiebreak.
-fn read_extension_priority() -> (HashMap<String,Vec<String>>, Vec<String>) {
+fn read_extension_priority() -> (PriorityRules, Vec<String>) {
     mezura_core::language_file::parse_priority_file(&(crate::paths::PERSISTENT_APP_PATHS.data_dir.clone() + EXTENSION_PRIORITY_FILE_NAME))
 }
 
@@ -383,10 +387,17 @@ impl MigrationOutcome {
             return None;
         }
 
+        // What it can tell is that the contents are not the ones it wrote, which is not the same as
+        // knowing who wrote them: a second installation, a copy from somewhere, or a hand edit all
+        // arrive here alike, and naming the reader as the author of a change they did not make
+        // sends them looking through a file they never touched.
         let (count, plural) = (self.replaced.len(), if self.replaced.len() == 1 {"file"} else {"files"});
-        Some(format!("\nUpdated the data files for {VERSION_ID}.\n{count} {plural} you had changed {} replaced. \
-Yours can be found in '{}{REPLACED_DIR_NAME}/{VERSION_ID}/', if you want to carry your changes over:\n  {}\n",
-                if count == 1 {"was"} else {"were"}, crate::paths::PERSISTENT_APP_PATHS.data_dir, self.replaced.join(", ")).yellow().to_string())
+        Some(format!("\n{}\n", crate::message_printer::wrap_message(&format!(
+                "Updated the data files for {VERSION_ID}.\n{count} {plural} on disk {} not the ones mezura had written, \
+so {} kept in '{}{REPLACED_DIR_NAME}/{VERSION_ID}/' in case you want anything out of {}:\n  {}",
+                if count == 1 {"was"} else {"were"}, if count == 1 {"it was"} else {"they were"},
+                crate::paths::PERSISTENT_APP_PATHS.data_dir, if count == 1 {"it"} else {"them"},
+                self.replaced.join(", ")))).yellow().to_string())
     }
 }
 
@@ -484,7 +495,11 @@ fn archive(data_dir: &str, relative: &str, contents: &[u8]) -> Result<(), std::i
 fn migrate_data_files(data_dir: &str, force: bool) -> Result<MigrationOutcome, std::io::Error> {
     let (recorded_version, recorded) = read_manifest(data_dir);
     let mut outcome = MigrationOutcome::default();
-    if !force && recorded_version == VERSION_ID {
+    // The version says what was written and the directory says what is there, and it takes both:
+    // an installation whose files are deleted keeps the version that wrote them, so the record
+    // alone leaves the folder empty for good while every run counts from the copies inside the
+    // binary and says nothing. One directory listing, against the hashing of every file below it.
+    if !force && recorded_version == VERSION_ID && crate::paths::dir_contains_entries(&(data_dir.to_owned() + LANGUAGES_DIR_NAME)) {
         return Ok(outcome);
     }
 
@@ -595,9 +610,9 @@ fn handle_message_only_command(args_str: &str, languages_available: &[Language])
     // holds a help text, and nothing says it is not one until something tries to parse it. The two
     // can only have been typed together, since a configuration file may not declare '--output'.
     if asks_for_a_json_document(args_str) {
-        eprintln!("\n{}\n", crate::theme::get_active().error.paint(&format!(
+        eprintln!("\n{}\n", crate::theme::get_active().error.paint(&crate::message_printer::wrap_message(&format!(
                 "'--{message_command}' prints a message to read and '--output json' writes a document for a \
-program to read, and both of them go to the output, so only one of the two can be asked for at a time.")));
+program to read, and both of them go to the output, so only one of the two can be asked for at a time."))));
         return Some(ExitCode::FAILURE);
     }
 
@@ -645,19 +660,21 @@ program to read, and both of them go to the output, so only one of the two can b
                 }
                 if !outcome.installed.is_empty() {
                     let plural = if outcome.installed.len() == 1 {"file"} else {"files"};
-                    println!("\nRestored {} {plural}:\n{}", outcome.installed.len(), outcome.installed.join(", "));
+                    println!("\n{}", crate::message_printer::wrap_message(&format!("Restored {} {plural}:\n{}",
+                            outcome.installed.len(), outcome.installed.join(", "))));
                 }
                 if let Some(message) = outcome.format() {
                     println!("{message}");
                 }
                 if !outcome.withdrawn.is_empty() {
-                    println!("\nNo longer part of mezura, and moved to '{}{REPLACED_DIR_NAME}/{VERSION_ID}/':\n{}",
-                            crate::paths::PERSISTENT_APP_PATHS.data_dir, outcome.withdrawn.join(", "));
+                    println!("\n{}", crate::message_printer::wrap_message(&format!(
+                            "No longer part of mezura, and moved to '{}{REPLACED_DIR_NAME}/{VERSION_ID}/':\n{}",
+                            crate::paths::PERSISTENT_APP_PATHS.data_dir, outcome.withdrawn.join(", "))));
                 }
                 Some(ExitCode::SUCCESS)
             },
             Err(x) => {
-                println!("\n{}", format!("Unable to restore the files: {x}").red());
+                println!("\n{}", crate::message_printer::wrap_message(&format!("Unable to restore the files: {x}")).red());
                 Some(ExitCode::FAILURE)
             }
         };
@@ -669,7 +686,8 @@ program to read, and both of them go to the output, so only one of the two can b
                 Some(ExitCode::SUCCESS)
             },
             Err(x) => {
-                println!("\n{}", format!("Unable to generate the theme editor page: {x}").red());
+                println!("\n{}", crate::message_printer::wrap_message(
+                        &format!("Unable to generate the theme editor page: {x}")).red());
                 Some(ExitCode::FAILURE)
             }
         };
@@ -824,6 +842,37 @@ mod tests {
         assert_eq!("a language of an earlier version",
                 std::fs::read_to_string(format!("{dir}replaced/{VERSION_ID}/languages/Gone.txt")).unwrap());
         assert_eq!("a language of my own", std::fs::read_to_string(&theirs).unwrap());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // An installation that loses its files repairs itself on the next run, and the version alone
+    // cannot answer that: deleting the languages leaves the version that wrote them behind. Nothing
+    // else catches it either, since the run then reads the copies baked into the binary and counts
+    // correctly, so the only symptom is a data directory that can no longer be edited.
+    #[test]
+    fn an_installation_that_lost_its_files_is_repaired_even_though_the_version_has_not_moved() {
+        let dir = SCRATCH_DIR.to_owned() + "migration-emptied/";
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        migrate_data_files(&dir, false).unwrap();
+        let a_language = dir.clone() + "languages/Rust.txt";
+        assert!(std::path::Path::new(&a_language).exists(), "the first pass wrote nothing");
+
+        for entry in std::fs::read_dir(dir.clone() + "languages/").unwrap().flatten() {
+            std::fs::remove_file(entry.path()).unwrap();
+        }
+
+        // Same version, same manifest, and the languages gone: the pass that used to return here
+        let outcome = migrate_data_files(&dir, false).unwrap();
+        assert!(std::path::Path::new(&a_language).exists(),
+                "an emptied languages folder was left empty, and the run would count from the binary in silence");
+        assert!(!outcome.installed.is_empty() && outcome.replaced.is_empty(),
+                "the files came back as somebody's changed copies rather than as missing ones: {:?}", outcome.replaced);
+
+        // and with everything in place it still costs nothing and says nothing
+        let outcome = migrate_data_files(&dir, false).unwrap();
+        assert!(outcome.installed.is_empty() && outcome.replaced.is_empty() && outcome.withdrawn.is_empty());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

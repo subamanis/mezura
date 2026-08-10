@@ -59,7 +59,7 @@ fn collect_stats() -> String {
     // them and rerunning the golden measures the edit.
     let languages_on_disk = language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0;
 
-    let (languages, _) = Languages::resolve(&config, languages_on_disk, &HashMap::new());
+    let (languages, _) = Languages::resolve(&config, languages_on_disk, &Default::default());
 
     // The all-faulty guard lives on the asserts below: that case comes back as a result now, and
     // the empty faulty list is already demanded a few lines down

@@ -36,7 +36,6 @@ use std::time::Instant;
 
 use crossbeam_deque::{Injector, Worker};
 
-use engine::extensions::find_language_of_extension;
 use engine::modules::{ModuleId, Modules};
 
 // The file that decides which language gets an extension that two of them claim. Nothing here reads
@@ -49,7 +48,7 @@ pub const EXTENSION_PRIORITY_FILE_NAME : &str = "extension_priority.txt";
 pub const UNNAMED_MODULE_NAME : &str = "(unnamed)";
 
 pub(crate) type FaultyFilesListMut = Arc<Mutex<Vec<FaultyFileDetails>>>;
-pub(crate) type ExtensionLangMap = Arc<HashMap<String, Arc<str>>>;
+pub(crate) type SharedLanguageLookup = Arc<engine::identity::LanguageLookup>;
 // One bucket per module. A run where the user named no modules at all has exactly one bucket, so
 // nothing further down has two shapes to handle.
 pub(crate) type StatsMapMut = Arc<Mutex<Vec<HashMap<String,Stats>>>>;
@@ -92,9 +91,9 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
     let config = Arc::new(config.clone());
     let faulty_files_ref : FaultyFilesListMut  = Arc::new(Mutex::new(Vec::with_capacity(10)));
     let finish_condition_ref = Arc::new(AtomicBool::new(false));
-    let (by_name, extension_map) = languages.into_parts();
+    let (by_name, lookup) = languages.into_parts();
     let language_map_ref = Arc::new(by_name);
-    let extension_lang_map: ExtensionLangMap = Arc::new(extension_map);
+    let language_lookup: SharedLanguageLookup = Arc::new(lookup);
     let modules = Arc::new(Modules::of(&dirs));
     let stats_per_module : StatsMapMut =
             Arc::new(Mutex::new(make_language_stats(&language_map_ref, modules.count())));
@@ -115,7 +114,7 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
                 RunError::InvalidExcludePattern(culprit)
             })?);
     calculate_single_file_stats_or_add_to_injector(&config, &dirs, &dirs_injector, &files_injector, &mut files_present,
-            &extension_lang_map, &modules, &progress);
+            &language_lookup, &modules, &progress);
 
     let files_stats = Arc::new(Mutex::new(files_present));
     let unreadable_dirs = Arc::new(Mutex::new(Vec::new()));
@@ -134,7 +133,7 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
     let mut last_refusal = None;
     for i in 0..config.threads.producers() {
         match engine::producer::start_producer_thread(i, files_injector.clone(), dirs_injector.clone(), Worker::new_fifo(),
-                idle_producers.clone(), extension_lang_map.clone(), exclude_matcher.clone(),
+                idle_producers.clone(), language_lookup.clone(), exclude_matcher.clone(),
                 config.clone(), files_stats.clone(), modules.clone(), unreadable_dirs.clone(),
                 producers_total.clone(), worker_panics.clone(), progress.clone()) {
             Ok(handle) => producer_handles.push(handle),
@@ -282,16 +281,14 @@ impl Drop for WalkDoneGuard {
 // with it, the module table still hands it back on the way down.
 pub(crate) fn calculate_single_file_stats_or_add_to_injector(config: &EngineConfig, dirs: &engine::targets::Targets,
         dirs_injector: &Arc<Injector<TraversedDir>>, files_injector: &Arc<Injector<ParsableFile>>,
-        files_present: &mut FilesPresent, extension_lang_map: &HashMap<String, Arc<str>>, modules: &Modules,
+        files_present: &mut FilesPresent, language_lookup: &engine::identity::LanguageLookup, modules: &Modules,
         progress: &ScanProgress)
 {
     crate::engine::targets::topmost_targets(dirs).iter().for_each(|target| {
         let dir_path = Path::new(&target.path);
         let module = modules.of_target(target);
         if dir_path.is_file() {
-            if let Some(x) = dir_path.extension()
-                && let Some(extension) = x.to_str()
-                && let Some(lang_name) = find_language_of_extension(extension_lang_map, extension) {
+            if let Some(lang_name) = language_lookup.of_path(dir_path) {
                 files_injector.push(ParsableFile::new(dir_path.to_path_buf(), lang_name, module));
                 files_present.total_files += 1;
                 files_present.relevant_files += 1;
@@ -549,7 +546,7 @@ mod worker_death_tests {
 
     fn languages_for(config: &EngineConfig) -> Languages {
         let languages = crate::language_file::parse_languages_in_dir(crate::test_paths::LANGUAGES_DIR).unwrap().0;
-        Languages::resolve(config, languages, &std::collections::HashMap::new()).0
+        Languages::resolve(config, languages, &Default::default()).0
     }
 
     #[test]

@@ -1,18 +1,18 @@
 // Which languages a run has in play, and which of them owns an extension two of them claim. The
 // format a language file is written in is 'language_file' next door.
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use crate::{Language, warnings};
 use crate::engine::config::EngineConfig;
-use crate::engine::extensions::make_extension_language_map;
+use crate::engine::identity::{IdentifiedBy, LanguageLookup, build_language_map_by};
+use crate::language_file::PriorityRules;
 use crate::warnings::Warning;
 
 // Built by the caller and handed to 'run', rather than inside it, so that its complaints about the
 // settings land with the other complaints about settings and not in the middle of a report.
 pub struct Languages {
     by_name: HashMap<String, Language>,
-    extension_map: HashMap<String, Arc<str>>,
+    lookup: LanguageLookup,
     // Which settings produced this set, so 'run' can refuse one that would have produced another.
     resolved_against: LanguageSelection
 }
@@ -28,7 +28,7 @@ impl Languages {
     // taken as a map somebody else keyed: in a map whose key and value disagree the key wins, and a
     // language would be counted under a name it does not carry.
     pub fn resolve(config: &EngineConfig, languages: impl IntoIterator<Item = Language>,
-            priority: &HashMap<String, Vec<String>>) -> (Self, Vec<Warning>)
+            priority: &PriorityRules) -> (Self, Vec<Warning>)
     {
         // Unusable ones go first, so that a name nobody can ask for is not in the list when the
         // narrowing below asks whether a name exists. Duplicates are reported last, after the
@@ -39,10 +39,17 @@ impl Languages {
         reported.extend(find_duplicate_names(&languages));
 
         let by_name = keyed_by_name(languages);
-        let (extension_map, report) = make_extension_language_map(&by_name, priority, &config.forced_languages);
+        let (by_extension, report) = build_language_map_by(IdentifiedBy::Extension, &by_name, &priority.by_extension,
+                &config.forced_languages);
         reported.extend(report.collect_warnings());
+        // The forced pairs go to both, since '--force-language Makefile=python' and '--force-language
+        // txt=python' are the same sentence and the reader has no reason to know which map answers
+        let (by_filename, filename_report) = build_language_map_by(IdentifiedBy::Filename, &by_name,
+                &priority.by_filename, &config.forced_languages);
+        reported.extend(filename_report.contested_only().collect_warnings());
 
-        (Languages { by_name, extension_map, resolved_against: LanguageSelection::of(config) }, reported)
+        (Languages { by_name, lookup: LanguageLookup { by_extension, by_filename },
+                resolved_against: LanguageSelection::of(config) }, reported)
     }
 
     // Asked by 'run' before it counts anything. Resolved against settings naming Rust and then run
@@ -51,8 +58,8 @@ impl Languages {
         self.resolved_against == LanguageSelection::of(config)
     }
 
-    pub(crate) fn into_parts(self) -> (HashMap<String, Language>, HashMap<String, Arc<str>>) {
-        (self.by_name, self.extension_map)
+    pub(crate) fn into_parts(self) -> (HashMap<String, Language>, LanguageLookup) {
+        (self.by_name, self.lookup)
     }
 }
 
@@ -68,7 +75,7 @@ pub fn parse_shipped_languages() -> Vec<Language> {
 }
 
 // The rule this crate ships for settling an extension that two languages both claim.
-pub fn parse_shipped_extension_priority() -> HashMap<String, Vec<String>> {
+pub fn parse_shipped_extension_priority() -> PriorityRules {
     crate::language_file::parse_priority(&String::from_utf8_lossy(get_shipped_extension_priority_raw())).0
 }
 
@@ -135,28 +142,28 @@ impl LanguageSelection {
             of_interest: folded(&config.languages_of_interest),
             excluded: folded(&config.excluded_languages),
             forced: config.forced_languages.iter().map(|(extension, language)|
-                    (crate::engine::extensions::extension_key(extension), language.to_lowercase())).collect()
+                    (crate::engine::identity::extension_key(extension), language.to_lowercase())).collect()
         }
     }
 }
 
-// A language that can never match a file, or can never be named. Both used to be accepted in
-// silence: they took a row in every internal map and contributed nothing, and a nameless one
-// answered to a forced pair whose language was left blank. The file parser refuses both, so what
-// this catches is a caller building one by hand.
+// A language that can never match a file, or can never be named. The file parser refuses both, so
+// what this catches is a caller building one by hand.
 fn drop_the_unusable(languages: Vec<Language>) -> (Vec<Language>, Vec<Warning>) {
     let mut reported = Vec::new();
     let kept = languages.into_iter().filter(|language| {
         if language.name.trim().is_empty() {
-            reported.push(Warning::new(warnings::Code::LanguageWithoutName,
-                    &language.extensions.join(","),
-                    format!("A language claiming '{}' has no name, so the files carrying those extensions were not counted.",
-                    language.extensions.join(", "))));
+            let claimed = language.extensions.iter().chain(&language.filenames)
+                    .map(String::as_str).collect::<Vec<_>>();
+            reported.push(Warning::new(warnings::Code::LanguageWithoutName, &claimed.join(","),
+                    format!("A language claiming '{}' has no name, so the files matching it were not counted.",
+                    claimed.join(", "))));
             return false;
         }
-        if language.extensions.is_empty() {
-            reported.push(Warning::new(warnings::Code::LanguageWithoutExtension, &language.name,
-                    format!("'{}' claims no extension, so no file can ever be counted as it.", language.name)));
+        if language.extensions.is_empty() && language.filenames.is_empty() {
+            reported.push(Warning::new(warnings::Code::LanguageClaimsNothing, &language.name,
+                    format!("'{}' claims no extension and no filename, so no file can ever be counted as it.",
+                    language.name)));
             return false;
         }
         true
@@ -173,7 +180,7 @@ fn drop_the_unusable(languages: Vec<Language>) -> (Vec<Language>, Vec<Warning>) 
 // which of two files somebody meant.
 // Grouped the way every other name comparison in this crate groups, through
 // 'is_the_same_language_name', and not by the exact spelling. Two files called 'Rust' and 'rust' are
-// two definitions of one language to '--languages', to '--exclude-languages', to '--force-lang' and
+// two definitions of one language to '--languages', to '--exclude-languages', to '--force-language' and
 // to the priority file, all of which fold case; counting them apart here was the one place that did
 // not, so that pair went through unreported while every one of those flags treated them as one.
 fn find_duplicate_names(languages: &[Language]) -> Vec<Warning> {
@@ -365,11 +372,11 @@ mod language_selection_tests {
                 Language::new("Rust", ["rs"], ["\""], ["//"], &[], [])];
 
         let config = EngineConfig::default();
-        let (languages, _) = Languages::resolve(&config, twice, &HashMap::new());
+        let (languages, _) = Languages::resolve(&config, twice, &PriorityRules::default());
         let reported = Languages::resolve(&config,
                 vec![Language::new("Same", ["aa"], ["\""], ["//"], &[], []),
                      Language::new("Same", ["bb"], ["\""], [""; 0], &[("/*", "*/")], [])],
-                &HashMap::new()).1;
+                &PriorityRules::default()).1;
 
         let mine = reported.iter().find(|x| x.code == warnings::Code::DuplicateLanguage)
                 .expect("a language declared twice was dropped in silence");
@@ -386,20 +393,37 @@ mod language_selection_tests {
     fn a_language_that_cannot_be_named_or_matched_is_dropped_and_reported() {
         let unusable = vec![
             Language::new("   ", ["zz"], ["\""], ["//"], &[], []),
-            Language::new("Nameless-Extensions", [""; 0], ["\""], ["//"], &[], []),
+            Language::new("Claims-Nothing", [""; 0], ["\""], ["//"], &[], []),
             Language::new("Rust", ["rs"], ["\""], ["//"], &[], [])];
 
         let (kept, reported) = drop_the_unusable(unusable);
         assert_eq!(vec!["Rust"], kept.into_iter().map(|x| x.name).collect::<Vec<_>>());
         assert_eq!(2, reported.len(), "{reported:?}");
         // Two codes and not one, because the consequences differ: dropping the nameless one leaves
-        // every '.zz' file counted by nobody, while the one claiming no extension could never have
+        // every '.zz' file counted by nobody, while the one claiming nothing could never have
         // matched a file in the first place
         assert_eq!(Some(warnings::Code::LanguageWithoutName),
                 reported.iter().find(|x| x.subject == "zz").map(|x| x.code),
                 "the nameless one is named by what it claims");
-        assert_eq!(Some(warnings::Code::LanguageWithoutExtension),
-                reported.iter().find(|x| x.subject == "Nameless-Extensions").map(|x| x.code));
+        assert_eq!(Some(warnings::Code::LanguageClaimsNothing),
+                reported.iter().find(|x| x.subject == "Claims-Nothing").map(|x| x.code));
+    }
+
+    // A language file may declare filenames and no extension at all, which is what a definition for
+    // Makefile or Dockerfile alone looks like. Dropping it took the language out of the run and
+    // reported that it claimed nothing, while the name it claimed would have matched files.
+    #[test]
+    fn a_language_that_claims_only_filenames_is_kept() {
+        let by_name_only = Language::new("Docky", [""; 0], ["\""], ["#"], &[], [])
+                .with_filenames(&["Dockerfile"]);
+
+        let (kept, reported) = drop_the_unusable(vec![by_name_only]);
+        assert_eq!(vec!["Docky"], kept.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), "{reported:?}");
+        assert!(reported.is_empty(), "{reported:?}");
+
+        // and it reaches the map that answers for a whole filename
+        let (languages, _) = Languages::resolve(&EngineConfig::default(), kept, &PriorityRules::default());
+        assert_eq!(Some("Docky"), languages.lookup.of_path(std::path::Path::new("some/dir/Dockerfile")).as_deref());
     }
 
     // Excluding a name that does not exist did nothing and said nothing, while asking for one four

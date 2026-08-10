@@ -1,31 +1,31 @@
 Language
-Ruby
+CMake
 
 Extensions
-rb
+cmake
 
 Filenames
-Gemfile Rakefile Vagrantfile Podfile Brewfile
+CMakeLists.txt
 
 String symbols
 
 Multi line string symbols
-" '
+"
 
 Comment symbols
 #
 Multi line comment start
-=begin
+#[=*[
 Multi line comment end
-=end
+]=*]
 
 Keyword
-NAME
-classes
-ALIASES
-class
+    NAME
+    functions
+    ALIASES
+    function
 Keyword
-NAME
-modules
-ALIASES
-module
+    NAME
+    macros
+    ALIASES
+    macro

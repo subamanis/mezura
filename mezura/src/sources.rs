@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use mezura_core::{EngineConfig, FilesPresent, Language, ScanProgress};
+use mezura_core::language_file::PriorityRules;
 
 use super::config_manager::Configuration;
 use super::diff::{Note, Reading};
@@ -85,7 +86,7 @@ pub fn start_acquiring_revisions(resolved: Vec<ResolvedRevision>) -> Vec<Revisio
 // The files are written out, the targets are found again inside them, and 'run' does the rest,
 // under this run's settings and this build
 pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, languages: Vec<Language>,
-        extension_priority: &HashMap<String,Vec<String>>) -> Result<(Reading, Vec<Note>), GitError>
+        extension_priority: &PriorityRules) -> Result<(Reading, Vec<Note>), GitError>
 {
     // Dropped, and with it erased, before this function returns anything: the whole phase is
     // silent on the permanent output, and the motion is its only sign of life

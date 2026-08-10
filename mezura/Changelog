@@ -23,6 +23,19 @@ Main changes:
       "(* (* *) *)" or a commented-out block in Rust, Haskell, Scala, Kotlin, Swift, Julia, Elm,
       Lisp, Scheme, MATLAB, WebAssembly text or D's "/+ +/" is read to its real end instead of
       its first closer.
+  -> A data directory whose files are missing is filled again on the next run, instead of staying
+      empty until the next version. Deleting the "languages" folder, or losing it any other way,
+      used to leave it empty for good while the run silently counted with the copies inside the
+      program.
+  -> Every message the program prints now wraps to the width of the report, including the ones
+      that list files, and the update message no longer says you changed a file when all it knows
+      is that the file is not the one it wrote.
+  -> Files that are known by their whole name are now counted: Makefile, Dockerfile,
+      CMakeLists.txt, Gemfile, Rakefile and the rest. A language file names them in a new
+      "Filenames" field, a file is matched by its name before its extension, and a contest over a
+      name is settled in "extension_priority.txt" under "contested-filenames" or with
+      "--force-language Makefile=<language>". Three new languages come with it: Make, Dockerfile and
+      CMake.
   -> Lua's counted comment brackets now work at every level: a pair written with "=*" in a
       language file, like --[=*[ with ]=*], matches any run of "=" and closes only at an end
       carrying the same count, so a "]]" inside a --[==[ block is text and the block ends where
@@ -51,13 +64,14 @@ Main changes:
       HLSL, GLSL, WGSL, Metal, Slang and ShaderLab.
   -> Objective-C takes ".m" and Perl takes ".pl", while ".h" stays with C Header. If you write
       MATLAB or Prolog instead, or want your headers counted as Objective-C, swap the line for it
-      in "extension_priority.txt", or run with "--force-lang m=matlab".
+      in "extension_priority.txt", or run with "--force-language m=matlab".
   -> Two languages that claim the same extension no longer settle it silently. The winner is named
       in the new "extension_priority.txt" file of the data directory, and when nothing names it, the
       program says which language it gave the extension to and that it only did so alphabetically.
-  -> New "--force-lang" command: "--force-lang m=matlab,pl=perl" decides which language an extension
-      belongs to for this run, whether or not another language claims it. It overrides the priority
-      file and, like every other command, can be saved in a configuration file.
+  -> New "--force-language" command: "--force-language m=matlab,pl=perl" decides which language an
+      extension belongs to for this run, whether or not another language claims it, and takes a
+      whole filename just as readily. It overrides the priority file and, like every other command,
+      can be saved in a configuration file.
   -> Extensions are now matched without regard to case, so a file named "MAIN.RS" counts as Rust.
 
 (Breaking!)
@@ -255,7 +269,7 @@ Bugfixes:
   -> A language file that declares extensions but no name now reports that the counts are in doubt
       instead of the settings: every file carrying those extensions goes uncounted, which is what
       an unreadable language file already said. It also has a code of its own,
-      "language-without-name", separate from "language-without-extension", which is the harmless
+      "language-without-name", separate from "language-claims-nothing", which is the harmless
       case and replaces the "unusable-language" that used to cover both.
   -> A command that is ignored, "--log" or "--compare" without a loaded configuration, now says so
       in "--output json" as well, under the code "command-ignored". It was only ever said on screen,
@@ -290,19 +304,19 @@ Bugfixes:
       A file saved in an encoding mezura cannot read now says so, instead of sending you looking for
       a mistake in a file whose format is fine, and the reason is now printed beside each file name.
   -> Two language files whose names differ only in upper and lower case are now reported, and
-      "--force-lang" and "extension_priority.txt" now give the extension to the one you named. Both
+      "--force-language" and "extension_priority.txt" now give the extension to the one you named. Both
       used to fold the case away and pick the other one, so naming a language exactly as it is
       spelled could hand your files to a different one, with its comment symbols and without a word.
   -> A language that claims one extension in two spellings, such as "h" and ".h", no longer reports
       itself as contesting the extension with itself.
-  -> The history section now reports "--force-lang" among the settings that changed since an
+  -> The history section now reports "--force-language" among the settings that changed since an
       earlier run. It was written into the log and thrown away on the way back in, so numbers moved
       with nothing to say why.
   -> The time a run reports is no longer shortened by a slow "on traversal done" callback that the
       counting outlasted. This only affects a program using mezura as a library.
   -> An extension can now be written with the dot in front of it. ".rs" in a language file, and
       ".m" in "extension_priority.txt", used to match nothing at all and say nothing about it, while
-      "--force-lang .m=matlab" had always accepted the dot.
+      "--force-language .m=matlab" had always accepted the dot.
   -> An extension is now matched whatever its length. One longer than 24 characters that also had a
       capital letter in it was never recognised, so those files were silently not counted.
   -> Two language files that declare the same language name are now reported. One of them was used

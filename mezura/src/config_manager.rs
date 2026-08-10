@@ -17,7 +17,7 @@ pub const DIRS               :&str   = "dirs";
 pub const EXCLUDE            :&str   = "exclude";
 pub const LANGUAGES          :&str   = "languages";
 pub const EXCLUDE_LANGUAGES  :&str   = "exclude-languages";
-pub const FORCE_LANG         :&str   = "force-lang";
+pub const FORCE_LANGUAGE     :&str   = "force-language";
 pub const THREADS            :&str   = "threads";
 pub const BRACES_AS_CODE     :&str   = "braces-as-code";
 pub const SEARCH_IN_DOTTED   :&str   = "search-in-dotted";
@@ -679,7 +679,7 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
     // not sit next to '--save': what the file has to hold is the look, not the pieces it came from
     if let Some(name) = &config.view.theme_name_to_save {
         if config.view.theme == Theme::default() {
-            eprintln!("\n{}", format!("Nothing to save in theme '{name}': every style is at its default.").yellow());
+            eprintln!("\n{}", wrap_message(&format!("Nothing to save in theme '{name}': every style is at its default.")).yellow());
         } else {
             match super::theme_files::save_theme_to_file(&crate::paths::PERSISTENT_APP_PATHS.themes_dir, name, &config.view.theme) {
                 Err(_) => eprintln!("\n{}","Error while trying to save the theme.".yellow()),
@@ -781,10 +781,10 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 return Err(ArgParsingError::IncorrectCommandArgs(EXCLUDE_LANGUAGES.to_owned()));
             }
             excluded_languages = Some(vec);
-        } else if command_name == FORCE_LANG {
+        } else if command_name == FORCE_LANGUAGE {
             let Some(map) = super::args::parse_forced_languages(arguments) else {
-                message_printer::print_help_message_for_command(FORCE_LANG);
-                return Err(ArgParsingError::IncorrectCommandArgs(FORCE_LANG.to_owned()));
+                message_printer::print_help_message_for_command(FORCE_LANGUAGE);
+                return Err(ArgParsingError::IncorrectCommandArgs(FORCE_LANGUAGE.to_owned()));
             };
             forced_languages = Some(map);
         } else if command_name == THREADS {
@@ -1093,7 +1093,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             HIDE => hidden.is_some(),
             NO_GITIGNORE => no_gitignore.is_some(),
             EXCLUDE => exclude_dirs.is_some(),
-            FORCE_LANG => forced_languages.is_some(),
+            FORCE_LANGUAGE => forced_languages.is_some(),
             THEME => theme_name.is_some(),
             SORT => sort_by.is_some(),
             TOP => top_n.is_some(),
@@ -1123,8 +1123,9 @@ fn print_warnings_for_commands_that_need_a_loaded_configuration(config_name_to_s
     // Printed here rather than kept for later, because this runs before the theme is resolved and
     // the plain color is the honest fallback; kept as well, so a machine consumer learns that a
     // command it gave was dropped instead of reading an empty 'warnings'.
+    // Wrapped for the screen and kept whole for the document, the way every warning is handled
     let ignored = |command: &str, message: String| {
-        eprintln!("\n{}", message.yellow());
+        eprintln!("\n{}", wrap_message(&message).yellow());
         super::warning_collector::keep(mezura_core::warnings::Warning::new(
                 mezura_core::warnings::Code::CommandIgnored, command, message));
     };
@@ -1207,7 +1208,7 @@ mod tests {
     fn counted(config: &Configuration) -> mezura_core::RunResult {
         let languages_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../mezura-core/data/languages/");
         let parsed = mezura_core::language_file::parse_languages_in_dir(languages_dir).unwrap().0;
-        let (languages, _) = mezura_core::Languages::resolve(&config.engine, parsed, &std::collections::HashMap::new());
+        let (languages, _) = mezura_core::Languages::resolve(&config.engine, parsed, &Default::default());
         mezura_core::run(&config.engine, languages, None, |_| {}).unwrap()
     }
 
@@ -1395,7 +1396,7 @@ mod tests {
         // the error a real run returns, through the same join 'main' prints it with
         let languages_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../mezura-core/data/languages/");
         let parsed = mezura_core::language_file::parse_languages_in_dir(languages_dir).unwrap().0;
-        let (languages, _) = mezura_core::Languages::resolve(&config.engine, parsed, &std::collections::HashMap::new());
+        let (languages, _) = mezura_core::Languages::resolve(&config.engine, parsed, &Default::default());
         let mezura_core::RunError::InvalidTargets(inner) = mezura_core::run(&config.engine, languages, None, |_| {}).unwrap_err()
                 else { panic!("the run did not refuse the config's dirs") };
         assert_eq!(ArgParsingError::InvalidPathInConfig("./does-not-exist-a2".to_owned(), "a2resolve1".to_owned()),
@@ -1633,7 +1634,7 @@ mod tests {
 
     #[test]
     fn force_lang_takes_pairs_of_an_extension_and_a_language_and_refuses_anything_else() {
-        let forced = |args: &str| create_config_from_args(&format!("./ --force-lang {args}")).map(|x| x.engine.forced_languages);
+        let forced = |args: &str| create_config_from_args(&format!("./ --force-language {args}")).map(|x| x.engine.forced_languages);
 
         assert_eq!(Ok(hashmap!("m".to_owned() => "matlab".to_owned())), forced("m=matlab"));
         // A leading dot is accepted the way '--languages' accepts it, and the extension is lowercased
@@ -1643,7 +1644,7 @@ mod tests {
                 forced(".M=MATLAB, pl = perl"));
 
         for wrong in ["", "matlab", "m=", "=matlab", "m=matlab,perl"] {
-            assert!(forced(wrong).is_err(), "'--force-lang {wrong}' was accepted");
+            assert!(forced(wrong).is_err(), "'--force-language {wrong}' was accepted");
         }
     }
 
@@ -1655,7 +1656,7 @@ mod tests {
         let test_file_path = &crate::paths::PERSISTENT_APP_PATHS.config_dir.clone().add("/test002.txt");
         let _ = std::fs::remove_file(test_file_path);
         std::fs::write(test_file_path, "===> dirs\nfrontend=\n\n===> sort\nnope\n\n===> top\nnope\n\n===> bar-thickness\nnope\n\n\
-                ===> progress-bar\nnope\n\n===> number-separator\nnope\n\n===> decimal-separator\nnope\n\n===> force-lang\nnope\n").unwrap();
+                ===> progress-bar\nnope\n\n===> number-separator\nnope\n\n===> decimal-separator\nnope\n\n===> force-language\nnope\n").unwrap();
 
         // A target that does not parse is a target whose files would not be counted, so with no
         // target on the command line to take its place the run stops instead of counting less
@@ -1666,7 +1667,7 @@ mod tests {
                 create_config_from_args("./ --load test002"));
 
         let rescued = create_config_from_args(
-                "./ --load test002 --sort name --top 3 --bar-thickness fat --progress-bar hash --number-separator dot --decimal-separator comma --force-lang m=matlab").unwrap();
+                "./ --load test002 --sort name --top 3 --bar-thickness fat --progress-bar hash --number-separator dot --decimal-separator comma --force-language m=matlab").unwrap();
         assert_eq!(vec![Target::of(mezura_core::engine::targets::convert_to_absolute("./"))], rescued.engine.dirs);
         assert_eq!(SortCriterion::Name, rescued.view.sort_by);
         assert_eq!(Some(3), rescued.view.top_n);

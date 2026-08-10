@@ -1159,7 +1159,7 @@ mod tests {
     use super::*;
     use crate::{Keyword, Stats};
     use crate::test_paths::{FIXTURES_DIR, LANGUAGES_DIR};
-    use crate::engine::extensions::{find_language_of_extension, make_extension_language_map};
+    use crate::engine::identity::{IdentifiedBy, LanguageLookup, build_language_map_by};
 
     // The four sample files the parser cases below read. They carry no telling extension, because
     // the language is the one the test names and not the one a suffix would imply, which is what
@@ -1282,6 +1282,7 @@ mod tests {
     static JAVA : LazyLock<Language> = LazyLock::new(|| Language {
         name : "java".to_owned(),
         extensions : vec!["java".to_owned()],
+        filenames : vec![],
         string_symbols : vec!["\"".to_owned()],
         multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned()],
@@ -1295,6 +1296,7 @@ mod tests {
     static PHP : LazyLock<Language> = LazyLock::new(|| Language {
         name : "PHP".to_owned(),
         extensions : vec!["php".to_owned()],
+        filenames : vec![],
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned(),"#".to_owned()],
@@ -1308,6 +1310,7 @@ mod tests {
     static PYTHON : LazyLock<Language> = LazyLock::new(|| Language {
         name : "py".to_owned(),
         extensions : vec!["py".to_owned()],
+        filenames : vec![],
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         multiline_strings : vec![],
         comment_symbols : vec!["#".to_owned()],
@@ -1321,6 +1324,7 @@ mod tests {
     static RUST : LazyLock<Language> = LazyLock::new(|| Language {
         name : "rust".to_owned(),
         extensions : vec!["rs".to_owned()],
+        filenames : vec![],
         string_symbols : vec!["\"".to_owned()],
         multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned()],
@@ -1337,6 +1341,7 @@ mod tests {
     static PYTHON_FULL : LazyLock<Language> = LazyLock::new(|| Language {
         name : "py".to_owned(),
         extensions : vec!["py".to_owned()],
+        filenames : vec![],
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         multiline_strings : vec![("\"\"\"".to_owned(), "\"\"\"".to_owned()), ("'''".to_owned(), "'''".to_owned())],
         comment_symbols : vec!["#".to_owned(), "//".to_owned(), "--".to_owned()],
@@ -1651,6 +1656,7 @@ mod tests {
     static LUA : LazyLock<Language> = LazyLock::new(|| Language {
         name : "lua".to_owned(),
         extensions : vec!["lua".to_owned()],
+        filenames : vec![],
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         multiline_strings : vec![],
         comment_symbols : vec!["--".to_owned()],
@@ -1681,6 +1687,7 @@ mod tests {
     static POWERSHELL : LazyLock<Language> = LazyLock::new(|| Language {
         name : "powershell".to_owned(),
         extensions : vec!["ps1".to_owned()],
+        filenames : vec![],
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         multiline_strings : vec![],
         comment_symbols : vec!["#".to_owned()],
@@ -1713,6 +1720,7 @@ mod tests {
     static PASCAL : LazyLock<Language> = LazyLock::new(|| Language {
         name : "pascal".to_owned(),
         extensions : vec!["pas".to_owned()],
+        filenames : vec![],
         string_symbols : vec!["'".to_owned()],
         multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned()],
@@ -1728,6 +1736,7 @@ mod tests {
     static D_LANG : LazyLock<Language> = LazyLock::new(|| Language {
         name : "d".to_owned(),
         extensions : vec!["d".to_owned()],
+        filenames : vec![],
         string_symbols : vec!["\"".to_owned()],
         multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned()],
@@ -1979,6 +1988,7 @@ mod tests {
     static CLOJURE : LazyLock<Language> = LazyLock::new(|| Language {
         name : "clojure".to_owned(),
         extensions : vec!["clj".to_owned()],
+        filenames : vec![],
         string_symbols : vec!["\"".to_owned()],
         multiline_strings : vec![],
         comment_symbols : vec![";".to_owned()],
@@ -2395,7 +2405,9 @@ mod tests {
     #[test]
     fn language_fixtures_match_their_declared_counts() {
         let root = fixtures_dir();
-        let extension_map = make_extension_language_map(&LANGUAGE_MAP_REF, &HashMap::new(), &HashMap::new()).0;
+        // The same lookup a run uses, name before extension, so a fixture called 'Makefile' is
+        // resolved the way the program resolves it and not by a rule of this test's own
+        let lookup = fixture_lookup();
         // Built-in defaults only, so that a preference in the machine's own config file cannot
         // change the counts
         let config = EngineConfig::default();
@@ -2405,10 +2417,9 @@ mod tests {
 
         for path in fixture_paths(&root) {
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
-            let extension = path.extension().and_then(|x| x.to_str()).unwrap_or_default();
 
-            let Some(lang_name) = find_language_of_extension(&extension_map, extension) else {
-                failures.push(format!("{name}: no supported language claims the extension '{extension}'"));
+            let Some(lang_name) = lookup.of_path(&path) else {
+                failures.push(format!("{name}: no supported language claims this name or its extension"));
                 continue;
             };
 
@@ -2469,6 +2480,13 @@ mod tests {
         assert!(failures.is_empty(), "\n{} fixture check(s) failed:\n  {}\n", failures.len(), failures.join("\n  "));
     }
 
+    fn fixture_lookup() -> LanguageLookup {
+        LanguageLookup {
+            by_extension: build_language_map_by(IdentifiedBy::Extension, &LANGUAGE_MAP_REF, &HashMap::new(), &HashMap::new()).0,
+            by_filename: build_language_map_by(IdentifiedBy::Filename, &LANGUAGE_MAP_REF, &HashMap::new(), &HashMap::new()).0
+        }
+    }
+
     #[test]
     fn every_fixture_extension_resolves_to_exactly_one_language() {
         let mut claimants_of = HashMap::<String, Vec<String>>::new();
@@ -2476,10 +2494,19 @@ mod tests {
             for extension in &language.extensions {
                 claimants_of.entry(extension.clone()).or_default().push(language.name.clone());
             }
+            // A fixture named after a whole filename is resolved by that name, so what has to be
+            // uncontested is the name and not the extension its spelling happens to end in
+            for filename in &language.filenames {
+                claimants_of.entry(filename.clone()).or_default().push(language.name.clone());
+            }
         }
 
         for path in fixture_paths(&fixtures_dir()) {
-            let extension = path.extension().and_then(|x| x.to_str()).unwrap_or_default().to_owned();
+            let name = path.file_name().and_then(|x| x.to_str()).unwrap_or_default().to_owned();
+            let extension = match claimants_of.contains_key(&name) {
+                true => name,
+                false => path.extension().and_then(|x| x.to_str()).unwrap_or_default().to_owned()
+            };
             let claimants = claimants_of.get(&extension).cloned().unwrap_or_default();
             assert!(claimants.len() == 1, "the fixture extension '{extension}' is claimed by {} languages ({}), so its counts depend on the tie-break rule",
                     claimants.len(), claimants.join(", "));

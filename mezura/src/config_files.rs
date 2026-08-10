@@ -105,7 +105,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                 if !langs.is_empty() {
                     excluded_languages = Some(langs);
                 }
-            } else if id == config_manager::FORCE_LANG {
+            } else if id == config_manager::FORCE_LANGUAGE {
                 // Read as a block like the other lists: a value written across two lines is otherwise
                 // cut to its first in silence, since the rest does not begin with '===>' and the
                 // outer loop skips it.
@@ -115,7 +115,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                 if declared.split(',').any(|pair| !pair.trim().is_empty()) {
                     match super::args::parse_forced_languages(&declared) {
                         Some(x) => forced_languages = Some(x),
-                        None => issues.invalid_fields.push(config_manager::FORCE_LANG)
+                        None => issues.invalid_fields.push(config_manager::FORCE_LANGUAGE)
                     }
                 }
             } else if id == config_manager::THREADS {
@@ -282,7 +282,7 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
         writer.write_all(exclude_languages.join(",").as_bytes())?;
     }
     if let Some(forced_languages) = &config_builder.forced_languages {
-        writer.write_all(&[b"\n\n===> ",config_manager::FORCE_LANG.as_bytes(),b"\n"].concat())?;
+        writer.write_all(&[b"\n\n===> ",config_manager::FORCE_LANGUAGE.as_bytes(),b"\n"].concat())?;
         writer.write_all(super::args::forced_languages_to_string(forced_languages).as_bytes())?;
     }
     if let Some(threads) = &config_builder.threads {
@@ -488,7 +488,7 @@ mod tests {
     #[test]
     fn test_save_config_file_and_then_parse_it() -> std::io::Result<()> {
         let command = "./ --exclude a,b,c.txt,d.txt, --braces-as-code --threads 1 1 --hide keywords,timing \
-                --force-lang m=matlab,.pl=Perl \
+                --force-language m=matlab,.pl=Perl \
                 --style code-number=green,comments-label=magenta bold,arrow=default dim".to_string();
         let config_builder = config_manager::create_config_builder_from_args(&command).unwrap();
 
@@ -546,10 +546,10 @@ mod tests {
     fn a_force_lang_value_written_across_lines_is_read_whole() -> std::io::Result<()> {
         let dir = SCRATCH_CONFIG_DIR.to_owned();
         std::fs::create_dir_all(&dir)?;
-        let path = dir.clone() + "force-lang-block.txt";
-        std::fs::write(&path, "===> dirs\n./\n\n===> force-lang\nm=matlab,\npl=perl\n")?;
+        let path = dir.clone() + "force-language-block.txt";
+        std::fs::write(&path, "===> dirs\n./\n\n===> force-language\nm=matlab,\npl=perl\n")?;
 
-        let (options, issues) = super::super::config_files::parse_config_file(Some("force-lang-block"), Some(dir)).unwrap();
+        let (options, issues) = super::super::config_files::parse_config_file(Some("force-language-block"), Some(dir)).unwrap();
         assert!(issues.invalid_fields.is_empty());
         assert_eq!(Some(hashmap!("m".to_owned() => "matlab".to_owned(), "pl".to_owned() => "perl".to_owned())),
                 options.forced_languages);

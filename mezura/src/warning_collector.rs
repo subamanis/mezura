@@ -54,12 +54,12 @@ fn add_advice_to(mut warning: Warning) -> Warning {
     // Not exhaustive, unlike the consequence a code carries: most of them have nothing to advise,
     // and a new one arriving without a line of advice is a missing nicety and not a wrong answer.
     let advice = match warning.code {
-        Code::ExtensionTiebreak => Some(format!("Declare it in '{}', or run with '--force-lang {}=<language>'.",
+        Code::LanguageTiebreak => Some(format!("Declare it in '{}', or run with '--force-language {}=<language>'.",
                 mezura_core::EXTENSION_PRIORITY_FILE_NAME, warning.subject)),
         Code::DuplicateLanguage => Some("Delete the copies you do not want from the 'languages' folder of your data dir.".to_owned()),
         // Naming the command that caused it, since the reader typed one of three and the sentence
         // above says only which name was not found.
-        Code::UnknownForcedLanguage => Some("Run with '--show-languages' for the ones available to '--force-lang'.".to_owned()),
+        Code::UnknownForcedLanguage => Some("Run with '--show-languages' for the ones available to '--force-language'.".to_owned()),
         Code::UnknownLanguage => Some("Run with '--show-languages' for the ones available to '--languages'.".to_owned()),
         Code::UnknownExcludedLanguage =>
                 Some("Run with '--show-languages' for the ones available to '--exclude-languages'.".to_owned()),
@@ -83,11 +83,11 @@ mod tests {
     // their own.
     #[test]
     fn a_kept_warning_reaches_the_collector() {
-        keep(Warning::new(Code::ExtensionTiebreak, "a-subject-no-other-test-uses",
+        keep(Warning::new(Code::LanguageTiebreak, "a-subject-no-other-test-uses",
                 "the readable half".to_owned()));
 
         let mine = get_collected_warnings().into_iter().find(|x| x.subject == "a-subject-no-other-test-uses").unwrap();
-        assert_eq!(Code::ExtensionTiebreak, mine.code);
+        assert_eq!(Code::LanguageTiebreak, mine.code);
         assert!(mine.message.starts_with("the readable half"), "{}", mine.message);
     }
 
@@ -96,18 +96,18 @@ mod tests {
     // half and is not told to edit a file it does not have.
     #[test]
     fn the_advice_this_program_can_give_is_added_to_the_librarys_sentence() {
-        let advised = add_advice_to(Warning::new(Code::ExtensionTiebreak, "m",
+        let advised = add_advice_to(Warning::new(Code::LanguageTiebreak, "m",
                 "The extension 'm' is claimed by MATLAB and Objective-C.".to_owned()));
 
         assert!(advised.message.starts_with("The extension 'm' is claimed by MATLAB and Objective-C.\n"),
                 "the library's own sentence was not kept whole:\n{}", advised.message);
         // naming the extension it is about, so the line can be typed as it stands
-        assert!(advised.message.contains("--force-lang m=<language>"), "{}", advised.message);
+        assert!(advised.message.contains("--force-language m=<language>"), "{}", advised.message);
         assert!(advised.message.contains("extension_priority.txt"), "{}", advised.message);
 
         // Each of the three unknown-name warnings names the command that caused it, since the
         // sentence above says only which name was not found and the reader typed one of three.
-        for (code, command) in [(Code::UnknownForcedLanguage, "--force-lang"), (Code::UnknownLanguage, "--languages"),
+        for (code, command) in [(Code::UnknownForcedLanguage, "--force-language"), (Code::UnknownLanguage, "--languages"),
                 (Code::UnknownExcludedLanguage, "--exclude-languages")] {
             let advised = add_advice_to(Warning::new(code, "zz", "not found.".to_owned()));
             assert!(advised.message.contains(command), "{} did not name '{command}':\n{}", code.name(), advised.message);

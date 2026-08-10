@@ -11,15 +11,15 @@
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 #[non_exhaustive]
 pub enum Code {
-    ExtensionTiebreak,
+    LanguageTiebreak,
     UnknownForcedLanguage,
     UnknownLanguage,
     UnknownExcludedLanguage,
     DuplicateLanguage,
     // Every file carrying its extensions is left to be counted by nobody
     LanguageWithoutName,
-    // Nothing is lost: with no extension it could never have matched a file
-    LanguageWithoutExtension,
+    // Nothing is lost: claiming neither an extension nor a filename, it could never have matched a file
+    LanguageClaimsNothing,
     LanguageFileUnreadable,
     PriorityLineSkipped,
     ConfigValueIgnored,
@@ -32,13 +32,13 @@ pub enum Code {
 impl Code {
     pub fn name(self) -> &'static str {
         match self {
-            Self::ExtensionTiebreak => "extension-tiebreak",
+            Self::LanguageTiebreak => "language-tiebreak",
             Self::UnknownForcedLanguage => "unknown-forced-language",
             Self::UnknownLanguage => "unknown-language",
             Self::UnknownExcludedLanguage => "unknown-excluded-language",
             Self::DuplicateLanguage => "duplicate-language",
             Self::LanguageWithoutName => "language-without-name",
-            Self::LanguageWithoutExtension => "language-without-extension",
+            Self::LanguageClaimsNothing => "language-claims-nothing",
             Self::LanguageFileUnreadable => "language-file-unreadable",
             Self::PriorityLineSkipped => "priority-line-skipped",
             Self::ConfigValueIgnored => "config-value-ignored",
@@ -53,11 +53,11 @@ impl Code {
     // compile, which is the whole reason this is not a field somebody fills in per complaint.
     pub fn affects(self) -> Affects {
         match self {
-            Self::ExtensionTiebreak | Self::DuplicateLanguage | Self::LanguageWithoutName
+            Self::LanguageTiebreak | Self::DuplicateLanguage | Self::LanguageWithoutName
             | Self::LanguageFileUnreadable => Affects::Counts,
 
             Self::UnknownForcedLanguage | Self::UnknownLanguage | Self::UnknownExcludedLanguage
-            | Self::LanguageWithoutExtension | Self::PriorityLineSkipped | Self::ConfigValueIgnored
+            | Self::LanguageClaimsNothing | Self::PriorityLineSkipped | Self::ConfigValueIgnored
             | Self::ConfigSectionUnknown | Self::CommandIgnored | Self::ConfigStyleInvalid
             | Self::ThemeUnavailable => Affects::Settings
         }
@@ -116,21 +116,20 @@ mod tests {
     // type, so both halves are asserted.
     #[test]
     fn a_warning_carries_a_stable_code_and_a_readable_message() {
-        let warning = Warning::new(Code::ExtensionTiebreak, "m", "the readable half".to_owned());
+        let warning = Warning::new(Code::LanguageTiebreak, "m", "the readable half".to_owned());
 
-        assert_eq!("extension-tiebreak", warning.code.name());
+        assert_eq!("language-tiebreak", warning.code.name());
         assert_eq!("counts", warning.affects().name());
         assert_eq!("m", warning.subject);
         assert_eq!("the readable half", warning.message);
         assert_eq!("settings", Affects::Settings.name());
     }
 
-    // What a code does to the answer is the code's own, so the two cases that used to share
-    // 'unusable-language' are two codes: one leaves files counted by nobody, the other could never
-    // have matched a file. Raised at one place each, they were free to disagree with themselves.
+    // Two languages nobody can use, and what they cost is not the same: a nameless one takes the
+    // files carrying its extensions out of the count, one that claims nothing never had any.
     #[test]
-    fn a_language_that_cannot_be_named_puts_the_counts_in_doubt_and_one_with_no_extension_does_not() {
+    fn a_language_that_cannot_be_named_puts_the_counts_in_doubt_and_one_that_claims_nothing_does_not() {
         assert_eq!(Affects::Counts, Code::LanguageWithoutName.affects());
-        assert_eq!(Affects::Settings, Code::LanguageWithoutExtension.affects());
+        assert_eq!(Affects::Settings, Code::LanguageClaimsNothing.affects());
     }
 }

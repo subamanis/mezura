@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
 use mezura_core::{EngineConfig, Language, Languages, ModuleResult, RunResult, Stats, UNNAMED_MODULE_NAME, render};
+use mezura_core::language_file::PriorityRules;
 
 use super::config_manager::{Configuration, Layout, SortCriterion};
-use super::config_manager::{BRACES_AS_CODE, EXCLUDE, EXCLUDE_LANGUAGES, FORCE_LANG, LANGUAGES,
+use super::config_manager::{BRACES_AS_CODE, EXCLUDE, EXCLUDE_LANGUAGES, FORCE_LANGUAGE, LANGUAGES,
         NO_GITIGNORE, SEARCH_IN_DOTTED};
 use super::json_reader::{DocumentError, DocumentWarning, Scope};
 use super::sources::RevisionSide;
@@ -161,7 +162,7 @@ impl BothSidesNamed {
     // The language complaints are reported here, this being the one form where no run of this
     // program's own will report them
     pub fn into_comparison(self, config: &Configuration,
-            extension_priority: &HashMap<String, Vec<String>>) -> Result<Comparison, String>
+            extension_priority: &PriorityRules) -> Result<Comparison, String>
     {
         let (_, reported) = Languages::resolve(&config.engine, self.languages.clone(), extension_priority);
         super::warning_collector::report_language_resolution_warnings(reported);
@@ -188,7 +189,7 @@ pub struct BaselineOnly {
 
 impl BaselineOnly {
     pub fn count_baseline(self, config: &Configuration,
-            extension_priority: &HashMap<String, Vec<String>>) -> Result<CountedBaseline, String>
+            extension_priority: &PriorityRules) -> Result<CountedBaseline, String>
     {
         let [baseline] = <[PreparedSide; 1]>::try_from(prepare_sides(vec![self.baseline], &config.engine)?)
                 .ok().expect("one side in, one side out");
@@ -266,7 +267,7 @@ fn prepare_sides(sides: Vec<DiffSide>, engine: &EngineConfig) -> Result<Vec<Prep
 
 impl PreparedSide {
     fn into_reading(self, config: &Configuration, languages: Vec<Language>,
-            extension_priority: &HashMap<String, Vec<String>>) -> Result<(Reading, Vec<Note>), String>
+            extension_priority: &PriorityRules) -> Result<(Reading, Vec<Note>), String>
     {
         match self {
             PreparedSide::Document(reading) => Ok((*reading, Vec::new())),
@@ -496,7 +497,7 @@ pub fn find_settings_that_differ(baseline: &Scope, subject: &Scope) -> Vec<&'sta
     if !same(&baseline.exclude, &subject.exclude) {differ.push(EXCLUDE)}
     if !same(&baseline.languages, &subject.languages) {differ.push(LANGUAGES)}
     if !same(&baseline.excluded_languages, &subject.excluded_languages) {differ.push(EXCLUDE_LANGUAGES)}
-    if baseline.forced_languages != subject.forced_languages {differ.push(FORCE_LANG)}
+    if baseline.forced_languages != subject.forced_languages {differ.push(FORCE_LANGUAGE)}
     if baseline.braces_as_code != subject.braces_as_code {differ.push(BRACES_AS_CODE)}
     if baseline.search_in_dotted != subject.search_in_dotted {differ.push(SEARCH_IN_DOTTED)}
     if baseline.gitignore != subject.gitignore {differ.push(NO_GITIGNORE)}
@@ -531,7 +532,7 @@ pub fn resolve_settings(document: &Scope, config: &mut super::config_manager::Co
     }
     if !typed.forced_languages && document.forced_languages != config.engine.forced_languages {
         config.engine.forced_languages = document.forced_languages.clone();
-        adopted.push(FORCE_LANG);
+        adopted.push(FORCE_LANGUAGE);
     }
     if !typed.braces_as_code && document.braces_as_code != config.engine.braces_as_code {
         config.engine.braces_as_code = document.braces_as_code;
@@ -917,7 +918,7 @@ mod tests {
         // did not measured different things and the difference is not code that changed
         config.engine.exclude_dirs = Vec::new();
         config.engine.forced_languages = hashmap!["m".to_owned() => "matlab".to_owned()];
-        assert_eq!(vec!["force-lang"], find_settings_that_differ(&document.scope, &scope_of(&config.engine)));
+        assert_eq!(vec!["force-language"], find_settings_that_differ(&document.scope, &scope_of(&config.engine)));
 
         config.engine.forced_languages = HashMap::new();
         config.engine.braces_as_code = true;

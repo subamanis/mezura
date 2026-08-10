@@ -1,7 +1,10 @@
-files=31 lines=369 code=185 comments=99
+files=34 lines=408 code=204 comments=111
 
 Assembly
   files=1 lines=10 code=4 comments=5
+CMake
+  files=1 lines=14 code=6 comments=6
+  functions=1 macros=0
 COBOL
   files=1 lines=8 code=5 comments=2
   divisions=2 programs=1
@@ -14,6 +17,9 @@ Clojure
 D
   files=1 lines=13 code=3 comments=7
   classes=1 interfaces=0 structs=1 templates=0
+Dockerfile
+  files=1 lines=12 code=6 comments=3
+  commands=2 stages=1
 Elm
   files=1 lines=11 code=5 comments=4
   types=1
@@ -49,6 +55,9 @@ Lisp
 Lua
   files=1 lines=18 code=7 comments=9
   functions=2
+Make
+  files=1 lines=13 code=7 comments=3
+  includes=1
 OCaml
   files=1 lines=13 code=5 comments=6
   modules=1 types=1

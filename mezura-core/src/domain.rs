@@ -14,6 +14,9 @@ use std::{collections::HashMap, sync::OnceLock};
 pub struct Language {
     pub name: String,
     pub extensions : Vec<String>,
+    // Whole names, for the files that carry no extension worth reading: 'Makefile', 'Dockerfile',
+    // and 'CMakeLists.txt', whose extension says text and means nothing
+    pub filenames : Vec<String>,
     pub string_symbols : Vec<String>,
     pub multiline_strings : Vec<(String, String)>,
     pub comment_symbols : Vec<String>,
@@ -41,6 +44,7 @@ impl Language {
         Language {
             name : name.as_ref().to_owned(),
             extensions : owned_strings(extensions),
+            filenames : Vec::new(),
             string_symbols : owned_strings(string_symbols),
             multiline_strings : Vec::new(),
             comment_symbols : owned_strings(comment_symbols),
@@ -56,6 +60,11 @@ impl Language {
     pub fn with_leveled_comments(mut self, pairs: &[(&str, &str)]) -> Self {
         self.leveled_comments.extend(pairs.iter().map(|(start, end)|
                 LeveledPair::of(start, end).expect("a leveled pair is written as prefix, '=*', one closing byte")));
+        self
+    }
+
+    pub fn with_filenames(mut self, names: &[&str]) -> Self {
+        self.filenames.extend(names.iter().map(|x| (*x).to_owned()));
         self
     }
 
@@ -171,6 +180,7 @@ impl PartialEq for Language {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
             && self.extensions == other.extensions
+            && self.filenames == other.filenames
             && self.string_symbols == other.string_symbols
             && self.multiline_strings == other.multiline_strings
             && self.comment_symbols == other.comment_symbols

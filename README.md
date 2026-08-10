@@ -81,7 +81,7 @@ like add more languages of his choice, add custom themes, or modify the default 
 
 Installing a new version updates the language files there, so a correction to a language reaches you without you having to do anything. One that you changed yourself is replaced too, since a language file that has fallen behind counts wrongly, but your copy is kept under ```data/replaced/<version>/``` and the program names it, so you can carry your changes over. A language file of your own is never touched, and neither are your themes, your default configuration or ```extension_priority.txt```: those are written when they are absent and left alone afterwards.
 
-In order for a file to be considered for counting, its extension must be supported, meaning that a .txt language file specifying the particular extension as an entry in its 'Extensions' field, must be present in the "data/languages" dir, see [Supported Languages](#supported-languages).
+In order for a file to be considered for counting, some language file in the "data/languages" dir must claim it, either by its extension or by its whole name, in the 'Extensions' or 'Filenames' field, see [Supported Languages](#supported-languages).
 
 
 ## Cmd Commands
@@ -169,12 +169,15 @@ WHAT IS COUNTED
 
     The given language names will be ignored from the stats calculation, if they exist.
 
---force-lang
+--force-language
 
-    1..n pairs of 'extension=language' separated by commas, case-insensitive
+    1..n pairs of 'extension=language' or 'filename=language' separated by commas, case-insensitive
 
     Decides which language an extension is counted as, whether or not another language claims it:
-    '--force-lang m=matlab,pl=perl,txt=python'
+    '--force-language m=matlab,pl=perl,txt=python'
+
+    A whole filename works the same way, for the files that have no extension worth reading:
+    '--force-language Makefile=python,Jenkinsfile=groovy'
 
     Overrides the 'extension_priority.txt' file of the data dir.
 
@@ -889,7 +892,7 @@ The user can easily specify a new language by replicating the format of the lang
 
 Header files have their own dedicated languages: `.h` files are counted under "C Header" and `.hpp` files under "C++ Header", since the program cannot know which codebase a header belongs to.
 
-If two or more language files claim the same extension, the winner is the one named in the `extension_priority.txt` file of the data dir, which ships with an answer for every contest between the languages that come with the program. An extension that nobody has named there goes to the language that comes first alphabetically, and the program reports it, since that is a tie-break and not a decision. Either way ```--force-lang``` overrides it for a single run or, through a configuration file, for a single project.
+If two or more language files claim the same extension, the winner is the one named in the `extension_priority.txt` file of the data dir, which ships with an answer for every contest between the languages that come with the program. An extension that nobody has named there goes to the language that comes first alphabetically, and the program reports it, since that is a tie-break and not a decision. Either way ```--force-language``` overrides it for a single run or, through a configuration file, for a single project.
 
 The format of the languages is as follows(and should not be modified at all):
 
@@ -899,6 +902,7 @@ Language
 
 Extensions
 <name of file extensions like cpp hpp or py, separated by whitespace>
+<the value may be left empty for a language whose files are known by their whole name>
 
 String symbols
 <string symbols whose string ends at the end of the line, separated by whitespace, like: " ' >
@@ -910,6 +914,10 @@ Comment symbols
 ```
 All the following lines are optional and can be omitted. You can also specify an arbitrary amount of keywords. A string symbol goes in exactly one of the three string lists.
 ```
+Filenames
+<whole names, for files an extension cannot describe, like: Makefile Dockerfile CMakeLists.txt>
+<a file is matched by its name first, so CMakeLists.txt is CMake and not whatever claims .txt>
+
 Multi line string symbols
 <string symbols whose string crosses lines, separated by whitespace, like: """ ` >
 
@@ -921,7 +929,10 @@ String symbol closers
 
 Multi line comment start
 <one or more block comment openers, separated by whitespace, like: { (* >
-<a pair written with =* is Lua's counted bracket: --[=*[ matches --[[, --[=[ and every level up>
+<the two characters =* stand for "any number of = here, including none", so writing --[=*[ and>
+<]=*] declares Lua's --[[ ]], --[=[ ]=], --[==[ ]==] and every level above, all at once. They>
+<are the one place in this format where characters do not stand for themselves, so a language>
+<whose comment symbol really contains =* cannot be written down>
 
 Multi line comment end
 <their closers, one per opener and in the same order, like: } *) >
@@ -959,21 +970,19 @@ Additionally:
 
 With that said, it is important to mention the following limitations:
 
-- The program cannot understand language specific syntax or details, this would require a handwritten, complex, language-specific parser for most different languages. For example, in a .php file that contains html or js, the distinction will not be made. Also, the keyword counting doesn't take any measures to ensure that a valid keyword has the user-intended meaning. For example, the word "class" may appear in the syntax of a programming language with an additional use than declaring a class. This may lead to some false positives.
+- A file is counted as one language from beginning to end. A ```.php``` file with html and js in it, a Vue or Svelte component with its three sections, a ```<script>``` block inside a page: all of them are read with the symbols of the language the file belongs to, so a comment written in the inner language may not be recognised as one. This is not a wall, it is simply not built yet: it needs a language file to say where the other language begins and ends, and the counter to switch over and back.
+
+- Keywords are counted as words, not as meaning. Wherever ```class``` appears as a word in code it is counted, and in a language that uses the same word for a second purpose those occurrences are counted too. Mezura has no idea what a declaration is; it knows where the code is and which words you asked it to look for.
 
 - If a target path contains another target path, the contained one is dropped, so that its files are not counted twice. A symbolic link (or a Windows junction) that the scan comes across is not followed, for the same reason: whatever it points at would be counted a second time through it. The same goes for one that a glob pattern matched, since those are found by the program rather than named by you. One that you name as a target yourself is followed, since that is what you asked for. Hard links are the case that stays: they are indistinguishable from an ordinary file, so the same content reached through two of them is counted twice.
 
-- A string opened by a symbol from the plain ```String symbols``` list ends at the end of its line, so an unbalanced quote costs that one line instead of everything below it. Only a symbol declared under ```Multi line string symbols``` carries a string across lines, and only the symbol that opened a string can close it: Python declares ```"""``` and ```'''``` crossing beside its plain ```"``` and ```'```, so a docstring containing a single quote is read correctly. A language whose plain string may legally span lines declares it crossing (Rust, Ruby, the shells, PHP, SQL and their kin), and there an unbalanced quote still reads the rest of the file as string content, since the program cannot know it was a mistake.
+- A string delimiter that the programmer invents on the spot cannot be written in a language file, since it is different every time it is used: a shell or PHP heredoc, a PowerShell here-string, Rust's ```r##"..."##``` past the one-hash form, and for now Lua's ```[[ ]]``` strings. What is inside them is plain text to the language, while mezura is still counting quotes in it, so one apostrophe in an ordinary sentence written inside a heredoc is enough to look like the start of a string. In most languages the damage ends with that line. In the ones where a string may legally run over several lines (Rust, Ruby, the shells, PHP, SQL and their kin) mezura cannot tell a long string from a lone quote, and everything below reads as string content until the next quote turns up.
 
-- A block comment pair declared under ```Nesting comment start``` nests inside itself: the block ends only when as many closers as openers have passed, which is what ```(* (* *) *)``` means in OCaml. Rust, D's ```/+ +/```, Haskell, OCaml, F#, Scala, Kotlin, Swift, Julia, Elm, Lisp, Scheme, MATLAB and the WebAssembly text format declare theirs so; a pair under the plain ```Multi line comment``` block still ends at its first closer, which is what C means.
-
-- A delimiter the programmer invents per string cannot be declared: a shell or PHP heredoc and the PowerShell here-string fall back to the ordinary quote rules, and so does Rust's ```r##"..."##``` and beyond. A fixed pair is declarable (Rust ships ```r"``` and ```r#"``` with their closers, C# ships ```@"``` with ```"```, and inside such a pair the backslash does not escape), and so is Lua's counted comment bracket: a pair written with ```=*```, like ```--[=*[``` with ```]=*]```, matches any run of ```=``` and closes only at an end carrying the same count, so a ```]]``` inside a ```--[==[``` block is text. Lua's ```[[ ]]``` string form is not declared yet and its body counts as code. Every declared pair costs the scan a little work at every quote of the language, which is why Rust stops at the one-hash form.
+- Everything in a language file stands for itself, with one exception: the two characters ```=*``` inside a comment symbol mean "any number of ```=``` here". It is what lets a single line declare Lua's ```--[[```, ```--[=[``` and ```--[==[``` together, and it is a small cheat: a language whose comment symbol really contained ```=*``` could not be written down. No such language is known, and if one turns up the marker moves to a block of its own.
 
 - Extensions are matched without regard to case, so a file named ```MAIN.RS``` is counted as Rust, and so is one named ```main.rs```. The one thing this loses is the Unix convention where an upper case ```.C``` means C++ while ```.c``` means C: to mezura they are the same extension.
 
-- A file is recognised by its extension alone, so files that are known by their name instead are not counted at all: ```Makefile```, ```Dockerfile``` and the like have no extension, and ```CMakeLists.txt``` looks like a text file.
-
-- When two languages claim the same extension, only one of them can have it, and the choice changes the numbers rather than only the label, since the loser's files are then parsed with the winner's comment and string symbols. The program says so every time it has to break such a tie by itself. To decide it once, name the winner in the ```extension_priority.txt``` file of the data directory; to decide it for one run or for one project, use ```--force-lang```, which overrides that file.
+- When two languages claim the same extension or the same filename, only one of them can have it, and the choice changes the numbers rather than only the label, since the loser's files are then parsed with the winner's comment and string symbols. Mezura makes no attempt to settle it by looking inside the files: a guess from the contents would be right most of the time, and the times it was wrong it would be wrong quietly, in the middle of a run, differently for two files with the same extension. So it takes the answer from you and says so every time it has no answer to take. To decide it once, name the winner in the ```extension_priority.txt``` file of the data directory, under ```contested-extensions``` or ```contested-filenames```; to decide it for one run or for one project, use ```--force-language```, which overrides that file and takes a filename as readily as an extension.
 
 - A regular expression written inside a string is read as a string, escapes included, and creates no inaccuracy. The regex literals of languages like JavaScript, Perl and Ruby are the ones that can miscount, and only through the symbols that language itself declares: a bare quote is legal inside ```/say "hi/``` and reads as an opened string, and a declared comment opener sitting inside a character class, like the ```/*``` of JavaScript in ```/a[/*]b/```, reads as an opened comment, so the lines after such a regex can be counted as string content or as comments.
 

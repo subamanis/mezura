@@ -1,0 +1,20 @@
+Language
+Make
+
+Extensions
+mk mak
+
+Filenames
+Makefile GNUmakefile makefile Makefile.am Makefile.in
+
+String symbols
+" '
+
+Comment symbols
+#
+
+Keyword
+    NAME
+    includes
+    ALIASES
+    include
