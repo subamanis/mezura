@@ -1,6 +1,6 @@
 # Cases still without a file
 
-Files 01 to 43 are written and verified. What is listed here has no file yet, and each line says
+Files 01 to 49 are written and verified. What is listed here has no file yet, and each line says
 why. When one lands, its line leaves this document.
 
 ## Waiting on a decision about the format
@@ -22,6 +22,12 @@ why. When one lands, its line leaves this document.
   for a second purpose counts those too. A case would only document it; the fix is a lexer per
   language, which is not happening.
 
+## Written and waiting on a fix
+
+- **A raw string ending in a backslash**, case 44, where one symbol serves as both ends. Odin's
+  backtick string stays open to the end of the file. The paired form of the same trap, case 16, is
+  already right, so this is the multi line string path alone.
+
 ## Written but only half solved
 
 - **The heredoc**, case 31. An apostrophe in the body opens a string and the comments under it are
@@ -32,7 +38,9 @@ why. When one lands, its line leaves this document.
 
 ## Definitions rather than mistakes
 
-Cases 23 and 24 hold the two places where mezura's numbers differ from a region-based counter by
-design: a blank line inside a block comment, and a line holding only punctuation. They pass as
-they are and are here as a reminder that when another tool's pair of numbers is added, those two
-are where the pairs will differ without either tool being wrong.
+Cases 23, 24 and 47 hold the three places where mezura's numbers differ from a region-based counter
+by design: a blank line inside a block comment, a line holding only punctuation, and a blank line
+inside a multi line string. They pass as they are and are here as a reminder that when another
+tool's pair of numbers is added, those three are where the pairs will differ without either tool
+being wrong. The third is the largest of them by far on real trees: it is the whole of the Python,
+Shell and Perl disagreement over the Linux kernel.
