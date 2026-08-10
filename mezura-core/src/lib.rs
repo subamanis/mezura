@@ -16,7 +16,7 @@ pub mod languages;
 pub mod render;
 pub mod warnings;
 
-pub use domain::{Keyword, Language, LeveledPair, Stats};
+pub use domain::{Keyword, Language, LeveledPair, MultilineString, Stats};
 pub use engine::config::{EngineConfig, Target, Threads};
 pub use engine::targets::TargetError;
 pub use languages::Languages;

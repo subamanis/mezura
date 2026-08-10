@@ -24,8 +24,9 @@ const COM_STARTS : u8 = 2;
 const COM_ENDS   : u8 = 3;
 
 // What one side of a string pair may do. An ordinary quote is both sides in one symbol; a pair
-// whose halves differ gets one slot per half. Only the two-sided form obeys the backslash: a
-// distinct opener means a raw form, and inside those nothing escapes.
+// whose halves differ gets one slot per half, and its opener cannot close nor its closer open.
+// 'RAW' is 'EITHER' without the backslash rule, for a symbol that serves as both ends of a form
+// that escapes nothing: Go's and Odin's backtick against JavaScript's template literal.
 // A character literal is a symbol that only exists paired on its own line: the scan looks for its
 // other half right away, emits the two as opener and closer when both are there, and emits nothing
 // at all when they are not, which is what keeps a lifetime's lone ' from opening anything.
@@ -33,6 +34,7 @@ const ROLE_EITHER  : u8 = 0;
 const ROLE_OPEN    : u8 = 1;
 const ROLE_CLOSE   : u8 = 2;
 const ROLE_LITERAL : u8 = 3;
+const ROLE_RAW     : u8 = 4;
 
 // One declared symbol. 'next' chains every symbol that begins with the same byte, longest first,
 // so that a '"""' is recognised before the '"' that starts it.
@@ -108,13 +110,15 @@ impl ScanPlan {
             let index = (language.string_symbols.len() + i) as u8;
             entries.push(PlanEntry::of(STRINGS, index, ROLE_LITERAL, symbol.as_bytes()));
         }
-        for (i, (open, close)) in language.multiline_strings.iter().enumerate() {
+        for (i, crossing) in language.multiline_strings.iter().enumerate() {
             let index = (language.string_symbols.len() + language.char_literal_symbols.len() + i) as u8;
-            if open == close {
-                entries.push(PlanEntry::of(STRINGS, index, ROLE_EITHER, open.as_bytes()));
-            } else {
+            let (open, close) = (&crossing.open, &crossing.close);
+            if open != close {
                 entries.push(PlanEntry::of(STRINGS, index, ROLE_OPEN, open.as_bytes()));
                 entries.push(PlanEntry::of(STRINGS, index, ROLE_CLOSE, close.as_bytes()));
+            } else {
+                let role = if crossing.escapes {ROLE_EITHER} else {ROLE_RAW};
+                entries.push(PlanEntry::of(STRINGS, index, role, open.as_bytes()));
             }
         }
         for (i, symbol) in language.comment_symbols.iter().enumerate() {
@@ -381,8 +385,8 @@ fn take_symbols_at(at: usize, line_bytes: &[u8], plan: &ScanPlan, buffers: &mut 
             if line_bytes.get(cursor) != Some(&slot.suffix) { continue }
             width = cursor + 1 - start;
         }
-        // An escape cancels a string symbol and nothing else, and never the half of a two-sided
-        // pair: a distinct opener means a raw form, and inside those the backslash is a byte
+        // An escape cancels a string symbol and nothing else, and only where the language says the
+        // form escapes at all: inside a raw one, one-sided or two-sided, the backslash is a byte
         if slot.kind == STRINGS && (slot.role == ROLE_EITHER || slot.role == ROLE_LITERAL)
                 && start != 0 && !is_not_escaped(start, line_bytes) { continue }
 
@@ -1246,7 +1250,7 @@ mod tests {
     use std::sync::{Arc, LazyLock};
 
     use super::*;
-    use crate::{Keyword, Stats};
+    use crate::{Keyword, MultilineString, Stats};
     use crate::test_paths::{FIXTURES_DIR, LANGUAGES_DIR};
     use crate::engine::identity::{IdentifiedBy, LanguageLookup, build_language_map_by};
 
@@ -1442,7 +1446,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
-        multiline_strings : vec![("\"\"\"".to_owned(), "\"\"\"".to_owned()), ("'''".to_owned(), "'''".to_owned())],
+        multiline_strings : vec![MultilineString::escaping("\"\"\""), MultilineString::escaping("'''")],
         comment_symbols : vec!["#".to_owned(), "//".to_owned(), "--".to_owned()],
         multiline_comments : vec![],
         nesting_comments : vec![],
@@ -2095,6 +2099,29 @@ mod tests {
                 bounds_multi(r#"var s = @"C:\temp\" + x;"#, &CSHARP_VERBATIM, None, &None));
     }
 
+    // One symbol at both ends says nothing about whether a backslash cancels it, and reading it off
+    // that shape left every 'C:\' open to the end of the file in Go, Odin and D. The backtick
+    // escapes nothing in those three and does escape in a JavaScript template literal, so the two
+    // halves of this test are the same line in two languages with opposite right answers.
+    #[test]
+    fn a_one_sided_form_escapes_or_not_as_the_language_declares_and_not_as_its_shape_suggests() {
+        let go = Language::new("go-like", ["go"], ["\""], ["//"], &[("/*", "*/")], [])
+                .with_raw_multiline_strings(&["`"]);
+        let js = Language::new("js-like", ["js"], ["\""], ["//"], &[("/*", "*/")], [])
+                .with_multiline_strings(&["`"]);
+
+        assert_eq!(TextInfo::from_slice_w_literal("var sep = ;"),
+                bounds_multi(r"var sep = `C:\`;", &go, None, &None));
+        assert_eq!(TextInfo::new(Some("var sep = ".to_owned()), true, None, Some(1)),
+                bounds_multi(r"var sep = `C:\`;", &js, None, &None));
+
+        // and the raw form is a string in every other way: its own symbol closes it, an ordinary
+        // quote inside it is text, and a comment opener inside it opens nothing
+        assert_eq!(TextInfo::new(Some("var s = ".to_owned()), true, None, Some(1)),
+                bounds_multi("var s = `open", &go, None, &None));
+        assert_eq!(TextInfo::none_all(true), bounds_multi("still \" /* text `", &go, None, &Some(1)));
+    }
+
     // A string ends with its line unless its symbol was declared to cross lines, so an unbalanced
     // quote costs one line while a docstring still spans as many as it likes.
     #[test]
@@ -2184,7 +2211,7 @@ mod tests {
 
             let string_halves = language.string_symbols.iter().cloned()
                     .chain(language.multiline_strings.iter()
-                            .flat_map(|(open, close)| [open.clone(), close.clone()]))
+                            .flat_map(|crossing| [crossing.open.clone(), crossing.close.clone()]))
                     .collect::<Vec<_>>();
             let com_starts = language.multiline_comments.iter().map(|(start, _)| start.clone()).collect::<Vec<_>>();
             let com_ends = language.multiline_comments.iter().map(|(_, end)| end.clone()).collect::<Vec<_>>();

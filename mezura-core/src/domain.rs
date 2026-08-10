@@ -6,10 +6,6 @@ use std::{collections::HashMap, sync::OnceLock};
 // Both kinds of symbol are declared the same way: a plain list of symbols that end at the end of
 // the line, and beside it the ones that cross lines, which come in pairs. So 'string_symbols' is
 // to 'multiline_strings' what 'comment_symbols' is to 'multiline_comments'.
-//
-// A string that crosses lines is a pair of opener and closer, the same symbol twice for '"""',
-// two different ones for a raw form ('r#"' with '"#', '@"' with '"'). Inside a pair whose halves
-// differ the backslash does not escape, which is the reason such a form has a distinct opener.
 #[derive(Debug, Clone)]
 pub struct Language {
     pub name: String,
@@ -21,7 +17,7 @@ pub struct Language {
     // The symbol of a character literal, Rust's and D's '. One that does not close on its own line
     // is not a literal at all, so a lifetime's lone ' opens nothing, while a '"' shields its quote
     pub char_literal_symbols : Vec<String>,
-    pub multiline_strings : Vec<(String, String)>,
+    pub multiline_strings : Vec<MultilineString>,
     pub comment_symbols : Vec<String>,
     pub multiline_comments : Vec<(String, String)>,
     // The pairs that nest inside themselves, so a closer only ends the block when it has closed
@@ -90,14 +86,17 @@ impl Language {
     }
 
     pub fn with_multiline_strings(mut self, symbols: &[&str]) -> Self {
-        self.multiline_strings.extend(symbols.iter()
-                .map(|x| ((*x).to_owned(), (*x).to_owned())));
+        self.multiline_strings.extend(symbols.iter().map(|x| MultilineString::escaping(x)));
+        self
+    }
+
+    pub fn with_raw_multiline_strings(mut self, symbols: &[&str]) -> Self {
+        self.multiline_strings.extend(symbols.iter().map(|x| MultilineString::raw(x)));
         self
     }
 
     pub fn with_string_pairs(mut self, pairs: &[(&str, &str)]) -> Self {
-        self.multiline_strings.extend(pairs.iter()
-                .map(|(open, close)| ((*open).to_owned(), (*close).to_owned())));
+        self.multiline_strings.extend(pairs.iter().map(|(open, close)| MultilineString::of(open, close)));
         self
     }
 
@@ -123,9 +122,9 @@ impl Language {
         match self.char_literal_symbols.get(symbol - self.string_symbols.len()) {
             Some(literal) => (literal, literal),
             None => {
-                let (open, close) = &self.multiline_strings[
+                let crossing = &self.multiline_strings[
                         symbol - self.string_symbols.len() - self.char_literal_symbols.len()];
-                (open, close)
+                (&crossing.open, &crossing.close)
             }
         }
     }
@@ -187,6 +186,35 @@ pub(crate) enum CommentPair<'a> {
     Plain { start: &'a str, end: &'a str },
     Nesting { start: &'a str, end: &'a str },
     Leveled(&'a LeveledPair)
+}
+
+// A string that crosses lines: the same symbol twice for Python's '"""', two different ones for a
+// raw form like 'r#"' with '"#'.
+//
+// 'escapes' is the one thing the shape cannot answer. A backtick escapes nothing in Go, Odin and D
+// and does escape in a JavaScript template literal, and '"""' splits the same way between Kotlin
+// and Java, so whether a backslash in front of the closer cancels it belongs to the symbol and not
+// to whether its two halves differ. A form written with two different symbols is raw by
+// construction, which is why 'of' takes no flag.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MultilineString {
+    pub open : String,
+    pub close : String,
+    pub escapes : bool
+}
+
+impl MultilineString {
+    pub fn escaping(symbol: &str) -> MultilineString {
+        MultilineString { open: symbol.to_owned(), close: symbol.to_owned(), escapes: true }
+    }
+
+    pub fn raw(symbol: &str) -> MultilineString {
+        MultilineString { open: symbol.to_owned(), close: symbol.to_owned(), escapes: false }
+    }
+
+    pub fn of(open: &str, close: &str) -> MultilineString {
+        MultilineString { open: open.to_owned(), close: close.to_owned(), escapes: false }
+    }
 }
 
 // A line ending in this symbol is joined to the one after it, before anything is decided about

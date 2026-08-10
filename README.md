@@ -76,7 +76,7 @@ The program, at compile time, includes the "data" folder in the binary, and duri
     MacOs:    /Users/$USER/Library/Application Support/mezura
 ```
 
-After every subsequent execution, the languages, themes, configurations and logs, are read from these folders, so the user can have easy access and modify them,
+The languages, themes, configurations and logs are then read from those folders, on that first execution as much as on every one after it, so the user can have easy access and modify them,
 like add more languages of his choice, add custom themes, or modify the default configuration.
 
 Installing a new version updates the language files there, so a correction to a language reaches you without you having to do anything. One that you changed yourself is replaced too, since a language file that has fallen behind counts wrongly, but your copy is kept under ```data/replaced/<version>/<date and time>/``` and the program names it, so you can carry your changes over. Each update or ```--restore``` writes its own folder there, so two of them never mix and the newest is the one at the bottom. A language file of your own is never touched, and neither are your themes, your default configuration or ```extension_priority.txt```: those are written when they are absent and left alone afterwards.
@@ -889,84 +889,15 @@ To make picking those five easier, there is an interactive editor, where every t
 ## Supported Languages
 Note that the default supported languages are incomplete, but they can be easily expanded by the user. All the supported languages can be found in the folder "data/languages"
 as separate text files, in the persistent data path of the application. 
-The user can easily specify a new language by replicating the format of the language files and customizing it accordingly, either by following the rules below or by copy pasting an existing file.
+The user can easily specify a new language by copying the file of a language that looks like theirs and editing it.
 
 Header files have their own dedicated languages: `.h` files are counted under "C Header" and `.hpp` files under "C++ Header", since the program cannot know which codebase a header belongs to.
 
 If two or more language files claim the same extension, the winner is the one named in the `extension_priority.txt` file of the data dir, which ships with an answer for every contest between the languages that come with the program. An extension that nobody has named there goes to the language that comes first alphabetically, and the program reports it, since that is a tie-break and not a decision. Either way ```--force-language``` overrides it for a single run or, through a configuration file, for a single project.
 
-The format of the languages is as follows. **The blocks are read in this order and no other**: one that arrives where it is not expected makes the whole file unreadable, and the language is left out of the run. The blocks marked optional can be left out entirely, and you can specify an arbitrary amount of keywords. A string symbol goes in exactly one of the three string lists.
+**[The language files guide](LANGUAGE_FILES_GUIDE.md)** is a page of its own: a whole language file to copy, every block with an example, which of the five string blocks a symbol belongs in, and the two mistakes that cost people the most time.
 
-```
-Language
-<name of the language>
-
-Extensions
-<name of file extensions like cpp hpp or py, separated by whitespace>
-<the value may be left empty for a language whose files are known by their whole name>
-
-Filenames                                                                        (optional)
-<whole names, for files an extension cannot describe, like: Makefile Dockerfile CMakeLists.txt>
-<a file is matched by its name first, so CMakeLists.txt is CMake and not whatever claims .txt>
-
-String symbols
-<string symbols whose string ends at the end of the line, separated by whitespace, like: " ' >
-<the value may be left empty, for a language whose quotes are not strings at all, like HTML>
-
-Character literal symbols                                                        (optional)
-<the symbol that holds a single character, like Rust's '. It counts as a literal only when it>
-<closes on its own line and holds one character or an escape, so the quote inside a '"' opens>
-<no string, while a lifetime's lone ' opens nothing and two of them on one line do not pair>
-
-Multi line string symbols                                                        (optional)
-<string symbols whose string crosses lines, separated by whitespace, like: """ ` >
-
-Line continuation                                                                (optional)
-<the symbol that joins a line to the next one when it is the last thing on it, like: \ >
-Continues                                                            (with the symbol, or not at all)
-<what the joining reaches: 'strings', 'comments', or both separated by whitespace. C splices>
-<anything, so a line comment ending in a backslash carries on; JavaScript and Python continue>
-<a string literal only, and their comments always end at the newline>
-
-Paired string openers                                                            (optional)
-<openers of strings whose closer is a different symbol, like: r#" >
-
-Paired string closers                                                (with the openers, or not at all)
-<their closers, one per opener and in the same order, like: "# >
-
-Comment symbols
-<one or more single line comment symbols, separated by whitespace, like: // # >
-<the value may be left empty, for a language whose comments are all written in blocks>
-
-Multi line comment start                                                         (optional)
-<one or more block comment openers, separated by whitespace, like: { (* >
-<the two characters =* stand for "any number of = here, including none", so writing --[=*[ and>
-<]=*] declares Lua's --[[ ]], --[=[ ]=], --[==[ ]==] and every level above, all at once. They>
-<are the one place in this format where characters do not stand for themselves, so a language>
-<whose comment symbol really contains =* cannot be written down. They are read here and only>
-<here: written under 'Nesting comment start' those two characters are taken literally, and the>
-<symbol then matches nothing>
-
-Multi line comment end                                                (with the starts, or not at all)
-<their closers, one per opener and in the same order, like: } *) >
-
-Nesting comment start                                                            (optional)
-<openers of block comments that nest inside themselves, like: /+ >
-
-Nesting comment end                                                   (with the starts, or not at all)
-<their closers, one per opener and in the same order, like: +/ >
-
-Keyword                                                                          (optional)
-    NAME
-    <the name of the keyword to be shown in the results, like: classes>
-    ALIASES
-    <any word that constitutes an instance of this keyword, like: class, record>
-Keyword
-    NAME
-    <the name of the keyword to be shown in the results, like: classes>
-    ALIASES
-    <any word that constitutes an instance of this keyword, like: class, record>
-```
+One thing worth knowing before you open it: the blocks are read in one fixed order, and one that arrives out of place, or one header misspelt, makes the whole file unreadable and leaves that language out of the run. That is deliberate. A typo taken as "ignore this block" would change your counts without a word.
 
 	
 ## Accuracy and Limitations

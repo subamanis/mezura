@@ -7,7 +7,7 @@ go
 String symbols
 "
 
-Multi line string symbols
+Multi line raw string symbols
 `
 
 Comment symbols

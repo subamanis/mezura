@@ -417,6 +417,11 @@ Bugfixes:
       already have them, and the folder is regenerated in full on the next run.
   -> A language file can declare any number of string and single line comment symbols now. Only the
       first one or two of each were ever used, and anything past them was ignored without a word.
+  -> A string that ends in a backslash no longer runs to the end of the file in Go, Odin, D,
+      Kotlin, Scala, C#, F#, Shell and PowerShell. A path like `C:\` used to leave the string open,
+      and everything under it, comments included, was counted as code. Language files gained a
+      "Multi line raw string symbols" block for the forms that escape nothing, since a backtick
+      escapes nothing in Go and does escape in a JavaScript template literal.
   -> A line that closes a block comment and opens the next one, with nothing or only whitespace
       between the two symbols, now counts as a comment line. It used to count as neither code nor
       comment, and with "--braces-as-code" as code.

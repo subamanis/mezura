@@ -22,6 +22,7 @@ const EXTENSIONS               : &str = "Extensions";
 const FILENAMES                : &str = "Filenames";
 const STRING_SYMBOLS           : &str = "String symbols";
 const MULTILINE_STRINGS        : &str = "Multi line string symbols";
+const MULTILINE_RAW_STRINGS    : &str = "Multi line raw string symbols";
 const PAIRED_STRING_OPENERS    : &str = "Paired string openers";
 const PAIRED_STRING_CLOSERS    : &str = "Paired string closers";
 const CHARACTER_LITERALS       : &str = "Character literal symbols";
@@ -221,20 +222,32 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
     // twice would leave the two answers to argue, so it refuses the file.
     let mut multiline_strings = Vec::new();
     if header == MULTILINE_STRINGS {
-        multiline_strings = split_line_on_whitespace(&read_value_line(lines)?).into_iter()
-                .map(|symbol| (symbol.clone(), symbol)).collect::<Vec<_>>();
+        multiline_strings = split_line_on_whitespace(&read_value_line(lines)?);
         if multiline_strings.is_empty() {return None;}
         header = read_next_header(lines)?;
     }
 
+    // The same, for a form where a backslash in front of the closer is an ordinary byte: Go's and
+    // Odin's backtick, Kotlin's and C#'s '"""'. Its own block because nothing about a symbol says
+    // which of the two it is, and the block above holds languages that write it identically and
+    // mean the opposite.
+    let mut raw_multiline_strings = Vec::new();
+    if header == MULTILINE_RAW_STRINGS {
+        raw_multiline_strings = split_line_on_whitespace(&read_value_line(lines)?);
+        if raw_multiline_strings.is_empty() {return None;}
+        header = read_next_header(lines)?;
+    }
+
     // Strings that open with one symbol and close with another, 'r#"' with '"#'. The two value
-    // lines are lists paired by position, the shape the multiline comment block also has.
+    // lines are lists paired by position, the shape the multiline comment block also has. Nothing
+    // escapes inside one, which is the reason such a form has a distinct opener at all.
+    let mut string_pairs = Vec::new();
     if header == PAIRED_STRING_OPENERS {
         let openers = split_line_on_whitespace(&read_value_line(lines)?);
         if openers.is_empty() || read_next_header(lines)?.as_str() != PAIRED_STRING_CLOSERS {return None;}
         let closers = split_line_on_whitespace(&read_value_line(lines)?);
         if closers.len() != openers.len() {return None;}
-        multiline_strings.extend(openers.into_iter().zip(closers));
+        string_pairs = openers.into_iter().zip(closers).collect::<Vec<_>>();
         header = read_next_header(lines)?;
     }
 
@@ -257,9 +270,15 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
 
     // Declaring no string at all is allowed and is what HTML needs: its quotes delimit attributes
     // rather than strings, and the free text between its tags is full of apostrophes.
-    if string_symbols.iter().any(|symbol| multiline_strings.iter().any(|(open, _)| open == symbol)) {return None;}
+    let crossing_openers = multiline_strings.iter().chain(raw_multiline_strings.iter())
+            .chain(string_pairs.iter().map(|(open, _)| open)).collect::<Vec<&String>>();
+    let opens_a_crossing_string = |symbol: &String| crossing_openers.contains(&symbol);
+    if string_symbols.iter().any(opens_a_crossing_string) {return None;}
     if char_literals.iter().any(|literal| string_symbols.contains(literal)
-            || multiline_strings.iter().any(|(open, _)| open == literal)) {return None;}
+            || opens_a_crossing_string(literal)) {return None;}
+    // One symbol in two of the three blocks would leave them to argue about whether it escapes
+    if crossing_openers.iter().enumerate()
+            .any(|(at, open)| crossing_openers[at + 1..].contains(open)) {return None;}
 
     if header != COMMENT_SYMBOLS {return None;}
     // Deliberately allowed to be empty: a language whose only comments are multiline has no line
@@ -336,9 +355,12 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
                     .collect::<Vec<_>>(), keywords);
     language.line_continuation = line_continuation;
 
+    // The three in the order the file declares them, which is the order the scan numbers them in
     Some(language
             .with_char_literals(&char_literals.iter().map(String::as_str).collect::<Vec<_>>())
-            .with_string_pairs(&multiline_strings.iter().map(|(open, close)| (open.as_str(), close.as_str()))
+            .with_multiline_strings(&multiline_strings.iter().map(String::as_str).collect::<Vec<_>>())
+            .with_raw_multiline_strings(&raw_multiline_strings.iter().map(String::as_str).collect::<Vec<_>>())
+            .with_string_pairs(&string_pairs.iter().map(|(open, close)| (open.as_str(), close.as_str()))
                     .collect::<Vec<_>>())
             .with_nesting_comments(&nesting_comments.iter().map(|(start, end)| (start.as_str(), end.as_str()))
                     .collect::<Vec<_>>())
@@ -468,6 +490,7 @@ fn split_line_on_whitespace(line: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::MultilineString;
     use crate::test_paths::{DATA_DIR, FIXTURES_DIR, LANGUAGES_DIR};
 
     // The parser reads the real shipped files correctly, which is where the weight belongs: a
@@ -767,7 +790,7 @@ Comment symbols\n//\n\nMulti line comment start\n{ (*\nMulti line comment end\n}
 Multi line string symbols\n\"\"\"\n\nComment symbols\n#\n";
         let parsed = crate::language_file::parse_language(good).expect("the declaration must parse");
         assert_eq!(vec!["\"".to_owned(), "'".to_owned()], parsed.string_symbols);
-        assert_eq!(vec![("\"\"\"".to_owned(), "\"\"\"".to_owned())], parsed.multiline_strings);
+        assert_eq!(vec![MultilineString::escaping("\"\"\"")], parsed.multiline_strings);
 
         let twice = good.replace("String symbols\n\" '", "String symbols\n\" ' \"\"\"");
         assert!(crate::language_file::parse_language(&twice).is_none(),
@@ -783,9 +806,47 @@ Multi line string symbols\n\"\"\"\n\nComment symbols\n#\n";
         assert!(parsed.string_symbols.is_empty() && parsed.multiline_strings.is_empty());
 
         // and the shipped files that declare crossing strings still do
-        for name in ["python.txt", "js.txt", "java.txt", "Rust.txt", "C#.txt", "go.txt"] {
+        for name in ["Python.txt", "JS.txt", "Java.txt", "Rust.txt", "C#.txt", "Go.txt"] {
             let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
             assert!(!language.multiline_strings.is_empty(), "{name} lost its crossing string declaration");
+        }
+    }
+
+    // Whether a backslash in front of the closer cancels it is the one thing the symbol's own shape
+    // cannot say, so it is a block of its own and not a rule about the bytes: the block above holds
+    // languages that write the same symbol and mean the opposite, '"""' being raw in Kotlin and
+    // escaping in Java.
+    #[test]
+    fn a_crossing_string_declares_whether_a_backslash_cancels_its_closer() {
+        let good = "Language\nGolike\n\nExtensions\ngol\n\nString symbols\n\"\n\n\
+Multi line raw string symbols\n`\n\nComment symbols\n//\n";
+        let parsed = crate::language_file::parse_language(good).expect("the declaration must parse");
+        assert_eq!(vec![MultilineString::raw("`")], parsed.multiline_strings);
+
+        // both blocks at once, numbered in the order the file declares them
+        let both = good.replace("Multi line raw string symbols\n`",
+                "Multi line string symbols\n\"\"\"\n\nMulti line raw string symbols\n`");
+        let parsed = crate::language_file::parse_language(&both).expect("both blocks must parse");
+        assert_eq!(vec![MultilineString::escaping("\"\"\""), MultilineString::raw("`")],
+                parsed.multiline_strings);
+
+        // one symbol in two of the three blocks leaves them to argue about whether it escapes
+        let twice = good.replace("Multi line raw string symbols\n`",
+                "Multi line string symbols\n`\n\nMulti line raw string symbols\n`");
+        assert!(crate::language_file::parse_language(&twice).is_none(),
+                "a symbol declared raw and escaping at once was accepted");
+        let with_pair = good.replace("Multi line raw string symbols\n`",
+                "Multi line raw string symbols\n`\n\nPaired string openers\n`\nPaired string closers\n'");
+        assert!(crate::language_file::parse_language(&with_pair).is_none(),
+                "a symbol declared raw and as a pair opener at once was accepted");
+        let empty = good.replace("Multi line raw string symbols\n`", "Multi line raw string symbols\n");
+        assert!(crate::language_file::parse_language(&empty).is_none());
+
+        // and the shipped files whose crossing form escapes nothing say so
+        for name in ["Go.txt", "Odin.txt", "D.txt", "Kotlin.txt", "Shell.txt", "PowerShell.txt"] {
+            let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
+            assert!(language.multiline_strings.iter().any(|crossing| !crossing.escapes),
+                    "{name} lost its raw crossing string declaration");
         }
     }
 
@@ -797,7 +858,7 @@ Multi line string symbols\n\"\"\"\n\nComment symbols\n#\n";
 Character literal symbols\n'\n\nMulti line string symbols\n\"\n\nComment symbols\n//\n";
         let parsed = crate::language_file::parse_language(good).expect("the declaration must parse");
         assert_eq!(vec!["'".to_owned()], parsed.char_literal_symbols);
-        assert_eq!(vec![("\"".to_owned(), "\"".to_owned())], parsed.multiline_strings);
+        assert_eq!(vec![MultilineString::escaping("\"")], parsed.multiline_strings);
 
         // declared in two lists it refuses the file, empty it refuses the file
         let twice = good.replace("String symbols\n\n", "String symbols\n'\n");

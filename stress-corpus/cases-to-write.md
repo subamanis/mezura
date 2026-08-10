@@ -22,12 +22,6 @@ why. When one lands, its line leaves this document.
   for a second purpose counts those too. A case would only document it; the fix is a lexer per
   language, which is not happening.
 
-## Written and waiting on a fix
-
-- **A raw string ending in a backslash**, case 44, where one symbol serves as both ends. Odin's
-  backtick string stays open to the end of the file. The paired form of the same trap, case 16, is
-  already right, so this is the multi line string path alone.
-
 ## Written but only half solved
 
 - **The heredoc**, case 31. An apostrophe in the body opens a string and the comments under it are

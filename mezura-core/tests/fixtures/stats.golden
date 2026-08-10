@@ -1,4 +1,4 @@
-files=34 lines=411 code=206 comments=112
+files=35 lines=427 code=213 comments=116
 
 Assembly
   files=1 lines=10 code=4 comments=5
@@ -36,6 +36,9 @@ GDScript
   classes=1 functions=2 signals=1
 GLSL
   files=1 lines=10 code=4 comments=3
+  structs=1
+Go
+  files=1 lines=16 code=7 comments=4
   structs=1
 GraphQL
   files=1 lines=11 code=5 comments=2
