@@ -3,7 +3,7 @@
 // 'cfg!(test)', which is only true in the crate actually being tested. In the library it would stop
 // applying the moment the binary is its own crate, and the tests would go back to reading and
 // writing the real directory without saying so.
-use std::{fs, path::Path, sync::LazyLock};
+use std::sync::LazyLock;
 
 use directories::ProjectDirs;
 
@@ -25,8 +25,7 @@ pub struct PersistentAppPaths {
     pub languages_dir: String,
     pub themes_dir: String,
     pub config_dir: String,
-    pub logs_dir: String,
-    pub are_initialized: bool
+    pub logs_dir: String
 }
 
 impl PersistentAppPaths {
@@ -55,29 +54,14 @@ impl PersistentAppPaths {
                     .data_dir().to_str()
                     .expect("the application data directory path is not valid UTF-8").to_owned() + "/"
         };
-        let languages_dir = data_dir.clone() + LANGUAGES_DIR_NAME + "/";
-        let config_dir = data_dir.clone() + CONFIG_DIR_NAME + "/";
-        let logs_dir = data_dir.clone() + LOGS_DIR_NAME + "/";
-        // The project dir existing means nothing on its own, since anything that touches these paths
-        // creates it. The shipped data has to actually be there, or a half-made directory passes for
-        // an installation and every run fails.
-        let are_initialized = dir_contains_entries(&languages_dir) && Path::new(&config_dir).exists()
-                && Path::new(&logs_dir).exists();
-
         PersistentAppPaths {
+            languages_dir: data_dir.clone() + LANGUAGES_DIR_NAME + "/",
             themes_dir: data_dir.clone() + THEMES_DIR_NAME + "/",
-            data_dir,
-            config_dir,
-            languages_dir,
-            logs_dir,
-            are_initialized
+            config_dir: data_dir.clone() + CONFIG_DIR_NAME + "/",
+            logs_dir: data_dir.clone() + LOGS_DIR_NAME + "/",
+            data_dir
         }
     }
-}
-
-// Returns false both when the dir doesn't exist and when it exists but is empty.
-pub fn dir_contains_entries(path: &str) -> bool {
-    fs::read_dir(path).is_ok_and(|mut entries| entries.next().is_some())
 }
 
 // What the tests read and what they write, kept apart. 'tests/fixtures' holds checked-in inputs and

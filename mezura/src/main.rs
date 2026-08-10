@@ -57,23 +57,25 @@ fn main() -> ExitCode {
     #[cfg(target_os = "windows")]
     control::set_virtual_terminal(true).unwrap();
 
-    let languages_available: Vec<Language>;
-
     // Before the languages are read, or the run that performs it would still count with the old
     // files and the change would appear to take two runs to arrive
-    match migrate_data_files(&crate::paths::PERSISTENT_APP_PATHS.data_dir, false) {
-        Ok(outcome) => if let Some(message) = outcome.format() {eprintln!("{message}")},
-        // Whatever was written stays on disk, and the version is recorded only after a pass that
-        // finished, so the next execution tries again instead of believing it is done
-        Err(x) => eprintln!("\n{}\n", crate::message_printer::wrap_message(
-                &format!("Unable to update the data files: {x}")).yellow())
+    let outcome = migrate_data_files(&crate::paths::PERSISTENT_APP_PATHS.data_dir, false);
+    for message in [outcome.format_restored(), outcome.format_replaced()].into_iter().flatten() {
+        eprintln!("{message}");
     }
 
-    if !crate::paths::PERSISTENT_APP_PATHS.are_initialized {
-        // A first execution reads the baked-in copies, since the paths were resolved and the
-        // directory judged before the migration above created anything. Same contents either way.
-        languages_available = mezura_core::languages::parse_shipped_languages();
-    } else {
+    // Whatever was written stays on disk, and the version is recorded only after a pass that
+    // finished, so the next execution tries again instead of believing it is done
+    let data_dir_is_whole = outcome.failure.is_none();
+    if let Some(x) = &outcome.failure {
+        eprintln!("\n{}\n", crate::message_printer::wrap_message(&format!(
+                "Unable to update the data files: {x}\nCounting with the copies inside the program, so \
+a language file of your own is not in use for this run.")).yellow());
+    }
+
+    // The pass above has just written the directory and is the only thing that knows whether it is
+    // whole, so nothing here asks a second, looser version of the same question
+    let languages_available = if data_dir_is_whole {
         match mezura_core::language_file::parse_languages_in_dir(&crate::paths::PERSISTENT_APP_PATHS.languages_dir) {
             Ok((parsed, faulty_files)) => {
                 if !faulty_files.is_empty() {
@@ -88,14 +90,16 @@ fn main() -> ExitCode {
                     }
                 }
 
-                languages_available = parsed;
+                parsed
             },
             Err(x) => {
                 eprintln!("\n{}", x.format());
                 return ExitCode::FAILURE;
             }
         }
-    }
+    } else {
+        mezura_core::languages::parse_shipped_languages()
+    };
 
     let args_str = match read_args_as_str() {
         Some(args) => {
@@ -374,19 +378,39 @@ fn open_in_browser(path: &str) {
 
 #[derive(Default)]
 struct MigrationOutcome {
-    installed: Vec<String>,
+    // What the manifest records writing and was gone, against what this version brings for the
+    // first time. A language file that never existed here was not lost, and telling somebody it was
+    // sends them looking for whatever deleted it.
+    restored: Vec<String>,
+    added: Vec<String>,
     replaced: Vec<String>,
     withdrawn: Vec<String>,
     // Where this pass put what it moved aside, under 'replaced/<version>/'. One folder per pass and
     // named after the moment it ran, so that two passes never mix their copies into one heap where
     // nothing says which run each file came from.
-    archived_under: String
+    archived_under: String,
+    // The pass has two things to say, what it did and whether it finished, and a Result carries only
+    // the second: a file moved aside by a pass that then died was announced to nobody, and the retry
+    // finds it already matching what we ship and says nothing about it either.
+    failure: Option<std::io::Error>
 }
 
 impl MigrationOutcome {
-    // Silence is the ordinary outcome. Only a file of the user's that was moved aside is worth a
-    // line, because it is the only part of this that asks something of them.
-    fn format(&self) -> Option<String> {
+    // A first installation writes everything and has lost nothing, so it says nothing: everything it
+    // wrote is new rather than missing.
+    fn format_restored(&self) -> Option<String> {
+        if self.restored.is_empty() {
+            return None;
+        }
+
+        Some(format!("\n{}\n", crate::message_printer::wrap_message(&format!(
+                "Part of your data directory was missing and has been written again:\n  {}",
+                self.restored.join(", "))).yellow()))
+    }
+
+    // Silence is the ordinary outcome. A file of the user's that was moved aside is worth a line,
+    // because it is the only part of this that asks something of them.
+    fn format_replaced(&self) -> Option<String> {
         if self.replaced.is_empty() {
             return None;
         }
@@ -525,39 +549,67 @@ fn find_free_archive_folder(data_dir: &str) -> String {
 // theirs is destroyed. A file we never wrote is never touched, which is what makes a language of
 // their own safe. 'force' is '--restore': do it again even though the version says there is nothing
 // to do.
-fn migrate_data_files(data_dir: &str, force: bool) -> Result<MigrationOutcome, std::io::Error> {
-    let (recorded_version, recorded) = read_manifest(data_dir);
+fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
     let mut outcome = MigrationOutcome::default();
+    let result = perform_migration(data_dir, force, &mut outcome);
+    outcome.failure = result.err();
+
+    outcome
+}
+
+// A file the manifest never recorded is one this version brings and not one that was lost. The
+// themes, the default configuration and the priority file are deliberately outside the manifest, so
+// for those the question is only whether this installation existed before.
+fn note_written_file(outcome: &mut MigrationOutcome, relative: String, was_recorded: bool) {
+    if was_recorded {
+        outcome.restored.push(relative);
+    } else {
+        outcome.added.push(relative);
+    }
+}
+
+fn perform_migration(data_dir: &str, force: bool, outcome: &mut MigrationOutcome)
+        -> Result<(), std::io::Error> {
+    let (recorded_version, recorded) = read_manifest(data_dir);
+    let directories = [LANGUAGES_DIR_NAME, THEMES_DIR_NAME, CONFIG_DIR_NAME, LOGS_DIR_NAME];
     // The version says what was written and the directory says what is there, and it takes both: an
     // installation whose files are deleted keeps the version that wrote them, so the record alone
     // leaves them gone for good while every run counts from the copies inside the binary and says
     // nothing. Asked of every file and not of the folder, because one language file left behind by a
     // quarantine or a half-finished cleanup answers "the folder is not empty" while sixty-six others
-    // are missing. One 'exists' per recorded file, against the hashing of every one of them below.
-    let every_file_is_there = recorded.keys().chain(written_once_files().iter())
-            .all(|relative| std::path::Path::new(&(data_dir.to_owned() + relative)).exists());
-    if !force && recorded_version == VERSION_ID && every_file_is_there {
-        return Ok(outcome);
+    // are missing. The four directories are then asked for by name, because 'logs' holds nothing
+    // that ships and no file of the check stands for it.
+    let everything_is_there = recorded.keys().chain(written_once_files().iter())
+            .all(|relative| std::path::Path::new(&(data_dir.to_owned() + relative)).exists())
+            && directories.iter().all(|name| std::path::Path::new(&(data_dir.to_owned() + name)).exists());
+    if !force && recorded_version == VERSION_ID && everything_is_there {
+        return Ok(());
     }
 
     // Chosen once, so that everything this pass moves aside lands together and a later reader can
     // see which files went in the same breath
     outcome.archived_under = find_free_archive_folder(data_dir);
 
-    for name in [LANGUAGES_DIR_NAME, THEMES_DIR_NAME, CONFIG_DIR_NAME, LOGS_DIR_NAME] {
+    for name in directories {
         // The logs directory holds nothing that ships, but without it a run with '--log' has nowhere to write
-        std::fs::create_dir_all(data_dir.to_owned() + name)?;
+        let path = data_dir.to_owned() + name;
+        let was_there = std::path::Path::new(&path).exists();
+        std::fs::create_dir_all(&path)?;
+        if !was_there {
+            note_written_file(outcome, name.to_owned() + "/", !recorded.is_empty());
+        }
     }
 
     let mut manifest = HashMap::new();
     for (relative, contents) in shipped_files() {
         let target = data_dir.to_owned() + &relative;
         let shipped_hash = content_hash(contents);
+        let was_recorded = recorded.contains_key(&relative);
         manifest.insert(relative.clone(), shipped_hash);
 
         let Ok(on_disk) = std::fs::read(&target) else {
             std::fs::write(&target, contents)?;
-            outcome.installed.push(relative);
+            note_written_file(outcome, relative, was_recorded);
             continue;
         };
 
@@ -611,25 +663,24 @@ fn migrate_data_files(data_dir: &str, force: bool) -> Result<MigrationOutcome, s
         let target = data_dir.to_owned() + &relative;
         if !std::path::Path::new(&target).exists() {
             std::fs::write(&target, contents)?;
-            outcome.installed.push(relative);
+            note_written_file(outcome, relative, !recorded.is_empty());
         }
     }
 
     let default_config = format!("{data_dir}{CONFIG_DIR_NAME}/{DEFAULT_CONFIG_NAME}");
     if !std::path::Path::new(&default_config).exists() {
         std::fs::write(&default_config, read_baked_in_default_config_contents())?;
-        outcome.installed.push(DEFAULT_CONFIG_NAME.to_owned());
+        note_written_file(outcome, format!("{CONFIG_DIR_NAME}/{DEFAULT_CONFIG_NAME}"), !recorded.is_empty());
     }
     let priority_path = data_dir.to_owned() + EXTENSION_PRIORITY_FILE_NAME;
     if !std::path::Path::new(&priority_path).exists() {
         std::fs::write(&priority_path, read_baked_in_extension_priority_contents())?;
-        outcome.installed.push(EXTENSION_PRIORITY_FILE_NAME.to_owned());
+        note_written_file(outcome, EXTENSION_PRIORITY_FILE_NAME.to_owned(), !recorded.is_empty());
     }
 
     // Last, so that a pass that died halfway leaves the old version recorded and the next run tries
     // again, instead of a half-written directory that claims to be current
-    write_manifest(data_dir, &manifest)?;
-    Ok(outcome)
+    write_manifest(data_dir, &manifest)
 }
 
 fn read_args_as_str() -> Option<String> {
@@ -702,32 +753,31 @@ program to read, and both of them go to the output, so only one of the two can b
     } else if is_present(RESTORE) {
         // The same pass a version change performs, asked for by hand: useful when something was
         // damaged inside one version, where nothing would otherwise trigger it
-        return match migrate_data_files(&crate::paths::PERSISTENT_APP_PATHS.data_dir, true) {
-            Ok(outcome) => {
-                if outcome.installed.is_empty() && outcome.replaced.is_empty() && outcome.withdrawn.is_empty() {
-                    println!("\nEverything that ships with mezura is in place.");
-                }
-                if !outcome.installed.is_empty() {
-                    let plural = if outcome.installed.len() == 1 {"file"} else {"files"};
-                    println!("\n{}", crate::message_printer::wrap_message(&format!("Restored {} {plural}:\n{}",
-                            outcome.installed.len(), outcome.installed.join(", "))));
-                }
-                if let Some(message) = outcome.format() {
-                    println!("{message}");
-                }
-                if !outcome.withdrawn.is_empty() {
-                    println!("\n{}", crate::message_printer::wrap_message(&format!(
-                            "No longer part of mezura, and moved to '{}{REPLACED_DIR_NAME}/{VERSION_ID}/{}/':\n{}",
-                            crate::paths::PERSISTENT_APP_PATHS.data_dir, outcome.archived_under,
-                            outcome.withdrawn.join(", "))));
-                }
-                Some(ExitCode::SUCCESS)
-            },
-            Err(x) => {
-                println!("\n{}", crate::message_printer::wrap_message(&format!("Unable to restore the files: {x}")).red());
-                Some(ExitCode::FAILURE)
-            }
-        };
+        let outcome = migrate_data_files(&crate::paths::PERSISTENT_APP_PATHS.data_dir, true);
+        if let Some(x) = &outcome.failure {
+            println!("\n{}", crate::message_printer::wrap_message(&format!("Unable to restore the files: {x}")).red());
+            return Some(ExitCode::FAILURE);
+        }
+
+        if outcome.restored.is_empty() && outcome.added.is_empty() && outcome.replaced.is_empty()
+                && outcome.withdrawn.is_empty() {
+            println!("\nEverything that ships with mezura is in place.");
+        }
+        for message in [outcome.format_restored(), outcome.format_replaced()].into_iter().flatten() {
+            println!("{message}");
+        }
+        if !outcome.added.is_empty() {
+            println!("\n{}", crate::message_printer::wrap_message(&format!(
+                    "Written for the first time:\n{}", outcome.added.join(", "))));
+        }
+        if !outcome.withdrawn.is_empty() {
+            println!("\n{}", crate::message_printer::wrap_message(&format!(
+                    "No longer part of mezura, and moved to '{}{REPLACED_DIR_NAME}/{VERSION_ID}/{}/':\n{}",
+                    crate::paths::PERSISTENT_APP_PATHS.data_dir, outcome.archived_under,
+                    outcome.withdrawn.join(", "))));
+        }
+
+        return Some(ExitCode::SUCCESS);
     } else if is_present(THEME_EDITOR) {
         return match crate::theme_files::generate_theme_editor_page() {
             Ok(path) => {
@@ -797,12 +847,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        let first = migrate_data_files(&dir, false).unwrap();
-        assert!(!first.installed.is_empty() && first.replaced.is_empty() && first.format().is_none());
+        let first = migrate_data_files(&dir, false);
+        assert!(first.failure.is_none() && !first.added.is_empty() && first.replaced.is_empty());
+        assert!(first.restored.is_empty() && first.format_restored().is_none()
+                && first.format_replaced().is_none(),
+                "a first installation, which lost nothing, spoke about missing files: {:?}", first.restored);
         assert!(std::path::Path::new(&(dir.clone() + "installed.txt")).exists());
 
         // Nothing changed since, so the version alone stops it
-        assert!(migrate_data_files(&dir, false).unwrap().installed.is_empty());
+        assert!(migrate_data_files(&dir, false).added.is_empty());
 
         let lua = dir.clone() + "languages/Lua.txt";
         let shipped = std::fs::read_to_string(&lua).unwrap();
@@ -810,13 +863,13 @@ mod tests {
         // Said differently and meaning the same: corrected without a word, since telling somebody
         // their file was replaced when nothing about it counted differently is noise
         std::fs::write(&lua, shipped.replace("\" '", "\"     '")).unwrap();
-        let cosmetic = migrate_data_files(&dir, true).unwrap();
+        let cosmetic = migrate_data_files(&dir, true);
         assert!(cosmetic.replaced.is_empty(), "a difference that changes no count was reported");
         assert_eq!(shipped, std::fs::read_to_string(&lua).unwrap());
 
         // A symbol removed is a different language, so their copy is kept and named
         std::fs::write(&lua, shipped.replace("\" '", "\"")).unwrap();
-        let edited = migrate_data_files(&dir, true).unwrap();
+        let edited = migrate_data_files(&dir, true);
         assert_eq!(vec!["languages/Lua.txt".to_owned()], edited.replaced);
         assert_eq!(shipped, std::fs::read_to_string(&lua).unwrap());
         assert!(std::fs::read_to_string(format!("{dir}replaced/{}/{}/languages/Lua.txt",
@@ -828,7 +881,7 @@ mod tests {
         let theme = dir.clone() + "themes/Dracula.txt";
         let mine = std::fs::read_to_string(&theme).unwrap() + "\nheading = #ff0000";
         std::fs::write(&theme, &mine).unwrap();
-        assert!(migrate_data_files(&dir, true).unwrap().replaced.is_empty());
+        assert!(migrate_data_files(&dir, true).replaced.is_empty());
         assert_eq!(mine, std::fs::read_to_string(&theme).unwrap());
 
         // A file of their own is never ours to touch, whatever happens around it
@@ -837,10 +890,33 @@ mod tests {
         // and one that was deleted comes back
         std::fs::remove_file(dir.clone() + "languages/Zig.txt").unwrap();
 
-        let third = migrate_data_files(&dir, true).unwrap();
-        assert_eq!(vec!["languages/Zig.txt".to_owned()], third.installed);
-        assert!(third.replaced.is_empty());
+        let third = migrate_data_files(&dir, true);
+        assert_eq!(vec!["languages/Zig.txt".to_owned()], third.restored);
+        assert!(third.replaced.is_empty() && third.added.is_empty());
         assert_eq!("not a language file at all", std::fs::read_to_string(&theirs).unwrap());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // A first run used to count from the copies inside the program while every later run counted
+    // from the directory, on the grounds that the two say the same thing. They have to, or the same
+    // files give two answers depending on how many times mezura has been started.
+    #[test]
+    fn a_migrated_directory_holds_exactly_the_languages_the_program_carries() {
+        let dir = SCRATCH_DIR.to_owned() + "migrated-languages/";
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        migrate_data_files(&dir, false);
+
+        let (from_disk, faulty) = mezura_core::language_file::parse_languages_in_dir(
+                &(dir.clone() + "languages/")).unwrap();
+        assert!(faulty.is_empty(), "the migration wrote language files that do not parse: {faulty:?}");
+
+        let by_name = |mut languages: Vec<Language>| {
+            languages.sort_by(|one, other| one.name.cmp(&other.name));
+            languages
+        };
+        assert_eq!(by_name(mezura_core::languages::parse_shipped_languages()), by_name(from_disk));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -853,15 +929,15 @@ mod tests {
         let dir = SCRATCH_DIR.to_owned() + "migration-carve-out/";
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        migrate_data_files(&dir, false).unwrap();
+        migrate_data_files(&dir, false);
 
         let config = dir.clone() + "config/default.txt";
         let priority = dir.clone() + "extension_priority.txt";
         std::fs::write(&config, "settings of my own").unwrap();
         std::fs::write(&priority, "m  MATLAB, Objective-C").unwrap();
 
-        let outcome = migrate_data_files(&dir, true).unwrap();
-        assert!(outcome.replaced.is_empty() && outcome.installed.is_empty());
+        let outcome = migrate_data_files(&dir, true);
+        assert!(outcome.replaced.is_empty() && outcome.restored.is_empty() && outcome.added.is_empty());
         assert_eq!("settings of my own", std::fs::read_to_string(&config).unwrap());
         assert_eq!("m  MATLAB, Objective-C", std::fs::read_to_string(&priority).unwrap());
 
@@ -875,7 +951,7 @@ mod tests {
         let dir = SCRATCH_DIR.to_owned() + "migration-withdrawn/";
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        migrate_data_files(&dir, false).unwrap();
+        migrate_data_files(&dir, false);
 
         let withdrawn = dir.clone() + "languages/Gone.txt";
         let theirs = dir.clone() + "languages/Mine.txt";
@@ -886,7 +962,7 @@ mod tests {
         std::fs::write(&manifest, recorded + "languages/Gone.txt 1
 ").unwrap();
 
-        let outcome = migrate_data_files(&dir, true).unwrap();
+        let outcome = migrate_data_files(&dir, true);
         assert_eq!(vec!["languages/Gone.txt".to_owned()], outcome.withdrawn);
         assert!(!std::path::Path::new(&withdrawn).exists());
         assert_eq!("a language of an earlier version", std::fs::read_to_string(
@@ -905,19 +981,19 @@ mod tests {
         let dir = SCRATCH_DIR.to_owned() + "migration-twice/";
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        migrate_data_files(&dir, false).unwrap();
+        migrate_data_files(&dir, false);
         let read_back = |folder: &str, name: &str|
                 std::fs::read_to_string(format!("{dir}replaced/{VERSION_ID}/{folder}/languages/{name}"));
 
         let mine = dir.clone() + "languages/Rust.txt";
         std::fs::write(&mine, "my first edit").unwrap();
-        let first = migrate_data_files(&dir, true).unwrap();
+        let first = migrate_data_files(&dir, true);
         assert_eq!(vec!["languages/Rust.txt".to_owned()], first.replaced);
 
         // Both passes run inside the same second here, which is exactly the case the folder name
         // has to survive on its own rather than by waiting for the clock
         std::fs::write(&mine, "my second edit").unwrap();
-        let second = migrate_data_files(&dir, true).unwrap();
+        let second = migrate_data_files(&dir, true);
         assert_eq!(vec!["languages/Rust.txt".to_owned()], second.replaced, "the copy kept its own name");
         assert_ne!(first.archived_under, second.archived_under, "two passes shared one folder");
 
@@ -938,14 +1014,14 @@ mod tests {
         let dir = SCRATCH_DIR.to_owned() + "migration-recased/";
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        migrate_data_files(&dir, false).unwrap();
+        migrate_data_files(&dir, false);
 
         // What an earlier version would have recorded had it shipped the name in another case
         let manifest = dir.clone() + "installed.txt";
         let recorded = std::fs::read_to_string(&manifest).unwrap();
         std::fs::write(&manifest, recorded + "languages/RUST.txt 1\n").unwrap();
 
-        let outcome = migrate_data_files(&dir, true).unwrap();
+        let outcome = migrate_data_files(&dir, true);
         assert!(std::path::Path::new(&(dir.clone() + "languages/Rust.txt")).exists(),
                 "the language file was written and then deleted through its other spelling: {:?}", outcome.withdrawn);
         assert!(outcome.withdrawn.is_empty(), "{:?}", outcome.withdrawn);
@@ -962,7 +1038,7 @@ mod tests {
         let dir = SCRATCH_DIR.to_owned() + "migration-emptied/";
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        migrate_data_files(&dir, false).unwrap();
+        migrate_data_files(&dir, false);
         let a_language = dir.clone() + "languages/Rust.txt";
         assert!(std::path::Path::new(&a_language).exists(), "the first pass wrote nothing");
 
@@ -971,15 +1047,17 @@ mod tests {
         }
 
         // Same version, same manifest, and the languages gone: the pass that used to return here
-        let outcome = migrate_data_files(&dir, false).unwrap();
+        let outcome = migrate_data_files(&dir, false);
         assert!(std::path::Path::new(&a_language).exists(),
                 "an emptied languages folder was left empty, and the run would count from the binary in silence");
-        assert!(!outcome.installed.is_empty() && outcome.replaced.is_empty(),
+        assert!(!outcome.restored.is_empty() && outcome.replaced.is_empty() && outcome.added.is_empty(),
                 "the files came back as somebody's changed copies rather than as missing ones: {:?}", outcome.replaced);
+        assert!(outcome.format_restored().is_some(), "an installation was repaired without a word");
 
         // and with everything in place it still costs nothing and says nothing
-        let outcome = migrate_data_files(&dir, false).unwrap();
-        assert!(outcome.installed.is_empty() && outcome.replaced.is_empty() && outcome.withdrawn.is_empty());
+        let outcome = migrate_data_files(&dir, false);
+        assert!(outcome.restored.is_empty() && outcome.added.is_empty() && outcome.replaced.is_empty()
+                && outcome.withdrawn.is_empty());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -993,11 +1071,11 @@ mod tests {
         let dir = SCRATCH_DIR.to_owned() + "migration-partly-emptied/";
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        migrate_data_files(&dir, false).unwrap();
+        migrate_data_files(&dir, false);
 
-        let (kept, lost) = (dir.clone() + "languages/Rust.txt", dir.clone() + "languages/java.txt");
+        let (kept, lost) = (dir.clone() + "languages/Rust.txt", dir.clone() + "languages/Java.txt");
         std::fs::remove_file(&lost).unwrap();
-        let outcome = migrate_data_files(&dir, false).unwrap();
+        let outcome = migrate_data_files(&dir, false);
         assert!(std::path::Path::new(&lost).exists(), "one language file of many was left missing");
         assert!(std::path::Path::new(&kept).exists());
         assert!(outcome.replaced.is_empty(), "a missing file came back as a changed one: {:?}", outcome.replaced);
@@ -1006,10 +1084,83 @@ mod tests {
         // the manifest deliberately does not record them
         let priority = dir.clone() + mezura_core::EXTENSION_PRIORITY_FILE_NAME;
         std::fs::remove_file(&priority).unwrap();
-        migrate_data_files(&dir, false).unwrap();
+        migrate_data_files(&dir, false);
         assert!(std::path::Path::new(&priority).exists(),
                 "'{}' was left missing, so every contested extension falls to the tiebreak for good",
                 mezura_core::EXTENSION_PRIORITY_FILE_NAME);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // The one directory with nothing shipped inside it, so no file of the completeness check stands
+    // for it. Deleting it used to leave it deleted for the whole life of a version, and a run with
+    // '--log' had nowhere to write for as long as that lasted.
+    #[test]
+    fn a_deleted_logs_folder_is_made_again_and_said_out_loud() {
+        let dir = SCRATCH_DIR.to_owned() + "migration-logs/";
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        migrate_data_files(&dir, false);
+
+        let logs = dir.clone() + "logs";
+        std::fs::remove_dir_all(&logs).unwrap();
+        let outcome = migrate_data_files(&dir, false);
+        assert!(std::path::Path::new(&logs).exists(), "the logs folder was left deleted");
+        assert_eq!(vec!["logs/".to_owned()], outcome.restored);
+        assert!(outcome.format_restored().is_some(), "the folder came back without a word");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // A new version brings language files the manifest has never seen, and they arrive through the
+    // same branch as one somebody deleted. Telling them that a language they never had went missing
+    // sends them looking for whatever took it away.
+    #[test]
+    fn a_language_this_version_brings_is_not_reported_as_one_that_went_missing() {
+        let dir = SCRATCH_DIR.to_owned() + "migration-new-language/";
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        migrate_data_files(&dir, false);
+
+        // as the manifest of a version that did not ship Zig yet
+        let manifest = dir.clone() + "installed.txt";
+        let recorded = std::fs::read_to_string(&manifest).unwrap();
+        std::fs::write(&manifest, recorded.lines().filter(|line| !line.contains("Zig.txt"))
+                .map(|line| if line == VERSION_ID {"v0.0.1"} else {line})
+                .collect::<Vec<_>>().join("\n")).unwrap();
+        std::fs::remove_file(dir.clone() + "languages/Zig.txt").unwrap();
+
+        let outcome = migrate_data_files(&dir, false);
+        assert_eq!(vec!["languages/Zig.txt".to_owned()], outcome.added);
+        assert!(outcome.restored.is_empty() && outcome.format_restored().is_none(),
+                "a language that never existed here was reported as missing: {:?}", outcome.restored);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // What the pass did used to travel inside the Result and be thrown away with the error, so a
+    // file moved aside by a pass that then died was announced to nobody: the retry finds it matching
+    // what we ship and says nothing either, and the copy sits in 'replaced' with nothing pointing at
+    // it. The manifest is made a directory here because writing over one fails on every system,
+    // including as root, and it fails at the last step, after everything else has been done.
+    #[test]
+    fn a_pass_that_fails_still_says_what_it_moved_aside() {
+        let dir = SCRATCH_DIR.to_owned() + "migration-failed/";
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        migrate_data_files(&dir, false);
+
+        let lua = dir.clone() + "languages/Lua.txt";
+        std::fs::write(&lua, "a language of my own under a name of ours").unwrap();
+        std::fs::remove_file(dir.clone() + "installed.txt").unwrap();
+        std::fs::create_dir(dir.clone() + "installed.txt").unwrap();
+
+        let outcome = migrate_data_files(&dir, true);
+        assert!(outcome.failure.is_some(), "writing the manifest over a directory succeeded");
+        assert_eq!(vec!["languages/Lua.txt".to_owned()], outcome.replaced);
+        assert!(outcome.format_replaced().is_some(), "the file was moved aside in silence");
+        assert_eq!("a language of my own under a name of ours", std::fs::read_to_string(
+                format!("{dir}replaced/{VERSION_ID}/{}/languages/Lua.txt", outcome.archived_under)).unwrap());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -1025,14 +1176,14 @@ mod tests {
         let dir = SCRATCH_DIR.to_owned() + "migration-recategorised/";
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        migrate_data_files(&dir, false).unwrap();
+        migrate_data_files(&dir, false);
 
         // as an earlier version of the code recorded them, before they were left alone
         let manifest = dir.clone() + "installed.txt";
         let recorded = std::fs::read_to_string(&manifest).unwrap();
         std::fs::write(&manifest, recorded + "themes/Dracula.txt 1\nconfig/default.txt 2\n").unwrap();
 
-        let outcome = migrate_data_files(&dir, true).unwrap();
+        let outcome = migrate_data_files(&dir, true);
         assert!(outcome.withdrawn.is_empty(), "still shipped, and taken away: {:?}", outcome.withdrawn);
         assert!(std::path::Path::new(&(dir.clone() + "themes/Dracula.txt")).exists());
         assert!(std::path::Path::new(&(dir.clone() + "config/default.txt")).exists());
@@ -1048,13 +1199,15 @@ mod tests {
         let dir = SCRATCH_DIR.to_owned() + "migration-manifest/";
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        migrate_data_files(&dir, false).unwrap();
-        assert!(migrate_data_files(&dir, false).unwrap().installed.is_empty());
+        migrate_data_files(&dir, false);
+        assert!(migrate_data_files(&dir, false).added.is_empty());
 
+        // Overwriting the manifest with a bare version line takes its entries with it, so the file
+        // that comes back is one nothing remembers writing, which is new rather than missing
         for recorded in ["v99.0.0", "v0.0.1", "", "not a version at all"] {
             std::fs::write(dir.clone() + "installed.txt", recorded).unwrap();
             std::fs::remove_file(dir.clone() + "languages/Zig.txt").unwrap();
-            assert_eq!(vec!["languages/Zig.txt".to_owned()], migrate_data_files(&dir, false).unwrap().installed,
+            assert_eq!(vec!["languages/Zig.txt".to_owned()], migrate_data_files(&dir, false).added,
                     "a manifest recording '{recorded}' did not make the pass run");
         }
 

@@ -430,6 +430,18 @@ Bugfixes:
   -> Deleting the languages or the configuration folder no longer costs you your themes and your
       default configuration. The program used to treat that as a fresh installation and write every
       shipped file over the top; now it only puts back what is missing.
+  -> A run that cannot update its data files now counts with the language files inside the program
+      and says so, instead of counting with whatever the folder was left holding. A folder with one
+      language file in it used to pass for a whole installation, and everything else went uncounted
+      without a word.
+  -> Deleting the "logs" folder is now noticed and the folder is written again on the next run, so
+      "--log" has somewhere to write. It used to stay deleted until the next version of mezura.
+  -> Anything of mezura's own that goes missing is now named when it is written again, instead of
+      coming back in silence. A first run, which has lost nothing, still says nothing, and a
+      language file that a new version brings for the first time is not reported as one that was
+      lost. "--restore" tells the two apart in what it prints as well.
+  -> A file of yours that was moved aside by an update that then failed is now reported. The
+      message used to be thrown away with the failure, and nothing ever said where the file went.
   -> The percentage bar of the overview is now more accurate
   -> The dashed line above the total now matches the width of the total line.
   -> A theme file that cannot be fully read no longer stops the program. The lines that do not
