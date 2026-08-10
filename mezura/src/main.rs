@@ -443,13 +443,23 @@ fn write_manifest(data_dir: &str, entries: &HashMap<String, u64>) -> Result<(), 
 
     std::fs::write(data_dir.to_owned() + MANIFEST_FILE_NAME,
             format!("# Written by mezura. It records which files it installed and what they looked like,\n\
-# so that an update can tell a file you edited from one it wrote itself. Deleting it is\n\
-# harmless: the next run treats the installation as a new one.\n{VERSION_ID}\n{body}\n"))
+# so that an update can tell a file you edited from one it wrote itself. Delete it and the next\n\
+# run has no way to tell: every file of ours that you have changed is moved into 'replaced' and\n\
+# written again from the copies inside the program.\n{VERSION_ID}\n{body}\n"))
 }
 
 fn named(dir_name: &str, file: &File<'static>) -> (String, &'static [u8]) {
     let name = std::path::Path::new(file.path).file_name().and_then(|x| x.to_str()).unwrap_or(file.path);
     (dir_name.to_owned() + "/" + name, file.contents)
+}
+
+// Written when they are absent and never touched again, so they are not in the manifest and the
+// repair check has to name them itself: without that, deleting 'extension_priority.txt' means every
+// contested extension falls to the alphabetical tiebreak, on every run, for good.
+fn written_once_files() -> Vec<String> {
+    include_dir!("data/themes").files.iter().map(|file| named(THEMES_DIR_NAME, file).0)
+            .chain([format!("{CONFIG_DIR_NAME}/{DEFAULT_CONFIG_NAME}"), EXTENSION_PRIORITY_FILE_NAME.to_owned()])
+            .collect()
 }
 
 fn shipped_files() -> Vec<(String, &'static [u8])> {
@@ -495,11 +505,15 @@ fn archive(data_dir: &str, relative: &str, contents: &[u8]) -> Result<(), std::i
 fn migrate_data_files(data_dir: &str, force: bool) -> Result<MigrationOutcome, std::io::Error> {
     let (recorded_version, recorded) = read_manifest(data_dir);
     let mut outcome = MigrationOutcome::default();
-    // The version says what was written and the directory says what is there, and it takes both:
-    // an installation whose files are deleted keeps the version that wrote them, so the record
-    // alone leaves the folder empty for good while every run counts from the copies inside the
-    // binary and says nothing. One directory listing, against the hashing of every file below it.
-    if !force && recorded_version == VERSION_ID && crate::paths::dir_contains_entries(&(data_dir.to_owned() + LANGUAGES_DIR_NAME)) {
+    // The version says what was written and the directory says what is there, and it takes both: an
+    // installation whose files are deleted keeps the version that wrote them, so the record alone
+    // leaves them gone for good while every run counts from the copies inside the binary and says
+    // nothing. Asked of every file and not of the folder, because one language file left behind by a
+    // quarantine or a half-finished cleanup answers "the folder is not empty" while sixty-six others
+    // are missing. One 'exists' per recorded file, against the hashing of every one of them below.
+    let every_file_is_there = recorded.keys().chain(written_once_files().iter())
+            .all(|relative| std::path::Path::new(&(data_dir.to_owned() + relative)).exists());
+    if !force && recorded_version == VERSION_ID && every_file_is_there {
         return Ok(outcome);
     }
 
@@ -540,8 +554,7 @@ fn migrate_data_files(data_dir: &str, force: bool) -> Result<MigrationOutcome, s
     // moved from the one set to the other, as the themes did, is still shipped and deleting it would
     // be the opposite of what that move was for.
     let still_shipped = shipped_files().into_iter().map(|(relative, _)| relative)
-            .chain(include_dir!("data/themes").files.iter().map(|file| named(THEMES_DIR_NAME, file).0))
-            .chain([format!("{CONFIG_DIR_NAME}/{DEFAULT_CONFIG_NAME}"), EXTENSION_PRIORITY_FILE_NAME.to_owned()])
+            .chain(written_once_files())
             .collect::<std::collections::HashSet<_>>();
     for relative in recorded.keys().filter(|relative| !still_shipped.contains(*relative)) {
         let target = data_dir.to_owned() + relative;
@@ -873,6 +886,36 @@ mod tests {
         // and with everything in place it still costs nothing and says nothing
         let outcome = migrate_data_files(&dir, false).unwrap();
         assert!(outcome.installed.is_empty() && outcome.replaced.is_empty() && outcome.withdrawn.is_empty());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // One file left behind answers "the folder is not empty" for the whole installation, and asking
+    // the folder rather than the files left both of these broken for good: the first counts with one
+    // language and reports none of the rest, the second sends every contested extension to the
+    // alphabetical tiebreak and prints a warning about each on every run.
+    #[test]
+    fn an_installation_missing_one_file_of_many_is_repaired_too() {
+        let dir = SCRATCH_DIR.to_owned() + "migration-partly-emptied/";
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        migrate_data_files(&dir, false).unwrap();
+
+        let (kept, lost) = (dir.clone() + "languages/Rust.txt", dir.clone() + "languages/java.txt");
+        std::fs::remove_file(&lost).unwrap();
+        let outcome = migrate_data_files(&dir, false).unwrap();
+        assert!(std::path::Path::new(&lost).exists(), "one language file of many was left missing");
+        assert!(std::path::Path::new(&kept).exists());
+        assert!(outcome.replaced.is_empty(), "a missing file came back as a changed one: {:?}", outcome.replaced);
+
+        // and the ones that are written once and left alone are named by the check as well, since
+        // the manifest deliberately does not record them
+        let priority = dir.clone() + mezura_core::EXTENSION_PRIORITY_FILE_NAME;
+        std::fs::remove_file(&priority).unwrap();
+        migrate_data_files(&dir, false).unwrap();
+        assert!(std::path::Path::new(&priority).exists(),
+                "'{}' was left missing, so every contested extension falls to the tiebreak for good",
+                mezura_core::EXTENSION_PRIORITY_FILE_NAME);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
