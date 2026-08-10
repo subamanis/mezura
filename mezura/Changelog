@@ -303,6 +303,8 @@ Bugfixes:
   -> A language file that could not be read at all is no longer reported as a formatting problem.
       A file saved in an encoding mezura cannot read now says so, instead of sending you looking for
       a mistake in a file whose format is fine, and the reason is now printed beside each file name.
+      One whose format really is wrong names the line the reading stopped at, since the blocks have
+      to be written in one order and a block in the wrong place makes the whole file unreadable.
   -> Two language files whose names differ only in upper and lower case are now reported, and
       "--force-language" and "extension_priority.txt" now give the extension to the one you named. Both
       used to fold the case away and pick the other one, so naming a language exactly as it is

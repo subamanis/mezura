@@ -68,14 +68,15 @@ impl std::error::Error for LanguageDirParseError {}
 #[derive(Debug)]
 pub enum LanguageFileError {
     Unreadable(std::io::Error),
-    Malformed
+    // The line the reading stopped at, counted from 1
+    Malformed(usize)
 }
 
 impl std::fmt::Display for LanguageFileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unreadable(error) => write!(f, "the language file could not be read: {error}"),
-            Self::Malformed => write!(f, "the language file is not written in the format mezura reads")
+            Self::Malformed(line) => write!(f, "line {line} is not what the format expects there")
         }
     }
 }
@@ -84,7 +85,7 @@ impl std::error::Error for LanguageFileError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Unreadable(error) => Some(error),
-            Self::Malformed => None
+            Self::Malformed(_) => None
         }
     }
 }
@@ -139,7 +140,7 @@ pub fn parse_languages_in_dir(target_path: impl AsRef<Path>)
 
 pub fn parse_language_file(path: impl AsRef<Path>) -> Result<Language, LanguageFileError> {
     let contents = fs::read_to_string(path).map_err(LanguageFileError::Unreadable)?;
-    parse_language(&contents).ok_or(LanguageFileError::Malformed)
+    parse_language_or_faulty_line(&contents).map_err(LanguageFileError::Malformed)
 }
 
 // The one parser of the language file format. A file on disk and the bytes baked into this crate go
@@ -160,53 +161,66 @@ pub fn parse_language_file(path: impl AsRef<Path>) -> Result<Language, LanguageF
 // the user's disk through this to ask whether their copy still means what ours does, and a file
 // edited into nonsense has to come back as "not the same" and not take the run down.
 pub fn parse_language(contents: &str) -> Option<Language> {
-    let contents = strip_byte_order_mark(contents);
-    let mut lines = contents.lines();
+    parse_language_or_faulty_line(contents).ok()
+}
 
-    if read_next_header(&mut lines)? != LANGUAGE {return None;}
-    let lang_name = read_value_line(&mut lines)?;
+// The same reading, with the line the parser stopped at when it refuses. The blocks are read in one
+// fixed order and an optional one that arrives late is refused whole, so "the format is wrong" on
+// its own leaves somebody comparing their file against the documentation line by line.
+pub fn parse_language_or_faulty_line(contents: &str) -> Result<Language, usize> {
+    let contents = strip_byte_order_mark(contents);
+    let mut reader = LineReader::of(contents);
+    match read_language(&mut reader) {
+        Some(language) => Ok(language),
+        None => Err(reader.read.max(1))
+    }
+}
+
+fn read_language(lines: &mut LineReader) -> Option<Language> {
+    if read_next_header(lines)? != LANGUAGE {return None;}
+    let lang_name = read_value_line(lines)?;
     // 'value_line' trims whitespace and nothing else, so an escape sequence on the name line came
     // through whole and ended up as a key of the result, which the command line then prints. A file
     // carrying one is damaged rather than unusual, and this is the only value that is displayed.
     if lang_name.is_empty() || lang_name.chars().any(char::is_control) {return None;}
 
-    if read_next_header(&mut lines)? != EXTENSIONS {return None;}
-    let extensions = split_line_on_whitespace(&read_value_line(&mut lines)?);
+    if read_next_header(lines)? != EXTENSIONS {return None;}
+    let extensions = split_line_on_whitespace(&read_value_line(lines)?);
 
     // Whole names, for the files an extension cannot describe. Optional, and the value may be
     // empty for a language that is nothing but names, which is what Make and Dockerfile are.
     let mut filenames = Vec::new();
-    let mut next = read_next_header(&mut lines)?;
+    let mut next = read_next_header(lines)?;
     if next == FILENAMES {
-        filenames = split_line_on_whitespace(&read_value_line(&mut lines)?);
-        next = read_next_header(&mut lines)?;
+        filenames = split_line_on_whitespace(&read_value_line(lines)?);
+        next = read_next_header(lines)?;
     }
     if extensions.is_empty() && filenames.is_empty() {return None;}
 
     if next != STRING_SYMBOLS {return None;}
-    let string_symbols = split_line_on_whitespace(&read_value_line(&mut lines)?);
+    let string_symbols = split_line_on_whitespace(&read_value_line(lines)?);
 
     // A symbol belongs to exactly one of the lists, the way a comment symbol does: a string that
     // ends with its line goes above, one that crosses lines goes here. Declaring the same symbol
     // twice would leave the two answers to argue, so it refuses the file.
     let mut multiline_strings = Vec::new();
-    let mut header = read_next_header(&mut lines)?;
+    let mut header = read_next_header(lines)?;
     if header == MULTILINE_STRINGS {
-        multiline_strings = split_line_on_whitespace(&read_value_line(&mut lines)?).into_iter()
+        multiline_strings = split_line_on_whitespace(&read_value_line(lines)?).into_iter()
                 .map(|symbol| (symbol.clone(), symbol)).collect::<Vec<_>>();
         if multiline_strings.is_empty() {return None;}
-        header = read_next_header(&mut lines)?;
+        header = read_next_header(lines)?;
     }
 
     // Strings that open with one symbol and close with another, 'r#"' with '"#'. The two value
     // lines are lists paired by position, the shape the multiline comment block also has.
     if header == STRING_SYMBOL_OPENERS {
-        let openers = split_line_on_whitespace(&read_value_line(&mut lines)?);
-        if openers.is_empty() || read_next_header(&mut lines)?.as_str() != STRING_SYMBOL_CLOSERS {return None;}
-        let closers = split_line_on_whitespace(&read_value_line(&mut lines)?);
+        let openers = split_line_on_whitespace(&read_value_line(lines)?);
+        if openers.is_empty() || read_next_header(lines)?.as_str() != STRING_SYMBOL_CLOSERS {return None;}
+        let closers = split_line_on_whitespace(&read_value_line(lines)?);
         if closers.len() != openers.len() {return None;}
         multiline_strings.extend(openers.into_iter().zip(closers));
-        header = read_next_header(&mut lines)?;
+        header = read_next_header(lines)?;
     }
 
     // Declaring no string at all is allowed and is what HTML needs: its quotes delimit attributes
@@ -216,20 +230,20 @@ pub fn parse_language(contents: &str) -> Option<Language> {
     if header != COMMENT_SYMBOLS {return None;}
     // Deliberately allowed to be empty: a language whose only comments are multiline has no line
     // comment symbol, and the value here is the empty line that says so.
-    let comment_symbols = split_line_on_whitespace(&read_value_line(&mut lines)?);
+    let comment_symbols = split_line_on_whitespace(&read_value_line(lines)?);
 
     // The two value lines are lists paired by position: the first start closes with the first end.
     // Unequal counts leave some symbol with no other half, and the file is refused rather than
     // guessed at.
     let mut multiline_comments = Vec::new();
-    let mut header = read_next_header(&mut lines);
+    let mut header = read_next_header(lines);
     if header.as_deref() == Some(MULTILINE_COMMENT_START) {
-        let starts = split_line_on_whitespace(&read_value_line(&mut lines)?);
-        if starts.is_empty() || read_next_header(&mut lines)?.as_str() != MULTILINE_COMMENT_END {return None;}
-        let ends = split_line_on_whitespace(&read_value_line(&mut lines)?);
+        let starts = split_line_on_whitespace(&read_value_line(lines)?);
+        if starts.is_empty() || read_next_header(lines)?.as_str() != MULTILINE_COMMENT_END {return None;}
+        let ends = split_line_on_whitespace(&read_value_line(lines)?);
         if ends.len() != starts.len() {return None;}
         multiline_comments = starts.into_iter().zip(ends).collect();
-        header = read_next_header(&mut lines);
+        header = read_next_header(lines);
     }
 
     // The pairs that nest inside themselves, so a closer only ends the block once it has closed
@@ -237,12 +251,12 @@ pub fn parse_language(contents: &str) -> Option<Language> {
     // whether '/* /* */' is still open is exactly what the two declarations disagree about.
     let mut nesting_comments : Vec<(String, String)> = Vec::new();
     if header.as_deref() == Some(NESTING_COMMENT_START) {
-        let starts = split_line_on_whitespace(&read_value_line(&mut lines)?);
-        if starts.is_empty() || read_next_header(&mut lines)?.as_str() != NESTING_COMMENT_END {return None;}
-        let ends = split_line_on_whitespace(&read_value_line(&mut lines)?);
+        let starts = split_line_on_whitespace(&read_value_line(lines)?);
+        if starts.is_empty() || read_next_header(lines)?.as_str() != NESTING_COMMENT_END {return None;}
+        let ends = split_line_on_whitespace(&read_value_line(lines)?);
         if ends.len() != starts.len() {return None;}
         nesting_comments = starts.into_iter().zip(ends).collect();
-        header = read_next_header(&mut lines);
+        header = read_next_header(lines);
     }
     if multiline_comments.iter().any(|(start, _)| nesting_comments.iter().any(|(other, _)| start == other)) {
         return None;
@@ -252,27 +266,31 @@ pub fn parse_language(contents: &str) -> Option<Language> {
     // only an end with the same count closes. It is declared in the multiline block, since the
     // counting is what such a pair has instead of nesting. Half a marker is a typo, refused.
     let mut leveled_comments = Vec::new();
+    let mut half_a_marker = false;
     multiline_comments.retain(|(start, end)| {
         if !start.contains("=*") && !end.contains("=*") {
             return true;
         }
-        leveled_comments.push((start.clone(), end.clone()));
+        match crate::domain::LeveledPair::of(start, end) {
+            Some(pair) => leveled_comments.push(pair),
+            None => half_a_marker = true
+        }
         false
     });
-    if !leveled_comments.iter().all(|(start, end)| crate::domain::LeveledPair::of(start, end).is_some()) {
+    if half_a_marker {
         return None;
     }
 
     let mut keywords = Vec::new();
     while header.as_deref() == Some(KEYWORD) {
-        if read_next_header(&mut lines)?.as_str() != KEYWORD_NAME {return None;}
-        let name = read_value_line(&mut lines)?;
-        if read_next_header(&mut lines)?.as_str() != KEYWORD_ALIASES {return None;}
-        let aliases = split_line_on_whitespace(&read_value_line(&mut lines)?);
+        if read_next_header(lines)?.as_str() != KEYWORD_NAME {return None;}
+        let name = read_value_line(lines)?;
+        if read_next_header(lines)?.as_str() != KEYWORD_ALIASES {return None;}
+        let aliases = split_line_on_whitespace(&read_value_line(lines)?);
         if name.is_empty() || aliases.is_empty() {return None;}
 
         keywords.push(Keyword{descriptive_name: name, aliases});
-        header = read_next_header(&mut lines);
+        header = read_next_header(lines);
     }
 
     // Anything still standing here is a header this parser has no block for, and the lines under it
@@ -286,8 +304,7 @@ pub fn parse_language(contents: &str) -> Option<Language> {
                     .collect::<Vec<_>>())
             .with_nesting_comments(&nesting_comments.iter().map(|(start, end)| (start.as_str(), end.as_str()))
                     .collect::<Vec<_>>())
-            .with_leveled_comments(&leveled_comments.iter().map(|(start, end)| (start.as_str(), end.as_str()))
-                    .collect::<Vec<_>>())
+            .with_leveled_comments(&leveled_comments)
             .with_filenames(&filenames.iter().map(String::as_str).collect::<Vec<_>>()))
 }
 
@@ -372,14 +389,38 @@ fn strip_byte_order_mark(contents: &str) -> &str {
 
 // The next line that carries a header, with the blank lines between blocks skipped. Trimmed, so an
 // indented sub-header like the 'NAME' of a keyword block is recognised.
-fn read_next_header(lines: &mut std::str::Lines) -> Option<String> {
+fn read_next_header(lines: &mut LineReader) -> Option<String> {
     lines.by_ref().map(str::trim).find(|line| !line.is_empty()).map(str::to_owned)
 }
 
 // The value that belongs to the header just read: the very next line, trimmed, empty or not. Never
 // skips a blank, because for the comment symbols the blank line is the value.
-fn read_value_line(lines: &mut std::str::Lines) -> Option<String> {
+fn read_value_line(lines: &mut LineReader) -> Option<String> {
     lines.next().map(|line| line.trim().to_owned())
+}
+
+// Counts what it hands out, so a file that is refused can name the line the parser stopped at
+// instead of only saying that the format is wrong. The blocks have to arrive in one order, and
+// "somewhere in this file" is no help at all in finding which one is out of place.
+struct LineReader<'a> {
+    lines: std::str::Lines<'a>,
+    read: usize
+}
+
+impl<'a> LineReader<'a> {
+    fn of(contents: &'a str) -> Self {
+        LineReader { lines: contents.lines(), read: 0 }
+    }
+}
+
+impl<'a> Iterator for LineReader<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<&'a str> {
+        let line = self.lines.next();
+        self.read += usize::from(line.is_some());
+        line
+    }
 }
 
 fn split_line_on_whitespace(line: &str) -> Vec<String> {
@@ -583,7 +624,10 @@ pl      Perl, Prolog
         std::fs::write(&garbage, "this is not a language file at all\n").unwrap();
         let malformed = crate::language_file::parse_language_file(&garbage).unwrap_err();
         std::fs::remove_file(&garbage).unwrap();
-        assert!(matches!(malformed, LanguageFileError::Malformed), "got: {malformed:?}");
+        // and it names the line it stopped at, since the blocks have to arrive in one order and
+        // "the format is wrong" leaves somebody comparing their file against the documentation
+        assert!(matches!(malformed, LanguageFileError::Malformed(1)), "got: {malformed:?}");
+        assert!(malformed.to_string().contains("line 1"), "{malformed}");
         assert!(std::error::Error::source(&malformed).is_none());
 
         // and a real one still comes back as a language
@@ -612,7 +656,7 @@ pl      Perl, Prolog
         assert_eq!(1, languages.len());
         assert_eq!(vec!["Garbage.txt", "Utf16.txt"],
                 faulty.iter().map(|x| x.file_name.as_str()).collect::<Vec<_>>());
-        assert!(matches!(faulty[0].error, LanguageFileError::Malformed), "got: {:?}", faulty[0].error);
+        assert!(matches!(faulty[0].error, LanguageFileError::Malformed(_)), "got: {:?}", faulty[0].error);
         assert!(matches!(faulty[1].error, LanguageFileError::Unreadable(_)), "got: {:?}", faulty[1].error);
     }
 

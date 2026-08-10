@@ -507,7 +507,9 @@ mod tests {
         assert_eq!(config_builder.hidden, options.hidden);
         // A project that answers a contested extension its own way answers it once, in its config
         assert_eq!(config_builder.forced_languages, options.forced_languages);
-        assert_eq!(Some(hashmap!("m".to_owned() => "matlab".to_owned(), "pl".to_owned() => "Perl".to_owned())),
+        // '.pl' keeps its dot through the round trip, because the two maps that read it key it
+        // differently: an extension drops the dot, a whole filename keeps it.
+        assert_eq!(Some(hashmap!("m".to_owned() => "matlab".to_owned(), ".pl".to_owned() => "Perl".to_owned())),
                 options.forced_languages);
         // Written one pair per line and read back as a group, so a saved look survives a reload
         assert_eq!(config_builder.styles, options.config_styles);

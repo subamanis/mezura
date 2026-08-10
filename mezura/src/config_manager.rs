@@ -1637,11 +1637,13 @@ mod tests {
         let forced = |args: &str| create_config_from_args(&format!("./ --force-language {args}")).map(|x| x.engine.forced_languages);
 
         assert_eq!(Ok(hashmap!("m".to_owned() => "matlab".to_owned())), forced("m=matlab"));
-        // A leading dot is accepted the way '--languages' accepts it, and the extension is lowercased
-        // here so that it is keyed the same way the lookup will ask for it. The language name is kept
-        // as it was typed, and compared without case later.
-        assert_eq!(Ok(hashmap!("m".to_owned() => "MATLAB".to_owned(), "pl".to_owned() => "perl".to_owned())),
+        // Lowercased here so it is keyed the way the lookup will ask for it, while the language name
+        // is kept as it was typed and compared without case later.
+        assert_eq!(Ok(hashmap!(".m".to_owned() => "MATLAB".to_owned(), "pl".to_owned() => "perl".to_owned())),
                 forced(".M=MATLAB, pl = perl"));
+        // The dot survives, and it has to: the extension map strips it when it keys itself, while a
+        // whole filename keeps it, so stripping here would leave '.gitignore' impossible to name.
+        assert_eq!(Ok(hashmap!(".gitignore".to_owned() => "Ini".to_owned())), forced(".gitignore=Ini"));
 
         for wrong in ["", "matlab", "m=", "=matlab", "m=matlab,perl"] {
             assert!(forced(wrong).is_err(), "'--force-language {wrong}' was accepted");

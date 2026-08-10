@@ -63,18 +63,10 @@ pub struct ContestedIdentity {
 #[derive(Debug,PartialEq,Eq,Clone,Default)]
 #[non_exhaustive]
 pub struct IdentityReport {
-    pub contested: Vec<ContestedIdentity>,
-    pub unknown_forced_languages: Vec<(String,String)>
+    pub contested: Vec<ContestedIdentity>
 }
 
 impl IdentityReport {
-    // The forced pairs are given to both maps, since nobody writing '--force-language Makefile=python'
-    // owes us the difference, so the map that could not use them must not report them again.
-    pub fn contested_only(mut self) -> Self {
-        self.unknown_forced_languages.clear();
-        self
-    }
-
     // Only the alphabetical tiebreak is reported. A rule or a forced pair is somebody's own decision,
     // and saying so every run buries the one line that matters. One warning per extension, so
     // whoever reads the document can key on it.
@@ -91,11 +83,6 @@ alphabetically, so the files of the rest are counted with the wrong comment and 
                     contested.winner)));
         }
 
-        for (extension, wanted) in &self.unknown_forced_languages {
-            reported.push(warnings::Warning::new(warnings::Code::UnknownForcedLanguage, extension,
-                    format!("Nothing called '{wanted}' is among the languages in use, so '{extension}' was left as it was.")));
-        }
-
         reported
     }
 }
@@ -107,11 +94,11 @@ pub fn build_language_map_by(identified_by: IdentifiedBy, languages: &HashMap<St
         priority: &HashMap<String,Vec<String>>, forced: &HashMap<String,String>)
         -> (HashMap<String, Arc<str>>, IdentityReport)
 {
-    let mut names = languages.keys().collect::<Vec<_>>();
+    let mut names = languages.keys().map(String::as_str).collect::<Vec<_>>();
     names.sort_unstable();
 
     let shared_names : HashMap<&str, Arc<str>> = names.iter()
-            .map(|name| (name.as_str(), Arc::from(name.as_str())))
+            .map(|name| (*name, Arc::from(*name)))
             .collect();
 
     // Normalised once, so the two places that consult it cannot disagree about the shape of a key.
@@ -121,16 +108,7 @@ pub fn build_language_map_by(identified_by: IdentifiedBy, languages: &HashMap<St
     let forced : HashMap<String, &str> = forced.iter()
             .map(|(identity, language)| (identified_by.key_of(identity), language.as_str()))
             .collect();
-    // Searched in the sorted order the names already have, and not through the keys of a map, whose
-    // iteration order is arbitrary: two languages whose names differ only in case would otherwise
-    // resolve to a different one of the two between runs of the same command.
-    //
-    // The exact spelling wins before case is folded, because folding first cannot be undone: with
-    // both 'Rust' and 'rust' declared, naming one of them got the other, the one whose capital sorts
-    // first, along with its comment symbols and without a word.
-    let language_named = |wanted: &str| names.iter().find(|name| name.as_str() == wanted)
-            .or_else(|| names.iter().find(|name| crate::languages::is_the_same_language_name(name, wanted)))
-            .map(|x| x.as_str());
+    let language_named = |wanted: &str| find_language_named(&names, wanted);
 
     let mut claimants : HashMap<String, Vec<&str>> = HashMap::with_capacity(languages.len() * 2);
     for name in &names {
@@ -140,8 +118,8 @@ pub fn build_language_map_by(identified_by: IdentifiedBy, languages: &HashMap<St
             // becomes its own rival: the collision fires, every loser equals the winner and is
             // filtered out, and the warning reads "claimed by Cish and ." Dropped in silence because
             // the counts were right and there is nothing for the reader to fix.
-            if !claiming.contains(&name.as_str()) {
-                claiming.push(name.as_str());
+            if !claiming.contains(name) {
+                claiming.push(name);
             }
         }
     }
@@ -186,16 +164,16 @@ pub fn build_language_map_by(identified_by: IdentifiedBy, languages: &HashMap<St
     }
 
     // '--force-language txt=python' is meant to work whether or not anything else claims the extension,
-    // so a forced entry that no language claims is added rather than ignored
+    // so a forced entry that no language claims is added rather than ignored. A pair naming a language
+    // that does not exist is not complained about here, because this runs once per kind of identity
+    // and the same pair is given to every one of them: 'Languages::resolve' asks that once.
     for (identity, wanted) in &forced {
-        match language_named(wanted) {
-            Some(name) => { map.insert(identity.clone(), shared_names[name].clone()); },
-            None => report.unknown_forced_languages.push((identity.clone(), (*wanted).to_owned()))
+        if let Some(name) = language_named(wanted) {
+            map.insert(identity.clone(), shared_names[name].clone());
         }
     }
 
     report.contested.sort_by(|a, b| a.identity.cmp(&b.identity));
-    report.unknown_forced_languages.sort();
     (map, report)
 }
 
@@ -247,6 +225,19 @@ pub fn find_language_of_identity(language_of: &HashMap<String, Arc<str>>, identi
     std::str::from_utf8(&buffer[..length]).ok()
             .and_then(|lowercased| language_of.get(lowercased))
             .cloned()
+}
+
+// Searched in the sorted order the names are given in, and never through the keys of a map, whose
+// iteration order is arbitrary: two languages whose names differ only in case would otherwise
+// resolve to a different one of the two between runs of the same command.
+//
+// The exact spelling wins before case is folded, because folding first cannot be undone: with both
+// 'Rust' and 'rust' declared, naming one of them got the other, the one whose capital sorts first,
+// along with its comment symbols and without a word.
+pub(crate) fn find_language_named<'a>(sorted_names: &[&'a str], wanted: &str) -> Option<&'a str> {
+    sorted_names.iter().find(|name| **name == wanted)
+            .or_else(|| sorted_names.iter().find(|name| crate::languages::is_the_same_language_name(name, wanted)))
+            .copied()
 }
 
 // The one spelling of an extension that everything keys on: no leading dot, lowercased the way the
@@ -445,23 +436,17 @@ mod tests {
         assert!(report.collect_warnings().is_empty());
     }
 
+    // The complaint about the name belongs to 'Languages::resolve', which asks it once for every map;
+    // what this map owes is that the pair changed nothing.
     #[test]
-    fn a_forced_language_that_is_not_available_is_reported_and_changes_nothing() {
+    fn a_forced_language_that_is_not_available_changes_nothing_and_is_left_to_be_reported() {
         let languages = languages_claiming(&[("Python", &["py"])]);
         let forced = hashmap!("py".to_owned() => "cobol".to_owned());
         let (map, report) = build_extension_language_map(&languages, &HashMap::new(), &forced);
-    
+
         assert_eq!("Python", winner_of(&map, "py"));
-        assert_eq!(vec![("py".to_owned(), "cobol".to_owned())], report.unknown_forced_languages);
-        let reported = report.collect_warnings();
-        assert_eq!(warnings::Code::UnknownForcedLanguage, reported[0].code);
-        // a mapping that did not apply leaves the counts alone, it is the settings that were not honoured
-        assert_eq!("settings", reported[0].affects().name());
-        assert_eq!("py", reported[0].subject);
-        // Names what was asked for and what happened, and nothing a command line can do about it:
-        // that sentence belongs to whoever has a command line.
-        assert!(reported[0].message.contains("'cobol'"), "{}", reported[0].message);
-        assert!(!reported[0].message.contains("--force-language"), "{}", reported[0].message);
+        assert!(report.contested.is_empty());
+        assert!(report.collect_warnings().is_empty());
     }
 
     // Two spellings of one extension are one extension, and they have to collide as one. Left as

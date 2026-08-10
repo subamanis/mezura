@@ -57,9 +57,10 @@ impl Language {
         }
     }
 
-    pub fn with_leveled_comments(mut self, pairs: &[(&str, &str)]) -> Self {
-        self.leveled_comments.extend(pairs.iter().map(|(start, end)|
-                LeveledPair::of(start, end).expect("a leveled pair is written as prefix, '=*', one closing byte")));
+    // Takes the parsed pair rather than its text, so that the one place that decides whether a pair
+    // is written correctly is 'LeveledPair::of' and a caller cannot reach a state this has to refuse.
+    pub fn with_leveled_comments(mut self, pairs: &[LeveledPair]) -> Self {
+        self.leveled_comments.extend(pairs.iter().cloned());
         self
     }
 
@@ -92,8 +93,7 @@ impl Language {
     }
 
     // The scan numbers every string symbol of a language in one sequence, the single line ones
-    // first and the crossing ones after them, which is the order the plan is built in. The
-    // comment pairs are numbered the same way, plain first and nesting after.
+    // first and the crossing ones after them, which is the order the plan is built in.
     pub(crate) fn get_string_pair_of(&self, symbol: u8) -> (&str, &str) {
         match self.string_symbols.get(symbol as usize) {
             Some(single) => (single, single),
@@ -108,43 +108,59 @@ impl Language {
         symbol as usize >= self.string_symbols.len()
     }
 
-    pub(crate) fn get_comment_pair_of(&self, symbol: u8) -> (&str, &str) {
-        let (start, end) = match self.multiline_comments.get(symbol as usize) {
-            Some(pair) => pair,
-            None => &self.nesting_comments[symbol as usize - self.multiline_comments.len()]
-        };
-        (start, end)
+    // The one place that knows the numbering, so that a pair kind added later is one match arm and
+    // not seven pieces of arithmetic spread over two files.
+    pub(crate) fn get_comment_pair_of(&self, symbol: u8) -> CommentPair<'_> {
+        let symbol = symbol as usize;
+        if let Some((start, end)) = self.multiline_comments.get(symbol) {
+            return CommentPair::Plain { start, end };
+        }
+        match self.nesting_comments.get(symbol - self.multiline_comments.len()) {
+            Some((start, end)) => CommentPair::Nesting { start, end },
+            None => CommentPair::Leveled(
+                    &self.leveled_comments[symbol - self.multiline_comments.len() - self.nesting_comments.len()])
+        }
     }
 
-    pub(crate) fn get_leveled_pair_of(&self, symbol: u8) -> &LeveledPair {
-        &self.leveled_comments[symbol as usize - self.multiline_comments.len() - self.nesting_comments.len()]
+    // In the order the numbering runs, which is what the scan plan assigns its numbers from.
+    pub(crate) fn comment_pairs(&self) -> impl Iterator<Item = CommentPair<'_>> {
+        self.multiline_comments.iter().map(|(start, end)| CommentPair::Plain { start, end })
+                .chain(self.nesting_comments.iter().map(|(start, end)| CommentPair::Nesting { start, end }))
+                .chain(self.leveled_comments.iter().map(CommentPair::Leveled))
     }
 
     pub(crate) fn comment_nests(&self, symbol: u8) -> bool {
-        symbol as usize >= self.multiline_comments.len() && !self.comment_is_leveled(symbol)
+        matches!(self.get_comment_pair_of(symbol), CommentPair::Nesting { .. })
     }
 
     pub(crate) fn comment_is_leveled(&self, symbol: u8) -> bool {
-        symbol as usize >= self.multiline_comments.len() + self.nesting_comments.len()
+        matches!(self.get_comment_pair_of(symbol), CommentPair::Leveled(_))
     }
 
     // The whole width of one occurrence, which for a leveled pair depends on how many '=' it
     // carried; a plain or nesting pair ignores the level
     pub(crate) fn comment_start_len(&self, symbol: u8, level: u8) -> usize {
-        if self.comment_is_leveled(symbol) {
-            self.get_leveled_pair_of(symbol).start_prefix.len() + level as usize + 1
-        } else {
-            self.get_comment_pair_of(symbol).0.len()
+        match self.get_comment_pair_of(symbol) {
+            CommentPair::Leveled(pair) => pair.start_prefix.len() + level as usize + 1,
+            CommentPair::Plain { start, .. } | CommentPair::Nesting { start, .. } => start.len()
         }
     }
 
     pub(crate) fn comment_end_len(&self, symbol: u8, level: u8) -> usize {
-        if self.comment_is_leveled(symbol) {
-            self.get_leveled_pair_of(symbol).end_prefix.len() + level as usize + 1
-        } else {
-            self.get_comment_pair_of(symbol).1.len()
+        match self.get_comment_pair_of(symbol) {
+            CommentPair::Leveled(pair) => pair.end_prefix.len() + level as usize + 1,
+            CommentPair::Plain { end, .. } | CommentPair::Nesting { end, .. } => end.len()
         }
     }
+}
+
+// A comment pair as the parser has to treat it, which is what the three lists of a language mean
+// once they are numbered in one sequence. Plain ends at its first closer, nesting counts its own
+// openers, leveled closes only at an end carrying the count its opener did.
+pub(crate) enum CommentPair<'a> {
+    Plain { start: &'a str, end: &'a str },
+    Nesting { start: &'a str, end: &'a str },
+    Leveled(&'a LeveledPair)
 }
 
 // One half of a long-bracket pair: the fixed bytes before the counted run of '=', and the single

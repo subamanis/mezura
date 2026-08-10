@@ -894,7 +894,7 @@ Header files have their own dedicated languages: `.h` files are counted under "C
 
 If two or more language files claim the same extension, the winner is the one named in the `extension_priority.txt` file of the data dir, which ships with an answer for every contest between the languages that come with the program. An extension that nobody has named there goes to the language that comes first alphabetically, and the program reports it, since that is a tie-break and not a decision. Either way ```--force-language``` overrides it for a single run or, through a configuration file, for a single project.
 
-The format of the languages is as follows(and should not be modified at all):
+The format of the languages is as follows. **The blocks are read in this order and no other**: one that arrives where it is not expected makes the whole file unreadable, and the language is left out of the run. The blocks marked optional can be left out entirely, and you can specify an arbitrary amount of keywords. A string symbol goes in exactly one of the three string lists.
 
 ```
 Language
@@ -904,46 +904,46 @@ Extensions
 <name of file extensions like cpp hpp or py, separated by whitespace>
 <the value may be left empty for a language whose files are known by their whole name>
 
+Filenames                                                                        (optional)
+<whole names, for files an extension cannot describe, like: Makefile Dockerfile CMakeLists.txt>
+<a file is matched by its name first, so CMakeLists.txt is CMake and not whatever claims .txt>
+
 String symbols
 <string symbols whose string ends at the end of the line, separated by whitespace, like: " ' >
 <the value may be left empty, for a language whose quotes are not strings at all, like HTML>
 
-Comment symbols
-<one or more single line comment symbols, separated by whitespace, like: // # >
-
-```
-All the following lines are optional and can be omitted. You can also specify an arbitrary amount of keywords. A string symbol goes in exactly one of the three string lists.
-```
-Filenames
-<whole names, for files an extension cannot describe, like: Makefile Dockerfile CMakeLists.txt>
-<a file is matched by its name first, so CMakeLists.txt is CMake and not whatever claims .txt>
-
-Multi line string symbols
+Multi line string symbols                                                        (optional)
 <string symbols whose string crosses lines, separated by whitespace, like: """ ` >
 
-String symbol openers
+String symbol openers                                                            (optional)
 <openers of strings whose closer is a different symbol, like: r#" >
 
-String symbol closers
+String symbol closers                                                (with the openers, or not at all)
 <their closers, one per opener and in the same order, like: "# >
 
-Multi line comment start
+Comment symbols
+<one or more single line comment symbols, separated by whitespace, like: // # >
+<the value may be left empty, for a language whose comments are all written in blocks>
+
+Multi line comment start                                                         (optional)
 <one or more block comment openers, separated by whitespace, like: { (* >
 <the two characters =* stand for "any number of = here, including none", so writing --[=*[ and>
 <]=*] declares Lua's --[[ ]], --[=[ ]=], --[==[ ]==] and every level above, all at once. They>
 <are the one place in this format where characters do not stand for themselves, so a language>
-<whose comment symbol really contains =* cannot be written down>
+<whose comment symbol really contains =* cannot be written down. They are read here and only>
+<here: written under 'Nesting comment start' those two characters are taken literally, and the>
+<symbol then matches nothing>
 
-Multi line comment end
+Multi line comment end                                                (with the starts, or not at all)
 <their closers, one per opener and in the same order, like: } *) >
 
-Nesting comment start
+Nesting comment start                                                            (optional)
 <openers of block comments that nest inside themselves, like: /+ >
 
-Nesting comment end
+Nesting comment end                                                   (with the starts, or not at all)
 <their closers, one per opener and in the same order, like: +/ >
 
-Keyword
+Keyword                                                                          (optional)
     NAME
     <the name of the keyword to be shown in the results, like: classes>
     ALIASES

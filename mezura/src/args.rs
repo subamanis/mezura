@@ -38,18 +38,22 @@ pub fn parse_paths_to_vec(s: &str) -> Vec<String> {
     s.split(',').filter_map(cleaned_path).collect::<Vec<_>>()
 }
 
-// 'm=matlab,.pl=perl'. The extension is lowercased here so the map is keyed the way the lookup asks
-// for it; the language name is kept as typed and compared without case later, as every other name is.
+// 'm=matlab,.pl=perl,Makefile=make'. Lowercased here so the map is keyed the way the lookup asks for
+// it, and the language name is kept as typed and compared without case later, as every other name is.
+//
+// The leading dot is left alone, and that is what lets a whole filename be named at all: the
+// extension side strips it when it keys its map, while a filename keeps every dot it was written
+// with, since '.gitignore' is a name and not an extension of nothing.
 pub fn parse_forced_languages(s: &str) -> Option<HashMap<String,String>> {
     let mut forced = HashMap::new();
     for pair in s.split(',').filter_map(get_trimmed_if_not_empty) {
-        let (extension, language) = pair.split_once('=')?;
-        let extension = remove_dot_prefix(extension.trim()).to_lowercase();
+        let (claimed, language) = pair.split_once('=')?;
+        let claimed = claimed.trim().to_lowercase();
         let language = language.trim();
-        if extension.is_empty() || language.is_empty() {
+        if claimed.is_empty() || language.is_empty() {
             return None;
         }
-        forced.insert(extension, language.to_owned());
+        forced.insert(claimed, language.to_owned());
     }
 
     if forced.is_empty() {None} else {Some(forced)}

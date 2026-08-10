@@ -1174,19 +1174,20 @@ mod tests {
         };
         let malformed = FaultyLanguageFile {
             file_name: "Garbage.txt".to_owned(),
-            error: mezura_core::language_file::LanguageFileError::Malformed
+            error: mezura_core::language_file::LanguageFileError::Malformed(7)
         };
 
         let both = format_faulty_language_files_message(&[unreadable, malformed]);
         assert!(both.contains("2 language files could not be used"), "{both}");
-        // each named on its own line, with the reason that belongs to it and not to the other
+        // each named on its own line, with the reason that belongs to it and not to the other, and
+        // the malformed one names the line, since the blocks have to arrive in one fixed order
         assert!(both.contains("-- Utf16.txt: the language file could not be read"), "{both}");
-        assert!(both.contains("-- Garbage.txt: the language file is not written in the format mezura reads"), "{both}");
+        assert!(both.contains("-- Garbage.txt: line 7 is not what the format expects there"), "{both}");
         assert!(!both.contains("Formatting problems"), "the two reasons are under one wrong heading again:\n{both}");
 
         let one = format_faulty_language_files_message(&[FaultyLanguageFile {
             file_name: "Garbage.txt".to_owned(),
-            error: mezura_core::language_file::LanguageFileError::Malformed}]);
+            error: mezura_core::language_file::LanguageFileError::Malformed(1)}]);
         assert!(one.contains("1 language file could not be used"), "{one}");
     }
 

@@ -11,7 +11,7 @@ use std::{collections::HashMap, fs::File, io::Read as IoRead, path::Path, str};
 use memchr::memmem;
 
 use crate::{EngineConfig, Language, phase_timing};
-use crate::domain::FileStats;
+use crate::domain::{CommentPair, FileStats};
 
 pub const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
 
@@ -112,18 +112,20 @@ impl ScanPlan {
         for (i, symbol) in language.comment_symbols.iter().enumerate() {
             entries.push(PlanEntry::of(COMMENTS, i as u8, ROLE_EITHER, symbol.as_bytes()));
         }
-        // Plain pairs first, nesting after them and leveled last, the numbering the comment
-        // helpers of Language answer to. A leveled slot holds its prefix as the bytes.
-        for (i, (start, end)) in language.multiline_comments.iter()
-                .chain(language.nesting_comments.iter()).enumerate() {
-            entries.push(PlanEntry::of(COM_STARTS, i as u8, ROLE_EITHER, start.as_bytes()));
-            entries.push(PlanEntry::of(COM_ENDS, i as u8, ROLE_EITHER, end.as_bytes()));
-        }
-        let plain_pairs = language.multiline_comments.len() + language.nesting_comments.len();
-        for (i, pair) in language.leveled_comments.iter().enumerate() {
-            let index = (plain_pairs + i) as u8;
-            entries.push(PlanEntry::leveled(COM_STARTS, index, pair.start_prefix.as_bytes(), pair.start_suffix));
-            entries.push(PlanEntry::leveled(COM_ENDS, index, pair.end_prefix.as_bytes(), pair.end_suffix));
+        // Numbered by the language itself, so this and the helpers that answer to those numbers
+        // cannot disagree about the order. A leveled slot holds its prefix as the bytes.
+        for (i, pair) in language.comment_pairs().enumerate() {
+            let index = i as u8;
+            match pair {
+                CommentPair::Plain { start, end } | CommentPair::Nesting { start, end } => {
+                    entries.push(PlanEntry::of(COM_STARTS, index, ROLE_EITHER, start.as_bytes()));
+                    entries.push(PlanEntry::of(COM_ENDS, index, ROLE_EITHER, end.as_bytes()));
+                },
+                CommentPair::Leveled(pair) => {
+                    entries.push(PlanEntry::leveled(COM_STARTS, index, pair.start_prefix.as_bytes(), pair.start_suffix));
+                    entries.push(PlanEntry::leveled(COM_ENDS, index, pair.end_prefix.as_bytes(), pair.end_suffix));
+                }
+            }
         }
         entries.retain(|entry| !entry.bytes.is_empty());
         entries.sort_by_key(|entry| std::cmp::Reverse(entry.bytes.len()));
@@ -347,9 +349,11 @@ fn take_symbols_at(at: usize, line_bytes: &[u8], plan: &ScanPlan, buffers: &mut 
 
         // An anchored symbol begins behind the byte that found it
         let Some(start) = at.checked_sub(slot.anchor as usize) else { continue };
-        // Each symbol is searched without overlapping itself, the way one pass per symbol used to
-        // behave: "///" holds one "//" and not two
-        if start < buffers.consumed[index] { continue }
+        // Each symbol is searched without overlapping itself, so "///" holds one "//" and not two.
+        // A counted slot is exempt: every level shares the one slot, so ']]' and ']=]' are two
+        // different symbols rather than one overlapping itself, and the shorter would hide the
+        // longer that begins inside it.
+        if slot.filler == 0 && start < buffers.consumed[index] { continue }
         let matched = match (slot.anchor, slot.len) {
             (0, 1) if slot.filler == 0 => true,
             (0, 2) if slot.filler == 0 => line_bytes.get(at + 1) == Some(&slot.second),
@@ -1751,7 +1755,7 @@ mod tests {
     // the run of '=' is counted at the opener and only an end with the same count closes.
     static LUA_LEVELED : LazyLock<Language> = LazyLock::new(|| Language::new(
             "lua-leveled", ["lua"], ["\"", "'"], ["--"], &[], [])
-            .with_leveled_comments(&[("--[=*[", "]=*]")]));
+            .with_leveled_comments(&[crate::LeveledPair::of("--[=*[", "]=*]").unwrap()]));
 
     #[test]
     fn a_leveled_pair_closes_only_at_an_end_carrying_the_same_count() {

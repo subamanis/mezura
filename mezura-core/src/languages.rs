@@ -46,7 +46,8 @@ impl Languages {
         // txt=python' are the same sentence and the reader has no reason to know which map answers
         let (by_filename, filename_report) = build_language_map_by(IdentifiedBy::Filename, &by_name,
                 &priority.by_filename, &config.forced_languages);
-        reported.extend(filename_report.contested_only().collect_warnings());
+        reported.extend(filename_report.collect_warnings());
+        reported.extend(find_unknown_forced_languages(&by_name, &config.forced_languages));
 
         (Languages { by_name, lookup: LanguageLookup { by_extension, by_filename },
                 resolved_against: LanguageSelection::of(config) }, reported)
@@ -145,6 +146,26 @@ impl LanguageSelection {
                     (crate::engine::identity::extension_key(extension), language.to_lowercase())).collect()
         }
     }
+}
+
+// Asked once, and not inside the map building, because that runs once per kind of identity and is
+// handed the same pairs every time: whoever writes '--force-language Makefile=python' owes us no
+// difference between a name and an extension, so the answer must not depend on which map could use
+// the pair.
+fn find_unknown_forced_languages(by_name: &HashMap<String, Language>, forced: &HashMap<String,String>)
+        -> Vec<Warning>
+{
+    let mut names = by_name.keys().map(String::as_str).collect::<Vec<_>>();
+    names.sort_unstable();
+
+    let mut unknown = forced.iter()
+            .filter(|(_, wanted)| crate::engine::identity::find_language_named(&names, wanted).is_none())
+            .collect::<Vec<_>>();
+    unknown.sort();
+
+    unknown.into_iter().map(|(claimed, wanted)| Warning::new(warnings::Code::UnknownForcedLanguage, claimed,
+            format!("Nothing called '{wanted}' is among the languages in use, so '{claimed}' was left as it was.")))
+            .collect()
 }
 
 // A language that can never match a file, or can never be named. The file parser refuses both, so
@@ -424,6 +445,30 @@ mod language_selection_tests {
         // and it reaches the map that answers for a whole filename
         let (languages, _) = Languages::resolve(&EngineConfig::default(), kept, &PriorityRules::default());
         assert_eq!(Some("Docky"), languages.lookup.of_path(std::path::Path::new("some/dir/Dockerfile")).as_deref());
+    }
+
+    // The same pairs are handed to the map of extensions and to the map of whole names, so asking
+    // this question inside either of them says it twice, on the screen and in the JSON document.
+    #[test]
+    fn a_forced_language_that_is_not_available_is_reported_once_and_changes_nothing() {
+        let config = EngineConfig {
+            forced_languages: hashmap!("py".to_owned() => "cobol".to_owned()),
+            ..Default::default()
+        };
+        let languages = vec![Language::new("Python", ["py"], ["\""], ["#"], &[], [])
+                .with_filenames(&["SConstruct"])];
+
+        let (_, reported) = Languages::resolve(&config, languages, &PriorityRules::default());
+        let mine = reported.iter().filter(|x| x.code == warnings::Code::UnknownForcedLanguage)
+                .collect::<Vec<_>>();
+        assert_eq!(1, mine.len(), "said once for each map it could not be used by: {reported:?}");
+        // a mapping that did not apply leaves the counts alone, it is the settings that were not honoured
+        assert_eq!("settings", mine[0].affects().name());
+        assert_eq!("py", mine[0].subject);
+        // Names what was asked for and what happened, and nothing a command line can do about it:
+        // that sentence belongs to whoever has a command line.
+        assert!(mine[0].message.contains("'cobol'"), "{}", mine[0].message);
+        assert!(!mine[0].message.contains("--force-language"), "{}", mine[0].message);
     }
 
     // Excluding a name that does not exist did nothing and said nothing, while asking for one four
