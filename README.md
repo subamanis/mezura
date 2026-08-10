@@ -914,12 +914,19 @@ String symbols
 <the value may be left empty, for a language whose quotes are not strings at all, like HTML>
 
 Character literal symbols                                                        (optional)
-<the symbol that holds a single character, like Rust's '. One that does not close on its own>
-<line is not a literal at all, so a lifetime's lone ' opens nothing, while the quote inside a>
-<'"' never opens a string>
+<the symbol that holds a single character, like Rust's '. It counts as a literal only when it>
+<closes on its own line and holds one character or an escape, so the quote inside a '"' opens>
+<no string, while a lifetime's lone ' opens nothing and two of them on one line do not pair>
 
 Multi line string symbols                                                        (optional)
 <string symbols whose string crosses lines, separated by whitespace, like: """ ` >
+
+Line continuation                                                                (optional)
+<the symbol that joins a line to the next one when it is the last thing on it, like: \ >
+Continues                                                            (with the symbol, or not at all)
+<what the joining reaches: 'strings', 'comments', or both separated by whitespace. C splices>
+<anything, so a line comment ending in a backslash carries on; JavaScript and Python continue>
+<a string literal only, and their comments always end at the newline>
 
 Paired string openers                                                            (optional)
 <openers of strings whose closer is a different symbol, like: r#" >
@@ -963,6 +970,9 @@ Keyword
 
 	
 ## Accuracy and Limitations
+
+Before the details, the one decision that explains most of the difference between mezura's numbers and another counter's: **mezura asks what a line says, not where it sits.** A blank line inside a block comment is blank, not comment, because it tells you nothing about the documentation around it. A line holding only ```}``` or ```);``` is neither code nor comment, because the language required it and the programmer said nothing by writing it. Counters that group by region answer the other question, "which block is this line inside", and give the blank line to the comment and the brace to the code. Neither reading is wrong, they answer different questions, and it is worth knowing which one you are reading: with mezura, ```code``` and ```comments``` do not add up to ```lines```, and what is left over is the part of the file that carries nothing. ```--braces-as-code``` moves the punctuation-only lines into code for anyone who wants the other convention.
+
 The program is able to understand and parse correctly arbitrarily complex code structures with intertwined strings and comments. This way it can identify if a line contains something other than a comment, even if the comment is partitioned in multiple positions and it can identify valid keywords, that are not inside strings or comments.
 For example in a line like ```/*class"*/" class" aclass```, it will not count "class" as a keyword since the first is inside a comment, the second inside a string and the third has a prefix.
 Additionally:
@@ -990,7 +1000,7 @@ With that said, it is important to mention the following limitations:
 
 - When two languages claim the same extension or the same filename, only one of them can have it, and the choice changes the numbers rather than only the label, since the loser's files are then parsed with the winner's comment and string symbols. Mezura makes no attempt to settle it by looking inside the files: a guess from the contents would be right most of the time, and the times it was wrong it would be wrong quietly, in the middle of a run, differently for two files with the same extension. So it takes the answer from you and says so every time it has no answer to take. To decide it once, name the winner in the ```extension_priority.txt``` file of the data directory, under ```contested-extensions``` or ```contested-filenames```; to decide it for one run or for one project, use ```--force-language```, which overrides that file and takes a filename as readily as an extension.
 
-- A regular expression written inside a string is read as a string, escapes included, and creates no inaccuracy. The regex literals of languages like JavaScript, Perl and Ruby are the ones that can miscount, and only through the symbols that language itself declares: a bare quote is legal inside ```/say "hi/``` and reads as an opened string, and a declared comment opener sitting inside a character class, like the ```/*``` of JavaScript in ```/a[/*]b/```, reads as an opened comment, so the lines after such a regex can be counted as string content or as comments.
+- A regular expression written inside a string is read as a string, escapes included, and creates no inaccuracy. A regex literal, in the languages that have them, can miscount in one way: a comment opener sitting inside it, like the ```/*``` of JavaScript in ```/a[/*]b/```, reads as a comment that has opened, so the lines after it are counted as comment until something closes it. A bare quote inside a regex costs nothing, since those languages declare their quotes as ending with the line.
 
 
 ## Windows Performance Note

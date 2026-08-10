@@ -1,0 +1,15 @@
+CC0 1.0 Universal (Public Domain Dedication)
+
+This licence covers the contents of this directory only. The rest of the mezura repository is
+licensed separately, under MIT or Apache-2.0.
+
+To the extent possible under law, the author has waived all copyright and related or neighbouring
+rights to the files in this directory. They may be copied, modified, distributed and used, including
+for commercial purposes, without asking and without attribution.
+
+These are test inputs. They exist to be vendored into other projects' test suites, and the point of
+CC0 is that doing so costs nothing and requires nothing.
+
+The full legal code is at https://creativecommons.org/publicdomain/zero/1.0/legalcode
+
+Nothing here is offered with any warranty.
