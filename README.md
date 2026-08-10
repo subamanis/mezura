@@ -921,9 +921,16 @@ String symbol closers
 
 Multi line comment start
 <one or more block comment openers, separated by whitespace, like: { (* >
+<a pair written with =* is Lua's counted bracket: --[=*[ matches --[[, --[=[ and every level up>
 
 Multi line comment end
 <their closers, one per opener and in the same order, like: } *) >
+
+Nesting comment start
+<openers of block comments that nest inside themselves, like: /+ >
+
+Nesting comment end
+<their closers, one per opener and in the same order, like: +/ >
 
 Keyword
     NAME
@@ -944,6 +951,11 @@ For example in a line like ```/*class"*/" class" aclass```, it will not count "c
 Additionally:
 - It checks for escaped characters, for example ```/"``` will not be counted as a string symbol
 - It resolves symbols that are side by side, for example ```*/*``` is normally identified as both a closing and an opening comment symbol, but the program will understand the correct usage.
+- A language that writes comments in more than one way gets all of them, and each one ends only with its own closing symbol. Pascal writes ```{ }``` and ```(* *)```, D writes ```/* */``` and ```/+ +/```, and a stray ```*)``` inside a ```{ }``` comment is just text.
+- A comment written inside another comment does not end it early. This is how OCaml, Rust, Haskell, F#, Scala, Kotlin, Swift, Julia, Elm, Lisp, Scheme, MATLAB and WebAssembly text read their own code, so commenting out a block that already had comments in it counts as the comment it is. In C and the languages that follow it the first ```*/``` really does end the comment, and that is what the program does there.
+- Lua's ```--[==[``` comments are read to their real end, so a ```]]``` written inside one is text.
+- A comment that ends and another that begins on the same line (```]]--[[``` in Lua, ```--><!--``` in HTML) are read as two comments.
+- Strings are read with the same care. A quote left open by mistake costs its own line instead of everything below it, a Python docstring or a JavaScript backtick still runs for as many lines as it likes, and the raw forms that end with a different symbol than they started with, like Rust's ```r#"..."#``` or C#'s ```@"..."```, end where the language says they do even when they finish with a backslash.
 
 With that said, it is important to mention the following limitations:
 
@@ -953,9 +965,9 @@ With that said, it is important to mention the following limitations:
 
 - A string opened by a symbol from the plain ```String symbols``` list ends at the end of its line, so an unbalanced quote costs that one line instead of everything below it. Only a symbol declared under ```Multi line string symbols``` carries a string across lines, and only the symbol that opened a string can close it: Python declares ```"""``` and ```'''``` crossing beside its plain ```"``` and ```'```, so a docstring containing a single quote is read correctly. A language whose plain string may legally span lines declares it crossing (Rust, Ruby, the shells, PHP, SQL and their kin), and there an unbalanced quote still reads the rest of the file as string content, since the program cannot know it was a mistake.
 
-- Block comments do not nest: the first closing symbol ends the block. In a language where the same pair may nest inside itself (D's ```/+ +/```, Rust, Haskell, OCaml), everything after the first closer of a nested comment counts as code until the outer one turns up.
+- A block comment pair declared under ```Nesting comment start``` nests inside itself: the block ends only when as many closers as openers have passed, which is what ```(* (* *) *)``` means in OCaml. Rust, D's ```/+ +/```, Haskell, OCaml, F#, Scala, Kotlin, Swift, Julia, Elm, Lisp, Scheme, MATLAB and the WebAssembly text format declare theirs so; a pair under the plain ```Multi line comment``` block still ends at its first closer, which is what C means.
 
-- A delimiter the programmer invents per string cannot be declared: a shell or PHP heredoc and the PowerShell here-string fall back to the ordinary quote rules, and so does any delimiter that varies in length, like Rust's ```r##"..."##``` and beyond or Lua's ```--[==[```. A fixed pair is declarable: Rust ships ```r"``` and ```r#"``` with their closers and C# ships ```@"``` with ```"```, and inside such a pair the backslash does not escape, which is what those raw forms mean. Every declared pair costs the scan a little work at every quote of the language, which is why Rust stops at the one-hash form.
+- A delimiter the programmer invents per string cannot be declared: a shell or PHP heredoc and the PowerShell here-string fall back to the ordinary quote rules, and so does Rust's ```r##"..."##``` and beyond. A fixed pair is declarable (Rust ships ```r"``` and ```r#"``` with their closers, C# ships ```@"``` with ```"```, and inside such a pair the backslash does not escape), and so is Lua's counted comment bracket: a pair written with ```=*```, like ```--[=*[``` with ```]=*]```, matches any run of ```=``` and closes only at an end carrying the same count, so a ```]]``` inside a ```--[==[``` block is text. Lua's ```[[ ]]``` string form is not declared yet and its body counts as code. Every declared pair costs the scan a little work at every quote of the language, which is why Rust stops at the one-hash form.
 
 - Extensions are matched without regard to case, so a file named ```MAIN.RS``` is counted as Rust, and so is one named ```main.rs```. The one thing this loses is the Unix convention where an upper case ```.C``` means C++ while ```.c``` means C: to mezura they are the same extension.
 
