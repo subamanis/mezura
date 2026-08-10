@@ -79,7 +79,7 @@ The program, at compile time, includes the "data" folder in the binary, and duri
 After every subsequent execution, the languages, themes, configurations and logs, are read from these folders, so the user can have easy access and modify them,
 like add more languages of his choice, add custom themes, or modify the default configuration.
 
-Installing a new version updates the language files there, so a correction to a language reaches you without you having to do anything. One that you changed yourself is replaced too, since a language file that has fallen behind counts wrongly, but your copy is kept under ```data/replaced/<version>/``` and the program names it, so you can carry your changes over. A language file of your own is never touched, and neither are your themes, your default configuration or ```extension_priority.txt```: those are written when they are absent and left alone afterwards.
+Installing a new version updates the language files there, so a correction to a language reaches you without you having to do anything. One that you changed yourself is replaced too, since a language file that has fallen behind counts wrongly, but your copy is kept under ```data/replaced/<version>/<date and time>/``` and the program names it, so you can carry your changes over. Each update or ```--restore``` writes its own folder there, so two of them never mix and the newest is the one at the bottom. A language file of your own is never touched, and neither are your themes, your default configuration or ```extension_priority.txt```: those are written when they are absent and left alone afterwards.
 
 In order for a file to be considered for counting, some language file in the "data/languages" dir must claim it, either by its extension or by its whole name, in the 'Extensions' or 'Filenames' field, see [Supported Languages](#supported-languages).
 
@@ -719,9 +719,10 @@ YOUR DATA DIRECTORY
     notice.
 
     A language file you changed is replaced too, since one that has fallen behind counts wrongly,
-    but your copy is kept under 'data/replaced/<version>/' and named, so you can carry your changes
-    over. A language file of your own is never touched, and neither are your themes, your default
-    configuration or 'extension_priority.txt': those are written when absent and left alone after.
+    but your copy is kept under 'data/replaced/<version>/<date and time>/' and named, so you can
+    carry your changes over. Each run of this writes its own folder there, so running it twice never
+    mixes the two. A language file of your own is never touched, and neither are your themes, your
+    default configuration or 'extension_priority.txt': those are written when absent and left alone.
 
 TUNING AND DIAGNOSTICS
 
@@ -912,13 +913,18 @@ String symbols
 <string symbols whose string ends at the end of the line, separated by whitespace, like: " ' >
 <the value may be left empty, for a language whose quotes are not strings at all, like HTML>
 
+Character literal symbols                                                        (optional)
+<the symbol that holds a single character, like Rust's '. One that does not close on its own>
+<line is not a literal at all, so a lifetime's lone ' opens nothing, while the quote inside a>
+<'"' never opens a string>
+
 Multi line string symbols                                                        (optional)
 <string symbols whose string crosses lines, separated by whitespace, like: """ ` >
 
-String symbol openers                                                            (optional)
+Paired string openers                                                            (optional)
 <openers of strings whose closer is a different symbol, like: r#" >
 
-String symbol closers                                                (with the openers, or not at all)
+Paired string closers                                                (with the openers, or not at all)
 <their closers, one per opener and in the same order, like: "# >
 
 Comment symbols

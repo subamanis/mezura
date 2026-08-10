@@ -10,9 +10,9 @@ String symbols
 Multi line string symbols
 """
 
-String symbol openers
+Paired string openers
 @"
-String symbol closers
+Paired string closers
 "
 
 Comment symbols

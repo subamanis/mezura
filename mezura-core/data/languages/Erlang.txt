@@ -5,6 +5,7 @@ Extensions
 erl hrl
 
 String symbols
+'
 
 Multi line string symbols
 "

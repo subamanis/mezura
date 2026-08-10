@@ -1,4 +1,4 @@
-// mezura-expect lines=24 code=12 comments=3 structs=1 enums=1 traits=1
+// mezura-expect lines=27 code=14 comments=4 structs=1 enums=1 traits=1
 use std::fmt;
 
 /* a block comment
@@ -20,5 +20,8 @@ impl Draw for Point {
         println!("// still code");
         let raw = r#"say "hi" and stay code"#;
         let path = r#"C:\ends\in\backslash\"#;
+        let quote: char = '"';
+        // still a comment, not the inside of a string
+        let lifetime: &'static str = "code";
     }
 }

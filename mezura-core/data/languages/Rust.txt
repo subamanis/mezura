@@ -6,12 +6,15 @@ rs
 
 String symbols
 
+Character literal symbols
+'
+
 Multi line string symbols
 "
 
-String symbol openers
+Paired string openers
 r" r#"
-String symbol closers
+Paired string closers
 " "#
 
 Comment symbols

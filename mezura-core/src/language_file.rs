@@ -22,8 +22,9 @@ const EXTENSIONS               : &str = "Extensions";
 const FILENAMES                : &str = "Filenames";
 const STRING_SYMBOLS           : &str = "String symbols";
 const MULTILINE_STRINGS        : &str = "Multi line string symbols";
-const STRING_SYMBOL_OPENERS    : &str = "String symbol openers";
-const STRING_SYMBOL_CLOSERS    : &str = "String symbol closers";
+const PAIRED_STRING_OPENERS    : &str = "Paired string openers";
+const PAIRED_STRING_CLOSERS    : &str = "Paired string closers";
+const CHARACTER_LITERALS       : &str = "Character literal symbols";
 const COMMENT_SYMBOLS          : &str = "Comment symbols";
 const MULTILINE_COMMENT_START  : &str = "Multi line comment start";
 const MULTILINE_COMMENT_END    : &str = "Multi line comment end";
@@ -200,11 +201,21 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
     if next != STRING_SYMBOLS {return None;}
     let string_symbols = split_line_on_whitespace(&read_value_line(lines)?);
 
+    // The symbol of a character literal, which exists only paired on its own line: a lone one is
+    // not a literal at all. Its own block and not a string list, because declaring Rust's ' as a
+    // string would be a lie the format cannot explain.
+    let mut char_literals = Vec::new();
+    let mut header = read_next_header(lines)?;
+    if header == CHARACTER_LITERALS {
+        char_literals = split_line_on_whitespace(&read_value_line(lines)?);
+        if char_literals.is_empty() {return None;}
+        header = read_next_header(lines)?;
+    }
+
     // A symbol belongs to exactly one of the lists, the way a comment symbol does: a string that
     // ends with its line goes above, one that crosses lines goes here. Declaring the same symbol
     // twice would leave the two answers to argue, so it refuses the file.
     let mut multiline_strings = Vec::new();
-    let mut header = read_next_header(lines)?;
     if header == MULTILINE_STRINGS {
         multiline_strings = split_line_on_whitespace(&read_value_line(lines)?).into_iter()
                 .map(|symbol| (symbol.clone(), symbol)).collect::<Vec<_>>();
@@ -214,9 +225,9 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
 
     // Strings that open with one symbol and close with another, 'r#"' with '"#'. The two value
     // lines are lists paired by position, the shape the multiline comment block also has.
-    if header == STRING_SYMBOL_OPENERS {
+    if header == PAIRED_STRING_OPENERS {
         let openers = split_line_on_whitespace(&read_value_line(lines)?);
-        if openers.is_empty() || read_next_header(lines)?.as_str() != STRING_SYMBOL_CLOSERS {return None;}
+        if openers.is_empty() || read_next_header(lines)?.as_str() != PAIRED_STRING_CLOSERS {return None;}
         let closers = split_line_on_whitespace(&read_value_line(lines)?);
         if closers.len() != openers.len() {return None;}
         multiline_strings.extend(openers.into_iter().zip(closers));
@@ -226,6 +237,8 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
     // Declaring no string at all is allowed and is what HTML needs: its quotes delimit attributes
     // rather than strings, and the free text between its tags is full of apostrophes.
     if string_symbols.iter().any(|symbol| multiline_strings.iter().any(|(open, _)| open == symbol)) {return None;}
+    if char_literals.iter().any(|literal| string_symbols.contains(literal)
+            || multiline_strings.iter().any(|(open, _)| open == literal)) {return None;}
 
     if header != COMMENT_SYMBOLS {return None;}
     // Deliberately allowed to be empty: a language whose only comments are multiline has no line
@@ -300,6 +313,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
     Some(Language::new(lang_name, extensions, string_symbols, comment_symbols,
             &multiline_comments.iter().map(|(start, end): &(String, String)| (start.as_str(), end.as_str()))
                     .collect::<Vec<_>>(), keywords)
+            .with_char_literals(&char_literals.iter().map(String::as_str).collect::<Vec<_>>())
             .with_string_pairs(&multiline_strings.iter().map(|(open, close)| (open.as_str(), close.as_str()))
                     .collect::<Vec<_>>())
             .with_nesting_comments(&nesting_comments.iter().map(|(start, end)| (start.as_str(), end.as_str()))
@@ -748,6 +762,31 @@ Multi line string symbols\n\"\"\"\n\nComment symbols\n#\n";
         for name in ["python.txt", "js.txt", "java.txt", "Rust.txt", "C#.txt", "go.txt"] {
             let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
             assert!(!language.multiline_strings.is_empty(), "{name} lost its crossing string declaration");
+        }
+    }
+
+    // Its own block between the string symbols and the crossing ones, so the format can say what
+    // the symbol is instead of pretending a character literal is a string
+    #[test]
+    fn a_character_literal_symbol_has_its_own_block_and_shares_no_list() {
+        let good = "Language\nRustlike\n\nExtensions\nrsl\n\nString symbols\n\n\n\
+Character literal symbols\n'\n\nMulti line string symbols\n\"\n\nComment symbols\n//\n";
+        let parsed = crate::language_file::parse_language(good).expect("the declaration must parse");
+        assert_eq!(vec!["'".to_owned()], parsed.char_literal_symbols);
+        assert_eq!(vec![("\"".to_owned(), "\"".to_owned())], parsed.multiline_strings);
+
+        // declared in two lists it refuses the file, empty it refuses the file
+        let twice = good.replace("String symbols\n\n", "String symbols\n'\n");
+        assert!(crate::language_file::parse_language(&twice).is_none(),
+                "a symbol that is both a string and a character literal was accepted");
+        let empty = good.replace("Character literal symbols\n'\n\n", "Character literal symbols\n\n\n");
+        assert!(crate::language_file::parse_language(&empty).is_none());
+
+        // the shipped declarations that motivated the block
+        for name in ["Rust.txt", "D.txt"] {
+            let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
+            assert_eq!(vec!["'".to_owned()], language.char_literal_symbols,
+                    "{name} lost its character literal declaration");
         }
     }
 

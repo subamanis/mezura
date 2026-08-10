@@ -384,9 +384,10 @@ pub const RESTORE_HELP  :  &str =
     notice.
 
     A language file you changed is replaced too, since one that has fallen behind counts wrongly,
-    but your copy is kept under 'data/replaced/<version>/' and named, so you can carry your changes
-    over. A language file of your own is never touched, and neither are your themes, your default
-    configuration or 'extension_priority.txt': those are written when absent and left alone after.
+    but your copy is kept under 'data/replaced/<version>/<date and time>/' and named, so you can
+    carry your changes over. Each run of this writes its own folder there, so running it twice never
+    mixes the two. A language file of your own is never touched, and neither are your themes, your
+    default configuration or 'extension_priority.txt': those are written when absent and left alone.
 
 ";
 pub const OUTPUT_HELP  :  &str =

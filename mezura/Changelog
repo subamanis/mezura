@@ -41,7 +41,7 @@ Main changes:
       carrying the same count, so a "]]" inside a --[==[ block is text and the block ends where
       Lua says it ends.
   -> A string can now open with one symbol and close with another, declared in a language file
-      under "String symbol openers" and "String symbol closers". Rust declares r" and r#" with
+      under "Paired string openers" and "Paired string closers". Rust declares r" and r#" with
       their closers and C# declares @" with ", so a raw or verbatim string holding quotes, or
       ending in a backslash, no longer counts the rest of the file as string content.
   -> String symbols now split by behavior the way comment symbols always did: the "String
@@ -50,12 +50,18 @@ Main changes:
       costs its own line instead of everything below it. Languages whose plain quote legally
       spans lines (Rust, Ruby, the shells, PHP, SQL and their kin) declare it crossing and keep
       their behavior.
+  -> A language file can now name the symbol of a character literal, in a "Character literal
+      symbols" line. One that does not close on its own line is not a literal at all, so Rust's
+      and D's '"' keeps its quote to itself while a lifetime's lone ' opens nothing. Erlang's
+      quoted atoms are declared as the single line strings they behave as.
   -> HTML now declares no string symbols at all: its quotes delimit attributes, not strings, so
       an apostrophe in the text ("it's") no longer swallows the comments and markup below it.
   -> Language files are now updated automatically when you install a new version, so a correction to
       a language reaches you without you having to do anything. One you had changed yourself is
       replaced too, since an out of date language file counts wrongly, but your copy is kept under
-      "data/replaced/<version>/" and the program names it, so you can carry your changes over.
+      "data/replaced/<version>/<date and time>/" and the program names it, so you can carry your
+      changes over. Each update and each "--restore" writes its own folder there, so two of them
+      never mix and you can tell which files were moved aside together.
       A language file of your own is never touched, and neither are your themes, your default
       configuration or "extension_priority.txt".
   -> 34 new languages: Objective-C, MATLAB, Lua, Perl, Prolog, Pascal, Delphi, OCaml, F#, Elm,
@@ -393,6 +399,13 @@ Bugfixes:
       already have them, and the folder is regenerated in full on the next run.
   -> A language file can declare any number of string and single line comment symbols now. Only the
       first one or two of each were ever used, and anything past them was ignored without a word.
+  -> A line that closes a block comment and opens the next one, with nothing or only whitespace
+      between the two symbols, now counts as a comment line. It used to count as neither code nor
+      comment, and with "--braces-as-code" as code.
+  -> A string that begins exactly where a block comment closes, "*/" straight into a quote with no
+      space between, is now read to its real end. Its opening quote used to be taken as its closing
+      one, so the string's text was counted as code and searched for keywords, and a quote that
+      crosses lines could carry the mistake to the end of the file.
   -> A string that stays open because every symbol that could close it is escaped is no longer cut
       short at a different string symbol on the same line. Languages with more than one string
       symbol, Python and Shell among them, count a few such lines differently than before.

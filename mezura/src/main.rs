@@ -376,7 +376,11 @@ fn open_in_browser(path: &str) {
 struct MigrationOutcome {
     installed: Vec<String>,
     replaced: Vec<String>,
-    withdrawn: Vec<String>
+    withdrawn: Vec<String>,
+    // Where this pass put what it moved aside, under 'replaced/<version>/'. One folder per pass and
+    // named after the moment it ran, so that two passes never mix their copies into one heap where
+    // nothing says which run each file came from.
+    archived_under: String
 }
 
 impl MigrationOutcome {
@@ -394,9 +398,10 @@ impl MigrationOutcome {
         let (count, plural) = (self.replaced.len(), if self.replaced.len() == 1 {"file"} else {"files"});
         Some(format!("\n{}\n", crate::message_printer::wrap_message(&format!(
                 "Updated the data files for {VERSION_ID}.\n{count} {plural} on disk {} not the ones mezura had written, \
-so {} kept in '{}{REPLACED_DIR_NAME}/{VERSION_ID}/' in case you want anything out of {}:\n  {}",
+so {} kept in '{}{REPLACED_DIR_NAME}/{VERSION_ID}/{}/' in case you want anything out of {}:\n  {}",
                 if count == 1 {"was"} else {"were"}, if count == 1 {"it was"} else {"they were"},
-                crate::paths::PERSISTENT_APP_PATHS.data_dir, if count == 1 {"it"} else {"them"},
+                crate::paths::PERSISTENT_APP_PATHS.data_dir, self.archived_under,
+                if count == 1 {"it"} else {"them"},
                 self.replaced.join(", ")))).yellow().to_string())
     }
 }
@@ -482,19 +487,37 @@ fn means_the_same(on_disk: &[u8], shipped: &[u8]) -> bool {
     }
 }
 
-fn archive(data_dir: &str, relative: &str, contents: &[u8]) -> Result<(), std::io::Error> {
-    let target = format!("{data_dir}{REPLACED_DIR_NAME}/{VERSION_ID}/{relative}");
+// The copy keeps its own name, under the folder this pass was given. Two passes under one version
+// used to share a folder, and the second found the first copy already sitting there: the file was
+// left alone and the caller replaced the user's newer edit anyway, so the edit was gone and the
+// message pointed at older text. A folder per pass ends that, and a file that is somehow already
+// there belongs to another process doing this same second, whose copy is the same bytes.
+fn archive(data_dir: &str, archived_under: &str, relative: &str, contents: &[u8]) -> Result<(), std::io::Error> {
+    let target = format!("{data_dir}{REPLACED_DIR_NAME}/{VERSION_ID}/{archived_under}/{relative}");
     if let Some(parent) = std::path::Path::new(&target).parent() {
         std::fs::create_dir_all(parent)?;
     }
-
-    // Never over one that is already there: two runs can start at the same moment, and a build under
-    // development is run many times under the one version
     if !std::path::Path::new(&target).exists() {
         std::fs::write(&target, contents)?;
     }
 
     Ok(())
+}
+
+// Named after the moment the pass ran, which sorts as it reads and holds no character a path
+// refuses on any of the three systems. Two passes inside one second would otherwise share a folder
+// and the second would find its copies already written, which is the whole failure this replaced.
+fn find_free_archive_folder(data_dir: &str) -> String {
+    let taken = |name: &str|
+            std::path::Path::new(&format!("{data_dir}{REPLACED_DIR_NAME}/{VERSION_ID}/{name}")).exists();
+
+    let moment = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+    if !taken(&moment) {
+        return moment;
+    }
+    (2..u32::MAX).map(|attempt| format!("{moment}-{attempt}"))
+            .find(|name| !taken(name))
+            .unwrap_or(moment)
 }
 
 // Brings the data directory to what this version ships. The shipped copy always wins and the user's
@@ -516,6 +539,10 @@ fn migrate_data_files(data_dir: &str, force: bool) -> Result<MigrationOutcome, s
     if !force && recorded_version == VERSION_ID && every_file_is_there {
         return Ok(outcome);
     }
+
+    // Chosen once, so that everything this pass moves aside lands together and a later reader can
+    // see which files went in the same breath
+    outcome.archived_under = find_free_archive_folder(data_dir);
 
     for name in [LANGUAGES_DIR_NAME, THEMES_DIR_NAME, CONFIG_DIR_NAME, LOGS_DIR_NAME] {
         // The logs directory holds nothing that ships, but without it a run with '--log' has nowhere to write
@@ -543,7 +570,7 @@ fn migrate_data_files(data_dir: &str, force: bool) -> Result<MigrationOutcome, s
             continue;
         }
 
-        archive(data_dir, &relative, &on_disk)?;
+        archive(data_dir, &outcome.archived_under, &relative, &on_disk)?;
         std::fs::write(&target, contents)?;
         outcome.replaced.push(relative);
     }
@@ -559,7 +586,7 @@ fn migrate_data_files(data_dir: &str, force: bool) -> Result<MigrationOutcome, s
     for relative in recorded.keys().filter(|relative| !still_shipped.contains(*relative)) {
         let target = data_dir.to_owned() + relative;
         if let Ok(on_disk) = std::fs::read(&target) {
-            archive(data_dir, relative, &on_disk)?;
+            archive(data_dir, &outcome.archived_under, relative, &on_disk)?;
             std::fs::remove_file(&target)?;
             outcome.withdrawn.push(relative.clone());
         }
@@ -681,8 +708,9 @@ program to read, and both of them go to the output, so only one of the two can b
                 }
                 if !outcome.withdrawn.is_empty() {
                     println!("\n{}", crate::message_printer::wrap_message(&format!(
-                            "No longer part of mezura, and moved to '{}{REPLACED_DIR_NAME}/{VERSION_ID}/':\n{}",
-                            crate::paths::PERSISTENT_APP_PATHS.data_dir, outcome.withdrawn.join(", "))));
+                            "No longer part of mezura, and moved to '{}{REPLACED_DIR_NAME}/{VERSION_ID}/{}/':\n{}",
+                            crate::paths::PERSISTENT_APP_PATHS.data_dir, outcome.archived_under,
+                            outcome.withdrawn.join(", "))));
                 }
                 Some(ExitCode::SUCCESS)
             },
@@ -782,8 +810,8 @@ mod tests {
         let edited = migrate_data_files(&dir, true).unwrap();
         assert_eq!(vec!["languages/Lua.txt".to_owned()], edited.replaced);
         assert_eq!(shipped, std::fs::read_to_string(&lua).unwrap());
-        assert!(std::fs::read_to_string(format!("{dir}replaced/{}/languages/Lua.txt", crate::config_manager::VERSION_ID))
-                .unwrap().contains("\""));
+        assert!(std::fs::read_to_string(format!("{dir}replaced/{}/{}/languages/Lua.txt",
+                crate::config_manager::VERSION_ID, edited.archived_under)).unwrap().contains("\""));
 
         // A theme is taste, and one that has fallen behind what we ship breaks nothing, so somebody
         // who expanded the one we ship keeps what they wrote. This is the case that decided the
@@ -852,9 +880,40 @@ mod tests {
         let outcome = migrate_data_files(&dir, true).unwrap();
         assert_eq!(vec!["languages/Gone.txt".to_owned()], outcome.withdrawn);
         assert!(!std::path::Path::new(&withdrawn).exists());
-        assert_eq!("a language of an earlier version",
-                std::fs::read_to_string(format!("{dir}replaced/{VERSION_ID}/languages/Gone.txt")).unwrap());
+        assert_eq!("a language of an earlier version", std::fs::read_to_string(
+                format!("{dir}replaced/{VERSION_ID}/{}/languages/Gone.txt", outcome.archived_under)).unwrap());
         assert_eq!("a language of my own", std::fs::read_to_string(&theirs).unwrap());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // Two passes under one version used to share a folder: the archive would not write over the copy
+    // already sitting there while the replacing wrote over the user's file regardless, so the second
+    // edit was destroyed and the message pointed at the first. Each pass now keeps its own folder,
+    // which is also the only thing that says which files were moved aside together.
+    #[test]
+    fn a_second_restore_after_a_second_edit_keeps_both_edits_under_their_own_folders() {
+        let dir = SCRATCH_DIR.to_owned() + "migration-twice/";
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        migrate_data_files(&dir, false).unwrap();
+        let read_back = |folder: &str, name: &str|
+                std::fs::read_to_string(format!("{dir}replaced/{VERSION_ID}/{folder}/languages/{name}"));
+
+        let mine = dir.clone() + "languages/Rust.txt";
+        std::fs::write(&mine, "my first edit").unwrap();
+        let first = migrate_data_files(&dir, true).unwrap();
+        assert_eq!(vec!["languages/Rust.txt".to_owned()], first.replaced);
+
+        // Both passes run inside the same second here, which is exactly the case the folder name
+        // has to survive on its own rather than by waiting for the clock
+        std::fs::write(&mine, "my second edit").unwrap();
+        let second = migrate_data_files(&dir, true).unwrap();
+        assert_eq!(vec!["languages/Rust.txt".to_owned()], second.replaced, "the copy kept its own name");
+        assert_ne!(first.archived_under, second.archived_under, "two passes shared one folder");
+
+        assert_eq!("my first edit", read_back(&first.archived_under, "Rust.txt").unwrap());
+        assert_eq!("my second edit", read_back(&second.archived_under, "Rust.txt").unwrap());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

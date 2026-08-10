@@ -18,6 +18,9 @@ pub struct Language {
     // and 'CMakeLists.txt', whose extension says text and means nothing
     pub filenames : Vec<String>,
     pub string_symbols : Vec<String>,
+    // The symbol of a character literal, Rust's and D's '. One that does not close on its own line
+    // is not a literal at all, so a lifetime's lone ' opens nothing, while a '"' shields its quote
+    pub char_literal_symbols : Vec<String>,
     pub multiline_strings : Vec<(String, String)>,
     pub comment_symbols : Vec<String>,
     pub multiline_comments : Vec<(String, String)>,
@@ -46,6 +49,7 @@ impl Language {
             extensions : owned_strings(extensions),
             filenames : Vec::new(),
             string_symbols : owned_strings(string_symbols),
+            char_literal_symbols : Vec::new(),
             multiline_strings : Vec::new(),
             comment_symbols : owned_strings(comment_symbols),
             multiline_comments : multiline_comments.iter()
@@ -66,6 +70,11 @@ impl Language {
 
     pub fn with_filenames(mut self, names: &[&str]) -> Self {
         self.filenames.extend(names.iter().map(|x| (*x).to_owned()));
+        self
+    }
+
+    pub fn with_char_literals(mut self, symbols: &[&str]) -> Self {
+        self.char_literal_symbols.extend(symbols.iter().map(|x| (*x).to_owned()));
         self
     }
 
@@ -93,19 +102,25 @@ impl Language {
     }
 
     // The scan numbers every string symbol of a language in one sequence, the single line ones
-    // first and the crossing ones after them, which is the order the plan is built in.
+    // first, the character literals after them and the crossing ones last, which is the order the
+    // plan is built in.
     pub(crate) fn get_string_pair_of(&self, symbol: u8) -> (&str, &str) {
-        match self.string_symbols.get(symbol as usize) {
-            Some(single) => (single, single),
+        let symbol = symbol as usize;
+        if let Some(single) = self.string_symbols.get(symbol) {
+            return (single, single);
+        }
+        match self.char_literal_symbols.get(symbol - self.string_symbols.len()) {
+            Some(literal) => (literal, literal),
             None => {
-                let (open, close) = &self.multiline_strings[symbol as usize - self.string_symbols.len()];
+                let (open, close) = &self.multiline_strings[
+                        symbol - self.string_symbols.len() - self.char_literal_symbols.len()];
                 (open, close)
             }
         }
     }
 
     pub(crate) fn string_crosses_lines(&self, symbol: u8) -> bool {
-        symbol as usize >= self.string_symbols.len()
+        symbol as usize >= self.string_symbols.len() + self.char_literal_symbols.len()
     }
 
     // The one place that knows the numbering, so that a pair kind added later is one match arm and
@@ -198,6 +213,7 @@ impl PartialEq for Language {
             && self.extensions == other.extensions
             && self.filenames == other.filenames
             && self.string_symbols == other.string_symbols
+            && self.char_literal_symbols == other.char_literal_symbols
             && self.multiline_strings == other.multiline_strings
             && self.comment_symbols == other.comment_symbols
             && self.multiline_comments == other.multiline_comments
