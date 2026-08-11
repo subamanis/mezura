@@ -652,10 +652,10 @@ pl      Perl, Prolog
     fn a_header_the_parser_does_not_know_refuses_the_file_instead_of_truncating_it() {
         // A shipped file and not a copy of the format written here, so that the shape being mutated
         // below is whatever the program actually reads today and cannot drift away from it.
-        let good = std::fs::read_to_string(LANGUAGES_DIR.to_owned() + "java.txt").unwrap();
+        let good = std::fs::read_to_string(LANGUAGES_DIR.to_owned() + "Java.txt").unwrap();
         let parsed = crate::language_file::parse_language(&good).expect("the control file must parse");
         assert!(!parsed.multiline_comments.is_empty() && !parsed.keywords.is_empty(),
-                "java.txt no longer declares the two blocks this test truncates, so pick another file");
+                "Java.txt no longer declares the two blocks this test truncates, so pick another file");
 
         // Line by line and never by replacing a run of text, because how many blank lines sit
         // between two blocks is the file's business and not this test's: written the other way, the
