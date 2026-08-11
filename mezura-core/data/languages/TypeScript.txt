@@ -1,5 +1,5 @@
 Language
-TS
+TypeScript
 
 Extensions
 ts mts cts
