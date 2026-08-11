@@ -15,6 +15,11 @@ Multi line string symbols
 Multi line raw string symbols
 `
 
+Paired string openers
+r"
+Paired string closers
+"
+
 Comment symbols
 //
 Multi line comment start

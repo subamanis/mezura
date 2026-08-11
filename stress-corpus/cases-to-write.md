@@ -1,6 +1,6 @@
 # Cases still without a file
 
-Files 01 to 54 are written and verified. What is listed here has no file yet, and each line says
+Files 01 to 59 are written and verified. What is listed here has no file yet, and each line says
 why. When one lands, its line leaves this document.
 
 ## Waiting on parser work
@@ -31,6 +31,12 @@ why. When one lands, its line leaves this document.
   at runtime, which the format cannot express today.
 - **The regex holding a comment opener**, case 37. Telling a regex from a division needs the token
   before the slash, which is a lexer's job.
+- **The escaped apostrophe in unquoted shell text**, case 59. Shell's single quote is declared as a
+  form that escapes nothing, which is true of its body and is what makes `sep='\'` come out right.
+  The scan applies that answer to the opener as well, so a `\'` written outside quotes opens a
+  string instead of being one apostrophe. Fixing it means asking whether a raw opener may still be
+  cancelled by an escape while its closer may not, which is a change to the scan and touches Go,
+  Odin and D as well, so it wants its own decision rather than a quiet edit to Shell.txt.
 
 ## Definitions rather than mistakes
 

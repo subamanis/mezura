@@ -9,6 +9,11 @@ String symbols
 Multi line raw string symbols
 " '
 
+Paired string openers
+@' @"
+Paired string closers
+'@ "@
+
 Comment symbols
 #
 Multi line comment start

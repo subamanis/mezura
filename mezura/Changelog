@@ -435,6 +435,13 @@ Bugfixes:
       and everything under it, comments included, was counted as code. Language files gained a
       "Multi line raw string symbols" block for the forms that escape nothing, since a backtick
       escapes nothing in Go and does escape in a JavaScript template literal.
+  -> The same is now true of the three string forms that were never declared at all: F# verbatim
+      strings (@"..."), D wysiwyg strings (r"...") and PowerShell here strings (@' '@ and @" "@).
+  -> Odin block comments now nest, so one commented-out block holding another ends where it really
+      ends instead of at the first "*/", and the lines between the two closers are comment.
+  -> "--show-languages" now tells you when two files in your languages folder declare the same
+      language. The list prints one line per language, so the copies collapsed into it silently,
+      and this is the command you would run to find them.
   -> A line that closes a block comment and opens the next one, with nothing or only whitespace
       between the two symbols, now counts as a comment line. It used to count as neither code nor
       comment, and with "--braces-as-code" as code.
