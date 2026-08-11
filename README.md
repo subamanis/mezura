@@ -155,8 +155,11 @@ WHAT IS COUNTED
 
     1..n arguments separated by commas, case-insensitive
 
-    The given language names must exist in any of the files in the 'data/languages/' dir as the
-    parameter of the field 'Language'.
+    A language is named either by the name a file in the 'data/languages/' dir gives it under
+    'Language', or by any extension it claims, so 'javascript' and 'js' name the same one.
+
+    An extension two languages claim names whichever of them owns it for the counting, which is
+    the answer in 'extension_priority.txt' or the one '--force-language' gave.
 
     Only the languages specified here will be taken into account for the stats.
 
@@ -164,8 +167,8 @@ WHAT IS COUNTED
 
     1..n arguments separated by commas, case-insensitive
 
-    The given language names should exist in any of the files in the 'data/languages/' dir as the
-    parameter of the field 'Language'.
+    A language is named either by the name a file in the 'data/languages/' dir gives it under
+    'Language', or by any extension it claims, so 'javascript' and 'js' name the same one.
 
     The given language names will be ignored from the stats calculation, if they exist.
 
@@ -917,7 +920,7 @@ Additionally:
 
 With that said, it is important to mention the following limitations:
 
-- A file is counted as one language from beginning to end. A ```.php``` file with html and js in it, a Vue or Svelte component with its three sections, a ```<script>``` block inside a page: all of them are read with the symbols of the language the file belongs to, so a comment written in the inner language may not be recognised as one. This is not a wall, it is simply not built yet: it needs a language file to say where the other language begins and ends, and the counter to switch over and back.
+- Sections of another language inside a file are counted with their own symbols where the language file declares them: the ```<script>``` and ```<style>``` blocks of HTML, Vue and Svelte, with ```lang="ts"``` and its kin naming the section's language and the tag's default answering when nothing does. A Vue template deliberately stays Vue, since its directives are not HTML. What remains outside: languages that interleave mid-line, the ```<?php ?>``` of PHP and the ERB/JSP/Blade family, which are still read as one language from beginning to end, and an opener tag split over two lines, which stays with its file's language.
 
 - Keywords are counted as words, not as meaning. Wherever ```class``` appears as a word in code it is counted, and in a language that uses the same word for a second purpose those occurrences are counted too. Mezura has no idea what a declaration is; it knows where the code is and which words you asked it to look for.
 

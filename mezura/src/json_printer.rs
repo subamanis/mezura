@@ -630,7 +630,7 @@ mod tests {
     fn result_of(per_language: HashMap<String, Stats>, total: Stats,
             faulty_files: Vec<FaultyFileDetails>, files_present: FilesPresent) -> RunResult
     {
-        RunResult {per_language, modules: Vec::new(), total, faulty_files,
+        RunResult {per_language, modules: Vec::new(), embedded: Default::default(), total, faulty_files,
                 files_present, targets: Vec::new(), unreadable_dirs: Vec::new(),
                 performance: mezura_core::Performance { duration_millis: 1180, threads: mezura_core::Threads::new(2, 8) }}
     }
@@ -741,7 +741,7 @@ mod tests {
         let module_of = |name: Option<&str>, language: &str, lines: usize, files: usize| {
             let per_language = hashmap![language.to_owned() => stats_of(files, lines * 10, lines, lines, 0, HashMap::new())];
             let total = Stats::total_of(&per_language);
-            mezura_core::ModuleResult {name: name.map(str::to_owned), per_language, total}
+            mezura_core::ModuleResult {name: name.map(str::to_owned), per_language, total, embedded: Default::default()}
         };
         let mut result = result_of(
             hashmap!["Rust".to_owned() => stats_of(2, 1000, 100, 100, 0, HashMap::new()),
@@ -896,7 +896,8 @@ mod tests {
         let module = |name: Option<&str>, language: &str, lines: usize, structs: usize| {
             let per_language = hashmap![language.to_owned() =>
                     stats_of(1, lines * 10, lines, lines, 0, hashmap!["structs".to_owned() => structs])];
-            mezura_core::ModuleResult {name: name.map(str::to_owned), total: Stats::total_of(&per_language), per_language}
+            mezura_core::ModuleResult {name: name.map(str::to_owned), total: Stats::total_of(&per_language), per_language,
+                    embedded: Default::default()}
         };
         let with_modules = |source, modules: Vec<mezura_core::ModuleResult>| {
             let mut reading = reading_of(source, HashMap::new());

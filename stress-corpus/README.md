@@ -27,6 +27,18 @@ hand. Two tools can therefore carry different `real` numbers for one file and bo
 agree and fails it when they do not, so a tool is only ever judged against what it says it wants,
 never against another tool's idea of correctness.
 
+**`<tool>-section`** is for a file that holds sections of another language, a `<script>` block in a
+page or the three parts of a Vue component. One line per section language, naming it and its counts:
+
+```
+// mezura-section TS   2 lines 1 code 1 comment
+// mezura-section SCSS 2 lines 1 code 1 comment
+```
+
+Such a case needs them, because the three totals of the file are the same whether the sections were
+found at all or the whole file was read with one language's symbols. Two tools can also agree on
+every number and disagree on what the sections *are*, which is what these lines exist to record.
+
 **`trap:`** says what the file is about, in one or two lines, and belongs to no tool.
 
 **`<tool>:`** is an optional note explaining why that tool's answer differs from its own intent. It

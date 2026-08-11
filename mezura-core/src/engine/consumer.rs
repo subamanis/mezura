@@ -2,17 +2,20 @@ use std::{collections::HashMap, sync::{Arc, atomic::{AtomicBool, AtomicU64, Orde
 
 use crossbeam_deque::{Injector, Steal, Worker};
 
-use crate::{EngineConfig, FaultyFileDetails, FaultyFilesListMut, Language, ParsableFile, ScanProgress,
-        Stats, StatsMapMut, phase_timing};
+use crate::{EmbeddedMapMut, EngineConfig, FaultyFileDetails, FaultyFilesListMut, Language, ParsableFile,
+        ScanProgress, Stats, StatsMapMut, phase_timing};
 use crate::engine::file_parser;
+use crate::languages::EmbeddedDefinitions;
 
 pub fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
-        stats_per_module: StatsMapMut, language_map: Arc<HashMap<String,Language>>,
+        stats_per_module: StatsMapMut, embedded_per_module: EmbeddedMapMut,
+        language_map: Arc<HashMap<String,Language>>, embedded_definitions: Arc<EmbeddedDefinitions>,
         config: Arc<EngineConfig>, started: Instant, counting_ended: Arc<AtomicU64>,
         progress: Arc<ScanProgress>) -> std::io::Result<JoinHandle<()>>
 {
     thread::Builder::new().name(format!("consumer-{id}")).spawn(move || {
-        start_parsing_files(id, files_injector, faulty_files, finish_condition, stats_per_module, language_map, config, &progress);
+        start_parsing_files(id, files_injector, faulty_files, finish_condition, stats_per_module,
+                embedded_per_module, language_map, embedded_definitions, config, &progress);
         // The last thing this thread does, and the only honest answer to how long the counting took:
         // 'run' joins these threads after calling the caller's callback, so its own clock cannot tell
         // the two apart.
@@ -21,18 +24,21 @@ pub fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>
 }
 
 pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
-    stats_per_module: StatsMapMut, language_map: Arc<HashMap<String,Language>>,
+    stats_per_module: StatsMapMut, embedded_per_module: EmbeddedMapMut,
+    language_map: Arc<HashMap<String,Language>>, embedded_definitions: Arc<EmbeddedDefinitions>,
     config: Arc<EngineConfig>, progress: &ScanProgress)
 {
     let mut buf = String::with_capacity(150);
     let mut parse_buffers = file_parser::ParseBuffers::default();
     let mut idle_iterations = 0u32;
     let mut local_faulty: Vec<FaultyFileDetails> = Vec::new();
-    let mut keyword_matchers: HashMap<String, Option<file_parser::KeywordMatcher>> = HashMap::new();
+    let mut keyword_matchers = file_parser::KeywordMatchers::default();
     // The module is an index into the outer vector and never part of the key: a composite one would
     // be an allocation on every file, and a run without modules simply has a vector of one.
     let modules = stats_per_module.lock().unwrap().len();
     let mut local_stats: Vec<HashMap<String, Stats>> =
+            vec![HashMap::new(); modules];
+    let mut local_embedded: Vec<HashMap<String, HashMap<String, Stats>>> =
             vec![HashMap::new(); modules];
     // A batch and not one file at a time. With four of these threads per core they all reach for the
     // same queue head between files, and the cost is not the atomic but the losing side: a contended
@@ -64,24 +70,28 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                 }
                 idle_iterations = 0;
                 let lang_name = parsable_file.language_name.as_ref();
-                if !keyword_matchers.contains_key(lang_name) {
-                    // Hidden keywords are not counted either: nothing else reads them, not even the
-                    // log, so the work would be thrown away.
-                    let built = if config.count_keywords {
-                        file_parser::KeywordMatcher::build(language_map.get(lang_name).unwrap())
-                    } else {
-                        None
-                    };
-                    keyword_matchers.insert(lang_name.to_owned(), built);
-                }
-                let keyword_matcher = keyword_matchers.get(lang_name).unwrap().as_ref();
-                match file_parser::parse_file(&parsable_file.path, lang_name, &mut buf, &mut parse_buffers, &language_map, keyword_matcher, &config) {
-                    Ok(x) => {
-                        progress.record_file_parsed(x.lines);
+                let lookup = file_parser::EmbeddedLookup { languages: &language_map,
+                        extension_to_name: &embedded_definitions.extension_to_name,
+                        set_aside: &embedded_definitions.set_aside };
+                match file_parser::parse_file(&parsable_file.path, lang_name, &mut buf, &mut parse_buffers, &lookup, &mut keyword_matchers, &config) {
+                    Ok(report) => {
+                        progress.record_file_parsed(report.total_lines());
                         let keywords = &language_map.get(lang_name).unwrap().keywords;
                         let bytes = buf.len();
-                        local_stats[parsable_file.module as usize].entry(lang_name.to_owned())
-                                .or_default().add_file(x, bytes, keywords);
+                        let module = parsable_file.module as usize;
+                        // The sections are the breakdown of this file, booked beside the row and
+                        // never into it; what they weigh is already inside the whole below
+                        for section in &report.sections {
+                            let section_keywords = lookup.find_by_name(&section.language)
+                                    .map(|inner| inner.keywords.as_slice()).unwrap_or(&[]);
+                            local_embedded[module].entry(lang_name.to_owned()).or_default()
+                                    .entry(section.language.clone()).or_default()
+                                    .add_file(&section.stats, section.bytes, section_keywords);
+                        }
+                        // The whole file weighs on its own language's row: a container file is one
+                        // file of its language, all of its lines included
+                        local_stats[module].entry(lang_name.to_owned())
+                                .or_default().add_file(&report.into_whole(), bytes, keywords);
                     },
                     // Separators normalised because the scan joins with the platform's own while the
                     // target it started from was resolved to forward slashes, and the two halves of
@@ -138,6 +148,17 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
         for (module, bucket) in local_stats.iter().enumerate() {
             for (lang_name, stats) in bucket.iter() {
                 global[module].entry(lang_name.clone()).or_default().add(stats);
+            }
+        }
+    }
+    if local_embedded.iter().any(|bucket| !bucket.is_empty()) {
+        let mut global = embedded_per_module.lock().unwrap();
+        for (module, bucket) in local_embedded.into_iter().enumerate() {
+            for (shell_name, sections) in bucket {
+                let shell_entry = global[module].entry(shell_name).or_default();
+                for (inner_name, stats) in sections {
+                    shell_entry.entry(inner_name).or_default().add(&stats);
+                }
             }
         }
     }

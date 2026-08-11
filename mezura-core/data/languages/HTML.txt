@@ -13,3 +13,10 @@ Multi line comment start
 <!--
 Multi line comment end
 -->
+
+Embedded region start
+<script <style
+Embedded region end
+</script> </style>
+Embedded region default
+js css

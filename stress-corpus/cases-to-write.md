@@ -1,17 +1,19 @@
 # Cases still without a file
 
-Files 01 to 49 are written and verified. What is listed here has no file yet, and each line says
+Files 01 to 54 are written and verified. What is listed here has no file yet, and each line says
 why. When one lands, its line leaves this document.
 
-## Waiting on a decision about the format
-
-- **A file holding more than one language**, which is where the biggest miscount of all lives: a
-  `.vue` counted whole with Vue's symbols, a `.html` whose `<script>` block uses `//` comments that
-  are read as markup, a `.php` file holding HTML and JavaScript. tokei reports these as several
-  languages and mezura reports one. Before any of them can be a case, the header has to be able to
-  say which languages the file holds and what each one's share is, and that has not been designed.
-
 ## Waiting on parser work
+
+- **A file whose languages interleave rather than sit in blocks**: a `.php` holding HTML, and the
+  ERB, JSP and Blade family. The switch happens anywhere, including in the middle of a line, and
+  both ways, which is a different problem from the `<script>` and `<style>` blocks that cases 50
+  to 54 cover. Nothing counts these correctly, tokei included, and the design chapter for it is
+  the "interleaved foresight" section of `archive/EMBEDDED_LANGUAGES.md`. A case would need a rule
+  for whose a line is when it belongs to two languages, which is the one genuinely new decision.
+- **An opening tag split over two lines**, `<script\n  lang="ts">`, which is legal and rare. It
+  counts as the shell today, deliberately, and a case would pin that as a choice rather than an
+  accident. Cheap to write, worth having before anyone changes the opener detection.
 
 - **C++ raw strings**, `R"( ... )"`. Undeclared because the closer would put `)` among the bytes the
   scan searches, which is a second pass over every line of C++. The delimited form

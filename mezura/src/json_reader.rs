@@ -130,7 +130,8 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
     // one module holding everything it counted, which is what the two blocks above already are.
     let modules = match root.get("modules") {
         Some(x) => parse_modules(read_array(x, "modules")?)?,
-        None => vec![ModuleResult { name: None, per_language: per_language.clone(), total: total.clone() }]
+        None => vec![ModuleResult { name: None, per_language: per_language.clone(), total: total.clone(),
+                embedded: Default::default() }]
     };
 
     let (scope, targets) = parse_scope(scope)?;
@@ -146,6 +147,9 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
             per_language,
             total,
             modules,
+            // A document does not carry the decomposition yet, and a reading without one is a
+            // reading whose container files simply have nothing to unfold
+            embedded: Default::default(),
             // The paths are written only when '--show-faulty-files' asked for them, so an absent
             // list means they were not detailed, never that nothing went wrong: how many there
             // were is in 'scan' and is read either way.
@@ -230,7 +234,8 @@ fn parse_modules(entries: &[Value]) -> Result<Vec<ModuleResult>, DocumentError> 
         Ok(ModuleResult {
             name: read_optional_name(entry, "name", &at)?,
             total: parse_stats(read_nested(entry, "total", &at)?, &join_location(&at, "total"))?,
-            per_language: parse_languages(read_list(entry, "languages", &at)?, &join_location(&at, "languages"))?
+            per_language: parse_languages(read_list(entry, "languages", &at)?, &join_location(&at, "languages"))?,
+            embedded: Default::default()
         })
     }).collect()
 }
@@ -377,9 +382,10 @@ mod tests {
         let result = RunResult {
             total: Stats::total_of(&per_language),
             modules: vec![
-                ModuleResult { name: Some("backend".to_owned()), per_language: hashmap!["Rust".to_owned() => rust], total: Stats::total_of(&hashmap!["Rust".to_owned() => parse_stats(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 0])]) },
-                ModuleResult { name: None, per_language: hashmap!["HTML".to_owned() => html.clone()], total: Stats::total_of(&hashmap!["HTML".to_owned() => html]) }],
+                ModuleResult { name: Some("backend".to_owned()), per_language: hashmap!["Rust".to_owned() => rust], total: Stats::total_of(&hashmap!["Rust".to_owned() => parse_stats(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 0])]), embedded: Default::default() },
+                ModuleResult { name: None, per_language: hashmap!["HTML".to_owned() => html.clone()], total: Stats::total_of(&hashmap!["HTML".to_owned() => html]), embedded: Default::default() }],
             per_language,
+            embedded: Default::default(),
             faulty_files: vec![FaultyFileDetails::new("D:\\dev\\a \"b\".rs".to_owned(), "stream did not contain valid UTF-8".to_owned(), 412)],
             files_present: FilesPresent { total_files: 9, relevant_files: 3, excluded_files: 4 },
             performance: Performance { duration_millis: 1180, threads: Threads::new(2, 8) },
@@ -507,7 +513,8 @@ mod tests {
         // and a run that named no module still has the one holding everything, so what a document
         // without the block reads back as has to be that and not an absence of modules
         let (mut plain, config) = populated();
-        plain.modules = vec![ModuleResult { name: None, per_language: plain.per_language.clone(), total: plain.total.clone() }];
+        plain.modules = vec![ModuleResult { name: None, per_language: plain.per_language.clone(), total: plain.total.clone(),
+                embedded: Default::default() }];
         let written = create_document(&plain, &Local::now(), &config);
         assert!(!written.contains("\"modules\""));
 

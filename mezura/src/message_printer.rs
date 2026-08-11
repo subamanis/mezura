@@ -102,8 +102,11 @@ pub const LANGUAGES_HELP  :  &str =
 
     1..n arguments separated by commas, case-insensitive
 
-    The given language names must exist in any of the files in the 'data/languages/' dir as the
-    parameter of the field 'Language'.
+    A language is named either by the name a file in the 'data/languages/' dir gives it under
+    'Language', or by any extension it claims, so 'javascript' and 'js' name the same one.
+
+    An extension two languages claim names whichever of them owns it for the counting, which is
+    the answer in 'extension_priority.txt' or the one '--force-language' gave.
 
     Only the languages specified here will be taken into account for the stats.
 
@@ -113,8 +116,8 @@ pub const EXCLUDE_LANGUAGES_HELP  :  &str =
 
     1..n arguments separated by commas, case-insensitive
 
-    The given language names should exist in any of the files in the 'data/languages/' dir as the
-    parameter of the field 'Language'.
+    A language is named either by the name a file in the 'data/languages/' dir gives it under
+    'Language', or by any extension it claims, so 'javascript' and 'js' name the same one.
 
     The given language names will be ignored from the stats calculation, if they exist.
 

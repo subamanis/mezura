@@ -36,6 +36,19 @@ Main changes:
       name is settled in "extension_priority.txt" under "contested-filenames" or with
       "--force-language Makefile=<language>". Three new languages come with it: Make, Dockerfile and
       CMake.
+  -> "JS" is now reported as "JavaScript" and "TS" as "TypeScript". Delete your old logs of those
+      projects or a comparison will read the rename as one language disappearing and another
+      appearing. Both '--languages js' and '--languages javascript' select it either way.
+  -> A language can now be named by any extension it claims, wherever a language name is expected:
+      '--languages js', '--exclude-languages rs', and the same inside a configuration file. An
+      extension that two languages claim names the one that owns it for the counting, which is the
+      answer in "extension_priority.txt" or the one "--force-language" gave.
+  -> The script and style sections of HTML, Vue and Svelte files are now counted with their own
+      languages' symbols instead of the file's, so a "//" comment inside a script block is a
+      comment and a "lang=\"ts\"" section counts as TS. The file still weighs whole on its own
+      language's row, and the per-language decomposition rides in the JSON-facing data for the
+      report to unfold in a later version. A language file declares such sections in a new
+      "Embedded region" block.
   -> Lua's counted comment brackets now work at every level: a pair written with "=*" in a
       language file, like --[=*[ with ]=*], matches any run of "=" and closes only at an end
       carrying the same count, so a "]]" inside a --[==[ block is text and the block ends where

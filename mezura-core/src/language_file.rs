@@ -35,6 +35,9 @@ const MULTILINE_COMMENT_START  : &str = "Multi line comment start";
 const MULTILINE_COMMENT_END    : &str = "Multi line comment end";
 const NESTING_COMMENT_START    : &str = "Nesting comment start";
 const NESTING_COMMENT_END      : &str = "Nesting comment end";
+const EMBEDDED_REGION_START    : &str = "Embedded region start";
+const EMBEDDED_REGION_END      : &str = "Embedded region end";
+const EMBEDDED_REGION_DEFAULT  : &str = "Embedded region default";
 const KEYWORD                  : &str = "Keyword";
 const KEYWORD_NAME             : &str = "NAME";
 const KEYWORD_ALIASES          : &str = "ALIASES";
@@ -334,6 +337,23 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         return None;
     }
 
+    // Sections of another language inside a file, HTML's script and style tags. Three lists paired
+    // by position: the opener, its closer, and the language the section falls to when the tag
+    // names none, written as an extension so it resolves the way a 'lang' attribute does.
+    let mut embedded_regions = Vec::new();
+    if header.as_deref() == Some(EMBEDDED_REGION_START) {
+        let starts = split_line_on_whitespace(&read_value_line(lines)?);
+        if starts.is_empty() || read_next_header(lines)?.as_str() != EMBEDDED_REGION_END {return None;}
+        let ends = split_line_on_whitespace(&read_value_line(lines)?);
+        if read_next_header(lines)?.as_str() != EMBEDDED_REGION_DEFAULT {return None;}
+        let defaults = split_line_on_whitespace(&read_value_line(lines)?);
+        if ends.len() != starts.len() || defaults.len() != starts.len() {return None;}
+        embedded_regions = starts.iter().zip(&ends).zip(&defaults)
+                .map(|((start, end), default)| crate::domain::EmbeddedRegion::of(start, end, default))
+                .collect();
+        header = read_next_header(lines);
+    }
+
     let mut keywords = Vec::new();
     while header.as_deref() == Some(KEYWORD) {
         if read_next_header(lines)?.as_str() != KEYWORD_NAME {return None;}
@@ -365,6 +385,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
             .with_nesting_comments(&nesting_comments.iter().map(|(start, end)| (start.as_str(), end.as_str()))
                     .collect::<Vec<_>>())
             .with_leveled_comments(&leveled_comments)
+            .with_embedded_regions(&embedded_regions)
             .with_filenames(&filenames.iter().map(String::as_str).collect::<Vec<_>>()))
 }
 
@@ -806,7 +827,7 @@ Multi line string symbols\n\"\"\"\n\nComment symbols\n#\n";
         assert!(parsed.string_symbols.is_empty() && parsed.multiline_strings.is_empty());
 
         // and the shipped files that declare crossing strings still do
-        for name in ["Python.txt", "JS.txt", "Java.txt", "Rust.txt", "C#.txt", "Go.txt"] {
+        for name in ["Python.txt", "JavaScript.txt", "Java.txt", "Rust.txt", "C#.txt", "Go.txt"] {
             let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
             assert!(!language.multiline_strings.is_empty(), "{name} lost its crossing string declaration");
         }
@@ -848,6 +869,33 @@ Multi line raw string symbols\n`\n\nComment symbols\n//\n";
             assert!(language.multiline_strings.iter().any(|crossing| !crossing.escapes),
                     "{name} lost its raw crossing string declaration");
         }
+    }
+
+    // Three lists paired by position, like the comment blocks: the opener, its closer, and the
+    // extension the section falls to when the tag names no language of its own.
+    #[test]
+    fn an_embedded_region_declares_its_tags_and_where_an_unnamed_section_falls() {
+        let good = "Language\nWeblike\n\nExtensions\nwbl\n\nString symbols\n\n\nComment symbols\n\n\
+Multi line comment start\n<!--\nMulti line comment end\n-->\n\n\
+Embedded region start\n<script <style\nEmbedded region end\n</script> </style>\nEmbedded region default\njs css\n";
+        let parsed = crate::language_file::parse_language(good).expect("the declaration must parse");
+        assert_eq!(vec![crate::domain::EmbeddedRegion::of("<script", "</script>", "js"),
+                crate::domain::EmbeddedRegion::of("<style", "</style>", "css")], parsed.embedded_regions);
+
+        // a list short of one entry leaves a region half declared, and the file is refused
+        let short = good.replace("Embedded region default\njs css", "Embedded region default\njs");
+        assert!(crate::language_file::parse_language(&short).is_none(),
+                "a region without its default was accepted");
+        let no_ends = good.replace("Embedded region end\n</script> </style>\n", "");
+        assert!(crate::language_file::parse_language(&no_ends).is_none());
+        let empty = good.replace("<script <style", "");
+        assert!(crate::language_file::parse_language(&empty).is_none());
+
+        // out of place it refuses the file whole, like every other block
+        let misplaced = "Language\nWeblike\n\nExtensions\nwbl\n\n\
+Embedded region start\n<script\nEmbedded region end\n</script>\nEmbedded region default\njs\n\n\
+String symbols\n\n\nComment symbols\n\n";
+        assert!(crate::language_file::parse_language(misplaced).is_none());
     }
 
     // Its own block between the string symbols and the crossing ones, so the format can say what
@@ -939,14 +987,17 @@ Comment symbols\n--\nMulti line comment start\n--[=*[\nMulti line comment end\n]
         // are not checked here any more: 'Language::new' takes them as pairs, so a start with no
         // end cannot be built at all, and an assertion that cannot fail reads as cover that is
         // not there.
-        // A language with no string symbol at all is HTML and only HTML, since nothing there is a
-        // string: naming it keeps a symbol lost from another file loud instead of allowed.
+        // A language with no string symbol at all is markup and only markup: HTML, and the shells
+        // of Vue and Svelte, where the quotes delimit attributes and the free text between tags is
+        // full of apostrophes. Their code lives in sections, which carry their own languages'
+        // strings. Naming them keeps a symbol lost from any other file loud instead of allowed.
         for language in &languages {
             let name = &language.name;
             assert!(!language.extensions.is_empty() || !language.filenames.is_empty(),
                     "{name} declares neither an extension nor a filename");
             assert!(!language.string_symbols.is_empty() || !language.multiline_strings.is_empty()
-                    || name == "HTML", "{name} declares no string symbol");
+                    || name == "HTML" || !language.embedded_regions.is_empty(),
+                    "{name} declares no string symbol");
         }
     }
 }

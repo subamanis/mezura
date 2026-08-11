@@ -10,7 +10,7 @@ use std::{collections::HashMap, fs::File, io::Read as IoRead, path::Path, str};
 
 use memchr::memmem;
 
-use crate::{EngineConfig, Language, phase_timing};
+use crate::{EmbeddedRegion, EngineConfig, Language, phase_timing};
 use crate::domain::{CommentPair, FileStats};
 
 pub const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
@@ -445,9 +445,82 @@ impl KeywordMatcher {
     }
 }
 
+// The maps a section's language is found through. 'extension_to_name' and 'set_aside' cover the
+// whole shipped set even when a run narrowed its languages, so that '--languages vue' still knows
+// what JavaScript is; a caller with no sections in play hands empty maps.
+pub struct EmbeddedLookup<'a> {
+    pub languages: &'a HashMap<String, Language>,
+    pub extension_to_name: &'a HashMap<String, std::sync::Arc<str>>,
+    pub set_aside: &'a HashMap<String, Language>,
+}
+
+impl EmbeddedLookup<'_> {
+    // What a tag says its section is written in, which people write either way: 'lang="scss"' is an
+    // extension and 'type="text/typescript"' is a language's name. The extension is tried first,
+    // since it is the form the declared defaults use and the one the user's priority rules answer
+    // for, and the name after it, so a language whose name is a whole word is found by that word.
+    fn find_by_spelling(&self, spelling: &str) -> Option<&Language> {
+        let lowered = spelling.to_lowercase();
+        if let Some(name) = self.extension_to_name.get(&lowered) {
+            return self.find_by_name(name.as_ref());
+        }
+        self.languages.values().chain(self.set_aside.values())
+                .find(|language| language.name.to_lowercase() == lowered)
+    }
+
+    pub fn find_by_name(&self, name: &str) -> Option<&Language> {
+        self.languages.get(name).or_else(|| self.set_aside.get(name))
+    }
+}
+
+// One matcher per language, built on first use. Sections make the per-file set open ended, which
+// is why the cache travels instead of a single matcher.
+#[derive(Default)]
+pub struct KeywordMatchers {
+    by_language: HashMap<String, Option<KeywordMatcher>>,
+}
+
+impl KeywordMatchers {
+    fn for_language(&mut self, language: &Language) -> Option<&KeywordMatcher> {
+        self.by_language.entry(language.name.clone())
+                .or_insert_with(|| KeywordMatcher::build(language)).as_ref()
+    }
+}
+
+// What one file counted to: the shell language's own lines, and one entry per embedded language
+// that had sections in the file. A file of a language with no regions is a report with no sections.
+pub struct FileReport {
+    pub shell: FileStats,
+    pub sections: Vec<SectionReport>,
+}
+
+pub struct SectionReport {
+    pub language: String,
+    pub stats: FileStats,
+    pub bytes: usize,
+}
+
+impl FileReport {
+    pub fn total_lines(&self) -> usize {
+        self.shell.lines + self.sections.iter().map(|section| section.stats.lines).sum::<usize>()
+    }
+
+    // The whole file as one number, which is what the shell language's row shows: a container file
+    // weighs all of its lines. The keywords stay the shell's own, because a section's keywords
+    // belong to the section's language and are carried by the sections themselves.
+    pub fn into_whole(mut self) -> FileStats {
+        for section in &self.sections {
+            self.shell.lines += section.stats.lines;
+            self.shell.code_lines += section.stats.code_lines;
+            self.shell.comment_lines += section.stats.comment_lines;
+        }
+        self.shell
+    }
+}
+
 pub fn parse_file(path: &Path, lang_name: &str, buf: &mut String, buffers: &mut ParseBuffers,
-    language_map: &HashMap<String,Language>, keyword_matcher: Option<&KeywordMatcher>, config: &EngineConfig)
--> Result<FileStats,String>
+    lookup: &EmbeddedLookup, matchers: &mut KeywordMatchers, config: &EngineConfig)
+-> Result<FileReport,String>
 {
     // None unless MEZURA_PHASE_TIMING is set, so a normal run never reads the clock at all
     let mut at = phase_timing::ENABLED.then(phase_timing::now);
@@ -472,10 +545,10 @@ pub fn parse_file(path: &Path, lang_name: &str, buf: &mut String, buffers: &mut 
         at = Some(phase_timing::now());
     }
 
-    let file_stats = parse_lines(buf, language_map.get(lang_name).unwrap(), keyword_matcher, config, buffers);
+    let report = parse_lines(buf, lookup.languages.get(lang_name).unwrap(), lookup, matchers, config, buffers);
     if let Some(t) = at { buffers.timing.parse_nanos += phase_timing::nanos_since(t); }
 
-    Ok(file_stats)
+    Ok(report)
 }
 
 // 'str::lines' splits through the standard library's own byte search, a SWAR loop over two words at
@@ -517,90 +590,252 @@ fn get_lines_of(contents: &str) -> LineIter<'_> {
     LineIter { contents, newlines: memchr::memchr_iter(b'\n', contents.as_bytes()), start: 0 }
 }
 
-fn parse_lines(contents: &str, language: &Language, keyword_matcher: Option<&KeywordMatcher>, config: &EngineConfig,
-    buffers: &mut ParseBuffers) -> FileStats
+// The carry from one line to the next, one set per language in play: the shell's survives a
+// section, a section's starts fresh at its opener and is dropped at its closer, the way the file
+// really reads.
+#[derive(Default)]
+struct WalkState {
+    open_comment: Option<(u8, u32)>,
+    open_str_symbol: Option<u8>,
+    continued_comment: bool,
+}
+
+// The lines of one embedded language, added up over every section of it in the file
+struct SectionBucket<'a> {
+    language: &'a Language,
+    stats: FileStats,
+    spans: Vec<(u32, u32)>,
+    bytes: usize,
+}
+
+fn parse_lines(contents: &str, language: &Language, lookup: &EmbeddedLookup, matchers: &mut KeywordMatchers,
+    config: &EngineConfig, buffers: &mut ParseBuffers) -> FileReport
 {
     let ParseBuffers { scan, alias_indices, code_spans, .. } = buffers;
-    let mut file_stats = match config.count_keywords {
+    let mut shell_stats = match config.count_keywords {
         false => FileStats::default(),
         true => FileStats::with_keywords(&language.keywords)
     };
-    let counting_keywords = config.count_keywords && keyword_matcher.is_some();
     code_spans.clear();
 
-    let mut open_comment = None;
-    let mut open_str_symbol = None;
-    let mut continued_comment = false;
-    for (line_start, raw_line) in get_lines_of(contents) {
-        file_stats.lines += 1;
+    let mut shell = WalkState::default();
+    let mut buckets: Vec<SectionBucket> = Vec::new();
+    let mut lines = get_lines_of(contents);
+    let mut handed_back = None;
+    while let Some((line_start, raw_line)) = handed_back.take().or_else(|| lines.next()) {
+        let had_code = walk_line(raw_line, line_start, language, config, config.count_keywords,
+                scan, &mut shell, &mut shell_stats, code_spans);
 
-        // Ascii-only trimming, since the unicode whitespace classification of trim() costs
-        // a significant part of the total run time, for lines that are code either way
-        let line = raw_line.trim_ascii();
-        if line.is_empty() { continued_comment = false; continue; }
-        let base = line_start + (raw_line.len() - raw_line.trim_ascii_start().len());
+        // A region opener only counts where the shell left it as code, so one sitting inside a
+        // comment or a string of the shell opens nothing
+        if had_code && !language.embedded_regions.is_empty()
+                && let Some((region, inner)) = find_region_opening(raw_line.trim_ascii(), &scan.code_ranges, language, lookup) {
+            // The tag line itself belongs to the shell, and anything it left open is cut off at
+            // the section boundary: per the HTML reading, what follows the tag is section content
+            shell = WalkState::default();
 
-        // A line joined to the one before it by a continuation symbol is the tail of that line's
-        // comment, and nothing on it is read: in C '// a comment \' makes the whole next line
-        // comment too, however it is written.
-        if continued_comment {
-            file_stats.comment_lines += 1;
-            continued_comment = ends_with_continuation(line, language);
-            continue;
+            let bucket_at = match buckets.iter().position(|bucket| bucket.language.name == inner.name) {
+                Some(at) => at,
+                None => {
+                    buckets.push(SectionBucket { language: inner, stats: match config.count_keywords {
+                        false => FileStats::default(),
+                        true => FileStats::with_keywords(&inner.keywords)
+                    }, spans: Vec::new(), bytes: 0 });
+                    buckets.len() - 1
+                }
+            };
+            let bucket = &mut buckets[bucket_at];
+            let mut inner_state = WalkState::default();
+            let section_from = end_of_line(contents, line_start, raw_line);
+            let mut section_to = contents.len();
+            for (inner_start, inner_raw) in lines.by_ref() {
+                // Per the HTML reading the closer ends the section wherever it stands, even inside
+                // a string of the section's language: that is why one writes '<\/script>' in
+                // JavaScript. The closer's line belongs to the shell.
+                if find_case_insensitive(inner_raw.as_bytes(), region.end.as_bytes()).is_some() {
+                    section_to = inner_start;
+                    handed_back = Some((inner_start, inner_raw));
+                    break;
+                }
+                walk_line(inner_raw, inner_start, inner, config, config.count_keywords,
+                        scan, &mut inner_state, &mut bucket.stats, &mut bucket.spans);
+            }
+            bucket.bytes += section_to - section_from;
         }
-        let continued = ends_with_continuation(line, language);
+    }
 
-        // Two functions rather than one with a branch, so a language without multiline comments never
-        // pays for the checks that only they need
-        let line_info =
-        if language.supports_multiline_comments() {
-            get_bounds_w_multiline_comments(line, language, open_comment, &open_str_symbol, scan)
-        } else {
-            get_bounds_only_single_line_comments(line, language, &open_str_symbol, scan)
-        };
+    if config.count_keywords {
+        if let Some(matcher) = matchers.for_language(language) {
+            count_keywords(contents, code_spans, matcher, &mut shell_stats, alias_indices);
+        }
+        for bucket in &mut buckets {
+            if let Some(matcher) = matchers.for_language(bucket.language) {
+                count_keywords(contents, &bucket.spans, matcher, &mut bucket.stats, alias_indices);
+            }
+        }
+    }
 
-        open_comment = line_info.open_comment_after;
-        // Only a symbol declared to cross lines carries its string to the next one, so the damage
-        // of an unbalanced quote is this line and not the rest of the file. A line ending in the
-        // continuation symbol is the exception: there the quote has not been left open by mistake,
-        // the language says the line goes on.
-        let continues_a_string = continued && language.line_continuation.as_ref()
-                .is_some_and(|continuation| continuation.in_strings);
-        open_str_symbol = line_info.open_str_sybol_after
-                .filter(|symbol| language.string_crosses_lines(*symbol) || continues_a_string);
+    FileReport {
+        shell: shell_stats,
+        sections: buckets.into_iter().map(|bucket| SectionReport {
+            language: bucket.language.name.clone(), stats: bucket.stats, bytes: bucket.bytes }).collect()
+    }
+}
 
-        // Whether this line ended inside a comment that the next one carries on. Only asked of a
-        // line that left no code and no open string behind, which is what a line comment leaves.
-        continued_comment = continued && open_str_symbol.is_none() && open_comment.is_none()
-                && line_info.code.is_none() && !line_info.has_string_literal
-                && language.line_continuation.as_ref().is_some_and(|continuation| continuation.in_comments);
+// One line into the counts of one language. Returns whether the line left code behind, which is
+// the only thing the section machinery needs to know about it.
+fn walk_line(raw_line: &str, line_start: usize, language: &Language, config: &EngineConfig,
+    collecting_spans: bool, scan: &mut ScanBuffers, state: &mut WalkState,
+    file_stats: &mut FileStats, code_spans: &mut Vec<(u32, u32)>) -> bool
+{
+    file_stats.lines += 1;
 
-        if line_info.code.is_some() {
-            // With the strings and comments stripped, a line holding no letter and no digit is
-            // punctuation the language required rather than anything the programmer said: '}',
-            // '});', '],', ')'. Bytes above 0x7f count as content, so an identifier in a non-latin
-            // alphabet reads as code and not as punctuation.
-            let is_no_content = !line_info.has_string_literal
-                    && !scan.code_ranges.iter().any(|(from, to)|
-                            line.as_bytes()[*from..*to].iter().any(|b| b.is_ascii_alphanumeric() || *b >= 0x80));
-            if config.braces_as_code || !is_no_content {
-                file_stats.code_lines += 1;
-                if counting_keywords {
-                    push_trimmed_spans(code_spans, &scan.code_ranges, line, base);
+    // Ascii-only trimming, since the unicode whitespace classification of trim() costs
+    // a significant part of the total run time, for lines that are code either way
+    let line = raw_line.trim_ascii();
+    if line.is_empty() { state.continued_comment = false; return false; }
+    let base = line_start + (raw_line.len() - raw_line.trim_ascii_start().len());
+
+    // A line joined to the one before it by a continuation symbol is the tail of that line's
+    // comment, and nothing on it is read: in C '// a comment \' makes the whole next line
+    // comment too, however it is written.
+    if state.continued_comment {
+        file_stats.comment_lines += 1;
+        state.continued_comment = ends_with_continuation(line, language);
+        return false;
+    }
+    let continued = ends_with_continuation(line, language);
+
+    // Two functions rather than one with a branch, so a language without multiline comments never
+    // pays for the checks that only they need
+    let line_info =
+    if language.supports_multiline_comments() {
+        get_bounds_w_multiline_comments(line, language, state.open_comment, &state.open_str_symbol, scan)
+    } else {
+        get_bounds_only_single_line_comments(line, language, &state.open_str_symbol, scan)
+    };
+
+    state.open_comment = line_info.open_comment_after;
+    // Only a symbol declared to cross lines carries its string to the next one, so the damage
+    // of an unbalanced quote is this line and not the rest of the file. A line ending in the
+    // continuation symbol is the exception: there the quote has not been left open by mistake,
+    // the language says the line goes on.
+    let continues_a_string = continued && language.line_continuation.as_ref()
+            .is_some_and(|continuation| continuation.in_strings);
+    state.open_str_symbol = line_info.open_str_sybol_after
+            .filter(|symbol| language.string_crosses_lines(*symbol) || continues_a_string);
+
+    // Whether this line ended inside a comment that the next one carries on. Only asked of a
+    // line that left no code and no open string behind, which is what a line comment leaves.
+    state.continued_comment = continued && state.open_str_symbol.is_none() && state.open_comment.is_none()
+            && line_info.code.is_none() && !line_info.has_string_literal
+            && language.line_continuation.as_ref().is_some_and(|continuation| continuation.in_comments);
+
+    if line_info.code.is_some() {
+        // With the strings and comments stripped, a line holding no letter and no digit is
+        // punctuation the language required rather than anything the programmer said: '}',
+        // '});', '],', ')'. Bytes above 0x7f count as content, so an identifier in a non-latin
+        // alphabet reads as code and not as punctuation.
+        let is_no_content = !line_info.has_string_literal
+                && !scan.code_ranges.iter().any(|(from, to)|
+                        line.as_bytes()[*from..*to].iter().any(|b| b.is_ascii_alphanumeric() || *b >= 0x80));
+        if config.braces_as_code || !is_no_content {
+            file_stats.code_lines += 1;
+            if collecting_spans {
+                push_trimmed_spans(code_spans, &scan.code_ranges, line, base);
+            }
+        }
+        true
+    } else if line_info.has_string_literal {
+        file_stats.code_lines += 1;
+        false
+    } else {
+        file_stats.comment_lines += 1;
+        false
+    }
+}
+
+// Where the line after this one begins, which is where a section's bytes start: past the line and
+// past its own newline, whichever width the file wrote it with
+fn end_of_line(contents: &str, line_start: usize, raw_line: &str) -> usize {
+    let mut end = line_start + raw_line.len();
+    if contents.as_bytes().get(end) == Some(&b'\r') { end += 1; }
+    if contents.as_bytes().get(end) == Some(&b'\n') { end += 1; }
+    end
+}
+
+// A region opener that survived the shell's own reading of the line, with the language its section
+// is in. None when the tag does not close on this line, when its section also closes on this line,
+// or when no language can be found for it: all three count as shell, which is what they were before
+// regions existed.
+fn find_region_opening<'a>(line: &str, code_ranges: &[(usize, usize)], language: &'a Language,
+    lookup: &'a EmbeddedLookup) -> Option<(&'a EmbeddedRegion, &'a Language)>
+{
+    let bytes = line.as_bytes();
+    for (from, to) in code_ranges {
+        let mut cursor = *from;
+        while let Some(offset) = memchr::memchr(b'<', &bytes[cursor..*to]) {
+            let at = cursor + offset;
+            cursor = at + 1;
+            for region in &language.embedded_regions {
+                if find_case_insensitive(&bytes[at..], region.start.as_bytes()) != Some(0) {
+                    continue;
+                }
+                let after_start = at + region.start.len();
+                // The tag has to close on its own line; split over two, the line stays shell
+                let Some(tag_close) = memchr::memchr(b'>', &bytes[after_start..]) else { continue };
+                // A section that opens and closes on one line stays shell whole, tags and all
+                if find_case_insensitive(&bytes[after_start + tag_close..], region.end.as_bytes()).is_some() {
+                    continue;
+                }
+                let tag_text = &line[after_start..after_start + tag_close];
+                let named = find_attribute_value(tag_text, "lang")
+                        .or_else(|| find_attribute_value(tag_text, "type").map(strip_mime_family));
+                let inner = named.and_then(|value| lookup.find_by_spelling(value))
+                        .or_else(|| lookup.find_by_spelling(&region.default));
+                if let Some(inner) = inner {
+                    return Some((region, inner));
                 }
             }
-        } else if line_info.has_string_literal {
-            file_stats.code_lines += 1;
-        } else {
-            file_stats.comment_lines += 1;
         }
     }
+    None
+}
 
-    if let Some(matcher) = keyword_matcher && counting_keywords {
-        count_keywords(contents, code_spans, matcher, &mut file_stats, alias_indices);
+// The value of one attribute inside a tag's text, with either quote or none: lang="ts", lang='ts'
+// and lang=ts all answer ts. The name has to be preceded by whitespace so that 'slang=' is not
+// 'lang=', and the '=' may carry spaces around it.
+fn find_attribute_value<'a>(tag_text: &'a str, name: &str) -> Option<&'a str> {
+    let bytes = tag_text.as_bytes();
+    let mut cursor = 0;
+    while let Some(offset) = find_case_insensitive(&bytes[cursor..], name.as_bytes()) {
+        let at = cursor + offset;
+        cursor = at + 1;
+        if at != 0 && !bytes[at - 1].is_ascii_whitespace() {
+            continue;
+        }
+        let rest = tag_text[at + name.len()..].trim_ascii_start();
+        let Some(value) = rest.strip_prefix('=') else { continue };
+        let value = value.trim_ascii_start();
+        return Some(match value.as_bytes().first() {
+            Some(&quote @ (b'"' | b'\'')) => value[1..].split(quote as char).next().unwrap_or(""),
+            _ => value.split_ascii_whitespace().next().unwrap_or("")
+        });
     }
+    None
+}
 
-    file_stats
+// 'type="text/typescript"' names its language after the slash, and a bare 'type="module"' has none
+fn strip_mime_family(value: &str) -> &str {
+    value.rsplit('/').next().unwrap_or(value)
+}
+
+fn find_case_insensitive(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    (0..=haystack.len() - needle.len())
+            .find(|&at| haystack[at..at + needle.len()].eq_ignore_ascii_case(needle))
 }
 
 // 'code' is the span of ScanBuffers::code_ranges that belongs to this line. None means the line left
@@ -1379,6 +1614,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
+        embedded_regions : vec![],
         multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned()],
         multiline_comments : vec![("/*".to_owned(), "*/".to_owned())],
@@ -1395,6 +1631,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
+        embedded_regions : vec![],
         multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned(),"#".to_owned()],
         multiline_comments : vec![("/*".to_owned(), "*/".to_owned())],
@@ -1411,6 +1648,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
+        embedded_regions : vec![],
         multiline_strings : vec![],
         comment_symbols : vec!["#".to_owned()],
         multiline_comments : vec![],
@@ -1427,6 +1665,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
+        embedded_regions : vec![],
         multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned()],
         multiline_comments : vec![("/*".to_owned(), "*/".to_owned())],
@@ -1446,6 +1685,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
+        embedded_regions : vec![],
         multiline_strings : vec![MultilineString::escaping("\"\"\""), MultilineString::escaping("'''")],
         comment_symbols : vec!["#".to_owned(), "//".to_owned(), "--".to_owned()],
         multiline_comments : vec![],
@@ -1460,8 +1700,32 @@ mod tests {
 
     static JAVA_MATCHER : LazyLock<KeywordMatcher> = LazyLock::new(|| KeywordMatcher::build(&JAVA).unwrap());
 
-    fn matcher_for(lang_name: &str) -> Option<KeywordMatcher> {
-        KeywordMatcher::build(LANGUAGE_MAP_REF.get(lang_name).unwrap())
+    static NO_EXTENSIONS : LazyLock<HashMap<String, Arc<str>>> = LazyLock::new(HashMap::new);
+    static NO_SET_ASIDE : LazyLock<HashMap<String, Language>> = LazyLock::new(HashMap::new);
+
+    // With the real extension map, so a fixture or a stress case whose sections name a language
+    // resolves it the way a run does; without priority rules, which no fixture contests
+    static SHIPPED_EXTENSIONS : LazyLock<HashMap<String, Arc<str>>> = LazyLock::new(||
+            build_language_map_by(IdentifiedBy::Extension, &LANGUAGE_MAP_REF, &HashMap::new(), &HashMap::new()).0);
+
+    fn shipped_lookup() -> EmbeddedLookup<'static> {
+        EmbeddedLookup { languages: &LANGUAGE_MAP_REF, extension_to_name: &SHIPPED_EXTENSIONS, set_aside: &NO_SET_ASIDE }
+    }
+
+    // The whole file as its language's row sees it, which is what these tests always asserted
+    fn parse_file_whole(path: &Path, lang_name: &str, buf: &mut String, config: &EngineConfig) -> Result<FileStats, String> {
+        parse_file_report(path, lang_name, buf, config).map(FileReport::into_whole)
+    }
+
+    fn parse_file_report(path: &Path, lang_name: &str, buf: &mut String, config: &EngineConfig) -> Result<FileReport, String> {
+        parse_file(path, lang_name, buf, &mut ParseBuffers::default(), &shipped_lookup(),
+                &mut KeywordMatchers::default(), config)
+    }
+
+    fn parse_lines_whole(contents: &str, language: &Language) -> FileStats {
+        parse_lines(contents, language, &EmbeddedLookup { languages: &NO_SET_ASIDE,
+                extension_to_name: &NO_EXTENSIONS, set_aside: &NO_SET_ASIDE },
+                &mut KeywordMatchers::default(), &EngineConfig::default(), &mut ParseBuffers::default()).into_whole()
     }
 
     // Seeded from the language and then given the one file, which is what a real run does: the seed
@@ -1470,7 +1734,7 @@ mod tests {
     fn content_info_of(file: FileStats, lang_name: &str) -> Stats {
         let language = LANGUAGE_MAP_REF.get(lang_name).unwrap();
         let mut stats = Stats::from(language);
-        stats.add_file(file, 0, &language.keywords);
+        stats.add_file(&file, 0, &language.keywords);
         stats
     }
 
@@ -1479,7 +1743,7 @@ mod tests {
         let mut buf = String::with_capacity(150);
 
         let mut config = EngineConfig::default();
-        let result = parse_file(&sample_file("a.txt"), "Java", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &config);
+        let result = parse_file_whole(&sample_file("a.txt"), "Java", &mut buf, &config);
         let result = content_info_of(result.unwrap(), "Java");
         assert_eq!(Stats::new(1, 0, 44, 13, 15, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         buf.clear();
@@ -1487,33 +1751,33 @@ mod tests {
         // comes from the language and not from the file, so hiding them stops the counting and not
         // the language's own list of what it would have counted.
         config.count_keywords = false;
-        let result = parse_file(&sample_file("a.txt"), "Java", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &config);
+        let result = parse_file_whole(&sample_file("a.txt"), "Java", &mut buf, &config);
         let result = content_info_of(result.unwrap(), "Java");
         assert_eq!(Stats::new(1, 0, 44, 13, 15, hashmap!("classes".to_owned()=>0,"interfaces".to_owned()=>0)), result);
         buf.clear();
         config.count_keywords = true;
-        let result = parse_file(&sample_file("a.txt"), "C#", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("C#").as_ref(), &EngineConfig::default());
+        let result = parse_file_whole(&sample_file("a.txt"), "C#", &mut buf, &EngineConfig::default());
         let result = content_info_of(result.unwrap(), "C#");
         assert_eq!(Stats::new(1, 0, 44, 13, 15, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         buf.clear();
         
-        let result = parse_file(&sample_file("d.txt"), "C#", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("C#").as_ref(), &EngineConfig::default());
+        let result = parse_file_whole(&sample_file("d.txt"), "C#", &mut buf, &EngineConfig::default());
         let result = content_info_of(result.unwrap(), "C#");
         assert_eq!(Stats::new(1, 0, 19, 7, 10, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         buf.clear();
-        let result = parse_file(&sample_file("d.txt"), "Java", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &EngineConfig::default());
+        let result = parse_file_whole(&sample_file("d.txt"), "Java", &mut buf, &EngineConfig::default());
         let result = content_info_of(result.unwrap(), "Java");
         assert_eq!(Stats::new(1, 0, 19, 7, 10, hashmap!("classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         buf.clear();
 
-        let result = parse_file(&sample_file("b.txt"), "Java", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &EngineConfig::default());
+        let result = parse_file_whole(&sample_file("b.txt"), "Java", &mut buf, &EngineConfig::default());
         let result = content_info_of(result.unwrap(), "Java");
         assert_eq!(Stats::new(1, 0, 19, 11, 5, hashmap!("classes".to_owned()=>7,"interfaces".to_owned()=>0)), result);
         buf.clear();
 
         // The 'class' on the line between two lone apostrophes counts: Python declares its plain
         // quotes single-line, so the quote above it dies at its own line instead of swallowing it
-        let result = parse_file(&sample_file("c.txt"), "Python", &mut buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Python").as_ref(), &EngineConfig::default());
+        let result = parse_file_whole(&sample_file("c.txt"), "Python", &mut buf, &EngineConfig::default());
         let result = content_info_of(result.unwrap(), "Python");
         assert_eq!(Stats::new(1, 0, 11, 6, 3, hashmap!("classes".to_owned()=>3)), result);
         buf.clear();
@@ -1527,7 +1791,7 @@ mod tests {
         let path = sample_file("a.txt");
         let count_with = |flag: bool, buf: &mut String| {
             let config = EngineConfig { braces_as_code: flag, ..Default::default() };
-            let stats = parse_file(&path, "Java", buf, &mut ParseBuffers::default(), &LANGUAGE_MAP_REF, matcher_for("Java").as_ref(), &config).unwrap();
+            let stats = parse_file_whole(&path, "Java", buf, &config).unwrap();
             (stats.lines, stats.code_lines, stats.comment_lines)
         };
 
@@ -1763,6 +2027,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
+        embedded_regions : vec![],
         multiline_strings : vec![],
         comment_symbols : vec!["--".to_owned()],
         multiline_comments : vec![("--[[".to_owned(), "]]".to_owned())],
@@ -1796,6 +2061,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
+        embedded_regions : vec![],
         multiline_strings : vec![],
         comment_symbols : vec!["#".to_owned()],
         multiline_comments : vec![("<#".to_owned(), "#>".to_owned())],
@@ -1831,6 +2097,7 @@ mod tests {
         string_symbols : vec!["'".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
+        embedded_regions : vec![],
         multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned()],
         multiline_comments : vec![("{".to_owned(), "}".to_owned()), ("(*".to_owned(), "*)".to_owned())],
@@ -1849,6 +2116,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
+        embedded_regions : vec![],
         multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned()],
         multiline_comments : vec![("/*".to_owned(), "*/".to_owned())],
@@ -2122,6 +2390,142 @@ mod tests {
         assert_eq!(TextInfo::none_all(true), bounds_multi("still \" /* text `", &go, None, &Some(1)));
     }
 
+    // The languages a section can resolve to, keyed the way the real run keys them: definitions by
+    // name, and the attribute values by extension.
+    fn section_fixture() -> (HashMap<String, Language>, HashMap<String, Arc<str>>) {
+        let js = Language::new("JS", ["js"], ["\""], ["//"], &[("/*", "*/")],
+                [Keyword { descriptive_name: "functions".to_owned(), aliases: vec!["function".to_owned()] }]);
+        let css = Language::new("CSS", ["css"], [""; 0], [""; 0], &[("/*", "*/")], []);
+        let languages = crate::languages::keyed_by_name(vec![js, css]);
+        let extensions = HashMap::from([("js".to_owned(), Arc::from("JS")), ("css".to_owned(), Arc::from("CSS"))]);
+        (languages, extensions)
+    }
+
+    fn web_shell() -> Language {
+        Language::new("web", ["wbl"], [""; 0], [""; 0], &[("<!--", "-->")], [])
+                .with_embedded_regions(&[EmbeddedRegion::of("<script", "</script>", "js"),
+                        EmbeddedRegion::of("<style", "</style>", "css")])
+    }
+
+    fn parse_with_sections(contents: &str, shell: &Language,
+        languages: &HashMap<String, Language>, extensions: &HashMap<String, Arc<str>>) -> FileReport
+    {
+        let lookup = EmbeddedLookup { languages, extension_to_name: extensions, set_aside: &NO_SET_ASIDE };
+        parse_lines(contents, shell, &lookup, &mut KeywordMatchers::default(),
+                &EngineConfig::default(), &mut ParseBuffers::default())
+    }
+
+    #[test]
+    fn a_section_is_counted_with_its_own_language_and_the_tag_lines_stay_with_the_shell() {
+        let (languages, extensions) = section_fixture();
+        let contents = "<p>hello</p>\n<script>\n// a js comment\nvar s = \"x\"; function f() {}\n</script>\n\
+<style>\n/* css comment */\n</style>\n<p>bye</p>\n";
+
+        let report = parse_with_sections(contents, &web_shell(), &languages, &extensions);
+        assert_eq!((6, 6, 0), (report.shell.lines, report.shell.code_lines, report.shell.comment_lines),
+                "the tag lines and the html around them belong to the shell");
+
+        let js = &report.sections[0];
+        assert_eq!(("JS", 2, 1, 1), (js.language.as_str(), js.stats.lines, js.stats.code_lines, js.stats.comment_lines));
+        assert_eq!(vec![1], js.stats.keyword_occurences, "the js keywords count inside the js section");
+        let css = &report.sections[1];
+        assert_eq!(("CSS", 1, 0, 1), (css.language.as_str(), css.stats.lines, css.stats.code_lines, css.stats.comment_lines));
+
+        // the bytes of a section are exactly the bytes between its tag lines
+        let js_bytes = contents.find("</script>").unwrap() - (contents.find("<script>").unwrap() + "<script>\n".len());
+        assert_eq!(js_bytes, js.bytes);
+        assert_eq!(contents.lines().count(), report.total_lines(), "a line of the file is counted exactly once");
+    }
+
+    // The opener only counts where the shell read it as code: inside a comment or a string of the
+    // shell it is text, which is what tokei gets only half right
+    #[test]
+    fn an_opener_inside_a_comment_or_a_string_of_the_shell_opens_nothing() {
+        let (languages, extensions) = section_fixture();
+        let report = parse_with_sections("<!-- <script> -->\n<p>x</p>\n", &web_shell(), &languages, &extensions);
+        assert!(report.sections.is_empty(), "a tag inside a comment opened a section");
+        assert_eq!((2, 1, 1), (report.shell.lines, report.shell.code_lines, report.shell.comment_lines));
+
+        let stringy = Language::new("webstr", ["wbs"], ["\""], [""; 0], &[], [])
+                .with_embedded_regions(&[EmbeddedRegion::of("<script", "</script>", "js")]);
+        let report = parse_with_sections("x = \"<script>\"\n", &stringy, &languages, &extensions);
+        assert!(report.sections.is_empty(), "a tag inside a string opened a section");
+    }
+
+    #[test]
+    fn the_tag_names_its_language_and_falls_to_the_declared_default_when_it_does_not() {
+        let (languages, extensions) = section_fixture();
+        let shell = web_shell();
+
+        // 'lang' wins over the region's default, however the value is quoted
+        for tag in ["<script lang=\"css\">", "<script lang='css'>", "<script lang=css>"] {
+            let contents = format!("{tag}\n/* x */\n</script>\n");
+            let report = parse_with_sections(&contents, &shell, &languages, &extensions);
+            assert_eq!("CSS", report.sections[0].language, "{tag} did not resolve its language");
+        }
+        // a mime 'type' names its language after the slash, by extension or by the language's own
+        // name, since people write both and only one of the two is an extension
+        let report = parse_with_sections("<script type=\"text/js\">\nvar x = 1;\n</script>\n", &shell, &languages, &extensions);
+        assert_eq!("JS", report.sections[0].language);
+        let report = parse_with_sections("<style lang=\"CSS\">\n.a { color: red; }\n</style>\n", &shell, &languages, &extensions);
+        assert_eq!("CSS", report.sections[0].language, "a language's own name was not recognised");
+        // a value nobody recognises falls to the default rather than losing the section
+        let report = parse_with_sections("<script lang=\"zz\">\nvar x = 1;\n</script>\n", &shell, &languages, &extensions);
+        assert_eq!("JS", report.sections[0].language);
+        // and 'slang=' is not 'lang='
+        let report = parse_with_sections("<script slang=\"css\">\nvar x = 1;\n</script>\n", &shell, &languages, &extensions);
+        assert_eq!("JS", report.sections[0].language);
+    }
+
+    // HTML reads its tags without regard to case, and a section that never closes runs to the end
+    // of the file the way an unclosed block comment does
+    #[test]
+    fn tags_match_in_any_case_and_an_unclosed_section_runs_to_the_end() {
+        let (languages, extensions) = section_fixture();
+        let report = parse_with_sections("<SCRIPT>\n// x\n</SCRIPT>\n<p>y</p>\n", &web_shell(), &languages, &extensions);
+        assert_eq!(1, report.sections.len(), "an upper case tag was not read as a tag");
+        assert_eq!((1, 0, 1), (report.sections[0].stats.lines, report.sections[0].stats.code_lines,
+                report.sections[0].stats.comment_lines));
+
+        let contents = "<p>x</p>\n<script>\n// one\n// two\n";
+        let report = parse_with_sections(contents, &web_shell(), &languages, &extensions);
+        assert_eq!((2, 2), (report.shell.lines, report.sections[0].stats.lines));
+        let section_from = contents.find("// one").unwrap();
+        assert_eq!(contents.len() - section_from, report.sections[0].bytes);
+    }
+
+    // The three shapes that stay shell whole: a tag split over two lines, a section that opens and
+    // closes on one line, and a language the maps cannot answer for
+    #[test]
+    fn what_cannot_be_a_section_counts_as_the_shell_it_always_was() {
+        let (languages, extensions) = section_fixture();
+        let report = parse_with_sections("<script\nlang=\"js\">\nvar x = 1;\n</script>\n", &web_shell(), &languages, &extensions);
+        assert!(report.sections.is_empty(), "a tag split over two lines opened a section");
+
+        let report = parse_with_sections("<script>var x = 1;</script>\n<p>y</p>\n", &web_shell(), &languages, &extensions);
+        assert!(report.sections.is_empty(), "a one line section left the line");
+        assert_eq!((2, 2), (report.shell.lines, report.shell.code_lines));
+
+        // A default nothing can answer for, by extension or by name, leaves the section as shell
+        // rather than counting it under a language that does not exist
+        let unknown = Language::new("web", ["wbl"], [""; 0], [""; 0], &[("<!--", "-->")], [])
+                .with_embedded_regions(&[EmbeddedRegion::of("<script", "</script>", "nosuchthing")]);
+        let report = parse_with_sections("<script>\nvar x = 1;\n</script>\n", &unknown, &languages, &extensions);
+        assert!(report.sections.is_empty(), "a section resolved to a language nothing declares");
+        assert_eq!((3, 3), (report.shell.lines, report.shell.code_lines));
+    }
+
+    // Two sections of one language add up in one entry, the way the report will show them
+    #[test]
+    fn two_sections_of_the_same_language_are_one_entry_of_the_report() {
+        let (languages, extensions) = section_fixture();
+        let contents = "<script>\n// one\n</script>\n<script>\n// two\nvar x = 1;\n</script>\n";
+        let report = parse_with_sections(contents, &web_shell(), &languages, &extensions);
+        assert_eq!(1, report.sections.len());
+        assert_eq!((3, 1, 2), (report.sections[0].stats.lines, report.sections[0].stats.code_lines,
+                report.sections[0].stats.comment_lines));
+    }
+
     // A string ends with its line unless its symbol was declared to cross lines, so an unbalanced
     // quote costs one line while a docstring still spans as many as it likes.
     #[test]
@@ -2132,15 +2536,15 @@ mod tests {
                 .with_multiline_strings(&["\"\"\"", "\"", "'"]);
         let contents = "a = \"unbalanced\nb = 1\nc = 2\n# comment\n";
 
-        let stats = parse_lines(contents, &plain, None, &EngineConfig::default(), &mut ParseBuffers::default());
+        let stats = parse_lines_whole(contents, &plain);
         assert_eq!((4, 3, 1), (stats.lines, stats.code_lines, stats.comment_lines));
         // declared crossing, everything after the quote is string content and code to the end
-        let stats = parse_lines(contents, &crossing, None, &EngineConfig::default(), &mut ParseBuffers::default());
+        let stats = parse_lines_whole(contents, &crossing);
         assert_eq!((4, 4, 0), (stats.lines, stats.code_lines, stats.comment_lines));
 
         // and the docstring symbol, which is declared crossing in both, still spans lines
         let doc = "d = \"\"\"docstring\n# still string\n\"\"\"\ne = 1\n# comment\n";
-        let stats = parse_lines(doc, &plain, None, &EngineConfig::default(), &mut ParseBuffers::default());
+        let stats = parse_lines_whole(doc, &plain);
         assert_eq!((5, 4, 1), (stats.lines, stats.code_lines, stats.comment_lines));
     }
 
@@ -2168,6 +2572,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
+        embedded_regions : vec![],
         multiline_strings : vec![],
         comment_symbols : vec![";".to_owned()],
         multiline_comments : vec![],
@@ -2556,6 +2961,9 @@ mod tests {
     // it is included in 'lines' and excluded from 'code'.
     fn parse_expectations(first_line: &str) -> Option<HashMap<String, usize>> {
         let after_marker = first_line.split_once(MARKER)?.1;
+        // A fixture in a language whose comments are blocks carries the closer on the header line,
+        // and the closer is where the declarations end rather than a malformed one
+        let after_marker = after_marker.split("-->").next().unwrap_or(after_marker);
         let mut expectations = HashMap::new();
         for entry in after_marker.split_whitespace() {
             let (key, value) = entry.split_once('=')?;
@@ -2604,10 +3012,8 @@ mod tests {
             };
 
             let language = LANGUAGE_MAP_REF.get(lang_name.as_ref()).unwrap();
-            let keyword_matcher = KeywordMatcher::build(language);
             let mut buf = String::new();
-            let stats = match parse_file(&path, lang_name.as_ref(), &mut buf, &mut ParseBuffers::default(),
-                    &LANGUAGE_MAP_REF, keyword_matcher.as_ref(), &config) {
+            let stats = match parse_file_whole(&path, lang_name.as_ref(), &mut buf, &config) {
                 Ok(stats) => stats,
                 Err(x) => {
                     failures.push(format!("{name}: could not be parsed: {x}"));
@@ -2673,6 +3079,18 @@ mod tests {
         Some((value_before("lines")?, value_before("code")?, value_before("comment")?))
     }
 
+    // The sections a case declares, as 'mezura-section TS 2 lines 1 code 1 comment', one line each.
+    // A case in a container language needs them: its three totals are the same whether the sections
+    // were found at all, so without these lines the file that proves the feature asserts nothing
+    // about it. The language is the first word after the marker.
+    fn parse_stress_sections(header: &str, marker: &str) -> Vec<(String, (usize, usize, usize))> {
+        header.lines().filter_map(|line| {
+            let rest = line.split_once(marker)?.1;
+            let language = rest.split_whitespace().next()?;
+            Some((language.to_owned(), parse_stress_counts(rest, language)?))
+        }).collect()
+    }
+
     // Each file of the corpus declares the honest answer and the answer mezura gives today. The
     // assertion is on the second, so a case mezura gets wrong keeps the suite green while saying
     // so out loud, and the moment the answer changes at all somebody has to look: a fix has to
@@ -2691,9 +3109,10 @@ mod tests {
             if !name.contains('.') || name.ends_with(".md") { continue; }
 
             let contents = std::fs::read_to_string(&path).unwrap();
-            // Generous, since a case that carries another counter's numbers as well as ours has a
-            // header of more than the three lines the plainest one needs
-            let header = contents.lines().take(12).collect::<Vec<_>>().join("\n");
+            // Generous, since a case that carries another counter's numbers as well as ours, and a
+            // line per section of each, has a header far longer than the three lines the plainest
+            // one needs
+            let header = contents.lines().take(20).collect::<Vec<_>>().join("\n");
             let (Some(real), Some(declared)) = (parse_stress_counts(&header, "mezura-real"),
                     parse_stress_counts(&header, "mezura-count")) else {
                 failures.push(format!("{name}: needs a 'mezura-real' and a 'mezura-count' line, each \
@@ -2705,12 +3124,24 @@ mod tests {
                 continue;
             };
 
-            let keyword_matcher = KeywordMatcher::build(&LANGUAGE_MAP_REF[lang_name.as_ref()]);
             let mut buf = String::new();
-            let stats = parse_file(&path, lang_name.as_ref(), &mut buf, &mut ParseBuffers::default(),
-                    &LANGUAGE_MAP_REF, keyword_matcher.as_ref(), &config)
+            let report = parse_file_report(&path, lang_name.as_ref(), &mut buf, &config)
                     .unwrap_or_else(|x| panic!("{name} could not be parsed: {x}"));
+            let mut found = report.sections.iter().map(|section| (section.language.clone(),
+                    (section.stats.lines, section.stats.code_lines, section.stats.comment_lines)))
+                    .collect::<Vec<_>>();
+            let stats = report.into_whole();
             let counted = (stats.lines, stats.code_lines, stats.comment_lines);
+
+            // Declared and found are compared as sets, since the order sections appear in is the
+            // file's business and not the declaration's
+            let mut sections = parse_stress_sections(&header, "mezura-section");
+            sections.sort();
+            found.sort();
+            if sections != found {
+                failures.push(format!("{name} ({lang_name}): declares the sections {sections:?} \
+                        and found {found:?}"));
+            }
 
             if counted != declared {
                 let verdict = if counted == real {"it is now right, so promote the file"}

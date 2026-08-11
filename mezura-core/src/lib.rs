@@ -16,7 +16,7 @@ pub mod languages;
 pub mod render;
 pub mod warnings;
 
-pub use domain::{Keyword, Language, LeveledPair, MultilineString, Stats};
+pub use domain::{EmbeddedRegion, Keyword, Language, LeveledPair, MultilineString, Stats};
 pub use engine::config::{EngineConfig, Target, Threads};
 pub use engine::targets::TargetError;
 pub use languages::Languages;
@@ -52,6 +52,7 @@ pub(crate) type SharedLanguageLookup = Arc<engine::identity::LanguageLookup>;
 // One bucket per module. A run where the user named no modules at all has exactly one bucket, so
 // nothing further down has two shapes to handle.
 pub(crate) type StatsMapMut = Arc<Mutex<Vec<HashMap<String,Stats>>>>;
+pub(crate) type EmbeddedMapMut = Arc<Mutex<Vec<HashMap<String,HashMap<String,Stats>>>>>;
 
 // Counts the directories and files named in 'config' and returns the figures.
 //
@@ -91,12 +92,15 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
     let config = Arc::new(config.clone());
     let faulty_files_ref : FaultyFilesListMut  = Arc::new(Mutex::new(Vec::with_capacity(10)));
     let finish_condition_ref = Arc::new(AtomicBool::new(false));
-    let (by_name, lookup) = languages.into_parts();
+    let (by_name, lookup, embedded_definitions) = languages.into_parts();
     let language_map_ref = Arc::new(by_name);
     let language_lookup: SharedLanguageLookup = Arc::new(lookup);
+    let embedded_definitions = Arc::new(embedded_definitions);
     let modules = Arc::new(Modules::of(&dirs));
     let stats_per_module : StatsMapMut =
             Arc::new(Mutex::new(make_language_stats(&language_map_ref, modules.count())));
+    let embedded_per_module : EmbeddedMapMut =
+            Arc::new(Mutex::new(vec![HashMap::new(); modules.count()]));
 
     let mut files_present = FilesPresent::default();
     let idle_producers = Arc::new(AtomicUsize::new(0));
@@ -149,7 +153,8 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
     let counting_ended = Arc::new(AtomicU64::new(0));
     for i in 0..config.threads.consumers() {
         match engine::consumer::start_parser_thread(i, files_injector.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
-                stats_per_module.clone(), language_map_ref.clone(), config.clone(),
+                stats_per_module.clone(), embedded_per_module.clone(), language_map_ref.clone(),
+                embedded_definitions.clone(), config.clone(),
                 parsing_started_instant, counting_ended.clone(), progress.clone()) {
             Ok(handle) => consumer_handles.push(handle),
             Err(x) => last_refusal = Some(x)
@@ -227,6 +232,8 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
 
     let mut stats_guard = stats_per_module.lock();
     let per_module = stats_guard.as_deref_mut().unwrap();
+    let mut embedded_guard = embedded_per_module.lock();
+    let embedded_by_module = embedded_guard.as_deref_mut().unwrap();
 
     let mut per_language = merge_over_modules(per_module);
     // Dropped before the total is summed, or the total's keyword map would name the keywords of
@@ -234,6 +241,17 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
     // the same either way, since an empty language adds nothing.
     remove_languages_with_0_files(&mut per_language);
     let total = Stats::total_of(&per_language);
+
+    // The decomposition across every module, summed the same way the rows are
+    let mut embedded: HashMap<String, HashMap<String, Stats>> = HashMap::new();
+    for bucket in embedded_by_module.iter() {
+        for (shell_name, sections) in bucket {
+            let shell_entry = embedded.entry(shell_name.clone()).or_default();
+            for (inner_name, stats) in sections {
+                shell_entry.entry(inner_name.clone()).or_default().add(stats);
+            }
+        }
+    }
 
     let modules_result = per_module.iter_mut().enumerate().map(|(id, bucket)| {
         let mut of_this_module = std::mem::take(bucket);
@@ -243,13 +261,15 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
         ModuleResult {
             name: modules.name_of(id as ModuleId).map(str::to_owned),
             total: Stats::total_of(&of_this_module),
-            per_language: of_this_module
+            per_language: of_this_module,
+            embedded: std::mem::take(&mut embedded_by_module[id])
         }
     }).collect::<Vec<_>>();
 
     Ok(RunResult {
         per_language,
         total,
+        embedded,
         modules: modules_result,
         faulty_files: std::mem::take(&mut faulty_files_ref.lock().unwrap()),
         files_present,

@@ -11,6 +11,11 @@ pub struct RunResult {
     // Across every module. A run where nothing was named has one module holding these same numbers.
     pub per_language: HashMap<String, Stats>,
     pub total: Stats,
+    // The sections other languages held inside container files, container language first and the
+    // section's language inside it. What is in here is already counted in 'per_language' under the
+    // container, so it decomposes those rows and is never added to them; 'files' inside it is the
+    // number of container files the section language appeared in.
+    pub embedded: HashMap<String, HashMap<String, Stats>>,
     pub modules: Vec<ModuleResult>,
     pub faulty_files: Vec<FaultyFileDetails>,
     pub files_present: FilesPresent,
@@ -60,9 +65,11 @@ impl RunResult {
         RunResult {
             per_language: HashMap::new(),
             total: Stats::default(),
+            embedded: HashMap::new(),
             modules: (0..modules.count()).map(|id| ModuleResult {
                 name: modules.name_of(id as ModuleId).map(str::to_owned),
                 per_language: HashMap::new(),
+                embedded: HashMap::new(),
                 total: Stats::default()
             }).collect(),
             faulty_files: Vec::new(),
@@ -80,6 +87,8 @@ impl RunResult {
 pub struct ModuleResult {
     pub name: Option<String>,
     pub per_language: HashMap<String, Stats>,
+    // The same decomposition 'RunResult::embedded' holds, for this module's files alone
+    pub embedded: HashMap<String, HashMap<String, Stats>>,
     pub total: Stats
 }
 

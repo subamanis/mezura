@@ -1,10 +1,10 @@
 // Which languages a run has in play, and which of them owns an extension two of them claim. The
 // format a language file is written in is 'language_file' next door.
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{Language, warnings};
 use crate::engine::config::EngineConfig;
-use crate::engine::identity::{IdentifiedBy, LanguageLookup, build_language_map_by};
+use crate::engine::identity::{IdentifiedBy, LanguageLookup, build_language_map_by, extension_key};
 use crate::language_file::PriorityRules;
 use crate::warnings::Warning;
 
@@ -13,6 +13,7 @@ use crate::warnings::Warning;
 pub struct Languages {
     by_name: HashMap<String, Language>,
     lookup: LanguageLookup,
+    embedded: EmbeddedDefinitions,
     // Which settings produced this set, so 'run' can refuse one that would have produced another.
     resolved_against: LanguageSelection
 }
@@ -34,7 +35,14 @@ impl Languages {
         // narrowing below asks whether a name exists. Duplicates are reported last, after the
         // narrowing, so a run that never asked for the language is not told about it.
         let (languages, mut reported) = drop_the_unusable(languages.into_iter().collect());
-        let (languages, narrowing) = retain_languages_of_interest(languages, config);
+        // Over everything, before the narrowing, because it answers two questions the narrowed set
+        // cannot: which language an extension names when '--languages' is given one, and what a
+        // section inside a container file is written in when the run narrowed that language away.
+        // Its own complaints about contested extensions are dropped, since the narrowed build below
+        // makes them, and a contest between two languages the run then leaves out is not news.
+        let (all_extensions, _) = build_language_map_by(IdentifiedBy::Extension, &keyed_by_name(languages.clone()),
+                &priority.by_extension, &config.forced_languages);
+        let (languages, set_aside, narrowing) = retain_languages_of_interest(languages, &all_extensions, config);
         reported.extend(narrowing);
         reported.extend(find_duplicate_names(&languages));
 
@@ -49,8 +57,18 @@ impl Languages {
         reported.extend(filename_report.collect_warnings());
         reported.extend(find_unknown_forced_languages(&by_name, &config.forced_languages));
 
+        // A section names its language whatever the run narrowed itself to, which is why the
+        // languages the narrowing set aside are kept and the map handed over is the one built over
+        // everything. Only carried when a language in play declares regions, so an ordinary run
+        // holds no second copy of anything.
+        let mut embedded = EmbeddedDefinitions::default();
+        let set_aside = keyed_by_name(set_aside);
+        if by_name.values().chain(set_aside.values()).any(|language| !language.embedded_regions.is_empty()) {
+            embedded = EmbeddedDefinitions { set_aside, extension_to_name: all_extensions };
+        }
+
         (Languages { by_name, lookup: LanguageLookup { by_extension, by_filename },
-                resolved_against: LanguageSelection::of(config) }, reported)
+                embedded, resolved_against: LanguageSelection::of(config) }, reported)
     }
 
     // Asked by 'run' before it counts anything. Resolved against settings naming Rust and then run
@@ -59,9 +77,17 @@ impl Languages {
         self.resolved_against == LanguageSelection::of(config)
     }
 
-    pub(crate) fn into_parts(self) -> (HashMap<String, Language>, LanguageLookup) {
-        (self.by_name, self.lookup)
+    pub(crate) fn into_parts(self) -> (HashMap<String, Language>, LanguageLookup, EmbeddedDefinitions) {
+        (self.by_name, self.lookup, self.embedded)
     }
+}
+
+// What a section of another language resolves against: the whole set's extension map, and the
+// definitions the narrowing took out of play. Empty on any run where no language declares regions.
+#[derive(Default)]
+pub(crate) struct EmbeddedDefinitions {
+    pub set_aside: HashMap<String, Language>,
+    pub extension_to_name: HashMap<String, std::sync::Arc<str>>,
 }
 
 // What this crate ships, parsed for counting and raw for installing. A caller that wants nothing but
@@ -97,9 +123,15 @@ pub fn get_shipped_extension_priority_raw() -> &'static [u8] {
     include_bytes!("../data/extension_priority.txt")
 }
 
-// The names that were asked for and do not exist as language files, in the order they were given.
+// The names that were asked for and no language answers to, in the order they were given. A
+// language answers to the name it carries and to every extension it claims, so 'js' is not an
+// unknown name while some language counts '.js' files. Which language an extension belongs to when
+// two claim it is a different question, settled where the narrowing happens; existence is not
+// contested, so this needs no priority rules and no map.
 pub fn find_unknown_language_names(languages: &[Language], wanted: &[String]) -> Vec<String> {
-    wanted.iter().filter(|name| !languages.iter().any(|x| is_the_same_language_name(&x.name, name)))
+    wanted.iter().filter(|wanted| !languages.iter().any(|language|
+                    is_the_same_language_name(&language.name, wanted)
+                    || language.extensions.iter().any(|extension| is_the_same_language_name(extension, wanted))))
             .cloned().collect()
 }
 
@@ -234,9 +266,19 @@ that takes one and {times} languages in the report, each counting part of the fi
 
 // Reported rather than printed: a name that does not exist is the caller's to complain about, and
 // the command line has a suggested spelling to put next to it.
-fn retain_languages_of_interest(mut languages: Vec<Language>, config: &EngineConfig)
-        -> (Vec<Language>, Vec<Warning>)
+fn retain_languages_of_interest(languages: Vec<Language>, extensions: &HashMap<String, Arc<str>>,
+        config: &EngineConfig) -> (Vec<Language>, Vec<Language>, Vec<Warning>)
 {
+    // A spelling selects a language by the name it carries, or by an extension it owns. The
+    // ownership is read from the map the counting itself uses, so '--languages m' means the same
+    // language that every '.m' file is counted as, whether that was settled by the priority file,
+    // by '--force-language' or by the tiebreak. Deciding it here again would let one word select
+    // one language and count another.
+    let selects = |spelling: &String, language: &Language| {
+        is_the_same_language_name(&language.name, spelling)
+                || extensions.get(&extension_key(spelling))
+                        .is_some_and(|owner| owner.as_ref() == language.name)
+    };
     let mut reported = Vec::new();
     if !config.languages_of_interest.is_empty() {
         for name in find_unknown_language_names(&languages, &config.languages_of_interest) {
@@ -258,14 +300,14 @@ fn retain_languages_of_interest(mut languages: Vec<Language>, config: &EngineCon
                 format!("'{name}' is not among the languages in use, so excluding it changed nothing.")));
     }
 
-    if !config.languages_of_interest.is_empty() {
-        languages.retain(|language| config.languages_of_interest.iter()
-                .any(|x| is_the_same_language_name(x, &language.name)));
-    }
-    languages.retain(|language| !config.excluded_languages.iter()
-            .any(|x| is_the_same_language_name(x, &language.name)));
+    // The ones the narrowing removes are set aside rather than dropped, because a section inside a
+    // counted file may still be written in one of them
+    let (languages, set_aside) = languages.into_iter().partition(|language|
+            (config.languages_of_interest.is_empty()
+                    || config.languages_of_interest.iter().any(|x| selects(x, language)))
+            && !config.excluded_languages.iter().any(|x| selects(x, language)));
 
-    (languages, reported)
+    (languages, set_aside, reported)
 }
 
 #[cfg(test)]
@@ -286,22 +328,82 @@ mod language_selection_tests {
         };
 
         let mut config = EngineConfig::default();
-        assert_eq!(vec!["C#", "Java", "Rust"], names_of(retain_languages_of_interest(languages(), &config).0));
+        assert_eq!(vec!["C#", "Java", "Rust"], names_of(retain_languages_of_interest(languages(), &HashMap::new(), &config).0));
 
         // asked for by a name that differs in case, which is still the same language
         config.languages_of_interest = vec!["java".to_owned(), "RUST".to_owned()];
-        assert_eq!(vec!["Java", "Rust"], names_of(retain_languages_of_interest(languages(), &config).0));
+        assert_eq!(vec!["Java", "Rust"], names_of(retain_languages_of_interest(languages(), &HashMap::new(), &config).0));
 
         // and the exclusion applies on top of the selection
         config.excluded_languages = vec!["rust".to_owned()];
-        assert_eq!(vec!["Java"], names_of(retain_languages_of_interest(languages(), &config).0));
+        assert_eq!(vec!["Java"], names_of(retain_languages_of_interest(languages(), &HashMap::new(), &config).0));
 
         // an excluded name on its own leaves everything else
         config.languages_of_interest = Vec::new();
-        assert_eq!(vec!["C#", "Java"], names_of(retain_languages_of_interest(languages(), &config).0));
+        assert_eq!(vec!["C#", "Java"], names_of(retain_languages_of_interest(languages(), &HashMap::new(), &config).0));
 
         assert_eq!(vec!["Erlang"], find_unknown_language_names(&languages(), &["java".to_owned(), "Erlang".to_owned()]));
         assert!(find_unknown_language_names(&languages(), &["C#".to_owned()]).is_empty());
+    }
+
+    // A language is asked for by the name it carries or by an extension it claims, since the two
+    // are what somebody has in front of them: the report shows the name and the files show the
+    // extension, and which of the two is the shorter word is an accident of the language.
+    #[test]
+    fn a_language_is_selected_by_its_name_or_by_an_extension_it_claims() {
+        let languages = || languages_claiming(&[("Java", &["java"]), ("C#", &["cs"]), ("Rust", &["rs"])])
+                .into_values().collect::<Vec<_>>();
+        let extensions = || build_language_map_by(IdentifiedBy::Extension, &keyed_by_name(languages()),
+                &HashMap::new(), &HashMap::new()).0;
+        let names_of = |languages: Vec<Language>| {
+            let mut names = languages.into_iter().map(|x| x.name).collect::<Vec<_>>();
+            names.sort();
+            names
+        };
+        let kept = |config: &EngineConfig| names_of(
+                retain_languages_of_interest(languages(), &extensions(), config).0);
+
+        let selecting = |names: &[&str]| EngineConfig {
+                languages_of_interest: names.iter().map(|x| (*x).to_owned()).collect(), ..Default::default() };
+        assert_eq!(vec!["C#"], kept(&selecting(&["cs"])), "an extension did not select its language");
+        // and the case of the extension is as free as the case of a name
+        assert_eq!(vec!["Rust"], kept(&selecting(&["RS"])));
+        // excluding takes the same road
+        let excluding = EngineConfig {
+                excluded_languages: vec!["java".to_owned(), "rs".to_owned()], ..Default::default() };
+        assert_eq!(vec!["C#"], kept(&excluding));
+
+        // an extension that exists is not an unknown name, or the run would warn about a spelling
+        // that had just worked
+        assert!(find_unknown_language_names(&languages(), &["cs".to_owned(), "RS".to_owned()]).is_empty());
+        assert_eq!(vec!["nosuch"], find_unknown_language_names(&languages(), &["nosuch".to_owned()]));
+    }
+
+    // Two languages claiming one extension have already been settled for the counting, and asking
+    // for that extension has to mean the same language it means everywhere else, or the same word
+    // would select one language and count another.
+    #[test]
+    fn an_extension_two_languages_claim_selects_the_one_that_won_it() {
+        let languages = || languages_claiming(&[("Objective-C", &["m", "mm"]), ("MATLAB", &["m"])])
+                .into_values().collect::<Vec<_>>();
+        let config = EngineConfig { languages_of_interest: vec!["m".to_owned()], ..Default::default() };
+        let kept = |priority, forced| {
+            let extensions = build_language_map_by(IdentifiedBy::Extension, &keyed_by_name(languages()),
+                    priority, forced).0;
+            retain_languages_of_interest(languages(), &extensions, &config).0
+                    .into_iter().map(|x| x.name).collect::<Vec<_>>()
+        };
+
+        let (nothing_decided, no_forcing) = (HashMap::new(), HashMap::new());
+        let priority = hashmap!("m".to_owned() => vec!["Objective-C".to_owned(), "MATLAB".to_owned()]);
+        let forced = hashmap!("m".to_owned() => "MATLAB".to_owned());
+
+        // the alphabetical tiebreak, which is what the run counts with when nobody has decided
+        assert_eq!(vec!["MATLAB"], kept(&nothing_decided, &no_forcing));
+        // the priority file's answer
+        assert_eq!(vec!["Objective-C"], kept(&priority, &no_forcing));
+        // and '--force-language', which beats the priority file here as it does everywhere
+        assert_eq!(vec!["MATLAB"], kept(&priority, &forced));
     }
 
     // Returned and not printed, because the command line puts its own colored version on the
@@ -312,8 +414,8 @@ mod language_selection_tests {
             languages_of_interest: vec!["Java".to_owned(), "Nolang-Q9".to_owned()],
             ..Default::default()
         };
-        let (_, reported) = retain_languages_of_interest(
-                languages_claiming(&[("Java", &["java"])]).into_values().collect(), &config);
+        let (_, _, reported) = retain_languages_of_interest(
+                languages_claiming(&[("Java", &["java"])]).into_values().collect(), &HashMap::new(), &config);
 
         let mine = reported.into_iter().find(|x| x.subject == "Nolang-Q9").unwrap();
         assert_eq!(warnings::Code::UnknownLanguage, mine.code);
@@ -353,14 +455,14 @@ mod language_selection_tests {
         let names_of = |languages: Vec<Language>| languages.into_iter().map(|x| x.name).collect::<Vec<_>>();
 
         let config = EngineConfig { excluded_languages: vec!["café".to_owned()], ..Default::default() };
-        let (kept, reported) = retain_languages_of_interest(cafe(), &config);
+        let (kept, _, reported) = retain_languages_of_interest(cafe(), &HashMap::new(), &config);
 
         assert_eq!(vec!["Rust"], names_of(kept), "the accented name survived an exclusion that names it");
         assert!(reported.is_empty(), "the language was excluded and the run said it does not exist: {reported:?}");
 
         // and the selection folds case the same way, so asking for it by the other spelling finds it
         let config = EngineConfig { languages_of_interest: vec!["café".to_owned()], ..Default::default() };
-        let (kept, reported) = retain_languages_of_interest(cafe(), &config);
+        let (kept, _, reported) = retain_languages_of_interest(cafe(), &HashMap::new(), &config);
         assert_eq!(vec!["CAFÉ"], names_of(kept));
         assert!(reported.is_empty(), "{reported:?}");
     }
@@ -375,8 +477,9 @@ mod language_selection_tests {
             excluded_languages: vec!["Rust".to_owned()],
             ..Default::default()
         };
-        let (kept, reported) = retain_languages_of_interest(
-                languages_claiming(&[("Java", &["java"]), ("Rust", &["rs"])]).into_values().collect(), &config);
+        let (kept, _, reported) = retain_languages_of_interest(
+                languages_claiming(&[("Java", &["java"]), ("Rust", &["rs"])]).into_values().collect(),
+                &HashMap::new(), &config);
 
         assert_eq!(vec!["Java"], kept.into_iter().map(|x| x.name).collect::<Vec<_>>());
         assert!(!reported.iter().any(|x| x.subject == "Rust"),
@@ -480,8 +583,9 @@ mod language_selection_tests {
             excluded_languages: vec!["Java".to_owned(), "Nolang-Q9".to_owned()],
             ..Default::default()
         };
-        let (kept, reported) = retain_languages_of_interest(
-                languages_claiming(&[("Java", &["java"]), ("Rust", &["rs"])]).into_values().collect(), &config);
+        let (kept, _, reported) = retain_languages_of_interest(
+                languages_claiming(&[("Java", &["java"]), ("Rust", &["rs"])]).into_values().collect(),
+                &HashMap::new(), &config);
 
         assert_eq!(vec!["Rust"], kept.into_iter().map(|x| x.name).collect::<Vec<_>>());
         let mine = reported.iter().find(|x| x.subject == "Nolang-Q9").unwrap();

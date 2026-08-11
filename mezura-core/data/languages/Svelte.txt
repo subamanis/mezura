@@ -5,20 +5,17 @@ Extensions
 svelte
 
 String symbols
-" '
-
-Multi line string symbols
-`
 
 Comment symbols
-//
-Multi line comment start
-/*
-Multi line comment end
-*/
 
-Keyword
-NAME
-classes
-ALIASES
-class
+Multi line comment start
+<!--
+Multi line comment end
+-->
+
+Embedded region start
+<script <style
+Embedded region end
+</script> </style>
+Embedded region default
+js css

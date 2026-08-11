@@ -31,6 +31,9 @@ pub struct Language {
     // joins. C splices anything, including a line comment; JavaScript and Python only continue a
     // string literal; Java, Go and C# have no such thing at all.
     pub line_continuation : Option<LineContinuation>,
+    // Sections of the file that belong to another language, HTML's '<script>' and '<style>'. The
+    // lines between the tags are counted with that language's own symbols and reported under it.
+    pub embedded_regions : Vec<EmbeddedRegion>,
     pub keywords : Vec<Keyword>,
     // Worked out from the symbols above and reused for every file of this language.
     pub(crate) scan_plan : OnceLock<crate::engine::file_parser::ScanPlan>
@@ -57,6 +60,7 @@ impl Language {
             nesting_comments : Vec::new(),
             leveled_comments : Vec::new(),
             line_continuation : None,
+            embedded_regions : Vec::new(),
             keywords : keywords.into_iter().collect(),
             scan_plan : OnceLock::new()
         }
@@ -77,6 +81,11 @@ impl Language {
     pub fn with_line_continuation(mut self, symbol: &str, in_strings: bool, in_comments: bool) -> Self {
         self.line_continuation = Some(LineContinuation {
             symbol: symbol.to_owned(), in_strings, in_comments });
+        self
+    }
+
+    pub fn with_embedded_regions(mut self, regions: &[EmbeddedRegion]) -> Self {
+        self.embedded_regions.extend(regions.iter().cloned());
         self
     }
 
@@ -217,6 +226,24 @@ impl MultilineString {
     }
 }
 
+// One section of another language inside a file: everything between 'start' and 'end' is counted
+// with that language's own symbols. Which language is read off the opener tag's 'lang' or 'type'
+// attribute through the extension lookup, and 'default' answers when the tag names none: an
+// extension, not a language name, so both paths resolve the same way. The tags match without
+// regard to case, the way HTML reads them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmbeddedRegion {
+    pub start : String,
+    pub end : String,
+    pub default : String
+}
+
+impl EmbeddedRegion {
+    pub fn of(start: &str, end: &str, default: &str) -> EmbeddedRegion {
+        EmbeddedRegion { start: start.to_owned(), end: end.to_owned(), default: default.to_owned() }
+    }
+}
+
 // A line ending in this symbol is joined to the one after it, before anything is decided about
 // either. 'in_comments' is what separates C, where the join happens whatever the line held, from
 // JavaScript and Python, where a line comment ends at the newline whatever follows it.
@@ -269,6 +296,7 @@ impl PartialEq for Language {
             && self.nesting_comments == other.nesting_comments
             && self.leveled_comments == other.leveled_comments
             && self.line_continuation == other.line_continuation
+            && self.embedded_regions == other.embedded_regions
             && self.keywords == other.keywords
     }
 }
@@ -336,7 +364,7 @@ impl Stats {
     // Not public, because its argument is not: the one thing outside this crate could do with it is
     // hand-build a file's counts and get the keyword indices to line up with a slice it also has to
     // supply. The way in from outside is 'run'.
-    pub(crate) fn add_file(&mut self, stats: FileStats, bytes: usize, keywords: &[Keyword]) {
+    pub(crate) fn add_file(&mut self, stats: &FileStats, bytes: usize, keywords: &[Keyword]) {
         self.files += 1;
         self.bytes += bytes;
         self.lines += stats.lines;

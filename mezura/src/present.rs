@@ -191,7 +191,7 @@ mod tests {
     fn result_with(unreadable: usize, faulty: usize) -> RunResult {
         RunResult {
             per_language: std::collections::HashMap::new(), total: Stats::default(),
-            modules: Vec::new(), targets: Vec::new(),
+            modules: Vec::new(), embedded: Default::default(), targets: Vec::new(),
             files_present: FilesPresent {total_files: 1, relevant_files: 1, excluded_files: 0},
             performance: Performance {duration_millis: 0, threads: Threads::new(1, 1)},
             faulty_files: (0..faulty).map(|i| mezura_core::FaultyFileDetails::new(

@@ -68,6 +68,9 @@ Three things to know before you start:
 | `Multi line comment end` | Their closers, in the same order | `*/ }` |
 | `Nesting comment start` *(opt)* | Openers of blocks that nest inside themselves | `(*` |
 | `Nesting comment end` | Their closers, in the same order | `*)` |
+| `Embedded region start` *(opt)* | Openers of sections written in another language | `<script <style` |
+| `Embedded region end` | Their closers, in the same order | `</script> </style>` |
+| `Embedded region default` | The extension each section falls to when its tag names none | `js css` |
 | `Keyword` *(opt, repeatable)* | What to count beside the lines | see below |
 
 A block marked *(opt)* can be left out entirely. One that has "in the same order" under it comes
@@ -120,6 +123,67 @@ Multi line comment end
 That is the only place in the format where characters do not stand for themselves, and it works
 only in these two blocks.
 
+## Sections of another language
+
+Some files are a shell holding blocks of other languages: a page with `<script>` and `<style>`, a
+Vue or Svelte component. Declare those blocks and each one is counted with its own language's
+symbols, so a `//` inside a script block is a comment even though the shell has no `//` at all.
+
+The three lines are matched by position, one entry per kind of block:
+
+```
+Embedded region start
+<script <style
+Embedded region end
+</script> </style>
+Embedded region default
+js css
+```
+
+**`Embedded region default` is the language the block falls to when its opening tag names none.**
+`<script>` on its own is JavaScript, `<script lang="ts">` is TypeScript, `<style>` is CSS,
+`<style lang="scss">` is SCSS.
+
+**How a spelling becomes a language, in both the tag and the default: extension first, then the
+language's own name.** So `ts` is found because TypeScript claims that extension, and `typescript`
+is found because that is what the language is called, which is what makes `type="text/typescript"`
+work. The extension comes first because that is the form your `extension_priority.txt` answers for,
+so an extension two languages claim resolves to the same one the counting uses. A spelling nobody
+recognises falls to the region's default rather than losing the block.
+
+The opener reads `lang="..."` first and `type="..."` after it, and in a mime type only the part
+after the slash is the language. Quotes are optional and either kind works.
+
+**A whole shell language** looks like this, and Vue's real file is barely longer:
+
+```
+Language
+Vue
+
+Extensions
+vue
+
+String symbols
+
+Comment symbols
+
+Multi line comment start
+<!--
+Multi line comment end
+-->
+
+Embedded region start
+<script <style
+Embedded region end
+</script> </style>
+Embedded region default
+js css
+```
+
+Note what it does **not** declare: no string symbols, because the quotes of markup delimit
+attributes and its text is full of apostrophes, and no `//`, because the shell has no such comment.
+Everything that needs those lives inside the blocks and carries its own language's rules.
+
 ## Keywords
 
 `NAME` is what appears in the report, `ALIASES` are the words in the code that count as one. Add as
@@ -135,6 +199,18 @@ class record
 
 They are counted as plain words: a word in a string or a comment never counts, `aclass` is not a
 `class`, and a language that uses `class` for a second purpose has those counted too.
+
+## Naming a language on the command line
+
+Wherever a language name is expected, `--languages`, `--exclude-languages`, and the same fields in
+a configuration file, you can write **either the name the file gives it or any extension it
+claims**: `--languages javascript` and `--languages js` are the same request. An extension that two
+languages claim names whichever of them owns it for the counting, which is the answer in
+`extension_priority.txt` or the one `--force-language` gave, so one word never selects one language
+and counts another.
+
+Because that answer is your machine's, a configuration file you share is clearer if it names
+languages by their names. On the command line, type whichever is shorter.
 
 ## Two things that bite
 

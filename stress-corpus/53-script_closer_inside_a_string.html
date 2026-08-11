@@ -1,0 +1,15 @@
+<!-- mezura-real    15 lines 5 code 10 comment -->
+<!-- mezura-count   15 lines 5 code 10 comment -->
+<!-- mezura-section JavaScript 0 lines 0 code 0 comment -->
+<!-- tokei-real     15 lines 5 code 10 comment -->
+<!-- tokei-count    16 lines 6 code 10 comment -->
+<!-- trap: a script element ends at the first closing tag whatever the JavaScript around it is
+     doing, which is why one writes "<\/script>" inside a string. So the section here is empty and
+     everything under the closer is markup, including what looks like a comment -->
+<!-- tokei: the closing line is counted once as markup and once as script, so the file is reported
+     as one line longer than it is -->
+<p>before</p>
+<script>
+var s = "</script>";
+// not a comment: the script element ended on the line above
+<p>after</p>
