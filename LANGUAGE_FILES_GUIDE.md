@@ -154,6 +154,16 @@ recognises falls to the region's default rather than losing the block.
 The opener reads `lang="..."` first and `type="..."` after it, and in a mime type only the part
 after the slash is the language. Quotes are optional and either kind works.
 
+**Every opener and closer has to begin with `<`**, because a section is looked for where a tag
+begins and nowhere else. A file declaring anything else is refused and mezura names the line, rather
+than accepting a declaration that could never match. The name of the tag also has to end where it is
+written, so `<script` opens a section in `<script>` and `<script lang="ts">` and not in
+`<scriptures>`.
+
+**A section that never closes is not a section.** Nothing marks an opener as a tag rather than the
+same word written out in the text of the page, so if no closer follows, the lines stay with the file's
+own language instead of being handed to another one to the end of the file.
+
 **A whole shell language** looks like this, and Vue's real file is barely longer:
 
 ```

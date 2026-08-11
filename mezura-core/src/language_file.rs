@@ -348,6 +348,10 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         if read_next_header(lines)?.as_str() != EMBEDDED_REGION_DEFAULT {return None;}
         let defaults = split_line_on_whitespace(&read_value_line(lines)?);
         if ends.len() != starts.len() || defaults.len() != starts.len() {return None;}
+        // A section is looked for where a tag begins and nowhere else, so an opener that is not one
+        // could never match. Refused rather than carried, since a declaration that silently does
+        // nothing leaves the file counted as though the block had not been written at all.
+        if starts.iter().chain(&ends).any(|symbol| !symbol.starts_with('<')) {return None;}
         embedded_regions = starts.iter().zip(&ends).zip(&defaults)
                 .map(|((start, end), default)| crate::domain::EmbeddedRegion::of(start, end, default))
                 .collect();
@@ -890,6 +894,15 @@ Embedded region start\n<script <style\nEmbedded region end\n</script> </style>\n
         assert!(crate::language_file::parse_language(&no_ends).is_none());
         let empty = good.replace("<script <style", "");
         assert!(crate::language_file::parse_language(&empty).is_none());
+
+        // A section is looked for where a tag begins, so an opener that is not one could never
+        // match. Refused, rather than accepted as a declaration that quietly does nothing.
+        let fenced = good.replace("<script <style", "```py <style").replace("</script> </style>", "``` </style>");
+        assert!(crate::language_file::parse_language(&fenced).is_none(),
+                "an opener that is not a tag was accepted");
+        let fenced_end = good.replace("</script> </style>", "``` </style>");
+        assert!(crate::language_file::parse_language(&fenced_end).is_none(),
+                "a closer that is not a tag was accepted");
 
         // out of place it refuses the file whole, like every other block
         let misplaced = "Language\nWeblike\n\nExtensions\nwbl\n\n\

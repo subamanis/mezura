@@ -64,6 +64,7 @@ impl Languages {
         let mut embedded = EmbeddedDefinitions::default();
         let set_aside = keyed_by_name(set_aside);
         if by_name.values().chain(set_aside.values()).any(|language| !language.embedded_regions.is_empty()) {
+            reported.extend(find_unresolvable_region_defaults(&by_name, &set_aside, &all_extensions));
             embedded = EmbeddedDefinitions { set_aside, extension_to_name: all_extensions };
         }
 
@@ -223,6 +224,35 @@ fn drop_the_unusable(languages: Vec<Language>) -> (Vec<Language>, Vec<Warning>) 
     }).collect();
 
     (kept, reported)
+}
+
+// A region's default names the language its sections fall to when their own tag names none, and
+// nothing at the time a language file is read can tell whether that name exists, since the file
+// knows only itself. Asked here, where every language and the extension map are in one place, and
+// asked against exactly the two the section lookup will consult, so the check and what it predicts
+// cannot drift. Left unreported it is silent and expensive: every unnamed section goes back to
+// being read with the container's own symbols, so a '//' inside a script block counts as code.
+fn find_unresolvable_region_defaults(by_name: &HashMap<String, Language>,
+    set_aside: &HashMap<String, Language>, extensions: &HashMap<String, Arc<str>>) -> Vec<Warning>
+{
+    let resolves = |spelling: &str| {
+        let lowered = spelling.to_lowercase();
+        extensions.contains_key(&lowered)
+                || by_name.values().chain(set_aside.values())
+                        .any(|language| is_the_same_language_name(&language.name, spelling))
+    };
+
+    let mut unresolvable = by_name.values().chain(set_aside.values())
+            .flat_map(|language| language.embedded_regions.iter()
+                    .map(move |region| (language.name.as_str(), region.default.as_str())))
+            .filter(|(_, default)| !resolves(default))
+            .collect::<Vec<_>>();
+    unresolvable.sort();
+    unresolvable.dedup();
+
+    unresolvable.into_iter().map(|(language, default)| Warning::new(warnings::Code::UnknownSectionLanguage, default,
+            format!("'{language}' says its sections fall to '{default}', and no language answers to that name or \
+claims it as an extension. Those sections are counted with the symbols of '{language}' instead."))).collect()
 }
 
 // Two definitions of one name: the second silently replaces the first when the map is built, and
@@ -404,6 +434,27 @@ mod language_selection_tests {
         assert_eq!(vec!["Objective-C"], kept(&priority, &no_forcing));
         // and '--force-language', which beats the priority file here as it does everywhere
         assert_eq!(vec!["MATLAB"], kept(&priority, &forced));
+    }
+
+    // A misspelt default is silent otherwise: nothing refuses the language file, since a file being
+    // read knows only itself, and every unnamed section goes back to being read with the container's
+    // own symbols, which is a comment count that looks perfectly ordinary and is wrong.
+    #[test]
+    fn a_region_default_that_names_no_language_is_reported() {
+        let shell = |default: &str| Language::new("Weblike", ["wbl"], [""; 0], [""; 0], &[("<!--", "-->")], [])
+                .with_embedded_regions(&[crate::EmbeddedRegion::of("<script", "</script>", default)]);
+        let resolved = |default: &str| Languages::resolve(&EngineConfig::default(),
+                vec![shell(default), Language::new("JavaScript", ["js"], ["\""], ["//"], &[], [])],
+                &PriorityRules::default()).1
+                .into_iter().filter(|x| x.code == warnings::Code::UnknownSectionLanguage).collect::<Vec<_>>();
+
+        assert!(resolved("js").is_empty(), "an extension a language claims was called unknown");
+        assert!(resolved("javascript").is_empty(), "a language's own name was called unknown");
+
+        let complained = resolved("javascrpt");
+        assert_eq!(1, complained.len(), "a default nothing answers to was not reported");
+        assert_eq!("javascrpt", complained[0].subject);
+        assert!(complained[0].message.contains("Weblike"), "the message does not name the language that declared it");
     }
 
     // Returned and not printed, because the command line puts its own colored version on the

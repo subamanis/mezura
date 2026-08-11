@@ -630,6 +630,14 @@ fn parse_lines(contents: &str, language: &Language, lookup: &EmbeddedLookup, mat
         // comment or a string of the shell opens nothing
         if had_code && !language.embedded_regions.is_empty()
                 && let Some((region, inner)) = find_region_opening(raw_line.trim_ascii(), &scan.code_ranges, language, lookup) {
+            let section_from = end_of_line(contents, line_start, raw_line);
+            // A section is only a section if it closes. Nothing forces an opener to be a tag rather
+            // than the same text written inside one, and handing a language every line to the end
+            // of the file on the strength of one word costs the whole file when it was not one.
+            let Some(closer_at) = find_tag_ignoring_case(&contents.as_bytes()[section_from..],
+                    region.end.as_bytes()) else { continue };
+            let closer_at = section_from + closer_at;
+
             // The tag line itself belongs to the shell, and anything it left open is cut off at
             // the section boundary: per the HTML reading, what follows the tag is section content
             shell = WalkState::default();
@@ -646,13 +654,12 @@ fn parse_lines(contents: &str, language: &Language, lookup: &EmbeddedLookup, mat
             };
             let bucket = &mut buckets[bucket_at];
             let mut inner_state = WalkState::default();
-            let section_from = end_of_line(contents, line_start, raw_line);
             let mut section_to = contents.len();
             for (inner_start, inner_raw) in lines.by_ref() {
                 // Per the HTML reading the closer ends the section wherever it stands, even inside
                 // a string of the section's language: that is why one writes '<\/script>' in
                 // JavaScript. The closer's line belongs to the shell.
-                if find_case_insensitive(inner_raw.as_bytes(), region.end.as_bytes()).is_some() {
+                if inner_start + inner_raw.len() > closer_at {
                     section_to = inner_start;
                     handed_back = Some((inner_start, inner_raw));
                     break;
@@ -782,10 +789,16 @@ fn find_region_opening<'a>(line: &str, code_ranges: &[(usize, usize)], language:
                     continue;
                 }
                 let after_start = at + region.start.len();
+                // Where the name of the tag ends, so that '<scriptures>' is a word in a page and
+                // not the opener of a script block
+                match bytes.get(after_start) {
+                    Some(byte) if byte.is_ascii_whitespace() || *byte == b'>' => (),
+                    _ => continue
+                }
                 // The tag has to close on its own line; split over two, the line stays shell
                 let Some(tag_close) = memchr::memchr(b'>', &bytes[after_start..]) else { continue };
                 // A section that opens and closes on one line stays shell whole, tags and all
-                if find_case_insensitive(&bytes[after_start + tag_close..], region.end.as_bytes()).is_some() {
+                if find_tag_ignoring_case(&bytes[after_start + tag_close..], region.end.as_bytes()).is_some() {
                     continue;
                 }
                 let tag_text = &line[after_start..after_start + tag_close];
@@ -836,6 +849,14 @@ fn strip_mime_family(value: &str) -> &str {
 fn starts_with_ignoring_case(haystack: &[u8], needle: &[u8]) -> bool {
     !needle.is_empty() && haystack.len() >= needle.len()
             && haystack[..needle.len()].eq_ignore_ascii_case(needle)
+}
+
+// A tag anywhere in the text, found through one memchr pass on the byte it begins with and a
+// comparison only where that lands, in both cases of that byte so that '</SCRIPT>' is found too.
+fn find_tag_ignoring_case(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    let first = *needle.first()?;
+    memchr::memchr2_iter(first.to_ascii_lowercase(), first.to_ascii_uppercase(), haystack)
+            .find(|at| starts_with_ignoring_case(&haystack[*at..], needle))
 }
 
 fn find_case_insensitive(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -2485,21 +2506,40 @@ mod tests {
         assert_eq!("JS", report.sections[0].language);
     }
 
-    // HTML reads its tags without regard to case, and a section that never closes runs to the end
-    // of the file the way an unclosed block comment does
+    // HTML reads its tags without regard to case, and a closer written in another case still ends
+    // the section it opened
     #[test]
-    fn tags_match_in_any_case_and_an_unclosed_section_runs_to_the_end() {
+    fn tags_match_in_any_case() {
         let (languages, extensions) = section_fixture();
         let report = parse_with_sections("<SCRIPT>\n// x\n</SCRIPT>\n<p>y</p>\n", &web_shell(), &languages, &extensions);
         assert_eq!(1, report.sections.len(), "an upper case tag was not read as a tag");
         assert_eq!((1, 0, 1), (report.sections[0].stats.lines, report.sections[0].stats.code_lines,
                 report.sections[0].stats.comment_lines));
 
-        let contents = "<p>x</p>\n<script>\n// one\n// two\n";
+        let contents = "<script>\n// x\n</SCRIPT>\n";
         let report = parse_with_sections(contents, &web_shell(), &languages, &extensions);
-        assert_eq!((2, 2), (report.shell.lines, report.sections[0].stats.lines));
-        let section_from = contents.find("// one").unwrap();
-        assert_eq!(contents.len() - section_from, report.sections[0].bytes);
+        assert_eq!(1, report.sections.len(), "a closer in another case did not end the section");
+        let section_from = contents.find("// x").unwrap();
+        assert_eq!(contents.find("</SCRIPT>").unwrap() - section_from, report.sections[0].bytes);
+    }
+
+    // Nothing forces an opener to be a tag rather than the same word written as text, so a section
+    // that never closes is text: without this, one '<script' in a paragraph hands every line under
+    // it to another language, and the file it costs is the whole of it
+    #[test]
+    fn a_section_that_never_closes_stays_with_the_shell() {
+        let (languages, extensions) = section_fixture();
+        let report = parse_with_sections("<p>x</p>\n<script>\n// one\n// two\n", &web_shell(), &languages, &extensions);
+        assert!(report.sections.is_empty(), "an unclosed opener took the rest of the file");
+        assert_eq!(4, report.shell.lines);
+
+        // The word has to end where a tag name ends, so a longer word beginning with it is text
+        let report = parse_with_sections("<scriptures>\n// one\n</scriptures>\n", &web_shell(), &languages, &extensions);
+        assert!(report.sections.is_empty(), "a longer word beginning with the tag opened a section");
+
+        // And the shell keeps reading the lines it kept, with its own symbols
+        let report = parse_with_sections("<p>x</p>\n<script>\n<!-- a note -->\n", &web_shell(), &languages, &extensions);
+        assert_eq!((3, 2, 1), (report.shell.lines, report.shell.code_lines, report.shell.comment_lines));
     }
 
     // The three shapes that stay shell whole: a tag split over two lines, a section that opens and

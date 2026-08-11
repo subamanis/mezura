@@ -63,6 +63,8 @@ fn add_advice_to(mut warning: Warning) -> Warning {
         Code::UnknownLanguage => Some("Run with '--show-languages' for the ones available to '--languages'.".to_owned()),
         Code::UnknownExcludedLanguage =>
                 Some("Run with '--show-languages' for the ones available to '--exclude-languages'.".to_owned()),
+        Code::UnknownSectionLanguage =>
+                Some("Correct the 'Embedded region default' line of that language file in your data dir.".to_owned()),
         _ => None
     };
 

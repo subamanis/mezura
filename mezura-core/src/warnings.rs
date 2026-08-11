@@ -15,6 +15,9 @@ pub enum Code {
     UnknownForcedLanguage,
     UnknownLanguage,
     UnknownExcludedLanguage,
+    // A section of another language falls back to the file's own language, so its comments are read
+    // with the wrong symbols
+    UnknownSectionLanguage,
     DuplicateLanguage,
     // Every file carrying its extensions is left to be counted by nobody
     LanguageWithoutName,
@@ -36,6 +39,7 @@ impl Code {
             Self::UnknownForcedLanguage => "unknown-forced-language",
             Self::UnknownLanguage => "unknown-language",
             Self::UnknownExcludedLanguage => "unknown-excluded-language",
+            Self::UnknownSectionLanguage => "unknown-section-language",
             Self::DuplicateLanguage => "duplicate-language",
             Self::LanguageWithoutName => "language-without-name",
             Self::LanguageClaimsNothing => "language-claims-nothing",
@@ -53,9 +57,10 @@ impl Code {
     // compile, which is the whole reason this is not a field somebody fills in per complaint.
     pub fn affects(self) -> Affects {
         match self {
+            // Counts
             Self::LanguageTiebreak | Self::DuplicateLanguage | Self::LanguageWithoutName
-            | Self::LanguageFileUnreadable => Affects::Counts,
-
+            | Self::LanguageFileUnreadable | Self::UnknownSectionLanguage => Affects::Counts,
+            // Settings
             Self::UnknownForcedLanguage | Self::UnknownLanguage | Self::UnknownExcludedLanguage
             | Self::LanguageClaimsNothing | Self::PriorityLineSkipped | Self::ConfigValueIgnored
             | Self::ConfigSectionUnknown | Self::CommandIgnored | Self::ConfigStyleInvalid
