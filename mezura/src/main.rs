@@ -746,6 +746,12 @@ program to read, and both of them go to the output, so only one of the two can b
         };
     } else if is_present(SHOW_LANGUAGES) {
         crate::message_printer::print_supported_languages(languages_available);
+        // The list is one line per language and not one per file, so two files declaring one name
+        // collapse into a single entry. This command is where somebody looks to find that out, and
+        // it returns before the run that would otherwise report it.
+        for warning in mezura_core::languages::find_duplicate_names(languages_available) {
+            crate::warning_collector::emit(warning);
+        }
         return Some(ExitCode::SUCCESS);
     } else if is_present(SHOW_CONFIGS) {
         crate::message_printer::print_existing_configs();

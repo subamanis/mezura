@@ -236,7 +236,7 @@ fn drop_the_unusable(languages: Vec<Language>) -> (Vec<Language>, Vec<Warning>) 
 // two definitions of one language to '--languages', to '--exclude-languages', to '--force-language' and
 // to the priority file, all of which fold case; counting them apart here was the one place that did
 // not, so that pair went through unreported while every one of those flags treated them as one.
-fn find_duplicate_names(languages: &[Language]) -> Vec<Warning> {
+pub fn find_duplicate_names(languages: &[Language]) -> Vec<Warning> {
     let mut spellings : HashMap<String, Vec<&str>> = HashMap::new();
     for language in languages {
         spellings.entry(language.name.to_lowercase()).or_default().push(language.name.as_str());
