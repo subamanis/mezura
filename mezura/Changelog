@@ -486,6 +486,8 @@ Other:
       rows, with the file count and size above the name, the line breakdown beside it and the
       keywords below. It is about 50 columns narrower than the same block was before.
   -> Sizes of a gigabyte and above are reported in GBs.
+  -> "--show-languages" prints its list in three columns instead of one name per line, so the whole
+      set fits on a screen.
   -> A language with many keywords wraps its keyword row, instead of making the details section
       wider than every other line in it.
   -> The test suite gained per-language parser fixtures that declare their own hand-verified counts,

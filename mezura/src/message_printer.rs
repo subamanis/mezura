@@ -1099,10 +1099,27 @@ pub fn format_faulty_language_files_message(faulty_files: &[FaultyLanguageFile])
 // language is a broken installation, and naming it twice here would read as two languages rather
 // than as the one it is.
 fn format_supported_languages_message(languages_available: &[Language]) -> String {
+    const COLUMNS : usize = 3;
+
     let mut lang_names = languages_available.iter().map(|x| x.name.to_owned()).collect::<Vec<_>>();
     lang_names.sort();
     lang_names.dedup();
-    format!("{}The supported languages found are:\n  {}\n", get_data_dir_str(), lang_names.join("\n  "))
+    format!("{}The supported languages found are:\n\n{}\n", get_data_dir_str(),
+            format_in_columns(&lang_names, COLUMNS))
+}
+
+// Filled downwards and not across, so that a sorted list still reads in order down each column
+// instead of jumping from one to the next and back on every name.
+fn format_in_columns(names: &[String], columns: usize) -> String {
+    const GUTTER : usize = 6;
+
+    let rows = names.len().div_ceil(columns);
+    let width = names.iter().map(|name| name.chars().count()).max().unwrap_or(0) + GUTTER;
+    (0..rows).map(|row| {
+        let line = (0..columns).filter_map(|column| names.get(column * rows + row))
+                .map(|name| format!("{name:<width$}")).collect::<String>();
+        format!("  {}", line.trim_end())
+    }).collect::<Vec<_>>().join("\n")
 }
 
 // Split from the printing so that the empty case can be asserted: joining the names with the same
@@ -1163,6 +1180,24 @@ mod tests {
 
         assert_eq!(1, listed.matches("Java").count(), "'Java' was listed more than once:\n{listed}");
         assert!(listed.contains("Rust"));
+    }
+
+    // The columns are filled downwards, so the last one is short by however much the count misses a
+    // multiple of three, and that ragged end is where a name goes missing without anything else
+    // looking wrong.
+    #[test]
+    fn every_name_survives_a_column_count_that_does_not_divide_the_list() {
+        let all = (0..10).map(|i| format!("Lang{i}")).collect::<Vec<_>>();
+        for count in 0..=all.len() {
+            let names = &all[..count];
+            let laid_out = format_in_columns(names, 3);
+            for name in names {
+                assert_eq!(1, laid_out.matches(name.as_str()).count(),
+                        "'{name}' is not listed exactly once among {count} names:\n{laid_out}");
+            }
+            assert!(laid_out.lines().all(|line| line.len() == line.trim_end().len()),
+                    "a line was left padded to the right:\n{laid_out}");
+        }
     }
 
     // The one message that only appears when something in the user's languages folder is wrong, so
