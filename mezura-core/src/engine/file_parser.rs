@@ -778,7 +778,7 @@ fn find_region_opening<'a>(line: &str, code_ranges: &[(usize, usize)], language:
             let at = cursor + offset;
             cursor = at + 1;
             for region in &language.embedded_regions {
-                if find_case_insensitive(&bytes[at..], region.start.as_bytes()) != Some(0) {
+                if !starts_with_ignoring_case(&bytes[at..], region.start.as_bytes()) {
                     continue;
                 }
                 let after_start = at + region.start.len();
@@ -828,6 +828,14 @@ fn find_attribute_value<'a>(tag_text: &'a str, name: &str) -> Option<&'a str> {
 // 'type="text/typescript"' names its language after the slash, and a bare 'type="module"' has none
 fn strip_mime_family(value: &str) -> &str {
     value.rsplit('/').next().unwrap_or(value)
+}
+
+// Asked at every '<' of every line of a markup file, which is why it is a comparison and not a
+// search for a match at zero: a search that answers "no" has walked the rest of the line first, and
+// on one long line that is the whole line once per '<'.
+fn starts_with_ignoring_case(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && haystack.len() >= needle.len()
+            && haystack[..needle.len()].eq_ignore_ascii_case(needle)
 }
 
 fn find_case_insensitive(haystack: &[u8], needle: &[u8]) -> Option<usize> {
