@@ -70,7 +70,7 @@ pub fn validate_exclude_patterns(exclude_patterns: &[String]) -> Result<(), Targ
 pub(crate) fn build_exclude_matcher(exclude_patterns: &[String]) -> Result<globset::GlobSet, globset::Error> {
     let mut builder = globset::GlobSetBuilder::new();
     for pattern in exclude_patterns {
-        let normalized = pattern.trim().replace('\\', "/");
+        let normalized = normalise_separators(pattern.trim());
         let normalized = normalized.trim_end_matches('/');
         let anchored = if normalized.starts_with("**/") {
             normalized.to_owned()
@@ -133,7 +133,27 @@ pub fn validate_and_absolutize(declared: &[Target]) -> Result<Vec<Target>, Targe
             return Err(TargetError::InvalidPath(trimmed.to_owned()));
         }
     }
+    // Here as well as after the patterns expand, and not only there: a contest between two literal
+    // paths is decidable the moment they are typed, and under '--diff' the later check runs against
+    // a checkout, so it names a temporary directory nobody wrote.
+    find_contested_target(&prepared)?;
+
     Ok(prepared)
+}
+
+// Two names over one path is not something a rule can settle: there is no more specific one of the
+// two, and whichever won would take the other's files away without a word.
+fn find_contested_target(targets: &[Target]) -> Result<(), TargetError> {
+    for (position, target) in targets.iter().enumerate() {
+        let key = path_comparison_key(&target.path);
+        if let Some(other) = targets[position + 1..].iter()
+                .find(|x| x.module != target.module && path_comparison_key(&x.path) == key) {
+            return Err(TargetError::Contested(target.path.clone(),
+                    name_or_rest(&target.module), name_or_rest(&other.module)));
+        }
+    }
+
+    Ok(())
 }
 
 // The spelling every resolved path carries: absolute, forward slashes, no trailing separator, and
@@ -230,16 +250,9 @@ fn expand_patterns(targets: Vec<Target>, respect_gitignore: bool, search_in_dott
         }
     }
 
-    // Two names over one path is not something a rule can settle: there is no more specific one of
-    // the two, and whichever won would take the other's files away without a word
-    for (position, target) in resolved.iter().enumerate() {
-        let key = path_comparison_key(&target.path);
-        if let Some(other) = resolved[position + 1..].iter()
-                .find(|x| x.module != target.module && path_comparison_key(&x.path) == key) {
-            return Err(TargetError::Contested(target.path.clone(),
-                    name_or_rest(&target.module), name_or_rest(&other.module)));
-        }
-    }
+    // Again here, because a pattern can expand onto a path another target names and that is knowable
+    // only now
+    find_contested_target(&resolved)?;
 
     Ok(remove_overlapping_targets(resolved))
 }
@@ -249,14 +262,14 @@ fn expand_patterns(targets: Vec<Target>, respect_gitignore: bool, search_in_dott
 // relative one was expanded against that directory anyway. What it buys is that the pattern still
 // means the same thing written into a file and read back from somewhere else.
 fn absolutize_pattern(pattern: &str) -> String {
-    let normalized = pattern.replace('\\', "/");
-    if Path::new(&normalized).is_absolute() {
-        return normalized;
+    let normalized = normalise_separators(pattern);
+    if Path::new(normalized.as_ref()).is_absolute() {
+        return normalized.into_owned();
     }
     match std::env::current_dir() {
-        Ok(cwd) => format!("{}/{}", cwd.to_string_lossy().replace('\\', "/").trim_end_matches('/'),
+        Ok(cwd) => format!("{}/{}", normalise_separators(&cwd.to_string_lossy()).trim_end_matches('/'),
                 normalized.trim_start_matches("./")),
-        Err(_) => normalized
+        Err(_) => normalized.into_owned()
     }
 }
 
@@ -438,6 +451,28 @@ mod target_path_tests {
         assert!(matches!(unnamed, Err(TargetError::Contested(_, ref a, ref b)) if a == "code" && b == "(unnamed)"));
         // The same name twice over one path is a repetition and not a contest
         assert_eq!(1, repeated.unwrap().len());
+    }
+
+    // Two literal paths are decidable the moment they are typed, and the command line calls this one
+    // before anything is counted. Under '--diff' the later check runs against a checkout, so the
+    // message would name a temporary directory nobody wrote, and a whole repository would be written
+    // out before it said so.
+    #[test]
+    fn two_names_over_one_typed_path_are_refused_before_anything_is_counted() {
+        let root = std::env::temp_dir().join("mezura-contested-early");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let (slashes, backslashes) = (root.to_str().unwrap().replace('\\', "/"), root.to_str().unwrap().to_owned());
+
+        // The two spellings are one path once absolutized, which is what makes it a contest
+        let contested = validate_and_absolutize(&[Target::named("one", slashes.clone()),
+                Target::named("two", backslashes)]);
+        let apart = validate_and_absolutize(&[Target::named("one", slashes.clone()), Target::of(slashes)]);
+        std::fs::remove_dir_all(&root).unwrap();
+
+        assert!(matches!(contested, Err(TargetError::Contested(_, ref a, ref b)) if a == "one" && b == "two"),
+                "{contested:?}");
+        assert!(apart.is_err(), "a name against the leftovers is a contest too");
     }
 
     #[test]

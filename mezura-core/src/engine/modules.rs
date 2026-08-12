@@ -98,7 +98,8 @@ impl Modules {
 
     fn at(&self, boundaries: &HashMap<String, ModuleId>, path: &Path, inherited: ModuleId) -> ModuleId {
         let Some(path) = path.to_str() else { return inherited };
-        boundaries.get(&crate::engine::targets::path_comparison_key(&path.replace('\\', "/"))).copied().unwrap_or(inherited)
+        let path = crate::engine::targets::normalise_separators(path);
+        boundaries.get(&crate::engine::targets::path_comparison_key(&path)).copied().unwrap_or(inherited)
     }
 }
 

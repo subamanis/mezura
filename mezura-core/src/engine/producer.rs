@@ -96,7 +96,7 @@ pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>,
                 // or a permission, a directory that went away, and a name the filesystem refused all
                 // arrive as one sentence, hundreds of times over a whole drive.
                 Err(error) => unreadable_dirs.push(UnreadableDirDetails {
-                    path: dir.path.to_string_lossy().replace('\\', "/"),
+                    path: crate::engine::targets::normalise_separators(&dir.path.to_string_lossy()).into_owned(),
                     error_msg: error.to_string()
                 })
             }

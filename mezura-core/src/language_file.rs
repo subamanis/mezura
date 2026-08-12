@@ -765,8 +765,8 @@ pl      Perl, Prolog
     // mark stopped the '===>' of the first line from matching, so the block was never entered, every
     // rule in it was skipped, and nothing landed among the faulty lines either, since a line that is
     // never read is never rejected. The only trace was the tiebreak warnings the file exists to
-    // silence. It survived unnoticed because the shipped copy opens with prose, and the mark sits on
-    // a line that is skipped anyway; a user who trims that prose away pays for it.
+    // silence. It survived unnoticed because the shipped copy opens with explanatory text, and the
+    // mark sits on a line that is skipped anyway; a user who trims those lines away pays for it.
     #[test]
     fn a_priority_file_saved_with_a_byte_order_mark_still_reads() {
         let good = "===> contested-extensions\nm    Objective-C, MATLAB\n";
