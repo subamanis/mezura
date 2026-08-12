@@ -923,8 +923,8 @@ mod tests {
         assert!(rendered.contains("\"subject\": \"a-subject-only-this-test-uses\""));
         assert!(rendered.contains("\"code\": \"language-tiebreak\""));
         assert!(rendered.contains("\"affects\": \"counts\""));
-        // The message is prose written for a person, so it goes through the same escaping as every
-        // other string here or a quotation mark in it would break the document
+        // The message is written for a person, so it goes through the same escaping as every other
+        // string here or a quotation mark in it would break the document
         assert!(rendered.contains("quoted \\\"text\\\" and a \\\\ backslash"));
     }
 

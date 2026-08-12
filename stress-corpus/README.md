@@ -59,7 +59,7 @@ its own `<tool>-section` lines with those counts; anything it reports beyond the
 and is not held against it. That second half matters, because part of this really is taste. Whether
 the markup inside a Vue `<template>` is HTML or is the Vue file itself has no right answer: its
 syntax is HTML's, and what people write in it is `<MyComponent />`, `v-if` and `{{ }}`, which HTML
-has none of. Whether the prose inside a Rust doc comment is Markdown is the same kind of question.
+has none of. Whether the text inside a Rust doc comment is Markdown is the same kind of question.
 A counter that splits those out is not wrong, and neither is one that does not.
 
 What a tool does owe, once it has decided, is consistency: a block it calls HTML has to be counted
