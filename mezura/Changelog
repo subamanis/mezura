@@ -7,6 +7,11 @@ Main changes:
       the rest under a row called "(unnamed)". Name nothing and the output is exactly what it was.
       A space separates one target from the next only once you have named one, so a path with a
       space in it still needs nothing but a comma next to it while you name nothing.
+  -> The "--dirs" command is now "--targets", since a target can be a file, a glob pattern or a
+      named module and not only a directory. A saved configuration's "===> dirs" block is now
+      "===> targets", so edit or re-save old configurations or their targets will be ignored. The
+      JSON documents and log entries record the list as "targets" too, so entries written before
+      this change cannot be compared against; delete them.
   -> Every piece of printed text can now be styled, not just the four colors of the overview.
       49 tokens are exposed, and each takes a color plus any of bold, italic, underline, dim and
       reverse, in any order. The cells of the live progress bar also take a "hex..hex" gradient

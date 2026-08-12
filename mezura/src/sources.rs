@@ -29,11 +29,11 @@ pub fn prepare_revisions(names: &[&str], engine: &EngineConfig) -> Result<Vec<Re
     }
     // The run's own rule for telling a pattern from a folder that carries those characters in its
     // name: what exists exactly as written is always literal
-    if let Some(target) = engine.dirs.iter().find(|x|
+    if let Some(target) = engine.targets.iter().find(|x|
             !Path::new(&x.path).exists() && x.path.contains(['*', '?', '[', '{'])) {
         return Err(GitError::PatternTarget { pattern: target.path.clone() });
     }
-    let declared = engine.dirs.iter().map(|x| x.path.clone()).collect::<Vec<_>>();
+    let declared = engine.targets.iter().map(|x| x.path.clone()).collect::<Vec<_>>();
     let repository = super::git::find_common_repository_of(&declared)?;
 
     let resolved = names.iter().map(|name| super::git::resolve_revision(&repository, name))
@@ -115,14 +115,14 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
     // form of each one that was found is kept beside its checkout path, because the checkout is a
     // temporary directory: a reading that named it would say a different tree on every run, when
     // what was measured is the declared tree as that commit held it.
-    let mut dirs = Vec::with_capacity(config.engine.dirs.len());
-    let mut counted_declared = Vec::with_capacity(config.engine.dirs.len());
+    let mut targets = Vec::with_capacity(config.engine.targets.len());
+    let mut counted_declared = Vec::with_capacity(config.engine.targets.len());
     let mut missing = Vec::new();
-    for target in &config.engine.dirs {
+    for target in &config.engine.targets {
         let (_, prefix) = super::git::find_repository_of(&target.path)?;
         match checkout.find_target_of(&prefix) {
             Some(path) => {
-                dirs.push(mezura_core::Target { module: target.module.clone(), path });
+                targets.push(mezura_core::Target { module: target.module.clone(), path });
                 counted_declared.push(target.clone());
             },
             None => missing.push(target.path.clone())
@@ -132,11 +132,11 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
         notes.push(Note::MissingInRevision { git_revision: git_revision.to_owned(), targets: missing });
     }
 
-    let of_git_revision = EngineConfig { dirs,
+    let of_git_revision = EngineConfig { targets,
             exclude_dirs: move_excludes_into_checkout(&checkout.path, &resolved.repository, &config.engine.exclude_dirs),
             ..config.engine.clone() };
     // A reading of zero and not a failure: it is what a revision older than every target holds
-    let result = if of_git_revision.dirs.is_empty() {
+    let result = if of_git_revision.targets.is_empty() {
         mezura_core::RunResult {
             per_language: HashMap::new(), total: mezura_core::Stats::default(), modules: Vec::new(),
             nested_languages: Default::default(),

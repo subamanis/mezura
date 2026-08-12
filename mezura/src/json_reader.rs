@@ -188,7 +188,7 @@ pub(crate) fn parse_scope(scope: &Map<String, Value>) -> Result<(Scope, Vec<Targ
                     at: "scope.keywords_counted".to_owned(), wanted: "true or false" })?,
             None => true
         }
-    }, parse_targets(read_list(scope, "dirs", "scope")?)?))
+    }, parse_targets(read_list(scope, "targets", "scope")?)?))
 }
 
 // 'extra' and 'average_bytes' are not read: both are worked out from the counts beside them, and a
@@ -304,7 +304,7 @@ fn parse_unreadable_dirs(entries: &[Value]) -> Result<Vec<UnreadableDirDetails>,
 
 fn parse_targets(entries: &[Value]) -> Result<Vec<Target>, DocumentError> {
     entries.iter().enumerate().map(|(i, entry)| {
-        let at = format!("scope.dirs[{i}]");
+        let at = format!("scope.targets[{i}]");
         let entry = read_object(entry, &at)?;
         let path = read_text(entry, "path", &at)?;
 
@@ -598,12 +598,12 @@ mod tests {
         assert!(error("\"modules\": [{\"name\": 7}]").contains("'modules[0].name' is not a string or null"));
 
         // a target is an object of two members, and either of them being wrong names that target
-        let scope_with = |dirs: &str| format!("\"scope\": {{\"dirs\": {dirs}, \"exclude\": [], \
+        let scope_with = |targets: &str| format!("\"scope\": {{\"targets\": {targets}, \"exclude\": [], \
                 \"languages\": [], \"excluded_languages\": [], \"forced_languages\": {{}}, \
                 \"braces_as_code\": false, \"search_in_dotted\": false, \"gitignore\": true, \
                 \"keywords_counted\": true}}");
-        assert!(error(&scope_with("[{\"module\": null}]")).contains("'scope.dirs[0].path'"));
-        assert!(error(&scope_with("[{\"module\": 7, \"path\": \"x\"}]")).contains("'scope.dirs[0].module' is not a string or null"));
+        assert!(error(&scope_with("[{\"module\": null}]")).contains("'scope.targets[0].path'"));
+        assert!(error(&scope_with("[{\"module\": 7, \"path\": \"x\"}]")).contains("'scope.targets[0].module' is not a string or null"));
 
         // a later format may have removed a key or changed what one means, so it is refused whole
         // rather than read as far as it happens to match
@@ -617,7 +617,7 @@ mod tests {
     fn minimal_document(body: &str) -> String {
         let document = format!("{{\"format\": 1, \"mezura_version\": \"3.0.0\", \
             \"generated_at\": \"2026-07-30T14:22:07+03:00\", \
-            \"scope\": {{\"dirs\": [], \"exclude\": [], \"languages\": [], \"excluded_languages\": [], \
+            \"scope\": {{\"targets\": [], \"exclude\": [], \"languages\": [], \"excluded_languages\": [], \
                 \"forced_languages\": {{}}, \"braces_as_code\": false, \"search_in_dotted\": false, \
                 \"gitignore\": true, \"keywords_counted\": true}}, \
             \"scan\": {{\"files_found\": 0, \"files_of_interest\": 0, \"files_excluded\": 0, \

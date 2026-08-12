@@ -230,11 +230,11 @@ fn create_side_object(reading: &super::diff::Reading) -> String {
 }
 
 // The scope in the shape the run document writes it, from wherever the reading carried it. The
-// directories are in it for the same reason they are in the run's: two sides that measured
+// targets are in it for the same reason they are in the run's: two sides that measured
 // different trees would otherwise read as code that changed.
 fn create_scope_object_of(scope: &super::json_reader::Scope, targets: &[mezura_core::Target]) -> String {
     let members = [
-        format!("    \"dirs\": {}", create_targets_array(targets)),
+        format!("    \"targets\": {}", create_targets_array(targets)),
         format!("    \"exclude\": {}", create_string_array(&scope.exclude)),
         format!("    \"languages\": {}", create_string_array(&scope.languages)),
         format!("    \"excluded_languages\": {}", create_string_array(&scope.excluded_languages)),
@@ -381,7 +381,7 @@ fn create_scope_object(config: &Configuration, targets: &[mezura_core::Target]) 
     let members = [
         // The resolved list off the result, not the declared one off the configuration: the same
         // './src' over two different trees is two different measurements
-        format!("    \"dirs\": {}", create_targets_array(targets)),
+        format!("    \"targets\": {}", create_targets_array(targets)),
         format!("    \"exclude\": {}", create_string_array(&config.engine.exclude_dirs)),
         format!("    \"languages\": {}", create_string_array(&config.engine.languages_of_interest)),
         format!("    \"excluded_languages\": {}", create_string_array(&config.engine.excluded_languages)),
@@ -902,7 +902,7 @@ mod tests {
 
         // and a run over the working directory alone still writes the key, empty
         result.targets = Vec::new();
-        assert!(create_document(&result, &Local::now(), &config).contains("\"dirs\": []"));
+        assert!(create_document(&result, &Local::now(), &config).contains("\"targets\": []"));
     }
 
     fn reading_of(source: crate::diff::Source, per_language: HashMap<String, Stats>) -> crate::diff::Reading {

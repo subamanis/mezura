@@ -78,7 +78,7 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
     // starts, and a watcher of the public flag must see it rise on every one of them, including
     // the seventh that will be added without remembering this.
     let _walk_ends = WalkDoneGuard(progress.clone());
-    if config.dirs.is_empty() {
+    if config.targets.is_empty() {
         return Err(RunError::NoTargets);
     }
     // Checked before anything is read from disk. Left to run, this pair would produce counts that
@@ -87,7 +87,7 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
         return Err(RunError::LanguagesFromAnotherConfig);
     }
     // Idempotent, so a caller that resolved its own targets earlier loses nothing here.
-    let dirs = engine::targets::resolve(&config.dirs, !config.no_gitignore, config.should_search_in_dotted)
+    let targets = engine::targets::resolve(&config.targets, !config.no_gitignore, config.should_search_in_dotted)
             .map_err(RunError::InvalidTargets)?;
     let config = Arc::new(config.clone());
     let faulty_files_ref : FaultyFilesListMut  = Arc::new(Mutex::new(Vec::with_capacity(10)));
@@ -96,7 +96,7 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
     let language_map_ref = Arc::new(by_name);
     let language_lookup: SharedLanguageLookup = Arc::new(lookup);
     let nested_definitions = Arc::new(nested_definitions);
-    let modules = Arc::new(Modules::of(&dirs));
+    let modules = Arc::new(Modules::of(&targets));
     let stats_per_module : StatsMapMut =
             Arc::new(Mutex::new(make_language_stats(&language_map_ref, modules.count())));
     let nested_per_module : NestedLanguageMapMut =
@@ -117,7 +117,7 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
                         .cloned().unwrap_or_default();
                 RunError::InvalidExcludePattern(culprit)
             })?);
-    calculate_single_file_stats_or_add_to_injector(&config, &dirs, &dirs_injector, &files_injector, &mut files_present,
+    calculate_single_file_stats_or_add_to_injector(&config, &targets, &dirs_injector, &files_injector, &mut files_present,
             &language_lookup, &modules, &progress);
 
     let files_stats = Arc::new(Mutex::new(files_present));
@@ -227,7 +227,7 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
     if relevant_files_num == 0 {
         return Ok(RunResult::of_nothing(files_present,
                 Performance { duration_millis: parsing_duration_millis, threads: threads_used }, &modules,
-                dirs.to_vec(), std::mem::take(&mut unreadable_dirs.lock().unwrap())));
+                targets.to_vec(), std::mem::take(&mut unreadable_dirs.lock().unwrap())));
     }
 
     let mut stats_guard = stats_per_module.lock();
@@ -274,7 +274,7 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
         faulty_files: std::mem::take(&mut faulty_files_ref.lock().unwrap()),
         files_present,
         performance: Performance { duration_millis: parsing_duration_millis, threads: threads_used },
-        targets: dirs.to_vec(),
+        targets: targets.to_vec(),
         unreadable_dirs: std::mem::take(&mut unreadable_dirs.lock().unwrap())
     })
 }
@@ -299,12 +299,12 @@ impl Drop for WalkDoneGuard {
 // Only the outermost targets are queued. One that sits inside another is reached by the scan of the
 // one around it, and queueing both would count its files twice; the name it was given is not lost
 // with it, the module table still hands it back on the way down.
-pub(crate) fn calculate_single_file_stats_or_add_to_injector(config: &EngineConfig, dirs: &engine::targets::Targets,
+pub(crate) fn calculate_single_file_stats_or_add_to_injector(config: &EngineConfig, targets: &engine::targets::Targets,
         dirs_injector: &Arc<Injector<TraversedDir>>, files_injector: &Arc<Injector<ParsableFile>>,
         files_present: &mut FilesPresent, language_lookup: &engine::identity::LanguageLookup, modules: &Modules,
         progress: &ScanProgress)
 {
-    crate::engine::targets::topmost_targets(dirs).iter().for_each(|target| {
+    crate::engine::targets::topmost_targets(targets).iter().for_each(|target| {
         let dir_path = Path::new(&target.path);
         let module = modules.of_target(target);
         if dir_path.is_file() {

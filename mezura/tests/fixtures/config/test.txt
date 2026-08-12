@@ -1,6 +1,6 @@
 Auto-generated config file.
 
-===> dirs
+===> targets
 C:/Some/Path/a,
 C:/Some/Path/b
 C:/Some/Path/c,C:/Some/Path/d

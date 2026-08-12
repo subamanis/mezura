@@ -227,7 +227,7 @@ mod tests {
                     None => Target::of(piece)
                 }).collect::<Vec<_>>();
         let config = EngineConfig {
-            dirs: declared,
+            targets: declared,
             threads: crate::Threads::new(1, 1),
             no_gitignore: extra_args.contains("--no-gitignore"),
             should_search_in_dotted: extra_args.contains("--search-in-dotted"),
@@ -235,7 +235,7 @@ mod tests {
         };
         // The same first step 'run' takes: the declared targets, resolved with the flags of the
         // configuration the walk is about to obey
-        let dirs = crate::engine::targets::resolve(&config.dirs, !config.no_gitignore, config.should_search_in_dotted).unwrap();
+        let targets = crate::engine::targets::resolve(&config.targets, !config.no_gitignore, config.should_search_in_dotted).unwrap();
         let config = Arc::new(config);
         let language_map = Arc::new(crate::languages::keyed_by_name(
                 crate::language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0));
@@ -244,9 +244,9 @@ mod tests {
         let idle_producers = Arc::new(AtomicUsize::new(0));
         let language_lookup: SharedLanguageLookup = Arc::new(LanguageLookup { by_extension: build_extension_language_map(&language_map, &Default::default(), &Default::default()).0,
                         ..Default::default() });
-        let modules = Arc::new(Modules::of(&dirs));
+        let modules = Arc::new(Modules::of(&targets));
         let mut files_present = FilesPresent::default();
-        calculate_single_file_stats_or_add_to_injector(&config, &dirs, &dirs_injector, &files_injector, &mut files_present, &language_lookup, &modules,
+        calculate_single_file_stats_or_add_to_injector(&config, &targets, &dirs_injector, &files_injector, &mut files_present, &language_lookup, &modules,
                 &ScanProgress::default());
 
         let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs).unwrap());
@@ -281,17 +281,17 @@ mod tests {
         let vanished = format!("{root_str}/gone");
 
         let config = EngineConfig { threads: crate::Threads::new(1, 1), ..EngineConfig::new([&root_str]) };
-        let dirs = crate::engine::targets::resolve(&config.dirs, !config.no_gitignore, config.should_search_in_dotted).unwrap();
+        let targets = crate::engine::targets::resolve(&config.targets, !config.no_gitignore, config.should_search_in_dotted).unwrap();
         let config = Arc::new(config);
         let language_map = Arc::new(crate::languages::keyed_by_name(
                 crate::language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0));
         let language_lookup: SharedLanguageLookup =
                 Arc::new(LanguageLookup { by_extension: build_extension_language_map(&language_map, &Default::default(), &Default::default()).0,
                         ..Default::default() });
-        let modules = Arc::new(Modules::of(&dirs));
+        let modules = Arc::new(Modules::of(&targets));
         let (files_injector, dirs_injector) = (Arc::new(Injector::new()), Arc::new(Injector::new()));
         let mut files_present = FilesPresent::default();
-        calculate_single_file_stats_or_add_to_injector(&config, &dirs, &dirs_injector, &files_injector,
+        calculate_single_file_stats_or_add_to_injector(&config, &targets, &dirs_injector, &files_injector,
                 &mut files_present, &language_lookup, &modules, &ScanProgress::default());
         // Queued and then gone, which the walk finds out only when it tries to open it
         dirs_injector.push(TraversedDir::new(std::path::PathBuf::from(&vanished), None, 0));

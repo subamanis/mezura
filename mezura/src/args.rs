@@ -20,7 +20,7 @@ pub fn parse_targets(s: &str) -> Result<Vec<(Option<String>, String)>, String> {
     }
 }
 
-// The '===> dirs' block of a configuration file, where the line separates one target from the next
+// The '===> targets' block of a configuration file, where the line separates one target from the next
 // and a space never does. So a path with a space needs no quoting here, which is the way out for the
 // one thing a command line cannot express: a spaced path in a run that names modules. A trailing
 // comma continues the list onto the next line.
@@ -189,7 +189,7 @@ fn targets_of(tokens: Vec<String>) -> Result<Vec<(Option<String>, String)>, Stri
 
 // One target ends and the next begins at a separator, while a comma continues the list of paths that
 // belong to the same one. A comma with a gap around it is still a comma, which is why that gap does
-// not separate: '--dirs ./a, ./b' has always meant two targets and still does, and 'tests=./a, ./b'
+// not separate: '--targets ./a, ./b' has always meant two targets and still does, and 'tests=./a, ./b'
 // keeps both paths under 'tests' instead of losing the second one to nobody.
 // What the separator is depends on where the text came from, and that is the whole point: the caller
 // knows where one target provably ends, and this has no business guessing.
@@ -265,8 +265,8 @@ mod tests {
                 split_into_command_segments("C:/t/D--dev-Rusty-mezura/scratch"));
         assert_eq!(vec!["C:/t/my--project ", "threads 1 2"],
                 split_into_command_segments("C:/t/my--project --threads 1 2"));
-        assert_eq!(vec!["", "dirs C:/t/a--b, C:/t/c--d ", "top 3"],
-                split_into_command_segments("--dirs C:/t/a--b, C:/t/c--d --top 3"));
+        assert_eq!(vec!["", "targets C:/t/a--b, C:/t/c--d ", "top 3"],
+                split_into_command_segments("--targets C:/t/a--b, C:/t/c--d --top 3"));
     }
 
     #[test]

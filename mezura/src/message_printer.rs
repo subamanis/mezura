@@ -14,11 +14,11 @@ static CHANGELOG_BYTES : &[u8] = include_bytes!("../Changelog");
 const MESSAGE_WIDTH : usize = 110;
 
 // These constants need to be maintained along with the readme's commands
-pub const DIRS_HELP  :  &str =
-"--dirs
+pub const TARGETS_HELP  :  &str =
+"--targets
 
     The paths to the directories or files, separated by commas if more than 1,
-    in this form: '--dirs <path1>, <path2>'
+    in this form: '--targets <path1>, <path2>'
     A path can also be a glob pattern (* ? [..] {..}), which is expanded to every existing
     directory and file that it matches, so 'services/*/src' is a valid target.
     A path that exists exactly as written is always taken literally, so a folder with one of
@@ -722,7 +722,7 @@ pub const COMPARE_LEVEL_HELP  :  &str =
 
     Every log entry records the settings that decide what is counted, and an entry that was written
     with different ones is marked 'modified:' followed by their names. The comparison is still shown,
-    because the point is to say whether it can be trusted: a change of 'dirs' means the numbers came
+    because the point is to say whether it can be trusted: a change of 'targets' means the numbers came
     from another tree, while a change of 'braces-as-code' means lines moved between code and extra
     and the total did not. An entry written by a version that did not record a setting is never
     reported as having changed it.
@@ -808,7 +808,7 @@ pub const HELP_HELP  :  &str =
 // take their candidates from it, so a new command cannot reach one of the three and miss the others.
 pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 6] = [
     ("What is counted", &[
-        (DIRS, DIRS_HELP),
+        (TARGETS, TARGETS_HELP),
         (EXCLUDE, EXCLUDE_HELP),
         (LANGUAGES, LANGUAGES_HELP),
         (EXCLUDE_LANGUAGES, EXCLUDE_LANGUAGES_HELP),

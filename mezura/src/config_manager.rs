@@ -13,7 +13,7 @@ use super::{message_printer, suggestions, theme::Theme};
 pub const VERSION_ID : &str = "v3.0.0";
 
 // command flags
-pub const DIRS               :&str   = "dirs";
+pub const TARGETS            :&str   = "targets";
 pub const EXCLUDE            :&str   = "exclude";
 pub const LANGUAGES          :&str   = "languages";
 pub const EXCLUDE_LANGUAGES  :&str   = "exclude-languages";
@@ -72,8 +72,8 @@ pub struct Configuration {
 
 impl Configuration {
     #[cfg(test)]
-    pub fn new(dirs: Vec<String>) -> Self {
-        Configuration { engine: EngineConfig::new(dirs), view: ViewConfig::default(),
+    pub fn new(targets: Vec<String>) -> Self {
+        Configuration { engine: EngineConfig::new(targets), view: ViewConfig::default(),
                 typed_explicitly: TypedExplicitlyOnCommandLine::default() }
     }
 
@@ -91,9 +91,9 @@ impl Configuration {
 #[derive(Debug,PartialEq,Clone)]
 pub struct ViewConfig {
     pub version: &'static str,
-    // Which configuration file supplied the dirs, when one did, so a run refusing them can name
+    // Which configuration file supplied the targets, when one did, so a run refusing them can name
     // the file the reader cannot see failing
-    pub dirs_source: Option<String>,
+    pub targets_source: Option<String>,
     pub should_show_faulty_files: bool,
     pub hidden: Hidden,
     pub log: LogOption,
@@ -139,7 +139,7 @@ impl Default for ViewConfig {
     fn default() -> Self {
         ViewConfig {
             version: VERSION_ID,
-            dirs_source: None,
+            targets_source: None,
             should_show_faulty_files: DEF_SHOW_FAULTY_FILES,
             hidden: Hidden::default(),
             log: LogOption::default(),
@@ -467,7 +467,7 @@ impl Formatted for ArgParsingError {
             Self::UnparsableWorkingDir => wrap_message("The current working dir could not be parsed as target dir, try inputing it manually.").red(),
             Self::InvalidPath(p) => wrap_message(&format!("Path provided is not a valid directory or file:\n'{p}'.")).red(),
             Self::InvalidPathInConfig(dir,name) => wrap_message(&format!("Specified path '{dir}', in config '{name}', doesn't exist anymore.")).red(),
-            Self::DoublePath => wrap_message("Directories already provided as first argument, but --dirs command also found.").red(),
+            Self::DoublePath => wrap_message("Targets already provided as first argument, but --targets command also found.").red(),
             // Only the mistake is red. What to do about it is not an error, it is the way out.
             Self::UnrecognisedCommand(p) => {
                 let tail = suggestions::formatted_suggestion(p, &message_printer::get_command_names())
@@ -529,7 +529,7 @@ impl TypedExplicitlyOnCommandLine {
     fn of(builder: &ConfigurationBuilder) -> Self {
         let ConfigurationBuilder { exclude_dirs, languages_of_interest, excluded_languages,
             forced_languages, braces_as_code, should_search_in_dotted, no_gitignore, hidden,
-            dirs: _, dirs_source: _, threads: _, should_show_faulty_files: _, theme_name: _,
+            targets: _, targets_source: _, threads: _, should_show_faulty_files: _, theme_name: _,
             log: _, compare_level: _, config_name_to_save: _, config_name_to_load: _,
             theme_name_to_save: _, bar_thickness: _, progress_bar: _, number_separator: _, decimal_separator: _,
             layout: _, output: _, diff_against: _, sort_by: _, top_n: _, styles: _,
@@ -552,11 +552,11 @@ impl TypedExplicitlyOnCommandLine {
 // it, and merged from both before 'build' turns it into the two halves the program runs on.
 #[derive(Debug, PartialEq, Default)]
 pub struct ConfigurationBuilder {
-    pub dirs:                     Option<Vec<Target>>,
-    // Which configuration file supplied the dirs, when one did: the run resolves them, and its
+    pub targets:                  Option<Vec<Target>>,
+    // Which configuration file supplied the targets, when one did: the run resolves them, and its
     // error has to name the file the reader cannot see failing. Deliberately absent from
     // 'add_missing_fields', being bookkeeping about the merge and not a merged value.
-    pub dirs_source:              Option<String>,
+    pub targets_source:           Option<String>,
     pub exclude_dirs:             Option<Vec<String>>,
     pub languages_of_interest:    Option<Vec<String>>,
     pub excluded_languages:       Option<Vec<String>>,
@@ -598,7 +598,7 @@ pub struct ConfigurationBuilder {
 
 impl ConfigurationBuilder {
     pub fn add_missing_fields(&mut self, config: Self) -> &mut Self {
-        if self.dirs.is_none() {self.dirs = config.dirs};
+        if self.targets.is_none() {self.targets = config.targets};
         if self.exclude_dirs.is_none() {self.exclude_dirs = config.exclude_dirs};
         if self.languages_of_interest.is_none() {self.languages_of_interest = config.languages_of_interest};
         if self.excluded_languages.is_none() {self.excluded_languages = config.excluded_languages};
@@ -642,7 +642,7 @@ impl ConfigurationBuilder {
         Configuration {
             typed_explicitly: self.typed_explicitly,
             engine: EngineConfig {
-                dirs: self.dirs.clone().unwrap_or_default(),
+                targets: self.targets.clone().unwrap_or_default(),
                 exclude_dirs: (self.exclude_dirs).clone().unwrap_or_default(),
                 languages_of_interest: (self.languages_of_interest).clone().unwrap_or_default(),
                 excluded_languages: (self.excluded_languages).clone().unwrap_or_default(),
@@ -656,7 +656,7 @@ impl ConfigurationBuilder {
             },
             view: ViewConfig {
                 version: VERSION_ID,
-                dirs_source: self.dirs_source.clone(),
+                targets_source: self.targets_source.clone(),
                 should_show_faulty_files: self.should_show_faulty_files.unwrap_or(DEF_SHOW_FAULTY_FILES),
                 hidden,
                 log: self.log.clone().unwrap_or_default(),
@@ -700,7 +700,7 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
     Ok(config)
 }
 
-// The form that reads back as this exact target, which is the syntax 'parse_dirs' below accepts. The
+// The form that reads back as this exact target, which is the syntax 'parse_targets' below accepts. The
 // quotes go around the path and not around the whole thing, because the name is taken from before the
 // first '=' and a leading quote would end up inside it.
 pub fn format_declared_form(target: &Target) -> String {
@@ -712,10 +712,10 @@ pub fn format_declared_form(target: &Target) -> String {
 }
 
 // The run refused the declared targets. The wording is this crate's own, and a configuration file
-// that supplied the dirs is named as the culprit: otherwise a 'dirs' block nobody can see failing
-// sends the reader hunting through the command they typed.
-pub fn attribute_dirs_error(error: mezura_core::TargetError, dirs_source: &Option<String>) -> ArgParsingError {
-    match (map_target_error(error), dirs_source) {
+// that supplied the targets is named as the culprit: otherwise a 'targets' block nobody can see
+// failing sends the reader hunting through the command they typed.
+pub fn attribute_targets_error(error: mezura_core::TargetError, targets_source: &Option<String>) -> ArgParsingError {
+    match (map_target_error(error), targets_source) {
         (ArgParsingError::InvalidPath(p), Some(name)) | (ArgParsingError::InvalidGlobPattern(p), Some(name))
         | (ArgParsingError::NoGlobMatches(p), Some(name)) | (ArgParsingError::AllGlobMatchesIgnored(p), Some(name)) =>
                 ArgParsingError::InvalidPathInConfig(p, name.clone()),
@@ -724,17 +724,17 @@ pub fn attribute_dirs_error(error: mezura_core::TargetError, dirs_source: &Optio
 }
 
 pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilder, ArgParsingError> {
-    let mut dirs = None;
+    let mut targets = None;
     let mut options = super::args::split_into_command_segments(line).into_iter();
 
     if line.trim().starts_with("--") {
         //ignoring the empty first element that is caused by splitting
         options.next();
     } else {
-        match parse_dirs(options.next().unwrap()) {
+        match parse_targets(options.next().unwrap()) {
             Ok(x) => {
                 if !x.is_empty() {
-                    dirs = Some(x);
+                    targets = Some(x);
                 }
             },
             Err(x) => {
@@ -754,18 +754,18 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             Some(index) => command.split_at(index),
             None => (command.trim(), "")
         };
-        if command_name == DIRS {
-            if dirs.is_some() {
+        if command_name == TARGETS {
+            if targets.is_some() {
                 return Err(ArgParsingError::DoublePath);
             }
 
-            let parse_result = parse_dirs(arguments);
+            let parse_result = parse_targets(arguments);
             if let Ok(x) = parse_result {
                 if x.is_empty() {
-                    message_printer::print_help_message_for_command(DIRS);
-                    return Err(ArgParsingError::IncorrectCommandArgs(DIRS.to_owned()));
+                    message_printer::print_help_message_for_command(TARGETS);
+                    return Err(ArgParsingError::IncorrectCommandArgs(TARGETS.to_owned()));
                 }
-                dirs = Some(x)
+                targets = Some(x)
             } else {
                 return Err(parse_result.err().unwrap());
             }
@@ -985,7 +985,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     print_warnings_for_commands_that_need_a_loaded_configuration(&config_name_to_save, &config_name_to_load, &log, &compare_level, &diff_against);
 
     let mut config_builder = ConfigurationBuilder {
-        dirs, dirs_source: None, exclude_dirs, languages_of_interest, excluded_languages, forced_languages, threads, braces_as_code,
+        targets, targets_source: None, exclude_dirs, languages_of_interest, excluded_languages, forced_languages, threads, braces_as_code,
         should_search_in_dotted: search_in_dotted, should_show_faulty_files: show_faulty_files,
         hidden, no_gitignore, theme_name, theme_name_to_save, log, compare_level,
         config_name_to_save, config_name_to_load, styles, bar_thickness, progress_bar, number_separator, decimal_separator, layout, output, diff_against, sort_by, top_n,
@@ -995,21 +995,21 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     // command line's own
     config_builder.typed_explicitly = TypedExplicitlyOnCommandLine::of(&config_builder);
 
-    let mut dirs_config_source = None;
+    let mut targets_config_source = None;
     if let Some((custom, issues)) = custom_config {
         let config_name = config_builder.config_name_to_load.clone().unwrap_or_default();
         print_config_file_warnings(&issues.warnings, &config_name);
         resolve_invalid_config_fields(&config_builder, &issues.invalid_fields, &config_name)?;
-        let dirs_were_missing = config_builder.dirs.is_none();
+        let targets_were_missing = config_builder.targets.is_none();
         config_builder.add_missing_fields(custom);
-        if dirs_were_missing && config_builder.dirs.is_some() {
-            dirs_config_source = Some(config_name);
+        if targets_were_missing && config_builder.targets.is_some() {
+            targets_config_source = Some(config_name);
         }
     }
 
     if let Some(name) = &config_builder.config_name_to_save {
-        if config_builder.dirs.is_none() {
-            config_builder.dirs = Some(create_targets_from_working_dir()?);
+        if config_builder.targets.is_none() {
+            config_builder.targets = Some(create_targets_from_working_dir()?);
         }
 
         match super::config_files::save_existing_commands_from_config_builder_to_file(None, name, &config_builder) {
@@ -1023,10 +1023,10 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             Ok((default_config, issues)) => {
                 print_config_file_warnings(&issues.warnings, DEFAULT_CONFIG_LABEL);
                 resolve_invalid_config_fields(&config_builder, &issues.invalid_fields, DEFAULT_CONFIG_LABEL)?;
-                let dirs_were_missing = config_builder.dirs.is_none();
+                let targets_were_missing = config_builder.targets.is_none();
                 config_builder.add_missing_fields(default_config);
-                if dirs_were_missing && config_builder.dirs.is_some() {
-                    dirs_config_source = Some(DEFAULT_CONFIG_LABEL.to_owned());
+                if targets_were_missing && config_builder.targets.is_some() {
+                    targets_config_source = Some(DEFAULT_CONFIG_LABEL.to_owned());
                 }
             },
             // An absent default configuration is an ordinary machine. A half-readable one is not,
@@ -1039,9 +1039,9 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
 
     // No pattern is expanded here, or anywhere in this crate: the run resolves the declared targets
     // at its entry, under the flags of the same configuration the walk obeys, so the two cannot
-    // answer differently. Only the name of the file that supplied the dirs is kept, so that the
+    // answer differently. Only the name of the file that supplied the targets is kept, so that the
     // run's refusal can name it.
-    config_builder.dirs_source = dirs_config_source;
+    config_builder.targets_source = targets_config_source;
 
     if let Some(name) = &config_builder.theme_name {
         match super::theme_files::load_theme(name, &crate::paths::PERSISTENT_APP_PATHS.themes_dir) {
@@ -1057,8 +1057,8 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         }
     }
 
-    if config_builder.dirs.is_none() {
-        config_builder.dirs = Some(create_targets_from_working_dir()?);
+    if config_builder.targets.is_none() {
+        config_builder.targets = Some(create_targets_from_working_dir()?);
     }
 
     Ok(config_builder)
@@ -1078,7 +1078,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
     // decides whether it belongs in the match below. Everything bound to '_' is a decision, with
     // its reason next to it.
     let ConfigurationBuilder {
-            dirs, exclude_dirs, forced_languages, threads, braces_as_code, should_search_in_dotted,
+            targets, exclude_dirs, forced_languages, threads, braces_as_code, should_search_in_dotted,
             should_show_faulty_files, hidden, no_gitignore, theme_name, compare_level, bar_thickness,
             progress_bar, number_separator, decimal_separator, layout, sort_by, top_n,
             // these two accept whatever they are given, so a config can hold no invalid value for
@@ -1086,14 +1086,14 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             languages_of_interest: _, excluded_languages: _,
             // not carried by a configuration file at all
             config_name_to_save: _, config_name_to_load: _, theme_name_to_save: _, output: _,
-            diff_against: _, log: _, dirs_source: _, typed_explicitly: _,
+            diff_against: _, log: _, targets_source: _, typed_explicitly: _,
             // a style that does not parse is reported per line and skipped, and the rest of the file
             // still applies, so these warn instead of reaching here
             styles: _, config_styles: _, theme_styles: _ } = config_builder;
 
     for field in invalid_fields {
         let is_overridden = match *field {
-            DIRS => dirs.is_some(),
+            TARGETS => targets.is_some(),
             THREADS => threads.is_some(),
             COMPARE_LEVEL => compare_level.is_some(),
             BRACES_AS_CODE => braces_as_code.is_some(),
@@ -1163,7 +1163,7 @@ fn has_any_args(command: &str) -> bool {
 // Only the half of resolution that no setting can change, so a typed path that names nothing is
 // refused the moment it was typed. Patterns are expanded by the run itself, under the flags of the
 // merged configuration it is handed.
-fn parse_dirs(s: &str) -> Result<Vec<Target>, ArgParsingError> {
+fn parse_targets(s: &str) -> Result<Vec<Target>, ArgParsingError> {
     let declared = super::args::parse_targets(s).map_err(ArgParsingError::MalformedTarget)?
             .into_iter().map(|(module, path)| Target { module, path }).collect::<Vec<_>>();
     mezura_core::engine::targets::validate_and_absolutize(&declared).map_err(map_target_error)
@@ -1208,8 +1208,8 @@ mod tests {
     // Rendered back into the form they were declared in, so that a test reads the same way whether
     // the target was named or not. Prepared and nothing more: expansion belongs to the run, and its
     // behavior is asserted where it lives, in the engine's own tests.
-    fn parse_dirs(s: &str) -> Result<Vec<String>, ArgParsingError> {
-        super::parse_dirs(s).map(|targets| targets.iter().map(Target::to_string).collect())
+    fn parse_targets(s: &str) -> Result<Vec<String>, ArgParsingError> {
+        super::parse_targets(s).map(|targets| targets.iter().map(Target::to_string).collect())
     }
 
     // The counting driven the way 'main' drives it, with the shipped language files read
@@ -1222,8 +1222,8 @@ mod tests {
     }
 
     fn new_conf(dir: &str) -> Configuration {
-        let dirs = vec![Target::of(mezura_core::engine::targets::convert_to_absolute(dir))];
-        let mut builder = ConfigurationBuilder { dirs: Some(dirs), ..Default::default() };
+        let targets = vec![Target::of(mezura_core::engine::targets::convert_to_absolute(dir))];
+        let mut builder = ConfigurationBuilder { targets: Some(targets), ..Default::default() };
         if let Ok((default_config, _)) = super::super::config_files::parse_config_file(None, None) {
             builder.add_missing_fields(default_config);
         }
@@ -1252,12 +1252,12 @@ mod tests {
     fn test_cmd_arg_parsing() {
         assert_eq!(Err(ArgParsingError::InvalidPath("random".to_owned())), create_config_from_args("random"));
         assert_eq!(Err(ArgParsingError::InvalidPath("./ random".to_owned())), create_config_from_args("./ random"));
-        assert_eq!(Err(ArgParsingError::InvalidPath("./ -show-faulty-files".to_owned())), create_config_from_args("--dirs ./ -show-faulty-files"));
+        assert_eq!(Err(ArgParsingError::InvalidPath("./ -show-faulty-files".to_owned())), create_config_from_args("--targets ./ -show-faulty-files"));
         assert_eq!(Err(ArgParsingError::UnrecognisedCommand("random".to_owned())), create_config_from_args("--random"));
-        assert_eq!(Err(ArgParsingError::UnrecognisedCommand("random".to_owned())), create_config_from_args("--dirs ./ --random"));
-        assert_eq!(Err(ArgParsingError::DoublePath), create_config_from_args("./ --dirs ./"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("dirs".to_owned())), create_config_from_args("--dirs"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("dirs".to_owned())), create_config_from_args("--dirs   "));
+        assert_eq!(Err(ArgParsingError::UnrecognisedCommand("random".to_owned())), create_config_from_args("--targets ./ --random"));
+        assert_eq!(Err(ArgParsingError::DoublePath), create_config_from_args("./ --targets ./"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("targets".to_owned())), create_config_from_args("--targets"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("targets".to_owned())), create_config_from_args("--targets   "));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 33 10"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 2 129"));
@@ -1280,7 +1280,7 @@ mod tests {
         assert_eq!(new_conf("./"), create_config_from_args(std::env::current_dir().unwrap().to_str().unwrap()).unwrap());
 
         assert_eq!(new_conf("./"), create_config_from_args("./").unwrap());
-        assert_eq!(new_conf("./"), create_config_from_args("--dirs ./").unwrap());
+        assert_eq!(new_conf("./"), create_config_from_args("--targets ./").unwrap());
         assert_eq!(conf("./", |c| {c.engine.threads = Threads::new(1,1);}), create_config_from_args("./ --threads 1 1").unwrap());
         assert_eq!(conf("./", |c| {c.engine.threads = Threads::new(1,1);}), create_config_from_args("./ --threads   1   1 ").unwrap());
         assert_eq!(conf("./", |c| {c.engine.threads = Threads::new(1,1); c.engine.braces_as_code = true; c.typed_explicitly.braces_as_code = true;}),
@@ -1348,23 +1348,23 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_dirs() {
-        assert_eq!(Err(ArgParsingError::InvalidPath("a".to_owned())), parse_dirs("a"));
-        assert_eq!(Err(ArgParsingError::InvalidPath("a b c".to_owned())), parse_dirs("a b c"));
+    fn test_parse_targets() {
+        assert_eq!(Err(ArgParsingError::InvalidPath("a".to_owned())), parse_targets("a"));
+        assert_eq!(Err(ArgParsingError::InvalidPath("a b c".to_owned())), parse_targets("a b c"));
 
-        assert_eq!(vec![mezura_core::engine::targets::convert_to_absolute("./")], parse_dirs("./").unwrap());
-        assert_eq!(vec![mezura_core::engine::targets::convert_to_absolute("./src")], parse_dirs("\"./src\"").unwrap());
+        assert_eq!(vec![mezura_core::engine::targets::convert_to_absolute("./")], parse_targets("./").unwrap());
+        assert_eq!(vec![mezura_core::engine::targets::convert_to_absolute("./src")], parse_targets("\"./src\"").unwrap());
 
         // Declared as written: a target inside another survives the parse, because the swallowing
         // of overlaps happens with the expansion, inside the run
         assert_eq!(vec![mezura_core::engine::targets::convert_to_absolute("./"), mezura_core::engine::targets::convert_to_absolute(".././")],
-                parse_dirs("./, .././").unwrap());
+                parse_targets("./, .././").unwrap());
 
         // A space is not a separator while nothing is named, so a path is allowed to contain one.
         // It cannot be: by the time a command line reaches here the shell has split it and taken
         // the quotes off, so a space inside a path and a space between two paths look the same.
-        assert_eq!(Err(ArgParsingError::InvalidPath("./tests ./src".to_owned())), parse_dirs("./tests ./src"));
-        assert_eq!(vec![mezura_core::engine::targets::convert_to_absolute("./")], parse_dirs(&std::env::current_dir().unwrap().to_string_lossy()).unwrap());
+        assert_eq!(Err(ArgParsingError::InvalidPath("./tests ./src".to_owned())), parse_targets("./tests ./src"));
+        assert_eq!(vec![mezura_core::engine::targets::convert_to_absolute("./")], parse_targets(&std::env::current_dir().unwrap().to_string_lossy()).unwrap());
     }
 
     #[test]
@@ -1375,54 +1375,54 @@ mod tests {
         // The grammar of a target belongs to 'args' and the folding of two spellings of one name to
         // 'engine::targets'; what is asserted here is the command line's own half, that a declared
         // name reaches a Target with its path made absolute, and the errors it words.
-        assert_eq!(vec![format!("code={src}"), format!("suite={tests}")], parse_dirs("code=./src suite=./tests").unwrap());
-        assert_eq!(vec![format!("code={src}"), tests.clone()], parse_dirs("code=./src ./tests").unwrap());
+        assert_eq!(vec![format!("code={src}"), format!("suite={tests}")], parse_targets("code=./src suite=./tests").unwrap());
+        assert_eq!(vec![format!("code={src}"), tests.clone()], parse_targets("code=./src ./tests").unwrap());
 
         // An '=' is a legal character in a path, so anything that looks like one is read as one
-        assert_eq!(vec![src.clone()], parse_dirs("./src").unwrap());
-        assert_eq!(Err(ArgParsingError::MalformedTarget("code=".to_owned())), parse_dirs("code="));
-        assert_eq!(Err(ArgParsingError::InvalidPath("nope".to_owned())), parse_dirs("code=nope"));
+        assert_eq!(vec![src.clone()], parse_targets("./src").unwrap());
+        assert_eq!(Err(ArgParsingError::MalformedTarget("code=".to_owned())), parse_targets("code="));
+        assert_eq!(Err(ArgParsingError::InvalidPath("nope".to_owned())), parse_targets("code=nope"));
     }
 
     // The targets a configuration declares reach the run as declared, and a mistake in them still
-    // names the configuration: the builder records which file supplied the dirs, and the run's
-    // refusal is worded through 'attributed_dirs_error' with that name on it.
+    // names the configuration: the builder records which file supplied the targets, and the run's
+    // refusal is worded through 'attribute_targets_error' with that name on it.
     #[test]
-    fn a_mistake_in_a_configs_dirs_still_names_the_configuration() {
+    fn a_mistake_in_a_configs_targets_still_names_the_configuration() {
         std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
-        let write_config = |name: &str, dirs: &str| {
+        let write_config = |name: &str, targets: &str| {
             let path = crate::paths::PERSISTENT_APP_PATHS.config_dir.clone() + name + ".txt";
-            std::fs::write(&path, format!("===> dirs\n{dirs}\n")).unwrap();
+            std::fs::write(&path, format!("===> targets\n{targets}\n")).unwrap();
             path
         };
 
         let path = write_config("a2resolve1", "./does-not-exist-a2");
         let config = create_config_from_args("--load a2resolve1").unwrap();
         std::fs::remove_file(&path).unwrap();
-        assert_eq!(vec![Target::of("./does-not-exist-a2")], config.engine.dirs);
-        assert_eq!(Some("a2resolve1".to_owned()), config.view.dirs_source);
+        assert_eq!(vec![Target::of("./does-not-exist-a2")], config.engine.targets);
+        assert_eq!(Some("a2resolve1".to_owned()), config.view.targets_source);
 
         // the error a real run returns, through the same join 'main' prints it with
         let languages_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../mezura-core/data/languages/");
         let parsed = mezura_core::language_file::parse_languages_in_dir(languages_dir).unwrap().0;
         let (languages, _) = mezura_core::Languages::resolve(&config.engine, parsed, &Default::default());
         let mezura_core::RunError::InvalidTargets(inner) = mezura_core::run(&config.engine, languages, None, |_| {}).unwrap_err()
-                else { panic!("the run did not refuse the config's dirs") };
+                else { panic!("the run did not refuse the config's targets") };
         assert_eq!(ArgParsingError::InvalidPathInConfig("./does-not-exist-a2".to_owned(), "a2resolve1".to_owned()),
-                attribute_dirs_error(inner, &config.view.dirs_source));
+                attribute_targets_error(inner, &config.view.targets_source));
 
         // typed on the command line there is no configuration to name, and a contest never gets
         // one, since naming a file would hide that both declarations are the user's own
         assert_eq!(ArgParsingError::InvalidPath("./gone".to_owned()),
-                attribute_dirs_error(mezura_core::TargetError::InvalidPath("./gone".to_owned()), &None));
+                attribute_targets_error(mezura_core::TargetError::InvalidPath("./gone".to_owned()), &None));
         assert_eq!(ArgParsingError::ContestedTarget("./src".to_owned(), "frontend".to_owned(), "backend".to_owned()),
-                attribute_dirs_error(mezura_core::TargetError::Contested("./src".to_owned(),
-                        "frontend".to_owned(), "backend".to_owned()), &config.view.dirs_source));
+                attribute_targets_error(mezura_core::TargetError::Contested("./src".to_owned(),
+                        "frontend".to_owned(), "backend".to_owned()), &config.view.targets_source));
 
         let path = write_config("a2resolve3", "code=./src");
         let result = create_config_from_args("--load a2resolve3").unwrap();
         std::fs::remove_file(&path).unwrap();
-        assert_eq!(vec![Target::named("code", "./src")], result.engine.dirs);
+        assert_eq!(vec![Target::named("code", "./src")], result.engine.targets);
     }
 
     fn a2_corpus(name: &str) -> (std::path::PathBuf, String) {
@@ -1438,24 +1438,24 @@ mod tests {
         (corpus, corpus_str)
     }
 
-    // The run resolves the dirs under the flags of the configuration it was handed, so a glob whose
+    // The run resolves the targets under the flags of the configuration it was handed, so a glob whose
     // matches are all gitignored counts them when the flag beside it says to, whichever of the two
     // came from a file and which from the command line.
     #[test]
-    fn a_configs_own_flags_apply_when_its_own_dirs_are_resolved() {
+    fn a_configs_own_flags_apply_when_its_own_targets_are_resolved() {
         std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
         let (corpus, corpus_str) = a2_corpus("mezura-a2-config-corpus");
 
         let config_path = crate::paths::PERSISTENT_APP_PATHS.config_dir.clone() + "a2gitignore.txt";
         std::fs::write(&config_path, format!(
-                "===> dirs\n{corpus_str}/target/*\n\n===> no-gitignore\nyes\n")).unwrap();
+                "===> targets\n{corpus_str}/target/*\n\n===> no-gitignore\nyes\n")).unwrap();
 
         let config = create_config_from_args("--load a2gitignore");
         std::fs::remove_file(&config_path).unwrap();
 
         let config = config.expect("the configuration did not load");
         assert!(config.engine.no_gitignore);
-        assert_eq!(vec![Target::of(format!("{corpus_str}/target/*"))], config.engine.dirs);
+        assert_eq!(vec![Target::of(format!("{corpus_str}/target/*"))], config.engine.targets);
         let result = counted(&config);
         std::fs::remove_dir_all(&corpus).unwrap();
         assert_eq!(1, result.total.files, "the gitignored match was not counted");
@@ -1476,7 +1476,7 @@ mod tests {
 
         let config = config.expect("the configuration did not load");
         assert!(config.engine.no_gitignore);
-        assert_eq!(vec![Target::of(format!("{corpus_str}/target/*"))], config.engine.dirs);
+        assert_eq!(vec![Target::of(format!("{corpus_str}/target/*"))], config.engine.targets);
         let result = counted(&config);
         std::fs::remove_dir_all(&corpus).unwrap();
         assert_eq!(1, result.total.files, "the gitignored match was not counted");
@@ -1506,7 +1506,7 @@ mod tests {
         assert!(saved.contains(&format!("{corpus_str}/sub*")),
                 "the pattern is not in the saved file:\n{saved}");
         assert!(!saved.contains("sub1"), "the saved file holds the expansion, not the pattern:\n{saved}");
-        assert_eq!(vec![Target::of(format!("{corpus_str}/sub*"))], loaded.engine.dirs);
+        assert_eq!(vec![Target::of(format!("{corpus_str}/sub*"))], loaded.engine.targets);
         let result = counted(&loaded);
         std::fs::remove_dir_all(&corpus).unwrap();
         assert_eq!(2, result.total.files);
@@ -1544,14 +1544,14 @@ mod tests {
 
         let bare = create_config_from_args(&root_str).unwrap();
         let with_flag = create_config_from_args(&format!("{root_str} --threads 2 3")).unwrap();
-        let through_dirs = create_config_from_args(&format!("--dirs {root_str} --threads 2 3")).unwrap();
+        let through_targets = create_config_from_args(&format!("--targets {root_str} --threads 2 3")).unwrap();
         std::fs::remove_dir_all(&root).unwrap();
 
-        assert_eq!(vec![Target::of(root_str.clone())], bare.engine.dirs);
-        assert_eq!(vec![Target::of(root_str.clone())], with_flag.engine.dirs);
+        assert_eq!(vec![Target::of(root_str.clone())], bare.engine.targets);
+        assert_eq!(vec![Target::of(root_str.clone())], with_flag.engine.targets);
         assert_eq!(Threads::new(2, 3), with_flag.engine.threads);
-        assert_eq!(vec![Target::of(root_str)], through_dirs.engine.dirs);
-        assert_eq!(Threads::new(2, 3), through_dirs.engine.threads);
+        assert_eq!(vec![Target::of(root_str)], through_targets.engine.targets);
+        assert_eq!(Threads::new(2, 3), through_targets.engine.threads);
     }
 
     #[test]
@@ -1564,26 +1564,26 @@ mod tests {
 
         let mut saved_config = create_config_builder_from_args("--threads 1 5 --languages lang1, lang2 --save test000").unwrap();
         assert!(Path::new(test_file_path).exists());
-        assert_eq!(saved_config.dirs.clone().unwrap()[0], Target::of(mezura_core::engine::targets::convert_to_absolute("./")));
+        assert_eq!(saved_config.targets.clone().unwrap()[0], Target::of(mezura_core::engine::targets::convert_to_absolute("./")));
         assert_eq!(saved_config.threads.clone().unwrap(), Threads::new(1, 5));
         assert_eq!(saved_config.languages_of_interest.clone().unwrap(), vec!["lang1", "lang2"]);
 
         let mut loaded_config = create_config_builder_from_args("--load test000").unwrap();
         saved_config.config_name_to_save = None;
         loaded_config.config_name_to_load = None;
-        // Bookkeeping about where the dirs came from, not a value that was saved
-        loaded_config.dirs_source = None;
+        // Bookkeeping about where the targets came from, not a value that was saved
+        loaded_config.targets_source = None;
         // A fact about each command line, not a value that was saved: the first typed its
         // languages, the second loaded them, and that is exactly what the mask is for
         assert!(saved_config.typed_explicitly.languages && !loaded_config.typed_explicitly.languages);
         saved_config.typed_explicitly = TypedExplicitlyOnCommandLine::default();
         assert_eq!(saved_config, loaded_config);
 
-        loaded_config = create_config_builder_from_args("--load test000 --threads 1 4 --dirs ./").unwrap();
-        assert_eq!(saved_config.dirs, loaded_config.dirs);
+        loaded_config = create_config_builder_from_args("--load test000 --threads 1 4 --targets ./").unwrap();
+        assert_eq!(saved_config.targets, loaded_config.targets);
         assert_ne!(saved_config.threads, loaded_config.threads);
 
-        saved_config = create_config_builder_from_args("--load test000 --threads 1 4 --dirs ./ --save test000").unwrap();
+        saved_config = create_config_builder_from_args("--load test000 --threads 1 4 --targets ./ --save test000").unwrap();
         saved_config.config_name_to_save = None;
         assert_eq!(saved_config, loaded_config);
 
@@ -1666,12 +1666,12 @@ mod tests {
         std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
         let test_file_path = &crate::paths::PERSISTENT_APP_PATHS.config_dir.clone().add("/test002.txt");
         let _ = std::fs::remove_file(test_file_path);
-        std::fs::write(test_file_path, "===> dirs\nfrontend=\n\n===> sort\nnope\n\n===> top\nnope\n\n===> bar-thickness\nnope\n\n\
+        std::fs::write(test_file_path, "===> targets\nfrontend=\n\n===> sort\nnope\n\n===> top\nnope\n\n===> bar-thickness\nnope\n\n\
                 ===> progress-bar\nnope\n\n===> number-separator\nnope\n\n===> decimal-separator\nnope\n\n===> force-language\nnope\n").unwrap();
 
         // A target that does not parse is a target whose files would not be counted, so with no
         // target on the command line to take its place the run stops instead of counting less
-        assert_eq!(Err(ArgParsingError::InvalidValueInConfig("dirs".to_owned(), "test002".to_owned())),
+        assert_eq!(Err(ArgParsingError::InvalidValueInConfig("targets".to_owned(), "test002".to_owned())),
                 create_config_from_args("--load test002"));
 
         assert_eq!(Err(ArgParsingError::InvalidValueInConfig("sort".to_owned(), "test002".to_owned())),
@@ -1679,7 +1679,7 @@ mod tests {
 
         let rescued = create_config_from_args(
                 "./ --load test002 --sort name --top 3 --bar-thickness fat --progress-bar hash --number-separator dot --decimal-separator comma --force-language m=matlab").unwrap();
-        assert_eq!(vec![Target::of(mezura_core::engine::targets::convert_to_absolute("./"))], rescued.engine.dirs);
+        assert_eq!(vec![Target::of(mezura_core::engine::targets::convert_to_absolute("./"))], rescued.engine.targets);
         assert_eq!(SortCriterion::Name, rescued.view.sort_by);
         assert_eq!(Some(3), rescued.view.top_n);
         assert_eq!(BarThickness::Fat, rescued.view.bar_thickness);

@@ -129,7 +129,7 @@ pub struct EngineConfig {
     // them at its entry with these same settings, so the flags that filter a pattern's matches and
     // the flags the scan obeys cannot disagree. A relative path is joined to the working directory
     // at that moment, and 'RunResult.targets' reports what they resolved to.
-    pub dirs: Vec<Target>,
+    pub targets: Vec<Target>,
     pub exclude_dirs: Vec<String>,
     pub languages_of_interest: Vec<String>,
     pub excluded_languages: Vec<String>,
@@ -144,11 +144,11 @@ pub struct EngineConfig {
 }
 
 // Written out rather than derived, because a derived 'count_keywords' would be false and anyone
-// writing 'EngineConfig { dirs, ..Default::default() }' would silently get no keywords.
+// writing 'EngineConfig { targets, ..Default::default() }' would silently get no keywords.
 impl Default for EngineConfig {
     fn default() -> Self {
         EngineConfig {
-            dirs: Vec::new(),
+            targets: Vec::new(),
             exclude_dirs: Vec::new(),
             languages_of_interest: Vec::new(),
             excluded_languages: Vec::new(),
@@ -164,9 +164,9 @@ impl Default for EngineConfig {
 
 impl EngineConfig {
     // Everything but the places to look takes the default the command line would have produced.
-    pub fn new(dirs: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+    pub fn new(targets: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
         EngineConfig {
-            dirs: dirs.into_iter().map(Target::of).collect(),
+            targets: targets.into_iter().map(Target::of).collect(),
             ..Default::default()
         }
     }

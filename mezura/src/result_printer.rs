@@ -1728,10 +1728,10 @@ fn find_settings_changed_since(entry: &super::log::LogEntry, config: &Configurat
     };
 
     let mut changed = Vec::new();
-    // The scope cannot carry the directories, so they are compared beside it: the same './src'
+    // The scope cannot carry the targets, so they are compared beside it: the same './src'
     // declared over two different trees is two different measurements
     if sort(&entry.targets) != sort(targets) {
-        changed.push(config_manager::DIRS);
+        changed.push(config_manager::TARGETS);
     }
     // The log holds no keyword counts, so a run that only stopped counting them changed nothing
     // the log records
@@ -1818,7 +1818,7 @@ fn print_comparison_to_previous_runs(result: &RunResult, log_content: &str, conf
     let total = &result.total;
     let log_entries = super::log::read_last_entries(log_content, config.view.compare_level);
     // Silent until used: a run that named no module says nothing about them here either, and the
-    // 'modified: dirs' tag is what already reports that the targets are not the ones they were
+    // 'modified: targets' tag is what already reports that the targets are not the ones they were
     let groups = if result.has_modules() {create_groups_of(result, config)} else {Vec::new()};
 
     let mut comparison_str = String::with_capacity(200);
@@ -2479,17 +2479,17 @@ mod tests {
         assert!(format_modified_tag(&changed).contains("braces-as-code, no-gitignore"));
 
         // The targets are compared as a set: the same list reordered is the same measurement
-        let entry_with_dirs = crate::log::LogEntry {
+        let entry_with_targets = crate::log::LogEntry {
                 targets: vec![mezura_core::Target::of("./b"), mezura_core::Target::of("./a")],
                 ..entry_of(|c| {c.engine.braces_as_code = true; c.engine.no_gitignore = true;}) };
-        assert!(find_settings_changed_since(&entry_with_dirs, &config,
+        assert!(find_settings_changed_since(&entry_with_targets, &config,
                 &[mezura_core::Target::of("./a"), mezura_core::Target::of("./b")]).is_empty());
-        assert_eq!(vec!["dirs"], find_settings_changed_since(&entry_with_dirs, &config,
+        assert_eq!(vec!["targets"], find_settings_changed_since(&entry_with_targets, &config,
                 &[mezura_core::Target::of("./c")]));
 
         // and a run that only stopped counting keywords changed nothing the log holds
         config.engine.count_keywords = false;
-        assert!(find_settings_changed_since(&entry_with_dirs, &config,
+        assert!(find_settings_changed_since(&entry_with_targets, &config,
                 &[mezura_core::Target::of("./a"), mezura_core::Target::of("./b")]).is_empty());
     }
 

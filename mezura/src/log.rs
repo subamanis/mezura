@@ -125,7 +125,7 @@ fn format_entry_line(config: &Configuration, datetime_now: &DateTime<Local>, res
 // kinds of file cannot drift apart in what they record
 fn format_scope(config: &Configuration, targets: &[Target]) -> String {
     let engine = &config.engine;
-    format!("{{\"dirs\":{},\"exclude\":{},\"languages\":{},\"excluded_languages\":{},\
+    format!("{{\"targets\":{},\"exclude\":{},\"languages\":{},\"excluded_languages\":{},\
 \"forced_languages\":{},\"braces_as_code\":{},\"search_in_dotted\":{},\"gitignore\":{},\"keywords_counted\":{}}}",
             format_targets(targets),
             format_strings(&engine.exclude_dirs),

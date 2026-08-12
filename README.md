@@ -63,7 +63,7 @@ The generated stats are the following:
 - Size (total and average) 
 - Keyword occurrences
 - Percentage comparisons between languages
-- The same figures grouped by a named part of the project, if you name one (see the modules section of ```--dirs```)
+- The same figures grouped by a named part of the project, if you name one (see the modules section of ```--targets```)
 - Difference of stats between executions 
 
 By default, the files and folders that are ignored by a .gitignore are skipped, so that build artifacts and dependencies don't pollute the stats (see the ```--no-gitignore``` command).
@@ -89,10 +89,10 @@ Below there is a list with all the commands-flags that the program accepts.
 ```
 WHAT IS COUNTED
 
---dirs
+--targets
 
     The paths to the directories or files, separated by commas if more than 1,
-    in this form: '--dirs <path1>, <path2>'
+    in this form: '--targets <path1>, <path2>'
     A path can also be a glob pattern (* ? [..] {..}), which is expanded to every existing
     directory and file that it matches, so 'services/*/src' is a valid target.
     A path that exists exactly as written is always taken literally, so a folder with one of
@@ -597,7 +597,7 @@ TAKING THE RESULT ELSEWHERE
 
     Every log entry records the settings that decide what is counted, and an entry that was written
     with different ones is marked 'modified:' followed by their names. The comparison is still shown,
-    because the point is to say whether it can be trusted: a change of 'dirs' means the numbers came
+    because the point is to say whether it can be trusted: a change of 'targets' means the numbers came
     from another tree, while a change of 'braces-as-code' means lines moved between code and extra
     and the total did not. An entry written by a version that did not record a setting is never
     reported as having changed it.

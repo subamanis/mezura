@@ -61,7 +61,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
         Err(_) => return Err(ConfigFileParseError::FileNotFound(file_name.to_owned()))
     })};
 
-    let (mut dirs, mut braces_as_code, mut should_search_in_dotted, mut threads, mut exclude_dirs,
+    let (mut targets, mut braces_as_code, mut should_search_in_dotted, mut threads, mut exclude_dirs,
          mut languages_of_interest, mut excluded_languages, mut forced_languages, mut should_show_faulty_files, mut hidden,
          mut no_gitignore, mut theme_name, mut compare_level, mut config_styles, mut bar_thickness,
          mut progress_bar, mut number_separator, mut decimal_separator, mut layout, mut sort_by, mut top_n) = (None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None);
@@ -77,16 +77,16 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
         if line.starts_with("===>") {
             let id = line.trim_start_matches("===>").split_whitespace().next().unwrap_or("");
 
-            if id == config_manager::DIRS {
+            if id == config_manager::TARGETS {
                 // The line ends a target here and a space never does, so a path with one in it needs
                 // no quoting. A target that does not parse would silently not be counted, so it
                 // stops the run rather than warning.
                 let declared = read_lines_from_file_to_vec(&mut reader, &mut buf, |line| vec![line.trim().to_owned()]);
                 match super::args::parse_targets_in_block(&declared.join("\n")) {
-                    Ok(targets) if !targets.is_empty() => dirs = Some(targets.into_iter()
+                    Ok(parsed) if !parsed.is_empty() => targets = Some(parsed.into_iter()
                             .map(|(module, path)| Target { module, path }).collect()),
                     Ok(_) => {},
-                    Err(_) => issues.invalid_fields.push(config_manager::DIRS)
+                    Err(_) => issues.invalid_fields.push(config_manager::TARGETS)
                 }
             } else if id == config_manager::EXCLUDE {
                 let paths = read_lines_from_file_to_vec(&mut reader, &mut buf, super::args::parse_paths_to_vec);
@@ -234,7 +234,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
     }
 
     let builder = ConfigurationBuilder {
-        dirs, exclude_dirs, languages_of_interest, excluded_languages, forced_languages, threads, braces_as_code, should_search_in_dotted,
+        targets, exclude_dirs, languages_of_interest, excluded_languages, forced_languages, threads, braces_as_code, should_search_in_dotted,
         should_show_faulty_files, hidden, no_gitignore, theme_name, compare_level, config_styles, bar_thickness,
         progress_bar, number_separator, decimal_separator, layout, sort_by, top_n,
         ..Default::default()
@@ -260,8 +260,8 @@ pub fn strip_byte_order_mark(contents: &str) -> &str {
     contents.trim_start_matches('\u{feff}')
 }
 
-// Dirs must be specified (is checked before calling this function)
-pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<String>, config_name: &str, config_builder: &ConfigurationBuilder) 
+// Targets must be specified (is checked before calling this function)
+pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<String>, config_name: &str, config_builder: &ConfigurationBuilder)
 -> std::io::Result<()> 
 {
     let config_dir = if let Some(dir) = config_path {dir} else {PERSISTENT_APP_PATHS.config_dir.clone()};
@@ -274,8 +274,8 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
     // One target per line, which the block reader joins back with the whitespace that separates one
     // from the next. It is the readable form and the unambiguous one at the same time: a name only
     // ever reaches the paths written after it with a comma between them.
-    writer.write_all(&[b"\n\n===> ",config_manager::DIRS.as_bytes(),b"\n"].concat())?;
-    writer.write_all(config_builder.dirs.as_ref().unwrap().iter().map(config_manager::format_declared_form)
+    writer.write_all(&[b"\n\n===> ",config_manager::TARGETS.as_bytes(),b"\n"].concat())?;
+    writer.write_all(config_builder.targets.as_ref().unwrap().iter().map(config_manager::format_declared_form)
             .collect::<Vec<_>>().join("\n").as_bytes())?;
 
     if let Some(exclude_dirs) = &config_builder.exclude_dirs {
@@ -477,7 +477,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let dir_str = dir.to_str().unwrap().to_owned() + "/";
 
-        let mut contents = b"===> threads\n2 8\n\n===> dirs\n".to_vec();
+        let mut contents = b"===> threads\n2 8\n\n===> targets\n".to_vec();
         contents.extend([0xCF, 0xE1, 0xE8, 0xFF, b'\n']);
         contents.extend(b"\n===> braces-as-code\nyes\n");
         std::fs::write(dir.join("halfway.txt"), contents).unwrap();
@@ -507,7 +507,7 @@ mod tests {
 
         let (options, issues) = super::super::config_files::parse_config_file(Some("auto-generated"), Some(SCRATCH_CONFIG_DIR.to_owned())).unwrap();
         assert!(issues.invalid_fields.is_empty() && issues.warnings.is_empty());
-        assert_eq!(config_builder.dirs, options.dirs);
+        assert_eq!(config_builder.targets, options.targets);
         assert_eq!(config_builder.exclude_dirs, options.exclude_dirs);
         assert_eq!(config_builder.threads, options.threads);
         assert_eq!(config_builder.braces_as_code, options.braces_as_code);
@@ -535,7 +535,7 @@ mod tests {
         let dir = SCRATCH_CONFIG_DIR.to_owned();
         std::fs::create_dir_all(&dir)?;
         let path = dir.clone() + "carries-a-log.txt";
-        std::fs::write(&path, "===> dirs\n./\n\n===> log\nyes\n\n===> braces-as-code\nyes\n")?;
+        std::fs::write(&path, "===> targets\n./\n\n===> log\nyes\n\n===> braces-as-code\nyes\n")?;
 
         let (options, issues) = super::super::config_files::parse_config_file(Some("carries-a-log"), Some(dir)).unwrap();
         assert_eq!(None, options.log);
@@ -558,7 +558,7 @@ mod tests {
         let dir = SCRATCH_CONFIG_DIR.to_owned();
         std::fs::create_dir_all(&dir)?;
         let path = dir.clone() + "force-language-block.txt";
-        std::fs::write(&path, "===> dirs\n./\n\n===> force-language\nm=matlab,\npl=perl\n")?;
+        std::fs::write(&path, "===> targets\n./\n\n===> force-language\nm=matlab,\npl=perl\n")?;
 
         let (options, issues) = super::super::config_files::parse_config_file(Some("force-language-block"), Some(dir)).unwrap();
         assert!(issues.invalid_fields.is_empty());
@@ -577,7 +577,7 @@ mod tests {
     fn a_configuration_saved_with_a_byte_order_mark_still_reads() -> std::io::Result<()> {
         let dir = SCRATCH_CONFIG_DIR.to_owned();
         std::fs::create_dir_all(&dir)?;
-        let body = "===> dirs\n./\n\n===> exclude-languages\njava\n";
+        let body = "===> targets\n./\n\n===> exclude-languages\njava\n";
 
         let plain = dir.clone() + "no-mark.txt";
         let marked = dir.clone() + "with-mark.txt";
@@ -588,7 +588,7 @@ mod tests {
         let (with, issues) = super::super::config_files::parse_config_file(Some("with-mark"), Some(dir)).unwrap();
 
         assert!(issues.invalid_fields.is_empty());
-        assert_eq!(without.dirs, with.dirs, "the targets of the file were dropped, and in silence");
+        assert_eq!(without.targets, with.targets, "the targets of the file were dropped, and in silence");
         assert_eq!(without.excluded_languages, with.excluded_languages);
         assert_eq!(Some(vec!["java".to_owned()]), with.excluded_languages);
 
@@ -610,12 +610,12 @@ mod tests {
                 Target::named("frontend", "D:/x/ui"),
                 Target::named("backend", "D:/x/my api"),
                 Target::of("D:/x/loose")];
-        let builder = ConfigurationBuilder { dirs: Some(declared.clone()), ..Default::default() };
+        let builder = ConfigurationBuilder { targets: Some(declared.clone()), ..Default::default() };
         save_existing_commands_from_config_builder_to_file(Some(dir.clone()), "modules-round-trip", &builder)?;
 
         let (options, issues) = parse_config_file(Some("modules-round-trip"), Some(dir)).unwrap();
         assert!(issues.invalid_fields.is_empty());
-        assert_eq!(Some(declared), options.dirs);
+        assert_eq!(Some(declared), options.targets);
 
         std::fs::remove_file(&path)
     }
@@ -623,28 +623,28 @@ mod tests {
     // A block is read as a whole, so a module written on a line of its own means what the same
     // module written next to the others means
     #[test]
-    fn the_dirs_block_reads_a_module_across_lines_and_refuses_one_with_no_path() -> std::io::Result<()> {
+    fn the_targets_block_reads_a_module_across_lines_and_refuses_one_with_no_path() -> std::io::Result<()> {
         let dir = SCRATCH_CONFIG_DIR.to_owned();
         std::fs::create_dir_all(&dir)?;
-        let path = dir.clone() + "dirs-block.txt";
-        std::fs::write(&path, "===> dirs\ntests=D:/x/api/tests\ntests=D:/x/web/tests\nbackend=D:/x/api\n")?;
+        let path = dir.clone() + "targets-block.txt";
+        std::fs::write(&path, "===> targets\ntests=D:/x/api/tests\ntests=D:/x/web/tests\nbackend=D:/x/api\n")?;
 
-        let (options, issues) = parse_config_file(Some("dirs-block"), Some(dir.clone())).unwrap();
+        let (options, issues) = parse_config_file(Some("targets-block"), Some(dir.clone())).unwrap();
         assert!(issues.invalid_fields.is_empty());
         assert_eq!(Some(vec![Target::named("tests", "D:/x/api/tests"),
                 Target::named("tests", "D:/x/web/tests"),
-                Target::named("backend", "D:/x/api")]), options.dirs);
+                Target::named("backend", "D:/x/api")]), options.targets);
 
         // and a trailing comma still continues the list over the line break
-        std::fs::write(&path, "===> dirs\ntests=D:/x/api/tests,\nD:/x/web/tests\n")?;
-        let (options, _) = parse_config_file(Some("dirs-block"), Some(dir.clone())).unwrap();
+        std::fs::write(&path, "===> targets\ntests=D:/x/api/tests,\nD:/x/web/tests\n")?;
+        let (options, _) = parse_config_file(Some("targets-block"), Some(dir.clone())).unwrap();
         assert_eq!(Some(vec![Target::named("tests", "D:/x/api/tests"),
-                Target::named("tests", "D:/x/web/tests")]), options.dirs);
+                Target::named("tests", "D:/x/web/tests")]), options.targets);
 
-        std::fs::write(&path, "===> dirs\nfrontend=\n")?;
-        let (options, issues) = parse_config_file(Some("dirs-block"), Some(dir)).unwrap();
-        assert_eq!(vec![config_manager::DIRS], issues.invalid_fields);
-        assert_eq!(None, options.dirs);
+        std::fs::write(&path, "===> targets\nfrontend=\n")?;
+        let (options, issues) = parse_config_file(Some("targets-block"), Some(dir)).unwrap();
+        assert_eq!(vec![config_manager::TARGETS], issues.invalid_fields);
+        assert_eq!(None, options.targets);
 
         std::fs::remove_file(&path)
     }
@@ -656,7 +656,7 @@ mod tests {
     #[test]
     fn test_read_config_file() -> std::io::Result<()> {
         let mut config = Configuration::new(vec![]);
-        let declared_dirs = vec![Target::of("C:/Some/Path/a"), Target::of("C:/Some/Path/b"),
+        let declared_targets = vec![Target::of("C:/Some/Path/a"), Target::of("C:/Some/Path/b"),
                 Target::of("C:/Some/Path/c"), Target::of("C:/Some/Path/d")];
         config.engine.exclude_dirs = vec!["a".to_owned(), "b".to_owned(), "c.txt".to_owned(), "d.txt".to_owned()];
         config.engine.threads = mezura_core::Threads::new(1, 1);
@@ -666,7 +666,7 @@ mod tests {
 
         let (options, issues) = super::super::config_files::parse_config_file(Some("test"), Some(FIXTURES_DIR.to_owned() + "config/")).unwrap();
         assert!(issues.invalid_fields.is_empty() && issues.warnings.is_empty());
-        assert_eq!(declared_dirs, options.dirs.unwrap());
+        assert_eq!(declared_targets, options.targets.unwrap());
         assert_eq!(config.engine.exclude_dirs, options.exclude_dirs.unwrap());
         assert_eq!(config.engine.threads, options.threads.unwrap());
         assert_eq!(config.engine.braces_as_code, options.braces_as_code.unwrap());

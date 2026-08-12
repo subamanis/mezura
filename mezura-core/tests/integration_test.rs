@@ -17,7 +17,7 @@ fn a_run_over_two_directories_counts_files_lines_and_keywords() {
     };
 
     assert_eq!(Threads::new(1, 3), config.threads);
-    assert_eq!(vec![Target::of(format!("{current_dir}/src")), Target::of(format!("{current_dir}/tests"))], config.dirs);
+    assert_eq!(vec![Target::of(format!("{current_dir}/src")), Target::of(format!("{current_dir}/tests"))], config.targets);
 
     let languages_on_disk = language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0;
     assert!(!languages_on_disk.is_empty());
@@ -305,7 +305,7 @@ fn languages_resolved_against_another_configuration_are_refused() {
     // not part of what resolution reads, so one resolve serves as many runs as you like
     let (languages, _) = Languages::shipped(&of("Rust"));
     let elsewhere = EngineConfig { ..of("Rust") };
-    let elsewhere = EngineConfig { dirs: vec![Target::of(format!("{current_dir}/tests"))], ..elsewhere };
+    let elsewhere = EngineConfig { targets: vec![Target::of(format!("{current_dir}/tests"))], ..elsewhere };
     assert!(run(&elsewhere, languages, None, |_| {}).is_ok(), "changing only the directory was refused");
 }
 
@@ -322,7 +322,7 @@ fn a_run_that_names_modules_and_finds_nothing_still_reports_them() {
     let path_of = |p: &std::path::Path| p.to_str().unwrap().replace('\\', "/");
 
     let config = EngineConfig {
-        dirs: vec![Target::named("api", path_of(&api)), Target::named("web", path_of(&web))],
+        targets: vec![Target::named("api", path_of(&api)), Target::named("web", path_of(&web))],
         threads: Threads::new(1, 2),
         ..Default::default()
     };
@@ -450,7 +450,7 @@ fn a_target_that_names_nothing_is_a_run_error() {
     std::fs::create_dir_all(&root).unwrap();
     let root_str = root.to_str().unwrap().replace('\\', "/");
     let config = EngineConfig {
-        dirs: vec![Target::named("a", &root_str), Target::named("b", &root_str)],
+        targets: vec![Target::named("a", &root_str), Target::named("b", &root_str)],
         ..Default::default()
     };
     let (languages, _) = Languages::shipped(&config);
@@ -484,7 +484,7 @@ fn the_result_reports_the_resolved_targets_the_run_walked() {
     walked.sort();
     assert_eq!(vec![format!("{root_str}/sub1"), format!("{root_str}/sub2")], walked);
     // and the configuration still holds what was declared
-    assert_eq!(vec![Target::of(format!("{root_str}/sub*"))], config.dirs);
+    assert_eq!(vec![Target::of(format!("{root_str}/sub*"))], config.targets);
 }
 
 // A pattern's match may itself be named like a pattern: 'a?b' legitimately matches a directory

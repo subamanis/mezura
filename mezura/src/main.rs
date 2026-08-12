@@ -266,9 +266,9 @@ fn main() -> ExitCode {
         },
         // Mistakes in the configuration surface here, because the run is what resolves the
         // declared targets: the wording is this crate's own, and a configuration file that
-        // supplied the dirs is named as the culprit the reader cannot see failing
+        // supplied the targets is named as the culprit the reader cannot see failing
         Err(mezura_core::RunError::InvalidTargets(inner)) => {
-            eprintln!("{}", crate::config_manager::attribute_dirs_error(inner, &config.view.dirs_source).format());
+            eprintln!("{}", crate::config_manager::attribute_targets_error(inner, &config.view.targets_source).format());
             ExitCode::FAILURE
         },
         Err(x) => {
