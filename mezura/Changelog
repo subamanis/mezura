@@ -45,10 +45,11 @@ Main changes:
       answer in "extension_priority.txt" or the one "--force-language" gave.
   -> The script and style sections of HTML, Vue and Svelte files are now counted with their own
       languages' symbols instead of the file's, so a "//" comment inside a script block is a
-      comment and a "lang=\"ts\"" section counts as TS. The file still weighs whole on its own
-      language's row, and the per-language decomposition rides in the JSON-facing data for the
-      report to unfold in a later version. A language file declares such sections in a new
-      "Embedded region" block.
+      comment and a "lang=\"ts\"" section counts as TypeScript. The file still weighs whole on its
+      own language's row, and under it the report now breaks that row down: how much of it is the
+      file's own language and how much each nested one, with a percentage of the container beside
+      every figure. It shows in every layout and in "--diff", and "--hide nested-languages" turns
+      it off. A language file declares such sections in a new "Nested language" block.
   -> Lua's counted comment brackets now work at every level: a pair written with "=*" in a
       language file, like --[=*[ with ]=*], matches any run of "=" and closes only at an end
       carrying the same count, so a "]]" inside a --[==[ block is text and the block ends where

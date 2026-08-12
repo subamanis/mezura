@@ -171,6 +171,7 @@ pub struct Hidden {
     pub parsing_info: bool,
     pub progress_bar: bool,
     pub keywords: bool,
+    pub nested_languages: bool,
     pub overview: bool,
     pub bar: bool,
     pub history: bool,
@@ -179,10 +180,11 @@ pub struct Hidden {
 }
 
 impl Hidden {
-    fn get_pairs(self) -> [(&'static str, bool); 10] {
+    fn get_pairs(self) -> [(&'static str, bool); 11] {
         [("version", self.version), ("directory-info", self.directory_info), ("parsing-info", self.parsing_info),
          ("progress-bar", self.progress_bar), ("animations", self.animations), ("keywords", self.keywords),
-         ("overview", self.overview), ("bar", self.bar), ("history", self.history), ("timing", self.timing)]
+         ("nested-languages", self.nested_languages), ("overview", self.overview), ("bar", self.bar),
+         ("history", self.history), ("timing", self.timing)]
     }
 
     // Returns the unrecognised name, so that the error can say which one it was
@@ -196,6 +198,7 @@ impl Hidden {
                 "progress-bar" => hidden.progress_bar = true,
                 "animations" => hidden.animations = true,
                 "keywords" => hidden.keywords = true,
+                "nested-languages" => hidden.nested_languages = true,
                 "overview" => hidden.overview = true,
                 "bar" => hidden.bar = true,
                 "history" => hidden.history = true,
@@ -211,8 +214,8 @@ impl Hidden {
         self.get_pairs().iter().filter(|(_,is_hidden)| *is_hidden).map(|(name,_)| *name).collect::<Vec<_>>().join(",")
     }
 
-    pub fn format_names() -> String {
-        Hidden::default().get_pairs().iter().map(|(name,_)| *name).collect::<Vec<_>>().join(", ")
+    pub fn get_names() -> Vec<&'static str> {
+        Hidden::default().get_pairs().iter().map(|(name,_)| *name).collect()
     }
 }
 
@@ -491,7 +494,13 @@ impl Formatted for ArgParsingError {
                 ColoredString::from(format!("{error}\n\n{tail}").as_str())
             },
             Self::InvalidStyle(p) => wrap_message(p).red(),
-            Self::InvalidHideTarget(p) => wrap_message(&format!("'{p}' is not something that can be hidden.\nThe options are: {}.", Hidden::format_names())).red(),
+            Self::InvalidHideTarget(p) => {
+                let names = Hidden::get_names();
+                let tail = suggestions::formatted_suggestion(p, &names)
+                        .unwrap_or_else(|| format!("The options are: {}.", names.join(", ")));
+                let error = format!("'{p}' is not something that can be hidden.").red();
+                ColoredString::from(wrap_message(&format!("{error}\n\n{tail}")).to_string().as_str())
+            },
             Self::InvalidValueInConfig(cmd,conf) => wrap_message(&format!("Invalid value for the command '--{cmd}', in config '{conf}'.\nFix the value in the config file, or override it by providing a valid '--{cmd}' argument.")).red(),
             Self::InvalidGlobPattern(p) => wrap_message(&format!("'{p}' is not a valid glob pattern.")).red(),
             Self::NoGlobMatches(p) => wrap_message(&format!("The pattern '{p}' did not match any existing directory or file.")).red(),

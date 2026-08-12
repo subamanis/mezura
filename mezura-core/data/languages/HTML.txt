@@ -14,9 +14,9 @@ Multi line comment start
 Multi line comment end
 -->
 
-Embedded region start
+Nested language start
 <script <style
-Embedded region end
+Nested language end
 </script> </style>
-Embedded region default
+Nested language default
 js css

@@ -10,7 +10,7 @@ use std::{collections::HashMap, fs::File, io::Read as IoRead, path::Path, str};
 
 use memchr::memmem;
 
-use crate::{EmbeddedRegion, EngineConfig, Language, phase_timing};
+use crate::{EngineConfig, Language, NestedLanguage, phase_timing};
 use crate::domain::{CommentPair, FileStats};
 
 pub const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
@@ -448,13 +448,13 @@ impl KeywordMatcher {
 // The maps a section's language is found through. 'extension_to_name' and 'set_aside' cover the
 // whole shipped set even when a run narrowed its languages, so that '--languages vue' still knows
 // what JavaScript is; a caller with no sections in play hands empty maps.
-pub struct EmbeddedLookup<'a> {
+pub struct NestedLanguageLookup<'a> {
     pub languages: &'a HashMap<String, Language>,
     pub extension_to_name: &'a HashMap<String, std::sync::Arc<str>>,
     pub set_aside: &'a HashMap<String, Language>,
 }
 
-impl EmbeddedLookup<'_> {
+impl NestedLanguageLookup<'_> {
     // What a tag says its section is written in, which people write either way: 'lang="scss"' is an
     // extension and 'type="text/typescript"' is a language's name. The extension is tried first,
     // since it is the form the declared defaults use and the one the user's priority rules answer
@@ -487,7 +487,7 @@ impl KeywordMatchers {
     }
 }
 
-// What one file counted to: the shell language's own lines, and one entry per embedded language
+// What one file counted to: the shell language's own lines, and one entry per nested language
 // that had sections in the file. A file of a language with no regions is a report with no sections.
 pub struct FileReport {
     pub shell: FileStats,
@@ -519,7 +519,7 @@ impl FileReport {
 }
 
 pub fn parse_file(path: &Path, lang_name: &str, buf: &mut String, buffers: &mut ParseBuffers,
-    lookup: &EmbeddedLookup, matchers: &mut KeywordMatchers, config: &EngineConfig)
+    lookup: &NestedLanguageLookup, matchers: &mut KeywordMatchers, config: &EngineConfig)
 -> Result<FileReport,String>
 {
     // None unless MEZURA_PHASE_TIMING is set, so a normal run never reads the clock at all
@@ -600,7 +600,7 @@ struct WalkState {
     continued_comment: bool,
 }
 
-// The lines of one embedded language, added up over every section of it in the file
+// The lines of one nested language, added up over every section of it in the file
 struct SectionBucket<'a> {
     language: &'a Language,
     stats: FileStats,
@@ -608,7 +608,7 @@ struct SectionBucket<'a> {
     bytes: usize,
 }
 
-fn parse_lines(contents: &str, language: &Language, lookup: &EmbeddedLookup, matchers: &mut KeywordMatchers,
+fn parse_lines(contents: &str, language: &Language, lookup: &NestedLanguageLookup, matchers: &mut KeywordMatchers,
     config: &EngineConfig, buffers: &mut ParseBuffers) -> FileReport
 {
     let ParseBuffers { scan, alias_indices, code_spans, .. } = buffers;
@@ -628,7 +628,7 @@ fn parse_lines(contents: &str, language: &Language, lookup: &EmbeddedLookup, mat
 
         // A region opener only counts where the shell left it as code, so one sitting inside a
         // comment or a string of the shell opens nothing
-        if had_code && !language.embedded_regions.is_empty()
+        if had_code && !language.nested_languages.is_empty()
                 && let Some((region, inner)) = find_region_opening(raw_line.trim_ascii(), &scan.code_ranges, language, lookup) {
             let section_from = end_of_line(contents, line_start, raw_line);
             // A section is only a section if it closes. Nothing forces an opener to be a tag rather
@@ -776,7 +776,7 @@ fn end_of_line(contents: &str, line_start: usize, raw_line: &str) -> usize {
 // or when no language can be found for it: all three count as shell, which is what they were before
 // regions existed.
 fn find_region_opening<'a>(line: &str, code_ranges: &[(usize, usize)], language: &'a Language,
-    lookup: &'a EmbeddedLookup) -> Option<(&'a EmbeddedRegion, &'a Language)>
+    lookup: &'a NestedLanguageLookup) -> Option<(&'a NestedLanguage, &'a Language)>
 {
     let bytes = line.as_bytes();
     for (from, to) in code_ranges {
@@ -784,7 +784,7 @@ fn find_region_opening<'a>(line: &str, code_ranges: &[(usize, usize)], language:
         while let Some(offset) = memchr::memchr(b'<', &bytes[cursor..*to]) {
             let at = cursor + offset;
             cursor = at + 1;
-            for region in &language.embedded_regions {
+            for region in &language.nested_languages {
                 if !starts_with_ignoring_case(&bytes[at..], region.start.as_bytes()) {
                     continue;
                 }
@@ -1643,7 +1643,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
-        embedded_regions : vec![],
+        nested_languages : vec![],
         multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned()],
         multiline_comments : vec![("/*".to_owned(), "*/".to_owned())],
@@ -1660,7 +1660,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
-        embedded_regions : vec![],
+        nested_languages : vec![],
         multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned(),"#".to_owned()],
         multiline_comments : vec![("/*".to_owned(), "*/".to_owned())],
@@ -1677,7 +1677,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
-        embedded_regions : vec![],
+        nested_languages : vec![],
         multiline_strings : vec![],
         comment_symbols : vec!["#".to_owned()],
         multiline_comments : vec![],
@@ -1694,7 +1694,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
-        embedded_regions : vec![],
+        nested_languages : vec![],
         multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned()],
         multiline_comments : vec![("/*".to_owned(), "*/".to_owned())],
@@ -1714,7 +1714,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
-        embedded_regions : vec![],
+        nested_languages : vec![],
         multiline_strings : vec![MultilineString::escaping("\"\"\""), MultilineString::escaping("'''")],
         comment_symbols : vec!["#".to_owned(), "//".to_owned(), "--".to_owned()],
         multiline_comments : vec![],
@@ -1737,8 +1737,8 @@ mod tests {
     static SHIPPED_EXTENSIONS : LazyLock<HashMap<String, Arc<str>>> = LazyLock::new(||
             build_language_map_by(IdentifiedBy::Extension, &LANGUAGE_MAP_REF, &HashMap::new(), &HashMap::new()).0);
 
-    fn shipped_lookup() -> EmbeddedLookup<'static> {
-        EmbeddedLookup { languages: &LANGUAGE_MAP_REF, extension_to_name: &SHIPPED_EXTENSIONS, set_aside: &NO_SET_ASIDE }
+    fn shipped_lookup() -> NestedLanguageLookup<'static> {
+        NestedLanguageLookup { languages: &LANGUAGE_MAP_REF, extension_to_name: &SHIPPED_EXTENSIONS, set_aside: &NO_SET_ASIDE }
     }
 
     // The whole file as its language's row sees it, which is what these tests always asserted
@@ -1752,7 +1752,7 @@ mod tests {
     }
 
     fn parse_lines_whole(contents: &str, language: &Language) -> FileStats {
-        parse_lines(contents, language, &EmbeddedLookup { languages: &NO_SET_ASIDE,
+        parse_lines(contents, language, &NestedLanguageLookup { languages: &NO_SET_ASIDE,
                 extension_to_name: &NO_EXTENSIONS, set_aside: &NO_SET_ASIDE },
                 &mut KeywordMatchers::default(), &EngineConfig::default(), &mut ParseBuffers::default()).into_whole()
     }
@@ -2056,7 +2056,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
-        embedded_regions : vec![],
+        nested_languages : vec![],
         multiline_strings : vec![],
         comment_symbols : vec!["--".to_owned()],
         multiline_comments : vec![("--[[".to_owned(), "]]".to_owned())],
@@ -2090,7 +2090,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
-        embedded_regions : vec![],
+        nested_languages : vec![],
         multiline_strings : vec![],
         comment_symbols : vec!["#".to_owned()],
         multiline_comments : vec![("<#".to_owned(), "#>".to_owned())],
@@ -2126,7 +2126,7 @@ mod tests {
         string_symbols : vec!["'".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
-        embedded_regions : vec![],
+        nested_languages : vec![],
         multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned()],
         multiline_comments : vec![("{".to_owned(), "}".to_owned()), ("(*".to_owned(), "*)".to_owned())],
@@ -2145,7 +2145,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
-        embedded_regions : vec![],
+        nested_languages : vec![],
         multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned()],
         multiline_comments : vec![("/*".to_owned(), "*/".to_owned())],
@@ -2432,14 +2432,14 @@ mod tests {
 
     fn web_shell() -> Language {
         Language::new("web", ["wbl"], [""; 0], [""; 0], &[("<!--", "-->")], [])
-                .with_embedded_regions(&[EmbeddedRegion::of("<script", "</script>", "js"),
-                        EmbeddedRegion::of("<style", "</style>", "css")])
+                .with_nested_languages(&[NestedLanguage::of("<script", "</script>", "js"),
+                        NestedLanguage::of("<style", "</style>", "css")])
     }
 
     fn parse_with_sections(contents: &str, shell: &Language,
         languages: &HashMap<String, Language>, extensions: &HashMap<String, Arc<str>>) -> FileReport
     {
-        let lookup = EmbeddedLookup { languages, extension_to_name: extensions, set_aside: &NO_SET_ASIDE };
+        let lookup = NestedLanguageLookup { languages, extension_to_name: extensions, set_aside: &NO_SET_ASIDE };
         parse_lines(contents, shell, &lookup, &mut KeywordMatchers::default(),
                 &EngineConfig::default(), &mut ParseBuffers::default())
     }
@@ -2476,7 +2476,7 @@ mod tests {
         assert_eq!((2, 1, 1), (report.shell.lines, report.shell.code_lines, report.shell.comment_lines));
 
         let stringy = Language::new("webstr", ["wbs"], ["\""], [""; 0], &[], [])
-                .with_embedded_regions(&[EmbeddedRegion::of("<script", "</script>", "js")]);
+                .with_nested_languages(&[NestedLanguage::of("<script", "</script>", "js")]);
         let report = parse_with_sections("x = \"<script>\"\n", &stringy, &languages, &extensions);
         assert!(report.sections.is_empty(), "a tag inside a string opened a section");
     }
@@ -2557,7 +2557,7 @@ mod tests {
         // A default nothing can answer for, by extension or by name, leaves the section as shell
         // rather than counting it under a language that does not exist
         let unknown = Language::new("web", ["wbl"], [""; 0], [""; 0], &[("<!--", "-->")], [])
-                .with_embedded_regions(&[EmbeddedRegion::of("<script", "</script>", "nosuchthing")]);
+                .with_nested_languages(&[NestedLanguage::of("<script", "</script>", "nosuchthing")]);
         let report = parse_with_sections("<script>\nvar x = 1;\n</script>\n", &unknown, &languages, &extensions);
         assert!(report.sections.is_empty(), "a section resolved to a language nothing declares");
         assert_eq!((3, 3), (report.shell.lines, report.shell.code_lines));
@@ -2620,7 +2620,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
-        embedded_regions : vec![],
+        nested_languages : vec![],
         multiline_strings : vec![],
         comment_symbols : vec![";".to_owned()],
         multiline_comments : vec![],
@@ -3127,16 +3127,53 @@ mod tests {
         Some((value_before("lines")?, value_before("code")?, value_before("comment")?))
     }
 
-    // The sections a case declares, as 'mezura-section TS 2 lines 1 code 1 comment', one line each.
+    // The sections a line declares, as 'mezura-section TS 2 lines 1 code 1 comment', one per line.
     // A case in a container language needs them: its three totals are the same whether the sections
     // were found at all, so without these lines the file that proves the feature asserts nothing
     // about it. The language is the first word after the marker.
+    //
+    // 'real-section' carries no tool's name because a section is not a matter of opinion: whether a
+    // '<script lang="ts">' block is TypeScript is a fact about the file, and a tool calling it
+    // JavaScript because it cannot tell the two apart is wrong rather than differently defined.
+    // Which lines are code and which are comment is the part that is genuinely per tool, and that is
+    // what the two totals are for.
     fn parse_stress_sections(header: &str, marker: &str) -> Vec<(String, (usize, usize, usize))> {
         header.lines().filter_map(|line| {
             let rest = line.split_once(marker)?.1;
             let language = rest.split_whitespace().next()?;
             Some((language.to_owned(), parse_stress_counts(rest, language)?))
         }).collect()
+    }
+
+    fn sorted_sections(header: &str, marker: &str) -> Vec<(String, (usize, usize, usize))> {
+        let mut sections = parse_stress_sections(header, marker);
+        sections.sort();
+        sections
+    }
+
+    // Whether a tool's answer is the right one, in both halves: the totals it declares against the
+    // totals it wants, and the sections it declares against the sections the file has.
+    fn tool_is_right_in(header: &str, tool: &str) -> bool {
+        parse_stress_counts(header, &format!("{tool}-real")) == parse_stress_counts(header, &format!("{tool}-count"))
+                && sorted_sections(header, &format!("{tool}-section")) == sorted_sections(header, "real-section")
+    }
+
+    // A tool's note explains why its answer is not the right one, so it belongs to exactly the cases
+    // where the two disagree. Both directions and every tool by the same rule: a case that gets
+    // something wrong and says nothing reads as a passing case, and a note left behind after the
+    // wrong answer was fixed reads as a fault that is no longer there.
+    fn check_the_note_of(header: &str, tool: &str, name: &str) -> Option<String> {
+        // A case is free to say nothing about a tool, and most say nothing about any but ours
+        parse_stress_counts(header, &format!("{tool}-count"))?;
+
+        match (tool_is_right_in(header, tool), header.contains(&format!("{tool}:"))) {
+            (false, false) => Some(format!("{name}: '{tool}' does not give the right answer here and no \
+                    '{tool}:' line says what it gets wrong")),
+            (true, false) => None,
+            (true, true) => Some(format!("{name}: has a '{tool}:' line while '{tool}' gives the right \
+                    answer, so either the note is stale or the numbers are")),
+            (false, true) => None
+        }
     }
 
     // Each file of the corpus declares the honest answer and the answer mezura gives today. The
@@ -3183,8 +3220,7 @@ mod tests {
 
             // Declared and found are compared as sets, since the order sections appear in is the
             // file's business and not the declaration's
-            let mut sections = parse_stress_sections(&header, "mezura-section");
-            sections.sort();
+            let sections = sorted_sections(&header, "mezura-section");
             found.sort();
             if sections != found {
                 failures.push(format!("{name} ({lang_name}): declares the sections {sections:?} \
@@ -3192,12 +3228,18 @@ mod tests {
             }
 
             if counted != declared {
-                let verdict = if counted == real {"it is now right, so promote the file"}
-                        else {"it is wrong in a new way"};
+                let verdict = if counted == real && found == sorted_sections(&header, "real-section") {
+                    "it is now right, so promote the file"
+                } else {
+                    "it is wrong in a new way"
+                };
                 failures.push(format!("{name} ({lang_name}): declared {declared:?}, counted {counted:?}, \
                         honest {real:?}. {verdict}"));
-            } else if declared != real {
+            } else if !tool_is_right_in(&header, "mezura") {
                 known_wrong += 1;
+            }
+            for tool in ["mezura", "tokei"] {
+                failures.extend(check_the_note_of(&header, tool, &name));
             }
             checked += 1;
         }
@@ -3207,10 +3249,16 @@ mod tests {
         assert!(failures.is_empty(), "\n{} stress case(s) moved:\n  {}\n", failures.len(), failures.join("\n  "));
     }
 
+    // With the priority rules a real run has, so that a contested extension resolves here to the
+    // language it resolves to on somebody's machine. Without them the tiebreak is alphabetical, and
+    // a '.pas' file would be counted as Delphi in the corpus and as Pascal everywhere else.
     fn fixture_lookup() -> LanguageLookup {
+        let priority = crate::languages::parse_shipped_extension_priority();
         LanguageLookup {
-            by_extension: build_language_map_by(IdentifiedBy::Extension, &LANGUAGE_MAP_REF, &HashMap::new(), &HashMap::new()).0,
-            by_filename: build_language_map_by(IdentifiedBy::Filename, &LANGUAGE_MAP_REF, &HashMap::new(), &HashMap::new()).0
+            by_extension: build_language_map_by(IdentifiedBy::Extension, &LANGUAGE_MAP_REF,
+                    &priority.by_extension, &HashMap::new()).0,
+            by_filename: build_language_map_by(IdentifiedBy::Filename, &LANGUAGE_MAP_REF,
+                    &priority.by_filename, &HashMap::new()).0
         }
     }
 

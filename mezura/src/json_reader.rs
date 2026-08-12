@@ -99,7 +99,7 @@ impl std::error::Error for DocumentError {
 // '--hide timing' has no timing in it, so 'result.performance' comes back holding a zero duration
 // and one thread of each kind, which is not something that was measured.
 pub fn parse(contents: &str) -> Result<Document, DocumentError> {
-    let value = serde_json::from_str::<Value>(super::strip_byte_order_mark(contents))
+    let value = serde_json::from_str::<Value>(crate::config_files::strip_byte_order_mark(contents))
             .map_err(DocumentError::NotJson)?;
     let Value::Object(root) = &value else {
         return Err(DocumentError::WrongType { at: "the document".to_owned(), wanted: "an object" });
@@ -121,6 +121,7 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
     let scan = read_nested(root, "scan", "")?;
     let total = parse_stats(read_nested(root, "total", "")?, "total")?;
     let per_language = parse_languages(read_list(root, "languages", "")?, "languages")?;
+    let nested_languages = parse_nested_languages(read_list(root, "languages", "")?, "languages")?;
 
     let performance = match root.get("performance") {
         Some(x) => parse_performance(read_object(x, "performance")?)?,
@@ -131,7 +132,7 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
     let modules = match root.get("modules") {
         Some(x) => parse_modules(read_array(x, "modules")?)?,
         None => vec![ModuleResult { name: None, per_language: per_language.clone(), total: total.clone(),
-                embedded: Default::default() }]
+                nested_languages: nested_languages.clone() }]
     };
 
     let (scope, targets) = parse_scope(scope)?;
@@ -147,9 +148,7 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
             per_language,
             total,
             modules,
-            // A document does not carry the decomposition yet, and a reading without one is a
-            // reading whose container files simply have nothing to unfold
-            embedded: Default::default(),
+            nested_languages,
             // The paths are written only when '--show-faulty-files' asked for them, so an absent
             // list means they were not detailed, never that nothing went wrong: how many there
             // were is in 'scan' and is read either way.
@@ -226,6 +225,26 @@ fn parse_languages(entries: &[Value], at: &str) -> Result<HashMap<String, Stats>
     }).collect()
 }
 
+// A document written before sections existed simply has none, so an older baseline compares as a
+// run whose containers held nothing rather than failing to read
+fn parse_nested_languages(entries: &[Value], at: &str)
+        -> Result<HashMap<String, HashMap<String, Stats>>, DocumentError>
+{
+    let mut found = HashMap::new();
+    for (i, entry) in entries.iter().enumerate() {
+        let at = format!("{at}[{i}]");
+        let entry = read_object(entry, &at)?;
+        let Some(sections) = entry.get("nested_languages") else { continue };
+
+        let at = join_location(&at, "nested_languages");
+        let sections = sections.as_array().ok_or_else(|| DocumentError::WrongType {
+                at: at.clone(), wanted: "a list" })?;
+        found.insert(read_text(entry, "name", &at)?, parse_languages(sections, &at)?);
+    }
+
+    Ok(found)
+}
+
 fn parse_modules(entries: &[Value]) -> Result<Vec<ModuleResult>, DocumentError> {
     entries.iter().enumerate().map(|(i, entry)| {
         let at = format!("modules[{i}]");
@@ -235,7 +254,8 @@ fn parse_modules(entries: &[Value]) -> Result<Vec<ModuleResult>, DocumentError> 
             name: read_optional_name(entry, "name", &at)?,
             total: parse_stats(read_nested(entry, "total", &at)?, &join_location(&at, "total"))?,
             per_language: parse_languages(read_list(entry, "languages", &at)?, &join_location(&at, "languages"))?,
-            embedded: Default::default()
+            nested_languages: parse_nested_languages(read_list(entry, "languages", &at)?,
+                    &join_location(&at, "languages"))?
         })
     }).collect()
 }
@@ -382,10 +402,10 @@ mod tests {
         let result = RunResult {
             total: Stats::total_of(&per_language),
             modules: vec![
-                ModuleResult { name: Some("backend".to_owned()), per_language: hashmap!["Rust".to_owned() => rust], total: Stats::total_of(&hashmap!["Rust".to_owned() => parse_stats(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 0])]), embedded: Default::default() },
-                ModuleResult { name: None, per_language: hashmap!["HTML".to_owned() => html.clone()], total: Stats::total_of(&hashmap!["HTML".to_owned() => html]), embedded: Default::default() }],
+                ModuleResult { name: Some("backend".to_owned()), per_language: hashmap!["Rust".to_owned() => rust], total: Stats::total_of(&hashmap!["Rust".to_owned() => parse_stats(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 0])]), nested_languages: Default::default() },
+                ModuleResult { name: None, per_language: hashmap!["HTML".to_owned() => html.clone()], total: Stats::total_of(&hashmap!["HTML".to_owned() => html]), nested_languages: Default::default() }],
             per_language,
-            embedded: Default::default(),
+            nested_languages: Default::default(),
             faulty_files: vec![FaultyFileDetails::new("D:\\dev\\a \"b\".rs".to_owned(), "stream did not contain valid UTF-8".to_owned(), 412)],
             files_present: FilesPresent { total_files: 9, relevant_files: 3, excluded_files: 4 },
             performance: Performance { duration_millis: 1180, threads: Threads::new(2, 8) },
@@ -514,7 +534,7 @@ mod tests {
         // without the block reads back as has to be that and not an absence of modules
         let (mut plain, config) = populated();
         plain.modules = vec![ModuleResult { name: None, per_language: plain.per_language.clone(), total: plain.total.clone(),
-                embedded: Default::default() }];
+                nested_languages: Default::default() }];
         let written = create_document(&plain, &Local::now(), &config);
         assert!(!written.contains("\"modules\""));
 

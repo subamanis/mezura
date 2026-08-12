@@ -14,8 +14,6 @@ pub const THEMES_DIR_NAME : &str = "themes";
 pub const CONFIG_DIR_NAME : &str = "config";
 pub const LOGS_DIR_NAME : &str = "logs";
 pub const DEFAULT_CONFIG_NAME : &str = "default.txt";
-pub const MANIFEST_FILE_NAME : &str = "installed.txt";
-pub const REPLACED_DIR_NAME : &str = "replaced";
 
 pub static PERSISTENT_APP_PATHS : LazyLock<PersistentAppPaths> = LazyLock::new(PersistentAppPaths::get);
 

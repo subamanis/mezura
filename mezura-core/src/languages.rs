@@ -13,7 +13,7 @@ use crate::warnings::Warning;
 pub struct Languages {
     by_name: HashMap<String, Language>,
     lookup: LanguageLookup,
-    embedded: EmbeddedDefinitions,
+    nested: NestedLanguageDefinitions,
     // Which settings produced this set, so 'run' can refuse one that would have produced another.
     resolved_against: LanguageSelection
 }
@@ -61,15 +61,15 @@ impl Languages {
         // languages the narrowing set aside are kept and the map handed over is the one built over
         // everything. Only carried when a language in play declares regions, so an ordinary run
         // holds no second copy of anything.
-        let mut embedded = EmbeddedDefinitions::default();
+        let mut nested = NestedLanguageDefinitions::default();
         let set_aside = keyed_by_name(set_aside);
-        if by_name.values().chain(set_aside.values()).any(|language| !language.embedded_regions.is_empty()) {
+        if by_name.values().chain(set_aside.values()).any(|language| !language.nested_languages.is_empty()) {
             reported.extend(find_unresolvable_region_defaults(&by_name, &set_aside, &all_extensions));
-            embedded = EmbeddedDefinitions { set_aside, extension_to_name: all_extensions };
+            nested = NestedLanguageDefinitions { set_aside, extension_to_name: all_extensions };
         }
 
         (Languages { by_name, lookup: LanguageLookup { by_extension, by_filename },
-                embedded, resolved_against: LanguageSelection::of(config) }, reported)
+                nested, resolved_against: LanguageSelection::of(config) }, reported)
     }
 
     // Asked by 'run' before it counts anything. Resolved against settings naming Rust and then run
@@ -78,15 +78,15 @@ impl Languages {
         self.resolved_against == LanguageSelection::of(config)
     }
 
-    pub(crate) fn into_parts(self) -> (HashMap<String, Language>, LanguageLookup, EmbeddedDefinitions) {
-        (self.by_name, self.lookup, self.embedded)
+    pub(crate) fn into_parts(self) -> (HashMap<String, Language>, LanguageLookup, NestedLanguageDefinitions) {
+        (self.by_name, self.lookup, self.nested)
     }
 }
 
 // What a section of another language resolves against: the whole set's extension map, and the
 // definitions the narrowing took out of play. Empty on any run where no language declares regions.
 #[derive(Default)]
-pub(crate) struct EmbeddedDefinitions {
+pub(crate) struct NestedLanguageDefinitions {
     pub set_aside: HashMap<String, Language>,
     pub extension_to_name: HashMap<String, std::sync::Arc<str>>,
 }
@@ -243,7 +243,7 @@ fn find_unresolvable_region_defaults(by_name: &HashMap<String, Language>,
     };
 
     let mut unresolvable = by_name.values().chain(set_aside.values())
-            .flat_map(|language| language.embedded_regions.iter()
+            .flat_map(|language| language.nested_languages.iter()
                     .map(move |region| (language.name.as_str(), region.default.as_str())))
             .filter(|(_, default)| !resolves(default))
             .collect::<Vec<_>>();
@@ -442,7 +442,7 @@ mod language_selection_tests {
     #[test]
     fn a_region_default_that_names_no_language_is_reported() {
         let shell = |default: &str| Language::new("Weblike", ["wbl"], [""; 0], [""; 0], &[("<!--", "-->")], [])
-                .with_embedded_regions(&[crate::EmbeddedRegion::of("<script", "</script>", default)]);
+                .with_nested_languages(&[crate::NestedLanguage::of("<script", "</script>", default)]);
         let resolved = |default: &str| Languages::resolve(&EngineConfig::default(),
                 vec![shell(default), Language::new("JavaScript", ["js"], ["\""], ["//"], &[], [])],
                 &PriorityRules::default()).1

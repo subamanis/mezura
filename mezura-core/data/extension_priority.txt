@@ -16,6 +16,11 @@ The names are the ones the language files declare, and neither they nor the exte
 capitalisation. A language you have removed, or one that never existed, is skipped and the next name
 on the line is tried.
 
+Change who wins by reordering the names on a line, not by deleting the line. This file is yours to
+edit and is never replaced, so every answer you give here survives an update; what an update does
+add is the rules for contests your copy does not mention at all, and a line you removed is one your
+copy does not mention. Your copy as it stood is kept under 'replaced' whenever anything is added.
+
 This settles the question for every run. To decide it for one run, or for one project through its
 configuration file, use '--force-language', as in '--force-language m=matlab', which overrides this
 file.

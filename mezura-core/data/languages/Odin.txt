@@ -12,9 +12,9 @@ Multi line raw string symbols
 
 Comment symbols
 //
-Nesting comment start
+Self-nesting comment start
 /*
-Nesting comment end
+Self-nesting comment end
 */
 
 Keyword

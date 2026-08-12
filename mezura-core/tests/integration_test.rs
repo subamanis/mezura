@@ -96,7 +96,7 @@ fn a_container_file_is_one_file_of_its_language_and_its_sections_are_the_decompo
     std::fs::write(root.join("plain.js"), "// a comment\nvar y = 2;\n").unwrap();
 
     let web = mezura_core::Language::new("Web", ["web"], [""; 0], [""; 0], &[("<!--", "-->")], [])
-            .with_embedded_regions(&[mezura_core::EmbeddedRegion::of("<script", "</script>", "js")]);
+            .with_nested_languages(&[mezura_core::NestedLanguage::of("<script", "</script>", "js")]);
     let js = mezura_core::Language::new("JS", ["js"], ["\""], ["//"], &[("/*", "*/")], []);
     let definitions = || [web.clone(), js.clone()];
 
@@ -113,7 +113,7 @@ fn a_container_file_is_one_file_of_its_language_and_its_sections_are_the_decompo
     assert_eq!(7, result.total.lines);
 
     // the decomposition: two js lines inside one container file, with their own reading
-    let section = &result.embedded["Web"]["JS"];
+    let section = &result.nested_languages["Web"]["JS"];
     assert_eq!((1, 2, 1, 1), (section.files, section.lines, section.code_lines, section.comment_lines));
     assert!(section.bytes > 0 && section.bytes < 30);
 
@@ -124,7 +124,7 @@ fn a_container_file_is_one_file_of_its_language_and_its_sections_are_the_decompo
     std::fs::remove_dir_all(&root).unwrap();
 
     assert_eq!(vec!["Web"], result.per_language.keys().collect::<Vec<_>>());
-    assert_eq!(2, result.embedded["Web"]["JS"].lines,
+    assert_eq!(2, result.nested_languages["Web"]["JS"].lines,
             "a narrowed run lost the decomposition of its own container files");
 }
 

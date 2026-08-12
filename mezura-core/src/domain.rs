@@ -33,7 +33,7 @@ pub struct Language {
     pub line_continuation : Option<LineContinuation>,
     // Sections of the file that belong to another language, HTML's '<script>' and '<style>'. The
     // lines between the tags are counted with that language's own symbols and reported under it.
-    pub embedded_regions : Vec<EmbeddedRegion>,
+    pub nested_languages : Vec<NestedLanguage>,
     pub keywords : Vec<Keyword>,
     // Worked out from the symbols above and reused for every file of this language.
     pub(crate) scan_plan : OnceLock<crate::engine::file_parser::ScanPlan>
@@ -60,7 +60,7 @@ impl Language {
             nesting_comments : Vec::new(),
             leveled_comments : Vec::new(),
             line_continuation : None,
-            embedded_regions : Vec::new(),
+            nested_languages : Vec::new(),
             keywords : keywords.into_iter().collect(),
             scan_plan : OnceLock::new()
         }
@@ -84,8 +84,8 @@ impl Language {
         self
     }
 
-    pub fn with_embedded_regions(mut self, regions: &[EmbeddedRegion]) -> Self {
-        self.embedded_regions.extend(regions.iter().cloned());
+    pub fn with_nested_languages(mut self, regions: &[NestedLanguage]) -> Self {
+        self.nested_languages.extend(regions.iter().cloned());
         self
     }
 
@@ -232,15 +232,15 @@ impl MultilineString {
 // extension, not a language name, so both paths resolve the same way. The tags match without
 // regard to case, the way HTML reads them.
 #[derive(Debug, Clone, PartialEq)]
-pub struct EmbeddedRegion {
+pub struct NestedLanguage {
     pub start : String,
     pub end : String,
     pub default : String
 }
 
-impl EmbeddedRegion {
-    pub fn of(start: &str, end: &str, default: &str) -> EmbeddedRegion {
-        EmbeddedRegion { start: start.to_owned(), end: end.to_owned(), default: default.to_owned() }
+impl NestedLanguage {
+    pub fn of(start: &str, end: &str, default: &str) -> NestedLanguage {
+        NestedLanguage { start: start.to_owned(), end: end.to_owned(), default: default.to_owned() }
     }
 }
 
@@ -296,7 +296,7 @@ impl PartialEq for Language {
             && self.nesting_comments == other.nesting_comments
             && self.leveled_comments == other.leveled_comments
             && self.line_continuation == other.line_continuation
-            && self.embedded_regions == other.embedded_regions
+            && self.nested_languages == other.nested_languages
             && self.keywords == other.keywords
     }
 }

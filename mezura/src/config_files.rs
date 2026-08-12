@@ -73,7 +73,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
         if size == 0 {break};
         // Only the first line of the file can carry the mark, but asking on every line costs a
         // comparison and spares the reader a special case that would have to be got right once
-        let line = super::strip_byte_order_mark(buf.trim());
+        let line = strip_byte_order_mark(buf.trim());
         if line.starts_with("===>") {
             let id = line.trim_start_matches("===>").split_whitespace().next().unwrap_or("");
 
@@ -249,6 +249,15 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
     }
 
     Ok((builder, issues))
+}
+
+// Three bytes that mean "this is UTF-8" and carry no text. 'trim' leaves them where they are, since
+// they are not whitespace, so a header on the first line of a file stops matching the moment
+// somebody re-saves it with PowerShell's 'Set-Content' or an older Notepad. Every parser of a text
+// format in this crate calls it, and leaving it to each parser is how two of the four came to be
+// missing it, one of them reading no rules at all in silence.
+pub fn strip_byte_order_mark(contents: &str) -> &str {
+    contents.trim_start_matches('\u{feff}')
 }
 
 // Dirs must be specified (is checked before calling this function)

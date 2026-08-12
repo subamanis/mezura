@@ -225,6 +225,8 @@ pub const HIDE_HELP  :  &str =
                       'Writing out', 'Counting' and 'Cleaning up' lines of a '--diff'. What
                       they settle into still prints. A TERM=dumb terminal gets this on its own
       keywords        the keyword counts, keeping the rest of the details rows
+      nested-languages  the rows that break a container file down, so a '.vue' weighs whole on
+                      the Vue row with no sign of the TypeScript and CSS inside it
       overview        the whole percentages section
       bar             only the [-|||-] bar of the overview, keeping the percentages and the colors
       history         the comparison with previous runs (the same as '--compare 0')
@@ -382,15 +384,23 @@ pub const RESTORE_HELP  :  &str =
     mezura ships: anything missing is written, and a language file that no longer says what ours
     says is replaced. It reports what it did.
 
-    This already happens on its own when you install a new version, so you should not need it. It
-    is here for when something was damaged or deleted within one version, where nothing else would
+    This already happens on its own whenever the mezura you run carries different files from the
+    ones your data directory was given, so you should not need it. It is here for when something
+    was damaged or deleted while the program itself stayed the same, where nothing else would
     notice.
 
     A language file you changed is replaced too, since one that has fallen behind counts wrongly,
     but your copy is kept under 'data/replaced/<version>/<date and time>/' and named, so you can
     carry your changes over. Each run of this writes its own folder there, so running it twice never
-    mixes the two. A language file of your own is never touched, and neither are your themes, your
-    default configuration or 'extension_priority.txt': those are written when absent and left alone.
+    mixes the two. A language file of your own is never touched, and neither are your themes or your
+    default configuration: those are written when absent and left alone.
+
+    'extension_priority.txt' is neither replaced nor left alone. Every rule you wrote in it is kept,
+    and the rules a new version adds are added beside them, so a contest you have already settled
+    stays settled while a new one does not go unmentioned. Change who wins a contest by reordering
+    the names on its line rather than by deleting the line: a line that is not there reads as one
+    you never had, and comes back. Your copy as it stood is kept under 'replaced' whenever anything
+    is added to it.
 
 ";
 pub const OUTPUT_HELP  :  &str =
@@ -606,6 +616,18 @@ pub const STYLE_HELP  :  &str =
       details-total            the word 'Total'
       percent                  the percentages of the details rows
       arrow                    the '->' after a language name, in the 'list' layout only
+
+    The sections inside a container file, one token per column of the same row:
+      nested-name              the name of a section language
+      nested-branch            the tree characters that tie the sections to the row above
+      nested-files             the file count of a section
+      nested-lines             its lines
+      nested-code              its code lines
+      nested-comments          its comment lines
+      nested-extra             its remaining lines
+      nested-size              its size
+      nested-size-unit         the unit beside that size
+      nested-percent           the percentages of a section, which are of the container
 
     The overview:
       overview-label           the 'Files:', 'Lines:' and 'Size :' row labels

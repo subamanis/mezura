@@ -271,6 +271,21 @@ theme_tokens! {
     // its heading in the keywords, and its line in the history section
     details_module    => "details-module",    Style::of(LABEL_GOLD).bold();
     details_total     => "details-total",     Style::plain().bold();
+
+    // The decomposition of a container file, one token per column so that a theme can treat the
+    // sections as their own band of the table. Dim by default, since they are a breakdown of the row
+    // above them and not rows of their own.
+    nested_name       => "nested-name",       Style::plain().bold().dim();
+    nested_branch     => "nested-branch",     Style::of(FAINT);
+    nested_percent    => "nested-percent",    Style::of(FAINTER).dim();
+    nested_files      => "nested-files",      Style::plain().dim();
+    nested_lines      => "nested-lines",      Style::of(Color::White).bold().dim();
+    nested_code       => "nested-code",       Style::plain().dim();
+    nested_comments   => "nested-comments",   Style::plain().dim();
+    nested_extra      => "nested-extra",      Style::plain().dim();
+    nested_size       => "nested-size",       Style::plain().dim();
+    nested_size_unit  => "nested-size-unit",  Style::of(SIZE_GOLD).dim();
+
     overview_label    => "overview-label",    Style::plain();
     overview_percent  => "overview-percent",  Style::plain();
 
@@ -364,7 +379,7 @@ pub fn parse_theme_file(contents: &str) -> ThemeFile {
     let mut validation_theme = Theme::default();
     let (mut styles, mut errors) = (Vec::new(), Vec::new());
 
-    for line in super::strip_byte_order_mark(contents).lines() {
+    for line in crate::config_files::strip_byte_order_mark(contents).lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;

@@ -2,20 +2,20 @@ use std::{collections::HashMap, sync::{Arc, atomic::{AtomicBool, AtomicU64, Orde
 
 use crossbeam_deque::{Injector, Steal, Worker};
 
-use crate::{EmbeddedMapMut, EngineConfig, FaultyFileDetails, FaultyFilesListMut, Language, ParsableFile,
+use crate::{NestedLanguageMapMut, EngineConfig, FaultyFileDetails, FaultyFilesListMut, Language, ParsableFile,
         ScanProgress, Stats, StatsMapMut, phase_timing};
 use crate::engine::file_parser;
-use crate::languages::EmbeddedDefinitions;
+use crate::languages::NestedLanguageDefinitions;
 
 pub fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
-        stats_per_module: StatsMapMut, embedded_per_module: EmbeddedMapMut,
-        language_map: Arc<HashMap<String,Language>>, embedded_definitions: Arc<EmbeddedDefinitions>,
+        stats_per_module: StatsMapMut, nested_per_module: NestedLanguageMapMut,
+        language_map: Arc<HashMap<String,Language>>, nested_definitions: Arc<NestedLanguageDefinitions>,
         config: Arc<EngineConfig>, started: Instant, counting_ended: Arc<AtomicU64>,
         progress: Arc<ScanProgress>) -> std::io::Result<JoinHandle<()>>
 {
     thread::Builder::new().name(format!("consumer-{id}")).spawn(move || {
         start_parsing_files(id, files_injector, faulty_files, finish_condition, stats_per_module,
-                embedded_per_module, language_map, embedded_definitions, config, &progress);
+                nested_per_module, language_map, nested_definitions, config, &progress);
         // The last thing this thread does, and the only honest answer to how long the counting took:
         // 'run' joins these threads after calling the caller's callback, so its own clock cannot tell
         // the two apart.
@@ -24,8 +24,8 @@ pub fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>
 }
 
 pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
-    stats_per_module: StatsMapMut, embedded_per_module: EmbeddedMapMut,
-    language_map: Arc<HashMap<String,Language>>, embedded_definitions: Arc<EmbeddedDefinitions>,
+    stats_per_module: StatsMapMut, nested_per_module: NestedLanguageMapMut,
+    language_map: Arc<HashMap<String,Language>>, nested_definitions: Arc<NestedLanguageDefinitions>,
     config: Arc<EngineConfig>, progress: &ScanProgress)
 {
     let mut buf = String::with_capacity(150);
@@ -38,7 +38,7 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
     let modules = stats_per_module.lock().unwrap().len();
     let mut local_stats: Vec<HashMap<String, Stats>> =
             vec![HashMap::new(); modules];
-    let mut local_embedded: Vec<HashMap<String, HashMap<String, Stats>>> =
+    let mut local_nested: Vec<HashMap<String, HashMap<String, Stats>>> =
             vec![HashMap::new(); modules];
     // A batch and not one file at a time. With four of these threads per core they all reach for the
     // same queue head between files, and the cost is not the atomic but the losing side: a contended
@@ -70,9 +70,9 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                 }
                 idle_iterations = 0;
                 let lang_name = parsable_file.language_name.as_ref();
-                let lookup = file_parser::EmbeddedLookup { languages: &language_map,
-                        extension_to_name: &embedded_definitions.extension_to_name,
-                        set_aside: &embedded_definitions.set_aside };
+                let lookup = file_parser::NestedLanguageLookup { languages: &language_map,
+                        extension_to_name: &nested_definitions.extension_to_name,
+                        set_aside: &nested_definitions.set_aside };
                 match file_parser::parse_file(&parsable_file.path, lang_name, &mut buf, &mut parse_buffers, &lookup, &mut keyword_matchers, &config) {
                     Ok(report) => {
                         progress.record_file_parsed(report.total_lines());
@@ -84,7 +84,7 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                         for section in &report.sections {
                             let section_keywords = lookup.find_by_name(&section.language)
                                     .map(|inner| inner.keywords.as_slice()).unwrap_or(&[]);
-                            local_embedded[module].entry(lang_name.to_owned()).or_default()
+                            local_nested[module].entry(lang_name.to_owned()).or_default()
                                     .entry(section.language.clone()).or_default()
                                     .add_file(&section.stats, section.bytes, section_keywords);
                         }
@@ -151,9 +151,9 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
             }
         }
     }
-    if local_embedded.iter().any(|bucket| !bucket.is_empty()) {
-        let mut global = embedded_per_module.lock().unwrap();
-        for (module, bucket) in local_embedded.into_iter().enumerate() {
+    if local_nested.iter().any(|bucket| !bucket.is_empty()) {
+        let mut global = nested_per_module.lock().unwrap();
+        for (module, bucket) in local_nested.into_iter().enumerate() {
             for (shell_name, sections) in bucket {
                 let shell_entry = global[module].entry(shell_name).or_default();
                 for (inner_name, stats) in sections {
