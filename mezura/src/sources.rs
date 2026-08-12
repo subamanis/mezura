@@ -149,7 +149,7 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
         // look, and the complaints are voiced by whoever asked for the counting
         let resolved = mezura_core::Languages::resolve(&of_git_revision, languages, extension_priority).0;
         let mut result = mezura_core::run(&of_git_revision, resolved, Some(progress.clone()), |_| {})
-                .map_err(|x| GitError::Refused { doing: "counting the revision", message: x.to_string() })?;
+                .map_err(|error| GitError::CountingRevision { revision: git_revision.to_owned(), error })?;
         result.targets = counted_declared;
         result
     };

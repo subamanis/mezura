@@ -25,6 +25,9 @@ pub enum GitError {
     // Its matches in the working tree and at the commit are two different sets of files, and there
     // is no place in a comparison to say which was meant, so it is refused rather than guessed.
     PatternTarget { pattern: String },
+    // The checkout succeeded and the counting of it did not, so this is a run error and git had no
+    // part in it. It carries the revision because a comparison counts two sides and only one failed.
+    CountingRevision { revision: String, error: mezura_core::RunError },
     Refused { doing: &'static str, message: String }
 }
 
@@ -37,6 +40,7 @@ impl std::fmt::Display for GitError {
             Self::NoSuchRevision { revision, repository } => write!(f, "'{revision}' is not a branch, tag or commit of the repository at '{repository}', and there is no file by that name either. One that lives only on a remote needs a 'git fetch' first."),
             Self::SameCommit { first, second, commit } => write!(f, "'{first}' and '{second}' name the same commit, {}, so the comparison has nothing to say.", &commit[..commit.len().min(12)]),
             Self::PatternTarget { pattern } => write!(f, "'{pattern}' is a glob pattern, and what it matches in the working tree and what it would match at that commit are two different sets of files. Write out the paths it should mean."),
+            Self::CountingRevision { revision, error } => write!(f, "'{revision}' was written out, but counting it failed. {error}"),
             Self::Refused { doing, message } => write!(f, "git refused while {doing}: {message}")
         }
     }
@@ -46,6 +50,7 @@ impl std::error::Error for GitError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::NotInstalled(x) => Some(x),
+            Self::CountingRevision { error, .. } => Some(error),
             _ => None
         }
     }
