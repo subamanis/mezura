@@ -6,6 +6,8 @@ use std::process::Command;
 use std::sync::Mutex;
 use std::thread::JoinHandle;
 
+use super::paths::{fold_for_comparison, normalise_separators};
+
 // Named after the run rather than after the revision, since two runs of one revision can overlap and
 // a worktree cannot be added twice at one place
 const CHECKOUT_PREFIX : &str = "mezura-diff-";
@@ -164,8 +166,9 @@ pub fn await_checkout_removals() {
 
 pub fn checkout(resolved: &ResolvedRevision) -> Result<Checkout, GitError> {
     let repository = resolved.repository.as_str();
-    let path = std::env::temp_dir().join(CHECKOUT_PREFIX.to_owned() + &resolved.commit[..resolved.commit.len().min(12)]
-            + "-" + &std::process::id().to_string()).to_string_lossy().replace('\\', "/");
+    let path = normalise_separators(&std::env::temp_dir().join(CHECKOUT_PREFIX.to_owned()
+            + &resolved.commit[..resolved.commit.len().min(12)]
+            + "-" + &std::process::id().to_string()).to_string_lossy()).into_owned();
     let _ = std::fs::remove_dir_all(&path);
 
     // git writes the tree out on one thread unless told otherwise, and a git too old to know the
@@ -189,13 +192,13 @@ pub fn checkout(resolved: &ResolvedRevision) -> Result<Checkout, GitError> {
 // a parallel write is half registered is the one interference between them.
 pub(crate) fn remove_leftover_checkouts(repository: &str) {
     let ours = format!("-{}", std::process::id());
-    let temp = std::env::temp_dir().to_string_lossy().replace('\\', "/").to_lowercase();
+    let temp = fold_for_comparison(&std::env::temp_dir().to_string_lossy()).into_owned();
     if let Ok(listed) = Command::new("git").args(["-C", repository, "worktree", "list", "--porcelain"]).output() {
         for line in String::from_utf8_lossy(&listed.stdout).lines() {
             let Some(path) = line.strip_prefix("worktree ") else { continue };
             let name = Path::new(path).file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
             if name.starts_with(CHECKOUT_PREFIX) && !name.ends_with(&ours)
-                    && path.replace('\\', "/").to_lowercase().starts_with(&temp) {
+                    && fold_for_comparison(path).starts_with(&temp) {
                 let _ = Command::new("git").args(["-C", repository, "worktree", "remove", "--force", path]).output();
             }
         }

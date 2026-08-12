@@ -708,12 +708,12 @@ mod tests {
         let module = |name: Option<&str>, lines: usize| {
             let per_language = hashmap!["Rust".to_owned() => stats(lines, lines, 1)];
             ModuleResult {name: name.map(str::to_owned), total: Stats::total_of(&per_language), per_language,
-                    nested_languages: Default::default()}
+                    nested_languages: HashMap::new(), files: HashMap::new()}
         };
         let result = |modules: Vec<ModuleResult>| {
             let per_language = hashmap!["Rust".to_owned() => stats(100, 70, 2)];
             mezura_core::RunResult {
-                total: Stats::total_of(&per_language), per_language, modules, nested_languages: Default::default(),
+                total: Stats::total_of(&per_language), per_language, modules, nested_languages: HashMap::new(),
                 faulty_files: Vec::new(), targets: Vec::new(), unreadable_dirs: Vec::new(),
                 files_present: mezura_core::FilesPresent {total_files: 2, relevant_files: 2, excluded_files: 0},
                 performance: mezura_core::Performance {duration_millis: 0, threads: mezura_core::Threads::new(1, 1)}
@@ -765,7 +765,7 @@ mod tests {
                 faulty_files_count: 0,
                 unreadable_dirs_count: 0,
                 result: RunResult {
-                    total: Stats::total_of(&per_language), per_language, modules, nested_languages: Default::default(),
+                    total: Stats::total_of(&per_language), per_language, modules, nested_languages: HashMap::new(),
                     faulty_files: Vec::new(), targets: Vec::new(), unreadable_dirs: Vec::new(),
                     files_present: mezura_core::FilesPresent {total_files: 2, relevant_files: 2, excluded_files: 0},
                     performance: mezura_core::Performance {duration_millis: 0, threads: mezura_core::Threads::new(1, 1)}
@@ -775,7 +775,7 @@ mod tests {
         let module = |name: &str| {
             let per_language = hashmap!["Rust".to_owned() => stats(50, 40, 1)];
             ModuleResult { name: Some(name.to_owned()), total: Stats::total_of(&per_language), per_language,
-                    nested_languages: Default::default() }
+                    nested_languages: HashMap::new(), files: HashMap::new() }
         };
 
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
@@ -846,7 +846,7 @@ mod tests {
             config.engine.braces_as_code = braces;
             let per_language = hashmap!["Rust".to_owned() => stats(100, 70, 2)];
             let result = mezura_core::RunResult {
-                total: Stats::total_of(&per_language), per_language, modules: Vec::new(), nested_languages: Default::default(),
+                total: Stats::total_of(&per_language), per_language, modules: Vec::new(), nested_languages: HashMap::new(),
                 faulty_files: Vec::new(), targets: Vec::new(), unreadable_dirs: Vec::new(),
                 files_present: mezura_core::FilesPresent {total_files: 2, relevant_files: 2, excluded_files: 0},
                 performance: mezura_core::Performance {duration_millis: 0, threads: mezura_core::Threads::new(1, 1)}
@@ -903,7 +903,7 @@ mod tests {
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         let per_language = hashmap!["Rust".to_owned() => stats(100, 70, 2)];
         let result = mezura_core::RunResult {
-            total: Stats::total_of(&per_language), per_language, modules: Vec::new(), nested_languages: Default::default(),
+            total: Stats::total_of(&per_language), per_language, modules: Vec::new(), nested_languages: HashMap::new(),
             faulty_files: Vec::new(), targets: Vec::new(), unreadable_dirs: Vec::new(),
             files_present: mezura_core::FilesPresent {total_files: 2, relevant_files: 2, excluded_files: 0},
             performance: mezura_core::Performance {duration_millis: 0, threads: mezura_core::Threads::new(1, 1)}

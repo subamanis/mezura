@@ -15,6 +15,10 @@ const SIZE_GOLD: Color = Color::TrueColor { r: 125, g: 119, b: 105 };
 // attribute both land far darker than this on most schemes.
 const FAINT: Color = Color::TrueColor { r: 170, g: 170, b: 170 };
 const FAINTER: Color = Color::TrueColor { r: 150, g: 150, b: 150 };
+// The name of a row hanging under a language, and the same again for a file, which sits a step
+// further back so that the two lists under one language are told apart by weight as well as by shape
+const SUB_ROW_GREY: Color = Color::TrueColor { r: 138, g: 138, b: 138 };
+const FILE_ROW_GREY: Color = Color::TrueColor { r: 122, g: 122, b: 122 };
 const KEYWORD_GREY: Color = Color::TrueColor { r: 181, g: 181, b: 181 };
 
 static ACTIVE_THEME: OnceLock<Theme> = OnceLock::new();
@@ -237,7 +241,11 @@ macro_rules! theme_tokens {
 theme_tokens! {
     version           => "version",           Style::plain();
     heading           => "heading",           Style::plain().underline().bold();
-    separator         => "separator",         Style::of(FAINT);
+    separator_total   => "separator-total",   Style::of(FAINT);
+    separator_header  => "separator-header",  Style::of(FAINT);
+    // The colour of the headers it sits in, painted on its own so that their italics do not slant a
+    // glyph that is not a word
+    sort_marker       => "sort-marker",       Style::of(LABEL_GOLD);
     arrow             => "arrow",             Style::of(FAINT);
     bar_frame         => "bar-frame",         Style::plain();
     percent           => "percent",           Style::of(FAINTER);
@@ -272,19 +280,33 @@ theme_tokens! {
     details_module    => "details-module",    Style::of(LABEL_GOLD).bold();
     details_total     => "details-total",     Style::plain().bold();
 
-    // The decomposition of a container file, one token per column so that a theme can treat the
-    // sections as their own band of the table. Dim by default, since they are a breakdown of the row
-    // above them and not rows of their own.
-    nested_name       => "nested-name",       Style::plain().bold().dim();
+    // The rows hanging under a language, one token per column so that a theme can treat them as
+    // their own band of the table. The name is dimmed and the figures are not: what marks a row as a
+    // breakdown is where it sits, and dimming its numbers as well makes a column unreadable down its
+    // length, which is the one way these figures are meant to be read.
+    nested_name       => "nested-name",       Style::of(SUB_ROW_GREY).bold();
     nested_branch     => "nested-branch",     Style::of(FAINT);
-    nested_percent    => "nested-percent",    Style::of(FAINTER).dim();
-    nested_files      => "nested-files",      Style::plain().dim();
-    nested_lines      => "nested-lines",      Style::of(Color::White).bold().dim();
-    nested_code       => "nested-code",       Style::plain().dim();
-    nested_comments   => "nested-comments",   Style::plain().dim();
-    nested_extra      => "nested-extra",      Style::plain().dim();
-    nested_size       => "nested-size",       Style::plain().dim();
-    nested_size_unit  => "nested-size-unit",  Style::of(SIZE_GOLD).dim();
+    nested_percent    => "nested-percent",    Style::of(FAINTER);
+    nested_files      => "nested-files",      Style::plain();
+    nested_lines      => "nested-lines",      Style::of(Color::White).bold();
+    nested_code       => "nested-code",       Style::plain();
+    nested_comments   => "nested-comments",   Style::plain();
+    nested_extra      => "nested-extra",      Style::plain();
+    nested_size       => "nested-size",       Style::plain();
+    nested_size_unit  => "nested-size-unit",  Style::of(SIZE_GOLD);
+
+    // The same set again for the files of a '--by-file' run. They hang under a language beside the
+    // sections and are a different question asked of it, so a theme can tell the two apart.
+    file_name         => "file-name",         Style::of(FILE_ROW_GREY);
+    file_branch       => "file-branch",       Style::of(FAINT);
+    file_percent      => "file-percent",      Style::of(FAINTER);
+    file_files        => "file-files",        Style::plain();
+    file_lines        => "file-lines",        Style::of(Color::White).bold();
+    file_code         => "file-code",         Style::plain();
+    file_comments     => "file-comments",     Style::plain();
+    file_extra        => "file-extra",        Style::plain();
+    file_size         => "file-size",         Style::plain();
+    file_size_unit    => "file-size-unit",    Style::of(SIZE_GOLD);
 
     overview_label    => "overview-label",    Style::plain();
     overview_percent  => "overview-percent",  Style::plain();
@@ -563,15 +585,10 @@ pub fn color_to_config_string(color: &Color) -> String {
 }
 
 // How many columns a painted line takes on the screen. The escape sequences the styles above
-// produce have their bytes in the string and nothing on the screen, so they are skipped.
-pub fn calculate_visible_len(line: &str) -> usize {
-    visible_chars(line).count()
-}
-
-// Terminal columns and not characters: CJK and emoji occupy two each, which a character count
-// declares half as wide as they draw. The report keeps counting characters, since its layouts and
-// goldens are built on that; the live lines measure with this, because a revision name is the one
-// user-written text that reaches them.
+// produce have their bytes in the string and nothing on the screen, so they are skipped, and CJK
+// and emoji count for the two each of them draws rather than the one a character count would give.
+// A file path reaches the aligned columns of the report, so this is the only measure either side of
+// the program may use.
 pub fn measure_columns(line: &str) -> usize {
     visible_chars(line).map(|character| character.width().unwrap_or(0)).sum()
 }

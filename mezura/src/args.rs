@@ -236,7 +236,7 @@ fn split_off_module_name(piece: &str) -> Option<(&str, &str)> {
 }
 
 fn cleaned_path(piece: &str) -> Option<String> {
-    let cleansed = &piece.trim().replace("\\", "/");
+    let cleansed = &super::paths::normalise_separators(piece.trim()).into_owned();
     get_trimmed_if_not_empty(cleansed.strip_prefix('"').unwrap_or(cleansed).strip_suffix('"').unwrap_or(cleansed))
 }
 

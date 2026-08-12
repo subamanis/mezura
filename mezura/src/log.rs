@@ -234,7 +234,7 @@ mod tests {
     use super::*;
 
     fn result_of(total: Stats, modules: Vec<ModuleResult>) -> RunResult {
-        RunResult { per_language: HashMap::new(), modules, nested_languages: Default::default(), total,
+        RunResult { per_language: HashMap::new(), modules, nested_languages: HashMap::new(), total,
                 faulty_files: Vec::new(),
                 files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(),
                 performance: Performance { duration_millis: 0, threads: Threads::new(1, 1) } }
@@ -253,8 +253,8 @@ mod tests {
         config.engine.forced_languages = hashmap!["m".to_owned() => "matlab".to_owned()];
 
         let module_of = |name: Option<&str>, lines: usize, code: usize, comments: usize| ModuleResult {
-            name: name.map(str::to_owned), per_language: HashMap::new(), nested_languages: Default::default(),
-            total: Stats::new(1, 10, lines, code, comments, HashMap::new()) };
+            name: name.map(str::to_owned), per_language: HashMap::new(), nested_languages: HashMap::new(),
+            files: HashMap::new(), total: Stats::new(1, 10, lines, code, comments, HashMap::new()) };
         let mut result = result_of(Stats::new(10, 5000, 1000, 700, 200, HashMap::new()),
                 vec![module_of(Some("frontend"), 600, 400, 150), module_of(None, 400, 300, 50)]);
         result.targets = vec![Target::named("frontend", "./web"), Target::of("./src")];
@@ -340,8 +340,8 @@ mod tests {
         let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
         config.view.set_log_option(LogOption::new(None));
         let module_of = |name: Option<&str>, lines: usize, code: usize, comments: usize| ModuleResult {
-            name: name.map(str::to_owned), per_language: HashMap::new(), nested_languages: Default::default(),
-            total: Stats::new(1, 10, lines, code, comments, HashMap::new()) };
+            name: name.map(str::to_owned), per_language: HashMap::new(), nested_languages: HashMap::new(),
+            files: HashMap::new(), total: Stats::new(1, 10, lines, code, comments, HashMap::new()) };
 
         let older = result_of(Stats::new(4, 4000, 400, 300, 0, HashMap::new()), Vec::new());
         log_stats(&path, &None, &older, &DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap(), &config).unwrap();

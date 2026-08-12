@@ -272,12 +272,16 @@ HOW THE REPORT LOOKS
 
 --sort
 
-    One argument: 'lines', 'files', 'code', 'size' or 'name'. Default: lines
+    One argument: 'lines', 'files', 'code', 'comments', 'extra', 'size' or 'name'. Default: lines
+    Every column of the details table is one of them, so there is no figure you can see and not
+    order by.
 
     Chooses the order of the languages in the "details" section, which also decides which of them
     reach the "overview" section and which are folded into its 'others' entry.
     Every criterion except 'name' sorts from the largest down, and ties are broken alphabetically
     so that the order never changes between runs on the same data.
+    The column that decides it carries a mark in its header, since the criterion can come from a
+    configuration file and then nothing else on the page would say it.
 
     Note that before v3.0.0 the order was a fixed formula in which the byte size dominated, so
     runs that used to be ordered by size are now ordered by lines unless you ask otherwise.
@@ -299,6 +303,27 @@ HOW THE REPORT LOOKS
     With modules, the cut happens inside each one, since that is what the rows under a module are.
     The 'matrix' layout is the exception: its rows are the languages of the whole run, so there the
     cut is over all of them.
+
+--by-file
+
+    No arguments, or one number.
+
+    Every counted file gets a row of its own, under the language it was counted as, showing its
+    lines split into code, comments and everything else. Without a number every file is printed,
+    the way '--top' shows every language until a number says otherwise.
+
+    A number is how many to show under each language: '--by-file 20' prints the twenty biggest of
+    every language, by whatever '--sort' is in effect, and 0 means all of them again. The cut is
+    inside each language of each module, for the same reason '--top' cuts inside each module: over
+    a whole report, the one part holding the biggest files would leave every other part with none.
+
+    A language whose files were cut ends on a branch left hanging, so that a tree drawn shut is
+    always the whole of what there is, and how many were left out is reported above the total. The
+    files of a language '--top' hid are not printed, since their language is not there to sit under.
+
+    A path too wide for its column loses whole directories out of its middle and never a piece of
+    the file's own name. A file's keywords are not counted, so a row is one line whatever the
+    language declares. The JSON document carries the same rows under each language, as 'by_file'.
 
 --hide
 
@@ -391,7 +416,8 @@ HOW THE REPORT LOOKS
     The page:
       version                  the version line at the top
       heading                  the section titles and the 'Analyzing directories' lines
-      separator                the dashed line above the total
+      separator-total          the line above the total
+      separator-header         the line under the column titles of the two tables
       summary                  the found / of interest / excluded line
       note                     the '(+N more languages hidden by --top N)' line
       success                  the 'ok' after parsing
@@ -405,6 +431,7 @@ HOW THE REPORT LOOKS
       details-module           the name of a module, wherever one is printed
       details-total            the word 'Total'
       percent                  the percentages of the details rows
+      sort-marker              the arrow beside the title of the column '--sort' ordered by
       arrow                    the '->' after a language name, in the 'list' layout only
 
     The sections inside a container file, one token per column of the same row:
@@ -418,6 +445,18 @@ HOW THE REPORT LOOKS
       nested-size              its size
       nested-size-unit         the unit beside that size
       nested-percent           the percentages of a section, which are of the container
+
+    The rows of a '--by-file' run, which hang under a language beside those sections:
+      file-name                the path of a file
+      file-branch              the tree characters that tie the files to the language above
+      file-files               the file count of such a row, which is always one
+      file-lines               its lines
+      file-code                its code lines
+      file-comments            its comment lines
+      file-extra               its remaining lines
+      file-size                its size
+      file-size-unit           the unit beside that size
+      file-percent             the percentages of a file, which are of its language
 
     The overview:
       overview-label           the 'Files:', 'Lines:' and 'Size :' row labels

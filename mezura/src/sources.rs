@@ -139,7 +139,7 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
     let result = if of_git_revision.targets.is_empty() {
         mezura_core::RunResult {
             per_language: HashMap::new(), total: mezura_core::Stats::default(), modules: Vec::new(),
-            nested_languages: Default::default(),
+            nested_languages: HashMap::new(),
             faulty_files: Vec::new(), unreadable_dirs: Vec::new(), targets: Vec::new(),
             files_present: FilesPresent::default(),
             performance: mezura_core::Performance { duration_millis: 0, threads: config.engine.threads.clone() }
@@ -164,14 +164,14 @@ fn move_excludes_into_checkout(checkout: &str, repository: &str, patterns: &[Str
     // ASCII folding only, so that folding never moves a byte and the remainder can be cut off the
     // unfolded pattern at the root's own length
     let key = |path: &str| {
-        let path = path.replace('\\', "/");
+        let path = super::paths::normalise_separators(path).into_owned();
         if cfg!(windows) {path.to_ascii_lowercase()} else {path}
     };
     let root = repository.trim_end_matches('/');
     let folded_root = key(root);
 
     patterns.iter().map(|pattern| {
-        let normalized = pattern.replace('\\', "/");
+        let normalized = super::paths::normalise_separators(pattern).into_owned();
         let folded = key(&normalized);
         if folded == folded_root {
             checkout.to_owned()

@@ -10,6 +10,10 @@ use super::result_printer;
 // check this and not the version of the binary, which moves for reasons that do not concern it.
 pub const FORMAT_VERSION : usize = 1;
 
+// The file rows of one language, in the order the report shows them, beside the path each row prints
+// No shortened path: a document carries the whole one, which is the only form a consumer can open
+type FilesByLanguage<'a> = HashMap<&'a str, Vec<&'a mezura_core::FileEntry>>;
+
 // The document is a designed shape and not a serialization of the structs the program happens to
 // have. It carries every number that was measured, in its raw unit, and nothing the printer computed
 // in order to look right: no sizes in KB, no separators, no percentages, no bar.
@@ -22,6 +26,9 @@ pub fn create_document(result: &RunResult, datetime_now: &DateTime<Local>, confi
     let names = result_printer::get_sorted_language_names(per_language, config.view.sort_by);
     let hidden = config.view.top_n.map_or(0, |top| names.len().saturating_sub(top));
     let shown = &names[..names.len() - hidden];
+    let file_rows = result_printer::find_files_to_show(result, config);
+    let files = merge_file_rows(&file_rows, config.view.sort_by);
+    let files_hidden = file_rows.iter().flat_map(HashMap::values).map(|rows| rows.hidden).sum::<usize>();
 
     let mut members = vec![
         format!("  \"format\": {FORMAT_VERSION}"),
@@ -34,8 +41,9 @@ pub fn create_document(result: &RunResult, datetime_now: &DateTime<Local>, confi
         format!("  \"scan\": {}", create_scan_object(4, &result.files_present,
                 result.faulty_files.len(), result.unreadable_dirs.len())),
         format!("  \"total\": {}", create_total_object(total, !config.view.hidden.keywords)),
-        format!("  \"languages\": {}", create_languages_array(shown, per_language, nested_languages, config)),
+        format!("  \"languages\": {}", create_languages_array(shown, per_language, nested_languages, &files, config)),
         format!("  \"languages_hidden\": {hidden}"),
+        format!("  \"files_hidden\": {files_hidden}"),
         // The paths of the two, which '--show-faulty-files' asks for here as it does on the screen.
         // How many there were is in 'scan' either way, so their absence is never a claim that
         // nothing went wrong.
@@ -46,7 +54,7 @@ pub fn create_document(result: &RunResult, datetime_now: &DateTime<Local>, confi
     // Absent from a run that named no module, the same way the section is absent from the printed
     // report: a consumer that never asked for a second axis is not handed one holding everything
     if result.has_modules() {
-        members.push(format!("  \"modules\": {}", create_modules_array(result, config)));
+        members.push(format!("  \"modules\": {}", create_modules_array(result, &file_rows, config)));
     }
     // The only volatile block apart from the timestamp, so hiding the timing is also what makes the
     // document repeatable enough to hash or to compare against a stored one
@@ -444,23 +452,52 @@ fn create_total_object(total: &Stats, keywords_counted: bool) -> String {
 // The leftovers of the named modules carry 'null' and not the '(unnamed)' the report prints: a marker
 // spelled as a name is one a real module could be called, and a machine consumer grouping by that
 // key would silently merge the two.
-fn create_modules_array(result: &RunResult, config: &Configuration) -> String {
-    let entries = result.modules.iter().map(|module| {
+fn create_modules_array(result: &RunResult, file_rows: &[result_printer::FileRowsOfModule],
+        config: &Configuration) -> String
+{
+    let entries = result.modules.iter().zip(file_rows).map(|(module, files)| {
         let names = result_printer::get_sorted_language_names(&module.per_language, config.view.sort_by);
         let hidden = config.view.top_n.map_or(0, |top| names.len().saturating_sub(top));
         let shown = &names[..names.len() - hidden];
+        let files_hidden = files.values().map(|rows| rows.hidden).sum::<usize>();
+        let files = find_shown_files(files);
         let name = module.name.as_ref().map_or("null".to_owned(), |x| format!("\"{}\"", escape(x)));
         let members = [
             format!("      \"name\": {name}"),
             format!("      \"total\": {}", indent(&create_total_object(&module.total, !config.view.hidden.keywords))),
             format!("      \"languages\": {}", indent(&create_languages_array(shown, &module.per_language,
-                    &module.nested_languages, config))),
+                    &module.nested_languages, &files, config))),
             format!("      \"languages_hidden\": {hidden}"),
+            format!("      \"files_hidden\": {files_hidden}"),
         ];
         format!("    {{\n{}\n    }}", members.join(",\n"))
     }).collect::<Vec<_>>();
 
     format!("[\n{}\n  ]", entries.join(",\n"))
+}
+
+fn find_shown_files<'a>(of_module: &'a result_printer::FileRowsOfModule<'a>) -> FilesByLanguage<'a> {
+    of_module.iter().map(|(language, rows)|
+            (*language, rows.shown.iter().map(|(_, file)| *file).collect())).collect()
+}
+
+// The document's own 'languages' array is the run and not one part of it
+fn merge_file_rows<'a>(per_module: &'a [result_printer::FileRowsOfModule<'a>], sort_by: mezura_core::SortCriterion)
+        -> FilesByLanguage<'a>
+{
+    let mut merged: FilesByLanguage<'a> = HashMap::new();
+    for of_module in per_module {
+        for (language, rows) in of_module {
+            merged.entry(language).or_default().extend(rows.shown.iter().map(|(_, file)| *file));
+        }
+    }
+    if per_module.len() > 1 {
+        for files in merged.values_mut() {
+            files.sort_by(|one, other| result_printer::compare_files_by(one, other, sort_by));
+        }
+    }
+
+    merged
 }
 
 // The two blocks are shared with the top level, where they sit one level higher, so their closing
@@ -472,7 +509,8 @@ fn indent(block: &str) -> String {
 // An array and not an object keyed by language name, so that the order '--sort' chose survives and
 // so that no language can collide with a key of the document.
 fn create_languages_array(shown: &[String], per_language: &HashMap<String, Stats>,
-        nested_languages: &HashMap<String, HashMap<String, Stats>>, config: &Configuration) -> String
+        nested_languages: &HashMap<String, HashMap<String, Stats>>,
+        files: &FilesByLanguage, config: &Configuration) -> String
 {
     if shown.is_empty() {
         return String::from("[]");
@@ -480,10 +518,32 @@ fn create_languages_array(shown: &[String], per_language: &HashMap<String, Stats
 
     let entries = shown.iter().filter_map(|name| {
         Some(create_language_object(name, per_language.get(name)?, !config.view.hidden.keywords,
-                nested_languages.get(name).filter(|_| !config.view.hidden.nested_languages)))
+                !config.view.hidden.nested_languages, nested_languages.get(name),
+                files.get(name.as_str()).map(Vec::as_slice).unwrap_or_default()))
     }).collect::<Vec<_>>();
 
     format!("[\n{}\n  ]", entries.join(",\n"))
+}
+
+fn create_files_array(files: &[&mezura_core::FileEntry], nested_shown: bool) -> String {
+    let entries = files.iter().map(|file| {
+        let stats = &file.stats;
+        let mut members = vec![
+            format!("          \"path\": \"{}\"", escape(&file.path)),
+            format!("          \"lines\": {}", stats.lines),
+            format!("          \"code\": {}", stats.code_lines),
+            format!("          \"comments\": {}", stats.comment_lines),
+            format!("          \"extra\": {}", stats.calculate_extra_lines()),
+            format!("          \"bytes\": {}", stats.bytes),
+        ];
+        if nested_shown && !file.nested_languages.is_empty() {
+            members.push(format!("          \"nested_languages\": {}",
+                    create_nested_languages_array(&file.nested_languages).replace('\n', "\n    ")));
+        }
+        format!("        {{\n{}\n        }}", members.join(",\n"))
+    }).collect::<Vec<_>>();
+
+    format!("[\n{}\n      ]", entries.join(",\n"))
 }
 
 // Absent for a language that holds nothing, so an older document and this one read alike
@@ -500,8 +560,9 @@ fn create_nested_languages_array(sections: &HashMap<String, Stats>) -> String {
     format!("[\n{}\n      ]", entries.join(",\n"))
 }
 
-fn create_language_object(name: &str, info: &Stats, keywords_counted: bool,
-        sections: Option<&HashMap<String, Stats>>) -> String
+// 'nested_shown' reaches the language's own breakdown and the one inside each of its files alike
+fn create_language_object(name: &str, info: &Stats, keywords_counted: bool, nested_shown: bool,
+        sections: Option<&HashMap<String, Stats>>, files: &[&mezura_core::FileEntry]) -> String
 {
     let mut members = vec![
         format!("      \"name\": \"{}\"", escape(name)),
@@ -518,8 +579,12 @@ fn create_language_object(name: &str, info: &Stats, keywords_counted: bool,
     if keywords_counted {
         members.push(format!("      \"keywords\": {}", create_keywords_object(&info.keyword_occurences, 8)));
     }
-    if let Some(sections) = sections.filter(|x| !x.is_empty()) {
+    if let Some(sections) = sections.filter(|x| nested_shown && !x.is_empty()) {
         members.push(format!("      \"nested_languages\": {}", create_nested_languages_array(sections)));
+    }
+    // Named after the command and not 'files', which this object already uses for how many there are
+    if !files.is_empty() {
+        members.push(format!("      \"by_file\": {}", create_files_array(files, nested_shown)));
     }
 
     format!("    {{\n{}\n    }}", members.join(",\n"))
@@ -697,7 +762,7 @@ mod tests {
     fn result_of(per_language: HashMap<String, Stats>, total: Stats,
             faulty_files: Vec<FaultyFileDetails>, files_present: FilesPresent) -> RunResult
     {
-        RunResult {per_language, modules: Vec::new(), nested_languages: Default::default(), total, faulty_files,
+        RunResult {per_language, modules: Vec::new(), nested_languages: HashMap::new(), total, faulty_files,
                 files_present, targets: Vec::new(), unreadable_dirs: Vec::new(),
                 performance: mezura_core::Performance { duration_millis: 1180, threads: mezura_core::Threads::new(2, 8) }}
     }
@@ -808,7 +873,8 @@ mod tests {
         let module_of = |name: Option<&str>, language: &str, lines: usize, files: usize| {
             let per_language = hashmap![language.to_owned() => stats_of(files, lines * 10, lines, lines, 0, HashMap::new())];
             let total = Stats::total_of(&per_language);
-            mezura_core::ModuleResult {name: name.map(str::to_owned), per_language, total, nested_languages: Default::default()}
+            mezura_core::ModuleResult {name: name.map(str::to_owned), per_language, total,
+                    nested_languages: HashMap::new(), files: HashMap::new()}
         };
         let mut result = result_of(
             hashmap!["Rust".to_owned() => stats_of(2, 1000, 100, 100, 0, HashMap::new()),
@@ -964,7 +1030,7 @@ mod tests {
             let per_language = hashmap![language.to_owned() =>
                     stats_of(1, lines * 10, lines, lines, 0, hashmap!["structs".to_owned() => structs])];
             mezura_core::ModuleResult {name: name.map(str::to_owned), total: Stats::total_of(&per_language), per_language,
-                    nested_languages: Default::default()}
+                    nested_languages: HashMap::new(), files: HashMap::new()}
         };
         let with_modules = |source, modules: Vec<mezura_core::ModuleResult>| {
             let mut reading = reading_of(source, HashMap::new());

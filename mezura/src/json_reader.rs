@@ -132,7 +132,7 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
     let modules = match root.get("modules") {
         Some(x) => parse_modules(read_array(x, "modules")?)?,
         None => vec![ModuleResult { name: None, per_language: per_language.clone(), total: total.clone(),
-                nested_languages: nested_languages.clone() }]
+                nested_languages: nested_languages.clone(), files: HashMap::new() }]
     };
 
     let (scope, targets) = parse_scope(scope)?;
@@ -255,7 +255,10 @@ fn parse_modules(entries: &[Value]) -> Result<Vec<ModuleResult>, DocumentError> 
             total: parse_stats(read_nested(entry, "total", &at)?, &join_location(&at, "total"))?,
             per_language: parse_languages(read_list(entry, "languages", &at)?, &join_location(&at, "languages"))?,
             nested_languages: parse_nested_languages(read_list(entry, "languages", &at)?,
-                    &join_location(&at, "languages"))?
+                    &join_location(&at, "languages"))?,
+            // The file rows a document carries are not read back: what a comparison compares is
+            // languages, and a file that was renamed between two readings has no answer yet
+            files: HashMap::new()
         })
     }).collect()
 }
@@ -402,10 +405,10 @@ mod tests {
         let result = RunResult {
             total: Stats::total_of(&per_language),
             modules: vec![
-                ModuleResult { name: Some("backend".to_owned()), per_language: hashmap!["Rust".to_owned() => rust], total: Stats::total_of(&hashmap!["Rust".to_owned() => parse_stats(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 0])]), nested_languages: Default::default() },
-                ModuleResult { name: None, per_language: hashmap!["HTML".to_owned() => html.clone()], total: Stats::total_of(&hashmap!["HTML".to_owned() => html]), nested_languages: Default::default() }],
+                ModuleResult { name: Some("backend".to_owned()), per_language: hashmap!["Rust".to_owned() => rust], total: Stats::total_of(&hashmap!["Rust".to_owned() => parse_stats(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 0])]), nested_languages: HashMap::new(), files: HashMap::new() },
+                ModuleResult { name: None, per_language: hashmap!["HTML".to_owned() => html.clone()], total: Stats::total_of(&hashmap!["HTML".to_owned() => html]), nested_languages: HashMap::new(), files: HashMap::new() }],
             per_language,
-            nested_languages: Default::default(),
+            nested_languages: HashMap::new(),
             faulty_files: vec![FaultyFileDetails::new("D:\\dev\\a \"b\".rs".to_owned(), "stream did not contain valid UTF-8".to_owned(), 412)],
             files_present: FilesPresent { total_files: 9, relevant_files: 3, excluded_files: 4 },
             performance: Performance { duration_millis: 1180, threads: Threads::new(2, 8) },
@@ -534,7 +537,7 @@ mod tests {
         // without the block reads back as has to be that and not an absence of modules
         let (mut plain, config) = populated();
         plain.modules = vec![ModuleResult { name: None, per_language: plain.per_language.clone(), total: plain.total.clone(),
-                nested_languages: Default::default() }];
+                nested_languages: HashMap::new(), files: HashMap::new() }];
         let written = create_document(&plain, &Local::now(), &config);
         assert!(!written.contains("\"modules\""));
 

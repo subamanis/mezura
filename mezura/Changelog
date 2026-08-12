@@ -12,6 +12,13 @@ Main changes:
       "===> targets", so edit or re-save old configurations or their targets will be ignored. The
       JSON documents and log entries record the list as "targets" too, so entries written before
       this change cannot be compared against; delete them.
+  -> New "--by-file" command: every counted file gets a row of its own under the language it was
+      counted as, with its lines split into code, comments and everything else. Without a number it
+      prints every file; "--by-file 20" prints the twenty biggest of each language, by whatever
+      "--sort" is in effect, and says above the total how many it left out. A language whose files
+      were cut ends on a branch left hanging, so a tree drawn shut is the whole of what there is.
+      Long paths lose whole directories out of their middle. The JSON document carries the same
+      rows under each language, as "by_file".
   -> Every piece of printed text can now be styled, not just the four colors of the overview.
       49 tokens are exposed, and each takes a color plus any of bold, italic, underline, dim and
       reverse, in any order. The cells of the live progress bar also take a "hex..hex" gradient
@@ -232,7 +239,7 @@ New commands:
       every printed number. The character itself is accepted too, as in '--number-separator _'.
   -> --decimal-separator dot|comma : chooses the character that separates the decimals of the sizes,
       the percentages and the execution time. Together with the one above, '1.559.486' and '716,2'.
-  -> --sort lines|files|code|size|name : chooses the order of the languages.
+  -> --sort lines|files|code|comments|extra|size|name : chooses the order of the languages.
   -> --version : prints the version of the binary and the date it was released on.
   -> --restore : writes back every file that ships with mezura and is not in your data directory
       any more, the language files, the themes and the default configuration, and says which ones.

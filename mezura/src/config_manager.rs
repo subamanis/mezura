@@ -35,6 +35,7 @@ pub const NUMBER_SEPARATOR   :&str   = "number-separator";
 pub const DECIMAL_SEPARATOR  :&str   = "decimal-separator";
 pub const SORT               :&str   = "sort";
 pub const TOP                :&str   = "top";
+pub const BY_FILE            :&str   = "by-file";
 pub const LOG                :&str   = "log";
 pub const COMPARE_LEVEL     :&str   = "compare";
 pub const SAVE               :&str   = "save";
@@ -112,6 +113,7 @@ pub struct ViewConfig {
     pub decimal_separator: DecimalSeparator,
     pub sort_by: SortCriterion,
     pub top_n: Option<usize>,
+    pub by_file: Option<ByFile>,
     pub theme: Theme
 }
 
@@ -156,6 +158,7 @@ impl Default for ViewConfig {
             decimal_separator: DecimalSeparator::default(),
             sort_by: SortCriterion::default(),
             top_n: None,
+            by_file: None,
             theme: Theme::default()
         }
     }
@@ -326,6 +329,37 @@ impl Layout {
             Self::Table => "table",
             Self::Boxed => "boxed",
             Self::Matrix => "matrix"
+        }
+    }
+}
+
+// Decides what is counted as well as what is shown: a run with none of this keeps no file rows
+#[derive(Debug,PartialEq,Eq,Clone,Copy)]
+pub enum ByFile {
+    Capped(usize),
+    All
+}
+
+impl ByFile {
+    // Zero is the uncapped form, so a configuration file can carry this as a plain number
+    pub fn parse(value: &str) -> Option<ByFile> {
+        match super::args::parse_usize_value(value, 0, usize::MAX)? {
+            0 => Some(Self::All),
+            rows => Some(Self::Capped(rows))
+        }
+    }
+
+    pub fn to_text(self) -> String {
+        match self {
+            Self::Capped(rows) => rows.to_string(),
+            Self::All => String::from("0")
+        }
+    }
+
+    pub fn shown_out_of(&self, files: usize) -> usize {
+        match self {
+            Self::Capped(rows) => files.min(*rows),
+            Self::All => files
         }
     }
 }
@@ -532,7 +566,7 @@ impl TypedExplicitlyOnCommandLine {
             targets: _, targets_source: _, threads: _, should_show_faulty_files: _, theme_name: _,
             log: _, compare_level: _, config_name_to_save: _, config_name_to_load: _,
             theme_name_to_save: _, bar_thickness: _, progress_bar: _, number_separator: _, decimal_separator: _,
-            layout: _, output: _, diff_against: _, sort_by: _, top_n: _, styles: _,
+            layout: _, output: _, diff_against: _, sort_by: _, top_n: _, by_file: _, styles: _,
             config_styles: _, theme_styles: _, typed_explicitly: _ } = builder;
 
         TypedExplicitlyOnCommandLine {
@@ -589,6 +623,7 @@ pub struct ConfigurationBuilder {
     pub diff_against:             Option<String>,
     pub sort_by:                  Option<SortCriterion>,
     pub top_n:                    Option<usize>,
+    pub by_file:                  Option<ByFile>,
     pub styles:                   Option<Vec<(String,String)>>,
     pub config_styles:            Option<Vec<(String,String)>>,
     pub theme_styles:             Option<Vec<(String,String)>>,
@@ -619,6 +654,7 @@ impl ConfigurationBuilder {
         if self.layout.is_none() {self.layout = config.layout};
         if self.sort_by.is_none() {self.sort_by = config.sort_by};
         if self.top_n.is_none() {self.top_n = config.top_n};
+        if self.by_file.is_none() {self.by_file = config.by_file};
         self
     }
 
@@ -651,8 +687,10 @@ impl ConfigurationBuilder {
                 braces_as_code: self.braces_as_code.unwrap_or(engine_defaults.braces_as_code),
                 should_search_in_dotted: self.should_search_in_dotted.unwrap_or(engine_defaults.should_search_in_dotted),
                 no_gitignore: self.no_gitignore.unwrap_or(engine_defaults.no_gitignore),
-                // The one flag that answers both questions
-                count_keywords: !hidden.keywords
+                // The two flags that answer both questions: what is counted and what is shown. A
+                // comparison prints no report for file rows to appear in, so none are kept there.
+                count_keywords: !hidden.keywords,
+                collect_files: self.by_file.is_some() && self.diff_against.is_none()
             },
             view: ViewConfig {
                 version: VERSION_ID,
@@ -673,6 +711,7 @@ impl ConfigurationBuilder {
                 decimal_separator: self.decimal_separator.unwrap_or_default(),
                 sort_by: self.sort_by.unwrap_or_default(),
                 top_n: self.top_n,
+                by_file: self.by_file,
                 theme: super::theme::resolve(self.theme_styles.as_deref().unwrap_or_default(),
                         self.config_styles.as_deref().unwrap_or_default(), self.styles.as_deref().unwrap_or_default())
             }
@@ -747,8 +786,8 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     let (mut exclude_dirs, mut languages_of_interest, mut excluded_languages, mut forced_languages, mut threads, mut braces_as_code,
          mut search_in_dotted, mut show_faulty_files, mut config_name_to_save, mut hidden, mut log,
          mut compare_level, mut config_name_to_load, mut no_gitignore, mut theme_name, mut theme_name_to_save, mut styles, mut bar_thickness,
-         mut progress_bar, mut number_separator, mut decimal_separator, mut layout, mut output, mut diff_against, mut sort_by, mut top_n)
-         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
+         mut progress_bar, mut number_separator, mut decimal_separator, mut layout, mut output, mut diff_against, mut sort_by, mut top_n, mut by_file)
+         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
     for command in options {
         let (command_name, arguments) = match command.find(" ") {
             Some(index) => command.split_at(index),
@@ -867,6 +906,20 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                     return Err(ArgParsingError::IncorrectCommandArgs(TOP.to_owned()))
                 }
             }
+        } else if command_name == BY_FILE {
+            // The only command whose argument is optional. Without one it hides nothing, the way
+            // '--top' shows every language until a number says otherwise.
+            if arguments.trim().is_empty() {
+                by_file = Some(ByFile::All);
+            } else {
+                match ByFile::parse(arguments) {
+                    Some(x) => by_file = Some(x),
+                    None => {
+                        message_printer::print_help_message_for_command(BY_FILE);
+                        return Err(ArgParsingError::IncorrectCommandArgs(BY_FILE.to_owned()))
+                    }
+                }
+            }
         } else if command_name == SORT {
             match SortCriterion::parse(arguments) {
                 Some(x) => sort_by = Some(x),
@@ -982,13 +1035,14 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         }
     }
 
-    print_warnings_for_commands_that_need_a_loaded_configuration(&config_name_to_save, &config_name_to_load, &log, &compare_level, &diff_against);
+    print_warnings_for_commands_that_need_a_loaded_configuration(&config_name_to_save, &config_name_to_load,
+            &log, &compare_level, &diff_against, &by_file);
 
     let mut config_builder = ConfigurationBuilder {
         targets, targets_source: None, exclude_dirs, languages_of_interest, excluded_languages, forced_languages, threads, braces_as_code,
         should_search_in_dotted: search_in_dotted, should_show_faulty_files: show_faulty_files,
         hidden, no_gitignore, theme_name, theme_name_to_save, log, compare_level,
-        config_name_to_save, config_name_to_load, styles, bar_thickness, progress_bar, number_separator, decimal_separator, layout, output, diff_against, sort_by, top_n,
+        config_name_to_save, config_name_to_load, styles, bar_thickness, progress_bar, number_separator, decimal_separator, layout, output, diff_against, sort_by, top_n, by_file,
         config_styles: None, theme_styles: None, typed_explicitly: TypedExplicitlyOnCommandLine::default()
     };
     // Before the configuration files below fill anything in, which is what makes the answer the
@@ -1080,7 +1134,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
     let ConfigurationBuilder {
             targets, exclude_dirs, forced_languages, threads, braces_as_code, should_search_in_dotted,
             should_show_faulty_files, hidden, no_gitignore, theme_name, compare_level, bar_thickness,
-            progress_bar, number_separator, decimal_separator, layout, sort_by, top_n,
+            progress_bar, number_separator, decimal_separator, layout, sort_by, top_n, by_file,
             // these two accept whatever they are given, so a config can hold no invalid value for
             // them and they never reach 'invalid_fields'
             languages_of_interest: _, excluded_languages: _,
@@ -1106,6 +1160,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             THEME => theme_name.is_some(),
             SORT => sort_by.is_some(),
             TOP => top_n.is_some(),
+            BY_FILE => by_file.is_some(),
             BAR_THICKNESS => bar_thickness.is_some(),
             PROGRESS_BAR => progress_bar.is_some(),
             NUMBER_SEPARATOR => number_separator.is_some(),
@@ -1127,7 +1182,8 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
 }
 
 fn print_warnings_for_commands_that_need_a_loaded_configuration(config_name_to_save: &Option<String>, config_name_to_load: &Option<String>,
-        log: &Option<LogOption>, compare_level: &Option<usize>, diff_against: &Option<String>)
+        log: &Option<LogOption>, compare_level: &Option<usize>, diff_against: &Option<String>,
+        by_file: &Option<ByFile>)
 {
     // Printed here rather than kept for later, because this runs before the theme is resolved and
     // the plain color is the honest fallback; kept as well, so a machine consumer learns that a
@@ -1143,6 +1199,13 @@ fn print_warnings_for_commands_that_need_a_loaded_configuration(config_name_to_s
     // reason the entry will not be written is enough.
     if let Some(log) = log && log.should_log && diff_against.is_some() {
         ignored(LOG, "'--log' command will be ignored: a comparison is not logged.".to_owned());
+    }
+
+    // A document holds no file rows to compare against, and a run that showed its own beside a
+    // comparison would be reporting every one of them as new
+    if by_file.is_some() && diff_against.is_some() {
+        ignored(BY_FILE, "'--by-file' command will be ignored: a comparison is between languages, \
+and the document it reads holds no files.".to_owned());
     }
 
     if config_name_to_load.is_none() {
@@ -1303,6 +1366,35 @@ mod tests {
                 create_config_from_args("./ --log   this is a test ").unwrap());
         assert_eq!(conf("./", |c| {c.view.set_log_option(LogOption::new(None));}),
                 create_config_from_args("./ --log  ").unwrap());
+    }
+
+    // The only command where a zero means "all of them" rather than "none"
+    #[test]
+    fn by_file_takes_a_number_or_nothing_and_reads_zero_as_every_file() {
+        let by_file = |command: &str| create_config_from_args(command).unwrap().view.by_file;
+
+        assert_eq!(None, by_file("./"));
+        assert_eq!(Some(ByFile::All), by_file("./ --by-file"));
+        assert_eq!(Some(ByFile::All), by_file("./ --by-file   "));
+        assert_eq!(Some(ByFile::Capped(20)), by_file("./ --by-file 20"));
+        assert_eq!(Some(ByFile::All), by_file("./ --by-file 0"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs(BY_FILE.to_owned())),
+                create_config_from_args("./ --by-file nope"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs(BY_FILE.to_owned())),
+                create_config_from_args("./ --by-file -3"));
+
+        // Asking for the rows is what makes the counting keep them, so the two halves cannot drift
+        assert!(!create_config_from_args("./").unwrap().engine.collect_files);
+        assert!(create_config_from_args("./ --by-file").unwrap().engine.collect_files);
+
+        // Under '--diff' nothing is collected, but the value is kept or '--save' would drop it
+        let compared = create_config_from_args("./ --by-file 8 --diff old.json").unwrap();
+        assert!(!compared.engine.collect_files);
+        assert_eq!(Some(ByFile::Capped(8)), compared.view.by_file);
+
+        // What a configuration file stores is what the command line accepts back
+        assert_eq!(Some(ByFile::All), ByFile::parse(&ByFile::All.to_text()));
+        assert_eq!(Some(ByFile::Capped(7)), ByFile::parse(&ByFile::Capped(7).to_text()));
     }
 
     #[test]
@@ -1667,7 +1759,8 @@ mod tests {
         let test_file_path = &crate::paths::PERSISTENT_APP_PATHS.config_dir.clone().add("/test002.txt");
         let _ = std::fs::remove_file(test_file_path);
         std::fs::write(test_file_path, "===> targets\nfrontend=\n\n===> sort\nnope\n\n===> top\nnope\n\n===> bar-thickness\nnope\n\n\
-                ===> progress-bar\nnope\n\n===> number-separator\nnope\n\n===> decimal-separator\nnope\n\n===> force-language\nnope\n").unwrap();
+                ===> progress-bar\nnope\n\n===> number-separator\nnope\n\n===> decimal-separator\nnope\n\n===> force-language\nnope\n\n\
+                ===> by-file\nnope\n").unwrap();
 
         // A target that does not parse is a target whose files would not be counted, so with no
         // target on the command line to take its place the run stops instead of counting less
@@ -1678,7 +1771,8 @@ mod tests {
                 create_config_from_args("./ --load test002"));
 
         let rescued = create_config_from_args(
-                "./ --load test002 --sort name --top 3 --bar-thickness fat --progress-bar hash --number-separator dot --decimal-separator comma --force-language m=matlab").unwrap();
+                "./ --load test002 --sort name --top 3 --bar-thickness fat --progress-bar hash --number-separator dot --decimal-separator comma --force-language m=matlab --by-file 8").unwrap();
+        assert_eq!(Some(ByFile::Capped(8)), rescued.view.by_file);
         assert_eq!(vec![Target::of(mezura_core::engine::targets::convert_to_absolute("./"))], rescued.engine.targets);
         assert_eq!(SortCriterion::Name, rescued.view.sort_by);
         assert_eq!(Some(3), rescued.view.top_n);

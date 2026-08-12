@@ -140,7 +140,9 @@ pub struct EngineConfig {
     pub no_gitignore: bool,
     // Hiding the keywords stops the counting too, since nothing else reads them and the work would
     // be thrown away.
-    pub count_keywords: bool
+    pub count_keywords: bool,
+    // Off by default: one entry per file, where the run otherwise holds one per language
+    pub collect_files: bool
 }
 
 // Written out rather than derived, because a derived 'count_keywords' would be false and anyone
@@ -157,7 +159,8 @@ impl Default for EngineConfig {
             braces_as_code: DEF_BRACES_AS_CODE,
             should_search_in_dotted: DEF_SEARCH_IN_DOTTED,
             no_gitignore: DEF_NO_GITIGNORE,
-            count_keywords: true
+            count_keywords: true,
+            collect_files: false
         }
     }
 }

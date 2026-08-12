@@ -70,6 +70,7 @@ impl RunResult {
                 name: modules.name_of(id as ModuleId).map(str::to_owned),
                 per_language: HashMap::new(),
                 nested_languages: HashMap::new(),
+                files: HashMap::new(),
                 total: Stats::default()
             }).collect(),
             faulty_files: Vec::new(),
@@ -89,6 +90,8 @@ pub struct ModuleResult {
     pub per_language: HashMap<String, Stats>,
     // The same decomposition 'RunResult::nested_languages' holds, for this module's files alone
     pub nested_languages: HashMap<String, HashMap<String, Stats>>,
+    // The breakdown of 'per_language', empty unless 'EngineConfig.collect_files' asked for it
+    pub files: HashMap<String, Vec<FileEntry>>,
     pub total: Stats
 }
 
@@ -96,6 +99,16 @@ impl ModuleResult {
     pub fn sort_languages_by(&self, criterion: SortCriterion) -> Vec<(&str, &Stats)> {
         sort_languages_by(&self.per_language, criterion)
     }
+}
+
+// What the sections weigh is already inside 'stats', the way a container language's row holds all
+// of its files' lines.
+#[derive(Debug,Clone)]
+pub struct FileEntry {
+    // With forward slashes, whichever way the platform writes them
+    pub path: String,
+    pub stats: Stats,
+    pub nested_languages: HashMap<String, Stats>
 }
 
 // 'threads' is what the run actually got, not what was asked for: the operating system may grant
@@ -121,6 +134,8 @@ pub enum SortCriterion {
     #[default]
     Lines,
     Code,
+    Comments,
+    Extra,
     Size,
     Name
 }
@@ -134,6 +149,8 @@ impl SortCriterion {
             "files" => Some(Self::Files),
             "lines" => Some(Self::Lines),
             "code" => Some(Self::Code),
+            "comments" => Some(Self::Comments),
+            "extra" => Some(Self::Extra),
             "size" => Some(Self::Size),
             "name" => Some(Self::Name),
             _ => None
@@ -145,8 +162,23 @@ impl SortCriterion {
             Self::Files => "files",
             Self::Lines => "lines",
             Self::Code => "code",
+            Self::Comments => "comments",
+            Self::Extra => "extra",
             Self::Size => "size",
             Self::Name => "name"
+        }
+    }
+
+    // 'Name' has no figure and every row answers 0, leaving the order to the caller's tiebreak
+    pub fn get_value_of(&self, stats: &Stats) -> usize {
+        match self {
+            Self::Files => stats.files,
+            Self::Size => stats.bytes,
+            Self::Lines => stats.lines,
+            Self::Code => stats.code_lines,
+            Self::Comments => stats.comment_lines,
+            Self::Extra => stats.calculate_extra_lines(),
+            Self::Name => 0
         }
     }
 }
@@ -261,21 +293,13 @@ impl Stats {
 
 // Shared by the whole run and by one module of it, which are the same question asked of two maps.
 fn sort_languages_by(per_language: &HashMap<String, Stats>, criterion: SortCriterion) -> Vec<(&str, &Stats)> {
-    let value_of = |stats: &Stats| match criterion {
-        SortCriterion::Files => stats.files,
-        SortCriterion::Size => stats.bytes,
-        SortCriterion::Lines => stats.lines,
-        SortCriterion::Code => stats.code_lines,
-        SortCriterion::Name => 0
-    };
-
     let mut rows = per_language.iter().map(|(name, stats)| (name.as_str(), stats)).collect::<Vec<_>>();
     if criterion == SortCriterion::Name {
         rows.sort_by_key(|(name, _)| name.to_lowercase());
     } else {
         // The name breaks every tie, with case folded, so two languages of equal size cannot swap
         // places between two runs of the same command because a map iterated differently.
-        rows.sort_by(|a, b| value_of(b.1).cmp(&value_of(a.1))
+        rows.sort_by(|a, b| criterion.get_value_of(b.1).cmp(&criterion.get_value_of(a.1))
                 .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
     }
 

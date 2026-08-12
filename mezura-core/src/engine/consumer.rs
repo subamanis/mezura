@@ -2,20 +2,20 @@ use std::{collections::HashMap, sync::{Arc, atomic::{AtomicBool, AtomicU64, Orde
 
 use crossbeam_deque::{Injector, Steal, Worker};
 
-use crate::{NestedLanguageMapMut, EngineConfig, FaultyFileDetails, FaultyFilesListMut, Language, ParsableFile,
-        ScanProgress, Stats, StatsMapMut, phase_timing};
+use crate::{FileEntry, FilesPerModuleMut, NestedLanguageMapMut, EngineConfig, FaultyFileDetails,
+        FaultyFilesListMut, Language, ParsableFile, ScanProgress, Stats, StatsMapMut, phase_timing};
 use crate::engine::file_parser;
 use crate::languages::NestedLanguageDefinitions;
 
 pub fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
-        stats_per_module: StatsMapMut, nested_per_module: NestedLanguageMapMut,
+        stats_per_module: StatsMapMut, nested_per_module: NestedLanguageMapMut, files_per_module: FilesPerModuleMut,
         language_map: Arc<HashMap<String,Language>>, nested_definitions: Arc<NestedLanguageDefinitions>,
         config: Arc<EngineConfig>, started: Instant, counting_ended: Arc<AtomicU64>,
         progress: Arc<ScanProgress>) -> std::io::Result<JoinHandle<()>>
 {
     thread::Builder::new().name(format!("consumer-{id}")).spawn(move || {
         start_parsing_files(id, files_injector, faulty_files, finish_condition, stats_per_module,
-                nested_per_module, language_map, nested_definitions, config, &progress);
+                nested_per_module, files_per_module, language_map, nested_definitions, config, &progress);
         // The last thing this thread does, and the only honest answer to how long the counting took:
         // 'run' joins these threads after calling the caller's callback, so its own clock cannot tell
         // the two apart.
@@ -24,7 +24,7 @@ pub fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>
 }
 
 pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
-    stats_per_module: StatsMapMut, nested_per_module: NestedLanguageMapMut,
+    stats_per_module: StatsMapMut, nested_per_module: NestedLanguageMapMut, files_per_module: FilesPerModuleMut,
     language_map: Arc<HashMap<String,Language>>, nested_definitions: Arc<NestedLanguageDefinitions>,
     config: Arc<EngineConfig>, progress: &ScanProgress)
 {
@@ -40,6 +40,7 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
             vec![HashMap::new(); modules];
     let mut local_nested: Vec<HashMap<String, HashMap<String, Stats>>> =
             vec![HashMap::new(); modules];
+    let mut local_files: Vec<HashMap<String, Vec<FileEntry>>> = vec![HashMap::new(); modules];
     // A batch and not one file at a time. With four of these threads per core they all reach for the
     // same queue head between files, and the cost is not the atomic but the losing side: a contended
     // steal comes back as Retry, which the arm below answers by yielding, buying a whole scheduling
@@ -79,6 +80,7 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                         let keywords = &language_map.get(lang_name).unwrap().keywords;
                         let bytes = buf.len();
                         let module = parsable_file.module as usize;
+                        let mut of_this_file = config.collect_files.then(HashMap::<String, Stats>::new);
                         // The sections are the breakdown of this file, booked beside the row and
                         // never into it; what they weigh is already inside the whole below
                         for section in &report.sections {
@@ -87,20 +89,35 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                             local_nested[module].entry(lang_name.to_owned()).or_default()
                                     .entry(section.language.clone()).or_default()
                                     .add_file(&section.stats, section.bytes, section_keywords);
+                            if let Some(sections) = &mut of_this_file {
+                                sections.entry(section.language.clone()).or_default()
+                                        .add(&Stats::new(1, section.bytes, section.stats.lines,
+                                                section.stats.code_lines, section.stats.comment_lines, HashMap::new()));
+                            }
                         }
                         // The whole file weighs on its own language's row: a container file is one
                         // file of its language, all of its lines included
+                        let whole = report.into_whole();
+                        // Without its keywords: a map per file is what would cost real memory over a
+                        // large tree, and no report shows them per file
+                        if let Some(nested_languages) = of_this_file {
+                            let entry = FileEntry {
+                                    path: spell_out(&parsable_file.path),
+                                    stats: Stats::new(1, bytes, whole.lines, whole.code_lines,
+                                            whole.comment_lines, HashMap::new()),
+                                    nested_languages };
+                            // Not 'entry(lang_name.to_owned())', which allocates the name per file
+                            match local_files[module].get_mut(lang_name) {
+                                Some(bucket) => bucket.push(entry),
+                                None => { local_files[module].insert(lang_name.to_owned(), vec![entry]); }
+                            }
+                        }
                         local_stats[module].entry(lang_name.to_owned())
-                                .or_default().add_file(&report.into_whole(), bytes, keywords);
+                                .or_default().add_file(&whole, bytes, keywords);
                     },
-                    // Separators normalised because the scan joins with the platform's own while the
-                    // target it started from was resolved to forward slashes, and the two halves of
-                    // one path then disagree in every report. Lossy because a path need not be UTF-8
-                    // and this string is only ever shown.
                     Err(x) => {
                         progress.record_file_parsed(0);
-                        local_faulty.push(FaultyFileDetails::new(
-                                parsable_file.path.to_string_lossy().replace('\\', "/"), x,
+                        local_faulty.push(FaultyFileDetails::new(spell_out(&parsable_file.path), x,
                                 parsable_file.path.metadata().map_or(0, |m| m.len())))
                     }
                 }
@@ -162,5 +179,17 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
             }
         }
     }
+    if local_files.iter().any(|bucket| !bucket.is_empty()) {
+        let mut global = files_per_module.lock().unwrap();
+        for (module, bucket) in local_files.into_iter().enumerate() {
+            for (language, files) in bucket {
+                global[module].entry(language).or_default().extend(files);
+            }
+        }
+    }
     // println!("Thread {} finished, having done {} files.",_id,share);
+}
+
+fn spell_out(path: &std::path::Path) -> String {
+    crate::engine::targets::normalise_separators(&path.to_string_lossy()).into_owned()
 }

@@ -339,6 +339,96 @@ fn a_run_that_names_modules_and_finds_nothing_still_reports_them() {
     assert!(result.modules.iter().all(|x| x.total.lines == 0));
 }
 
+#[test]
+fn the_counts_of_each_file_are_kept_only_when_they_were_asked_for() {
+    let root = std::env::temp_dir().join("mezura-by-file-test");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("inner")).unwrap();
+    std::fs::write(root.join("a.rs"), "fn a() {}\n// one\n\nfn b() {}\n").unwrap();
+    std::fs::write(root.join("inner").join("b.rs"), "fn c() {}\n").unwrap();
+    std::fs::write(root.join("page.html"), "<html>\n<style>\np {color: red;}\n</style>\n</html>\n").unwrap();
+    let root_str = root.to_string_lossy().replace('\\', "/");
+
+    let counted = |collect_files: bool| {
+        let config = EngineConfig { collect_files, threads: Threads::new(1, 2),
+                ..EngineConfig::new([root_str.clone()]) };
+        let (languages, _) = Languages::shipped(&config);
+        run(&config, languages, None, |_| {}).unwrap()
+    };
+
+    let without = counted(false);
+    assert!(without.modules.iter().all(|module| module.files.is_empty()),
+            "the files were kept without being asked for");
+
+    let result = counted(true);
+    std::fs::remove_dir_all(&root).unwrap();
+
+    let files_of = |language: &str| result.modules.iter()
+            .flat_map(|module| module.files.get(language)).flatten().collect::<Vec<_>>();
+    let mut paths = result.modules.iter().flat_map(|module| module.files.values()).flatten()
+            .map(|file| file.path.clone()).collect::<Vec<_>>();
+    paths.sort();
+    assert_eq!(vec![format!("{root_str}/a.rs"), format!("{root_str}/inner/b.rs"),
+            format!("{root_str}/page.html")], paths);
+
+    // The rows of one language add up to what that language's own row says
+    let rust = files_of("Rust");
+    let whole = result.per_language.get("Rust").unwrap();
+    assert_eq!(whole.lines, rust.iter().map(|file| file.stats.lines).sum::<usize>());
+    assert_eq!(whole.code_lines, rust.iter().map(|file| file.stats.code_lines).sum::<usize>());
+    assert_eq!(whole.comment_lines, rust.iter().map(|file| file.stats.comment_lines).sum::<usize>());
+    assert_eq!(whole.files, rust.len());
+
+    // The CSS inside the page is booked beside the file and is already inside its lines
+    let page = files_of("HTML")[0];
+    let css = page.nested_languages.get("CSS").expect("the style block was not kept with its file");
+    assert!(css.lines > 0 && css.lines < page.stats.lines,
+            "the section holds {} of the file's {} lines", css.lines, page.stats.lines);
+
+    assert_eq!(result.total.files, paths.len());
+}
+
+// A run with one module cannot say this: every index into the per-module lists is zero there, so a
+// list handed to the wrong module would pass every assertion above.
+#[test]
+fn each_module_keeps_the_files_that_were_counted_under_it() {
+    let root = std::env::temp_dir().join("mezura-by-file-modules-test");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("web")).unwrap();
+    std::fs::create_dir_all(root.join("api")).unwrap();
+    std::fs::write(root.join("web").join("app.js"), "let a = 1;\nlet b = 2;\n").unwrap();
+    std::fs::write(root.join("web").join("view.js"), "let c = 3;\n").unwrap();
+    std::fs::write(root.join("api").join("main.rs"), "fn main() {}\n").unwrap();
+    let root_str = root.to_string_lossy().replace('\\', "/");
+
+    let config = EngineConfig { collect_files: true, threads: Threads::new(2, 4),
+            targets: vec![Target::named("web", format!("{root_str}/web")),
+                    Target::named("api", format!("{root_str}/api"))],
+            ..EngineConfig::new([root_str.clone()]) };
+    let (languages, _) = Languages::shipped(&config);
+    let result = run(&config, languages, None, |_| {}).unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+
+    for module in &result.modules {
+        let name = module.name.as_deref().expect("both targets were named");
+        for file in module.files.values().flatten() {
+            assert!(file.path.starts_with(&format!("{root_str}/{name}/")),
+                    "'{}' was kept under the module '{name}'", file.path);
+        }
+        for (language, whole) in &module.per_language {
+            let of_this_language = module.files.get(language).unwrap();
+            assert_eq!(whole.lines, of_this_language.iter().map(|file| file.stats.lines).sum::<usize>());
+            assert_eq!(whole.files, of_this_language.len());
+        }
+    }
+    assert_eq!(vec![1, 2], {
+        let mut counts = result.modules.iter()
+                .map(|module| module.files.values().map(Vec::len).sum::<usize>()).collect::<Vec<_>>();
+        counts.sort();
+        counts
+    });
+}
+
 // A caller's own exclude pattern that does not parse used to bring the process down through an
 // 'expect' whose message blamed an argument parsing that never ran: only the command line validates
 // these, and this call never went through it. A mistake in the configuration comes back on the

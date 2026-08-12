@@ -184,14 +184,16 @@ fn determine_log_file_path(config: &Configuration) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use mezura_core::{FilesPresent, Performance, Stats, Threads};
 
     use super::*;
 
     fn result_with(unreadable: usize, faulty: usize) -> RunResult {
         RunResult {
-            per_language: std::collections::HashMap::new(), total: Stats::default(),
-            modules: Vec::new(), nested_languages: Default::default(), targets: Vec::new(),
+            per_language: HashMap::new(), total: Stats::default(),
+            modules: Vec::new(), nested_languages: HashMap::new(), targets: Vec::new(),
             files_present: FilesPresent {total_files: 1, relevant_files: 1, excluded_files: 0},
             performance: Performance {duration_millis: 0, threads: Threads::new(1, 1)},
             faulty_files: (0..faulty).map(|i| mezura_core::FaultyFileDetails::new(

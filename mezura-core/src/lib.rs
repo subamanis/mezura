@@ -21,8 +21,8 @@ pub use engine::config::{EngineConfig, Target, Threads};
 pub use engine::targets::TargetError;
 pub use languages::Languages;
 pub use progress::ScanProgress;
-pub use result::{FaultyFileDetails, FilesPresent, ModuleResult, Performance, RunError, RunResult,
-        SortCriterion, UnreadableDirDetails};
+pub use result::{FaultyFileDetails, FileEntry, FilesPresent, ModuleResult, Performance, RunError,
+        RunResult, SortCriterion, UnreadableDirDetails};
 pub use warnings::{Affects, Warning};
 
 #[cfg(test)]
@@ -53,6 +53,7 @@ pub(crate) type SharedLanguageLookup = Arc<engine::identity::LanguageLookup>;
 // nothing further down has two shapes to handle.
 pub(crate) type StatsMapMut = Arc<Mutex<Vec<HashMap<String,Stats>>>>;
 pub(crate) type NestedLanguageMapMut = Arc<Mutex<Vec<HashMap<String,HashMap<String,Stats>>>>>;
+pub(crate) type FilesPerModuleMut = Arc<Mutex<Vec<HashMap<String, Vec<FileEntry>>>>>;
 
 // Counts the directories and files named in 'config' and returns the figures.
 //
@@ -100,6 +101,8 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
     let stats_per_module : StatsMapMut =
             Arc::new(Mutex::new(make_language_stats(&language_map_ref, modules.count())));
     let nested_per_module : NestedLanguageMapMut =
+            Arc::new(Mutex::new(vec![HashMap::new(); modules.count()]));
+    let files_per_module : FilesPerModuleMut =
             Arc::new(Mutex::new(vec![HashMap::new(); modules.count()]));
 
     let mut files_present = FilesPresent::default();
@@ -153,8 +156,8 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
     let counting_ended = Arc::new(AtomicU64::new(0));
     for i in 0..config.threads.consumers() {
         match engine::consumer::start_parser_thread(i, files_injector.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
-                stats_per_module.clone(), nested_per_module.clone(), language_map_ref.clone(),
-                nested_definitions.clone(), config.clone(),
+                stats_per_module.clone(), nested_per_module.clone(), files_per_module.clone(),
+                language_map_ref.clone(), nested_definitions.clone(), config.clone(),
                 parsing_started_instant, counting_ended.clone(), progress.clone()) {
             Ok(handle) => consumer_handles.push(handle),
             Err(x) => last_refusal = Some(x)
@@ -234,6 +237,8 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
     let per_module = stats_guard.as_deref_mut().unwrap();
     let mut nested_guard = nested_per_module.lock();
     let nested_by_module = nested_guard.as_deref_mut().unwrap();
+    let mut files_guard = files_per_module.lock();
+    let files_by_module = files_guard.as_deref_mut().unwrap();
 
     let mut per_language = merge_over_modules(per_module);
     // Dropped before the total is summed, or the total's keyword map would name the keywords of
@@ -262,7 +267,8 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
             name: modules.name_of(id as ModuleId).map(str::to_owned),
             total: Stats::total_of(&of_this_module),
             per_language: of_this_module,
-            nested_languages: std::mem::take(&mut nested_by_module[id])
+            nested_languages: std::mem::take(&mut nested_by_module[id]),
+            files: std::mem::take(&mut files_by_module[id])
         }
     }).collect::<Vec<_>>();
 

@@ -1,5 +1,6 @@
 // Which paths the walk is actually given, once the ones that lie inside other ones have been taken
 // out, and which of the things it finds are excluded. Everything here decides what gets counted.
+use std::borrow::Cow;
 use std::path::Path;
 
 use crate::GitignoreStack;
@@ -141,7 +142,7 @@ pub fn validate_and_absolutize(declared: &[Target]) -> Result<Vec<Target>, Targe
 pub fn convert_to_absolute(s: &str) -> String {
     let p = Path::new(s);
     if p.is_absolute() {
-        return trim_trailing_slash(&s.replace("\\", "/")).to_owned();
+        return trim_trailing_slash(&normalise_separators(s)).to_owned();
     }
 
     // The canonical form of a path that was typed as valid UTF-8 need not be valid UTF-8 itself,
@@ -149,9 +150,14 @@ pub fn convert_to_absolute(s: &str) -> String {
     // holds. Falling back to what was typed keeps a string that still names the place, which
     // 'to_string_lossy' would not: this one is handed back to 'is_dir' and 'is_file' further down.
     match std::fs::canonicalize(p).ok().and_then(|buf| buf.to_str().map(str::to_owned)) {
-        Some(str_path) => trim_trailing_slash(&str_path.strip_prefix(r"\\?\").unwrap_or(&str_path).replace("\\", "/")).to_owned(),
-        None => trim_trailing_slash(&s.replace("\\", "/")).to_owned()
+        Some(str_path) => trim_trailing_slash(
+                &normalise_separators(str_path.strip_prefix(r"\\?\").unwrap_or(&str_path))).to_owned(),
+        None => trim_trailing_slash(&normalise_separators(s)).to_owned()
     }
+}
+
+pub(crate) fn normalise_separators(path: &str) -> Cow<'_, str> {
+    if cfg!(windows) {Cow::Owned(path.replace('\\', "/"))} else {Cow::Borrowed(path)}
 }
 
 // Sorted by path with the duplicates gone, so the nearest enclosing target of any entry is the last

@@ -55,7 +55,7 @@ pub struct ConfigFileIssues {
 pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String>) -> Result<(ConfigurationBuilder, ConfigFileIssues),ConfigFileParseError> {
     let config_path = if let Some(dir) = config_dir_path {dir} else {PERSISTENT_APP_PATHS.config_dir.clone()};
     let file_name = if let Some(x) = file_name {x} else {DEFAULT_CONFIG_NAME.trim_end_matches(".txt")};
-    let file_path = (config_path + file_name + ".txt").replace("\\", "/");
+    let file_path = super::paths::normalise_separators(&(config_path + file_name + ".txt")).into_owned();
     let mut reader = CountingReader { line: 0, failed_at: None, reader: BufReader::new(match fs::File::open(file_path){
         Ok(f) => f,
         Err(_) => return Err(ConfigFileParseError::FileNotFound(file_name.to_owned()))
@@ -64,7 +64,8 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
     let (mut targets, mut braces_as_code, mut should_search_in_dotted, mut threads, mut exclude_dirs,
          mut languages_of_interest, mut excluded_languages, mut forced_languages, mut should_show_faulty_files, mut hidden,
          mut no_gitignore, mut theme_name, mut compare_level, mut config_styles, mut bar_thickness,
-         mut progress_bar, mut number_separator, mut decimal_separator, mut layout, mut sort_by, mut top_n) = (None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None);
+         mut progress_bar, mut number_separator, mut decimal_separator, mut layout, mut sort_by, mut top_n,
+         mut by_file) = (None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None);
     let mut issues = ConfigFileIssues::default();
     let mut buf = String::with_capacity(150);
 
@@ -176,6 +177,13 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                     Some(x) => top_n = Some(x),
                     None => issues.invalid_fields.push(config_manager::TOP)
                 }
+            } else if id == config_manager::BY_FILE {
+                buf.clear();
+                let _ = reader.read_line(&mut buf);
+                match config_manager::ByFile::parse(&buf) {
+                    Some(x) => by_file = Some(x),
+                    None => issues.invalid_fields.push(config_manager::BY_FILE)
+                }
             } else if id == config_manager::BAR_THICKNESS {
                 buf.clear();
                 let _ = reader.read_line(&mut buf);
@@ -236,7 +244,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
     let builder = ConfigurationBuilder {
         targets, exclude_dirs, languages_of_interest, excluded_languages, forced_languages, threads, braces_as_code, should_search_in_dotted,
         should_show_faulty_files, hidden, no_gitignore, theme_name, compare_level, config_styles, bar_thickness,
-        progress_bar, number_separator, decimal_separator, layout, sort_by, top_n,
+        progress_bar, number_separator, decimal_separator, layout, sort_by, top_n, by_file,
         ..Default::default()
     };
 
@@ -332,6 +340,11 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
 ===> ",config_manager::TOP.as_bytes(),b"
 "].concat())?;
         writer.write_all(top_n.to_string().as_bytes())?;
+    }
+
+    if let Some(by_file) = &config_builder.by_file {
+        writer.write_all(&[b"\n\n===> ",config_manager::BY_FILE.as_bytes(),b"\n"].concat())?;
+        writer.write_all(by_file.to_text().as_bytes())?;
     }
 
     if let Some(bar_thickness) = &config_builder.bar_thickness {
@@ -497,7 +510,7 @@ mod tests {
     #[test]
     fn test_save_config_file_and_then_parse_it() -> std::io::Result<()> {
         let command = "./ --exclude a,b,c.txt,d.txt, --braces-as-code --threads 1 1 --hide keywords,timing \
-                --force-language m=matlab,.pl=Perl \
+                --force-language m=matlab,.pl=Perl --by-file 12 \
                 --style code-number=green,comments-label=magenta bold,arrow=default dim".to_string();
         let config_builder = config_manager::create_config_builder_from_args(&command).unwrap();
 
@@ -514,6 +527,7 @@ mod tests {
         assert_eq!(config_builder.should_show_faulty_files, options.should_show_faulty_files);
         assert_eq!(config_builder.should_search_in_dotted, options.should_search_in_dotted);
         assert_eq!(config_builder.hidden, options.hidden);
+        assert_eq!(config_builder.by_file, options.by_file);
         // A project that answers a contested extension its own way answers it once, in its config
         assert_eq!(config_builder.forced_languages, options.forced_languages);
         // '.pl' keeps its dot through the round trip, because the two maps that read it key it

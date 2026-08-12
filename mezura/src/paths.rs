@@ -3,6 +3,7 @@
 // 'cfg!(test)', which is only true in the crate actually being tested. In the library it would stop
 // applying the moment the binary is its own crate, and the tests would go back to reading and
 // writing the real directory without saying so.
+use std::borrow::Cow;
 use std::sync::LazyLock;
 
 use directories::ProjectDirs;
@@ -60,6 +61,14 @@ impl PersistentAppPaths {
             data_dir
         }
     }
+}
+
+pub fn normalise_separators(path: &str) -> Cow<'_, str> {
+    if cfg!(windows) {Cow::Owned(path.replace('\\', "/"))} else {Cow::Borrowed(path)}
+}
+
+pub fn fold_for_comparison(path: &str) -> Cow<'_, str> {
+    if cfg!(windows) {Cow::Owned(normalise_separators(path).to_lowercase())} else {Cow::Borrowed(path)}
 }
 
 // What the tests read and what they write, kept apart. 'tests/fixtures' holds checked-in inputs and
