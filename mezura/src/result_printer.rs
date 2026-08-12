@@ -1882,8 +1882,10 @@ fn get_keywords_as_str(theme: &Theme, keyword_occurencies: &HashMap<String,usize
 }
 
 // Ordered by name, so that a keyword stays in the same place down a report and between two runs
+// A keyword a language declares and no file used says nothing, so it gets no cell. The JSON keeps
+// its zeros: a machine format whose fields appear and disappear per run is worse than a stable one.
 fn create_keyword_entries(keyword_occurencies: &HashMap<String,usize>) -> Vec<(String, String)> {
-    let mut sorted_keywords = keyword_occurencies.iter().collect::<Vec<_>>();
+    let mut sorted_keywords = keyword_occurencies.iter().filter(|(_, count)| **count > 0).collect::<Vec<_>>();
     sorted_keywords.sort_unstable_by_key(|(name,_)| name.as_str());
 
     sorted_keywords.into_iter().map(|(name, occurancies)| (name.to_owned(), format_with_separators(*occurancies))).collect()
@@ -2262,8 +2264,8 @@ mod tests {
 
     // One dataset for every layout, chosen so that the things that break are all present at once: a
     // long language name next to a short one, figures wide enough to move the shared right edge, a
-    // keyword row long enough to wrap, a language with no keywords at all, and five languages, which
-    // is one more than the overview can show without folding into "others".
+    // keyword row long enough to wrap, a language with no keywords at all, a keyword that fired
+    // nowhere, and five languages, one more than the overview shows without folding into "others".
     fn sample_data() -> (Vec<String>, HashMap<String, Stats>, Stats) {
         let per_language = hashmap![
             "Rust".to_owned() => Stats::new(13, 416800, 9008, 6122, 505,
@@ -2272,7 +2274,9 @@ mod tests {
                     hashmap!["classes".to_owned() => 805, "functions".to_owned() => 1204, "generators".to_owned() => 17,
                              "promises".to_owned() => 96, "imports".to_owned() => 342]),
             "HTML".to_owned() => Stats::new(2, 18800, 396, 361, 0, hashmap![]),
-            "Python".to_owned() => Stats::new(3, 9000, 250, 200, 20, hashmap!["classes".to_owned() => 2]),
+            // 'decorators' is declared and never used, so no layout may print a cell for it
+            "Python".to_owned() => Stats::new(3, 9000, 250, 200, 20,
+                    hashmap!["classes".to_owned() => 2, "decorators".to_owned() => 0]),
             "Java".to_owned() => Stats::new(1, 900, 80, 60, 5,
                     hashmap!["classes".to_owned() => 2, "interfaces".to_owned() => 1])];
         let total = Stats::total_of(&per_language);
