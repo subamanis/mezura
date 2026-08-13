@@ -96,6 +96,10 @@ pub struct ScanPlan {
     slots: Vec<Slot>,
     symbols: Vec<Box<[u8]>>,
     sorted_kinds: [bool; 4],
+    // Whether a line opening with a line comment symbol is a comment and nothing else. False where a
+    // block opener begins with one, as Lua's '--[[' begins with '--', CMake's '#[[' and Julia's '#='
+    // with '#': there the same bytes open a block that runs on past this line.
+    line_comment_ends_the_line: bool,
 }
 
 impl ScanPlan {
@@ -140,6 +144,9 @@ impl ScanPlan {
             }
         }
         entries.retain(|entry| !entry.bytes.is_empty());
+        let line_comment_ends_the_line = !entries.iter().filter(|entry| entry.kind == COM_STARTS)
+                .any(|start| entries.iter().filter(|entry| entry.kind == COMMENTS)
+                        .any(|comment| start.bytes.starts_with(&comment.bytes)));
         entries.sort_by_key(|entry| std::cmp::Reverse(entry.bytes.len()));
 
         let anchors = anchors_of(&entries);
@@ -176,7 +183,7 @@ impl ScanPlan {
         for (entry, anchor) in entries.iter().zip(&anchors) {
             if *anchor != 0 { sorted_kinds[entry.kind as usize] = true }
         }
-        ScanPlan { chunks, first, slots, symbols, sorted_kinds }
+        ScanPlan { chunks, first, slots, symbols, sorted_kinds, line_comment_ends_the_line }
     }
 }
 
@@ -962,6 +969,17 @@ fn line_info_with_str_symbol(ranges: usize, str_symbol: u8) -> LineInfo {
 fn get_bounds(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
     open_str_symbol: &Option<u8>, braces_as_code: bool, buffers: &mut ScanBuffers) -> LineInfo
 {
+    // A line comment runs to the end of its line, so a line that opens with one is comment through
+    // and through and nothing the scan could find past it changes that. Only with nothing left open
+    // above: inside a block or a crossing string the same bytes are text.
+    // The buffers are left as the line before them left them, which is safe only because nothing
+    // reads them when no code span comes back.
+    if open_comment.is_none() && open_str_symbol.is_none()
+            && get_or_build_plan_of(language).line_comment_ends_the_line
+            && language.comment_symbols.iter().any(|symbol| line.as_bytes().starts_with(symbol.as_bytes())) {
+        return LineInfo::none_all(false);
+    }
+
     scan_line(line, language, buffers);
     resolve_string_delimiters(language, open_str_symbol, buffers);
     let ScanBuffers { strings: str_indices, string_symbols: str_symbols, comments: comment_indices,
