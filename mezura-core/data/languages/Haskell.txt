@@ -19,7 +19,7 @@ Self-nesting comment end
 
 Keyword
 NAME
-data types
+types
 ALIASES
 data
 Keyword

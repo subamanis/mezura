@@ -71,6 +71,9 @@ Main changes:
   -> "JS" is now reported as "JavaScript" and "TS" as "TypeScript". Delete your old logs of those
       projects or a comparison will read the rename as one language disappearing and another
       appearing. Both '--languages js' and '--languages javascript' select it either way.
+  -> Haskell's counted keyword is now called "types" instead of "data types". It counts the same
+      "data" declarations as before, and the report and the JSON document both use the new name, so
+      a consumer keyed on the old one needs the one word changed.
   -> A language can now be named by any extension it claims, wherever a language name is expected:
       '--languages js', '--exclude-languages rs', and the same inside a configuration file. An
       extension that two languages claim names the one that owns it for the counting, which is the

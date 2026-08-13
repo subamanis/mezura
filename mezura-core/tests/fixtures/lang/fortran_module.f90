@@ -1,4 +1,4 @@
-! mezura-expect lines=12 code=8 comments=2 extra=2
+! mezura-expect lines=13 code=9 comments=2 extra=2
 module greetings
     implicit none
 contains
@@ -10,3 +10,4 @@ contains
     end subroutine greet
 
 end module greetings
+character(len=*), parameter :: note = '! not a comment'

@@ -2931,6 +2931,7 @@ mod tests {
     }
 
     const MARKER: &str = "mezura-expect";
+    const LANGUAGE_FIELD: &str = "language=";
 
     fn fixtures_dir() -> std::path::PathBuf {
         Path::new(FIXTURES_DIR).join("lang")
@@ -2940,18 +2941,28 @@ mod tests {
     // produce for it. The counts are hand-verified, so a mismatch means either the parser regressed
     // or the fixture is wrong; both are worth stopping for. The header line itself is a comment, so
     // it is included in 'lines' and excluded from 'code'.
-    fn parse_expectations(first_line: &str) -> Option<HashMap<String, usize>> {
+    // The counts, and the language the fixture says it is. Naming the language is only for an
+    // extension two of them claim, as MATLAB and Objective-C both claim '.m': the lookup would
+    // answer with the tie-break rule and the counts would be that rule's rather than the parser's.
+    // It comes last on the line because a language name can hold a space.
+    fn parse_expectations(first_line: &str) -> Option<(Option<String>, HashMap<String, usize>)> {
         let after_marker = first_line.split_once(MARKER)?.1;
         // A fixture in a language whose comments are blocks carries the closer on the header line,
-        // and the closer is where the declarations end rather than a malformed one
-        let after_marker = after_marker.split("-->").next().unwrap_or(after_marker);
+        // and the closer is where the declarations end rather than a malformed one. Anything else
+        // that is not a 'name=count' is a typo and refuses the header, which is the point.
+        let after_marker = ["-->", "*/", "*)", "-}", "]]", "}"].iter()
+                .fold(after_marker, |text, closer| text.split(closer).next().unwrap_or(text));
+        let (counts, language) = match after_marker.split_once(LANGUAGE_FIELD) {
+            Some((before, name)) => (before, Some(name.trim().to_owned())),
+            None => (after_marker, None)
+        };
         let mut expectations = HashMap::new();
-        for entry in after_marker.split_whitespace() {
+        for entry in counts.split_whitespace() {
             let (key, value) = entry.split_once('=')?;
             expectations.insert(key.to_owned(), value.parse::<usize>().ok()?);
         }
 
-        if expectations.is_empty() { None } else { Some(expectations) }
+        if expectations.is_empty() { None } else { Some((language, expectations)) }
     }
 
     fn fixture_paths(root: &Path) -> Vec<std::path::PathBuf> {
@@ -2981,16 +2992,26 @@ mod tests {
         for path in fixture_paths(&root) {
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
 
-            let Some(lang_name) = lookup.of_path(&path) else {
-                failures.push(format!("{name}: no supported language claims this name or its extension"));
-                continue;
-            };
-
             let contents = std::fs::read_to_string(&path).unwrap();
-            let Some(expected) = parse_expectations(contents.lines().next().unwrap_or_default()) else {
+            let Some((declared, expected)) = parse_expectations(contents.lines().next().unwrap_or_default()) else {
                 failures.push(format!("{name}: the first line must contain a '{MARKER} lines=N code=N ...' header"));
                 continue;
             };
+
+            let lang_name = match declared {
+                Some(declared) => std::sync::Arc::from(declared.as_str()),
+                None => match lookup.of_path(&path) {
+                    Some(found) => found,
+                    None => {
+                        failures.push(format!("{name}: no supported language claims this name or its extension"));
+                        continue;
+                    }
+                }
+            };
+            if !LANGUAGE_MAP_REF.contains_key(lang_name.as_ref()) {
+                failures.push(format!("{name}: no language is called '{lang_name}'"));
+                continue;
+            }
 
             let language = LANGUAGE_MAP_REF.get(lang_name.as_ref()).unwrap();
             let mut buf = String::new();
@@ -3210,6 +3231,13 @@ mod tests {
         }
 
         for path in fixture_paths(&fixtures_dir()) {
+            // One that says what it is has already answered the question this asks
+            let contents = std::fs::read_to_string(&path).unwrap_or_default();
+            if parse_expectations(contents.lines().next().unwrap_or_default())
+                    .is_some_and(|(declared, _)| declared.is_some()) {
+                continue;
+            }
+
             let name = path.file_name().and_then(|x| x.to_str()).unwrap_or_default().to_owned();
             let extension = match claimants_of.contains_key(&name) {
                 true => name,

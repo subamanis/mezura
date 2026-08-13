@@ -1,4 +1,4 @@
-// mezura-expect lines=15 code=8 comments=6 extra=1 classes=1 records=1
+// mezura-expect lines=16 code=9 comments=6 extra=1 classes=1 records=1
 unit Greeter;
 
 { a block
@@ -13,3 +13,4 @@ type
   TGreeter = class(TObject)
     procedure Greet;
   end;
+const S = '// not a comment';

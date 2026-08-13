@@ -1,4 +1,4 @@
-# mezura-expect lines=13 code=7 comments=3 extra=3 includes=1
+# mezura-expect lines=15 code=9 comments=3 extra=3 includes=1
 include config.mk
 
 CC = gcc
@@ -11,3 +11,5 @@ all: main.o
 # clean up
 clean:
 	rm -f app
+NOTE = "# not a comment"
+ALT = 'also'

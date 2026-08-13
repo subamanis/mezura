@@ -1,0 +1,9 @@
+// mezura-expect lines=9 code=4 comments=3 extra=2
+/* a block
+   comment */
+$name: "// not a comment";
+$other: 'also';
+
+body {
+    color: red;
+}

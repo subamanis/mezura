@@ -1,0 +1,7 @@
+/* mezura-expect lines=7 code=3 comments=3 extra=1 */
+/* a block
+   comment */
+body {
+    color: red;
+    font-family: "Arial", 'Helvetica';
+}

@@ -1,4 +1,4 @@
-# mezura-expect lines=10 code=5 comments=2 extra=3 packages=1
+# mezura-expect lines=11 code=6 comments=2 extra=3 packages=1
 package Greeter;
 
 # greets
@@ -7,4 +7,5 @@ sub greet {
     print "hello $name\n";
 }
 
+my $note = '# not a comment';
 1;

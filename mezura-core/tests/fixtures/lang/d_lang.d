@@ -1,4 +1,4 @@
-// mezura-expect lines=13 code=3 comments=7 extra=3 structs=1 classes=1
+// mezura-expect lines=16 code=6 comments=7 extra=3 structs=1 classes=1
 struct Point { int x; }
 
 /* a block
@@ -11,3 +11,6 @@ class Greeter {
 
 /+ one line +/
 /+ nested /+ inner +/ tail +/
+char c = 'x';
+string s = "// not a comment";
+string r = r"C:\raw";

@@ -1,4 +1,4 @@
-# mezura-expect lines=11 code=5 comments=2 extra=4 types=1 interfaces=1 enums=1
+# mezura-expect lines=15 code=9 comments=2 extra=4 types=1 interfaces=1 enums=1
 type Query {
   greeting: String
 }
@@ -9,3 +9,7 @@ interface Node {
 
 # an enum
 enum Color { RED, GREEN }
+scalar Note @spec(url: "# not a comment")
+"""
+a description
+"""

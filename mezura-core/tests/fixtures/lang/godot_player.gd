@@ -1,4 +1,4 @@
-# mezura-expect lines=14 code=7 comments=3 extra=4 classes=1 functions=2 signals=1
+# mezura-expect lines=19 code=12 comments=3 extra=4 classes=1 functions=2 signals=1
 class_name Player
 
 signal died(where)
@@ -12,3 +12,8 @@ func _ready() -> void:
 func hurt(amount: int) -> void:
 	# nothing yet
 	speed -= amount
+var s = "# not a comment"
+var t = 'also'
+var doc = """
+a block string
+"""

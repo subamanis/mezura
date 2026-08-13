@@ -1,4 +1,4 @@
-(* mezura-expect lines=13 code=5 comments=6 extra=2 types=1 modules=1
+(* mezura-expect lines=14 code=6 comments=6 extra=2 types=1 modules=1
 *)
 module Greeter = struct
   type t = { name : string }
@@ -11,3 +11,4 @@ module Greeter = struct
 end
 
 let () = print_string "hi"
+let initial = 'x'

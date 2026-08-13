@@ -1,4 +1,4 @@
-# mezura-expect lines=14 code=8 comments=3 extra=3 structs=1 modules=1
+# mezura-expect lines=18 code=12 comments=3 extra=3 structs=1 modules=1
 module Greetings
 
 #= a block
@@ -12,3 +12,7 @@ function greet(p::Person)
 end
 
 end
+c = 'x'
+doc = """
+a block string
+"""

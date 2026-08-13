@@ -1,96 +1,193 @@
-files=36 lines=444 code=223 comments=120
+files=70 lines=848 code=452 comments=224
 
+Ada
+  files=1 lines=8 code=5 comments=2
+  packages=1 types=1
 Assembly
-  files=1 lines=10 code=4 comments=5
+  files=1 lines=12 code=6 comments=5
+C
+  files=1 lines=11 code=5 comments=3
+  structs=1
+C Header
+  files=1 lines=10 code=5 comments=3
+  structs=1
+C#
+  files=1 lines=15 code=9 comments=3
+  classes=1 interfaces=1 structs=1
+C++
+  files=1 lines=11 code=5 comments=3
+  classes=1 structs=1
+C++ Header
+  files=1 lines=12 code=4 comments=5
+  classes=1 structs=1
 CMake
-  files=1 lines=14 code=6 comments=6
+  files=1 lines=15 code=7 comments=6
   functions=1 macros=0
 COBOL
-  files=1 lines=8 code=5 comments=2
+  files=1 lines=9 code=6 comments=2
   divisions=2 programs=1
+CSS
+  files=1 lines=7 code=3 comments=3
 Carbon
-  files=1 lines=8 code=4 comments=1
+  files=1 lines=12 code=8 comments=1
   classes=1 interfaces=1
 Clojure
   files=1 lines=11 code=6 comments=2
   functions=2 macros=1 namespaces=1
 D
-  files=1 lines=13 code=3 comments=7
+  files=1 lines=16 code=6 comments=7
   classes=1 interfaces=0 structs=1 templates=0
+Dart
+  files=1 lines=14 code=8 comments=3
+  classes=1 enums=1
+Delphi
+  files=1 lines=12 code=5 comments=5
+  classes=1 records=1
 Dockerfile
-  files=1 lines=12 code=6 comments=3
+  files=1 lines=13 code=7 comments=3
   commands=2 stages=1
+Elixir
+  files=1 lines=13 code=10 comments=2
+  functions=2 modules=1
 Elm
-  files=1 lines=11 code=5 comments=4
+  files=1 lines=15 code=9 comments=4
   types=1
 Erlang
-  files=1 lines=9 code=4 comments=3
+  files=1 lines=10 code=5 comments=3
   modules=1 records=0
 F#
-  files=1 lines=9 code=4 comments=3
+  files=1 lines=14 code=9 comments=3
   modules=1 types=1
 Fortran
-  files=1 lines=12 code=8 comments=2
+  files=1 lines=13 code=9 comments=2
 GDScript
-  files=1 lines=14 code=7 comments=3
+  files=1 lines=19 code=12 comments=3
   classes=1 functions=2 signals=1
 GLSL
-  files=1 lines=10 code=4 comments=3
+  files=1 lines=11 code=5 comments=3
   structs=1
 Go
   files=1 lines=16 code=7 comments=4
   structs=1
 GraphQL
-  files=1 lines=11 code=5 comments=2
+  files=1 lines=15 code=9 comments=2
   enums=1 inputs=0 interfaces=1 types=1
+HLSL
+  files=1 lines=12 code=5 comments=3
+  buffers=1 structs=1
+HTML
+  files=1 lines=16 code=11 comments=3
+Haskell
+  files=1 lines=10 code=5 comments=3
+  classes=1 types=1
+JAI
+  files=1 lines=8 code=3 comments=3
+  structs=1
+JSX
+  files=1 lines=9 code=4 comments=3
+  classes=1
 Java
-  files=1 lines=16 code=7 comments=3
+  files=1 lines=19 code=10 comments=3
   classes=2 interfaces=1
 JavaScript
   files=3 lines=38 code=24 comments=5
   classes=3
 Julia
-  files=1 lines=14 code=8 comments=3
+  files=1 lines=18 code=12 comments=3
   modules=1 structs=1
+Kotlin
+  files=1 lines=11 code=6 comments=2
+  classes=1 interfaces=1
 Lisp
   files=1 lines=7 code=3 comments=3
   classes=1 functions=1 macros=0
 Lua
-  files=1 lines=18 code=7 comments=9
+  files=1 lines=19 code=8 comments=9
   functions=2
+MATLAB
+  files=1 lines=9 code=4 comments=4
+  classes=1
 Make
-  files=1 lines=13 code=7 comments=3
+  files=1 lines=15 code=9 comments=3
   includes=1
+Metal
+  files=1 lines=8 code=3 comments=3
+  structs=1
 OCaml
-  files=1 lines=13 code=5 comments=6
+  files=1 lines=14 code=6 comments=6
   modules=1 types=1
 Objective-C
   files=1 lines=12 code=8 comments=1
   classes=1 protocols=0
+Odin
+  files=1 lines=9 code=6 comments=2
+  enums=1 structs=1 unions=1
+PHP
+  files=1 lines=9 code=3 comments=4
+  classes=1
 Pascal
-  files=1 lines=15 code=8 comments=6
+  files=1 lines=16 code=9 comments=6
   classes=1 records=1
 Perl
-  files=1 lines=10 code=5 comments=2
+  files=1 lines=11 code=6 comments=2
   packages=1
 PowerShell
-  files=1 lines=11 code=4 comments=5
+  files=1 lines=17 code=10 comments=5
   classes=0
 Prolog
-  files=1 lines=8 code=4 comments=3
+  files=1 lines=9 code=5 comments=3
 Python
   files=2 lines=28 code=17 comments=5
   classes=3
+R
+  files=1 lines=6 code=3 comments=2
+Ruby
+  files=1 lines=11 code=6 comments=4
+  classes=1 modules=1
 Rust
-  files=1 lines=27 code=14 comments=4
+  files=1 lines=28 code=15 comments=4
   enums=1 structs=1 traits=1
+SCSS
+  files=1 lines=9 code=4 comments=3
+SQL
+  files=1 lines=8 code=3 comments=4
+  tables=1 views=1
+Scala
+  files=1 lines=11 code=7 comments=2
+  classes=1 objects=1 traits=1
+Scheme
+  files=1 lines=6 code=2 comments=3
+  definitions=2
 ShaderLab
   files=1 lines=13 code=5 comments=3
   passes=1 shaders=1 subshaders=1
+Shell
+  files=1 lines=8 code=4 comments=2
+  functions=1
+Slang
+  files=1 lines=10 code=4 comments=3
+  interfaces=1 structs=1
+Svelte
+  files=1 lines=13 code=7 comments=4
+Swift
+  files=1 lines=12 code=6 comments=2
+  classes=1 structs=1
+TSX
+  files=1 lines=12 code=6 comments=3
+  classes=1 enums=1 interfaces=1
+TypeScript
+  files=1 lines=11 code=5 comments=3
+  classes=1 enums=1
 VHDL
-  files=1 lines=9 code=6 comments=2
+  files=1 lines=12 code=7 comments=4
 Vue
   files=1 lines=17 code=10 comments=4
 WAT
-  files=1 lines=7 code=3 comments=3
+  files=1 lines=8 code=4 comments=3
   functions=1 modules=1
+WGSL
+  files=1 lines=8 code=3 comments=3
+  structs=1
+Zig
+  files=1 lines=7 code=4 comments=2
+  enums=1 structs=1

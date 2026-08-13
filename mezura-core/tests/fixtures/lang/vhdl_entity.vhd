@@ -1,4 +1,4 @@
--- mezura-expect lines=9 code=6 comments=2 extra=1
+-- mezura-expect lines=12 code=7 comments=4 extra=1
 entity counter is
     port (clk : in bit);
 end entity counter;
@@ -7,3 +7,6 @@ end entity counter;
 architecture rtl of counter is
 begin
 end architecture rtl;
+/* a block
+   comment */
+constant NOTE : string := "-- not a comment";
