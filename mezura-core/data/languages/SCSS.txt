@@ -7,6 +7,9 @@ scss sass
 String symbols
 " '
 
+Escape character
+\
+
 Comment symbols
 //
 Multi line comment start

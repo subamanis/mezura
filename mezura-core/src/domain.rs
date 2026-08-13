@@ -31,6 +31,11 @@ pub struct Language {
     // joins. C splices anything, including a line comment; JavaScript and Python only continue a
     // string literal; Java, Go and C# have no such thing at all.
     pub line_continuation : Option<LineContinuation>,
+    // What cancels a string symbol standing after it: the backslash in most languages, the backtick
+    // in PowerShell, and nothing in the family that escapes a quote by doubling it. None means a
+    // quote closes whatever stands in front of it, which is what Pascal, Ada, Fortran, COBOL and
+    // standard SQL need.
+    pub escape_character : Option<u8>,
     // Sections of the file that belong to another language, HTML's '<script>' and '<style>'. The
     // lines between the tags are counted with that language's own symbols and reported under it.
     pub nested_languages : Vec<NestedLanguage>,
@@ -60,6 +65,9 @@ impl Language {
             nesting_comments : Vec::new(),
             leveled_comments : Vec::new(),
             line_continuation : None,
+            // The backslash, since every language the constructor is reached from in a test
+            // escapes with it; a language file has to say so itself
+            escape_character : Some(b'\\'),
             nested_languages : Vec::new(),
             keywords : keywords.into_iter().collect(),
             scan_plan : OnceLock::new()
@@ -296,6 +304,7 @@ impl PartialEq for Language {
             && self.nesting_comments == other.nesting_comments
             && self.leveled_comments == other.leveled_comments
             && self.line_continuation == other.line_continuation
+            && self.escape_character == other.escape_character
             && self.nested_languages == other.nested_languages
             && self.keywords == other.keywords
     }

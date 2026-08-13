@@ -7,6 +7,9 @@ hlsl hlsli fx fxh
 String symbols
 "
 
+Escape character
+\
+
 Comment symbols
 //
 Multi line comment start

@@ -7,6 +7,9 @@ wat wast
 String symbols
 "
 
+Escape character
+\
+
 Comment symbols
 ;;
 Self-nesting comment start

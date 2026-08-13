@@ -20,6 +20,9 @@ Paired string openers
 Paired string closers
 "
 
+Escape character
+\
+
 Comment symbols
 //
 Self-nesting comment start

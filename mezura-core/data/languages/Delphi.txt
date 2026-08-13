@@ -7,6 +7,9 @@ pas dpr dpk
 String symbols
 '
 
+Escape character
+none
+
 Comment symbols
 //
 Multi line comment start

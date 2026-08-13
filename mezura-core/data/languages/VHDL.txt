@@ -7,6 +7,9 @@ vhd vhdl
 String symbols
 "
 
+Escape character
+none
+
 Comment symbols
 --
 

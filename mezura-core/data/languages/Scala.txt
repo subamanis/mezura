@@ -10,6 +10,9 @@ String symbols
 Multi line raw string symbols
 """
 
+Escape character
+\
+
 Comment symbols
 //
 Self-nesting comment start

@@ -7,6 +7,9 @@ adb ads
 String symbols
 "
 
+Escape character
+none
+
 Comment symbols
 --
 

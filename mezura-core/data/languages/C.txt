@@ -7,6 +7,9 @@ c
 String symbols
 "
 
+Escape character
+\
+
 Line continuation
 \
 Continues

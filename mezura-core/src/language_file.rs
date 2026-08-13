@@ -26,6 +26,8 @@ const MULTILINE_RAW_STRINGS    : &str = "Multi line raw string symbols";
 const PAIRED_STRING_OPENERS    : &str = "Paired string openers";
 const PAIRED_STRING_CLOSERS    : &str = "Paired string closers";
 const CHARACTER_LITERALS       : &str = "Character literal symbols";
+const ESCAPE_CHARACTER         : &str = "Escape character";
+const ESCAPES_NOTHING          : &str = "none";
 const LINE_CONTINUATION        : &str = "Line continuation";
 const CONTINUES                : &str = "Continues";
 const CONTINUES_STRINGS        : &str = "strings";
@@ -254,6 +256,29 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         header = read_next_header(lines)?;
     }
 
+    // What cancels a string symbol, which is a fact about the language and not about the symbol.
+    // The backslash in most, the backtick in PowerShell, and nothing at all in the family that
+    // escapes a quote by doubling it: Pascal, Ada, Fortran, COBOL and standard SQL. Required of
+    // any language declaring a string of any kind, so that a file states it instead of inheriting
+    // whatever the parser last happened to do; 'none' is how a language says nothing escapes.
+    let mut escape_character = None;
+    let declares_a_string = !string_symbols.is_empty() || !char_literals.is_empty()
+            || !multiline_strings.is_empty() || !raw_multiline_strings.is_empty()
+            || !string_pairs.is_empty();
+    if header == ESCAPE_CHARACTER {
+        let value = read_value_line(lines)?;
+        if value != ESCAPES_NOTHING {
+            // One byte, because the test walks backwards from the symbol counting how many of these
+            // stand in front of it, and every language that has one spells it in ASCII
+            let [byte] = value.as_bytes() else { return None };
+            if !byte.is_ascii() { return None; }
+            escape_character = Some(*byte);
+        }
+        header = read_next_header(lines)?;
+    } else if declares_a_string {
+        return None;
+    }
+
     // The symbol that joins a line to the next, and what the joining reaches. Read before the
     // comment symbols because it is a property of the line and not of either kind of delimiter.
     let mut line_continuation = None;
@@ -378,6 +403,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
             &multiline_comments.iter().map(|(start, end): &(String, String)| (start.as_str(), end.as_str()))
                     .collect::<Vec<_>>(), keywords);
     language.line_continuation = line_continuation;
+    language.escape_character = escape_character;
 
     // The three in the order the file declares them, which is the order the scan numbers them in
     Some(language
@@ -545,6 +571,7 @@ mod tests {
         // away as a mistake: an extra blank line between blocks does not derail the parse. Fed as a
         // string, which is what 'parse_language' takes and what 'parse_languages_in_dir' hands it per file.
         let padded = "Language\nJava\n\n\nExtensions\njava\n\n\n\nString symbols\n\"\n\n\
+Escape character\n\\\n\n\
 Comment symbols\n//\n\n\nKeyword\n    NAME\n    classes\n    ALIASES\n    class\n";
         let java = parse_language(padded).expect("an extra blank line broke the parse");
         assert_eq!(vec!["classes"], java.keywords.iter().map(|k| k.descriptive_name.clone()).collect::<Vec<_>>());
@@ -622,7 +649,8 @@ pl      Perl, Prolog
 
     #[test]
     fn a_language_that_does_not_parse_comes_back_as_none() {
-        let good = "Language\nLua\n\nExtensions\nlua\n\nString symbols\n\" '\n\nComment symbols\n--\n";
+        let good = "Language\nLua\n\nExtensions\nlua\n\nString symbols\n\" '\n\n\
+Escape character\n\\\n\nComment symbols\n--\n";
         assert!(crate::language_file::parse_language(good).is_some());
         // and the carriage returns of a windows checkout change nothing about it
         assert_eq!(crate::language_file::parse_language(good),
@@ -786,6 +814,7 @@ pl      Perl, Prolog
     #[test]
     fn multiline_comment_pairs_zip_by_position_and_unequal_counts_refuse_the_file() {
         let two_pairs = "Language\nPascalish\n\nExtensions\npax\n\nString symbols\n'\n\n\
+Escape character\nnone\n\n\
 Comment symbols\n//\n\nMulti line comment start\n{ (*\nMulti line comment end\n} *)\n";
         let parsed = crate::language_file::parse_language(two_pairs).expect("two pairs must parse");
         assert_eq!(vec![("{".to_owned(), "}".to_owned()), ("(*".to_owned(), "*)".to_owned())],
@@ -812,7 +841,7 @@ Comment symbols\n//\n\nMulti line comment start\n{ (*\nMulti line comment end\n}
     #[test]
     fn a_string_symbol_is_declared_in_one_list_and_the_crossing_ones_are_numbered_last() {
         let good = "Language\nPylike\n\nExtensions\npyl\n\nString symbols\n\" '\n\n\
-Multi line string symbols\n\"\"\"\n\nComment symbols\n#\n";
+Multi line string symbols\n\"\"\"\n\nEscape character\n\\\n\nComment symbols\n#\n";
         let parsed = crate::language_file::parse_language(good).expect("the declaration must parse");
         assert_eq!(vec!["\"".to_owned(), "'".to_owned()], parsed.string_symbols);
         assert_eq!(vec![MultilineString::escaping("\"\"\"")], parsed.multiline_strings);
@@ -844,7 +873,7 @@ Multi line string symbols\n\"\"\"\n\nComment symbols\n#\n";
     #[test]
     fn a_crossing_string_declares_whether_a_backslash_cancels_its_closer() {
         let good = "Language\nGolike\n\nExtensions\ngol\n\nString symbols\n\"\n\n\
-Multi line raw string symbols\n`\n\nComment symbols\n//\n";
+Multi line raw string symbols\n`\n\nEscape character\n\\\n\nComment symbols\n//\n";
         let parsed = crate::language_file::parse_language(good).expect("the declaration must parse");
         assert_eq!(vec![MultilineString::raw("`")], parsed.multiline_strings);
 
@@ -916,7 +945,8 @@ String symbols\n\n\nComment symbols\n\n";
     #[test]
     fn a_character_literal_symbol_has_its_own_block_and_shares_no_list() {
         let good = "Language\nRustlike\n\nExtensions\nrsl\n\nString symbols\n\n\n\
-Character literal symbols\n'\n\nMulti line string symbols\n\"\n\nComment symbols\n//\n";
+Character literal symbols\n'\n\nMulti line string symbols\n\"\n\n\
+Escape character\n\\\n\nComment symbols\n//\n";
         let parsed = crate::language_file::parse_language(good).expect("the declaration must parse");
         assert_eq!(vec!["'".to_owned()], parsed.char_literal_symbols);
         assert_eq!(vec![MultilineString::escaping("\"")], parsed.multiline_strings);
@@ -936,11 +966,45 @@ Character literal symbols\n'\n\nMulti line string symbols\n\"\n\nComment symbols
         }
     }
 
+    // Required of anything declaring a string, so that a file states what escapes instead of
+    // inheriting the backslash from whatever the parser happened to do last.
+    #[test]
+    fn a_language_that_declares_a_string_has_to_say_what_escapes_it() {
+        let good = "Language\nEsclike\n\nExtensions\nesc\n\nString symbols\n\"\n\n\
+Escape character\n\\\n\nComment symbols\n//\n";
+        assert_eq!(Some(b'\\'), parse_language(good).expect("the declaration must parse").escape_character);
+
+        let backtick = good.replace("Escape character\n\\", "Escape character\n`");
+        assert_eq!(Some(b'`'), parse_language(&backtick).unwrap().escape_character);
+        let nothing = good.replace("Escape character\n\\", "Escape character\nnone");
+        assert_eq!(None, parse_language(&nothing).unwrap().escape_character);
+
+        let missing = good.replace("Escape character\n\\\n\n", "");
+        assert!(parse_language(&missing).is_none(),
+                "a language declaring a string was accepted without saying what escapes it");
+        // more than one byte is not a character, and the test walks backwards a byte at a time
+        let two = good.replace("Escape character\n\\", "Escape character\n\\\\");
+        assert!(parse_language(&two).is_none());
+
+        // a language with no string of any kind needs none of this, which is what HTML is
+        let stringless = good.replace("String symbols\n\"", "String symbols\n")
+                .replace("Escape character\n\\\n\n", "");
+        assert!(parse_language(&stringless).is_some(), "a language with no strings was refused");
+
+        // and the shipped files that motivated the block
+        for (name, escape) in [("Shell.txt", Some(b'\\')), ("PowerShell.txt", Some(b'`')),
+                ("SQL.txt", None), ("Pascal.txt", None), ("C.txt", Some(b'\\'))] {
+            let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
+            assert_eq!(escape, language.escape_character, "{name} declares the wrong escape");
+        }
+    }
+
     // '=*' inside a pair symbol is the counted run of Lua's long brackets: one declaration covers
     // '--[[', '--[=[' and every level above. Half a marker is a typo and refuses the file.
     #[test]
     fn a_pair_written_with_the_counted_marker_is_leveled() {
         let good = "Language\nLualike\n\nExtensions\nlux\n\nString symbols\n\" '\n\n\
+Escape character\n\\\n\n\
 Comment symbols\n--\nMulti line comment start\n--[=*[\nMulti line comment end\n]=*]\n";
         let parsed = crate::language_file::parse_language(good).expect("the leveled declaration must parse");
         assert!(parsed.multiline_comments.is_empty());

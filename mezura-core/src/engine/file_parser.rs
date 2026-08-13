@@ -35,6 +35,10 @@ const ROLE_OPEN    : u8 = 1;
 const ROLE_CLOSE   : u8 = 2;
 const ROLE_LITERAL : u8 = 3;
 const ROLE_RAW     : u8 = 4;
+// A raw symbol with the language's escape character in front of it. Inside such a string the escape
+// is an ordinary byte, so it may still close one; outside, it is an escape like any other and may
+// not open one. Shell is where the two answers differ: 'echo I\'m done' writes one apostrophe.
+const ROLE_RAW_ESCAPED : u8 = 5;
 
 // One declared symbol. 'next' chains every symbol that begins with the same byte, longest first,
 // so that a '"""' is recognised before the '"' that starts it.
@@ -344,31 +348,35 @@ pub struct ParseBuffers {
     pub timing: phase_timing::Totals,
 }
 
-fn is_not_escaped(pos: usize, bytes: &[u8]) -> bool {
-    let mut slashes = 0;
+// An even run of the language's escape character in front of a symbol leaves it standing, since each
+// pair escapes itself. A language that declares none escapes nothing anywhere.
+fn is_not_escaped(pos: usize, bytes: &[u8], escape: Option<u8>) -> bool {
+    let Some(escape) = escape else { return true };
+    let mut escapes = 0;
     let mut offset = 1;
-    while pos >= offset && bytes[pos - offset] == b'\\' {
+    while pos >= offset && bytes[pos - offset] == escape {
         offset += 1;
-        slashes += 1;
+        escapes += 1;
     }
-    slashes % 2 == 0
+    escapes % 2 == 0
 }
 
 fn scan_line(line: &str, language: &Language, buffers: &mut ScanBuffers) {
     let plan = get_or_build_plan_of(language);
     let line_bytes = line.as_bytes();
+    let escape = language.escape_character;
     buffers.reset(plan.slots.len());
 
     for chunk in &plan.chunks {
         match chunk.len {
             1 => for at in memchr::memchr_iter(chunk.bytes[0], line_bytes) {
-                take_symbols_at(at, line_bytes, plan, buffers)
+                take_symbols_at(at, line_bytes, plan, buffers, escape)
             },
             2 => for at in memchr::memchr2_iter(chunk.bytes[0], chunk.bytes[1], line_bytes) {
-                take_symbols_at(at, line_bytes, plan, buffers)
+                take_symbols_at(at, line_bytes, plan, buffers, escape)
             },
             _ => for at in memchr::memchr3_iter(chunk.bytes[0], chunk.bytes[1], chunk.bytes[2], line_bytes) {
-                take_symbols_at(at, line_bytes, plan, buffers)
+                take_symbols_at(at, line_bytes, plan, buffers, escape)
             }
         }
     }
@@ -396,7 +404,9 @@ fn scan_line(line: &str, language: &Language, buffers: &mut ScanBuffers) {
     }
 }
 
-fn take_symbols_at(at: usize, line_bytes: &[u8], plan: &ScanPlan, buffers: &mut ScanBuffers) {
+fn take_symbols_at(at: usize, line_bytes: &[u8], plan: &ScanPlan, buffers: &mut ScanBuffers,
+    escape: Option<u8>)
+{
     let mut cursor = plan.first[line_bytes[at] as usize];
     while cursor != NO_SLOT {
         let index = cursor as usize;
@@ -429,10 +439,17 @@ fn take_symbols_at(at: usize, line_bytes: &[u8], plan: &ScanPlan, buffers: &mut 
             if line_bytes.get(cursor) != Some(&slot.suffix) { continue }
             width = cursor + 1 - start;
         }
-        // An escape cancels a string symbol and nothing else, and only where the language says the
-        // form escapes at all: inside a raw one, one-sided or two-sided, the backslash is a byte
-        if slot.kind == STRINGS && (slot.role == ROLE_EITHER || slot.role == ROLE_LITERAL)
-                && start != 0 && !is_not_escaped(start, line_bytes) { continue }
+        // An escape cancels a string symbol and nothing else. An escaped raw symbol is kept and
+        // marked instead of dropped, since whether it counts depends on something the scan cannot
+        // see: the resolution below knows whether it would open a string or close one.
+        let mut role = slot.role;
+        if slot.kind == STRINGS && start != 0 && !is_not_escaped(start, line_bytes, escape) {
+            match slot.role {
+                ROLE_EITHER | ROLE_LITERAL => continue,
+                ROLE_RAW => role = ROLE_RAW_ESCAPED,
+                _ => ()
+            }
+        }
 
         // A character literal exists only whole: its other half is looked for here and now, and
         // both halves go in together as an opener and its closer, or neither does. Whatever sits
@@ -443,7 +460,8 @@ fn take_symbols_at(at: usize, line_bytes: &[u8], plan: &ScanPlan, buffers: &mut 
             let closed_at = loop {
                 let Some(offset) = memchr::memchr(symbol_bytes[0], &line_bytes[cursor..]) else { break None };
                 let candidate = cursor + offset;
-                if line_bytes[candidate..].starts_with(symbol_bytes) && is_not_escaped(candidate, line_bytes)
+                if line_bytes[candidate..].starts_with(symbol_bytes)
+                        && is_not_escaped(candidate, line_bytes, escape)
                         && holds_one_character(&line_bytes[start + width..candidate]) {
                     break Some(candidate);
                 }
@@ -461,7 +479,7 @@ fn take_symbols_at(at: usize, line_bytes: &[u8], plan: &ScanPlan, buffers: &mut 
 
         buffers.consumed[index] = start + width;
         match slot.kind {
-            STRINGS => buffers.raw_strings.push((start, slot.symbol, slot.role)),
+            STRINGS => buffers.raw_strings.push((start, slot.symbol, role)),
             COMMENTS => buffers.comments.push(start),
             COM_STARTS => buffers.com_starts.push((start, slot.symbol, level)),
             _ => buffers.com_ends.push((start, slot.symbol, level))
@@ -967,7 +985,7 @@ fn ends_with_continuation(line: &str, language: &Language) -> bool {
     let Some(continuation) = &language.line_continuation else { return false };
     let bytes = line.as_bytes();
     bytes.ends_with(continuation.symbol.as_bytes())
-            && is_not_escaped(bytes.len() - continuation.symbol.len(), bytes)
+            && is_not_escaped(bytes.len() - continuation.symbol.len(), bytes, language.escape_character)
 }
 
 fn push_code(ranges: &mut Vec<(usize, usize)>, from: usize, to: usize) {
@@ -1427,7 +1445,9 @@ fn resolve_string_delimiters(language: &Language, open_str_symbol: &Option<u8>, 
                 language.get_string_pair_of(symbol).1.len()
             }
             None => {
-                if role == ROLE_CLOSE { continue; }
+                // A closer opens nothing, and neither does a raw symbol the language escaped:
+                // outside a string there is nothing for the escape to be an ordinary byte of
+                if role == ROLE_CLOSE || role == ROLE_RAW_ESCAPED { continue; }
                 open = Some(symbol);
                 language.get_string_pair_of(symbol).0.len()
             }
@@ -1612,6 +1632,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
+        escape_character : Some(b'\\'),
         nested_languages : vec![],
         multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned()],
@@ -1629,6 +1650,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
+        escape_character : Some(b'\\'),
         nested_languages : vec![],
         multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned(),"#".to_owned()],
@@ -1646,6 +1668,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
+        escape_character : Some(b'\\'),
         nested_languages : vec![],
         multiline_strings : vec![],
         comment_symbols : vec!["#".to_owned()],
@@ -1663,6 +1686,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
+        escape_character : Some(b'\\'),
         nested_languages : vec![],
         multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned()],
@@ -1683,6 +1707,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
+        escape_character : Some(b'\\'),
         nested_languages : vec![],
         multiline_strings : vec![MultilineString::escaping("\"\"\""), MultilineString::escaping("'''")],
         comment_symbols : vec!["#".to_owned(), "//".to_owned(), "--".to_owned()],
@@ -2027,6 +2052,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
+        escape_character : Some(b'\\'),
         nested_languages : vec![],
         multiline_strings : vec![],
         comment_symbols : vec!["--".to_owned()],
@@ -2061,6 +2087,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
+        escape_character : Some(b'`'),
         nested_languages : vec![],
         multiline_strings : vec![],
         comment_symbols : vec!["#".to_owned()],
@@ -2097,6 +2124,7 @@ mod tests {
         string_symbols : vec!["'".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
+        escape_character : None,
         nested_languages : vec![],
         multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned()],
@@ -2116,6 +2144,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
+        escape_character : Some(b'\\'),
         nested_languages : vec![],
         multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned()],
@@ -2332,6 +2361,38 @@ mod tests {
         // '*' is dropped rather than kept: '*/' holds the '/' that '//' forces into the scan, and
         // every pointer, product and comment continuation line stops being a candidate position
         assert_eq!((vec![b'"', b'/'], 1), bytes_of(&with_raw));
+    }
+
+    // Whether a backslash cancels the symbol after it is a fact about the language and not about
+    // the symbol, which is why the same declaration cannot serve both shells and PowerShell: both
+    // write a quote that escapes nothing inside itself, and only one of them escapes outside one.
+    #[test]
+    fn what_cancels_a_symbol_is_read_from_the_language_and_not_assumed() {
+        let shell = Language::new("shell-like", ["sh"], [""; 0], ["#"], &[], [])
+                .with_raw_multiline_strings(&["'"]);
+        let mut powershell = Language::new("ps-like", ["ps1"], [""; 0], ["#"], &[], [])
+                .with_raw_multiline_strings(&["'"]);
+        powershell.escape_character = Some(b'`');
+        let mut pascal = Language::new("pascal-like", ["pas"], ["'"], ["//"], &[], []);
+        pascal.escape_character = None;
+
+        // the shell escapes with the backslash, so the apostrophe opens nothing and the line is
+        // ordinary code from beginning to end
+        assert_eq!(TextInfo::from_slice(r"echo I\'m done"),
+                bounds_multi(r"echo I\'m done", &shell, None, &None));
+        // inside the string it is a byte again, so the same shape closes one
+        assert_eq!(TextInfo::from_slice_w_literal("echo  done"),
+                bounds_multi(r"echo 'a\' done", &shell, None, &None));
+
+        // PowerShell escapes with the backtick, so a path ending in a backslash opens a string
+        // where the shell would not
+        assert_eq!(TextInfo::from_slice_w_literal(r"cd C:\"),
+                bounds_multi(r"cd C:\'Program Files'", &powershell, None, &None));
+
+        // and a language that escapes by doubling its quote cancels nothing: the string closes at
+        // its own quote, which is what leaves the comment after it a comment and not string content
+        assert_eq!(TextInfo::from_slice_w_literal("s := ; "),
+                bounds_multi(r"s := 'C:\'; // a comment", &pascal, None, &None));
     }
 
     // C++'s raw string crosses lines by itself and keeps everything inside it, which is what makes
@@ -2642,6 +2703,7 @@ mod tests {
         string_symbols : vec!["\"".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
+        escape_character : Some(b'\\'),
         nested_languages : vec![],
         multiline_strings : vec![],
         comment_symbols : vec![";".to_owned()],

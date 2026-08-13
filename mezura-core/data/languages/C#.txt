@@ -15,6 +15,9 @@ Paired string openers
 Paired string closers
 "
 
+Escape character
+\
+
 Comment symbols
 //
 Multi line comment start

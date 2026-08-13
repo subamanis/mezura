@@ -13,6 +13,9 @@ Character literal symbols
 Multi line string symbols
 """
 
+Escape character
+\
+
 Comment symbols
 #
 Self-nesting comment start

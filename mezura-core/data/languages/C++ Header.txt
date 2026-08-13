@@ -12,6 +12,9 @@ R"(
 Paired string closers
 )"
 
+Escape character
+\
+
 Line continuation
 \
 Continues

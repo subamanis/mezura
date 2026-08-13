@@ -7,6 +7,9 @@ m
 String symbols
 "
 
+Escape character
+none
+
 Comment symbols
 %
 Self-nesting comment start

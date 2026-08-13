@@ -17,6 +17,9 @@ r" r#"
 Paired string closers
 " "#
 
+Escape character
+\
+
 Comment symbols
 //
 Self-nesting comment start

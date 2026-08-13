@@ -94,6 +94,13 @@ Main changes:
       their closers, C# declares @" with " and C++ declares R"( with )", so a raw or verbatim
       string holding quotes or a comment opener, or ending in a backslash, no longer counts
       everything below it as string or comment.
+  -> A language file now declares what escapes a quote, under "Escape character", and the answer is
+      no longer the backslash everywhere. It is the backslash in most languages, the backtick in
+      PowerShell, and "none" in the family that escapes a quote by doubling it: Pascal, Delphi, Ada,
+      Fortran, COBOL, MATLAB, VHDL and SQL. An SQL statement holding a Windows path, 'C:\', used to
+      swallow every comment under it to the end of the file, and a shell line writing an apostrophe
+      as I\'m did the same. Any language file of your own that declares a string of any kind now
+      needs this block, or the file is refused.
   -> String symbols now split by behavior the way comment symbols always did: the "String
       symbols" list ends at the end of the line, and a "Multi line string symbols" list holds the
       ones that cross lines, like Python's """ or a backtick template. An unbalanced quote now

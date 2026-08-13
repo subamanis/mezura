@@ -7,6 +7,9 @@ h
 String symbols
 "
 
+Escape character
+\
+
 Line continuation
 \
 Continues

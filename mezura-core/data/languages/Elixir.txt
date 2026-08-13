@@ -10,6 +10,9 @@ String symbols
 Multi line string symbols
 """ '''
 
+Escape character
+\
+
 Comment symbols
 #
 

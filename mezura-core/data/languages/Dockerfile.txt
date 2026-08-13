@@ -10,6 +10,9 @@ Dockerfile Containerfile
 String symbols
 " '
 
+Escape character
+\
+
 Comment symbols
 #
 

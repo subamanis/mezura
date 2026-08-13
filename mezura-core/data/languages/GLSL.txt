@@ -7,6 +7,9 @@ glsl vert frag geom comp tesc tese
 String symbols
 "
 
+Escape character
+\
+
 Comment symbols
 //
 Multi line comment start

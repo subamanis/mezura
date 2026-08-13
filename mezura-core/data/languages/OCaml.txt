@@ -10,6 +10,9 @@ String symbols
 Character literal symbols
 '
 
+Escape character
+\
+
 Comment symbols
 
 Self-nesting comment start

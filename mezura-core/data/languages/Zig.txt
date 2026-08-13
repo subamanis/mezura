@@ -7,6 +7,9 @@ zig
 String symbols
 "
 
+Escape character
+\
+
 Comment symbols
 //
 

@@ -6,8 +6,11 @@ sql
 
 String symbols
 
-Multi line string symbols
+Multi line raw string symbols
 ' "
+
+Escape character
+none
 
 Comment symbols
 --
