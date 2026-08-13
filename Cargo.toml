@@ -3,4 +3,7 @@ resolver = "3"
 members = ["mezura-core", "mezura"]
 
 [profile.release]
-debug = true
+debug = false
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
