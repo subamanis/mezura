@@ -217,7 +217,9 @@ WHAT IS COUNTED
 
     Specifies whether lines that carry no content should be considered as code lines or not.
     A line carries no content when nothing but punctuation is left on it once the strings and
-    the comments are taken out: '}', '});', '],', ')'.
+    the comments are taken out: '}', '});', '],', ')'. One of those that carries a comment as
+    well, such as '}  // end of function', is a comment line, since the comment is all it says.
+    Enabling this flag makes it a code line instead, the way any line holding both is.
 
     The default behaviour is to not count them as code, since it is silly for code of the same content
     and substance to be counted differently, according to the programmer's code style.

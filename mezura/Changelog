@@ -308,6 +308,11 @@ Performance:
       so it is worth raising if your files live on a slow drive.
 
 Bugfixes:
+  -> A line holding a comment beside nothing but punctuation now counts as a comment. Lines such as
+      "}  // end of function" or "});  // callback" were counted as neither code nor comment, so
+      their comment was reported nowhere and comment counts came out low on any codebase that
+      writes them. With "--braces-as-code" such a line counts as code, as it did before, since the
+      punctuation is code there and a line carrying both is code.
   -> A comparison document now records the settings it took from the document it compares against,
       under the code "setting-adopted". They were only ever said on screen, so with "--output json"
       nothing at all was said, and both sides simply read alike: a value the command line gave
