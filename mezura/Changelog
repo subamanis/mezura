@@ -58,6 +58,10 @@ Main changes:
       by falls back to sorting by lines and says so. The JSON document always carries every figure.
   -> In the boxed layout a module's name row is now closed by a solid line on both sides. The
       table's vertical used to change brightness in the middle of itself, which read as a fault.
+  -> Sizes are written "B", "KB", "MB" and "GB" instead of "Bytes", "KBs", "MBs" and "GBs". The
+      plural read as a rate, "40.0 KBs" being one character from kilobytes per second, and the
+      size column is a character narrower for it. The figures and the 1000 they divide by are
+      unchanged.
   -> Files that are known by their whole name are now counted: Makefile, Dockerfile,
       CMakeLists.txt, Gemfile, Rakefile and the rest. A language file names them in a new
       "Filenames" field, a file is matched by its name before its extension, and a contest over a

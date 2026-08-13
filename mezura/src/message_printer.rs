@@ -606,8 +606,8 @@ pub const STYLE_HELP  :  &str =
       avg-size-number    avg-size-label
       keyword-number     keyword-label
 
-    'size-unit' is the unit next to a size, the 'KBs' of '430.5 KBs total', and it is one token for
-    both sizes since there is no reason to want two colors of KBs on one line. It is separate from
+    'size-unit' is the unit next to a size, the 'KB' of '430.5 KB total', and it is one token for
+    both sizes since there is no reason to want two colors of KB on one line. It is separate from
     the labels so that it can stay quiet while 'Size' reads like every other column header.
 
     The numbers of the \"history\" section are the same quantities, so they follow the same tokens.

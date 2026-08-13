@@ -145,15 +145,17 @@ impl NumberFormat {
 
     // A count of bytes in the largest unit that leaves a figure worth reading, so that 2417403 is
     // 2.4 and not 2417.4. Every row of a report goes through it, which is what stops one line from
-    // calling a value MBs while the line under it calls the same value KBs.
+    // calling a value MB while the line under it calls the same value KB.
     //
-    // A count of bytes is a whole number, so '430.0 Bytes' would claim a precision the figure does
-    // not have: only a divided value has a decimal to show.
+    // Divided by 1000 and not 1024, which is what 'KB' means; the 1024 ladder is spelled 'KiB'.
+    //
+    // A count of bytes is a whole number, so '430.0 B' would claim a precision the figure does not
+    // have: only a divided value has a decimal to show.
     pub fn size_with_unit(&self, bytes: usize) -> (String, &'static str) {
-        if bytes >= 1_000_000_000 {(self.with_decimal_mark(&format!("{:.1}", bytes as f64 / 1_000_000_000f64)), "GBs")}
-        else if bytes >= 1_000_000 {(self.with_decimal_mark(&format!("{:.1}", bytes as f64 / 1_000_000f64)), "MBs")}
-        else if bytes >= 1_000 {(self.with_decimal_mark(&format!("{:.1}", bytes as f64 / 1_000f64)), "KBs")}
-        else {(self.integer(bytes), "Bytes")}
+        if bytes >= 1_000_000_000 {(self.with_decimal_mark(&format!("{:.1}", bytes as f64 / 1_000_000_000f64)), "GB")}
+        else if bytes >= 1_000_000 {(self.with_decimal_mark(&format!("{:.1}", bytes as f64 / 1_000_000f64)), "MB")}
+        else if bytes >= 1_000 {(self.with_decimal_mark(&format!("{:.1}", bytes as f64 / 1_000f64)), "KB")}
+        else {(self.integer(bytes), "B")}
     }
 
     // A share that is present but rounds to 0.00 would read as absent, so it is named instead. The
@@ -316,16 +318,16 @@ mod tests {
     }
 
     // The boundary belongs to the larger unit: a thousand bytes is one KB, and the figure that
-    // reads '1000 Bytes' next to a '1.0 KBs' one byte later is the one that is wrong.
+    // reads '1000 B' next to a '1.0 KB' one byte later is the one that is wrong.
     #[test]
     fn a_size_takes_the_largest_unit_that_leaves_a_figure_worth_reading() {
         let format = NumberFormat::default();
-        assert_eq!(("999".to_owned(), "Bytes"), format.size_with_unit(999));
-        assert_eq!(("1.0".to_owned(), "KBs"), format.size_with_unit(1_000));
-        assert_eq!(("1.0".to_owned(), "MBs"), format.size_with_unit(1_000_000));
-        assert_eq!(("1.0".to_owned(), "GBs"), format.size_with_unit(1_000_000_000));
-        assert_eq!(("2.4".to_owned(), "MBs"), format.size_with_unit(2_417_403));
-        assert_eq!(("0".to_owned(), "Bytes"), format.size_with_unit(0));
+        assert_eq!(("999".to_owned(), "B"), format.size_with_unit(999));
+        assert_eq!(("1.0".to_owned(), "KB"), format.size_with_unit(1_000));
+        assert_eq!(("1.0".to_owned(), "MB"), format.size_with_unit(1_000_000));
+        assert_eq!(("1.0".to_owned(), "GB"), format.size_with_unit(1_000_000_000));
+        assert_eq!(("2.4".to_owned(), "MB"), format.size_with_unit(2_417_403));
+        assert_eq!(("0".to_owned(), "B"), format.size_with_unit(0));
     }
 
     #[test]
@@ -356,11 +358,11 @@ mod tests {
         assert_eq!("1.234,5", european.grouped("1234.5"));
         assert_eq!("12,35", european.percent(12.345));
 
-        assert_eq!(("2.4".to_owned(), "MBs"), english.size_with_unit(2_417_403));
-        assert_eq!(("2,4".to_owned(), "MBs"), european.size_with_unit(2_417_403));
+        assert_eq!(("2.4".to_owned(), "MB"), english.size_with_unit(2_417_403));
+        assert_eq!(("2,4".to_owned(), "MB"), european.size_with_unit(2_417_403));
         // A whole number of bytes is not divided, so it shows no decimal at all
-        assert_eq!(("430".to_owned(), "Bytes"), english.size_with_unit(430));
-        assert_eq!(("999".to_owned(), "Bytes"), english.size_with_unit(999));
+        assert_eq!(("430".to_owned(), "B"), english.size_with_unit(430));
+        assert_eq!(("999".to_owned(), "B"), english.size_with_unit(999));
 
         // And saying nothing is the same as asking for the one above, which is what the program
         // prints. A caller writing its own view got ungrouped digits here and had to correct them.

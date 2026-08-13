@@ -264,8 +264,8 @@ theme_tokens! {
     total_size_label  => "total-size-label",  Style::of(LABEL_GOLD).italic();
     avg_size_number   => "avg-size-number",   Style::plain();
     avg_size_label    => "avg-size-label",    Style::of(LABEL_GOLD).italic();
-    // One token for both the total and the average, since there is no reason to want KBs in one
-    // color next to KBs in another. It is the one piece of the size that stays dim, because a unit
+    // One token for both the total and the average, since there is no reason to want KB in one
+    // color next to KB in another. It is the one piece of the size that stays dim, because a unit
     // is the least informative part of a figure the reader is scanning past
     size_unit         => "size-unit",         Style::of(SIZE_GOLD);
     keyword_number    => "keyword-number",    Style::of(KEYWORD_GREY);
