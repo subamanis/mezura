@@ -7,6 +7,11 @@ cpp cc cxx c++
 String symbols
 "
 
+Paired string openers
+R"(
+Paired string closers
+)"
+
 Line continuation
 \
 Continues

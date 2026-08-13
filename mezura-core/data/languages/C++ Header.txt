@@ -7,6 +7,11 @@ hpp hh hxx h++
 String symbols
 "
 
+Paired string openers
+R"(
+Paired string closers
+)"
+
 Line continuation
 \
 Continues

@@ -91,8 +91,9 @@ Main changes:
       Lua says it ends.
   -> A string can now open with one symbol and close with another, declared in a language file
       under "Paired string openers" and "Paired string closers". Rust declares r" and r#" with
-      their closers and C# declares @" with ", so a raw or verbatim string holding quotes, or
-      ending in a backslash, no longer counts the rest of the file as string content.
+      their closers, C# declares @" with " and C++ declares R"( with )", so a raw or verbatim
+      string holding quotes or a comment opener, or ending in a backslash, no longer counts
+      everything below it as string or comment.
   -> String symbols now split by behavior the way comment symbols always did: the "String
       symbols" list ends at the end of the line, and a "Multi line string symbols" list holds the
       ones that cross lines, like Python's """ or a backtick template. An unbalanced quote now

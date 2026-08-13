@@ -178,34 +178,71 @@ impl ScanPlan {
         }
 
         let (chunks, mut sorted_kinds) = pack_into_chunks(&entries, &anchors);
-        // An anchored match begins behind the byte that found it, so its position can come out
-        // behind one already recorded; the kind is sorted afterwards to put it back in line order
-        for (entry, anchor) in entries.iter().zip(&anchors) {
-            if *anchor != 0 { sorted_kinds[entry.kind as usize] = true }
+        // An anchored match begins behind the byte that found it, so a kind holding symbols
+        // anchored at two different depths reports them out of line order and is sorted afterwards.
+        // One depth throughout, which is what most kinds of most languages have, still arrives in
+        // the order the line is written in.
+        for (kind, sorted) in sorted_kinds.iter_mut().enumerate() {
+            let mut depths = entries.iter().zip(&anchors)
+                    .filter(|(entry, _)| entry.kind as usize == kind).map(|(_, anchor)| *anchor);
+            let Some(first) = depths.next() else { continue };
+            if depths.any(|depth| depth != first) { *sorted = true }
         }
         ScanPlan { chunks, first, slots, symbols, sorted_kinds, line_comment_ends_the_line }
     }
 }
 
-// Where in each symbol the byte that finds it sits: at the front, except for a symbol beginning
-// with an ordinary letter or digit, which is searched by a byte further in. See 'Slot'.
+// Where in each symbol the byte that finds it sits. Every symbol could be searched by its first
+// byte, and the choice exists because the bytes are not equally cheap: a letter is visited on every
+// word of the file, and any byte at all costs a memchr pass over every line once three others are
+// already spoken for. So the fewest bytes that reach every symbol are chosen, and each symbol is
+// anchored on the first of its own bytes among them. See 'Slot'.
 //
-// Which byte matters as much as that it is not the letter. The choice is a byte the scan looks
-// for anyway, which is why declaring 'r#"' or 'R"(' adds nothing to the passes: both are found by
-// the quote the language already declares. Anchoring 'R"(' on its bracket instead would put '(' in
-// front of every call in a C++ file.
+// Two symbols are what this is for. 'r#"' and 'R"(' begin with a letter and are found by the quote
+// their language declares anyway. ')"' begins with a bracket, which stands in front of every call
+// in C++, and is found by the same quote.
 fn anchors_of(entries: &[PlanEntry]) -> Vec<u8> {
-    let searched_anyway = entries.iter().map(|entry| entry.bytes[0])
-            .filter(|byte| !byte.is_ascii_alphanumeric()).collect::<Vec<u8>>();
+    // A symbol offering one byte has no say in the matter, and those are searched whatever else
+    // is decided
+    let mut searched : Vec<u8> = Vec::new();
+    for entry in entries {
+        let mut bytes = get_candidate_bytes_of(entry);
+        let Some(first) = bytes.next() else { continue };
+        if bytes.all(|byte| byte == first) && !searched.contains(&first) { searched.push(first) }
+    }
+    while let Some(byte) = find_the_byte_reaching_most_of(entries, &searched) {
+        searched.push(byte);
+    }
 
-    entries.iter().map(|entry| {
-        if !entry.bytes[0].is_ascii_alphanumeric() {
-            return 0;
+    // A symbol of nothing but letters reaches none of them and keeps its first byte, which is the
+    // only case the loop above leaves unanswered
+    entries.iter().map(|entry| entry.bytes.iter().position(|byte| searched.contains(byte))
+            .unwrap_or(0) as u8).collect()
+}
+
+fn get_candidate_bytes_of(entry: &PlanEntry) -> impl Iterator<Item = u8> + '_ {
+    entry.bytes.iter().copied().filter(|byte| !byte.is_ascii_alphanumeric())
+}
+
+fn is_reached_by(entry: &PlanEntry, searched: &[u8]) -> bool {
+    get_candidate_bytes_of(entry).any(|byte| searched.contains(&byte))
+}
+
+// The byte that would reach the most of what nothing reaches yet, or nothing when everything is
+// reached. On a tie the one met first wins, so a language's plan is the same on every run.
+fn find_the_byte_reaching_most_of(entries: &[PlanEntry], searched: &[u8]) -> Option<u8> {
+    let waiting = entries.iter().filter(|entry| get_candidate_bytes_of(entry).next().is_some()
+            && !is_reached_by(entry, searched)).collect::<Vec<&PlanEntry>>();
+
+    let mut best : Option<(u8, usize)> = None;
+    for entry in &waiting {
+        for byte in get_candidate_bytes_of(entry) {
+            let reach = waiting.iter().filter(|other|
+                    get_candidate_bytes_of(other).any(|other_byte| other_byte == byte)).count();
+            if best.is_none_or(|(_, most)| reach > most) { best = Some((byte, reach)) }
         }
-        entry.bytes.iter().position(|byte| searched_anyway.contains(byte))
-                .or_else(|| entry.bytes.iter().rposition(|byte| !byte.is_ascii_alphanumeric()))
-                .unwrap_or(0) as u8
-    }).collect()
+    }
+    best.map(|(byte, _)| byte)
 }
 
 // Two kinds sharing a first byte must be searched in the same pass, or that byte gets visited twice.
@@ -2275,6 +2312,58 @@ mod tests {
                 "the opener is searched by '(' in a language made of brackets");
     }
 
+    // The same reasoning reaches a symbol that begins with punctuation nobody else wants. C++'s
+    // ')"' would put the bracket that stands in front of every call into the scan, and the quote it
+    // also holds is searched anyway, so declaring the raw pair adds no byte and no pass at all.
+    #[test]
+    fn a_symbol_is_searched_by_a_byte_another_symbol_needs_before_one_of_its_own() {
+        let plain = Language::new("cpp-like", ["cpp"], ["\""], ["//"], &[("/*", "*/")], []);
+        let with_raw = Language::new("cpp-like", ["cpp"], ["\""], ["//"], &[("/*", "*/")], [])
+                .with_string_pairs(&[("R\"(", ")\"")]);
+
+        let bytes_of = |language: &Language| {
+            let plan = ScanPlan::build(language);
+            let mut bytes = plan.chunks.iter()
+                    .flat_map(|c| c.bytes[..c.len as usize].to_vec()).collect::<Vec<u8>>();
+            bytes.sort_unstable();
+            (bytes, plan.chunks.len())
+        };
+        assert_eq!(bytes_of(&plain), bytes_of(&with_raw));
+        // '*' is dropped rather than kept: '*/' holds the '/' that '//' forces into the scan, and
+        // every pointer, product and comment continuation line stops being a candidate position
+        assert_eq!((vec![b'"', b'/'], 1), bytes_of(&with_raw));
+    }
+
+    // C++'s raw string crosses lines by itself and keeps everything inside it, which is what makes
+    // it worth declaring: a file that opens one and writes a quote, a comment opener or a bracket
+    // inside it used to count the rest of the line as whatever those symbols said.
+    #[test]
+    fn a_cpp_raw_string_keeps_the_quotes_and_brackets_inside_it() {
+        let cpp = Language::new("cpp-like", ["cpp"], ["\""], ["//"], &[("/*", "*/")], [])
+                .with_string_pairs(&[("R\"(", ")\"")]);
+
+        assert_eq!(TextInfo::from_slice_w_literal("auto s = ;"),
+                bounds_multi(r#"auto s = R"(say "hi" // and (stay) code)";"#, &cpp, None, &None));
+        // a prefixed form is the same three bytes behind a letter or two, so one declaration
+        // answers for 'LR"(', 'uR"(' and 'u8R"(' as well
+        assert_eq!(TextInfo::from_slice_w_literal("auto s = u8;"),
+                bounds_multi(r#"auto s = u8R"(text)";"#, &cpp, None, &None));
+
+        // the closer is the bracket every call in the language ends with, and standing in code with
+        // nothing open it is text: this is one ordinary string and not the end of anything
+        assert_eq!(TextInfo::from_slice_w_literal("printf();"),
+                bounds_multi(r#"printf(")");"#, &cpp, None, &None));
+
+        // left open it reports its own symbol, an ordinary quote cannot close it on the next line,
+        // and its own closer can
+        assert_eq!(TextInfo::new(Some("auto s = ".to_owned()), true, None, Some(1)),
+                bounds_multi(r#"auto s = R"(open"#, &cpp, None, &None));
+        assert_eq!(TextInfo::new(None, true, None, Some(1)),
+                bounds_multi(r#"still text "quoted" // not a comment"#, &cpp, None, &Some(1)));
+        assert_eq!(TextInfo::new(Some(";".to_owned()), true, None, None),
+                bounds_multi(r#"done)";"#, &cpp, None, &Some(1)));
+    }
+
     // Rust's shortest raw form is one letter and a quote, so every string ending in 'r' carries
     // what looks like an opener: '"abcr"' must still be one plain string and not an opener inside
     // one. What saves it is that the pair cannot open while another string is open.
@@ -2594,25 +2683,21 @@ mod tests {
         for language in [&*JAVA, &*RUST, &*PHP, &*PYTHON, &*PYTHON_FULL, &*PASCAL, &*D_LANG, &*LUA, &*POWERSHELL] {
             let plan = ScanPlan::build(language);
             let searched = |byte: u8| plan.chunks.iter().filter(|c| c.bytes[..c.len as usize].contains(&byte)).count();
+            // The byte a symbol is found by, which is its first only until it is anchored on another
+            let bytes_of = |kind: u8| plan.slots.iter().enumerate().filter(|(_, slot)| slot.kind == kind)
+                    .map(|(at, slot)| plan.symbols[at][slot.anchor as usize]).collect::<Vec<u8>>();
 
-            let string_halves = language.string_symbols.iter().cloned()
-                    .chain(language.multiline_strings.iter()
-                            .flat_map(|crossing| [crossing.open.clone(), crossing.close.clone()]))
-                    .collect::<Vec<_>>();
-            let com_starts = language.multiline_comments.iter().map(|(start, _)| start.clone()).collect::<Vec<_>>();
-            let com_ends = language.multiline_comments.iter().map(|(_, end)| end.clone()).collect::<Vec<_>>();
-            for symbols in [&string_halves, &language.comment_symbols, &com_starts, &com_ends] {
-                if symbols.is_empty() { continue; }
-                let first_bytes = symbols.iter().map(|s| s.as_bytes()[0]).collect::<Vec<u8>>();
+            for kind in [STRINGS, COMMENTS, COM_STARTS, COM_ENDS] {
+                let bytes = bytes_of(kind);
+                if bytes.is_empty() { continue; }
                 let holding = plan.chunks.iter()
-                        .filter(|c| first_bytes.iter().any(|b| c.bytes[..c.len as usize].contains(b)))
+                        .filter(|c| bytes.iter().any(|b| c.bytes[..c.len as usize].contains(b)))
                         .count();
                 assert_eq!(1, holding, "{} splits a kind across passes", language.name);
-            }
-            // and no byte is looked for twice, which would report the same symbol from two passes
-            for symbol in string_halves.iter().chain(language.comment_symbols.iter())
-                    .chain(com_starts.iter()).chain(com_ends.iter()) {
-                assert_eq!(1, searched(symbol.as_bytes()[0]), "{} searches a byte twice", language.name);
+                // and no byte is looked for twice, which would report the same symbol from two passes
+                for byte in bytes {
+                    assert_eq!(1, searched(byte), "{} searches a byte twice", language.name);
+                }
             }
         }
     }
