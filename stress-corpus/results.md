@@ -97,30 +97,29 @@ for it. So a `//` comment inside a `<script>` block is read with the page's symb
 `//`, and counts as markup code. This costs it cases 5100, 5300, 5500, 6200, 6600 and 6900, which is
 every case in the folder about embedded languages. tokei does have the feature and gets most of them.
 
-**7. Wrong in company.** The heredoc holding an apostrophe (3100), the regex holding a comment opener
-(3700), C++'s delimited `R"delim( ... )delim"` (6700), Lua's `[[ ]]` string (6800) and the SQL path
-ending in a backslash (7000) defeat all three counters, mezura included. They are listed here so the
-count of scc's faults is not read as a score.
+**7. PowerShell's backtick is not read as an escape, and its single quoted string is not declared at
+all.** Its language file gives Powershell one quote, the double one, and no apostrophe. So
+``Write-Host "a `" b"`` is read as three plain quotes, the last of which opens a string that runs
+past the end of the line and turns the comment under it into code. Case 7100. Case 7200 is the
+companion, an apostrophe standing in ordinary code behind a backtick, and scc answers it **correctly
+by accident**: not because the backtick stopped it but because it does not know the language has a
+single quoted string to open. A file holding a real one would find that out.
+
+**8. Wrong in company.** The heredoc holding an apostrophe (3100), the regex holding a comment opener
+(3700), C++'s delimited `R"delim( ... )delim"` (6700) and Lua's `[[ ]]` string (6800) defeat all
+three counters, mezura included. They are listed here so the count of scc's faults is not read as a
+score.
 
 **A backslash escapes in every language, and in several it means nothing.** Case 7000 is the sharpest
-of them and all three tools fail it identically. Standard SQL escapes a quote by doubling it, `''`,
-and the backslash is an ordinary character, so `path = 'C:\'` is a closed string holding a Windows
-path. All three read the backslash as cancelling the closing quote, and since all three let SQL
-strings cross lines, every comment below is counted as string content: 3 code and 7 comment where the
-honest answer is 2 and 8, and on a real file the loss runs to the end of it.
-
-The same hardcoded backslash sits over a whole family: Pascal, Delphi, Ada, Fortran and COBOL all
-escape by doubling too, and all five are shipped here. They escape lightly because their quotes are
-declared as ending with their line, so the damage stops at that line and never changes a count, only
-which words on it are searched for keywords. SQL is the one where the quote crosses lines, and that
-is why it is the case that got written.
+of them. Standard SQL escapes a quote by doubling it, `''`, and the backslash is an ordinary
+character, so `path = 'C:\'` is a closed string holding a Windows path. Read as an escape it cancels
+the closing quote, and since SQL strings cross lines, every comment below counts as string content.
+tokei and scc both still do this; mezura did too until a language file was given an `Escape
+character` block to say what cancels a quote, the backslash in most languages, the backtick in
+PowerShell and nothing at all in the doubling family. Case 6000, the shell writing an apostrophe as
+`I\'m`, was the other half of it and is fixed by the same block.
 
 ## Where scc is right and we are not
-
-**The escaped apostrophe in unquoted shell text**, case 6000. `echo I\'m done` writes one apostrophe
-and opens nothing. We treat the single quote as a form that escapes nothing, apply that to the
-opening symbol as well as the closing one, and count the comments below as code. scc and tokei both
-read it correctly.
 
 **A comment opener inside an HTML attribute**, case 4000. We declare no string symbols for HTML on
 purpose, so a `<!--` written inside a quoted attribute value opens a comment that never closes. Both
@@ -129,14 +128,14 @@ of the others get it right.
 ## Where scc is right and tokei is not
 
 scc answers correctly, and tokei does not, in cases 1300, 1400, 1900, 3900, 4600, 4700, 4900, 5000,
-5400 and 6400: Lua's counted brackets, a string opening after a block closes, an apostrophe in HTML
+5400, 6400 and 7200: Lua's counted brackets, a string opening after a block closes, an apostrophe in HTML
 text, a block comment closed by `//*/`, code between two comments on one line, a doc comment with no
 text, and a statement after a block closes. In case 4600 scc is the only one of the three to close
 the block at `//*/`, which is the C idiom for switching a block off by adding one character.
 
 ## Where tokei is wrong
 
-tokei misreads 29 of the 70 cases. Each of those files carries a `tokei:` line saying what it gets
+tokei misreads 31 of the 72 cases. Each of those files carries a `tokei:` line saying what it gets
 wrong, so the detail is next to the evidence rather than repeated here. By mechanism:
 
 **A quote it should not have seen opens a string, and everything below counts as code.** Cases 1800,
@@ -223,7 +222,7 @@ Written as `lines / code / comment`, as each tool reports today.
 | 5700 wysiwyg string ending in a backslash | 11/2/9 | **11/3/8** | **11/3/8** |
 | 5800 here string holding an apostrophe | 11/4/7 | 11/4/7 | 11/4/7 |
 | 5900 nested block comment in odin | 13/2/11 | **13/4/9** | **13/4/9** |
-| 6000 escaped apostrophe outside quotes | **13/4/9** | 13/2/11 | 13/2/11 |
+| 6000 escaped apostrophe outside quotes | 10/2/8 | 10/2/8 | 10/2/8 |
 | 6100 script opener that never closes | 9/2/7 | 9/2/7 | 9/2/7 |
 | 6200 script closer written with a space | 14/4/10 | 14/4/10 | 14/4/10 |
 | 6300 brace and trailing comment | 8/2/6 | 8/3/5 | 8/3/5 |
@@ -233,7 +232,9 @@ Written as `lines / code / comment`, as each tool reports today.
 | 6700 delimited raw string names its own closer | **11/1/10** | **11/1/10** | **11/1/10** |
 | 6800 long bracket string holding a comment symbol | **10/1/8** | **10/2/8** | **10/2/8** |
 | 6900 php block holding html around it | **15/5/8** | **15/7/8** | **15/7/8** |
-| 7000 backslash before a closing quote in sql | **10/3/7** | **10/3/7** | **10/3/7** |
+| 7000 backslash before a closing quote in sql | 10/2/8 | **10/3/7** | **10/3/7** |
+| 7100 backtick escapes inside a double quoted string | 9/2/7 | **9/3/6** | **9/3/6** |
+| 7200 backtick before a single quoted string | 9/2/7 | **9/3/6** | 9/2/7 |
 
 Bold marks an answer that is wrong under that tool's own definitions. An unbolded difference is one
 of the three definitions above. Cases 6200 and 6600 are bold nowhere and wrong in all three: the
@@ -250,4 +251,4 @@ scc.exe <case>
 Where a tool disagreed with either of the other two, the case was counted by hand. Where scc's answer
 needed explaining, `scc.exe -t <case>` prints its verdict for every line, which says which line moved,
 and the mechanism was then confirmed on a file written to isolate it rather than inferred from the
-source. Findings 1, 2, 3, 5 and 6 were confirmed that way. Finding 4 is the measurement only.
+source. Findings 1, 2, 3, 5, 6 and 7 were confirmed that way. Finding 4 is the measurement only.
