@@ -82,8 +82,11 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                         let module = parsable_file.module as usize;
                         let mut of_this_file = config.collect_files.then(HashMap::<String, Stats>::new);
                         // The sections are the breakdown of this file, booked beside the row and
-                        // never into it; what they weigh is already inside the whole below
-                        for section in &report.sections {
+                        // never into it; what they weigh is already inside the whole below. A region
+                        // that held nothing and one written in the container's own language get no
+                        // row: zero lines say nothing, and a container is not a breakdown of itself.
+                        for section in report.sections.iter().filter(|section|
+                                section.stats.lines > 0 && section.language != lang_name) {
                             let section_keywords = lookup.find_by_name(&section.language)
                                     .map(|inner| inner.keywords.as_slice()).unwrap_or(&[]);
                             local_nested[module].entry(lang_name.to_owned()).or_default()

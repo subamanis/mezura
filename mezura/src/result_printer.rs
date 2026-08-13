@@ -74,7 +74,7 @@ pub fn format_and_print_results(result: &RunResult, existing_log_content: &Optio
             else {groups.iter().map(|x| x.hidden).sum::<usize>()};
 
     let theme = super::theme::get_active();
-    let columns = Columns::of(&groups, total);
+    let columns = Columns::of(&groups, total, config.view.hidden);
     let block_width = columns.width(theme);
     let should_print_keywords = !config.view.hidden.keywords;
     // Nothing to cross when no module was named, so the table is printed instead of a grid of one
@@ -108,9 +108,9 @@ languages crossed with modules. Use any other layout to see the files."));
     match layout {
         Layout::Matrix => print_as_matrix(theme, &groups, &matrix_names, total, print_total, should_print_keywords),
         Layout::Boxed => print_as_boxed_table(theme, &groups, total, print_total, should_print_keywords,
-                of_the_table, config.view.sort_by),
+                of_the_table, config.view.sort_by, &config.view.hidden),
         Layout::Table => print_as_table(theme, &groups, total, print_total, should_print_keywords,
-                of_the_table, config.view.sort_by),
+                of_the_table, config.view.sort_by, &config.view.hidden),
         Layout::List => print_individually(theme, &groups, &columns, block_width, should_print_keywords)
     }
 
@@ -167,12 +167,13 @@ pub fn create_theme_sample_rows(theme: &Theme, layout: Layout) -> Vec<String> {
         lines.extend(format_keyword_block_lines(theme, &groups));
         lines
     };
+    let no_hides = config_manager::Hidden::default();
     match layout {
-        Layout::Table => with_keywords(format_table_lines(theme, &groups, &total, false, &[], SortCriterion::Lines)),
-        Layout::Boxed => with_keywords(format_boxed_lines(theme, &groups, &total, false, &[], SortCriterion::Lines)),
+        Layout::Table => with_keywords(format_table_lines(theme, &groups, &total, false, &[], SortCriterion::Lines, &no_hides)),
+        Layout::Boxed => with_keywords(format_boxed_lines(theme, &groups, &total, false, &[], SortCriterion::Lines, &no_hides)),
         // The matrix has no second axis to show for one made-up language of one unnamed module, and
         // the tokens it paints are the ones the table already previews
-        Layout::Matrix => with_keywords(format_table_lines(theme, &groups, &total, false, &[], SortCriterion::Lines)),
+        Layout::Matrix => with_keywords(format_table_lines(theme, &groups, &total, false, &[], SortCriterion::Lines, &no_hides)),
         Layout::List => {
             let len_of = |value: usize| format_with_separators(value).len();
             let columns = Columns {
@@ -180,7 +181,8 @@ pub fn create_theme_sample_rows(theme: &Theme, layout: Layout) -> Vec<String> {
                 headline: len_of(FILES).max(len_of(LINES)),
                 code: len_of(CODE),
                 comments: len_of(COMMENTS),
-                extra: len_of(LINES - CODE - COMMENTS)
+                extra: len_of(LINES - CODE - COMMENTS),
+                hidden: no_hides
             };
             let width = columns.width(theme);
             vec![columns.format_files_row(theme, FILES, &format_size(theme, BYTES, BYTES / FILES), width),
@@ -403,7 +405,41 @@ enum ColumnKind {
     Extra,
     Size,
     Percent,
-    Change
+    Change,
+    // The percentage of a change, which only a comparison has. '--hide percentages' takes it and
+    // leaves the absolute move, since that is still a change and not a share.
+    ChangePercent
+}
+
+// Which of a table's columns '--hide' leaves standing. Everything that describes a figure follows
+// that figure out, so hiding 'files' never leaves a bare share or a bare change behind.
+fn create_shown_mask(columns: &[ColumnKind], hidden: &config_manager::Hidden) -> Vec<bool> {
+    let survives = |kind: ColumnKind| match kind {
+        ColumnKind::Files => !hidden.files,
+        ColumnKind::Comments => !hidden.comments,
+        ColumnKind::Extra => !hidden.extra,
+        ColumnKind::Size => !hidden.size,
+        ColumnKind::Percent | ColumnKind::ChangePercent => !hidden.percentages,
+        ColumnKind::Name | ColumnKind::Lines | ColumnKind::Code | ColumnKind::Change => true
+    };
+    let mut mask = Vec::with_capacity(columns.len());
+    let mut figure_shown = true;
+    for kind in columns {
+        match kind {
+            ColumnKind::Percent | ColumnKind::ChangePercent | ColumnKind::Change =>
+                    mask.push(figure_shown && survives(*kind)),
+            _ => {
+                figure_shown = survives(*kind);
+                mask.push(figure_shown);
+            }
+        }
+    }
+
+    mask
+}
+
+fn keep_shown<T>(cells: Vec<T>, mask: &[bool]) -> Vec<T> {
+    cells.into_iter().zip(mask).filter(|(_, kept)| **kept).map(|(cell, _)| cell).collect()
 }
 
 static NO_NESTED : std::sync::LazyLock<HashMap<String, HashMap<String, Stats>>> =
@@ -448,7 +484,7 @@ impl<'a> SubRowStyles<'a> {
             ColumnKind::Extra => self.extra,
             ColumnKind::Size => self.size,
             ColumnKind::Percent => self.percent,
-            ColumnKind::Change => &UNPAINTED
+            ColumnKind::Change | ColumnKind::ChangePercent => &UNPAINTED
         }
     }
 
@@ -600,11 +636,11 @@ fn determine_name_header(groups: &[Group]) -> &'static str {
 // One aligned row per language, no borders: whitespace alignment survives being pasted into a
 // README or a ticket. The header cells reuse the label token of the quantity underneath them and
 // the body cells its number token, so the table needs no styling of its own.
-fn print_as_table(theme: &Theme, groups: &[Group], total: &Stats,
-        print_total: bool, should_print_keywords: bool, notes: &[String], sort_by: SortCriterion)
+fn print_as_table(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool,
+        should_print_keywords: bool, notes: &[String], sort_by: SortCriterion, hidden: &config_manager::Hidden)
 {
     println!("{}.\n", theme.heading.paint("Details"));
-    for line in format_table_lines(theme, groups, total, print_total, notes, sort_by) {
+    for line in format_table_lines(theme, groups, total, print_total, notes, sort_by, hidden) {
         println!("{line}");
     }
 
@@ -617,7 +653,7 @@ fn print_as_table(theme: &Theme, groups: &[Group], total: &Stats,
 }
 
 fn format_table_lines(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool,
-        notes: &[String], sort_by: SortCriterion) -> Vec<String>
+        notes: &[String], sort_by: SortCriterion, hidden: &config_manager::Hidden) -> Vec<String>
 {
     // Every counted column carries its own percentage. The two that compare languages ('Files' and
     // 'Lines') take a share of the total, the two that describe one ('Code' and 'Comments') take a
@@ -626,8 +662,6 @@ fn format_table_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
     const COLUMNS : [ColumnKind; 11] = [ColumnKind::Name, ColumnKind::Files, ColumnKind::Percent,
             ColumnKind::Lines, ColumnKind::Percent, ColumnKind::Code, ColumnKind::Percent,
             ColumnKind::Comments, ColumnKind::Percent, ColumnKind::Extra, ColumnKind::Size];
-    // The columns a percentage belongs to, kept against their number by a gap of their own
-    const TIGHT_AFTER : [usize; 4] = [1, 3, 5, 7];
 
     fn format_row_of(theme: &Theme, name: &str, files: usize, lines: usize, code: usize, comments: usize, bytes: usize,
             total_files: usize, total_lines: usize) -> Vec<String>
@@ -684,16 +718,25 @@ fn format_table_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
             }
         }}).collect::<Vec<_>>();
 
-    let mut headers = HEADERS.map(str::to_owned).to_vec();
+    let mask = create_shown_mask(&COLUMNS, hidden);
+    let columns = keep_shown(COLUMNS.to_vec(), &mask);
+    // A percentage is kept against its number by a gap of its own
+    let tight_after = (0..columns.len()).filter(|at| columns.get(at + 1) == Some(&ColumnKind::Percent))
+            .collect::<Vec<_>>();
+    let rows = rows.into_iter().map(|row| keep_shown(row, &mask)).collect::<Vec<_>>();
+
+    let mut headers = keep_shown(HEADERS.map(str::to_owned).to_vec(), &mask);
     headers[0] = determine_name_header(groups).to_owned();
-    let mut header_styles = vec![&theme.details_language_header, &theme.files_label, &theme.percent, &theme.lines_label, &theme.percent,
-            &theme.code_label, &theme.percent, &theme.comments_label, &theme.percent, &theme.extra_label, &theme.total_size_label];
+    let mut header_styles = keep_shown(vec![&theme.details_language_header, &theme.files_label, &theme.percent,
+            &theme.lines_label, &theme.percent, &theme.code_label, &theme.percent, &theme.comments_label,
+            &theme.percent, &theme.extra_label, &theme.total_size_label], &mask);
     mark_sorted_column(theme, &mut headers, &mut header_styles, sort_by);
-    let body_styles = [&theme.details_language_name, &theme.files_number, &theme.percent, &theme.lines_number, &theme.percent,
-            &theme.code_number, &theme.percent, &theme.comments_number, &theme.percent, &theme.extra_number, &theme.total_size_number];
+    let body_styles = keep_shown(vec![&theme.details_language_name, &theme.files_number, &theme.percent,
+            &theme.lines_number, &theme.percent, &theme.code_number, &theme.percent, &theme.comments_number,
+            &theme.percent, &theme.extra_number, &theme.total_size_number], &mask);
 
     draw_aligned_table(theme, &headers, &rows, &described.iter().map(|row| row.kind).collect::<Vec<_>>(),
-            &COLUMNS, &TIGHT_AFTER, &header_styles, &body_styles, is_grouped(groups))
+            &columns, &tight_after, &header_styles, &body_styles, is_grouped(groups))
 }
 
 // The whole of what '--diff' prints, and the only thing printed at all when both readings were
@@ -715,8 +758,8 @@ pub fn print_comparison(comparison: &super::diff::Comparison, config: &Configura
 
     let rows = create_compared_rows(pairs.as_deref(), &baseline.result, &subject.result, config);
     let lines = match config.view.layout {
-        Layout::Boxed => format_boxed_comparison_lines(theme, &rows, config.view.sort_by),
-        _ => format_comparison_lines(theme, &rows, config.view.sort_by)
+        Layout::Boxed => format_boxed_comparison_lines(theme, &rows, config.view.sort_by, &config.view.hidden),
+        _ => format_comparison_lines(theme, &rows, config.view.sort_by, &config.view.hidden)
     };
     for line in lines {
         println!("{line}");
@@ -917,7 +960,8 @@ so anything a .gitignore ignores is counted on one side alone.")).to_string(),
 // The comparison in the boxed frame: the same triads as the table, with each figure's change in the
 // slot its share occupies on a plain run, and 'Extra' gone the same way. The change cells arrive
 // painted by their direction, so the frame's own slot style is plain.
-fn format_boxed_comparison_lines(theme: &Theme, rows: &[ComparedRow], sort_by: SortCriterion) -> Vec<String>
+fn format_boxed_comparison_lines(theme: &Theme, rows: &[ComparedRow], sort_by: SortCriterion,
+        hidden: &config_manager::Hidden) -> Vec<String>
 {
     const HEADERS : [&str; 6] = ["Language", "Files", "Lines", "Code", "Comments", "Size"];
     const COLUMNS : [ColumnKind; 6] = [ColumnKind::Name, ColumnKind::Files, ColumnKind::Lines,
@@ -929,6 +973,7 @@ fn format_boxed_comparison_lines(theme: &Theme, rows: &[ComparedRow], sort_by: S
         let counted = |was: usize, is: usize| BoxedCell {
             number: format_with_separators(is),
             slot: if was == is {paint_change(theme, was, is, NO_CHANGE)}
+                    else if hidden.percentages {paint_change(theme, was, is, &format_signed_difference(was, is))}
                     else {paint_change(theme, was, is, &format!("{}  {}", format_signed_difference(was, is), format_change(was, is)))}
         };
         let (size, unit) = super::number_formatter::get_active().size_with_unit(now.bytes);
@@ -947,17 +992,21 @@ fn format_boxed_comparison_lines(theme: &Theme, rows: &[ComparedRow], sort_by: S
     let drawn = rows.iter().map(|row| (row.name.clone(), cells(&row.baseline, &row.subject))).collect::<Vec<_>>();
     let kinds = rows.iter().map(|row| row.kind).collect::<Vec<_>>();
 
-    let number_styles = [&theme.files_number, &theme.lines_number, &theme.code_number,
-            &theme.comments_number, &theme.total_size_number];
+    let mask = create_shown_mask(&COLUMNS, hidden);
+    let columns = keep_shown(COLUMNS.to_vec(), &mask);
+    let drawn = drawn.into_iter()
+            .map(|(name, cells)| (name, keep_shown(cells, &mask[1..]))).collect::<Vec<_>>();
+    let number_styles = keep_shown(vec![&theme.files_number, &theme.lines_number, &theme.code_number,
+            &theme.comments_number, &theme.total_size_number], &mask[1..]);
 
-    let mut headers = HEADERS.map(str::to_owned).to_vec();
+    let mut headers = keep_shown(HEADERS.map(str::to_owned).to_vec(), &mask);
     headers[0] = determine_name_header_for(&kinds).to_owned();
-    let mut header_styles = vec![&theme.details_language_header, &theme.files_label, &theme.lines_label,
-            &theme.code_label, &theme.comments_label, &theme.total_size_label];
+    let mut header_styles = keep_shown(vec![&theme.details_language_header, &theme.files_label,
+            &theme.lines_label, &theme.code_label, &theme.comments_label, &theme.total_size_label], &mask);
     mark_sorted_column(theme, &mut headers, &mut header_styles, sort_by);
 
     draw_boxed_table(theme, &headers[0], &headers.iter().map(String::as_str).collect::<Vec<_>>(),
-            &drawn, &kinds, &COLUMNS, ColumnKind::Change, &header_styles, &number_styles)
+            &drawn, &kinds, &columns, ColumnKind::Change, &header_styles, &number_styles)
 }
 
 // 'From A to B' and not 'compared A to B': the columns hold B's counts and the signs are the
@@ -973,7 +1022,8 @@ fn format_comparison_heading(theme: &Theme, baseline: &super::diff::Reading, sub
 // share percentages, 'Extra' and 'Size' are gone. The shares are what the change replaces, 'Extra' is
 // the three columns left over subtracted from the lines, and the size is the one figure genuinely
 // dropped.
-fn format_comparison_lines(theme: &Theme, rows: &[ComparedRow], sort_by: SortCriterion) -> Vec<String>
+fn format_comparison_lines(theme: &Theme, rows: &[ComparedRow], sort_by: SortCriterion,
+        hidden: &config_manager::Hidden) -> Vec<String>
 {
     // The change columns are left unnamed: their values are two to five characters and the word would
     // widen the table for nothing, while every one of them carries a sign that says what it is.
@@ -983,14 +1033,10 @@ fn format_comparison_lines(theme: &Theme, rows: &[ComparedRow], sort_by: SortCri
     // files" is the answer where "+5.26%" is the same fact with a decimal point put on it
     const HEADERS : [&str; 14] = ["Language", "Files", "", "Lines", "", "%", "Code", "", "%",
             "Comments", "", "%", "Size", ""];
-    // The '%' columns hold the percentage of the change, painted by its direction like the figure
-    // beside it, so they are 'Change' and not 'Percent'
     const COLUMNS : [ColumnKind; 14] = [ColumnKind::Name, ColumnKind::Files, ColumnKind::Change,
-            ColumnKind::Lines, ColumnKind::Change, ColumnKind::Change, ColumnKind::Code,
-            ColumnKind::Change, ColumnKind::Change, ColumnKind::Comments, ColumnKind::Change,
-            ColumnKind::Change, ColumnKind::Size, ColumnKind::Change];
-    // Both the change and the percentage belong to the number before them
-    const TIGHT_AFTER : [usize; 8] = [1, 3, 4, 6, 7, 9, 10, 12];
+            ColumnKind::Lines, ColumnKind::Change, ColumnKind::ChangePercent, ColumnKind::Code,
+            ColumnKind::Change, ColumnKind::ChangePercent, ColumnKind::Comments, ColumnKind::Change,
+            ColumnKind::ChangePercent, ColumnKind::Size, ColumnKind::Change];
 
     let plain = super::theme::Style::plain();
     // The direction is a property of the value and not of the column, so these two cells arrive
@@ -1013,17 +1059,25 @@ fn format_comparison_lines(theme: &Theme, rows: &[ComparedRow], sort_by: SortCri
     let drawn = rows.iter().map(|row| cells(row.name.clone(), &row.baseline, &row.subject)).collect::<Vec<_>>();
     let kinds = rows.iter().map(|row| row.kind).collect::<Vec<_>>();
 
-    let mut headers = HEADERS.map(str::to_owned).to_vec();
-    let mut header_styles = vec![&theme.details_language_header, &theme.files_label, &plain,
+    let mask = create_shown_mask(&COLUMNS, hidden);
+    let columns = keep_shown(COLUMNS.to_vec(), &mask);
+    // Both the change and its percentage belong to the number before them
+    let tight_after = (0..columns.len()).filter(|at|
+            matches!(columns.get(at + 1), Some(ColumnKind::Change | ColumnKind::ChangePercent)))
+            .collect::<Vec<_>>();
+    let drawn = drawn.into_iter().map(|row| keep_shown(row, &mask)).collect::<Vec<_>>();
+
+    let mut headers = keep_shown(HEADERS.map(str::to_owned).to_vec(), &mask);
+    let mut header_styles = keep_shown(vec![&theme.details_language_header, &theme.files_label, &plain,
             &theme.lines_label, &plain, &theme.percent, &theme.code_label, &plain, &theme.percent,
-            &theme.comments_label, &plain, &theme.percent, &theme.total_size_label, &plain];
-    let body_styles = [&theme.details_language_name, &theme.files_number, &plain,
+            &theme.comments_label, &plain, &theme.percent, &theme.total_size_label, &plain], &mask);
+    let body_styles = keep_shown(vec![&theme.details_language_name, &theme.files_number, &plain,
             &theme.lines_number, &plain, &plain, &theme.code_number, &plain, &plain,
-            &theme.comments_number, &plain, &plain, &theme.total_size_number, &plain];
+            &theme.comments_number, &plain, &plain, &theme.total_size_number, &plain], &mask);
     headers[0] = determine_name_header_for(&kinds).to_owned();
     mark_sorted_column(theme, &mut headers, &mut header_styles, sort_by);
 
-    draw_aligned_table(theme, &headers, &drawn, &kinds, &COLUMNS, &TIGHT_AFTER, &header_styles,
+    draw_aligned_table(theme, &headers, &drawn, &kinds, &columns, &tight_after, &header_styles,
             &body_styles, kinds.contains(&RowKind::Module))
 }
 
@@ -1329,12 +1383,12 @@ fn format_matrix_lines<'a>(theme: &'a Theme, groups: &[Group], languages: &[Stri
 // The same figures as the borderless table, in a drawn frame. Each number and its percentage share
 // one cell here, since the borders already do the grouping that the tight gap does over there, and
 // that brings the whole thing down from eleven columns to seven.
-fn print_as_boxed_table(theme: &Theme, groups: &[Group], total: &Stats,
-        print_total: bool, should_print_keywords: bool, notes: &[String], sort_by: SortCriterion)
+fn print_as_boxed_table(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool,
+        should_print_keywords: bool, notes: &[String], sort_by: SortCriterion, hidden: &config_manager::Hidden)
 {
     println!("{}.
 ", theme.heading.paint("Details"));
-    for line in format_boxed_lines(theme, groups, total, print_total, notes, sort_by) {
+    for line in format_boxed_lines(theme, groups, total, print_total, notes, sort_by, hidden) {
         println!("{line}");
     }
 
@@ -1345,7 +1399,7 @@ fn print_as_boxed_table(theme: &Theme, groups: &[Group], total: &Stats,
 }
 
 fn format_boxed_lines(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool,
-        notes: &[String], sort_by: SortCriterion) -> Vec<String>
+        notes: &[String], sort_by: SortCriterion, hidden: &config_manager::Hidden) -> Vec<String>
 {
     const HEADERS : [&str; 7] = ["Language", "Files", "Lines", "Code", "Comments", "Extra", "Size"];
     const COLUMNS : [ColumnKind; 7] = [ColumnKind::Name, ColumnKind::Files, ColumnKind::Lines,
@@ -1400,19 +1454,33 @@ fn format_boxed_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
         }}).collect::<Vec<_>>();
     let kinds = described.iter().map(|row| row.kind).collect::<Vec<_>>();
 
+    // The percentages live in the slots beside the numbers, and a column whose slots are all empty
+    // is drawn without one
+    let mask = create_shown_mask(&COLUMNS, hidden);
+    let columns = keep_shown(COLUMNS.to_vec(), &mask);
+    let mut rows = rows.into_iter()
+            .map(|(name, cells)| (name, keep_shown(cells, &mask[1..]))).collect::<Vec<_>>();
+    if hidden.percentages {
+        for (_, cells) in &mut rows {
+            for cell in cells {
+                cell.slot.clear();
+            }
+        }
+    }
+
     let header_styles = [&theme.files_label, &theme.lines_label, &theme.code_label,
             &theme.comments_label, &theme.extra_label, &theme.total_size_label];
-    let number_styles = [&theme.files_number, &theme.lines_number, &theme.code_number,
-            &theme.comments_number, &theme.extra_number, &theme.total_size_number];
+    let number_styles = keep_shown(vec![&theme.files_number, &theme.lines_number, &theme.code_number,
+            &theme.comments_number, &theme.extra_number, &theme.total_size_number], &mask[1..]);
 
-    let mut headers = HEADERS.map(str::to_owned).to_vec();
+    let mut headers = keep_shown(HEADERS.map(str::to_owned).to_vec(), &mask);
     headers[0] = determine_name_header(groups).to_owned();
-    let mut header_styles = std::iter::once(&theme.details_language_header)
-            .chain(header_styles).collect::<Vec<_>>();
+    let mut header_styles = keep_shown(std::iter::once(&theme.details_language_header)
+            .chain(header_styles).collect::<Vec<_>>(), &mask);
     mark_sorted_column(theme, &mut headers, &mut header_styles, sort_by);
 
     draw_boxed_table(theme, &headers[0], &headers.iter().map(String::as_str).collect::<Vec<_>>(),
-            &rows, &kinds, &COLUMNS, ColumnKind::Percent, &header_styles, &number_styles)
+            &rows, &kinds, &columns, ColumnKind::Percent, &header_styles, &number_styles)
 }
 
 // The joints are as much text as the cells, so the width is the columns plus every joint
@@ -1513,7 +1581,11 @@ fn draw_boxed_table(theme: &Theme, name_title: &str, headers: &[&str], rows: &[(
             RowKind::Module | RowKind::Total => false,
             RowKind::Language | RowKind::Nested | RowKind::File | RowKind::Note => true
         };
-        let separator = if position == 0 || !is_body {
+        // A module's name row is drawn in the frame's own shade, so it is closed on both sides
+        // rather than only above: without the second rule the vertical of the table changes
+        // brightness in the middle of itself and reads as a rendering fault.
+        let after_module = position > 0 && kinds[position - 1] == RowKind::Module;
+        let separator = if position == 0 || !is_body || after_module {
             frame("├", "┼", "┤", "─", BORDER_OUTER, false)
         } else {
             frame("├", "┼", "┤", "╌", BORDER_INNER, true)
@@ -1556,13 +1628,15 @@ fn draw_boxed_table(theme: &Theme, name_title: &str, headers: &[&str], rows: &[(
             };
             let number = format!("{}{}", " ".repeat(number_widths[i] - calculate_widest_visible_line(&cell.number)),
                     number_style.paint(&cell.number));
-            let body = if slot_widths[i] > 0 {
-                format!("{number}{}{}{}", " ".repeat(SLOT_GAP), slot_style.paint(&cell.slot),
-                        " ".repeat(slot_widths[i] - calculate_widest_visible_line(&cell.slot)))
-            } else {
-                number
-            };
-            let used = number_widths[i] + if slot_widths[i] > 0 {SLOT_GAP + slot_widths[i]} else {0};
+            // A column with no slots holds bare numbers, and those sit on the right edge rather
+            // than huddling on the left of a centred title
+            if slot_widths[i] == 0 {
+                painted.push(format!("{}{number}", " ".repeat(inner_widths[i + 1] - number_widths[i])));
+                continue;
+            }
+            let body = format!("{number}{}{}{}", " ".repeat(SLOT_GAP), slot_style.paint(&cell.slot),
+                    " ".repeat(slot_widths[i] - calculate_widest_visible_line(&cell.slot)));
+            let used = number_widths[i] + SLOT_GAP + slot_widths[i];
             painted.push(format!("{body}{}", " ".repeat(inner_widths[i + 1] - used)));
         }
         lines.push(content_row(painted, !is_body));
@@ -1591,8 +1665,10 @@ fn format_individual_lines(theme: &Theme, groups: &[Group], columns: &Columns, b
         if grouped {
             let name = group.get_displayed_name();
             let stats = group.total;
-            lines.push(columns.format_files_row(theme, stats.files,
-                    &format_size(theme, stats.bytes, stats.calculate_average_size()), block_width));
+            if columns.prints_files_row() {
+                lines.push(columns.format_files_row(theme, stats.files,
+                        &format_size(theme, stats.bytes, stats.calculate_average_size()), block_width));
+            }
             lines.push(columns.format_breakdown_row(theme, &theme.details_module.paint(name).to_string(),
                     calculate_widest_visible_line(name), stats.lines, stats.code_lines, stats.comment_lines));
         }
@@ -1603,8 +1679,10 @@ fn format_individual_lines(theme: &Theme, groups: &[Group], columns: &Columns, b
                 lines.push(String::new());
             }
 
-            lines.push(columns.format_files_row(theme, content_info.files,
-                    &format_size(theme, content_info.bytes, content_info.calculate_average_size()), block_width));
+            if columns.prints_files_row() {
+                lines.push(columns.format_files_row(theme, content_info.files,
+                        &format_size(theme, content_info.bytes, content_info.calculate_average_size()), block_width));
+            }
             lines.push(columns.format_breakdown_row(theme, &(indent.to_owned() + &theme.details_language_name.paint(lang_name).to_string()),
                     calculate_widest_visible_line(lang_name) + indent.len(), content_info.lines,
                     content_info.code_lines, content_info.comment_lines));
@@ -1647,11 +1725,13 @@ struct Columns {
     headline: usize,
     code: usize,
     comments: usize,
-    extra: usize
+    extra: usize,
+    // Carried here so that every row a run renders through these functions obeys the same '--hide'
+    hidden: config_manager::Hidden
 }
 
 impl Columns {
-    fn of(groups: &[Group], total: &Stats) -> Self
+    fn of(groups: &[Group], total: &Stats, hidden: config_manager::Hidden) -> Self
     {
         let grouped = is_grouped(groups);
         let indent = if grouped {LIST_INDENT.len()} else {0};
@@ -1661,7 +1741,8 @@ impl Columns {
             headline: len_of(total.files).max(len_of(total.lines)),
             code: len_of(total.code_lines),
             comments: len_of(total.comment_lines),
-            extra: len_of(total.calculate_extra_lines())
+            extra: len_of(total.calculate_extra_lines()),
+            hidden
         };
 
         // The total holds the largest of every column, except when --top hid the language that made
@@ -1712,34 +1793,67 @@ impl Columns {
     // through these same functions so that the preview cannot drift from the real output
     fn format_breakdown_row(&self, theme: &Theme, painted_name: &str, name_len: usize, lines: usize, code_lines: usize, comment_lines: usize) -> String {
         let (code_percentage, comment_percentage) = calculate_code_and_comment_percentages(lines,code_lines, comment_lines);
-        format!("{}{}{}{}{:>headline_w$} {} {{ {:>code_w$} {} ({})  +  {:>comments_w$} {} ({})  +  {:>extra_w$} {} }}",
+        let percent = |value: f64| if self.hidden.percentages {String::new()}
+                else {format!(" ({})", paint_percent(theme, value))};
+        let mut terms = vec![format!("{:>code_w$} {}{}",
+                theme.code_number.paint(&format_with_separators(code_lines)), theme.code_label.paint("code"),
+                percent(code_percentage), code_w = self.code)];
+        if !self.hidden.comments {
+            terms.push(format!("{:>comments_w$} {}{}",
+                    theme.comments_number.paint(&format_with_separators(comment_lines)),
+                    theme.comments_label.paint("comments"), percent(comment_percentage), comments_w = self.comments));
+        }
+        if !self.hidden.extra {
+            terms.push(format!("{:>extra_w$} {}",
+                    theme.extra_number.paint(&format_with_separators(lines - code_lines - comment_lines)),
+                    theme.extra_label.paint("extra"), extra_w = self.extra));
+        }
+        format!("{}{}{}{}{:>headline_w$} {} {{ {} }}",
                 painted_name, " ".repeat(self.name - name_len + NAME_GAP), theme.arrow.paint("->"), " ".repeat(NAME_GAP),
                 theme.lines_number.paint(&format_with_separators(lines)), theme.lines_label.paint("lines"),
-                theme.code_number.paint(&format_with_separators(code_lines)), theme.code_label.paint("code"), paint_percent(theme,code_percentage),
-                theme.comments_number.paint(&format_with_separators(comment_lines)), theme.comments_label.paint("comments"), paint_percent(theme,comment_percentage),
-                theme.extra_number.paint(&format_with_separators(lines - code_lines - comment_lines)), theme.extra_label.paint("extra"),
-                headline_w = self.headline, code_w = self.code, comments_w = self.comments, extra_w = self.extra)
+                terms.join("  +  "), headline_w = self.headline)
     }
 
     fn format_nested_row(&self, styles: &SubRowStyles, painted_name: &str, name_len: usize, lines: usize,
             code_lines: usize, comment_lines: usize) -> String
     {
         let (code_percentage, comment_percentage) = calculate_code_and_comment_percentages(lines, code_lines, comment_lines);
-        format!("{}{}{}{}{:>headline_w$} {} {{ {:>code_w$} {} ({})  +  {:>comments_w$} {} ({})  +  {:>extra_w$} {} }}",
+        let percent = |value: f64| if self.hidden.percentages {String::new()}
+                else {format!(" ({})", styles.percent.paint(&(format_percent_text(value) + "%")))};
+        let mut terms = vec![format!("{:>code_w$} {}{}",
+                styles.code.paint(&format_with_separators(code_lines)), styles.code.paint("code"),
+                percent(code_percentage), code_w = self.code)];
+        if !self.hidden.comments {
+            terms.push(format!("{:>comments_w$} {}{}",
+                    styles.comments.paint(&format_with_separators(comment_lines)),
+                    styles.comments.paint("comments"), percent(comment_percentage), comments_w = self.comments));
+        }
+        if !self.hidden.extra {
+            terms.push(format!("{:>extra_w$} {}",
+                    styles.extra.paint(&format_with_separators(lines - code_lines - comment_lines)),
+                    styles.extra.paint("extra"), extra_w = self.extra));
+        }
+        format!("{}{}{}{}{:>headline_w$} {} {{ {} }}",
                 painted_name, " ".repeat(self.name - name_len + NAME_GAP), styles.branch.paint("->"), " ".repeat(NAME_GAP),
                 styles.lines.paint(&format_with_separators(lines)), styles.lines.paint("lines"),
-                styles.code.paint(&format_with_separators(code_lines)), styles.code.paint("code"),
-                styles.percent.paint(&(format_percent_text(code_percentage) + "%")),
-                styles.comments.paint(&format_with_separators(comment_lines)), styles.comments.paint("comments"),
-                styles.percent.paint(&(format_percent_text(comment_percentage) + "%")),
-                styles.extra.paint(&format_with_separators(lines - code_lines - comment_lines)), styles.extra.paint("extra"),
-                headline_w = self.headline, code_w = self.code, comments_w = self.comments, extra_w = self.extra)
+                terms.join("  +  "), headline_w = self.headline)
+    }
+
+    // The whole row is skipped when both halves are hidden, which is the caller's question to ask
+    fn prints_files_row(&self) -> bool {
+        !(self.hidden.files && self.hidden.size)
     }
 
     // The size text ends where the row below it does
     fn format_files_row(&self, theme: &Theme, files: usize, size_text: &str, width: usize) -> String {
-        let left = format!("{}{:>headline_w$} {}", " ".repeat(self.calculate_headline_end() - self.headline),
-                theme.files_number.paint(&format_with_separators(files)), theme.files_label.paint("files"), headline_w = self.headline);
+        let left = if self.hidden.files {String::new()} else {
+            format!("{}{:>headline_w$} {}", " ".repeat(self.calculate_headline_end() - self.headline),
+                    theme.files_number.paint(&format_with_separators(files)), theme.files_label.paint("files"),
+                    headline_w = self.headline)
+        };
+        if self.hidden.size {
+            return left;
+        }
         let used = calculate_widest_visible_line(&left) + calculate_widest_visible_line(size_text);
 
         left + &" ".repeat(width.saturating_sub(used).max(2)) + size_text
@@ -1762,12 +1876,13 @@ fn format_sum_lines(theme: &Theme, per_language: &HashMap<String,Stats>, total: 
         block_width: usize, should_print_keywords: bool) -> Vec<String>
 {
     // The separator spans the block, which every row of the details section already fits exactly
-    let mut lines = vec![
-        format!("{} ",theme.separator_total.paint(&SEPARATOR_LINE.repeat(block_width))),
-        columns.format_files_row(theme, total.files,
-                &format_size(theme, total.bytes, total.calculate_average_size()), block_width),
-        columns.format_breakdown_row(theme, &theme.details_total.paint(TOTAL_NAME).to_string(),
-                TOTAL_NAME.len(), total.lines, total.code_lines, total.comment_lines)];
+    let mut lines = vec![format!("{} ",theme.separator_total.paint(&SEPARATOR_LINE.repeat(block_width)))];
+    if columns.prints_files_row() {
+        lines.push(columns.format_files_row(theme, total.files,
+                &format_size(theme, total.bytes, total.calculate_average_size()), block_width));
+    }
+    lines.push(columns.format_breakdown_row(theme, &theme.details_total.paint(TOTAL_NAME).to_string(),
+            TOTAL_NAME.len(), total.lines, total.code_lines, total.comment_lines));
 
     if should_print_keywords {
         let keywords_line = get_keywords_as_str(theme, &create_keyword_sum_map(per_language), None, columns.calculate_words_start(), block_width);
@@ -1847,13 +1962,16 @@ fn get_keywords_as_str(theme: &Theme, keyword_occurencies: &HashMap<String,usize
 {
     const SEPARATOR : &str = ", ";
 
-    if keyword_occurencies.is_empty() {
+    // Asked of the entries and not of the map: a language whose every keyword was found nowhere has
+    // a map full of zeros and nothing to print, and the caller drops an empty line and not a blank one
+    let entries = create_keyword_entries(keyword_occurencies);
+    if entries.is_empty() {
         return String::new();
     }
 
     let mut keyword_info = " ".repeat(indent);
     let mut used = indent;
-    for (position, (name, count)) in create_keyword_entries(keyword_occurencies).into_iter().enumerate() {
+    for (position, (name, count)) in entries.into_iter().enumerate() {
         let moved = baseline.map(|baseline| (baseline.get(&name).copied().unwrap_or(0), keyword_occurencies[&name]))
                 .filter(|(was, is)| was != is)
                 .map(|(was, is)| format!(" ({})", paint_change(theme, was, is, &format_signed_difference(was, is))));
@@ -2273,7 +2391,9 @@ mod tests {
             "JavaScript".to_owned() => Stats::new(4, 40000, 1200, 900, 120,
                     hashmap!["classes".to_owned() => 805, "functions".to_owned() => 1204, "generators".to_owned() => 17,
                              "promises".to_owned() => 96, "imports".to_owned() => 342]),
-            "HTML".to_owned() => Stats::new(2, 18800, 396, 361, 0, hashmap![]),
+            // Every keyword it declares was found nowhere, so it prints no keyword line at all and
+            // not a line of the indent alone
+            "HTML".to_owned() => Stats::new(2, 18800, 396, 361, 0, hashmap!["tags".to_owned() => 0]),
             // 'decorators' is declared and never used, so no layout may print a cell for it
             "Python".to_owned() => Stats::new(3, 9000, 250, 200, 20,
                     hashmap!["classes".to_owned() => 2, "decorators".to_owned() => 0]),
@@ -2422,10 +2542,11 @@ mod tests {
 
         let (sorted, content_info, total) = sample_data();
         let theme = &Theme::default();
+        let no_hides = crate::config_manager::Hidden::default();
         let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
         let plain = vec![Group {name: None, languages: sorted.clone(), hidden: 0, per_language: &content_info,
                 nested: &NO_NESTED, files: HashMap::new(), total: &total, baseline: None}];
-        let columns = Columns::of(&plain, &total);
+        let columns = Columns::of(&plain, &total, no_hides);
         let width = columns.width(theme);
 
         // HTML holds the two sections, so every layout is rendered once without a container in it
@@ -2435,7 +2556,7 @@ mod tests {
         let with_nested = vec![Group {name: None, languages: sorted.clone(), hidden: 0,
                 per_language: &content_info, nested: &sections, files: HashMap::new(),
                 total: &total, baseline: None}];
-        let nested_columns = Columns::of(&with_nested, &total);
+        let nested_columns = Columns::of(&with_nested, &total, no_hides);
         let nested_width = nested_columns.width(theme);
 
         let mut cases: Vec<(String, Vec<String>)> = Vec::new();
@@ -2447,17 +2568,17 @@ mod tests {
         cases.push(("list, with nested languages".to_owned(),
                 format_individual_lines(theme, &with_nested, &nested_columns, nested_width, false)));
 
-        let mut table = format_table_lines(theme, &plain, &total, true, &[], SortCriterion::Lines);
+        let mut table = format_table_lines(theme, &plain, &total, true, &[], SortCriterion::Lines, &no_hides);
         table.extend(format_keyword_block_lines(theme, &plain));
         cases.push(("table".to_owned(), table));
         cases.push(("table, with nested languages".to_owned(),
-                format_table_lines(theme, &with_nested, &total, true, &[], SortCriterion::Lines)));
+                format_table_lines(theme, &with_nested, &total, true, &[], SortCriterion::Lines, &no_hides)));
 
-        let mut boxed = format_boxed_lines(theme, &plain, &total, true, &[], SortCriterion::Lines);
+        let mut boxed = format_boxed_lines(theme, &plain, &total, true, &[], SortCriterion::Lines, &no_hides);
         boxed.extend(format_keyword_block_lines(theme, &plain));
         cases.push(("boxed".to_owned(), boxed));
         cases.push(("boxed, with nested languages".to_owned(),
-                format_boxed_lines(theme, &with_nested, &total, true, &[], SortCriterion::Lines)));
+                format_boxed_lines(theme, &with_nested, &total, true, &[], SortCriterion::Lines, &no_hides)));
 
         // HTML has sections and files under it, Python has files alone, and the other three have
         // neither. Python's list is cut, so its branch has to hang open where HTML's is drawn shut.
@@ -2471,15 +2592,15 @@ mod tests {
                 per_language: &content_info, nested: &sections,
                 files: hashmap!["HTML" => files_of("HTML", 0), "Python" => files_of("Python", 4)],
                 total: &total, baseline: None}];
-        let file_columns = Columns::of(&with_files, &total);
+        let file_columns = Columns::of(&with_files, &total, no_hides);
         let file_width = file_columns.width(theme);
         cases.push(("list, with files".to_owned(),
                 format_individual_lines(theme, &with_files, &file_columns, file_width, false)));
         let a_note = vec!["(+4 more files hidden by --by-file 1)".to_owned()];
         cases.push(("table, with files".to_owned(),
-                format_table_lines(theme, &with_files, &total, true, &a_note, SortCriterion::Lines)));
+                format_table_lines(theme, &with_files, &total, true, &a_note, SortCriterion::Lines, &no_hides)));
         cases.push(("boxed, with files".to_owned(),
-                format_boxed_lines(theme, &with_files, &total, true, &a_note, SortCriterion::Lines)));
+                format_boxed_lines(theme, &with_files, &total, true, &a_note, SortCriterion::Lines, &no_hides)));
 
         // Two sentences are one paragraph: a blank line above the first, none between them
         let both_cuts = vec![Group {name: None, languages: sorted[..4].to_vec(), hidden: 1,
@@ -2489,7 +2610,26 @@ mod tests {
         let both_notes = vec!["(+1 more language hidden by --top 4)".to_owned(),
                 "(+4 more files hidden by --by-file 1)".to_owned()];
         cases.push(("table, both notes".to_owned(),
-                format_table_lines(theme, &both_cuts, &total, true, &both_notes, SortCriterion::Lines)));
+                format_table_lines(theme, &both_cuts, &total, true, &both_notes, SortCriterion::Lines, &no_hides)));
+
+        // Hidden columns: the numbers stay, their shares go, and two whole columns are gone
+        let trimmed = crate::config_manager::Hidden { size: true, extra: true, percentages: true,
+                ..crate::config_manager::Hidden::default() };
+        cases.push(("table, columns hidden".to_owned(),
+                format_table_lines(theme, &with_nested, &total, true, &[], SortCriterion::Lines, &trimmed)));
+        cases.push(("boxed, columns hidden".to_owned(),
+                format_boxed_lines(theme, &with_nested, &total, true, &[], SortCriterion::Lines, &trimmed)));
+        let trimmed_columns = Columns::of(&with_nested, &total, trimmed);
+        cases.push(("list, columns hidden".to_owned(),
+                format_individual_lines(theme, &with_nested, &trimmed_columns, trimmed_columns.width(theme), false)));
+
+        // The files row goes whole when both of its halves are hidden
+        let no_files_row = crate::config_manager::Hidden { files: true, size: true,
+                ..crate::config_manager::Hidden::default() };
+        let bare_columns = Columns::of(&plain, &total, no_files_row);
+        let mut bare = format_individual_lines(theme, &plain, &bare_columns, bare_columns.width(theme), false);
+        bare.extend(format_sum_lines(theme, &content_info, &total, &bare_columns, bare_columns.width(theme), false));
+        cases.push(("list, no files row".to_owned(), bare));
 
         cases.push(("overview".to_owned(), format_overview_lines(&sorted, &content_info, &total, &config)));
 
@@ -2505,18 +2645,18 @@ mod tests {
         let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
         let modules = sample_modules();
         let groups = groups_from(&modules, &config);
-        let columns = Columns::of(&groups, &total);
+        let columns = Columns::of(&groups, &total, no_hides);
         let width = columns.width(theme);
 
         let mut list = format_individual_lines(theme, &groups, &columns, width, true);
         list.extend(format_sum_lines(theme, &content_info, &total, &columns, width, true));
         cases.push(("modules, list".to_owned(), list));
 
-        let mut table = format_table_lines(theme, &groups, &total, true, &[], SortCriterion::Lines);
+        let mut table = format_table_lines(theme, &groups, &total, true, &[], SortCriterion::Lines, &no_hides);
         table.extend(format_keyword_block_lines(theme, &groups));
         cases.push(("modules, table".to_owned(), table));
 
-        let mut boxed = format_boxed_lines(theme, &groups, &total, true, &[], SortCriterion::Lines);
+        let mut boxed = format_boxed_lines(theme, &groups, &total, true, &[], SortCriterion::Lines, &no_hides);
         boxed.extend(format_keyword_block_lines(theme, &groups));
         cases.push(("modules, boxed".to_owned(), boxed));
 
@@ -2526,13 +2666,13 @@ mod tests {
         let groups = groups_from(&modules, &config);
         let note = vec!["(+3 more languages hidden by --top 1)".to_owned()];
         cases.push(("modules, table, top 1".to_owned(),
-                format_table_lines(theme, &groups, &total, true, &note, SortCriterion::Lines)));
+                format_table_lines(theme, &groups, &total, true, &note, SortCriterion::Lines, &no_hides)));
 
         config.view.top_n = None;
         config.view.sort_by = SortCriterion::Name;
         let groups = groups_from(&modules, &config);
         cases.push(("modules, table, sorted by name".to_owned(),
-                format_table_lines(theme, &groups, &total, true, &[], SortCriterion::Name)));
+                format_table_lines(theme, &groups, &total, true, &[], SortCriterion::Name, &no_hides)));
 
         // The rows of the matrix are the languages of the whole run, and each of them is three
         // physical rows, so the second case is the one where a module does not have the language
@@ -2564,12 +2704,22 @@ mod tests {
         };
 
         let rows = create_compared_rows(None, &before.result, &now.result, &config);
-        let mut comparison = format_comparison_lines(theme, &rows, config.view.sort_by);
+        let mut comparison = format_comparison_lines(theme, &rows, config.view.sort_by, &no_hides);
         comparison.extend(format_keyword_block_lines(theme, &[create_group_with_baseline(None, &before.result.per_language,
                 &now.result.per_language, &now.result.total, &config)]));
         cases.push(("comparison".to_owned(), headed(comparison, &before, &now)));
         cases.push(("comparison, boxed".to_owned(),
-                headed(format_boxed_comparison_lines(theme, &rows, config.view.sort_by), &before, &now)));
+                headed(format_boxed_comparison_lines(theme, &rows, config.view.sort_by, &no_hides), &before, &now)));
+
+        // A comparison obeys the column names too. Its '%' cells are percentages of the change, so
+        // 'percentages' takes them and leaves the absolute move, and every change follows its own
+        // figure out rather than being left beside a column that is gone.
+        let trimmed = crate::config_manager::Hidden { files: true, size: true, percentages: true,
+                ..crate::config_manager::Hidden::default() };
+        cases.push(("comparison, columns hidden".to_owned(),
+                headed(format_comparison_lines(theme, &rows, config.view.sort_by, &trimmed), &before, &now)));
+        cases.push(("comparison, boxed, columns hidden".to_owned(),
+                headed(format_boxed_comparison_lines(theme, &rows, config.view.sort_by, &trimmed), &before, &now)));
 
         // The same two readings with a second axis through them, which is shown because they named
         // the same modules
@@ -2581,19 +2731,19 @@ mod tests {
                         &pair.now.total, config)).collect::<Vec<_>>();
 
         let rows = create_compared_rows(Some(&pairs), &before.result, &now.result, &config);
-        let mut comparison = format_comparison_lines(theme, &rows, config.view.sort_by);
+        let mut comparison = format_comparison_lines(theme, &rows, config.view.sort_by, &no_hides);
         comparison.extend(format_keyword_block_lines(theme, &grouped_keywords(&config)));
         cases.push(("comparison, modules".to_owned(), headed(comparison, &before, &now)));
 
-        let mut comparison = format_boxed_comparison_lines(theme, &rows, config.view.sort_by);
+        let mut comparison = format_boxed_comparison_lines(theme, &rows, config.view.sort_by, &no_hides);
         comparison.extend(format_keyword_block_lines(theme, &grouped_keywords(&config)));
         cases.push(("comparison, modules, boxed".to_owned(), headed(comparison, &before, &now)));
 
         // '--top' cuts inside each module here as it does everywhere else
         config.view.top_n = Some(1);
         cases.push(("comparison, modules, top 1".to_owned(), headed(format_comparison_lines(theme,
-                &create_compared_rows(Some(&pairs), &before.result, &now.result, &config), config.view.sort_by),
-                &before, &now)));
+                &create_compared_rows(Some(&pairs), &before.result, &now.result, &config), config.view.sort_by,
+                &no_hides), &before, &now)));
 
         let mut rendered = String::with_capacity(4000);
         for (name, lines) in cases {
@@ -2626,7 +2776,7 @@ mod tests {
                 group(None, &content_info, &total)];
 
         let theme = &Theme::default();
-        let columns = Columns::of(&groups, &total);
+        let columns = Columns::of(&groups, &total, crate::config_manager::Hidden::default());
         assert!(columns.name >= UNNAMED_MODULE_NAME.len());
 
         let lines = format_individual_lines(theme, &groups, &columns, columns.width(theme), false);

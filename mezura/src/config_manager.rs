@@ -179,15 +179,32 @@ pub struct Hidden {
     pub bar: bool,
     pub history: bool,
     pub timing: bool,
-    pub animations: bool
+    pub animations: bool,
+    pub files: bool,
+    pub comments: bool,
+    pub extra: bool,
+    pub size: bool,
+    pub percentages: bool
 }
 
 impl Hidden {
-    fn get_pairs(self) -> [(&'static str, bool); 11] {
+    fn get_pairs(self) -> [(&'static str, bool); 16] {
         [("version", self.version), ("directory-info", self.directory_info), ("parsing-info", self.parsing_info),
          ("progress-bar", self.progress_bar), ("animations", self.animations), ("keywords", self.keywords),
          ("nested-languages", self.nested_languages), ("overview", self.overview), ("bar", self.bar),
-         ("history", self.history), ("timing", self.timing)]
+         ("history", self.history), ("timing", self.timing), ("files", self.files), ("comments", self.comments),
+         ("extra", self.extra), ("size", self.size), ("percentages", self.percentages)]
+    }
+
+    // Whether '--sort' was asked to order by a column this run does not draw
+    pub fn hides_column_of(&self, criterion: SortCriterion) -> bool {
+        match criterion {
+            SortCriterion::Files => self.files,
+            SortCriterion::Comments => self.comments,
+            SortCriterion::Extra => self.extra,
+            SortCriterion::Size => self.size,
+            SortCriterion::Lines | SortCriterion::Code | SortCriterion::Name => false
+        }
     }
 
     // Returns the unrecognised name, so that the error can say which one it was
@@ -206,6 +223,11 @@ impl Hidden {
                 "bar" => hidden.bar = true,
                 "history" => hidden.history = true,
                 "timing" => hidden.timing = true,
+                "files" => hidden.files = true,
+                "comments" => hidden.comments = true,
+                "extra" => hidden.extra = true,
+                "size" => hidden.size = true,
+                "percentages" => hidden.percentages = true,
                 _ => return Err(entry.to_owned())
             }
         }
@@ -670,6 +692,17 @@ impl ConfigurationBuilder {
     // list, matching the command line and the configuration file.
     pub fn build(&self) -> Configuration {
         let hidden = self.hidden.unwrap_or_default();
+        // Decided here, after a configuration file has had its say on both halves. A JSON document
+        // carries every figure whatever is hidden, so there the order stands as asked.
+        let mut sort_by = self.sort_by.unwrap_or_default();
+        if hidden.hides_column_of(sort_by) && self.output.unwrap_or_default() == OutputFormat::Text {
+            let message = format!("'--{SORT} {}' orders by a column '--{HIDE} {0}' takes out, so the report \
+is sorted by lines.", sort_by.name());
+            eprintln!("\n{}", wrap_message(&message).yellow());
+            super::warning_collector::keep(mezura_core::warnings::Warning::new(
+                    mezura_core::warnings::Code::CommandIgnored, SORT, message));
+            sort_by = SortCriterion::default();
+        }
         // Asked of the engine rather than read from constants of its own, so the help text and the
         // behaviour cannot answer differently. The literal below stays exhaustive on purpose: a new
         // field of EngineConfig has to be decided here and not inherited silently.
@@ -709,7 +742,7 @@ impl ConfigurationBuilder {
                 diff_against: self.diff_against.clone(),
                 number_separator: self.number_separator.unwrap_or_default(),
                 decimal_separator: self.decimal_separator.unwrap_or_default(),
-                sort_by: self.sort_by.unwrap_or_default(),
+                sort_by,
                 top_n: self.top_n,
                 by_file: self.by_file,
                 theme: super::theme::resolve(self.theme_styles.as_deref().unwrap_or_default(),
@@ -1421,11 +1454,30 @@ mod tests {
         assert_eq!(Ok(expected), Hidden::parse(&expected.to_list_string()));
         assert_eq!(Ok(Hidden::default()), Hidden::parse(""));
 
+        // and every name the struct knows survives that round trip, so a new field cannot be
+        // written by '--save' and refused on the way back
+        let every_name = Hidden::get_names().join(",");
+        assert_eq!(every_name, Hidden::parse(&every_name).unwrap().to_list_string());
+
         // The mask asks whether keywords were hidden, not whether '--hide' was typed at all: a
         // '--hide timing' says nothing about them
         assert!(create_config_from_args("./ --hide keywords,timing").unwrap().typed_explicitly.hide_keywords);
         assert!(!create_config_from_args("./ --hide timing").unwrap().typed_explicitly.hide_keywords);
         assert!(!create_config_from_args("./").unwrap().typed_explicitly.hide_keywords);
+    }
+
+    // Hiding the column the order comes from would leave an order nothing on the page explains, so
+    // the sort falls back to lines. A JSON document carries every figure whatever is hidden, so
+    // there the order stands as asked.
+    #[test]
+    fn sorting_by_a_hidden_column_falls_back_to_lines() {
+        let sorted = |command: &str| create_config_from_args(command).unwrap().view.sort_by;
+
+        assert_eq!(SortCriterion::Lines, sorted("./ --hide size --sort size"));
+        assert_eq!(SortCriterion::Lines, sorted("./ --hide size --sort size --diff old.json"));
+        assert_eq!(SortCriterion::Size, sorted("./ --hide extra --sort size"));
+        assert_eq!(SortCriterion::Size, sorted("./ --hide size --sort size --output json"));
+        assert_eq!(SortCriterion::Code, sorted("./ --hide files,comments,extra,size,percentages --sort code"));
     }
 
     #[test]

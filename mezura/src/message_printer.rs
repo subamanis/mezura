@@ -231,9 +231,21 @@ pub const HIDE_HELP  :  &str =
       bar             only the [-|||-] bar of the overview, keeping the percentages and the colors
       history         the comparison with previous runs (the same as '--compare 0')
       timing          the execution time line at the bottom
+      files           the files column of the details rows
+      comments        the comments column of the details rows
+      extra           the extra column of the details rows
+      size            the size column of the details rows, and the size half of the 'list'
+                      layout's files line
+      percentages     every percentage of the details rows, keeping the numbers they describe
 
     The list mixes whole sections with parts of them on purpose: you are pointing at what you
     see, not at how the program is organised.
+
+    The five column names reach the details in every layout except the matrix, whose three rows
+    stay whole. A comparison obeys them too, where every change follows its own figure out; its
+    percentages are percentages of the change, so hiding them leaves the absolute move, and it has
+    no 'extra' column to hide. Hiding the column '--sort' orders by falls back to sorting by
+    lines, and says so.
 
     Errors and warnings are never hidden. Hiding the parsing info still reports files that failed
     to be parsed, since otherwise the numbers would silently be wrong.

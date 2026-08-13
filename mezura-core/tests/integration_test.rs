@@ -128,6 +128,51 @@ fn a_container_file_is_one_file_of_its_language_and_its_sections_are_the_decompo
             "a narrowed run lost the decomposition of its own container files");
 }
 
+// A region that held nothing and one written in the container's own language fold into the file's
+// own share: zero lines say nothing, and a container is not a breakdown of itself. An excluded
+// language stays named, decided on 2026-08-13: excluding means its files are not counted, while the
+// breakdown of a counted file is a fact about it, and folding it away would move those lines into
+// the container's own share, which would be a lie about what "itself" holds.
+#[test]
+fn an_empty_or_self_section_gets_no_row_and_an_excluded_one_keeps_its_name() {
+    let root = std::env::temp_dir().join("mezura-suppressed-sections");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("page.web"), "<script>\nvar x = 1;\nvar y = 2;\n</script>\n<style>\np {}\n</style>\n").unwrap();
+    std::fs::write(root.join("empty.web"), "<script src=\"x.js\">\n</script>\n").unwrap();
+    std::fs::write(root.join("inner.web"), "<template>\n<p>hi</p>\n</template>\n").unwrap();
+
+    let web = mezura_core::Language::new("Web", ["web"], [""; 0], [""; 0], &[("<!--", "-->")], [])
+            .with_nested_languages(&[mezura_core::NestedLanguage::of("<script", "</script>", "js"),
+                    mezura_core::NestedLanguage::of("<style", "</style>", "css"),
+                    mezura_core::NestedLanguage::of("<template", "</template>", "web")]);
+    let js = mezura_core::Language::new("JS", ["js"], ["\""], ["//"], &[("/*", "*/")], []);
+    let css = mezura_core::Language::new("CSS", ["css"], [""; 0], [""; 0], &[("/*", "*/")], []);
+    let definitions = || [web.clone(), js.clone(), css.clone()];
+
+    let config = EngineConfig { threads: Threads::new(1, 1),
+            ..EngineConfig::new([root.to_string_lossy().replace('\\', "/")]) };
+    let (languages, _) = Languages::resolve(&config, definitions(), &Default::default());
+    let result = run(&config, languages, None, |_| {}).unwrap();
+
+    let sections = &result.nested_languages["Web"];
+    assert_eq!((1, 2), (sections["JS"].files, sections["JS"].lines), "the empty region counted as a JS file");
+    assert_eq!(1, sections["CSS"].files);
+    assert!(!sections.contains_key("Web"), "the container was named as its own breakdown");
+
+    // Excluded by extension spelling, so the exclusion resolves the way '--exclude-languages js'
+    // does, and neither the breakdown nor the container's own row moves by a line
+    let web_lines = result.per_language["Web"].lines;
+    let excluded = EngineConfig { excluded_languages: vec!["js".to_owned()], ..config };
+    let (languages, _) = Languages::resolve(&excluded, definitions(), &Default::default());
+    let result = run(&excluded, languages, None, |_| {}).unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+
+    assert_eq!(2, result.nested_languages["Web"]["JS"].lines,
+            "excluding a language hid it from the breakdown of a counted file");
+    assert_eq!(web_lines, result.per_language["Web"].lines);
+}
+
 // 'Languages::shipped' is the door that also applies the rule for an extension two languages both
 // claim, and nothing was proving it did: every other test counts trees of '.rs' where nothing is
 // contested, so replacing that rule with an empty one passed the whole suite. '.m' is claimed by

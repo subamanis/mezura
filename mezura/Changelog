@@ -42,6 +42,22 @@ Main changes:
   -> Every message the program prints now wraps to the width of the report, including the ones
       that list files, and the update message no longer says you changed a file when all it knows
       is that the file is not the one it wrote.
+  -> A keyword that a language declares and no file used is no longer printed as "classes: 0". The
+      JSON document keeps its zeros, so a consumer still gets the same fields every run.
+  -> Two named targets over one path are now refused before anything is counted, so the message
+      names the path you typed. With "--diff" it used to check out the whole repository first and
+      then blame a temporary directory nobody wrote.
+  -> When counting a revision fails, the reason is now reported as what it was. A bad exclude
+      pattern or a thread the system refused used to come out as "git refused".
+  -> A script or style region that held nothing no longer gets a row of zeros in the breakdown,
+      and a region written in the container's own language folds into the file's own row instead
+      of appearing as HTML nested inside HTML.
+  -> "--hide" can now take out columns of the details, not only whole sections: "files",
+      "comments", "extra", "size" and "percentages". A comparison obeys them too, where hiding the
+      percentages leaves the absolute change beside each figure. Hiding the column "--sort" orders
+      by falls back to sorting by lines and says so. The JSON document always carries every figure.
+  -> In the boxed layout a module's name row is now closed by a solid line on both sides. The
+      table's vertical used to change brightness in the middle of itself, which read as a fault.
   -> Files that are known by their whole name are now counted: Makefile, Dockerfile,
       CMakeLists.txt, Gemfile, Rakefile and the rest. A language file names them in a new
       "Filenames" field, a file is matched by its name before its extension, and a contest over a
