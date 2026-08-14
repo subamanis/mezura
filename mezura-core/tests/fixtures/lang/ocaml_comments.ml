@@ -1,4 +1,4 @@
-(* mezura-expect lines=14 code=6 comments=6 extra=2 types=1 modules=1
+(* mezura-expect lines=14 code=6 comments=5 extra=3 types=1 modules=1
 *)
 module Greeter = struct
   type t = { name : string }

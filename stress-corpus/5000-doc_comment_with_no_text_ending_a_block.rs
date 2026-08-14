@@ -1,5 +1,5 @@
-// mezura-real  12 lines 1 code 11 comment
-// mezura-count 12 lines 1 code 11 comment
+// mezura-real  12 lines 1 code 10 comment
+// mezura-count 12 lines 1 code 10 comment
 // tokei-real   12 lines 1 code 11 comment
 // tokei-count  11 lines 1 code 10 comment
 // tokei-section Markdown 1 lines 0 code 1 comment

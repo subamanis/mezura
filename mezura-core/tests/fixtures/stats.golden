@@ -1,4 +1,4 @@
-files=70 lines=851 code=455 comments=224
+files=70 lines=851 code=455 comments=217
 
 Ada
   files=1 lines=8 code=5 comments=2
@@ -21,7 +21,7 @@ C++ Header
   files=1 lines=13 code=5 comments=5
   classes=1 structs=1
 CMake
-  files=1 lines=15 code=7 comments=6
+  files=1 lines=15 code=7 comments=5
   functions=1 macros=0
 COBOL
   files=1 lines=9 code=6 comments=2
@@ -102,10 +102,10 @@ Lisp
   files=1 lines=7 code=3 comments=3
   classes=1 functions=1 macros=0
 Lua
-  files=1 lines=19 code=8 comments=9
+  files=1 lines=19 code=8 comments=8
   functions=2
 MATLAB
-  files=1 lines=9 code=4 comments=4
+  files=1 lines=9 code=4 comments=2
   classes=1
 Make
   files=1 lines=15 code=9 comments=3
@@ -114,7 +114,7 @@ Metal
   files=1 lines=8 code=3 comments=3
   structs=1
 OCaml
-  files=1 lines=14 code=6 comments=6
+  files=1 lines=14 code=6 comments=5
   modules=1 types=1
 Objective-C
   files=1 lines=12 code=8 comments=1
@@ -132,7 +132,7 @@ Perl
   files=1 lines=11 code=6 comments=2
   packages=1
 PowerShell
-  files=1 lines=17 code=10 comments=5
+  files=1 lines=17 code=10 comments=3
   classes=0
 Prolog
   files=1 lines=9 code=5 comments=3

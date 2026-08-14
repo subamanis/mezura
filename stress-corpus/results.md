@@ -169,14 +169,14 @@ Written as `lines / code / comment`, as each tool reports today.
 | 0400 block comment holding line comment | 9/1/8 | 9/1/8 | 9/1/8 |
 | 0500 line comment holding block open | 7/1/6 | 7/1/6 | 7/1/6 |
 | 0600 code then comment on one line | 7/2/5 | 7/2/5 | 7/2/5 |
-| 0700 close touching reopen plain | 9/1/8 | 9/1/8 | 9/1/8 |
-| 0800 close touching reopen nesting | 9/1/8 | 9/1/8 | 9/1/8 |
-| 0900 close and reopen with a space | 9/1/8 | 9/1/8 | 9/1/8 |
+| 0700 close touching reopen plain | 9/1/7 | 9/1/8 | 9/1/8 |
+| 0800 close touching reopen nesting | 9/1/7 | 9/1/8 | 9/1/8 |
+| 0900 close and reopen with a space | 9/1/7 | 9/1/8 | 9/1/8 |
 | 1000 nested block comment that nests | 7/1/6 | 7/1/6 | **7/2/5** |
 | 1100 nested block comment that does not | 7/1/6 | 7/1/6 | 7/1/6 |
 | 1200 two comment pairs of one language | 8/1/7 | 8/1/7 | 8/1/7 |
-| 1300 lua level bracket holding plain close | 10/1/9 | **10/3/7** | 10/1/9 |
-| 1400 lua short closer hiding the real one | 9/1/8 | **9/2/7** | 9/1/8 |
+| 1300 lua level bracket holding plain close | 10/1/8 | **10/3/7** | 10/1/9 |
+| 1400 lua short closer hiding the real one | 9/1/7 | **9/2/7** | 9/1/8 |
 | 1500 raw string holding quotes | 7/1/6 | 7/1/6 | 7/1/6 |
 | 1600 raw string ending in backslash | 7/1/6 | 7/1/6 | **7/2/5** |
 | 1700 verbatim string crossing lines | 8/2/6 | 8/2/6 | 8/2/6 |
@@ -206,13 +206,13 @@ Written as `lines / code / comment`, as each tool reports today.
 | 4100 closer in code with nothing open | 7/1/6 | 7/1/6 | 7/1/6 |
 | 4200 three slashes are one comment | 7/1/6 | 7/1/6 | 7/1/6 |
 | 4300 pascal writes two pairs | 8/1/7 | 8/1/7 | 8/1/7 |
-| 4400 cmake bracket comment | 10/1/9 | **10/3/7** | **10/4/6** |
-| 4500 multiline string ending in backslash | 12/2/10 | 12/2/10 | 12/2/10 |
-| 4600 block comment closed after a line comment | 14/2/10 | **14/2/12** | 14/4/10 |
+| 4400 cmake bracket comment | 10/1/8 | **10/3/7** | **10/4/6** |
+| 4500 multiline string ending in backslash | 12/2/8 | 12/2/10 | 12/2/10 |
+| 4600 block comment closed after a line comment | 14/2/9 | **14/2/12** | 14/4/10 |
 | 4700 comment then code then comment | 9/2/7 | **9/1/8** | 9/2/7 |
 | 4800 blank line inside a multiline string | 12/5/6 | 12/6/6 | 12/6/6 |
-| 4900 doc comment with no text | 13/1/12 | **13/1/11** | 13/1/12 |
-| 5000 doc comment with no text ending a block | 12/1/11 | **11/1/10** | 12/1/11 |
+| 4900 doc comment with no text | 13/1/11 | **13/1/11** | 13/1/12 |
+| 5000 doc comment with no text ending a block | 12/1/10 | **11/1/10** | 12/1/11 |
 | 5100 vue sections count as their own languages | 27/9/17 | **27/10/16** | **27/13/14** |
 | 5200 section language named by the tag | 26/9/17 | 26/9/17 | 26/9/17 |
 | 5300 script tag in upper case | 15/5/10 | **15/6/9** | **15/6/9** |
@@ -221,12 +221,12 @@ Written as `lines / code / comment`, as each tool reports today.
 | 5600 verbatim string ending in a backslash | 9/2/7 | 9/2/7 | 9/2/7 |
 | 5700 wysiwyg string ending in a backslash | 11/2/9 | **11/3/8** | **11/3/8** |
 | 5800 here string holding an apostrophe | 11/4/7 | 11/4/7 | 11/4/7 |
-| 5900 nested block comment in odin | 13/2/11 | **13/4/9** | **13/4/9** |
+| 5900 nested block comment in odin | 13/2/10 | **13/4/9** | **13/4/9** |
 | 6000 escaped apostrophe outside quotes | 10/2/8 | 10/2/8 | 10/2/8 |
 | 6100 script opener that never closes | 9/2/7 | 9/2/7 | 9/2/7 |
 | 6200 script closer written with a space | 14/4/10 | 14/4/10 | 14/4/10 |
 | 6300 brace and trailing comment | 8/2/6 | 8/3/5 | 8/3/5 |
-| 6400 close then code then stray and reopen | 10/2/8 | **10/1/9** | 10/2/8 |
+| 6400 close then code then stray and reopen | 10/2/7 | **10/1/9** | 10/2/8 |
 | 6500 raw string holding its own closing bracket | 11/5/6 | 11/5/6 | **11/1/10** |
 | 6600 opening tag split over two lines | 13/5/8 | 13/5/8 | 13/5/8 |
 | 6700 delimited raw string names its own closer | **11/1/10** | **11/1/10** | **11/1/10** |

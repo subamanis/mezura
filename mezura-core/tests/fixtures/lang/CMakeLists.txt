@@ -1,4 +1,4 @@
-# mezura-expect lines=15 code=7 comments=6 extra=2 functions=1
+# mezura-expect lines=15 code=7 comments=5 extra=3 functions=1
 cmake_minimum_required(VERSION 3.20)
 project(app)
 

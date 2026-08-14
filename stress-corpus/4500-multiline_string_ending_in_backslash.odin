@@ -1,5 +1,5 @@
-// mezura-real  12 lines 2 code 10 comment
-// mezura-count 12 lines 2 code 10 comment
+// mezura-real  12 lines 2 code 8 comment
+// mezura-count 12 lines 2 code 8 comment
 // tokei-real   12 lines 2 code 10 comment
 // tokei-count  12 lines 2 code 10 comment
 // trap: a raw string whose last byte is a backslash, written with the same symbol at both ends. A

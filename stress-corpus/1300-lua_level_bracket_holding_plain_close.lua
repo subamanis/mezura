@@ -1,5 +1,5 @@
--- mezura-real  10 lines 1 code 9 comment
--- mezura-count 10 lines 1 code 9 comment
+-- mezura-real  10 lines 1 code 8 comment
+-- mezura-count 10 lines 1 code 8 comment
 -- tokei-real   10 lines 1 code 9 comment
 -- tokei-count  10 lines 3 code 7 comment
 -- trap: a counted bracket is closed only by an end carrying the same count

@@ -1,4 +1,4 @@
-# mezura-expect lines=17 code=10 comments=5 extra=2
+# mezura-expect lines=17 code=10 comments=3 extra=4
 <#
     a block comment
 #>

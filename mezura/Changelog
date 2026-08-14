@@ -23,6 +23,10 @@ Main changes:
       49 tokens are exposed, and each takes a color plus any of bold, italic, underline, dim and
       reverse, in any order. The cells of the live progress bar also take a "hex..hex" gradient
       or "rainbow". Run "--help style" for the full list.
+  -> A comment line carrying no words now counts as extra, the way a lone brace always did: the
+      bare "/*" and "*/" of a block written on their own lines, the "*" of a banner line, a lone
+      "//" spacer, a decorative "/*----*/". Comment counts drop visibly on trees written in banner
+      style; code counts do not move.
   -> Comment lines are now counted and reported separately, with their own percentage.
   -> A language can now declare more than one block comment pair: Pascal and Delphi count both
       "{ }" and "(* *)", and D counts "/+ +/" beside "/* */". Only the end of the pair that opened

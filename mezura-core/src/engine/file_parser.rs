@@ -11,7 +11,7 @@ use std::{collections::HashMap, fs::File, io::Read as IoRead, path::Path, str};
 use memchr::memmem;
 
 use crate::{EngineConfig, Language, NestedLanguage, phase_timing};
-use crate::domain::{CommentPair, FileStats};
+use crate::domain::{CommentPair, FileStats, LineContinuation};
 
 pub const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
 
@@ -667,6 +667,7 @@ struct SectionBucket<'a> {
     language: &'a Language,
     stats: FileStats,
     spans: Vec<(u32, u32)>,
+    collecting_spans: bool,
     bytes: usize,
 }
 
@@ -680,12 +681,17 @@ fn parse_lines(contents: &str, language: &Language, lookup: &NestedLanguageLooku
     };
     code_spans.clear();
 
+    // Spans are read by nothing but the keyword search, so a language whose keywords no search
+    // will be run for has no reason to build them: the 10 shipped languages that declare none,
+    // among them CSS, HTML and Vue, walked every code line into a vector nobody opened.
+    let collecting_spans = config.count_keywords && matchers.for_language(language).is_some();
+
     let mut shell = WalkState::default();
     let mut buckets: Vec<SectionBucket> = Vec::new();
     let mut lines = get_lines_of(contents);
     let mut handed_back = None;
     while let Some((line_start, raw_line)) = handed_back.take().or_else(|| lines.next()) {
-        let had_code = walk_line(raw_line, line_start, language, config, config.count_keywords,
+        let had_code = walk_line(raw_line, line_start, language, config, collecting_spans,
                 scan, &mut shell, &mut shell_stats, code_spans);
 
         // A region opener only counts where the shell left it as code, so one sitting inside a
@@ -710,7 +716,9 @@ fn parse_lines(contents: &str, language: &Language, lookup: &NestedLanguageLooku
                     buckets.push(SectionBucket { language: inner, stats: match config.count_keywords {
                         false => FileStats::default(),
                         true => FileStats::with_keywords(&inner.keywords)
-                    }, spans: Vec::new(), bytes: 0 });
+                    }, spans: Vec::new(),
+                    collecting_spans: config.count_keywords && matchers.for_language(inner).is_some(),
+                    bytes: 0 });
                     buckets.len() - 1
                 }
             };
@@ -726,7 +734,7 @@ fn parse_lines(contents: &str, language: &Language, lookup: &NestedLanguageLooku
                     handed_back = Some((inner_start, inner_raw));
                     break;
                 }
-                walk_line(inner_raw, inner_start, inner, config, config.count_keywords,
+                walk_line(inner_raw, inner_start, inner, config, bucket.collecting_spans,
                         scan, &mut inner_state, &mut bucket.stats, &mut bucket.spans);
             }
             bucket.bytes += section_to - section_from;
@@ -761,56 +769,58 @@ fn walk_line(raw_line: &str, line_start: usize, language: &Language, config: &En
 
     // Ascii-only trimming, since the unicode whitespace classification of trim() costs
     // a significant part of the total run time, for lines that are code either way
-    let line = raw_line.trim_ascii();
+    let from_start = raw_line.trim_ascii_start();
+    let line = from_start.trim_ascii_end();
     if line.is_empty() { state.continued_comment = false; return false; }
-    let base = line_start + (raw_line.len() - raw_line.trim_ascii_start().len());
+    let base = line_start + (raw_line.len() - from_start.len());
 
     // A line joined to the one before it by a continuation symbol is the tail of that line's
     // comment, and nothing on it is read: in C '// a comment \' makes the whole next line
     // comment too, however it is written.
     if state.continued_comment {
-        file_stats.comment_lines += 1;
+        if has_word_byte(line.as_bytes()) { file_stats.comment_lines += 1; }
         state.continued_comment = ends_with_continuation(line, language);
         return false;
     }
-    let continued = ends_with_continuation(line, language);
 
-    let line_info = get_bounds(line, language, state.open_comment, &state.open_str_symbol,
-            config.braces_as_code, scan);
+    let line_info = get_bounds(line, language, state.open_comment, &state.open_str_symbol, scan);
 
     state.open_comment = line_info.open_comment_after;
     // Only a symbol declared to cross lines carries its string to the next one, so the damage
     // of an unbalanced quote is this line and not the rest of the file. A line ending in the
     // continuation symbol is the exception: there the quote has not been left open by mistake,
     // the language says the line goes on.
-    let continues_a_string = continued && language.line_continuation.as_ref()
-            .is_some_and(|continuation| continuation.in_strings);
-    state.open_str_symbol = line_info.open_str_sybol_after
-            .filter(|symbol| language.string_crosses_lines(*symbol) || continues_a_string);
+    state.open_str_symbol = line_info.open_str_sybol_after.filter(|symbol|
+            language.string_crosses_lines(*symbol)
+            || (continues_in(language, |continuation| continuation.in_strings)
+                && ends_with_continuation(line, language)));
 
-    // Whether this line ended inside a comment that the next one carries on. Only asked of a
-    // line that left no code and no open string behind, which is what a line comment leaves.
-    state.continued_comment = continued && state.open_str_symbol.is_none() && state.open_comment.is_none()
-            && line_info.code.is_none() && !line_info.has_string_literal
-            && language.line_continuation.as_ref().is_some_and(|continuation| continuation.in_comments);
+    // A line is counted where it says something: words in a code range make it code, words that
+    // sit only inside a comment make it a comment, and a line with no word byte anywhere is extra,
+    // whether it is blank, a lone brace, a bare '*/' or the '*' of a banner. String content is
+    // data and counts as code whatever it holds.
+    let counts_as_code = line_info.has_string_literal || (line_info.code.is_some()
+            && (config.braces_as_code || has_word_byte_in(&scan.code_ranges, line)));
+    let counts_as_comment = !counts_as_code && has_word_byte(line.as_bytes());
 
-    if line_info.code.is_some() {
-        let is_no_content = !line_info.has_string_literal
-                && says_nothing(&scan.code_ranges, line, config.braces_as_code);
-        if config.braces_as_code || !is_no_content {
-            file_stats.code_lines += 1;
-            if collecting_spans {
-                push_trimmed_spans(code_spans, &scan.code_ranges, line, base);
-            }
-        }
-        true
-    } else if line_info.has_string_literal {
+    // Whether this line ended inside a comment that the next one carries on. Only a line comment
+    // reaches the continuation symbol, which is what empty code ranges say: a closed block with a
+    // '\' after it, the shape of every C macro holding a comment in its body, extends nothing.
+    // The symbol is looked for last because it is the dearest question here and the rarest yes.
+    state.continued_comment = state.open_str_symbol.is_none() && state.open_comment.is_none()
+            && counts_as_comment && line_info.code.is_none()
+            && continues_in(language, |continuation| continuation.in_comments)
+            && ends_with_continuation(line, language);
+
+    if counts_as_code {
         file_stats.code_lines += 1;
-        false
-    } else {
+        if collecting_spans && line_info.code.is_some() {
+            push_trimmed_spans(code_spans, &scan.code_ranges, line, base);
+        }
+    } else if counts_as_comment {
         file_stats.comment_lines += 1;
-        false
     }
+    line_info.code.is_some()
 }
 
 // Where the line after this one begins, which is where a section's bytes start: past the line and
@@ -979,6 +989,10 @@ fn holds_one_character(between: &[u8]) -> bool {
     }
 }
 
+fn continues_in(language: &Language, wanted: impl Fn(&LineContinuation) -> bool) -> bool {
+    language.line_continuation.as_ref().is_some_and(wanted)
+}
+
 // The symbol has to be the last thing on the line and not itself escaped, so a Windows path ending
 // in a backslash inside a raw string does not join the next line to it.
 fn ends_with_continuation(line: &str, language: &Language) -> bool {
@@ -994,23 +1008,16 @@ fn push_code(ranges: &mut Vec<(usize, usize)>, from: usize, to: usize) {
     }
 }
 
-// Whether the code this line left behind says anything, asked the same way everywhere. With the
-// strings and comments stripped, a line holding no letter and no digit is punctuation the language
-// required rather than anything the programmer said: '}', '});', '],', ')'. Bytes above 0x7f count as
-// content, so an identifier in a non-latin alphabet reads as code and not as punctuation. Under
-// '--braces-as-code' that punctuation is code, so only whitespace says nothing.
-//
-// One function because two of them disagreed: the bounds asked for whitespace and 'walk_line' asked
-// for letters, so '}  // end of function' was code to neither and a comment to neither, and its
-// comment was reported nowhere.
-fn says_nothing(ranges: &[(usize, usize)], line: &str, braces_as_code: bool) -> bool {
+// A word byte is what makes a line say something: a letter, a digit, or anything above ASCII, so
+// an identifier in a non-latin alphabet reads as content. Everything else is punctuation some
+// grammar required: '}', '});', a bare '*/', the '*' of a banner line.
+fn has_word_byte(bytes: &[u8]) -> bool {
+    bytes.iter().any(|byte| byte.is_ascii_alphanumeric() || *byte >= 0x80)
+}
+
+fn has_word_byte_in(ranges: &[(usize, usize)], line: &str) -> bool {
     let bytes = line.as_bytes();
-    if braces_as_code {
-        ranges.iter().all(|(from, to)| bytes[*from..*to].iter().all(|b| b.is_ascii_whitespace()))
-    } else {
-        !ranges.iter().any(|(from, to)|
-                bytes[*from..*to].iter().any(|b| b.is_ascii_alphanumeric() || *b >= 0x80))
-    }
+    ranges.iter().any(|(from, to)| has_word_byte(&bytes[*from..*to]))
 }
 
 fn line_info_with_str_symbol(ranges: usize, str_symbol: u8) -> LineInfo {
@@ -1022,7 +1029,7 @@ fn line_info_with_str_symbol(ranges: usize, str_symbol: u8) -> LineInfo {
 }
 
 fn get_bounds(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
-    open_str_symbol: &Option<u8>, braces_as_code: bool, buffers: &mut ScanBuffers) -> LineInfo
+    open_str_symbol: &Option<u8>, buffers: &mut ScanBuffers) -> LineInfo
 {
     // A line comment runs to the end of its line, so a line that opens with one is comment through
     // and through and nothing the scan could find past it changes that. Only with nothing left open
@@ -1191,9 +1198,9 @@ fn get_bounds(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
                     }
                     carry = depth;
                 }
-                // A block that stays open leaves a comment line whenever nothing but whitespace sat
-                // outside it, whichever kind of pair it is
-                if !has_string_literal && says_nothing(code_ranges, line, braces_as_code) {
+                // A block that stays open leaves a comment line whenever no code sat outside it,
+                // whichever kind of pair it is
+                if !has_string_literal && code_ranges.is_empty() {
                     return LineInfo::open_comment_at(open_pair, carry);
                 }
                 return LineInfo::code_span_with((0, code_ranges.len()), has_string_literal, Some((open_pair, carry)), None);
@@ -1202,7 +1209,7 @@ fn get_bounds(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
             let end_level = if leveled { carried as u8 } else { 0 };
             let index_after = last_symbol_index + language.comment_end_len(open_pair, end_level);
             if index_after >= line.len() {
-                if says_nothing(code_ranges, line, braces_as_code) {return LineInfo::none_all(has_string_literal);}
+                if code_ranges.is_empty() {return LineInfo::none_all(has_string_literal);}
                 else {return LineInfo::code_span((0, code_ranges.len()), has_string_literal);}
             }
 
@@ -1219,7 +1226,7 @@ fn get_bounds(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
         } else {
             if next_symbol_is_comment(comment_counter, str_counter, start_com_counter) {
                 push_code(code_ranges, slice_start_index, comment_indices[comment_counter]);
-                if says_nothing(code_ranges, line, braces_as_code) {return LineInfo::none_all(has_string_literal);}
+                if code_ranges.is_empty() {return LineInfo::none_all(has_string_literal);}
                 else {return LineInfo::code_span((0, code_ranges.len()), has_string_literal);}
             } else if next_symbol_is_string(comment_counter, str_counter, start_com_counter) {
                 let this_index = str_indices[str_counter];
@@ -1247,7 +1254,7 @@ fn get_bounds(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
                 // leveled one carries its level either way
                 if !has_more_ends(end_com_counter) && !language.comment_nests(this_symbol)
                         && !language.comment_is_leveled(this_symbol) {
-                    if !has_string_literal && says_nothing(code_ranges, line, braces_as_code) {
+                    if !has_string_literal && code_ranges.is_empty() {
                         return LineInfo::with_open_comment(this_symbol);
                     }
                     return LineInfo::code_span_with((0, code_ranges.len()), has_string_literal, Some((this_symbol, 1)), None);
@@ -1571,7 +1578,7 @@ mod tests {
 
     fn bounds_multi_deep(line: &str, language: &Language, open_comment: Option<(u8, u32)>, open_str_symbol: &Option<u8>) -> TextInfo {
         let mut buffers = ScanBuffers::default();
-        let info = get_bounds(line, language, open_comment, open_str_symbol, false, &mut buffers);
+        let info = get_bounds(line, language, open_comment, open_str_symbol, &mut buffers);
         text_of(line, info, &buffers)
     }
 
@@ -1768,7 +1775,7 @@ mod tests {
         let mut config = EngineConfig::default();
         let result = parse_file_whole(&sample_file("a.txt"), "Java", &mut buf, &config);
         let result = content_info_of(result.unwrap(), "Java");
-        assert_eq!(Stats::new(1, 0, 44, 13, 17, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
+        assert_eq!(Stats::new(1, 0, 44, 13, 8, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         buf.clear();
         // The keywords keep their slots and stay at zero, which is what a run produces: the seed
         // comes from the language and not from the file, so hiding them stops the counting and not
@@ -1776,33 +1783,33 @@ mod tests {
         config.count_keywords = false;
         let result = parse_file_whole(&sample_file("a.txt"), "Java", &mut buf, &config);
         let result = content_info_of(result.unwrap(), "Java");
-        assert_eq!(Stats::new(1, 0, 44, 13, 17, hashmap!("classes".to_owned()=>0,"interfaces".to_owned()=>0)), result);
+        assert_eq!(Stats::new(1, 0, 44, 13, 8, hashmap!("classes".to_owned()=>0,"interfaces".to_owned()=>0)), result);
         buf.clear();
         config.count_keywords = true;
         let result = parse_file_whole(&sample_file("a.txt"), "C#", &mut buf, &EngineConfig::default());
         let result = content_info_of(result.unwrap(), "C#");
-        assert_eq!(Stats::new(1, 0, 44, 13, 17, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
+        assert_eq!(Stats::new(1, 0, 44, 13, 8, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
         buf.clear();
         
         let result = parse_file_whole(&sample_file("d.txt"), "C#", &mut buf, &EngineConfig::default());
         let result = content_info_of(result.unwrap(), "C#");
-        assert_eq!(Stats::new(1, 0, 19, 7, 10, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
+        assert_eq!(Stats::new(1, 0, 19, 7, 7, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         buf.clear();
         let result = parse_file_whole(&sample_file("d.txt"), "Java", &mut buf, &EngineConfig::default());
         let result = content_info_of(result.unwrap(), "Java");
-        assert_eq!(Stats::new(1, 0, 19, 7, 10, hashmap!("classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
+        assert_eq!(Stats::new(1, 0, 19, 7, 7, hashmap!("classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
         buf.clear();
 
         let result = parse_file_whole(&sample_file("b.txt"), "Java", &mut buf, &EngineConfig::default());
         let result = content_info_of(result.unwrap(), "Java");
-        assert_eq!(Stats::new(1, 0, 19, 11, 5, hashmap!("classes".to_owned()=>7,"interfaces".to_owned()=>0)), result);
+        assert_eq!(Stats::new(1, 0, 19, 11, 4, hashmap!("classes".to_owned()=>7,"interfaces".to_owned()=>0)), result);
         buf.clear();
 
         // The 'class' on the line between two lone apostrophes counts: Python declares its plain
         // quotes single-line, so the quote above it dies at its own line instead of swallowing it
         let result = parse_file_whole(&sample_file("c.txt"), "Python", &mut buf, &EngineConfig::default());
         let result = content_info_of(result.unwrap(), "Python");
-        assert_eq!(Stats::new(1, 0, 11, 6, 3, hashmap!("classes".to_owned()=>3)), result);
+        assert_eq!(Stats::new(1, 0, 11, 6, 1, hashmap!("classes".to_owned()=>3)), result);
         buf.clear();
     }
 
@@ -1818,13 +1825,34 @@ mod tests {
             (stats.lines, stats.code_lines, stats.comment_lines)
         };
 
-        // a.txt has 10 lines that are nothing but a brace, of which 2 carry a comment as well, and
-        // 6 blank ones. The three categories always add up to the total. Those 2 move twice over:
-        // the flag makes their brace code, and a line holding code and a comment is code, so they
-        // leave the comment count as they enter the code one.
-        assert_eq!((44, 13, 17), count_with(false, &mut buf));
+        // a.txt has 10 lines holding a brace and no word, 2 of them with a wordless comment beside
+        // it. The flag moves all 10 into code; the 9 delimiter-only lines of its block comments
+        // say nothing and stay extra under either flag.
+        assert_eq!((44, 13, 8), count_with(false, &mut buf));
         buf.clear();
-        assert_eq!((44, 23, 15), count_with(true, &mut buf));
+        assert_eq!((44, 23, 8), count_with(true, &mut buf));
+    }
+
+    // A line is counted where it says something: words in code make it code, words only in a
+    // comment make it a comment, and a line with no word anywhere is extra, because a bare
+    // delimiter is the grammar's and not the writer's.
+    #[test]
+    fn a_line_counts_where_its_words_are_and_bare_delimiters_are_extra() {
+        let counts = |contents: &str| {
+            let stats = parse_lines_whole(contents, &JAVA);
+            (stats.lines, stats.code_lines, stats.comment_lines)
+        };
+
+        // the banner shape: only the starred text is a comment, the ceremony around it is extra
+        assert_eq!((4, 0, 1), counts("/*\n* words here\n*\n*/\n"));
+        // a decorative separator says nothing
+        assert_eq!((2, 1, 0), counts("/*----------*/\nint x = 1;\n"));
+        // a bare line comment is a spacer, one with words is a comment
+        assert_eq!((3, 1, 1), counts("//\n// words\nint x = 1;\n"));
+        // the words of a mixed line sit in its comment, and the brace does not demote it
+        assert_eq!((2, 1, 1), counts("int x = 1;\n} // end of main\n"));
+        // a bare closer with a brace beside it says no more than the bare closer alone
+        assert_eq!((3, 0, 2), counts("/* words\n*/ }\n/* more words\n"));
     }
 
     // A keyword cut in half by a string literal must not count: each surviving stretch is searched
@@ -1835,7 +1863,7 @@ mod tests {
         let mut file_stats = FileStats::with_keywords(&[STRUCT.clone(),ENUM.clone(),TRAIT.clone()]);
         let matcher = KeywordMatcher::build(&RUST).unwrap();
         let mut buffers = ScanBuffers::default();
-        let info = get_bounds(line, &RUST, None, &None, false, &mut buffers);
+        let info = get_bounds(line, &RUST, None, &None, &mut buffers);
         let mut spans = Vec::new();
         assert!(info.code.is_some());
         push_trimmed_spans(&mut spans, &buffers.code_ranges, line, 0);
@@ -1846,7 +1874,7 @@ mod tests {
         let line = "struct a;";
         let mut file_stats = FileStats::with_keywords(&[STRUCT.clone(),ENUM.clone(),TRAIT.clone()]);
         let mut buffers = ScanBuffers::default();
-        let info = get_bounds(line, &RUST, None, &None, false, &mut buffers);
+        let info = get_bounds(line, &RUST, None, &None, &mut buffers);
         let mut spans = Vec::new();
         assert!(info.code.is_some());
         push_trimmed_spans(&mut spans, &buffers.code_ranges, line, 0);
@@ -2864,15 +2892,17 @@ mod tests {
         resolve_double_counting_of_adjacent_start_and_end_symbols(&mut starts, &mut ends, true, &lua_like);
         assert_eq!((vec![(2, 0, 0)], vec![(0, 0, 0)]), (starts, ends));
 
-        // and the whole shape through the walk: the line closes and reopens, so it ends still open,
-        // and it is a comment line whether or not whitespace separates the two symbols, since the
-        // space between them is nothing a reader would call code
+        // and the whole shape through the walk: the line closes and reopens, so it ends still open.
+        // Whitespace between the symbols is reported as a code range and left to the walk, which
+        // counts the line where its words are, in the comment.
         assert_eq!(TextInfo::with_open_comment(0), bounds_multi("]]--[[", &LUA, Some(0), &None));
-        assert_eq!(TextInfo::with_open_comment(0), bounds_multi("]]  --[[ reopened", &LUA, Some(0), &None));
+        assert_eq!(TextInfo::new(Some("  ".to_owned()), false, Some((0, 1)), None),
+                bounds_multi("]]  --[[ reopened", &LUA, Some(0), &None));
         // an HTML-shaped pair, 4 against 3, through a language declaring no line comments
         let html : Language = Language::new("html-like", ["html"], ["\""], [""; 0], &[("<!--", "-->")], []);
         assert_eq!(TextInfo::with_open_comment(0), bounds_multi("--><!--", &html, Some(0), &None));
-        assert_eq!(TextInfo::with_open_comment(0), bounds_multi("--> <!-- reopened", &html, Some(0), &None));
+        assert_eq!(TextInfo::new(Some(" ".to_owned()), false, Some((0, 1)), None),
+                bounds_multi("--> <!-- reopened", &html, Some(0), &None));
     }
 
     #[test]
