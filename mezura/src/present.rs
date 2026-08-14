@@ -245,14 +245,14 @@ mod tests {
             source: crate::diff::Source::Document { path: "old.json".to_owned() },
             taken: "2026-08-06T10:00:00+03:00".to_owned(),
             version: "3.0.0".to_owned(),
-            scope: crate::diff::scope_of(&mezura_core::EngineConfig::default()),
+            scope: crate::diff::scope_of(&mezura_core::EngineConfig::default(), mezura_core::CountingModel::Content),
             warnings: Vec::new(),
             faulty_files_count: 0,
             unreadable_dirs_count: 0,
             result: result_with(0, 0)
         };
         let comparison = crate::diff::Comparison::of(baseline,
-                crate::diff::Reading::of_this_run(&result, &chrono::Local::now(), &config.engine), &config, Vec::new());
+                crate::diff::Reading::of_this_run(&result, &chrono::Local::now(), &config), &config, Vec::new());
 
         present(&result, Some(&comparison), &config);
         assert!(!path.exists(), "the comparison run wrote a log entry");

@@ -336,33 +336,138 @@ impl Clone for Keyword {
     }
 }
 
-// The extra lines and the average size are methods rather than fields, so a stored copy cannot drift
-// from the numbers it comes from.
+// Where each line of a file landed, one slot per line, so the nine add up to the lines. "Words"
+// are word bytes: a letter, a digit, or anything above ASCII. A line with none anywhere is
+// punctuation some grammar required, or blank.
+#[derive(Debug,PartialEq,Default,Clone)]
+pub struct LineClasses {
+    pub words_in_code : usize,
+    // Lines whose only content is the inside of a string literal, the middle of a multiline
+    // string being the plain case. String content is data and both models count it as code.
+    pub string_content : usize,
+    // Words only inside a comment, on a line that also carries code punctuation: '} // words'.
+    // The two models part here, which is why it cannot sit in either neighbour: content reads
+    // the words and says comment, region reads the '}' and says code.
+    pub comment_words_beside_code : usize,
+    pub words_in_comment : usize,
+    pub punctuation_in_code : usize,
+    pub punctuation_in_comment : usize,
+    pub blank : usize,
+    pub blank_in_comment : usize,
+    pub blank_in_string : usize
+}
+
+impl LineClasses {
+    pub fn add(&mut self, other: &LineClasses) {
+        self.words_in_code += other.words_in_code;
+        self.string_content += other.string_content;
+        self.comment_words_beside_code += other.comment_words_beside_code;
+        self.words_in_comment += other.words_in_comment;
+        self.punctuation_in_code += other.punctuation_in_code;
+        self.punctuation_in_comment += other.punctuation_in_comment;
+        self.blank += other.blank;
+        self.blank_in_comment += other.blank_in_comment;
+        self.blank_in_string += other.blank_in_string;
+    }
+
+    // Saturating because the numbers taken out may come off a document or a log, where nothing
+    // promises they stay inside what they are taken from
+    pub fn subtract(&mut self, other: &LineClasses) {
+        self.words_in_code = self.words_in_code.saturating_sub(other.words_in_code);
+        self.string_content = self.string_content.saturating_sub(other.string_content);
+        self.comment_words_beside_code = self.comment_words_beside_code.saturating_sub(other.comment_words_beside_code);
+        self.words_in_comment = self.words_in_comment.saturating_sub(other.words_in_comment);
+        self.punctuation_in_code = self.punctuation_in_code.saturating_sub(other.punctuation_in_code);
+        self.punctuation_in_comment = self.punctuation_in_comment.saturating_sub(other.punctuation_in_comment);
+        self.blank = self.blank.saturating_sub(other.blank);
+        self.blank_in_comment = self.blank_in_comment.saturating_sub(other.blank_in_comment);
+        self.blank_in_string = self.blank_in_string.saturating_sub(other.blank_in_string);
+    }
+}
+
+// Where the code and comment columns come from. The engine only ever fills 'LineClasses'; what a
+// column shows is this fold, chosen at presentation time, so the same run answers both models.
+//
+// 'Content' asks what a line says: words in code make it code, words only in a comment make it a
+// comment, and punctuation and blanks are neither. 'Region' asks where a line sits, which is how
+// cloc, tokei and scc count: any code on the line makes it code, a line inside a comment belongs
+// to the comment whatever it holds, and only a blank outside everything is blank.
+#[derive(Debug,PartialEq,Eq,Clone,Copy,Default)]
+pub enum CountingModel {
+    #[default]
+    Content,
+    Region
+}
+
+impl CountingModel {
+    pub fn parse(value: &str) -> Option<CountingModel> {
+        match value.trim().to_lowercase().as_str() {
+            "content" => Some(Self::Content),
+            "region" => Some(Self::Region),
+            _ => None
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Content => "content",
+            Self::Region => "region"
+        }
+    }
+
+    pub fn calculate_code_lines(&self, classes: &LineClasses) -> usize {
+        match self {
+            Self::Content => classes.words_in_code + classes.string_content,
+            Self::Region => classes.words_in_code + classes.string_content
+                    + classes.comment_words_beside_code + classes.punctuation_in_code
+                    + classes.blank_in_string
+        }
+    }
+
+    pub fn calculate_comment_lines(&self, classes: &LineClasses) -> usize {
+        match self {
+            Self::Content => classes.comment_words_beside_code + classes.words_in_comment,
+            Self::Region => classes.words_in_comment + classes.punctuation_in_comment
+                    + classes.blank_in_comment
+        }
+    }
+}
+
+// The folded columns and the average size are methods rather than fields, so a stored copy cannot
+// drift from the numbers it comes from.
 #[derive(Debug,PartialEq,Default,Clone)]
 pub struct Stats {
     pub files : usize,
     pub bytes : usize,
     pub lines : usize,
-    pub code_lines : usize,
-    pub comment_lines : usize,
+    pub classes : LineClasses,
     // Added up over a run these are every keyword any language declared, which answers "how many
     // classes are in this project" across the several languages that have such a thing.
     pub keyword_occurences : HashMap<String,usize>
 }
 
 impl Stats {
-    pub fn new(files: usize, bytes: usize, lines: usize, code_lines: usize, comment_lines: usize,
+    pub fn new(files: usize, bytes: usize, lines: usize, classes: LineClasses,
             keyword_occurences: HashMap<String,usize>) -> Self
     {
-        Stats { files, bytes, lines, code_lines, comment_lines, keyword_occurences }
+        Stats { files, bytes, lines, classes, keyword_occurences }
     }
 
-    // The blank lines and the ones carrying no content.
+    pub fn calculate_code_lines(&self, model: CountingModel) -> usize {
+        model.calculate_code_lines(&self.classes)
+    }
+
+    pub fn calculate_comment_lines(&self, model: CountingModel) -> usize {
+        model.calculate_comment_lines(&self.classes)
+    }
+
+    // The third column: extra under 'Content', blanks under 'Region'.
     //
     // Saturating because the fields are public and this is also built from numbers read off a log
-    // file: three counts that do not add up are the caller's arithmetic, not a reason to panic.
-    pub fn calculate_extra_lines(&self) -> usize {
-        self.lines.saturating_sub(self.code_lines).saturating_sub(self.comment_lines)
+    // file: counts that do not add up are the caller's arithmetic, not a reason to panic.
+    pub fn calculate_extra_lines(&self, model: CountingModel) -> usize {
+        self.lines.saturating_sub(self.calculate_code_lines(model))
+                .saturating_sub(self.calculate_comment_lines(model))
     }
 
     // Rounded to whole bytes, and zero rather than a division by zero when nothing was counted
@@ -377,8 +482,7 @@ impl Stats {
         self.files += 1;
         self.bytes += bytes;
         self.lines += stats.lines;
-        self.code_lines += stats.code_lines;
-        self.comment_lines += stats.comment_lines;
+        self.classes.add(&stats.classes);
         for (keyword_index, occurrences) in stats.keyword_occurences.iter().enumerate() {
             if *occurrences > 0 {
                 *self.keyword_occurences.entry(keywords[keyword_index].descriptive_name.clone())
@@ -391,8 +495,7 @@ impl Stats {
         self.files += other.files;
         self.bytes += other.bytes;
         self.lines += other.lines;
-        self.code_lines += other.code_lines;
-        self.comment_lines += other.comment_lines;
+        self.classes.add(&other.classes);
         for (keyword, occurrences) in other.keyword_occurences.iter() {
             *self.keyword_occurences.entry(keyword.clone()).or_default() += *occurrences;
         }
@@ -415,8 +518,7 @@ impl From<&Language> for Stats {
 #[derive(Debug,PartialEq,Default)]
 pub(crate) struct FileStats {
     pub lines : usize,
-    pub code_lines : usize,
-    pub comment_lines : usize,
+    pub classes : LineClasses,
     pub keyword_occurences : Vec<usize>
 }
 
@@ -424,8 +526,7 @@ impl FileStats {
     pub(crate) fn with_keywords(keywords: &[Keyword]) -> Self {
         FileStats {
             lines : 0,
-            code_lines : 0,
-            comment_lines : 0,
+            classes : LineClasses::default(),
             keyword_occurences : vec![0; keywords.len()]
         }
     }
@@ -449,19 +550,42 @@ fn create_keyword_slots(language: &Language) -> HashMap<String,usize> {
 mod tests {
     use super::*;
 
+    fn stats_of(lines: usize, code: usize, comments: usize) -> Stats {
+        let classes = LineClasses { words_in_code: code, words_in_comment: comments, ..Default::default() };
+        Stats::new(1, 0, lines, classes, HashMap::new())
+    }
+
     // The parser cannot produce these: a line is counted once and falls into exactly one of the
-    // three. They come off a log file whose head was lost.
+    // classes. They come off a log file whose head was lost.
     #[test]
-    fn three_counts_that_do_not_add_up_give_no_extra_lines_rather_than_a_panic() {
-        assert_eq!(0, Stats::new(1, 0, 0, 0, 900, HashMap::new()).calculate_extra_lines());
-        assert_eq!(0, Stats::new(1, 0, 40, 900, 50, HashMap::new()).calculate_extra_lines());
-        assert_eq!(0, Stats::new(1, 0, 100, 60, 40, HashMap::new()).calculate_extra_lines());
-        assert_eq!(10, Stats::new(1, 0, 100, 60, 30, HashMap::new()).calculate_extra_lines());
+    fn counts_that_do_not_add_up_give_no_extra_lines_rather_than_a_panic() {
+        assert_eq!(0, stats_of(0, 0, 900).calculate_extra_lines(CountingModel::Content));
+        assert_eq!(0, stats_of(40, 900, 50).calculate_extra_lines(CountingModel::Content));
+        assert_eq!(0, stats_of(100, 60, 40).calculate_extra_lines(CountingModel::Content));
+        assert_eq!(10, stats_of(100, 60, 30).calculate_extra_lines(CountingModel::Content));
+    }
+
+    #[test]
+    fn each_model_folds_the_classes_into_its_own_columns() {
+        let classes = LineClasses {
+            words_in_code: 10, string_content: 5, comment_words_beside_code: 4, words_in_comment: 8,
+            punctuation_in_code: 3, punctuation_in_comment: 2, blank: 6, blank_in_comment: 1,
+            blank_in_string: 7
+        };
+        let stats = Stats::new(1, 0, 46, classes, HashMap::new());
+
+        assert_eq!(15, stats.calculate_code_lines(CountingModel::Content));
+        assert_eq!(12, stats.calculate_comment_lines(CountingModel::Content));
+        assert_eq!(19, stats.calculate_extra_lines(CountingModel::Content));
+
+        assert_eq!(29, stats.calculate_code_lines(CountingModel::Region));
+        assert_eq!(11, stats.calculate_comment_lines(CountingModel::Region));
+        assert_eq!(6, stats.calculate_extra_lines(CountingModel::Region));
     }
 
     #[test]
     fn an_average_size_over_no_files_is_zero_rather_than_a_division_by_zero() {
         assert_eq!(0, Stats::default().calculate_average_size());
-        assert_eq!(250, Stats::new(4, 1000, 0, 0, 0, HashMap::new()).calculate_average_size());
+        assert_eq!(250, Stats::new(4, 1000, 0, LineClasses::default(), HashMap::new()).calculate_average_size());
     }
 }

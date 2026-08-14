@@ -16,7 +16,8 @@ pub mod languages;
 pub mod render;
 pub mod warnings;
 
-pub use domain::{Keyword, Language, LeveledPair, MultilineString, NestedLanguage, Stats};
+pub use domain::{CountingModel, Keyword, Language, LeveledPair, LineClasses, MultilineString,
+        NestedLanguage, Stats};
 pub use engine::config::{EngineConfig, Target, Threads};
 pub use engine::targets::TargetError;
 pub use languages::Languages;
@@ -525,20 +526,22 @@ mod tests {
     // they are derived from, and the keywords add up now where the totals used to carry none.
     #[test]
     fn the_total_is_the_languages_added_together() {
+        let counted = |code, comments| LineClasses {
+                words_in_code: code, words_in_comment: comments, ..Default::default() };
         let languages = hashmap![
-            "a".to_owned() => Stats::new(20, 100_000, 2000, 1400, 100, hashmap!["classes".to_owned() => 7]),
-            "b".to_owned() => Stats::new(10, 50_000, 1000, 800, 50, hashmap!["classes".to_owned() => 2]),
-            "c".to_owned() => Stats::new(10, 50_000, 1000, 800, 50, hashmap!["structs".to_owned() => 5])
+            "a".to_owned() => Stats::new(20, 100_000, 2000, counted(1400, 100), hashmap!["classes".to_owned() => 7]),
+            "b".to_owned() => Stats::new(10, 50_000, 1000, counted(800, 50), hashmap!["classes".to_owned() => 2]),
+            "c".to_owned() => Stats::new(10, 50_000, 1000, counted(800, 50), hashmap!["structs".to_owned() => 5])
         ];
         let total = Stats::total_of(&languages);
 
         assert_eq!(40, total.files);
         assert_eq!(200_000, total.bytes);
         assert_eq!(4000, total.lines);
-        assert_eq!(3000, total.code_lines);
-        assert_eq!(200, total.comment_lines);
+        assert_eq!(3000, total.calculate_code_lines(CountingModel::Content));
+        assert_eq!(200, total.calculate_comment_lines(CountingModel::Content));
         // what is neither code nor comment, worked out and not stored
-        assert_eq!(800, total.calculate_extra_lines());
+        assert_eq!(800, total.calculate_extra_lines(CountingModel::Content));
         assert_eq!(5000, total.calculate_average_size());
         // 'classes' exists in two of the three, which is the question the totals could not answer
         // at all before: they carried no keywords.

@@ -27,6 +27,18 @@ Main changes:
       bare "/*" and "*/" of a block written on their own lines, the "*" of a banner line, a lone
       "//" spacer, a decorative "/*----*/". Comment counts drop visibly on trees written in banner
       style; code counts do not move.
+  -> New "--counting" command, taking "content" or "region". The default, "content", is the
+      counting mezura always did: a line counts where its words are, and a line saying nothing is
+      extra. "region" counts a line where it sits, the way cloc, tokei and scc do: any code on the
+      line makes it code, a blank inside a comment belongs to the comment, and the extra column
+      gives way to blanks. Both come from the same run; the command only picks the columns shown.
+  -> "--braces-as-code" is removed: what it reached for is the whole of "--counting region". A
+      saved configuration's "===> braces-as-code" block is no longer read, so replace it with a
+      "===> counting" block holding "region" to keep that behaviour.
+  -> The JSON document and the log record where every line landed, as a "classes" block of nine
+      counts, and the scope records "counting" instead of "braces_as_code". "code", "comments" and
+      "extra" are the fold of those counts under the model the scope names. Documents and logs
+      written by an earlier v3.0.0 build cannot be read and have to be taken again.
   -> Comment lines are now counted and reported separately, with their own percentage.
   -> A language can now declare more than one block comment pair: Pascal and Delphi count both
       "{ }" and "(* *)", and D counts "/+ +/" beside "/* */". Only the end of the pair that opened

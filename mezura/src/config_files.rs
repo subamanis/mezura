@@ -61,7 +61,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
         Err(_) => return Err(ConfigFileParseError::FileNotFound(file_name.to_owned()))
     })};
 
-    let (mut targets, mut braces_as_code, mut should_search_in_dotted, mut threads, mut exclude_dirs,
+    let (mut targets, mut counting, mut should_search_in_dotted, mut threads, mut exclude_dirs,
          mut languages_of_interest, mut excluded_languages, mut forced_languages, mut should_show_faulty_files, mut hidden,
          mut no_gitignore, mut theme_name, mut compare_level, mut config_styles, mut bar_thickness,
          mut progress_bar, mut number_separator, mut decimal_separator, mut layout, mut sort_by, mut top_n,
@@ -127,10 +127,12 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                     Some(x) => threads = Some(Threads::from(x)),
                     None => issues.invalid_fields.push(config_manager::THREADS)
                 }
-            }else if id == config_manager::BRACES_AS_CODE {
-                match read_bool_value_from_file(&mut reader, &mut buf) {
-                    Ok(x) => braces_as_code = x,
-                    Err(()) => issues.invalid_fields.push(config_manager::BRACES_AS_CODE)
+            } else if id == config_manager::COUNTING {
+                buf.clear();
+                let _ = reader.read_line(&mut buf);
+                match mezura_core::CountingModel::parse(&buf) {
+                    Some(x) => counting = Some(x),
+                    None => issues.invalid_fields.push(config_manager::COUNTING)
                 }
             } else if id == config_manager::SHOW_FAULTY_FILES {
                 match read_bool_value_from_file(&mut reader, &mut buf) {
@@ -242,7 +244,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
     }
 
     let builder = ConfigurationBuilder {
-        targets, exclude_dirs, languages_of_interest, excluded_languages, forced_languages, threads, braces_as_code, should_search_in_dotted,
+        targets, exclude_dirs, languages_of_interest, excluded_languages, forced_languages, threads, counting, should_search_in_dotted,
         should_show_faulty_files, hidden, no_gitignore, theme_name, compare_level, config_styles, bar_thickness,
         progress_bar, number_separator, decimal_separator, layout, sort_by, top_n, by_file,
         ..Default::default()
@@ -306,9 +308,9 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
         writer.write_all(&[b"\n\n===> ",config_manager::THREADS.as_bytes(),b"\n"].concat())?;
         writer.write_all((threads.producers().to_string() + " " + &threads.consumers().to_string()).as_bytes())?;
     }
-    if let Some(braces_as_code) = &config_builder.braces_as_code {
-        writer.write_all(&[b"\n\n===> ",config_manager::BRACES_AS_CODE.as_bytes(),b"\n"].concat())?;
-        writer.write_all(if *braces_as_code {b"yes"} else {b"no"})?;
+    if let Some(counting) = &config_builder.counting {
+        writer.write_all(&[b"\n\n===> ",config_manager::COUNTING.as_bytes(),b"\n"].concat())?;
+        writer.write_all(counting.name().as_bytes())?;
     }
     if let Some(should_search_in_dotted) = &config_builder.should_search_in_dotted {
         writer.write_all(&[b"\n\n===> ",config_manager::SEARCH_IN_DOTTED.as_bytes(),b"\n"].concat())?;
@@ -492,7 +494,7 @@ mod tests {
 
         let mut contents = b"===> threads\n2 8\n\n===> targets\n".to_vec();
         contents.extend([0xCF, 0xE1, 0xE8, 0xFF, b'\n']);
-        contents.extend(b"\n===> braces-as-code\nyes\n");
+        contents.extend(b"\n===> counting\nregion\n");
         std::fs::write(dir.join("halfway.txt"), contents).unwrap();
 
         let result = super::super::config_files::parse_config_file(Some("halfway"), Some(dir_str));
@@ -509,7 +511,7 @@ mod tests {
 
     #[test]
     fn test_save_config_file_and_then_parse_it() -> std::io::Result<()> {
-        let command = "./ --exclude a,b,c.txt,d.txt, --braces-as-code --threads 1 1 --hide keywords,timing \
+        let command = "./ --exclude a,b,c.txt,d.txt, --counting region --threads 1 1 --hide keywords,timing \
                 --force-language m=matlab,.pl=Perl --by-file 12 \
                 --style code-number=green,comments-label=magenta bold,arrow=default dim".to_string();
         let config_builder = config_manager::create_config_builder_from_args(&command).unwrap();
@@ -523,7 +525,7 @@ mod tests {
         assert_eq!(config_builder.targets, options.targets);
         assert_eq!(config_builder.exclude_dirs, options.exclude_dirs);
         assert_eq!(config_builder.threads, options.threads);
-        assert_eq!(config_builder.braces_as_code, options.braces_as_code);
+        assert_eq!(config_builder.counting, options.counting);
         assert_eq!(config_builder.should_show_faulty_files, options.should_show_faulty_files);
         assert_eq!(config_builder.should_search_in_dotted, options.should_search_in_dotted);
         assert_eq!(config_builder.hidden, options.hidden);
@@ -549,12 +551,12 @@ mod tests {
         let dir = SCRATCH_CONFIG_DIR.to_owned();
         std::fs::create_dir_all(&dir)?;
         let path = dir.clone() + "carries-a-log.txt";
-        std::fs::write(&path, "===> targets\n./\n\n===> log\nyes\n\n===> braces-as-code\nyes\n")?;
+        std::fs::write(&path, "===> targets\n./\n\n===> log\nyes\n\n===> counting\nregion\n")?;
 
         let (options, issues) = super::super::config_files::parse_config_file(Some("carries-a-log"), Some(dir)).unwrap();
         assert_eq!(None, options.log);
         // the rest of the file still applies, so the one bad section costs itself and nothing else
-        assert_eq!(Some(true), options.braces_as_code);
+        assert_eq!(Some(mezura_core::CountingModel::Region), options.counting);
         assert!(issues.warnings.iter().any(|(code, message)|
                 *code == mezura_core::warnings::Code::ConfigSectionUnknown && message.contains("'log'")),
                 "the ignored section was not named: {:?}", issues.warnings);
@@ -674,7 +676,7 @@ mod tests {
                 Target::of("C:/Some/Path/c"), Target::of("C:/Some/Path/d")];
         config.engine.exclude_dirs = vec!["a".to_owned(), "b".to_owned(), "c.txt".to_owned(), "d.txt".to_owned()];
         config.engine.threads = mezura_core::Threads::new(1, 1);
-        config.engine.braces_as_code = true;
+        config.view.counting = mezura_core::CountingModel::Region;
         config
             .set_hidden(config_manager::Hidden {bar: true, timing: true, ..Default::default()});
 
@@ -683,7 +685,7 @@ mod tests {
         assert_eq!(declared_targets, options.targets.unwrap());
         assert_eq!(config.engine.exclude_dirs, options.exclude_dirs.unwrap());
         assert_eq!(config.engine.threads, options.threads.unwrap());
-        assert_eq!(config.engine.braces_as_code, options.braces_as_code.unwrap());
+        assert_eq!(config.view.counting, options.counting.unwrap());
         assert_eq!(config.view.should_show_faulty_files, options.should_show_faulty_files.unwrap());
         assert_eq!(config.engine.should_search_in_dotted, options.should_search_in_dotted.unwrap());
         assert_eq!(config.view.hidden, options.hidden.unwrap());
@@ -709,14 +711,14 @@ mod tests {
         let dir_str = dir.to_str().unwrap().to_owned() + "/";
 
         std::fs::write(dir.join("badcfg.txt"),
-                "===> threads\n3343 45534\n\n===> braces-as-code\nmitsos\n\n===> compare\n99\n\n===> hide\nkeywords\n\n===> sort\nnope\n").unwrap();
+                "===> threads\n3343 45534\n\n===> counting\nmitsos\n\n===> compare\n99\n\n===> hide\nkeywords\n\n===> sort\nnope\n").unwrap();
 
         let (options, issues) = super::super::config_files::parse_config_file(Some("badcfg"), Some(dir_str)).unwrap();
-        assert_eq!(issues.invalid_fields, vec![config_manager::THREADS, config_manager::BRACES_AS_CODE,
+        assert_eq!(issues.invalid_fields, vec![config_manager::THREADS, config_manager::COUNTING,
                 config_manager::COMPARE_LEVEL, config_manager::SORT]);
         assert!(issues.warnings.is_empty());
         assert_eq!(options.threads, None);
-        assert_eq!(options.braces_as_code, None);
+        assert_eq!(options.counting, None);
         assert_eq!(options.compare_level, None);
         assert_eq!(options.sort_by, None);
         assert_eq!(options.hidden, Some(config_manager::Hidden {keywords: true, ..Default::default()}));

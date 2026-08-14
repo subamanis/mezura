@@ -35,7 +35,10 @@ pub struct Scope {
     pub excluded_languages: Vec<String>,
     // The extension is the key, as the run is asked about it: 'm' to 'matlab'
     pub forced_languages: HashMap<String, String>,
-    pub braces_as_code: bool,
+    // Kept as the word the document holds rather than a 'CountingModel': a document written by a
+    // later version can name a model this build has never heard of, and the comparison still has
+    // to say that the two readings were not taken the same way
+    pub counting: String,
     pub search_in_dotted: bool,
     pub gitignore: bool,
     // Whether the keywords were counted at all: '--hide keywords' stops the counting, and a map
@@ -179,7 +182,7 @@ pub(crate) fn parse_scope(scope: &Map<String, Value>) -> Result<(Scope, Vec<Targ
         languages: read_strings(scope, "languages", "scope")?,
         excluded_languages: read_strings(scope, "excluded_languages", "scope")?,
         forced_languages: parse_forced_languages(read_nested(scope, "forced_languages", "scope")?)?,
-        braces_as_code: read_flag(scope, "braces_as_code", "scope")?,
+        counting: read_text(scope, "counting", "scope")?,
         search_in_dotted: read_flag(scope, "search_in_dotted", "scope")?,
         gitignore: read_flag(scope, "gitignore", "scope")?,
         // Absent from a document of the first builds, which all counted them
@@ -203,9 +206,28 @@ pub(crate) fn parse_stats(entry: &Map<String, Value>, at: &str) -> Result<Stats,
         read_number(entry, "files", at)?,
         read_number(entry, "bytes", at)?,
         read_number(entry, "lines", at)?,
-        read_number(entry, "code", at)?,
-        read_number(entry, "comments", at)?,
+        parse_classes(entry, at)?,
         keywords))
+}
+
+// Where every line of the counted files landed, which is what both counting models are folds of.
+// 'code' and 'comments' are written beside them and never read back: they are one such fold, and a
+// stored copy of a derived figure is the one thing that can disagree with what it came from.
+pub(crate) fn parse_classes(entry: &Map<String, Value>, at: &str) -> Result<mezura_core::LineClasses, DocumentError> {
+    let classes = read_nested(entry, "classes", at)?;
+    let at = join_location(at, "classes");
+    let of = |name: &str| read_number(classes, name, &at);
+    Ok(mezura_core::LineClasses {
+        words_in_code: of("words_in_code")?,
+        string_content: of("string_content")?,
+        comment_words_beside_code: of("comment_words_beside_code")?,
+        words_in_comment: of("words_in_comment")?,
+        punctuation_in_code: of("punctuation_in_code")?,
+        punctuation_in_comment: of("punctuation_in_comment")?,
+        blank: of("blank")?,
+        blank_in_comment: of("blank_in_comment")?,
+        blank_in_string: of("blank_in_string")?
+    })
 }
 
 fn parse_forced_languages(entry: &Map<String, Value>) -> Result<HashMap<String, String>, DocumentError> {
@@ -390,7 +412,7 @@ mod tests {
 
     fn parse_stats(files: usize, bytes: usize, lines: usize, code: usize, comments: usize,
             keywords: HashMap<String, usize>) -> Stats {
-        Stats::new(files, bytes, lines, code, comments, keywords)
+        crate::test_support::plain_stats_of(files, bytes, lines, code, comments, keywords)
     }
 
     // Everything the printer can put in a document, so that nothing is left to a shape no test
@@ -421,7 +443,7 @@ mod tests {
         config.engine.exclude_dirs = vec!["target".to_owned(), "*.min.js".to_owned()];
         config.engine.languages_of_interest = vec!["rust".to_owned()];
         config.engine.excluded_languages = vec!["json".to_owned()];
-        config.engine.braces_as_code = true;
+        config.view.counting = mezura_core::CountingModel::Region;
         config.engine.should_search_in_dotted = true;
         config.engine.no_gitignore = true;
         config.view.sort_by = SortCriterion::Name;
@@ -482,7 +504,7 @@ mod tests {
         assert_eq!(vec!["target".to_owned(), "*.min.js".to_owned()], read.scope.exclude);
         assert_eq!(vec!["rust".to_owned()], read.scope.languages);
         assert_eq!(vec!["json".to_owned()], read.scope.excluded_languages);
-        assert!(read.scope.braces_as_code);
+        assert_eq!("region", read.scope.counting);
         assert!(read.scope.search_in_dotted);
         // written as whether the file is obeyed, which is the opposite of the flag that turns it off
         assert!(!read.scope.gitignore);
@@ -603,16 +625,25 @@ mod tests {
         // a target is an object of two members, and either of them being wrong names that target
         let scope_with = |targets: &str| format!("\"scope\": {{\"targets\": {targets}, \"exclude\": [], \
                 \"languages\": [], \"excluded_languages\": [], \"forced_languages\": {{}}, \
-                \"braces_as_code\": false, \"search_in_dotted\": false, \"gitignore\": true, \
+                \"counting\": \"content\", \"search_in_dotted\": false, \"gitignore\": true, \
                 \"keywords_counted\": true}}");
         assert!(error(&scope_with("[{\"module\": null}]")).contains("'scope.targets[0].path'"));
         assert!(error(&scope_with("[{\"module\": 7, \"path\": \"x\"}]")).contains("'scope.targets[0].module' is not a string or null"));
 
         // a later format may have removed a key or changed what one means, so it is refused whole
         // rather than read as far as it happens to match
-        let newer = minimal_document("\"warnings\": []").replace("\"format\": 1", "\"format\": 2");
+        let too_new = FORMAT_VERSION + 1;
+        let newer = minimal_document("\"warnings\": []")
+                .replace("\"format\": 1", &format!("\"format\": {too_new}"));
         let refused = parse(&newer).unwrap_err().to_string();
-        assert!(refused.contains("format 2") && refused.contains("Update mezura"), "{refused}");
+        assert!(refused.contains(&format!("format {too_new}")) && refused.contains("Update mezura"), "{refused}");
+    }
+
+    // Every class at zero, which a document of a run that counted nothing carries
+    fn empty_classes() -> String {
+        let names = ["words_in_code", "string_content", "comment_words_beside_code", "words_in_comment",
+                "punctuation_in_code", "punctuation_in_comment", "blank", "blank_in_comment", "blank_in_string"];
+        format!("{{{}}}", names.map(|name| format!("\"{name}\": 0")).join(", "))
     }
 
     // Written by hand rather than by the printer, so that a test can leave a member out or spell it
@@ -621,13 +652,14 @@ mod tests {
         let document = format!("{{\"format\": 1, \"mezura_version\": \"3.0.0\", \
             \"generated_at\": \"2026-07-30T14:22:07+03:00\", \
             \"scope\": {{\"targets\": [], \"exclude\": [], \"languages\": [], \"excluded_languages\": [], \
-                \"forced_languages\": {{}}, \"braces_as_code\": false, \"search_in_dotted\": false, \
+                \"forced_languages\": {{}}, \"counting\": \"content\", \"search_in_dotted\": false, \
                 \"gitignore\": true, \"keywords_counted\": true}}, \
             \"scan\": {{\"files_found\": 0, \"files_of_interest\": 0, \"files_excluded\": 0, \
                 \"files_faulty\": 0, \"dirs_unreadable\": 0}}, \
-            \"total\": {{\"files\": 0, \"lines\": 0, \"code\": 0, \"comments\": 0, \"bytes\": 0}}, \
+            \"total\": {{\"files\": 0, \"lines\": 0, \"code\": 0, \"comments\": 0, \"bytes\": 0, \
+                \"classes\": {}}}, \
             \"languages\": [], \"languages_hidden\": 0, \"faulty_files\": [], \"unreadable_dirs\": [], \
-            \"warnings\": [], {body}}}");
+            \"warnings\": [], {body}}}", empty_classes());
         // the same key twice is valid JSON and the last one wins, which is what lets 'body' replace
         // one of the members above instead of only adding to them
         assert!(serde_json::from_str::<Value>(&document).is_ok(), "the test's own document is not JSON:\n{document}");

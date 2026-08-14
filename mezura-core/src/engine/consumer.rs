@@ -95,7 +95,7 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                             if let Some(sections) = &mut of_this_file {
                                 sections.entry(section.language.clone()).or_default()
                                         .add(&Stats::new(1, section.bytes, section.stats.lines,
-                                                section.stats.code_lines, section.stats.comment_lines, HashMap::new()));
+                                                section.stats.classes.clone(), HashMap::new()));
                             }
                         }
                         // The whole file weighs on its own language's row: a container file is one
@@ -106,8 +106,8 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                         if let Some(nested_languages) = of_this_file {
                             let entry = FileEntry {
                                     path: spell_out(&parsable_file.path),
-                                    stats: Stats::new(1, bytes, whole.lines, whole.code_lines,
-                                            whole.comment_lines, HashMap::new()),
+                                    stats: Stats::new(1, bytes, whole.lines, whole.classes.clone(),
+                                            HashMap::new()),
                                     nested_languages };
                             // Not 'entry(lang_name.to_owned())', which allocates the name per file
                             match local_files[module].get_mut(lang_name) {

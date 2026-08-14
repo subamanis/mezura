@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use colored::{ColoredString, Colorize};
 #[cfg(test)]
 use colored::Color;
-use mezura_core::{EngineConfig, Target, Threads};
+use mezura_core::{CountingModel, EngineConfig, Target, Threads};
 use mezura_core::engine::config::{MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE};
 
 use super::message_printer::{Formatted, wrap_message};
@@ -19,7 +19,7 @@ pub const LANGUAGES          :&str   = "languages";
 pub const EXCLUDE_LANGUAGES  :&str   = "exclude-languages";
 pub const FORCE_LANGUAGE     :&str   = "force-language";
 pub const THREADS            :&str   = "threads";
-pub const BRACES_AS_CODE     :&str   = "braces-as-code";
+pub const COUNTING           :&str   = "counting";
 pub const SEARCH_IN_DOTTED   :&str   = "search-in-dotted";
 pub const SHOW_FAULTY_FILES  :&str   = "show-faulty-files";
 pub const HIDE               :&str   = "hide";
@@ -114,6 +114,9 @@ pub struct ViewConfig {
     pub sort_by: SortCriterion,
     pub top_n: Option<usize>,
     pub by_file: Option<ByFile>,
+    // Which fold of the classes every shown number goes through. In the view and not the engine,
+    // because the engine only ever fills the classes and both models are answered by one run.
+    pub counting: CountingModel,
     pub theme: Theme
 }
 
@@ -159,6 +162,7 @@ impl Default for ViewConfig {
             sort_by: SortCriterion::default(),
             top_n: None,
             by_file: None,
+            counting: CountingModel::default(),
             theme: Theme::default()
         }
     }
@@ -573,7 +577,7 @@ pub struct TypedExplicitlyOnCommandLine {
     pub languages: bool,
     pub excluded_languages: bool,
     pub forced_languages: bool,
-    pub braces_as_code: bool,
+    pub counting: bool,
     pub search_in_dotted: bool,
     pub no_gitignore: bool,
     pub hide_keywords: bool
@@ -584,7 +588,7 @@ impl TypedExplicitlyOnCommandLine {
     // this compiles again.
     fn of(builder: &ConfigurationBuilder) -> Self {
         let ConfigurationBuilder { exclude_dirs, languages_of_interest, excluded_languages,
-            forced_languages, braces_as_code, should_search_in_dotted, no_gitignore, hidden,
+            forced_languages, counting, should_search_in_dotted, no_gitignore, hidden,
             targets: _, targets_source: _, threads: _, should_show_faulty_files: _, theme_name: _,
             log: _, compare_level: _, config_name_to_save: _, config_name_to_load: _,
             theme_name_to_save: _, bar_thickness: _, progress_bar: _, number_separator: _, decimal_separator: _,
@@ -596,7 +600,7 @@ impl TypedExplicitlyOnCommandLine {
             languages: languages_of_interest.is_some(),
             excluded_languages: excluded_languages.is_some(),
             forced_languages: forced_languages.is_some(),
-            braces_as_code: braces_as_code.is_some(),
+            counting: counting.is_some(),
             search_in_dotted: should_search_in_dotted.is_some(),
             no_gitignore: no_gitignore.is_some(),
             hide_keywords: hidden.as_ref().is_some_and(|x| x.keywords)
@@ -618,7 +622,7 @@ pub struct ConfigurationBuilder {
     pub excluded_languages:       Option<Vec<String>>,
     pub forced_languages:         Option<HashMap<String,String>>,
     pub threads:                  Option<Threads>,
-    pub braces_as_code:           Option<bool>,
+    pub counting:                 Option<CountingModel>,
     pub should_search_in_dotted:  Option<bool>,
     pub should_show_faulty_files: Option<bool>,
     pub hidden:                   Option<Hidden>,
@@ -661,7 +665,7 @@ impl ConfigurationBuilder {
         if self.excluded_languages.is_none() {self.excluded_languages = config.excluded_languages};
         if self.forced_languages.is_none() {self.forced_languages = config.forced_languages};
         if self.threads.is_none() {self.threads = config.threads};
-        if self.braces_as_code.is_none() {self.braces_as_code = config.braces_as_code};
+        if self.counting.is_none() {self.counting = config.counting};
         if self.should_search_in_dotted.is_none() {self.should_search_in_dotted = config.should_search_in_dotted};
         if self.should_show_faulty_files.is_none() {self.should_show_faulty_files = config.should_show_faulty_files};
         if self.hidden.is_none() {self.hidden = config.hidden};
@@ -682,7 +686,7 @@ impl ConfigurationBuilder {
 
     pub fn has_missing_fields(&self) -> bool {
         self.exclude_dirs.is_none() || self.languages_of_interest.is_none() || self.forced_languages.is_none() ||
-        self.threads.is_none() || self.braces_as_code.is_none() || self.should_search_in_dotted.is_none() ||
+        self.threads.is_none() || self.counting.is_none() || self.should_search_in_dotted.is_none() ||
         self.should_show_faulty_files.is_none() || self.hidden.is_none() || self.no_gitignore.is_none() ||
         self.theme_name.is_none() || self.compare_level.is_none() ||
         self.config_styles.is_none() || self.bar_thickness.is_none() || self.progress_bar.is_none() || self.number_separator.is_none() || self.decimal_separator.is_none() || self.layout.is_none() || self.sort_by.is_none()
@@ -717,7 +721,6 @@ is sorted by lines.", sort_by.name());
                 excluded_languages: (self.excluded_languages).clone().unwrap_or_default(),
                 forced_languages: (self.forced_languages).clone().unwrap_or_default(),
                 threads: self.threads.clone().unwrap_or_default(),
-                braces_as_code: self.braces_as_code.unwrap_or(engine_defaults.braces_as_code),
                 should_search_in_dotted: self.should_search_in_dotted.unwrap_or(engine_defaults.should_search_in_dotted),
                 no_gitignore: self.no_gitignore.unwrap_or(engine_defaults.no_gitignore),
                 // The two flags that answer both questions: what is counted and what is shown. A
@@ -745,6 +748,7 @@ is sorted by lines.", sort_by.name());
                 sort_by,
                 top_n: self.top_n,
                 by_file: self.by_file,
+                counting: self.counting.unwrap_or_default(),
                 theme: super::theme::resolve(self.theme_styles.as_deref().unwrap_or_default(),
                         self.config_styles.as_deref().unwrap_or_default(), self.styles.as_deref().unwrap_or_default())
             }
@@ -816,7 +820,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     }
 
     let mut custom_config = None;
-    let (mut exclude_dirs, mut languages_of_interest, mut excluded_languages, mut forced_languages, mut threads, mut braces_as_code,
+    let (mut exclude_dirs, mut languages_of_interest, mut excluded_languages, mut forced_languages, mut threads, mut counting,
          mut search_in_dotted, mut show_faulty_files, mut config_name_to_save, mut hidden, mut log,
          mut compare_level, mut config_name_to_load, mut no_gitignore, mut theme_name, mut theme_name_to_save, mut styles, mut bar_thickness,
          mut progress_bar, mut number_separator, mut decimal_separator, mut layout, mut output, mut diff_against, mut sort_by, mut top_n, mut by_file)
@@ -877,12 +881,14 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 message_printer::print_help_message_for_command(THREADS);
                 return Err(ArgParsingError::IncorrectCommandArgs(THREADS.to_owned()))
             }
-        } else if command_name == BRACES_AS_CODE {
-            if has_any_args(command) {
-                message_printer::print_help_message_for_command(BRACES_AS_CODE);
-                return Err(ArgParsingError::UnexpectedCommandArgs(BRACES_AS_CODE.to_owned()))
+        } else if command_name == COUNTING {
+            match CountingModel::parse(arguments) {
+                Some(x) => counting = Some(x),
+                None => {
+                    message_printer::print_help_message_for_command(COUNTING);
+                    return Err(ArgParsingError::IncorrectCommandArgs(COUNTING.to_owned()))
+                }
             }
-            braces_as_code = Some(true)
         } else if command_name == SEARCH_IN_DOTTED {
             if has_any_args(command) {
                 message_printer::print_help_message_for_command(SEARCH_IN_DOTTED);
@@ -1072,7 +1078,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             &log, &compare_level, &diff_against, &by_file);
 
     let mut config_builder = ConfigurationBuilder {
-        targets, targets_source: None, exclude_dirs, languages_of_interest, excluded_languages, forced_languages, threads, braces_as_code,
+        targets, targets_source: None, exclude_dirs, languages_of_interest, excluded_languages, forced_languages, threads, counting,
         should_search_in_dotted: search_in_dotted, should_show_faulty_files: show_faulty_files,
         hidden, no_gitignore, theme_name, theme_name_to_save, log, compare_level,
         config_name_to_save, config_name_to_load, styles, bar_thickness, progress_bar, number_separator, decimal_separator, layout, output, diff_against, sort_by, top_n, by_file,
@@ -1165,7 +1171,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
     // decides whether it belongs in the match below. Everything bound to '_' is a decision, with
     // its reason next to it.
     let ConfigurationBuilder {
-            targets, exclude_dirs, forced_languages, threads, braces_as_code, should_search_in_dotted,
+            targets, exclude_dirs, forced_languages, threads, counting, should_search_in_dotted,
             should_show_faulty_files, hidden, no_gitignore, theme_name, compare_level, bar_thickness,
             progress_bar, number_separator, decimal_separator, layout, sort_by, top_n, by_file,
             // these two accept whatever they are given, so a config can hold no invalid value for
@@ -1183,7 +1189,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             TARGETS => targets.is_some(),
             THREADS => threads.is_some(),
             COMPARE_LEVEL => compare_level.is_some(),
-            BRACES_AS_CODE => braces_as_code.is_some(),
+            COUNTING => counting.is_some(),
             SEARCH_IN_DOTTED => should_search_in_dotted.is_some(),
             SHOW_FAULTY_FILES => should_show_faulty_files.is_some(),
             HIDE => hidden.is_some(),
@@ -1362,7 +1368,9 @@ mod tests {
         assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("show-faulty-files".to_owned())), create_config_from_args("./ --threads 1 1 --show-faulty-files 1"));
         assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("show-faulty-files".to_owned())), create_config_from_args("./ --threads 1 1 --show-faulty-files a"));
         assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("search-in-dotted".to_owned())), create_config_from_args("./ --threads 1 1 --search-in-dotted a"));
-        assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("braces-as-code".to_owned())), create_config_from_args("./ --braces-as-code a"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("counting".to_owned())), create_config_from_args("./ --counting"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("counting".to_owned())), create_config_from_args("./ --counting braces"));
+        assert_eq!(Err(ArgParsingError::UnrecognisedCommand("braces-as-code".to_owned())), create_config_from_args("./ --braces-as-code"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned())), create_config_from_args("./ --exclude"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned())), create_config_from_args("./ --exclude   --threads 4"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned())), create_config_from_args("./ --exclude [invalid"));
@@ -1379,8 +1387,10 @@ mod tests {
         assert_eq!(new_conf("./"), create_config_from_args("--targets ./").unwrap());
         assert_eq!(conf("./", |c| {c.engine.threads = Threads::new(1,1);}), create_config_from_args("./ --threads 1 1").unwrap());
         assert_eq!(conf("./", |c| {c.engine.threads = Threads::new(1,1);}), create_config_from_args("./ --threads   1   1 ").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.threads = Threads::new(1,1); c.engine.braces_as_code = true; c.typed_explicitly.braces_as_code = true;}),
-                create_config_from_args("./ --threads 1 1 --braces-as-code").unwrap());
+        assert_eq!(conf("./", |c| {c.engine.threads = Threads::new(1,1); c.view.counting = CountingModel::Region; c.typed_explicitly.counting = true;}),
+                create_config_from_args("./ --threads 1 1 --counting region").unwrap());
+        assert_eq!(conf("./", |c| {c.view.counting = CountingModel::Content; c.typed_explicitly.counting = true;}),
+                create_config_from_args("./ --counting content").unwrap());
         assert_eq!(conf("./", |c| {c.engine.should_search_in_dotted = true; c.typed_explicitly.search_in_dotted = true;}),
                 create_config_from_args("./ --search-in-dotted").unwrap());
         assert_eq!(conf("./", |c| {c.engine.no_gitignore = true; c.typed_explicitly.no_gitignore = true;}),
@@ -1812,7 +1822,7 @@ mod tests {
         let _ = std::fs::remove_file(test_file_path);
         std::fs::write(test_file_path, "===> targets\nfrontend=\n\n===> sort\nnope\n\n===> top\nnope\n\n===> bar-thickness\nnope\n\n\
                 ===> progress-bar\nnope\n\n===> number-separator\nnope\n\n===> decimal-separator\nnope\n\n===> force-language\nnope\n\n\
-                ===> by-file\nnope\n").unwrap();
+                ===> by-file\nnope\n\n===> counting\nnope\n").unwrap();
 
         // A target that does not parse is a target whose files would not be counted, so with no
         // target on the command line to take its place the run stops instead of counting less
@@ -1823,9 +1833,10 @@ mod tests {
                 create_config_from_args("./ --load test002"));
 
         let rescued = create_config_from_args(
-                "./ --load test002 --sort name --top 3 --bar-thickness fat --progress-bar hash --number-separator dot --decimal-separator comma --force-language m=matlab --by-file 8").unwrap();
+                "./ --load test002 --sort name --top 3 --bar-thickness fat --progress-bar hash --number-separator dot --decimal-separator comma --force-language m=matlab --by-file 8 --counting region").unwrap();
         assert_eq!(Some(ByFile::Capped(8)), rescued.view.by_file);
         assert_eq!(vec![Target::of(mezura_core::engine::targets::convert_to_absolute("./"))], rescued.engine.targets);
+        assert_eq!(CountingModel::Region, rescued.view.counting);
         assert_eq!(SortCriterion::Name, rescued.view.sort_by);
         assert_eq!(Some(3), rescued.view.top_n);
         assert_eq!(BarThickness::Fat, rescued.view.bar_thickness);

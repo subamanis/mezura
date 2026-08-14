@@ -8,7 +8,6 @@ pub const MIN_PRODUCERS_VALUE : usize = 1;
 pub const MAX_CONSUMERS_VALUE : usize = 128;
 pub const MIN_CONSUMERS_VALUE : usize = 1;
 
-pub(crate) const DEF_BRACES_AS_CODE    : bool    = false;
 pub(crate) const DEF_SEARCH_IN_DOTTED  : bool    = false;
 pub(crate) const DEF_NO_GITIGNORE      : bool    = false;
 
@@ -135,7 +134,6 @@ pub struct EngineConfig {
     pub excluded_languages: Vec<String>,
     pub forced_languages: HashMap<String,String>,
     pub threads: Threads,
-    pub braces_as_code: bool,
     pub should_search_in_dotted: bool,
     pub no_gitignore: bool,
     // Hiding the keywords stops the counting too, since nothing else reads them and the work would
@@ -156,7 +154,6 @@ impl Default for EngineConfig {
             excluded_languages: Vec::new(),
             forced_languages: HashMap::new(),
             threads: Threads::default(),
-            braces_as_code: DEF_BRACES_AS_CODE,
             should_search_in_dotted: DEF_SEARCH_IN_DOTTED,
             no_gitignore: DEF_NO_GITIGNORE,
             count_keywords: true,

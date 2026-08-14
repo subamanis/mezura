@@ -573,8 +573,7 @@ impl FileReport {
     pub fn into_whole(mut self) -> FileStats {
         for section in &self.sections {
             self.shell.lines += section.stats.lines;
-            self.shell.code_lines += section.stats.code_lines;
-            self.shell.comment_lines += section.stats.comment_lines;
+            self.shell.classes.add(&section.stats.classes);
         }
         self.shell
     }
@@ -691,7 +690,7 @@ fn parse_lines(contents: &str, language: &Language, lookup: &NestedLanguageLooku
     let mut lines = get_lines_of(contents);
     let mut handed_back = None;
     while let Some((line_start, raw_line)) = handed_back.take().or_else(|| lines.next()) {
-        let had_code = walk_line(raw_line, line_start, language, config, collecting_spans,
+        let had_code = walk_line(raw_line, line_start, language, collecting_spans,
                 scan, &mut shell, &mut shell_stats, code_spans);
 
         // A region opener only counts where the shell left it as code, so one sitting inside a
@@ -734,7 +733,7 @@ fn parse_lines(contents: &str, language: &Language, lookup: &NestedLanguageLooku
                     handed_back = Some((inner_start, inner_raw));
                     break;
                 }
-                walk_line(inner_raw, inner_start, inner, config, bucket.collecting_spans,
+                walk_line(inner_raw, inner_start, inner, bucket.collecting_spans,
                         scan, &mut inner_state, &mut bucket.stats, &mut bucket.spans);
             }
             bucket.bytes += section_to - section_from;
@@ -761,9 +760,9 @@ fn parse_lines(contents: &str, language: &Language, lookup: &NestedLanguageLooku
 
 // One line into the counts of one language. Returns whether the line left code behind, which is
 // the only thing the section machinery needs to know about it.
-fn walk_line(raw_line: &str, line_start: usize, language: &Language, config: &EngineConfig,
-    collecting_spans: bool, scan: &mut ScanBuffers, state: &mut WalkState,
-    file_stats: &mut FileStats, code_spans: &mut Vec<(u32, u32)>) -> bool
+fn walk_line(raw_line: &str, line_start: usize, language: &Language, collecting_spans: bool,
+    scan: &mut ScanBuffers, state: &mut WalkState, file_stats: &mut FileStats,
+    code_spans: &mut Vec<(u32, u32)>) -> bool
 {
     file_stats.lines += 1;
 
@@ -771,14 +770,21 @@ fn walk_line(raw_line: &str, line_start: usize, language: &Language, config: &En
     // a significant part of the total run time, for lines that are code either way
     let from_start = raw_line.trim_ascii_start();
     let line = from_start.trim_ascii_end();
-    if line.is_empty() { state.continued_comment = false; return false; }
+    if line.is_empty() {
+        state.continued_comment = false;
+        if state.open_str_symbol.is_some() { file_stats.classes.blank_in_string += 1; }
+        else if state.open_comment.is_some() { file_stats.classes.blank_in_comment += 1; }
+        else { file_stats.classes.blank += 1; }
+        return false;
+    }
     let base = line_start + (raw_line.len() - from_start.len());
 
     // A line joined to the one before it by a continuation symbol is the tail of that line's
     // comment, and nothing on it is read: in C '// a comment \' makes the whole next line
     // comment too, however it is written.
     if state.continued_comment {
-        if has_word_byte(line.as_bytes()) { file_stats.comment_lines += 1; }
+        if has_word_byte(line.as_bytes()) { file_stats.classes.words_in_comment += 1; }
+        else { file_stats.classes.punctuation_in_comment += 1; }
         state.continued_comment = ends_with_continuation(line, language);
         return false;
     }
@@ -795,12 +801,12 @@ fn walk_line(raw_line: &str, line_start: usize, language: &Language, config: &En
             || (continues_in(language, |continuation| continuation.in_strings)
                 && ends_with_continuation(line, language)));
 
-    // A line is counted where it says something: words in a code range make it code, words that
-    // sit only inside a comment make it a comment, and a line with no word byte anywhere is extra,
-    // whether it is blank, a lone brace, a bare '*/' or the '*' of a banner. String content is
-    // data and counts as code whatever it holds.
-    let counts_as_code = line_info.has_string_literal || (line_info.code.is_some()
-            && (config.braces_as_code || has_word_byte_in(&scan.code_ranges, line)));
+    // Each line lands in exactly one class, read off what it says and where it sits: words in a
+    // code range, words only inside a comment, string content, punctuation, blank. The models are
+    // folds over these at presentation time; the walk decides no bucket.
+    let has_code = line_info.code.is_some();
+    let words_in_code = has_code && has_word_byte_in(&scan.code_ranges, line);
+    let counts_as_code = words_in_code || line_info.has_string_literal;
     let counts_as_comment = !counts_as_code && has_word_byte(line.as_bytes());
 
     // Whether this line ended inside a comment that the next one carries on. Only a line comment
@@ -808,19 +814,24 @@ fn walk_line(raw_line: &str, line_start: usize, language: &Language, config: &En
     // '\' after it, the shape of every C macro holding a comment in its body, extends nothing.
     // The symbol is looked for last because it is the dearest question here and the rarest yes.
     state.continued_comment = state.open_str_symbol.is_none() && state.open_comment.is_none()
-            && counts_as_comment && line_info.code.is_none()
+            && counts_as_comment && !has_code
             && continues_in(language, |continuation| continuation.in_comments)
             && ends_with_continuation(line, language);
 
-    if counts_as_code {
-        file_stats.code_lines += 1;
-        if collecting_spans && line_info.code.is_some() {
-            push_trimmed_spans(code_spans, &scan.code_ranges, line, base);
-        }
-    } else if counts_as_comment {
-        file_stats.comment_lines += 1;
+    let classes = &mut file_stats.classes;
+    if words_in_code { classes.words_in_code += 1; }
+    else if line_info.has_string_literal { classes.string_content += 1; }
+    else if counts_as_comment {
+        if has_code { classes.comment_words_beside_code += 1; }
+        else { classes.words_in_comment += 1; }
     }
-    line_info.code.is_some()
+    else if has_code { classes.punctuation_in_code += 1; }
+    else { classes.punctuation_in_comment += 1; }
+
+    if counts_as_code && collecting_spans && has_code {
+        push_trimmed_spans(code_spans, &scan.code_ranges, line, base);
+    }
+    has_code
 }
 
 // Where the line after this one begins, which is where a section's bytes start: past the line and
@@ -1516,7 +1527,7 @@ mod tests {
     use std::sync::{Arc, LazyLock};
 
     use super::*;
-    use crate::{Keyword, MultilineString, Stats};
+    use crate::{CountingModel, Keyword, LineClasses, MultilineString, Stats};
     use crate::test_paths::{FIXTURES_DIR, LANGUAGES_DIR};
     use crate::engine::identity::{IdentifiedBy, LanguageLookup, build_language_map_by};
 
@@ -1768,69 +1779,68 @@ mod tests {
         stats
     }
 
+    // The three columns as the default view folds them, which is what these tests always asserted
+    fn content_counts(stats: &FileStats) -> (usize, usize, usize) {
+        (stats.lines, CountingModel::Content.calculate_code_lines(&stats.classes),
+                CountingModel::Content.calculate_comment_lines(&stats.classes))
+    }
+
     #[test]
     fn test_correct_parsing_of_the_sample_files() {
         let mut buf = String::with_capacity(150);
 
+        let assert_sample = |file: &str, lang: &str, counts: (usize, usize, usize),
+                keywords: HashMap<String, usize>, config: &EngineConfig, buf: &mut String| {
+            let file_stats = parse_file_whole(&sample_file(file), lang, buf, config).unwrap();
+            assert_eq!(counts, content_counts(&file_stats), "{file} as {lang}");
+            assert_eq!(keywords, content_info_of(file_stats, lang).keyword_occurences, "{file} as {lang}");
+            buf.clear();
+        };
+
         let mut config = EngineConfig::default();
-        let result = parse_file_whole(&sample_file("a.txt"), "Java", &mut buf, &config);
-        let result = content_info_of(result.unwrap(), "Java");
-        assert_eq!(Stats::new(1, 0, 44, 13, 8, hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
-        buf.clear();
+        assert_sample("a.txt", "Java", (44, 13, 8),
+                hashmap!("classes".to_owned()=>3,"interfaces".to_owned()=>0), &config, &mut buf);
         // The keywords keep their slots and stay at zero, which is what a run produces: the seed
         // comes from the language and not from the file, so hiding them stops the counting and not
         // the language's own list of what it would have counted.
         config.count_keywords = false;
-        let result = parse_file_whole(&sample_file("a.txt"), "Java", &mut buf, &config);
-        let result = content_info_of(result.unwrap(), "Java");
-        assert_eq!(Stats::new(1, 0, 44, 13, 8, hashmap!("classes".to_owned()=>0,"interfaces".to_owned()=>0)), result);
-        buf.clear();
+        assert_sample("a.txt", "Java", (44, 13, 8),
+                hashmap!("classes".to_owned()=>0,"interfaces".to_owned()=>0), &config, &mut buf);
         config.count_keywords = true;
-        let result = parse_file_whole(&sample_file("a.txt"), "C#", &mut buf, &EngineConfig::default());
-        let result = content_info_of(result.unwrap(), "C#");
-        assert_eq!(Stats::new(1, 0, 44, 13, 8, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>3,"interfaces".to_owned()=>0)), result);
-        buf.clear();
-        
-        let result = parse_file_whole(&sample_file("d.txt"), "C#", &mut buf, &EngineConfig::default());
-        let result = content_info_of(result.unwrap(), "C#");
-        assert_eq!(Stats::new(1, 0, 19, 7, 7, hashmap!("structs".to_owned()=>0,"classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
-        buf.clear();
-        let result = parse_file_whole(&sample_file("d.txt"), "Java", &mut buf, &EngineConfig::default());
-        let result = content_info_of(result.unwrap(), "Java");
-        assert_eq!(Stats::new(1, 0, 19, 7, 7, hashmap!("classes".to_owned()=>5,"interfaces".to_owned()=>0)), result);
-        buf.clear();
+        assert_sample("a.txt", "C#", (44, 13, 8),
+                hashmap!("structs".to_owned()=>0,"classes".to_owned()=>3,"interfaces".to_owned()=>0), &config, &mut buf);
 
-        let result = parse_file_whole(&sample_file("b.txt"), "Java", &mut buf, &EngineConfig::default());
-        let result = content_info_of(result.unwrap(), "Java");
-        assert_eq!(Stats::new(1, 0, 19, 11, 4, hashmap!("classes".to_owned()=>7,"interfaces".to_owned()=>0)), result);
-        buf.clear();
+        assert_sample("d.txt", "C#", (19, 7, 7),
+                hashmap!("structs".to_owned()=>0,"classes".to_owned()=>5,"interfaces".to_owned()=>0), &config, &mut buf);
+        assert_sample("d.txt", "Java", (19, 7, 7),
+                hashmap!("classes".to_owned()=>5,"interfaces".to_owned()=>0), &config, &mut buf);
+
+        assert_sample("b.txt", "Java", (19, 11, 4),
+                hashmap!("classes".to_owned()=>7,"interfaces".to_owned()=>0), &config, &mut buf);
 
         // The 'class' on the line between two lone apostrophes counts: Python declares its plain
         // quotes single-line, so the quote above it dies at its own line instead of swallowing it
-        let result = parse_file_whole(&sample_file("c.txt"), "Python", &mut buf, &EngineConfig::default());
-        let result = content_info_of(result.unwrap(), "Python");
-        assert_eq!(Stats::new(1, 0, 11, 6, 1, hashmap!("classes".to_owned()=>3)), result);
-        buf.clear();
+        assert_sample("c.txt", "Python", (11, 6, 1),
+                hashmap!("classes".to_owned()=>3), &config, &mut buf);
     }
 
-    // That the flag reaches the parser at all, rather than only that it parses from the command line
-    // and survives a config file, which is all anything else checks.
+    // The parse decides no bucket: it fills the classes once and each model is a fold over them.
+    // The expected classes are a hand count of a.txt, so this is also the worked example of what
+    // each class means.
     #[test]
-    fn braces_as_code_moves_the_no_content_lines_into_code() {
+    fn one_parse_answers_both_models_through_the_classes() {
         let mut buf = String::with_capacity(150);
-        let path = sample_file("a.txt");
-        let count_with = |flag: bool, buf: &mut String| {
-            let config = EngineConfig { braces_as_code: flag, ..Default::default() };
-            let stats = parse_file_whole(&path, "Java", buf, &config).unwrap();
-            (stats.lines, stats.code_lines, stats.comment_lines)
-        };
+        let stats = parse_file_whole(&sample_file("a.txt"), "Java", &mut buf, &EngineConfig::default()).unwrap();
 
-        // a.txt has 10 lines holding a brace and no word, 2 of them with a wordless comment beside
-        // it. The flag moves all 10 into code; the 9 delimiter-only lines of its block comments
-        // say nothing and stay extra under either flag.
-        assert_eq!((44, 13, 8), count_with(false, &mut buf));
-        buf.clear();
-        assert_eq!((44, 23, 8), count_with(true, &mut buf));
+        assert_eq!(LineClasses {
+            words_in_code: 13, string_content: 0, comment_words_beside_code: 0, words_in_comment: 8,
+            punctuation_in_code: 10, punctuation_in_comment: 7, blank: 6, blank_in_comment: 0,
+            blank_in_string: 0
+        }, stats.classes);
+
+        assert_eq!((44, 13, 8), content_counts(&stats));
+        assert_eq!(23, CountingModel::Region.calculate_code_lines(&stats.classes));
+        assert_eq!(15, CountingModel::Region.calculate_comment_lines(&stats.classes));
     }
 
     // A line is counted where it says something: words in code make it code, words only in a
@@ -1838,10 +1848,7 @@ mod tests {
     // delimiter is the grammar's and not the writer's.
     #[test]
     fn a_line_counts_where_its_words_are_and_bare_delimiters_are_extra() {
-        let counts = |contents: &str| {
-            let stats = parse_lines_whole(contents, &JAVA);
-            (stats.lines, stats.code_lines, stats.comment_lines)
-        };
+        let counts = |contents: &str| content_counts(&parse_lines_whole(contents, &JAVA));
 
         // the banner shape: only the starred text is a comment, the ceremony around it is extra
         assert_eq!((4, 0, 1), counts("/*\n* words here\n*\n*/\n"));
@@ -1961,8 +1968,7 @@ mod tests {
 
         FileStats {
             lines: 0,
-            code_lines: 0,
-            comment_lines: 0,
+            classes: LineClasses::default(),
             keyword_occurences : get_keyword_map(class_occurances, interface_occurances)
         }
     }
@@ -2563,14 +2569,16 @@ mod tests {
 <style>\n/* css comment */\n</style>\n<p>bye</p>\n";
 
         let report = parse_with_sections(contents, &web_shell(), &languages, &extensions);
-        assert_eq!((6, 6, 0), (report.shell.lines, report.shell.code_lines, report.shell.comment_lines),
+        assert_eq!((6, 6, 0), content_counts(&report.shell),
                 "the tag lines and the html around them belong to the shell");
 
         let js = &report.sections[0];
-        assert_eq!(("JS", 2, 1, 1), (js.language.as_str(), js.stats.lines, js.stats.code_lines, js.stats.comment_lines));
+        assert_eq!("JS", js.language.as_str());
+        assert_eq!((2, 1, 1), content_counts(&js.stats));
         assert_eq!(vec![1], js.stats.keyword_occurences, "the js keywords count inside the js section");
         let css = &report.sections[1];
-        assert_eq!(("CSS", 1, 0, 1), (css.language.as_str(), css.stats.lines, css.stats.code_lines, css.stats.comment_lines));
+        assert_eq!("CSS", css.language.as_str());
+        assert_eq!((1, 0, 1), content_counts(&css.stats));
 
         // the bytes of a section are exactly the bytes between its tag lines
         let js_bytes = contents.find("</script>").unwrap() - (contents.find("<script>").unwrap() + "<script>\n".len());
@@ -2585,7 +2593,7 @@ mod tests {
         let (languages, extensions) = section_fixture();
         let report = parse_with_sections("<!-- <script> -->\n<p>x</p>\n", &web_shell(), &languages, &extensions);
         assert!(report.sections.is_empty(), "a tag inside a comment opened a section");
-        assert_eq!((2, 1, 1), (report.shell.lines, report.shell.code_lines, report.shell.comment_lines));
+        assert_eq!((2, 1, 1), content_counts(&report.shell));
 
         let stringy = Language::new("webstr", ["wbs"], ["\""], [""; 0], &[], [])
                 .with_nested_languages(&[NestedLanguage::of("<script", "</script>", "js")]);
@@ -2625,8 +2633,7 @@ mod tests {
         let (languages, extensions) = section_fixture();
         let report = parse_with_sections("<SCRIPT>\n// x\n</SCRIPT>\n<p>y</p>\n", &web_shell(), &languages, &extensions);
         assert_eq!(1, report.sections.len(), "an upper case tag was not read as a tag");
-        assert_eq!((1, 0, 1), (report.sections[0].stats.lines, report.sections[0].stats.code_lines,
-                report.sections[0].stats.comment_lines));
+        assert_eq!((1, 0, 1), content_counts(&report.sections[0].stats));
 
         let contents = "<script>\n// x\n</SCRIPT>\n";
         let report = parse_with_sections(contents, &web_shell(), &languages, &extensions);
@@ -2651,7 +2658,7 @@ mod tests {
 
         // And the shell keeps reading the lines it kept, with its own symbols
         let report = parse_with_sections("<p>x</p>\n<script>\n<!-- a note -->\n", &web_shell(), &languages, &extensions);
-        assert_eq!((3, 2, 1), (report.shell.lines, report.shell.code_lines, report.shell.comment_lines));
+        assert_eq!((3, 2, 1), content_counts(&report.shell));
     }
 
     // The three shapes that stay shell whole: a tag split over two lines, a section that opens and
@@ -2664,7 +2671,7 @@ mod tests {
 
         let report = parse_with_sections("<script>var x = 1;</script>\n<p>y</p>\n", &web_shell(), &languages, &extensions);
         assert!(report.sections.is_empty(), "a one line section left the line");
-        assert_eq!((2, 2), (report.shell.lines, report.shell.code_lines));
+        assert_eq!((2, 2, 0), content_counts(&report.shell));
 
         // A default nothing can answer for, by extension or by name, leaves the section as shell
         // rather than counting it under a language that does not exist
@@ -2672,7 +2679,7 @@ mod tests {
                 .with_nested_languages(&[NestedLanguage::of("<script", "</script>", "nosuchthing")]);
         let report = parse_with_sections("<script>\nvar x = 1;\n</script>\n", &unknown, &languages, &extensions);
         assert!(report.sections.is_empty(), "a section resolved to a language nothing declares");
-        assert_eq!((3, 3), (report.shell.lines, report.shell.code_lines));
+        assert_eq!((3, 3, 0), content_counts(&report.shell));
     }
 
     // Two sections of one language add up in one entry, the way the report will show them
@@ -2682,8 +2689,7 @@ mod tests {
         let contents = "<script>\n// one\n</script>\n<script>\n// two\nvar x = 1;\n</script>\n";
         let report = parse_with_sections(contents, &web_shell(), &languages, &extensions);
         assert_eq!(1, report.sections.len());
-        assert_eq!((3, 1, 2), (report.sections[0].stats.lines, report.sections[0].stats.code_lines,
-                report.sections[0].stats.comment_lines));
+        assert_eq!((3, 1, 2), content_counts(&report.sections[0].stats));
     }
 
     // A string ends with its line unless its symbol was declared to cross lines, so an unbalanced
@@ -2697,15 +2703,15 @@ mod tests {
         let contents = "a = \"unbalanced\nb = 1\nc = 2\n# comment\n";
 
         let stats = parse_lines_whole(contents, &plain);
-        assert_eq!((4, 3, 1), (stats.lines, stats.code_lines, stats.comment_lines));
+        assert_eq!((4, 3, 1), content_counts(&stats));
         // declared crossing, everything after the quote is string content and code to the end
         let stats = parse_lines_whole(contents, &crossing);
-        assert_eq!((4, 4, 0), (stats.lines, stats.code_lines, stats.comment_lines));
+        assert_eq!((4, 4, 0), content_counts(&stats));
 
         // and the docstring symbol, which is declared crossing in both, still spans lines
         let doc = "d = \"\"\"docstring\n# still string\n\"\"\"\ne = 1\n# comment\n";
         let stats = parse_lines_whole(doc, &plain);
-        assert_eq!((5, 4, 1), (stats.lines, stats.code_lines, stats.comment_lines));
+        assert_eq!((5, 4, 1), content_counts(&stats));
     }
 
     // Closing used to advance one byte whatever the symbol, so the tail of a closing '"""' leaked
@@ -3200,11 +3206,12 @@ mod tests {
                 }
             };
 
+            let (lines, code, comments) = content_counts(&stats);
             let mut actual = HashMap::from([
-                ("lines".to_owned(), stats.lines),
-                ("code".to_owned(), stats.code_lines),
-                ("comments".to_owned(), stats.comment_lines),
-                ("extra".to_owned(), stats.lines - stats.code_lines - stats.comment_lines),
+                ("lines".to_owned(), lines),
+                ("code".to_owned(), code),
+                ("comments".to_owned(), comments),
+                ("extra".to_owned(), lines - code - comments),
             ]);
             for (index, keyword) in language.keywords.iter().enumerate() {
                 actual.insert(keyword.descriptive_name.clone(), stats.keyword_occurences[index]);
@@ -3343,11 +3350,10 @@ mod tests {
             let mut buf = String::new();
             let report = parse_file_report(&path, lang_name.as_ref(), &mut buf, &config)
                     .unwrap_or_else(|x| panic!("{name} could not be parsed: {x}"));
-            let mut found = report.sections.iter().map(|section| (section.language.clone(),
-                    (section.stats.lines, section.stats.code_lines, section.stats.comment_lines)))
-                    .collect::<Vec<_>>();
+            let mut found = report.sections.iter().map(|section|
+                    (section.language.clone(), content_counts(&section.stats))).collect::<Vec<_>>();
             let stats = report.into_whole();
-            let counted = (stats.lines, stats.code_lines, stats.comment_lines);
+            let counted = content_counts(&stats);
 
             // Declared and found are compared as sets, since the order sections appear in is the
             // file's business and not the declaration's

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use mezura_core::{EngineConfig, Languages, Target, Threads, language_file, languages, run};
+use mezura_core::{CountingModel, EngineConfig, Languages, Target, Threads, language_file, languages, run};
 
 const LANGUAGES_DIR : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/languages/");
 
@@ -32,8 +32,9 @@ fn a_run_over_two_directories_counts_files_lines_and_keywords() {
     assert!(first_language.files != 0 && first_language.bytes != 0);
 
     // Readable from outside at all, which they were not before the surface was chosen
-    assert_eq!(result.total.lines, result.total.code_lines
-            + result.total.comment_lines + result.total.calculate_extra_lines());
+    let model = CountingModel::Content;
+    assert_eq!(result.total.lines, result.total.calculate_code_lines(model)
+            + result.total.calculate_comment_lines(model) + result.total.calculate_extra_lines(model));
 
     let keyword_num = result.per_language.values()
             .flat_map(|info| info.keyword_occurences.values()).copied().sum::<usize>();
@@ -114,7 +115,9 @@ fn a_container_file_is_one_file_of_its_language_and_its_sections_are_the_decompo
 
     // the decomposition: two js lines inside one container file, with their own reading
     let section = &result.nested_languages["Web"]["JS"];
-    assert_eq!((1, 2, 1, 1), (section.files, section.lines, section.code_lines, section.comment_lines));
+    assert_eq!((1, 2, 1, 1), (section.files, section.lines,
+            section.calculate_code_lines(CountingModel::Content),
+            section.calculate_comment_lines(CountingModel::Content)));
     assert!(section.bytes > 0 && section.bytes < 30);
 
     // narrowed to the container language alone, the sections still resolve and still decompose
@@ -279,11 +282,12 @@ fn two_spellings_of_one_name_are_reported_and_force_lang_still_picks_the_one_it_
     let (as_lower, _) = counted_forcing("pal");
     std::fs::remove_dir_all(&root).unwrap();
 
-    assert_eq!(1, as_capital.total.comment_lines, "'--force-language pal=Pal' did not use 'Pal'");
-    assert_eq!(0, as_capital.total.code_lines);
+    let model = CountingModel::Content;
+    assert_eq!(1, as_capital.total.calculate_comment_lines(model), "'--force-language pal=Pal' did not use 'Pal'");
+    assert_eq!(0, as_capital.total.calculate_code_lines(model));
 
-    assert_eq!(1, as_lower.total.code_lines, "'--force-language pal=pal' was given 'Pal' instead");
-    assert_eq!(0, as_lower.total.comment_lines);
+    assert_eq!(1, as_lower.total.calculate_code_lines(model), "'--force-language pal=pal' was given 'Pal' instead");
+    assert_eq!(0, as_lower.total.calculate_comment_lines(model));
 
     assert!(warnings.iter().any(|warning| warning.code == mezura_core::warnings::Code::DuplicateLanguage),
             "two spellings of one name went unreported: {warnings:?}");
@@ -419,9 +423,11 @@ fn the_counts_of_each_file_are_kept_only_when_they_were_asked_for() {
     // The rows of one language add up to what that language's own row says
     let rust = files_of("Rust");
     let whole = result.per_language.get("Rust").unwrap();
+    let code_of = |stats: &mezura_core::Stats| stats.calculate_code_lines(CountingModel::Content);
+    let comments_of = |stats: &mezura_core::Stats| stats.calculate_comment_lines(CountingModel::Content);
     assert_eq!(whole.lines, rust.iter().map(|file| file.stats.lines).sum::<usize>());
-    assert_eq!(whole.code_lines, rust.iter().map(|file| file.stats.code_lines).sum::<usize>());
-    assert_eq!(whole.comment_lines, rust.iter().map(|file| file.stats.comment_lines).sum::<usize>());
+    assert_eq!(code_of(whole), rust.iter().map(|file| code_of(&file.stats)).sum::<usize>());
+    assert_eq!(comments_of(whole), rust.iter().map(|file| comments_of(&file.stats)).sum::<usize>());
     assert_eq!(whole.files, rust.len());
 
     // The CSS inside the page is booked beside the file and is already inside its lines

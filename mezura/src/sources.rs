@@ -155,7 +155,7 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
     };
 
     Ok((Reading::of_git_revision(git_revision, resolved.commit.clone(), resolved.taken_at.clone(),
-            result, &config.engine), notes))
+            result, config), notes))
 }
 
 // The checkout is the same tree at another root, so a pattern written as a full path moves with it

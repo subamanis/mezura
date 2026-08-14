@@ -11,11 +11,12 @@ Do not modify the name of the commands and the name of this file.
 The two below are here as an example, and both carry the value the program already uses when
 nothing is set. Change them, delete them, or add any of the other commands underneath.
 
-Whether or not to count braces '{' , '}' as lines of code.
-If used from cmd, dont use any arguments, just the name of the command
-'yes' or 'true' to activate or anything else to deactivate, default: no (deactivated)
-===> braces-as-code
-no
+Which counting model the columns follow. 'content' counts a line where its words are, so a lone
+brace or a blank line is extra. 'region' counts a line where it sits, the way cloc, tokei and scc
+do: any code on the line makes it code, a blank inside a comment belongs to the comment, and the
+extra column gives way to blanks. Default: content
+===> counting
+content
 
 The number of previous runs of a configuration, that every subsequent run should be compared to,
 showing differences between stats. Use value of 0 to disable.

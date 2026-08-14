@@ -210,24 +210,23 @@ WHAT IS COUNTED
     The '.git' directory is never traversed, with or without this command, at any depth. Nothing
     inside it is source, and walking it is thousands of files for no count at all.
 
---braces-as-code
+--counting
 
-    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable, or 'no'
-    to disable. Default: no
+    One argument, 'content' or 'region'. Default: content
 
-    Specifies whether lines that carry no content should be considered as code lines or not.
-    A line carries no content when nothing but punctuation is left on it once the strings and
-    the comments are taken out: '}', '});', '],', ')'. One of those that carries a comment as
-    well, such as '}  // end of function', is a comment line, since the comment is all it says.
-    Enabling this flag makes it a code line instead, the way any line holding both is.
+    Which counting model the code, comments and third column follow. Both models are answered by
+    the same run: this only chooses which one the columns show.
 
-    The default behaviour is to not count them as code, since it is silly for code of the same content
-    and substance to be counted differently, according to the programmer's code style.
-    Writing 'if (x) { do(); }' on one line or on three should not change the number.
-    This helps to keep the stats clean when using code lines as a complexity and productivity metric.
+    'content' counts a line where its words are. Words in code make it code, words only inside a
+    comment make it a comment, and a line with no word anywhere is extra, whether it is blank, a
+    lone brace like '}' or '});', or a bare '*/'. Writing 'if (x) { do(); }' on one line or on
+    three does not change the number, which keeps the count honest as a measure of content.
 
-    Note that other line counters count these lines as code, so this is where their number and
-    mezura's differ. Enabling this flag makes the two closer.
+    'region' counts a line where it sits, the way cloc, tokei and scc count. Any code on the line
+    makes it code, a line inside a comment belongs to the comment whatever it holds, a blank
+    inside a comment or a string counts with its region, and the extra column gives way to
+    blanks: only an empty line outside everything is blank. Use this model when comparing
+    mezura's numbers against another counter's.
 
 --show-languages
 
@@ -651,8 +650,8 @@ TAKING THE RESULT ELSEWHERE
     Every log entry records the settings that decide what is counted, and an entry that was written
     with different ones is marked 'modified:' followed by their names. The comparison is still shown,
     because the point is to say whether it can be trusted: a change of 'targets' means the numbers came
-    from another tree, while a change of 'braces-as-code' means lines moved between code and extra
-    and the total did not. An entry written by a version that did not record a setting is never
+    from another tree, while a change of 'counting' means lines moved between the columns and the
+    total did not. An entry written by a version that did not record a setting is never
     reported as having changed it.
 
 --diff
@@ -718,8 +717,8 @@ TAKING THE RESULT ELSEWHERE
     scratch or deleted whole, for files that in all likelihood only moved.
 
     A document records the settings the counting obeyed, and they reach whatever is counted
-    against it: comparing against a baseline taken with '--braces-as-code' counts this run
-    with it too, and says so, because the two readings would otherwise disagree about what a
+    against it: comparing against a baseline taken with '--counting region' shows this run
+    under it too, and says so, because the two readings would otherwise disagree about what a
     line of code even is and that difference would read as code that changed. A setting given
     on this very command line is kept instead, and the comparison then warns that the two
     readings were not taken the same way, as it does when two documents disagree with each
@@ -886,7 +885,9 @@ mezura ./src --output json | jq -r '.languages[] | "\(.name) \(.lines)"'
 The counts are plain numbers of lines and bytes, with no separators, no KB or MB and no percentages:
 those are decisions about a terminal and a consumer that wants them can compute them. `scope` echoes
 the settings that can change a number, so that two documents are not compared when one of them was
-produced with a different `--exclude` or with `--braces-as-code`. `format` is the version of the
+produced with a different `--exclude` or `--counting`. Every total, language, section and file row
+also carries a `classes` block holding the nine raw per-line counts both counting models fold from,
+so a consumer can compute either model whatever the scope names. `format` is the version of the
 document itself, separate from `mezura_version`, and it only moves when a key is removed or changes
 meaning, so a parser can check that one and ignore which build wrote the file.
 
@@ -925,7 +926,7 @@ Configurations can be created automatically by specifying all the flags once, al
 The next time you want to run the program on this project, you can do it like this: 
 ```mezura --load <config_name>``` <br>
 
-By default, there is a configuration file name "default" already present in the "data/config" dir, that gets loaded on every run. There, you can customize your preferences and they will apply to all runs, except if overriden by explicitely providing a different flag in the cmd, or by loading a specific configuration. For example, if you prefer counting braces as code, you can specify it there, because the default behaviour is to not regard them as code. <br>
+By default, there is a configuration file name "default" already present in the "data/config" dir, that gets loaded on every run. There, you can customize your preferences and they will apply to all runs, except if overriden by explicitely providing a different flag in the cmd, or by loading a specific configuration. For example, if you prefer the counting model of the other counters, you can put a "===> counting" block holding "region" there. <br>
 
 The priorities of the specified flags are:
 1) cmd
@@ -937,7 +938,7 @@ The priorities of the specified flags are:
 
 ## Logs and History
 Inside the 'data/logs' folder, the program will save log files that correspond to saved configurations everytime the '--log' flag is used. <br>
-A log is a .jsonl file: one JSON entry per line, the newest first, so it is read by any JSON tool one line at a time. Each entry records the date and time of the execution and the name of the log (if specified), the settings the run was counted with (the target directories, whether braces count as code, and so on, so you can see if at some point the configuration got modified), and the total files, lines, code lines, comment lines and size of the execution. <br>
+A log is a .jsonl file: one JSON entry per line, the newest first, so it is read by any JSON tool one line at a time. Each entry records the date and time of the execution and the name of the log (if specified), the settings the run was counted with (the target directories, the counting model, and so on, so you can see if at some point the configuration got modified), the total files, lines and size, and the raw per-line counts that the code and comment columns are folded from, so the history section shows every entry under whatever "--counting" the current run uses. <br>
 
 A run that names its targets records its modules in the entry, and the history section then carries one narrow line per module: which of them grew, and by how much. A module that was not there last time, or that is not there any more, is named as such instead of being compared against nothing. An entry written by a run that named none has no such block. <br>
 
@@ -980,7 +981,7 @@ One thing worth knowing before you open it: the blocks are read in one fixed ord
 	
 ## Accuracy and Limitations
 
-Before the details, the one decision that explains most of the difference between mezura's numbers and another counter's: **mezura asks what a line says, not where it sits.** A blank line inside a block comment is blank, not comment, because it tells you nothing about the documentation around it. A line holding only ```}``` or ```);``` is neither code nor comment, because the language required it and the programmer said nothing by writing it. Counters that group by region answer the other question, "which block is this line inside", and give the blank line to the comment and the brace to the code. Neither reading is wrong, they answer different questions, and it is worth knowing which one you are reading: with mezura, ```code``` and ```comments``` do not add up to ```lines```, and what is left over is the part of the file that carries nothing. ```--braces-as-code``` moves the punctuation-only lines into code for anyone who wants the other convention.
+Before the details, the one decision that explains most of the difference between mezura's numbers and another counter's: **by default, mezura asks what a line says, not where it sits.** A blank line inside a block comment is blank, not comment, because it tells you nothing about the documentation around it. A line holding only ```}``` or ```);``` is neither code nor comment, because the language required it and the programmer said nothing by writing it. Counters that group by region answer the other question, "which block is this line inside", and give the blank line to the comment and the brace to the code. Neither reading is wrong, they answer different questions, and it is worth knowing which one you are reading: under the default, ```code``` and ```comments``` do not add up to ```lines```, and what is left over is the part of the file that carries nothing. Both answers come from the same run, and ```--counting region``` shows the other one: any code on the line makes it code, a line inside a comment belongs to the comment whatever it holds, the extra column gives way to blanks, and the columns then line up with what cloc, tokei and scc print. Measured over the 125 C files of the Linux kernel's ```mm/``` directory, ```--counting region``` and tokei agree on every column of every file.
 
 The program is able to understand and parse correctly arbitrarily complex code structures with intertwined strings and comments. This way it can identify if a line contains something other than a comment, even if the comment is partitioned in multiple positions and it can identify valid keywords, that are not inside strings or comments.
 For example in a line like ```/*class"*/" class" aclass```, it will not count "class" as a keyword since the first is inside a comment, the second inside a string and the third has a prefix.

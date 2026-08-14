@@ -13,8 +13,8 @@ d.txt
 ===> threads
 1 1
 
-===> braces-as-code
-yes
+===> counting
+region
 
 ===> search-in-dotted
 no

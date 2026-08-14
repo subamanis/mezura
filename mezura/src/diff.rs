@@ -4,7 +4,7 @@ use mezura_core::{EngineConfig, Language, Languages, ModuleResult, RunResult, St
 use mezura_core::language_file::PriorityRules;
 
 use super::config_manager::{Configuration, Layout, SortCriterion};
-use super::config_manager::{BRACES_AS_CODE, EXCLUDE, EXCLUDE_LANGUAGES, FORCE_LANGUAGE, LANGUAGES,
+use super::config_manager::{COUNTING, EXCLUDE, EXCLUDE_LANGUAGES, FORCE_LANGUAGE, LANGUAGES,
         NO_GITIGNORE, SEARCH_IN_DOTTED};
 use super::json_reader::{DocumentError, DocumentWarning, Scope};
 use super::sources::RevisionSide;
@@ -48,12 +48,12 @@ pub struct Reading {
 impl Reading {
     // Everything but the counts and the commit's own two facts is this run's own
     pub fn of_git_revision(asked_for: &str, commit: String, taken: String, result: RunResult,
-            engine: &mezura_core::EngineConfig) -> Self {
+            config: &Configuration) -> Self {
         Reading {
             source: Source::GitRevision { commit, asked_for: asked_for.to_owned() },
             taken,
             version: super::config_manager::VERSION_ID.trim_start_matches('v').to_owned(),
-            scope: scope_of(engine),
+            scope: scope_of(&config.engine, config.view.counting),
             warnings: Vec::new(),
             faulty_files_count: result.faulty_files.len(),
             unreadable_dirs_count: result.unreadable_dirs.len(),
@@ -63,12 +63,12 @@ impl Reading {
 
     // A copy, because the result is still being presented around the comparison
     pub fn of_this_run(result: &RunResult, taken: &chrono::DateTime<chrono::Local>,
-            engine: &mezura_core::EngineConfig) -> Self {
+            config: &Configuration) -> Self {
         Reading {
             source: Source::Run,
             taken: taken.to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
             version: super::config_manager::VERSION_ID.trim_start_matches('v').to_owned(),
-            scope: scope_of(engine),
+            scope: scope_of(&config.engine, config.view.counting),
             warnings: Vec::new(),
             faulty_files_count: result.faulty_files.len(),
             unreadable_dirs_count: result.unreadable_dirs.len(),
@@ -419,7 +419,8 @@ pub fn change_of(before: usize, now: usize) -> Change {
 // '--top' hid and can never underflow. 'top' is the screen's cut and is not applied when a document
 // is being written, which holds every row the same way the run's own document does.
 pub fn create_comparison_rows(baseline: &HashMap<String, Stats>, subject: &HashMap<String, Stats>,
-        sort_by: SortCriterion, top: Option<usize>) -> (Vec<LanguageStatsChange>, usize)
+        sort_by: SortCriterion, top: Option<usize>, model: mezura_core::CountingModel)
+-> (Vec<LanguageStatsChange>, usize)
 {
     // Held at what the subject has, so one that disappeared sorts to the bottom where a zero belongs
     let mut merged = subject.clone();
@@ -427,7 +428,7 @@ pub fn create_comparison_rows(baseline: &HashMap<String, Stats>, subject: &HashM
         merged.entry(name.clone()).or_default();
     }
 
-    let names = super::result_printer::get_sorted_language_names(&merged, sort_by);
+    let names = super::result_printer::get_sorted_language_names(&merged, sort_by, model);
     let shown = top.map_or(names.len(), |x| x.min(names.len()));
 
     (names[..shown].iter().map(|name| LanguageStatsChange {
@@ -471,13 +472,13 @@ pub fn format_module_names(result: &RunResult) -> Option<String> {
 //
 // The gitignore flag is turned around here and nowhere else: a document records whether the file was
 // obeyed, and the command line records whether it was not.
-pub fn scope_of(engine: &mezura_core::EngineConfig) -> Scope {
+pub fn scope_of(engine: &mezura_core::EngineConfig, counting: mezura_core::CountingModel) -> Scope {
     Scope {
         exclude: engine.exclude_dirs.clone(),
         languages: engine.languages_of_interest.clone(),
         excluded_languages: engine.excluded_languages.clone(),
         forced_languages: engine.forced_languages.clone(),
-        braces_as_code: engine.braces_as_code,
+        counting: counting.name().to_owned(),
         search_in_dotted: engine.should_search_in_dotted,
         gitignore: !engine.no_gitignore,
         keywords_counted: engine.count_keywords
@@ -498,7 +499,7 @@ pub fn find_settings_that_differ(baseline: &Scope, subject: &Scope) -> Vec<&'sta
     if !same(&baseline.languages, &subject.languages) {differ.push(LANGUAGES)}
     if !same(&baseline.excluded_languages, &subject.excluded_languages) {differ.push(EXCLUDE_LANGUAGES)}
     if baseline.forced_languages != subject.forced_languages {differ.push(FORCE_LANGUAGE)}
-    if baseline.braces_as_code != subject.braces_as_code {differ.push(BRACES_AS_CODE)}
+    if baseline.counting != subject.counting {differ.push(COUNTING)}
     if baseline.search_in_dotted != subject.search_in_dotted {differ.push(SEARCH_IN_DOTTED)}
     if baseline.gitignore != subject.gitignore {differ.push(NO_GITIGNORE)}
     if baseline.keywords_counted != subject.keywords_counted {differ.push(HIDE_KEYWORDS)}
@@ -534,9 +535,12 @@ pub fn resolve_settings(document: &Scope, config: &mut super::config_manager::Co
         config.engine.forced_languages = document.forced_languages.clone();
         adopted.push(FORCE_LANGUAGE);
     }
-    if !typed.braces_as_code && document.braces_as_code != config.engine.braces_as_code {
-        config.engine.braces_as_code = document.braces_as_code;
-        adopted.push(BRACES_AS_CODE);
+    // Only a model this build has can be adopted: a word it does not know names a fold it cannot
+    // perform, so it is left to the settings-differ note rather than half-imitated
+    if !typed.counting && document.counting != config.view.counting.name()
+            && let Some(model) = mezura_core::CountingModel::parse(&document.counting) {
+        config.view.counting = model;
+        adopted.push(COUNTING);
     }
     if !typed.search_in_dotted && document.search_in_dotted != config.engine.should_search_in_dotted {
         config.engine.should_search_in_dotted = document.search_in_dotted;
@@ -624,7 +628,7 @@ mod tests {
     use crate::config_manager::SortCriterion;
 
     fn stats(lines: usize, code: usize, files: usize) -> Stats {
-        Stats::new(files, lines * 30, lines, code, 0, HashMap::new())
+        crate::test_support::plain_stats_of(files, lines * 30, lines, code, 0, HashMap::new())
     }
 
     // '..' separates the two readings and is also a directory on every filesystem there is, so the
@@ -677,13 +681,14 @@ mod tests {
         let baseline = hashmap!["Rust".to_owned() => stats(100, 70, 2), "Java".to_owned() => stats(40, 30, 1)];
         let subject = hashmap!["Rust".to_owned() => stats(150, 100, 3), "Go".to_owned() => stats(60, 50, 1)];
 
-        let (rows, union) = create_comparison_rows(&baseline, &subject, SortCriterion::Lines, None);
+        let model = mezura_core::CountingModel::Content;
+        let (rows, union) = create_comparison_rows(&baseline, &subject, SortCriterion::Lines, None, model);
         assert_eq!(3, union);
         assert_eq!(vec!["Rust".to_owned(), "Go".to_owned(), "Java".to_owned()],
                 rows.iter().map(|x| x.name.clone()).collect::<Vec<_>>());
         // the one that is gone sorts last, holding the zero it is now, and keeps every figure it had
         assert_eq!(40, rows[2].baseline.lines);
-        assert_eq!(30, rows[2].baseline.code_lines);
+        assert_eq!(30, rows[2].baseline.calculate_code_lines(model));
         assert_eq!(0, rows[2].subject.lines);
         // and the one that appeared has a whole empty reading behind it rather than a missing one
         assert_eq!(0, rows[1].baseline.lines);
@@ -691,13 +696,13 @@ mod tests {
 
         // '--top' cuts these rows the way it cuts the report, and never the union, so what it hid
         // is always the difference of the two. A document asks for no cut.
-        let (cut, union) = create_comparison_rows(&baseline, &subject, SortCriterion::Lines, Some(2));
+        let (cut, union) = create_comparison_rows(&baseline, &subject, SortCriterion::Lines, Some(2), model);
         assert_eq!((2, 3), (cut.len(), union));
-        assert_eq!(3, create_comparison_rows(&baseline, &subject, SortCriterion::Lines, None).0.len());
+        assert_eq!(3, create_comparison_rows(&baseline, &subject, SortCriterion::Lines, None, model).0.len());
 
         // and '--sort' orders them, as it does everywhere else
         assert_eq!(vec!["Go".to_owned(), "Java".to_owned(), "Rust".to_owned()],
-                create_comparison_rows(&baseline, &subject, SortCriterion::Name, None).0.iter()
+                create_comparison_rows(&baseline, &subject, SortCriterion::Name, None, model).0.iter()
                         .map(|x| x.name.clone()).collect::<Vec<_>>());
     }
 
@@ -760,7 +765,7 @@ mod tests {
                 source: Source::Document { path: name.to_owned() },
                 taken: "2026-08-07T10:00:00+03:00".to_owned(),
                 version: version.to_owned(),
-                scope: scope_of(&mezura_core::EngineConfig::default()),
+                scope: scope_of(&mezura_core::EngineConfig::default(), mezura_core::CountingModel::Content),
                 warnings: Vec::new(),
                 faulty_files_count: 0,
                 unreadable_dirs_count: 0,
@@ -783,7 +788,7 @@ mod tests {
         let adopted = Note::SettingsAdopted { from: "old.json".to_owned(), settings: vec!["exclude"] };
 
         let mut baseline = reading("old.json", "2.9.0", vec![module("api")]);
-        baseline.scope.braces_as_code = true;
+        baseline.scope.counting = "region".to_owned();
         // The scan facts come first among the doubts, then what that run had said itself
         baseline.faulty_files_count = 2;
         baseline.unreadable_dirs_count = 1;
@@ -795,7 +800,7 @@ mod tests {
         assert_eq!(vec![
             Note::SettingsAdopted { from: "old.json".to_owned(), settings: vec!["exclude"] },
             Note::SettingsDiffer { baseline: "old.json".to_owned(), subject: "new.json".to_owned(),
-                    settings: vec!["braces-as-code"] },
+                    settings: vec!["counting"] },
             Note::VersionsDiffer { baseline: "old.json".to_owned(), baseline_version: "2.9.0".to_owned(),
                     subject: "new.json".to_owned(), subject_version: "3.0.0".to_owned() },
             Note::CountsInDoubt { about: "old.json".to_owned(), doubts: vec![
@@ -840,10 +845,10 @@ mod tests {
     fn a_documents_settings_reach_a_side_that_is_counted_and_no_other() {
         let dir = crate::paths::test_paths::SCRATCH_DIR.to_owned() + "diff-plan-sources/";
         std::fs::create_dir_all(&dir).unwrap();
-        let document = |name: &str, braces: bool| {
+        let document = |name: &str, model: mezura_core::CountingModel| {
             let path = format!("{dir}{name}.json");
             let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
-            config.engine.braces_as_code = braces;
+            config.view.counting = model;
             let per_language = hashmap!["Rust".to_owned() => stats(100, 70, 2)];
             let result = mezura_core::RunResult {
                 total: Stats::total_of(&per_language), per_language, modules: Vec::new(), nested_languages: HashMap::new(),
@@ -854,11 +859,11 @@ mod tests {
             std::fs::write(&path, crate::json_printer::create_document(&result, &chrono::Local::now(), &config)).unwrap();
             path
         };
-        let with_braces = document("with-braces", true);
-        let without = document("without-braces", false);
+        let with_region = document("with-region", mezura_core::CountingModel::Region);
+        let without = document("without-region", mezura_core::CountingModel::Content);
 
-        // 'braces_as_code' is false on a fresh configuration, so a document that recorded it true
-        // is a real difference and every case below is asking whether that difference travels
+        // 'counting' is content on a fresh configuration, so a document that recorded region is a
+        // real difference and every case below is asking whether that difference travels
         let adopted_by = |operand: &str| {
             let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
             config.view.diff_against = Some(operand.to_owned());
@@ -867,31 +872,32 @@ mod tests {
                 DiffRequest::BetweenTwoReadings(x) => x.notes_so_far,
                 DiffRequest::AgainstThisRun(x) => x.notes_so_far
             };
-            (notes, config.engine.braces_as_code)
+            (notes, config.view.counting)
         };
 
         // one document beside something that will be counted, from either side and in the single
         // form: the counting takes the document's value
-        for operand in [with_braces.clone(), format!("{with_braces}..HEAD"), format!("HEAD..{with_braces}")] {
-            let (notes, braces) = adopted_by(&operand);
-            assert_eq!(vec![Note::SettingsAdopted { from: "with-braces.json".to_owned(),
-                    settings: vec!["braces-as-code"] }], notes, "nothing was adopted for '{operand}'");
-            assert!(braces, "the value was reported as adopted and not applied, for '{operand}'");
+        for operand in [with_region.clone(), format!("{with_region}..HEAD"), format!("HEAD..{with_region}")] {
+            let (notes, counting) = adopted_by(&operand);
+            assert_eq!(vec![Note::SettingsAdopted { from: "with-region.json".to_owned(),
+                    settings: vec!["counting"] }], notes, "nothing was adopted for '{operand}'");
+            assert_eq!(mezura_core::CountingModel::Region, counting,
+                    "the value was reported as adopted and not applied, for '{operand}'");
         }
 
         // Two documents: both sets of numbers are already fixed, so there is nothing to reach and
         // the difference is reported instead. Both orders, because only the one whose first side
         // carries the difference can tell a working guard from a missing one.
-        for operand in [format!("{with_braces}..{without}"), format!("{without}..{with_braces}")] {
-            let (notes, braces) = adopted_by(&operand);
+        for operand in [format!("{with_region}..{without}"), format!("{without}..{with_region}")] {
+            let (notes, counting) = adopted_by(&operand);
             assert!(notes.is_empty(), "a document was overridden by another document, for '{operand}': {notes:?}");
-            assert!(!braces);
+            assert_eq!(mezura_core::CountingModel::Content, counting);
         }
 
         // and two revisions have no document to take anything from
-        let (notes, braces) = adopted_by("HEAD~1..HEAD");
+        let (notes, counting) = adopted_by("HEAD~1..HEAD");
         assert!(notes.is_empty(), "{notes:?}");
-        assert!(!braces);
+        assert_eq!(mezura_core::CountingModel::Content, counting);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -910,29 +916,29 @@ mod tests {
         };
         let document = crate::json_reader::parse(&crate::json_printer::create_document(&result,
                 &chrono::Local::now(), &crate::config_manager::Configuration::new(vec!["./src".to_owned()]))).unwrap();
-        assert!(find_settings_that_differ(&document.scope, &scope_of(&config.engine)).is_empty());
+        let content = mezura_core::CountingModel::Content;
+        assert!(find_settings_that_differ(&document.scope, &scope_of(&config.engine, content)).is_empty());
 
         // the order they were written in is not a difference
         config.engine.exclude_dirs = vec!["target".to_owned()];
-        assert_eq!(vec!["exclude"], find_settings_that_differ(&document.scope, &scope_of(&config.engine)));
+        assert_eq!(vec!["exclude"], find_settings_that_differ(&document.scope, &scope_of(&config.engine, content)));
 
         // It decides which language a file is counted as, so a run that forced one and a run that
         // did not measured different things and the difference is not code that changed
         config.engine.exclude_dirs = Vec::new();
         config.engine.forced_languages = hashmap!["m".to_owned() => "matlab".to_owned()];
-        assert_eq!(vec!["force-language"], find_settings_that_differ(&document.scope, &scope_of(&config.engine)));
+        assert_eq!(vec!["force-language"], find_settings_that_differ(&document.scope, &scope_of(&config.engine, content)));
 
         config.engine.forced_languages = HashMap::new();
-        config.engine.braces_as_code = true;
         config.engine.no_gitignore = true;
-        assert_eq!(vec!["braces-as-code", "no-gitignore"], find_settings_that_differ(&document.scope, &scope_of(&config.engine)));
+        assert_eq!(vec!["counting", "no-gitignore"], find_settings_that_differ(&document.scope,
+                &scope_of(&config.engine, mezura_core::CountingModel::Region)));
 
         // and hiding the keywords is among them: it moves no line or code count, but a side that
         // did not count keywords would read as every keyword written since
-        config.engine.braces_as_code = false;
         config.engine.no_gitignore = false;
         config.engine.count_keywords = false;
-        assert_eq!(vec!["hide keywords"], find_settings_that_differ(&document.scope, &scope_of(&config.engine)));
+        assert_eq!(vec!["hide keywords"], find_settings_that_differ(&document.scope, &scope_of(&config.engine, content)));
     }
 
     // The settings of a document reach whatever is counted against it, unless this run's own
@@ -946,7 +952,7 @@ mod tests {
             languages: Vec::new(),
             excluded_languages: Vec::new(),
             forced_languages: HashMap::new(),
-            braces_as_code: true,
+            counting: "region".to_owned(),
             search_in_dotted: false,
             gitignore: false,
             keywords_counted: true
@@ -955,9 +961,9 @@ mod tests {
         // Nothing typed: what differs is taken, what agrees is not reported
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         let adopted = resolve_settings(&document, &mut config);
-        assert_eq!(vec!["exclude", "braces-as-code", "no-gitignore"], adopted);
+        assert_eq!(vec!["exclude", "counting", "no-gitignore"], adopted);
         assert_eq!(vec!["target".to_owned()], config.engine.exclude_dirs);
-        assert!(config.engine.braces_as_code);
+        assert_eq!(mezura_core::CountingModel::Region, config.view.counting);
         // recorded as "the file was not obeyed", so the flag turns on
         assert!(config.engine.no_gitignore);
         // and a second pass finds nothing left to take
@@ -965,22 +971,32 @@ mod tests {
 
         // The same difference with the value typed stays as typed, and is not reported as taken
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
-        config.typed_explicitly.braces_as_code = true;
+        config.typed_explicitly.counting = true;
         config.typed_explicitly.exclude = true;
         assert_eq!(vec!["no-gitignore"], resolve_settings(&document, &mut config));
-        assert!(!config.engine.braces_as_code);
+        assert_eq!(mezura_core::CountingModel::Content, config.view.counting);
         assert!(config.engine.exclude_dirs.is_empty());
+
+        // A model this build does not have, which a document of a later version can name, cannot
+        // be imitated, so it is left to the differ note instead of being half applied
+        let unknown = Scope { counting: "some-later-model".to_owned(), gitignore: true,
+                exclude: Vec::new(), ..document.clone() };
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        assert!(resolve_settings(&unknown, &mut config).is_empty());
+        assert_eq!(mezura_core::CountingModel::Content, config.view.counting);
+        assert_eq!(vec!["counting"], find_settings_that_differ(&unknown,
+                &scope_of(&config.engine, config.view.counting)));
 
         // The order two lists were written in is not a difference
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         config.engine.exclude_dirs = vec!["target".to_owned()];
         config.engine.no_gitignore = true;
-        config.engine.braces_as_code = true;
+        config.view.counting = mezura_core::CountingModel::Region;
         assert!(resolve_settings(&document, &mut config).is_empty());
 
         // The keyword flag moves both halves, or the counting and the printing would disagree
         let without_keywords = Scope { keywords_counted: false, gitignore: true,
-                braces_as_code: false, exclude: Vec::new(), ..document };
+                counting: "content".to_owned(), exclude: Vec::new(), ..document };
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         assert_eq!(vec!["hide keywords"], resolve_settings(&without_keywords, &mut config));
         assert!(!config.engine.count_keywords);

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use mezura_core::{EngineConfig, Languages, Stats, language_file, run};
+use mezura_core::{CountingModel, EngineConfig, Languages, LineClasses, Stats, language_file, run};
 
 const LANGUAGES_DIR : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/languages/");
 
@@ -18,6 +18,8 @@ fn golden_path() -> PathBuf {
 
 // Byte sizes are deliberately absent from the report: they are the one figure that differs between a
 // CRLF and an LF checkout of the same fixtures, which would break the golden on the CI matrix.
+// 'code' and 'comments' are the content fold of the classes beneath them, so a classification
+// change that moves the default columns breaks the familiar lines and not only the class line.
 fn render_report(per_language: &HashMap<String, Stats>) -> String {
     let mut names = per_language.keys().cloned().collect::<Vec<_>>();
     names.sort();
@@ -28,11 +30,12 @@ fn render_report(per_language: &HashMap<String, Stats>) -> String {
         let info = per_language.get(name).unwrap();
         total_files += info.files;
         total_lines += info.lines;
-        total_code += info.code_lines;
-        total_comments += info.comment_lines;
+        total_code += info.calculate_code_lines(CountingModel::Content);
+        total_comments += info.calculate_comment_lines(CountingModel::Content);
 
-        report.push_str(&format!("{name}\n  files={} lines={} code={} comments={}\n",
-                info.files, info.lines, info.code_lines, info.comment_lines));
+        report.push_str(&format!("{name}\n  files={} lines={} code={} comments={}\n  {}\n",
+                info.files, info.lines, info.calculate_code_lines(CountingModel::Content),
+                info.calculate_comment_lines(CountingModel::Content), render_classes(&info.classes)));
 
         let mut keywords = info.keyword_occurences.iter().collect::<Vec<_>>();
         keywords.sort_by_key(|(name, _)| name.as_str());
@@ -43,6 +46,14 @@ fn render_report(per_language: &HashMap<String, Stats>) -> String {
     }
 
     format!("files={total_files} lines={total_lines} code={total_code} comments={total_comments}\n\n{report}")
+}
+
+fn render_classes(classes: &LineClasses) -> String {
+    format!("words_in_code={} string_content={} comment_words_beside_code={} words_in_comment={} \
+punctuation_in_code={} punctuation_in_comment={} blank={} blank_in_comment={} blank_in_string={}",
+            classes.words_in_code, classes.string_content, classes.comment_words_beside_code,
+            classes.words_in_comment, classes.punctuation_in_code, classes.punctuation_in_comment,
+            classes.blank, classes.blank_in_comment, classes.blank_in_string)
 }
 
 // One producer and several consumers, which is where the per-thread stats merging happens and where

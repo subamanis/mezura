@@ -24,8 +24,13 @@ mid-refactor is not a result.
 
 The two halves may therefore come from different builds, deliberately, and each figure says which.
 
-**Not done yet.** This sweep is one build per tool: tokei six commits past its v14.0.0 tag and scc's
-3.7.0 release binary. The findings have not been checked against either main branch.
+**Partly done.** The sweep is one build per tool: tokei six commits past its v14.0.0 tag and scc's
+3.7.0 release binary. **The two raw string and character literal findings have since been checked
+against both of tokei's builds**, a fresh build of the `v14.0.0` tag beside its current master, and
+both answer identically on cases 1600, 1650 and 1800, so what is published about tokei there is not
+something already fixed upstream. scc is still the release binary alone: its master carries the
+version string `4.0.0 (beta)` while the binary reports 3.7.0, so the two are not the same code, and
+no Go toolchain here can build the other one. Everything else in this document is still one build.
 
 **Every finding here was measured with the binaries.** The scc source read alongside them is a newer
 checkout than the binary that produced the numbers, which is visible in its `--report` flag being
@@ -72,7 +77,8 @@ Rust string, and scc reads the backslash as escaping the closing quote, so every
 counted as string content, which it counts as code. Its language file marks that form
 `ignoreEscape: true`, which is meant to prevent exactly this, and the flag does not reach the case.
 Measured on a two line file that differs only in the final backslash: without it the string closes,
-with it the rest of the file is swallowed. Case 1600.
+with it the rest of the file is swallowed. Cases 1600 and 1650, which are the hashed form and the
+bare one: scc is wrong on both, and tokei only on the bare one.
 
 **4. The C++ raw string `R"( ... )"` is declared and not honoured.** Its language file lists the form
 and its four prefixed spellings, and the counting behaves as though none of them were there: on
@@ -135,12 +141,27 @@ the block at `//*/`, which is the C idiom for switching a block off by adding on
 
 ## Where tokei is wrong
 
-tokei misreads 31 of the 72 cases. Each of those files carries a `tokei:` line saying what it gets
+tokei misreads 32 of the 73 cases. Each of those files carries a `tokei:` line saying what it gets
 wrong, so the detail is next to the evidence rather than repeated here. By mechanism:
 
-**A quote it should not have seen opens a string, and everything below counts as code.** Cases 1800,
-3000, 3100, 3900, 5100 and 5700. The apostrophe of "it's", a quote inside a regex, a quote inside a
-character literal, a backslash before a closing quote.
+**A quote it should not have seen opens a string, and everything below counts as code.** Cases 1650,
+1800, 3000, 3100, 3900, 5100 and 5700. The apostrophe of "it's", a quote inside a regex, a quote
+inside a character literal, a backslash before a closing quote.
+
+**And the raw string it reads is the one with hashes around it.** Cases 1600 and 1650 are the same
+backslash before the same closing quote, written `r#"..."#` and `r"..."`. tokei answers the first
+correctly and swallows the rest of the file on the second, so what it is reading is the hashes and
+not the rule that a raw string has no escapes. scc is wrong on both, which is finding 3 above.
+
+**What one of these costs is not the lines under it, it is every line after it, and in a bucket
+nobody expects.** A quote read wrongly does not merely open a string, it leaves the count of quotes
+odd, and from there every `"` in the file means the opposite of what it says. Our own
+`engine/targets.rs` is the worked example and it is not contrived: the bare raw string is on line
+174, and 134 lines later `assert!(has_glob_metacharacters("src/*"))` arrives. With the parity
+inverted, the quote before `src` reads as a closing one, which leaves `/*` outside any string, which
+opens a block comment that nothing closes. The file is 651 lines, and tokei and scc both report 396
+of them as comment against the 122 that are. Measured on a six line file: the glob string alone is
+counted correctly by all three, and the same string under the raw string is not.
 
 **A comment ends in the wrong place.** Cases 1300, 1400, 4400 and 5900: a bare `]]` ends a counted
 bracket that only an end of the same count should close, and an inner closer ends a block that nests.
@@ -179,6 +200,7 @@ Written as `lines / code / comment`, as each tool reports today.
 | 1400 lua short closer hiding the real one | 9/1/7 | **9/2/7** | 9/1/8 |
 | 1500 raw string holding quotes | 7/1/6 | 7/1/6 | 7/1/6 |
 | 1600 raw string ending in backslash | 7/1/6 | 7/1/6 | **7/2/5** |
+| 1650 bare raw string ending in backslash | 11/1/10 | **11/3/8** | **11/3/8** |
 | 1700 verbatim string crossing lines | 8/2/6 | 8/2/6 | 8/2/6 |
 | 1800 char literal holding a quote | 9/1/8 | **9/3/6** | **9/3/6** |
 | 1900 string opening after block close | 9/1/8 | **9/0/9** | 9/1/8 |

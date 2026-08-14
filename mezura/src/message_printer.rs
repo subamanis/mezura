@@ -155,25 +155,24 @@ pub const THREADS_HELP  :  &str =
     is worth trying a higher number than the default.
 
 ";
-pub const BRACES_AS_CODE_HELP  :  &str =
-"--braces-as-code
+pub const COUNTING_HELP  :  &str =
+"--counting
 
-    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable, or 'no'
-    to disable. Default: no
+    One argument, 'content' or 'region'. Default: content
 
-    Specifies whether lines that carry no content should be considered as code lines or not.
-    A line carries no content when nothing but punctuation is left on it once the strings and
-    the comments are taken out: '}', '});', '],', ')'. One of those that carries a comment as
-    well, such as '}  // end of function', is a comment line, since the comment is all it says.
-    Enabling this flag makes it a code line instead, the way any line holding both is.
+    Which counting model the code, comments and third column follow. Both models are answered by
+    the same run: this only chooses which one the columns show.
 
-    The default behaviour is to not count them as code, since it is silly for code of the same content
-    and substance to be counted differently, according to the programmer's code style.
-    Writing 'if (x) { do(); }' on one line or on three should not change the number.
-    This helps to keep the stats clean when using code lines as a complexity and productivity metric.
+    'content' counts a line where its words are. Words in code make it code, words only inside a
+    comment make it a comment, and a line with no word anywhere is extra, whether it is blank, a
+    lone brace like '}' or '});', or a bare '*/'. Writing 'if (x) { do(); }' on one line or on
+    three does not change the number, which keeps the count honest as a measure of content.
 
-    Note that other line counters count these lines as code, so this is where their number and
-    mezura's differ. Enabling this flag makes the two closer.
+    'region' counts a line where it sits, the way cloc, tokei and scc count. Any code on the line
+    makes it code, a line inside a comment belongs to the comment whatever it holds, a blank
+    inside a comment or a string counts with its region, and the extra column gives way to
+    blanks: only an empty line outside everything is blank. Use this model when comparing
+    mezura's numbers against another counter's.
 
 ";
 pub const SEARCH_IN_DOTTED_HELP  :  &str =
@@ -519,8 +518,8 @@ pub const DIFF_HELP  :  &str =
     scratch or deleted whole, for files that in all likelihood only moved.
 
     A document records the settings the counting obeyed, and they reach whatever is counted
-    against it: comparing against a baseline taken with '--braces-as-code' counts this run
-    with it too, and says so, because the two readings would otherwise disagree about what a
+    against it: comparing against a baseline taken with '--counting region' shows this run
+    under it too, and says so, because the two readings would otherwise disagree about what a
     line of code even is and that difference would read as code that changed. A setting given
     on this very command line is kept instead, and the comparison then warns that the two
     readings were not taken the same way, as it does when two documents disagree with each
@@ -755,8 +754,8 @@ pub const COMPARE_LEVEL_HELP  :  &str =
     Every log entry records the settings that decide what is counted, and an entry that was written
     with different ones is marked 'modified:' followed by their names. The comparison is still shown,
     because the point is to say whether it can be trusted: a change of 'targets' means the numbers came
-    from another tree, while a change of 'braces-as-code' means lines moved between code and extra
-    and the total did not. An entry written by a version that did not record a setting is never
+    from another tree, while a change of 'counting' means lines moved between the columns and the
+    total did not. An entry written by a version that did not record a setting is never
     reported as having changed it.
 
 ";
@@ -870,7 +869,7 @@ pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 6] = [
         (FORCE_LANGUAGE, FORCE_LANGUAGE_HELP),
         (NO_GITIGNORE, NO_GITIGNORE_HELP),
         (SEARCH_IN_DOTTED, SEARCH_IN_DOTTED_HELP),
-        (BRACES_AS_CODE, BRACES_AS_CODE_HELP),
+        (COUNTING, COUNTING_HELP),
         (SHOW_LANGUAGES, SHOW_LANGUAGES_HELP),
     ]),
     ("How the report looks", &[

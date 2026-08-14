@@ -5,13 +5,13 @@ use std::{fs::File, io::{self, BufWriter, Read, Write}, path::Path};
 use chrono::{DateTime, Local, SecondsFormat};
 use serde_json::Value;
 
-use mezura_core::{RunResult, Stats, Target, UNNAMED_MODULE_NAME};
+use mezura_core::{LineClasses, RunResult, Stats, Target, UNNAMED_MODULE_NAME};
 
 use super::config_manager::Configuration;
 use super::json_printer::escape;
 use super::json_reader::{DocumentError, Scope};
-use super::json_reader::{parse_scope, parse_stats, read_list, read_nested, read_number,
-        read_object, read_optional_name, read_text};
+use super::json_reader::{parse_classes, parse_scope, parse_stats, read_list, read_nested,
+        read_number, read_object, read_optional_name, read_text};
 
 // The log's own lineage, separate from the run document's: it moves when a key of an entry is
 // removed or changes meaning, and an entry of a newer format is skipped rather than misread
@@ -33,8 +33,7 @@ pub struct LogEntry {
 pub struct ModuleEntry {
     pub name: String,
     pub lines: usize,
-    pub code_lines: usize,
-    pub comment_lines: usize
+    pub classes: LineClasses
 }
 
 // A log is the one output that cannot be recomputed: everything else is a fresh measurement of a
@@ -126,21 +125,30 @@ fn format_entry_line(config: &Configuration, datetime_now: &DateTime<Local>, res
 fn format_scope(config: &Configuration, targets: &[Target]) -> String {
     let engine = &config.engine;
     format!("{{\"targets\":{},\"exclude\":{},\"languages\":{},\"excluded_languages\":{},\
-\"forced_languages\":{},\"braces_as_code\":{},\"search_in_dotted\":{},\"gitignore\":{},\"keywords_counted\":{}}}",
+\"forced_languages\":{},\"counting\":\"{}\",\"search_in_dotted\":{},\"gitignore\":{},\"keywords_counted\":{}}}",
             format_targets(targets),
             format_strings(&engine.exclude_dirs),
             format_strings(&engine.languages_of_interest),
             format_strings(&engine.excluded_languages),
             format_forced_languages(&engine.forced_languages),
-            engine.braces_as_code,
+            config.view.counting.name(),
             engine.should_search_in_dotted,
             !engine.no_gitignore,
             engine.count_keywords)
 }
 
 fn format_stats(total: &Stats) -> String {
-    format!("{{\"files\":{},\"bytes\":{},\"lines\":{},\"code\":{},\"comments\":{}}}",
-            total.files, total.bytes, total.lines, total.code_lines, total.comment_lines)
+    format!("{{\"files\":{},\"bytes\":{},\"lines\":{},\"classes\":{}}}",
+            total.files, total.bytes, total.lines, format_classes(&total.classes))
+}
+
+fn format_classes(classes: &LineClasses) -> String {
+    format!("{{\"words_in_code\":{},\"string_content\":{},\"comment_words_beside_code\":{},\
+\"words_in_comment\":{},\"punctuation_in_code\":{},\"punctuation_in_comment\":{},\"blank\":{},\
+\"blank_in_comment\":{},\"blank_in_string\":{}}}",
+            classes.words_in_code, classes.string_content, classes.comment_words_beside_code,
+            classes.words_in_comment, classes.punctuation_in_code, classes.punctuation_in_comment,
+            classes.blank, classes.blank_in_comment, classes.blank_in_string)
 }
 
 fn format_modules(result: &RunResult) -> String {
@@ -150,8 +158,8 @@ fn format_modules(result: &RunResult) -> String {
 
     let entries = result.modules.iter().map(|module| {
         let name = module.name.as_ref().map_or("null".to_owned(), |name| format!("\"{}\"", escape(name)));
-        format!("{{\"name\":{name},\"lines\":{},\"code\":{},\"comments\":{}}}",
-                module.total.lines, module.total.code_lines, module.total.comment_lines)
+        format!("{{\"name\":{name},\"lines\":{},\"classes\":{}}}",
+                module.total.lines, format_classes(&module.total.classes))
     }).collect::<Vec<_>>();
 
     format!("[{}]", entries.join(","))
@@ -214,8 +222,7 @@ fn parse_entry(line: &str) -> Result<LogEntry, DocumentError> {
                 name: read_optional_name(entry, "name", &at)?
                         .unwrap_or_else(|| UNNAMED_MODULE_NAME.to_owned()),
                 lines: read_number(entry, "lines", &at)?,
-                code_lines: read_number(entry, "code", &at)?,
-                comment_lines: read_number(entry, "comments", &at)?
+                classes: parse_classes(entry, &at)?
             })
         }).collect::<Result<Vec<_>, _>>()?
     })
@@ -248,37 +255,41 @@ mod tests {
     fn an_entry_round_trips_through_its_own_line() {
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         config.view.set_log_option(LogOption::new(Some("with \"quotes\" in it".to_owned())));
-        config.engine.braces_as_code = true;
+        config.view.counting = mezura_core::CountingModel::Region;
         config.engine.exclude_dirs = vec!["node_modules".to_owned()];
         config.engine.forced_languages = hashmap!["m".to_owned() => "matlab".to_owned()];
 
         let module_of = |name: Option<&str>, lines: usize, code: usize, comments: usize| ModuleResult {
             name: name.map(str::to_owned), per_language: HashMap::new(), nested_languages: HashMap::new(),
-            files: HashMap::new(), total: Stats::new(1, 10, lines, code, comments, HashMap::new()) };
-        let mut result = result_of(Stats::new(10, 5000, 1000, 700, 200, HashMap::new()),
+            files: HashMap::new(), total: crate::test_support::plain_stats_of(1, 10, lines, code, comments, HashMap::new()) };
+        let mut result = result_of(crate::test_support::plain_stats_of(10, 5000, 1000, 700, 200, HashMap::new()),
                 vec![module_of(Some("frontend"), 600, 400, 150), module_of(None, 400, 300, 50)]);
         result.targets = vec![Target::named("frontend", "./web"), Target::of("./src")];
 
         let now: DateTime<Local> = DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap();
         let entry = parse_entry(&format_entry_line(&config, &now, &result)).unwrap();
 
+        let model = mezura_core::CountingModel::Content;
         assert_eq!(Some("with \"quotes\" in it".to_owned()), entry.name);
         assert_eq!(now, entry.datetime);
         assert_eq!((10, 5000, 1000, 700, 200), (entry.total.files, entry.total.bytes,
-                entry.total.lines, entry.total.code_lines, entry.total.comment_lines));
+                entry.total.lines, entry.total.calculate_code_lines(model),
+                entry.total.calculate_comment_lines(model)));
         assert_eq!(result.targets, entry.targets);
         assert_eq!(vec!["node_modules".to_owned()], entry.scope.exclude);
         assert_eq!(hashmap!["m".to_owned() => "matlab".to_owned()], entry.scope.forced_languages);
-        assert!(entry.scope.braces_as_code && entry.scope.gitignore && entry.scope.keywords_counted);
+        assert_eq!("region", entry.scope.counting);
+        assert!(entry.scope.gitignore && entry.scope.keywords_counted);
         assert_eq!(vec!["frontend".to_owned(), UNNAMED_MODULE_NAME.to_owned()],
                 entry.modules.iter().map(|x| x.name.clone()).collect::<Vec<_>>());
-        assert_eq!((600, 400, 150), (entry.modules[0].lines, entry.modules[0].code_lines,
-                entry.modules[0].comment_lines));
+        assert_eq!((600, 400, 150), (entry.modules[0].lines,
+                model.calculate_code_lines(&entry.modules[0].classes),
+                model.calculate_comment_lines(&entry.modules[0].classes)));
 
         // and a run with no name and no modules reads back as exactly that
         config.view.set_log_option(LogOption::new(None));
         let plain = parse_entry(&format_entry_line(&config, &now,
-                &result_of(Stats::new(1, 1, 1, 1, 0, HashMap::new()), Vec::new()))).unwrap();
+                &result_of(crate::test_support::plain_stats_of(1, 1, 1, 1, 0, HashMap::new()), Vec::new()))).unwrap();
         assert_eq!(None, plain.name);
         assert!(plain.modules.is_empty());
     }
@@ -289,10 +300,10 @@ mod tests {
     fn a_broken_line_does_not_discard_the_lines_around_it() {
         let config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
         let now: DateTime<Local> = DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap();
-        let good = format_entry_line(&config, &now, &result_of(Stats::new(2, 2, 2, 2, 0, HashMap::new()), Vec::new()));
+        let good = format_entry_line(&config, &now, &result_of(crate::test_support::plain_stats_of(2, 2, 2, 2, 0, HashMap::new()), Vec::new()));
 
         let contents = format!("{good}\nnot json at all\n{}\n{good}\n",
-                good.replace("\"format\":1", "\"format\":99"));
+                good.replace(&format!("\"format\":{LOG_FORMAT_VERSION}"), "\"format\":99"));
         let entries = read_last_entries(&contents, 10);
         assert_eq!(2, entries.len(), "a broken or newer line took its neighbours with it");
 
@@ -310,15 +321,16 @@ mod tests {
 
         let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
         config.view.set_log_option(LogOption::new(Some("test name".to_owned())));
-        let result = result_of(Stats::new(10, 100, 1000, 100, 0, HashMap::new()), Vec::new());
+        let result = result_of(crate::test_support::plain_stats_of(10, 100, 1000, 100, 0, HashMap::new()), Vec::new());
 
         log_stats(&path, &None, &result, &DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap(), &config).unwrap();
 
         let entries = read_last_entries(&extract_file_contents(&path).unwrap(), 1);
+        let model = mezura_core::CountingModel::Content;
         assert_eq!(10, entries[0].total.files);
         assert_eq!(1000, entries[0].total.lines);
-        assert_eq!(100, entries[0].total.code_lines);
-        assert_eq!(900, entries[0].total.calculate_extra_lines());
+        assert_eq!(100, entries[0].total.calculate_code_lines(model));
+        assert_eq!(900, entries[0].total.calculate_extra_lines(model));
         assert_eq!(100, entries[0].total.bytes);
         assert_eq!(10, entries[0].total.calculate_average_size());
         assert_eq!(Some("test name".to_owned()), entries[0].name);
@@ -341,12 +353,12 @@ mod tests {
         config.view.set_log_option(LogOption::new(None));
         let module_of = |name: Option<&str>, lines: usize, code: usize, comments: usize| ModuleResult {
             name: name.map(str::to_owned), per_language: HashMap::new(), nested_languages: HashMap::new(),
-            files: HashMap::new(), total: Stats::new(1, 10, lines, code, comments, HashMap::new()) };
+            files: HashMap::new(), total: crate::test_support::plain_stats_of(1, 10, lines, code, comments, HashMap::new()) };
 
-        let older = result_of(Stats::new(4, 4000, 400, 300, 0, HashMap::new()), Vec::new());
+        let older = result_of(crate::test_support::plain_stats_of(4, 4000, 400, 300, 0, HashMap::new()), Vec::new());
         log_stats(&path, &None, &older, &DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap(), &config).unwrap();
 
-        let with_modules = result_of(Stats::new(10, 5000, 1000, 700, 200, HashMap::new()),
+        let with_modules = result_of(crate::test_support::plain_stats_of(10, 5000, 1000, 700, 200, HashMap::new()),
                 vec![module_of(Some("frontend"), 600, 400, 150), module_of(None, 400, 300, 50)]);
         let history = extract_file_contents(&path);
         log_stats(&path, &history, &with_modules,
@@ -355,12 +367,15 @@ mod tests {
         let entries = read_last_entries(&extract_file_contents(&path).unwrap(), 2);
         assert_eq!(2, entries.len());
 
+        let model = mezura_core::CountingModel::Content;
+        let counts_of = |module: &ModuleEntry| (module.lines,
+                model.calculate_code_lines(&module.classes), model.calculate_comment_lines(&module.classes));
         assert_eq!(1000, entries[0].total.lines);
-        assert_eq!(200, entries[0].total.comment_lines);
+        assert_eq!(200, entries[0].total.calculate_comment_lines(model));
         assert_eq!(vec!["frontend".to_owned(), UNNAMED_MODULE_NAME.to_owned()],
                 entries[0].modules.iter().map(|x| x.name.clone()).collect::<Vec<_>>());
-        assert_eq!((600, 400, 150), (entries[0].modules[0].lines, entries[0].modules[0].code_lines, entries[0].modules[0].comment_lines));
-        assert_eq!((400, 300, 50), (entries[0].modules[1].lines, entries[0].modules[1].code_lines, entries[0].modules[1].comment_lines));
+        assert_eq!((600, 400, 150), counts_of(&entries[0].modules[0]));
+        assert_eq!((400, 300, 50), counts_of(&entries[0].modules[1]));
 
         assert_eq!(400, entries[1].total.lines);
         assert!(entries[1].modules.is_empty());
@@ -381,7 +396,7 @@ mod tests {
         std::fs::create_dir_all(SCRATCH_LOG_DIR).unwrap();
         let path = SCRATCH_LOG_DIR.to_owned() + "test_unreadable.jsonl";
         let config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
-        let result = result_of(Stats::new(10, 100, 1000, 100, 0, HashMap::new()), Vec::new());
+        let result = result_of(crate::test_support::plain_stats_of(10, 100, 1000, 100, 0, HashMap::new()), Vec::new());
         let now = DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap();
 
         // What a run finds when the history is there and readable: the new entry, then all of it
@@ -418,7 +433,7 @@ mod tests {
         std::fs::create_dir_all(SCRATCH_LOG_DIR).unwrap();
         let path = SCRATCH_LOG_DIR.to_owned() + "test_emptied.jsonl";
         let config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
-        let result = result_of(Stats::new(10, 100, 1000, 100, 0, HashMap::new()), Vec::new());
+        let result = result_of(crate::test_support::plain_stats_of(10, 100, 1000, 100, 0, HashMap::new()), Vec::new());
         let now = DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap();
 
         for emptied in ["", "\r\n", "\n\n   \n", "   "] {

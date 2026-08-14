@@ -2,192 +2,259 @@ files=70 lines=851 code=455 comments=217
 
 Ada
   files=1 lines=8 code=5 comments=2
+  words_in_code=5 string_content=0 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   packages=1 types=1
 Assembly
   files=1 lines=12 code=6 comments=5
+  words_in_code=6 string_content=0 comment_words_beside_code=0 words_in_comment=5 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
 C
   files=1 lines=11 code=5 comments=3
+  words_in_code=5 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=1 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   structs=1
 C Header
   files=1 lines=10 code=5 comments=3
+  words_in_code=5 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=0 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   structs=1
 C#
   files=1 lines=15 code=9 comments=3
+  words_in_code=7 string_content=2 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=1 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   classes=1 interfaces=1 structs=1
 C++
   files=1 lines=13 code=7 comments=3
+  words_in_code=6 string_content=1 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=1 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   classes=1 structs=1
 C++ Header
   files=1 lines=13 code=5 comments=5
+  words_in_code=5 string_content=0 comment_words_beside_code=0 words_in_comment=5 punctuation_in_code=1 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   classes=1 structs=1
 CMake
   files=1 lines=15 code=7 comments=5
+  words_in_code=7 string_content=0 comment_words_beside_code=0 words_in_comment=5 punctuation_in_code=0 punctuation_in_comment=1 blank=2 blank_in_comment=0 blank_in_string=0
   functions=1 macros=0
 COBOL
   files=1 lines=9 code=6 comments=2
+  words_in_code=6 string_content=0 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   divisions=2 programs=1
 CSS
   files=1 lines=7 code=3 comments=3
+  words_in_code=3 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=1 punctuation_in_comment=0 blank=0 blank_in_comment=0 blank_in_string=0
 Carbon
   files=1 lines=12 code=8 comments=1
+  words_in_code=6 string_content=2 comment_words_beside_code=0 words_in_comment=1 punctuation_in_code=2 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   classes=1 interfaces=1
 Clojure
   files=1 lines=11 code=6 comments=2
+  words_in_code=6 string_content=0 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=0 punctuation_in_comment=0 blank=3 blank_in_comment=0 blank_in_string=0
   functions=2 macros=1 namespaces=1
 D
   files=1 lines=16 code=6 comments=7
+  words_in_code=6 string_content=0 comment_words_beside_code=0 words_in_comment=7 punctuation_in_code=1 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   classes=1 interfaces=0 structs=1 templates=0
 Dart
   files=1 lines=14 code=8 comments=3
+  words_in_code=6 string_content=2 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=1 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   classes=1 enums=1
 Delphi
   files=1 lines=12 code=5 comments=5
+  words_in_code=5 string_content=0 comment_words_beside_code=0 words_in_comment=5 punctuation_in_code=0 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   classes=1 records=1
 Dockerfile
   files=1 lines=13 code=7 comments=3
+  words_in_code=7 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=0 punctuation_in_comment=0 blank=3 blank_in_comment=0 blank_in_string=0
   commands=2 stages=1
 Elixir
   files=1 lines=13 code=10 comments=2
+  words_in_code=6 string_content=4 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   functions=2 modules=1
 Elm
   files=1 lines=15 code=9 comments=4
+  words_in_code=7 string_content=2 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=0 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   types=1
 Erlang
   files=1 lines=10 code=5 comments=3
+  words_in_code=5 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=0 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   modules=1 records=0
 F#
   files=1 lines=14 code=9 comments=3
+  words_in_code=7 string_content=2 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=0 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   modules=1 types=1
 Fortran
   files=1 lines=13 code=9 comments=2
+  words_in_code=9 string_content=0 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=0 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
 GDScript
   files=1 lines=19 code=12 comments=3
+  words_in_code=10 string_content=2 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=0 punctuation_in_comment=0 blank=4 blank_in_comment=0 blank_in_string=0
   classes=1 functions=2 signals=1
 GLSL
   files=1 lines=11 code=5 comments=3
+  words_in_code=5 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=1 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   structs=1
 Go
   files=1 lines=16 code=7 comments=4
+  words_in_code=5 string_content=2 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=1 punctuation_in_comment=0 blank=4 blank_in_comment=0 blank_in_string=0
   structs=1
 GraphQL
   files=1 lines=15 code=9 comments=2
+  words_in_code=6 string_content=3 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=2 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   enums=1 inputs=0 interfaces=1 types=1
 HLSL
   files=1 lines=12 code=5 comments=3
+  words_in_code=5 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=2 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   buffers=1 structs=1
 HTML
   files=1 lines=16 code=11 comments=3
+  words_in_code=11 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=0 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
 Haskell
   files=1 lines=10 code=5 comments=3
+  words_in_code=5 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=0 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   classes=1 types=1
 JAI
   files=1 lines=8 code=3 comments=3
+  words_in_code=3 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=1 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   structs=1
 JSX
   files=1 lines=9 code=4 comments=3
+  words_in_code=4 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=1 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   classes=1
 Java
   files=1 lines=19 code=10 comments=3
+  words_in_code=8 string_content=2 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=3 punctuation_in_comment=0 blank=3 blank_in_comment=0 blank_in_string=0
   classes=2 interfaces=1
 JavaScript
   files=3 lines=38 code=24 comments=5
+  words_in_code=19 string_content=5 comment_words_beside_code=0 words_in_comment=5 punctuation_in_code=6 punctuation_in_comment=0 blank=3 blank_in_comment=0 blank_in_string=0
   classes=3
 Julia
   files=1 lines=18 code=12 comments=3
+  words_in_code=10 string_content=2 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=0 punctuation_in_comment=0 blank=3 blank_in_comment=0 blank_in_string=0
   modules=1 structs=1
 Kotlin
   files=1 lines=11 code=6 comments=2
+  words_in_code=4 string_content=2 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=1 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   classes=1 interfaces=1
 Lisp
   files=1 lines=7 code=3 comments=3
+  words_in_code=3 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   classes=1 functions=1 macros=0
 Lua
   files=1 lines=19 code=8 comments=8
+  words_in_code=8 string_content=0 comment_words_beside_code=0 words_in_comment=8 punctuation_in_code=0 punctuation_in_comment=1 blank=2 blank_in_comment=0 blank_in_string=0
   functions=2
 MATLAB
   files=1 lines=9 code=4 comments=2
+  words_in_code=4 string_content=0 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=0 punctuation_in_comment=2 blank=1 blank_in_comment=0 blank_in_string=0
   classes=1
 Make
   files=1 lines=15 code=9 comments=3
+  words_in_code=9 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=0 punctuation_in_comment=0 blank=3 blank_in_comment=0 blank_in_string=0
   includes=1
 Metal
   files=1 lines=8 code=3 comments=3
+  words_in_code=3 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=1 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   structs=1
 OCaml
   files=1 lines=14 code=6 comments=5
+  words_in_code=6 string_content=0 comment_words_beside_code=0 words_in_comment=5 punctuation_in_code=0 punctuation_in_comment=1 blank=2 blank_in_comment=0 blank_in_string=0
   modules=1 types=1
 Objective-C
   files=1 lines=12 code=8 comments=1
+  words_in_code=8 string_content=0 comment_words_beside_code=0 words_in_comment=1 punctuation_in_code=1 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   classes=1 protocols=0
 Odin
   files=1 lines=9 code=6 comments=2
+  words_in_code=6 string_content=0 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   enums=1 structs=1 unions=1
 PHP
   files=1 lines=9 code=3 comments=4
+  words_in_code=3 string_content=0 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=1 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   classes=1
 Pascal
   files=1 lines=16 code=9 comments=6
+  words_in_code=9 string_content=0 comment_words_beside_code=0 words_in_comment=6 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   classes=1 records=1
 Perl
   files=1 lines=11 code=6 comments=2
+  words_in_code=6 string_content=0 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=1 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   packages=1
 PowerShell
   files=1 lines=17 code=10 comments=3
+  words_in_code=5 string_content=5 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=1 punctuation_in_comment=2 blank=1 blank_in_comment=0 blank_in_string=0
   classes=0
 Prolog
   files=1 lines=9 code=5 comments=3
+  words_in_code=5 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
 Python
   files=2 lines=28 code=17 comments=5
+  words_in_code=15 string_content=2 comment_words_beside_code=0 words_in_comment=5 punctuation_in_code=0 punctuation_in_comment=0 blank=6 blank_in_comment=0 blank_in_string=0
   classes=3
 R
   files=1 lines=6 code=3 comments=2
+  words_in_code=3 string_content=0 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
 Ruby
   files=1 lines=11 code=6 comments=4
+  words_in_code=6 string_content=0 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   classes=1 modules=1
 Rust
   files=1 lines=28 code=15 comments=4
+  words_in_code=15 string_content=0 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=5 punctuation_in_comment=0 blank=4 blank_in_comment=0 blank_in_string=0
   enums=1 structs=1 traits=1
 SCSS
   files=1 lines=9 code=4 comments=3
+  words_in_code=4 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=1 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
 SQL
   files=1 lines=8 code=3 comments=4
+  words_in_code=3 string_content=0 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   tables=1 views=1
 Scala
   files=1 lines=11 code=7 comments=2
+  words_in_code=5 string_content=2 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=1 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   classes=1 objects=1 traits=1
 Scheme
   files=1 lines=6 code=2 comments=3
+  words_in_code=2 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   definitions=2
 ShaderLab
   files=1 lines=13 code=5 comments=3
+  words_in_code=5 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=4 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   passes=1 shaders=1 subshaders=1
 Shell
   files=1 lines=8 code=4 comments=2
+  words_in_code=4 string_content=0 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=1 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   functions=1
 Slang
   files=1 lines=10 code=4 comments=3
+  words_in_code=4 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=1 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   interfaces=1 structs=1
 Svelte
   files=1 lines=13 code=7 comments=4
+  words_in_code=7 string_content=0 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=0 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
 Swift
   files=1 lines=12 code=6 comments=2
+  words_in_code=4 string_content=2 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=2 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   classes=1 structs=1
 TSX
   files=1 lines=12 code=6 comments=3
+  words_in_code=6 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=1 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   classes=1 enums=1 interfaces=1
 TypeScript
   files=1 lines=11 code=5 comments=3
+  words_in_code=5 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=1 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   classes=1 enums=1
 VHDL
   files=1 lines=12 code=7 comments=4
+  words_in_code=7 string_content=0 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
 Vue
   files=1 lines=17 code=10 comments=4
+  words_in_code=10 string_content=0 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=0 punctuation_in_comment=0 blank=3 blank_in_comment=0 blank_in_string=0
 WAT
   files=1 lines=8 code=4 comments=3
+  words_in_code=4 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=1 punctuation_in_comment=0 blank=0 blank_in_comment=0 blank_in_string=0
   functions=1 modules=1
 WGSL
   files=1 lines=8 code=3 comments=3
+  words_in_code=3 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=1 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   structs=1
 Zig
   files=1 lines=7 code=4 comments=2
+  words_in_code=4 string_content=0 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   enums=1 structs=1

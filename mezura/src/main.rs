@@ -27,6 +27,8 @@ mod present;
 mod result_printer;
 mod sources;
 mod suggestions;
+#[cfg(test)]
+mod test_support;
 mod theme;
 mod theme_files;
 mod warning_collector;
@@ -238,7 +240,7 @@ fn main() -> ExitCode {
     match outcome {
         Ok(result) => {
             let comparison = counted_baseline.map(|baseline| baseline.with_subject(
-                    crate::diff::Reading::of_this_run(&result, &chrono::Local::now(), &config.engine), &config));
+                    crate::diff::Reading::of_this_run(&result, &chrono::Local::now(), &config), &config));
             crate::present::present(&result, comparison.as_ref(), &config);
             // Already presented above as the failures they are, and the exit code keeps its meaning:
             // 1 is a run that did not happen. Every file unparseable, or every place unopenable.

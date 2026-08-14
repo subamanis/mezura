@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Local};
 use colored::{Color, ColoredString, Colorize};
-use mezura_core::{RunResult, Stats, UNNAMED_MODULE_NAME, render};
+use mezura_core::{CountingModel, RunResult, Stats, UNNAMED_MODULE_NAME, render};
 
 use super::config_manager::{self, ByFile, Configuration, Layout, SortCriterion};
 use super::number_formatter::format_with_separators;
@@ -64,7 +64,7 @@ pub fn format_and_print_results(result: &RunResult, existing_log_content: &Optio
     //
     // Two lists and not one: the overview is handed the uncut one, since it folds everything past
     // its own limit into 'others' itself and cannot do that without seeing what it is folding.
-    let global_names = get_sorted_language_names(per_language, config.view.sort_by);
+    let global_names = get_sorted_language_names(per_language, config.view.sort_by, config.view.counting);
     let matrix_hidden = config.view.top_n.map_or(0, |top| global_names.len().saturating_sub(top));
     let matrix_names = global_names[..global_names.len() - matrix_hidden].to_vec();
 
@@ -74,7 +74,7 @@ pub fn format_and_print_results(result: &RunResult, existing_log_content: &Optio
             else {groups.iter().map(|x| x.hidden).sum::<usize>()};
 
     let theme = super::theme::get_active();
-    let columns = Columns::of(&groups, total, config.view.hidden);
+    let columns = Columns::of(&groups, total, config.view.hidden, config.view.counting);
     let block_width = columns.width(theme);
     let should_print_keywords = !config.view.hidden.keywords;
     // Nothing to cross when no module was named, so the table is printed instead of a grid of one
@@ -106,11 +106,12 @@ languages crossed with modules. Use any other layout to see the files."));
     let of_the_table = if is_table && layout != Layout::Matrix {notes.as_slice()} else {&[]};
 
     match layout {
-        Layout::Matrix => print_as_matrix(theme, &groups, &matrix_names, total, print_total, should_print_keywords),
+        Layout::Matrix => print_as_matrix(theme, &groups, &matrix_names, total, print_total,
+                should_print_keywords, config.view.counting),
         Layout::Boxed => print_as_boxed_table(theme, &groups, total, print_total, should_print_keywords,
-                of_the_table, config.view.sort_by, &config.view.hidden),
+                of_the_table, config.view.sort_by, &config.view.hidden, config.view.counting),
         Layout::Table => print_as_table(theme, &groups, total, print_total, should_print_keywords,
-                of_the_table, config.view.sort_by, &config.view.hidden),
+                of_the_table, config.view.sort_by, &config.view.hidden, config.view.counting),
         Layout::List => print_individually(theme, &groups, &columns, block_width, should_print_keywords)
     }
 
@@ -153,7 +154,8 @@ pub fn create_theme_sample_rows(theme: &Theme, layout: Layout) -> Vec<String> {
     const BYTES   : usize  = 3_412_500;
 
     let keywords = hashmap!("structs".to_owned() => 284usize, "traits".to_owned() => 31);
-    let per_language = hashmap!(NAME.to_owned() => Stats::new(FILES, BYTES, LINES, CODE, COMMENTS, keywords.clone()));
+    let classes = mezura_core::LineClasses { words_in_code: CODE, words_in_comment: COMMENTS, ..Default::default() };
+    let per_language = hashmap!(NAME.to_owned() => Stats::new(FILES, BYTES, LINES, classes, keywords.clone()));
     let total = Stats::total_of(&per_language);
     let groups = vec![Group {name: None, languages: vec![NAME.to_owned()], hidden: 0,
             per_language: &per_language, nested: &NO_NESTED, files: HashMap::new(),
@@ -168,12 +170,13 @@ pub fn create_theme_sample_rows(theme: &Theme, layout: Layout) -> Vec<String> {
         lines
     };
     let no_hides = config_manager::Hidden::default();
+    let model = CountingModel::default();
     match layout {
-        Layout::Table => with_keywords(format_table_lines(theme, &groups, &total, false, &[], SortCriterion::Lines, &no_hides)),
-        Layout::Boxed => with_keywords(format_boxed_lines(theme, &groups, &total, false, &[], SortCriterion::Lines, &no_hides)),
+        Layout::Table => with_keywords(format_table_lines(theme, &groups, &total, false, &[], SortCriterion::Lines, &no_hides, model)),
+        Layout::Boxed => with_keywords(format_boxed_lines(theme, &groups, &total, false, &[], SortCriterion::Lines, &no_hides, model)),
         // The matrix has no second axis to show for one made-up language of one unnamed module, and
         // the tokens it paints are the ones the table already previews
-        Layout::Matrix => with_keywords(format_table_lines(theme, &groups, &total, false, &[], SortCriterion::Lines, &no_hides)),
+        Layout::Matrix => with_keywords(format_table_lines(theme, &groups, &total, false, &[], SortCriterion::Lines, &no_hides, model)),
         Layout::List => {
             let len_of = |value: usize| format_with_separators(value).len();
             let columns = Columns {
@@ -182,7 +185,8 @@ pub fn create_theme_sample_rows(theme: &Theme, layout: Layout) -> Vec<String> {
                 code: len_of(CODE),
                 comments: len_of(COMMENTS),
                 extra: len_of(LINES - CODE - COMMENTS),
-                hidden: no_hides
+                hidden: no_hides,
+                model
             };
             let width = columns.width(theme);
             vec![columns.format_files_row(theme, FILES, &format_size(theme, BYTES, BYTES / FILES), width),
@@ -194,9 +198,10 @@ pub fn create_theme_sample_rows(theme: &Theme, layout: Layout) -> Vec<String> {
 
 // Ties are broken by name rather than left to the iteration order of the maps, which would make
 // the printed order differ between runs on the very projects where languages are evenly matched
-pub(crate) fn get_sorted_language_names(per_language: &HashMap<String, Stats>, criterion: SortCriterion) -> Vec<String>
+pub(crate) fn get_sorted_language_names(per_language: &HashMap<String, Stats>, criterion: SortCriterion,
+    model: CountingModel) -> Vec<String>
 {
-    let value_of = |name: &String| per_language.get(name).map_or(0, |x| criterion.get_value_of(x));
+    let value_of = |name: &String| per_language.get(name).map_or(0, |x| criterion.get_value_of(x, model));
 
     let mut names = per_language.keys().cloned().collect::<Vec<_>>();
     if criterion == SortCriterion::Name {
@@ -246,7 +251,7 @@ fn create_groups_of<'a>(result: &'a RunResult, config: &Configuration) -> Vec<Gr
     // of arranging the columns of a matrix they have. The leftovers are last, never having been
     // declared at all.
     let mut groups = result.modules.iter().map(|module| {
-        let languages = get_sorted_language_names(&module.per_language, config.view.sort_by);
+        let languages = get_sorted_language_names(&module.per_language, config.view.sort_by, config.view.counting);
         let hidden = config.view.top_n.map_or(0, |top| languages.len().saturating_sub(top));
         Group {
             name: module.name.as_deref(),
@@ -305,13 +310,13 @@ pub(crate) fn find_files_to_show<'a>(result: &'a RunResult, config: &Configurati
 
     let common_directory = find_common_directory_of(&result.targets);
     result.modules.iter().map(|module| {
-        let names = get_sorted_language_names(&module.per_language, config.view.sort_by);
+        let names = get_sorted_language_names(&module.per_language, config.view.sort_by, config.view.counting);
         let hidden = config.view.top_n.map_or(0, |top| names.len().saturating_sub(top));
 
         names[..names.len() - hidden].iter().filter_map(|name| {
             let (language, entries) = module.files.get_key_value(name.as_str())?;
             let mut files = entries.iter().collect::<Vec<_>>();
-            files.sort_by(|one, other| compare_files_by(one, other, config.view.sort_by));
+            files.sort_by(|one, other| compare_files_by(one, other, config.view.sort_by, config.view.counting));
             let shown = by_file.shown_out_of(files.len());
             Some((language.as_str(), FileRows {
                 shown: files[..shown].iter()
@@ -324,9 +329,9 @@ pub(crate) fn find_files_to_show<'a>(result: &'a RunResult, config: &Configurati
 
 // The path breaks every tie, so two files of equal size cannot swap places between two runs
 pub(crate) fn compare_files_by(one: &mezura_core::FileEntry, other: &mezura_core::FileEntry,
-        sort_by: SortCriterion) -> std::cmp::Ordering
+        sort_by: SortCriterion, model: CountingModel) -> std::cmp::Ordering
 {
-    sort_by.get_value_of(&other.stats).cmp(&sort_by.get_value_of(&one.stats))
+    sort_by.get_value_of(&other.stats, model).cmp(&sort_by.get_value_of(&one.stats, model))
             .then_with(|| one.path.cmp(&other.path))
 }
 
@@ -493,13 +498,11 @@ impl<'a> SubRowStyles<'a> {
     }
 }
 
-// Held consistent because these numbers arrive from a document as readily as from a run, and the
-// layouts subtract code and comments from lines to get 'extra'
+// Saturating per class because these numbers arrive from a document as readily as from a run,
+// where nothing promises the sections stay inside the whole
 fn take_out(shell: &mut Stats, sections: &Stats) {
     shell.lines = shell.lines.saturating_sub(sections.lines);
-    shell.code_lines = shell.code_lines.saturating_sub(sections.code_lines).min(shell.lines);
-    shell.comment_lines = shell.comment_lines.saturating_sub(sections.comment_lines)
-            .min(shell.lines - shell.code_lines);
+    shell.classes.subtract(&sections.classes);
 }
 
 // Biggest first, with the shell's own share inserted ahead of them
@@ -612,7 +615,7 @@ fn mark_sorted_column<'a>(theme: &'a Theme, headers: &mut [String],
         SortCriterion::Lines => header == "Lines",
         SortCriterion::Code => header == "Code",
         SortCriterion::Comments => header == "Comments",
-        SortCriterion::Extra => header == "Extra",
+        SortCriterion::Extra => header == "Extra" || header == "Blanks",
         SortCriterion::Size => header == "Size",
         SortCriterion::Name => header == "Language" || header == "Module"
     };
@@ -633,14 +636,24 @@ fn determine_name_header(groups: &[Group]) -> &'static str {
     if is_grouped(groups) {"Module"} else {"Language"}
 }
 
+// The third column is what is left after code and comments, and each model leaves something else:
+// content leaves the lines that say nothing, region only the blanks outside everything
+fn third_column_header(model: CountingModel) -> &'static str {
+    match model {
+        CountingModel::Content => "Extra",
+        CountingModel::Region => "Blanks"
+    }
+}
+
 // One aligned row per language, no borders: whitespace alignment survives being pasted into a
 // README or a ticket. The header cells reuse the label token of the quantity underneath them and
 // the body cells its number token, so the table needs no styling of its own.
 fn print_as_table(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool,
-        should_print_keywords: bool, notes: &[String], sort_by: SortCriterion, hidden: &config_manager::Hidden)
+        should_print_keywords: bool, notes: &[String], sort_by: SortCriterion, hidden: &config_manager::Hidden,
+        model: CountingModel)
 {
     println!("{}.\n", theme.heading.paint("Details"));
-    for line in format_table_lines(theme, groups, total, print_total, notes, sort_by, hidden) {
+    for line in format_table_lines(theme, groups, total, print_total, notes, sort_by, hidden, model) {
         println!("{line}");
     }
 
@@ -653,12 +666,14 @@ fn print_as_table(theme: &Theme, groups: &[Group], total: &Stats, print_total: b
 }
 
 fn format_table_lines(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool,
-        notes: &[String], sort_by: SortCriterion, hidden: &config_manager::Hidden) -> Vec<String>
+        notes: &[String], sort_by: SortCriterion, hidden: &config_manager::Hidden,
+        model: CountingModel) -> Vec<String>
 {
     // Every counted column carries its own percentage. The two that compare languages ('Files' and
     // 'Lines') take a share of the total, the two that describe one ('Code' and 'Comments') take a
     // share of that language's own lines.
-    const HEADERS : [&str; 11] = ["Language", "Files", "%", "Lines", "%", "Code", "%", "Comments", "%", "Extra", "Size"];
+    let headers : [&str; 11] = ["Language", "Files", "%", "Lines", "%", "Code", "%", "Comments", "%",
+            third_column_header(model), "Size"];
     const COLUMNS : [ColumnKind; 11] = [ColumnKind::Name, ColumnKind::Files, ColumnKind::Percent,
             ColumnKind::Lines, ColumnKind::Percent, ColumnKind::Code, ColumnKind::Percent,
             ColumnKind::Comments, ColumnKind::Percent, ColumnKind::Extra, ColumnKind::Size];
@@ -692,27 +707,30 @@ fn format_table_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
             // A module's share is of the whole, a language's is of the module it is in: a module
             // reading 100% of itself would say nothing, which is the whole point of the two levels
             RowKind::Module => format_row_of(theme, cell, group.total.files, group.total.lines,
-                    group.total.code_lines, group.total.comment_lines, group.total.bytes,
-                    total.files, total.lines),
-            RowKind::Total => format_row_of(theme, cell, total.files, total.lines, total.code_lines,
-                    total.comment_lines, total.bytes, total.files, total.lines),
+                    group.total.calculate_code_lines(model), group.total.calculate_comment_lines(model),
+                    group.total.bytes, total.files, total.lines),
+            RowKind::Total => format_row_of(theme, cell, total.files, total.lines,
+                    total.calculate_code_lines(model), total.calculate_comment_lines(model),
+                    total.bytes, total.files, total.lines),
             RowKind::Language => {
                 let name = row.language.unwrap();
                 let content_info = group.per_language.get(name).unwrap();
-                format_row_of(theme, cell, content_info.files, content_info.lines, content_info.code_lines, content_info.comment_lines,
+                format_row_of(theme, cell, content_info.files, content_info.lines,
+                        content_info.calculate_code_lines(model), content_info.calculate_comment_lines(model),
                         content_info.bytes, group.total.files, group.total.lines)
             },
             RowKind::Nested | RowKind::File => {
                 let whole = group.per_language.get(row.language.unwrap()).unwrap();
                 let stats = row.stats.as_deref().unwrap();
-                let mut cells = format_row_of(theme, cell, stats.files, stats.lines, stats.code_lines,
-                        stats.comment_lines, stats.bytes, whole.files, whole.lines);
+                let mut cells = format_row_of(theme, cell, stats.files, stats.lines,
+                        stats.calculate_code_lines(model), stats.calculate_comment_lines(model),
+                        stats.bytes, whole.files, whole.lines);
                 let (size, unit) = super::number_formatter::get_active().size_with_unit(stats.bytes);
                 cells[10] = size + " " + &SubRowStyles::of(theme, row.kind).size_unit.paint(unit).to_string();
                 cells
             },
             RowKind::Note => {
-                let mut cells = vec![String::new(); HEADERS.len()];
+                let mut cells = vec![String::new(); headers.len()];
                 cells[0] = cell.clone();
                 cells
             }
@@ -725,7 +743,7 @@ fn format_table_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
             .collect::<Vec<_>>();
     let rows = rows.into_iter().map(|row| keep_shown(row, &mask)).collect::<Vec<_>>();
 
-    let mut headers = keep_shown(HEADERS.map(str::to_owned).to_vec(), &mask);
+    let mut headers = keep_shown(headers.map(str::to_owned).to_vec(), &mask);
     headers[0] = determine_name_header(groups).to_owned();
     let mut header_styles = keep_shown(vec![&theme.details_language_header, &theme.files_label, &theme.percent,
             &theme.lines_label, &theme.percent, &theme.code_label, &theme.percent, &theme.comments_label,
@@ -758,8 +776,10 @@ pub fn print_comparison(comparison: &super::diff::Comparison, config: &Configura
 
     let rows = create_compared_rows(pairs.as_deref(), &baseline.result, &subject.result, config);
     let lines = match config.view.layout {
-        Layout::Boxed => format_boxed_comparison_lines(theme, &rows, config.view.sort_by, &config.view.hidden),
-        _ => format_comparison_lines(theme, &rows, config.view.sort_by, &config.view.hidden)
+        Layout::Boxed => format_boxed_comparison_lines(theme, &rows, config.view.sort_by,
+                &config.view.hidden, config.view.counting),
+        _ => format_comparison_lines(theme, &rows, config.view.sort_by, &config.view.hidden,
+                config.view.counting)
     };
     for line in lines {
         println!("{line}");
@@ -801,7 +821,8 @@ fn create_compared_rows(pairs: Option<&[super::diff::ModulePair]>, baseline: &Ru
     let languages_of = |baseline_languages: &HashMap<String, Stats>, subject_languages: &HashMap<String, Stats>,
             baseline_nested: &HashMap<String, HashMap<String, Stats>>,
             subject_nested: &HashMap<String, HashMap<String, Stats>>, indent: &str| {
-        super::diff::create_comparison_rows(baseline_languages, subject_languages, config.view.sort_by, config.view.top_n)
+        super::diff::create_comparison_rows(baseline_languages, subject_languages, config.view.sort_by,
+                config.view.top_n, config.view.counting)
                 .0.into_iter()
                 .flat_map(|change| {
                     let mut rows = vec![ComparedRow { name: indent.to_owned() + &change.name,
@@ -880,7 +901,8 @@ fn create_compared_sections(change: &super::diff::LanguageStatsChange,
 fn create_group_with_baseline<'a>(name: Option<&'a str>, baseline: &'a HashMap<String, Stats>,
         subject: &'a HashMap<String, Stats>, total: &'a Stats, config: &Configuration) -> Group<'a>
 {
-    let (rows, union) = super::diff::create_comparison_rows(baseline, subject, config.view.sort_by, config.view.top_n);
+    let (rows, union) = super::diff::create_comparison_rows(baseline, subject, config.view.sort_by,
+            config.view.top_n, config.view.counting);
     let hidden = union - rows.len();
     let languages = rows.into_iter().map(|row| row.name)
             .filter(|language| subject.contains_key(language)).collect();
@@ -899,7 +921,8 @@ fn count_languages_hidden_by_top(pairs: Option<&[super::diff::ModulePair]>, base
         return 0;
     }
     let cut = |before: &HashMap<String, Stats>, now: &HashMap<String, Stats>| {
-        let (rows, union) = super::diff::create_comparison_rows(before, now, SortCriterion::Lines, top);
+        let (rows, union) = super::diff::create_comparison_rows(before, now, SortCriterion::Lines, top,
+                CountingModel::default());
         union - rows.len()
     };
 
@@ -961,7 +984,7 @@ so anything a .gitignore ignores is counted on one side alone.")).to_string(),
 // slot its share occupies on a plain run, and 'Extra' gone the same way. The change cells arrive
 // painted by their direction, so the frame's own slot style is plain.
 fn format_boxed_comparison_lines(theme: &Theme, rows: &[ComparedRow], sort_by: SortCriterion,
-        hidden: &config_manager::Hidden) -> Vec<String>
+        hidden: &config_manager::Hidden, model: CountingModel) -> Vec<String>
 {
     const HEADERS : [&str; 6] = ["Language", "Files", "Lines", "Code", "Comments", "Size"];
     const COLUMNS : [ColumnKind; 6] = [ColumnKind::Name, ColumnKind::Files, ColumnKind::Lines,
@@ -984,7 +1007,8 @@ fn format_boxed_comparison_lines(theme: &Theme, rows: &[ComparedRow], sort_by: S
             slot: paint_change(theme, before.files, now.files, &format_signed_difference(before.files, now.files))
         };
         vec![files, counted(before.lines, now.lines),
-             counted(before.code_lines, now.code_lines), counted(before.comment_lines, now.comment_lines),
+             counted(before.calculate_code_lines(model), now.calculate_code_lines(model)),
+             counted(before.calculate_comment_lines(model), now.calculate_comment_lines(model)),
              BoxedCell { number: size + " " + &theme.size_unit.paint(unit).to_string(),
                          slot: paint_change(theme, before.bytes, now.bytes, &format_signed_size(theme, before.bytes, now.bytes)) }]
     };
@@ -1023,7 +1047,7 @@ fn format_comparison_heading(theme: &Theme, baseline: &super::diff::Reading, sub
 // the three columns left over subtracted from the lines, and the size is the one figure genuinely
 // dropped.
 fn format_comparison_lines(theme: &Theme, rows: &[ComparedRow], sort_by: SortCriterion,
-        hidden: &config_manager::Hidden) -> Vec<String>
+        hidden: &config_manager::Hidden, model: CountingModel) -> Vec<String>
 {
     // The change columns are left unnamed: their values are two to five characters and the word would
     // widen the table for nothing, while every one of them carries a sign that says what it is.
@@ -1044,8 +1068,9 @@ fn format_comparison_lines(theme: &Theme, rows: &[ComparedRow], sort_by: SortCri
     let cells = |name: String, before: &Stats, now: &Stats| {
         let mut row = vec![name, format_with_separators(now.files),
                 paint_change(theme, before.files, now.files, &format_signed_difference(before.files, now.files))];
-        for (was, is) in [(before.lines, now.lines), (before.code_lines, now.code_lines),
-                (before.comment_lines, now.comment_lines)] {
+        for (was, is) in [(before.lines, now.lines),
+                (before.calculate_code_lines(model), now.calculate_code_lines(model)),
+                (before.calculate_comment_lines(model), now.calculate_comment_lines(model))] {
             row.push(format_with_separators(is));
             row.push(paint_change(theme, was, is, &format_signed_difference(was, is)));
             row.push(paint_change(theme, was, is, &format_change(was, is)));
@@ -1239,10 +1264,10 @@ fn draw_aligned_table(theme: &Theme, headers: &[String], rows: &[Vec<String>], k
 // Languages down, modules across. The nested table answers "what is inside the backend", read down
 // a section; this one answers "how do the modules compare on the same language", read along a row.
 fn print_as_matrix(theme: &Theme, groups: &[Group], languages: &[String], total: &Stats,
-        print_total: bool, should_print_keywords: bool)
+        print_total: bool, should_print_keywords: bool, model: CountingModel)
 {
     println!("{}.\n", theme.heading.paint("Details"));
-    for line in format_matrix_lines(theme, groups, languages, total, print_total) {
+    for line in format_matrix_lines(theme, groups, languages, total, print_total, model) {
         println!("{line}");
     }
 
@@ -1265,7 +1290,7 @@ fn print_as_matrix(theme: &Theme, groups: &[Group], languages: &[String], total:
 }
 
 fn format_matrix_lines<'a>(theme: &'a Theme, groups: &[Group], languages: &[String], total: &Stats,
-        print_total: bool) -> Vec<String>
+        print_total: bool, model: CountingModel) -> Vec<String>
 {
     const GAP : usize = 4;
     const TOTAL_HEADER : &str = "Total";
@@ -1277,13 +1302,13 @@ fn format_matrix_lines<'a>(theme: &'a Theme, groups: &[Group], languages: &[Stri
         Some(match metric {
             0 => group.per_language.get(language).map_or(0, |x| x.files),
             1 => content_info.lines,
-            _ => content_info.code_lines
+            _ => content_info.calculate_code_lines(model)
         })
     };
     let of_stats = |stats: &Stats, metric: usize| match metric {
         0 => stats.files,
         1 => stats.lines,
-        _ => stats.code_lines
+        _ => stats.calculate_code_lines(model)
     };
     let cell_of = |value: Option<usize>, metric: usize| match value {
         Some(value) => format_with_separators(value),
@@ -1384,11 +1409,12 @@ fn format_matrix_lines<'a>(theme: &'a Theme, groups: &[Group], languages: &[Stri
 // one cell here, since the borders already do the grouping that the tight gap does over there, and
 // that brings the whole thing down from eleven columns to seven.
 fn print_as_boxed_table(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool,
-        should_print_keywords: bool, notes: &[String], sort_by: SortCriterion, hidden: &config_manager::Hidden)
+        should_print_keywords: bool, notes: &[String], sort_by: SortCriterion, hidden: &config_manager::Hidden,
+        model: CountingModel)
 {
     println!("{}.
 ", theme.heading.paint("Details"));
-    for line in format_boxed_lines(theme, groups, total, print_total, notes, sort_by, hidden) {
+    for line in format_boxed_lines(theme, groups, total, print_total, notes, sort_by, hidden, model) {
         println!("{line}");
     }
 
@@ -1399,9 +1425,11 @@ fn print_as_boxed_table(theme: &Theme, groups: &[Group], total: &Stats, print_to
 }
 
 fn format_boxed_lines(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool,
-        notes: &[String], sort_by: SortCriterion, hidden: &config_manager::Hidden) -> Vec<String>
+        notes: &[String], sort_by: SortCriterion, hidden: &config_manager::Hidden,
+        model: CountingModel) -> Vec<String>
 {
-    const HEADERS : [&str; 7] = ["Language", "Files", "Lines", "Code", "Comments", "Extra", "Size"];
+    let headers : [&str; 7] = ["Language", "Files", "Lines", "Code", "Comments",
+            third_column_header(model), "Size"];
     const COLUMNS : [ColumnKind; 7] = [ColumnKind::Name, ColumnKind::Files, ColumnKind::Lines,
             ColumnKind::Code, ColumnKind::Comments, ColumnKind::Extra, ColumnKind::Size];
 
@@ -1431,26 +1459,29 @@ fn format_boxed_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
         let (cell, group) = (&row.cell, row.group);
         match row.kind {
             RowKind::Module => format_row_of(theme, cell, group.total.files, group.total.lines,
-                    group.total.code_lines, group.total.comment_lines, group.total.bytes,
-                    total.files, total.lines),
-            RowKind::Total => format_row_of(theme, cell, total.files, total.lines, total.code_lines,
-                    total.comment_lines, total.bytes, total.files, total.lines),
+                    group.total.calculate_code_lines(model), group.total.calculate_comment_lines(model),
+                    group.total.bytes, total.files, total.lines),
+            RowKind::Total => format_row_of(theme, cell, total.files, total.lines,
+                    total.calculate_code_lines(model), total.calculate_comment_lines(model),
+                    total.bytes, total.files, total.lines),
             RowKind::Language => {
                 let name = row.language.unwrap();
                 let content_info = group.per_language.get(name).unwrap();
-                format_row_of(theme, cell, content_info.files, content_info.lines, content_info.code_lines, content_info.comment_lines,
+                format_row_of(theme, cell, content_info.files, content_info.lines,
+                        content_info.calculate_code_lines(model), content_info.calculate_comment_lines(model),
                         content_info.bytes, group.total.files, group.total.lines)
             },
             RowKind::Nested | RowKind::File => {
                 let whole = group.per_language.get(row.language.unwrap()).unwrap();
                 let stats = row.stats.as_deref().unwrap();
-                format_row_of(theme, cell, stats.files, stats.lines, stats.code_lines,
-                        stats.comment_lines, stats.bytes, whole.files, whole.lines)
+                format_row_of(theme, cell, stats.files, stats.lines,
+                        stats.calculate_code_lines(model), stats.calculate_comment_lines(model),
+                        stats.bytes, whole.files, whole.lines)
             },
             // A sentence about the rows and not a row of figures, so it takes the name cell and
             // leaves the columns empty
             RowKind::Note => (cell.clone(),
-                    (0..HEADERS.len() - 1).map(|_| BoxedCell { number: String::new(), slot: String::new() }).collect())
+                    (0..headers.len() - 1).map(|_| BoxedCell { number: String::new(), slot: String::new() }).collect())
         }}).collect::<Vec<_>>();
     let kinds = described.iter().map(|row| row.kind).collect::<Vec<_>>();
 
@@ -1473,7 +1504,7 @@ fn format_boxed_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
     let number_styles = keep_shown(vec![&theme.files_number, &theme.lines_number, &theme.code_number,
             &theme.comments_number, &theme.extra_number, &theme.total_size_number], &mask[1..]);
 
-    let mut headers = keep_shown(HEADERS.map(str::to_owned).to_vec(), &mask);
+    let mut headers = keep_shown(headers.map(str::to_owned).to_vec(), &mask);
     headers[0] = determine_name_header(groups).to_owned();
     let mut header_styles = keep_shown(std::iter::once(&theme.details_language_header)
             .chain(header_styles).collect::<Vec<_>>(), &mask);
@@ -1670,7 +1701,8 @@ fn format_individual_lines(theme: &Theme, groups: &[Group], columns: &Columns, b
                         &format_size(theme, stats.bytes, stats.calculate_average_size()), block_width));
             }
             lines.push(columns.format_breakdown_row(theme, &theme.details_module.paint(name).to_string(),
-                    calculate_widest_visible_line(name), stats.lines, stats.code_lines, stats.comment_lines));
+                    calculate_widest_visible_line(name), stats.lines,
+                    stats.calculate_code_lines(columns.model), stats.calculate_comment_lines(columns.model)));
         }
 
         for (i, lang_name) in group.languages.iter().enumerate() {
@@ -1685,7 +1717,8 @@ fn format_individual_lines(theme: &Theme, groups: &[Group], columns: &Columns, b
             }
             lines.push(columns.format_breakdown_row(theme, &(indent.to_owned() + &theme.details_language_name.paint(lang_name).to_string()),
                     calculate_widest_visible_line(lang_name) + indent.len(), content_info.lines,
-                    content_info.code_lines, content_info.comment_lines));
+                    content_info.calculate_code_lines(columns.model),
+                    content_info.calculate_comment_lines(columns.model)));
             // No files row: the count and the average size above describe whole files
             let sections = find_sections_of(group, lang_name, content_info);
             let of_language = group.files.get(lang_name.as_str());
@@ -1703,7 +1736,8 @@ fn format_individual_lines(theme: &Theme, groups: &[Group], columns: &Columns, b
                 lines.push(columns.format_nested_row(&styles, &name,
                         indent.len() + BRANCH_INDENT.len() + calculate_widest_visible_line(branch)
                                 + calculate_widest_visible_line(branch_name),
-                        stats.lines, stats.code_lines, stats.comment_lines));
+                        stats.lines, stats.calculate_code_lines(columns.model),
+                        stats.calculate_comment_lines(columns.model)));
             }
             if should_print_keywords {
                 let keywords = get_keywords_as_str(theme, &content_info.keyword_occurences, None, columns.calculate_words_start(), block_width);
@@ -1727,11 +1761,13 @@ struct Columns {
     comments: usize,
     extra: usize,
     // Carried here so that every row a run renders through these functions obeys the same '--hide'
-    hidden: config_manager::Hidden
+    hidden: config_manager::Hidden,
+    // and the same fold
+    model: CountingModel
 }
 
 impl Columns {
-    fn of(groups: &[Group], total: &Stats, hidden: config_manager::Hidden) -> Self
+    fn of(groups: &[Group], total: &Stats, hidden: config_manager::Hidden, model: CountingModel) -> Self
     {
         let grouped = is_grouped(groups);
         let indent = if grouped {LIST_INDENT.len()} else {0};
@@ -1739,10 +1775,11 @@ impl Columns {
         let mut columns = Columns {
             name: TOTAL_NAME.len(),
             headline: len_of(total.files).max(len_of(total.lines)),
-            code: len_of(total.code_lines),
-            comments: len_of(total.comment_lines),
-            extra: len_of(total.calculate_extra_lines()),
-            hidden
+            code: len_of(total.calculate_code_lines(model)),
+            comments: len_of(total.calculate_comment_lines(model)),
+            extra: len_of(total.calculate_extra_lines(model)),
+            hidden,
+            model
         };
 
         // The total holds the largest of every column, except when --top hid the language that made
@@ -1758,9 +1795,9 @@ impl Columns {
                 columns.name = columns.name.max(calculate_widest_visible_line(name) + indent);
                 columns.headline = columns.headline.max(len_of(group.per_language.get(name).unwrap().files))
                         .max(len_of(content_info.lines));
-                columns.code = columns.code.max(len_of(content_info.code_lines));
-                columns.comments = columns.comments.max(len_of(content_info.comment_lines));
-                columns.extra = columns.extra.max(len_of(content_info.lines - content_info.code_lines - content_info.comment_lines));
+                columns.code = columns.code.max(len_of(content_info.calculate_code_lines(model)));
+                columns.comments = columns.comments.max(len_of(content_info.calculate_comment_lines(model)));
+                columns.extra = columns.extra.max(len_of(content_info.calculate_extra_lines(model)));
                 // The markers are asked for rather than assumed, so changing one cannot leave this
                 // column a character short of what gets drawn in it
                 let under = indent + BRANCH_INDENT.len();
@@ -1806,7 +1843,7 @@ impl Columns {
         if !self.hidden.extra {
             terms.push(format!("{:>extra_w$} {}",
                     theme.extra_number.paint(&format_with_separators(lines - code_lines - comment_lines)),
-                    theme.extra_label.paint("extra"), extra_w = self.extra));
+                    theme.extra_label.paint(self.third_label()), extra_w = self.extra));
         }
         format!("{}{}{}{}{:>headline_w$} {} {{ {} }}",
                 painted_name, " ".repeat(self.name - name_len + NAME_GAP), theme.arrow.paint("->"), " ".repeat(NAME_GAP),
@@ -1831,12 +1868,19 @@ impl Columns {
         if !self.hidden.extra {
             terms.push(format!("{:>extra_w$} {}",
                     styles.extra.paint(&format_with_separators(lines - code_lines - comment_lines)),
-                    styles.extra.paint("extra"), extra_w = self.extra));
+                    styles.extra.paint(self.third_label()), extra_w = self.extra));
         }
         format!("{}{}{}{}{:>headline_w$} {} {{ {} }}",
                 painted_name, " ".repeat(self.name - name_len + NAME_GAP), styles.branch.paint("->"), " ".repeat(NAME_GAP),
                 styles.lines.paint(&format_with_separators(lines)), styles.lines.paint("lines"),
                 terms.join("  +  "), headline_w = self.headline)
+    }
+
+    fn third_label(&self) -> &'static str {
+        match self.model {
+            CountingModel::Content => "extra",
+            CountingModel::Region => "blanks"
+        }
     }
 
     // The whole row is skipped when both halves are hidden, which is the caller's question to ask
@@ -1882,7 +1926,8 @@ fn format_sum_lines(theme: &Theme, per_language: &HashMap<String,Stats>, total: 
                 &format_size(theme, total.bytes, total.calculate_average_size()), block_width));
     }
     lines.push(columns.format_breakdown_row(theme, &theme.details_total.paint(TOTAL_NAME).to_string(),
-            TOTAL_NAME.len(), total.lines, total.code_lines, total.comment_lines));
+            TOTAL_NAME.len(), total.lines, total.calculate_code_lines(columns.model),
+            total.calculate_comment_lines(columns.model)));
 
     if should_print_keywords {
         let keywords_line = get_keywords_as_str(theme, &create_keyword_sum_map(per_language), None, columns.calculate_words_start(), block_width);
@@ -2142,11 +2187,15 @@ fn fold_rest_into_others(sorted_language_names: &[String],
 
     // Whatever the kept ones do not account for, which is what keeps the shares of the overview
     // shares of the whole run and not of the few it draws
-    let mut others = Stats::default();
+    let mut others = total.clone();
     let shown = Stats::total_of(&per_language);
-    others.files = total.files - shown.files;
-    others.bytes = total.bytes - shown.bytes;
-    others.lines = total.lines - shown.lines;
+    others.files -= shown.files;
+    others.bytes -= shown.bytes;
+    others.lines -= shown.lines;
+    // The classes go with them, or the row would hold lines that no class of it accounts for and
+    // whichever column is folded from them would read zero for everything that was folded away
+    others.classes.subtract(&shown.classes);
+    others.keyword_occurences.clear();
     per_language.insert(OTHERS_NAME.to_string(), others);
 
     (sorted_language_names, per_language)
@@ -2202,7 +2251,8 @@ fn find_settings_changed_since(entry: &super::log::LogEntry, config: &Configurat
     }
     // The log holds no keyword counts, so a run that only stopped counting them changed nothing
     // the log records
-    changed.extend(super::diff::find_settings_that_differ(&entry.scope, &super::diff::scope_of(&config.engine))
+    changed.extend(super::diff::find_settings_that_differ(&entry.scope,
+            &super::diff::scope_of(&config.engine, config.view.counting))
             .into_iter().filter(|setting| *setting != super::diff::HIDE_KEYWORDS));
 
     changed
@@ -2223,7 +2273,8 @@ fn format_modified_tag(changed: &[&'static str]) -> String {
 // One line per module under the line of the entry, and narrower than it: Files and Extra stay on
 // the total, since what is asked of a module is which part of it moved. With every column repeated,
 // one entry is five wide lines and '--compare 3' stops being readable.
-fn format_module_comparison_lines(entry: &super::log::LogEntry, groups: &[Group]) -> String {
+fn format_module_comparison_lines(entry: &super::log::LogEntry, groups: &[Group],
+        model: CountingModel) -> String {
     let theme = super::theme::get_active();
     let names = groups.iter().map(|x| x.get_displayed_name().to_owned())
             .chain(entry.modules.iter().map(|x| x.name.clone())
@@ -2234,10 +2285,11 @@ fn format_module_comparison_lines(entry: &super::log::LogEntry, groups: &[Group]
     // Right aligned down the entry, since the whole reason these are three narrow columns and not
     // the full breakdown is that they are meant to be read down rather than across
     let compared = names.iter().filter_map(|name| entry.modules.iter().find(|x| &x.name == name)).collect::<Vec<_>>();
-    let number_width = |value: fn(&super::log::ModuleEntry) -> usize|
+    let number_width = |value: &dyn Fn(&super::log::ModuleEntry) -> usize|
             compared.iter().map(|x| format_with_separators(value(x)).len()).max().unwrap_or(0);
-    let (lines_width, code_width, comments_width) =
-            (number_width(|x| x.lines), number_width(|x| x.code_lines), number_width(|x| x.comment_lines));
+    let (lines_width, code_width, comments_width) = (number_width(&|x| x.lines),
+            number_width(&|x| model.calculate_code_lines(&x.classes)),
+            number_width(&|x| model.calculate_comment_lines(&x.classes)));
 
     let mut rendered = String::with_capacity(names.len() * 80);
     for name in &names {
@@ -2256,8 +2308,10 @@ fn format_module_comparison_lines(entry: &super::log::LogEntry, groups: &[Group]
                 };
                 format!("Lines: {}   Code: {}   Comments: {}",
                         cell(&theme.lines_number, now.lines, then.lines, lines_width),
-                        cell(&theme.code_number, now.code_lines, then.code_lines, code_width),
-                        cell(&theme.comments_number, now.comment_lines, then.comment_lines, comments_width))
+                        cell(&theme.code_number, now.calculate_code_lines(model),
+                                model.calculate_code_lines(&then.classes), code_width),
+                        cell(&theme.comments_number, now.calculate_comment_lines(model),
+                                model.calculate_comment_lines(&then.classes), comments_width))
             },
             (Some(_), None) => theme.note.paint("declared in this run, nothing to compare against").to_string(),
             _ => theme.note.paint("not counted any more").to_string()
@@ -2301,16 +2355,18 @@ fn print_comparison_to_previous_runs(result: &RunResult, groups: &[Group], log_c
             comparison_str.push_str(&format!("{} {} ({} days, {} hours and {} minutes ago){}\n",
                     arrow, then_str, days, hours, minutes, tag));
         }
-        comparison_str.push_str(&format!("     Files: {}({}%) Lines: {}({}%) {{Code: {}({}%), Comments: {}({}%), Extra: {}({}%)}}\n",
+        let model = config.view.counting;
+        comparison_str.push_str(&format!("     Files: {}({}%) Lines: {}({}%) {{Code: {}({}%), Comments: {}({}%), {}: {}({}%)}}\n",
                 super::theme::get_active().files_number.paint(&format_with_separators(entry.total.files)), paint_percentage(&format_signed_percentage_difference(entry.total.files, total.files)),
                 super::theme::get_active().lines_number.paint(&format_with_separators(entry.total.lines)), paint_percentage(&format_signed_percentage_difference(entry.total.lines, total.lines)),
-                super::theme::get_active().code_number.paint(&format_with_separators(entry.total.code_lines)), paint_percentage(&format_signed_percentage_difference(entry.total.code_lines, total.code_lines)),
-                super::theme::get_active().comments_number.paint(&format_with_separators(entry.total.comment_lines)), paint_percentage(&format_signed_percentage_difference(entry.total.comment_lines, total.comment_lines)),
-                super::theme::get_active().extra_number.paint(&format_with_separators(entry.total.calculate_extra_lines())), paint_percentage(&format_signed_percentage_difference(entry.total.calculate_extra_lines(), total.calculate_extra_lines()))));
+                super::theme::get_active().code_number.paint(&format_with_separators(entry.total.calculate_code_lines(model))), paint_percentage(&format_signed_percentage_difference(entry.total.calculate_code_lines(model), total.calculate_code_lines(model))),
+                super::theme::get_active().comments_number.paint(&format_with_separators(entry.total.calculate_comment_lines(model))), paint_percentage(&format_signed_percentage_difference(entry.total.calculate_comment_lines(model), total.calculate_comment_lines(model))),
+                third_column_header(model),
+                super::theme::get_active().extra_number.paint(&format_with_separators(entry.total.calculate_extra_lines(model))), paint_percentage(&format_signed_percentage_difference(entry.total.calculate_extra_lines(model), total.calculate_extra_lines(model)))));
         // A run that named no module says nothing about them here either; the 'modified: targets'
         // tag is what already reports that the targets are not the ones they were
         if result.has_modules() {
-            comparison_str.push_str(&format_module_comparison_lines(entry, groups));
+            comparison_str.push_str(&format_module_comparison_lines(entry, groups, model));
         }
         comparison_str.push('\n');
     }
@@ -2386,21 +2442,21 @@ mod tests {
     // nowhere, and five languages, one more than the overview shows without folding into "others".
     fn sample_data() -> (Vec<String>, HashMap<String, Stats>, Stats) {
         let per_language = hashmap![
-            "Rust".to_owned() => Stats::new(13, 416800, 9008, 6122, 505,
+            "Rust".to_owned() => crate::test_support::plain_stats_of(13, 416800, 9008, 6122, 505,
                     hashmap!["enums".to_owned() => 11, "structs".to_owned() => 29, "traits".to_owned() => 1]),
-            "JavaScript".to_owned() => Stats::new(4, 40000, 1200, 900, 120,
+            "JavaScript".to_owned() => crate::test_support::plain_stats_of(4, 40000, 1200, 900, 120,
                     hashmap!["classes".to_owned() => 805, "functions".to_owned() => 1204, "generators".to_owned() => 17,
                              "promises".to_owned() => 96, "imports".to_owned() => 342]),
             // Every keyword it declares was found nowhere, so it prints no keyword line at all and
             // not a line of the indent alone
-            "HTML".to_owned() => Stats::new(2, 18800, 396, 361, 0, hashmap!["tags".to_owned() => 0]),
+            "HTML".to_owned() => crate::test_support::plain_stats_of(2, 18800, 396, 361, 0, hashmap!["tags".to_owned() => 0]),
             // 'decorators' is declared and never used, so no layout may print a cell for it
-            "Python".to_owned() => Stats::new(3, 9000, 250, 200, 20,
+            "Python".to_owned() => crate::test_support::plain_stats_of(3, 9000, 250, 200, 20,
                     hashmap!["classes".to_owned() => 2, "decorators".to_owned() => 0]),
-            "Java".to_owned() => Stats::new(1, 900, 80, 60, 5,
+            "Java".to_owned() => crate::test_support::plain_stats_of(1, 900, 80, 60, 5,
                     hashmap!["classes".to_owned() => 2, "interfaces".to_owned() => 1])];
         let total = Stats::total_of(&per_language);
-        let sorted = get_sorted_language_names(&per_language, SortCriterion::Lines);
+        let sorted = get_sorted_language_names(&per_language, SortCriterion::Lines, CountingModel::Content);
 
         (sorted, per_language, total)
     }
@@ -2433,16 +2489,16 @@ mod tests {
         };
 
         vec![of(Some("backend"), vec![
-                ("Rust", Stats::new(11, 380000, 8104, 5510, 470,
+                ("Rust", crate::test_support::plain_stats_of(11, 380000, 8104, 5510, 470,
                         hashmap!["enums".to_owned() => 9, "structs".to_owned() => 24, "traits".to_owned() => 1]))]),
              of(Some("frontend"), vec![
-                ("JavaScript", Stats::new(5, 52000, 1500, 1150, 140,
+                ("JavaScript", crate::test_support::plain_stats_of(5, 52000, 1500, 1150, 140,
                         hashmap!["classes".to_owned() => 900, "functions".to_owned() => 1204, "generators".to_owned() => 17,
                                  "promises".to_owned() => 96, "imports".to_owned() => 400])),
-                ("HTML", Stats::new(2, 18800, 396, 361, 0, hashmap![]))]),
+                ("HTML", crate::test_support::plain_stats_of(2, 18800, 396, 361, 0, hashmap![]))]),
              of(None, vec![
-                ("Go", Stats::new(2, 7000, 210, 170, 12, hashmap!["structs".to_owned() => 4])),
-                ("Java", Stats::new(1, 900, 80, 60, 5,
+                ("Go", crate::test_support::plain_stats_of(2, 7000, 210, 170, 12, hashmap!["structs".to_owned() => 4])),
+                ("Java", crate::test_support::plain_stats_of(1, 900, 80, 60, 5,
                         hashmap!["classes".to_owned() => 2, "interfaces".to_owned() => 1]))])]
     }
 
@@ -2474,7 +2530,7 @@ mod tests {
             source: crate::diff::Source::Document {path: name.to_owned()},
             taken: taken.to_owned(),
             version: "3.0.0".to_owned(),
-            scope: crate::diff::scope_of(&mezura_core::EngineConfig::default()),
+            scope: crate::diff::scope_of(&mezura_core::EngineConfig::default(), CountingModel::Content),
             warnings: Vec::new(),
             faulty_files_count: 0,
             unreadable_dirs_count: 0,
@@ -2515,7 +2571,7 @@ mod tests {
     fn sample_files() -> HashMap<String, Vec<mezura_core::FileEntry>> {
         let entry = |path: &str, lines, code, comments, bytes| mezura_core::FileEntry {
             path: format!("D:/x/{path}"),
-            stats: Stats::new(1, bytes, lines, code, comments, hashmap![]),
+            stats: crate::test_support::plain_stats_of(1, bytes, lines, code, comments, hashmap![]),
             nested_languages: HashMap::new()
         };
         hashmap![
@@ -2530,8 +2586,8 @@ mod tests {
 
     fn sample_sections() -> HashMap<String, HashMap<String, Stats>> {
         hashmap!["HTML".to_owned() => hashmap![
-                "JavaScript".to_owned() => Stats::new(2, 4000, 200, 182, 0, hashmap![]),
-                "Python".to_owned() => Stats::new(1, 2000, 100, 91, 0, hashmap![])]]
+                "JavaScript".to_owned() => crate::test_support::plain_stats_of(2, 4000, 200, 182, 0, hashmap![]),
+                "Python".to_owned() => crate::test_support::plain_stats_of(1, 2000, 100, 91, 0, hashmap![])]]
     }
 
     fn render_every_layout() -> String {
@@ -2543,10 +2599,11 @@ mod tests {
         let (sorted, content_info, total) = sample_data();
         let theme = &Theme::default();
         let no_hides = crate::config_manager::Hidden::default();
+        let content = CountingModel::Content;
         let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
         let plain = vec![Group {name: None, languages: sorted.clone(), hidden: 0, per_language: &content_info,
                 nested: &NO_NESTED, files: HashMap::new(), total: &total, baseline: None}];
-        let columns = Columns::of(&plain, &total, no_hides);
+        let columns = Columns::of(&plain, &total, no_hides, content);
         let width = columns.width(theme);
 
         // HTML holds the two sections, so every layout is rendered once without a container in it
@@ -2556,7 +2613,7 @@ mod tests {
         let with_nested = vec![Group {name: None, languages: sorted.clone(), hidden: 0,
                 per_language: &content_info, nested: &sections, files: HashMap::new(),
                 total: &total, baseline: None}];
-        let nested_columns = Columns::of(&with_nested, &total, no_hides);
+        let nested_columns = Columns::of(&with_nested, &total, no_hides, content);
         let nested_width = nested_columns.width(theme);
 
         let mut cases: Vec<(String, Vec<String>)> = Vec::new();
@@ -2568,17 +2625,17 @@ mod tests {
         cases.push(("list, with nested languages".to_owned(),
                 format_individual_lines(theme, &with_nested, &nested_columns, nested_width, false)));
 
-        let mut table = format_table_lines(theme, &plain, &total, true, &[], SortCriterion::Lines, &no_hides);
+        let mut table = format_table_lines(theme, &plain, &total, true, &[], SortCriterion::Lines, &no_hides, content);
         table.extend(format_keyword_block_lines(theme, &plain));
         cases.push(("table".to_owned(), table));
         cases.push(("table, with nested languages".to_owned(),
-                format_table_lines(theme, &with_nested, &total, true, &[], SortCriterion::Lines, &no_hides)));
+                format_table_lines(theme, &with_nested, &total, true, &[], SortCriterion::Lines, &no_hides, content)));
 
-        let mut boxed = format_boxed_lines(theme, &plain, &total, true, &[], SortCriterion::Lines, &no_hides);
+        let mut boxed = format_boxed_lines(theme, &plain, &total, true, &[], SortCriterion::Lines, &no_hides, content);
         boxed.extend(format_keyword_block_lines(theme, &plain));
         cases.push(("boxed".to_owned(), boxed));
         cases.push(("boxed, with nested languages".to_owned(),
-                format_boxed_lines(theme, &with_nested, &total, true, &[], SortCriterion::Lines, &no_hides)));
+                format_boxed_lines(theme, &with_nested, &total, true, &[], SortCriterion::Lines, &no_hides, content)));
 
         // HTML has sections and files under it, Python has files alone, and the other three have
         // neither. Python's list is cut, so its branch has to hang open where HTML's is drawn shut.
@@ -2592,15 +2649,15 @@ mod tests {
                 per_language: &content_info, nested: &sections,
                 files: hashmap!["HTML" => files_of("HTML", 0), "Python" => files_of("Python", 4)],
                 total: &total, baseline: None}];
-        let file_columns = Columns::of(&with_files, &total, no_hides);
+        let file_columns = Columns::of(&with_files, &total, no_hides, content);
         let file_width = file_columns.width(theme);
         cases.push(("list, with files".to_owned(),
                 format_individual_lines(theme, &with_files, &file_columns, file_width, false)));
         let a_note = vec!["(+4 more files hidden by --by-file 1)".to_owned()];
         cases.push(("table, with files".to_owned(),
-                format_table_lines(theme, &with_files, &total, true, &a_note, SortCriterion::Lines, &no_hides)));
+                format_table_lines(theme, &with_files, &total, true, &a_note, SortCriterion::Lines, &no_hides, content)));
         cases.push(("boxed, with files".to_owned(),
-                format_boxed_lines(theme, &with_files, &total, true, &a_note, SortCriterion::Lines, &no_hides)));
+                format_boxed_lines(theme, &with_files, &total, true, &a_note, SortCriterion::Lines, &no_hides, content)));
 
         // Two sentences are one paragraph: a blank line above the first, none between them
         let both_cuts = vec![Group {name: None, languages: sorted[..4].to_vec(), hidden: 1,
@@ -2610,23 +2667,23 @@ mod tests {
         let both_notes = vec!["(+1 more language hidden by --top 4)".to_owned(),
                 "(+4 more files hidden by --by-file 1)".to_owned()];
         cases.push(("table, both notes".to_owned(),
-                format_table_lines(theme, &both_cuts, &total, true, &both_notes, SortCriterion::Lines, &no_hides)));
+                format_table_lines(theme, &both_cuts, &total, true, &both_notes, SortCriterion::Lines, &no_hides, content)));
 
         // Hidden columns: the numbers stay, their shares go, and two whole columns are gone
         let trimmed = crate::config_manager::Hidden { size: true, extra: true, percentages: true,
                 ..crate::config_manager::Hidden::default() };
         cases.push(("table, columns hidden".to_owned(),
-                format_table_lines(theme, &with_nested, &total, true, &[], SortCriterion::Lines, &trimmed)));
+                format_table_lines(theme, &with_nested, &total, true, &[], SortCriterion::Lines, &trimmed, content)));
         cases.push(("boxed, columns hidden".to_owned(),
-                format_boxed_lines(theme, &with_nested, &total, true, &[], SortCriterion::Lines, &trimmed)));
-        let trimmed_columns = Columns::of(&with_nested, &total, trimmed);
+                format_boxed_lines(theme, &with_nested, &total, true, &[], SortCriterion::Lines, &trimmed, content)));
+        let trimmed_columns = Columns::of(&with_nested, &total, trimmed, content);
         cases.push(("list, columns hidden".to_owned(),
                 format_individual_lines(theme, &with_nested, &trimmed_columns, trimmed_columns.width(theme), false)));
 
         // The files row goes whole when both of its halves are hidden
         let no_files_row = crate::config_manager::Hidden { files: true, size: true,
                 ..crate::config_manager::Hidden::default() };
-        let bare_columns = Columns::of(&plain, &total, no_files_row);
+        let bare_columns = Columns::of(&plain, &total, no_files_row, content);
         let mut bare = format_individual_lines(theme, &plain, &bare_columns, bare_columns.width(theme), false);
         bare.extend(format_sum_lines(theme, &content_info, &total, &bare_columns, bare_columns.width(theme), false));
         cases.push(("list, no files row".to_owned(), bare));
@@ -2645,18 +2702,18 @@ mod tests {
         let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
         let modules = sample_modules();
         let groups = groups_from(&modules, &config);
-        let columns = Columns::of(&groups, &total, no_hides);
+        let columns = Columns::of(&groups, &total, no_hides, content);
         let width = columns.width(theme);
 
         let mut list = format_individual_lines(theme, &groups, &columns, width, true);
         list.extend(format_sum_lines(theme, &content_info, &total, &columns, width, true));
         cases.push(("modules, list".to_owned(), list));
 
-        let mut table = format_table_lines(theme, &groups, &total, true, &[], SortCriterion::Lines, &no_hides);
+        let mut table = format_table_lines(theme, &groups, &total, true, &[], SortCriterion::Lines, &no_hides, content);
         table.extend(format_keyword_block_lines(theme, &groups));
         cases.push(("modules, table".to_owned(), table));
 
-        let mut boxed = format_boxed_lines(theme, &groups, &total, true, &[], SortCriterion::Lines, &no_hides);
+        let mut boxed = format_boxed_lines(theme, &groups, &total, true, &[], SortCriterion::Lines, &no_hides, content);
         boxed.extend(format_keyword_block_lines(theme, &groups));
         cases.push(("modules, boxed".to_owned(), boxed));
 
@@ -2666,13 +2723,13 @@ mod tests {
         let groups = groups_from(&modules, &config);
         let note = vec!["(+3 more languages hidden by --top 1)".to_owned()];
         cases.push(("modules, table, top 1".to_owned(),
-                format_table_lines(theme, &groups, &total, true, &note, SortCriterion::Lines, &no_hides)));
+                format_table_lines(theme, &groups, &total, true, &note, SortCriterion::Lines, &no_hides, content)));
 
         config.view.top_n = None;
         config.view.sort_by = SortCriterion::Name;
         let groups = groups_from(&modules, &config);
         cases.push(("modules, table, sorted by name".to_owned(),
-                format_table_lines(theme, &groups, &total, true, &[], SortCriterion::Name, &no_hides)));
+                format_table_lines(theme, &groups, &total, true, &[], SortCriterion::Name, &no_hides, content)));
 
         // The rows of the matrix are the languages of the whole run, and each of them is three
         // physical rows, so the second case is the one where a module does not have the language
@@ -2680,11 +2737,11 @@ mod tests {
         config.view.sort_by = SortCriterion::Lines;
         let groups = groups_from(&modules, &config);
         cases.push(("modules, matrix".to_owned(),
-                format_matrix_lines(theme, &groups, &sorted, &total, true)));
+                format_matrix_lines(theme, &groups, &sorted, &total, true, content)));
         cases.push(("modules, matrix, top 2".to_owned(),
-                format_matrix_lines(theme, &groups, &sorted[..2], &total, true)));
+                format_matrix_lines(theme, &groups, &sorted[..2], &total, true, content)));
         cases.push(("modules, matrix, no total".to_owned(),
-                format_matrix_lines(theme, &groups, &sorted[..1], &total, false)));
+                format_matrix_lines(theme, &groups, &sorted[..1], &total, false, content)));
 
         // What '--diff' prints in place of everything above. The dates are fixed, being the one part
         // of the heading that a clock would otherwise write.
@@ -2704,12 +2761,12 @@ mod tests {
         };
 
         let rows = create_compared_rows(None, &before.result, &now.result, &config);
-        let mut comparison = format_comparison_lines(theme, &rows, config.view.sort_by, &no_hides);
+        let mut comparison = format_comparison_lines(theme, &rows, config.view.sort_by, &no_hides, content);
         comparison.extend(format_keyword_block_lines(theme, &[create_group_with_baseline(None, &before.result.per_language,
                 &now.result.per_language, &now.result.total, &config)]));
         cases.push(("comparison".to_owned(), headed(comparison, &before, &now)));
         cases.push(("comparison, boxed".to_owned(),
-                headed(format_boxed_comparison_lines(theme, &rows, config.view.sort_by, &no_hides), &before, &now)));
+                headed(format_boxed_comparison_lines(theme, &rows, config.view.sort_by, &no_hides, content), &before, &now)));
 
         // A comparison obeys the column names too. Its '%' cells are percentages of the change, so
         // 'percentages' takes them and leaves the absolute move, and every change follows its own
@@ -2717,9 +2774,9 @@ mod tests {
         let trimmed = crate::config_manager::Hidden { files: true, size: true, percentages: true,
                 ..crate::config_manager::Hidden::default() };
         cases.push(("comparison, columns hidden".to_owned(),
-                headed(format_comparison_lines(theme, &rows, config.view.sort_by, &trimmed), &before, &now)));
+                headed(format_comparison_lines(theme, &rows, config.view.sort_by, &trimmed, content), &before, &now)));
         cases.push(("comparison, boxed, columns hidden".to_owned(),
-                headed(format_boxed_comparison_lines(theme, &rows, config.view.sort_by, &trimmed), &before, &now)));
+                headed(format_boxed_comparison_lines(theme, &rows, config.view.sort_by, &trimmed, content), &before, &now)));
 
         // The same two readings with a second axis through them, which is shown because they named
         // the same modules
@@ -2731,11 +2788,11 @@ mod tests {
                         &pair.now.total, config)).collect::<Vec<_>>();
 
         let rows = create_compared_rows(Some(&pairs), &before.result, &now.result, &config);
-        let mut comparison = format_comparison_lines(theme, &rows, config.view.sort_by, &no_hides);
+        let mut comparison = format_comparison_lines(theme, &rows, config.view.sort_by, &no_hides, content);
         comparison.extend(format_keyword_block_lines(theme, &grouped_keywords(&config)));
         cases.push(("comparison, modules".to_owned(), headed(comparison, &before, &now)));
 
-        let mut comparison = format_boxed_comparison_lines(theme, &rows, config.view.sort_by, &no_hides);
+        let mut comparison = format_boxed_comparison_lines(theme, &rows, config.view.sort_by, &no_hides, content);
         comparison.extend(format_keyword_block_lines(theme, &grouped_keywords(&config)));
         cases.push(("comparison, modules, boxed".to_owned(), headed(comparison, &before, &now)));
 
@@ -2743,7 +2800,45 @@ mod tests {
         config.view.top_n = Some(1);
         cases.push(("comparison, modules, top 1".to_owned(), headed(format_comparison_lines(theme,
                 &create_compared_rows(Some(&pairs), &before.result, &now.result, &config), config.view.sort_by,
-                &no_hides), &before, &now)));
+                &no_hides, content), &before, &now)));
+
+        // The two models, over data that tells them apart. Every one of the nine classes is in
+        // play, so each model answers differently in every column and a block handed the wrong one,
+        // or ignoring it and folding the default, cannot pass. The dataset is hand counted and the
+        // arithmetic is written out beside it, since these are the only cases here whose numbers
+        // are the subject rather than the alignment.
+        //
+        // Rust: 100 + 7 + 9 + 40 + 20 + 3 + 25 + 2 + 1 = 207 lines.
+        //   content  107 code (100 + 7), 49 comments (9 + 40), 51 extra (20 + 3 + 25 + 2 + 1)
+        //   region   137 code (100 + 7 + 9 + 20 + 1), 45 comments (40 + 3 + 2), 25 blanks
+        // Lua: 60 + 3 + 2 + 15 + 8 + 1 + 10 + 4 + 2 = 105 lines.
+        //   content  63 code, 17 comments, 25 extra
+        //   region   75 code (60 + 3 + 2 + 8 + 2), 20 comments (15 + 1 + 4), 10 blanks
+        let every_class = hashmap![
+            "Rust".to_owned() => crate::test_support::stats_of(9, 8000, mezura_core::LineClasses {
+                    words_in_code: 100, string_content: 7, comment_words_beside_code: 9,
+                    words_in_comment: 40, punctuation_in_code: 20, punctuation_in_comment: 3,
+                    blank: 25, blank_in_comment: 2, blank_in_string: 1 },
+                    hashmap!["structs".to_owned() => 12]),
+            "Lua".to_owned() => crate::test_support::stats_of(4, 3000, mezura_core::LineClasses {
+                    words_in_code: 60, string_content: 3, comment_words_beside_code: 2,
+                    words_in_comment: 15, punctuation_in_code: 8, punctuation_in_comment: 1,
+                    blank: 10, blank_in_comment: 4, blank_in_string: 2 }, hashmap![])];
+        let every_class_total = Stats::total_of(&every_class);
+        let both_models = vec![Group { name: None, hidden: 0,
+                languages: get_sorted_language_names(&every_class, SortCriterion::Lines, content),
+                per_language: &every_class, nested: &NO_NESTED, files: HashMap::new(),
+                total: &every_class_total, baseline: None }];
+
+        for (label, model) in [("content", content), ("region", CountingModel::Region)] {
+            let columns = Columns::of(&both_models, &every_class_total, no_hides, model);
+            cases.push((format!("every class, {label}, list"),
+                    format_individual_lines(theme, &both_models, &columns, columns.width(theme), false)));
+            cases.push((format!("every class, {label}, table"), format_table_lines(theme, &both_models,
+                    &every_class_total, true, &[], SortCriterion::Lines, &no_hides, model)));
+            cases.push((format!("every class, {label}, boxed"), format_boxed_lines(theme, &both_models,
+                    &every_class_total, true, &[], SortCriterion::Lines, &no_hides, model)));
+        }
 
         let mut rendered = String::with_capacity(4000);
         for (name, lines) in cases {
@@ -2765,7 +2860,7 @@ mod tests {
     fn the_leftovers_row_fits_the_column_even_when_every_other_name_is_shorter() {
         colored::control::set_override(false);
 
-        let content_info = hashmap!["D".to_owned() => Stats::new(1, 24, 2, 2, 0, hashmap![])];
+        let content_info = hashmap!["D".to_owned() => crate::test_support::plain_stats_of(1, 24, 2, 2, 0, hashmap![])];
         let total = Stats::total_of(&content_info);
         fn group<'a>(name: Option<&'a str>, content_info: &'a HashMap<String, Stats>,
                 total: &'a Stats) -> Group<'a> {
@@ -2776,7 +2871,8 @@ mod tests {
                 group(None, &content_info, &total)];
 
         let theme = &Theme::default();
-        let columns = Columns::of(&groups, &total, crate::config_manager::Hidden::default());
+        let columns = Columns::of(&groups, &total, crate::config_manager::Hidden::default(),
+                CountingModel::Content);
         assert!(columns.name >= UNNAMED_MODULE_NAME.len());
 
         let lines = format_individual_lines(theme, &groups, &columns, columns.width(theme), false);
@@ -2796,7 +2892,7 @@ mod tests {
 
         let of = |name: &str, structs: usize| {
             let per_language = hashmap!["Rust".to_owned() =>
-                    Stats::new(2, 4000, 100, 70, 10, hashmap!["structs".to_owned() => structs])];
+                    crate::test_support::plain_stats_of(2, 4000, 100, 70, 10, hashmap!["structs".to_owned() => structs])];
             ModuleResult {name: Some(name.to_owned()), total: Stats::total_of(&per_language), per_language,
                     nested_languages: HashMap::new(), files: HashMap::new()}
         };
@@ -2822,7 +2918,7 @@ mod tests {
         let (_, content_info, _) = sample_data();
         let of_modules = |modules: Vec<ModuleResult>| RunResult {
             per_language: content_info.clone(), modules, nested_languages: HashMap::new(),
-            total: Stats::new(23, 485500, 10934, 7643, 650, hashmap![]),
+            total: crate::test_support::plain_stats_of(23, 485500, 10934, 7643, 650, hashmap![]),
             faulty_files: Vec::new(), files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(), performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
         let single = || vec![ModuleResult {name: None, per_language: content_info.clone(),
                 total: Stats::total_of(&content_info), nested_languages: HashMap::new(), files: HashMap::new()}];
@@ -3008,8 +3104,8 @@ mod tests {
 
         let (_, content_info, total) = sample_data();
         let nested = hashmap!["HTML".to_owned() => hashmap![
-                "JavaScript".to_owned() => Stats::new(2, 4000, 200, 182, 0, hashmap![]),
-                "Python".to_owned() => Stats::new(1, 2000, 100, 91, 0, hashmap![])]];
+                "JavaScript".to_owned() => crate::test_support::plain_stats_of(2, 4000, 200, 182, 0, hashmap![]),
+                "Python".to_owned() => crate::test_support::plain_stats_of(1, 2000, 100, 91, 0, hashmap![])]];
         let a_run = || RunResult {
             per_language: content_info.clone(),
             modules: vec![ModuleResult { name: None, per_language: content_info.clone(),
@@ -3039,20 +3135,26 @@ mod tests {
         assert_eq!(vec!["JavaScript".to_owned(), "Python".to_owned()],
                 sections[1..].iter().map(|(name, _)| name.clone()).collect::<Vec<_>>(),
                 "the sections are not ordered by lines");
+        let code_of = |stats: &Stats| stats.calculate_code_lines(CountingModel::Content);
         assert_eq!(whole.lines - 300, sections[0].1.lines);
-        assert_eq!(whole.code_lines - 273, sections[0].1.code_lines);
+        assert_eq!(code_of(whole) - 273, code_of(&sections[0].1));
         // Every column answers "of the container", so the file count of a section is how many of its
         // files hold that section, and the shell is in all of them
         assert_eq!(whole.files, sections[0].1.files);
 
-        // A document holding sections larger than their container must not take the run down
+        // A document holding sections larger than their container must not take the run down.
+        // Built by hand and not through the helper, whose whole job is to refuse counts that no
+        // file could have produced: this one is exactly such a document.
+        let impossible = mezura_core::LineClasses { words_in_code: 9999, words_in_comment: 9999,
+                ..Default::default() };
         let broken = hashmap!["HTML".to_owned() => hashmap![
-                "JavaScript".to_owned() => Stats::new(9, 99999, 9999, 9999, 9999, hashmap![])]];
+                "JavaScript".to_owned() => Stats::new(9, 99999, 9999, impossible, hashmap![])]];
         let group = Group { name: None, languages: vec!["HTML".to_owned()], hidden: 0,
                 per_language: &content_info, nested: &broken, files: HashMap::new(),
                 total: &total, baseline: None };
         let shell = &find_sections_of(&group, "HTML", whole)[0].1;
-        assert!(shell.code_lines + shell.comment_lines <= shell.lines,
+        assert!(shell.calculate_code_lines(CountingModel::Content)
+                + shell.calculate_comment_lines(CountingModel::Content) <= shell.lines,
                 "the shell holds more code and comments than it has lines: {shell:?}");
     }
 
@@ -3110,9 +3212,9 @@ mod tests {
     #[test]
     fn each_overview_row_reads_its_own_field_into_the_slot_of_its_language() {
         let content = hashmap!(
-            "A".to_owned() => Stats::new(1, 60, 30, 0, 0, hashmap![]),
-            "B".to_owned() => Stats::new(2, 30, 10, 0, 0, hashmap![]),
-            "C".to_owned() => Stats::new(7, 10, 60, 0, 0, hashmap![]));
+            "A".to_owned() => crate::test_support::plain_stats_of(1, 60, 30, 0, 0, hashmap![]),
+            "B".to_owned() => crate::test_support::plain_stats_of(2, 30, 10, 0, 0, hashmap![]),
+            "C".to_owned() => crate::test_support::plain_stats_of(7, 10, 60, 0, 0, hashmap![]));
         let names = ["A".to_owned(), "B".to_owned(), "C".to_owned()];
 
         assert_eq!(vec![10.0, 20.0, 70.0], get_files_percentages(&content, &names));
@@ -3129,29 +3231,30 @@ mod tests {
     #[test]
     fn sorting_uses_the_chosen_criterion_and_breaks_ties_by_name() {
         let content = hashmap![
-            "Zig".to_owned() => Stats::new(9, 10, 100, 50, 0, HashMap::new()),
-            "Ada".to_owned() => Stats::new(1, 900, 100, 90, 0, HashMap::new()),
-            "Rust".to_owned() => Stats::new(5, 50, 300, 10, 0, HashMap::new())];
+            "Zig".to_owned() => crate::test_support::plain_stats_of(9, 10, 100, 50, 0, HashMap::new()),
+            "Ada".to_owned() => crate::test_support::plain_stats_of(1, 900, 100, 90, 0, HashMap::new()),
+            "Rust".to_owned() => crate::test_support::plain_stats_of(5, 50, 300, 10, 0, HashMap::new())];
 
-        assert_eq!(vec!["Rust","Ada","Zig"], get_sorted_language_names(&content, SortCriterion::Lines));
-        assert_eq!(vec!["Zig","Rust","Ada"], get_sorted_language_names(&content, SortCriterion::Files));
-        assert_eq!(vec!["Ada","Rust","Zig"], get_sorted_language_names(&content, SortCriterion::Size));
-        assert_eq!(vec!["Ada","Zig","Rust"], get_sorted_language_names(&content, SortCriterion::Code));
-        assert_eq!(vec!["Ada","Rust","Zig"], get_sorted_language_names(&content, SortCriterion::Name));
+        let sorted = |criterion| get_sorted_language_names(&content, criterion, CountingModel::Content);
+        assert_eq!(vec!["Rust","Ada","Zig"], sorted(SortCriterion::Lines));
+        assert_eq!(vec!["Zig","Rust","Ada"], sorted(SortCriterion::Files));
+        assert_eq!(vec!["Ada","Rust","Zig"], sorted(SortCriterion::Size));
+        assert_eq!(vec!["Ada","Zig","Rust"], sorted(SortCriterion::Code));
+        assert_eq!(vec!["Ada","Rust","Zig"], sorted(SortCriterion::Name));
 
         // Ada and Zig both have 100 lines, so the name decides, not the iteration order of the map
-        assert_eq!(vec!["Rust","Ada","Zig"], get_sorted_language_names(&content, SortCriterion::Lines));
+        assert_eq!(vec!["Rust","Ada","Zig"], sorted(SortCriterion::Lines));
     }
 
     #[test]
     fn test_retain_most_relevant_and_add_others_field_for_rest() {
         let sorted_language_names = vec!["a".to_owned(), "b".to_owned(), "c".to_owned(), "d".to_owned(), "e".to_owned()];
         let per_language = hashmap![
-            "a".to_owned() => Stats::new(10, 60000, 1000, 800, 0, hashmap![]),
-            "b".to_owned() => Stats::new(9, 50000, 900, 700, 0, hashmap![]),
-            "c".to_owned() => Stats::new(8, 40000, 800, 600, 0, hashmap![]),
-            "d".to_owned() => Stats::new(7, 30000, 700, 500, 0, hashmap![]),
-            "e".to_owned() => Stats::new(6, 20000, 600, 400, 0, hashmap![])
+            "a".to_owned() => crate::test_support::plain_stats_of(10, 60000, 1000, 800, 0, hashmap![]),
+            "b".to_owned() => crate::test_support::plain_stats_of(9, 50000, 900, 700, 0, hashmap![]),
+            "c".to_owned() => crate::test_support::plain_stats_of(8, 40000, 800, 600, 0, hashmap![]),
+            "d".to_owned() => crate::test_support::plain_stats_of(7, 30000, 700, 500, 0, hashmap![]),
+            "e".to_owned() => crate::test_support::plain_stats_of(6, 20000, 600, 400, 0, hashmap![])
         ];
         let total = Stats::total_of(&per_language);
 
@@ -3165,12 +3268,14 @@ mod tests {
         assert_eq!(vec!["a".to_owned(), "b".to_owned(), "c".to_owned(), "others".to_owned()], folded_names);
 
         assert_eq!(hashmap![
-            "a".to_owned() => Stats::new(10, 60000, 1000, 800, 0, hashmap![]),
-            "b".to_owned() => Stats::new(9, 50000, 900, 700, 0, hashmap![]),
-            "c".to_owned() => Stats::new(8, 40000, 800, 600, 0, hashmap![]),
-            // The leftovers carry the files and the bytes of what was folded away as well as the
-            // lines, so the overview's shares are shares of the whole run in all three of its bars
-            "others".to_owned() => Stats::new(13, 50000, 1300, 0, 0, hashmap![])
+            "a".to_owned() => crate::test_support::plain_stats_of(10, 60000, 1000, 800, 0, hashmap![]),
+            "b".to_owned() => crate::test_support::plain_stats_of(9, 50000, 900, 700, 0, hashmap![]),
+            "c".to_owned() => crate::test_support::plain_stats_of(8, 40000, 800, 600, 0, hashmap![]),
+            // The leftovers carry the files, the bytes and the classes of what was folded away as
+            // well as the lines, so the overview's shares are shares of the whole run in all three
+            // of its bars, and the row's own columns are the ones its languages had: 'd' and 'e'
+            // held 500 and 400 lines of code between their 1300
+            "others".to_owned() => crate::test_support::plain_stats_of(13, 50000, 1300, 900, 0, hashmap![])
             ], folded_per_language);
 
         // and what was folded plus what was kept is still the whole
@@ -3188,8 +3293,8 @@ mod tests {
             let mut then = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
             edit(&mut then);
             crate::log::LogEntry { name: None, datetime: Local::now(),
-                    scope: crate::diff::scope_of(&then.engine), targets: Vec::new(),
-                    total: Stats::new(1, 1, 1, 1, 0, hashmap![]), modules: Vec::new() }
+                    scope: crate::diff::scope_of(&then.engine, then.view.counting), targets: Vec::new(),
+                    total: crate::test_support::plain_stats_of(1, 1, 1, 1, 0, hashmap![]), modules: Vec::new() }
         };
 
         // Taken with the same settings: nothing to say
@@ -3198,16 +3303,16 @@ mod tests {
         assert!(format_modified_tag(&find_settings_changed_since(&same, &config, &[])).is_empty());
 
         // One that differs is named, and the names are the ones the reader can look up
-        config.engine.braces_as_code = true;
+        config.view.counting = CountingModel::Region;
         config.engine.no_gitignore = true;
         let changed = find_settings_changed_since(&same, &config, &[]);
-        assert_eq!(vec!["braces-as-code", "no-gitignore"], changed);
-        assert!(format_modified_tag(&changed).contains("braces-as-code, no-gitignore"));
+        assert_eq!(vec!["counting", "no-gitignore"], changed);
+        assert!(format_modified_tag(&changed).contains("counting, no-gitignore"));
 
         // The targets are compared as a set: the same list reordered is the same measurement
         let entry_with_targets = crate::log::LogEntry {
                 targets: vec![mezura_core::Target::of("./b"), mezura_core::Target::of("./a")],
-                ..entry_of(|c| {c.engine.braces_as_code = true; c.engine.no_gitignore = true;}) };
+                ..entry_of(|c| {c.view.counting = CountingModel::Region; c.engine.no_gitignore = true;}) };
         assert!(find_settings_changed_since(&entry_with_targets, &config,
                 &[mezura_core::Target::of("./a"), mezura_core::Target::of("./b")]).is_empty());
         assert_eq!(vec!["targets"], find_settings_changed_since(&entry_with_targets, &config,

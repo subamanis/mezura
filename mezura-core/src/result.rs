@@ -2,7 +2,7 @@
 // 'Language' exists before anything has been counted, a 'Stats' of it does not.
 use std::collections::HashMap;
 
-use crate::Stats;
+use crate::{CountingModel, Stats};
 use crate::engine::config::{Target, Threads};
 use crate::engine::modules::{ModuleId, Modules};
 
@@ -32,8 +32,8 @@ pub struct RunResult {
 
 impl RunResult {
     // Largest first by the chosen figure, ties broken by name.
-    pub fn sort_languages_by(&self, criterion: SortCriterion) -> Vec<(&str, &Stats)> {
-        sort_languages_by(&self.per_language, criterion)
+    pub fn sort_languages_by(&self, criterion: SortCriterion, model: CountingModel) -> Vec<(&str, &Stats)> {
+        sort_languages_by(&self.per_language, criterion, model)
     }
 
     // The emptiness check is not redundant: without it the two counts are equal when both are zero,
@@ -96,8 +96,8 @@ pub struct ModuleResult {
 }
 
 impl ModuleResult {
-    pub fn sort_languages_by(&self, criterion: SortCriterion) -> Vec<(&str, &Stats)> {
-        sort_languages_by(&self.per_language, criterion)
+    pub fn sort_languages_by(&self, criterion: SortCriterion, model: CountingModel) -> Vec<(&str, &Stats)> {
+        sort_languages_by(&self.per_language, criterion, model)
     }
 }
 
@@ -169,15 +169,16 @@ impl SortCriterion {
         }
     }
 
-    // 'Name' has no figure and every row answers 0, leaving the order to the caller's tiebreak
-    pub fn get_value_of(&self, stats: &Stats) -> usize {
+    // 'Name' has no figure and every row answers 0, leaving the order to the caller's tiebreak.
+    // Three of the criteria are folds, so what "most code" means follows the model on screen.
+    pub fn get_value_of(&self, stats: &Stats, model: CountingModel) -> usize {
         match self {
             Self::Files => stats.files,
             Self::Size => stats.bytes,
             Self::Lines => stats.lines,
-            Self::Code => stats.code_lines,
-            Self::Comments => stats.comment_lines,
-            Self::Extra => stats.calculate_extra_lines(),
+            Self::Code => stats.calculate_code_lines(model),
+            Self::Comments => stats.calculate_comment_lines(model),
+            Self::Extra => stats.calculate_extra_lines(model),
             Self::Name => 0
         }
     }
@@ -292,14 +293,16 @@ impl Stats {
 }
 
 // Shared by the whole run and by one module of it, which are the same question asked of two maps.
-fn sort_languages_by(per_language: &HashMap<String, Stats>, criterion: SortCriterion) -> Vec<(&str, &Stats)> {
+fn sort_languages_by(per_language: &HashMap<String, Stats>, criterion: SortCriterion,
+    model: CountingModel) -> Vec<(&str, &Stats)>
+{
     let mut rows = per_language.iter().map(|(name, stats)| (name.as_str(), stats)).collect::<Vec<_>>();
     if criterion == SortCriterion::Name {
         rows.sort_by_key(|(name, _)| name.to_lowercase());
     } else {
         // The name breaks every tie, with case folded, so two languages of equal size cannot swap
         // places between two runs of the same command because a map iterated differently.
-        rows.sort_by(|a, b| criterion.get_value_of(b.1).cmp(&criterion.get_value_of(a.1))
+        rows.sort_by(|a, b| criterion.get_value_of(b.1, model).cmp(&criterion.get_value_of(a.1, model))
                 .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
     }
 
