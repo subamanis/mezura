@@ -210,6 +210,16 @@ WHAT IS COUNTED
     The '.git' directory is never traversed, with or without this command, at any depth. Nothing
     inside it is source, and walking it is thousands of files for no count at all.
 
+--show-languages
+
+    No arguments.
+
+    Overrides normal program execution and just prints a sorted list with the names of
+    all the supported languages that were detected in the persistent data path
+    of the application, where you can add more.
+
+HOW THE REPORT LOOKS
+
 --counting
 
     One argument, 'content' or 'region'. Default: content
@@ -227,16 +237,6 @@ WHAT IS COUNTED
     inside a comment or a string counts with its region, and the extra column gives way to
     blanks: only an empty line outside everything is blank. Use this model when comparing
     mezura's numbers against another counter's.
-
---show-languages
-
-    No arguments.
-
-    Overrides normal program execution and just prints a sorted list with the names of
-    all the supported languages that were detected in the persistent data path
-    of the application, where you can add more.
-
-HOW THE REPORT LOOKS
 
 --layout
 
@@ -275,7 +275,8 @@ HOW THE REPORT LOOKS
 
     One argument: 'lines', 'files', 'code', 'comments', 'extra', 'size' or 'name'. Default: lines
     Every column of the details table is one of them, so there is no figure you can see and not
-    order by.
+    order by. 'extra' is the third column under either counting model, so it orders the 'Blanks'
+    column of '--counting region' as readily as the 'Extra' column of the default.
 
     Chooses the order of the languages in the "details" section, which also decides which of them
     reach the "overview" section and which are folded into its 'others' entry.
@@ -350,7 +351,8 @@ HOW THE REPORT LOOKS
       timing          the execution time line at the bottom
       files           the files column of the details rows
       comments        the comments column of the details rows
-      extra           the extra column of the details rows
+      extra           the third column of the details rows, whether it is headed 'Extra' or,
+                      under '--counting region', 'Blanks'
       size            the size column of the details rows, and the size half of the 'list'
                       layout's files line
       percentages     every percentage of the details rows, keeping the numbers they describe

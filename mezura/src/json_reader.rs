@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use mezura_core::{FaultyFileDetails, FilesPresent, ModuleResult, Performance, RunResult, Stats,
-        Target, Threads, UnreadableDirDetails};
+use mezura_core::{FaultyFileDetails, FilesPresent, LineClasses, ModuleResult, Performance, RunResult,
+        Stats, Target, Threads, UnreadableDirDetails};
 use serde_json::{Map, Value};
 
 use super::json_printer::FORMAT_VERSION;
@@ -213,21 +213,15 @@ pub(crate) fn parse_stats(entry: &Map<String, Value>, at: &str) -> Result<Stats,
 // Where every line of the counted files landed, which is what both counting models are folds of.
 // 'code' and 'comments' are written beside them and never read back: they are one such fold, and a
 // stored copy of a derived figure is the one thing that can disagree with what it came from.
-pub(crate) fn parse_classes(entry: &Map<String, Value>, at: &str) -> Result<mezura_core::LineClasses, DocumentError> {
+pub(crate) fn parse_classes(entry: &Map<String, Value>, at: &str) -> Result<LineClasses, DocumentError> {
     let classes = read_nested(entry, "classes", at)?;
     let at = join_location(at, "classes");
-    let of = |name: &str| read_number(classes, name, &at);
-    Ok(mezura_core::LineClasses {
-        words_in_code: of("words_in_code")?,
-        string_content: of("string_content")?,
-        comment_words_beside_code: of("comment_words_beside_code")?,
-        words_in_comment: of("words_in_comment")?,
-        punctuation_in_code: of("punctuation_in_code")?,
-        punctuation_in_comment: of("punctuation_in_comment")?,
-        blank: of("blank")?,
-        blank_in_comment: of("blank_in_comment")?,
-        blank_in_string: of("blank_in_string")?
-    })
+    let mut counts = [0usize; LineClasses::NAMES.len()];
+    for (slot, name) in counts.iter_mut().zip(LineClasses::NAMES) {
+        *slot = read_number(classes, name, &at)?;
+    }
+
+    Ok(LineClasses::of_array(counts))
 }
 
 fn parse_forced_languages(entry: &Map<String, Value>) -> Result<HashMap<String, String>, DocumentError> {
@@ -641,9 +635,7 @@ mod tests {
 
     // Every class at zero, which a document of a run that counted nothing carries
     fn empty_classes() -> String {
-        let names = ["words_in_code", "string_content", "comment_words_beside_code", "words_in_comment",
-                "punctuation_in_code", "punctuation_in_comment", "blank", "blank_in_comment", "blank_in_string"];
-        format!("{{{}}}", names.map(|name| format!("\"{name}\": 0")).join(", "))
+        format!("{{{}}}", LineClasses::NAMES.map(|name| format!("\"{name}\": 0")).join(", "))
     }
 
     // Written by hand rather than by the printer, so that a test can leave a member out or spell it

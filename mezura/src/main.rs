@@ -36,11 +36,11 @@ mod warning_collector;
 use std::{process::ExitCode, sync::Arc, time::Instant};
 
 use colored::*;
-use mezura_core::{EXTENSION_PRIORITY_FILE_NAME, FilesPresent, Language};
+use mezura_core::{CountingModel, EXTENSION_PRIORITY_FILE_NAME, FilesPresent, Language};
 use mezura_core::language_file::PriorityRules;
 
 use crate::config_manager::{Configuration, OutputFormat};
-use crate::config_manager::{CHANGELOG, HELP, LAYOUT, OUTPUT, RESTORE, SHOW_CONFIGS,
+use crate::config_manager::{CHANGELOG, COUNTING, HELP, LAYOUT, OUTPUT, RESTORE, SHOW_CONFIGS,
         SHOW_LANGUAGES, SHOW_THEMES, THEME_EDITOR, VERSION, VERSION_ID};
 use crate::message_printer::Formatted;
 use crate::migration::{MigrationOutcome, migrate_data_files};
@@ -466,17 +466,18 @@ program to read, and both of them go to the output, so only one of the two can b
             }
         };
     } else if let Some(pos) = crate::args::find_command(args_str, SHOW_THEMES) {
-        // The preview follows '--layout', so that what it shows is what a run would print. Read here
-        // by hand, because a message-only command runs before there is a configuration to ask.
-        let layout = crate::args::find_command(args_str, LAYOUT)
-                .and_then(|at| args_str[at + LAYOUT.len() + 2..].split_whitespace().next())
-                .and_then(config_manager::Layout::parse)
-                .unwrap_or_default();
+        // The preview follows '--layout' and '--counting', so that what it shows is what a run would
+        // print. Read here by hand, because a message-only command runs before there is a
+        // configuration to ask.
+        let argument_of = |command: &str| crate::args::find_command(args_str, command)
+                .and_then(|at| args_str[at + command.len() + 2..].split_whitespace().next());
+        let layout = argument_of(LAYOUT).and_then(config_manager::Layout::parse).unwrap_or_default();
+        let counting = argument_of(COUNTING).and_then(CountingModel::parse).unwrap_or_default();
 
         return match args_str[pos + SHOW_THEMES.len() + 2..].split_whitespace().next() {
             Some(arg) if !arg.starts_with("--") => match config_manager::BarThickness::parse(arg) {
                 Some(thickness) => {
-                    crate::message_printer::print_existing_themes(thickness, layout);
+                    crate::message_printer::print_existing_themes(thickness, layout, counting);
                     Some(ExitCode::SUCCESS)
                 },
                 None => {
@@ -486,7 +487,8 @@ program to read, and both of them go to the output, so only one of the two can b
                 }
             },
             _ => {
-                crate::message_printer::print_existing_themes(config_manager::BarThickness::default(), layout);
+                crate::message_printer::print_existing_themes(config_manager::BarThickness::default(),
+                        layout, counting);
                 Some(ExitCode::SUCCESS)
             }
         };

@@ -1,7 +1,7 @@
 use std::fs;
 
 use colored::{ColoredString, Colorize};
-use mezura_core::{Language, RunError};
+use mezura_core::{CountingModel, Language, RunError};
 use mezura_core::language_file::{FaultyLanguageFile, LanguageDirParseError};
 
 use super::config_manager::*;
@@ -234,7 +234,8 @@ pub const HIDE_HELP  :  &str =
       timing          the execution time line at the bottom
       files           the files column of the details rows
       comments        the comments column of the details rows
-      extra           the extra column of the details rows
+      extra           the third column of the details rows, whether it is headed 'Extra' or,
+                      under '--counting region', 'Blanks'
       size            the size column of the details rows, and the size half of the 'list'
                       layout's files line
       percentages     every percentage of the details rows, keeping the numbers they describe
@@ -290,7 +291,8 @@ pub const SORT_HELP  :  &str =
 
     One argument: 'lines', 'files', 'code', 'comments', 'extra', 'size' or 'name'. Default: lines
     Every column of the details table is one of them, so there is no figure you can see and not
-    order by.
+    order by. 'extra' is the third column under either counting model, so it orders the 'Blanks'
+    column of '--counting region' as readily as the 'Extra' column of the default.
 
     Chooses the order of the languages in the \"details\" section, which also decides which of them
     reach the \"overview\" section and which are folded into its 'others' entry.
@@ -873,10 +875,10 @@ pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 6] = [
         (FORCE_LANGUAGE, FORCE_LANGUAGE_HELP),
         (NO_GITIGNORE, NO_GITIGNORE_HELP),
         (SEARCH_IN_DOTTED, SEARCH_IN_DOTTED_HELP),
-        (COUNTING, COUNTING_HELP),
         (SHOW_LANGUAGES, SHOW_LANGUAGES_HELP),
     ]),
     ("How the report looks", &[
+        (COUNTING, COUNTING_HELP),
         (LAYOUT, LAYOUT_HELP),
         (SORT, SORT_HELP),
         (TOP, TOP_HELP),
@@ -1072,7 +1074,7 @@ pub fn print_changelog(full: bool) {
 // A theme is 46 tokens, and the one place whose job is to show what one looks like before you pick
 // it has to show more than the four language slots of a mock overview line. The sample includes a
 // real details row, which is the densest line the program prints.
-pub fn print_existing_themes(bar_thickness: BarThickness, layout: Layout) {
+pub fn print_existing_themes(bar_thickness: BarThickness, layout: Layout, counting: CountingModel) {
     // Five entries, so that every language slot including the fold gets to show itself. The
     // verticals add up to the width of a real bar.
     const MOCK_PERCENTAGES : [(&str, f64, usize); 5] =
@@ -1096,7 +1098,12 @@ pub fn print_existing_themes(bar_thickness: BarThickness, layout: Layout) {
 
     let mut msg = get_data_dir_str();
     msg.push_str("Found these themes:\n");
-    for name in theme_names.iter() {
+    for (at, name) in theme_names.iter().enumerate() {
+        // One blank line more between two themes than any block leaves inside one, so that a long
+        // listing reads as a stack of samples rather than one run-on page
+        if at > 0 {
+            msg.push('\n');
+        }
         msg.push_str(&format!("\n  {}\n\n", name.bold()));
 
         let Some((styles, _)) = super::theme_files::load_theme(name, &PERSISTENT_APP_PATHS.themes_dir) else {
@@ -1106,7 +1113,7 @@ pub fn print_existing_themes(bar_thickness: BarThickness, layout: Layout) {
         let theme = super::theme::resolve(&styles, &[], &[]);
 
         msg.push_str(&format!("{INDENT}{}.\n", theme.heading.paint("Details")));
-        for row in super::result_printer::create_theme_sample_rows(&theme, layout) {
+        for row in super::result_printer::create_theme_sample_rows(&theme, layout, counting) {
             msg.push_str(&format!("{INDENT}{row}\n"));
         }
 

@@ -49,11 +49,10 @@ fn render_report(per_language: &HashMap<String, Stats>) -> String {
 }
 
 fn render_classes(classes: &LineClasses) -> String {
-    format!("words_in_code={} string_content={} comment_words_beside_code={} words_in_comment={} \
-punctuation_in_code={} punctuation_in_comment={} blank={} blank_in_comment={} blank_in_string={}",
-            classes.words_in_code, classes.string_content, classes.comment_words_beside_code,
-            classes.words_in_comment, classes.punctuation_in_code, classes.punctuation_in_comment,
-            classes.blank, classes.blank_in_comment, classes.blank_in_string)
+    LineClasses::NAMES.iter().zip(classes.to_array())
+            .map(|(name, count)| format!("{name}={count}"))
+            .collect::<Vec<_>>()
+            .join(" ")
 }
 
 // One producer and several consumers, which is where the per-thread stats merging happens and where

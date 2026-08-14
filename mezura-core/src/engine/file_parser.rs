@@ -680,9 +680,8 @@ fn parse_lines(contents: &str, language: &Language, lookup: &NestedLanguageLooku
     };
     code_spans.clear();
 
-    // Spans are read by nothing but the keyword search, so a language whose keywords no search
-    // will be run for has no reason to build them: the 10 shipped languages that declare none,
-    // among them CSS, HTML and Vue, walked every code line into a vector nobody opened.
+    // Spans are read by nothing but the keyword search, so a language no search will be run for
+    // has no reason to build them
     let collecting_spans = config.count_keywords && matchers.for_language(language).is_some();
 
     let mut shell = WalkState::default();
@@ -1770,7 +1769,7 @@ mod tests {
         NestedLanguageLookup { languages: &LANGUAGE_MAP_REF, extension_to_name: &SHIPPED_EXTENSIONS, set_aside: &NO_SET_ASIDE }
     }
 
-    // The whole file as its language's row sees it, which is what these tests always asserted
+    // The whole file as its language's row sees it
     fn parse_file_whole(path: &Path, lang_name: &str, buf: &mut String, config: &EngineConfig) -> Result<FileStats, String> {
         parse_file_report(path, lang_name, buf, config).map(FileReport::into_whole)
     }
@@ -1796,7 +1795,7 @@ mod tests {
         stats
     }
 
-    // The three columns as the default view folds them, which is what these tests always asserted
+    // The three columns as the default view folds them
     fn content_counts(stats: &FileStats) -> (usize, usize, usize) {
         (stats.lines, CountingModel::Content.calculate_code_lines(&stats.classes),
                 CountingModel::Content.calculate_comment_lines(&stats.classes))

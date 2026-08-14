@@ -358,36 +358,46 @@ pub struct LineClasses {
 }
 
 impl LineClasses {
+    // Everything that walks all nine goes through 'to_array' and 'of_array', and everything that
+    // writes them out or reads them back pairs those with these names, so a tenth class is two
+    // lines here and a compiler error at each of the two conversions rather than a count that is
+    // silently dropped from a document, a log and the leftovers row of the overview.
+    pub const NAMES : [&'static str; 9] = ["words_in_code", "string_content",
+            "comment_words_beside_code", "words_in_comment", "punctuation_in_code",
+            "punctuation_in_comment", "blank", "blank_in_comment", "blank_in_string"];
+
+    pub fn of_array(counts: [usize; 9]) -> Self {
+        LineClasses {
+            words_in_code: counts[0],
+            string_content: counts[1],
+            comment_words_beside_code: counts[2],
+            words_in_comment: counts[3],
+            punctuation_in_code: counts[4],
+            punctuation_in_comment: counts[5],
+            blank: counts[6],
+            blank_in_comment: counts[7],
+            blank_in_string: counts[8]
+        }
+    }
+
+    pub fn to_array(&self) -> [usize; 9] {
+        [self.words_in_code, self.string_content, self.comment_words_beside_code,
+         self.words_in_comment, self.punctuation_in_code, self.punctuation_in_comment,
+         self.blank, self.blank_in_comment, self.blank_in_string]
+    }
+
     pub fn calculate_lines(&self) -> usize {
-        self.words_in_code + self.string_content + self.comment_words_beside_code
-                + self.words_in_comment + self.punctuation_in_code + self.punctuation_in_comment
-                + self.blank + self.blank_in_comment + self.blank_in_string
+        self.to_array().iter().sum()
     }
 
     pub fn add(&mut self, other: &LineClasses) {
-        self.words_in_code += other.words_in_code;
-        self.string_content += other.string_content;
-        self.comment_words_beside_code += other.comment_words_beside_code;
-        self.words_in_comment += other.words_in_comment;
-        self.punctuation_in_code += other.punctuation_in_code;
-        self.punctuation_in_comment += other.punctuation_in_comment;
-        self.blank += other.blank;
-        self.blank_in_comment += other.blank_in_comment;
-        self.blank_in_string += other.blank_in_string;
+        *self = combine_classes(self, other, |mine, theirs| mine + theirs);
     }
 
     // Saturating because the numbers taken out may come off a document or a log, where nothing
     // promises they stay inside what they are taken from
     pub fn subtract(&mut self, other: &LineClasses) {
-        self.words_in_code = self.words_in_code.saturating_sub(other.words_in_code);
-        self.string_content = self.string_content.saturating_sub(other.string_content);
-        self.comment_words_beside_code = self.comment_words_beside_code.saturating_sub(other.comment_words_beside_code);
-        self.words_in_comment = self.words_in_comment.saturating_sub(other.words_in_comment);
-        self.punctuation_in_code = self.punctuation_in_code.saturating_sub(other.punctuation_in_code);
-        self.punctuation_in_comment = self.punctuation_in_comment.saturating_sub(other.punctuation_in_comment);
-        self.blank = self.blank.saturating_sub(other.blank);
-        self.blank_in_comment = self.blank_in_comment.saturating_sub(other.blank_in_comment);
-        self.blank_in_string = self.blank_in_string.saturating_sub(other.blank_in_string);
+        *self = combine_classes(self, other, usize::saturating_sub);
     }
 }
 
@@ -542,6 +552,13 @@ impl FileStats {
 // takes a Cow off a path and a reference to any of them.
 pub(crate) fn owned_strings(items: impl IntoIterator<Item = impl AsRef<str>>) -> Vec<String> {
     items.into_iter().map(|x| x.as_ref().to_owned()).collect()
+}
+
+fn combine_classes(one: &LineClasses, other: &LineClasses,
+    of_each: impl Fn(usize, usize) -> usize) -> LineClasses
+{
+    let (mine, theirs) = (one.to_array(), other.to_array());
+    LineClasses::of_array(std::array::from_fn(|at| of_each(mine[at], theirs[at])))
 }
 
 fn create_keyword_slots(language: &Language) -> HashMap<String,usize> {

@@ -143,12 +143,11 @@ fn format_stats(total: &Stats) -> String {
 }
 
 fn format_classes(classes: &LineClasses) -> String {
-    format!("{{\"words_in_code\":{},\"string_content\":{},\"comment_words_beside_code\":{},\
-\"words_in_comment\":{},\"punctuation_in_code\":{},\"punctuation_in_comment\":{},\"blank\":{},\
-\"blank_in_comment\":{},\"blank_in_string\":{}}}",
-            classes.words_in_code, classes.string_content, classes.comment_words_beside_code,
-            classes.words_in_comment, classes.punctuation_in_code, classes.punctuation_in_comment,
-            classes.blank, classes.blank_in_comment, classes.blank_in_string)
+    let members = LineClasses::NAMES.iter().zip(classes.to_array())
+            .map(|(name, count)| format!("\"{name}\":{count}"))
+            .collect::<Vec<_>>();
+
+    format!("{{{}}}", members.join(","))
 }
 
 fn format_modules(result: &RunResult) -> String {

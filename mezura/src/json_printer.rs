@@ -607,17 +607,9 @@ fn create_language_object(name: &str, info: &Stats, keywords_counted: bool, nest
 // under either model whatever the scope's own was
 fn create_classes_object(classes: &LineClasses, indent: usize) -> String {
     let pad = " ".repeat(indent);
-    let members = [
-        format!("{pad}\"words_in_code\": {}", classes.words_in_code),
-        format!("{pad}\"string_content\": {}", classes.string_content),
-        format!("{pad}\"comment_words_beside_code\": {}", classes.comment_words_beside_code),
-        format!("{pad}\"words_in_comment\": {}", classes.words_in_comment),
-        format!("{pad}\"punctuation_in_code\": {}", classes.punctuation_in_code),
-        format!("{pad}\"punctuation_in_comment\": {}", classes.punctuation_in_comment),
-        format!("{pad}\"blank\": {}", classes.blank),
-        format!("{pad}\"blank_in_comment\": {}", classes.blank_in_comment),
-        format!("{pad}\"blank_in_string\": {}", classes.blank_in_string),
-    ];
+    let members = LineClasses::NAMES.iter().zip(classes.to_array())
+            .map(|(name, count)| format!("{pad}\"{name}\": {count}"))
+            .collect::<Vec<_>>();
 
     format!("{{\n{}\n{}}}", members.join(",\n"), " ".repeat(indent - 2))
 }

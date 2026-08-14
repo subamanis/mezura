@@ -14,10 +14,9 @@ pub fn stats_of(files: usize, bytes: usize, classes: LineClasses,
 }
 
 // A file holding nothing that the two counting models read differently: words in code, words in a
-// comment, and blank lines outside both, which is what everything left over has to be. For the
-// tests whose subject is the layout, the document or the log, where what a line is has no bearing
-// on what is asserted; the two models answer alike for such a file, and that is not an accident
-// being papered over, it is true of the file.
+// comment, and blank lines outside both, which is what everything left over has to be. Both models
+// answer alike for such a file, which is what lets a test about a layout, a document or a log give
+// three numbers and say nothing about where a line sits.
 pub fn plain_stats_of(files: usize, bytes: usize, lines: usize, code: usize, comments: usize,
     keyword_occurences: HashMap<String, usize>) -> Stats
 {
