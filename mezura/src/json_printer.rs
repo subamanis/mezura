@@ -1157,7 +1157,7 @@ mod tests {
         let from = || reading_of(crate::diff::Source::Document { path: "D:/old.json".to_owned() }, HashMap::new());
         let mut to = reading_of(crate::diff::Source::Run, HashMap::new());
         to.version = "3.1.0".to_owned();
-        to.scope.counting = "region".to_owned();
+        to.scope.search_in_dotted = true;
 
         // A value the two readings were made to agree on is as much a fact about the numbers as one
         // they disagreed on, and after the adoption the two scopes read alike, so without this
@@ -1171,7 +1171,7 @@ mod tests {
 
         let document = create_comparison_document(&crate::diff::Comparison::of(from(), to, &config, Vec::new()), &datetime, &config);
         assert!(document.contains("\"code\": \"setting-differs\""), "{document}");
-        assert!(document.contains("\"subject\": \"counting\""));
+        assert!(document.contains("\"subject\": \"search-in-dotted\""));
         assert!(document.contains("\"code\": \"versions-differ\""));
         assert!(document.contains("\"subject\": \"3.0.0 -> 3.1.0\""));
         assert!(document.contains("\"path\": \"D:/old.json\""));

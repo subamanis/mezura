@@ -812,9 +812,11 @@ fn walk_line(raw_line: &str, line_start: usize, language: &Language, collecting_
     // Whether this line ended inside a comment that the next one carries on. Only a line comment
     // reaches the continuation symbol, which is what empty code ranges say: a closed block with a
     // '\' after it, the shape of every C macro holding a comment in its body, extends nothing.
-    // The symbol is looked for last because it is the dearest question here and the rarest yes.
+    // What the comment says is not asked, since a decorative '// ---- \' continues as readily as
+    // a sentence. The symbol is looked for last because it is the dearest question here and the
+    // rarest yes.
     state.continued_comment = state.open_str_symbol.is_none() && state.open_comment.is_none()
-            && counts_as_comment && !has_code
+            && !line_info.has_string_literal && !has_code
             && continues_in(language, |continuation| continuation.in_comments)
             && ends_with_continuation(line, language);
 
@@ -1013,8 +1015,11 @@ fn ends_with_continuation(line: &str, language: &Language) -> bool {
             && is_not_escaped(bytes.len() - continuation.symbol.len(), bytes, language.escape_character)
 }
 
-fn push_code(ranges: &mut Vec<(usize, usize)>, from: usize, to: usize) {
-    if to > from {
+// A stretch of nothing but whitespace is not code, and recording one would say that the line has
+// code on it: the space in '*/ /*' between a comment closing and the next one opening, or the one
+// in '/* block */ // trailing', is the shape that reaches here.
+fn push_code(ranges: &mut Vec<(usize, usize)>, line: &str, from: usize, to: usize) {
+    if to > from && !line[from..to].trim_ascii().is_empty() {
         ranges.push((from, to));
     }
 }
@@ -1078,8 +1083,7 @@ fn get_bounds(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
         }
     }
 
-    // A '//' that sits inside a '*/' is part of it and not a comment of its own
-    comment_indices.retain(|x| !is_intersecting_with_multi_line_end_symbol(*x, language, com_end_indices));
+    resolve_comment_and_multiline_end_overlap(line, language, comment_indices, com_end_indices);
 
     resolve_comment_and_multiline_start_overlap(line, language, comment_indices, com_start_indices);
 
@@ -1089,7 +1093,7 @@ fn get_bounds(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
     }
 
     if str_indices.is_empty() && comment_indices.is_empty() && com_start_indices.is_empty() && com_end_indices.is_empty() {
-        push_code(code_ranges, 0, line.len());
+        push_code(code_ranges, line, 0, line.len());
         return LineInfo::code_span((0, code_ranges.len()), false);
     }
 
@@ -1236,7 +1240,7 @@ fn get_bounds(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
             slice_start_index = index_after;
         } else {
             if next_symbol_is_comment(comment_counter, str_counter, start_com_counter) {
-                push_code(code_ranges, slice_start_index, comment_indices[comment_counter]);
+                push_code(code_ranges, line, slice_start_index, comment_indices[comment_counter]);
                 if code_ranges.is_empty() {return LineInfo::none_all(has_string_literal);}
                 else {return LineInfo::code_span((0, code_ranges.len()), has_string_literal);}
             } else if next_symbol_is_string(comment_counter, str_counter, start_com_counter) {
@@ -1244,7 +1248,7 @@ fn get_bounds(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
                 if skipped_com_end_symbol(last_symbol_index, end_com_counter, this_index) {
                     end_com_counter += 1;
                 }
-                push_code(code_ranges, slice_start_index, this_index);
+                push_code(code_ranges, line, slice_start_index, this_index);
                 str_counter += 1;
                 if !has_more_strs(str_counter) {
                     return line_info_with_str_symbol(code_ranges.len(), str_symbols[str_counter-1]);
@@ -1259,7 +1263,7 @@ fn get_bounds(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
                     end_com_counter += 1;
                 }
 
-                push_code(code_ranges, slice_start_index, this_index);
+                push_code(code_ranges, line, slice_start_index, this_index);
                 // A nesting or leveled pair falls through to the open branch even with no ends
                 // left: further starts of a nesting one still deepen the carried state, and the
                 // leveled one carries its level either way
@@ -1276,7 +1280,7 @@ fn get_bounds(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
                 start_com_counter += 1;
                 last_symbol_index = this_index;
             } else {
-                push_code(code_ranges, slice_start_index, line.len());
+                push_code(code_ranges, line, slice_start_index, line.len());
                 return LineInfo::code_span((0, code_ranges.len()), has_string_literal);
             }
         }
@@ -1509,17 +1513,30 @@ fn resolve_comment_and_multiline_start_overlap(line: &str, language: &Language,
     com_start_indices.retain(|(at, _, _)| !comment_indices.contains(at));
 }
 
-fn is_intersecting_with_multi_line_end_symbol(index: usize, language: &Language, end_vec: &[(usize, u8, u8)]) -> bool {
-    for (i, symbol, level) in end_vec {
-        let symbol_len = language.comment_end_len(*symbol, *level);
-        if index < symbol_len {
-            if *i == 0 {return true;}
-        } else {
-            if *i == index - symbol_len + 1 {return true;}
+// A comment symbol beginning inside a multiline end symbol is part of it and not a comment of its
+// own. It is moved past that end symbol rather than dropped: no symbol is searched overlapping
+// itself, so in '*///' the real '//' was already suppressed by the one lying across the closer,
+// and discarding that one without giving its bytes back leaves the line with no comment at all.
+fn resolve_comment_and_multiline_end_overlap(line: &str, language: &Language,
+    comment_indices: &mut Vec<usize>, com_end_indices: &[(usize, u8, u8)])
+{
+    if comment_indices.is_empty() || com_end_indices.is_empty() {
+        return;
+    }
+    let past_the_end_symbol_at = |at: usize| com_end_indices.iter().find_map(|(end, symbol, level)| {
+        let after = end + language.comment_end_len(*symbol, *level);
+        (at > *end && at < after).then_some(after)
+    });
+    let starts_a_comment = |at: usize| language.comment_symbols.iter()
+            .any(|symbol| line.as_bytes()[at..].starts_with(symbol.as_bytes()));
+
+    for at in comment_indices.iter_mut() {
+        if let Some(after) = past_the_end_symbol_at(*at) {
+            *at = after;
         }
     }
-
-    false
+    comment_indices.retain(|at| *at < line.len() && starts_a_comment(*at));
+    comment_indices.dedup();
 }
 
 #[cfg(test)]
@@ -1614,7 +1631,7 @@ mod tests {
         let ends = com_end_indices.iter().map(|at| (*at, 0u8, 0u8)).collect::<Vec<_>>();
         let mut buffers = ScanBuffers::default();
         scan_line(line, language, &mut buffers);
-        buffers.comments.retain(|x| !is_intersecting_with_multi_line_end_symbol(*x, language, &ends));
+        resolve_comment_and_multiline_end_overlap(line, language, &mut buffers.comments, &ends);
         buffers.comments
     }
 
@@ -2258,7 +2275,7 @@ mod tests {
         // each pair opens and closes on its own
         assert_eq!(TextInfo::none_all(false), bounds_multi("{ comment }", &PASCAL, None, &None));
         assert_eq!(TextInfo::none_all(false), bounds_multi("(* comment *)", &PASCAL, None, &None));
-        assert_eq!(TextInfo::from_slice_w_literal("x := 1;  "),
+        assert_eq!(TextInfo::from_slice_w_literal("x := 1; "),
                 bounds_multi("x := 1; { note } '4'", &PASCAL, None, &None));
 
         // the other pair's end inside a block is text, and the block still closes with its own
@@ -2275,9 +2292,11 @@ mod tests {
         assert_eq!(TextInfo::from_slice(" x := 2;"), bounds_multi("} x := 2;", &PASCAL, Some(0), &None));
         assert_eq!(TextInfo::from_slice(" x := 2;"), bounds_multi("*) x := 2;", &PASCAL, Some(1), &None));
 
-        // one line with both pairs in turn, and the code between them kept
-        assert_eq!(TextInfo::from_slice_w_literal("  "),
-                bounds_multi("{ a } (* b *) ''", &PASCAL, None, &None));
+        // one line with both pairs in turn, and the code between them kept. Whitespace alone is
+        // not code, so the second reads as a line holding a literal and nothing else.
+        assert_eq!(TextInfo::from_slice_w_literal(" x "),
+                bounds_multi("{ a } x (* b *) ''", &PASCAL, None, &None));
+        assert_eq!(TextInfo::none_all(true), bounds_multi("{ a } (* b *) ''", &PASCAL, None, &None));
         // the '{' block swallows a '(*' opener sitting inside it
         assert_eq!(TextInfo::from_slice(" c"), bounds_multi("{ a (* b } c", &PASCAL, None, &None));
     }
@@ -2899,15 +2918,15 @@ mod tests {
         assert_eq!((vec![(2, 0, 0)], vec![(0, 0, 0)]), (starts, ends));
 
         // and the whole shape through the walk: the line closes and reopens, so it ends still open.
-        // Whitespace between the symbols is reported as a code range and left to the walk, which
-        // counts the line where its words are, in the comment.
+        // Whitespace between the two symbols is not code, so the line reads the same with it and
+        // without it.
         assert_eq!(TextInfo::with_open_comment(0), bounds_multi("]]--[[", &LUA, Some(0), &None));
-        assert_eq!(TextInfo::new(Some("  ".to_owned()), false, Some((0, 1)), None),
+        assert_eq!(TextInfo::with_open_comment(0),
                 bounds_multi("]]  --[[ reopened", &LUA, Some(0), &None));
         // an HTML-shaped pair, 4 against 3, through a language declaring no line comments
         let html : Language = Language::new("html-like", ["html"], ["\""], [""; 0], &[("<!--", "-->")], []);
         assert_eq!(TextInfo::with_open_comment(0), bounds_multi("--><!--", &html, Some(0), &None));
-        assert_eq!(TextInfo::new(Some(" ".to_owned()), false, Some((0, 1)), None),
+        assert_eq!(TextInfo::with_open_comment(0),
                 bounds_multi("--> <!-- reopened", &html, Some(0), &None));
     }
 
@@ -3108,8 +3127,8 @@ mod tests {
             mefm \" */ \" \
             //*/world!"
         );
-        assert_eq!(TextInfo::new(Some("Hello  ".to_string()), true, None, Some(0u8)), bounds_multi(&line, &JAVA, None, &None));
-        assert_eq!(TextInfo::new(Some(" ".to_string()), true, None, Some(0u8)), bounds_multi(&line, &JAVA, Some(0), &None));
+        assert_eq!(TextInfo::new(Some("Hello ".to_string()), true, None, Some(0u8)), bounds_multi(&line, &JAVA, None, &None));
+        assert_eq!(TextInfo::with_open_symbol(0), bounds_multi(&line, &JAVA, Some(0), &None));
         assert_eq!(TextInfo::new(Some(" */ ".to_string()), true, None, Some(0u8)), bounds_multi(&line, &JAVA, None, double_str_opt));
     }
 

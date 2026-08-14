@@ -486,6 +486,10 @@ pub fn scope_of(engine: &mezura_core::EngineConfig, counting: mezura_core::Count
 }
 
 // A difference here is not a change in the code, and every one of these can move a count on its own.
+//
+// 'counting' is recorded beside them and is deliberately not among them: what a document and a log
+// carry is the count of every class of line, and both sides of a comparison are folded by the model
+// this run is showing, so two readings taken under different models are compared exactly.
 pub fn find_settings_that_differ(baseline: &Scope, subject: &Scope) -> Vec<&'static str> {
     let same = |a: &[String], b: &[String]| {
         let (mut a, mut b) = (a.to_vec(), b.to_vec());
@@ -499,7 +503,6 @@ pub fn find_settings_that_differ(baseline: &Scope, subject: &Scope) -> Vec<&'sta
     if !same(&baseline.languages, &subject.languages) {differ.push(LANGUAGES)}
     if !same(&baseline.excluded_languages, &subject.excluded_languages) {differ.push(EXCLUDE_LANGUAGES)}
     if baseline.forced_languages != subject.forced_languages {differ.push(FORCE_LANGUAGE)}
-    if baseline.counting != subject.counting {differ.push(COUNTING)}
     if baseline.search_in_dotted != subject.search_in_dotted {differ.push(SEARCH_IN_DOTTED)}
     if baseline.gitignore != subject.gitignore {differ.push(NO_GITIGNORE)}
     if baseline.keywords_counted != subject.keywords_counted {differ.push(HIDE_KEYWORDS)}
@@ -788,7 +791,7 @@ mod tests {
         let adopted = Note::SettingsAdopted { from: "old.json".to_owned(), settings: vec!["exclude"] };
 
         let mut baseline = reading("old.json", "2.9.0", vec![module("api")]);
-        baseline.scope.counting = "region".to_owned();
+        baseline.scope.search_in_dotted = true;
         // The scan facts come first among the doubts, then what that run had said itself
         baseline.faulty_files_count = 2;
         baseline.unreadable_dirs_count = 1;
@@ -800,7 +803,7 @@ mod tests {
         assert_eq!(vec![
             Note::SettingsAdopted { from: "old.json".to_owned(), settings: vec!["exclude"] },
             Note::SettingsDiffer { baseline: "old.json".to_owned(), subject: "new.json".to_owned(),
-                    settings: vec!["counting"] },
+                    settings: vec!["search-in-dotted"] },
             Note::VersionsDiffer { baseline: "old.json".to_owned(), baseline_version: "2.9.0".to_owned(),
                     subject: "new.json".to_owned(), subject_version: "3.0.0".to_owned() },
             Note::CountsInDoubt { about: "old.json".to_owned(), doubts: vec![
@@ -931,12 +934,18 @@ mod tests {
 
         config.engine.forced_languages = HashMap::new();
         config.engine.no_gitignore = true;
-        assert_eq!(vec!["counting", "no-gitignore"], find_settings_that_differ(&document.scope,
-                &scope_of(&config.engine, mezura_core::CountingModel::Region)));
+        assert_eq!(vec!["no-gitignore"], find_settings_that_differ(&document.scope,
+                &scope_of(&config.engine, content)));
+
+        // The counting model is not among them, and a document naming the other one is compared
+        // exactly: both sides are folded by the model on screen, so nothing about the two readings
+        // was measured differently
+        config.engine.no_gitignore = false;
+        assert!(find_settings_that_differ(&document.scope,
+                &scope_of(&config.engine, mezura_core::CountingModel::Region)).is_empty());
 
         // and hiding the keywords is among them: it moves no line or code count, but a side that
         // did not count keywords would read as every keyword written since
-        config.engine.no_gitignore = false;
         config.engine.count_keywords = false;
         assert_eq!(vec!["hide keywords"], find_settings_that_differ(&document.scope, &scope_of(&config.engine, content)));
     }
@@ -978,14 +987,12 @@ mod tests {
         assert!(config.engine.exclude_dirs.is_empty());
 
         // A model this build does not have, which a document of a later version can name, cannot
-        // be imitated, so it is left to the differ note instead of being half applied
+        // be imitated, so this run keeps the one it has and the columns say which that is
         let unknown = Scope { counting: "some-later-model".to_owned(), gitignore: true,
                 exclude: Vec::new(), ..document.clone() };
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         assert!(resolve_settings(&unknown, &mut config).is_empty());
         assert_eq!(mezura_core::CountingModel::Content, config.view.counting);
-        assert_eq!(vec!["counting"], find_settings_that_differ(&unknown,
-                &scope_of(&config.engine, config.view.counting)));
 
         // The order two lists were written in is not a difference
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);

@@ -358,6 +358,12 @@ pub struct LineClasses {
 }
 
 impl LineClasses {
+    pub fn calculate_lines(&self) -> usize {
+        self.words_in_code + self.string_content + self.comment_words_beside_code
+                + self.words_in_comment + self.punctuation_in_code + self.punctuation_in_comment
+                + self.blank + self.blank_in_comment + self.blank_in_string
+    }
+
     pub fn add(&mut self, other: &LineClasses) {
         self.words_in_code += other.words_in_code;
         self.string_content += other.string_content;

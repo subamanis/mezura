@@ -518,12 +518,15 @@ pub const DIFF_HELP  :  &str =
     scratch or deleted whole, for files that in all likelihood only moved.
 
     A document records the settings the counting obeyed, and they reach whatever is counted
-    against it: comparing against a baseline taken with '--counting region' shows this run
-    under it too, and says so, because the two readings would otherwise disagree about what a
-    line of code even is and that difference would read as code that changed. A setting given
+    against it: comparing against a baseline taken with '--exclude target' leaves that directory
+    out of this run too, and says so, because the two readings would otherwise have counted
+    different trees and that difference would read as code that changed. A setting given
     on this very command line is kept instead, and the comparison then warns that the two
     readings were not taken the same way, as it does when two documents disagree with each
-    other and there is nothing left to count. '--no-gitignore' never reaches a revision, and
+    other and there is nothing left to count. '--counting' travels the same way, so the columns
+    read as the baseline's did, but a difference in it is never warned about: a document records
+    where every line landed and not one fold of it, so both sides are folded alike whatever they
+    were written under. '--no-gitignore' never reaches a revision, and
     mezura says so: a checkout holds only what git tracks. The comparison also says so when
     the two readings were counted by different versions of mezura.
 
@@ -754,9 +757,10 @@ pub const COMPARE_LEVEL_HELP  :  &str =
     Every log entry records the settings that decide what is counted, and an entry that was written
     with different ones is marked 'modified:' followed by their names. The comparison is still shown,
     because the point is to say whether it can be trusted: a change of 'targets' means the numbers came
-    from another tree, while a change of 'counting' means lines moved between the columns and the
-    total did not. An entry written by a version that did not record a setting is never
-    reported as having changed it.
+    from another tree, while a change of 'exclude' means part of that tree stopped being counted and
+    the rest of it did not move. '--counting' is not among them, since an entry records where every
+    line landed rather than one fold of it and is read under whichever model this run is showing. An
+    entry written by a version that did not record a setting is never reported as having changed it.
 
 ";
 pub const BY_FILE_HELP  :  &str =

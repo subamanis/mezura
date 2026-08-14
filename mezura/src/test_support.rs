@@ -8,9 +8,7 @@ use mezura_core::{LineClasses, Stats};
 pub fn stats_of(files: usize, bytes: usize, classes: LineClasses,
     keyword_occurences: HashMap<String, usize>) -> Stats
 {
-    let lines = classes.words_in_code + classes.string_content + classes.comment_words_beside_code
-            + classes.words_in_comment + classes.punctuation_in_code + classes.punctuation_in_comment
-            + classes.blank + classes.blank_in_comment + classes.blank_in_string;
+    let lines = classes.calculate_lines();
 
     Stats::new(files, bytes, lines, classes, keyword_occurences)
 }

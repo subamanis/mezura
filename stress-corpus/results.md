@@ -111,7 +111,13 @@ companion, an apostrophe standing in ordinary code behind a backtick, and scc an
 by accident**: not because the backtick stopped it but because it does not know the language has a
 single quoted string to open. A file holding a real one would find that out.
 
-**8. Wrong in company.** The heredoc holding an apostrophe (3100), the regex holding a comment opener
+**8. A line comment ending in a backslash does not carry onto the next line.** In C the backslash
+joins the two before anything is read, so the line under a `// comment \` is part of that comment
+and not code. scc ends the comment at the newline and counts what follows as code. Cases 2200, 2250
+and 2260, one line lost to code in each. tokei does the same, and neither is helped by what the
+comment says: 2250 writes it as a decorative `// ---- \` holding no word at all.
+
+**9. Wrong in company.** The heredoc holding an apostrophe (3100), the regex holding a comment opener
 (3700), C++'s delimited `R"delim( ... )delim"` (6700) and Lua's `[[ ]]` string (6800) defeat all
 three counters, mezura included. They are listed here so the count of scc's faults is not read as a
 score.
@@ -141,7 +147,7 @@ the block at `//*/`, which is the C idiom for switching a block off by adding on
 
 ## Where tokei is wrong
 
-tokei misreads 32 of the 73 cases. Each of those files carries a `tokei:` line saying what it gets
+tokei misreads 36 of the 77 cases. Each of those files carries a `tokei:` line saying what it gets
 wrong, so the detail is next to the evidence rather than repeated here. By mechanism:
 
 **A quote it should not have seen opens a string, and everything below counts as code.** Cases 1650,
@@ -166,8 +172,15 @@ counted correctly by all three, and the same string under the raw string is not.
 **A comment ends in the wrong place.** Cases 1300, 1400, 4400 and 5900: a bare `]]` ends a counted
 bracket that only an end of the same count should close, and an inner closer ends a block that nests.
 
-**A comment does not end at all, or ends and the code after it is lost.** Cases 1900, 2200, 4600,
-4700, 6400.
+**A comment does not end at all, or ends and the code after it is lost.** Cases 1900, 2200, 2250,
+2260, 4600, 4700, 6400.
+
+**A line holding nothing but comments is counted as code.** Cases 0550, 0950 and 2260. A block
+comment opens and closes on one line and a line comment follows it, `/* block */ // trailing`, and
+tokei calls the line code although nothing sits outside the two comments. It is this shape alone:
+the same line comment after a block that spans lines, after two blocks, or after nothing is counted
+correctly, and the space between the two makes no difference. 2260 carries the splice fault on the
+same line as well, so that file costs it two lines rather than one.
 
 **A doc comment is counted as neither comment nor blank.** Cases 4900 and 5000, where a file of 12
 lines is reported as 11.
@@ -189,10 +202,12 @@ Written as `lines / code / comment`, as each tool reports today.
 | 0300 string symbol inside comment | 7/1/6 | 7/1/6 | 7/1/6 |
 | 0400 block comment holding line comment | 9/1/8 | 9/1/8 | 9/1/8 |
 | 0500 line comment holding block open | 7/1/6 | 7/1/6 | 7/1/6 |
+| 0550 block comment closed then line comment | 10/1/9 | **10/2/8** | 10/1/9 |
 | 0600 code then comment on one line | 7/2/5 | 7/2/5 | 7/2/5 |
 | 0700 close touching reopen plain | 9/1/7 | 9/1/8 | 9/1/8 |
 | 0800 close touching reopen nesting | 9/1/7 | 9/1/8 | 9/1/8 |
 | 0900 close and reopen with a space | 9/1/7 | 9/1/8 | 9/1/8 |
+| 0950 block close touching a line comment | 11/1/10 | **11/2/9** | 11/1/10 |
 | 1000 nested block comment that nests | 7/1/6 | 7/1/6 | **7/2/5** |
 | 1100 nested block comment that does not | 7/1/6 | 7/1/6 | 7/1/6 |
 | 1200 two comment pairs of one language | 8/1/7 | 8/1/7 | 8/1/7 |
@@ -207,6 +222,8 @@ Written as `lines / code / comment`, as each tool reports today.
 | 2000 lifetime and apostrophe in string | 8/1/7 | 8/1/7 | 8/1/7 |
 | 2100 line splice inside a string | 9/4/5 | 9/4/5 | 9/4/5 |
 | 2200 line splice inside a comment | 9/1/8 | **9/2/7** | **9/2/7** |
+| 2250 line splice in a comment with no words | 11/2/8 | **11/3/8** | **11/3/8** |
+| 2260 line splice after a closed block comment | 12/2/10 | **12/4/8** | **12/3/9** |
 | 2300 blank line inside block comment | 10/1/8 | 10/1/9 | 10/1/9 |
 | 2400 punctuation only line | 9/2/6 | 9/3/6 | 9/3/6 |
 | 2500 docstring holding a comment symbol | 10/5/5 | 10/5/5 | 10/2/8 |

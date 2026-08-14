@@ -499,10 +499,14 @@ impl<'a> SubRowStyles<'a> {
 }
 
 // Saturating per class because these numbers arrive from a document as readily as from a run,
-// where nothing promises the sections stay inside the whole
+// where nothing promises the sections stay inside the whole. The lines are then what the classes
+// left over add up to, rather than a subtraction of their own: a document whose sections do not
+// fit would otherwise leave a shell holding more code than it has lines, and every layout works
+// the third column out by taking code and comments off them.
 fn take_out(shell: &mut Stats, sections: &Stats) {
-    shell.lines = shell.lines.saturating_sub(sections.lines);
+    shell.bytes = shell.bytes.saturating_sub(sections.bytes);
     shell.classes.subtract(&sections.classes);
+    shell.lines = shell.classes.calculate_lines();
 }
 
 // Biggest first, with the shell's own share inserted ahead of them
@@ -516,7 +520,6 @@ fn find_sections_of(group: &Group, language: &str, whole: &Stats) -> Vec<(String
     }).collect::<Vec<_>>();
 
     let mut shell = whole.clone();
-    shell.bytes = shell.bytes.saturating_sub(counted.bytes);
     take_out(&mut shell, &counted);
     rows.sort_by(|one, other| other.1.lines.cmp(&one.1.lines).then(one.0.cmp(&other.0)));
     rows.insert(0, (format!("{language} {SHELL_SUFFIX}"), shell));
@@ -868,7 +871,6 @@ fn create_compared_sections(change: &super::diff::LanguageStatsChange,
         for stats in sections.into_iter().flat_map(HashMap::values) {
             counted.add(stats);
         }
-        shell.bytes = shell.bytes.saturating_sub(counted.bytes);
         take_out(&mut shell, &counted);
         shell
     };
@@ -3144,18 +3146,22 @@ mod tests {
 
         // A document holding sections larger than their container must not take the run down.
         // Built by hand and not through the helper, whose whole job is to refuse counts that no
-        // file could have produced: this one is exactly such a document.
-        let impossible = mezura_core::LineClasses { words_in_code: 9999, words_in_comment: 9999,
-                ..Default::default() };
+        // file could have produced: this one is exactly such a document. Its lines are the
+        // container's and its classes are nothing, which is the shape that tells a shell taking
+        // the two apart from one keeping them together: subtracting them separately leaves every
+        // class of the container behind a line count of zero.
         let broken = hashmap!["HTML".to_owned() => hashmap![
-                "JavaScript".to_owned() => Stats::new(9, 99999, 9999, impossible, hashmap![])]];
+                "JavaScript".to_owned() => Stats::new(9, 99999, 9999, mezura_core::LineClasses::default(),
+                        hashmap![])]];
         let group = Group { name: None, languages: vec!["HTML".to_owned()], hidden: 0,
                 per_language: &content_info, nested: &broken, files: HashMap::new(),
                 total: &total, baseline: None };
         let shell = &find_sections_of(&group, "HTML", whole)[0].1;
-        assert!(shell.calculate_code_lines(CountingModel::Content)
-                + shell.calculate_comment_lines(CountingModel::Content) <= shell.lines,
-                "the shell holds more code and comments than it has lines: {shell:?}");
+        for model in [CountingModel::Content, CountingModel::Region] {
+            assert!(shell.calculate_code_lines(model) + shell.calculate_comment_lines(model) <= shell.lines,
+                    "under {} the shell holds more code and comments than it has lines: {shell:?}",
+                    model.name());
+        }
     }
 
     // The golden hands the blocks rows it built itself, so it says nothing about which rows the real
@@ -3302,17 +3308,19 @@ mod tests {
         assert!(find_settings_changed_since(&same, &config, &[]).is_empty());
         assert!(format_modified_tag(&find_settings_changed_since(&same, &config, &[])).is_empty());
 
-        // One that differs is named, and the names are the ones the reader can look up
+        // One that differs is named, and the names are the ones the reader can look up. The
+        // counting model is not one of them: the entry records every class of line, so it is
+        // folded by the model on screen whichever one it was written under.
         config.view.counting = CountingModel::Region;
         config.engine.no_gitignore = true;
         let changed = find_settings_changed_since(&same, &config, &[]);
-        assert_eq!(vec!["counting", "no-gitignore"], changed);
-        assert!(format_modified_tag(&changed).contains("counting, no-gitignore"));
+        assert_eq!(vec!["no-gitignore"], changed);
+        assert!(format_modified_tag(&changed).contains("no-gitignore"));
 
         // The targets are compared as a set: the same list reordered is the same measurement
         let entry_with_targets = crate::log::LogEntry {
                 targets: vec![mezura_core::Target::of("./b"), mezura_core::Target::of("./a")],
-                ..entry_of(|c| {c.view.counting = CountingModel::Region; c.engine.no_gitignore = true;}) };
+                ..entry_of(|c| {c.engine.no_gitignore = true;}) };
         assert!(find_settings_changed_since(&entry_with_targets, &config,
                 &[mezura_core::Target::of("./a"), mezura_core::Target::of("./b")]).is_empty());
         assert_eq!(vec!["targets"], find_settings_changed_since(&entry_with_targets, &config,
