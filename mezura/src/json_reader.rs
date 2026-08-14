@@ -194,8 +194,10 @@ pub(crate) fn parse_scope(scope: &Map<String, Value>) -> Result<(Scope, Vec<Targ
     }, parse_targets(read_list(scope, "targets", "scope")?)?))
 }
 
-// 'extra' and 'average_bytes' are not read: both are worked out from the counts beside them, and a
-// stored copy is the one thing that can disagree with them.
+// 'code', 'comments', 'extra' and 'average_bytes' are written and not read: all four are worked out
+// from the counts beside them, and a stored copy is the one thing that can disagree with them. The
+// first two are also the writer's counting model showing, and this run folds the classes with its
+// own.
 pub(crate) fn parse_stats(entry: &Map<String, Value>, at: &str) -> Result<Stats, DocumentError> {
     let keywords = match entry.get("keywords") {
         Some(x) => parse_keywords(read_object(x, &join_location(at, "keywords"))?, &join_location(at, "keywords"))?,

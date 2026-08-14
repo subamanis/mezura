@@ -390,7 +390,7 @@ impl LineClasses {
         self.to_array().iter().sum()
     }
 
-    pub fn add(&mut self, other: &LineClasses) {
+    pub(crate) fn add(&mut self, other: &LineClasses) {
         *self = combine_classes(self, other, |mine, theirs| mine + theirs);
     }
 

@@ -105,9 +105,10 @@ fn write_whole_log(path: &str, contents: &Option<String>, result: &RunResult,
 }
 
 // One line, holding everything the history section reads back: the identity, the scope the run
-// obeyed, the totals and the module totals. No derived figure is written: 'extra' and the average
-// size are worked out from the counts beside them, and a stored copy is the one thing that can
-// disagree with them.
+// obeyed, the totals and the module totals. Both the lines counted and the classes they were sorted
+// into are written, since the walk counts a line before deciding its class and the two are separate
+// measurements. Nothing folded out of them is: not 'extra', not the average size, and not 'code'
+// and 'comments', which are what a counting model makes of the classes.
 fn format_entry_line(config: &Configuration, datetime_now: &DateTime<Local>, result: &RunResult) -> String {
     let name = config.view.log.name.as_ref()
             .map_or("null".to_owned(), |name| format!("\"{}\"", escape(name)));
