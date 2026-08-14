@@ -150,14 +150,21 @@ languages crossed with modules. Use any other layout to see the files."));
 pub fn create_theme_sample_rows(theme: &Theme, layout: Layout, model: CountingModel) -> Vec<String> {
     const NAME    : &str   = "Rust";
     const FILES   : usize  = 1_284;
-    const LINES   : usize  = 96_512;
-    const CODE    : usize  = 71_004;
-    const COMMENTS: usize  = 12_838;
     const BYTES   : usize  = 3_412_500;
 
+    // A whole line for every class, so that the sample obeys both counting models the way a counted
+    // file does. Given as classes and not as three columns because the columns are folds of these,
+    // and a hand written pair that disagreed would print a third column no class of it accounts for.
+    let classes = mezura_core::LineClasses {
+        words_in_code: 68_004, string_content: 2_800, comment_words_beside_code: 200,
+        words_in_comment: 12_638, punctuation_in_code: 9_100, punctuation_in_comment: 190,
+        blank: 3_310, blank_in_comment: 130, blank_in_string: 140
+    };
+    let (lines, code, comments) = (classes.calculate_lines(),
+            model.calculate_code_lines(&classes), model.calculate_comment_lines(&classes));
+
     let keywords = hashmap!("structs".to_owned() => 284usize, "traits".to_owned() => 31);
-    let classes = mezura_core::LineClasses { words_in_code: CODE, words_in_comment: COMMENTS, ..Default::default() };
-    let per_language = hashmap!(NAME.to_owned() => Stats::new(FILES, BYTES, LINES, classes, keywords.clone()));
+    let per_language = hashmap!(NAME.to_owned() => Stats::new(FILES, BYTES, lines, classes, keywords.clone()));
     let total = Stats::total_of(&per_language);
     let groups = vec![Group {name: None, languages: vec![NAME.to_owned()], hidden: 0,
             per_language: &per_language, nested: &NO_NESTED, files: HashMap::new(),
@@ -179,20 +186,15 @@ pub fn create_theme_sample_rows(theme: &Theme, layout: Layout, model: CountingMo
         // The matrix has no second axis to show for one made-up language of one unnamed module, and
         // the tokens it paints are the ones the table already previews
         Layout::Matrix => with_keywords(format_table_lines(theme, &groups, &total, false, &[], sample_view)),
+        // Through the same 'Columns' a run builds, off the same counts the tables were handed, or
+        // the one function whose whole purpose is that the preview cannot drift would be two
+        // previews of two different languages
         Layout::List => {
-            let len_of = |value: usize| format_with_separators(value).len();
-            let columns = Columns {
-                name: NAME.len().max(TOTAL_NAME.len()),
-                headline: len_of(FILES).max(len_of(LINES)),
-                code: len_of(CODE),
-                comments: len_of(COMMENTS),
-                extra: len_of(LINES - CODE - COMMENTS),
-                hidden: no_hides,
-                model
-            };
+            let columns = Columns::of(&groups, &total, no_hides, model);
             let width = columns.width(theme);
             vec![columns.format_files_row(theme, FILES, &format_size(theme, BYTES, BYTES / FILES), width),
-                 columns.format_breakdown_row(theme, &theme.details_language_name.paint(NAME).to_string(), NAME.len(), LINES, CODE, COMMENTS),
+                 columns.format_breakdown_row(theme, &theme.details_language_name.paint(NAME).to_string(),
+                        NAME.len(), lines, code, comments),
                  get_keywords_as_str(theme, &keywords, None, columns.calculate_words_start(), width)]
         }
     }

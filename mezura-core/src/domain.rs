@@ -495,6 +495,15 @@ impl Stats {
     // hand-build a file's counts and get the keyword indices to line up with a slice it also has to
     // supply. The way in from outside is 'run'.
     pub(crate) fn add_file(&mut self, stats: &FileStats, bytes: usize, keywords: &[Keyword]) {
+        // The walk counts a line and then sorts it into exactly one class, so the two are a
+        // measurement and its itemisation and have to agree. This is the only door a counted file
+        // comes through, which makes it the place a classification that lost a line shows up. Not
+        // on 'add' below: that one also takes counts parsed out of a document, where nothing
+        // promises anything.
+        debug_assert_eq!(stats.lines, stats.classes.calculate_lines(),
+                "a counted file has {} lines and {} of them landed in a class",
+                stats.lines, stats.classes.calculate_lines());
+
         self.files += 1;
         self.bytes += bytes;
         self.lines += stats.lines;

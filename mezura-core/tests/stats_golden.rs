@@ -28,6 +28,14 @@ fn render_report(per_language: &HashMap<String, Stats>) -> String {
     let mut report = String::with_capacity(500);
     for name in &names {
         let info = per_language.get(name).unwrap();
+        // The lines counted and the classes they were sorted into are two measurements of one walk,
+        // taken in that order, so they have to agree. The golden's own numbers cannot say this: a
+        // line the walk counted and no class claimed would move both the lines and the third column
+        // together and read as an ordinary edit.
+        assert_eq!(info.lines, info.classes.calculate_lines(),
+                "{name} counted {} lines and sorted {} of them into a class",
+                info.lines, info.classes.calculate_lines());
+
         total_files += info.files;
         total_lines += info.lines;
         total_code += info.calculate_code_lines(CountingModel::Content);

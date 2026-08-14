@@ -31,7 +31,11 @@ fn a_run_over_two_directories_counts_files_lines_and_keywords() {
     let first_language = result.per_language.values().next().unwrap();
     assert!(first_language.files != 0 && first_language.bytes != 0);
 
-    // Readable from outside at all, which they were not before the surface was chosen
+    // Readable from outside at all, which they were not before the surface was chosen. Against the
+    // classes and not against the three columns: 'extra' is what is left of the lines after the
+    // other two, so the columns can only add up to the lines they were worked out from, whatever
+    // the walk did. The classes are the second measurement and can disagree.
+    assert_eq!(result.total.lines, result.total.classes.calculate_lines());
     let model = CountingModel::Content;
     assert_eq!(result.total.lines, result.total.calculate_code_lines(model)
             + result.total.calculate_comment_lines(model) + result.total.calculate_extra_lines(model));
