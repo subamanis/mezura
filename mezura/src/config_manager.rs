@@ -187,17 +187,18 @@ pub struct Hidden {
     pub files: bool,
     pub comments: bool,
     pub extra: bool,
+    pub blanks: bool,
     pub size: bool,
     pub percentages: bool
 }
 
 impl Hidden {
-    fn get_pairs(self) -> [(&'static str, bool); 16] {
+    fn get_pairs(self) -> [(&'static str, bool); 17] {
         [("version", self.version), ("directory-info", self.directory_info), ("parsing-info", self.parsing_info),
          ("progress-bar", self.progress_bar), ("animations", self.animations), ("keywords", self.keywords),
          ("nested-languages", self.nested_languages), ("overview", self.overview), ("bar", self.bar),
          ("history", self.history), ("timing", self.timing), ("files", self.files), ("comments", self.comments),
-         ("extra", self.extra), ("size", self.size), ("percentages", self.percentages)]
+         ("extra", self.extra), ("blanks", self.blanks), ("size", self.size), ("percentages", self.percentages)]
     }
 
     // Whether '--sort' was asked to order by a column this run does not draw
@@ -205,7 +206,8 @@ impl Hidden {
         match criterion {
             SortCriterion::Files => self.files,
             SortCriterion::Comments => self.comments,
-            SortCriterion::Extra => self.extra,
+            // Whichever word was asked for, 'build' has already left the answer in one flag
+            SortCriterion::Extra | SortCriterion::Blanks => self.extra,
             SortCriterion::Size => self.size,
             SortCriterion::Lines | SortCriterion::Code | SortCriterion::Name => false
         }
@@ -230,6 +232,7 @@ impl Hidden {
                 "files" => hidden.files = true,
                 "comments" => hidden.comments = true,
                 "extra" => hidden.extra = true,
+                "blanks" => hidden.blanks = true,
                 "size" => hidden.size = true,
                 "percentages" => hidden.percentages = true,
                 _ => return Err(entry.to_owned())
@@ -692,13 +695,45 @@ impl ConfigurationBuilder {
         self.config_styles.is_none() || self.bar_thickness.is_none() || self.progress_bar.is_none() || self.number_separator.is_none() || self.decimal_separator.is_none() || self.layout.is_none() || self.sort_by.is_none()
     }
 
+    // Said once for both commands, since one word covers them: the run names the model it is
+    // counting with and the word that quantity has there, so that nobody hunts for a column that
+    // was never going to be drawn.
+    fn report_a_word_of_the_other_model(command: &str, counting: CountingModel, result: &str) {
+        let message = format!("'--{command} {}' names the third column of the other way of counting. \
+This run counts by {}, where that column is '{}', so {result}.",
+                counting.get_other().get_third_quantity_name(), counting.name(),
+                counting.get_third_quantity_name());
+        eprintln!("\n{}", wrap_message(&message).yellow());
+        super::warning_collector::keep(mezura_core::warnings::Warning::new(
+                mezura_core::warnings::Code::CommandIgnored, command, message));
+    }
+
     // The only place that knows the flat form maps onto two halves. Everything above this stays one
     // list, matching the command line and the configuration file.
     pub fn build(&self) -> Configuration {
-        let hidden = self.hidden.unwrap_or_default();
+        let counting = self.counting.unwrap_or_default();
+        let mut hidden = self.hidden.unwrap_or_default();
+        let mut sort_by = self.sort_by.unwrap_or_default();
+        // The third quantity is called 'extra' where a line is measured by what it says and
+        // 'blanks' where it is measured by where it sits, so the other model's word names nothing
+        // this run draws. It is dropped rather than obeyed as though it were the word that belongs,
+        // and from here down 'hidden.extra' is the one flag that says the column is out.
+        let (mine, of_the_other_model) = match counting {
+            CountingModel::Content => (hidden.extra, hidden.blanks),
+            CountingModel::Region => (hidden.blanks, hidden.extra)
+        };
+        hidden.extra = mine;
+        hidden.blanks = false;
+        if of_the_other_model {
+            Self::report_a_word_of_the_other_model(HIDE, counting, "nothing was hidden");
+        }
+        if sort_by == SortCriterion::Extra && counting == CountingModel::Region
+                || sort_by == SortCriterion::Blanks && counting == CountingModel::Content {
+            Self::report_a_word_of_the_other_model(SORT, counting, "the report is sorted by lines");
+            sort_by = SortCriterion::default();
+        }
         // Decided here, after a configuration file has had its say on both halves. A JSON document
         // carries every figure whatever is hidden, so there the order stands as asked.
-        let mut sort_by = self.sort_by.unwrap_or_default();
         if hidden.hides_column_of(sort_by) && self.output.unwrap_or_default() == OutputFormat::Text {
             let message = format!("'--{SORT} {}' orders by a column '--{HIDE} {0}' takes out, so the report \
 is sorted by lines.", sort_by.name());
@@ -1488,6 +1523,23 @@ mod tests {
         assert_eq!(SortCriterion::Size, sorted("./ --hide extra --sort size"));
         assert_eq!(SortCriterion::Size, sorted("./ --hide size --sort size --output json"));
         assert_eq!(SortCriterion::Code, sorted("./ --hide files,comments,extra,size,percentages --sort code"));
+    }
+
+    // Each model has its own word for the third column, so the other one asks for a column this run
+    // does not draw: it orders and hides nothing rather than being taken for the word that belongs.
+    #[test]
+    fn the_word_of_the_other_counting_model_orders_nothing_and_hides_nothing() {
+        let view = |command: &str| create_config_from_args(command).unwrap().view;
+
+        assert_eq!(SortCriterion::Lines, view("./ --counting region --sort extra").sort_by);
+        assert_eq!(SortCriterion::Blanks, view("./ --counting region --sort blanks").sort_by);
+        assert_eq!(SortCriterion::Extra, view("./ --sort extra").sort_by);
+        assert_eq!(SortCriterion::Lines, view("./ --sort blanks").sort_by);
+
+        assert!(!view("./ --counting region --hide extra").hidden.extra);
+        assert!(view("./ --counting region --hide blanks").hidden.extra);
+        assert!(view("./ --hide extra").hidden.extra);
+        assert!(!view("./ --hide blanks").hidden.extra);
     }
 
     #[test]

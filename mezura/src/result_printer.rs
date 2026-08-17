@@ -679,7 +679,7 @@ fn mark_sorted_column<'a>(theme: &'a Theme, headers: &mut [String],
         SortCriterion::Lines => header == "Lines",
         SortCriterion::Code => header == "Code",
         SortCriterion::Comments => header == "Comments",
-        SortCriterion::Extra => header == "Extra" || header == "Blanks",
+        SortCriterion::Extra | SortCriterion::Blanks => header == "Extra" || header == "Blanks",
         SortCriterion::Size => header == "Size",
         SortCriterion::Name => header == "Language" || header == "Module"
     };
@@ -701,20 +701,12 @@ fn determine_name_header(groups: &[Group]) -> &'static str {
 }
 
 // The third column is what is left after code and comments, and each model leaves something else:
-// content leaves the lines that say nothing, region only the blanks outside everything. The two
-// spellings sit together because a model reaching one of them and not the other would head a
-// column with a word the rows under it do not use.
+// content leaves the lines that say nothing, region only the blanks outside everything. This is the
+// heading over the cells, and the model itself holds the word the cells use.
 fn get_third_column_header(model: CountingModel) -> &'static str {
     match model {
         CountingModel::Content => "Extra",
         CountingModel::Region => "Blanks"
-    }
-}
-
-fn get_third_column_label(model: CountingModel) -> &'static str {
-    match model {
-        CountingModel::Content => "extra",
-        CountingModel::Region => "blanks"
     }
 }
 
@@ -1874,7 +1866,7 @@ impl Columns {
         if !self.hidden.extra {
             terms.push(format!("{:>extra_w$} {}",
                     theme.extra_number.paint(&format_with_separators(lines - code_lines - comment_lines)),
-                    theme.extra_label.paint(get_third_column_label(self.model)), extra_w = self.extra));
+                    theme.extra_label.paint(self.model.get_third_quantity_name()), extra_w = self.extra));
         }
         format!("{}{}{}{}{:>headline_w$} {} {{ {} }}",
                 painted_name, " ".repeat(self.name - name_len + NAME_GAP), theme.arrow.paint("->"), " ".repeat(NAME_GAP),
@@ -1899,7 +1891,7 @@ impl Columns {
         if !self.hidden.extra {
             terms.push(format!("{:>extra_w$} {}",
                     styles.extra.paint(&format_with_separators(lines - code_lines - comment_lines)),
-                    styles.extra.paint(get_third_column_label(self.model)), extra_w = self.extra));
+                    styles.extra.paint(self.model.get_third_quantity_name()), extra_w = self.extra));
         }
         format!("{}{}{}{}{:>headline_w$} {} {{ {} }}",
                 painted_name, " ".repeat(self.name - name_len + NAME_GAP), styles.branch.paint("->"), " ".repeat(NAME_GAP),

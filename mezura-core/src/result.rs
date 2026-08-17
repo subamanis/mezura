@@ -135,7 +135,10 @@ pub enum SortCriterion {
     Lines,
     Code,
     Comments,
+    // The third quantity under each model, and each word orders by it only under the model that
+    // uses the word: 'extra' names nothing to a run counting by region, where the column is blanks.
     Extra,
+    Blanks,
     Size,
     Name
 }
@@ -151,6 +154,7 @@ impl SortCriterion {
             "code" => Some(Self::Code),
             "comments" => Some(Self::Comments),
             "extra" => Some(Self::Extra),
+            "blanks" => Some(Self::Blanks),
             "size" => Some(Self::Size),
             "name" => Some(Self::Name),
             _ => None
@@ -164,6 +168,7 @@ impl SortCriterion {
             Self::Code => "code",
             Self::Comments => "comments",
             Self::Extra => "extra",
+            Self::Blanks => "blanks",
             Self::Size => "size",
             Self::Name => "name"
         }
@@ -178,7 +183,7 @@ impl SortCriterion {
             Self::Lines => stats.lines,
             Self::Code => stats.calculate_code_lines(model),
             Self::Comments => stats.calculate_comment_lines(model),
-            Self::Extra => stats.calculate_extra_lines(model),
+            Self::Extra | Self::Blanks => stats.calculate_extra_lines(model),
             Self::Name => 0
         }
     }

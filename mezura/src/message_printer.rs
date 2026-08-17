@@ -234,8 +234,10 @@ pub const HIDE_HELP  :  &str =
       timing          the execution time line at the bottom
       files           the files column of the details rows
       comments        the comments column of the details rows
-      extra           the third column of the details rows, whether it is headed 'Extra' or,
-                      under '--counting region', 'Blanks'
+      extra           the third column of the details rows, which is what '--counting content'
+                      leaves after code and comments
+      blanks          the same column under '--counting region'. Each word belongs to one model,
+                      so naming the other one's hides nothing and says so
       size            the size column of the details rows, and the size half of the 'list'
                       layout's files line
       percentages     every percentage of the details rows, keeping the numbers they describe
@@ -289,10 +291,11 @@ pub const SAVE_THEME_HELP  :  &str =
 pub const SORT_HELP  :  &str =
 "--sort
 
-    One argument: 'lines', 'files', 'code', 'comments', 'extra', 'size' or 'name'. Default: lines
+    One argument: 'lines', 'files', 'code', 'comments', 'extra', 'blanks', 'size' or 'name'.
+    Default: lines
     Every column of the details table is one of them, so there is no figure you can see and not
-    order by. 'extra' is the third column under either counting model, so it orders the 'Blanks'
-    column of '--counting region' as readily as the 'Extra' column of the default.
+    order by. The third column is 'extra' under '--counting content' and 'blanks' under
+    '--counting region', and naming the other model's word orders by lines and says so.
 
     Chooses the order of the languages in the \"details\" section, which also decides which of them
     reach the \"overview\" section and which are folded into its 'others' entry.

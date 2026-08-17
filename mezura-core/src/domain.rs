@@ -431,6 +431,23 @@ impl CountingModel {
         }
     }
 
+    pub fn get_other(&self) -> CountingModel {
+        match self {
+            Self::Content => Self::Region,
+            Self::Region => Self::Content
+        }
+    }
+
+    // What the third quantity is called under this model. Every face of a report asks here, the
+    // column the table heads and the key the document writes, or one of them would name it with a
+    // word the other does not use.
+    pub fn get_third_quantity_name(&self) -> &'static str {
+        match self {
+            Self::Content => "extra",
+            Self::Region => "blanks"
+        }
+    }
+
     pub fn calculate_code_lines(&self, classes: &LineClasses) -> usize {
         match self {
             Self::Content => classes.words_in_code + classes.string_content,

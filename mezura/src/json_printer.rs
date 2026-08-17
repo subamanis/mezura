@@ -441,7 +441,7 @@ fn create_total_object(total: &Stats, keywords_counted: bool, model: CountingMod
         format!("    \"lines\": {}", total.lines),
         format!("    \"code\": {}", total.calculate_code_lines(model)),
         format!("    \"comments\": {}", total.calculate_comment_lines(model)),
-        format!("    \"extra\": {}", total.calculate_extra_lines(model)),
+        format!("    \"{}\": {}", model.get_third_quantity_name(), total.calculate_extra_lines(model)),
         format!("    \"bytes\": {}", total.bytes),
         format!("    \"average_bytes\": {}", total.calculate_average_size()),
         format!("    \"classes\": {}", create_classes_object(&total.classes, 6)),
@@ -541,7 +541,8 @@ fn create_files_array(files: &[&mezura_core::FileEntry], nested_shown: bool, mod
             format!("          \"lines\": {}", stats.lines),
             format!("          \"code\": {}", stats.calculate_code_lines(model)),
             format!("          \"comments\": {}", stats.calculate_comment_lines(model)),
-            format!("          \"extra\": {}", stats.calculate_extra_lines(model)),
+            format!("          \"{}\": {}", model.get_third_quantity_name(),
+                    stats.calculate_extra_lines(model)),
             format!("          \"bytes\": {}", stats.bytes),
             format!("          \"classes\": {}", create_classes_object(&stats.classes, 12)),
         ];
@@ -562,10 +563,11 @@ fn create_nested_languages_array(sections: &HashMap<String, Stats>, model: Count
 
     let entries = sorted.into_iter().map(|(name, info)| format!(
 "        {{\n          \"name\": \"{}\",\n          \"files\": {},\n          \"lines\": {},\n          \
-\"code\": {},\n          \"comments\": {},\n          \"extra\": {},\n          \"bytes\": {},\n          \
+\"code\": {},\n          \"comments\": {},\n          \"{}\": {},\n          \"bytes\": {},\n          \
 \"classes\": {}\n        }}",
             escape(name), info.files, info.lines, info.calculate_code_lines(model),
-            info.calculate_comment_lines(model), info.calculate_extra_lines(model), info.bytes,
+            info.calculate_comment_lines(model), model.get_third_quantity_name(),
+            info.calculate_extra_lines(model), info.bytes,
             create_classes_object(&info.classes, 12))).collect::<Vec<_>>();
 
     format!("[\n{}\n      ]", entries.join(",\n"))
@@ -582,7 +584,7 @@ fn create_language_object(name: &str, info: &Stats, keywords_counted: bool, nest
         format!("      \"lines\": {}", info.lines),
         format!("      \"code\": {}", info.calculate_code_lines(model)),
         format!("      \"comments\": {}", info.calculate_comment_lines(model)),
-        format!("      \"extra\": {}", info.calculate_extra_lines(model)),
+        format!("      \"{}\": {}", model.get_third_quantity_name(), info.calculate_extra_lines(model)),
         format!("      \"bytes\": {}", info.bytes),
         format!("      \"average_bytes\": {}", info.calculate_average_size()),
         format!("      \"classes\": {}", create_classes_object(&info.classes, 8)),
