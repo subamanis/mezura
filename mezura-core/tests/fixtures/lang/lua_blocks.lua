@@ -1,4 +1,4 @@
--- mezura-expect lines=19 code=8 comments=8 extra=3 functions=2
+-- mezura-expect lines=21 code=10 comments=8 extra=3 functions=2
 local greeting = "hello"
 
 --[[ this block
@@ -17,3 +17,5 @@ end
 with ]] inside as text
 ]==]
 local s = '-- not a comment'
+local text = [[raw text across
+two lines, no escapes]]

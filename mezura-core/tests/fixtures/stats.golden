@@ -1,4 +1,4 @@
-files=70 lines=851 code=455 comments=217
+files=70 lines=853 code=457 comments=217
 
 Ada
   files=1 lines=8 code=5 comments=2
@@ -137,8 +137,8 @@ Lisp
   words_in_code=3 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   classes=1 functions=1 macros=0
 Lua
-  files=1 lines=19 code=8 comments=8
-  words_in_code=8 string_content=0 comment_words_beside_code=0 words_in_comment=8 punctuation_in_code=0 punctuation_in_comment=1 blank=2 blank_in_comment=0 blank_in_string=0
+  files=1 lines=21 code=10 comments=8
+  words_in_code=9 string_content=1 comment_words_beside_code=0 words_in_comment=8 punctuation_in_code=0 punctuation_in_comment=1 blank=2 blank_in_comment=0 blank_in_string=0
   functions=2
 MATLAB
   files=1 lines=9 code=4 comments=2
