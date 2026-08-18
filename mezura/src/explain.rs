@@ -1,0 +1,161 @@
+// The '--explain' face: one file line by line, as text for a person and as the per-line JSON
+// document for a program. The answers come from the library's explain pass; everything here is
+// wording and layout.
+use std::path::Path;
+use std::process::ExitCode;
+
+use mezura_core::{Bucket, Carried, CountingModel, ExplainError, FileExplanation, Languages};
+
+use crate::config_manager::Configuration;
+use crate::json_printer::escape;
+use crate::message_printer::wrap_message;
+use crate::theme::get_active;
+
+pub fn run_explain(config: &Configuration, languages: Languages) -> ExitCode {
+    let [target] = &config.engine.targets[..] else {
+        return refuse(&format!("'--explain' answers for exactly one file, and this run names {} \
+targets. Give the file alone: mezura src/main.rs --explain", config.engine.targets.len()));
+    };
+    let path = Path::new(&target.path);
+    if !path.is_file() {
+        return refuse(&format!("'--explain' answers for one file, and '{}' is not one. Give the \
+file itself: mezura src/main.rs --explain", target.path));
+    }
+
+    match mezura_core::explain_file(path, &config.engine, languages) {
+        Ok(explanation) => {
+            if config.view.prints_text() {
+                print_text(&target.path, &explanation, config.view.counting);
+            } else {
+                print_json(&target.path, &explanation, config.view.counting);
+            }
+            ExitCode::SUCCESS
+        },
+        Err(ExplainError::UnclaimedFile) => refuse(&format!("No language of this run claims '{}', \
+so there is nothing to explain. If its language was narrowed away, drop '--languages' or \
+'--exclude-languages'; if the extension is unknown, '--force-language' hands it to a language.",
+                target.path)),
+        Err(ExplainError::UnreadableFile(reason)) => refuse(&format!("'{}' could not be read: \
+{reason}", target.path)),
+        Err(ExplainError::LanguagesFromAnotherConfig) => refuse("The languages of this run were \
+resolved against different settings, so the answer would be for the wrong selection.")
+    }
+}
+
+fn refuse(message: &str) -> ExitCode {
+    eprintln!("\n{}\n", get_active().error.paint(&wrap_message(message)));
+    ExitCode::FAILURE
+}
+
+fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel) {
+    let theme = get_active();
+    println!("{}", theme.heading.paint(&format!("{path} as {}, counted by {}",
+            explanation.language, model.name())));
+    println!();
+    if explanation.lines.is_empty() {
+        println!("{}", theme.note.paint("The file has no lines."));
+        return;
+    }
+
+    let width = explanation.lines.len().to_string().len();
+    for (at, (source, line)) in explanation.contents.lines().zip(&explanation.lines).enumerate() {
+        println!("{:>width$}  {}", at + 1, source);
+        let bucket = model.fold(line.class);
+        let bucket_style = match bucket {
+            Bucket::Code => &theme.code_label,
+            Bucket::Comments => &theme.comments_label,
+            Bucket::Third => &theme.extra_label
+        };
+        let mut verdict = format!("{}  {}", bucket_style.paint(model.get_bucket_name(bucket)),
+                line.class.get_name());
+        let mut notes = line.read_as.as_ref().map(|name| format!("read as {name}"))
+                .into_iter().collect::<Vec<_>>();
+        notes.extend(describe_carried(&line.carried));
+        if !notes.is_empty() {
+            verdict = format!("{verdict}  {}", theme.note.paint(&format!("({})", notes.join("; "))));
+        }
+        println!("{:>width$}  {verdict}", "");
+    }
+
+    let (code, comments, third) = fold_totals(explanation, model);
+    println!();
+    println!("{} lines: {code} {}, {comments} {}, {third} {}", explanation.lines.len(),
+            theme.code_label.paint("code"), theme.comments_label.paint("comments"),
+            theme.extra_label.paint(model.get_third_quantity_name()));
+}
+
+// The document linejudge reads: 'format', 'lines', 'buckets' and one 'per_line' entry per physical
+// line are the contract, everything else is mezura's own and a reader is free to skip it.
+fn print_json(path: &str, explanation: &FileExplanation, model: CountingModel) {
+    let (code, comments, third) = fold_totals(explanation, model);
+    let mut document = String::with_capacity(120 + 90 * explanation.lines.len());
+    document.push_str(&format!("{{\n  \"format\": 1,\n  \"counter\": \"mezura\",\n  \"file\": \"{}\",\n",
+            escape(path)));
+    document.push_str(&format!("  \"language\": \"{}\",\n  \"counting\": \"{}\",\n  \"lines\": {},\n",
+            escape(&explanation.language), model.name(), explanation.lines.len()));
+    document.push_str(&format!("  \"buckets\": {{ \"code\": {code}, \"comments\": {comments}, \"{}\": {third} }},\n",
+            model.get_third_quantity_name()));
+    document.push_str("  \"per_line\": [");
+    for (at, line) in explanation.lines.iter().enumerate() {
+        let bucket = model.get_bucket_name(model.fold(line.class));
+        let mut entry = format!("\n    {{ \"line\": {}, \"bucket\": \"{bucket}\", \"class\": \"{}\"",
+                at + 1, line.class.get_name());
+        if let Some(name) = &line.read_as {
+            entry.push_str(&format!(", \"read_as\": \"{}\"", escape(name)));
+        }
+        if let Some(note) = describe_carried(&line.carried) {
+            entry.push_str(&format!(", \"carried\": \"{}\"", escape(&note)));
+        }
+        entry.push_str(" }");
+        if at + 1 < explanation.lines.len() {
+            entry.push(',');
+        }
+        document.push_str(&entry);
+    }
+    document.push_str(if explanation.lines.is_empty() {"],\n"} else {"\n  ],\n"});
+    document.push_str(&format!("  \"classes\": {{ {} }}\n}}",
+            explanation.classes.to_array().iter().zip(mezura_core::LineClasses::NAMES)
+                    .map(|(count, name)| format!("\"{name}\": {count}"))
+                    .collect::<Vec<_>>().join(", ")));
+    println!("{document}");
+}
+
+fn fold_totals(explanation: &FileExplanation, model: CountingModel) -> (usize, usize, usize) {
+    let code = model.calculate_code_lines(&explanation.classes);
+    let comments = model.calculate_comment_lines(&explanation.classes);
+    (code, comments, explanation.lines.len() - code - comments)
+}
+
+fn describe_carried(carried: &Carried) -> Option<String> {
+    match carried {
+        Carried::Nothing => None,
+        Carried::Comment { opener, depth, since_line } if *depth > 1 => Some(format!(
+                "in a comment opened by {opener} on line {since_line}, {depth} deep")),
+        Carried::Comment { opener, since_line, .. } => Some(format!(
+                "in a comment opened by {opener} on line {since_line}")),
+        Carried::Str { opener, since_line } => Some(format!(
+                "in a string opened by {opener} on line {since_line}")),
+        Carried::CommentContinuation { since_line } => Some(format!(
+                "a continuation of the comment on line {since_line}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The wording of the notes, pinned here because both faces print it and linejudge's readers
+    // will show it beside their own rows
+    #[test]
+    fn a_carried_answer_reads_as_a_sentence() {
+        assert_eq!(None, describe_carried(&Carried::Nothing));
+        assert_eq!(Some("in a comment opened by /* on line 23".to_owned()),
+                describe_carried(&Carried::Comment { opener: "/*".to_owned(), depth: 1, since_line: 23 }));
+        assert_eq!(Some("in a comment opened by --[[ on line 4, 3 deep".to_owned()),
+                describe_carried(&Carried::Comment { opener: "--[[".to_owned(), depth: 3, since_line: 4 }));
+        assert_eq!(Some("in a string opened by \" on line 7".to_owned()),
+                describe_carried(&Carried::Str { opener: "\"".to_owned(), since_line: 7 }));
+        assert_eq!(Some("a continuation of the comment on line 2".to_owned()),
+                describe_carried(&Carried::CommentContinuation { since_line: 2 }));
+    }
+}

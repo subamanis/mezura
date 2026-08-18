@@ -30,6 +30,7 @@ pub const BAR_THICKNESS      :&str   = "bar-thickness";
 pub const PROGRESS_BAR       :&str   = "progress-bar";
 pub const LAYOUT             :&str   = "layout";
 pub const OUTPUT             :&str   = "output";
+pub const EXPLAIN            :&str   = "explain";
 pub const DIFF               :&str   = "diff";
 pub const NUMBER_SEPARATOR   :&str   = "number-separator";
 pub const DECIMAL_SEPARATOR  :&str   = "decimal-separator";
@@ -106,6 +107,8 @@ pub struct ViewConfig {
     pub progress_bar: ProgressBarStyle,
     pub layout: Layout,
     pub output: OutputFormat,
+    // One file explained line by line instead of a report. Command line only, like '--output'.
+    pub explain: bool,
     // The document this run is compared against, as the path was typed. Read after the settings are
     // built and before anything is counted, so a baseline that is not one costs no scan.
     pub diff_against: Option<String>,
@@ -156,6 +159,7 @@ impl Default for ViewConfig {
             progress_bar: ProgressBarStyle::default(),
             layout: Layout::default(),
             output: OutputFormat::default(),
+            explain: false,
             diff_against: None,
             number_separator: NumberSeparator::default(),
             decimal_separator: DecimalSeparator::default(),
@@ -521,7 +525,8 @@ pub enum ArgParsingError {
     NoGlobMatches(String),
     AllGlobMatchesIgnored(String),
     MalformedTarget(String),
-    ContestedTarget(String, String, String)
+    ContestedTarget(String, String, String),
+    MeaninglessWithExplain(String)
 }
 
 impl Formatted for ArgParsingError {
@@ -569,7 +574,8 @@ impl Formatted for ArgParsingError {
             Self::NoGlobMatches(p) => wrap_message(&format!("The pattern '{p}' did not match any existing directory or file.")).red(),
             Self::AllGlobMatchesIgnored(p) => wrap_message(&format!("Everything that the pattern '{p}' matched is skipped, because a .gitignore file ignores it, because it is a dotted path, or because it is a link.\nUse the '--no-gitignore' or '--search-in-dotted' commands to include it, or provide the paths explicitly.")).red(),
             Self::MalformedTarget(p) => wrap_message(&format!("'{p}' names a module with no path after it.\nA target is written as '<module>=<path>', and its paths are separated by commas: 'tests=./api/tests,./web/tests'.")).red(),
-            Self::ContestedTarget(path, first, second) => wrap_message(&format!("'{path}' is declared both as '{first}' and as '{second}'.\nEvery file belongs to exactly one module, and there is no more specific of the two to decide it.")).red()
+            Self::ContestedTarget(path, first, second) => wrap_message(&format!("'{path}' is declared both as '{first}' and as '{second}'.\nEvery file belongs to exactly one module, and there is no more specific of the two to decide it.")).red(),
+            Self::MeaninglessWithExplain(command) => wrap_message(&format!("'--{EXPLAIN}' explains one file line by line and '--{command}' belongs to a report over a whole scan, so the two cannot be asked for together.")).red()
         }
     }
 }
@@ -595,7 +601,7 @@ impl TypedExplicitlyOnCommandLine {
             targets: _, targets_source: _, threads: _, should_show_faulty_files: _, theme_name: _,
             log: _, compare_level: _, config_name_to_save: _, config_name_to_load: _,
             theme_name_to_save: _, bar_thickness: _, progress_bar: _, number_separator: _, decimal_separator: _,
-            layout: _, output: _, diff_against: _, sort_by: _, top_n: _, by_file: _, styles: _,
+            layout: _, output: _, explain: _, diff_against: _, sort_by: _, top_n: _, by_file: _, styles: _,
             config_styles: _, theme_styles: _, typed_explicitly: _ } = builder;
 
         TypedExplicitlyOnCommandLine {
@@ -647,6 +653,8 @@ pub struct ConfigurationBuilder {
     // Absent from 'add_missing_fields' and 'has_missing_fields' on purpose, like the save and load
     // names: those two functions exist for what a configuration file can supply, and this is not it
     pub output:                   Option<OutputFormat>,
+    // Absent from the same two for the same reason: a per-run diagnostic, never a saved setting
+    pub explain:                  Option<bool>,
     // Absent from those same two, and for the same reason: a configuration that silently turned
     // every run into a comparison against a file saved months ago is not a setting anybody wants
     pub diff_against:             Option<String>,
@@ -777,6 +785,7 @@ is sorted by lines.", sort_by.name());
                 progress_bar: self.progress_bar.unwrap_or_default(),
                 layout: self.layout.unwrap_or_default(),
                 output: self.output.unwrap_or_default(),
+                explain: self.explain.unwrap_or(false),
                 diff_against: self.diff_against.clone(),
                 number_separator: self.number_separator.unwrap_or_default(),
                 decimal_separator: self.decimal_separator.unwrap_or_default(),
@@ -858,8 +867,8 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     let (mut exclude_dirs, mut languages_of_interest, mut excluded_languages, mut forced_languages, mut threads, mut counting,
          mut search_in_dotted, mut show_faulty_files, mut config_name_to_save, mut hidden, mut log,
          mut compare_level, mut config_name_to_load, mut no_gitignore, mut theme_name, mut theme_name_to_save, mut styles, mut bar_thickness,
-         mut progress_bar, mut number_separator, mut decimal_separator, mut layout, mut output, mut diff_against, mut sort_by, mut top_n, mut by_file)
-         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
+         mut progress_bar, mut number_separator, mut decimal_separator, mut layout, mut output, mut explain, mut diff_against, mut sort_by, mut top_n, mut by_file)
+         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
     for command in options {
         let (command_name, arguments) = match command.find(" ") {
             Some(index) => command.split_at(index),
@@ -1034,6 +1043,12 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                     return Err(ArgParsingError::IncorrectCommandArgs(OUTPUT.to_owned()))
                 }
             }
+        } else if command_name == EXPLAIN {
+            if has_any_args(command) {
+                message_printer::print_help_message_for_command(EXPLAIN);
+                return Err(ArgParsingError::UnexpectedCommandArgs(EXPLAIN.to_owned()))
+            }
+            explain = Some(true);
         } else if command_name == DIFF {
             let path = arguments.trim();
             if path.is_empty() {
@@ -1116,12 +1131,26 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         targets, targets_source: None, exclude_dirs, languages_of_interest, excluded_languages, forced_languages, threads, counting,
         should_search_in_dotted: search_in_dotted, should_show_faulty_files: show_faulty_files,
         hidden, no_gitignore, theme_name, theme_name_to_save, log, compare_level,
-        config_name_to_save, config_name_to_load, styles, bar_thickness, progress_bar, number_separator, decimal_separator, layout, output, diff_against, sort_by, top_n, by_file,
+        config_name_to_save, config_name_to_load, styles, bar_thickness, progress_bar, number_separator, decimal_separator, layout, output, explain, diff_against, sort_by, top_n, by_file,
         config_styles: None, theme_styles: None, typed_explicitly: TypedExplicitlyOnCommandLine::default()
     };
     // Before the configuration files below fill anything in, which is what makes the answer the
     // command line's own
     config_builder.typed_explicitly = TypedExplicitlyOnCommandLine::of(&config_builder);
+
+    // Checked here, while every field is still the command line's own: a value one of the files
+    // below merges in must not kill an explain run, only a command actually typed beside it.
+    if config_builder.explain == Some(true) {
+        let typed_beside_it = [(DIFF, config_builder.diff_against.is_some()),
+                (LOG, config_builder.log.is_some()),
+                (COMPARE_LEVEL, config_builder.compare_level.is_some()),
+                (SORT, config_builder.sort_by.is_some()),
+                (TOP, config_builder.top_n.is_some()),
+                (BY_FILE, config_builder.by_file.is_some())];
+        if let Some((command, _)) = typed_beside_it.iter().find(|(_, typed)| *typed) {
+            return Err(ArgParsingError::MeaninglessWithExplain((*command).to_owned()));
+        }
+    }
 
     let mut targets_config_source = None;
     if let Some((custom, issues)) = custom_config {
@@ -1214,7 +1243,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             languages_of_interest: _, excluded_languages: _,
             // not carried by a configuration file at all
             config_name_to_save: _, config_name_to_load: _, theme_name_to_save: _, output: _,
-            diff_against: _, log: _, targets_source: _, typed_explicitly: _,
+            explain: _, diff_against: _, log: _, targets_source: _, typed_explicitly: _,
             // a style that does not parse is reported per line and skipped, and the rest of the file
             // still applies, so these warn instead of reaching here
             styles: _, config_styles: _, theme_styles: _ } = config_builder;

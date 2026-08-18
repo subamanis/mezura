@@ -812,6 +812,29 @@ YOUR DATA DIRECTORY
 
 TUNING AND DIAGNOSTICS
 
+--explain
+
+    No arguments. The target must be exactly one file.
+
+    Explains that file line by line instead of printing a report. Every line is shown with the
+    bucket it lands in under the active way of counting, the class mezura itself read off it,
+    and, where something was still open when the line began, what that was and where it started:
+    'in a comment opened by /* on line 23', 'in a string opened by " on line 7'. In a file
+    holding other languages, a line read by an embedded language names it.
+
+      mezura src/main.rs --explain
+      mezura src/page.vue --explain --counting region
+      mezura src/main.rs --explain --output json
+
+    A total can be right by accident, two mistakes cancelling out, and a per-line answer cannot,
+    which is what this is for: checking a surprising count against the file itself.
+
+    '--output json' writes the same answer as a document with one verdict per line and nothing
+    else on the output, and no log entry is written. '--counting' picks the buckets, and the
+    commands choosing what is counted ('--languages', '--force-language' and the rest) apply as
+    in a run. The commands that belong to a report over a whole scan ('--diff', '--log',
+    '--compare', '--sort', '--top', '--by-file') are refused beside it.
+
 --threads
 
     2 numbers: the first between 1 and 32 and the second between 1 and 128.
@@ -882,7 +905,8 @@ THE PROGRAM ITSELF
 `--output json` writes a single JSON document instead of the printed report, so that a build step, a
 badge or a dashboard can read a run instead of a person. Everything that is not the document itself,
 warnings included, goes to the error output, so `mezura ./src --output json > stats.json` leaves a file
-that a parser accepts. The document is written even when there was nothing to count, and even when
+that a parser accepts. The same holds for `--explain --output json`, where the document answers for
+one file with one verdict per line. The document is written even when there was nothing to count, and even when
 every file failed to parse: a consumer never has to tell "no output" apart from "no code found", and
 a run that failed says so in the document instead of leaving an empty file.
 

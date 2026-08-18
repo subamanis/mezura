@@ -6,6 +6,7 @@
 mod test_support;
 
 mod domain;
+mod explain;
 mod phase_timing;
 mod progress;
 mod result;
@@ -16,9 +17,10 @@ pub mod languages;
 pub mod render;
 pub mod warnings;
 
-pub use domain::{CountingModel, Keyword, Language, LeveledPair, LineClasses, MultilineString,
-        NestedLanguage, Stats};
+pub use domain::{Bucket, CountingModel, Keyword, Language, LeveledPair, LineClass, LineClasses,
+        MultilineString, NestedLanguage, Stats};
 pub use engine::config::{EngineConfig, Target, Threads};
+pub use explain::{Carried, ExplainError, ExplainedLine, FileExplanation, explain_file};
 pub use engine::targets::TargetError;
 pub use languages::Languages;
 pub use progress::ScanProgress;

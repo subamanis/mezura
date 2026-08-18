@@ -10,7 +10,7 @@ use std::{collections::HashMap, fs::File, io::Read as IoRead, path::Path, str};
 
 use memchr::memmem;
 
-use crate::{EngineConfig, Language, NestedLanguage, phase_timing};
+use crate::{EngineConfig, Language, LineClass, NestedLanguage, phase_timing};
 use crate::domain::{CommentPair, FileStats, LineContinuation};
 
 pub const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
@@ -606,10 +606,28 @@ pub fn parse_file(path: &Path, lang_name: &str, buf: &mut String, buffers: &mut 
         at = Some(phase_timing::now());
     }
 
-    let report = parse_lines(buf, lookup.languages.get(lang_name).unwrap(), lookup, matchers, config, buffers);
+    let report = parse_lines::<false>(buf, lookup.languages.get(lang_name).unwrap(), lookup, matchers,
+            config, buffers, &mut ExplainLog::default());
     if let Some(t) = at { buffers.timing.parse_nanos += phase_timing::nanos_since(t); }
 
     Ok(report)
+}
+
+// The door '--explain' comes through: the same walk as a counting run, one file, with the log
+// switched on. Keywords are skipped whatever the configuration says, since they cannot move a
+// line's class and this pass answers nothing else.
+pub(crate) fn explain_parsed_file(path: &Path, lang_name: &str, lookup: &NestedLanguageLookup,
+    config: &EngineConfig) -> Result<(String, FileReport, ExplainLog), String>
+{
+    let mut contents = String::new();
+    File::open(path).and_then(|mut file| file.read_to_string(&mut contents))
+            .map_err(|error| error.to_string())?;
+
+    let config = EngineConfig { count_keywords: false, ..config.clone() };
+    let mut log = ExplainLog::default();
+    let report = parse_lines::<true>(&contents, lookup.languages.get(lang_name).unwrap(), lookup,
+            &mut KeywordMatchers::default(), &config, &mut ParseBuffers::default(), &mut log);
+    Ok((contents, report, log))
 }
 
 // 'str::lines' splits through the standard library's own byte search, a SWAR loop over two words at
@@ -654,11 +672,94 @@ fn get_lines_of(contents: &str) -> LineIter<'_> {
 // The carry from one line to the next, one set per language in play: the shell's survives a
 // section, a section's starts fresh at its opener and is dropped at its closer, the way the file
 // really reads.
+//
+// 'opened_line' is written only while explaining: the line that opened whatever is currently
+// carried. One slot covers comment, string and continuation because at most one of the three
+// crosses a line boundary. It needs no resetting of its own, since a section starts on a fresh
+// state and a region opener replaces the shell's.
 #[derive(Default)]
 struct WalkState {
     open_comment: Option<(u8, u32)>,
     open_str_symbol: Option<u8>,
     continued_comment: bool,
+    opened_line: usize,
+}
+
+// What earlier lines left open when a line began, as '--explain' reports it. For a leveled pair the
+// depth carried by the walk is the level, so the spelling of the opener is rebuilt from it later.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum CarriedRecord {
+    Nothing,
+    Comment { symbol: u8, depth: u32, since_line: usize },
+    Str { symbol: u8, since_line: usize },
+    Continuation { since_line: usize },
+}
+
+impl CarriedRecord {
+    fn of(state: &WalkState) -> CarriedRecord {
+        if let Some(symbol) = state.open_str_symbol {
+            CarriedRecord::Str { symbol, since_line: state.opened_line }
+        } else if let Some((symbol, depth)) = state.open_comment {
+            CarriedRecord::Comment { symbol, depth, since_line: state.opened_line }
+        } else if state.continued_comment {
+            CarriedRecord::Continuation { since_line: state.opened_line }
+        } else {
+            CarriedRecord::Nothing
+        }
+    }
+
+    // Whether what is open after a line is the same open thing this record described, rather than
+    // a new one the line opened. Judged by the symbol, which mistakes one corner: a line that
+    // closes a pair and reopens the same pair before its end keeps the old opening line.
+    fn survives_in(&self, state: &WalkState) -> bool {
+        match self {
+            CarriedRecord::Nothing => false,
+            CarriedRecord::Comment { symbol, .. } =>
+                    state.open_comment.map(|(open, _)| open == *symbol).unwrap_or(false),
+            CarriedRecord::Str { symbol, .. } => state.open_str_symbol == Some(*symbol),
+            CarriedRecord::Continuation { .. } => state.continued_comment,
+        }
+    }
+}
+
+// One verdict per physical line, in file order, which the walk produces by visiting every line
+// exactly once. The language of a record is interned, since a file rarely holds more than a few.
+#[derive(Default)]
+pub(crate) struct ExplainLog {
+    records: Vec<LineRecord>,
+    languages: Vec<String>,
+}
+
+pub(crate) struct LineRecord {
+    pub class: LineClass,
+    pub carried: CarriedRecord,
+    language: u16,
+}
+
+impl ExplainLog {
+    fn record(&mut self, class: LineClass, carried: CarriedRecord, language: &Language) {
+        let language = match self.languages.iter().position(|name| name == &language.name) {
+            Some(at) => at as u16,
+            None => {
+                self.languages.push(language.name.clone());
+                (self.languages.len() - 1) as u16
+            }
+        };
+        self.records.push(LineRecord { class, carried, language });
+    }
+
+    // The number of the line being walked right now, 1-based: its record has not been pushed yet
+    fn get_current_line_number(&self) -> usize {
+        self.records.len() + 1
+    }
+
+    pub fn get_language_name_of(&self, record: &LineRecord) -> &str {
+        &self.languages[record.language as usize]
+    }
+
+    pub fn records(&self) -> &[LineRecord] {
+        &self.records
+    }
 }
 
 // The lines of one nested language, added up over every section of it in the file
@@ -670,8 +771,9 @@ struct SectionBucket<'a> {
     bytes: usize,
 }
 
-fn parse_lines(contents: &str, language: &Language, lookup: &NestedLanguageLookup, matchers: &mut KeywordMatchers,
-    config: &EngineConfig, buffers: &mut ParseBuffers) -> FileReport
+fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup: &NestedLanguageLookup,
+    matchers: &mut KeywordMatchers, config: &EngineConfig, buffers: &mut ParseBuffers,
+    log: &mut ExplainLog) -> FileReport
 {
     let ParseBuffers { scan, alias_indices, code_spans, .. } = buffers;
     let mut shell_stats = match config.count_keywords {
@@ -689,8 +791,8 @@ fn parse_lines(contents: &str, language: &Language, lookup: &NestedLanguageLooku
     let mut lines = get_lines_of(contents);
     let mut handed_back = None;
     while let Some((line_start, raw_line)) = handed_back.take().or_else(|| lines.next()) {
-        let had_code = walk_line(raw_line, line_start, language, collecting_spans,
-                scan, &mut shell, &mut shell_stats, code_spans);
+        let had_code = walk_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans,
+                scan, &mut shell, &mut shell_stats, code_spans, log);
 
         // A region opener only counts where the shell left it as code, so one sitting inside a
         // comment or a string of the shell opens nothing
@@ -732,8 +834,8 @@ fn parse_lines(contents: &str, language: &Language, lookup: &NestedLanguageLooku
                     handed_back = Some((inner_start, inner_raw));
                     break;
                 }
-                walk_line(inner_raw, inner_start, inner, bucket.collecting_spans,
-                        scan, &mut inner_state, &mut bucket.stats, &mut bucket.spans);
+                walk_line::<EXPLAIN>(inner_raw, inner_start, inner, bucket.collecting_spans,
+                        scan, &mut inner_state, &mut bucket.stats, &mut bucket.spans, log);
             }
             bucket.bytes += section_to - section_from;
         }
@@ -759,11 +861,12 @@ fn parse_lines(contents: &str, language: &Language, lookup: &NestedLanguageLooku
 
 // One line into the counts of one language. Returns whether the line left code behind, which is
 // the only thing the section machinery needs to know about it.
-fn walk_line(raw_line: &str, line_start: usize, language: &Language, collecting_spans: bool,
+fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &Language, collecting_spans: bool,
     scan: &mut ScanBuffers, state: &mut WalkState, file_stats: &mut FileStats,
-    code_spans: &mut Vec<(u32, u32)>) -> bool
+    code_spans: &mut Vec<(u32, u32)>, log: &mut ExplainLog) -> bool
 {
     file_stats.lines += 1;
+    let carried = if EXPLAIN { CarriedRecord::of(state) } else { CarriedRecord::Nothing };
 
     // Ascii-only trimming, since the unicode whitespace classification of trim() costs
     // a significant part of the total run time, for lines that are code either way
@@ -771,9 +874,11 @@ fn walk_line(raw_line: &str, line_start: usize, language: &Language, collecting_
     let line = from_start.trim_ascii_end();
     if line.is_empty() {
         state.continued_comment = false;
-        if state.open_str_symbol.is_some() { file_stats.classes.blank_in_string += 1; }
-        else if state.open_comment.is_some() { file_stats.classes.blank_in_comment += 1; }
-        else { file_stats.classes.blank += 1; }
+        let class = if state.open_str_symbol.is_some() { LineClass::BlankInString }
+                else if state.open_comment.is_some() { LineClass::BlankInComment }
+                else { LineClass::Blank };
+        file_stats.classes.bump(class);
+        if EXPLAIN { log.record(class, carried, language); }
         return false;
     }
     let base = line_start + (raw_line.len() - from_start.len());
@@ -782,9 +887,11 @@ fn walk_line(raw_line: &str, line_start: usize, language: &Language, collecting_
     // comment, and nothing on it is read: in C '// a comment \' makes the whole next line
     // comment too, however it is written.
     if state.continued_comment {
-        if has_word_byte(line.as_bytes()) { file_stats.classes.words_in_comment += 1; }
-        else { file_stats.classes.punctuation_in_comment += 1; }
+        let class = if has_word_byte(line.as_bytes()) { LineClass::WordsInComment }
+                else { LineClass::PunctuationInComment };
+        file_stats.classes.bump(class);
         state.continued_comment = ends_with_continuation(line, language);
+        if EXPLAIN { log.record(class, carried, language); }
         return false;
     }
 
@@ -819,15 +926,22 @@ fn walk_line(raw_line: &str, line_start: usize, language: &Language, collecting_
             && continues_in(language, |continuation| continuation.in_comments)
             && ends_with_continuation(line, language);
 
-    let classes = &mut file_stats.classes;
-    if words_in_code { classes.words_in_code += 1; }
-    else if line_info.has_string_literal { classes.string_content += 1; }
-    else if counts_as_comment {
-        if has_code { classes.comment_words_beside_code += 1; }
-        else { classes.words_in_comment += 1; }
+    let class = if words_in_code { LineClass::WordsInCode }
+            else if line_info.has_string_literal { LineClass::StringContent }
+            else if counts_as_comment {
+                if has_code { LineClass::CommentWordsBesideCode } else { LineClass::WordsInComment }
+            }
+            else if has_code { LineClass::PunctuationInCode }
+            else { LineClass::PunctuationInComment };
+    file_stats.classes.bump(class);
+    if EXPLAIN {
+        let leaves_something_open = state.open_comment.is_some() || state.open_str_symbol.is_some()
+                || state.continued_comment;
+        if leaves_something_open && !carried.survives_in(state) {
+            state.opened_line = log.get_current_line_number();
+        }
+        log.record(class, carried, language);
     }
-    else if has_code { classes.punctuation_in_code += 1; }
-    else { classes.punctuation_in_comment += 1; }
 
     if counts_as_code && collecting_spans && has_code {
         push_trimmed_spans(code_spans, &scan.code_ranges, line, base);
@@ -1780,9 +1894,10 @@ mod tests {
     }
 
     fn parse_lines_whole(contents: &str, language: &Language) -> FileStats {
-        parse_lines(contents, language, &NestedLanguageLookup { languages: &NO_SET_ASIDE,
+        parse_lines::<false>(contents, language, &NestedLanguageLookup { languages: &NO_SET_ASIDE,
                 extension_to_name: &NO_EXTENSIONS, set_aside: &NO_SET_ASIDE },
-                &mut KeywordMatchers::default(), &EngineConfig::default(), &mut ParseBuffers::default()).into_whole()
+                &mut KeywordMatchers::default(), &EngineConfig::default(), &mut ParseBuffers::default(),
+                &mut ExplainLog::default()).into_whole()
     }
 
     // Seeded from the language and then given the one file, which is what a real run does: the seed
@@ -2576,8 +2691,8 @@ mod tests {
         languages: &HashMap<String, Language>, extensions: &HashMap<String, Arc<str>>) -> FileReport
     {
         let lookup = NestedLanguageLookup { languages, extension_to_name: extensions, set_aside: &NO_SET_ASIDE };
-        parse_lines(contents, shell, &lookup, &mut KeywordMatchers::default(),
-                &EngineConfig::default(), &mut ParseBuffers::default())
+        parse_lines::<false>(contents, shell, &lookup, &mut KeywordMatchers::default(),
+                &EngineConfig::default(), &mut ParseBuffers::default(), &mut ExplainLog::default())
     }
 
     #[test]
@@ -3402,6 +3517,60 @@ mod tests {
         println!("stress corpus: {checked} cases, {known_wrong} of them known wrong");
         assert!(checked > 0, "no stress cases were found in {}", root.display());
         assert!(failures.is_empty(), "\n{} stress case(s) moved:\n  {}\n", failures.len(), failures.join("\n  "));
+    }
+
+    // The drift gate between the two builds of the walk: counting and explaining are one function,
+    // but the explain records are written beside the class counts and a slip would part them. Every
+    // fixture and every stress case goes through both, compared class by class and line by line.
+    #[test]
+    fn explaining_a_file_answers_exactly_what_counting_it_does() {
+        let lookup = fixture_lookup();
+        let config = EngineConfig::default();
+
+        let mut paths = fixture_paths(&fixtures_dir());
+        if let Some(corpus) = stress_corpus_dir() {
+            paths.extend(fixture_paths(&corpus));
+        }
+
+        let mut checked = 0;
+        for path in paths {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if name.ends_with(".md") { continue; }
+            let Some(lang_name) = lookup.of_path(&path) else { continue };
+
+            let mut buf = String::new();
+            let counted = parse_file_report(&path, lang_name.as_ref(), &mut buf, &config)
+                    .unwrap_or_else(|x| panic!("{name} could not be counted: {x}"));
+            let (_, explained, log) = explain_parsed_file(&path, lang_name.as_ref(), &shipped_lookup(), &config)
+                    .unwrap_or_else(|x| panic!("{name} could not be explained: {x}"));
+
+            let mut lines_per_language = HashMap::<String, usize>::new();
+            for record in log.records() {
+                *lines_per_language.entry(log.get_language_name_of(record).to_owned()).or_default() += 1;
+            }
+            let mut expected = HashMap::<String, usize>::new();
+            *expected.entry(lang_name.to_string()).or_default() += counted.shell.lines;
+            for section in &counted.sections {
+                *expected.entry(section.language.clone()).or_default() += section.stats.lines;
+            }
+            expected.retain(|_, lines| *lines > 0);
+            assert_eq!(expected, lines_per_language, "{name}: lines per language");
+
+            let whole_counted = counted.into_whole();
+            let whole_explained = explained.into_whole();
+            assert_eq!(whole_counted.classes, whole_explained.classes, "{name}");
+            assert_eq!(whole_counted.lines, log.records().len(),
+                    "{name}: {} lines got {} records", whole_counted.lines, log.records().len());
+
+            let mut from_records = crate::LineClasses::default();
+            for record in log.records() {
+                from_records.bump(record.class);
+            }
+            assert_eq!(whole_counted.classes, from_records,
+                    "{name}: the records disagree with the counted classes");
+            checked += 1;
+        }
+        assert!(checked > 30, "only {checked} files were swept");
     }
 
     // With the priority rules a real run has, so that a contested extension resolves here to the

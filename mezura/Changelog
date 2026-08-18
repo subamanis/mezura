@@ -27,6 +27,10 @@ Main changes:
       bare "/*" and "*/" of a block written on their own lines, the "*" of a banner line, a lone
       "//" spacer, a decorative "/*----*/". Comment counts drop visibly on trees written in banner
       style; code counts do not move.
+  -> New "--explain" command: run on exactly one file, it answers line by line instead of printing
+      a report, with each line's bucket, the class it was read as, and what was still open when the
+      line began. "--output json" writes the same answer as a document with one verdict per line,
+      for other tools to read. Run "--help explain" for the details.
   -> New "--counting" command, taking "content" or "region". The default, "content", is the
       counting mezura always did: a line counts where its words are, and a line saying nothing is
       extra. "region" counts a line where it sits, the way cloc, tokei and scc do: any code on the

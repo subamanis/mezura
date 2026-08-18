@@ -188,6 +188,32 @@ pub const SEARCH_IN_DOTTED_HELP  :  &str =
     inside it is source, and walking it is thousands of files for no count at all.
 
 ";
+pub const EXPLAIN_HELP  :  &str =
+"--explain
+
+    No arguments. The target must be exactly one file.
+
+    Explains that file line by line instead of printing a report. Every line is shown with the
+    bucket it lands in under the active way of counting, the class mezura itself read off it,
+    and, where something was still open when the line began, what that was and where it started:
+    'in a comment opened by /* on line 23', 'in a string opened by \" on line 7'. In a file
+    holding other languages, a line read by an embedded language names it.
+
+      mezura src/main.rs --explain
+      mezura src/page.vue --explain --counting region
+      mezura src/main.rs --explain --output json
+
+    A total can be right by accident, two mistakes cancelling out, and a per-line answer cannot,
+    which is what this is for: checking a surprising count against the file itself.
+
+    '--output json' writes the same answer as a document with one verdict per line and nothing
+    else on the output, and no log entry is written. '--counting' picks the buckets, and the
+    commands choosing what is counted ('--languages', '--force-language' and the rest) apply as
+    in a run. The commands that belong to a report over a whole scan ('--diff', '--log',
+    '--compare', '--sort', '--top', '--by-file') are refused beside it.
+
+";
+
 pub const SHOW_FAULTY_FILES_HELP  :  &str =
 "--show-faulty-files
 
@@ -910,6 +936,7 @@ pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 6] = [
         (RESTORE, RESTORE_HELP),
     ]),
     ("Tuning and diagnostics", &[
+        (EXPLAIN, EXPLAIN_HELP),
         (THREADS, THREADS_HELP),
         (SHOW_FAULTY_FILES, SHOW_FAULTY_FILES_HELP),
     ]),

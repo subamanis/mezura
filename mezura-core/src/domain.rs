@@ -390,6 +390,20 @@ impl LineClasses {
         self.to_array().iter().sum()
     }
 
+    pub(crate) fn bump(&mut self, class: LineClass) {
+        match class {
+            LineClass::WordsInCode => self.words_in_code += 1,
+            LineClass::StringContent => self.string_content += 1,
+            LineClass::CommentWordsBesideCode => self.comment_words_beside_code += 1,
+            LineClass::WordsInComment => self.words_in_comment += 1,
+            LineClass::PunctuationInCode => self.punctuation_in_code += 1,
+            LineClass::PunctuationInComment => self.punctuation_in_comment += 1,
+            LineClass::Blank => self.blank += 1,
+            LineClass::BlankInComment => self.blank_in_comment += 1,
+            LineClass::BlankInString => self.blank_in_string += 1
+        }
+    }
+
     pub(crate) fn add(&mut self, other: &LineClasses) {
         *self = combine_classes(self, other, |mine, theirs| mine + theirs);
     }
@@ -399,6 +413,41 @@ impl LineClasses {
     pub fn subtract(&mut self, other: &LineClasses) {
         *self = combine_classes(self, other, usize::saturating_sub);
     }
+}
+
+// One line's class as a value, for the walk to hand out one at a time. Variant order is the order
+// of 'LineClasses::NAMES', which 'get_name' and 'ALL' index by.
+#[derive(Debug,PartialEq,Eq,Clone,Copy)]
+pub enum LineClass {
+    WordsInCode,
+    StringContent,
+    CommentWordsBesideCode,
+    WordsInComment,
+    PunctuationInCode,
+    PunctuationInComment,
+    Blank,
+    BlankInComment,
+    BlankInString
+}
+
+impl LineClass {
+    pub const ALL : [LineClass; 9] = [LineClass::WordsInCode, LineClass::StringContent,
+            LineClass::CommentWordsBesideCode, LineClass::WordsInComment, LineClass::PunctuationInCode,
+            LineClass::PunctuationInComment, LineClass::Blank, LineClass::BlankInComment,
+            LineClass::BlankInString];
+
+    pub fn get_name(&self) -> &'static str {
+        LineClasses::NAMES[*self as usize]
+    }
+}
+
+// The three columns a model folds a class into. What the third one is called depends on the model,
+// which is 'get_bucket_name'.
+#[derive(Debug,PartialEq,Eq,Clone,Copy)]
+pub enum Bucket {
+    Code,
+    Comments,
+    Third
 }
 
 // Where the code and comment columns come from. The engine only ever fills 'LineClasses'; what a
@@ -448,21 +497,46 @@ impl CountingModel {
         }
     }
 
-    pub fn calculate_code_lines(&self, classes: &LineClasses) -> usize {
-        match self {
-            Self::Content => classes.words_in_code + classes.string_content,
-            Self::Region => classes.words_in_code + classes.string_content
-                    + classes.comment_words_beside_code + classes.punctuation_in_code
-                    + classes.blank_in_string
+    pub fn get_bucket_name(&self, bucket: Bucket) -> &'static str {
+        match bucket {
+            Bucket::Code => "code",
+            Bucket::Comments => "comments",
+            Bucket::Third => self.get_third_quantity_name()
         }
     }
 
-    pub fn calculate_comment_lines(&self, classes: &LineClasses) -> usize {
+    // The single source of what lands where: the column sums below and the per-line answer of
+    // '--explain' both go through this, so the two cannot disagree.
+    pub fn fold(&self, class: LineClass) -> Bucket {
         match self {
-            Self::Content => classes.comment_words_beside_code + classes.words_in_comment,
-            Self::Region => classes.words_in_comment + classes.punctuation_in_comment
-                    + classes.blank_in_comment
+            Self::Content => match class {
+                LineClass::WordsInCode | LineClass::StringContent => Bucket::Code,
+                LineClass::CommentWordsBesideCode | LineClass::WordsInComment => Bucket::Comments,
+                LineClass::PunctuationInCode | LineClass::PunctuationInComment | LineClass::Blank
+                | LineClass::BlankInComment | LineClass::BlankInString => Bucket::Third
+            },
+            Self::Region => match class {
+                LineClass::WordsInCode | LineClass::StringContent | LineClass::CommentWordsBesideCode
+                | LineClass::PunctuationInCode | LineClass::BlankInString => Bucket::Code,
+                LineClass::WordsInComment | LineClass::PunctuationInComment
+                | LineClass::BlankInComment => Bucket::Comments,
+                LineClass::Blank => Bucket::Third
+            }
         }
+    }
+
+    pub fn calculate_code_lines(&self, classes: &LineClasses) -> usize {
+        self.sum_the_classes_folding_to(Bucket::Code, classes)
+    }
+
+    pub fn calculate_comment_lines(&self, classes: &LineClasses) -> usize {
+        self.sum_the_classes_folding_to(Bucket::Comments, classes)
+    }
+
+    fn sum_the_classes_folding_to(&self, bucket: Bucket, classes: &LineClasses) -> usize {
+        LineClass::ALL.iter().zip(classes.to_array())
+                .filter(|(class, _)| self.fold(**class) == bucket)
+                .map(|(_, count)| count).sum()
     }
 }
 
@@ -630,6 +704,19 @@ mod tests {
         assert_eq!(29, stats.calculate_code_lines(CountingModel::Region));
         assert_eq!(11, stats.calculate_comment_lines(CountingModel::Region));
         assert_eq!(6, stats.calculate_extra_lines(CountingModel::Region));
+    }
+
+    // The wiring '--explain' prints through: a class names itself with the exact strings the
+    // documents and logs already use, and a bucket's name comes from the model it is read under.
+    #[test]
+    fn a_class_names_itself_and_a_model_names_its_buckets() {
+        for (i, class) in LineClass::ALL.iter().enumerate() {
+            assert_eq!(LineClasses::NAMES[i], class.get_name());
+        }
+        assert_eq!("code", CountingModel::Content.get_bucket_name(Bucket::Code));
+        assert_eq!("comments", CountingModel::Region.get_bucket_name(Bucket::Comments));
+        assert_eq!("extra", CountingModel::Content.get_bucket_name(Bucket::Third));
+        assert_eq!("blanks", CountingModel::Region.get_bucket_name(Bucket::Third));
     }
 
     #[test]

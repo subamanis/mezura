@@ -15,6 +15,7 @@ mod args;
 mod config_files;
 mod config_manager;
 mod diff;
+mod explain;
 mod git;
 mod json_printer;
 mod json_reader;
@@ -213,6 +214,12 @@ fn main() -> ExitCode {
 
     let (languages, reported) = mezura_core::Languages::resolve(&config.engine, languages_available, &extension_priority);
     crate::warning_collector::report_language_resolution_warnings(reported);
+
+    // Its own answer entirely: no scan, no report, no log. The commands that shape a report were
+    // refused beside it when the arguments were read.
+    if config.view.explain {
+        return crate::explain::run_explain(&config, languages);
+    }
 
     // Above the run, so that a baseline which turns out not to be one costs no scan of the tree
     let counted_baseline = match baseline_only.map(|x| x.count_baseline(&config, &extension_priority)) {
