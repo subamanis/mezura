@@ -476,9 +476,11 @@ HOW THE REPORT LOOKS
       file-size-unit           the unit beside that size
       file-percent             the percentages of a file, which are of its language
 
-    The source lines of an '--explain' run; what is neither keeps the terminal's own color:
+    An '--explain' run, where the verdict words follow the label tokens above. The first two
+    paint stretches inside the source lines, and what is neither keeps the terminal's own color:
       explain-string           the stretches of a line that sit inside a string
       explain-comment          the stretches that sit inside a comment
+      explain-detail           the class name on a verdict row
 
     The overview:
       overview-label           the 'Files:', 'Lines:' and 'Size :' row labels
@@ -1043,7 +1045,7 @@ With that said, it is important to mention the following limitations:
 
 - If a target path contains another target path, the contained one is dropped, so that its files are not counted twice. A symbolic link (or a Windows junction) that the scan comes across is not followed, for the same reason: whatever it points at would be counted a second time through it. The same goes for one that a glob pattern matched, since those are found by the program rather than named by you. One that you name as a target yourself is followed, since that is what you asked for. Hard links are the case that stays: they are indistinguishable from an ordinary file, so the same content reached through two of them is counted twice.
 
-- A string delimiter that the programmer invents on the spot cannot be written in a language file, since it is different every time it is used: a shell or PHP heredoc, Rust's ```r##"..."##``` past the one-hash form, and for now Lua's ```[[ ]]``` strings. What is inside them is plain text to the language, while mezura is still counting quotes in it, so one apostrophe in an ordinary sentence written inside a heredoc is enough to look like the start of a string. In most languages the damage ends with that line. In the ones where a string may legally run over several lines (Rust, Ruby, the shells, PHP, SQL and their kin) mezura cannot tell a long string from a lone quote, and everything below reads as string content until the next quote turns up.
+- A string delimiter that the programmer invents on the spot cannot be written in a language file, since it is different every time it is used: a shell or PHP heredoc, Rust's ```r##"..."##``` past the one-hash form, and Lua's levelled ```[=[ ]=]``` string brackets past the plain ```[[ ]]``` form, which is declared. What is inside them is plain text to the language, while mezura is still counting quotes in it, so one apostrophe in an ordinary sentence written inside a heredoc is enough to look like the start of a string. In most languages the damage ends with that line. In the ones where a string may legally run over several lines (Rust, Ruby, the shells, PHP, SQL and their kin) mezura cannot tell a long string from a lone quote, and everything below reads as string content until the next quote turns up.
 
 - Everything in a language file stands for itself, with one exception: the two characters ```=*``` inside a comment symbol mean "any number of ```=``` here". It is what lets a single line declare Lua's ```--[[```, ```--[=[``` and ```--[==[``` together, and it is a small cheat: a language whose comment symbol really contained ```=*``` could not be written down. No such language is known, and if one turns up the marker moves to a block of its own.
 

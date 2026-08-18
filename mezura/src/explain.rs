@@ -60,15 +60,18 @@ fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel) {
 
     let width = explanation.lines.len().to_string().len();
     for (at, (source, line)) in explanation.contents.lines().zip(&explanation.lines).enumerate() {
-        println!("{:>width$}  {}", at + 1, paint_by_spans(source, &line.spans));
+        if at > 0 {
+            println!();
+        }
         let bucket = model.fold(line.class);
         let bucket_style = match bucket {
             Bucket::Code => &theme.code_label,
             Bucket::Comments => &theme.comments_label,
             Bucket::Third => &theme.extra_label
         };
+        println!("{:>width$}  {}", at + 1, paint_by_spans(source, &line.spans));
         let mut verdict = format!("{}  {}", bucket_style.paint(model.get_bucket_name(bucket)),
-                line.class.get_name());
+                theme.explain_detail.paint(line.class.get_name()));
         let mut notes = line.read_as.as_ref().map(|name| format!("read as {name}"))
                 .into_iter().collect::<Vec<_>>();
         notes.extend(describe_carried(&line.carried));
@@ -80,9 +83,11 @@ fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel) {
 
     let (code, comments, third) = fold_totals(explanation, model);
     println!();
-    println!("{} lines: {code} {}, {comments} {}, {third} {}", explanation.lines.len(),
-            theme.code_label.paint("code"), theme.comments_label.paint("comments"),
-            theme.extra_label.paint(model.get_third_quantity_name()));
+    println!("{} {}: {} {}, {} {}, {} {}",
+            theme.lines_number.paint(&explanation.lines.len().to_string()), theme.lines_label.paint("lines"),
+            theme.code_number.paint(&code.to_string()), theme.code_label.paint("code"),
+            theme.comments_number.paint(&comments.to_string()), theme.comments_label.paint("comments"),
+            theme.extra_number.paint(&third.to_string()), theme.extra_label.paint(model.get_third_quantity_name()));
 }
 
 // The document linejudge reads: 'format', 'lines', 'buckets' and one 'per_line' entry per physical

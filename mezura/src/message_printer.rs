@@ -698,9 +698,11 @@ pub const STYLE_HELP  :  &str =
       file-size-unit           the unit beside that size
       file-percent             the percentages of a file, which are of its language
 
-    The source lines of an '--explain' run; what is neither keeps the terminal's own color:
+    An '--explain' run, where the verdict words follow the label tokens above. The first two
+    paint stretches inside the source lines, and what is neither keeps the terminal's own color:
       explain-string           the stretches of a line that sit inside a string
       explain-comment          the stretches that sit inside a comment
+      explain-detail           the class name on a verdict row
 
     The overview:
       overview-label           the 'Files:', 'Lines:' and 'Size :' row labels
