@@ -335,6 +335,9 @@ theme_tokens! {
     progress_bar_figures => "progress-bar-figures", Style::plain().dim();
 
     summary           => "summary",           Style::plain();
+    // The stretches '--explain' paints inside a source line; code stays in the terminal's own color
+    explain_string    => "explain-string",    Style::of(Color::Green);
+    explain_comment   => "explain-comment",   Style::plain().dim();
     note              => "note",              Style::plain().dim().italic();
     success           => "success",           Style::of(Color::BrightGreen);
     warning           => "warning",           Style::of(Color::Yellow);

@@ -18,7 +18,7 @@ pub mod render;
 pub mod warnings;
 
 pub use domain::{Bucket, CountingModel, Keyword, Language, LeveledPair, LineClass, LineClasses,
-        MultilineString, NestedLanguage, Stats};
+        MultilineString, NestedLanguage, Span, SpanKind, Stats};
 pub use engine::config::{EngineConfig, Target, Threads};
 pub use explain::{Carried, ExplainError, ExplainedLine, FileExplanation, explain_file};
 pub use engine::targets::TargetError;

@@ -3,7 +3,7 @@
 // so they cannot disagree with the totals.
 use std::path::Path;
 
-use crate::{EngineConfig, Language, LineClass, LineClasses};
+use crate::{EngineConfig, Language, LineClass, LineClasses, Span};
 use crate::domain::CommentPair;
 use crate::engine::file_parser::{CarriedRecord, NestedLanguageLookup, explain_parsed_file};
 use crate::languages::Languages;
@@ -20,15 +20,21 @@ pub struct ExplainedLine {
     // Some where a nested language's rules read the line; None means the file's own language did
     pub read_as: Option<String>,
     pub carried: Carried,
+    // The line cut into its stretches of code, string and comment, in order and touching each
+    // other; whitespace at either end of the line sits outside them. Empty on a blank line.
+    pub spans: Vec<Span>,
 }
 
 // What was open when the line began. For a comment of a leveled pair the opener is spelled with
 // its level, '--[==[', and the depth is 1; a nesting pair reports its real depth.
+// 'ends_on_this_line' says the carried thing is gone by the line's end: closed on it, or replaced
+// by a new one of the same symbol that the line itself opened. A '*/ code /*' line carries the old
+// comment and ends it, and the next line's answer names the new opener.
 #[derive(Debug, PartialEq)]
 pub enum Carried {
     Nothing,
-    Comment { opener: String, depth: u32, since_line: usize },
-    Str { opener: String, since_line: usize },
+    Comment { opener: String, depth: u32, since_line: usize, ends_on_this_line: bool },
+    Str { opener: String, since_line: usize, ends_on_this_line: bool },
     CommentContinuation { since_line: usize },
 }
 
@@ -60,12 +66,14 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
             .map_err(ExplainError::UnreadableFile)?;
 
     let language = lang_name.to_string();
-    let lines = log.records().iter().map(|record| {
-        let read_by = log.get_language_name_of(record);
+    let (records, names) = log.into_parts();
+    let lines = records.into_iter().map(|record| {
+        let read_by = names[record.language as usize].as_str();
         ExplainedLine {
             class: record.class,
             read_as: (read_by != language).then(|| read_by.to_owned()),
             carried: spell_out_carried(record.carried, nested_lookup.find_by_name(read_by)),
+            spans: record.spans,
         }
     }).collect::<Vec<_>>();
 
@@ -82,14 +90,14 @@ fn spell_out_carried(carried: CarriedRecord, language: Option<&Language>) -> Car
     match carried {
         CarriedRecord::Nothing => Carried::Nothing,
         CarriedRecord::Continuation { since_line } => Carried::CommentContinuation { since_line },
-        CarriedRecord::Str { symbol, since_line } => Carried::Str {
+        CarriedRecord::Str { symbol, since_line, ends } => Carried::Str {
             opener: language.map(|x| x.get_string_pair_of(symbol).0.to_owned()).unwrap_or_default(),
-            since_line
+            since_line, ends_on_this_line: ends
         },
-        CarriedRecord::Comment { symbol, depth, since_line } => {
+        CarriedRecord::Comment { symbol, depth, since_line, ends } => {
             let (opener, depth) = language.map(|x| spell_comment_opener(x, symbol, depth))
                     .unwrap_or((String::new(), depth));
-            Carried::Comment { opener, depth, since_line }
+            Carried::Comment { opener, depth, since_line, ends_on_this_line: ends }
         }
     }
 }
@@ -146,10 +154,14 @@ mod tests {
         let carried = explained.lines.iter().map(|line| &line.carried).collect::<Vec<_>>();
         assert_eq!(&Carried::Nothing, carried[0]);
         assert_eq!(&Carried::Nothing, carried[1]);
-        assert_eq!(&Carried::Comment { opener: "/*".to_owned(), depth: 1, since_line: 2 }, carried[2]);
-        assert_eq!(&Carried::Comment { opener: "/*".to_owned(), depth: 1, since_line: 2 }, carried[3]);
+        assert_eq!(&Carried::Comment { opener: "/*".to_owned(), depth: 1, since_line: 2,
+                ends_on_this_line: false }, carried[2]);
+        // the closing line still carries the comment, and says that it ends here
+        assert_eq!(&Carried::Comment { opener: "/*".to_owned(), depth: 1, since_line: 2,
+                ends_on_this_line: true }, carried[3]);
         assert_eq!(&Carried::Nothing, carried[4]);
-        assert_eq!(&Carried::Str { opener: "\"".to_owned(), since_line: 5 }, carried[5]);
+        assert_eq!(&Carried::Str { opener: "\"".to_owned(), since_line: 5,
+                ends_on_this_line: true }, carried[5]);
         assert_eq!(&Carried::Nothing, carried[6]);
 
         assert_eq!(LineClass::BlankInComment, explained.lines[2].class);
@@ -164,8 +176,48 @@ mod tests {
                 "x = 1\n--[==[ words\nmore words\n]==]\n");
 
         assert_eq!("Lua", explained.language);
-        assert_eq!(&Carried::Comment { opener: "--[==[".to_owned(), depth: 1, since_line: 2 },
-                &explained.lines[2].carried);
+        assert_eq!(&Carried::Comment { opener: "--[==[".to_owned(), depth: 1, since_line: 2,
+                ends_on_this_line: false }, &explained.lines[2].carried);
+    }
+
+    #[test]
+    fn every_line_is_cut_into_its_string_and_comment_stretches() {
+        let explained = explain_in_own_dir("mezura-explain-spans", "a.rs",
+                "fn main() {\n/* first\n\nlast */\nlet s = \"one\n два\";\n}\n");
+
+        let spans = |at: usize| explained.lines[at].spans.iter()
+                .map(|span| (span.from, span.to, span.kind)).collect::<Vec<_>>();
+        assert_eq!(vec![(0, 11, crate::SpanKind::Code)], spans(0));
+        assert_eq!(vec![(0, 8, crate::SpanKind::Comment)], spans(1));
+        assert!(spans(2).is_empty());
+        assert_eq!(vec![(0, 7, crate::SpanKind::Comment)], spans(3));
+        assert_eq!(vec![(0, 8, crate::SpanKind::Code), (8, 12, crate::SpanKind::String)], spans(4));
+        // the leading space sits outside every span, and the offsets are bytes of the raw line,
+        // so the two-byte characters of 'два' count as two
+        assert_eq!(vec![(1, 8, crate::SpanKind::String), (8, 9, crate::SpanKind::Code)], spans(5));
+        assert_eq!(vec![(0, 1, crate::SpanKind::Code)], spans(6));
+    }
+
+    // The reason the provenance bit exists: a line that ends the carried comment and opens a new
+    // one of the same symbol. Without it, every following line kept naming the first opener.
+    #[test]
+    fn a_line_that_ends_a_comment_and_opens_the_same_pair_moves_the_opening_line() {
+        let explained = explain_in_own_dir("mezura-explain-reopen", "a.rs",
+                "/*\nwords\n*/ pub enum A {} /*\nmore words\n*/ /*\nlast words\n*/\n");
+
+        let carried = explained.lines.iter().map(|line| &line.carried).collect::<Vec<_>>();
+        assert_eq!(&Carried::Comment { opener: "/*".to_owned(), depth: 1, since_line: 1,
+                ends_on_this_line: true }, carried[2]);
+        // the next line names the reopening line, not the first opener
+        assert_eq!(&Carried::Comment { opener: "/*".to_owned(), depth: 1, since_line: 3,
+                ends_on_this_line: false }, carried[3]);
+        // and the bare '*/ /*' shape, with nothing between the closer and the opener, moves it too
+        assert_eq!(&Carried::Comment { opener: "/*".to_owned(), depth: 1, since_line: 3,
+                ends_on_this_line: true }, carried[4]);
+        assert_eq!(&Carried::Comment { opener: "/*".to_owned(), depth: 1, since_line: 5,
+                ends_on_this_line: false }, carried[5]);
+        assert_eq!(&Carried::Comment { opener: "/*".to_owned(), depth: 1, since_line: 5,
+                ends_on_this_line: true }, carried[6]);
     }
 
     #[test]

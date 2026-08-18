@@ -10,7 +10,7 @@ use std::{collections::HashMap, fs::File, io::Read as IoRead, path::Path, str};
 
 use memchr::memmem;
 
-use crate::{EngineConfig, Language, LineClass, NestedLanguage, phase_timing};
+use crate::{EngineConfig, Language, LineClass, NestedLanguage, Span, SpanKind, phase_timing};
 use crate::domain::{CommentPair, FileStats, LineContinuation};
 
 pub const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
@@ -687,20 +687,22 @@ struct WalkState {
 
 // What earlier lines left open when a line began, as '--explain' reports it. For a leveled pair the
 // depth carried by the walk is the level, so the spelling of the opener is rebuilt from it later.
+// 'ends' says the carried thing is gone by the line's end: closed, or replaced by a new one of the
+// same symbol that this line itself opened.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum CarriedRecord {
     Nothing,
-    Comment { symbol: u8, depth: u32, since_line: usize },
-    Str { symbol: u8, since_line: usize },
+    Comment { symbol: u8, depth: u32, since_line: usize, ends: bool },
+    Str { symbol: u8, since_line: usize, ends: bool },
     Continuation { since_line: usize },
 }
 
 impl CarriedRecord {
     fn of(state: &WalkState) -> CarriedRecord {
         if let Some(symbol) = state.open_str_symbol {
-            CarriedRecord::Str { symbol, since_line: state.opened_line }
+            CarriedRecord::Str { symbol, since_line: state.opened_line, ends: false }
         } else if let Some((symbol, depth)) = state.open_comment {
-            CarriedRecord::Comment { symbol, depth, since_line: state.opened_line }
+            CarriedRecord::Comment { symbol, depth, since_line: state.opened_line, ends: false }
         } else if state.continued_comment {
             CarriedRecord::Continuation { since_line: state.opened_line }
         } else {
@@ -708,16 +710,17 @@ impl CarriedRecord {
         }
     }
 
-    // Whether what is open after a line is the same open thing this record described, rather than
-    // a new one the line opened. Judged by the symbol, which mistakes one corner: a line that
-    // closes a pair and reopens the same pair before its end keeps the old opening line.
-    fn survives_in(&self, state: &WalkState) -> bool {
+    // Asked after the line has been read, against the state it left behind: the carried thing
+    // survives only where the same kind is still open and was not opened anew on this line
+    fn with_its_end_marked(self, state: &WalkState, opened_here: OpenedHere) -> CarriedRecord {
         match self {
-            CarriedRecord::Nothing => false,
-            CarriedRecord::Comment { symbol, .. } =>
-                    state.open_comment.map(|(open, _)| open == *symbol).unwrap_or(false),
-            CarriedRecord::Str { symbol, .. } => state.open_str_symbol == Some(*symbol),
-            CarriedRecord::Continuation { .. } => state.continued_comment,
+            CarriedRecord::Comment { symbol, depth, since_line, .. } => CarriedRecord::Comment {
+                symbol, depth, since_line,
+                ends: state.open_comment.is_none() || opened_here.comment },
+            CarriedRecord::Str { symbol, since_line, .. } => CarriedRecord::Str {
+                symbol, since_line,
+                ends: state.open_str_symbol.is_none() || opened_here.string },
+            other => other,
         }
     }
 }
@@ -733,11 +736,14 @@ pub(crate) struct ExplainLog {
 pub(crate) struct LineRecord {
     pub class: LineClass,
     pub carried: CarriedRecord,
-    language: u16,
+    // Byte offsets into the raw line as the file spells it, whitespace the walk trimmed included
+    pub spans: Vec<Span>,
+    // An index into the interned names that 'into_parts' hands out beside the records
+    pub language: u16,
 }
 
 impl ExplainLog {
-    fn record(&mut self, class: LineClass, carried: CarriedRecord, language: &Language) {
+    fn record(&mut self, class: LineClass, carried: CarriedRecord, language: &Language, spans: Vec<Span>) {
         let language = match self.languages.iter().position(|name| name == &language.name) {
             Some(at) => at as u16,
             None => {
@@ -745,7 +751,7 @@ impl ExplainLog {
                 (self.languages.len() - 1) as u16
             }
         };
-        self.records.push(LineRecord { class, carried, language });
+        self.records.push(LineRecord { class, carried, spans, language });
     }
 
     // The number of the line being walked right now, 1-based: its record has not been pushed yet
@@ -753,12 +759,18 @@ impl ExplainLog {
         self.records.len() + 1
     }
 
+    #[cfg(test)]
     pub fn get_language_name_of(&self, record: &LineRecord) -> &str {
         &self.languages[record.language as usize]
     }
 
+    #[cfg(test)]
     pub fn records(&self) -> &[LineRecord] {
         &self.records
+    }
+
+    pub fn into_parts(self) -> (Vec<LineRecord>, Vec<String>) {
+        (self.records, self.languages)
     }
 }
 
@@ -878,10 +890,11 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
                 else if state.open_comment.is_some() { LineClass::BlankInComment }
                 else { LineClass::Blank };
         file_stats.classes.bump(class);
-        if EXPLAIN { log.record(class, carried, language); }
+        if EXPLAIN { log.record(class, carried, language, Vec::new()); }
         return false;
     }
-    let base = line_start + (raw_line.len() - from_start.len());
+    let lead = raw_line.len() - from_start.len();
+    let base = line_start + lead;
 
     // A line joined to the one before it by a continuation symbol is the tail of that line's
     // comment, and nothing on it is read: in C '// a comment \' makes the whole next line
@@ -891,11 +904,16 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
                 else { LineClass::PunctuationInComment };
         file_stats.classes.bump(class);
         state.continued_comment = ends_with_continuation(line, language);
-        if EXPLAIN { log.record(class, carried, language); }
+        if EXPLAIN {
+            log.record(class, carried, language,
+                    vec![Span { from: lead, to: lead + line.len(), kind: SpanKind::Comment }]);
+        }
         return false;
     }
 
-    let line_info = get_bounds(line, language, state.open_comment, &state.open_str_symbol, scan);
+    let mut line_spans: Vec<Span> = Vec::new();
+    let (line_info, opened_here) = get_bounds::<EXPLAIN>(line, language, state.open_comment,
+            &state.open_str_symbol, scan, &mut line_spans);
 
     state.open_comment = line_info.open_comment_after;
     // Only a symbol declared to cross lines carries its string to the next one, so the damage
@@ -935,12 +953,16 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
             else { LineClass::PunctuationInComment };
     file_stats.classes.bump(class);
     if EXPLAIN {
-        let leaves_something_open = state.open_comment.is_some() || state.open_str_symbol.is_some()
-                || state.continued_comment;
-        if leaves_something_open && !carried.survives_in(state) {
+        if (state.open_comment.is_some() && opened_here.comment)
+                || (state.open_str_symbol.is_some() && opened_here.string)
+                || state.continued_comment {
             state.opened_line = log.get_current_line_number();
         }
-        log.record(class, carried, language);
+        for span in &mut line_spans {
+            span.from += lead;
+            span.to += lead;
+        }
+        log.record(class, carried.with_its_end_marked(state, opened_here), language, line_spans);
     }
 
     if counts_as_code && collecting_spans && has_code {
@@ -1157,8 +1179,26 @@ fn line_info_with_str_symbol(ranges: usize, str_symbol: u8) -> LineInfo {
     }
 }
 
-fn get_bounds(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
-    open_str_symbol: &Option<u8>, buffers: &mut ScanBuffers) -> LineInfo
+// Whether the thing a line leaves open began on that same line, as opposed to carrying on from an
+// earlier one. Only '--explain' reads it: the counting cannot tell '*/ x /*' apart from a comment
+// running through, and does not need to, but the report of which line opened what does.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+struct OpenedHere {
+    comment: bool,
+    string: bool,
+}
+
+// Only '--explain' collects spans; in the counting build this compiles to nothing at all, which
+// was measured to matter: the same check done at run time cost a few percent of user CPU.
+fn note_span<const EXPLAIN: bool>(spans: &mut Vec<Span>, from: usize, to: usize, kind: SpanKind) {
+    if EXPLAIN && to > from {
+        spans.push(Span { from, to, kind });
+    }
+}
+
+fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
+    open_str_symbol: &Option<u8>, buffers: &mut ScanBuffers, spans: &mut Vec<Span>)
+-> (LineInfo, OpenedHere)
 {
     // A line comment runs to the end of its line, so a line that opens with one is comment through
     // and through and nothing the scan could find past it changes that. Only with nothing left open
@@ -1168,7 +1208,8 @@ fn get_bounds(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
     if open_comment.is_none() && open_str_symbol.is_none()
             && get_or_build_plan_of(language).line_comment_ends_the_line
             && language.comment_symbols.iter().any(|symbol| line.as_bytes().starts_with(symbol.as_bytes())) {
-        return LineInfo::none_all(false);
+        note_span::<EXPLAIN>(spans,0, line.len(), SpanKind::Comment);
+        return (LineInfo::none_all(false), OpenedHere::default());
     }
 
     scan_line(line, language, buffers);
@@ -1178,7 +1219,8 @@ fn get_bounds(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
 
     match open_comment {
         None => if open_str_symbol.is_some() && str_indices.is_empty() {
-            return LineInfo::none_str(None, true, *open_str_symbol);
+            note_span::<EXPLAIN>(spans,0, line.len(), SpanKind::String);
+            return (LineInfo::none_str(None, true, *open_str_symbol), OpenedHere::default());
         },
         // Only the end of the pair that opened the block closes it, so a line holding none of
         // those is comment through and through, whatever other symbols sit on it. For a pair
@@ -1191,7 +1233,8 @@ fn get_bounds(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
             let deepens = language.comment_nests(open_pair)
                     && com_start_indices.iter().any(|(_, symbol, _)| *symbol == open_pair);
             if !has_end && !deepens {
-                return LineInfo::open_comment_at(open_pair, carried);
+                note_span::<EXPLAIN>(spans,0, line.len(), SpanKind::Comment);
+                return (LineInfo::open_comment_at(open_pair, carried), OpenedHere::default());
             }
         }
     }
@@ -1207,11 +1250,16 @@ fn get_bounds(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
 
     if str_indices.is_empty() && comment_indices.is_empty() && com_start_indices.is_empty() && com_end_indices.is_empty() {
         push_code(code_ranges, line, 0, line.len());
-        return LineInfo::code_span((0, code_ranges.len()), false);
+        note_span::<EXPLAIN>(spans,0, line.len(), SpanKind::Code);
+        return (LineInfo::code_span((0, code_ranges.len()), false), OpenedHere::default());
     }
 
     let (mut start_com_counter, mut end_com_counter, mut str_counter, mut comment_counter) = (0,0,0,0);
     let (mut open_com_m, mut is_str_open_m) = (open_comment, open_str_symbol.is_some());
+    let mut opened = OpenedHere::default();
+    // Where the stretch being coloured began. Zero serves whichever of the three kinds the line
+    // starts inside, and every transition below moves it to the byte after what it just noted.
+    let mut region_from = 0;
 
     let has_more_comments = |counter| counter < comment_indices.len(); 
     let has_more_strs = |counter| counter < str_indices.len();
@@ -1278,9 +1326,12 @@ fn get_bounds(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
             let index_after = last_symbol_index
                     + language.get_string_pair_of(str_symbols[str_counter]).1.len();
             if index_after >= line.len() {
-                if code_ranges.is_empty() {return LineInfo::none_all(true);}
-                else {return LineInfo::code_span((0, code_ranges.len()), true);}
+                note_span::<EXPLAIN>(spans,region_from, line.len(), SpanKind::String);
+                if code_ranges.is_empty() {return (LineInfo::none_all(true), OpenedHere::default());}
+                else {return (LineInfo::code_span((0, code_ranges.len()), true), OpenedHere::default());}
             }
+            note_span::<EXPLAIN>(spans,region_from, index_after, SpanKind::String);
+            region_from = index_after;
 
             progress_counters_after(last_symbol_index, &mut comment_counter, &mut str_counter,
                     &mut start_com_counter, &mut end_com_counter);
@@ -1328,18 +1379,22 @@ fn get_bounds(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
                 }
                 // A block that stays open leaves a comment line whenever no code sat outside it,
                 // whichever kind of pair it is
+                note_span::<EXPLAIN>(spans,region_from, line.len(), SpanKind::Comment);
                 if !has_string_literal && code_ranges.is_empty() {
-                    return LineInfo::open_comment_at(open_pair, carry);
+                    return (LineInfo::open_comment_at(open_pair, carry), opened);
                 }
-                return LineInfo::code_span_with((0, code_ranges.len()), has_string_literal, Some((open_pair, carry)), None);
+                return (LineInfo::code_span_with((0, code_ranges.len()), has_string_literal, Some((open_pair, carry)), None), opened);
             };
             last_symbol_index = closed_at;
             let end_level = if leveled { carried as u8 } else { 0 };
             let index_after = last_symbol_index + language.comment_end_len(open_pair, end_level);
             if index_after >= line.len() {
-                if code_ranges.is_empty() {return LineInfo::none_all(has_string_literal);}
-                else {return LineInfo::code_span((0, code_ranges.len()), has_string_literal);}
+                note_span::<EXPLAIN>(spans,region_from, line.len(), SpanKind::Comment);
+                if code_ranges.is_empty() {return (LineInfo::none_all(has_string_literal), OpenedHere::default());}
+                else {return (LineInfo::code_span((0, code_ranges.len()), has_string_literal), OpenedHere::default());}
             }
+            note_span::<EXPLAIN>(spans,region_from, index_after, SpanKind::Comment);
+            region_from = index_after;
 
             // Every counter goes past the closer's own bytes and not merely past where it began, so
             // a symbol standing at the byte after it is reached by the ordinary dispatch below
@@ -1353,20 +1408,27 @@ fn get_bounds(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
             slice_start_index = index_after;
         } else {
             if next_symbol_is_comment(comment_counter, str_counter, start_com_counter) {
-                push_code(code_ranges, line, slice_start_index, comment_indices[comment_counter]);
-                if code_ranges.is_empty() {return LineInfo::none_all(has_string_literal);}
-                else {return LineInfo::code_span((0, code_ranges.len()), has_string_literal);}
+                let comment_at = comment_indices[comment_counter];
+                push_code(code_ranges, line, slice_start_index, comment_at);
+                note_span::<EXPLAIN>(spans,region_from, comment_at, SpanKind::Code);
+                note_span::<EXPLAIN>(spans,comment_at, line.len(), SpanKind::Comment);
+                if code_ranges.is_empty() {return (LineInfo::none_all(has_string_literal), OpenedHere::default());}
+                else {return (LineInfo::code_span((0, code_ranges.len()), has_string_literal), OpenedHere::default());}
             } else if next_symbol_is_string(comment_counter, str_counter, start_com_counter) {
                 let this_index = str_indices[str_counter];
                 if skipped_com_end_symbol(last_symbol_index, end_com_counter, this_index) {
                     end_com_counter += 1;
                 }
                 push_code(code_ranges, line, slice_start_index, this_index);
+                note_span::<EXPLAIN>(spans,region_from, this_index, SpanKind::Code);
+                region_from = this_index;
                 str_counter += 1;
                 if !has_more_strs(str_counter) {
-                    return line_info_with_str_symbol(code_ranges.len(), str_symbols[str_counter-1]);
+                    note_span::<EXPLAIN>(spans,region_from, line.len(), SpanKind::String);
+                    return (line_info_with_str_symbol(code_ranges.len(), str_symbols[str_counter-1]),
+                            OpenedHere { comment: false, string: true });
                 }
-                
+
                 is_str_open_m = true;
                 has_string_literal = true;
                 last_symbol_index = this_index;
@@ -1377,24 +1439,30 @@ fn get_bounds(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
                 }
 
                 push_code(code_ranges, line, slice_start_index, this_index);
+                note_span::<EXPLAIN>(spans,region_from, this_index, SpanKind::Code);
+                region_from = this_index;
                 // A nesting or leveled pair falls through to the open branch even with no ends
                 // left: further starts of a nesting one still deepen the carried state, and the
                 // leveled one carries its level either way
                 if !has_more_ends(end_com_counter) && !language.comment_nests(this_symbol)
                         && !language.comment_is_leveled(this_symbol) {
+                    note_span::<EXPLAIN>(spans,region_from, line.len(), SpanKind::Comment);
                     if !has_string_literal && code_ranges.is_empty() {
-                        return LineInfo::with_open_comment(this_symbol);
+                        return (LineInfo::with_open_comment(this_symbol), OpenedHere { comment: true, string: false });
                     }
-                    return LineInfo::code_span_with((0, code_ranges.len()), has_string_literal, Some((this_symbol, 1)), None);
+                    return (LineInfo::code_span_with((0, code_ranges.len()), has_string_literal, Some((this_symbol, 1)), None),
+                            OpenedHere { comment: true, string: false });
                 }
 
                 open_com_m = Some((this_symbol,
                         if language.comment_is_leveled(this_symbol) { this_level as u32 } else { 1 }));
+                opened.comment = true;
                 start_com_counter += 1;
                 last_symbol_index = this_index;
             } else {
                 push_code(code_ranges, line, slice_start_index, line.len());
-                return LineInfo::code_span((0, code_ranges.len()), has_string_literal);
+                note_span::<EXPLAIN>(spans,region_from, line.len(), SpanKind::Code);
+                return (LineInfo::code_span((0, code_ranges.len()), has_string_literal), OpenedHere::default());
             }
         }
     }
@@ -1719,7 +1787,7 @@ mod tests {
 
     fn bounds_multi_deep(line: &str, language: &Language, open_comment: Option<(u8, u32)>, open_str_symbol: &Option<u8>) -> TextInfo {
         let mut buffers = ScanBuffers::default();
-        let info = get_bounds(line, language, open_comment, open_str_symbol, &mut buffers);
+        let (info, _) = get_bounds::<false>(line, language, open_comment, open_str_symbol, &mut buffers, &mut Vec::new());
         text_of(line, info, &buffers)
     }
 
@@ -2001,7 +2069,7 @@ mod tests {
         let mut file_stats = FileStats::with_keywords(&[STRUCT.clone(),ENUM.clone(),TRAIT.clone()]);
         let matcher = KeywordMatcher::build(&RUST).unwrap();
         let mut buffers = ScanBuffers::default();
-        let info = get_bounds(line, &RUST, None, &None, &mut buffers);
+        let (info, _) = get_bounds::<false>(line, &RUST, None, &None, &mut buffers, &mut Vec::new());
         let mut spans = Vec::new();
         assert!(info.code.is_some());
         push_trimmed_spans(&mut spans, &buffers.code_ranges, line, 0);
@@ -2012,7 +2080,7 @@ mod tests {
         let line = "struct a;";
         let mut file_stats = FileStats::with_keywords(&[STRUCT.clone(),ENUM.clone(),TRAIT.clone()]);
         let mut buffers = ScanBuffers::default();
-        let info = get_bounds(line, &RUST, None, &None, &mut buffers);
+        let (info, _) = get_bounds::<false>(line, &RUST, None, &None, &mut buffers, &mut Vec::new());
         let mut spans = Vec::new();
         assert!(info.code.is_some());
         push_trimmed_spans(&mut spans, &buffers.code_ranges, line, 0);
@@ -3541,8 +3609,31 @@ mod tests {
             let mut buf = String::new();
             let counted = parse_file_report(&path, lang_name.as_ref(), &mut buf, &config)
                     .unwrap_or_else(|x| panic!("{name} could not be counted: {x}"));
-            let (_, explained, log) = explain_parsed_file(&path, lang_name.as_ref(), &shipped_lookup(), &config)
+            let (contents, explained, log) = explain_parsed_file(&path, lang_name.as_ref(), &shipped_lookup(), &config)
                     .unwrap_or_else(|x| panic!("{name} could not be explained: {x}"));
+
+            // The spans of every line partition its trimmed text: they start at the first byte of
+            // text, touch each other with no gap and no overlap, and stop at the last. A blank
+            // line has none.
+            for (at, (raw_line, record)) in contents.lines().zip(log.records()).enumerate() {
+                let trimmed = raw_line.trim_ascii();
+                if trimmed.is_empty() {
+                    assert!(record.spans.is_empty(), "{name}:{}: a blank line got spans", at + 1);
+                    continue;
+                }
+                let lead = raw_line.len() - raw_line.trim_ascii_start().len();
+                assert_eq!(lead, record.spans[0].from,
+                        "{name}:{}: the first span starts past the text", at + 1);
+                assert_eq!(lead + trimmed.len(), record.spans.last().unwrap().to,
+                        "{name}:{}: the last span stops short of the text", at + 1);
+                for pair in record.spans.windows(2) {
+                    assert_eq!(pair[0].to, pair[1].from,
+                            "{name}:{}: spans leave a gap or overlap", at + 1);
+                }
+                for span in &record.spans {
+                    assert!(span.from < span.to, "{name}:{}: an empty span", at + 1);
+                }
+            }
 
             let mut lines_per_language = HashMap::<String, usize>::new();
             for record in log.records() {

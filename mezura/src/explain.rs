@@ -4,7 +4,8 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use mezura_core::{Bucket, Carried, CountingModel, ExplainError, FileExplanation, Languages};
+use mezura_core::{Bucket, Carried, CountingModel, ExplainError, FileExplanation, Languages, Span,
+        SpanKind};
 
 use crate::config_manager::Configuration;
 use crate::json_printer::escape;
@@ -59,7 +60,7 @@ fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel) {
 
     let width = explanation.lines.len().to_string().len();
     for (at, (source, line)) in explanation.contents.lines().zip(&explanation.lines).enumerate() {
-        println!("{:>width$}  {}", at + 1, source);
+        println!("{:>width$}  {}", at + 1, paint_by_spans(source, &line.spans));
         let bucket = model.fold(line.class);
         let bucket_style = match bucket {
             Bucket::Code => &theme.code_label,
@@ -106,6 +107,11 @@ fn print_json(path: &str, explanation: &FileExplanation, model: CountingModel) {
         if let Some(note) = describe_carried(&line.carried) {
             entry.push_str(&format!(", \"carried\": \"{}\"", escape(&note)));
         }
+        if !line.spans.is_empty() {
+            entry.push_str(&format!(", \"spans\": [{}]", line.spans.iter()
+                    .map(|span| format!("[{}, {}, \"{}\"]", span.from, span.to, span.kind.get_name()))
+                    .collect::<Vec<_>>().join(", ")));
+        }
         entry.push_str(" }");
         if at + 1 < explanation.lines.len() {
             entry.push(',');
@@ -126,14 +132,47 @@ fn fold_totals(explanation: &FileExplanation, model: CountingModel) -> (usize, u
     (code, comments, explanation.lines.len() - code - comments)
 }
 
+// The source line with its string and comment stretches in their own styles. The offsets come off
+// the parser and land on symbol or trim boundaries, but a span that would cut a character in half
+// is left unpainted rather than panicking over a diagnostic.
+fn paint_by_spans(source: &str, spans: &[Span]) -> String {
+    let theme = get_active();
+    let mut painted = String::with_capacity(source.len() + 16 * spans.len());
+    let mut at = 0;
+    for span in spans {
+        let (from, to) = (span.from.min(source.len()), span.to.min(source.len()));
+        if from > at && source.is_char_boundary(at) && source.is_char_boundary(from) {
+            painted.push_str(&source[at..from]);
+        }
+        if !source.is_char_boundary(from) || !source.is_char_boundary(to) {
+            continue;
+        }
+        let piece = &source[from..to];
+        match span.kind {
+            SpanKind::String => painted.push_str(&theme.explain_string.paint(piece).to_string()),
+            SpanKind::Comment => painted.push_str(&theme.explain_comment.paint(piece).to_string()),
+            SpanKind::Code => painted.push_str(piece)
+        }
+        at = to;
+    }
+    if at <= source.len() && source.is_char_boundary(at) {
+        painted.push_str(&source[at..]);
+    }
+    painted
+}
+
 fn describe_carried(carried: &Carried) -> Option<String> {
     match carried {
         Carried::Nothing => None,
-        Carried::Comment { opener, depth, since_line } if *depth > 1 => Some(format!(
+        Carried::Comment { opener, since_line, ends_on_this_line: true, .. } => Some(format!(
+                "the comment opened by {opener} on line {since_line} ends on this line")),
+        Carried::Comment { opener, depth, since_line, .. } if *depth > 1 => Some(format!(
                 "in a comment opened by {opener} on line {since_line}, {depth} deep")),
         Carried::Comment { opener, since_line, .. } => Some(format!(
                 "in a comment opened by {opener} on line {since_line}")),
-        Carried::Str { opener, since_line } => Some(format!(
+        Carried::Str { opener, since_line, ends_on_this_line: true } => Some(format!(
+                "the string opened by {opener} on line {since_line} ends on this line")),
+        Carried::Str { opener, since_line, .. } => Some(format!(
                 "in a string opened by {opener} on line {since_line}")),
         Carried::CommentContinuation { since_line } => Some(format!(
                 "a continuation of the comment on line {since_line}")),
@@ -144,17 +183,43 @@ fn describe_carried(carried: &Carried) -> Option<String> {
 mod tests {
     use super::*;
 
+    // What the painter owes: every byte of the source comes back out, in order, whatever the spans
+    // say. Colors are turned off the way the layouts golden turns them off, because the manual
+    // comparison protocol exports CLICOLOR_FORCE and a test binary inherits it.
+    #[test]
+    fn the_painted_line_keeps_every_byte_of_the_source() {
+        colored::control::set_override(false);
+        let line = " два\"; // ok";
+        let spans = [Span { from: 1, to: 8, kind: SpanKind::String },
+                Span { from: 8, to: 9, kind: SpanKind::Code },
+                Span { from: 10, to: 15, kind: SpanKind::Comment }];
+        assert_eq!(line, paint_by_spans(line, &spans));
+        assert_eq!(line, paint_by_spans(line, &[]));
+        // spans that run past the line, or cut a character in half, lose their paint and no text
+        assert_eq!(line, paint_by_spans(line, &[Span { from: 2, to: 40, kind: SpanKind::String }]));
+    }
+
     // The wording of the notes, pinned here because both faces print it and linejudge's readers
     // will show it beside their own rows
     #[test]
     fn a_carried_answer_reads_as_a_sentence() {
         assert_eq!(None, describe_carried(&Carried::Nothing));
         assert_eq!(Some("in a comment opened by /* on line 23".to_owned()),
-                describe_carried(&Carried::Comment { opener: "/*".to_owned(), depth: 1, since_line: 23 }));
+                describe_carried(&Carried::Comment { opener: "/*".to_owned(), depth: 1, since_line: 23,
+                        ends_on_this_line: false }));
         assert_eq!(Some("in a comment opened by --[[ on line 4, 3 deep".to_owned()),
-                describe_carried(&Carried::Comment { opener: "--[[".to_owned(), depth: 3, since_line: 4 }));
+                describe_carried(&Carried::Comment { opener: "--[[".to_owned(), depth: 3, since_line: 4,
+                        ends_on_this_line: false }));
+        // a line the carried thing does not survive says so, instead of claiming the line sits in it
+        assert_eq!(Some("the comment opened by /* on line 12 ends on this line".to_owned()),
+                describe_carried(&Carried::Comment { opener: "/*".to_owned(), depth: 1, since_line: 12,
+                        ends_on_this_line: true }));
         assert_eq!(Some("in a string opened by \" on line 7".to_owned()),
-                describe_carried(&Carried::Str { opener: "\"".to_owned(), since_line: 7 }));
+                describe_carried(&Carried::Str { opener: "\"".to_owned(), since_line: 7,
+                        ends_on_this_line: false }));
+        assert_eq!(Some("the string opened by \"\"\" on line 2 ends on this line".to_owned()),
+                describe_carried(&Carried::Str { opener: "\"\"\"".to_owned(), since_line: 2,
+                        ends_on_this_line: true }));
         assert_eq!(Some("a continuation of the comment on line 2".to_owned()),
                 describe_carried(&Carried::CommentContinuation { since_line: 2 }));
     }

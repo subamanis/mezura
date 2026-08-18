@@ -197,7 +197,10 @@ pub const EXPLAIN_HELP  :  &str =
     bucket it lands in under the active way of counting, the class mezura itself read off it,
     and, where something was still open when the line began, what that was and where it started:
     'in a comment opened by /* on line 23', 'in a string opened by \" on line 7'. In a file
-    holding other languages, a line read by an embedded language names it.
+    holding other languages, a line read by an embedded language names it. The source lines are
+    printed with the stretches that sit inside a string or a comment in their own styles, which
+    '--style' reaches as 'explain-string' and 'explain-comment', so a symbol swallowed by a
+    string is visible as such.
 
       mezura src/main.rs --explain
       mezura src/page.vue --explain --counting region
@@ -207,10 +210,11 @@ pub const EXPLAIN_HELP  :  &str =
     which is what this is for: checking a surprising count against the file itself.
 
     '--output json' writes the same answer as a document with one verdict per line and nothing
-    else on the output, and no log entry is written. '--counting' picks the buckets, and the
-    commands choosing what is counted ('--languages', '--force-language' and the rest) apply as
-    in a run. The commands that belong to a report over a whole scan ('--diff', '--log',
-    '--compare', '--sort', '--top', '--by-file') are refused beside it.
+    else on the output, and no log entry is written. Each verdict carries those stretches as
+    'spans', byte offsets into its line. '--counting' picks the buckets, and the commands
+    choosing what is counted ('--languages', '--force-language' and the rest) apply as in a run.
+    The commands that belong to a report over a whole scan ('--diff', '--log', '--compare',
+    '--sort', '--top', '--by-file') are refused beside it.
 
 ";
 
@@ -693,6 +697,10 @@ pub const STYLE_HELP  :  &str =
       file-size                its size
       file-size-unit           the unit beside that size
       file-percent             the percentages of a file, which are of its language
+
+    The source lines of an '--explain' run; what is neither keeps the terminal's own color:
+      explain-string           the stretches of a line that sit inside a string
+      explain-comment          the stretches that sit inside a comment
 
     The overview:
       overview-label           the 'Files:', 'Lines:' and 'Size :' row labels

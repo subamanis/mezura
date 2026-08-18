@@ -20,7 +20,7 @@ Main changes:
       Long paths lose whole directories out of their middle. The JSON document carries the same
       rows under each language, as "by_file".
   -> Every piece of printed text can now be styled, not just the four colors of the overview.
-      49 tokens are exposed, and each takes a color plus any of bold, italic, underline, dim and
+      51 tokens are exposed, and each takes a color plus any of bold, italic, underline, dim and
       reverse, in any order. The cells of the live progress bar also take a "hex..hex" gradient
       or "rainbow". Run "--help style" for the full list.
   -> A comment line carrying no words now counts as extra, the way a lone brace always did: the
@@ -29,8 +29,9 @@ Main changes:
       style; code counts do not move.
   -> New "--explain" command: run on exactly one file, it answers line by line instead of printing
       a report, with each line's bucket, the class it was read as, and what was still open when the
-      line began. "--output json" writes the same answer as a document with one verdict per line,
-      for other tools to read. Run "--help explain" for the details.
+      line began. The stretches of each line that sit inside a string or a comment are printed in
+      their own styles. "--output json" writes the same answer as a document with one verdict per
+      line, spans included, for other tools to read. Run "--help explain" for the details.
   -> New "--counting" command, taking "content" or "region". The default, "content", is the
       counting mezura always did: a line counts where its words are, and a line saying nothing is
       extra. "region" counts a line where it sits, the way cloc, tokei and scc do: any code on the

@@ -450,6 +450,33 @@ pub enum Bucket {
     Third
 }
 
+// One stretch of a line as '--explain' reports it: which bytes sit inside a string, which inside a
+// comment, and which outside both. 'from' and 'to' are byte offsets into the line as the file
+// spells it, and the symbols that open and close a thing belong to its stretch.
+#[derive(Debug,PartialEq,Eq,Clone,Copy)]
+pub struct Span {
+    pub from: usize,
+    pub to: usize,
+    pub kind: SpanKind
+}
+
+#[derive(Debug,PartialEq,Eq,Clone,Copy)]
+pub enum SpanKind {
+    Code,
+    String,
+    Comment
+}
+
+impl SpanKind {
+    pub fn get_name(&self) -> &'static str {
+        match self {
+            Self::Code => "code",
+            Self::String => "string",
+            Self::Comment => "comment"
+        }
+    }
+}
+
 // Where the code and comment columns come from. The engine only ever fills 'LineClasses'; what a
 // column shows is this fold, chosen at presentation time, so the same run answers both models.
 //
