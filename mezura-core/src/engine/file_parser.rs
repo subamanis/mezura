@@ -891,6 +891,12 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
                 else { LineClass::Blank };
         file_stats.classes.bump(class);
         if EXPLAIN { log.record(class, carried, language, Vec::new()); }
+        // A string whose symbol does not cross lines was only held open by a continuation, and
+        // the continuation needs a backslash at the line's end, which a blank line has nowhere
+        // to put. The line itself still counted inside the string, where it began.
+        if state.open_str_symbol.is_some_and(|symbol| !language.string_crosses_lines(symbol)) {
+            state.open_str_symbol = None;
+        }
         return false;
     }
     let lead = raw_line.len() - from_start.len();
@@ -934,13 +940,14 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
     let counts_as_comment = !counts_as_code && has_word_byte(line.as_bytes());
 
     // Whether this line ended inside a comment that the next one carries on. Only a line comment
-    // reaches the continuation symbol, which is what empty code ranges say: a closed block with a
-    // '\' after it, the shape of every C macro holding a comment in its body, extends nothing.
+    // reaches the continuation symbol, which is what 'ended_in_line_comment' says: a closed block
+    // with a '\' after it, the shape of every C macro holding a comment in its body, extends
+    // nothing, while 'code; // c \' joins the next line to its comment the way C reads it.
     // What the comment says is not asked, since a decorative '// ---- \' continues as readily as
     // a sentence. The symbol is looked for last because it is the dearest question here and the
     // rarest yes.
     state.continued_comment = state.open_str_symbol.is_none() && state.open_comment.is_none()
-            && !line_info.has_string_literal && !has_code
+            && opened_here.ended_in_line_comment
             && continues_in(language, |continuation| continuation.in_comments)
             && ends_with_continuation(line, language);
 
@@ -1179,13 +1186,17 @@ fn line_info_with_str_symbol(ranges: usize, str_symbol: u8) -> LineInfo {
     }
 }
 
-// Whether the thing a line leaves open began on that same line, as opposed to carrying on from an
-// earlier one. Only '--explain' reads it: the counting cannot tell '*/ x /*' apart from a comment
-// running through, and does not need to, but the report of which line opened what does.
+// What the reading of a line learned that 'LineInfo' does not say. 'comment' and 'string' are
+// whether the thing the line leaves open began on that same line, as opposed to carrying on from
+// an earlier one; only '--explain' reads those, for the report of which line opened what.
+// 'ended_in_line_comment' is read by the counting itself: it is what lets a continuation carry a
+// spliced line comment off a line that also held code, where 'code; // c \' joins the next line
+// to the comment and a closed block's '/* c */ \' must not.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 struct OpenedHere {
     comment: bool,
     string: bool,
+    ended_in_line_comment: bool,
 }
 
 // Only '--explain' collects spans; in the counting build this compiles to nothing at all, which
@@ -1208,8 +1219,9 @@ fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment
     if open_comment.is_none() && open_str_symbol.is_none()
             && get_or_build_plan_of(language).line_comment_ends_the_line
             && language.comment_symbols.iter().any(|symbol| line.as_bytes().starts_with(symbol.as_bytes())) {
-        note_span::<EXPLAIN>(spans,0, line.len(), SpanKind::Comment);
-        return (LineInfo::none_all(false), OpenedHere::default());
+        note_span::<EXPLAIN>(spans, 0, line.len(), SpanKind::Comment);
+        return (LineInfo::none_all(false),
+                OpenedHere { ended_in_line_comment: true, ..OpenedHere::default() });
     }
 
     scan_line(line, language, buffers);
@@ -1219,7 +1231,7 @@ fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment
 
     match open_comment {
         None => if open_str_symbol.is_some() && str_indices.is_empty() {
-            note_span::<EXPLAIN>(spans,0, line.len(), SpanKind::String);
+            note_span::<EXPLAIN>(spans, 0, line.len(), SpanKind::String);
             return (LineInfo::none_str(None, true, *open_str_symbol), OpenedHere::default());
         },
         // Only the end of the pair that opened the block closes it, so a line holding none of
@@ -1233,7 +1245,7 @@ fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment
             let deepens = language.comment_nests(open_pair)
                     && com_start_indices.iter().any(|(_, symbol, _)| *symbol == open_pair);
             if !has_end && !deepens {
-                note_span::<EXPLAIN>(spans,0, line.len(), SpanKind::Comment);
+                note_span::<EXPLAIN>(spans, 0, line.len(), SpanKind::Comment);
                 return (LineInfo::open_comment_at(open_pair, carried), OpenedHere::default());
             }
         }
@@ -1250,7 +1262,7 @@ fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment
 
     if str_indices.is_empty() && comment_indices.is_empty() && com_start_indices.is_empty() && com_end_indices.is_empty() {
         push_code(code_ranges, line, 0, line.len());
-        note_span::<EXPLAIN>(spans,0, line.len(), SpanKind::Code);
+        note_span::<EXPLAIN>(spans, 0, line.len(), SpanKind::Code);
         return (LineInfo::code_span((0, code_ranges.len()), false), OpenedHere::default());
     }
 
@@ -1326,11 +1338,11 @@ fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment
             let index_after = last_symbol_index
                     + language.get_string_pair_of(str_symbols[str_counter]).1.len();
             if index_after >= line.len() {
-                note_span::<EXPLAIN>(spans,region_from, line.len(), SpanKind::String);
+                note_span::<EXPLAIN>(spans, region_from, line.len(), SpanKind::String);
                 if code_ranges.is_empty() {return (LineInfo::none_all(true), OpenedHere::default());}
                 else {return (LineInfo::code_span((0, code_ranges.len()), true), OpenedHere::default());}
             }
-            note_span::<EXPLAIN>(spans,region_from, index_after, SpanKind::String);
+            note_span::<EXPLAIN>(spans, region_from, index_after, SpanKind::String);
             region_from = index_after;
 
             progress_counters_after(last_symbol_index, &mut comment_counter, &mut str_counter,
@@ -1379,7 +1391,7 @@ fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment
                 }
                 // A block that stays open leaves a comment line whenever no code sat outside it,
                 // whichever kind of pair it is
-                note_span::<EXPLAIN>(spans,region_from, line.len(), SpanKind::Comment);
+                note_span::<EXPLAIN>(spans, region_from, line.len(), SpanKind::Comment);
                 if !has_string_literal && code_ranges.is_empty() {
                     return (LineInfo::open_comment_at(open_pair, carry), opened);
                 }
@@ -1389,11 +1401,11 @@ fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment
             let end_level = if leveled { carried as u8 } else { 0 };
             let index_after = last_symbol_index + language.comment_end_len(open_pair, end_level);
             if index_after >= line.len() {
-                note_span::<EXPLAIN>(spans,region_from, line.len(), SpanKind::Comment);
+                note_span::<EXPLAIN>(spans, region_from, line.len(), SpanKind::Comment);
                 if code_ranges.is_empty() {return (LineInfo::none_all(has_string_literal), OpenedHere::default());}
                 else {return (LineInfo::code_span((0, code_ranges.len()), has_string_literal), OpenedHere::default());}
             }
-            note_span::<EXPLAIN>(spans,region_from, index_after, SpanKind::Comment);
+            note_span::<EXPLAIN>(spans, region_from, index_after, SpanKind::Comment);
             region_from = index_after;
 
             // Every counter goes past the closer's own bytes and not merely past where it began, so
@@ -1410,23 +1422,24 @@ fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment
             if next_symbol_is_comment(comment_counter, str_counter, start_com_counter) {
                 let comment_at = comment_indices[comment_counter];
                 push_code(code_ranges, line, slice_start_index, comment_at);
-                note_span::<EXPLAIN>(spans,region_from, comment_at, SpanKind::Code);
-                note_span::<EXPLAIN>(spans,comment_at, line.len(), SpanKind::Comment);
-                if code_ranges.is_empty() {return (LineInfo::none_all(has_string_literal), OpenedHere::default());}
-                else {return (LineInfo::code_span((0, code_ranges.len()), has_string_literal), OpenedHere::default());}
+                note_span::<EXPLAIN>(spans, region_from, comment_at, SpanKind::Code);
+                note_span::<EXPLAIN>(spans, comment_at, line.len(), SpanKind::Comment);
+                let ends = OpenedHere { ended_in_line_comment: true, ..OpenedHere::default() };
+                if code_ranges.is_empty() {return (LineInfo::none_all(has_string_literal), ends);}
+                else {return (LineInfo::code_span((0, code_ranges.len()), has_string_literal), ends);}
             } else if next_symbol_is_string(comment_counter, str_counter, start_com_counter) {
                 let this_index = str_indices[str_counter];
                 if skipped_com_end_symbol(last_symbol_index, end_com_counter, this_index) {
                     end_com_counter += 1;
                 }
                 push_code(code_ranges, line, slice_start_index, this_index);
-                note_span::<EXPLAIN>(spans,region_from, this_index, SpanKind::Code);
+                note_span::<EXPLAIN>(spans, region_from, this_index, SpanKind::Code);
                 region_from = this_index;
                 str_counter += 1;
                 if !has_more_strs(str_counter) {
-                    note_span::<EXPLAIN>(spans,region_from, line.len(), SpanKind::String);
+                    note_span::<EXPLAIN>(spans, region_from, line.len(), SpanKind::String);
                     return (line_info_with_str_symbol(code_ranges.len(), str_symbols[str_counter-1]),
-                            OpenedHere { comment: false, string: true });
+                            OpenedHere { string: true, ..OpenedHere::default() });
                 }
 
                 is_str_open_m = true;
@@ -1439,19 +1452,19 @@ fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment
                 }
 
                 push_code(code_ranges, line, slice_start_index, this_index);
-                note_span::<EXPLAIN>(spans,region_from, this_index, SpanKind::Code);
+                note_span::<EXPLAIN>(spans, region_from, this_index, SpanKind::Code);
                 region_from = this_index;
                 // A nesting or leveled pair falls through to the open branch even with no ends
                 // left: further starts of a nesting one still deepen the carried state, and the
                 // leveled one carries its level either way
                 if !has_more_ends(end_com_counter) && !language.comment_nests(this_symbol)
                         && !language.comment_is_leveled(this_symbol) {
-                    note_span::<EXPLAIN>(spans,region_from, line.len(), SpanKind::Comment);
+                    note_span::<EXPLAIN>(spans, region_from, line.len(), SpanKind::Comment);
                     if !has_string_literal && code_ranges.is_empty() {
-                        return (LineInfo::with_open_comment(this_symbol), OpenedHere { comment: true, string: false });
+                        return (LineInfo::with_open_comment(this_symbol), OpenedHere { comment: true, ..OpenedHere::default() });
                     }
                     return (LineInfo::code_span_with((0, code_ranges.len()), has_string_literal, Some((this_symbol, 1)), None),
-                            OpenedHere { comment: true, string: false });
+                            OpenedHere { comment: true, ..OpenedHere::default() });
                 }
 
                 open_com_m = Some((this_symbol,
@@ -1461,7 +1474,7 @@ fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment
                 last_symbol_index = this_index;
             } else {
                 push_code(code_ranges, line, slice_start_index, line.len());
-                note_span::<EXPLAIN>(spans,region_from, line.len(), SpanKind::Code);
+                note_span::<EXPLAIN>(spans, region_from, line.len(), SpanKind::Code);
                 return (LineInfo::code_span((0, code_ranges.len()), has_string_literal), OpenedHere::default());
             }
         }
@@ -1966,6 +1979,45 @@ mod tests {
                 extension_to_name: &NO_EXTENSIONS, set_aside: &NO_SET_ASIDE },
                 &mut KeywordMatchers::default(), &EngineConfig::default(), &mut ParseBuffers::default(),
                 &mut ExplainLog::default()).into_whole()
+    }
+
+    fn c_like_with_a_splice() -> Language {
+        Language::new("c-like", ["c"], ["\""], ["//"], &[("/*", "*/")], [])
+                .with_line_continuation("\\", true, true)
+    }
+
+    // 'int a = 1; // comment \' joins the next line to its comment in C, code on the line or not.
+    // The closed block's '/* c */ \' is the shape that must never carry: there the line ends
+    // outside every comment and the backslash is code, which is what every C macro body relies on.
+    #[test]
+    fn a_spliced_line_comment_carries_even_off_a_line_that_also_holds_code() {
+        let language = c_like_with_a_splice();
+
+        let stats = parse_lines_whole("int a = 1; // comment \\\n   joined to the comment\nint x = 1;\n", &language);
+        assert_eq!(2, stats.classes.words_in_code);
+        assert_eq!(1, stats.classes.words_in_comment);
+
+        let stats = parse_lines_whole("/* block */ \\\nint x = 1;\n", &language);
+        assert_eq!(1, stats.classes.words_in_code);
+        assert_eq!(1, stats.classes.comment_words_beside_code);
+    }
+
+    // The splice holds a string open only off a line ending in the backslash, and a blank line has
+    // nowhere to put one. The blank itself still counts inside the string, where it began; a
+    // symbol that crosses lines on its own is untouched, which is what keeps docstrings whole.
+    #[test]
+    fn a_blank_line_ends_a_string_the_splice_was_carrying() {
+        let stats = parse_lines_whole("char *s = \"abc \\\n\n// a comment\";\nint x = 1;\n",
+                &c_like_with_a_splice());
+        assert_eq!(2, stats.classes.words_in_code);
+        assert_eq!(1, stats.classes.blank_in_string);
+        assert_eq!(1, stats.classes.words_in_comment);
+
+        let crossing = Language::new("py-like", ["py"], ["\""], ["#"], &[], [])
+                .with_multiline_strings(&["\"\"\""]);
+        let stats = parse_lines_whole("\"\"\" open\n\nstill inside \"\"\"\n", &crossing);
+        assert_eq!(1, stats.classes.blank_in_string);
+        assert_eq!(2, stats.classes.string_content);
     }
 
     // Seeded from the language and then given the one file, which is what a real run does: the seed
