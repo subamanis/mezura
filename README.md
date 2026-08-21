@@ -92,50 +92,42 @@ WHAT IS COUNTED
 --targets
     the directories and files to count, and the names to group them under (modules)
 
-    The paths to the directories or files, separated by commas if more than 1,
-    in this form: '--targets <path1>, <path2>'
-    A path can also be a glob pattern (* ? [..] {..}), which is expanded to every existing
-    directory and file that it matches, so 'services/*/src' is a valid target.
-    A path that exists exactly as written is always taken literally, so a folder with one of
-    those characters in its name is still just a folder.
-    Since the matches of a pattern are found by the program and not named by you, they follow
-    the same rules as every other path it discovers: the ones that a .gitignore ignores, that
-    are dotted, or that are links, are skipped (see the '--no-gitignore' and '--search-in-dotted'
-    commands).
-    A path that you write out explicitly is always used, even if it is ignored, dotted or a link.
-    Targets that are contained in other targets are dropped, so that no file is counted twice.
-    If you are using Windows Powershell, you will need to escape the commas with a backtick: `
-    or surround all the arguments with quotation marks:
+    1..n paths to directories or files, separated by commas:
+    '--targets <path1>, <path2>'
+
+    A path can be a glob pattern (* ? [..] {..}), so 'services/*/src' is a target. A path that
+    exists exactly as written is taken literally, so a folder named with one of those characters
+    is still a folder. A target inside another target is dropped, so nothing is counted twice.
+
+    A path you write out is always counted, even if it is ignored, dotted or a link. The matches
+    of a pattern were found by mezura rather than named by you, so those are skipped like any
+    other found path (see '--no-gitignore' and '--search-in-dotted').
+
+    In Windows Powershell the commas need a backtick, or the whole list needs quotation marks:
     <path1>`, <path2>`, <path3>   or   "<path1>, <path2>, <path3>"
+
+    Targets can also be given as the first arguments of the program, or in a configuration file.
 
     MODULES
 
-    A target can be given a name, and then the report is grouped by it as well as by language,
-    which answers 'how much of this is the frontend' without running the program once per folder:
+    Give a target a name and the report is grouped by it as well as by language:
 
         mezura frontend=./web backend=./api
         mezura ./project tests=./project/tests
 
-    A comma continues the list of paths of the same module and a space ends it, so
-    'tests=./api/tests,./web/tests' is one module of two directories, while 'frontend=./web ./ui'
-    is the module and a separate unnamed target. Repeating a name adds to it.
-    Every file belongs to exactly one module, and the most specific path wins, so the second
-    example above means 'the tests there, the rest of the project here', whichever order they are
-    written in. Anything the named ones did not claim is one row called '(unnamed)', and it comes
-    last. The rest appear in the order you wrote them, which is how you arrange the columns of the
-    'matrix' layout: '--sort' orders the languages inside a module and never the modules themselves.
-    Declaring the same path under two different names is refused, since there is nothing more
-    specific to settle it. A run that names nothing prints exactly what it always did.
+    A comma continues one module and a space ends it, so 'tests=./api/tests,./web/tests' is one
+    module of two directories while 'frontend=./web ./ui' is the module and a separate unnamed
+    target. Repeating a name adds to it, and one path under two names is refused.
 
-    A space only ends a target once you have named one. While no name is given, a path is allowed
-    to contain spaces and only a comma separates two of them, which is the way it has always been.
-    That does leave one thing a command line cannot say, a path with a space in it in a run that
-    also names modules, because your shell removes the quotation marks before the program sees
-    them. Write those in a configuration file, one target per line, where a space never separates.
+    Every file belongs to one module and the most specific path wins, so the second example means
+    'the tests there, the rest of the project here' in either order. What no name claimed becomes
+    a row called '(unnamed)' and comes last; the rest keep the order you wrote them in, which is
+    also the order of the columns in 'matrix'. '--sort' orders the languages inside a module and
+    never the modules.
 
-    The target directories can also be given implicitly (in which case this command is not needed) with 2 ways:
-    1) as the first arguments of the program directly
-    2) if they are present in a configuration file (see '--save' and '--load' commands).
+    Once anything is named a space ends a target, so a path holding spaces cannot be written
+    beside modules: the shell takes the quotation marks away before mezura sees them. Put those
+    in a configuration file, one target per line.
 
 --counting
     whether a line counts by where its words are or by where the line sits
@@ -180,10 +172,8 @@ WHAT IS COUNTED
     A language is named either by the name a file in the 'data/languages/' dir gives it under
     'Language', or by any extension it claims, so 'javascript' and 'js' name the same one.
 
-    An extension two languages claim names whichever of them owns it for the counting, which is
+    An extension that two languages claim names whichever of them owns it for this run, which is
     the answer in 'extension_priority.txt' or the one '--force-language' gave.
-
-    Only the languages specified here will be taken into account for the stats.
 
 --exclude-languages
     count everything except these languages
@@ -193,14 +183,14 @@ WHAT IS COUNTED
     A language is named either by the name a file in the 'data/languages/' dir gives it under
     'Language', or by any extension it claims, so 'javascript' and 'js' name the same one.
 
-    The given language names will be ignored from the stats calculation, if they exist.
+    A name that nothing in the scan answers to is reported as having changed nothing, and the run
+    carries on.
 
 --force-language
     count an extension as the language you pick, even if another one claims it
 
     1..n pairs of 'extension=language' or 'filename=language' separated by commas, case-insensitive
 
-    Decides which language an extension is counted as, whether or not another language claims it:
     '--force-language m=matlab,pl=perl,txt=python'
 
     A whole filename works the same way, for the files that have no extension worth reading:
@@ -214,15 +204,13 @@ WHAT IS COUNTED
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
     or 'no' to disable. Default: no
 
-    By default, the program respects .gitignore files: any file or folder ignored by a .gitignore
-    found in the traversed directories (or in their parent directories, up to the repository root)
-    is skipped, and skipped files are included in the excluded files count. Negated patterns
-    ('!keep.log') are supported, and target paths that are written out explicitly are always used,
-    even if a .gitignore of their parent directories would ignore them. The matches of a glob
-    pattern do not count as written out explicitly, since the program is the one that found them.
+    Without this flag a .gitignore is obeyed: anything it ignores is skipped and counted among the
+    excluded files. The .gitignore files read are the ones inside the directories being walked and
+    the ones above them, up to the repository root, and negated patterns ('!keep.log') work.
 
-    This flag disables that behavior, so that every relevant file is counted
-    regardless of .gitignore rules.
+    A path you wrote out yourself is always counted, even where a .gitignore above it says
+    otherwise. The files a glob pattern matched do not count as written out, since mezura is the
+    one that found them.
 
 --search-in-dotted
     go into directories whose name starts with a dot
@@ -230,8 +218,7 @@ WHAT IS COUNTED
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
     or 'no' to disable. Default: no
 
-    Specifies whether the program should traverse directories that are prefixed with a dot,
-    like .vscode or .github.
+    Directories like '.vscode' and '.github' are skipped without this flag.
 
     The '.git' directory is never traversed, with or without this command, at any depth. Nothing
     inside it is source, and walking it is thousands of files for no count at all.
@@ -241,9 +228,8 @@ WHAT IS COUNTED
 
     No arguments.
 
-    Overrides normal program execution and just prints a sorted list with the names of
-    all the supported languages that were detected in the persistent data path
-    of the application, where you can add more.
+    Lists by name what is in the 'data/languages/' directory, and counts nothing. Adding a file
+    there teaches mezura another language.
 
 HOW THE REPORT LOOKS
 
@@ -252,30 +238,23 @@ HOW THE REPORT LOOKS
 
     One argument: 'table', 'boxed', 'list' or 'matrix'. Default: table
 
-    Chooses the shape of the "details" section.
-
       table     one aligned row per language: Language, Files, Lines, Code, Comments, Extra
-                and Size, with a percentage next to each of the first four. No borders, only
-                whitespace alignment, so it survives being pasted into a README or a ticket.
+                and Size, with a percentage next to each of the first four. Aligned with
+                spaces and no borders, so it pastes into a README or a ticket unchanged.
       boxed     the same figures inside a drawn frame. Each number shares a cell with its
-                percentage there, since the borders already group the two, which makes it
-                narrower than 'table'. Needs a terminal that can render box drawing
-                characters.
+                percentage, which makes it narrower than 'table'. Needs a terminal that can
+                draw box characters.
       list      one block of three rows per language: the file count and the size above the
                 name, the line breakdown beside it, the keywords below. Wider, and it cannot
                 be read down a column, but it reads well for a handful of languages.
-      matrix    languages down, modules across, one number per cell. The other three answer
-                'what is inside the backend', read down a section; this one answers 'how do
-                the modules compare on the same language', read along a row, which is what
-                you want when the folders you named are several answers to one problem rather
-                than several parts of one thing. Only one number fits in a cell, so it holds
-                whatever '--sort' is ordering by, and a line above the table says which.
-                A dash is a language the module does not have. With no module named there is
-                nothing to cross, so it says so and prints 'table' instead.
+      matrix    languages down, modules across, one number per cell, so a row says how the
+                modules compare on the same language. That one number is whatever '--sort'
+                is ordering by, named in a line above the table, and a dash is a language
+                the module does not have. With no module named there is nothing to cross,
+                so it says so and prints 'table' instead.
 
-    The percentage next to 'Files' and to 'Lines' is that language's share of the total, the
-    one next to 'Code' and to 'Comments' is its share of that language's own lines, which is
-    what the same two numbers mean in the 'list' layout.
+    The percentage beside 'Files' and 'Lines' is the language's share of the whole scan. The one
+    beside 'Code' and 'Comments' is its share of that language's own lines.
 
     In the two tables the keywords cannot be a column without destroying the alignment, so they
     are printed as their own block underneath, one line per language. '--hide keywords' still
@@ -290,52 +269,46 @@ HOW THE REPORT LOOKS
     order by. The third column is 'extra' under '--counting content' and 'blanks' under
     '--counting region', and naming the other model's word orders by lines and says so.
 
-    Chooses the order of the languages in the "details" section, which also decides which of them
-    reach the "overview" section and which are folded into its 'others' entry.
-    Every criterion except 'name' sorts from the largest down, and ties are broken alphabetically
-    so that the order never changes between runs on the same data.
-    The column that decides it carries a mark in its header, since the criterion can come from a
-    configuration file and then nothing else on the page would say it.
+    Orders the languages in the "details" section, which also decides which of them reach the
+    "overview" section and which are folded into its 'others' entry.
 
-    Note that before v3.0.0 the order was a fixed formula in which the byte size dominated, so
-    runs that used to be ordered by size are now ordered by lines unless you ask otherwise.
+    Everything except 'name' sorts from the largest down, and ties are broken alphabetically so
+    the order never changes between runs on the same data. The column that decides it carries a
+    mark in its header, since the criterion can come from a configuration file and then nothing
+    else on the page would say it.
 
 --top
     show only this many languages, and say how many were left out
 
     One number, 1 or greater.
 
-    Shows only that many languages in the "details" section, the ones that come first according
-    to the '--sort' criterion. A line underneath states how many were hidden, so that the numbers
-    not adding up to the total is never a mystery.
+    Shows only that many languages in the "details" section, the ones that come first under
+    '--sort'. A line underneath says how many were hidden, so the rows never fail to add up to the
+    total without saying why. The total itself still counts every language. The "overview" section
+    shows no more languages than this either, so asking for the top 2 does not leave a third one
+    sitting in the bar.
 
-    The total keeps counting every language, hidden ones included, since it is the total.
-    The "overview" section never shows more languages than this either, so asking for the top 2
-    does not leave a third one sitting in the bar.
-
-    It never reorders the modules themselves, only the languages inside them: you chose that order
-    when you wrote them.
-    With modules, the cut happens inside each one, since that is what the rows under a module are.
-    The 'matrix' layout is the exception: its rows are the languages of the whole run, so there the
-    cut is over all of them.
+    The modules keep the order you wrote them in, and the cut is made inside each one, since the
+    rows under a module are its own languages. The 'matrix' layout is the exception: its rows are
+    the languages of the whole run, so there the cut is over all of them.
 
 --by-file
     give every file its own row, or only the biggest few of each language
 
     No arguments, or one number.
 
-    Every counted file gets a row of its own, under the language it was counted as, showing its
-    lines split into code, comments and everything else. Without a number every file is printed,
-    the way '--top' shows every language until a number says otherwise.
+    Every file gets a row under the language it was counted as, with its lines split into code,
+    comments and everything else. Without a number, every file is printed.
 
     A number is how many to show under each language: '--by-file 20' prints the twenty biggest of
-    every language, by whatever '--sort' is in effect, and 0 means all of them again. The cut is
-    inside each language of each module, for the same reason '--top' cuts inside each module: over
-    a whole report, the one part holding the biggest files would leave every other part with none.
+    every language, ordered by whatever '--sort' is in effect, and 0 means all of them again. The
+    cut is made inside each language of each module, for the same reason '--top' cuts inside each
+    module: across a whole report, the one part with the biggest files would leave the others
+    with none.
 
-    A language whose files were cut ends on a branch left hanging, so that a tree drawn shut is
-    always the whole of what there is, and how many were left out is reported above the total. The
-    files of a language '--top' hid are not printed, since their language is not there to sit under.
+    A language whose files were cut ends on a branch left hanging, so a tree drawn shut means
+    nothing was left out, and the count of what was is printed above the total. A language that
+    '--top' hid has no row for its files to sit under, so they are not printed either.
 
     A path too wide for its column loses whole directories out of its middle and never a piece of
     the file's own name. A file's keywords are not counted, so a row is one line whatever the
@@ -347,16 +320,16 @@ HOW THE REPORT LOOKS
     One or more names separated by commas or spaces, for example:
     --hide parsing-info,timing   or   --hide parsing-info timing
 
-    Leaves the named parts of the output unprinted. What you can hide:
+    What you can hide:
 
       version         the version line at the top
       directory-info  the 'Analyzing directories' line and the 'N files found' line under it
       parsing-info    the 'Parsing files' line and the 'ok' under it
       progress-bar    the bar, the share done and the speed figures of a long parse, keeping
                       its file count
-      animations      every moving line: the scan's dots, the live progress bar, and the
-                      'Writing out', 'Counting' and 'Cleaning up' lines of a '--diff'. What
-                      they settle into still prints. A TERM=dumb terminal gets this on its own
+      animations      every moving line: the scan's dots, the live progress bar and the working
+                      lines of a '--diff'. What they settle into still prints, and a TERM=dumb
+                      terminal hides them on its own
       keywords        the keyword counts, keeping the rest of the details rows
       nested-languages  the rows that break a container file down, so a '.vue' weighs whole on
                       the Vue row with no sign of the TypeScript and CSS inside it
@@ -374,27 +347,24 @@ HOW THE REPORT LOOKS
                       layout's files line
       percentages     every percentage of the details rows, keeping the numbers they describe
 
-    The list mixes whole sections with parts of them on purpose: you are pointing at what you
-    see, not at how the program is organised.
+    The column names reach every layout except 'matrix', whose three rows stay whole. Hiding the
+    column '--sort' orders by falls back to sorting by lines, and says so.
 
-    The five column names reach the details in every layout except the matrix, whose three rows
-    stay whole. A comparison obeys them too, where every change follows its own figure out; its
-    percentages are percentages of the change, so hiding them leaves the absolute move, and it has
-    no 'extra' column to hide. Hiding the column '--sort' orders by falls back to sorting by
-    lines, and says so.
+    A '--diff' comparison obeys them too, taking each change away with its figure. Its
+    percentages are percentages of the change, so hiding those leaves the absolute move, and it
+    has no 'extra' column to hide.
 
-    Errors and warnings are never hidden. Hiding the parsing info still reports files that failed
-    to be parsed, since otherwise the numbers would silently be wrong.
+    Errors and warnings are never hidden, and a hidden parsing info still reports the files that
+    failed to parse, since the numbers would otherwise be wrong with nothing saying so.
 
 --theme
-    apply a named theme, which is the whole look in one file
+    apply a theme, which is a whole look kept in one file
 
     One argument, the name of a theme (case-insensitive).
 
-    Applies a named theme. Themes are .txt files in the 'data/themes' dir, in the persistent
-    data path of the application, where the file name is the theme name. Every line is a
-    'token = value' pair, the same tokens and values that '--style' takes (see '--help style').
-    You can add your own there, and '--show-themes' lists the ones you have.
+    A theme is a .txt file in the 'data/themes' directory, named by its file name. Every line is
+    a 'token = value' pair, the same tokens and values '--style' takes (see '--help --style').
+    Add your own there; '--show-themes' lists the ones you have, each one drawn.
 
     A theme carries only how the output looks. What is measured and what is shown stays in a
     configuration file, so a theme can be handed to someone else without carrying your paths
@@ -409,39 +379,26 @@ HOW THE REPORT LOOKS
     One or more 'token=style' pairs separated by commas, for example:
     --style code-number=bright-black,code-label=b5a98a italic,heading=white bold underline
 
-    Overrides how a category of printed text looks. A style is a color and any number of the
-    attributes 'bold', 'italic', 'underline', 'dim' and 'reverse', in any order. The color is
-    either a hex value or one of the 16 terminal color names, or the word 'default' to leave the
-    terminal's own foreground color alone.
+    A style is a color and any number of the attributes 'bold', 'italic', 'underline', 'dim' and
+    'reverse', in any order. The color is a hex value, one of the 16 terminal color names, or
+    'default' to leave the terminal's own foreground alone. 'reverse' swaps the text and
+    background colors, so it stands out without picking one.
 
-    'reverse' swaps the text and background colors, so it stands out strongly without committing
-    to any color of its own, which means it adapts to whatever theme the terminal is using.
+    The cells of the live progress bar take two forms no other token does: hex values separated
+    by '..' fill them with an even gradient, and 'rainbow' walks a spectrum along them. A gradient
+    needs hex values, since a colour name has no shade to interpolate. Every other token takes one
+    colour and says so if given either form.
 
-    The cells of the live progress bar take two forms no other token does, being a run of cells
-    rather than one piece of text: two or more hex values separated by '..' fill them with a
-    gradient through every one of them, evenly spread, and 'rainbow' walks a spectrum along them
-    while they are drawn. A gradient takes hex values only, because a terminal color name is
-    whatever the terminal's own scheme maps it to and there is no shade to interpolate. Every
-    other token takes one color and says so if it is given either form.
+    Every counted quantity has two tokens, one for the figure and one for the word beside it:
 
-    Every counted quantity owns two tokens, one for the number and one for the word beside it,
-    so either can be picked out without touching the other. Each is named after the word that
-    appears on screen:
+      files-number  files-label             comments-number  comments-label
+      lines-number  lines-label             total-size-number  total-size-label
+      code-number  code-label               avg-size-number  avg-size-label
+      extra-number  extra-label             keyword-number  keyword-label
 
-      files-number       files-label
-      lines-number       lines-label
-      code-number        code-label
-      comments-number    comments-label
-      extra-number       extra-label
-      total-size-number  total-size-label
-      avg-size-number    avg-size-label
-      keyword-number     keyword-label
-
-    'size-unit' is the unit next to a size, the 'KB' of '430.5 KB total', and it is one token for
-    both sizes since there is no reason to want two colors of KB on one line. It is separate from
-    the labels so that it can stay quiet while 'Size' reads like every other column header.
-
-    The numbers of the "history" section are the same quantities, so they follow the same tokens.
+    The "history" section counts the same quantities and takes the same tokens. 'size-unit' is
+    the 'KB' of '430.5 KB total', one token for both sizes, kept apart from the labels so it can
+    stay quiet while 'Size' reads like any column header.
 
     The rest, by where they appear.
 
@@ -466,32 +423,20 @@ HOW THE REPORT LOOKS
       sort-marker              the arrow beside the title of the column '--sort' ordered by
       arrow                    the '->' after a language name, in the 'list' layout only
 
-    The sections inside a container file, one token per column of the same row:
-      nested-name              the name of a section language
-      nested-branch            the tree characters that tie the sections to the row above
-      nested-files             the file count of a section
-      nested-lines             its lines
-      nested-code              its code lines
-      nested-comments          its comment lines
-      nested-extra             its remaining lines
-      nested-size              its size
-      nested-size-unit         the unit beside that size
-      nested-percent           the percentages of a section, which are of the container
+    The rows hanging under a language, one token per column, twice over: 'nested-' for the
+    sections inside a container file, 'file-' for the rows of a '--by-file' run:
 
-    The rows of a '--by-file' run, which hang under a language beside those sections:
-      file-name                the path of a file
-      file-branch              the tree characters that tie the files to the language above
-      file-files               the file count of such a row, which is always one
-      file-lines               its lines
-      file-code                its code lines
-      file-comments            its comment lines
-      file-extra               its remaining lines
-      file-size                its size
-      file-size-unit           the unit beside that size
-      file-percent             the percentages of a file, which are of its language
+      nested-name  nested-branch  nested-files  nested-lines  nested-code  nested-comments
+      nested-extra  nested-size  nested-size-unit  nested-percent
+      file-name  file-branch  file-files  file-lines  file-code  file-comments
+      file-extra  file-size  file-size-unit  file-percent
 
-    An '--explain' run, where the verdict words follow the label tokens above. The first two
-    paint stretches inside the source lines, and what is neither keeps the terminal's own color:
+    'name' is the section's language or the file's path, 'branch' the tree characters tying the
+    row to the one above, and 'percent' is of the container for a section and of its language
+    for a file.
+
+    An '--explain' run. Its verdict words follow the label tokens above, the first two below
+    paint stretches of the source lines, and anything neither keeps the terminal's own color:
       explain-string           the stretches of a line that sit inside a string
       explain-comment          the stretches that sit inside a comment
       explain-detail           the class name on a verdict row
@@ -500,18 +445,14 @@ HOW THE REPORT LOOKS
       overview-label           the 'Files:', 'Lines:' and 'Size :' row labels
       overview-percent         the percentages of the overview
       bar-frame                the brackets around the overview bar and the live one
-      language-1               the first language, its name and the color of its bar cells
-      language-2               the second
-      language-3               the third
-      language-4               the fourth, shown only when nothing was folded into 'others'
-      language-others          the folded 'others' entry. A theme that names 'language-4'
-                               and not this one gets the same style here, since the two
-                               never appear together
+      language-1 language-2 language-3 language-4
+                               each language of the bar, its name and the colour of its cells.
+                               The fourth shows only when nothing was folded into 'others'
+      language-others          the folded 'others' entry, which falls back to 'language-4'
+                               where a theme names that one and not this
 
     A figure that moved, in the history section and in a '--diff' comparison alike:
-      change-up                an increase
-      change-down              a decrease
-      change-same              no change
+      change-up  change-down  change-same
 
     The history section, which compares this run with the ones before it:
       history-entry            the '->' of an entry
@@ -527,39 +468,31 @@ HOW THE REPORT LOOKS
     Only the color of a 'language-' token reaches the cells of the overview bar; bold, italic and
     the rest apply to the language name alone.
 
-    The same tokens can be declared in a theme file and in the style block of a config. They are
-    applied as one ladder of increasing specificity: the built-in defaults, then the theme, then
-    this project's config, then '--style' for this run. So a theme can ship a complete look, your
-    own config can keep a few tweaks that survive switching themes, and '--style' wins over both.
+    A theme file and the style block of a config take the same tokens, and each wins over the
+    last: built-in defaults, then the theme, then the config, then '--style' for this run.
 
 --bar-thickness
     the character the overview's percentage bar is drawn with
 
     One argument: 'slim', 'medium', 'fat' or 'low'. Default: medium
 
-    Chooses the character that the percentage bar of the "overview" section is drawn with.
-
-      slim     |   the only one made of ASCII, so it is the one that is guaranteed to
-                   render on every terminal
-      medium   ┃   the default, thicker, but still leaves gaps between the strokes
+      slim     |   plain ASCII, so it renders on any terminal
+      medium   ┃   thicker, and still leaves gaps between the strokes
       fat      █   fills the cell, so the boundary between two language colors is crisp
       low      ▄   fills only the bottom of the cell, a thin band under the text
 
-    All but 'slim' need a terminal and a font that can render box drawing characters.
-    If the bar comes out as question marks or empty boxes, use 'slim'.
+    All but 'slim' need a font that can draw box characters. If the bar comes out as question
+    marks or empty boxes, use 'slim'.
 
 --progress-bar
     the characters the live progress bar is drawn with
 
     One argument: 'smooth', 'blocky' or 'hash'. Default: smooth
 
-    Chooses the characters that the live progress bar of a long parse is drawn with.
-
-      smooth   ▏▎▍▌▋▊▉█   one unbroken bar, its tip gliding through eight sub-steps per cell
-      blocky   ▪▮         separate boxes, each drawn narrower than its cell, so a small gap
-                          falls between them
-      hash     .:#        the only one made of ASCII, so it is the one that is guaranteed
-                          to render on every terminal
+      smooth   ▏▎▍▌▋▊▉█   one unbroken bar, its tip moving in eight steps per cell
+      blocky   ▪▮         separate boxes, each narrower than its cell, so a small gap falls
+                          between them
+      hash     .:#        plain ASCII, so it renders on any terminal
 
     The bar only appears on a terminal, on a parse long enough to watch, with the share done
     beside it; '--hide progress-bar' keeps its file count and drops the rest.
@@ -570,8 +503,6 @@ HOW THE REPORT LOOKS
     One argument: 'comma', 'underscore', 'dot' or 'none'. The character itself is also
     accepted, so '--number-separator _' is the same as '--number-separator underscore'.
     Default: comma
-
-    Chooses the character that groups the digits of every printed number.
 
       comma        1,559,486
       underscore   1_559_486
@@ -588,37 +519,32 @@ HOW THE REPORT LOOKS
     One argument: 'dot' or 'comma'. The character itself is also accepted, so
     '--decimal-separator ,' is the same as '--decimal-separator comma'. Default: dot
 
-    Chooses the character that separates the decimals of every printed number: the sizes,
-    the percentages and the execution time.
+    It applies to the sizes, the percentages and the execution time.
 
-    It is free to be the same character as the one '--number-separator' groups the digits
-    with, since both conventions are in use somewhere. Nothing that is written to a log
-    file is affected, so a log stays readable by any version.
+    It may be the same character '--number-separator' groups the digits with, since both
+    conventions are in use somewhere. What is written to a log file is not affected, so a log
+    stays readable by any version.
 
 --show-themes
     print the themes this installation holds, each previewed, and stop
 
     No arguments, or one of 'slim', 'medium', 'fat' and 'low'. Default: medium
 
-    Overrides normal program execution and just prints a sorted list with the names of all
-    the themes that were detected in the persistent data path of the application, where you
-    can add more, each one previewed on a sample of the real details rows and a mock overview.
+    Lists by name what is in the 'data/themes/' directory, and counts nothing. Each one is drawn
+    on a sample of real details rows and a mock overview, in the shape '--layout' asks for, so a
+    theme is judged the way it will be printed.
 
-    The preview follows '--layout', so it shows the shape a run would actually print.
-
-    The optional argument draws the preview bar with the character that the '--bar-thickness'
-    command would use, so that a theme can be judged the way it will be printed.
+    The optional argument is a '--bar-thickness' for the preview bar.
 
 --theme-editor
     open a page for tuning the language colours of every theme, and stop
 
     No arguments.
 
-    Overrides normal program execution: generates an interactive HTML page with the language
-    colors of every theme found in the persistent data path of the application, and opens it
-    in the default browser. There, every color can be adjusted, with live contrast metrics and
-    a mock overview drawn with the same bar character the program prints, and the result is
-    turned into the five 'language-' lines of a theme file.
+    Writes an HTML page carrying the language colours of every theme in your 'data/themes'
+    directory, opens it in your browser, and counts nothing. Every colour can be moved there,
+    against a live contrast reading and a mock overview drawn with the bar character the program
+    prints, and the page hands back the five 'language-' lines to paste into a theme file.
 
 TAKING THE RESULT ELSEWHERE
 
@@ -627,57 +553,48 @@ TAKING THE RESULT ELSEWHERE
 
     One argument: 'text' or 'json'. Default: text
 
-    Chooses what mezura writes to its output. 'json' replaces everything, the status lines and
-    the overview included, with a single JSON document, so that the run can be read by another
-    program instead of by a person.
+    'json' replaces the whole output, status lines and overview included, with a single document,
+    so another program can read the run.
 
       mezura ./src --output json > stats.json
       mezura ./src --output json | jq '.total.code'
 
-    The document carries the counts as plain numbers of lines and bytes: no thousands
-    separators, no KB or MB, no percentages and no colors, whatever the rest of the settings
-    say. '--sort' and '--top' still order and cut the list of languages, and the count of the
-    ones left out is in the document. '--hide keywords' and '--hide timing' remove what they
-    name, since it is either not counted or not measured; the rest of the '--hide' list names
-    printed sections that a JSON run does not have.
+    The counts are plain numbers of lines and bytes, with no thousands separators, no KB or MB,
+    no percentages and no colours, whatever the other settings say. '--sort' and '--top' still
+    order and cut the languages, and the count of the ones left out is in the document. Of the
+    '--hide' list only 'keywords' and 'timing' apply, since the rest name printed sections a JSON
+    run does not have.
 
-    Warnings and errors are written to the error output, so no stray line can land inside the
-    document, and the warnings are carried in it as well, under 'warnings'. Each one has a
-    'code' that is safe to branch on and will not change wording under you, an 'affects' of
-    'counts' or 'settings', the 'subject' it is about, and the readable 'message'. Ask whether
-    any of them affects the counts to know whether the numbers can be trusted: a language file
-    that could not be read means a whole language went uncounted, while an ignored setting does
-    not touch a number. The list is there even when it is empty.
+    Warnings and errors go to the error output, so no stray line lands inside the document, and
+    the warnings are in it as well under 'warnings', each with a 'code' safe to branch on, an
+    'affects' of 'counts' or 'settings', a 'subject' and a readable 'message'. 'affects' is what
+    says whether the numbers can be trusted: an unreadable language file means a whole language
+    went uncounted, an ignored setting touches nothing. The list is there even when empty, and a
+    run that found nothing still writes a valid document with a total of zero.
 
-    A run that finds nothing to count still writes a valid document, with an empty list of
-    languages and a total of zero.
-
-    This is the one display setting that a configuration file cannot carry, so that no saved
-    configuration can silently turn the output of every later run into JSON.
+    Cannot be saved in a configuration file.
 
 --log
     append this run to the log of the loaded configuration
 
     Can take 0..n words as arguments in the cmd.
 
-    This flag only works if a configuration file is loaded. Specifies that a new log entry should be made
-    with the stats of this program execution, inside the appropriate file in the 'data/logs' directory.
-    If not log file exists for this configuration, one is created.
-    All the provided arguments are used as a description of the log entry.
+    Only works with a configuration loaded, since the log belongs to it: the entry is appended to
+    that configuration's file in the 'data/logs' directory, and the file is created if it is not
+    there yet. Any words you give are kept with the entry as its description.
 
-    A configuration file cannot declare it: logging is asked for per run, so that loading a
-    configuration never writes an entry on its own. It does not apply to a '--diff' run either,
-    since a comparison is not logged, and mezura says so instead of writing an entry.
+    Cannot be saved in a configuration file, so loading one never writes an entry on its own. A
+    '--diff' run is not logged either, and says so instead of writing an entry.
+
+COMPARING WITH EARLIER RUNS
 
 --compare
     how many earlier logged runs to show the difference against
 
     1 argument: a number between 0 and 10. Default: 1
 
-    This flag only works if a configuration file is loaded. Specifies with how many previous logs this
-    program execution should be compared to (see '--save' and '--load' commands).
-
-    Providing 0 as argument will disable the history section (comparison).
+    Only works with a configuration loaded, since the entries being compared against are the ones
+    '--log' wrote under it. 0 turns the comparison off.
 
     Every log entry records the settings that decide what is counted, and an entry that was written
     with different ones is marked 'modified:' followed by their names. The comparison is still shown,
@@ -688,15 +605,13 @@ TAKING THE RESULT ELSEWHERE
     entry written by a version that did not record a setting is never reported as having changed it.
 
 --diff
-    what changed between two earlier runs, each named by a file or a git revision
+    what changed since an earlier run, or between two of them
 
     One argument: a reading, or two of them with '..' between, oldest first. A reading is the
     path of a JSON document that an earlier run wrote, or a git revision: a branch, a tag, or
     enough of a commit hash to be unique.
 
-    Compares this run against that reading, or the two readings against each other. The
-    comparison takes the place of the report rather than sitting under it, so no language is
-    listed twice.
+    The comparison takes the place of the report rather than sitting under it.
 
       mezura ./src --output json > baseline.json
       mezura ./src --diff baseline.json
@@ -704,76 +619,44 @@ TAKING THE RESULT ELSEWHERE
       mezura ./src --diff v2.0.1..v3.0.0
       mezura --diff january.json..june.json
 
-    A revision is counted on the spot, over its own files, with this run's settings and its
-    targets: 'mezura ./src --diff main' counts what './src' held on 'main'. The targets must
-    all be inside one git repository, and a directory the revision does not have counts as
-    zero, so everything in it reads as new. What was found on disk decides which of the two a
-    reading is: a name that is a file is a document, anything else is asked of git. A revision
-    is any spelling git itself resolves: a branch, a tag, a hash, or a remote-tracking name
-    like 'origin/main'. It has to have been fetched already; one that lives only on the remote
-    needs a 'git fetch' first, mezura never touches the network.
+    A name that is a file on disk is read as a document, anything else is asked of git, which
+    resolves 'origin/main' as readily as a tag. Only one '..' is allowed and it is always the
+    separator, so '--diff ../old.json' works while a path climbing twice is refused.
 
-    Counting a revision costs more than counting the same tree in place: the commit's files
-    are first written out whole to a temporary directory, and a file written moments ago is
-    slower to read back than one that has sat on disk. The checkout is removed in the
-    background after the comparison prints. Size can also move when no line did: git writes
-    the checkout with the line endings 'core.autocrlf' asks for, and a working tree saved
-    with the other ending then differs by one byte per line, in Size and nowhere else.
+    A revision is counted on the spot with this run's settings and targets, so 'mezura ./src
+    --diff main' counts what './src' held on 'main'. It must already be fetched, and every target
+    must be in one git repository. A directory the revision does not have counts as zero, so all
+    of it reads as new.
 
-    Only one '..' is allowed, and it is the separator. A path that climbs through one on its
-    way to a file is taken whole when the file is really there, so '--diff ../old.json' reads
-    as you would expect; two of them cannot be told apart from a separator and are refused, so
-    write such a path out without the climb.
+    Counting a revision is slower, since the commit is written out to a temporary directory
+    first. Size can move there while no line did, when git gives the checkout different line
+    endings from your working tree.
 
-    Every figure carries what it is now and how much it moved, and the three counted in
-    thousands carry the percentage as well; a file count and a size are read whole, so '+2
-    files' is the answer there and a decimal point would be the same fact dressed up. A figure
-    that did not move is a dash, so the eye goes to the rows that did. The columns that a plain
-    run gives to each figure's share of the whole are what the change is written in, and
-    'Extra' is gone, being the three columns beside it taken off the lines.
+    Every figure shows what it is now, how much it moved, and by what percentage. A figure that
+    did not move is a dash. There is no 'Extra' column. Keywords are marked the same way and only
+    where one moved: 'structs: 57 (+5), traits: 2'. The overview and the history section are not
+    printed.
 
-    The keywords are marked the same way, in the section they already have, and only where one
-    moved: 'structs: 57 (+5), traits: 2'. The overview is not printed, being a picture of one
-    reading, and neither is the history section, which is a comparison of its own against the
-    log's entries: two of those under one another answer 'what changed since' twice with
-    different pasts.
+    A language only one reading has is marked 'new' or 'gone'. Modules get a row each when both
+    readings named the same ones; when they did not, everything is compared at once and mezura
+    says what each side named.
 
-    '--sort' and '--top' order and cut the rows as they do everywhere else. The comparison is
-    drawn as the table, or in the boxed frame with '--layout boxed'; 'list' and 'matrix' have
-    nothing to show for one, and mezura says so and prints the table. A language that only one
-    of the two readings has is marked 'new' or 'gone' instead of being given a percentage,
-    since a count that grew out of nothing has none.
+    '--sort' and '--top' order and cut the rows as ever. Only 'table' and 'boxed' can draw a
+    comparison, so the other two layouts fall back to the table.
 
-    The modules get a row each, with their languages under them, when the two readings named
-    the same ones. When they did not, there is no module the two of them share: the comparison
-    is of everything at once, and mezura says which each of them named. A module that one
-    reading has and the other does not would have every language in it read as written from
-    scratch or deleted whole, for files that in all likelihood only moved.
+    A document records the settings it was counted with, and this run takes them so both sides
+    cover the same tree: a baseline taken with '--exclude target' excludes it here too, and says
+    so. Type a setting yourself and yours wins, with a warning that the two were not taken alike.
+    The same warning covers two documents that disagree, or two counted by different versions.
+    '--counting' never warns, since both sides are folded from the same record. '--no-gitignore'
+    cannot reach a revision, and mezura says so. A document written with '--top' is refused, since
+    the languages it left out would read as deleted.
 
-    A document records the settings the counting obeyed, and they reach whatever is counted
-    against it: comparing against a baseline taken with '--exclude target' leaves that directory
-    out of this run too, and says so, because the two readings would otherwise have counted
-    different trees and that difference would read as code that changed. A setting given
-    on this very command line is kept instead, and the comparison then warns that the two
-    readings were not taken the same way, as it does when two documents disagree with each
-    other and there is nothing left to count. '--counting' travels the same way, so the columns
-    read as the baseline's did, but a difference in it is never warned about: a document records
-    where every line landed and not one fold of it, so both sides are folded alike whatever they
-    were written under. '--no-gitignore' never reaches a revision, and
-    mezura says so: a checkout holds only what git tracks. The comparison also says so when
-    the two readings were counted by different versions of mezura.
+    With '--output json' the comparison is a document of its own, the same vocabulary as a run's,
+    every count carrying 'from', 'to' and 'change' and the two readings named under 'from' and
+    'to'. '--top' does not cut it.
 
-    A document written with '--top' is refused, because the languages it left out would read as
-    languages that were deleted since. Write the baseline without it.
-
-    With '--output json' the comparison itself is written as a document: the same vocabulary as
-    a run's document, with every count carrying 'from', 'to' and 'change', and the two readings
-    identified under 'from' and 'to' by their source, so a build step can ask questions like
-    'did the code shrink' of the change directly. '--top' does not cut that document, being a
-    decision about a screen.
-
-    This is not a display setting a configuration file can carry, so that no saved
-    configuration can silently turn every later run into a comparison.
+    Cannot be saved in a configuration file.
 
 YOUR DATA DIRECTORY
 
@@ -782,18 +665,19 @@ YOUR DATA DIRECTORY
 
     One argument as the file name (whitespace allowed, without an extension, case-insensitive)
 
-    Doing so, will run the program and also create a .txt configuration file,
-    inside 'data/config/' with the specified name, that can later be loaded with the --load command.
+    The run happens as normal, and a .txt file of that name is written into 'data/config/' holding
+    the flags it ran with. '--load <name>' brings them back.
 
 --load
     take the flags of this run from a saved configuration file
 
     One argument as the file name (whitespace allowed, without an extension, case-insensitive)
 
-    Associated with the '--save' command, this command is used to load the flags of
-    an existing configuration file from the 'data/config/' directory.
+    Reads a file '--save' wrote in the 'data/config/' directory and applies its flags. Anything you
+    also type on the command line wins over what the file says.
 
-    You can combine the '--load' and '--save' commands to modify a configuration file.
+    Give '--load' and '--save' the same name to edit a configuration: it is loaded, your changes
+    are applied on top, and the result is written back.
 
 --save-theme
     save the way this run looks as a named theme
@@ -812,36 +696,32 @@ YOUR DATA DIRECTORY
 
     No arguments.
 
-    Overrides normal program execution and just prints a sorted list with the names of
-    all the configuration files that were detected in the persistent data path
-    of the application.
+    Lists by name what is in the 'data/config/' directory, and counts nothing. Any of them is
+    loaded with '--load <name>'.
 
 --restore
     put the data directory back to what this version ships, and stop
 
     No arguments.
 
-    Overrides normal program execution and brings your data directory back to what this version of
-    mezura ships: anything missing is written, and a language file that no longer says what ours
-    says is replaced. It reports what it did.
+    Anything missing is written, and a language file that no longer says what ours says is
+    replaced. It reports what it did, and nothing is counted.
 
-    This already happens on its own whenever the mezura you run carries different files from the
-    ones your data directory was given, so you should not need it. It is here for when something
-    was damaged or deleted while the program itself stayed the same, where nothing else would
-    notice.
+    This happens on its own whenever the mezura you run carries different files from the ones your
+    data directory was given, so you should not need it. It is here for when something was damaged
+    or deleted while the program itself stayed the same, which nothing else would notice.
 
     A language file you changed is replaced too, since one that has fallen behind counts wrongly,
-    but your copy is kept under 'data/replaced/<version>/<date and time>/' and named, so you can
-    carry your changes over. Each run of this writes its own folder there, so running it twice never
-    mixes the two. A language file of your own is never touched, and neither are your themes or your
-    default configuration: those are written when absent and left alone.
+    but your copy is saved under 'data/replaced/<version>/<date and time>/' so you can carry your
+    changes over, a fresh folder per run. A language file of your own is never touched, and
+    neither are your themes or your default configuration: those are written when absent and left
+    alone.
 
-    'extension_priority.txt' is neither replaced nor left alone. Every rule you wrote in it is kept,
-    and the rules a new version adds are added beside them, so a contest you have already settled
-    stays settled while a new one does not go unmentioned. Change who wins a contest by reordering
-    the names on its line rather than by deleting the line: a line that is not there reads as one
-    you never had, and comes back. Your copy as it stood is kept under 'replaced' whenever anything
-    is added to it.
+    'extension_priority.txt' is merged instead. Each line names an extension that several
+    languages claim, and the first language on the line wins it. Your lines are kept as they are,
+    and lines for extensions your copy never mentions are added. To change a winner, reorder the
+    names on its line; deleting the line brings it back, since a missing line and a line you never
+    had look the same. Your copy is saved under 'replaced' whenever anything is added to it.
 
 TUNING AND DIAGNOSTICS
 
@@ -850,14 +730,12 @@ TUNING AND DIAGNOSTICS
 
     No arguments. The target must be exactly one file.
 
-    Explains that file line by line instead of printing a report. Every line is shown with the
-    bucket it lands in under the active way of counting, the class mezura itself read off it,
-    and, where something was still open when the line began, what that was and where it started:
-    'in a comment opened by /* on line 23', 'in a string opened by " on line 7'. In a file
-    holding other languages, a line read by an embedded language names it. The source lines are
-    printed with the stretches that sit inside a string or a comment in their own styles, which
-    '--style' reaches as 'explain-string' and 'explain-comment', so a symbol swallowed by a
-    string is visible as such.
+    Every line is shown with the bucket it lands in, the class mezura read off it, and, where
+    something was still open when the line began, what that was and where it started: 'in a
+    comment opened by /* on line 23', 'in a string opened by " on line 7'. A line read by an
+    embedded language names it. The stretches inside a string or a comment are printed in their
+    own styles, which '--style' reaches as 'explain-string' and 'explain-comment', so a symbol
+    swallowed by a string can be seen to be one.
 
       mezura src/main.rs --explain
       mezura src/page.vue --explain --counting region
@@ -878,18 +756,13 @@ TUNING AND DIAGNOSTICS
 
     2 numbers: the first between 1 and 32 and the second between 1 and 128.
 
-    This represents the number of the producers (threads that will traverse the given directories),
-    and consumers (threads that will parse whatever files the producers found).
+    The producers walk the directories you named, the consumers parse the files they find. Without
+    this command both numbers are chosen from the threads your machine has.
 
-    If this command is not provided, the numbers will be chosen based on the available threads
-    on your machine.
-
-    There are far more consumers than cores on purpose. A consumer spends most of its life waiting
-    for a file to open, so what decides the speed is how many reads are in flight, not how many
-    cores there are. Raising the number costs nothing on a fast disk whose files are already
-    cached, and is worth up to twice the speed on a slow disk or on the first run after a reboot.
-    If your files live on a slow drive, or you are counting a tree you have not touched today, it
-    is worth trying a higher number than the default.
+    The default asks for far more consumers than cores on purpose. A consumer spends most of its
+    life waiting for a file to open, so the speed comes from how many reads are in flight, not
+    from how many cores there are. Raising it costs nothing on a fast disk whose files are already
+    cached, and is worth up to twice the speed on a slow one, or on the first run after a reboot.
 
 --show-faulty-files
     name the files that could not be parsed, and what went wrong with each
@@ -897,37 +770,38 @@ TUNING AND DIAGNOSTICS
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
     or 'no' to disable. Default: no
 
-    Sometimes it happens that an error occurs when trying to parse a file, either while opening it,
-    or while reading its contents. A directory can also fail to be opened at all, most often because
-    of its permissions, or because something removed it while the scan was running. The default
-    behavior in both cases is to count them and display the count, since everything under a directory
-    that could not be read is missing from every number in the report.
+    A file can fail while it is being opened or while it is being read, and by far the most common
+    reason is that it holds bytes that are not UTF-8. A directory can fail to open at all, usually
+    over its permissions or because something removed it mid-scan. Either way the run continues and
+    the report prints how many there were, since everything under a directory that could not be
+    read is missing from every number above it.
 
-    This flag specifies that their path, along with information about the exact error is displayed too.
-    The most common reason for a faulty file is if it contains non UTF-8 characters.
+    This flag adds the path of each one and the error it gave.
 
-    It asks the same of '--output json', where the two lists of paths are written only when this
-    flag is given. How many there were is in the 'scan' block either way, so a document without
-    the lists never claims that nothing went wrong. A comparison document carries the counts of
-    each side and no lists at all.
+    '--output json' obeys it too: the two lists of paths are written only when it is given, while
+    how many there were is in the 'scan' block either way, so a document without the lists never
+    claims that nothing went wrong. A comparison document carries the counts of each side and no
+    lists at all.
 
 THE PROGRAM ITSELF
 
 --help
     this list, or the full help of the commands you name
 
-    No arguments, or any number of other command names, written with their dashes:
-    '--help --style --layout' explains those two and nothing else.
+    No arguments, 'full', or any number of command names written with their dashes.
 
-    Overrides normal program execution and prints this message.
+    On its own it prints one line per command. Name commands to read those in full and nothing
+    else, '--help --style --layout'. 'full' prints every command in full, which is long.
+
+    Nothing is counted either way.
 
 --version
     the version of this binary and the day it was released
 
     No arguments.
 
-    Overrides normal program execution and prints the version of this binary, with the date it
-    was released on. An unreleased build says so instead of naming a date.
+    Prints the version of this binary and the date it was released on, and counts nothing. An
+    unreleased build says so instead of naming a date.
 
     Not to be confused with '--hide version', which only leaves the version line off the top of
     a normal run.
@@ -937,9 +811,8 @@ THE PROGRAM ITSELF
 
     No arguments, or the optional argument 'full'.
 
-    Overrides normal program execution and just prints a summary of the changes
-    of the current version of the program. If 'full' is provided, the changes
-    of every previous version are printed too, most recent first.
+    Prints what changed in the version you are running, and counts nothing. With 'full' it prints
+    every version before it as well, the newest first.
 ```
 
 
