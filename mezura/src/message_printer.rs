@@ -12,10 +12,16 @@ static CHANGELOG_BYTES : &[u8] = include_bytes!("../Changelog");
 // Wide enough for a sentence to read as one, narrow enough that a terminal is unlikely to break it
 // somewhere of its own choosing, which is what a message wider than the window looks like
 const MESSAGE_WIDTH : usize = 110;
+// The help paints itself and never asks the theme, since it is read before a theme is chosen and
+// adding tokens for it would change the format of every theme file already on a machine.
+const HELP_COMMAND : (u8, u8, u8) = (110, 160, 220);
+const HELP_TEXT : (u8, u8, u8) = (140, 140, 140);
+const LIST_INDENT : usize = 2;
 
 // These constants need to be maintained along with the readme's commands
 pub const TARGETS_HELP  :  &str =
 "--targets
+    the directories and files to count, and the names to group them under (modules)
 
     The paths to the directories or files, separated by commas if more than 1,
     in this form: '--targets <path1>, <path2>'
@@ -65,6 +71,7 @@ pub const TARGETS_HELP  :  &str =
 ";
 pub const EXCLUDE_HELP  :  &str =
 "--exclude
+    paths to leave out, as glob patterns
 
     1..n glob patterns separated by commas.
 
@@ -82,6 +89,7 @@ pub const EXCLUDE_HELP  :  &str =
 ";
 pub const NO_GITIGNORE_HELP  :  &str =
 "--no-gitignore
+    count the files a .gitignore ignores
 
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
     or 'no' to disable. Default: no
@@ -99,6 +107,7 @@ pub const NO_GITIGNORE_HELP  :  &str =
 ";
 pub const LANGUAGES_HELP  :  &str =
 "--languages
+    count only these languages and leave every other one out of the report
 
     1..n arguments separated by commas, case-insensitive
 
@@ -113,6 +122,7 @@ pub const LANGUAGES_HELP  :  &str =
 ";
 pub const EXCLUDE_LANGUAGES_HELP  :  &str =
 "--exclude-languages
+    count everything except these languages
 
     1..n arguments separated by commas, case-insensitive
 
@@ -124,6 +134,7 @@ pub const EXCLUDE_LANGUAGES_HELP  :  &str =
 ";
 pub const FORCE_LANGUAGE_HELP  :  &str =
 "--force-language
+    count an extension as the language you pick, even if another one claims it
 
     1..n pairs of 'extension=language' or 'filename=language' separated by commas, case-insensitive
 
@@ -138,6 +149,7 @@ pub const FORCE_LANGUAGE_HELP  :  &str =
 ";
 pub const THREADS_HELP  :  &str =
 "--threads
+    how many threads walk the directories and how many parse the files
 
     2 numbers: the first between 1 and 32 and the second between 1 and 128.
 
@@ -157,6 +169,7 @@ pub const THREADS_HELP  :  &str =
 ";
 pub const COUNTING_HELP  :  &str =
 "--counting
+    whether a line counts by where its words are or by where the line sits
 
     One argument, 'content' or 'region'. Default: content
 
@@ -177,6 +190,7 @@ pub const COUNTING_HELP  :  &str =
 ";
 pub const SEARCH_IN_DOTTED_HELP  :  &str =
 "--search-in-dotted
+    go into directories whose name starts with a dot
 
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
     or 'no' to disable. Default: no
@@ -190,6 +204,7 @@ pub const SEARCH_IN_DOTTED_HELP  :  &str =
 ";
 pub const EXPLAIN_HELP  :  &str =
 "--explain
+    show one file line by line instead of printing a report
 
     No arguments. The target must be exactly one file.
 
@@ -220,6 +235,7 @@ pub const EXPLAIN_HELP  :  &str =
 
 pub const SHOW_FAULTY_FILES_HELP  :  &str =
 "--show-faulty-files
+    name the files that could not be parsed, and what went wrong with each
 
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
     or 'no' to disable. Default: no
@@ -241,6 +257,7 @@ pub const SHOW_FAULTY_FILES_HELP  :  &str =
 ";
 pub const HIDE_HELP  :  &str =
 "--hide
+    parts of the output to leave unprinted
 
     One or more names separated by commas or spaces, for example:
     --hide parsing-info,timing   or   --hide parsing-info timing
@@ -284,11 +301,10 @@ pub const HIDE_HELP  :  &str =
     Errors and warnings are never hidden. Hiding the parsing info still reports files that failed
     to be parsed, since otherwise the numbers would silently be wrong.
 
-    Replaces the '--no-visual' and '--no-keywords' commands of previous versions.
-
 ";
 pub const THEME_HELP  :  &str =
 "--theme
+    apply a named theme, which is the whole look in one file
 
     One argument, the name of a theme (case-insensitive).
 
@@ -307,6 +323,7 @@ pub const THEME_HELP  :  &str =
 ";
 pub const SAVE_THEME_HELP  :  &str =
 "--save-theme
+    save the way this run looks as a named theme
 
     One argument, the name of the theme file to write (case-insensitive, no extension).
 
@@ -320,6 +337,7 @@ pub const SAVE_THEME_HELP  :  &str =
 ";
 pub const SORT_HELP  :  &str =
 "--sort
+    which column the languages are ordered by
 
     One argument: 'lines', 'files', 'code', 'comments', 'extra', 'blanks', 'size' or 'name'.
     Default: lines
@@ -340,6 +358,7 @@ pub const SORT_HELP  :  &str =
 ";
 pub const TOP_HELP  :  &str =
 "--top
+    show only this many languages, and say how many were left out
 
     One number, 1 or greater.
 
@@ -360,6 +379,7 @@ pub const TOP_HELP  :  &str =
 ";
 pub const BAR_THICKNESS_HELP  :  &str =
 "--bar-thickness
+    the character the overview's percentage bar is drawn with
 
     One argument: 'slim', 'medium', 'fat' or 'low'. Default: medium
 
@@ -377,6 +397,7 @@ pub const BAR_THICKNESS_HELP  :  &str =
 ";
 pub const PROGRESS_BAR_HELP  :  &str =
 "--progress-bar
+    the characters the live progress bar is drawn with
 
     One argument: 'smooth', 'blocky' or 'hash'. Default: smooth
 
@@ -394,6 +415,7 @@ pub const PROGRESS_BAR_HELP  :  &str =
 ";
 pub const LAYOUT_HELP  :  &str =
 "--layout
+    the shape of the details section: a table, a box, a list, or a matrix of modules
 
     One argument: 'table', 'boxed', 'list' or 'matrix'. Default: table
 
@@ -429,6 +451,7 @@ pub const LAYOUT_HELP  :  &str =
 ";
 pub const RESTORE_HELP  :  &str =
 "--restore
+    put the data directory back to what this version ships, and stop
 
     No arguments.
 
@@ -457,6 +480,7 @@ pub const RESTORE_HELP  :  &str =
 ";
 pub const OUTPUT_HELP  :  &str =
 "--output
+    text for a person, or one JSON document for another program
 
     One argument: 'text' or 'json'. Default: text
 
@@ -491,6 +515,7 @@ pub const OUTPUT_HELP  :  &str =
 ";
 pub const DIFF_HELP  :  &str =
 "--diff
+    what changed between two earlier runs, each named by a file or a git revision
 
     One argument: a reading, or two of them with '..' between, oldest first. A reading is the
     path of a JSON document that an earlier run wrote, or a git revision: a branch, a tag, or
@@ -580,6 +605,7 @@ pub const DIFF_HELP  :  &str =
 ";
 pub const NUMBER_SEPARATOR_HELP  :  &str =
 "--number-separator
+    the character between the thousands of every printed number
 
     One argument: 'comma', 'underscore', 'dot' or 'none'. The character itself is also
     accepted, so '--number-separator _' is the same as '--number-separator underscore'.
@@ -599,6 +625,7 @@ pub const NUMBER_SEPARATOR_HELP  :  &str =
 ";
 pub const DECIMAL_SEPARATOR_HELP  :  &str =
 "--decimal-separator
+    the character before the decimals of every printed number
 
     One argument: 'dot' or 'comma'. The character itself is also accepted, so
     '--decimal-separator ,' is the same as '--decimal-separator comma'. Default: dot
@@ -613,14 +640,15 @@ pub const DECIMAL_SEPARATOR_HELP  :  &str =
 ";
 pub const STYLE_HELP  :  &str =
 "--style
+    override the colour and attributes of one kind of printed text
 
     One or more 'token=style' pairs separated by commas, for example:
     --style code-number=bright-black,code-label=b5a98a italic,heading=white bold underline
 
     Overrides how a category of printed text looks. A style is a color and any number of the
     attributes 'bold', 'italic', 'underline', 'dim' and 'reverse', in any order. The color is
-    either a hex value or one of the 16 terminal color names (the same grammar as '--colors'),
-    or the word 'default' to leave the terminal's own foreground color alone.
+    either a hex value or one of the 16 terminal color names, or the word 'default' to leave the
+    terminal's own foreground color alone.
 
     'reverse' swaps the text and background colors, so it stands out strongly without committing
     to any color of its own, which means it adapts to whatever theme the terminal is using.
@@ -743,6 +771,7 @@ pub const STYLE_HELP  :  &str =
 ";
 pub const THEME_EDITOR_HELP  :  &str =
 "--theme-editor
+    open a page for tuning the language colours of every theme, and stop
 
     No arguments.
 
@@ -752,11 +781,10 @@ pub const THEME_EDITOR_HELP  :  &str =
     a mock overview drawn with the same bar character the program prints, and the result is
     turned into the five 'language-' lines of a theme file.
 
-    Replaces the '--tune-palettes' command of previous versions.
-
 ";
 pub const SHOW_THEMES_HELP  :  &str =
 "--show-themes
+    print the themes this installation holds, each previewed, and stop
 
     No arguments, or one of 'slim', 'medium', 'fat' and 'low'. Default: medium
 
@@ -772,6 +800,7 @@ pub const SHOW_THEMES_HELP  :  &str =
 ";
 pub const LOG_HELP  :  &str =
 "--log
+    append this run to the log of the loaded configuration
 
     Can take 0..n words as arguments in the cmd.
 
@@ -787,6 +816,7 @@ pub const LOG_HELP  :  &str =
 ";
 pub const COMPARE_LEVEL_HELP  :  &str =
 "--compare
+    how many earlier logged runs to show the difference against
 
     1 argument: a number between 0 and 10. Default: 1
 
@@ -806,6 +836,7 @@ pub const COMPARE_LEVEL_HELP  :  &str =
 ";
 pub const BY_FILE_HELP  :  &str =
 "--by-file
+    give every file its own row, or only the biggest few of each language
 
     No arguments, or one number.
 
@@ -829,6 +860,7 @@ pub const BY_FILE_HELP  :  &str =
 ";
 pub const SAVE_HELP  :  &str =
 "--save
+    save the flags of this run as a named configuration
 
     One argument as the file name (whitespace allowed, without an extension, case-insensitive)
 
@@ -838,6 +870,7 @@ pub const SAVE_HELP  :  &str =
 ";
 pub const LOAD_HELP  :  &str =
 "--load
+    take the flags of this run from a saved configuration file
 
     One argument as the file name (whitespace allowed, without an extension, case-insensitive)
 
@@ -849,6 +882,7 @@ pub const LOAD_HELP  :  &str =
 ";
 pub const CHANGELOG_HELP  :  &str =
 "--changelog
+    what changed in this version, or in every version with 'full'
 
     No arguments, or the optional argument 'full'.
 
@@ -859,6 +893,7 @@ pub const CHANGELOG_HELP  :  &str =
 ";
 pub const SHOW_LANGUAGES_HELP  :  &str =
 "--show-languages
+    print the languages this installation knows and stop
 
     No arguments.
 
@@ -869,6 +904,7 @@ pub const SHOW_LANGUAGES_HELP  :  &str =
 ";
 pub const SHOW_CONFIGS_HELP  :  &str =
 "--show-configs
+    print the configurations this installation holds and stop
 
     No arguments.
 
@@ -880,6 +916,7 @@ pub const SHOW_CONFIGS_HELP  :  &str =
 
 pub const VERSION_HELP  :  &str =
 "--version
+    the version of this binary and the day it was released
 
     No arguments.
 
@@ -892,6 +929,7 @@ pub const VERSION_HELP  :  &str =
 ";
 pub const HELP_HELP  :  &str =
 "--help
+    this list, or the full help of the commands you name
 
     No arguments, or any number of other command names, written with their dashes:
     '--help --style --layout' explains those two and nothing else.
@@ -908,6 +946,7 @@ pub const HELP_HELP  :  &str =
 pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 6] = [
     ("What is counted", &[
         (TARGETS, TARGETS_HELP),
+        (COUNTING, COUNTING_HELP),
         (EXCLUDE, EXCLUDE_HELP),
         (LANGUAGES, LANGUAGES_HELP),
         (EXCLUDE_LANGUAGES, EXCLUDE_LANGUAGES_HELP),
@@ -917,7 +956,6 @@ pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 6] = [
         (SHOW_LANGUAGES, SHOW_LANGUAGES_HELP),
     ]),
     ("How the report looks", &[
-        (COUNTING, COUNTING_HELP),
         (LAYOUT, LAYOUT_HELP),
         (SORT, SORT_HELP),
         (TOP, TOP_HELP),
@@ -1001,6 +1039,43 @@ fn wrap_one_line(line: &str) -> String {
 
 // Used both by the full help and by the test that writes the README's command list, so that the two
 // cannot describe the same commands differently or in a different order
+// Every command in one place, with the summary that is the second line of its own help text. A
+// summary too long for the line hangs under the one above it, so the column reads as one thing.
+pub fn create_help_list() -> String {
+    let widest = get_command_names().iter().map(|name| name.len() + 2).max().unwrap_or(0);
+    let indent = LIST_INDENT + widest + 2;
+    let mut list = String::with_capacity(4_000);
+    for (group, commands) in COMMAND_HELP {
+        list.push_str(&format!("{}\n\n", group.to_uppercase()));
+        for (name, help) in commands {
+            let summary = help.lines().nth(1).unwrap_or_default().trim();
+            let named = format!("{:<width$}", format!("--{name}"), width = widest);
+            list.push_str(&format!("{}{named}  {}\n", " ".repeat(LIST_INDENT),
+                    hang_under(summary, MESSAGE_WIDTH - indent, indent)));
+        }
+        list.push('\n');
+    }
+
+    list
+}
+
+fn hang_under(text: &str, width: usize, indent: usize) -> String {
+    let mut lines = vec![String::new()];
+    for word in text.split_whitespace() {
+        let line = lines.last_mut().expect("a line was pushed before the loop");
+        match line.is_empty() {
+            true => line.push_str(word),
+            false if line.chars().count() + 1 + word.chars().count() <= width => {
+                line.push(' ');
+                line.push_str(word);
+            }
+            false => lines.push(word.to_owned()),
+        }
+    }
+
+    lines.join(&format!("\n{}", " ".repeat(indent)))
+}
+
 pub fn create_help_body() -> String {
     let mut body = String::with_capacity(20_000);
     for (group, commands) in COMMAND_HELP {
@@ -1031,7 +1106,64 @@ pub fn get_command_names() -> Vec<&'static str> {
     COMMAND_HELP.iter().flat_map(|(_, commands)| commands.iter().map(|(name, _)| *name)).collect()
 }
 
+// Painted where it is printed and never where it is built, so create_help_body stays plain text
+// and the README generated from it is unaffected.
+//
+// A group opens at the first column in capitals, a command opens at the first column with its own
+// name, and both are the same blue wherever they appear, since '--targets' in a sentence is the
+// same thing as the '--targets' that opens a block.
+fn paint_the_help(text: &str) -> String {
+    let lines = text.lines().map(|line| {
+        if line.is_empty() {
+            return line.to_owned();
+        }
+        if line.starts_with("--") {
+            return line.truecolor(HELP_COMMAND.0, HELP_COMMAND.1, HELP_COMMAND.2).bold().to_string();
+        }
+        if !line.starts_with(' ') && line == line.to_uppercase() {
+            return line.bold().to_string();
+        }
+        paint_the_commands_named_in(line)
+    });
+
+    lines.collect::<Vec<String>>().join("\n")
+}
+
+// Walked by character because a command is written inside quotation marks, '--save', and splitting
+// on spaces would hand back the quotes stuck to the name.
+fn paint_the_commands_named_in(line: &str) -> String {
+    let faded = |text: &str| text.truecolor(HELP_TEXT.0, HELP_TEXT.1, HELP_TEXT.2).to_string();
+    let mut painted = String::new();
+    let mut plain = String::new();
+    let mut chars = line.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '-' || chars.peek() != Some(&'-') {
+            plain.push(ch);
+            continue;
+        }
+        let mut named = String::from(ch);
+        while chars.peek().is_some_and(|ch| ch.is_ascii_alphanumeric() || "-_".contains(*ch)) {
+            named.extend(chars.next());
+        }
+        painted += &faded(&plain);
+        plain.clear();
+        painted += &named.truecolor(HELP_COMMAND.0, HELP_COMMAND.1, HELP_COMMAND.2).to_string();
+    }
+
+    painted + &faded(&plain)
+}
+
 pub fn print_whole_help_message() {
+    print_the_help(&create_help_body());
+}
+
+// What a bare '--help' answers: every command with one line about it, and where to go for more.
+pub fn print_the_command_list() {
+    print_the_help(&format!("{}Run '--help <command>' for the full help of one, or '--help full' \
+                             for all of them.\n", create_help_list()));
+}
+
+fn print_the_help(body: &str) {
 
     let mut msg ="
     │  ╲     ╱  ╲
@@ -1045,7 +1177,7 @@ pub fn print_whole_help_message() {
 
     msg += get_data_dir_str().as_str();
     msg += "Format of arguments: <path_here> --optional_command1 --optional_commandN\n\n";
-    msg += &create_help_body();
+    msg += &paint_the_help(body);
 
     println!("{msg}");
 }
@@ -1053,7 +1185,10 @@ pub fn print_whole_help_message() {
 pub fn print_help_message_for_given_args(args_line: &str) {
     let options = crate::args::split_into_command_segments(args_line).into_iter().skip(1).collect::<Vec<_>>();
     if options.len() == 1 {
-        print_whole_help_message();
+        match options[0].split_whitespace().nth(1) {
+            Some("full") => print_whole_help_message(),
+            _ => print_the_command_list(),
+        }
         return;
     }
 
@@ -1076,7 +1211,7 @@ pub fn print_help_message_for_given_args(args_line: &str) {
     let mut entries = String::new();
     for name in asked {
         match get_help_msg_of_command(name) {
-            Some(x) => entries += x,
+            Some(x) => entries += &paint_the_help(x),
             // The same error the program gives without '--help', so that an unknown command does
             // not read as an ordinary line of help text
             None => entries += &format!("{}\n\n", ArgParsingError::UnrecognisedCommand(name.to_owned()).format())
@@ -1086,7 +1221,7 @@ pub fn print_help_message_for_given_args(args_line: &str) {
     // The data dir line is always there, so asking whether the message is empty never answered
     // anything: nothing recognised has to be counted on its own
     if entries.is_empty() {
-        print_whole_help_message();
+        print_the_command_list();
     } else {
         println!("{}{entries}", get_data_dir_str());
     }
@@ -1097,7 +1232,7 @@ pub fn print_help_message_for_given_args(args_line: &str) {
 // holding instead of a document.
 pub fn print_help_message_for_command(arg: &str) {
     if let Some(x) = get_help_msg_of_command(arg) {
-        eprintln!("\n{x}");
+        eprintln!("\n{}", paint_the_help(x));
     }
 }
 
@@ -1426,6 +1561,18 @@ mod tests {
         let first = changelog.lines().next().unwrap();
         assert!(first.starts_with(&format!("{VERSION_ID} - ")),
                 "the Changelog opens with '{first}', which does not start with '{VERSION_ID} - '");
+    }
+
+    // The list a bare '--help' prints is these second lines, so a command without one is a blank
+    // next to its name there.
+    #[test]
+    fn every_command_opens_its_help_with_a_summary_of_itself() {
+        for name in get_command_names() {
+            let help = get_help_msg_of_command(name).expect("every command has a help entry");
+            let summary = help.lines().nth(1).unwrap_or_default().trim();
+            assert!(!summary.is_empty(), "'--{name}' says nothing on the second line of its help");
+            assert!(!summary.starts_with("--"), "'--{name}' opens with a command and not a summary");
+        }
     }
 
     // The three lists of commands became one table, and nothing else may hold a fourth

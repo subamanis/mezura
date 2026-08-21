@@ -570,6 +570,9 @@ Other:
   -> The test suite gained per-language parser fixtures that declare their own hand-verified counts,
       and a byte-exact comparison of the whole fixture corpus against a recorded result.
   -> mezura is now dual-licensed as MIT OR Apache-2.0, at your option.
+  -> The help is printed in colour.
+  -> "--help" is now one line per command instead of every command in full. "--help full" prints
+      all of it, and "--help --targets" one of it, as before.
 
 
 

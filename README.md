@@ -90,6 +90,7 @@ Below there is a list with all the commands-flags that the program accepts.
 WHAT IS COUNTED
 
 --targets
+    the directories and files to count, and the names to group them under (modules)
 
     The paths to the directories or files, separated by commas if more than 1,
     in this form: '--targets <path1>, <path2>'
@@ -136,91 +137,8 @@ WHAT IS COUNTED
     1) as the first arguments of the program directly
     2) if they are present in a configuration file (see '--save' and '--load' commands).
 
---exclude
-
-    1..n glob patterns separated by commas.
-
-    A pattern without a slash matches a file or folder name at any depth ('node_modules', '*.min.js').
-    A pattern with slashes matches the end of the full path, anchored at path components
-    ('Rusty/mezura' matches '.../Rusty/mezura' but not '.../aRusty/mezura'). Full absolute
-    paths work too. Glob syntax is supported in both forms: * ? [..] {..}
-    Matching folders are skipped entirely; the files inside them are not traversed and
-    are not included in the reported count of excluded files.
-
-    If you are using Windows Powershell, you will need to escape the commas with a backtick: `
-    or surround all the arguments with quotation marks:
-    <arg1>`, <arg2>`, <arg3>   or   "<arg1>, <arg2>, <arg3>"
-
---languages
-
-    1..n arguments separated by commas, case-insensitive
-
-    A language is named either by the name a file in the 'data/languages/' dir gives it under
-    'Language', or by any extension it claims, so 'javascript' and 'js' name the same one.
-
-    An extension two languages claim names whichever of them owns it for the counting, which is
-    the answer in 'extension_priority.txt' or the one '--force-language' gave.
-
-    Only the languages specified here will be taken into account for the stats.
-
---exclude-languages
-
-    1..n arguments separated by commas, case-insensitive
-
-    A language is named either by the name a file in the 'data/languages/' dir gives it under
-    'Language', or by any extension it claims, so 'javascript' and 'js' name the same one.
-
-    The given language names will be ignored from the stats calculation, if they exist.
-
---force-language
-
-    1..n pairs of 'extension=language' or 'filename=language' separated by commas, case-insensitive
-
-    Decides which language an extension is counted as, whether or not another language claims it:
-    '--force-language m=matlab,pl=perl,txt=python'
-
-    A whole filename works the same way, for the files that have no extension worth reading:
-    '--force-language Makefile=python,Jenkinsfile=groovy'
-
-    Overrides the 'extension_priority.txt' file of the data dir.
-
---no-gitignore
-
-    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
-    or 'no' to disable. Default: no
-
-    By default, the program respects .gitignore files: any file or folder ignored by a .gitignore
-    found in the traversed directories (or in their parent directories, up to the repository root)
-    is skipped, and skipped files are included in the excluded files count. Negated patterns
-    ('!keep.log') are supported, and target paths that are written out explicitly are always used,
-    even if a .gitignore of their parent directories would ignore them. The matches of a glob
-    pattern do not count as written out explicitly, since the program is the one that found them.
-
-    This flag disables that behavior, so that every relevant file is counted
-    regardless of .gitignore rules.
-
---search-in-dotted
-
-    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
-    or 'no' to disable. Default: no
-
-    Specifies whether the program should traverse directories that are prefixed with a dot,
-    like .vscode or .github.
-
-    The '.git' directory is never traversed, with or without this command, at any depth. Nothing
-    inside it is source, and walking it is thousands of files for no count at all.
-
---show-languages
-
-    No arguments.
-
-    Overrides normal program execution and just prints a sorted list with the names of
-    all the supported languages that were detected in the persistent data path
-    of the application, where you can add more.
-
-HOW THE REPORT LOOKS
-
 --counting
+    whether a line counts by where its words are or by where the line sits
 
     One argument, 'content' or 'region'. Default: content
 
@@ -238,7 +156,99 @@ HOW THE REPORT LOOKS
     blanks: only an empty line outside everything is blank. Use this model when comparing
     mezura's numbers against another counter's.
 
+--exclude
+    paths to leave out, as glob patterns
+
+    1..n glob patterns separated by commas.
+
+    A pattern without a slash matches a file or folder name at any depth ('node_modules', '*.min.js').
+    A pattern with slashes matches the end of the full path, anchored at path components
+    ('Rusty/mezura' matches '.../Rusty/mezura' but not '.../aRusty/mezura'). Full absolute
+    paths work too. Glob syntax is supported in both forms: * ? [..] {..}
+    Matching folders are skipped entirely; the files inside them are not traversed and
+    are not included in the reported count of excluded files.
+
+    If you are using Windows Powershell, you will need to escape the commas with a backtick: `
+    or surround all the arguments with quotation marks:
+    <arg1>`, <arg2>`, <arg3>   or   "<arg1>, <arg2>, <arg3>"
+
+--languages
+    count only these languages and leave every other one out of the report
+
+    1..n arguments separated by commas, case-insensitive
+
+    A language is named either by the name a file in the 'data/languages/' dir gives it under
+    'Language', or by any extension it claims, so 'javascript' and 'js' name the same one.
+
+    An extension two languages claim names whichever of them owns it for the counting, which is
+    the answer in 'extension_priority.txt' or the one '--force-language' gave.
+
+    Only the languages specified here will be taken into account for the stats.
+
+--exclude-languages
+    count everything except these languages
+
+    1..n arguments separated by commas, case-insensitive
+
+    A language is named either by the name a file in the 'data/languages/' dir gives it under
+    'Language', or by any extension it claims, so 'javascript' and 'js' name the same one.
+
+    The given language names will be ignored from the stats calculation, if they exist.
+
+--force-language
+    count an extension as the language you pick, even if another one claims it
+
+    1..n pairs of 'extension=language' or 'filename=language' separated by commas, case-insensitive
+
+    Decides which language an extension is counted as, whether or not another language claims it:
+    '--force-language m=matlab,pl=perl,txt=python'
+
+    A whole filename works the same way, for the files that have no extension worth reading:
+    '--force-language Makefile=python,Jenkinsfile=groovy'
+
+    Overrides the 'extension_priority.txt' file of the data dir.
+
+--no-gitignore
+    count the files a .gitignore ignores
+
+    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
+    or 'no' to disable. Default: no
+
+    By default, the program respects .gitignore files: any file or folder ignored by a .gitignore
+    found in the traversed directories (or in their parent directories, up to the repository root)
+    is skipped, and skipped files are included in the excluded files count. Negated patterns
+    ('!keep.log') are supported, and target paths that are written out explicitly are always used,
+    even if a .gitignore of their parent directories would ignore them. The matches of a glob
+    pattern do not count as written out explicitly, since the program is the one that found them.
+
+    This flag disables that behavior, so that every relevant file is counted
+    regardless of .gitignore rules.
+
+--search-in-dotted
+    go into directories whose name starts with a dot
+
+    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
+    or 'no' to disable. Default: no
+
+    Specifies whether the program should traverse directories that are prefixed with a dot,
+    like .vscode or .github.
+
+    The '.git' directory is never traversed, with or without this command, at any depth. Nothing
+    inside it is source, and walking it is thousands of files for no count at all.
+
+--show-languages
+    print the languages this installation knows and stop
+
+    No arguments.
+
+    Overrides normal program execution and just prints a sorted list with the names of
+    all the supported languages that were detected in the persistent data path
+    of the application, where you can add more.
+
+HOW THE REPORT LOOKS
+
 --layout
+    the shape of the details section: a table, a box, a list, or a matrix of modules
 
     One argument: 'table', 'boxed', 'list' or 'matrix'. Default: table
 
@@ -272,6 +282,7 @@ HOW THE REPORT LOOKS
     suppresses them.
 
 --sort
+    which column the languages are ordered by
 
     One argument: 'lines', 'files', 'code', 'comments', 'extra', 'blanks', 'size' or 'name'.
     Default: lines
@@ -290,6 +301,7 @@ HOW THE REPORT LOOKS
     runs that used to be ordered by size are now ordered by lines unless you ask otherwise.
 
 --top
+    show only this many languages, and say how many were left out
 
     One number, 1 or greater.
 
@@ -308,6 +320,7 @@ HOW THE REPORT LOOKS
     cut is over all of them.
 
 --by-file
+    give every file its own row, or only the biggest few of each language
 
     No arguments, or one number.
 
@@ -329,6 +342,7 @@ HOW THE REPORT LOOKS
     language declares. The JSON document carries the same rows under each language, as 'by_file'.
 
 --hide
+    parts of the output to leave unprinted
 
     One or more names separated by commas or spaces, for example:
     --hide parsing-info,timing   or   --hide parsing-info timing
@@ -372,9 +386,8 @@ HOW THE REPORT LOOKS
     Errors and warnings are never hidden. Hiding the parsing info still reports files that failed
     to be parsed, since otherwise the numbers would silently be wrong.
 
-    Replaces the '--no-visual' and '--no-keywords' commands of previous versions.
-
 --theme
+    apply a named theme, which is the whole look in one file
 
     One argument, the name of a theme (case-insensitive).
 
@@ -391,14 +404,15 @@ HOW THE REPORT LOOKS
     A name that matches no file is an error, since that one is a mistake in the command.
 
 --style
+    override the colour and attributes of one kind of printed text
 
     One or more 'token=style' pairs separated by commas, for example:
     --style code-number=bright-black,code-label=b5a98a italic,heading=white bold underline
 
     Overrides how a category of printed text looks. A style is a color and any number of the
     attributes 'bold', 'italic', 'underline', 'dim' and 'reverse', in any order. The color is
-    either a hex value or one of the 16 terminal color names (the same grammar as '--colors'),
-    or the word 'default' to leave the terminal's own foreground color alone.
+    either a hex value or one of the 16 terminal color names, or the word 'default' to leave the
+    terminal's own foreground color alone.
 
     'reverse' swaps the text and background colors, so it stands out strongly without committing
     to any color of its own, which means it adapts to whatever theme the terminal is using.
@@ -519,6 +533,7 @@ HOW THE REPORT LOOKS
     own config can keep a few tweaks that survive switching themes, and '--style' wins over both.
 
 --bar-thickness
+    the character the overview's percentage bar is drawn with
 
     One argument: 'slim', 'medium', 'fat' or 'low'. Default: medium
 
@@ -534,6 +549,7 @@ HOW THE REPORT LOOKS
     If the bar comes out as question marks or empty boxes, use 'slim'.
 
 --progress-bar
+    the characters the live progress bar is drawn with
 
     One argument: 'smooth', 'blocky' or 'hash'. Default: smooth
 
@@ -549,6 +565,7 @@ HOW THE REPORT LOOKS
     beside it; '--hide progress-bar' keeps its file count and drops the rest.
 
 --number-separator
+    the character between the thousands of every printed number
 
     One argument: 'comma', 'underscore', 'dot' or 'none'. The character itself is also
     accepted, so '--number-separator _' is the same as '--number-separator underscore'.
@@ -566,6 +583,7 @@ HOW THE REPORT LOOKS
     character.
 
 --decimal-separator
+    the character before the decimals of every printed number
 
     One argument: 'dot' or 'comma'. The character itself is also accepted, so
     '--decimal-separator ,' is the same as '--decimal-separator comma'. Default: dot
@@ -578,6 +596,7 @@ HOW THE REPORT LOOKS
     file is affected, so a log stays readable by any version.
 
 --show-themes
+    print the themes this installation holds, each previewed, and stop
 
     No arguments, or one of 'slim', 'medium', 'fat' and 'low'. Default: medium
 
@@ -591,6 +610,7 @@ HOW THE REPORT LOOKS
     command would use, so that a theme can be judged the way it will be printed.
 
 --theme-editor
+    open a page for tuning the language colours of every theme, and stop
 
     No arguments.
 
@@ -600,11 +620,10 @@ HOW THE REPORT LOOKS
     a mock overview drawn with the same bar character the program prints, and the result is
     turned into the five 'language-' lines of a theme file.
 
-    Replaces the '--tune-palettes' command of previous versions.
-
 TAKING THE RESULT ELSEWHERE
 
 --output
+    text for a person, or one JSON document for another program
 
     One argument: 'text' or 'json'. Default: text
 
@@ -637,6 +656,7 @@ TAKING THE RESULT ELSEWHERE
     configuration can silently turn the output of every later run into JSON.
 
 --log
+    append this run to the log of the loaded configuration
 
     Can take 0..n words as arguments in the cmd.
 
@@ -650,6 +670,7 @@ TAKING THE RESULT ELSEWHERE
     since a comparison is not logged, and mezura says so instead of writing an entry.
 
 --compare
+    how many earlier logged runs to show the difference against
 
     1 argument: a number between 0 and 10. Default: 1
 
@@ -667,6 +688,7 @@ TAKING THE RESULT ELSEWHERE
     entry written by a version that did not record a setting is never reported as having changed it.
 
 --diff
+    what changed between two earlier runs, each named by a file or a git revision
 
     One argument: a reading, or two of them with '..' between, oldest first. A reading is the
     path of a JSON document that an earlier run wrote, or a git revision: a branch, a tag, or
@@ -756,6 +778,7 @@ TAKING THE RESULT ELSEWHERE
 YOUR DATA DIRECTORY
 
 --save
+    save the flags of this run as a named configuration
 
     One argument as the file name (whitespace allowed, without an extension, case-insensitive)
 
@@ -763,6 +786,7 @@ YOUR DATA DIRECTORY
     inside 'data/config/' with the specified name, that can later be loaded with the --load command.
 
 --load
+    take the flags of this run from a saved configuration file
 
     One argument as the file name (whitespace allowed, without an extension, case-insensitive)
 
@@ -772,6 +796,7 @@ YOUR DATA DIRECTORY
     You can combine the '--load' and '--save' commands to modify a configuration file.
 
 --save-theme
+    save the way this run looks as a named theme
 
     One argument, the name of the theme file to write (case-insensitive, no extension).
 
@@ -783,6 +808,7 @@ YOUR DATA DIRECTORY
     carries no styles of its own.
 
 --show-configs
+    print the configurations this installation holds and stop
 
     No arguments.
 
@@ -791,6 +817,7 @@ YOUR DATA DIRECTORY
     of the application.
 
 --restore
+    put the data directory back to what this version ships, and stop
 
     No arguments.
 
@@ -819,6 +846,7 @@ YOUR DATA DIRECTORY
 TUNING AND DIAGNOSTICS
 
 --explain
+    show one file line by line instead of printing a report
 
     No arguments. The target must be exactly one file.
 
@@ -846,6 +874,7 @@ TUNING AND DIAGNOSTICS
     '--sort', '--top', '--by-file') are refused beside it.
 
 --threads
+    how many threads walk the directories and how many parse the files
 
     2 numbers: the first between 1 and 32 and the second between 1 and 128.
 
@@ -863,6 +892,7 @@ TUNING AND DIAGNOSTICS
     is worth trying a higher number than the default.
 
 --show-faulty-files
+    name the files that could not be parsed, and what went wrong with each
 
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
     or 'no' to disable. Default: no
@@ -884,6 +914,7 @@ TUNING AND DIAGNOSTICS
 THE PROGRAM ITSELF
 
 --help
+    this list, or the full help of the commands you name
 
     No arguments, or any number of other command names, written with their dashes:
     '--help --style --layout' explains those two and nothing else.
@@ -891,6 +922,7 @@ THE PROGRAM ITSELF
     Overrides normal program execution and prints this message.
 
 --version
+    the version of this binary and the day it was released
 
     No arguments.
 
@@ -901,6 +933,7 @@ THE PROGRAM ITSELF
     a normal run.
 
 --changelog
+    what changed in this version, or in every version with 'full'
 
     No arguments, or the optional argument 'full'.
 
