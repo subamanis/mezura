@@ -55,6 +55,7 @@ Three things to know before you start:
 | `Language` | The name shown in the report | `Kotlin` |
 | `Extensions` | Extensions, no dot, case ignored | `cpp cxx cc` |
 | `Filenames` *(opt)* | Whole names, for files an extension cannot describe | `Makefile Dockerfile` |
+| `Shebangs` *(opt)* | Interpreters a `#!` first line may name, for scripts with no extension | `sh bash zsh` |
 | `String symbols` | Strings that end with the line | `" '` |
 | `Character literal symbols` *(opt)* | Wraps a single character, like Rust's `'a'` | `'` |
 | `Multi line string symbols` *(opt)* | Crosses lines, backslash escapes | `"""` |
@@ -66,15 +67,21 @@ Three things to know before you start:
 | `Comment symbols` | Comments that end with the line | `// #` |
 | `Multi line comment start` *(opt)* | Block comment openers | `/* {` |
 | `Multi line comment end` | Their closers, in the same order | `*/ }` |
-| `Nesting comment start` *(opt)* | Openers of blocks that nest inside themselves | `(*` |
-| `Nesting comment end` | Their closers, in the same order | `*)` |
-| `Embedded region start` *(opt)* | Openers of sections written in another language | `<script <style` |
-| `Embedded region end` | Their closers, in the same order | `</script> </style>` |
-| `Embedded region default` | The extension each section falls to when its tag names none | `js css` |
+| `Self-nesting comment start` *(opt)* | Openers of blocks that nest inside themselves | `(*` |
+| `Self-nesting comment end` | Their closers, in the same order | `*)` |
+| `Nested language start` *(opt)* | Openers of sections written in another language | `<script <style` |
+| `Nested language end` | Their closers, in the same order | `</script> </style>` |
+| `Nested language default` | The extension each section falls to when its tag names none | `js css` |
 | `Keyword` *(opt, repeatable)* | What to count beside the lines | see below |
 
 A block marked *(opt)* can be left out entirely. One that has "in the same order" under it comes
 with its partner or not at all.
+
+`Shebangs` is consulted only for a file with no extension whose name nothing claims: its first
+line is read, and the interpreter named there, found past `/usr/bin/env` and its flags, is matched
+against these names. A versioned interpreter falls back to its plain name, so `python` alone
+covers `python3` and `python3.12`; name a versioned form explicitly only when it belongs to a
+different language, the way `perl6` is Raku and not Perl.
 
 ## Which string block
 
@@ -132,15 +139,15 @@ symbols, so a `//` inside a script block is a comment even though the shell has 
 The three lines are matched by position, one entry per kind of block:
 
 ```
-Embedded region start
+Nested language start
 <script <style
-Embedded region end
+Nested language end
 </script> </style>
-Embedded region default
+Nested language default
 js css
 ```
 
-**`Embedded region default` is the language the block falls to when its opening tag names none.**
+**`Nested language default` is the language the block falls to when its opening tag names none.**
 `<script>` on its own is JavaScript, `<script lang="ts">` is TypeScript, `<style>` is CSS,
 `<style lang="scss">` is SCSS.
 
@@ -182,11 +189,11 @@ Multi line comment start
 Multi line comment end
 -->
 
-Embedded region start
+Nested language start
 <script <style
-Embedded region end
+Nested language end
 </script> </style>
-Embedded region default
+Nested language default
 js css
 ```
 
