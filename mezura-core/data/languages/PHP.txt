@@ -4,6 +4,9 @@ PHP
 Extensions
 php
 
+Shebangs
+php
+
 String symbols
 
 Multi line string symbols

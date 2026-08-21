@@ -145,23 +145,29 @@ fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, 
             if ft.is_file() {
                 local_total_files += 1;
                 let path_buf = e.path();
-                if let Some(lang_name) = language_lookup.of_path(&path_buf) {
-                    if !exclude_matcher.is_empty() && exclude_matcher.is_match(&path_buf) {
-                        local_excluded_files += 1;
-                        continue;
-                    }
-                    if let Some(stack) = gitignore_stack && stack.is_ignored(&path_buf, false) {
-                        local_excluded_files += 1;
-                        continue;
-                    }
-
-                    local_relevant_files += 1;
-                    let module = if file_boundaries {modules.at_file(&path_buf, module)} else {module};
-                    // The size is not asked for: the counting thread reads the file into a buffer
-                    // anyway, so its length is the same number for free.
-                    files_injector.push(ParsableFile::new(path_buf, lang_name, module));
-                    progress.record_file_found();
+                let claimed = language_lookup.of_path(&path_buf);
+                if claimed.is_none() && !language_lookup.needs_a_shebang_probe(&path_buf) {
+                    continue;
                 }
+                // The ignore checks sit between the name lookup and the probe, so a covered file
+                // is never opened. Only a claimed file counts as excluded; an unclaimed candidate
+                // was never identified, so it stays in the uncounted remainder.
+                if (!exclude_matcher.is_empty() && exclude_matcher.is_match(&path_buf))
+                        || gitignore_stack.as_ref().is_some_and(|stack| stack.is_ignored(&path_buf, false)) {
+                    if claimed.is_some() {
+                        local_excluded_files += 1;
+                    }
+                    continue;
+                }
+                let Some(lang_name) = claimed.or_else(|| language_lookup.of_shebang(&path_buf)) else {
+                    continue;
+                };
+                local_relevant_files += 1;
+                let module = if file_boundaries {modules.at_file(&path_buf, module)} else {module};
+                // The size is not asked for: the counting thread reads the file into a buffer
+                // anyway, so its length is the same number for free.
+                files_injector.push(ParsableFile::new(path_buf, lang_name, module));
+                progress.record_file_found();
             } else { //is directory
                 // Read lossily, and only to ask whether it is dotted, which a lossy reading answers
                 // correctly since a leading '.' is ASCII and survives any replacement. Demanding
@@ -205,7 +211,7 @@ mod tests {
     use crate::engine::targets::build_exclude_matcher;
     use crate::calculate_single_file_stats_or_add_to_injector;
     use crate::test_paths::LANGUAGES_DIR;
-    use crate::engine::identity::build_extension_language_map;
+    use crate::engine::identity::{IdentifiedBy, build_extension_language_map, build_language_map_by};
 
     fn count_files_of(target: &str, extra_args: &str) -> (usize, usize, usize, Vec<String>) {
         let (total, relevant, excluded, found) = walk(target, extra_args);
@@ -242,7 +248,9 @@ mod tests {
         let files_injector = Arc::new(Injector::new());
         let dirs_injector = Arc::new(Injector::new());
         let idle_producers = Arc::new(AtomicUsize::new(0));
-        let language_lookup: SharedLanguageLookup = Arc::new(LanguageLookup { by_extension: build_extension_language_map(&language_map, &Default::default(), &Default::default()).0,
+        let language_lookup: SharedLanguageLookup = Arc::new(LanguageLookup {
+                        by_extension: build_extension_language_map(&language_map, &Default::default(), &Default::default()).0,
+                        by_shebang: build_language_map_by(IdentifiedBy::Shebang, &language_map, &Default::default(), &Default::default()).0,
                         ..Default::default() });
         let modules = Arc::new(Modules::of(&targets));
         let mut files_present = FilesPresent::default();
@@ -487,6 +495,32 @@ mod tests {
         let (_, relevant, _, found) = count_files_of(&root, "");
         assert_eq!(2, relevant, "a path with a space in it was read as two targets");
         assert_eq!(vec!["a.rs", "b.rs"], found);
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    // A script whose name says nothing is claimed through its '#!' first line: opened only when
+    // it has no extension at all, and only after the ignore checks, so an ignored script stays
+    // unopened and lands in the uncounted remainder rather than in 'excluded'.
+    #[test]
+    fn an_extensionless_script_is_claimed_through_its_first_line() {
+        let root = std::env::temp_dir().join("mezura_shebang_walk_test");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::write(root.join(".gitignore"), "ignored-deploy\n").unwrap();
+        fs::write(root.join("deploy"), "#!/usr/bin/env bash\necho hi\n").unwrap();
+        fs::write(root.join("ignored-deploy"), "#!/bin/sh\necho hi\n").unwrap();
+        fs::write(root.join("LICENSE"), "MIT License\n").unwrap();
+        fs::write(root.join("script.xyz"), "#!/bin/sh\necho hi\n").unwrap();
+        fs::write(root.join("a.rs"), "fn main() {}\n").unwrap();
+        let root_str = root.to_str().unwrap().replace('\\', "/");
+
+        let (total, relevant, excluded, found) = count_files_of(&root_str, "");
+        assert_eq!(vec!["a.rs", "deploy"], found, "the shebang did not claim the script");
+        // 'LICENSE', '.gitignore', the '.xyz' carrying a shebang and the ignored script all stay
+        // in the remainder: an extension keeps a file out of the probe whatever its first line
+        // says, and a file the ignore checks cover is not 'excluded', it was never identified
+        assert_eq!((6, 2, 0), (total, relevant, excluded));
 
         fs::remove_dir_all(&root).unwrap();
     }

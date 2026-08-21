@@ -317,7 +317,7 @@ pub(crate) fn calculate_single_file_stats_or_add_to_injector(config: &EngineConf
         let dir_path = Path::new(&target.path);
         let module = modules.of_target(target);
         if dir_path.is_file() {
-            if let Some(lang_name) = language_lookup.of_path(dir_path) {
+            if let Some(lang_name) = language_lookup.of_path_or_shebang(dir_path) {
                 files_injector.push(ParsableFile::new(dir_path.to_path_buf(), lang_name, module));
                 files_present.total_files += 1;
                 files_present.relevant_files += 1;

@@ -1858,6 +1858,7 @@ mod tests {
         name : "java".to_owned(),
         extensions : vec!["java".to_owned()],
         filenames : vec![],
+        shebangs : vec![],
         string_symbols : vec!["\"".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
@@ -1876,6 +1877,7 @@ mod tests {
         name : "PHP".to_owned(),
         extensions : vec!["php".to_owned()],
         filenames : vec![],
+        shebangs : vec![],
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
@@ -1894,6 +1896,7 @@ mod tests {
         name : "py".to_owned(),
         extensions : vec!["py".to_owned()],
         filenames : vec![],
+        shebangs : vec![],
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
@@ -1912,6 +1915,7 @@ mod tests {
         name : "rust".to_owned(),
         extensions : vec!["rs".to_owned()],
         filenames : vec![],
+        shebangs : vec![],
         string_symbols : vec!["\"".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
@@ -1933,6 +1937,7 @@ mod tests {
         name : "py".to_owned(),
         extensions : vec!["py".to_owned()],
         filenames : vec![],
+        shebangs : vec![],
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
@@ -2334,6 +2339,7 @@ mod tests {
         name : "lua".to_owned(),
         extensions : vec!["lua".to_owned()],
         filenames : vec![],
+        shebangs : vec![],
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
@@ -2369,6 +2375,7 @@ mod tests {
         name : "powershell".to_owned(),
         extensions : vec!["ps1".to_owned()],
         filenames : vec![],
+        shebangs : vec![],
         string_symbols : vec!["\"".to_owned(), "'".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
@@ -2406,6 +2413,7 @@ mod tests {
         name : "pascal".to_owned(),
         extensions : vec!["pas".to_owned()],
         filenames : vec![],
+        shebangs : vec![],
         string_symbols : vec!["'".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
@@ -2426,6 +2434,7 @@ mod tests {
         name : "d".to_owned(),
         extensions : vec!["d".to_owned()],
         filenames : vec![],
+        shebangs : vec![],
         string_symbols : vec!["\"".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
@@ -2987,6 +2996,7 @@ mod tests {
         name : "clojure".to_owned(),
         extensions : vec!["clj".to_owned()],
         filenames : vec![],
+        shebangs : vec![],
         string_symbols : vec!["\"".to_owned()],
         char_literal_symbols : vec![],
         line_continuation : None,
@@ -3436,10 +3446,10 @@ mod tests {
 
             let lang_name = match declared {
                 Some(declared) => std::sync::Arc::from(declared.as_str()),
-                None => match lookup.of_path(&path) {
+                None => match lookup.of_path_or_shebang(&path) {
                     Some(found) => found,
                     None => {
-                        failures.push(format!("{name}: no supported language claims this name or its extension"));
+                        failures.push(format!("{name}: no supported language claims this name, its extension or its first line"));
                         continue;
                     }
                 }
@@ -3656,7 +3666,7 @@ mod tests {
         for path in paths {
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
             if name.ends_with(".md") { continue; }
-            let Some(lang_name) = lookup.of_path(&path) else { continue };
+            let Some(lang_name) = lookup.of_path_or_shebang(&path) else { continue };
 
             let mut buf = String::new();
             let counted = parse_file_report(&path, lang_name.as_ref(), &mut buf, &config)
@@ -3725,22 +3735,31 @@ mod tests {
             by_extension: build_language_map_by(IdentifiedBy::Extension, &LANGUAGE_MAP_REF,
                     &priority.by_extension, &HashMap::new()).0,
             by_filename: build_language_map_by(IdentifiedBy::Filename, &LANGUAGE_MAP_REF,
-                    &priority.by_filename, &HashMap::new()).0
+                    &priority.by_filename, &HashMap::new()).0,
+            by_shebang: build_language_map_by(IdentifiedBy::Shebang, &LANGUAGE_MAP_REF,
+                    &HashMap::new(), &HashMap::new()).0
         }
     }
 
     #[test]
     fn every_fixture_extension_resolves_to_exactly_one_language() {
+        use crate::engine::identity::{identity_key, interpreter_spellings};
+        // One map over all three kinds of identity, keyed the way the real maps key each kind,
+        // so a language declaring 'sh' as an extension and as a shebang is one claimant and two
+        // spellings apart only in case still collide
         let mut claimants_of = HashMap::<String, Vec<String>>::new();
         for language in LANGUAGE_MAP_REF.values() {
-            for extension in &language.extensions {
-                claimants_of.entry(extension.clone()).or_default().push(language.name.clone());
-            }
+            let mut claim = |identity: String| {
+                let claiming = claimants_of.entry(identity).or_default();
+                if !claiming.contains(&language.name) {
+                    claiming.push(language.name.clone());
+                }
+            };
+            language.extensions.iter().for_each(|x| claim(identity_key(IdentifiedBy::Extension, x)));
             // A fixture named after a whole filename is resolved by that name, so what has to be
             // uncontested is the name and not the extension its spelling happens to end in
-            for filename in &language.filenames {
-                claimants_of.entry(filename.clone()).or_default().push(language.name.clone());
-            }
+            language.filenames.iter().for_each(|x| claim(identity_key(IdentifiedBy::Filename, x)));
+            language.shebangs.iter().for_each(|x| claim(identity_key(IdentifiedBy::Shebang, x)));
         }
 
         for path in fixture_paths(&fixtures_dir()) {
@@ -3751,13 +3770,23 @@ mod tests {
                 continue;
             }
 
-            let name = path.file_name().and_then(|x| x.to_str()).unwrap_or_default().to_owned();
-            let extension = match claimants_of.contains_key(&name) {
-                true => name,
-                false => path.extension().and_then(|x| x.to_str()).unwrap_or_default().to_owned()
+            let name = path.file_name().and_then(|x| x.to_str()).unwrap_or_default();
+            let as_filename = identity_key(IdentifiedBy::Filename, name);
+            let identity = if claimants_of.contains_key(&as_filename) {
+                as_filename
+            } else if let Some(extension) = path.extension().and_then(|x| x.to_str()) {
+                identity_key(IdentifiedBy::Extension, extension)
+            } else {
+                // An extensionless fixture resolves through its first line, by the same
+                // spellings the walk tries, most specific first
+                let token = crate::engine::identity::find_interpreter(contents.as_bytes())
+                        .and_then(|x| std::str::from_utf8(x).ok()).unwrap_or_default();
+                interpreter_spellings(token).into_iter()
+                        .find(|spelling| claimants_of.contains_key(spelling))
+                        .unwrap_or_else(|| token.to_ascii_lowercase())
             };
-            let claimants = claimants_of.get(&extension).cloned().unwrap_or_default();
-            assert!(claimants.len() == 1, "the fixture extension '{extension}' is claimed by {} languages ({}), so its counts depend on the tie-break rule",
+            let claimants = claimants_of.get(&identity).cloned().unwrap_or_default();
+            assert!(claimants.len() == 1, "the fixture identity '{identity}' is claimed by {} languages ({}), so its counts depend on the tie-break rule",
                     claimants.len(), claimants.join(", "));
         }
     }

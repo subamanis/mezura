@@ -1,6 +1,6 @@
-// Which language owns an extension or a whole filename, and how a contest between two of them is
-// settled.
-use std::{collections::HashMap, path::Path, sync::Arc};
+// Which language owns an extension, a whole filename or a shebang interpreter, and how a contest
+// between two of them is settled.
+use std::{collections::HashMap, fs::File, io::ErrorKind, io::Read, path::Path, sync::Arc};
 
 use crate::{Language, warnings};
 
@@ -8,26 +8,32 @@ use crate::{Language, warnings};
 // keeps the case-insensitive lookup from allocating once per file
 const MAX_IDENTITY_LEN : usize = 32;
 
-// The two ways a file says which language it is. They go through the same contest machinery and
+// One read this size answers the probe, so an extensionless binary costs a single small read
+const SHEBANG_READ_LIMIT : usize = 256;
+
+// The three ways a file says which language it is. They go through the same contest machinery and
 // differ in one thing each: what a language declares, and how the text is keyed.
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 pub enum IdentifiedBy {
     Extension,
-    Filename
+    Filename,
+    Shebang
 }
 
 impl IdentifiedBy {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Extension => "extension",
-            Self::Filename => "filename"
+            Self::Filename => "filename",
+            Self::Shebang => "shebang"
         }
     }
 
     fn declared_by<'a>(&self, language: &'a Language) -> &'a [String] {
         match self {
             Self::Extension => &language.extensions,
-            Self::Filename => &language.filenames
+            Self::Filename => &language.filenames,
+            Self::Shebang => &language.shebangs
         }
     }
 
@@ -35,7 +41,7 @@ impl IdentifiedBy {
     fn key_of(&self, text: &str) -> String {
         match self {
             Self::Extension => extension_key(text),
-            Self::Filename => text.to_ascii_lowercase()
+            Self::Filename | Self::Shebang => text.to_ascii_lowercase()
         }
     }
 }
@@ -167,9 +173,14 @@ pub fn build_language_map_by(identified_by: IdentifiedBy, languages: &HashMap<St
     // so a forced entry that no language claims is added rather than ignored. A pair naming a language
     // that does not exist is not complained about here, because this runs once per kind of identity
     // and the same pair is given to every one of them: 'Languages::resolve' asks that once.
-    for (identity, wanted) in &forced {
-        if let Some(name) = language_named(wanted) {
-            map.insert(identity.clone(), shared_names[name].clone());
+    // The shebang map is the exception: a forced extension is not an interpreter, and one unclaimed
+    // entry here would turn the probe on for a run whose languages declare no shebang at all. A pair
+    // naming an interpreter some language does claim has already won above.
+    if identified_by != IdentifiedBy::Shebang {
+        for (identity, wanted) in &forced {
+            if let Some(name) = language_named(wanted) {
+                map.insert(identity.clone(), shared_names[name].clone());
+            }
         }
     }
 
@@ -177,13 +188,14 @@ pub fn build_language_map_by(identified_by: IdentifiedBy, languages: &HashMap<St
     (map, report)
 }
 
-// The two maps a run counts with, and the one question a file is asked. Together because the answer
+// The maps a run counts with, and the one question a file is asked. Together because the answer
 // is one answer: a file whose whole name is claimed is that language whatever its extension says,
 // which is what makes 'CMakeLists.txt' CMake rather than text.
 #[derive(Debug, Default)]
 pub struct LanguageLookup {
     pub by_extension: HashMap<String, Arc<str>>,
-    pub by_filename: HashMap<String, Arc<str>>
+    pub by_filename: HashMap<String, Arc<str>>,
+    pub by_shebang: HashMap<String, Arc<str>>
 }
 
 impl LanguageLookup {
@@ -197,6 +209,38 @@ impl LanguageLookup {
         }
         let extension = path.extension().and_then(|x| x.to_str())?;
         find_language_of_identity(&self.by_extension, extension)
+    }
+
+    // For a file named directly as a target, where nothing between the name lookup and the probe
+    // gets to exclude it
+    pub fn of_path_or_shebang(&self, path: &Path) -> Option<Arc<str>> {
+        self.of_path(path).or_else(|| self.of_shebang(path))
+    }
+
+    // Asked before 'of_shebang' opens anything, so the walk can run its ignore checks in between
+    // and a file nobody wants counted is never opened.
+    pub fn needs_a_shebang_probe(&self, path: &Path) -> bool {
+        // 'extension()' answers None for dotfiles too, so a '.bashrc'-shaped name qualifies. The
+        // candidates stay few because '.git' is never walked and dotted directories are skipped
+        // unless '--search-in-dotted' asks for them.
+        !self.by_shebang.is_empty() && path.extension().is_none()
+    }
+
+    pub fn of_shebang(&self, path: &Path) -> Option<Arc<str>> {
+        if !self.needs_a_shebang_probe(path) {
+            return None;
+        }
+        let (buffer, length) = read_first_bytes(path)?;
+        let mut line = &buffer[..length];
+        // A full buffer with no line break means the first line was cut, and a cut word must
+        // not be matched: 'rubyfmt' cut at 'ruby' would count as Ruby. Everything after the
+        // last whitespace goes, and a line that is one unbroken word answers nothing.
+        if length == SHEBANG_READ_LIMIT && !line.contains(&b'\n') {
+            let last_space = line.iter().rposition(|b| matches!(b, b' ' | b'\t' | b'\r'))?;
+            line = &line[..last_space];
+        }
+        let interpreter = std::str::from_utf8(find_interpreter(line)?).ok()?;
+        find_language_of_interpreter(&self.by_shebang, interpreter)
     }
 }
 
@@ -238,6 +282,64 @@ pub(crate) fn find_language_named<'a>(sorted_names: &[&'a str], wanted: &str) ->
     sorted_names.iter().find(|name| **name == wanted)
             .or_else(|| sorted_names.iter().find(|name| crate::languages::is_the_same_language_name(name, wanted)))
             .copied()
+}
+
+// The interpreter a '#!' first line names: the last path component of its first word, or, when
+// that is 'env', the first word after it that is neither a flag nor a NAME=value assignment,
+// which is what lets '#!/usr/bin/env -S deno run' answer 'deno'.
+pub(crate) fn find_interpreter(first_line: &[u8]) -> Option<&[u8]> {
+    let line = first_line.strip_prefix(b"#!")?;
+    let line = &line[..line.iter().position(|b| *b == b'\n').unwrap_or(line.len())];
+    let mut words = line.split(|b| matches!(b, b' ' | b'\t' | b'\r')).filter(|word| !word.is_empty());
+    let command = words.next()?;
+    let command = command.rsplit(|b| *b == b'/').next().unwrap_or(command);
+    if command != b"env" {
+        return Some(command);
+    }
+    words.find(|word| !word.starts_with(b"-") && !word.contains(&b'='))
+}
+
+// Looped because one 'read' may legally return short, and an interrupted call is retried
+// instead of being read as "no language".
+fn read_first_bytes(path: &Path) -> Option<([u8; SHEBANG_READ_LIMIT], usize)> {
+    let mut file = File::open(path).ok()?;
+    let mut buffer = [0u8; SHEBANG_READ_LIMIT];
+    let mut length = 0;
+    while length < SHEBANG_READ_LIMIT {
+        match file.read(&mut buffer[length..]) {
+            Ok(0) => break,
+            Ok(bytes) => length += bytes,
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(_) => return None
+        }
+    }
+    Some((buffer, length))
+}
+
+// The exact spelling first, then one version segment fewer at a time, so a declared 'python3'
+// answers for 'python3.12' before 'python' can, and 'perl6.0.0' reaches a declared 'perl6'
+// instead of falling through to Perl.
+pub(crate) fn find_language_of_interpreter(language_of: &HashMap<String, Arc<str>>, interpreter: &str)
+        -> Option<Arc<str>> {
+    interpreter_spellings(interpreter).iter()
+            .find_map(|spelling| language_of.get(spelling))
+            .cloned()
+}
+
+// Every spelling the interpreter lookup tries, most specific first. Shared with the fixture
+// test that mirrors the resolution, so the two cannot drift.
+pub(crate) fn interpreter_spellings(interpreter: &str) -> Vec<String> {
+    let mut spellings = vec![interpreter.to_ascii_lowercase()];
+    let mut candidate = interpreter;
+    loop {
+        let trimmed = candidate.trim_end_matches(|c: char| c.is_ascii_digit());
+        let trimmed = trimmed.strip_suffix('.').unwrap_or(trimmed);
+        if trimmed.is_empty() || trimmed.len() == candidate.len() {
+            return spellings;
+        }
+        spellings.push(trimmed.to_ascii_lowercase());
+        candidate = trimmed;
+    }
 }
 
 // The one spelling of an extension that everything keys on: no leading dot, lowercased the way the
@@ -456,12 +558,206 @@ mod tests {
     fn extensions_are_matched_without_case_and_contest_each_other_across_it() {
         let languages = languages_claiming(&[("Zig", &["ZIG"]), ("Ziggy", &["zig"])]);
         let (map, report) = build_extension_language_map(&languages, &HashMap::new(), &HashMap::new());
-    
+
         assert_eq!(1, report.contested.len());
         assert_eq!("zig", report.contested[0].identity);
         assert_eq!("Zig", winner_of(&map, "zig"));
         assert_eq!("Zig", winner_of(&map, "ZIG"));
         assert_eq!("Zig", winner_of(&map, "Zig"));
         assert_eq!("", winner_of(&map, "zigg"));
+    }
+
+    fn interpreter_of(line: &str) -> Option<String> {
+        find_interpreter(line.as_bytes()).map(|x| String::from_utf8_lossy(x).into_owned())
+    }
+
+    // The whitespace and flag matrix scc settled in its issue 115, which is the most field-tested
+    // set of first lines there is, plus the 'env -S' and NAME=value forms that only linguist
+    // handles and this parser takes from it.
+    #[test]
+    fn the_interpreter_is_read_out_of_every_shape_a_shebang_line_takes() {
+        for line in ["#!/usr/bin/perl", "#!  /usr/bin/perl", "#!/usr/bin/perl -w", "#!/usr/bin/env perl",
+                "#!  /usr/bin/env   perl", "#!/usr/bin/env perl -w", "#!  /usr/bin/env   perl   -w  ",
+                "#!/opt/local/bin/perl", "#!perl", "#! perl", "#!/usr/bin/perl\nprint 1;"] {
+            assert_eq!(Some("perl".to_owned()), interpreter_of(line), "on {line:?}");
+        }
+        assert_eq!(Some("perl5".to_owned()), interpreter_of("#!/usr/bin/perl5"),
+                "the version is the lookup's business, not the line parser's");
+
+        // 'env' takes flags and variable assignments before the interpreter, and a flag cluster
+        // is one word: all of these run in the wild
+        assert_eq!(Some("python3".to_owned()), interpreter_of("#!/usr/bin/env -S python3"));
+        assert_eq!(Some("deno".to_owned()), interpreter_of("#!/usr/bin/env -S deno run --allow-read"));
+        assert_eq!(Some("python".to_owned()), interpreter_of("#!/usr/bin/env -vS PYTHONPATH=/opt python"));
+        assert_eq!(Some("bash".to_owned()), interpreter_of("#!/usr/bin/env --split-string bash"));
+
+        // and a windows checkout hands the line over with its '\r' still on
+        assert_eq!(Some("sh".to_owned()), interpreter_of("#!/bin/sh\r\necho hi"));
+    }
+
+    #[test]
+    fn a_line_that_names_no_interpreter_answers_nothing() {
+        // no '#!' first, which is also what any binary or BOM-carrying file looks like: the kernel
+        // itself refuses a shebang behind a BOM, so such a file is not a script
+        assert_eq!(None, interpreter_of("echo hi"));
+        assert_eq!(None, interpreter_of("\u{feff}#!/bin/sh"));
+        assert_eq!(None, interpreter_of(""));
+        // a '#!' with nothing usable after it
+        assert_eq!(None, interpreter_of("#!"));
+        assert_eq!(None, interpreter_of("#!/usr/bin/env"));
+        assert_eq!(None, interpreter_of("#!/usr/bin/env -S"));
+    }
+
+    fn shebang_lookup(claims: &[(&str, &[&str])]) -> LanguageLookup {
+        let languages = claims.iter()
+                .map(|(name, interpreters)| ((*name).to_owned(),
+                        Language::new(*name, ["zzz"], ["\""], ["#"], &[], []).with_shebangs(interpreters)))
+                .collect();
+        LanguageLookup {
+            by_shebang: build_language_map_by(IdentifiedBy::Shebang, &languages,
+                    &HashMap::new(), &HashMap::new()).0,
+            ..Default::default()
+        }
+    }
+
+    // A declared 'python' answers for 'python3' and 'python3.12' without every version being
+    // enumerated, and the exact match goes first so 'perl6', which is Raku and not a Perl
+    // version, goes where it was declared.
+    #[test]
+    fn a_versioned_interpreter_falls_back_to_its_declared_name_and_an_exact_claim_wins_first() {
+        let root = std::env::temp_dir().join("mezura_shebang_versions_test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let script = |name: &str, first_line: &str| {
+            let path = root.join(name);
+            std::fs::write(&path, format!("{first_line}\nbody\n")).unwrap();
+            path
+        };
+        let lookup = shebang_lookup(&[("Python", &["python"]), ("Perl", &["perl"]),
+                ("Raku", &["perl6"]), ("R", &["Rscript"])]);
+
+        assert_eq!(Some("Python"), lookup.of_shebang(&script("versioned", "#!/usr/bin/python3.12")).as_deref());
+        assert_eq!(Some("Python"), lookup.of_shebang(&script("enved", "#!/usr/bin/env python3")).as_deref());
+        assert_eq!(Some("Raku"), lookup.of_shebang(&script("raku", "#!/usr/bin/perl6")).as_deref());
+        assert_eq!(Some("Perl"), lookup.of_shebang(&script("versioned-perl", "#!/usr/bin/perl5.36")).as_deref());
+        // matched the way every other identity is, without case
+        assert_eq!(Some("R"), lookup.of_shebang(&script("rscript", "#!/usr/bin/env Rscript")).as_deref());
+        // an interpreter that is nothing but digits after the trim is not a match for everything
+        assert_eq!(None, lookup.of_shebang(&script("digits", "#!/usr/bin/386")).as_deref());
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    // The trim walks back one version segment at a time, so the most specific declared spelling
+    // wins: in one step, 'python3.12' jumped straight to 'python' past a declared 'python3',
+    // and 'perl6.0.0' turned a Raku script into Perl.
+    #[test]
+    fn the_version_fallback_stops_at_the_most_specific_declared_spelling() {
+        let root = std::env::temp_dir().join("mezura_shebang_segments_test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let script = |name: &str, first_line: &str| {
+            let path = root.join(name);
+            std::fs::write(&path, format!("{first_line}\nbody\n")).unwrap();
+            path
+        };
+        let lookup = shebang_lookup(&[("OldPython", &["python"]), ("NewPython", &["python3"]),
+                ("Perl", &["perl"]), ("Raku", &["perl6"])]);
+
+        assert_eq!(Some("NewPython"), lookup.of_shebang(&script("py312", "#!/usr/bin/python3.12")).as_deref());
+        assert_eq!(Some("OldPython"), lookup.of_shebang(&script("py27", "#!/usr/bin/python2.7")).as_deref());
+        assert_eq!(Some("Raku"), lookup.of_shebang(&script("raku", "#!/usr/bin/perl6.0.0")).as_deref());
+        assert_eq!(Some("Perl"), lookup.of_shebang(&script("perl", "#!/usr/bin/perl5.36.0")).as_deref());
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    // A first line longer than the probe's window arrives cut, and a cut word is not an
+    // interpreter: 'rubyfmt' cut at 'ruby' counted as Ruby until this was guarded.
+    #[test]
+    fn a_first_line_longer_than_the_probe_window_never_matches_a_cut_word() {
+        let root = std::env::temp_dir().join("mezura_shebang_cut_test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let script = |name: &str, first_line: &str| {
+            let path = root.join(name);
+            std::fs::write(&path, format!("{first_line}\nbody\n")).unwrap();
+            path
+        };
+        let lookup = shebang_lookup(&[("Ruby", &["ruby"]), ("Shell", &["bash"])]);
+
+        // sized so the window ends right after the 'ruby' inside 'rubyfmt'
+        let padding = "a".repeat(SHEBANG_READ_LIMIT - "#!/usr/bin/env -S F= ruby".len());
+        let cut_mid_word = script("cut", &format!("#!/usr/bin/env -S F={padding} rubyfmt --check"));
+        assert_eq!(None, lookup.of_shebang(&cut_mid_word).as_deref());
+
+        // an interpreter that fits inside the window still answers, whatever runs past it
+        let cut_in_arguments = script("late-cut", &format!("#!/bin/bash {}", "x".repeat(400)));
+        assert_eq!(Some("Shell"), lookup.of_shebang(&cut_in_arguments).as_deref());
+
+        // and one unbroken word filling the window answers nothing rather than a prefix of itself
+        let one_word = script("one-word", &format!("#!/usr/bin/ruby{}", "y".repeat(400)));
+        assert_eq!(None, lookup.of_shebang(&one_word).as_deref());
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    // A forced pair whose identity nothing claims lands in the extension and filename maps and
+    // deliberately not in the shebang one: there it would turn the probe on for a run whose
+    // languages declare no shebang at all, and let an extension spelling answer as an interpreter.
+    #[test]
+    fn a_forced_pair_nothing_claims_stays_out_of_the_shebang_map() {
+        let languages = languages_claiming(&[("Rust", &["rs"])]);
+        let forced = hashmap!("txt".to_owned() => "rust".to_owned());
+        let (map, _) = build_language_map_by(IdentifiedBy::Shebang, &languages, &HashMap::new(), &forced);
+        assert!(map.is_empty(), "a forced extension became an interpreter: {map:?}");
+
+        // and the same pair still settles a real interpreter contest
+        let contested: HashMap<String, Language> = [("Ash", ["sh"]), ("Bsh", ["sh"])].into_iter()
+                .map(|(name, interpreters)| (name.to_owned(),
+                        Language::new(name, ["zzz"], ["\""], ["#"], &[], []).with_shebangs(&interpreters)))
+                .collect();
+        let forced = hashmap!("sh".to_owned() => "bsh".to_owned());
+        let (map, report) = build_language_map_by(IdentifiedBy::Shebang, &contested, &HashMap::new(), &forced);
+        assert_eq!(Some("Bsh"), map.get("sh").map(|x| x.as_ref()));
+        assert_eq!(ResolvedBy::ForceLang, report.contested[0].resolved_by);
+    }
+
+    // The probe's bound is the whole of its cost: only a file with no extension at all is ever
+    // opened, whatever its first line would have said.
+    #[test]
+    fn only_an_extensionless_file_is_probed_and_a_probe_that_finds_nothing_claims_nothing() {
+        let root = std::env::temp_dir().join("mezura_shebang_probe_test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let script = |name: &str, contents: &str| {
+            let path = root.join(name);
+            std::fs::write(&path, contents).unwrap();
+            path
+        };
+        let lookup = shebang_lookup(&[("Shell", &["sh", "bash"])]);
+
+        let deploy = script("deploy", "#!/bin/bash\necho hi\n");
+        assert!(lookup.needs_a_shebang_probe(&deploy));
+        assert_eq!(Some("Shell"), lookup.of_shebang(&deploy).as_deref());
+        assert_eq!(Some("Shell"), lookup.of_path_or_shebang(&deploy).as_deref());
+
+        // an extension, even one nothing claims, keeps the file out of the probe
+        let with_extension = script("deploy.xyz", "#!/bin/bash\necho hi\n");
+        assert!(!lookup.needs_a_shebang_probe(&with_extension));
+        assert_eq!(None, lookup.of_shebang(&with_extension));
+
+        // a first line that is not a shebang, and a binary-shaped one, both stay unclaimed
+        assert_eq!(None, lookup.of_shebang(&script("LICENSE", "MIT License\n")));
+        assert_eq!(None, lookup.of_shebang(&script("compiled", "\u{0}\u{1}binary#!/bin/sh")));
+        // an interpreter nobody declares stays unclaimed too
+        assert_eq!(None, lookup.of_shebang(&script("looped", "#!/usr/bin/lua\nprint(1)\n")));
+
+        // with no language declaring a shebang, nothing qualifies and nothing is opened
+        let no_shebangs = LanguageLookup::default();
+        assert!(!no_shebangs.needs_a_shebang_probe(&deploy));
+        assert_eq!(None, no_shebangs.of_shebang(&deploy));
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

@@ -55,6 +55,11 @@ impl Languages {
         let (by_filename, filename_report) = build_language_map_by(IdentifiedBy::Filename, &by_name,
                 &priority.by_filename, &config.forced_languages);
         reported.extend(filename_report.collect_warnings());
+        // The priority file has no block for a contested interpreter yet; the forced pairs reach
+        // this map like the other two, which is how such a contest would be settled by hand.
+        let (by_shebang, shebang_report) = build_language_map_by(IdentifiedBy::Shebang, &by_name,
+                &HashMap::new(), &config.forced_languages);
+        reported.extend(shebang_report.collect_warnings());
         reported.extend(find_unknown_forced_languages(&by_name, &config.forced_languages));
 
         // A section names its language whatever the run narrowed itself to, which is why the
@@ -68,7 +73,7 @@ impl Languages {
             nested = NestedLanguageDefinitions { set_aside, extension_to_name: all_extensions };
         }
 
-        (Languages { by_name, lookup: LanguageLookup { by_extension, by_filename },
+        (Languages { by_name, lookup: LanguageLookup { by_extension, by_filename, by_shebang },
                 nested, resolved_against: LanguageSelection::of(config) }, reported)
     }
 
@@ -214,9 +219,9 @@ fn drop_the_unusable(languages: Vec<Language>) -> (Vec<Language>, Vec<Warning>) 
                     claimed.join(", "))));
             return false;
         }
-        if language.extensions.is_empty() && language.filenames.is_empty() {
+        if language.extensions.is_empty() && language.filenames.is_empty() && language.shebangs.is_empty() {
             reported.push(Warning::new(warnings::Code::LanguageClaimsNothing, &language.name,
-                    format!("'{}' claims no extension and no filename, so no file can ever be counted as it.",
+                    format!("'{}' claims no extension, no filename and no shebang, so no file can ever be counted as it.",
                     language.name)));
             return false;
         }

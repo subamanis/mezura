@@ -4,6 +4,9 @@ Perl
 Extensions
 pl pm
 
+Shebangs
+perl
+
 String symbols
 
 Multi line string symbols

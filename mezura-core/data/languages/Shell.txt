@@ -4,6 +4,9 @@ Shell
 Extensions
 sh bash zsh ksh
 
+Shebangs
+sh bash zsh ksh dash
+
 String symbols
 
 Multi line string symbols

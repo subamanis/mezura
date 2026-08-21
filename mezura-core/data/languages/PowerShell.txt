@@ -4,6 +4,9 @@ PowerShell
 Extensions
 ps1 psm1 psd1
 
+Shebangs
+pwsh
+
 String symbols
 
 Multi line string symbols

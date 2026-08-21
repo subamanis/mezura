@@ -7,6 +7,9 @@ rb
 Filenames
 Gemfile Rakefile Vagrantfile Podfile Brewfile
 
+Shebangs
+ruby
+
 String symbols
 
 Multi line string symbols

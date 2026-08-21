@@ -1,4 +1,4 @@
-files=70 lines=853 code=457 comments=217
+files=71 lines=861 code=461 comments=219
 
 Ada
   files=1 lines=8 code=5 comments=2
@@ -218,8 +218,8 @@ ShaderLab
   words_in_code=5 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=4 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   passes=1 shaders=1 subshaders=1
 Shell
-  files=1 lines=8 code=4 comments=2
-  words_in_code=4 string_content=0 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=1 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
+  files=2 lines=16 code=8 comments=4
+  words_in_code=8 string_content=0 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=1 punctuation_in_comment=0 blank=3 blank_in_comment=0 blank_in_string=0
   functions=1
 Slang
   files=1 lines=10 code=4 comments=3

@@ -13,6 +13,9 @@ pub struct Language {
     // Whole names, for the files that carry no extension worth reading: 'Makefile', 'Dockerfile',
     // and 'CMakeLists.txt', whose extension says text and means nothing
     pub filenames : Vec<String>,
+    // Interpreter names as a '#!' line spells them, 'sh' or 'python', for the scripts whose name
+    // says nothing at all. Only a file with no extension and an unclaimed name is ever probed.
+    pub shebangs : Vec<String>,
     pub string_symbols : Vec<String>,
     // The symbol of a character literal, Rust's and D's '. One that does not close on its own line
     // is not a literal at all, so a lifetime's lone ' opens nothing, while a '"' shields its quote
@@ -56,6 +59,7 @@ impl Language {
             name : name.as_ref().to_owned(),
             extensions : owned_strings(extensions),
             filenames : Vec::new(),
+            shebangs : Vec::new(),
             string_symbols : owned_strings(string_symbols),
             char_literal_symbols : Vec::new(),
             multiline_strings : Vec::new(),
@@ -83,6 +87,11 @@ impl Language {
 
     pub fn with_filenames(mut self, names: &[&str]) -> Self {
         self.filenames.extend(names.iter().map(|x| (*x).to_owned()));
+        self
+    }
+
+    pub fn with_shebangs(mut self, interpreters: &[&str]) -> Self {
+        self.shebangs.extend(interpreters.iter().map(|x| (*x).to_owned()));
         self
     }
 
@@ -296,6 +305,7 @@ impl PartialEq for Language {
         self.name == other.name
             && self.extensions == other.extensions
             && self.filenames == other.filenames
+            && self.shebangs == other.shebangs
             && self.string_symbols == other.string_symbols
             && self.char_literal_symbols == other.char_literal_symbols
             && self.multiline_strings == other.multiline_strings

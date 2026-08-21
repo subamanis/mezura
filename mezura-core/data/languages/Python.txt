@@ -4,6 +4,9 @@ Python
 Extensions
 py pyw pyi
 
+Shebangs
+python
+
 String symbols
 " '
 

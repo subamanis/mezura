@@ -35,6 +35,9 @@ Rules that keep the numbers honest:
   not mention, the test fails, so a fixture cannot quietly stop covering a keyword.
 - **One language per extension.** A separate test asserts that no fixture uses an extension claimed by
   two languages, since those counts would depend on the tie-break rule rather than on the parser.
+- **A fixture with no extension resolves through its whole name or its `#!` first line**, the way
+  the program resolves it. `configure` is Shell because its first line names `sh`, and that line
+  also carries the expectation header, `#!/bin/sh # mezura-expect ...`, since both have to be first.
 - **Keep them small enough to count by hand.** A fixture nobody can verify is worse than no fixture.
 - **Avoid constructs whose intended behavior is unsettled**, such as Python triple-quoted strings,
   which mezura's string-symbol model does not describe. Encoding a guess as ground truth is how a test

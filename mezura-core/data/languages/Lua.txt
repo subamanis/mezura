@@ -4,6 +4,9 @@ Lua
 Extensions
 lua
 
+Shebangs
+lua
+
 String symbols
 " '
 

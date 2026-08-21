@@ -54,7 +54,7 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
         return Err(ExplainError::LanguagesFromAnotherConfig);
     }
     let (by_name, lookup, nested_definitions) = languages.into_parts();
-    let Some(lang_name) = lookup.of_path(path) else {
+    let Some(lang_name) = lookup.of_path_or_shebang(path) else {
         return Err(ExplainError::UnclaimedFile);
     };
     let nested_lookup = NestedLanguageLookup {

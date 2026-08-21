@@ -1,0 +1,8 @@
+#!/bin/sh # mezura-expect lines=8 code=4 comments=2 extra=2
+# resolved through its first line, since the name carries no extension
+
+set -e
+PREFIX="/usr/local"
+
+echo "installing to $PREFIX"
+exit 0

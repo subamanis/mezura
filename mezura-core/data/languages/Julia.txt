@@ -4,6 +4,9 @@ Julia
 Extensions
 jl
 
+Shebangs
+julia
+
 String symbols
 "
 

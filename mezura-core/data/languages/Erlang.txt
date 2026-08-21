@@ -4,6 +4,9 @@ Erlang
 Extensions
 erl hrl
 
+Shebangs
+escript
+
 String symbols
 '
 

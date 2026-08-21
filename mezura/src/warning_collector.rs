@@ -54,7 +54,11 @@ fn add_advice_to(mut warning: Warning) -> Warning {
     // Not exhaustive, unlike the consequence a code carries: most of them have nothing to advise,
     // and a new one arriving without a line of advice is a missing nicety and not a wrong answer.
     let advice = match warning.code {
-        Code::LanguageTiebreak => Some(format!("Declare it in '{}', or run with '--force-language {}=<language>'.",
+        // The priority file settles extensions and filenames only, so the sentence says so: a
+        // contested shebang written in there is skipped without a word, and sending its owner
+        // there would be advice that fails silently.
+        Code::LanguageTiebreak => Some(format!("A contested extension or filename is settled for good in '{}'; \
+'--force-language {}=<language>' decides it for this run.",
                 mezura_core::EXTENSION_PRIORITY_FILE_NAME, warning.subject)),
         Code::DuplicateLanguage => Some("Delete the copies you do not want from the 'languages' folder of your data dir.".to_owned()),
         // Naming the command that caused it, since the reader typed one of three and the sentence
@@ -64,7 +68,7 @@ fn add_advice_to(mut warning: Warning) -> Warning {
         Code::UnknownExcludedLanguage =>
                 Some("Run with '--show-languages' for the ones available to '--exclude-languages'.".to_owned()),
         Code::UnknownSectionLanguage =>
-                Some("Correct the 'Embedded region default' line of that language file in your data dir.".to_owned()),
+                Some("Correct the 'Nested language default' line of that language file in your data dir.".to_owned()),
         _ => None
     };
 

@@ -20,6 +20,7 @@ pub struct PriorityRules {
 const LANGUAGE                 : &str = "Language";
 const EXTENSIONS               : &str = "Extensions";
 const FILENAMES                : &str = "Filenames";
+const SHEBANGS                 : &str = "Shebangs";
 const STRING_SYMBOLS           : &str = "String symbols";
 const MULTILINE_STRINGS        : &str = "Multi line string symbols";
 const MULTILINE_RAW_STRINGS    : &str = "Multi line raw string symbols";
@@ -206,7 +207,15 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         filenames = split_line_on_whitespace(&read_value_line(lines)?);
         next = read_next_header(lines)?;
     }
-    if extensions.is_empty() && filenames.is_empty() {return None;}
+    // Interpreter names as a '#!' line spells them, for the scripts whose name says nothing.
+    // Optional; declaring the block with nothing under it is a mistake and refuses the file.
+    let mut shebangs = Vec::new();
+    if next == SHEBANGS {
+        shebangs = split_line_on_whitespace(&read_value_line(lines)?);
+        if shebangs.is_empty() {return None;}
+        next = read_next_header(lines)?;
+    }
+    if extensions.is_empty() && filenames.is_empty() && shebangs.is_empty() {return None;}
 
     if next != STRING_SYMBOLS {return None;}
     let string_symbols = split_line_on_whitespace(&read_value_line(lines)?);
@@ -416,7 +425,8 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
                     .collect::<Vec<_>>())
             .with_leveled_comments(&leveled_comments)
             .with_nested_languages(&nested_languages)
-            .with_filenames(&filenames.iter().map(String::as_str).collect::<Vec<_>>()))
+            .with_filenames(&filenames.iter().map(String::as_str).collect::<Vec<_>>())
+            .with_shebangs(&shebangs.iter().map(String::as_str).collect::<Vec<_>>()))
 }
 
 // A missing file is not a mistake: an installation made by an earlier version has none, and the
@@ -475,7 +485,9 @@ pub fn parse_priority(contents: &str) -> (PriorityRules, Vec<String>) {
         // never say why.
         let of_block = match block {
             IdentifiedBy::Extension => &mut rules.by_extension,
-            IdentifiedBy::Filename => &mut rules.by_filename
+            IdentifiedBy::Filename => &mut rules.by_filename,
+            // No marker opens a shebang block, so the mapping above never produces this
+            IdentifiedBy::Shebang => unreachable!("no marker opens a shebang block")
         };
         match of_block.entry(crate::engine::identity::identity_key(block, claimed)) {
             std::collections::hash_map::Entry::Occupied(_) => faulty_lines.push(line.to_owned()),
@@ -722,6 +734,58 @@ Escape character\n\\\n\nComment symbols\n--\n";
                     "'{name}' was accepted, and everything under it dropped:\n{contents}");
         }
     }
+
+    // The 'Shebangs' block, like every optional block, is read at one position and refused
+    // anywhere else, and declaring it with nothing under it is a mistake rather than an empty list.
+    #[test]
+    fn the_shebangs_block_parses_where_it_belongs_and_nowhere_else() {
+        let good = std::fs::read_to_string(LANGUAGES_DIR.to_owned() + "Shell.txt").unwrap();
+        let parsed = crate::language_file::parse_language(&good).expect("the control file must parse");
+        assert_eq!(vec!["sh", "bash", "zsh", "ksh", "dash"],
+                parsed.shebangs.iter().map(String::as_str).collect::<Vec<_>>());
+
+        let lines = good.lines().collect::<Vec<_>>();
+        let at = lines.iter().position(|x| x.trim() == SHEBANGS).unwrap();
+
+        let mut blanked = lines.clone();
+        blanked[at + 1] = "";
+        assert!(crate::language_file::parse_language(&blanked.join("\n")).is_none(),
+                "a 'Shebangs' block with nothing under it was accepted");
+
+        // moved below the string symbols, which is the late arrival the fixed order refuses
+        let mut moved = lines.clone();
+        let block = moved.drain(at..at + 2).collect::<Vec<_>>();
+        let after_strings = moved.iter().position(|x| x.trim() == STRING_SYMBOLS).unwrap() + 2;
+        for (offset, line) in block.into_iter().enumerate() {
+            moved.insert(after_strings + offset, line);
+        }
+        assert!(crate::language_file::parse_language(&moved.join("\n")).is_none(),
+                "a 'Shebangs' block after the string symbols was accepted");
+
+        // and without the block the file still parses, since the block is optional
+        let mut without = lines.clone();
+        without.drain(at..at + 2);
+        let parsed = crate::language_file::parse_language(&without.join("\n"))
+                .expect("a file without the optional block must still parse");
+        assert!(parsed.shebangs.is_empty());
+
+        // a file whose only claim is its Shebangs block parses, since the block is a third way
+        // to claim files and not a decoration on the other two
+        let extensions_value = lines.iter().position(|x| x.trim() == EXTENSIONS).unwrap() + 1;
+        let mut shebang_only = lines.clone();
+        shebang_only[extensions_value] = "";
+        let parsed = crate::language_file::parse_language(&shebang_only.join("\n"))
+                .expect("a shebang-only language file was refused");
+        assert!(parsed.extensions.is_empty());
+        assert_eq!(vec!["sh", "bash", "zsh", "ksh", "dash"],
+                parsed.shebangs.iter().map(String::as_str).collect::<Vec<_>>());
+
+        // while a file with no claim of any kind is still refused
+        let mut claimless = shebang_only.clone();
+        claimless.drain(at..at + 2);
+        assert!(crate::language_file::parse_language(&claimless.join("\n")).is_none(),
+                "a language claiming nothing at all was accepted");
+    }
     // Why a file could not become a language is two different answers and the caller is meant to be
     // able to tell them apart, so both have to be reachable. Collapsing them into one passed every
     // test there was, which is what a distinction with nothing asserting it is worth.
@@ -935,7 +999,7 @@ Nested language start\n<script <style\nNested language end\n</script> </style>\n
 
         // out of place it refuses the file whole, like every other block
         let misplaced = "Language\nWeblike\n\nExtensions\nwbl\n\n\
-Embedded region start\n<script\nEmbedded region end\n</script>\nEmbedded region default\njs\n\n\
+Nested language start\n<script\nNested language end\n</script>\nNested language default\njs\n\n\
 String symbols\n\n\nComment symbols\n\n";
         assert!(crate::language_file::parse_language(misplaced).is_none());
     }
@@ -1076,5 +1140,18 @@ Comment symbols\n--\nMulti line comment start\n--[=*[\nMulti line comment end\n]
                     || name == "HTML" || !language.nested_languages.is_empty(),
                     "{name} declares no string symbol");
         }
+
+        // An interpreter two shipped files claim would be settled by the alphabetical tiebreak,
+        // since the priority file has no block for it: refused here instead, until a real contest
+        // earns that block.
+        let mut interpreters = languages.iter()
+                .flat_map(|language| language.shebangs.iter()
+                        .map(move |shebang| (shebang.to_ascii_lowercase(), language.name.as_str())))
+                .collect::<Vec<_>>();
+        interpreters.sort_unstable();
+        let contested = interpreters.windows(2).filter(|pair| pair[0].0 == pair[1].0)
+                .map(|pair| format!("'{}' ({}, {})", pair[0].0, pair[0].1, pair[1].1))
+                .collect::<Vec<_>>();
+        assert!(contested.is_empty(), "these interpreters are claimed by more than one shipped file: {contested:?}");
     }
 }

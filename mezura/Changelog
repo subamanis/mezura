@@ -32,6 +32,12 @@ Main changes:
       line began. The stretches of each line that sit inside a string or a comment are printed in
       their own styles. "--output json" writes the same answer as a document with one verdict per
       line, spans included, for other tools to read. Run "--help explain" for the details.
+  -> A file with no extension and a name nothing claims is now opened for its first line, and a
+      "#!" there decides its language: "deploy", "configure" and the scripts of a "bin/" directory
+      are counted instead of silently skipped. The interpreter is matched after "env" and its
+      flags, and a versioned one falls back to its plain name, so "#!/usr/bin/env python3.12"
+      counts as Python. A language file declares its interpreters under a new optional "Shebangs"
+      block; nothing changes for files an extension or "--force-language" already describes.
   -> New "--counting" command, taking "content" or "region". The default, "content", is the
       counting mezura always did: a line counts where its words are, and a line saying nothing is
       extra. "region" counts a line where it sits, the way cloc, tokei and scc do: any code on the
@@ -51,11 +57,11 @@ Main changes:
       whitespace-separated lists, paired by position.
   -> A block comment that closes and reopens on the same line no longer counts the rest of the
       file as code. This hit Lua and HTML, whose opening and closing symbols differ in length.
-  -> Block comments can now nest, declared per pair under "Nesting comment start" and "Nesting
-      comment end": the block ends only when as many closers as openers have passed, so an OCaml
-      "(* (* *) *)" or a commented-out block in Rust, Haskell, Scala, Kotlin, Swift, Julia, Elm,
-      Lisp, Scheme, MATLAB, WebAssembly text or D's "/+ +/" is read to its real end instead of
-      its first closer.
+  -> Block comments can now nest, declared per pair under "Self-nesting comment start" and
+      "Self-nesting comment end": the block ends only when as many closers as openers have passed,
+      so an OCaml "(* (* *) *)" or a commented-out block in Rust, Haskell, Scala, Kotlin, Swift,
+      Julia, Elm, Lisp, Scheme, MATLAB, WebAssembly text or D's "/+ +/" is read to its real end
+      instead of its first closer.
   -> A data directory whose files are missing is filled again on the next run, instead of staying
       empty until the next version. Deleting the "languages" folder, or losing it any other way,
       used to leave it empty for good while the run silently counted with the copies inside the

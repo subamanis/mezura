@@ -4,6 +4,9 @@ R
 Extensions
 r
 
+Shebangs
+Rscript
+
 String symbols
 
 Multi line string symbols

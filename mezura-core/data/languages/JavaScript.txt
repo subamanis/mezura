@@ -4,6 +4,9 @@ JavaScript
 Extensions
 js mjs cjs
 
+Shebangs
+node
+
 String symbols
 " '
 
