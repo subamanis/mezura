@@ -1,6 +1,5 @@
-// The '--explain' face: one file line by line, as text for a person and as the per-line JSON
-// document for a program. The answers come from the library's explain pass; everything here is
-// wording and layout.
+// The '--explain' face: one file line by line, as text and as JSON. The answers come from the
+// library's explain pass; everything here is wording and layout.
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -137,9 +136,8 @@ fn fold_totals(explanation: &FileExplanation, model: CountingModel) -> (usize, u
     (code, comments, explanation.lines.len() - code - comments)
 }
 
-// The source line with its string and comment stretches in their own styles. The offsets come off
-// the parser and land on symbol or trim boundaries, but a span that would cut a character in half
-// is left unpainted rather than panicking over a diagnostic.
+// A span that would cut a character in half is left unpainted rather than panicking over a
+// diagnostic.
 fn paint_by_spans(source: &str, spans: &[Span]) -> String {
     let theme = get_active();
     let mut painted = String::with_capacity(source.len() + 16 * spans.len());
@@ -188,9 +186,8 @@ fn describe_carried(carried: &Carried) -> Option<String> {
 mod tests {
     use super::*;
 
-    // What the painter owes: every byte of the source comes back out, in order, whatever the spans
-    // say. Colors are turned off the way the layouts golden turns them off, because the manual
-    // comparison protocol exports CLICOLOR_FORCE and a test binary inherits it.
+    // Color is turned off because the manual comparison protocol exports CLICOLOR_FORCE and a test
+    // binary inherits it, which would leave escape codes in the compared text.
     #[test]
     fn the_painted_line_keeps_every_byte_of_the_source() {
         colored::control::set_override(false);
@@ -200,12 +197,9 @@ mod tests {
                 Span { from: 10, to: 15, kind: SpanKind::Comment }];
         assert_eq!(line, paint_by_spans(line, &spans));
         assert_eq!(line, paint_by_spans(line, &[]));
-        // spans that run past the line, or cut a character in half, lose their paint and no text
         assert_eq!(line, paint_by_spans(line, &[Span { from: 2, to: 40, kind: SpanKind::String }]));
     }
 
-    // The wording of the notes, pinned here because both faces print it and linejudge's readers
-    // will show it beside their own rows
     #[test]
     fn a_carried_answer_reads_as_a_sentence() {
         assert_eq!(None, describe_carried(&Carried::Nothing));
@@ -215,7 +209,6 @@ mod tests {
         assert_eq!(Some("in a comment opened by --[[ on line 4, 3 deep".to_owned()),
                 describe_carried(&Carried::Comment { opener: "--[[".to_owned(), depth: 3, since_line: 4,
                         ends_on_this_line: false }));
-        // a line the carried thing does not survive says so, instead of claiming the line sits in it
         assert_eq!(Some("the comment opened by /* on line 12 ends on this line".to_owned()),
                 describe_carried(&Carried::Comment { opener: "/*".to_owned(), depth: 1, since_line: 12,
                         ends_on_this_line: true }));

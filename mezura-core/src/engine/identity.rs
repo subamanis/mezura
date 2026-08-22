@@ -4,15 +4,13 @@ use std::{collections::HashMap, fs::File, io::ErrorKind, io::Read, path::Path, s
 
 use crate::{Language, warnings};
 
-// Longer than any extension that exists and than the filenames anybody writes, and the buffer that
-// keeps the case-insensitive lookup from allocating once per file
+// Longer than any extension or filename anybody writes: the stack buffer below is what keeps the
+// case-insensitive lookup from allocating once per file
 const MAX_IDENTITY_LEN : usize = 32;
 
 // One read this size answers the probe, so an extensionless binary costs a single small read
 const SHEBANG_READ_LIMIT : usize = 256;
 
-// The three ways a file says which language it is. They go through the same contest machinery and
-// differ in one thing each: what a language declares, and how the text is keyed.
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 pub enum IdentifiedBy {
     Extension,
@@ -46,8 +44,8 @@ impl IdentifiedBy {
     }
 }
 
-// The three outcomes must never read alike: the first two are decisions somebody took, the third is
-// a tiebreak nobody asked for and the one that can put a language's comments into another's code.
+// The first two are decisions somebody took; the third is a tiebreak nobody asked for, and the one
+// that can put a language's comments into another's code.
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 pub enum ResolvedBy {
     ForceLang,
@@ -55,7 +53,6 @@ pub enum ResolvedBy {
     AlphabeticalFallback
 }
 
-// One text more than one language claims, and how it was settled.
 #[derive(Debug,PartialEq,Eq,Clone)]
 #[non_exhaustive]
 pub struct ContestedIdentity {
@@ -73,12 +70,10 @@ pub struct IdentityReport {
 }
 
 impl IdentityReport {
-    // Only the alphabetical tiebreak is reported. A rule or a forced pair is somebody's own decision,
-    // and saying so every run buries the one line that matters. One warning per extension, so
-    // whoever reads the document can key on it.
-    //
-    // Each says what happened and stops. What to do about it depends on who is calling: the command
-    // line has a file and a flag for it and adds its own sentence, a library caller has neither.
+    // Only the alphabetical tiebreak is reported: a rule or a forced pair is somebody's own decision,
+    // and saying so every run buries the one line that matters. Each warning says what happened and
+    // stops, since what to do about it depends on who is calling: the command line has a file and a
+    // flag for it and adds its own sentence, a library caller has neither.
     pub fn collect_warnings(&self) -> Vec<warnings::Warning> {
         let mut reported = Vec::new();
         for contested in self.contested.iter().filter(|x| x.resolved_by == ResolvedBy::AlphabeticalFallback) {
@@ -107,10 +102,8 @@ pub fn build_language_map_by(identified_by: IdentifiedBy, languages: &HashMap<St
             .map(|name| (*name, Arc::from(*name)))
             .collect();
 
-    // Normalised once, so the two places that consult it cannot disagree about the shape of a key.
-    // A library caller sets this field directly and owes nothing about case or the leading dot, and
-    // when only one of the two lookups folded them, the mapping was applied while the run warned in
-    // the same breath that the extension had been left to the tiebreak.
+    // Normalised once, so the two places that consult it cannot disagree about the shape of a key:
+    // a library caller sets this field directly and owes nothing about case or the leading dot.
     let forced : HashMap<String, &str> = forced.iter()
             .map(|(identity, language)| (identified_by.key_of(identity), language.as_str()))
             .collect();
@@ -122,8 +115,7 @@ pub fn build_language_map_by(identified_by: IdentifiedBy, languages: &HashMap<St
             let claiming = claimants.entry(identified_by.key_of(declared)).or_default();
             // A language claiming one extension twice, as 'h' and '.h', is not a contest. Left in, it
             // becomes its own rival: the collision fires, every loser equals the winner and is
-            // filtered out, and the warning reads "claimed by Cish and ." Dropped in silence because
-            // the counts were right and there is nothing for the reader to fix.
+            // filtered out, and the warning reads "claimed by Cish and ."
             if !claiming.contains(name) {
                 claiming.push(name);
             }
@@ -143,13 +135,12 @@ pub fn build_language_map_by(identified_by: IdentifiedBy, languages: &HashMap<St
                                 .or_else(|| claimants.iter().find(|name| crate::languages::is_the_same_language_name(name, wanted))))
                         .copied());
 
-        // The winner and the mechanism that chose it are decided in one place, because deriving the
-        // second from "is there a rule for this extension" is not the same question. A rule naming a
-        // language that does not claim the extension, because it was renamed, removed or misspelled,
-        // settles nothing: the tiebreak decides, and reporting it as settled hides exactly the case
-        // this whole mechanism exists to announce.
-        // The claimants were pushed in the order the sorted names were walked, so the first of them
-        // is the alphabetical winner this has always fallen back to.
+        // The winner and the mechanism that chose it are decided in one place, because "is there a
+        // rule for this extension" is not the same question. A rule naming a language that does not
+        // claim the extension, because it was renamed, removed or misspelled, settles nothing: the
+        // tiebreak decides, and reporting it as settled hides exactly the case this whole mechanism
+        // exists to announce. The claimants were pushed in the order the sorted names were walked,
+        // so the first of them is the alphabetical winner.
         let (winner, resolved_by) = match (forced_winner, priority_winner) {
             (Some(x), _) => (x, ResolvedBy::ForceLang),
             (_, Some(x)) => (x, ResolvedBy::PriorityFile),
@@ -174,8 +165,7 @@ pub fn build_language_map_by(identified_by: IdentifiedBy, languages: &HashMap<St
     // that does not exist is not complained about here, because this runs once per kind of identity
     // and the same pair is given to every one of them: 'Languages::resolve' asks that once.
     // The shebang map is the exception: a forced extension is not an interpreter, and one unclaimed
-    // entry here would turn the probe on for a run whose languages declare no shebang at all. A pair
-    // naming an interpreter some language does claim has already won above.
+    // entry here would turn the probe on for a run whose languages declare no shebang at all.
     if identified_by != IdentifiedBy::Shebang {
         for (identity, wanted) in &forced {
             if let Some(name) = language_named(wanted) {
@@ -188,9 +178,8 @@ pub fn build_language_map_by(identified_by: IdentifiedBy, languages: &HashMap<St
     (map, report)
 }
 
-// The maps a run counts with, and the one question a file is asked. Together because the answer
-// is one answer: a file whose whole name is claimed is that language whatever its extension says,
-// which is what makes 'CMakeLists.txt' CMake rather than text.
+// A file whose whole name is claimed is that language whatever its extension says, which is what
+// makes 'CMakeLists.txt' CMake rather than text.
 #[derive(Debug, Default)]
 pub struct LanguageLookup {
     pub by_extension: HashMap<String, Arc<str>>,
@@ -200,8 +189,8 @@ pub struct LanguageLookup {
 
 impl LanguageLookup {
     pub fn of_path(&self, path: &Path) -> Option<Arc<str>> {
-        // The name is asked first and only when something claims one, so a run whose languages
-        // declare no filename pays one branch and no lookup
+        // The whole name is asked first, and only when a language claims one, so a run whose
+        // languages declare no filename pays one branch and no lookup
         if !self.by_filename.is_empty()
                 && let Some(name) = path.file_name().and_then(|x| x.to_str())
                 && let Some(language) = find_language_of_identity(&self.by_filename, name) {
@@ -255,9 +244,8 @@ pub fn find_language_of_identity(language_of: &HashMap<String, Arc<str>>, identi
     }
 
     // The buffer below is the hot path and covers every extension and filename anybody actually
-    // writes. One longer than it comes from somebody's own language file, and is worth the
-    // allocation rather than the silent miss it used to be: the file was simply never counted and
-    // nothing said so.
+    // writes. One longer than it comes from somebody's own language file and is worth the
+    // allocation: the alternative is a file that is never counted, with nothing said about it.
     if identity.len() > MAX_IDENTITY_LEN {
         return language_of.get(&identity.to_ascii_lowercase()).cloned();
     }
@@ -273,11 +261,9 @@ pub fn find_language_of_identity(language_of: &HashMap<String, Arc<str>>, identi
 
 // Searched in the sorted order the names are given in, and never through the keys of a map, whose
 // iteration order is arbitrary: two languages whose names differ only in case would otherwise
-// resolve to a different one of the two between runs of the same command.
-//
-// The exact spelling wins before case is folded, because folding first cannot be undone: with both
-// 'Rust' and 'rust' declared, naming one of them got the other, the one whose capital sorts first,
-// along with its comment symbols and without a word.
+// resolve to a different one of the two between runs of the same command. The exact spelling wins
+// before case is folded: with both 'Rust' and 'rust' declared, folding first hands back the other
+// one, whose capital sorts first, along with its comment symbols and without a word.
 pub(crate) fn find_language_named<'a>(sorted_names: &[&'a str], wanted: &str) -> Option<&'a str> {
     sorted_names.iter().find(|name| **name == wanted)
             .or_else(|| sorted_names.iter().find(|name| crate::languages::is_the_same_language_name(name, wanted)))
@@ -326,8 +312,8 @@ pub(crate) fn find_language_of_interpreter(language_of: &HashMap<String, Arc<str
             .cloned()
 }
 
-// Every spelling the interpreter lookup tries, most specific first. Shared with the fixture
-// test that mirrors the resolution, so the two cannot drift.
+// Most specific first. Shared with the fixture test that mirrors the resolution, so the two cannot
+// drift.
 pub(crate) fn interpreter_spellings(interpreter: &str) -> Vec<String> {
     let mut spellings = vec![interpreter.to_ascii_lowercase()];
     let mut candidate = interpreter;
@@ -353,8 +339,6 @@ pub(crate) fn identity_key(identified_by: IdentifiedBy, text: &str) -> String {
     identified_by.key_of(text)
 }
 
-// Every test here and in the walk is about extensions, and naming the side each time reads as though
-// the choice mattered to what is being asserted.
 #[cfg(test)]
 pub fn build_extension_language_map(languages: &HashMap<String,Language>, priority: &HashMap<String,Vec<String>>,
         forced: &HashMap<String,String>) -> (HashMap<String, Arc<str>>, IdentityReport)
@@ -368,14 +352,13 @@ mod tests {
     use crate::languages_claiming;
 
     // Three places turn an extension into a key: a language's own declaration, a '--force-language'
-    // pair, and a rule of the priority file. Only the forced one used to strip a leading dot, so a
-    // language declaring '.dot' claimed nothing and a rule written '.m' settled nothing, both in
-    // silence. The dotted form is what every editor and every other counter writes.
+    // pair, and a rule of the priority file. The dotted form is what every editor and every other
+    // counter writes, and one of the three that does not strip the dot settles nothing, in silence.
     #[test]
     fn an_extension_is_keyed_the_same_way_wherever_it_is_declared() {
         let dotted = languages_claiming(&[("Dotty", &[".dot"])]);
         let (map, _) = build_extension_language_map(&dotted, &HashMap::new(), &HashMap::new());
-        assert_eq!(Some("Dotty"), map.get("dot").map(|x| x.as_ref()),
+        assert_eq!(Some("Dotty"), map.get("dot").map(AsRef::as_ref),
                 "a language declaring '.dot' claims nothing: {map:?}");
 
         // and a rule of the priority file reaches the same key
@@ -386,14 +369,11 @@ mod tests {
 
         let contested = languages_claiming(&[("MATLAB", &["m"]), ("Objective-C", &[".m"])]);
         let (map, report) = build_extension_language_map(&contested, &rules.by_extension, &HashMap::new());
-        assert_eq!(Some("MATLAB"), map.get("m").map(|x| x.as_ref()));
+        assert_eq!(Some("MATLAB"), map.get("m").map(AsRef::as_ref));
         assert_eq!(1, report.contested.len(), "one declared with a dot and one without did not meet");
         assert_eq!(ResolvedBy::PriorityFile, report.contested[0].resolved_by);
     }
 
-    // The stack buffer is sized for every extension that exists today, and anything longer with a
-    // capital in it used to be given up on rather than lowercased, so the files were not counted
-    // and nothing said so.
     #[test]
     fn an_extension_longer_than_the_buffer_is_still_matched_case_insensitively() {
         let long = "A".repeat(MAX_IDENTITY_LEN + 6);
@@ -427,7 +407,6 @@ mod tests {
         assert!(report.collect_warnings().is_empty());
     }
 
-    // The tiebreak is the outcome nobody chose, and the only one that is announced
     #[test]
     fn a_contested_extension_falls_back_to_the_first_name_alphabetically_and_says_so() {
         let languages = languages_claiming(&[("Objective-C", &["m", "mm"]), ("MATLAB", &["m"])]);
@@ -446,12 +425,7 @@ mod tests {
                 report.collect_warnings().iter().map(|x| (x.code, x.affects().name())).collect::<Vec<_>>());
     }
 
-    // One language, two spellings of one extension, which stopped being two keys the moment the
-    // leading dot began to be stripped. The contest machinery then fired on a language against
-    // itself: the winner was filtered out of its own list of losers, leaving none, and the sentence
-    // came out as "claimed by Cish and ." filed against the counts, which were never in question.
-    // The dotted form is the one the comments here call what every editor writes, so a user moving
-    // their file over to it and leaving the bare one behind is the ordinary way in.
+    // Moving a declaration to the dotted form and leaving the bare one behind is the ordinary way in
     #[test]
     fn a_language_claiming_one_extension_twice_does_not_contest_it_with_itself() {
         let languages = languages_claiming(&[("Cish", &["h", ".h", "H"])]);
@@ -487,9 +461,8 @@ mod tests {
         assert!(report.collect_warnings().is_empty());
     }
 
-    // A rule whose every name has been renamed away, removed or misspelled settles nothing, and the
-    // tiebreak is what decides. Reporting it as settled left the user believing their rule was in
-    // force while the extension quietly went elsewhere, with nothing printed.
+    // Reporting it as settled leaves the user believing their rule is in force while the extension
+    // quietly goes elsewhere, with nothing printed
     #[test]
     fn a_priority_rule_that_names_no_claimant_falls_through_to_the_tiebreak_and_says_so() {
         let languages = languages_claiming(&[("MATLAB", &["m"]), ("Objective-C", &["m"])]);
@@ -503,7 +476,6 @@ mod tests {
         assert!(reported[0].message.contains("only because"));
     }
 
-    // A name in the priority file that no longer exists is skipped rather than left to win nothing
     #[test]
     fn the_priority_file_moves_on_to_the_next_name_when_the_first_is_not_there() {
         let languages = languages_claiming(&[("Prolog", &["pl"]), ("Raku", &["pl"])]);
@@ -520,13 +492,10 @@ mod tests {
     
         assert_eq!("Python", winner_of(&map, "txt"));
         assert_eq!("Python", winner_of(&map, "py"));
-        // nothing was contested, so there is nothing to report
         assert!(report.contested.is_empty());
     }
 
-    // A caller of the library sets the field directly and is under no obligation to lowercase its
-    // keys. When only the second of the two lookups normalised, the mapping was applied and the run
-    // warned in the same breath that the extension had been left to the alphabetical tiebreak.
+    // A caller of the library sets the field directly and is under no obligation to lowercase its keys
     #[test]
     fn a_forced_extension_is_normalised_before_it_is_looked_up() {
         let languages = languages_claiming(&[("MATLAB", &["m"]), ("Objective-C", &["m"])]);
@@ -538,8 +507,7 @@ mod tests {
         assert!(report.collect_warnings().is_empty());
     }
 
-    // The complaint about the name belongs to 'Languages::resolve', which asks it once for every map;
-    // what this map owes is that the pair changed nothing.
+    // The complaint about the name belongs to 'Languages::resolve', which asks it once for every map
     #[test]
     fn a_forced_language_that_is_not_available_changes_nothing_and_is_left_to_be_reported() {
         let languages = languages_claiming(&[("Python", &["py"])]);
@@ -551,9 +519,6 @@ mod tests {
         assert!(report.collect_warnings().is_empty());
     }
 
-    // Two spellings of one extension are one extension, and they have to collide as one. Left as
-    // they were written they would look like two, would never be found to contest anything, and
-    // would each quietly win in the files that happened to be spelled their way.
     #[test]
     fn extensions_are_matched_without_case_and_contest_each_other_across_it() {
         let languages = languages_claiming(&[("Zig", &["ZIG"]), ("Ziggy", &["zig"])]);
@@ -620,11 +585,9 @@ mod tests {
         }
     }
 
-    // A declared 'python' answers for 'python3' and 'python3.12' without every version being
-    // enumerated, and the exact match goes first so 'perl6', which is Raku and not a Perl
-    // version, goes where it was declared.
+    // 'perl6' is Raku and not a version of Perl, which is why the exact match goes first
     #[test]
-    fn a_versioned_interpreter_falls_back_to_its_declared_name_and_an_exact_claim_wins_first() {
+    fn a_versioned_interpreter_falls_back_to_the_most_specific_spelling_declared() {
         let root = std::env::temp_dir().join("mezura_shebang_versions_test");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
@@ -633,13 +596,16 @@ mod tests {
             std::fs::write(&path, format!("{first_line}\nbody\n")).unwrap();
             path
         };
-        let lookup = shebang_lookup(&[("Python", &["python"]), ("Perl", &["perl"]),
-                ("Raku", &["perl6"]), ("R", &["Rscript"])]);
+        // Both 'python' and 'python3' are declared, which is what tells a trim of one version
+        // segment at a time apart from a trim straight back to the bare name.
+        let lookup = shebang_lookup(&[("OldPython", &["python"]), ("NewPython", &["python3"]),
+                ("Perl", &["perl"]), ("Raku", &["perl6"]), ("R", &["Rscript"])]);
 
-        assert_eq!(Some("Python"), lookup.of_shebang(&script("versioned", "#!/usr/bin/python3.12")).as_deref());
-        assert_eq!(Some("Python"), lookup.of_shebang(&script("enved", "#!/usr/bin/env python3")).as_deref());
-        assert_eq!(Some("Raku"), lookup.of_shebang(&script("raku", "#!/usr/bin/perl6")).as_deref());
-        assert_eq!(Some("Perl"), lookup.of_shebang(&script("versioned-perl", "#!/usr/bin/perl5.36")).as_deref());
+        assert_eq!(Some("NewPython"), lookup.of_shebang(&script("py312", "#!/usr/bin/python3.12")).as_deref());
+        assert_eq!(Some("OldPython"), lookup.of_shebang(&script("py27", "#!/usr/bin/python2.7")).as_deref());
+        assert_eq!(Some("NewPython"), lookup.of_shebang(&script("enved", "#!/usr/bin/env python3")).as_deref());
+        assert_eq!(Some("Raku"), lookup.of_shebang(&script("raku", "#!/usr/bin/perl6.0.0")).as_deref());
+        assert_eq!(Some("Perl"), lookup.of_shebang(&script("perl", "#!/usr/bin/perl5.36.0")).as_deref());
         // matched the way every other identity is, without case
         assert_eq!(Some("R"), lookup.of_shebang(&script("rscript", "#!/usr/bin/env Rscript")).as_deref());
         // an interpreter that is nothing but digits after the trim is not a match for everything
@@ -648,32 +614,6 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
-    // The trim walks back one version segment at a time, so the most specific declared spelling
-    // wins: in one step, 'python3.12' jumped straight to 'python' past a declared 'python3',
-    // and 'perl6.0.0' turned a Raku script into Perl.
-    #[test]
-    fn the_version_fallback_stops_at_the_most_specific_declared_spelling() {
-        let root = std::env::temp_dir().join("mezura_shebang_segments_test");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        let script = |name: &str, first_line: &str| {
-            let path = root.join(name);
-            std::fs::write(&path, format!("{first_line}\nbody\n")).unwrap();
-            path
-        };
-        let lookup = shebang_lookup(&[("OldPython", &["python"]), ("NewPython", &["python3"]),
-                ("Perl", &["perl"]), ("Raku", &["perl6"])]);
-
-        assert_eq!(Some("NewPython"), lookup.of_shebang(&script("py312", "#!/usr/bin/python3.12")).as_deref());
-        assert_eq!(Some("OldPython"), lookup.of_shebang(&script("py27", "#!/usr/bin/python2.7")).as_deref());
-        assert_eq!(Some("Raku"), lookup.of_shebang(&script("raku", "#!/usr/bin/perl6.0.0")).as_deref());
-        assert_eq!(Some("Perl"), lookup.of_shebang(&script("perl", "#!/usr/bin/perl5.36.0")).as_deref());
-
-        std::fs::remove_dir_all(&root).unwrap();
-    }
-
-    // A first line longer than the probe's window arrives cut, and a cut word is not an
-    // interpreter: 'rubyfmt' cut at 'ruby' counted as Ruby until this was guarded.
     #[test]
     fn a_first_line_longer_than_the_probe_window_never_matches_a_cut_word() {
         let root = std::env::temp_dir().join("mezura_shebang_cut_test");
@@ -702,9 +642,6 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
-    // A forced pair whose identity nothing claims lands in the extension and filename maps and
-    // deliberately not in the shebang one: there it would turn the probe on for a run whose
-    // languages declare no shebang at all, and let an extension spelling answer as an interpreter.
     #[test]
     fn a_forced_pair_nothing_claims_stays_out_of_the_shebang_map() {
         let languages = languages_claiming(&[("Rust", &["rs"])]);
@@ -719,12 +656,10 @@ mod tests {
                 .collect();
         let forced = hashmap!("sh".to_owned() => "bsh".to_owned());
         let (map, report) = build_language_map_by(IdentifiedBy::Shebang, &contested, &HashMap::new(), &forced);
-        assert_eq!(Some("Bsh"), map.get("sh").map(|x| x.as_ref()));
+        assert_eq!(Some("Bsh"), map.get("sh").map(AsRef::as_ref));
         assert_eq!(ResolvedBy::ForceLang, report.contested[0].resolved_by);
     }
 
-    // The probe's bound is the whole of its cost: only a file with no extension at all is ever
-    // opened, whatever its first line would have said.
     #[test]
     fn only_an_extensionless_file_is_probed_and_a_probe_that_finds_nothing_claims_nothing() {
         let root = std::env::temp_dir().join("mezura_shebang_probe_test");

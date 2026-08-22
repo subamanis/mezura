@@ -42,9 +42,9 @@ use crossbeam_deque::{Injector, Worker};
 use engine::modules::{ModuleId, Modules};
 
 // The file that decides which language gets an extension that two of them claim. Nothing here reads
-// or writes it: the command line creates it in the user's data directory and parses it, and hands
-// the rules in as a plain map. The name lives here because the warning about an unsettled extension
-// is written here and points the reader at the file.
+// or writes it: the command line creates it in the user's data directory, parses it, and hands the
+// rules in as a plain map. The name lives here because the warning about an unsettled extension is
+// written here and points the reader at the file.
 pub const EXTENSION_PRIORITY_FILE_NAME : &str = "extension_priority.txt";
 // The name of the report row holding everything no target was given a name for. Not the directory's
 // own name, which would claim files that a named target has already taken out of it.
@@ -60,33 +60,33 @@ pub(crate) type FilesPerModuleMut = Arc<Mutex<Vec<HashMap<String, Vec<FileEntry>
 
 // Counts the directories and files named in 'config' and returns the figures.
 //
-// 'languages' has to have been resolved against this same 'config'. Resolving is what applies the
-// chosen and excluded languages and the forced extensions, so an ill-matched pair would count one
-// set of languages while the settings say another: no error, just wrong numbers. The run refuses
-// such a pair instead of answering it.
+// 'languages' has to have been resolved against this same 'config', and the run refuses the pair
+// otherwise: resolving is what applies the chosen and excluded languages and the forced extensions,
+// so an ill-matched pair would count one set of languages while the settings say another.
+pub fn run(config: &EngineConfig, languages: Languages) -> Result<RunResult, RunError> {
+    run_watched(config, languages, None, |_| {})
+}
+
+// The same run, for a caller drawing it as it happens.
 //
-// 'progress' is watched while the call blocks: the run moves its counters as files are found and
-// parsed, so a thread of the caller's can draw them. Pass 'None' when nobody is watching.
+// 'progress' is moved as files are found and parsed, so a thread of the caller's can draw the
+// counters while this one blocks.
 //
-// 'on_traversal_done' is called once, as soon as the directories have been scanned, and is told how
-// many files were found. The counting of those files is still going on at that point, which is why
-// this is a callback: afterwards there is no way to know what was found before the counting ended.
-// It is called on every run that returns 'Ok', including one that found nothing to count. It is not
-// called when one of the scanning threads died, because the figures such a run leaves behind are
-// lower than what is really on disk. Pass '|_| {}' to ignore it.
-pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<ScanProgress>>,
+// 'on_traversal_done' is called once, as soon as the directories have been scanned, with the files
+// found; the counting of those files is still going on at that point. It is called on every run
+// that returns 'Ok', including one that found nothing, and never on a run whose scanning thread
+// died, because the figures such a run leaves behind are lower than what is really on disk.
+pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option<Arc<ScanProgress>>,
         on_traversal_done: impl FnOnce(FilesPresent)) -> Result<RunResult, RunError>
 {
     let progress = progress.unwrap_or_default();
-    // Guarded rather than called on each return: 'run' refuses in six places before the walk ever
-    // starts, and a watcher of the public flag must see it rise on every one of them, including
-    // the seventh that will be added without remembering this.
+    // Guarded rather than raised on each return: 'run' refuses in six places before the walk ever
+    // starts, and a watcher of the public flag must see it rise on every one of them.
     let _walk_ends = WalkDoneGuard(progress.clone());
     if config.targets.is_empty() {
         return Err(RunError::NoTargets);
     }
-    // Checked before anything is read from disk. Left to run, this pair would produce counts that
-    // look perfectly normal and are for a different set of languages than the settings describe.
+    // Checked before anything is read from disk.
     if !languages.describe_the_same_selection_as(config) {
         return Err(RunError::LanguagesFromAnotherConfig);
     }
@@ -115,9 +115,8 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
     let exclude_matcher = Arc::new(engine::targets::build_exclude_matcher(&config.exclude_dirs)
             .map_err(|_| {
                 // The builder rewrites every pattern into a longer form before compiling it, and its
-                // error quotes that rewritten text, which the user never typed. Trying the patterns
-                // one at a time finds which of them is the broken one, so the error can quote it as
-                // it was written.
+                // error quotes that rewritten text, which the user never typed. Trying them one at a
+                // time finds the broken one, so the error can quote it as it was written.
                 let culprit = config.exclude_dirs.iter()
                         .find(|x| engine::targets::build_exclude_matcher(std::slice::from_ref(x)).is_err())
                         .cloned().unwrap_or_default();
@@ -182,6 +181,9 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
     for handle in producer_handles {
         let _ = handle.join();
     }
+    // After the join and not before it, which reads as the more accurate place: a watcher starts
+    // timing the counting the moment this flag rises, and only here is nothing else left competing
+    // for the cores. Raised earlier, the pace it measures comes out low.
     progress.mark_walk_done();
     let producers_done_millis = parsing_started_instant.elapsed().as_millis();
 
@@ -189,11 +191,10 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
 
     finish_condition_ref.store(true,Ordering::Relaxed);
 
-    // **The callback goes below the flag above and never above it.** It is the caller's code, it may
+    // The callback goes below the flag above and never above it. It is the caller's code, it may
     // panic, and a panic here unwinds past the joins with the consumers still running: they leave
     // their loop only on that flag, so raising it first is what lets them finish instead of spinning
-    // forever. Measured with 16 consumers: raised first, the process is idle a moment later; raised
-    // after, 20 threads were still burning ten seconds on.
+    // forever.
     //
     // A producer that died merged none of its share, so these counters are short of what is on disk
     // and the run is about to refuse them anyway. Announcing them would put a number on screen that
@@ -256,7 +257,6 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
     remove_languages_with_0_files(&mut per_language);
     let total = Stats::total_of(&per_language);
 
-    // The decomposition across every module, summed the same way the rows are
     let mut nested_languages: HashMap<String, HashMap<String, Stats>> = HashMap::new();
     for bucket in nested_by_module.iter() {
         for (shell_name, sections) in bucket {
@@ -361,7 +361,7 @@ pub(crate) struct ParsableFile {
     pub language_name: Arc<str>,
     pub module: ModuleId,
     // Named as a target rather than found by the walk, which is what exempts it from every rule
-    // that skips a file: the ignore files, the dotted names, and the two kinds of skipping below
+    // that skips a file: the ignore files, the dotted names, and being minified or generated
     pub written_by_hand: bool
 }
 
@@ -493,8 +493,6 @@ impl GitignoreStack {
     }
 }
 
-// The per-language figures of every module added together, which is what a question about the whole
-// run reads.
 fn merge_over_modules(per_module: &[HashMap<String,Stats>]) -> HashMap<String,Stats> {
     let mut merged = per_module[0].clone();
     for of_a_module in &per_module[1..] {
@@ -522,9 +520,8 @@ pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
 mod tests {
     use super::*;
 
-    // The merge that ends a consumer reaches into these maps and unwraps, so a language or a module
-    // that was never given an entry would kill the thread rather than miscount. Asserted here and
-    // not through a run, since a result has had the empty languages removed from it by then.
+    // Asserted here and not through a run, since a result has had the empty languages removed from
+    // it by then.
     #[test]
     fn every_language_gets_a_bucket_in_every_module() {
         let languages = languages_claiming(&[("Rust", &["rs"]), ("Go", &["go"]), ("Zig", &["zig"])]);
@@ -543,9 +540,6 @@ mod tests {
         }
     }
 
-    // The total is the same measurement summed, in the same type, which is the whole point of there
-    // being one. The two derived figures are methods and not stored, so they cannot drift from what
-    // they are derived from, and the keywords add up now where the totals used to carry none.
     #[test]
     fn the_total_is_the_languages_added_together() {
         let counted = |code, comments| LineClasses {
@@ -562,26 +556,22 @@ mod tests {
         assert_eq!(4000, total.lines);
         assert_eq!(3000, total.calculate_code_lines(CountingModel::Content));
         assert_eq!(200, total.calculate_comment_lines(CountingModel::Content));
-        // what is neither code nor comment, worked out and not stored
         assert_eq!(800, total.calculate_extra_lines(CountingModel::Content));
         assert_eq!(5000, total.calculate_average_size());
-        // 'classes' exists in two of the three, which is the question the totals could not answer
-        // at all before: they carried no keywords.
+        // 'classes' is declared by two of the three, so its total is 7 + 2
         assert_eq!(Some(&9), total.keyword_occurences.get("classes"));
         assert_eq!(Some(&5), total.keyword_occurences.get("structs"));
 
-        // and nothing to add up is a total of nothing. 'average_size' over no files is 'domain's
-        // own question and is asserted there.
+        // nothing to add up is a total of nothing; 'average_size' over no files is asserted in 'domain'
         assert_eq!(0, Stats::total_of(&HashMap::new()).files);
     }
 }
 
 // What 'run' owes its caller when a worker thread dies: an error, never a number it knows is short.
-// A worker merges its counters at the end, so one that dies mid-run takes its share of the counting
-// with it. The two hooks that cause the deaths fire on the corpus names used here and on nothing else.
+// The two hooks that cause the deaths fire on the corpus names used here and on nothing else.
 #[cfg(test)]
 mod worker_death_tests {
-    use crate::{EngineConfig, Languages, RunError, run};
+    use crate::{EngineConfig, Languages, RunError, run, run_watched};
 
     fn corpus(name: &str) -> (std::path::PathBuf, EngineConfig) {
         let root = std::env::temp_dir().join(name);
@@ -604,10 +594,10 @@ mod worker_death_tests {
     fn a_dead_consumer_is_an_error_and_not_a_short_count() {
         let (root, config) = corpus("mezura-dead-consumer");
 
-        let err = run(&config, languages_for(&config), None, |_| {});
+        let err = run(&config, languages_for(&config));
         std::fs::remove_dir_all(&root).unwrap();
         let (clean_root, clean_config) = corpus("mezura-alive-consumer");
-        let clean = run(&clean_config, languages_for(&clean_config), None, |_| {});
+        let clean = run(&clean_config, languages_for(&clean_config));
         std::fs::remove_dir_all(&clean_root).unwrap();
 
         let err = err.expect_err("a consumer died and run returned a result anyway");
@@ -621,10 +611,10 @@ mod worker_death_tests {
     fn a_dead_producer_is_an_error_and_the_run_still_terminates() {
         let (root, config) = corpus("mezura-dead-producer");
 
-        let err = run(&config, languages_for(&config), None, |_| {});
+        let err = run(&config, languages_for(&config));
         std::fs::remove_dir_all(&root).unwrap();
         let (clean_root, clean_config) = corpus("mezura-alive-producer");
-        let clean = run(&clean_config, languages_for(&clean_config), None, |_| {});
+        let clean = run(&clean_config, languages_for(&clean_config));
         std::fs::remove_dir_all(&clean_root).unwrap();
 
         let err = err.expect_err("a producer died and run returned a result anyway");
@@ -635,41 +625,33 @@ mod worker_death_tests {
 
     // A dead producer takes its share of the walk with it and merges nothing, so the counters left
     // behind are short. The announcement fires before the guard that turns the death into an error,
-    // which is what it is for, so it is the one thing that could put a wrong number on the screen a
-    // moment before the run refuses it. Measured on a tree of 60 with one of two producers dying: it
-    // announced 30 and then errored.
+    // so it is the one thing that could put a wrong number on the screen a moment before the run
+    // refuses it.
     #[test]
     fn a_walk_whose_own_thread_died_is_never_announced() {
         let (root, config) = corpus("mezura-dead-producer-announce");
         let mut announced = Vec::new();
-        let outcome = run(&config, languages_for(&config), None, |scan| announced.push(scan));
+        let outcome = run_watched(&config, languages_for(&config), None, |scan| announced.push(scan));
         std::fs::remove_dir_all(&root).unwrap();
 
         // the hook answers to 'mezura-dead-producer' as a prefix, so this corpus dies the same way
         assert!(matches!(&outcome, Err(RunError::IncompleteRun { .. })), "got: {outcome:?}");
         assert!(announced.is_empty(), "a walk that lost a thread was announced anyway: {announced:?}");
 
-        // and the same run with every thread intact does announce, so the guard above is the
-        // difference and not some other reason nothing was said
+        // the same run with every thread intact does announce, so the guard is the difference
         let (clean_root, clean_config) = corpus("mezura-alive-producer-announce");
         let mut announced = Vec::new();
-        let clean = run(&clean_config, languages_for(&clean_config), None, |scan| announced.push(scan));
+        let clean = run_watched(&clean_config, languages_for(&clean_config), None, |scan| announced.push(scan));
         std::fs::remove_dir_all(&clean_root).unwrap();
         assert_eq!(1, clean.unwrap().total.files);
         assert_eq!(1, announced.len(), "an intact walk was not announced");
     }
 
-    // The other half of what a run reports as its duration, and the half that was wrong. The
-    // integration test beside this one holds that a slow callback is not charged to the counting,
-    // and it can only see the case where the callback is the last thing running: twenty tiny files
-    // are consumed long before its sleep is over. The fix that answered it subtracted the callback's
-    // elapsed time from the clock, which is right in exactly that case and wrong in the other one.
-    //
-    // Here the counting outlasts the callback, which is what every run over a real tree looks like.
-    // The callback delayed nothing, so nothing should come off the figure. Ten files at forty
-    // milliseconds through one consumer is four hundred milliseconds of counting under a callback
-    // that sleeps a hundred and fifty: subtracting gives two hundred and fifty, and the rate the
-    // command line prints from it is a third too high.
+    // The integration test beside this one only reaches the case where the callback is the last
+    // thing running. Here the counting outlasts it, which is what every run over a real tree looks
+    // like, so nothing should come off the figure: ten files at forty milliseconds through one
+    // consumer is four hundred milliseconds of counting under a callback that sleeps a hundred and
+    // fifty.
     #[test]
     fn a_callback_that_finishes_before_the_counting_takes_nothing_off_the_duration() {
         const SLEPT_PER_FILE : u128 = 40;
@@ -689,7 +671,8 @@ mod worker_death_tests {
             ..EngineConfig::new([root.to_string_lossy().replace('\\', "/")])
         };
 
-        let counted = run(&config, languages_for(&config), None, |_| std::thread::sleep(callback_holds)).unwrap();
+        let counted = run_watched(&config, languages_for(&config), None,
+                |_| std::thread::sleep(callback_holds)).unwrap();
         std::fs::remove_dir_all(&root).unwrap();
 
         assert_eq!(FILES as usize, counted.total.files);

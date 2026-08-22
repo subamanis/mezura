@@ -25,12 +25,11 @@ pub struct RunResult {
     pub files_present: FilesPresent,
     pub performance: Performance,
     // The places actually visited: the targets as given, resolved, with every pattern expanded to
-    // what it matched at that moment. What a log or a document records to say "these two runs
-    // measured the same thing", since the same './src' over two different trees is two different
-    // measurements and a pattern's matches change while its text does not.
+    // what it matched at that moment. A pattern's matches change while its text does not, which is
+    // what a log or a document needs to say that two runs measured the same thing.
     pub targets: Vec<Target>,
     // Directories that could not be opened, so everything inside them is missing from every number
-    // above. Empty on an ordinary run, and the one thing that says the counts are short.
+    // above.
     pub unreadable_dirs: Vec<UnreadableDirDetails>
 }
 
@@ -47,7 +46,7 @@ impl RunResult {
     }
 
     // Files were found and no row came out of them, by any mixture of failing to parse and being
-    // left out as minified or generated. A report drawn from this is a table with nothing in it.
+    // left out as minified or generated.
     pub fn nothing_of_interest_was_counted(&self) -> bool {
         self.files_present.relevant_files > 0 && self.total.files == 0
     }
@@ -64,9 +63,6 @@ impl RunResult {
         self.modules.iter().any(|x| x.name.is_some())
     }
 
-    // Nothing of interest was found, which is an answer and not a failure: the counts are zero and
-    // the file numbers still say how many were looked at and how many were excluded.
-    //
     // The modules are built even here. One that found nothing was still asked for by name, and
     // leaving it out would make 'has_modules' say no and take the whole block out of the document
     // exactly when the scan came back empty.
@@ -138,8 +134,7 @@ pub struct FilesPresent {
     pub excluded_files: usize
 }
 
-// Which figure decides the order of a report's rows. Here rather than in whatever draws one, because
-// every consumer of a result sorts it and there is one sensible way to break a tie.
+// Which figure decides the order of a report's rows.
 #[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
 pub enum SortCriterion {
     Files,
@@ -156,9 +151,7 @@ pub enum SortCriterion {
 }
 
 impl SortCriterion {
-    // The spelling a person types and the one a configuration file stores are the same word. Kept
-    // with the enum so that the name a run was sorted by can be written into a log or a document
-    // without copying the vocabulary out.
+    // The spelling a person types and the one a configuration file stores are the same word.
     pub fn parse(value: &str) -> Option<SortCriterion> {
         match value.trim().to_lowercase().as_str() {
             "files" => Some(Self::Files),
@@ -220,8 +213,6 @@ impl FaultyFileDetails {
     }
 }
 
-// The reason belongs beside the path because a permission and a directory deleted mid-scan send the
-// reader to different places, and on a whole drive there are hundreds of these.
 #[derive(Debug,Clone)]
 #[non_exhaustive]
 pub struct UnreadableDirDetails {
@@ -230,8 +221,7 @@ pub struct UnreadableDirDetails {
 }
 
 impl UnreadableDirDetails {
-    // Both types here are non-exhaustive, so a crate outside this one cannot build them field by
-    // field and needs a constructor.
+    // Non-exhaustive, so a crate outside this one cannot build it field by field.
     pub fn new(path: String, error_msg: String) -> Self {
         UnreadableDirDetails {
             path,
@@ -245,17 +235,15 @@ impl UnreadableDirDetails {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum RunError {
-    // Nowhere to look is a malformed question, not an empty answer. The command line cannot ask it,
-    // since a bare run falls back to the working directory; a caller that built a configuration with
-    // no directories almost certainly forgot them, and an Ok full of zeros would dress that up as a
-    // measurement.
+    // Nowhere to look is a malformed question, not an empty answer, and an Ok full of zeros would
+    // dress it up as a measurement. The command line cannot ask it, since a bare run falls back to
+    // the working directory.
     NoTargets,
     // The languages were resolved against a configuration that selects a different set from the one
-    // handed to the run. Refused rather than counted, because the answer would look exactly like the
-    // answer to the question that was asked: resolving with a configuration naming Rust and then
-    // running with one naming Python counted Rust and said nothing. Only the three fields resolution
-    // reads are compared, with case and order folded, so resolving once and counting several
-    // directories is untouched.
+    // handed to the run. Refused rather than counted: resolving with a configuration naming Rust and
+    // then counting with one naming Python counts Rust, calls it Rust, and looks like an answer.
+    // Only the three fields resolution reads are compared, with case and order folded, so resolving
+    // once and counting several directories is untouched.
     LanguagesFromAnotherConfig,
     // The targets could not be turned into places to visit: a path that names nothing, a pattern
     // that does not parse or matches nothing, or one place given under two names.
@@ -264,13 +252,11 @@ pub enum RunError {
     InvalidExcludePattern(String),
     // The operating system refused every thread of one side. Refusing some but not all is not an
     // error: fewer threads is the same answer arriving slower. Zero is different, because zero
-    // scanning threads find nothing and zero counting threads count nothing, and either would dress
-    // a non-answer up as an empty one.
+    // scanning threads find nothing and zero counting threads count nothing.
     NoThreadsAvailable { side: &'static str, error: std::io::Error },
     // A worker died mid-run. Each merges its share of the counting at the end, so whatever it had
-    // done is lost with it, and a number known to be short is never returned as an answer. The
-    // panic's message travels here; its location already reached the error output through the panic
-    // hook, at the moment it happened.
+    // done is lost with it. The panic's message travels here; its location already reached the error
+    // output through the panic hook, at the moment it happened.
     IncompleteRun { worker_panic: String }
 }
 
@@ -297,8 +283,7 @@ impl std::error::Error for RunError {
 }
 
 // On the type from 'domain.rs' but about results, which is why it is here: adding languages together
-// is what the last row of a report holds. The keywords add up with the rest, so "how many classes are
-// in this project" has an answer across the several languages that have them.
+// is what the last row of a report holds.
 impl Stats {
     pub fn total_of(languages: &HashMap<String, Stats>) -> Self {
         let mut total = Stats::default();
@@ -309,7 +294,6 @@ impl Stats {
     }
 }
 
-// Shared by the whole run and by one module of it, which are the same question asked of two maps.
 fn sort_languages_by(per_language: &HashMap<String, Stats>, criterion: SortCriterion,
     model: CountingModel) -> Vec<(&str, &Stats)>
 {
@@ -335,16 +319,12 @@ mod tests {
         let unreadable = unreadable.iter().map(|path| UnreadableDirDetails {
             path: (*path).to_owned(), error_msg: "Access is denied. (os error 5)".to_owned()
         }).collect();
-        let mut result = RunResult::of_nothing(
+        RunResult::of_nothing(
                 FilesPresent { total_files: relevant, relevant_files: relevant, excluded_files: 0 },
                 Performance { duration_millis: 0, threads: Threads::new(1, 1) },
-                &Modules::of(&[]), Vec::new(), unreadable);
-        result.files_present.relevant_files = relevant;
-        result
+                &Modules::of(&[]), Vec::new(), unreadable)
     }
 
-    // An empty readable tree is an answer, an empty scan that failed to open something is not, and
-    // finding files makes the question moot.
     #[test]
     fn an_empty_scan_is_suspect_only_when_something_was_unreadable() {
         assert!(!result_with(0, &[]).nothing_could_be_read());

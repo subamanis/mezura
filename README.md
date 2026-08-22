@@ -76,12 +76,12 @@ The program, at compile time, includes the "data" folder in the binary, and duri
     MacOs:    /Users/$USER/Library/Application Support/mezura
 ```
 
-The languages, themes, configurations and logs are then read from those folders, on that first execution as much as on every one after it, so the user can have easy access and modify them,
-like add more languages of his choice, add custom themes, or modify the default configuration.
+The languages, themes, configurations and logs are then read from those folders, on that first execution as much as on every one after it, so you can reach them and change them:
+add languages of your own, add themes, or edit the default configuration.
 
 Installing a new version updates the language files there, so a correction to a language reaches you without you having to do anything. One that you changed yourself is replaced too, since a language file that has fallen behind counts wrongly, but your copy is kept under ```data/replaced/<version>/<date and time>/``` and the program names it, so you can carry your changes over. Each update or ```--restore``` writes its own folder there, so two of them never mix and the newest is the one at the bottom. A language file of your own is never touched, and neither are your themes, your default configuration or ```extension_priority.txt```: those are written when they are absent and left alone afterwards.
 
-In order for a file to be considered for counting, some language file in the "data/languages" dir must claim it, either by its extension or by its whole name, in the 'Extensions' or 'Filenames' field, see [Supported Languages](#supported-languages). A file with no extension and a name nothing claims gets one more chance: its first line is read, and if it is a ```#!``` line naming an interpreter some language claims in its 'Shebangs' field, the file is counted as that language, which is how a ```deploy``` or ```configure``` script is counted instead of silently skipped. The interpreter is found past ```/usr/bin/env``` and its flags, and a versioned name falls back to its plain one, so ```#!/usr/bin/env python3.12``` counts as Python.
+For a file to be counted, some language file in the "data/languages" directory must claim it, either by its extension or by its whole name, in the 'Extensions' or 'Filenames' field, see [Supported Languages](#supported-languages). A file with no extension and a name nothing claims gets one more chance: its first line is read, and if it is a ```#!``` line naming an interpreter some language claims in its 'Shebangs' field, the file is counted as that language, which is how a ```deploy``` or ```configure``` script is counted instead of silently skipped. The interpreter is found past ```/usr/bin/env``` and its flags, and a versioned name falls back to its plain one, so ```#!/usr/bin/env python3.12``` counts as Python.
 
 
 ## Cmd Commands
@@ -96,8 +96,8 @@ WHAT IS COUNTED
     '--targets <path1>, <path2>'
 
     A path can be a glob pattern (* ? [..] {..}), so 'services/*/src' is a target. A path that
-    exists exactly as written is taken literally, so a folder named with one of those characters
-    is still a folder. A target inside another target is dropped, so nothing is counted twice.
+    exists exactly as written is taken literally, so a directory named with one of those characters
+    is still a directory. A target inside another target is dropped, so nothing is counted twice.
 
     A path you write out is always counted, even if it is ignored, dotted, a link, minified or
     generated. The matches of a pattern were found by mezura rather than named by you, so those
@@ -154,7 +154,7 @@ WHAT IS COUNTED
 
     1..n glob patterns separated by commas.
 
-    A pattern without a slash matches a file or folder name at any depth ('node_modules', '*.min.js').
+    A pattern without a slash matches a file or directory name at any depth ('node_modules', '*.min.js').
     A pattern with slashes matches the end of the full path, anchored at path components
     ('Rusty/mezura' matches '.../Rusty/mezura' but not '.../aRusty/mezura'). Full absolute
     paths work too. Glob syntax is supported in both forms: * ? [..] {..}
@@ -170,7 +170,7 @@ WHAT IS COUNTED
 
     1..n arguments separated by commas, case-insensitive
 
-    A language is named either by the name a file in the 'data/languages/' dir gives it under
+    A language is named either by the name a file in the 'data/languages/' directory gives it under
     'Language', or by any extension it claims, so 'javascript' and 'js' name the same one.
 
     An extension that two languages claim names whichever of them owns it for this run, which is
@@ -181,7 +181,7 @@ WHAT IS COUNTED
 
     1..n arguments separated by commas, case-insensitive
 
-    A language is named either by the name a file in the 'data/languages/' dir gives it under
+    A language is named either by the name a file in the 'data/languages/' directory gives it under
     'Language', or by any extension it claims, so 'javascript' and 'js' name the same one.
 
     A name that nothing in the scan answers to is reported as having changed nothing, and the run
@@ -197,7 +197,7 @@ WHAT IS COUNTED
     A whole filename works the same way, for the files that have no extension worth reading:
     '--force-language Makefile=python,Jenkinsfile=groovy'
 
-    Overrides the 'extension_priority.txt' file of the data dir.
+    Overrides the 'extension_priority.txt' file of the data directory.
 
 --no-gitignore
     count the files a .gitignore ignores
@@ -354,14 +354,15 @@ HOW THE REPORT LOOKS
     What you can hide:
 
       version         the version line at the top
-      directory-info  the 'Analyzing directories' line and the 'N files found' line under it
+      directory-info  the 'Analyzing targets' line and the 'N files found' line under it
       parsing-info    the 'Parsing files' line and the 'ok' under it
       progress-bar    the bar, the share done and the speed figures of a long parse, keeping
                       its file count
       animations      every moving line: the scan's dots, the live progress bar and the working
                       lines of a '--diff'. What they settle into still prints, and a TERM=dumb
                       terminal hides them on its own
-      keywords        the keyword counts, keeping the rest of the details rows
+      keywords        the keyword counts, keeping the rest of the details rows. This one also
+                      stops them being counted, so it is the only name here that makes a run faster
       nested-languages  the rows that break a container file down, so a '.vue' weighs whole on
                       the Vue row with no sign of the TypeScript and CSS inside it
       overview        the whole percentages section
@@ -405,7 +406,7 @@ HOW THE REPORT LOOKS
     A name that matches no file is an error, since that one is a mistake in the command.
 
 --style
-    override the colour and attributes of one kind of printed text
+    override the color and attributes of one kind of printed text
 
     One or more 'token=style' pairs separated by commas, for example:
     --style code-number=bright-black,code-label=b5a98a italic,heading=white bold underline
@@ -417,8 +418,8 @@ HOW THE REPORT LOOKS
 
     The cells of the live progress bar take two forms no other token does: hex values separated
     by '..' fill them with an even gradient, and 'rainbow' walks a spectrum along them. A gradient
-    needs hex values, since a colour name has no shade to interpolate. Every other token takes one
-    colour and says so if given either form.
+    needs hex values, since a color name has no shade to interpolate. Every other token takes one
+    color and says so if given either form.
 
     Every counted quantity has two tokens, one for the figure and one for the word beside it:
 
@@ -435,7 +436,7 @@ HOW THE REPORT LOOKS
 
     The page:
       version                  the version line at the top
-      heading                  the section titles and the 'Analyzing directories' lines
+      heading                  the section titles and the 'Analyzing targets' lines
       separator-total          the line above the total
       separator-header         the line under the column titles of the two tables
       summary                  the found / of interest / excluded line
@@ -473,11 +474,11 @@ HOW THE REPORT LOOKS
       explain-detail           the class name on a verdict row
 
     The overview:
-      overview-label           the 'Files:', 'Lines:' and 'Size :' row labels
+      overview-label           the 'Files:', 'Lines:' and 'Size:' row labels
       overview-percent         the percentages of the overview
       bar-frame                the brackets around the overview bar and the live one
       language-1 language-2 language-3 language-4
-                               each language of the bar, its name and the colour of its cells.
+                               each language of the bar, its name and the color of its cells.
                                The fourth shows only when nothing was folded into 'others'
       language-others          the folded 'others' entry, which falls back to 'language-4'
                                where a theme names that one and not this
@@ -568,12 +569,12 @@ HOW THE REPORT LOOKS
     The optional argument is a '--bar-thickness' for the preview bar.
 
 --theme-editor
-    open a page for tuning the language colours of every theme, and stop
+    open a page for tuning the language colors of every theme, and stop
 
     No arguments.
 
-    Writes an HTML page carrying the language colours of every theme in your 'data/themes'
-    directory, opens it in your browser, and counts nothing. Every colour can be moved there,
+    Writes an HTML page carrying the language colors of every theme in your 'data/themes'
+    directory, opens it in your browser, and counts nothing. Every color can be moved there,
     against a live contrast reading and a mock overview drawn with the bar character the program
     prints, and the page hands back the five 'language-' lines to paste into a theme file.
 
@@ -591,7 +592,7 @@ TAKING THE RESULT ELSEWHERE
       mezura ./src --output json | jq '.total.code'
 
     The counts are plain numbers of lines and bytes, with no thousands separators, no KB or MB,
-    no percentages and no colours, whatever the other settings say. '--sort' and '--top' still
+    no percentages and no colors, whatever the other settings say. '--sort' and '--top' still
     order and cut the languages, and the count of the ones left out is in the document. Of the
     '--hide' list only 'keywords' and 'timing' apply, since the rest name printed sections a JSON
     run does not have.
@@ -744,7 +745,7 @@ YOUR DATA DIRECTORY
 
     A language file you changed is replaced too, since one that has fallen behind counts wrongly,
     but your copy is saved under 'data/replaced/<version>/<date and time>/' so you can carry your
-    changes over, a fresh folder per run. A language file of your own is never touched, and
+    changes over, a fresh directory per run. A language file of your own is never touched, and
     neither are your themes or your default configuration: those are written when absent and left
     alone.
 
@@ -875,9 +876,10 @@ meaning, so a parser can check that one and ignore which build wrote the file.
 directory the scan could not open, whose whole contents are therefore missing from every number in
 the document. Both are arrays of objects carrying the path and the reason, so a permission is told
 apart from a directory that was deleted while the scan was running. Both are empty on an ordinary
-run, and either being non-empty means the counts are short by something the document names. Both are always written in full, whether or
-not `--show-faulty-files` was given: that flag is a decision about how much to print on a terminal,
-and two runs over the same code have to produce the same document.
+run, and either being non-empty means the counts are short by something the document names. Both
+carry their paths only when `--show-faulty-files` is given. How many there were is in the `scan`
+block either way, as `files_faulty` and `dirs_unreadable`, so a document without the lists never
+claims that nothing went wrong.
 
 `warnings` carries what the run said on the error output, which whoever reads the document never
 sees. Each entry has a `code` that is safe to branch on, a `message` that is safe to show and free to
@@ -906,7 +908,7 @@ Configurations can be created automatically by specifying all the flags once, al
 The next time you want to run the program on this project, you can do it like this: 
 ```mezura --load <config_name>``` <br>
 
-By default, there is a configuration file name "default" already present in the "data/config" dir, that gets loaded on every run. There, you can customize your preferences and they will apply to all runs, except if overriden by explicitely providing a different flag in the cmd, or by loading a specific configuration. For example, if you prefer the counting model of the other counters, you can put a "===> counting" block holding "region" there. <br>
+By default, there is a configuration file named "default" already present in the "data/config" directory, that gets loaded on every run. There, you can customize your preferences and they will apply to all runs, unless overridden by giving a different command on the command line, or by loading a specific configuration. For example, if you prefer the counting model of the other counters, you can put a "===> counting" block holding "region" there. <br>
 
 The priorities of the specified flags are:
 1) cmd
@@ -917,7 +919,7 @@ The priorities of the specified flags are:
 
 
 ## Logs and History
-Inside the 'data/logs' folder, the program will save log files that correspond to saved configurations everytime the '--log' flag is used. <br>
+Inside the 'data/logs' folder, the program will save log files that correspond to saved configurations every time '--log' is given. <br>
 A log is a .jsonl file: one JSON entry per line, the newest first, so it is read by any JSON tool one line at a time. Each entry records the date and time of the execution and the name of the log (if specified), the settings the run was counted with (the target directories, the counting model, and so on, so you can see if at some point the configuration got modified), the total files, lines and size, and the raw per-line counts that the code and comment columns are folded from, so the history section shows every entry under whatever "--counting" the current run uses. <br>
 
 A run that names its targets records its modules in the entry, and the history section then carries one narrow line per module: which of them grew, and by how much. A module that was not there last time, or that is not there any more, is named as such instead of being compared against nothing. An entry written by a run that named none has no such block. <br>
@@ -931,11 +933,11 @@ Note that a configuration file must be loaded for both '--log' and '--compare' t
 
 
 ## Themes
-Everything the program prints can be styled: 46 tokens, each taking a color plus any of bold, italic, underline, dim and reverse. A color is either a hex value or one of the 16 standard terminal color names, which follow the color scheme of your terminal. Run ```--help style``` for the full list of tokens.
+Everything the program prints can be styled: 74 tokens, each taking a color plus any of bold, italic, underline, dim and reverse. A color is either a hex value or one of the 16 standard terminal color names, which follow the color scheme of your terminal. Run ```--help --style``` for the full list of tokens.
 
 A **theme** is a plain .txt file of ```token = value``` lines, in the "data/themes" dir of the persistent data path. It carries only how the output looks, never what is measured, so it can be shared as it is. Apply one with ```--theme <name>```, list the ones you have with ```--show-themes```, and write the current look into a new one with ```--save-theme <name>```.
 
-7 themes are bundled: **Mezura** (the default one), Dracula, Gruvbox, Catppuccin, Meadow, Neon and Ocean. Edit them, or add your own by dropping a file there.
+8 themes are bundled: **Mezura** (the default one), Catppuccin, Dracula, Forest, Gruvbox, Meadow, Neon and Ocean. Edit them, or add your own by dropping a file there.
 
 The four languages of the overview and the folded 'others' entry are five ordinary tokens, ```language-1``` to ```language-4``` and ```language-others```, so a theme sets them the same way it sets everything else.
 
@@ -1027,7 +1029,7 @@ Remove-MpPreference -ExclusionProcess "mezura.exe"
 
 ## Similar Projects
 
-If you don't require the keyword counting functionality of this program, the history tracking feature, or the alternate-than-usual visualization, use the [scc](https://github.com/boyter/scc) project written in GO, that is honestly impressive.
+If you don't require the keyword counting functionality of this program, the history tracking feature, or the unusual shape of its report, use the [scc](https://github.com/boyter/scc) project written in Go, which is very good.
 
 Other alternative projects you can check are:
 - [loc](https://github.com/cgag/loc)

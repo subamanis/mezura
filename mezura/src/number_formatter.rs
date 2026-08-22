@@ -1,14 +1,11 @@
-// How a number reads to a person: the grouping of digits, the decimal mark, the rounding. None of it
-// changes a count, and none of the arithmetic is here: 'mezura_core::render' holds that, and this is
-// the one place that knows which preferences this run was started with.
+// The arithmetic is in 'mezura_core::render'; this is the one place that knows which grouping and
+// decimal mark this run was started with.
 use std::sync::OnceLock;
 
 use mezura_core::render::NumberFormat;
 
 use super::config_manager::{DecimalSeparator, NumberSeparator};
 
-// Reached from every printed figure, so it is set once rather than threaded through the printer, the
-// same way the active theme is.
 static FORMAT : OnceLock<NumberFormat> = OnceLock::new();
 
 static NUMBER_SEPARATOR : OnceLock<NumberSeparator> = OnceLock::new();
@@ -23,16 +20,14 @@ pub fn set_decimal_separator(separator: DecimalSeparator) {
     let _ = DECIMAL_SEPARATOR.set(separator);
 }
 
-// Built on first use, by which time both commands have been read. Two separators arriving one at a
-// time is why they are not a single setter.
+// Built on first use, by which time both separators have been set; they arrive one at a time.
 pub fn get_active() -> &'static NumberFormat {
     FORMAT.get_or_init(|| NumberFormat::new(
             NUMBER_SEPARATOR.get().copied().unwrap_or_default().get_character(),
             DECIMAL_SEPARATOR.get().copied().unwrap_or_default().get_character()))
 }
 
-// Applied to text that is already rounded, so that every rule about rounding stays written with a
-// dot and only the last step decides what the reader sees
+// Applied after rounding, so that every rounding rule stays written with a dot.
 pub fn format_with_decimal_separator(text: String) -> String {
     get_active().with_decimal_mark(&text)
 }
@@ -45,13 +40,10 @@ pub fn format_with_separators(i: usize) -> String {
 mod tests {
     use super::*;
 
-    // The grouping itself is the library's and is asserted there. What this holds is the wiring:
-    // the format this crate hands out is the one the commands asked for.
+    // The grouping itself is 'NumberFormat::integer' and is asserted there. What is this crate's is
+    // that a run where nobody called the two setters still formats with a comma and a dot.
     #[test]
-    pub fn test_with_separators() {
-        assert_eq!("123",format_with_separators(123));
-        assert_eq!("1,234",format_with_separators(1234));
-        assert_eq!("12,345",format_with_separators(12345));
-        assert_eq!("1,234,567",format_with_separators(1234567));
+    fn a_run_that_set_no_separators_groups_with_a_comma() {
+        assert_eq!("1,234,567", format_with_separators(1234567));
     }
 }

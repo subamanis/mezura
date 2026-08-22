@@ -1,8 +1,7 @@
-// Reading and writing theme files, and the page that lets somebody build one by eye.
 use std::{fs, io};
 
-// None means the theme is not there at all, which is a mistake in the name and not in the file.
-// A theme that exists always loads, carrying whatever its parser could not read.
+// None means no such file, which is a mistake in the name. A theme that exists always loads,
+// carrying whatever its parser could not read.
 pub fn load_theme(name: &str, themes_dir: &str) -> Option<super::theme::ThemeFile> {
     let entries = fs::read_dir(themes_dir).ok()?;
     for entry in entries.flatten() {
@@ -22,8 +21,8 @@ pub fn load_theme(name: &str, themes_dir: &str) -> Option<super::theme::ThemeFil
     None
 }
 
-// Flattened on purpose: the reason a theme file exists is that it can be handed to someone else, so
-// it carries values and not a reference to whatever it was built on top of.
+// Flattened on purpose: a theme file is meant to be handed to someone else, so it carries values
+// and not a reference to whatever it was built on top of.
 pub fn save_theme_to_file(themes_dir: &str, name: &str, theme: &super::theme::Theme) -> io::Result<()> {
     let styles = theme.find_non_default_tokens().into_iter().map(|(token, value)| (token.to_owned(), value)).collect::<Vec<_>>();
     fs::create_dir_all(themes_dir)?;
@@ -67,17 +66,17 @@ pub fn generate_theme_editor_page() -> io::Result<String> {
 #[cfg(test)]
 mod tests {
     // The page exists twice: embedded above so 'cargo package' can carry it, and at
-    // 'docs/theme-editor/index.html' which GitHub Pages publishes and the README links to. Neither
-    // can replace the other, since Pages serves only from the repository's 'docs/' and the package
-    // refuses paths outside its own directory.
+    // 'docs/theme-editor/index.html' which GitHub Pages publishes. Neither can replace the other,
+    // since Pages serves only from the repository's 'docs/' and the package refuses paths outside
+    // its own directory.
     #[test]
     fn the_published_theme_editor_is_the_embedded_one() {
         let template = include_str!("../docs/theme-editor/index.html");
         let published_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("..").join("docs").join("theme-editor").join("index.html");
 
-        // Its own switch and not MEZURA_UPDATE_GOLDEN, because this one rewrites a page the world
-        // sees: refreshing test fixtures must not be able to republish the site as a side effect.
+        // Its own switch and not MEZURA_UPDATE_GOLDEN: refreshing test fixtures must not be able to
+        // republish the site as a side effect.
         if std::env::var_os("MEZURA_UPDATE_PUBLISHED").is_some() {
             std::fs::write(&published_path, template).unwrap();
             return;
@@ -90,7 +89,7 @@ mod tests {
     }
 
     #[test]
-    fn test_load_theme() {
+    fn a_theme_is_loaded_by_its_file_name_and_a_broken_line_in_it_is_reported() {
         let dir = std::env::temp_dir().join("mezura_theme_test");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("Mytheme.txt"), "language-1 = cyan\nlanguage-2 = bright-magenta\ncode-label = bright-yellow italic\n").unwrap();
@@ -105,8 +104,6 @@ mod tests {
         assert_eq!(expected, super::super::theme_files::load_theme("MYTHEME", dir_str).unwrap().0);
         assert!(super::super::theme_files::load_theme("nonexistant", dir_str).is_none());
 
-        // A theme that is there always loads, carrying what could not be read. Only a name that
-        // points at no file at all is a failure, since only that one is a mistake in the command.
         let (broken, errors) = super::super::theme_files::load_theme("broken", dir_str).unwrap();
         assert_eq!(vec![("heading".to_owned(), "white bold".to_owned())], broken);
         assert_eq!(vec![super::super::theme::ThemeParseError::InvalidValue("language-1".to_owned(), "kaka".to_owned())], errors);
@@ -114,10 +111,8 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    // The file --save-theme writes has to reproduce the look on its own, which is the whole reason
-    // it is flattened instead of pointing at whatever it was built on top of
     #[test]
-    fn test_a_saved_theme_reloads_into_the_same_theme() {
+    fn a_saved_theme_reloads_into_the_same_theme() {
         let dir = std::env::temp_dir().join("mezura_theme_save_test");
         let _ = std::fs::remove_dir_all(&dir);
         let dir_str = dir.to_str().unwrap().to_owned() + "/";

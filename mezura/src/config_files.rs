@@ -16,8 +16,7 @@ use crate::paths::{DEFAULT_CONFIG_NAME, PERSISTENT_APP_PATHS};
 pub enum ConfigFileParseError {
     FileNotFound(String),
     // An error and not a warning, because everything after that line was never seen and the blocks
-    // deciding what gets counted may be among them: a half-applied configuration is a wrong answer
-    // in a valid one's clothes.
+    // deciding what gets counted may be among them.
     UnreadableLine(String, usize, UnreadableCause)
 }
 
@@ -32,9 +31,8 @@ impl Formatted for ConfigFileParseError {
 }
 
 // The two need different sentences: bytes that are not UTF-8 are a property of the file and will be
-// there every time until it is re-saved, while an I/O failure belongs to this run and has nothing to
-// do with the line. Blaming the encoding for the second sends somebody re-saving a file that was
-// never the problem.
+// there every time until it is re-saved, while an I/O failure belongs to this run. Blaming the
+// encoding for the second sends somebody re-saving a file that was never the problem.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum UnreadableCause {
     NotUtf8,
@@ -47,8 +45,8 @@ pub enum UnreadableCause {
 #[derive(Debug, Default)]
 pub struct ConfigFileIssues {
     pub invalid_fields: Vec<&'static str>,
-    // The code travels with the message from where the kind is known. Recovering it later by looking
-    // for a phrase inside the English is the exact coupling the pair exists to avoid.
+    // The code travels with the message from where the kind is known, so nothing downstream has to
+    // recover it by looking for a phrase inside the English.
     pub warnings: Vec<(mezura_core::warnings::Code, String)>
 }
 
@@ -72,8 +70,8 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
     loop {
         let size = reader.read_line(&mut buf);
         if size == 0 {break};
-        // Only the first line of the file can carry the mark, but asking on every line costs a
-        // comparison and spares the reader a special case that would have to be got right once
+        // Only the first line of the file can carry the mark, but asking on every line costs one
+        // comparison and spares the loop a special case
         let line = strip_byte_order_mark(buf.trim());
         if line.starts_with("===>") {
             let id = line.trim_start_matches("===>").split_whitespace().next().unwrap_or("");
@@ -107,9 +105,9 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                     excluded_languages = Some(langs);
                 }
             } else if id == config_manager::FORCE_LANGUAGE {
-                // Read as a block like the other lists: a value written across two lines is otherwise
-                // cut to its first in silence, since the rest does not begin with '===>' and the
-                // outer loop skips it.
+                // Read as a block like the other lists: a value written across two lines would
+                // otherwise be cut to its first in silence, since the rest does not begin with
+                // '===>' and the outer loop skips it.
                 let declared = read_lines_from_file_to_vec(&mut reader, &mut buf, |line| vec![line.trim().to_owned()]).join(",");
                 // An empty value is the command left in the file without being used, which is not a
                 // mistake. Anything else that does not parse is one.
@@ -260,8 +258,8 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
         ..Default::default()
     };
 
-    // After the whole walk of the file, so that the number reported is the first failure and not
-    // whichever one a nested block happened to meet
+    // After the whole file has been walked, so that the line reported is the first failure and not
+    // whichever one a block inside happened to meet
     if let Some((line, error)) = reader.failed_at {
         let cause = if error.kind() == std::io::ErrorKind::InvalidData {UnreadableCause::NotUtf8}
                 else {UnreadableCause::Io(error.to_string())};
@@ -274,13 +272,12 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
 // Three bytes that mean "this is UTF-8" and carry no text. 'trim' leaves them where they are, since
 // they are not whitespace, so a header on the first line of a file stops matching the moment
 // somebody re-saves it with PowerShell's 'Set-Content' or an older Notepad. Every parser of a text
-// format in this crate calls it, and leaving it to each parser is how two of the four came to be
-// missing it, one of them reading no rules at all in silence.
+// format in this crate calls it.
 pub fn strip_byte_order_mark(contents: &str) -> &str {
     contents.trim_start_matches('\u{feff}')
 }
 
-// Targets must be specified (is checked before calling this function)
+// The targets must be set before this is called: they are unwrapped below.
 pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<String>, config_name: &str, config_builder: &ConfigurationBuilder)
 -> std::io::Result<()> 
 {
@@ -291,9 +288,8 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
 
     writer.write_all(b"Auto-generated config file.")?;
 
-    // One target per line, which the block reader joins back with the whitespace that separates one
-    // from the next. It is the readable form and the unambiguous one at the same time: a name only
-    // ever reaches the paths written after it with a comma between them.
+    // One target per line, which is what the block reader expects: a module name only reaches the
+    // paths written after it when a comma joins them.
     writer.write_all(&[b"\n\n===> ",config_manager::TARGETS.as_bytes(),b"\n"].concat())?;
     writer.write_all(config_builder.targets.as_ref().unwrap().iter().map(config_manager::format_declared_form)
             .collect::<Vec<_>>().join("\n").as_bytes())?;
@@ -398,13 +394,12 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
         writer.write_all(layout.name().as_bytes())?;
     }
 
-    // The two style layers of a configuration collapse into its one block, in the order they were
-    // applied, so that reloading the file reproduces what the run looked like. When --save-theme is
-    // writing a theme in the same run, they are already inside it and would only be said twice.
+    // The two style layers collapse into one block, in the order they were applied, so that
+    // reloading the file reproduces what the run looked like. When '--save-theme' is writing a theme
+    // in the same run they are already inside it and would only be said twice.
     let styles = if config_builder.theme_name_to_save.is_some() {Vec::new()}
             else {config_builder.config_styles.iter().chain(config_builder.styles.iter()).flatten().collect::<Vec<_>>()};
     if !styles.is_empty() {
-        // One pair per line, the same shape a theme file uses, so a long list stays readable
         let rendered = styles.iter().map(|(token, style)| format!("{token} = {style}")).collect::<Vec<_>>().join("\n");
         writer.write_all(&[b"\n\n===> ",config_manager::STYLE.as_bytes(),b"\n"].concat())?;
         writer.write_all(rendered.as_bytes())?;
@@ -426,7 +421,6 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
     Ok(())
 }
 
-// The names a directory offers, for the close-match suggestions of one that was not found
 pub fn read_names_in_dir(dir: &str) -> Vec<String> {
     let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
     let mut names = entries.flatten().filter(|x| x.path().is_file())
@@ -435,10 +429,9 @@ pub fn read_names_in_dir(dir: &str) -> Vec<String> {
     names
 }
 
-// The reader 'parse_config_file' hands around: it counts lines, and one it cannot deliver is
-// remembered instead of vanishing. From then on it reads as an ended file, which every caller
-// already treats as the end of its block, so nothing after the bad line is applied and the file is
-// refused as a whole by the single check at the end.
+// Counts lines, and remembers a line it could not deliver instead of losing it. From then on it
+// reads as an ended file, which every caller already treats as the end of its block, so nothing
+// after the bad line is applied and the file is refused whole by the single check at the end.
 struct CountingReader {
     reader: BufReader<File>,
     line: usize,
@@ -498,12 +491,8 @@ mod tests {
     use super::*;
     use crate::paths::test_paths::{FIXTURES_DIR, SCRATCH_CONFIG_DIR};
     use super::super::config_manager::ConfigurationBuilder;
-    // A line the reader could not deliver used to end the loop as if the file ended there, and the
-    // half that had been read was applied without a word: a config saved in the wrong encoding kept
-    // its first blocks and silently lost the rest. The realistic cause is not a failing disk, it is
-    // an editor writing a path with non-ASCII characters as something other than UTF-8. A mistake
-    // that decides what gets counted stops the run, so this is an error naming the file and the
-    // line, not a warning.
+    // The realistic cause is not a failing disk, it is an editor writing a path with non-ASCII
+    // characters as something other than UTF-8.
     #[test]
     fn a_config_that_stops_being_readable_mid_file_is_an_error_not_a_half_applied_config() {
         let dir = std::env::temp_dir().join("mezura_unreadable_config_test");
@@ -528,7 +517,7 @@ mod tests {
     }
 
     #[test]
-    fn test_save_config_file_and_then_parse_it() -> std::io::Result<()> {
+    fn a_command_line_written_to_a_configuration_reads_back_as_the_same_command_line() -> std::io::Result<()> {
         let command = "./ --exclude a,b,c.txt,d.txt, --counting region --threads 1 1 --hide keywords,timing \
                 --force-language m=matlab,.pl=Perl --by-file 12 --count-minified --count-generated \
                 --style code-number=green,comments-label=magenta bold,arrow=default dim".to_string();
@@ -550,13 +539,11 @@ mod tests {
         assert_eq!(config_builder.count_generated, options.count_generated);
         assert_eq!(config_builder.hidden, options.hidden);
         assert_eq!(config_builder.by_file, options.by_file);
-        // A project that answers a contested extension its own way answers it once, in its config
         assert_eq!(config_builder.forced_languages, options.forced_languages);
-        // '.pl' keeps its dot through the round trip, because the two maps that read it key it
-        // differently: an extension drops the dot, a whole filename keeps it.
+        // '.pl' keeps its dot through the round trip: an extension drops the dot when it is keyed,
+        // a whole filename keeps it.
         assert_eq!(Some(hashmap!("m".to_owned() => "matlab".to_owned(), ".pl".to_owned() => "Perl".to_owned())),
                 options.forced_languages);
-        // Written one pair per line and read back as a group, so a saved look survives a reload
         assert_eq!(config_builder.styles, options.config_styles);
         assert_eq!(3, options.config_styles.as_ref().unwrap().len());
 
@@ -564,8 +551,7 @@ mod tests {
     }
 
     // A configuration that carried its own log would write an entry on every run that loads it, so
-    // the section is refused like any other a file cannot carry, and out loud: silence would read as
-    // logging that mysteriously stopped for whoever wrote the line under an older version.
+    // the section is refused like any other a file cannot carry, and said out loud.
     #[test]
     fn a_log_section_written_into_a_config_file_never_takes_effect() -> std::io::Result<()> {
         let dir = SCRATCH_CONFIG_DIR.to_owned();
@@ -575,13 +561,12 @@ mod tests {
 
         let (options, issues) = super::super::config_files::parse_config_file(Some("carries-a-log"), Some(dir)).unwrap();
         assert_eq!(None, options.log);
-        // the rest of the file still applies, so the one bad section costs itself and nothing else
+        // the rest of the file still applies
         assert_eq!(Some(mezura_core::CountingModel::Region), options.counting);
         assert!(issues.warnings.iter().any(|(code, message)|
                 *code == mezura_core::warnings::Code::ConfigSectionUnknown && message.contains("'log'")),
                 "the ignored section was not named: {:?}", issues.warnings);
 
-        // and through the real merge, a run that loads the file still does not log
         let mut loaded = ConfigurationBuilder::default();
         loaded.add_missing_fields(options);
         assert!(!loaded.build().view.log.should_log);
@@ -604,11 +589,9 @@ mod tests {
         std::fs::remove_file(&path)
     }
 
-    // A byte order mark is what PowerShell's 'Set-Content' and older Notepad put at the front of a
-    // file they save, and it is not whitespace, so 'trim' leaves it in front of the '===>' of the
-    // first block. That block is then not a block, and every setting under it is read as loose text
-    // and dropped, which for a configuration means the run silently uses the defaults instead. Both
-    // orderings are here because only the first line of the file can carry it.
+    // Both files are written because only the first line can carry the mark, and a mark in front of
+    // the first '===>' would make that block no block at all: its settings would be read as loose
+    // text and dropped, leaving the run on the defaults without a word.
     #[test]
     fn a_configuration_saved_with_a_byte_order_mark_still_reads() -> std::io::Result<()> {
         let dir = SCRATCH_CONFIG_DIR.to_owned();
@@ -631,9 +614,6 @@ mod tests {
         std::fs::remove_file(&plain).and(std::fs::remove_file(&marked))
     }
 
-    // The whole point of putting the name inside the target rather than in a field of its own: what
-    // '--save' writes has to be what a load reads, or the saved settings would drift away from the
-    // paths they belong to on the first round trip.
     #[test]
     fn the_modules_of_a_saved_configuration_survive_being_read_back() -> std::io::Result<()> {
         let dir = SCRATCH_CONFIG_DIR.to_owned();
@@ -641,7 +621,7 @@ mod tests {
         let path = dir.clone() + "modules-round-trip.txt";
 
         // The last two are the ones that break: an unnamed target after a named one, and a path
-        // with a space in it now that whitespace is what separates one target from the next
+        // with a space in it, whitespace being what separates one target from the next
         let declared = vec![Target::named("frontend", "D:/x/web"),
                 Target::named("frontend", "D:/x/ui"),
                 Target::named("backend", "D:/x/my api"),
@@ -656,8 +636,6 @@ mod tests {
         std::fs::remove_file(&path)
     }
 
-    // A block is read as a whole, so a module written on a line of its own means what the same
-    // module written next to the others means
     #[test]
     fn the_targets_block_reads_a_module_across_lines_and_refuses_one_with_no_path() -> std::io::Result<()> {
         let dir = SCRATCH_CONFIG_DIR.to_owned();
@@ -671,7 +649,6 @@ mod tests {
                 Target::named("tests", "D:/x/web/tests"),
                 Target::named("backend", "D:/x/api")]), options.targets);
 
-        // and a trailing comma still continues the list over the line break
         std::fs::write(&path, "===> targets\ntests=D:/x/api/tests,\nD:/x/web/tests\n")?;
         let (options, _) = parse_config_file(Some("targets-block"), Some(dir.clone())).unwrap();
         assert_eq!(Some(vec![Target::named("tests", "D:/x/api/tests"),
@@ -685,12 +662,8 @@ mod tests {
         std::fs::remove_file(&path)
     }
 
-    // It used to unwrap its way through the file, which was safe while the only files it ever read
-    // were ours. The migration now asks it whether the user's copy still means what our copy means,
-    // so a file edited into something unrecognisable has to come back as None and not take the run
-    // with it. Every one of these was a panic before.
     #[test]
-    fn test_read_config_file() -> std::io::Result<()> {
+    fn every_block_of_a_configuration_file_reaches_the_setting_it_names() -> std::io::Result<()> {
         let mut config = Configuration::new(vec![]);
         let declared_targets = vec![Target::of("C:/Some/Path/a"), Target::of("C:/Some/Path/b"),
                 Target::of("C:/Some/Path/c"), Target::of("C:/Some/Path/d")];
@@ -706,14 +679,17 @@ mod tests {
         assert_eq!(config.engine.exclude_dirs, options.exclude_dirs.unwrap());
         assert_eq!(config.engine.threads, options.threads.unwrap());
         assert_eq!(config.view.counting, options.counting.unwrap());
-        assert_eq!(config.view.should_show_faulty_files, options.should_show_faulty_files.unwrap());
-        assert_eq!(config.engine.should_search_in_dotted, options.should_search_in_dotted.unwrap());
+        // Against the value the file holds and not against a default-built configuration: both of
+        // these default to false, so comparing them that way proves the block was seen and nothing
+        // about where its value went
+        assert_eq!(Some(true), options.should_show_faulty_files);
+        assert_eq!(Some(true), options.should_search_in_dotted);
         assert_eq!(config.view.hidden, options.hidden.unwrap());
 
         Ok(())
     }
     #[test]
-    fn test_default_config_file_is_found_and_parsed() {
+    fn the_default_configuration_is_found_by_its_name_and_parsed() {
         let dir = std::env::temp_dir().join("mezura_default_config_test");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("default.txt"), "===> exclude-languages\nSQL\n").unwrap();
@@ -725,7 +701,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
     #[test]
-    fn test_parse_config_file_reports_invalid_values() {
+    fn a_value_a_configuration_cannot_carry_is_named_rather_than_taken() {
         let dir = std::env::temp_dir().join("mezura_invalid_config_test");
         std::fs::create_dir_all(&dir).unwrap();
         let dir_str = dir.to_str().unwrap().to_owned() + "/";
@@ -746,10 +722,8 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    // A section nobody knows and a style line that does not parse are both about how the result
-    // looks, so they are said out loud and the rest of the file still applies
     #[test]
-    fn test_parse_config_file_warns_instead_of_failing_for_unknown_sections_and_styles() {
+    fn an_unknown_section_or_a_broken_style_warns_and_the_rest_of_the_file_still_applies() {
         let dir = std::env::temp_dir().join("mezura_warning_config_test");
         std::fs::create_dir_all(&dir).unwrap();
         let dir_str = dir.to_str().unwrap().to_owned() + "/";

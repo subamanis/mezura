@@ -19,16 +19,16 @@ pub fn read_document(name: &str) -> Option<Result<Reading, String>> {
             .then(|| super::diff::load(name).map_err(|x| x.to_string()))
 }
 
-// Every revision of a '--diff' resolves here, before anything is written out: a typo in the second
-// side fails before the first is checked out and counted whole, and two spellings of one commit
-// are refused while both hashes are on hand. Equal commits would also share one checkout path and
-// race each other's background removal on it. Answered in the order asked.
+// Every revision of a '--diff' resolves here, before anything is written out, so that a typo in the
+// second side fails before the first is checked out and counted whole. Two spellings of one commit
+// are refused while both hashes are on hand: they would otherwise share one checkout path and race
+// each other's background removal on it. Answered in the order asked.
 pub fn prepare_revisions(names: &[&str], engine: &EngineConfig) -> Result<Vec<ResolvedRevision>, GitError> {
     if names.is_empty() {
         return Ok(Vec::new());
     }
-    // The run's own rule for telling a pattern from a folder that carries those characters in its
-    // name: what exists exactly as written is always literal
+    // Telling a pattern from a folder whose name carries those characters: what exists exactly as
+    // written is always literal
     if let Some(target) = engine.targets.iter().find(|x|
             !Path::new(&x.path).exists() && x.path.contains(['*', '?', '[', '{'])) {
         return Err(GitError::PatternTarget { pattern: target.path.clone() });
@@ -46,14 +46,13 @@ pub fn prepare_revisions(names: &[&str], engine: &EngineConfig) -> Result<Vec<Re
     Ok(resolved)
 }
 
-// One side's acquisition in flight: the resolved revision, and the write started ahead of its turn
 pub struct RevisionSide {
     resolved: ResolvedRevision,
     write: Option<JoinHandle<Result<Checkout, GitError>>>
 }
 
 // A side dropped uncounted still joins its write, so a checkout that completed queues its own
-// background removal instead of outliving the run as litter; an error path needs nothing but '?'
+// background removal instead of outliving the run as litter.
 impl Drop for RevisionSide {
     fn drop(&mut self) {
         if let Some(write) = self.write.take() {
@@ -62,9 +61,9 @@ impl Drop for RevisionSide {
     }
 }
 
-// The ground is cleared exactly once, before anything writes: the sweep's prune beside a half
+// The leftovers are swept exactly once, before anything writes: the sweep's prune beside a half
 // registered parallel write is the one interference between them. With two sides both writes start
-// at once and the counting stays serial, so the second hides behind the first side's write and
+// at once while the counting stays serial, so the second hides behind the first side's write and
 // count; a single side, or a thread that cannot spawn, writes inline at its turn.
 pub fn start_acquiring_revisions(resolved: Vec<ResolvedRevision>) -> Vec<RevisionSide> {
     if let Some(first) = resolved.first() {
@@ -83,13 +82,11 @@ pub fn start_acquiring_revisions(resolved: Vec<ResolvedRevision>) -> Vec<Revisio
     }).collect()
 }
 
-// The files are written out, the targets are found again inside them, and 'run' does the rest,
-// under this run's settings and this build
 pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, languages: Vec<Language>,
         extension_priority: &PriorityRules) -> Result<(Reading, Vec<Note>), GitError>
 {
-    // Dropped, and with it erased, before this function returns anything: the whole phase is
-    // silent on the permanent output, and the motion is its only sign of life
+    // Erased when it drops, before this function returns: the whole phase leaves nothing behind on
+    // the permanent output
     let progress = Arc::new(ScanProgress::default());
     let _live = super::animated_display::start_revision_display(config, &side.resolved.revision, progress.clone(),
             side.write.as_ref().is_some_and(|x| x.is_finished()));
@@ -112,9 +109,8 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
     }
 
     // A target the revision never had counts as nothing rather than stopping the run. The declared
-    // form of each one that was found is kept beside its checkout path, because the checkout is a
-    // temporary directory: a reading that named it would say a different tree on every run, when
-    // what was measured is the declared tree as that commit held it.
+    // form of each one that was found is kept beside its checkout path, because a reading that
+    // named the checkout would say a different temporary directory on every run.
     let mut targets = Vec::with_capacity(config.engine.targets.len());
     let mut counted_declared = Vec::with_capacity(config.engine.targets.len());
     let mut missing = Vec::new();
@@ -142,13 +138,11 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
             nested_languages: HashMap::new(),
             faulty_files: Vec::new(), minified_files: 0, generated_files: 0, unreadable_dirs: Vec::new(), targets: Vec::new(),
             files_present: FilesPresent::default(),
-            performance: mezura_core::Performance { duration_millis: 0, threads: config.engine.threads.clone() }
+            performance: mezura_core::Performance { duration_millis: 0, threads: config.engine.threads }
         }
     } else {
-        // Resolved against this configuration, as 'run' demands: the two differ only in where they
-        // look, and the complaints are voiced by whoever asked for the counting
         let resolved = mezura_core::Languages::resolve(&of_git_revision, languages, extension_priority).0;
-        let mut result = mezura_core::run(&of_git_revision, resolved, Some(progress.clone()), |_| {})
+        let mut result = mezura_core::run_watched(&of_git_revision, resolved, Some(progress.clone()), |_| {})
                 .map_err(|error| GitError::CountingRevision { revision: git_revision.to_owned(), error })?;
         result.targets = counted_declared;
         result
@@ -189,7 +183,6 @@ mod tests {
 
     use super::*;
 
-    // The '--diff' help promises it: a name that is a file is a document, anything else is git's
     #[test]
     fn a_directory_is_never_read_as_a_document() {
         let dir = SCRATCH_DIR.to_owned() + "a-directory-named-like-a-branch";
@@ -197,7 +190,6 @@ mod tests {
         assert!(read_document(&dir).is_none(), "a directory was taken for a document");
         std::fs::remove_dir_all(&dir).unwrap();
 
-        // a file is still read, and a name that is nowhere on disk still falls through
         let file = SCRATCH_DIR.to_owned() + "not-a-document.json";
         std::fs::write(&file, "{ not a document").unwrap();
         assert!(matches!(read_document(&file), Some(Err(_))));
@@ -205,8 +197,6 @@ mod tests {
         assert!(read_document("no-such-thing-anywhere").is_none());
     }
 
-    // The dedup answers by hash and not by spelling, so a commit against itself is refused however
-    // the two sides wrote it
     #[test]
     fn two_spellings_of_one_commit_are_refused_and_distinct_names_are_resolved() {
         let package = env!("CARGO_MANIFEST_DIR").replace('\\', "/");
@@ -236,7 +226,6 @@ mod tests {
         assert_eq!(vec!["D:/repository/x".to_owned()],
                 move_excludes_into_checkout("C:/tmp/chk", "D:/repo", &["D:/repository/x".to_owned()]));
 
-        // the platform's own idea of case, so a drive letter typed either way still travels
         if cfg!(windows) {
             assert_eq!(vec!["C:/tmp/chk/target".to_owned()],
                     move_excludes_into_checkout("C:/tmp/chk", "D:/repo", &["d:/REPO/target".to_owned()]));

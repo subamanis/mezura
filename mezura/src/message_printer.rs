@@ -24,8 +24,8 @@ pub const TARGETS_HELP  :  &str =
     '--targets <path1>, <path2>'
 
     A path can be a glob pattern (* ? [..] {..}), so 'services/*/src' is a target. A path that
-    exists exactly as written is taken literally, so a folder named with one of those characters
-    is still a folder. A target inside another target is dropped, so nothing is counted twice.
+    exists exactly as written is taken literally, so a directory named with one of those characters
+    is still a directory. A target inside another target is dropped, so nothing is counted twice.
 
     A path you write out is always counted, even if it is ignored, dotted, a link, minified or
     generated. The matches of a pattern were found by mezura rather than named by you, so those
@@ -65,7 +65,7 @@ pub const EXCLUDE_HELP  :  &str =
 
     1..n glob patterns separated by commas.
 
-    A pattern without a slash matches a file or folder name at any depth ('node_modules', '*.min.js').
+    A pattern without a slash matches a file or directory name at any depth ('node_modules', '*.min.js').
     A pattern with slashes matches the end of the full path, anchored at path components
     ('Rusty/mezura' matches '.../Rusty/mezura' but not '.../aRusty/mezura'). Full absolute
     paths work too. Glob syntax is supported in both forms: * ? [..] {..}
@@ -99,7 +99,7 @@ pub const LANGUAGES_HELP  :  &str =
 
     1..n arguments separated by commas, case-insensitive
 
-    A language is named either by the name a file in the 'data/languages/' dir gives it under
+    A language is named either by the name a file in the 'data/languages/' directory gives it under
     'Language', or by any extension it claims, so 'javascript' and 'js' name the same one.
 
     An extension that two languages claim names whichever of them owns it for this run, which is
@@ -112,7 +112,7 @@ pub const EXCLUDE_LANGUAGES_HELP  :  &str =
 
     1..n arguments separated by commas, case-insensitive
 
-    A language is named either by the name a file in the 'data/languages/' dir gives it under
+    A language is named either by the name a file in the 'data/languages/' directory gives it under
     'Language', or by any extension it claims, so 'javascript' and 'js' name the same one.
 
     A name that nothing in the scan answers to is reported as having changed nothing, and the run
@@ -130,7 +130,7 @@ pub const FORCE_LANGUAGE_HELP  :  &str =
     A whole filename works the same way, for the files that have no extension worth reading:
     '--force-language Makefile=python,Jenkinsfile=groovy'
 
-    Overrides the 'extension_priority.txt' file of the data dir.
+    Overrides the 'extension_priority.txt' file of the data directory.
 
 ";
 pub const THREADS_HELP  :  &str =
@@ -276,14 +276,15 @@ pub const HIDE_HELP  :  &str =
     What you can hide:
 
       version         the version line at the top
-      directory-info  the 'Analyzing directories' line and the 'N files found' line under it
+      directory-info  the 'Analyzing targets' line and the 'N files found' line under it
       parsing-info    the 'Parsing files' line and the 'ok' under it
       progress-bar    the bar, the share done and the speed figures of a long parse, keeping
                       its file count
       animations      every moving line: the scan's dots, the live progress bar and the working
                       lines of a '--diff'. What they settle into still prints, and a TERM=dumb
                       terminal hides them on its own
-      keywords        the keyword counts, keeping the rest of the details rows
+      keywords        the keyword counts, keeping the rest of the details rows. This one also
+                      stops them being counted, so it is the only name here that makes a run faster
       nested-languages  the rows that break a container file down, so a '.vue' weighs whole on
                       the Vue row with no sign of the TypeScript and CSS inside it
       overview        the whole percentages section
@@ -453,7 +454,7 @@ pub const RESTORE_HELP  :  &str =
 
     A language file you changed is replaced too, since one that has fallen behind counts wrongly,
     but your copy is saved under 'data/replaced/<version>/<date and time>/' so you can carry your
-    changes over, a fresh folder per run. A language file of your own is never touched, and
+    changes over, a fresh directory per run. A language file of your own is never touched, and
     neither are your themes or your default configuration: those are written when absent and left
     alone.
 
@@ -477,7 +478,7 @@ pub const OUTPUT_HELP  :  &str =
       mezura ./src --output json | jq '.total.code'
 
     The counts are plain numbers of lines and bytes, with no thousands separators, no KB or MB,
-    no percentages and no colours, whatever the other settings say. '--sort' and '--top' still
+    no percentages and no colors, whatever the other settings say. '--sort' and '--top' still
     order and cut the languages, and the count of the ones left out is in the document. Of the
     '--hide' list only 'keywords' and 'timing' apply, since the rest name printed sections a JSON
     run does not have.
@@ -582,7 +583,7 @@ pub const DECIMAL_SEPARATOR_HELP  :  &str =
 ";
 pub const STYLE_HELP  :  &str =
 "--style
-    override the colour and attributes of one kind of printed text
+    override the color and attributes of one kind of printed text
 
     One or more 'token=style' pairs separated by commas, for example:
     --style code-number=bright-black,code-label=b5a98a italic,heading=white bold underline
@@ -594,8 +595,8 @@ pub const STYLE_HELP  :  &str =
 
     The cells of the live progress bar take two forms no other token does: hex values separated
     by '..' fill them with an even gradient, and 'rainbow' walks a spectrum along them. A gradient
-    needs hex values, since a colour name has no shade to interpolate. Every other token takes one
-    colour and says so if given either form.
+    needs hex values, since a color name has no shade to interpolate. Every other token takes one
+    color and says so if given either form.
 
     Every counted quantity has two tokens, one for the figure and one for the word beside it:
 
@@ -612,7 +613,7 @@ pub const STYLE_HELP  :  &str =
 
     The page:
       version                  the version line at the top
-      heading                  the section titles and the 'Analyzing directories' lines
+      heading                  the section titles and the 'Analyzing targets' lines
       separator-total          the line above the total
       separator-header         the line under the column titles of the two tables
       summary                  the found / of interest / excluded line
@@ -650,11 +651,11 @@ pub const STYLE_HELP  :  &str =
       explain-detail           the class name on a verdict row
 
     The overview:
-      overview-label           the 'Files:', 'Lines:' and 'Size :' row labels
+      overview-label           the 'Files:', 'Lines:' and 'Size:' row labels
       overview-percent         the percentages of the overview
       bar-frame                the brackets around the overview bar and the live one
       language-1 language-2 language-3 language-4
-                               each language of the bar, its name and the colour of its cells.
+                               each language of the bar, its name and the color of its cells.
                                The fourth shows only when nothing was folded into 'others'
       language-others          the folded 'others' entry, which falls back to 'language-4'
                                where a theme names that one and not this
@@ -682,12 +683,12 @@ pub const STYLE_HELP  :  &str =
 ";
 pub const THEME_EDITOR_HELP  :  &str =
 "--theme-editor
-    open a page for tuning the language colours of every theme, and stop
+    open a page for tuning the language colors of every theme, and stop
 
     No arguments.
 
-    Writes an HTML page carrying the language colours of every theme in your 'data/themes'
-    directory, opens it in your browser, and counts nothing. Every colour can be moved there,
+    Writes an HTML page carrying the language colors of every theme in your 'data/themes'
+    directory, opens it in your browser, and counts nothing. Every color can be moved there,
     against a live contrast reading and a mock overview drawn with the bar character the program
     prints, and the page hands back the five 'language-' lines to paste into a theme file.
 
@@ -841,11 +842,8 @@ pub const HELP_HELP  :  &str =
 
 ";
 
-// Grouped by what the commands are about and not by how they work, so a reader looking for themes
-// finds '--show-themes' beside '--theme' and does not care that one of them overrides the run.
-//
-// The full help prints this, the lookup for one command searches it, and the close-match suggestions
-// take their candidates from it, so a new command cannot reach one of the three and miss the others.
+// The full help prints this, the lookup for one command searches it, and the close-match
+// suggestions take their candidates from it, so a new command cannot reach one and miss the others.
 pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 7] = [
     ("What is counted", &[
         (TARGETS, TARGETS_HELP),
@@ -902,8 +900,7 @@ pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 7] = [
     ]),
 ];
 
-// The library gives its errors a plain 'Display'; this is the same text as this program says it,
-// in its colors and broken to a width a person reads comfortably.
+// The library's errors as this program says them: its colors, broken to a readable width.
 pub trait Formatted {
     fn format(&self) -> ColoredString;
 }
@@ -920,8 +917,8 @@ impl Formatted for LanguageDirParseError {
     }
 }
 
-// Broken between words and never inside one, and a line that was already short is left alone. Lines
-// the message wrote itself are kept, so a message that laid itself out is not laid out twice.
+// Broken between words and never inside one. The lines the message wrote itself are kept, so a
+// message that laid itself out is not laid out twice.
 pub fn wrap_message(message: &str) -> String {
     message.split('\n').map(wrap_one_line).collect::<Vec<_>>().join("\n")
 }
@@ -944,10 +941,9 @@ fn wrap_one_line(line: &str) -> String {
     wrapped
 }
 
-// Used both by the full help and by the test that writes the README's command list, so that the two
-// cannot describe the same commands differently or in a different order
-// Every command in one place, with the summary that is the second line of its own help text. A
-// summary too long for the line hangs under the one above it, so the column reads as one thing.
+// Used both by the full help and by the test that writes the README's command list, so the two
+// cannot describe the same commands differently or in a different order. Each summary is the second
+// line of that command's own help text.
 pub fn create_help_list() -> String {
     let widest = get_command_names().iter().map(|name| name.len() + 2).max().unwrap_or(0);
     let indent = LIST_INDENT + widest + 2;
@@ -996,8 +992,7 @@ pub fn create_help_body() -> String {
     body
 }
 
-// The date lives in the Changelog's first line, 'v3.0.0 - unreleased', and nowhere else: a constant
-// would be a third place to remember on every release and the one most likely to be forgotten. A
+// The release date lives in the Changelog's first line, 'v3.0.0 - unreleased', and nowhere else. A
 // test in this module keeps that line and VERSION_ID together.
 pub fn print_version() {
     let changelog = String::from_utf8_lossy(CHANGELOG_BYTES);
@@ -1015,10 +1010,6 @@ pub fn get_command_names() -> Vec<&'static str> {
 
 // Painted where it is printed and never where it is built, so create_help_body stays plain text
 // and the README generated from it is unaffected.
-//
-// A group opens at the first column in capitals, a command opens at the first column with its own
-// name, and both are the same blue wherever they appear, since '--targets' in a sentence is the
-// same thing as the '--targets' that opens a block.
 fn paint_the_help(text: &str) -> String {
     let lines = text.lines().map(|line| {
         if line.is_empty() {
@@ -1064,7 +1055,6 @@ pub fn print_whole_help_message() {
     print_the_help(&create_help_body());
 }
 
-// What a bare '--help' answers: every command with one line about it, and where to go for more.
 pub fn print_the_command_list() {
     print_the_help(&format!("{}Run '--help <command>' for the full help of one, or '--help full' \
                              for all of them.\n", create_help_list()));
@@ -1100,8 +1090,7 @@ pub fn print_help_message_for_given_args(args_line: &str) {
     }
 
     // The first '--help' is the command being run and not something it was asked about, so it is
-    // skipped once. A second one is a real question, and a third says nothing the second did not,
-    // so a name is answered once however many times it was typed.
+    // skipped once. Past that a name is answered once, however many times it was typed.
     let mut command_itself_skipped = false;
     let mut asked : Vec<&str> = Vec::new();
     for option in options {
@@ -1119,14 +1108,14 @@ pub fn print_help_message_for_given_args(args_line: &str) {
     for name in asked {
         match get_help_msg_of_command(name) {
             Some(x) => entries += &paint_the_help(x),
-            // The same error the program gives without '--help', so that an unknown command does
-            // not read as an ordinary line of help text
+            // The same error the program gives without '--help', so an unknown command does not
+            // read as an ordinary line of help text
             None => entries += &format!("{}\n\n", ArgParsingError::UnrecognisedCommand(name.to_owned()).format())
         }
     }
 
-    // The data dir line is always there, so asking whether the message is empty never answered
-    // anything: nothing recognised has to be counted on its own
+    // The entries and not the whole message: the data dir line is always there, so the message is
+    // never empty.
     if entries.is_empty() {
         print_the_command_list();
     } else {
@@ -1134,9 +1123,8 @@ pub fn print_help_message_for_given_args(args_line: &str) {
     }
 }
 
-// On the error output, where all 29 of its callers already are: every one is a path that returns a
-// failure, and on stdout this text was what a redirected '--output json > stats.json' ended up
-// holding instead of a document.
+// On the error output: every caller is a path that returns a failure, and on stdout this text ends
+// up inside a redirected '--output json > stats.json' instead of a document.
 pub fn print_help_message_for_command(arg: &str) {
     if let Some(x) = get_help_msg_of_command(arg) {
         eprintln!("\n{}", paint_the_help(x));
@@ -1153,9 +1141,8 @@ pub fn print_changelog(full: bool) {
     }
 }
 
-// A theme is 46 tokens, and the one place whose job is to show what one looks like before you pick
-// it has to show more than the four language slots of a mock overview line. The sample includes a
-// real details row, which is the densest line the program prints.
+// The sample includes a real details row, the densest line the program prints: a theme is 46 tokens
+// and a mock overview line shows four of them.
 pub fn print_existing_themes(bar_thickness: BarThickness, layout: Layout, counting: CountingModel) {
     // Five entries, so that every language slot including the fold gets to show itself. The
     // verticals add up to the width of a real bar.
@@ -1181,8 +1168,7 @@ pub fn print_existing_themes(bar_thickness: BarThickness, layout: Layout, counti
     let mut msg = get_data_dir_str();
     msg.push_str("Found these themes:\n");
     for (at, name) in theme_names.iter().enumerate() {
-        // One blank line more between two themes than any block leaves inside one, so that a long
-        // listing reads as a stack of samples rather than one run-on page
+        // One blank line more between two themes than any block leaves inside one
         if at > 0 {
             msg.push('\n');
         }
@@ -1207,8 +1193,7 @@ pub fn print_existing_themes(bar_thickness: BarThickness, layout: Layout, counti
             if i < MOCK_PERCENTAGES.len()-1 {msg.push_str(" - ")}
         }
 
-        // On its own line, under the percentages: five language slots plus a fifty cell bar do not
-        // fit next to each other, and this listing has no reason to be the widest thing printed
+        // On its own line: five language slots plus a fifty cell bar do not fit next to each other
         msg.push_str(&format!("\n{INDENT}{}{}", " ".repeat(BAR_INDENT), theme.bar_frame.paint("[-")));
         for (i, (_, _, verticals)) in MOCK_PERCENTAGES.iter().enumerate() {
             let cell = bar_thickness.get_character().repeat(*verticals);
@@ -1252,10 +1237,9 @@ pub fn print_existing_configs() {
     println!("{}", format_existing_configs_message(&config_names));
 }
 
-// The reason travels beside each name, which is the shape the faulty counted files already use. One
-// heading over both reasons a file can fail is true of only one of them: a file saved in an encoding
-// that cannot be read as text would be announced as a file with a typo in it, and its owner would go
-// hunting for a mistake that is not there.
+// The reason travels beside each name: one heading over both reasons a file can fail is true of
+// only one of them, and a file saved in an unreadable encoding would be announced as a file with a
+// typo in it.
 pub fn format_faulty_language_files_message(faulty_files: &[FaultyLanguageFile]) -> String {
     let mut message = format!("\n{} language {} could not be used, and will not be taken into consideration.",
             faulty_files.len(), if faulty_files.len() == 1 {"file"} else {"files"});
@@ -1265,21 +1249,19 @@ pub fn format_faulty_language_files_message(faulty_files: &[FaultyLanguageFile])
     message + "\n"
 }
 
-// Split from the printing so that the deduplication can be asserted. Two files declaring one
-// language is a broken installation, and naming it twice here would read as two languages rather
-// than as the one it is.
+// Two files declaring one language is a broken installation, and naming it twice here would read as
+// two languages rather than as the one it is.
 fn format_supported_languages_message(languages_available: &[Language]) -> String {
     const COLUMNS : usize = 3;
 
     let mut lang_names = languages_available.iter().map(|x| x.name.to_owned()).collect::<Vec<_>>();
     lang_names.sort();
     lang_names.dedup();
-    format!("{}The supported languages found are:\n\n{}\n", get_data_dir_str(),
+    format!("{}Found these languages:\n\n{}\n", get_data_dir_str(),
             format_in_columns(&lang_names, COLUMNS))
 }
 
-// Filled downwards and not across, so that a sorted list still reads in order down each column
-// instead of jumping from one to the next and back on every name.
+// Filled downwards and not across, so a sorted list reads in order down each column.
 fn format_in_columns(names: &[String], columns: usize) -> String {
     const GUTTER : usize = 6;
 
@@ -1292,10 +1274,8 @@ fn format_in_columns(names: &[String], columns: usize) -> String {
     }).collect::<Vec<_>>().join("\n")
 }
 
-// Split from the printing so that the empty case can be asserted: joining the names with the same
-// two spaces that indent the first one leaves a heading over a line holding those two spaces and
-// nothing else, which reads as a configuration whose name failed to appear rather than as none
-// existing. The data dir is named either way, being the answer to "where would I put one".
+// The empty case gets a sentence of its own: joining no names with the two spaces that indent the
+// first one leaves a heading over a line of two spaces, which reads as a name that failed to print.
 fn format_existing_configs_message(config_names: &[&str]) -> String {
     if config_names.is_empty() {
         format!("{}No configurations found.\n", get_data_dir_str())
@@ -1305,7 +1285,7 @@ fn format_existing_configs_message(config_names: &[&str]) -> String {
 }
 
 fn get_data_dir_str() -> String {
-    format!("\nData dir path: {}\n\n", PERSISTENT_APP_PATHS.data_dir)
+    format!("\nData directory: {}\n\n", PERSISTENT_APP_PATHS.data_dir.trim_end_matches(['/', '\\']))
 }
 
 fn get_help_msg_of_command(command: &str) -> Option<&'static str> {
@@ -1329,18 +1309,14 @@ mod tests {
         for line in wrapped.lines() {
             assert!(line.chars().count() <= MESSAGE_WIDTH, "'{line}' is {} columns", line.chars().count());
         }
-        // the words survive whole and in order, and the two sentences still start on their own lines
         assert_eq!(long.split_whitespace().collect::<Vec<_>>(), wrapped.split_whitespace().collect::<Vec<_>>());
         assert!(wrapped.lines().any(|x| x.starts_with("Use the '--no-gitignore'")));
 
-        // a word longer than the width has nowhere to break, so it goes out whole on its own line
+        // a word longer than the width has nowhere to break
         let path = "a/".repeat(MESSAGE_WIDTH);
         assert_eq!(format!("see\n{path}"), wrap_message(&format!("see {path}")));
     }
 
-    // An installation holding two files that declare one language is one language however many
-    // files describe it. The list used to arrive as a map, which deduplicated it without anybody
-    // deciding to, and the line that took that job over had nothing asserting it.
     #[test]
     fn a_language_declared_by_two_files_is_listed_once() {
         let twice = vec![Language::new("Java", ["java"], ["\""], ["//"], &[], []),
@@ -1352,9 +1328,8 @@ mod tests {
         assert!(listed.contains("Rust"));
     }
 
-    // The columns are filled downwards, so the last one is short by however much the count misses a
-    // multiple of three, and that ragged end is where a name goes missing without anything else
-    // looking wrong.
+    // The columns are filled downwards, so the last one is short whenever the count misses a
+    // multiple of three, and that ragged end is where a name goes missing.
     #[test]
     fn every_name_survives_a_column_count_that_does_not_divide_the_list() {
         let all = (0..10).map(|i| format!("Lang{i}")).collect::<Vec<_>>();
@@ -1371,9 +1346,7 @@ mod tests {
     }
 
     // The one message that only appears when something in the user's languages folder is wrong, so
-    // no ordinary run prints it and no comparison of two builds can see it. Both reasons a file can
-    // fail used to arrive under one heading calling them formatting problems, which sent the owner of
-    // a file saved in the wrong encoding looking for a typo that was not there.
+    // no ordinary run prints it and no comparison of two builds can see it.
     #[test]
     fn a_language_file_that_could_not_be_read_is_not_called_a_formatting_problem() {
         let unreadable = FaultyLanguageFile {
@@ -1388,8 +1361,6 @@ mod tests {
 
         let both = format_faulty_language_files_message(&[unreadable, malformed]);
         assert!(both.contains("2 language files could not be used"), "{both}");
-        // each named on its own line, with the reason that belongs to it and not to the other, and
-        // the malformed one names the line, since the blocks have to arrive in one fixed order
         assert!(both.contains("-- Utf16.txt: the language file could not be read"), "{both}");
         assert!(both.contains("-- Garbage.txt: line 7 is not what the format expects there"), "{both}");
         assert!(!both.contains("Formatting problems"), "the two reasons are under one wrong heading again:\n{both}");
@@ -1400,9 +1371,6 @@ mod tests {
         assert!(one.contains("1 language file could not be used"), "{one}");
     }
 
-    // With nothing to list, '--show-configs' printed the heading and then a line holding the two
-    // spaces that indent a name, which reads as a name that failed to print rather than as an
-    // empty data dir.
     #[test]
     fn an_empty_config_dir_says_so_instead_of_listing_nothing() {
         let none = format_existing_configs_message(&[]);
@@ -1412,15 +1380,13 @@ mod tests {
 
         let some = format_existing_configs_message(&["mezura.txt", "portal.txt"]);
         assert!(some.contains("Found these configurations:\n  mezura.txt\n  portal.txt"), "{some}");
-        // and either way the reader is told where the directory is
-        assert!(none.contains("Data dir path:") && some.contains("Data dir path:"));
+        assert!(none.contains("Data directory:") && some.contains("Data directory:"));
     }
 
     const README_HEADING : &str = "## Cmd Commands";
     const FENCE : &str = "```";
 
-    // Returns the command block of the README, and everything before and after it, so that the block
-    // can be replaced without the rest of a hand written document being touched
+    // The middle part alone is replaceable, so the rest of a hand written document is never touched.
     fn readme_parts(readme: &str) -> (String, String, String) {
         let heading_at = readme.find(README_HEADING).expect("the README has a '## Cmd Commands' heading");
         let opening = readme[heading_at..].find(FENCE).expect("that section opens a fenced block") + heading_at;
@@ -1430,9 +1396,9 @@ mod tests {
         (readme[..body_at].to_owned(), readme[body_at..closing].to_owned(), readme[closing..].to_owned())
     }
 
-    // The README's command list is not maintained, it is written from the help texts, which are the
-    // one source. Everything the README wants to say that the help does not say has to live outside
-    // the fence, because the inside of it is replaced wholesale.
+    // The README's command list is not maintained, it is written from the help texts. Anything the
+    // README wants to say that the help does not has to live outside the fence, since the inside of
+    // it is replaced wholesale.
     #[test]
     fn the_readme_command_list_is_the_help_itself() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("README.md");
@@ -1450,8 +1416,7 @@ mod tests {
                  Regenerate it with MEZURA_UPDATE_GOLDEN=1 cargo test -p mezura readme");
     }
 
-    // A token nobody can find is a token nobody can use, and the help is the only place that lists
-    // them. The README carries the same list by being generated from this text.
+    // The help is the only place that lists the style tokens, and the README is generated from it.
     #[test]
     fn every_style_token_is_named_in_the_help() {
         for token in crate::theme::Theme::get_token_names() {
@@ -1459,9 +1424,8 @@ mod tests {
         }
     }
 
-    // '--version' reads the release date from the first line of the Changelog, so that line has to
-    // keep naming the version this binary reports. Without this the two drift apart silently and
-    // '--version' starts quoting the date of a release that is not the one running.
+    // '--version' reads the release date from the first line of the Changelog, so without this the
+    // two drift apart silently and '--version' quotes the date of a release that is not running.
     #[test]
     fn the_changelog_opens_with_the_version_this_binary_reports() {
         let changelog = String::from_utf8_lossy(CHANGELOG_BYTES);
@@ -1482,7 +1446,6 @@ mod tests {
         }
     }
 
-    // The three lists of commands became one table, and nothing else may hold a fourth
     #[test]
     fn every_command_has_exactly_one_help_entry() {
         let names = get_command_names();

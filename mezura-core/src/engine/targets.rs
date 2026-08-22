@@ -1,5 +1,5 @@
 // Which paths the walk is actually given, once the ones that lie inside other ones have been taken
-// out, and which of the things it finds are excluded. Everything here decides what gets counted.
+// out, and which of the things it finds are excluded.
 use std::borrow::Cow;
 use std::path::Path;
 
@@ -7,8 +7,7 @@ use crate::GitignoreStack;
 use crate::engine::config::Target;
 
 // Proof inside this crate that resolution has already happened, so everything downstream can take
-// absolute validated paths for granted. It never leaves the crate: a caller holds targets as
-// declared, and resolving them is the run's own first step.
+// absolute validated paths for granted.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct Targets {
     resolved: Vec<Target>,
@@ -30,8 +29,7 @@ impl std::ops::Deref for Targets {
     }
 }
 
-// Carried on the run's own error. The command line rewords it; the Display below is what a library
-// caller prints.
+// The command line rewords these; the Display below is what a library caller prints.
 #[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TargetError {
@@ -70,9 +68,8 @@ pub(crate) fn remove_overlapping_targets(targets: Vec<Target>) -> Vec<Target> {
     keep_topmost(targets, |enclosing, target| enclosing.module == target.module)
 }
 
-// Whether every pattern parses, which is all a caller can act on. The matcher itself stays inside,
-// because its type belongs to a dependency and putting it in the signature would make a release of
-// globset a breaking change of ours.
+// The matcher itself stays inside: its type belongs to a dependency, and putting it in the
+// signature would make a release of globset a breaking change of ours.
 pub fn validate_exclude_patterns(exclude_patterns: &[String]) -> Result<(), TargetError> {
     build_exclude_matcher(exclude_patterns).map(|_| ())
             .map_err(|x| TargetError::InvalidGlob(x.glob().unwrap_or("").to_owned()))
@@ -96,16 +93,15 @@ pub(crate) fn build_exclude_matcher(exclude_patterns: &[String]) -> Result<globs
 // "Are these two the same place". Case-insensitive on Windows where the filesystem is, and with the
 // trailing separator gone, since 'D:/a' and 'D:/a/' are one directory: the containment test wants a
 // path strictly longer than its ancestor plus a separator, which 'D:/a/' is not against 'D:/a', so
-// the pair looked like two places and everything under it was counted twice.
+// the pair reads as two places and everything under it is counted twice.
 pub(crate) fn path_comparison_key(path: &str) -> String {
     let path = path.trim_end_matches('/');
     if cfg!(windows) {path.to_lowercase()} else {path.to_owned()}
 }
 
 // A literal path must exist and is always used, even if it is ignored or dotted, because somebody
-// named it. A glob is expanded to the paths it matches, and those the program found itself, so they
-// obey the same rules as everything else it finds. Then the nested ones are dropped, unless they
-// carry a module of their own.
+// named it. A glob's matches were found by the program, so they obey every rule the walk obeys, and
+// the nested ones are then dropped unless they carry a module of their own.
 //
 // Idempotent, because all of it is existence-first: what one pass resolved, the next takes literally.
 pub(crate) fn resolve(declared: &[Target], respect_gitignore: bool, search_in_dotted: bool)
@@ -118,20 +114,18 @@ pub(crate) fn resolve(declared: &[Target], respect_gitignore: bool, search_in_do
     Ok(Targets { resolved: expand_patterns(prepared, respect_gitignore, search_in_dotted)?, written_by_hand })
 }
 
-// A target naming nothing is refused; everything else comes back absolute, with two spellings of one
-// module name unified. A relative pattern is joined to the working directory, so a saved
-// configuration still names the same places when it is loaded from somewhere else.
+// A relative path or pattern is joined to the working directory, so a saved configuration still
+// names the same places when it is loaded from somewhere else.
 //
-// The half of resolution no setting can change, which is why it stands alone. 'run' does it anyway
-// as its first step, so call it only to refuse a bad path at the moment somebody typed it. It does
-// not expand patterns, because which of a pattern's matches survive depends on settings this cannot
-// see.
+// 'run' does this as its first step anyway, so call it only to refuse a bad path at the moment
+// somebody typed it. It does not expand patterns, because which of a pattern's matches survive
+// depends on settings this cannot see.
 pub fn validate_and_absolutize(declared: &[Target]) -> Result<Vec<Target>, TargetError> {
     let mut prepared: Vec<Target> = Vec::with_capacity(declared.len());
     for target in declared {
         let (module, trimmed) = (&target.module, target.path.trim());
-        // Two spellings of one name are one module, the way two spellings of one extension are one
-        // extension. The first one seen is the one the report prints.
+        // Two spellings of one name are one module, and the first one seen is the one the report
+        // prints
         let module = module.as_ref().map(|name| prepared.iter()
                 .find_map(|x: &Target| x.module.clone().filter(|seen| seen.to_lowercase() == name.to_lowercase()))
                 .unwrap_or_else(|| name.clone()));
@@ -172,8 +166,7 @@ fn find_contested_target(targets: &[Target]) -> Result<(), TargetError> {
 }
 
 // The spelling every resolved path carries: absolute, forward slashes, no trailing separator, and
-// without the '\\?\' prefix that std's 'canonicalize' puts on Windows. Every literal target goes
-// through it, so a caller wanting the spelling a resolved target will have starts here.
+// without the '\\?\' prefix that std's 'canonicalize' puts on Windows.
 pub fn convert_to_absolute(s: &str) -> String {
     let p = Path::new(s);
     if p.is_absolute() {
@@ -183,7 +176,7 @@ pub fn convert_to_absolute(s: &str) -> String {
     // The canonical form of a path that was typed as valid UTF-8 need not be valid UTF-8 itself,
     // since canonicalizing resolves links and the target's real name is whatever the file system
     // holds. Falling back to what was typed keeps a string that still names the place, which
-    // 'to_string_lossy' would not: this one is handed back to 'is_dir' and 'is_file' further down.
+    // 'to_string_lossy' would not: this one is handed to 'is_dir' and 'is_file' further down.
     match std::fs::canonicalize(p).ok().and_then(|buf| buf.to_str().map(str::to_owned)) {
         Some(str_path) => trim_trailing_slash(
                 &normalise_separators(str_path.strip_prefix(r"\\?\").unwrap_or(&str_path))).to_owned(),
@@ -199,8 +192,8 @@ pub(crate) fn normalise_separators(path: &str) -> Cow<'_, str> {
 // one kept before it. 'covered' decides what "enclosing" is allowed to remove.
 //
 // The sort belongs to the algorithm and not to the answer, so the order the targets were written in
-// is carried through and restored at the end: a report whose first column is alpha when the user
-// declared 'zeta=... alpha=...' is in a third order that answers nobody's question.
+// is carried through and restored at the end: a report that starts with alpha when the user declared
+// 'zeta=... alpha=...' is in a third order that answers nobody's question.
 fn keep_topmost(targets: Vec<Target>, covered: impl Fn(&Target, &Target) -> bool) -> Vec<Target> {
     let mut sorted = targets.into_iter().enumerate()
             .map(|(declared_at, x)| (path_comparison_key(&x.path), declared_at, x)).collect::<Vec<_>>();
@@ -238,26 +231,25 @@ fn expand_patterns(targets: Vec<Target>, respect_gitignore: bool, search_in_dott
         // Existence decides here too: prepared targets come back through this on the second
         // resolution pass, and an absolutized literal may carry pattern characters it never typed
         if !is_valid_path(&target.path) && has_glob_metacharacters(&target.path) {
-            let paths = match glob::glob(&target.path) {
-                Ok(x) => x,
-                Err(_) => return Err(TargetError::InvalidGlob(target.path.clone()))
+            let Ok(paths) = glob::glob(&target.path) else {
+                return Err(TargetError::InvalidGlob(target.path));
             };
             let matches = paths.flatten().filter(|x| x.is_dir() || x.is_file()).collect::<Vec<_>>();
             if matches.is_empty() {
-                return Err(TargetError::NoGlobMatches(target.path.clone()));
+                return Err(TargetError::NoGlobMatches(target.path));
             }
 
             let relevant = matches.iter()
                     .filter(|x| search_in_dotted || !is_dotted(x))
                     .filter(|x| !respect_gitignore || !GitignoreStack::is_path_ignored(x))
                     // A pattern is not a name: what it matched was found by the program, and a link
-                    // it found is a link the walk would have skipped for counting twice whatever it
-                    // points at. Named on its own it is still followed, as any target is.
+                    // the walk finds is skipped, since it counts whatever it points at a second
+                    // time. Named on its own it is still followed, as any target is.
                     .filter(|x| !x.is_symlink())
                     .filter_map(|x| x.to_str().map(convert_to_absolute))
                     .map(|path| Target { module: target.module.clone(), path }).collect::<Vec<_>>();
             if relevant.is_empty() {
-                return Err(TargetError::AllGlobMatchesIgnored(target.path.clone()));
+                return Err(TargetError::AllGlobMatchesIgnored(target.path));
             }
             resolved.extend(relevant);
         } else {
@@ -273,9 +265,9 @@ fn expand_patterns(targets: Vec<Target>, respect_gitignore: bool, search_in_dott
 }
 
 // 'convert_to_absolute' cannot do this one: it asks the filesystem, and a pattern is not a path that
-// exists. Joining with the working directory changes nothing about what the pattern matches, since a
-// relative one was expanded against that directory anyway. What it buys is that the pattern still
-// means the same thing written into a file and read back from somewhere else.
+// exists. Joining the working directory changes nothing about what the pattern matches, since a
+// relative one is expanded against that directory anyway; what it buys is that the pattern still
+// means the same thing written into a configuration and read back from somewhere else.
 fn absolutize_pattern(pattern: &str) -> String {
     let normalized = normalise_separators(pattern);
     if Path::new(normalized.as_ref()).is_absolute() {
@@ -319,7 +311,7 @@ mod target_path_tests {
     use super::*;
 
     #[test]
-    fn test_has_glob_metacharacters() {
+    fn a_path_carrying_a_glob_character_is_recognised_as_a_pattern() {
         assert!(has_glob_metacharacters("src/*"));
         assert!(has_glob_metacharacters("a?b"));
         assert!(has_glob_metacharacters("[abc]"));
@@ -352,7 +344,7 @@ mod target_path_tests {
     }
 
     #[test]
-    fn test_remove_overlapping_paths_keeps_unrelated() {
+    fn unrelated_targets_are_all_kept_in_the_order_they_were_written() {
         assert_eq!(Vec::<String>::new(), dedupe(&[]));
         assert_eq!(vec!["D:/a"], dedupe(&["D:/a"]));
         // The order they were written in, not the order they sort in
@@ -361,13 +353,13 @@ mod target_path_tests {
     }
 
     #[test]
-    fn test_remove_overlapping_paths_drops_identical() {
+    fn the_same_target_written_twice_is_kept_once() {
         assert_eq!(vec!["D:/a"], dedupe(&["D:/a", "D:/a"]));
         assert_eq!(vec!["D:/b", "D:/a"], dedupe(&["D:/b", "D:/a", "D:/b", "D:/a"]));
     }
 
     #[test]
-    fn test_remove_overlapping_paths_drops_nested() {
+    fn a_target_inside_another_target_is_dropped() {
         assert_eq!(vec!["D:/a"], dedupe(&["D:/a", "D:/a/b"]));
         assert_eq!(vec!["D:/a"], dedupe(&["D:/a/b", "D:/a"]));
         assert_eq!(vec!["D:/a"], dedupe(&["D:/a", "D:/a/b/c/d", "D:/a/b"]));
@@ -376,7 +368,7 @@ mod target_path_tests {
     }
 
     #[test]
-    fn test_remove_overlapping_paths_respects_component_boundaries() {
+    fn a_shared_prefix_that_is_not_a_whole_component_is_not_an_overlap() {
         // 'D:/ab' is not inside 'D:/a', despite the string prefix
         assert_eq!(vec!["D:/a", "D:/ab"], dedupe(&["D:/a", "D:/ab"]));
         assert_eq!(vec!["D:/a", "D:/a-b"], dedupe(&["D:/a", "D:/a-b"]));
@@ -387,10 +379,9 @@ mod target_path_tests {
     }
 
     #[test]
-    fn test_remove_overlapping_paths_handles_trailing_slashes_and_case() {
+    fn a_trailing_slash_or_a_different_case_still_names_the_same_place() {
         assert_eq!(vec!["D:/a/"], dedupe(&["D:/a/", "D:/a/b"]));
-        // The same place written twice, once with the slash. Only the byte-identical duplicate was
-        // ever tested, so this pair survived the pruning and every file under it was counted twice.
+        // The same place written twice and not a byte-identical duplicate: it still folds into one
         assert_eq!(vec!["D:/a"], dedupe(&["D:/a", "D:/a/"]));
         assert_eq!(vec!["D:/a/"], dedupe(&["D:/a/", "D:/a"]));
         assert_eq!(vec!["D:/a"], dedupe(&["D:/a", "D:/a/", "D:/a/b"]));
@@ -403,8 +394,8 @@ mod target_path_tests {
         }
     }
 
-    // Dropping the nested one is what would quietly count the tests as backend, which is the exact
-    // opposite of what was asked for
+    // Dropping the nested one would quietly count the tests as backend, the opposite of what was
+    // asked for
     #[test]
     fn a_nested_target_survives_the_pruning_when_it_names_another_module() {
         assert_eq!(vec!["backend=D:/api", "tests=D:/api/tests"],
@@ -415,19 +406,15 @@ mod target_path_tests {
         assert_eq!(vec!["tests=D:/api"], dedupe_named(&["tests D:/api", "tests D:/api/deep"]));
     }
 
-    // The nearest enclosing target decides, not the outermost one: below a boundary that changed the
-    // module, a target that changes it back is a boundary of its own and has to stay
+    // The nearest enclosing target decides, not the outermost one
     #[test]
     fn a_target_that_reverts_the_module_of_the_one_above_it_is_kept() {
         assert_eq!(vec!["D:/a", "tests=D:/a/b", "D:/a/b/c"],
                 dedupe_named(&["D:/a", "tests D:/a/b", "D:/a/b/c"]));
     }
 
-    // A place that exists is the place the user named, whatever characters its name carries:
-    // pattern syntax applies only to text that names nothing on disk. Deciding by syntax first
-    // read the brackets of an existing directory, or of the working directory a relative path had
-    // been joined to, as a character class, and refused a place that exists: a saved configuration
-    // holds its targets in absolute form, so one saved under a bracketed ancestor could never load.
+    // A saved configuration holds its targets in absolute form, so with syntax deciding first, one
+    // saved under a directory with a bracket in its name could never be loaded again.
     #[test]
     fn an_existing_path_is_a_literal_target_even_when_it_looks_like_a_pattern() {
         let root = std::env::temp_dir().join("mezura-existing-bracket");
@@ -448,8 +435,6 @@ mod target_path_tests {
         resolve(&declared, respect_gitignore, false).map(|x| x.iter().map(Target::to_string).collect())
     }
 
-    // There is no more specific one of the two to decide it, and whichever won would take the
-    // other's files away without a word
     #[test]
     fn one_path_under_two_names_is_refused() {
         let root = std::env::temp_dir().join("mezura-contested");
@@ -468,10 +453,8 @@ mod target_path_tests {
         assert_eq!(1, repeated.unwrap().len());
     }
 
-    // Two literal paths are decidable the moment they are typed, and the command line calls this one
-    // before anything is counted. Under '--diff' the later check runs against a checkout, so the
-    // message would name a temporary directory nobody wrote, and a whole repository would be written
-    // out before it said so.
+    // Under '--diff' the later check runs against a checkout, so a whole repository is written out
+    // before the message names a temporary directory nobody wrote.
     #[test]
     fn two_names_over_one_typed_path_are_refused_before_anything_is_counted() {
         let root = std::env::temp_dir().join("mezura-contested-early");
@@ -553,10 +536,9 @@ mod target_path_tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
-    // A trailing separator names the same place as none, and the resolved spelling has to settle on
-    // one of them: the log compares these strings to decide whether two runs measured the same tree,
-    // so 'D:/x/' against 'D:/x' reported a change nobody made. The pruning inside one run already
-    // treated them as one place, which is exactly what kept the disagreement out of sight.
+    // The log compares these strings to decide whether two runs measured the same tree, so 'D:/x/'
+    // against 'D:/x' reports a change nobody made. The pruning inside one run treats them as one
+    // place either way, which is what keeps the disagreement out of sight.
     #[test]
     fn a_trailing_separator_is_not_a_second_spelling_of_one_place() {
         let root = std::env::temp_dir().join("mezura-trailing-slash");
@@ -565,14 +547,12 @@ mod target_path_tests {
         let root_str = root.to_str().unwrap().replace('\\', "/");
 
         let bare = convert_to_absolute(&root_str);
-        let slashed = convert_to_absolute(&(root_str.clone() + "/"));
+        let slashed = convert_to_absolute(&(root_str + "/"));
         std::fs::remove_dir_all(&root).unwrap();
 
         assert_eq!(bare, slashed);
     }
 
-    // A root is not a directory with a separator after it: 'D:/' is the root of the drive while
-    // 'D:' is the current directory on it, and '/' is the root of the file system.
     #[test]
     fn the_trailing_separator_of_a_root_belongs_to_its_name() {
         assert_eq!("D:/", trim_trailing_slash("D:/"));
@@ -582,8 +562,6 @@ mod target_path_tests {
         assert_eq!("//server/share", trim_trailing_slash("//server/share/"));
     }
 
-    // The other side of existence-first: text that names nothing on disk is a pattern when it
-    // carries the syntax, and a missing place when it does not.
     #[test]
     fn text_that_names_nothing_is_a_pattern_only_when_it_carries_the_syntax() {
         let nowhere = std::env::temp_dir().join("mezura-nowhere");
@@ -594,8 +572,6 @@ mod target_path_tests {
         assert!(matches!(validate_and_absolutize(&[Target::of(plain_str.clone())]), Err(TargetError::InvalidPath(p)) if p == plain_str));
     }
 
-    // The first spelling seen is the one every later one folds into, so the report prints one row
-    // and not two, and 'remove_overlapping_targets' sees one module where the user meant one.
     #[test]
     fn two_spellings_of_a_module_name_are_one_module() {
         let root = std::env::temp_dir().join("mezura-module-name-case");
@@ -629,7 +605,7 @@ mod exclude_matcher_tests {
     use super::*;
 
     #[test]
-    fn test_name_patterns_match_at_any_depth() {
+    fn an_exclusion_naming_one_word_matches_it_at_any_depth_and_never_half_a_name() {
         let matcher = build_exclude_matcher(&["node_modules".to_owned(), "*.min.js".to_owned()]).unwrap();
 
         assert!(matcher.is_match("node_modules"));
@@ -641,7 +617,7 @@ mod exclude_matcher_tests {
     }
 
     #[test]
-    fn test_path_patterns_are_component_anchored() {
+    fn an_exclusion_naming_a_path_is_anchored_on_whole_components() {
         let matcher = build_exclude_matcher(&["Rusty/mezura".to_owned(), "D:/dev/bench".to_owned()]).unwrap();
 
         assert!(matcher.is_match("D:/dev/Rusty/mezura"));
@@ -651,7 +627,7 @@ mod exclude_matcher_tests {
     }
 
     #[test]
-    fn test_backslashes_and_trailing_slashes_are_normalized() {
+    fn an_exclusion_written_with_backslashes_or_a_trailing_slash_still_matches() {
         let matcher = build_exclude_matcher(&["Rusty\\mezura\\bench".to_owned(), "target/".to_owned()]).unwrap();
 
         assert!(matcher.is_match("D:/dev/Rusty/mezura/bench"));
@@ -659,7 +635,7 @@ mod exclude_matcher_tests {
     }
 
     #[test]
-    fn test_invalid_glob_is_rejected() {
+    fn an_exclusion_that_is_not_a_valid_glob_stops_the_run() {
         assert!(build_exclude_matcher(&["[invalid".to_owned()]).is_err());
         assert!(build_exclude_matcher(&["valid".to_owned(), "[invalid".to_owned()]).is_err());
     }

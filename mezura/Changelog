@@ -20,9 +20,9 @@ Main changes:
       Long paths lose whole directories out of their middle. The JSON document carries the same
       rows under each language, as "by_file".
   -> Every piece of printed text can now be styled, not just the four colors of the overview.
-      52 tokens are exposed, and each takes a color plus any of bold, italic, underline, dim and
+      74 tokens are exposed, and each takes a color plus any of bold, italic, underline, dim and
       reverse, in any order. The cells of the live progress bar also take a "hex..hex" gradient
-      or "rainbow". Run "--help style" for the full list.
+      or "rainbow". Run "--help --style" for the full list.
   -> A comment line carrying no words now counts as extra, the way a lone brace always did: the
       bare "/*" and "*/" of a block written on their own lines, the "*" of a banner line, a lone
       "//" spacer, a decorative "/*----*/". Comment counts drop visibly on trees written in banner
@@ -31,7 +31,7 @@ Main changes:
       a report, with each line's bucket, the class it was read as, and what was still open when the
       line began. The stretches of each line that sit inside a string or a comment are printed in
       their own styles. "--output json" writes the same answer as a document with one verdict per
-      line, spans included, for other tools to read. Run "--help explain" for the details.
+      line, spans included, for other tools to read. Run "--help --explain" for the details.
   -> Minified files are now left out of the counts, and the report says how many were. A bundle is
       a whole program written on one or two lines, so counting it put a file of forty thousand real
       lines into the report as one line of code. A file counts as minified when its lines average
@@ -192,6 +192,12 @@ Main changes:
       whole filename just as readily. It overrides the priority file and, like every other command,
       can be saved in a configuration file.
   -> Extensions are now matched without regard to case, so a file named "MAIN.RS" counts as Rust.
+  -> The messages and the help were gone over for wording. Every error now names what failed and
+      what to do about it, one word is used for one thing throughout ("directory", never "dir" or
+      "folder"), and the counts read as English on one file as much as on many. Two printed lines
+      moved: the scan heading is "Analyzing targets" rather than "Analyzing directories", since a
+      target can be a file or a pattern, and the overview's third label is "Size:" rather than
+      "Size :". Anything that reads mezura's output by matching those lines needs updating.
 
 (Breaking!)
   -> Color palettes are now called themes, and carry a whole look instead of four bar colors.
@@ -224,7 +230,7 @@ Main changes:
       no content.
   -> Lines that carry no content are recognised consistently now, whatever punctuation they are
       made of. The old rule covered only a few shapes, so a small number of lines move between
-      "code" and "extra". '--braces-as-code' counts them all as code, as before.
+      "code" and "extra". "--counting region" counts them all as code.
   -> The log is now written as JSON, one entry per line, in "data/logs/<config>.jsonl". Each entry
       records the settings, the totals with the comment count, and the module totals. Logs from
       earlier versions (.txt) are not read or touched; delete them if you do not want them around.
@@ -357,22 +363,27 @@ Performance:
       so it is worth raising if your files live on a slow drive.
 
 Bugfixes:
+  -> A setting your default configuration holds is no longer dropped when you load another one.
+      "targets", "exclude-languages", "top" and "by-file" were the four that could go missing: a
+      "--load"ed configuration carrying a "===> style" block and covering every other setting made
+      the run skip the default configuration entirely, and those four of its values were lost
+      without a word.
   -> A line holding a comment beside nothing but punctuation now counts as a comment. Lines such as
       "}  // end of function" or "});  // callback" were counted as neither code nor comment, so
       their comment was reported nowhere and comment counts came out low on any codebase that
-      writes them. With "--braces-as-code" such a line counts as code, as it did before, since the
-      punctuation is code there and a line carrying both is code.
+      writes them. With "--counting region" such a line counts as code, since the punctuation is
+      code there and a line carrying both is code.
   -> A comparison document now records the settings it took from the document it compares against,
       under the code "setting-adopted". They were only ever said on screen, so with "--output json"
       nothing at all was said, and both sides simply read alike: a value the command line gave
       could not be told apart from one borrowed from the baseline.
-  -> A setting named by a comparison is now spelled without its dashes, as "braces-as-code" rather
-      than "--braces-as-code", both in the sentences above the table and in the "subject" of a JSON
-      warning. It is the same name the history section already used for the same thing.
-  -> Each side of a comparison document now records the directories it measured, under
-      "scope.dirs", the way a run document already did. Without it, two sides that measured
+  -> A setting named by a comparison is now spelled without its dashes, as "counting" rather than
+      "--counting", both in the sentences above the table and in the "subject" of a JSON warning.
+      It is the same name the history section already used for the same thing.
+  -> Each side of a comparison document now records the targets it measured, under
+      "scope.targets", the way a run document already did. Without it, two sides that measured
       different trees could not be told apart from code that changed. A side counted from a git
-      revision records the directories as they were asked for, not the temporary checkout they
+      revision records the targets as they were asked for, not the temporary checkout they
       were counted in.
   -> A comparison now says above its table when a side's own scan leaves the numbers in doubt:
       a side that found no relevant files at all, one whose files failed to be parsed, and one
@@ -531,7 +542,7 @@ Bugfixes:
       and this is the command you would run to find them.
   -> A line that closes a block comment and opens the next one, with nothing or only whitespace
       between the two symbols, now counts as a comment line. It used to count as neither code nor
-      comment, and with "--braces-as-code" as code.
+      comment, and with "--counting region" as code.
   -> A string that begins exactly where a block comment closes, "*/" straight into a quote with no
       space between, is now read to its real end. Its opening quote used to be taken as its closing
       one, so the string's text was counted as code and searched for keywords, and a quote that

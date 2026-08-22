@@ -25,9 +25,21 @@ impl Languages {
         Self::resolve(config, parse_shipped_languages(), &parse_shipped_extension_priority())
     }
 
-    // For a caller with languages of its own. Keyed here by each language's own name rather than
-    // taken as a map somebody else keyed: in a map whose key and value disagree the key wins, and a
-    // language would be counted under a name it does not carry.
+    // The shipped set plus languages of the caller's own. Here rather than left to the caller,
+    // because doing it by hand means remembering the shipped priority rules as well: passed a
+    // default set instead, a contested extension is settled a different way and the counts come
+    // back looking perfectly normal.
+    pub fn shipped_with(config: &EngineConfig, extra: impl IntoIterator<Item = Language>)
+    -> (Self, Vec<Warning>)
+    {
+        let mut languages = parse_shipped_languages();
+        languages.extend(extra);
+        Self::resolve(config, languages, &parse_shipped_extension_priority())
+    }
+
+    // For a caller with languages and priority rules of its own. Keyed here by each language's own
+    // name rather than taken as a map somebody else keyed: in a map whose key and value disagree the
+    // key wins, and a language would be counted under a name it does not carry.
     pub fn resolve(config: &EngineConfig, languages: impl IntoIterator<Item = Language>,
             priority: &PriorityRules) -> (Self, Vec<Warning>)
     {
@@ -77,8 +89,6 @@ impl Languages {
                 nested, resolved_against: LanguageSelection::of(config) }, reported)
     }
 
-    // Asked by 'run' before it counts anything. Resolved against settings naming Rust and then run
-    // with settings naming Python, it counted Rust, called it Rust, and said nothing.
     pub(crate) fn describe_the_same_selection_as(&self, config: &EngineConfig) -> bool {
         self.resolved_against == LanguageSelection::of(config)
     }
@@ -114,10 +124,8 @@ pub fn parse_shipped_extension_priority() -> PriorityRules {
 
 // The bytes as they were authored, comments and layout included, so what the installer puts in the
 // user's folder is a file made to be read and edited. Public because that installer is a separate
-// crate and cannot reach into this one's 'data/'.
-//
-// Plain tuples and not the embedder's own file type, so a release of 'include_dir' is never a
-// breaking change of ours.
+// crate and cannot reach into this one's 'data/'; plain tuples and not the embedder's own file type,
+// so a release of 'include_dir' is never a breaking change of ours.
 pub fn get_shipped_language_files_raw() -> Vec<(&'static str, &'static [u8])> {
     include_dir::include_dir!("data/languages").files.iter()
             .map(|file| (std::path::Path::new(file.path).file_name().and_then(|x| x.to_str()).unwrap_or(file.path),
@@ -131,9 +139,8 @@ pub fn get_shipped_extension_priority_raw() -> &'static [u8] {
 
 // The names that were asked for and no language answers to, in the order they were given. A
 // language answers to the name it carries and to every extension it claims, so 'js' is not an
-// unknown name while some language counts '.js' files. Which language an extension belongs to when
-// two claim it is a different question, settled where the narrowing happens; existence is not
-// contested, so this needs no priority rules and no map.
+// unknown name while some language counts '.js' files. Which of two languages owns a contested
+// extension is a different question, settled where the narrowing happens.
 pub fn find_unknown_language_names(languages: &[Language], wanted: &[String]) -> Vec<String> {
     wanted.iter().filter(|wanted| !languages.iter().any(|language|
                     is_the_same_language_name(&language.name, wanted)
@@ -145,14 +152,14 @@ pub fn find_unknown_language_names(languages: &[Language], wanted: &[String]) ->
 // and the priority rules.
 //
 // 'to_lowercase' and not 'eq_ignore_ascii_case', which agree until a name has a letter outside ASCII:
-// with the two mixed, 'CAFÉ' excluded as 'café' was taken out of the count by one rule and reported
-// as a name that does not exist by the other, in the same run.
+// mixing the two takes 'CAFÉ' excluded as 'café' out of the count by one rule while the other
+// reports it, in the same run, as a name that does not exist.
 pub(crate) fn is_the_same_language_name(one: &str, other: &str) -> bool {
     one.to_lowercase() == other.to_lowercase()
 }
 
-// By the name each language carries. A later declaration of a name wins, which is what a directory
-// holding two files for one language has always done.
+// By the name each language carries. A later declaration of a name wins, which is what happens when
+// a directory holds two files for one language.
 pub(crate) fn keyed_by_name(languages: impl IntoIterator<Item = Language>) -> HashMap<String, Language> {
     languages.into_iter().map(|language| (language.name.clone(), language)).collect()
 }
@@ -186,10 +193,8 @@ impl LanguageSelection {
     }
 }
 
-// Asked once, and not inside the map building, because that runs once per kind of identity and is
-// handed the same pairs every time: whoever writes '--force-language Makefile=python' owes us no
-// difference between a name and an extension, so the answer must not depend on which map could use
-// the pair.
+// Asked once, and not inside the map building, which runs once per kind of identity and is handed
+// the same pairs every time: asking it there says the same thing two or three times over.
 fn find_unknown_forced_languages(by_name: &HashMap<String, Language>, forced: &HashMap<String,String>)
         -> Vec<Warning>
 {
@@ -233,10 +238,10 @@ fn drop_the_unusable(languages: Vec<Language>) -> (Vec<Language>, Vec<Warning>) 
 
 // A region's default names the language its sections fall to when their own tag names none, and
 // nothing at the time a language file is read can tell whether that name exists, since the file
-// knows only itself. Asked here, where every language and the extension map are in one place, and
-// asked against exactly the two the section lookup will consult, so the check and what it predicts
-// cannot drift. Left unreported it is silent and expensive: every unnamed section goes back to
-// being read with the container's own symbols, so a '//' inside a script block counts as code.
+// knows only itself. Asked here against exactly the two maps the section lookup will consult, so the
+// check and what it predicts cannot drift. Left unreported it is silent and expensive: every unnamed
+// section goes back to being read with the container's own symbols, so a '//' inside a script block
+// counts as code.
 fn find_unresolvable_region_defaults(by_name: &HashMap<String, Language>,
     set_aside: &HashMap<String, Language>, extensions: &HashMap<String, Arc<str>>) -> Vec<Warning>
 {
@@ -262,15 +267,12 @@ claims it as an extension. Those sections are counted with the symbols of '{lang
 
 // Two definitions of one name: the second silently replaces the first when the map is built, and
 // which one is second is whatever order the directory was read in, so renaming a file changes the
-// counts. Reported against the counts and not the settings, because that is what it changes: the
-// two definitions disagree about comment symbols, and the losing one takes its extensions out of
-// the run with it. Announcing it is the fix; picking a winner would mean inventing a rule for
-// which of two files somebody meant.
-// Grouped the way every other name comparison in this crate groups, through
-// 'is_the_same_language_name', and not by the exact spelling. Two files called 'Rust' and 'rust' are
-// two definitions of one language to '--languages', to '--exclude-languages', to '--force-language' and
-// to the priority file, all of which fold case; counting them apart here was the one place that did
-// not, so that pair went through unreported while every one of those flags treated them as one.
+// counts. Against the counts and not the settings, because the two definitions disagree about
+// comment symbols and the losing one takes its extensions out of the run with it.
+//
+// Grouped through 'is_the_same_language_name' and not by exact spelling, since 'Rust' and 'rust' are
+// one language to '--languages', '--exclude-languages', '--force-language' and the priority file,
+// all of which fold case.
 pub fn find_duplicate_names(languages: &[Language]) -> Vec<Warning> {
     let mut spellings : HashMap<String, Vec<&str>> = HashMap::new();
     for language in languages {
@@ -283,10 +285,9 @@ pub fn find_duplicate_names(languages: &[Language]) -> Vec<Warning> {
     duplicated.into_iter().map(|found| {
         let times = found.len();
         let name = found[0];
-        // The two cases behave differently and the sentence has to say which one this is. Identical
-        // spellings collapse into one entry of the map and one of them is simply gone; spellings
-        // that differ in case are separate entries that both survive, take a row each in the report
-        // and split the count of one language between them.
+        // Identical spellings collapse into one entry of the map and one of them is simply gone;
+        // spellings that differ in case are separate entries that both survive, take a row each in
+        // the report and split the count of one language between them.
         let detail = if found.iter().all(|other| *other == name) {
             format!("'{name}' is declared {times} times, and only one of those declarations was used. \
 Which one is not decided by anything you can see, so the counts of '{name}' depend on it.")
@@ -307,8 +308,7 @@ fn retain_languages_of_interest(languages: Vec<Language>, extensions: &HashMap<S
     // A spelling selects a language by the name it carries, or by an extension it owns. The
     // ownership is read from the map the counting itself uses, so '--languages m' means the same
     // language that every '.m' file is counted as, whether that was settled by the priority file,
-    // by '--force-language' or by the tiebreak. Deciding it here again would let one word select
-    // one language and count another.
+    // by '--force-language' or by the tiebreak.
     let selects = |spelling: &String, language: &Language| {
         is_the_same_language_name(&language.name, spelling)
                 || extensions.get(&extension_key(spelling))
@@ -322,10 +322,8 @@ fn retain_languages_of_interest(languages: Vec<Language>, extensions: &HashMap<S
         }
     }
 
-    // Asked of the whole list and not of what the selection above left of it. Checked after the
-    // narrowing, every excluded name that happened to be outside the selection was reported as a
-    // name that does not exist, which is every excluded name on any run that also names languages:
-    // '--languages Java --exclude-languages Rust' said Rust did not exist.
+    // Asked of the whole list and not of what the selection above left of it: checked after the
+    // narrowing, '--languages Java --exclude-languages Rust' reports that Rust does not exist.
     //
     // Under a code of its own, and not the one above it, because the command line has already put
     // that one on the screen with a suggested spelling and keeps it only for the document. This one
@@ -350,8 +348,6 @@ mod language_selection_tests {
     use super::*;
     use crate::languages_claiming;
 
-    // The command line reports a misspelling to a person; this is the half that decides what gets
-    // counted, and it is what a library caller gets with no command line involved at all.
     #[test]
     fn the_run_narrows_the_languages_and_records_a_name_that_does_not_exist() {
         let languages = || languages_claiming(&[("Java", &["java"]), ("C#", &["cs"]), ("Rust", &["rs"])])
@@ -365,15 +361,14 @@ mod language_selection_tests {
         let mut config = EngineConfig::default();
         assert_eq!(vec!["C#", "Java", "Rust"], names_of(retain_languages_of_interest(languages(), &HashMap::new(), &config).0));
 
-        // asked for by a name that differs in case, which is still the same language
         config.languages_of_interest = vec!["java".to_owned(), "RUST".to_owned()];
         assert_eq!(vec!["Java", "Rust"], names_of(retain_languages_of_interest(languages(), &HashMap::new(), &config).0));
 
-        // and the exclusion applies on top of the selection
+        // the exclusion applies on top of the selection
         config.excluded_languages = vec!["rust".to_owned()];
         assert_eq!(vec!["Java"], names_of(retain_languages_of_interest(languages(), &HashMap::new(), &config).0));
 
-        // an excluded name on its own leaves everything else
+        // and on its own it leaves everything else
         config.languages_of_interest = Vec::new();
         assert_eq!(vec!["C#", "Java"], names_of(retain_languages_of_interest(languages(), &HashMap::new(), &config).0));
 
@@ -381,9 +376,6 @@ mod language_selection_tests {
         assert!(find_unknown_language_names(&languages(), &["C#".to_owned()]).is_empty());
     }
 
-    // A language is asked for by the name it carries or by an extension it claims, since the two
-    // are what somebody has in front of them: the report shows the name and the files show the
-    // extension, and which of the two is the shorter word is an accident of the language.
     #[test]
     fn a_language_is_selected_by_its_name_or_by_an_extension_it_claims() {
         let languages = || languages_claiming(&[("Java", &["java"]), ("C#", &["cs"]), ("Rust", &["rs"])])
@@ -401,9 +393,7 @@ mod language_selection_tests {
         let selecting = |names: &[&str]| EngineConfig {
                 languages_of_interest: names.iter().map(|x| (*x).to_owned()).collect(), ..Default::default() };
         assert_eq!(vec!["C#"], kept(&selecting(&["cs"])), "an extension did not select its language");
-        // and the case of the extension is as free as the case of a name
         assert_eq!(vec!["Rust"], kept(&selecting(&["RS"])));
-        // excluding takes the same road
         let excluding = EngineConfig {
                 excluded_languages: vec!["java".to_owned(), "rs".to_owned()], ..Default::default() };
         assert_eq!(vec!["C#"], kept(&excluding));
@@ -414,9 +404,6 @@ mod language_selection_tests {
         assert_eq!(vec!["nosuch"], find_unknown_language_names(&languages(), &["nosuch".to_owned()]));
     }
 
-    // Two languages claiming one extension have already been settled for the counting, and asking
-    // for that extension has to mean the same language it means everywhere else, or the same word
-    // would select one language and count another.
     #[test]
     fn an_extension_two_languages_claim_selects_the_one_that_won_it() {
         let languages = || languages_claiming(&[("Objective-C", &["m", "mm"]), ("MATLAB", &["m"])])
@@ -433,17 +420,12 @@ mod language_selection_tests {
         let priority = hashmap!("m".to_owned() => vec!["Objective-C".to_owned(), "MATLAB".to_owned()]);
         let forced = hashmap!("m".to_owned() => "MATLAB".to_owned());
 
-        // the alphabetical tiebreak, which is what the run counts with when nobody has decided
         assert_eq!(vec!["MATLAB"], kept(&nothing_decided, &no_forcing));
-        // the priority file's answer
         assert_eq!(vec!["Objective-C"], kept(&priority, &no_forcing));
-        // and '--force-language', which beats the priority file here as it does everywhere
+        // forcing beats the priority file here as it does everywhere
         assert_eq!(vec!["MATLAB"], kept(&priority, &forced));
     }
 
-    // A misspelt default is silent otherwise: nothing refuses the language file, since a file being
-    // read knows only itself, and every unnamed section goes back to being read with the container's
-    // own symbols, which is a comment count that looks perfectly ordinary and is wrong.
     #[test]
     fn a_region_default_that_names_no_language_is_reported() {
         let shell = |default: &str| Language::new("Weblike", ["wbl"], [""; 0], [""; 0], &[("<!--", "-->")], [])
@@ -462,8 +444,6 @@ mod language_selection_tests {
         assert!(complained[0].message.contains("Weblike"), "the message does not name the language that declared it");
     }
 
-    // Returned and not printed, because the command line puts its own colored version on the
-    // screen with a suggested spelling next to it.
     #[test]
     fn a_language_that_does_not_exist_reaches_the_document_as_a_warning() {
         let config = EngineConfig {
@@ -475,13 +455,11 @@ mod language_selection_tests {
 
         let mine = reported.into_iter().find(|x| x.subject == "Nolang-Q9").unwrap();
         assert_eq!(warnings::Code::UnknownLanguage, mine.code);
-        // the counts are sound for what does exist, it is the setting that was not honoured
         assert_eq!("settings", mine.affects().name());
     }
 
-    // The names travel with the bytes because the command line writes each file to disk under the
-    // name it came with, prefixed by its folder. Returning the whole embedded path instead passed
-    // every test there was, and would have installed 'languages/data/languages/Rust.txt'.
+    // The command line writes each file to disk under the name it came with, prefixed by its
+    // folder, so an embedded path here installs 'languages/data/languages/Rust.txt'.
     #[test]
     fn the_shipped_files_carry_bare_names_and_match_the_directory() {
         let raw = get_shipped_language_files_raw();
@@ -501,9 +479,6 @@ mod language_selection_tests {
         assert_eq!(on_disk, shipped, "the embedded set and the directory have drifted apart");
     }
 
-    // The exclusion folded case one way and the check for whether the name exists folded it another,
-    // so a name with a letter outside ASCII went down both roads at once: removed from the count,
-    // and reported as a name that removing changed nothing about.
     #[test]
     fn a_language_name_outside_ascii_is_excluded_and_not_reported_as_missing() {
         let cafe = || vec![Language::new("CAFÉ", ["cf"], ["\""], ["//"], &[], []),
@@ -516,16 +491,12 @@ mod language_selection_tests {
         assert_eq!(vec!["Rust"], names_of(kept), "the accented name survived an exclusion that names it");
         assert!(reported.is_empty(), "the language was excluded and the run said it does not exist: {reported:?}");
 
-        // and the selection folds case the same way, so asking for it by the other spelling finds it
         let config = EngineConfig { languages_of_interest: vec!["café".to_owned()], ..Default::default() };
         let (kept, _, reported) = retain_languages_of_interest(cafe(), &HashMap::new(), &config);
         assert_eq!(vec!["CAFÉ"], names_of(kept));
         assert!(reported.is_empty(), "{reported:?}");
     }
 
-    // The excluded names were checked against what the selection had already left behind, so any
-    // excluded name outside the selection was reported as a name that does not exist. That is every
-    // excluded name on any run that also names languages, which teaches the reader to ignore the code.
     #[test]
     fn excluding_a_language_outside_the_selection_is_not_reported_as_missing() {
         let config = EngineConfig {
@@ -542,9 +513,8 @@ mod language_selection_tests {
                 "'Rust' exists and was reported as missing: {reported:?}");
     }
 
-    // Two definitions of one name: the map keeps the last and the order is the directory's, so
-    // renaming a file changes which comment symbols a language counts with. Measured before this:
-    // the same source came back as comment=0 code=3 or comment=4 code=1 depending on the file names.
+    // With the same source and only the file names changed, the two definitions gave comment=0
+    // code=3 and comment=4 code=1.
     #[test]
     fn two_definitions_of_one_name_are_reported_against_the_counts() {
         let twice = vec![Language::new("Same", ["aa"], ["\""], ["//"], &[], []),
@@ -562,13 +532,10 @@ mod language_selection_tests {
                 .expect("a language declared twice was dropped in silence");
         assert_eq!("Same", mine.subject);
         assert_eq!("counts", mine.affects().name(), "the choice changes numbers, not settings");
-        // one of the two really is gone, which is what the warning is about
+        // one of the two really is gone
         assert_eq!(2, languages.into_parts().0.len());
     }
 
-    // A language nobody can name and a language no file can match were both accepted, took a row in
-    // every internal map, and contributed nothing. The file parser refuses both, so this is the
-    // caller who built one by hand.
     #[test]
     fn a_language_that_cannot_be_named_or_matched_is_dropped_and_reported() {
         let unusable = vec![
@@ -579,9 +546,6 @@ mod language_selection_tests {
         let (kept, reported) = drop_the_unusable(unusable);
         assert_eq!(vec!["Rust"], kept.into_iter().map(|x| x.name).collect::<Vec<_>>());
         assert_eq!(2, reported.len(), "{reported:?}");
-        // Two codes and not one, because the consequences differ: dropping the nameless one leaves
-        // every '.zz' file counted by nobody, while the one claiming nothing could never have
-        // matched a file in the first place
         assert_eq!(Some(warnings::Code::LanguageWithoutName),
                 reported.iter().find(|x| x.subject == "zz").map(|x| x.code),
                 "the nameless one is named by what it claims");
@@ -589,9 +553,7 @@ mod language_selection_tests {
                 reported.iter().find(|x| x.subject == "Claims-Nothing").map(|x| x.code));
     }
 
-    // A language file may declare filenames and no extension at all, which is what a definition for
-    // Makefile or Dockerfile alone looks like. Dropping it took the language out of the run and
-    // reported that it claimed nothing, while the name it claimed would have matched files.
+    // What a definition for Makefile or Dockerfile alone looks like: filenames and no extension.
     #[test]
     fn a_language_that_claims_only_filenames_is_kept() {
         let by_name_only = Language::new("Docky", [""; 0], ["\""], ["#"], &[], [])
@@ -601,13 +563,10 @@ mod language_selection_tests {
         assert_eq!(vec!["Docky"], kept.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), "{reported:?}");
         assert!(reported.is_empty(), "{reported:?}");
 
-        // and it reaches the map that answers for a whole filename
         let (languages, _) = Languages::resolve(&EngineConfig::default(), kept, &PriorityRules::default());
         assert_eq!(Some("Docky"), languages.lookup.of_path(std::path::Path::new("some/dir/Dockerfile")).as_deref());
     }
 
-    // The same pairs are handed to the map of extensions and to the map of whole names, so asking
-    // this question inside either of them says it twice, on the screen and in the JSON document.
     #[test]
     fn a_forced_language_that_is_not_available_is_reported_once_and_changes_nothing() {
         let config = EngineConfig {
@@ -621,18 +580,14 @@ mod language_selection_tests {
         let mine = reported.iter().filter(|x| x.code == warnings::Code::UnknownForcedLanguage)
                 .collect::<Vec<_>>();
         assert_eq!(1, mine.len(), "said once for each map it could not be used by: {reported:?}");
-        // a mapping that did not apply leaves the counts alone, it is the settings that were not honoured
         assert_eq!("settings", mine[0].affects().name());
         assert_eq!("py", mine[0].subject);
-        // Names what was asked for and what happened, and nothing a command line can do about it:
-        // that sentence belongs to whoever has a command line.
+        // The message names what was asked for and leaves '--force-language' to whoever has a
+        // command line
         assert!(mine[0].message.contains("'cobol'"), "{}", mine[0].message);
         assert!(!mine[0].message.contains("--force-language"), "{}", mine[0].message);
     }
 
-    // Excluding a name that does not exist did nothing and said nothing, while asking for one four
-    // lines above it has always been reported. Its own code, because the command line prints this one
-    // and only keeps the other.
     #[test]
     fn excluding_a_language_that_does_not_exist_is_reported_too() {
         let config = EngineConfig {
@@ -647,7 +602,23 @@ mod language_selection_tests {
         let mine = reported.iter().find(|x| x.subject == "Nolang-Q9").unwrap();
         assert_eq!(warnings::Code::UnknownExcludedLanguage, mine.code);
         assert_eq!("settings", mine.affects().name());
-        // and the one that does exist is excluded without a word about it
         assert!(!reported.iter().any(|x| x.subject == "Java"));
+    }
+
+    // The shipped priority rules are the half a caller doing this by hand forgets, and forgetting
+    // them is silent: 'm' is claimed by both Objective-C and MATLAB, and without the rules the
+    // contest is settled alphabetically instead, so a MATLAB file is counted as Objective-C.
+    #[test]
+    fn adding_a_language_of_your_own_keeps_the_shipped_ones_and_their_priority_rules() {
+        let config = EngineConfig::new(["./"]);
+        let mine = Language::new("Nolang-Q9", ["nolangq9"], ["\""], ["//"], &[], []);
+        let (by_name, lookup, _) = Languages::shipped_with(&config, [mine]).0.into_parts();
+        let (shipped_by_name, shipped_lookup, _) = Languages::shipped(&config).0.into_parts();
+
+        assert!(by_name.contains_key("Nolang-Q9"), "the language of my own was dropped");
+        assert_eq!(shipped_by_name.len() + 1, by_name.len(), "the shipped ones went with it");
+        assert_eq!(shipped_lookup.of_path(std::path::Path::new("a.m")),
+                lookup.of_path(std::path::Path::new("a.m")),
+                "a contested extension was settled differently, so the priority rules were lost");
     }
 }

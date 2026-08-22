@@ -15,7 +15,7 @@ pub fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>
         progress: Arc<ScanProgress>) -> std::io::Result<JoinHandle<()>>
 {
     thread::Builder::new().name(format!("consumer-{id}")).spawn(move || {
-        start_parsing_files(id, files_injector, faulty_files, finish_condition, stats_per_module,
+        start_parsing_files(files_injector, faulty_files, finish_condition, stats_per_module,
                 nested_per_module, files_per_module, language_map, nested_definitions, config,
                 &minified_files, &generated_files, &progress);
         // The last thing this thread does, and the only honest answer to how long the counting took:
@@ -25,7 +25,7 @@ pub fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>
     })
 }
 
-pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
+fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
     stats_per_module: StatsMapMut, nested_per_module: NestedLanguageMapMut, files_per_module: FilesPerModuleMut,
     language_map: Arc<HashMap<String,Language>>, nested_definitions: Arc<NestedLanguageDefinitions>,
     config: Arc<EngineConfig>, minified_files: &AtomicUsize, generated_files: &AtomicUsize,
@@ -47,10 +47,9 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
             vec![HashMap::new(); modules];
     let mut local_files: Vec<HashMap<String, Vec<FileEntry>>> = vec![HashMap::new(); modules];
     // A batch and not one file at a time. With four of these threads per core they all reach for the
-    // same queue head between files, and the cost is not the atomic but the losing side: a contended
-    // steal comes back as Retry, which the arm below answers by yielding, buying a whole scheduling
-    // round per file. The batch halves what is left when the queue runs low, so the last files still
-    // spread out rather than queueing behind one thread.
+    // same queue head between files, and a contended steal comes back as Retry, which the arm below
+    // answers by yielding: a whole scheduling round per file. A batch is half of what is left, so
+    // the last files still spread out rather than queueing behind one thread.
     let worker = Worker::new_fifo();
     loop {
         let next = match worker.pop() {
@@ -66,10 +65,9 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                 if parsable_file.path.to_string_lossy().contains("mezura-dead-consumer") {
                     panic!("test-induced consumer panic");
                 }
-                // The same door for the opposite question: checking the reported duration needs
-                // counting that visibly outlasts the caller's callback, and a corpus big enough to
-                // take a known number of milliseconds is a corpus whose timing depends on the
-                // machine. This makes it slow by an amount the test chose.
+                // The same for the opposite question: checking the reported duration needs counting
+                // that visibly outlasts the caller's callback, and a corpus big enough to take a
+                // known number of milliseconds is one whose timing depends on the machine.
                 #[cfg(test)]
                 if parsable_file.path.to_string_lossy().contains("mezura-slow-consumer") {
                     thread::sleep(Duration::from_millis(40));
@@ -87,10 +85,9 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                         let bytes = buf.len();
                         let module = parsable_file.module as usize;
                         let mut of_this_file = config.collect_files.then(HashMap::<String, Stats>::new);
-                        // The sections are the breakdown of this file, booked beside the row and
-                        // never into it; what they weigh is already inside the whole below. A region
-                        // that held nothing and one written in the container's own language get no
-                        // row: zero lines say nothing, and a container is not a breakdown of itself.
+                        // A nested section is booked beside the file's own row and never into it:
+                        // its lines are already inside the whole below. A section that held nothing,
+                        // and one written in the container's own language, get no row at all.
                         for section in report.sections.iter().filter(|section|
                                 section.stats.lines > 0 && section.language != lang_name) {
                             let section_keywords = lookup.find_by_name(&section.language)
@@ -104,11 +101,10 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                                                 section.stats.classes.clone(), HashMap::new()));
                             }
                         }
-                        // The whole file weighs on its own language's row: a container file is one
-                        // file of its language, all of its lines included
+                        // The whole file weighs on its own language's row, its nested lines included
                         let whole = report.into_whole();
-                        // Without its keywords: a map per file is what would cost real memory over a
-                        // large tree, and no report shows them per file
+                        // No keywords per file: a map each would cost real memory over a large tree,
+                        // and no report shows them
                         if let Some(nested_languages) = of_this_file {
                             let entry = FileEntry {
                                     path: spell_out(&parsable_file.path),
@@ -121,8 +117,11 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                                 None => { local_files[module].insert(lang_name.to_owned(), vec![entry]); }
                             }
                         }
-                        local_stats[module].entry(lang_name.to_owned())
-                                .or_default().add_file(&whole, bytes, keywords);
+                        match local_stats[module].get_mut(lang_name) {
+                            Some(stats) => stats.add_file(&whole, bytes, keywords),
+                            None => { local_stats[module].entry(lang_name.to_owned())
+                                    .or_default().add_file(&whole, bytes, keywords); }
+                        }
                     },
                     Ok(file_parser::FileOutcome::SkippedAsMinified) => {
                         progress.record_file_parsed(0);
@@ -138,8 +137,7 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                                 parsable_file.path.metadata().map_or(0, |m| m.len())))
                     }
                 }
-                // Shrinking belongs to whoever owns the buffer, and it has to happen after its
-                // length has been read as the file's size
+                // Only after the buffer's length has been read as the file's size, never before
                 if buf.capacity() > file_parser::MAX_RETAINED_FILE_BUFFER_BYTES {
                     buf = String::with_capacity(150);
                 }
@@ -152,8 +150,8 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
                     break;
                 }
 
-                // An empty queue while the producers are still running is the consumer waiting for
-                // work that has not been discovered yet, which is the only real starvation here
+                // Timed only while the producers are still running: a consumer waiting for work that
+                // has not been discovered yet is the only real starvation here
                 let waited_from = phase_timing::ENABLED.then(phase_timing::now);
                 idle_iterations += 1;
                 if idle_iterations < 10 {
@@ -210,7 +208,6 @@ pub fn start_parsing_files(_id: usize, files_injector: Arc<Injector<ParsableFile
             }
         }
     }
-    // println!("Thread {} finished, having done {} files.",_id,share);
 }
 
 fn spell_out(path: &std::path::Path) -> String {

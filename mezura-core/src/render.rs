@@ -3,17 +3,17 @@
 
 const TINY_THRESHOLD : f64 = 0.01;
 
-// How many cells of a bar of 'total_cells' each share is worth, by largest remainder: each takes the
-// whole part of its exact claim, anything visible keeps at least one cell so it cannot disappear, and
-// the leftover cells go one at a time to whoever sits furthest below their claim. Always sums to
-// 'total_cells' exactly.
+// How many cells of a bar of 'total_cells' each share is worth, by largest remainder. Anything
+// visible keeps at least one cell, and that can push the total over the target, since 97/1/1/1 wants
+// fifty-one cells in a bar of fifty: the excess comes off whoever holds the most and never empties
+// anyone, because a cell missing from a share of 96 is invisible while the same cell taken from a
+// share of 3 understates it by a third. So the sum is 'total_cells' unless more shares are visible
+// than there are cells to give them, where it is the number of visible shares.
 //
-// The minimum-one rule can push the total *over* the target, since 97/1/1/1 wants fifty-one cells in
-// a bar of fifty. The excess comes off whoever holds the most, and never empties anyone: a cell
-// missing from a share of 96 is invisible, the same cell taken from a share of 3 understates it by a
-// third.
-//
-// 'shares' are percentages, so a list that does not add up to about 100 gets a bar that is not full.
+// 'shares' are percentages of the same whole, so a list of them that adds up to less than 100 gets a
+// bar that is not full: one language holding a tenth of a project draws four cells of forty, and the
+// thirty six left empty are everything the caller did not name. A caller wanting the largest few
+// drawn against each other instead asks 'calculate_percentages_of_their_own_sum' for its shares.
 pub fn apportion(shares: &[f64], total_cells: usize) -> Vec<usize> {
     let exact = shares.iter().map(|x| x * total_cells as f64 / 100.0).collect::<Vec<_>>();
     let mut cells = shares.iter().zip(exact.iter())
@@ -24,7 +24,12 @@ pub fn apportion(shares: &[f64], total_cells: usize) -> Vec<usize> {
 
     while sum < total_cells {
         let distance_below = |i: &usize| exact[*i] - cells[*i] as f64;
+        // Still below its own claim, or a partial list would go on being handed cells after every
+        // share already has all it is worth, and the ones left over flatten the differences: over
+        // the fifty cells the tests below use, 40/8/2 filled that way is 28/12/10, where the
+        // smallest share is a twentieth of the largest.
         let furthest_below = (0..cells.len()).filter(|i| shares[*i] >= TINY_THRESHOLD)
+                .filter(|i| distance_below(i) > 0.0)
                 .max_by(|a, b| distance_below(a).total_cmp(&distance_below(b)));
         match furthest_below {
             Some(i) => cells[i] += 1,
@@ -69,8 +74,7 @@ pub fn calculate_percentages_of_a_given_total(numbers: &[usize], total: usize) -
 
     // The last entry mops up the rounding of the others only when the list really is the whole of
     // the total, which is the case that owes the reader exactly 100. A list that is a part of
-    // something larger owes 100 nothing, and handing its last entry the remainder is the very
-    // renormalisation this function exists to let a caller avoid.
+    // something larger owes 100 nothing.
     let accounts_for_everything = numbers.iter().sum::<usize>() == total;
     let exact = |number: usize| number as f64 / total as f64 * 100f64;
     let mut shares = Vec::with_capacity(numbers.len());
@@ -144,8 +148,7 @@ impl NumberFormat {
     }
 
     // A count of bytes in the largest unit that leaves a figure worth reading, so that 2417403 is
-    // 2.4 and not 2417.4. Every row of a report goes through it, which is what stops one line from
-    // calling a value MB while the line under it calls the same value KB.
+    // 2.4 and not 2417.4.
     //
     // Divided by 1000 and not 1024, which is what 'KB' means; the 1024 ladder is spelled 'KiB'.
     //
@@ -176,9 +179,7 @@ impl NumberFormat {
         format!("{sign}{marker}{}", self.with_decimal_mark(&round_2(magnitude).to_string()))
     }
 
-    // For text a caller has already shaped itself and only wants the mark put on, which is every
-    // figure whose rounding rule is written elsewhere: those stay written with a dot, and this is
-    // the single step that decides what the reader sees.
+    // For text a caller has already shaped itself and only wants the mark put on.
     pub fn with_decimal_mark(&self, text: &str) -> String {
         match self.decimal {
             '.' => text.to_owned(),
@@ -187,9 +188,8 @@ impl NumberFormat {
     }
 }
 
-// What the program itself prints, so a caller that says nothing gets numbers that look like mezura's.
-// Grouped, because nobody reaches for a type called 'NumberFormat' to be handed plain digits, which
-// '{}' gives them already. Ungrouped is asked for by name, with 'NumberFormat::new(None, '.')'.
+// What the program itself prints. Grouped, since '{}' already hands out plain digits; ungrouped is
+// asked for by name, with 'NumberFormat::new(None, '.')'.
 impl Default for NumberFormat {
     fn default() -> Self {
         NumberFormat { thousands: Some(','), decimal: '.' }
@@ -217,14 +217,12 @@ mod tests {
         assert_eq!(vec![6,25,13,6], apportion(&[12.5,50.0,25.0,12.5], BAR));
         assert_eq!(vec![1,1,24,24], apportion(&[0.1,0.1,49.9,49.9], BAR));
 
-        // The count is a parameter, so the same shares scale to any bar
         assert_eq!(25, apportion(&[50.0,50.0], 50)[0]);
         assert_eq!(50, apportion(&[50.0,50.0], 100)[0]);
         assert_eq!(10, apportion(&[50.0,50.0], 20)[0]);
     }
 
-    // The minimum-one rule wants 48+1+1+1 here, which is one cell over the target. The excess has
-    // to come off the largest share rather than emptying one of the small ones.
+    // The minimum-one rule wants 48+1+1+1 here, one cell over the target.
     #[test]
     fn the_cell_that_a_protected_minimum_costs_comes_off_the_largest_share() {
         assert_eq!(vec![47,1,1,1], apportion(&[97.0,1.0,1.0,1.0], BAR));
@@ -234,8 +232,8 @@ mod tests {
         assert_eq!(BAR, cells.iter().sum::<usize>());
         assert!(cells.iter().all(|x| *x >= 1), "a share that is present must never lose its last cell");
 
-        // Six entries at a hundred cells: the second deserves 3 and must keep them, because losing
-        // one understates it by a third while the first barely notices
+        // The second entry deserves 3 cells of the hundred and must keep them: losing one
+        // understates it by a third, while the first barely notices
         assert_eq!(vec![93,3,1,1,1,1], apportion(&[96.96, 3.0, 0.01, 0.01, 0.01, 0.01], 100));
         assert_eq!(vec![45,1,1,1,1,1], apportion(&[96.96, 3.0, 0.01, 0.01, 0.01, 0.01], BAR));
     }
@@ -262,6 +260,23 @@ mod tests {
         }
     }
 
+    // What a caller drawing only the largest few gets: the bar stops where their share of the whole
+    // stops, and the empty part of it is everything they did not name. Filled instead, the leftover
+    // cells go to whoever is furthest below their claim and then, once nobody is, to whoever the
+    // tiebreak reaches, which flattens the differences the bar exists to show.
+    #[test]
+    fn a_list_that_covers_less_than_the_whole_draws_a_bar_that_stops_short() {
+        assert_eq!(vec![5], apportion(&[10.0], BAR));
+        assert_eq!(vec![13, 13], apportion(&[25.0, 25.0], BAR));
+        assert_eq!(vec![20, 4, 1], apportion(&[40.0, 8.0, 2.0], BAR));
+
+        // and the same three shares as shares of each other fill it, in their real proportions
+        let of_each_other = calculate_percentages_of_their_own_sum(&[40, 8, 2]);
+        let cells = apportion(&of_each_other, BAR);
+        assert_eq!(BAR, cells.iter().sum::<usize>());
+        assert_eq!(vec![40, 8, 2], cells);
+    }
+
     #[test]
     fn percentages_sum_to_a_hundred_with_the_last_entry_absorbing_the_rounding() {
         assert_eq!(vec![0f64,50f64,50f64], calculate_percentages_of_their_own_sum(&[0,100,100]));
@@ -272,8 +287,8 @@ mod tests {
         assert_eq!(vec![33.28,33.28,33.44,0.0], calculate_percentages_of_their_own_sum(&[200,200,201,0]));
     }
 
-    // 3 files out of 800000 is 0.000375%, which used to print as a flat 0.00. Checked in the middle
-    // and in the last position, which are computed by different branches.
+    // 3 files out of 800,000 is 0.000375%. Checked in the middle and in the last position, which
+    // are computed by different branches.
     #[test]
     fn a_share_that_rounds_away_is_named_rather_than_shown_as_absent() {
         let format = NumberFormat::default();
@@ -283,7 +298,9 @@ mod tests {
             assert_eq!("<0.01", format.percent(shares[tiny]), "for {numbers:?}");
             let cells = apportion(&shares, BAR);
             assert_eq!(0, cells[tiny], "a share too small to be printed must not claim a cell either");
-            assert_eq!(BAR, cells.iter().sum::<usize>());
+            // The neighbouring test cannot carry this one: its rule is that every share above zero
+            // keeps a cell, which is exactly what the share here does not do
+            assert_eq!(BAR, cells.iter().sum::<usize>(), "the bar came up short around the tiny share");
         }
 
         // One that really is absent stays a flat zero and keeps no cell
@@ -291,34 +308,38 @@ mod tests {
         assert_eq!("0.00", format.percent(shares[2]));
         assert_eq!(0, apportion(&shares, BAR)[2]);
 
+        // The figure a caller reads is the true share and not a marker standing in for it
+        let shares = calculate_percentages_of_their_own_sum(&[500_000, 3, 299_997]);
+        assert!((shares[1] - 0.000375).abs() < 1e-9, "the share was replaced by a marker: {}", shares[1]);
+        assert!((shares.iter().sum::<f64>() - 100.0).abs() < 0.01, "the shares no longer sum to 100: {shares:?}");
+    }
+
+    // The largest two of three, as shares of each other and then as shares of the whole: two
+    // different questions, and the plain call answers the first.
+    #[test]
+    fn a_share_is_of_its_own_sum_unless_a_total_is_given() {
+        assert_eq!(vec![62.5, 37.5], calculate_percentages_of_their_own_sum(&[500_000, 300_000]));
+        assert_eq!(vec![50.0, 30.0], calculate_percentages_of_a_given_total(&[500_000, 300_000], 1_000_000));
+        assert_eq!(vec![0.0, 0.0], calculate_percentages_of_a_given_total(&[0, 0], 0));
+    }
+
+    // A report pads every percentage into a five column field, so '<0.01' has to fit in it. 100.00
+    // is the one value that does not, which is why such padding saturates.
+    #[test]
+    fn every_percentage_but_a_full_hundred_fits_a_five_column_field() {
+        let format = NumberFormat::default();
         assert_eq!("0.00", format.percent(0.0));
         assert_eq!("0.01", format.percent(0.01));
         assert_eq!("12.35", format.percent(12.345));
         assert_eq!("100.00", format.percent(100.0));
 
-        // The figure a caller reads is the true one and not a marker: it used to come back as a
-        // flat 0.001 whatever the real share was, which is 2.7 times this one and sums past 100.
-        let shares = calculate_percentages_of_their_own_sum(&[500_000, 3, 299_997]);
-        assert!((shares[1] - 0.000375).abs() < 1e-9, "the share was replaced by a marker: {}", shares[1]);
-        assert!((shares.iter().sum::<f64>() - 100.0).abs() < 0.01, "the shares no longer sum to 100: {shares:?}");
-
-        // And the denominator is stated when the list is not everything. Taking the largest two of
-        // three and asking for their shares of the whole is not the same question as their shares
-        // of each other, and the plain call answers the second.
-        assert_eq!(vec![62.5, 37.5], calculate_percentages_of_their_own_sum(&[500_000, 300_000]));
-        assert_eq!(vec![50.0, 30.0], calculate_percentages_of_a_given_total(&[500_000, 300_000], 1_000_000));
-        assert_eq!(vec![0.0, 0.0], calculate_percentages_of_a_given_total(&[0, 0], 0));
-
-        // A report pads every percentage into a five column field, so '<0.01' has to fit in it.
-        // 100.00 is the one value that does not, which is why such padding saturates.
         for value in [0.0, 0.000375, 0.01, 9.9, 99.99] {
             assert!(format.percent(value).len() <= 5, "'{}' does not fit the column", format.percent(value));
         }
         assert_eq!(6, format.percent(100.0).len());
     }
 
-    // The boundary belongs to the larger unit: a thousand bytes is one KB, and the figure that
-    // reads '1000 B' next to a '1.0 KB' one byte later is the one that is wrong.
+    // The boundary belongs to the larger unit: a thousand bytes is one KB.
     #[test]
     fn a_size_takes_the_largest_unit_that_leaves_a_figure_worth_reading() {
         let format = NumberFormat::default();
@@ -341,7 +362,6 @@ mod tests {
 
     #[test]
     fn a_number_is_grouped_and_marked_the_way_the_caller_asked() {
-        // Ungrouped is a thing a caller asks for by name, and no longer what saying nothing gets
         let plain = NumberFormat::new(None, '.');
         assert_eq!("1234567", plain.integer(1234567));
         assert_eq!("1.5", plain.grouped("1.5"));
@@ -358,14 +378,10 @@ mod tests {
         assert_eq!("1.234,5", european.grouped("1234.5"));
         assert_eq!("12,35", european.percent(12.345));
 
-        assert_eq!(("2.4".to_owned(), "MB"), english.size_with_unit(2_417_403));
+        // The unit boundaries are the test above; here only that the mark reaches a size too
         assert_eq!(("2,4".to_owned(), "MB"), european.size_with_unit(2_417_403));
-        // A whole number of bytes is not divided, so it shows no decimal at all
-        assert_eq!(("430".to_owned(), "B"), english.size_with_unit(430));
-        assert_eq!(("999".to_owned(), "B"), english.size_with_unit(999));
 
-        // And saying nothing is the same as asking for the one above, which is what the program
-        // prints. A caller writing its own view got ungrouped digits here and had to correct them.
+        // and saying nothing is the same as asking for the one above, which is what the program prints
         assert_eq!(english.integer(1234567), NumberFormat::default().integer(1234567));
         assert_eq!("1,234,567", NumberFormat::default().integer(1234567));
     }

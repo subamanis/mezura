@@ -49,8 +49,12 @@ const KEYWORD_ALIASES          : &str = "ALIASES";
 const CONTESTED_EXTENSIONS     : &str = "contested-extensions";
 const CONTESTED_FILENAMES      : &str = "contested-filenames";
 
+// No command is named here: this crate does not know the command line's. Whoever prints it adds the
+// way out, the way 'warning_collector' does for the language warnings. And nothing here promises a
+// repair on the next run: the command line's migration pass runs before this parse, so all three of
+// the errors below are only ever reached after it has already run and not fixed them.
 const REGENERATE_LANGUAGES_HINT : &str =
-        "Delete the \"languages\" folder and it will be generated again on the next execution.\nThe \"config\" and \"logs\" folders will not be affected.";
+        "The copies this build ships can be written over them.";
 
 #[derive(Debug)]
 pub enum LanguageDirParseError {
@@ -66,7 +70,7 @@ impl std::fmt::Display for LanguageDirParseError {
 {REGENERATE_LANGUAGES_HINT}"),
             Self::NoFilesFormattedProperly => write!(f, "No language file is formatted properly, so none could be parsed.
 {REGENERATE_LANGUAGES_HINT}"),
-            Self::PathMissing(path) => write!(f, "It seems that the language dir ({path}) has been deleted.
+            Self::PathMissing(path) => write!(f, "The languages directory ({path}) is not there.
 {REGENERATE_LANGUAGES_HINT}")
         }
     }
@@ -113,9 +117,8 @@ pub struct FaultyLanguageFile {
 // language missing from the count.
 pub fn parse_languages_in_dir(target_path: impl AsRef<Path>)
 -> Result<(Vec<Language>, Vec<FaultyLanguageFile>), LanguageDirParseError> {
-    // As it is spelled on disk. Lowercasing it named a file that does not exist anywhere the
-    // filesystem is case sensitive, and the whole point of the list is that somebody can go and
-    // open the file it names.
+    // As it is spelled on disk: the point of the list is that somebody can go and open the file it
+    // names, and lowercasing it names a file that does not exist wherever the filesystem has a case.
     fn add_to_faulty_files(entry: &DirEntry, error: LanguageFileError, faulty_files: &mut Vec<FaultyLanguageFile>) {
         let file_name = entry.file_name().to_str().map_or(String::new(), |x| x.to_owned());
         if !file_name.is_empty() {faulty_files.push(FaultyLanguageFile { file_name, error })}
@@ -158,28 +161,24 @@ pub fn parse_language_file(path: impl AsRef<Path>) -> Result<Language, LanguageF
 // The one parser of the language file format. A file on disk and the bytes baked into this crate go
 // through it alike, so there is no second parser to drift from.
 //
-// Three rules. A value sits on the line straight after its header and is taken as it is even when
-// empty, because a language with only multiline comments has an empty 'Comment symbols' value and
-// that empty line is the value, not a separator. Blank lines are skipped only before a header, so a
-// spare one never derails the parse.
+// A value sits on the line straight after its header and is taken as it is even when empty, since a
+// language with only multiline comments has an empty 'Comment symbols' value and that empty line is
+// the value, not a separator. Blank lines are skipped only before a header. And every line has to be
+// accounted for: a header left over at the end is one this did not understand, and the file is
+// refused whole, or 'Multiline comment start' written for 'Multi line comment start' passes as a
+// language with no multiline comments and no keywords that counts its block comments as code.
 //
-// And **every line has to be accounted for**, which is the rule that decides whether a mistake is
-// loud or silent: a header left over at the end is one this did not understand, and the file is
-// refused rather than half kept. Without it, 'Multiline comment start' written for 'Multi line
-// comment start' was accepted with no multiline comments and no keywords at all, and that language
-// then counted its block comments as code.
-//
-// Returns None rather than panicking on anything unrecognised: the version migration reads what is on
-// the user's disk through this to ask whether their copy still means what ours does, and a file
-// edited into nonsense has to come back as "not the same" and not take the run down.
+// None rather than a panic on anything unrecognised: the version migration reads the user's own
+// files through this to ask whether their copy still means what ours does, and one edited into
+// nonsense has to come back as "not the same" and not take the run down.
 pub fn parse_language(contents: &str) -> Option<Language> {
     parse_language_or_faulty_line(contents).ok()
 }
 
 // The same reading, with the line the parser stopped at when it refuses. The blocks are read in one
 // fixed order and an optional one that arrives late is refused whole, so "the format is wrong" on
-// its own leaves somebody comparing their file against the documentation line by line.
-pub fn parse_language_or_faulty_line(contents: &str) -> Result<Language, usize> {
+// its own leaves somebody comparing their file against the documentation.
+pub(crate) fn parse_language_or_faulty_line(contents: &str) -> Result<Language, usize> {
     let contents = strip_byte_order_mark(contents);
     let mut reader = LineReader::of(contents);
     match read_language(&mut reader) {
@@ -191,9 +190,9 @@ pub fn parse_language_or_faulty_line(contents: &str) -> Result<Language, usize> 
 fn read_language(lines: &mut LineReader) -> Option<Language> {
     if read_next_header(lines)? != LANGUAGE {return None;}
     let lang_name = read_value_line(lines)?;
-    // 'value_line' trims whitespace and nothing else, so an escape sequence on the name line came
-    // through whole and ended up as a key of the result, which the command line then prints. A file
-    // carrying one is damaged rather than unusual, and this is the only value that is displayed.
+    // 'read_value_line' trims whitespace and nothing else, so a control character on the name line
+    // reaches the map key the command line prints. This is the only value that is displayed, and a
+    // file carrying one is damaged rather than unusual.
     if lang_name.is_empty() || lang_name.chars().any(char::is_control) {return None;}
 
     if read_next_header(lines)? != EXTENSIONS {return None;}
@@ -221,8 +220,8 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
     let string_symbols = split_line_on_whitespace(&read_value_line(lines)?);
 
     // The symbol of a character literal, which exists only paired on its own line: a lone one is
-    // not a literal at all. Its own block and not a string list, because declaring Rust's ' as a
-    // string would be a lie the format cannot explain.
+    // not a literal at all. Its own block, because declaring Rust's ' as a string would be a lie
+    // the format cannot explain.
     let mut char_literals = Vec::new();
     let mut header = read_next_header(lines)?;
     if header == CHARACTER_LITERALS {
@@ -243,8 +242,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
 
     // The same, for a form where a backslash in front of the closer is an ordinary byte: Go's and
     // Odin's backtick, Kotlin's and C#'s '"""'. Its own block because nothing about a symbol says
-    // which of the two it is, and the block above holds languages that write it identically and
-    // mean the opposite.
+    // which of the two it is, and the block above holds languages that write it identically.
     let mut raw_multiline_strings = Vec::new();
     if header == MULTILINE_RAW_STRINGS {
         raw_multiline_strings = split_line_on_whitespace(&read_value_line(lines)?);
@@ -266,10 +264,9 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
     }
 
     // What cancels a string symbol, which is a fact about the language and not about the symbol.
-    // The backslash in most, the backtick in PowerShell, and nothing at all in the family that
-    // escapes a quote by doubling it: Pascal, Ada, Fortran, COBOL and standard SQL. Required of
-    // any language declaring a string of any kind, so that a file states it instead of inheriting
-    // whatever the parser last happened to do; 'none' is how a language says nothing escapes.
+    // Required of any language declaring a string of any kind, so that a file states it instead of
+    // inheriting whatever the parser last happened to do; 'none' is how a language says nothing
+    // escapes.
     let mut escape_character = None;
     let declares_a_string = !string_symbols.is_empty() || !char_literals.is_empty()
             || !multiline_strings.is_empty() || !raw_multiline_strings.is_empty()
@@ -319,7 +316,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
 
     if header != COMMENT_SYMBOLS {return None;}
     // Deliberately allowed to be empty: a language whose only comments are multiline has no line
-    // comment symbol, and the value here is the empty line that says so.
+    // comment symbol.
     let comment_symbols = split_line_on_whitespace(&read_value_line(lines)?);
 
     // The two value lines are lists paired by position: the first start closes with the first end.
@@ -383,8 +380,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         let defaults = split_line_on_whitespace(&read_value_line(lines)?);
         if ends.len() != starts.len() || defaults.len() != starts.len() {return None;}
         // A section is looked for where a tag begins and nowhere else, so an opener that is not one
-        // could never match. Refused rather than carried, since a declaration that silently does
-        // nothing leaves the file counted as though the block had not been written at all.
+        // could never match. Refused rather than carried as a declaration that does nothing.
         if starts.iter().chain(&ends).any(|symbol| !symbol.starts_with('<')) {return None;}
         nested_languages = starts.iter().zip(&ends).zip(&defaults)
                 .map(|((start, end), default)| crate::domain::NestedLanguage::of(start, end, default))
@@ -405,7 +401,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
     }
 
     // Anything still standing here is a header this parser has no block for, and the lines under it
-    // were never read. Keeping the half it recognised is what made a typo silently change a count.
+    // were never read.
     if header.is_some() {return None;}
 
     let mut language = Language::new(lang_name, extensions, string_symbols, comment_symbols,
@@ -414,7 +410,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
     language.line_continuation = line_continuation;
     language.escape_character = escape_character;
 
-    // The three in the order the file declares them, which is the order the scan numbers them in
+    // In the order the file declares them, which is the order the scan numbers them in
     Some(language
             .with_char_literals(&char_literals.iter().map(String::as_str).collect::<Vec<_>>())
             .with_multiline_strings(&multiline_strings.iter().map(String::as_str).collect::<Vec<_>>())
@@ -450,11 +446,10 @@ pub fn parse_priority(contents: &str) -> (PriorityRules, Vec<String>) {
     for line in strip_byte_order_mark(contents).lines() {
         let line = line.trim();
         if line.is_empty() {continue;}
-        // The '===>' of the configuration files and not the bare headers of the language files: a
-        // language file has nothing to separate its blocks with, while this one explains itself
-        // above its rules exactly as a configuration does. A marker also ends the block, so that a
-        // section added later is skipped rather than read as a rule for an extension named '===>',
-        // which is neither applied nor reported.
+        // The '===>' of the configuration files, since this one explains itself above its rules the
+        // way a configuration does. A marker also ends the block, so a section added later is
+        // skipped rather than read as a rule for an extension named '===>', which would be neither
+        // applied nor reported.
         if line.starts_with("===>") {
             let name = line.trim_start_matches("===>").split_whitespace().next().unwrap_or_default();
             block = if name.eq_ignore_ascii_case(CONTESTED_EXTENSIONS) {
@@ -486,7 +481,6 @@ pub fn parse_priority(contents: &str) -> (PriorityRules, Vec<String>) {
         let of_block = match block {
             IdentifiedBy::Extension => &mut rules.by_extension,
             IdentifiedBy::Filename => &mut rules.by_filename,
-            // No marker opens a shebang block, so the mapping above never produces this
             IdentifiedBy::Shebang => unreachable!("no marker opens a shebang block")
         };
         match of_block.entry(crate::engine::identity::identity_key(block, claimed)) {
@@ -502,10 +496,9 @@ pub fn parse_priority(contents: &str) -> (PriorityRules, Vec<String>) {
 // remove them because they are not whitespace. PowerShell's 'Set-Content' and older Notepad both
 // write one, so it arrives through the ordinary way of editing one of these files on Windows.
 //
-// Every parser of a text format in this crate calls it, because leaving it to each one is how it
-// goes wrong: a mark in front of the '===>' of the priority file stops that line matching, and every
-// rule in the file is then skipped without so much as a faulty line to report it, a line never read
-// being a line never rejected.
+// Every parser of a text format in this crate calls it: a mark in front of the '===>' of the
+// priority file stops that line matching, and every rule in the file is then skipped without so
+// much as a faulty line to report it, a line never read being a line never rejected.
 fn strip_byte_order_mark(contents: &str) -> &str {
     contents.trim_start_matches('\u{feff}')
 }
@@ -522,9 +515,9 @@ fn read_value_line(lines: &mut LineReader) -> Option<String> {
     lines.next().map(|line| line.trim().to_owned())
 }
 
-// Counts what it hands out, so a file that is refused can name the line the parser stopped at
-// instead of only saying that the format is wrong. The blocks have to arrive in one order, and
-// "somewhere in this file" is no help at all in finding which one is out of place.
+// Counts what it hands out, so a file that is refused can name the line the parser stopped at:
+// the blocks have to arrive in one order, and "somewhere in this file" does not say which one is
+// out of place.
 struct LineReader<'a> {
     lines: std::str::Lines<'a>,
     read: usize
@@ -556,32 +549,27 @@ mod tests {
     use crate::MultilineString;
     use crate::test_paths::{DATA_DIR, FIXTURES_DIR, LANGUAGES_DIR};
 
-    // The parser reads the real shipped files correctly, which is where the weight belongs: a
-    // hand-written string that copies the format is a second source of truth that rots. There is
-    // one parser, 'parse_language'; 'parse_languages_in_dir' is not a second one, it reads each file and calls
-    // it, so reading the languages directory is reading the files through it.
+    // The real shipped files and not a hand-written string that copies the format, which would be a
+    // second source of truth that rots.
     #[test]
     fn the_parser_reads_the_shipped_files_and_a_blank_line_never_costs_a_block() {
-        let (languages, faulty) = parse_languages_in_dir(LANGUAGES_DIR).unwrap();
-        assert!(faulty.is_empty(), "shipped files that did not parse: {faulty:?}");
+        let (languages, _) = parse_languages_in_dir(LANGUAGES_DIR).unwrap();
         let named = |wanted: &str| languages.iter().find(|x| x.name == wanted)
                 .unwrap_or_else(|| panic!("{wanted} is shipped"));
 
-        // The bug this fixed: the keywords sit below a blank line, and every one of them was dropped.
+        // the keywords sit below a blank line
         let rust = named("Rust");
         assert!(rust.keywords.iter().any(|k| k.descriptive_name == "structs"),
                 "Rust lost its keywords: {:?}", rust.keywords);
 
         // A language whose only comments are multiline has an empty 'Comment symbols' value, and
-        // that empty line is the value and not a separator to skip, or the symbols one line down
-        // would read as it.
+        // that empty line is the value and not a separator to skip.
         let css = named("CSS");
         assert!(css.comment_symbols.is_empty() && !css.multiline_comments.is_empty(),
                 "CSS was the empty-comment-symbols case and its shape changed");
 
-        // The one thing no shipped file can show, because a stray blank line in one would be tidied
-        // away as a mistake: an extra blank line between blocks does not derail the parse. Fed as a
-        // string, which is what 'parse_language' takes and what 'parse_languages_in_dir' hands it per file.
+        // The one thing no shipped file can show, since a stray blank line in one would be tidied
+        // away: an extra blank line between blocks does not derail the parse.
         let padded = "Language\nJava\n\n\nExtensions\njava\n\n\n\nString symbols\n\"\n\n\
 Escape character\n\\\n\n\
 Comment symbols\n//\n\n\nKeyword\n    NAME\n    classes\n    ALIASES\n    class\n";
@@ -614,8 +602,6 @@ Comment symbols\n//\n\n\nKeyword\n    NAME\n    classes\n    ALIASES\n    class\
                 crate::EXTENSION_PRIORITY_FILE_NAME, unsettled.join("\n"));
     }
 
-    // Everything above the header is explanation and has to stay explanation, including an example
-    // written in the very shape of a rule
     #[test]
     fn the_priority_file_reads_only_what_is_under_its_headers() {
         let (rules, faulty) = crate::language_file::parse_priority(
@@ -634,8 +620,7 @@ Makefile   Make, Automake
         assert_eq!(Some(&vec!["Objective-C".to_owned(), "MATLAB".to_owned()]), rules.by_extension.get("m"));
         assert_eq!(Some(&vec!["Perl".to_owned()]), rules.by_extension.get("pl"));
 
-        // The two blocks are two questions: a name lands in its own map, keeps its dots, and is
-        // not answered by a rule about extensions
+        // a name lands in its own map and is not answered by a rule about extensions
         assert_eq!(Some(&vec!["Make".to_owned(), "Automake".to_owned()]), rules.by_filename.get("makefile"));
         assert!(!rules.by_extension.contains_key("makefile"));
     }
@@ -650,8 +635,6 @@ v       ,  ,
 ===> some-section-added-later
 pl      Perl, Prolog
 ");
-        // A marker ends the block, so the section after it is skipped whole instead of becoming a
-        // rule for an extension called '===>'
         assert!(!rules.by_extension.contains_key("===>") && !rules.by_extension.contains_key("pl"));
         assert_eq!(1, rules.by_extension.len());
         // the second declaration is the one that loses, and the decision above it stands
@@ -680,31 +663,28 @@ Escape character\n\\\n\nComment symbols\n--\n";
             assert!(crate::language_file::parse_language(&contents).is_none(), "accepted:\n{contents}");
         }
 
-        // Declaring no string symbol is not a mistake, it is what HTML does: its quotes delimit
-        // attributes rather than strings, and its text is full of apostrophes.
+        // Declaring no string symbol is not a mistake, it is what HTML does.
         assert!(crate::language_file::parse_language(&good.replace("\" '\n", "\n")).is_some());
 
-        // An extra blank line between blocks is no longer a mistake: the parser skips blanks before
-        // a header, so a stray one does not cost a language its whole definition.
+        // a stray blank line between blocks does not cost a language its definition
         assert!(crate::language_file::parse_language(&good.replace("lua\n", "lua\n\n")).is_some());
     }
-    // The parser used to keep whatever it recognised and drop the rest, so a header it did not know
-    // ended the definition early and in silence. Every case below is a plausible typo in a file
-    // somebody edited by hand, and every one of them used to be ACCEPTED as a language with no
-    // multiline comments and no keywords, which counts a block comment as code.
+    // Every case below is a plausible typo in a file somebody edited by hand, and each one, kept
+    // rather than refused, is a language with no multiline comments and no keywords, which counts a
+    // block comment as code.
     #[test]
     fn a_header_the_parser_does_not_know_refuses_the_file_instead_of_truncating_it() {
-        // A shipped file and not a copy of the format written here, so that the shape being mutated
-        // below is whatever the program actually reads today and cannot drift away from it.
+        // A shipped file and not a copy of the format written here, so the shape being mutated
+        // below is whatever the program actually reads today.
         let good = std::fs::read_to_string(LANGUAGES_DIR.to_owned() + "Java.txt").unwrap();
         let parsed = crate::language_file::parse_language(&good).expect("the control file must parse");
         assert!(!parsed.multiline_comments.is_empty() && !parsed.keywords.is_empty(),
                 "Java.txt no longer declares the two blocks this test truncates, so pick another file");
 
         // Line by line and never by replacing a run of text, because how many blank lines sit
-        // between two blocks is the file's business and not this test's: written the other way, the
-        // last case below silently matched nothing and the test passed by testing the good file
-        // four times. Each mutation is asserted to have changed something for the same reason.
+        // between two blocks is the file's business and not this test's: a replacement that matches
+        // nothing tests the good file again and says so nowhere. Each mutation is asserted to have
+        // changed something for the same reason.
         let lines = good.lines().collect::<Vec<_>>();
         let line_of = |header: &str| lines.iter().position(|x| x.trim() == header)
                 .unwrap_or_else(|| panic!("the control file has no '{header}' line"));
@@ -722,7 +702,7 @@ Escape character\n\\\n\nComment symbols\n--\n";
         with_a_heading_over_the_keywords.insert(line_of(KEYWORD), "Keywords");
 
         let truncating = [
-            // one word of the header run together, which is the mistake that found this
+            // one word of the header run together
             ("a header run together", with_line_replaced(start, "Multiline comment start")),
             ("a header that means nothing", with_line_replaced(start, "Totally Bogus")),
             ("a heading added over the keyword blocks", with_a_heading_over_the_keywords.join("\n")),
@@ -735,8 +715,7 @@ Escape character\n\\\n\nComment symbols\n--\n";
         }
     }
 
-    // The 'Shebangs' block, like every optional block, is read at one position and refused
-    // anywhere else, and declaring it with nothing under it is a mistake rather than an empty list.
+    // Declaring the block with nothing under it is a mistake rather than an empty list.
     #[test]
     fn the_shebangs_block_parses_where_it_belongs_and_nowhere_else() {
         let good = std::fs::read_to_string(LANGUAGES_DIR.to_owned() + "Shell.txt").unwrap();
@@ -762,15 +741,14 @@ Escape character\n\\\n\nComment symbols\n--\n";
         assert!(crate::language_file::parse_language(&moved.join("\n")).is_none(),
                 "a 'Shebangs' block after the string symbols was accepted");
 
-        // and without the block the file still parses, since the block is optional
         let mut without = lines.clone();
         without.drain(at..at + 2);
         let parsed = crate::language_file::parse_language(&without.join("\n"))
                 .expect("a file without the optional block must still parse");
         assert!(parsed.shebangs.is_empty());
 
-        // a file whose only claim is its Shebangs block parses, since the block is a third way
-        // to claim files and not a decoration on the other two
+        // a file whose only claim is its Shebangs block parses: the block is a third way to claim
+        // files and not a decoration on the other two
         let extensions_value = lines.iter().position(|x| x.trim() == EXTENSIONS).unwrap() + 1;
         let mut shebang_only = lines.clone();
         shebang_only[extensions_value] = "";
@@ -780,15 +758,11 @@ Escape character\n\\\n\nComment symbols\n--\n";
         assert_eq!(vec!["sh", "bash", "zsh", "ksh", "dash"],
                 parsed.shebangs.iter().map(String::as_str).collect::<Vec<_>>());
 
-        // while a file with no claim of any kind is still refused
         let mut claimless = shebang_only.clone();
         claimless.drain(at..at + 2);
         assert!(crate::language_file::parse_language(&claimless.join("\n")).is_none(),
                 "a language claiming nothing at all was accepted");
     }
-    // Why a file could not become a language is two different answers and the caller is meant to be
-    // able to tell them apart, so both have to be reachable. Collapsing them into one passed every
-    // test there was, which is what a distinction with nothing asserting it is worth.
     #[test]
     fn a_path_that_is_not_there_and_a_file_that_does_not_parse_are_different_answers() {
         let missing = crate::language_file::parse_language_file(
@@ -802,21 +776,17 @@ Escape character\n\\\n\nComment symbols\n--\n";
         std::fs::write(&garbage, "this is not a language file at all\n").unwrap();
         let malformed = crate::language_file::parse_language_file(&garbage).unwrap_err();
         std::fs::remove_file(&garbage).unwrap();
-        // and it names the line it stopped at, since the blocks have to arrive in one order and
-        // "the format is wrong" leaves somebody comparing their file against the documentation
+        // and it names the line it stopped at
         assert!(matches!(malformed, LanguageFileError::Malformed(1)), "got: {malformed:?}");
         assert!(malformed.to_string().contains("line 1"), "{malformed}");
         assert!(std::error::Error::source(&malformed).is_none());
 
-        // and a real one still comes back as a language
         assert!(crate::language_file::parse_language_file(LANGUAGES_DIR.to_owned() + "Rust.txt").is_ok());
     }
 
     // The distinction above survives the walk of a directory, which is the only place any caller
-    // meets it. It used to be thrown away there, in an 'Err(_)' that pushed a bare name onto one
-    // list, so the sole caller announced "Formatting problems detected in language files" over both:
-    // a file saved in UTF-16, which is what PowerShell writes with '-Encoding Unicode', sent its
-    // owner looking for a typo in a file whose format was never the problem.
+    // meets it. Announcing "formatting problems" over both sends the owner of a file saved in
+    // UTF-16, which is what PowerShell writes with '-Encoding Unicode', looking for a typo.
     #[test]
     fn the_walk_of_a_directory_keeps_the_reason_each_file_failed() {
         let dir = std::env::temp_dir().join("mezura-faulty-language-dir");
@@ -838,9 +808,6 @@ Escape character\n\\\n\nComment symbols\n--\n";
         assert!(matches!(faulty[1].error, LanguageFileError::Unreadable(_)), "got: {:?}", faulty[1].error);
     }
 
-    // A byte order mark is what PowerShell's 'Set-Content' and older Notepad put at the front of a
-    // file they save, so this is the ordinary way of editing a language file on Windows, and it
-    // used to make the file unreadable and the language vanish from the count.
     #[test]
     fn a_language_file_saved_with_a_byte_order_mark_still_reads() {
         let good = std::fs::read_to_string(LANGUAGES_DIR.to_owned() + "Rust.txt").unwrap();
@@ -853,12 +820,10 @@ Escape character\n\\\n\nComment symbols\n--\n";
         assert!(crate::language_file::parse_language(&with_mark).is_some());
     }
 
-    // The same editor saves this file too, and here the failure was silent rather than loud: the
-    // mark stopped the '===>' of the first line from matching, so the block was never entered, every
-    // rule in it was skipped, and nothing landed among the faulty lines either, since a line that is
-    // never read is never rejected. The only trace was the tiebreak warnings the file exists to
-    // silence. It survived unnoticed because the shipped copy opens with explanatory text, and the
-    // mark sits on a line that is skipped anyway; a user who trims those lines away pays for it.
+    // Here the failure is silent: nothing lands among the faulty lines, since a line that is never
+    // read is never rejected, and the only trace is the tiebreak warnings the file exists to
+    // silence. The shipped copy opens with explanatory text, so the mark sits on a line that is
+    // skipped anyway; a user who trims those lines away is the one who pays.
     #[test]
     fn a_priority_file_saved_with_a_byte_order_mark_still_reads() {
         let good = "===> contested-extensions\nm    Objective-C, MATLAB\n";
@@ -872,9 +837,6 @@ Escape character\n\\\n\nComment symbols\n--\n";
         assert_eq!(1, rules_with_mark.by_extension.len(), "the rules of the file were dropped, and in silence");
     }
 
-    // The two value lines are lists paired by position, so Pascal declares '{ }' beside '(* *)'
-    // on one line each. A count that does not match leaves a symbol with no other half, and the
-    // file is refused whole rather than paired by guesswork.
     #[test]
     fn multiline_comment_pairs_zip_by_position_and_unequal_counts_refuse_the_file() {
         let two_pairs = "Language\nPascalish\n\nExtensions\npax\n\nString symbols\n'\n\n\
@@ -889,8 +851,8 @@ Comment symbols\n//\n\nMulti line comment start\n{ (*\nMulti line comment end\n}
         let one_start = two_pairs.replace("{ (*", "{");
         assert!(crate::language_file::parse_language(&one_start).is_none(), "one start for two ends was accepted");
 
-        // and the shipped files that need the second pair actually declare it; D's second pair is
-        // the nesting one, which is the case that makes the distinction per pair
+        // and the shipped files that need a second pair declare it; D's second pair is the nesting
+        // one, which is the case that makes the distinction per pair
         for name in ["Pascal.txt", "Delphi.txt"] {
             let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
             assert_eq!(2, language.multiline_comments.len(), "{name} no longer declares both of its pairs");
@@ -900,8 +862,6 @@ Comment symbols\n//\n\nMulti line comment start\n{ (*\nMulti line comment end\n}
                 "D.txt no longer declares its plain pair beside its nesting one");
     }
 
-    // A string symbol belongs to exactly one of the two lists, the way a comment symbol does, and
-    // the scan numbers the plain ones first and the crossing ones after them.
     #[test]
     fn a_string_symbol_is_declared_in_one_list_and_the_crossing_ones_are_numbered_last() {
         let good = "Language\nPylike\n\nExtensions\npyl\n\nString symbols\n\" '\n\n\
@@ -916,8 +876,7 @@ Multi line string symbols\n\"\"\"\n\nEscape character\n\\\n\nComment symbols\n#\
         let empty = good.replace("Multi line string symbols\n\"\"\"", "Multi line string symbols\n");
         assert!(crate::language_file::parse_language(&empty).is_none());
 
-        // a language that writes no string at all is allowed, which is what HTML needs: its quotes
-        // delimit attributes, and the free text between its tags is full of apostrophes
+        // a language that writes no string at all is allowed, which is what HTML needs
         let stringless = good.replace("String symbols\n\" '", "String symbols\n")
                 .replace("Multi line string symbols\n\"\"\"\n\n", "");
         let parsed = crate::language_file::parse_language(&stringless).expect("a language with no strings must parse");
@@ -930,10 +889,8 @@ Multi line string symbols\n\"\"\"\n\nEscape character\n\\\n\nComment symbols\n#\
         }
     }
 
-    // Whether a backslash in front of the closer cancels it is the one thing the symbol's own shape
-    // cannot say, so it is a block of its own and not a rule about the bytes: the block above holds
-    // languages that write the same symbol and mean the opposite, '"""' being raw in Kotlin and
-    // escaping in Java.
+    // '"""' is raw in Kotlin and escaping in Java, which is why the shape of a symbol cannot answer
+    // this and each block does.
     #[test]
     fn a_crossing_string_declares_whether_a_backslash_cancels_its_closer() {
         let good = "Language\nGolike\n\nExtensions\ngol\n\nString symbols\n\"\n\n\
@@ -948,7 +905,6 @@ Multi line raw string symbols\n`\n\nEscape character\n\\\n\nComment symbols\n//\
         assert_eq!(vec![MultilineString::escaping("\"\"\""), MultilineString::raw("`")],
                 parsed.multiline_strings);
 
-        // one symbol in two of the three blocks leaves them to argue about whether it escapes
         let twice = good.replace("Multi line raw string symbols\n`",
                 "Multi line string symbols\n`\n\nMulti line raw string symbols\n`");
         assert!(crate::language_file::parse_language(&twice).is_none(),
@@ -968,8 +924,6 @@ Multi line raw string symbols\n`\n\nEscape character\n\\\n\nComment symbols\n//\
         }
     }
 
-    // Three lists paired by position, like the comment blocks: the opener, its closer, and the
-    // extension the section falls to when the tag names no language of its own.
     #[test]
     fn a_nested_language_declares_its_tags_and_where_an_unnamed_section_falls() {
         let good = "Language\nWeblike\n\nExtensions\nwbl\n\nString symbols\n\n\nComment symbols\n\n\
@@ -979,7 +933,6 @@ Nested language start\n<script <style\nNested language end\n</script> </style>\n
         assert_eq!(vec![crate::domain::NestedLanguage::of("<script", "</script>", "js"),
                 crate::domain::NestedLanguage::of("<style", "</style>", "css")], parsed.nested_languages);
 
-        // a list short of one entry leaves a region half declared, and the file is refused
         let short = good.replace("Nested language default\njs css", "Nested language default\njs");
         assert!(crate::language_file::parse_language(&short).is_none(),
                 "a region without its default was accepted");
@@ -988,8 +941,7 @@ Nested language start\n<script <style\nNested language end\n</script> </style>\n
         let empty = good.replace("<script <style", "");
         assert!(crate::language_file::parse_language(&empty).is_none());
 
-        // A section is looked for where a tag begins, so an opener that is not one could never
-        // match. Refused, rather than accepted as a declaration that quietly does nothing.
+        // A section is looked for where a tag begins, so an opener that is not one could never match
         let fenced = good.replace("<script <style", "```py <style").replace("</script> </style>", "``` </style>");
         assert!(crate::language_file::parse_language(&fenced).is_none(),
                 "an opener that is not a tag was accepted");
@@ -1004,8 +956,6 @@ String symbols\n\n\nComment symbols\n\n";
         assert!(crate::language_file::parse_language(misplaced).is_none());
     }
 
-    // Its own block between the string symbols and the crossing ones, so the format can say what
-    // the symbol is instead of pretending a character literal is a string
     #[test]
     fn a_character_literal_symbol_has_its_own_block_and_shares_no_list() {
         let good = "Language\nRustlike\n\nExtensions\nrsl\n\nString symbols\n\n\n\
@@ -1022,7 +972,7 @@ Escape character\n\\\n\nComment symbols\n//\n";
         let empty = good.replace("Character literal symbols\n'\n\n", "Character literal symbols\n\n\n");
         assert!(crate::language_file::parse_language(&empty).is_none());
 
-        // the shipped declarations that motivated the block
+        // the shipped declarations that use the block
         for name in ["Rust.txt", "D.txt"] {
             let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
             assert_eq!(vec!["'".to_owned()], language.char_literal_symbols,
@@ -1030,8 +980,6 @@ Escape character\n\\\n\nComment symbols\n//\n";
         }
     }
 
-    // Required of anything declaring a string, so that a file states what escapes instead of
-    // inheriting the backslash from whatever the parser happened to do last.
     #[test]
     fn a_language_that_declares_a_string_has_to_say_what_escapes_it() {
         let good = "Language\nEsclike\n\nExtensions\nesc\n\nString symbols\n\"\n\n\
@@ -1050,12 +998,11 @@ Escape character\n\\\n\nComment symbols\n//\n";
         let two = good.replace("Escape character\n\\", "Escape character\n\\\\");
         assert!(parse_language(&two).is_none());
 
-        // a language with no string of any kind needs none of this, which is what HTML is
         let stringless = good.replace("String symbols\n\"", "String symbols\n")
                 .replace("Escape character\n\\\n\n", "");
         assert!(parse_language(&stringless).is_some(), "a language with no strings was refused");
 
-        // and the shipped files that motivated the block
+        // and the shipped files that declare each of the three answers
         for (name, escape) in [("Shell.txt", Some(b'\\')), ("PowerShell.txt", Some(b'`')),
                 ("SQL.txt", None), ("Pascal.txt", None), ("C.txt", Some(b'\\'))] {
             let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
@@ -1063,8 +1010,7 @@ Escape character\n\\\n\nComment symbols\n//\n";
         }
     }
 
-    // '=*' inside a pair symbol is the counted run of Lua's long brackets: one declaration covers
-    // '--[[', '--[=[' and every level above. Half a marker is a typo and refuses the file.
+    // One declaration covers '--[[', '--[=[' and every level above.
     #[test]
     fn a_pair_written_with_the_counted_marker_is_leveled() {
         let good = "Language\nLualike\n\nExtensions\nlux\n\nString symbols\n\" '\n\n\
@@ -1088,18 +1034,23 @@ Comment symbols\n--\nMulti line comment start\n--[=*[\nMulti line comment end\n]
         let (rules, faulty) = crate::language_file::parse_priority_file("a/path/that/is/not/there.txt");
         assert_eq!((PriorityRules::default(), Vec::<String>::new()), (rules, faulty));
     }
+    // The C++ fixture is a definition that is correct everywhere except for one stray line under the
+    // language name, which is the mistake somebody editing a file by hand actually makes. Its
+    // neighbours in the directory have to come through untouched.
     #[test]
-    fn test_parse_languages_in_dir() {
-        let (languages, faulty_files) = crate::language_file::parse_languages_in_dir(
+    fn a_stray_line_in_one_definition_costs_that_language_and_no_other() {
+        let (languages, faulty) = crate::language_file::parse_languages_in_dir(
                 FIXTURES_DIR.to_owned() + "definitions/").unwrap();
-        assert!(languages.len() == 2);
-        assert!(faulty_files.len() == 1);
+
+        let mut names = languages.iter().map(|x| x.name.as_str()).collect::<Vec<_>>();
+        names.sort_unstable();
+        assert_eq!(vec!["Java", "Rust"], names);
+        assert_eq!(vec!["C++.txt"], faulty.iter().map(|x| x.file_name.as_str()).collect::<Vec<_>>());
+        assert!(matches!(faulty[0].error, LanguageFileError::Malformed(_)), "got: {:?}", faulty[0].error);
     }
 
-    // Every language file that ships has to parse. CSS, HTML and SCSS were silently rejected for
-    // months because the parser demanded a blank line after the multiline comment symbols, which a
-    // language with no keywords has no reason to have, and nothing pointed at it: the run simply
-    // said "formatting problems" and carried on without them.
+    // A shipped file that does not parse costs the whole language, and the only signal during a run
+    // is one line saying "formatting problems".
     #[test]
     fn every_shipped_language_file_parses() {
         let dir = LANGUAGES_DIR;
@@ -1115,23 +1066,17 @@ Comment symbols\n--\nMulti line comment start\n--[=*[\nMulti line comment end\n]
         assert_eq!(on_disk, languages.len(),
                 "{} language files on disk but {} parsed", on_disk, languages.len());
 
-        // Two files declaring one name is a language silently lost, since resolving keys by name and
-        // the second declaration wins. The count above used to catch it on its own, back when the
-        // parse came back as a map and the two collapsed into one entry.
+        // Two files declaring one name is a language silently lost, since resolving keys by name
+        // and the second declaration wins.
         let mut names = languages.iter().map(|x| x.name.as_str()).collect::<Vec<_>>();
         names.sort_unstable();
         let duplicates = names.windows(2).filter(|pair| pair[0] == pair[1])
                 .map(|pair| pair[0]).collect::<Vec<_>>();
         assert!(duplicates.is_empty(), "these names are declared by more than one shipped file: {duplicates:?}");
 
-        // and each one has to describe something countable. The two halves of a multiline comment
-        // are not checked here any more: 'Language::new' takes them as pairs, so a start with no
-        // end cannot be built at all, and an assertion that cannot fail reads as cover that is
-        // not there.
         // A language with no string symbol at all is markup and only markup: HTML, and the shells
-        // of Vue and Svelte, where the quotes delimit attributes and the free text between tags is
-        // full of apostrophes. Their code lives in sections, which carry their own languages'
-        // strings. Naming them keeps a symbol lost from any other file loud instead of allowed.
+        // of Vue and Svelte, whose code lives in sections that carry their own languages' strings.
+        // Naming them keeps a symbol lost from any other file loud instead of allowed.
         for language in &languages {
             let name = &language.name;
             assert!(!language.extensions.is_empty() || !language.filenames.is_empty(),

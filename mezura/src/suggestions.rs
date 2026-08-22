@@ -1,9 +1,7 @@
 // Edit distance alone fails on the case that motivates this: 'list-themes' and 'show-themes' are
 // four edits apart, and a threshold that finds them matches noise. The names are hyphen-compounded,
-// so a shared token is the stronger signal, and it answers with the whole family of related names
-// rather than one guess.
+// so a shared token is the stronger signal and is tried first.
 
-// Strategies in order of how much they tell us, stopping at the first that finds anything
 pub fn suggest<'a>(input: &str, candidates: &[&'a str]) -> Vec<&'a str> {
     let input = input.trim().to_lowercase();
     if input.is_empty() {
@@ -30,8 +28,6 @@ pub fn suggest<'a>(input: &str, candidates: &[&'a str]) -> Vec<&'a str> {
             .copied().collect()
 }
 
-// None when nothing is close, so that the caller can point at its own listing command instead of
-// this printing every name there is
 pub fn formatted_suggestion(input: &str, candidates: &[&str]) -> Option<String> {
     let matches = suggest(input, candidates);
     if matches.is_empty() {
@@ -85,7 +81,6 @@ mod tests {
     const COMMANDS : [&str; 8] = ["show-themes", "theme-editor", "show-configs", "show-languages",
             "theme", "save-theme", "threads", "exclude"];
 
-    // The case the whole strategy order exists for: four edits away, and obvious to a human
     #[test]
     fn a_shared_token_beats_the_edit_distance_that_would_miss_it() {
         assert!(edit_distance("list-themes", "show-themes") > max_edit_distance("list-themes"));
@@ -103,7 +98,6 @@ mod tests {
         assert_eq!(vec!["exclude"], suggest("exclud", &COMMANDS));
     }
 
-    // Two edits over three letters reaches most of the alphabet
     #[test]
     fn a_short_name_gets_a_tighter_tolerance() {
         let languages = ["Rust", "CSS", "JS", "R", "TS", "TSX"];
@@ -116,7 +110,6 @@ mod tests {
         assert!(suggest("", &COMMANDS).is_empty());
     }
 
-    // A single shared letter is noise, not a suggestion
     #[test]
     fn a_token_has_to_be_long_enough_to_mean_something() {
         assert!(tokens_match("theme", "themes"));
@@ -126,7 +119,7 @@ mod tests {
     }
 
     #[test]
-    fn test_edit_distance() {
+    fn one_edit_is_one_insertion_one_deletion_or_one_substitution() {
         assert_eq!(0, edit_distance("same", "same"));
         assert_eq!(1, edit_distance("save", "safe"));
         assert_eq!(1, edit_distance("theme", "themes"));

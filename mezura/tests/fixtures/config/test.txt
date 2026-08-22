@@ -17,10 +17,10 @@ d.txt
 region
 
 ===> search-in-dotted
-no
+yes
 
 ===> show-faulty-files
-no
+yes
 
 ===> hide
 bar,timing

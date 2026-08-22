@@ -18,21 +18,21 @@ const FAILURES_NAMED : usize = 6;
 
 #[derive(Default)]
 pub struct MigrationOutcome {
-    // Recorded as written and gone, against brought for the first time. A language file that never
+    // Written before and gone, against brought for the first time. A language file that never
     // existed here was not lost, and telling somebody it was sends them looking for what took it.
     pub restored: Vec<String>,
     pub added: Vec<String>,
     pub replaced: Vec<String>,
-    // Ours, unchanged since we wrote it, and corrected by this version. Nothing of theirs is at
-    // stake, but their counts move, so a pass that lists nothing has still changed the numbers.
+    // Ours, unchanged since we wrote it, and corrected by this version: nothing of theirs is at
+    // stake, and their counts still move.
     pub updated: Vec<String>,
     pub withdrawn: Vec<String>,
     pub merged: Vec<String>,
     // Under 'replaced/<version>/', named after the moment the pass ran. One folder per pass, or
     // nothing says which run a copy came from.
     pub archived_under: String,
-    // A list rather than one error, because a file locked by something else costs that file and not
-    // the sixty after it
+    // A list rather than one error: a file locked by something else costs that file and not the
+    // sixty after it
     pub failed: Vec<String>,
     // The only part of the directory a run cannot do without
     pub languages_failed: usize
@@ -63,14 +63,13 @@ impl MigrationOutcome {
                 self.restored.join(", "))).yellow()))
     }
 
-    // A file of theirs that was moved aside is the only part of this that asks something of them
     pub fn format_replaced(&self) -> Option<String> {
         if self.replaced.is_empty() {
             return None;
         }
 
-        // It never says "you changed this": all it knows is that the contents are not the ones it
-        // wrote, and a second installation, a copy from somewhere and a hand edit arrive here alike
+        // It never says "you changed this": all that is known is that the contents are not the ones
+        // mezura wrote, and a copy from somewhere and a hand edit arrive here alike
         let (count, plural) = (self.replaced.len(), if self.replaced.len() == 1 {"file"} else {"files"});
         Some(format!("\n{}\n", wrap_message(&format!(
                 "Updated the data files for {VERSION_ID}.\n{count} {plural} on disk {} not {} mezura had written, \
@@ -126,8 +125,8 @@ copy as it was is in '{}{REPLACED_DIR_NAME}/{VERSION_ID}/{}/'.",
             return None;
         }
 
-        // A directory that cannot be written at all fails on every file in it, and the one thing
-        // worth reading is then the first of eighty-five lines in front of every count
+        // A directory that cannot be written at all fails on every file in it, and eighty-five
+        // lines saying so are worth less than the first of them beside the count
         let named = self.failed.iter().take(FAILURES_NAMED).cloned().collect::<Vec<_>>().join("\n  ");
         let rest = match self.failed.len().saturating_sub(FAILURES_NAMED) {
             0 => String::new(),
@@ -148,9 +147,9 @@ language claims is settled alphabetically, and each such extension says so on it
                 self.failed.len())).yellow()))
     }
 
-    // A file being taken away, and not one the counting needs, so it is deliberately not counted
-    // against the languages: the run counts perfectly well with one extra file in that folder,
-    // while 'languages_failed' abandons the whole directory for the copies inside the program.
+    // Deliberately not counted against the languages: the run counts perfectly well with one extra
+    // file in that folder, while 'languages_failed' abandons the whole directory for the copies
+    // inside the program.
     fn could_not_withdraw(&mut self, relative: &str, error: &std::io::Error) {
         self.failed.push(format!("{relative}: {error}"));
     }
@@ -192,9 +191,9 @@ fn perform_migration(data_dir: &str, force: bool, outcome: &mut MigrationOutcome
                     content_hash(read_baked_in_extension_priority_contents().as_bytes()))])
             .collect::<HashMap<_, _>>();
     // Asked of every file rather than of the folder holding it: one language file left behind by a
-    // quarantine answers "the folder is not empty" while sixty-six others are missing. And of what
-    // this version ships rather than of what the record remembers, since a file that could not be
-    // written is absent from both and the record would call it present.
+    // quarantine answers "the folder is not empty" while sixty-six others are missing. And asked of
+    // what this version ships rather than of what the record remembers, since a file that could not
+    // be written is absent from both and the record would call it present.
     let everything_is_there = carried.keys()
             .all(|relative| holds_something(&(data_dir.to_owned() + relative)))
             // The looser question for the ones written once and left alone, since an empty one of
@@ -290,7 +289,7 @@ fn perform_migration(data_dir: &str, force: bool, outcome: &mut MigrationOutcome
     // A file shipped as 'go.txt' and now as 'Go.txt' is one file on Windows and macOS, so the new
     // name was written over the old while the record still names the old, and deleting by name
     // would take away what was written a moment ago. Where the two names really are two files, the
-    // old one holds its old bytes and is withdrawn as it should be.
+    // old one holds its old bytes and is withdrawn.
     let ours_now = manifest.values().copied().collect::<HashSet<_>>();
     for (relative, hash) in recorded.iter().filter(|(relative, _)| !still_shipped.contains(*relative)) {
         let target = data_dir.to_owned() + relative;
@@ -320,8 +319,8 @@ fn perform_migration(data_dir: &str, force: bool, outcome: &mut MigrationOutcome
     }
 
     // Written when absent and never touched again, and left out of the manifest so nothing can
-    // reach them later either. Both exist in order to be edited, and a theme that has fallen behind
-    // breaks nothing, since a token it does not name falls back to a default.
+    // reach them later either. A theme that has fallen behind breaks nothing, since a token it does
+    // not name falls back to a default.
     for (relative, contents) in include_dir!("data/themes").files.iter().map(|file| named(THEMES_DIR_NAME, file)) {
         let target = data_dir.to_owned() + &relative;
         if !std::path::Path::new(&target).exists()
@@ -355,11 +354,10 @@ fn note_written_file(outcome: &mut MigrationOutcome, relative: String, was_recor
     }
 }
 
-// The one shipped file that is neither replaced nor left alone. Replacing it throws away the answer
-// somebody gave to a contested extension; leaving it alone hides everything a new version adds.
-//
-// What enters the manifest is the shipped copy's hash and never the merged file's: the record says
-// what was last brought, and the file on disk is theirs and ours together.
+// The one shipped file that is neither replaced nor left alone: replacing it throws away the answer
+// somebody gave to a contested extension, and leaving it alone hides everything a new version adds.
+// What enters the manifest is the shipped copy's hash and never the merged file's, since the record
+// says what was last brought while the file on disk is theirs and ours together.
 fn merge_the_priority_file(data_dir: &str, archived_under: &str, recorded: &HashMap<String, u64>,
         manifest: &mut HashMap<String, u64>, outcome: &mut MigrationOutcome)
 {
@@ -410,10 +408,9 @@ fn merge_the_priority_file(data_dir: &str, archived_under: &str, recorded: &Hash
 
 // Their copy brought up to what this version ships, or None when it already holds all of it. Every
 // rule they wrote is kept, as written and in the order they left it, and what arrives is the
-// explanation, a section their copy does not have, and a contest it never mentions.
-//
-// A rule they deleted is a contest their copy never mentions, so it comes back: an extension is
-// handed to another language by reordering the names on its line, and the file says so.
+// explanation, a section their copy does not have, and a contest it never mentions. A rule they
+// deleted comes back for that last reason: an extension is handed to another language by reordering
+// the names on its line, which is what the file says to do.
 fn merge_priority_files(theirs: &str, ours: &str) -> Option<String> {
     let (_, their_blocks) = read_priority_blocks(theirs);
     let (preamble, our_blocks) = read_priority_blocks(ours);
@@ -469,8 +466,9 @@ fn read_priority_blocks(contents: &str) -> (Vec<&str>, Vec<PriorityBlock<'_>>) {
     let (mut preamble, mut blocks) = (Vec::new(), Vec::<PriorityBlock>::new());
     let mut current = None;
 
-    // A file re-saved by PowerShell or an older Notepad carries a mark, it is not whitespace, and
-    // it sits in front of the first marker, so every rule under that marker reads as explanation
+    // A file re-saved by PowerShell or an older Notepad carries a byte order mark, which is not
+    // whitespace and sits in front of the first marker, so every rule under it would read as
+    // explanation
     for line in crate::config_files::strip_byte_order_mark(contents).lines() {
         if line.trim_start().starts_with("===>") {
             let marker = line.trim();
@@ -496,9 +494,9 @@ fn read_priority_blocks(contents: &str) -> (Vec<&str>, Vec<PriorityBlock<'_>>) {
     (preamble, blocks)
 }
 
-// Asked of the parser that reads the file rather than answered here, so the two cannot hold
-// different opinions about what a marker is: '===>contested-extensions' and a marker with a word
-// after its name both open the extensions section for the program that counts.
+// Asked of the parser that reads the file rather than answered here, so the two cannot disagree
+// about what a marker is: '===>contested-extensions' and a marker with a word after its name both
+// open the extensions section for the program that counts.
 fn find_what_the_marker_opens(marker: &str) -> Option<Holds> {
     let (rules, _) = mezura_core::language_file::parse_priority(&format!("{marker}\nprobe Probe\n"));
 
@@ -511,9 +509,8 @@ fn find_what_the_marker_opens(marker: &str) -> Option<Holds> {
     }
 }
 
-// A net under the merge rather than part of how it works: if an answer they gave is missing from
-// the result, their file is left exactly as it stands. Bringing them the new rules is worth less
-// than keeping the ones they decided.
+// A net under the merge: if an answer they gave is missing from the result, their file is left
+// exactly as it stands. Bringing them the new rules is worth less than keeping the ones they gave.
 fn every_answer_of_theirs_survived(theirs: &str, merged: &str) -> bool {
     let (theirs, merged) = (mezura_core::language_file::parse_priority(theirs).0,
             mezura_core::language_file::parse_priority(merged).0);
@@ -615,8 +612,7 @@ fn means_the_same(on_disk: &[u8], shipped: &[u8]) -> bool {
 }
 
 // The copy keeps its own name, under the folder this pass was given. The bool says whether this
-// call is what put it there, which is what lets a caller undo it when the step the copy was taken
-// for then fails.
+// call is what put it there, so that a caller can undo it when the step it was taken for fails.
 fn archive(data_dir: &str, archived_under: &str, relative: &str, contents: &[u8]) -> Result<bool, std::io::Error> {
     let target = find_archived_path(data_dir, archived_under, relative);
     if let Some(parent) = std::path::Path::new(&target).parent() {
@@ -671,8 +667,6 @@ mod tests {
             migrate_data_files, read_manifest, write_manifest};
     use crate::paths::test_paths::SCRATCH_DIR;
 
-    // The three ways a file can differ from what we ship, of which only one reaches the user as a
-    // message
     #[test]
     fn a_migration_replaces_what_was_changed_and_keeps_it_and_is_silent_about_the_rest() {
         let dir = SCRATCH_DIR.to_owned() + "migration-test/";
@@ -687,14 +681,12 @@ mod tests {
                 "a first installation, which lost nothing, spoke about missing files: {:?}", first.restored);
         assert!(std::path::Path::new(&(dir.clone() + "installed.txt")).exists());
 
-        // Nothing changed since, so it costs nothing and says nothing
         assert!(migrate_data_files(&dir, false).did_nothing());
 
         let lua = dir.clone() + "languages/Lua.txt";
         let shipped = std::fs::read_to_string(&lua).unwrap();
 
-        // Said differently and meaning the same: corrected without a word, since a replacement that
-        // changed no count is noise
+        // Spelled differently and meaning the same, so it is corrected without a word
         std::fs::write(&lua, shipped.replace("\" '", "\"     '")).unwrap();
         let cosmetic = migrate_data_files(&dir, true);
         assert!(cosmetic.replaced.is_empty(), "a difference that changes no count was reported");
@@ -708,8 +700,7 @@ mod tests {
         assert!(std::fs::read_to_string(format!("{dir}replaced/{}/{}/languages/Lua.txt",
                 VERSION_ID, edited.archived_under)).unwrap().contains("\""));
 
-        // A theme is taste and a language file is numbers, which is the whole of the split: somebody
-        // who expanded the theme we ship keeps what they wrote.
+        // A theme is taste and a language file is numbers, so an expanded theme keeps what it holds
         let theme = dir.clone() + "themes/Dracula.txt";
         let mine = std::fs::read_to_string(&theme).unwrap() + "\nheading = #ff0000";
         std::fs::write(&theme, &mine).unwrap();
@@ -719,7 +710,6 @@ mod tests {
         // A file of their own is never ours to touch, whatever happens around it
         let theirs = dir.clone() + "languages/Mine.txt";
         std::fs::write(&theirs, "not a language file at all").unwrap();
-        // and one that was deleted comes back
         std::fs::remove_file(dir.clone() + "languages/Zig.txt").unwrap();
 
         let third = migrate_data_files(&dir, true);
@@ -752,8 +742,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    // The worst thing this could do is reset somebody's settings. The priority file beside the
-    // configuration is not left alone in the same way, which is the subject of the test below.
     #[test]
     fn the_file_that_exists_in_order_to_be_edited_is_never_replaced() {
         let dir = SCRATCH_DIR.to_owned() + "migration-carve-out/";
@@ -781,8 +769,7 @@ mod tests {
     }
 
     // An installation made before the 'contested-filenames' block existed has no such block, so
-    // nothing in their own copy says the rules it holds can be written at all. What arrives has to
-    // arrive around their decisions rather than over them.
+    // nothing in their own copy says the rules it holds can be written at all.
     #[test]
     fn the_priority_file_gains_what_this_version_adds_and_keeps_every_decision() {
         let dir = SCRATCH_DIR.to_owned() + "migration-priority-merge/";
@@ -790,14 +777,13 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         migrate_data_files(&dir, false);
 
-        // As a copy written before the second block and the explanation above it existed, holding
-        // one answer of their own and one rule about a contest we never had
+        // A copy written before the second block and the explanation above it existed, holding one
+        // answer of their own and one rule about a contest we never had
         let path = dir.clone() + mezura_core::EXTENSION_PRIORITY_FILE_NAME;
         let theirs = "How this file worked back then.\n\n===> contested-extensions\nm       MATLAB, Objective-C\nlpr     Lazarus, Pascal\n";
         std::fs::write(&path, theirs).unwrap();
-        // and as the record that version left, holding the hash of some other text under this name.
-        // That record is the only thing that can say a release changed this file: without it, a
-        // release adding a rule and no language matches every hash it checks and returns.
+        // and the record that version left, holding the hash of some other text under this name.
+        // That record is the only thing that can say a release changed this file.
         let mut recorded = read_manifest(&dir);
         recorded.insert(mezura_core::EXTENSION_PRIORITY_FILE_NAME.to_owned(), 1);
         write_manifest(&dir, &recorded).unwrap();
@@ -818,12 +804,11 @@ mod tests {
         assert_eq!(Some(&vec!["MATLAB".to_owned(), "Objective-C".to_owned()]), rules.by_extension.get("m"));
         assert_eq!(Some(&vec!["C Header".to_owned(), "Objective-C".to_owned()]), rules.by_extension.get("h"));
 
-        // Their copy as it was is kept, since the merge is the one place this pass rewrites a file
-        // that was theirs to edit
+        // Their copy as it was is kept: the merge is the one place this pass rewrites a file that
+        // was theirs to edit
         assert_eq!(theirs, std::fs::read_to_string(format!("{dir}replaced/{VERSION_ID}/{}/{}",
                 outcome.archived_under, mezura_core::EXTENSION_PRIORITY_FILE_NAME)).unwrap());
 
-        // and now that it holds everything, a second pass finds nothing to do at all
         assert!(migrate_data_files(&dir, false).did_nothing(),
                 "a merged file was merged again, so every run would say so");
         assert!(migrate_data_files(&dir, true).merged.is_empty(),
@@ -832,8 +817,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    // The one branch that removes a file, which is why it has to be told apart from a file of their
-    // own by more than the fact that we do not ship it: only the manifest remembers writing it.
+    // The one branch that removes a file. Only the manifest tells it apart from a file of their own.
     #[test]
     fn a_file_we_no_longer_ship_is_moved_out_and_one_of_their_own_is_left_alone() {
         let dir = SCRATCH_DIR.to_owned() + "migration-withdrawn/";
@@ -859,8 +843,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    // A folder per pass is what keeps a second edit from being archived over the first, and it is
-    // the only thing that says which files were moved aside together.
     #[test]
     fn a_second_restore_after_a_second_edit_keeps_both_edits_under_their_own_folders() {
         let dir = SCRATCH_DIR.to_owned() + "migration-twice/";
@@ -875,8 +857,8 @@ mod tests {
         let first = migrate_data_files(&dir, true);
         assert_eq!(vec!["languages/Rust.txt".to_owned()], first.replaced);
 
-        // Both passes run inside the same second, which the folder name has to survive on its own
-        // rather than by waiting for the clock
+        // Both passes run inside the same second, which the folder name has to survive without
+        // waiting for the clock
         std::fs::write(&mine, "my second edit").unwrap();
         let second = migrate_data_files(&dir, true);
         assert_eq!(vec!["languages/Rust.txt".to_owned()], second.replaced, "the copy kept its own name");
@@ -889,9 +871,7 @@ mod tests {
     }
 
     // A file shipped under one spelling and now under another is one file on Windows and macOS, so
-    // the new name is written over it and the old name then reads that same file. Decided by
-    // content rather than by folding the case, so that where the two names really are two files the
-    // old one is still withdrawn.
+    // the new name is written over it and the old name then reads that same file.
     #[test]
     fn a_shipped_file_renamed_only_in_its_case_is_not_withdrawn_after_being_written() {
         let dir = SCRATCH_DIR.to_owned() + "migration-recased/";
@@ -912,7 +892,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    // Nothing else catches this: the run reads the copies baked into the binary and counts
+    // Nothing else catches this: the run falls back to the copies baked into the binary and counts
     // correctly, so the only symptom is a data directory that can no longer be edited.
     #[test]
     fn an_installation_that_lost_its_files_is_repaired_even_though_the_binary_has_not_moved() {
@@ -935,7 +915,6 @@ mod tests {
                 "the files came back as somebody's changed copies rather than as missing ones: {:?}", outcome.replaced);
         assert!(outcome.format_restored().is_some(), "an installation was repaired without a word");
 
-        // and with everything in place it still costs nothing and says nothing
         assert!(migrate_data_files(&dir, false).did_nothing());
 
         std::fs::remove_dir_all(&dir).unwrap();
@@ -969,7 +948,7 @@ mod tests {
     }
 
     // The one directory with nothing shipped inside it, so no file of the completeness check stands
-    // for it and a run with '--log' has nowhere to write while it is gone
+    // for it, and a run with '--log' has nowhere to write while it is gone
     #[test]
     fn a_deleted_logs_folder_is_made_again_and_said_out_loud() {
         let dir = SCRATCH_DIR.to_owned() + "migration-logs/";
@@ -1011,8 +990,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    // Three things: the pass reaches everything after the failure, a failure outside 'languages'
-    // does not put the counting in doubt, and the next pass repairs what this one could not.
     // 'themes' is made a file because creating a directory over one fails on every system.
     #[test]
     fn what_cannot_be_written_costs_itself_and_not_the_rest_of_the_directory() {
@@ -1032,7 +1009,10 @@ mod tests {
         // Everything the pass had left to do after the directory it could not make
         assert!(std::path::Path::new(&(dir.clone() + "config/default.txt")).exists(), "the pass stopped at the themes");
         assert!(std::path::Path::new(&(dir.clone() + MANIFEST_FILE_NAME)).exists(), "the manifest was never written");
-        assert_eq!(67, std::fs::read_dir(dir.clone() + "languages").unwrap().count());
+        // Against what the binary carries and not against today's number, or adding a language
+        // breaks a test about a directory that could not be written
+        assert_eq!(mezura_core::languages::get_shipped_language_files_raw().len(),
+                std::fs::read_dir(dir.clone() + "languages").unwrap().count());
 
         std::fs::remove_file(dir.clone() + "themes").unwrap();
         let second = migrate_data_files(&dir, false);
@@ -1044,8 +1024,7 @@ mod tests {
     }
 
     // The case every upgrade is made of: a file we shipped, that they never touched, whose contents
-    // this version corrects. Overwritten without asking, which is right, and not without a word,
-    // because it changes their counts.
+    // this version corrects. Overwritten without asking, and not without a word.
     #[test]
     fn a_file_of_ours_brought_up_to_date_is_not_brought_up_to_date_in_silence() {
         let dir = SCRATCH_DIR.to_owned() + "migration-updated/";
@@ -1053,8 +1032,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         migrate_data_files(&dir, false);
 
-        // What an older version having written an older copy looks like: the contents differ from
-        // what we ship, and the manifest records exactly what is on disk
+        // What an older version's copy looks like: the contents differ from what we ship, and the
+        // manifest records exactly what is on disk
         let lua = dir.clone() + "languages/Lua.txt";
         let older = std::fs::read_to_string(&lua).unwrap().replace("Lua", "Lua ");
         std::fs::write(&lua, &older).unwrap();
@@ -1062,8 +1041,8 @@ mod tests {
         recorded.insert("languages/Lua.txt".to_owned(), content_hash(older.as_bytes()));
         write_manifest(&dir, &recorded).unwrap();
 
-        // Asked for rather than forced, because the version string has not moved: a build whose
-        // language files changed under one version is the case this has to see
+        // Not forced, because the case to see is a build whose language files changed while the
+        // version string did not
         let outcome = migrate_data_files(&dir, false);
 
         assert_eq!(vec!["languages/Lua.txt".to_owned()], outcome.updated);
@@ -1077,7 +1056,7 @@ mod tests {
     // A file moved aside by a pass that then dies has to be announced, or the retry finds it
     // matching what we ship, says nothing either, and the copy sits in 'replaced' with nothing
     // pointing at it. The manifest is made a directory because writing over one fails everywhere,
-    // and it fails at the last step, after everything else has been done.
+    // and it is the last step, so everything before it has already been done.
     #[test]
     fn a_pass_that_fails_still_says_what_it_moved_aside() {
         let dir = SCRATCH_DIR.to_owned() + "migration-failed/";
@@ -1103,10 +1082,9 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    // An installation whose manifest predates the code reading it, which every other test here
-    // cannot produce because they all start from an empty directory. A file that moves from the
-    // managed set to the one written and left alone keeps its entry, and the withdrawal branch has
-    // to know that is not the same as one we stopped shipping.
+    // An installation whose manifest predates the code reading it, which no other test here can
+    // produce, since they all start from an empty directory. A file that moved from the managed set
+    // to the one written and left alone keeps its entry, and that is not one we stopped shipping.
     #[test]
     fn a_file_that_stopped_being_managed_is_not_a_file_that_stopped_being_shipped() {
         let dir = SCRATCH_DIR.to_owned() + "migration-recategorised/";
@@ -1128,9 +1106,8 @@ mod tests {
     }
 
     // The trigger is whether the record describes the files this binary carries, and the version
-    // string it also holds decides nothing. Asking the version instead is what left a build made
-    // between releases counting with the previous build's language files: the string had not moved,
-    // so the pass returned before looking at anything.
+    // string it also holds decides nothing: between two releases the files change and the string
+    // does not.
     #[test]
     fn a_manifest_that_does_not_describe_this_binary_makes_the_pass_run() {
         let dir = SCRATCH_DIR.to_owned() + "migration-manifest/";
@@ -1144,17 +1121,16 @@ mod tests {
         let a_language = |text: &str| text.lines().find(|line| line.contains("Zig.txt"))
                 .expect("the manifest records no language files").to_owned();
 
-        // A version that is not this one changes nothing by itself, since the files it recorded are
-        // the ones this binary carries and there is nothing to bring up to date
+        // A version that is not this one changes nothing by itself: the files it recorded are the
+        // ones this binary carries, so there is nothing to bring up to date
         for version in ["v99.0.0", "v0.0.1", "not a version at all"] {
             std::fs::write(&manifest, whole.replace(VERSION_ID, version)).unwrap();
             assert!(migrate_data_files(&dir, false).did_nothing(),
                     "a manifest recording '{version}' made the pass work although every file was in place");
         }
 
-        // A record that does not describe what this binary carries does, whichever way it differs:
-        // nothing recorded at all, a file recorded as something other than what we ship, one this
-        // binary brings that it never mentions, and one it mentions that we no longer have
+        // A record that does not describe what this binary carries makes it run, whichever way it
+        // differs
         for (broken, why) in [(String::new(), "an unreadable manifest"),
                 (whole.replace(&a_language(&whole), "languages/Zig.txt 1"), "a file we ship, recorded as another"),
                 (whole.lines().filter(|line| !line.contains("Zig.txt")).collect::<Vec<_>>().join("\n"),
@@ -1170,9 +1146,8 @@ mod tests {
     }
 
     // Dropping the record leaves the file installed for good: a language a release took away keeps
-    // being loaded, two files then declare one language, and '--restore' cannot help because
-    // nothing tells it from a language of the user's own any more. The folder in the way is how a
-    // removal is made to fail on every system, since a directory does not go through 'remove_file'.
+    // being loaded, and '--restore' cannot help, since nothing tells it from a language of the
+    // user's own any more. A directory in the way is how a removal is made to fail on every system.
     #[test]
     fn a_withdrawal_that_could_not_finish_is_tried_again_by_the_next_run() {
         let dir = SCRATCH_DIR.to_owned() + "migration-withdrawal-failed/";
@@ -1205,8 +1180,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    // Nothing was replaced when the write after the copy fails, since their file is still theirs on
-    // disk, and saying otherwise contradicts the failure printed beside it
     #[test]
     fn a_replacement_whose_write_fails_is_not_reported_and_leaves_no_copy() {
         let dir = SCRATCH_DIR.to_owned() + "migration-write-failed/";
@@ -1231,7 +1204,7 @@ mod tests {
     }
 
     // A shipped file that is there and empty satisfies its name and is no longer a language
-    // definition, so every run reports it as faulty and names nothing that would fix it
+    // definition, so every run reports it as faulty and names nothing that would put it right
     #[test]
     fn a_shipped_file_emptied_where_it_stands_is_written_again() {
         let dir = SCRATCH_DIR.to_owned() + "migration-emptied-file/";
@@ -1257,8 +1230,8 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    // Load bearing: the shipped files are written with carriage returns, and an editor that saves
-    // one back without them changes every line and no meaning
+    // The shipped files are written with carriage returns, and an editor that saves one back
+    // without them changes every line and no meaning
     #[test]
     fn the_hash_does_not_see_line_endings() {
         assert_eq!(content_hash(b"first\r\nsecond\r\n"), content_hash(b"first\nsecond\n"));
@@ -1285,16 +1258,15 @@ mod tests {
         assert!(merged.contains("===> theirs-alone") && merged.contains("q   Something"),
                 "a block of their own was dropped:\n{merged}");
 
-        // The explanation is ours and comes back as we write it, so a section that arrives is not
+        // The explanation is ours and comes back as we write it, so a section that arrives is never
         // one that nothing explains
         let merged = merge_priority_files("How it worked back then.\n\n===> contested-extensions\nh       C Header, Objective-C\nm       Objective-C, MATLAB\n", ours).unwrap();
         assert!(merged.starts_with("How it works now."), "the explanation was left behind:\n{merged}");
     }
 
-    // The merge reads the file to rewrite it and the parser reads it to count, so there are two
-    // readers and one answer about where a section begins. Where they disagree, the merge takes a
-    // section for one of their own, writes ours beside it, and the parser lets ours win the contest
-    // they had settled.
+    // The merge reads the file to rewrite it and the parser reads it to count. Where the two
+    // disagree about where a section begins, the merge takes a section for one of their own, writes
+    // ours beside it, and the parser lets ours win the contest they had settled.
     #[test]
     fn merging_the_priority_file_finds_a_section_wherever_the_parser_finds_one() {
         let ours = "How it works now.\n\n===> contested-extensions\nh       C Header, Objective-C\nm       Objective-C, MATLAB\n\n===> contested-filenames\n";

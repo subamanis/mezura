@@ -70,13 +70,14 @@ per-language rules are told apart from the parser's own mechanics.
 
 ## `definitions/`, language definition files
 
-Three of them, read by `test_parse_dir` in `src/language_file.rs`, which asserts that two parse and
-one does not. They are inputs to the definition-file parser and have nothing to do with counting, so
-they deliberately do not live beside the shipped definitions in `data/languages`.
+Three of them, read by `a_stray_line_in_one_definition_costs_that_language_and_no_other` in
+`src/language_file.rs`. The C++ one is correct everywhere except for one stray line under the
+language name, which is the mistake somebody editing a file by hand makes; the other two have to
+come through it untouched. They are inputs to the definition-file parser and have nothing to do with
+counting, so they deliberately do not live beside the shipped definitions in `data/languages`.
 
-## What is not covered here yet
+## The printed output, which is covered elsewhere
 
-The **printed output** has no golden. The binary reads its languages and its default config from the
-machine's persistent app directory, so a test that ran the executable would depend on whatever the
-developer has configured locally. Output goldens need the calculation/presentation split planned for
-v3.0.0; until then, correctness is asserted on the stats rather than on the rendering.
+`mezura/tests/fixtures/layouts.golden` is the same idea for the presentation, and it lives in the
+other package because that is where the printing does. It renders one fixed dataset through every
+layout and is regenerated with `MEZURA_UPDATE_GOLDEN=1 cargo test -p mezura every_layout`.

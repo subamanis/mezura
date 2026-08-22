@@ -13,8 +13,8 @@ use super::json_reader::{DocumentError, Scope};
 use super::json_reader::{parse_classes, parse_scope, parse_stats, read_list, read_nested,
         read_number, read_object, read_optional_name, read_text};
 
-// The log's own lineage, separate from the run document's: it moves when a key of an entry is
-// removed or changes meaning, and an entry of a newer format is skipped rather than misread
+// Separate from the run document's version: it moves when a key of an entry is removed or changes
+// meaning, and an entry of a newer format is skipped rather than misread
 const LOG_FORMAT_VERSION : usize = 1;
 
 const LOG_ENTRY_KIND : &str = "log-entry";
@@ -28,16 +28,16 @@ pub struct LogEntry {
     pub modules: Vec<ModuleEntry>
 }
 
-// Only what a module line of the history section prints. Files and Extra are on the total and not
-// repeated per module.
+// Only what a module line of the history section prints: the files and the extra lines are on the
+// total and not repeated per module.
 pub struct ModuleEntry {
     pub name: String,
     pub lines: usize,
     pub classes: LineClasses
 }
 
-// A log is the one output that cannot be recomputed: everything else is a fresh measurement of a
-// tree still on disk, this is the record of runs that are gone. So it is never truncated in place.
+// A log is the one output that cannot be measured again, since the trees those runs counted have
+// moved on, so it is never truncated in place.
 pub fn log_stats(path: &str, contents: &Option<String>, result: &RunResult, datetime_now: &DateTime<Local>, config: &Configuration) -> io::Result<()> {
     // A file that exists and is not empty has history in it whatever stopped it being read this
     // time: a lock, an editor holding it, bytes that are not UTF-8. Writing this run alone over it
@@ -48,12 +48,8 @@ pub fn log_stats(path: &str, contents: &Option<String>, result: &RunResult, date
     }
 
     // Written whole beside the old one and moved over it only when it is complete, so a failure part
-    // way through costs this entry and not the file.
-    //
-    // Named after the process, because with a fixed name two runs against the same log share one
-    // file: the second truncates the first mid-write, both flush at their own offsets, and both move
-    // the spliced result over the real log. That is not last-writer-wins, it is one run's header
-    // over another's body.
+    // way through costs this entry and not the file. The process id is in the name because with a
+    // fixed one two runs against the same log would splice one run's header onto another's body.
     let being_written = format!("{path}.writing.{}", std::process::id());
     let outcome = write_whole_log(&being_written, contents, result, datetime_now, config)
             .and_then(|()| std::fs::rename(&being_written, path));
@@ -64,13 +60,11 @@ pub fn log_stats(path: &str, contents: &Option<String>, result: &RunResult, date
     outcome
 }
 
-// 'None' means one thing: there is no history here to keep. The file is absent, or it is there and
-// could not be read, and 'log_stats' tells those two apart by asking the filesystem for its size.
-//
-// Whitespace is not a third meaning. A log emptied with 'echo. >' holds two bytes, and answering
-// 'None' for it would make the refusal above see a file with bytes in it that came back unreadable,
-// and decline to write on that run and every run after. Whether whitespace is worth comparing
-// against is the printer's question, and the printer asks it.
+// 'None' means there is no history here to keep: the file is absent, or it is there and could not
+// be read, and 'log_stats' tells those two apart by asking the filesystem for its size. Whitespace
+// is not a third meaning. A log emptied with 'echo. >' holds two bytes, and answering 'None' for it
+// would make the refusal above see a file with bytes in it that came back unreadable, and decline
+// to write on that run and every run after.
 pub fn extract_file_contents(file_path: &str) -> Option<String> {
     if Path::new(&file_path).is_file() {
         let mut contents = String::with_capacity(700);
@@ -104,11 +98,10 @@ fn write_whole_log(path: &str, contents: &Option<String>, result: &RunResult,
     writer.flush()
 }
 
-// One line, holding everything the history section reads back: the identity, the scope the run
-// obeyed, the totals and the module totals. Both the lines counted and the classes they were sorted
-// into are written, since the walk counts a line before deciding its class and the two are separate
-// measurements. Nothing folded out of them is: not 'extra', not the average size, and not 'code'
-// and 'comments', which are what a counting model makes of the classes.
+// One line, holding everything the history section reads back. Both the lines counted and the
+// classes they were sorted into are written, being two separate measurements; nothing worked out
+// from them is, not the extra lines, not the average size, and not code and comments, which are
+// what a counting model makes of the classes.
 fn format_entry_line(config: &Configuration, datetime_now: &DateTime<Local>, result: &RunResult) -> String {
     let name = config.view.log.name.as_ref()
             .map_or("null".to_owned(), |name| format!("\"{}\"", escape(name)));
@@ -250,10 +243,6 @@ mod tests {
                 performance: Performance { duration_millis: 0, threads: Threads::new(1, 1) } }
     }
 
-    // Written through the same writer the program uses, and read back through the same reader: the
-    // identity, the scope, every figure and every module. The scope goes through 'parse_scope', the
-    // run document's own reader, so a key written here under another name fails this rather than
-    // being silently dropped.
     #[test]
     fn an_entry_round_trips_through_its_own_line() {
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
@@ -289,7 +278,6 @@ mod tests {
                 model.calculate_code_lines(&entry.modules[0].classes),
                 model.calculate_comment_lines(&entry.modules[0].classes)));
 
-        // and a run with no name and no modules reads back as exactly that
         config.view.set_log_option(LogOption::new(None));
         let plain = parse_entry(&format_entry_line(&config, &now,
                 &result_of(crate::test_support::plain_stats_of(1, 1, 1, 1, 0, HashMap::new()), Vec::new()))).unwrap();
@@ -297,8 +285,6 @@ mod tests {
         assert!(plain.modules.is_empty());
     }
 
-    // The history behind one broken line is still history, and an entry from a build of tomorrow is
-    // one this build must not half-read
     #[test]
     fn a_broken_line_does_not_discard_the_lines_around_it() {
         let config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
@@ -310,40 +296,9 @@ mod tests {
         let entries = read_last_entries(&contents, 10);
         assert_eq!(2, entries.len(), "a broken or newer line took its neighbours with it");
 
-        // and the count still means entries, not lines
         assert_eq!(1, read_last_entries(&contents, 1).len());
     }
 
-    #[test]
-    fn test_log_creation_and_reading() -> io::Result<()> {
-        std::fs::create_dir_all(SCRATCH_LOG_DIR)?;
-        let path = SCRATCH_LOG_DIR.to_owned() + "test2.jsonl";
-        if Path::new(&path).exists() {
-            std::fs::remove_file(&path).unwrap();
-        }
-
-        let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
-        config.view.set_log_option(LogOption::new(Some("test name".to_owned())));
-        let result = result_of(crate::test_support::plain_stats_of(10, 100, 1000, 100, 0, HashMap::new()), Vec::new());
-
-        log_stats(&path, &None, &result, &DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap(), &config).unwrap();
-
-        let entries = read_last_entries(&extract_file_contents(&path).unwrap(), 1);
-        let model = mezura_core::CountingModel::Content;
-        assert_eq!(10, entries[0].total.files);
-        assert_eq!(1000, entries[0].total.lines);
-        assert_eq!(100, entries[0].total.calculate_code_lines(model));
-        assert_eq!(900, entries[0].total.calculate_extra_lines(model));
-        assert_eq!(100, entries[0].total.bytes);
-        assert_eq!(10, entries[0].total.calculate_average_size());
-        assert_eq!(Some("test name".to_owned()), entries[0].name);
-        assert!(entries[0].modules.is_empty());
-
-        Ok(())
-    }
-
-    // The block reaches the entry it belongs to and its figures stay out of the ones above and
-    // below it, and the newest entry is the first line
     #[test]
     fn the_modules_of_an_entry_are_read_back_and_never_reach_another_one() {
         std::fs::create_dir_all(SCRATCH_LOG_DIR).unwrap();
@@ -383,7 +338,6 @@ mod tests {
         assert_eq!(400, entries[1].total.lines);
         assert!(entries[1].modules.is_empty());
 
-        // and the entry that carries the block is still complete when only one was asked for
         let only_one = read_last_entries(&extract_file_contents(&path).unwrap(), 1);
         assert_eq!(1, only_one.len());
         assert_eq!(2, only_one[0].modules.len());
@@ -391,9 +345,6 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
     }
 
-    // The log is the one output that cannot be measured again: the trees those runs counted have
-    // moved on. 'extract_file_contents' answers None both to "there is nothing" and to "I could not
-    // read it", which are opposite instructions, so the refusal is what this holds.
     #[test]
     fn a_log_that_could_not_be_read_is_kept_rather_than_replaced_by_the_run() {
         std::fs::create_dir_all(SCRATCH_LOG_DIR).unwrap();
@@ -402,7 +353,6 @@ mod tests {
         let result = result_of(crate::test_support::plain_stats_of(10, 100, 1000, 100, 0, HashMap::new()), Vec::new());
         let now = DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap();
 
-        // What a run finds when the history is there and readable: the new entry, then all of it
         std::fs::write(&path, "AN ENTRY FROM BEFORE\n").unwrap();
         let history = extract_file_contents(&path);
         assert!(history.is_some());
@@ -410,9 +360,8 @@ mod tests {
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(written.contains("AN ENTRY FROM BEFORE"), "the history was dropped:\n{written}");
 
-        // And what it finds when the same file cannot be read. The bytes below are not UTF-8, which
-        // is one way in; a lock or an antivirus holding the file is the same answer through the
-        // same door, and on this platform far likelier.
+        // The bytes below are not UTF-8, which is one way to make the read fail; a lock or an
+        // antivirus holding the file gives the same answer and is likelier here.
         std::fs::write(&path, [b"AN ENTRY FROM BEFORE\n".to_vec(), vec![0xFF, 0xFE, 0x80]].concat()).unwrap();
         let unreadable = extract_file_contents(&path);
         assert!(unreadable.is_none(), "the probe no longer reproduces an unreadable log");
@@ -422,15 +371,13 @@ mod tests {
         let after = std::fs::read(&path).unwrap();
         assert!(String::from_utf8_lossy(&after).contains("AN ENTRY FROM BEFORE"),
                 "the entries were destroyed by a run that could not read them");
-        // and nothing half written is left lying beside it, under the name this process would use
         assert!(!Path::new(&format!("{path}.writing.{}", std::process::id())).exists());
 
         std::fs::remove_file(&path).unwrap();
     }
 
-    // The other side of the same guard. Emptying a log is an ordinary thing to want, and every
-    // ordinary way of doing it on this platform leaves a newline behind rather than nothing at all,
-    // which the refusal above must not read as a file it failed to parse.
+    // Every ordinary way of emptying a log on this platform leaves whitespace behind rather than
+    // nothing at all, which the refusal must not read as a file it failed to parse.
     #[test]
     fn a_log_emptied_by_hand_is_written_again_rather_than_refused_forever() {
         std::fs::create_dir_all(SCRATCH_LOG_DIR).unwrap();

@@ -3,9 +3,6 @@
 // separates this file from 'result.rs' beside it.
 use std::{collections::HashMap, sync::OnceLock};
 
-// Both kinds of symbol are declared the same way: a plain list of symbols that end at the end of
-// the line, and beside it the ones that cross lines, which come in pairs. So 'string_symbols' is
-// to 'multiline_strings' what 'comment_symbols' is to 'multiline_comments'.
 #[derive(Debug, Clone)]
 pub struct Language {
     pub name: String,
@@ -159,8 +156,8 @@ impl Language {
         symbol as usize >= self.string_symbols.len() + self.char_literal_symbols.len()
     }
 
-    // The one place that knows the numbering, so that a pair kind added later is one match arm and
-    // not seven pieces of arithmetic spread over two files.
+    // The one place that knows the numbering: a pair kind added later is one match arm here and not
+    // seven pieces of arithmetic spread over two files.
     pub(crate) fn get_comment_pair_of(&self, symbol: u8) -> CommentPair<'_> {
         let symbol = symbol as usize;
         if let Some((start, end)) = self.multiline_comments.get(symbol) {
@@ -205,9 +202,8 @@ impl Language {
     }
 }
 
-// A comment pair as the parser has to treat it, which is what the three lists of a language mean
-// once they are numbered in one sequence. Plain ends at its first closer, nesting counts its own
-// openers, leveled closes only at an end carrying the count its opener did.
+// Plain ends at its first closer, nesting counts its own openers, leveled closes only at an end
+// carrying the count its opener did.
 pub(crate) enum CommentPair<'a> {
     Plain { start: &'a str, end: &'a str },
     Nesting { start: &'a str, end: &'a str },
@@ -215,13 +211,10 @@ pub(crate) enum CommentPair<'a> {
 }
 
 // A string that crosses lines: the same symbol twice for Python's '"""', two different ones for a
-// raw form like 'r#"' with '"#'.
-//
-// 'escapes' is the one thing the shape cannot answer. A backtick escapes nothing in Go, Odin and D
-// and does escape in a JavaScript template literal, and '"""' splits the same way between Kotlin
-// and Java, so whether a backslash in front of the closer cancels it belongs to the symbol and not
-// to whether its two halves differ. A form written with two different symbols is raw by
-// construction, which is why 'of' takes no flag.
+// raw form like 'r#"' with '"#'. 'escapes' is the one thing the shape cannot answer, since a
+// backtick escapes nothing in Go, Odin and D and does escape in a JavaScript template literal, and
+// '"""' splits the same way between Kotlin and Java. A form written with two different symbols is
+// raw by construction, which is why 'of' takes no flag.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MultilineString {
     pub open : String,
@@ -322,7 +315,7 @@ impl PartialEq for Language {
 
 // 'descriptive_name' is what the report shows, 'aliases' are the spellings that count towards it, so
 // 'classes' can be counted from both 'class' and 'record'.
-#[derive(Debug,PartialEq)]
+#[derive(Debug,PartialEq,Eq,Clone)]
 pub struct Keyword {
     pub descriptive_name : String,
     pub aliases : Vec<String>
@@ -333,15 +326,6 @@ impl Keyword {
         Keyword {
             descriptive_name : descriptive_name.as_ref().to_owned(),
             aliases : owned_strings(aliases)
-        }
-    }
-}
-
-impl Clone for Keyword {
-    fn clone(&self) -> Self {
-        Keyword {
-            descriptive_name : self.descriptive_name.to_owned(),
-            aliases : self.aliases.to_owned()
         }
     }
 }
@@ -368,10 +352,9 @@ pub struct LineClasses {
 }
 
 impl LineClasses {
-    // Everything that walks all nine goes through 'to_array' and 'of_array', and everything that
-    // writes them out or reads them back pairs those with these names, so a tenth class is two
-    // lines here and a compiler error at each of the two conversions rather than a count that is
-    // silently dropped from a document, a log and the leftovers row of the overview.
+    // Everything that walks all nine goes through 'to_array' and 'of_array' paired with these
+    // names, so a tenth class is two lines here and a compiler error at each of the two conversions
+    // rather than a count silently dropped from a document, a log and the overview.
     pub const NAMES : [&'static str; 9] = ["words_in_code", "string_content",
             "comment_words_beside_code", "words_in_comment", "punctuation_in_code",
             "punctuation_in_comment", "blank", "blank_in_comment", "blank_in_string"];
@@ -425,8 +408,7 @@ impl LineClasses {
     }
 }
 
-// One line's class as a value, for the walk to hand out one at a time. Variant order is the order
-// of 'LineClasses::NAMES', which 'get_name' and 'ALL' index by.
+// Variant order is the order of 'LineClasses::NAMES', which 'get_name' and 'ALL' index by.
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 pub enum LineClass {
     WordsInCode,
@@ -524,9 +506,8 @@ impl CountingModel {
         }
     }
 
-    // What the third quantity is called under this model. Every face of a report asks here, the
-    // column the table heads and the key the document writes, or one of them would name it with a
-    // word the other does not use.
+    // What the third quantity is called under this model. Every face of a report asks here, or the
+    // table would head a column with a word the document does not use.
     pub fn get_third_quantity_name(&self) -> &'static str {
         match self {
             Self::Content => "extra",
@@ -619,15 +600,10 @@ impl Stats {
         self.bytes.checked_div(self.files).unwrap_or(0)
     }
 
-    // Not public, because its argument is not: the one thing outside this crate could do with it is
-    // hand-build a file's counts and get the keyword indices to line up with a slice it also has to
-    // supply. The way in from outside is 'run'.
     pub(crate) fn add_file(&mut self, stats: &FileStats, bytes: usize, keywords: &[Keyword]) {
-        // The walk counts a line and then sorts it into exactly one class, so the two are a
-        // measurement and its itemisation and have to agree. This is the only door a counted file
-        // comes through, which makes it the place a classification that lost a line shows up. Not
-        // on 'add' below: that one also takes counts parsed out of a document, where nothing
-        // promises anything.
+        // The walk counts a line and then sorts it into exactly one class, so the two have to
+        // agree, and this is the only door a counted file comes through. Not on 'add' below, which
+        // also takes counts parsed out of a document, where nothing promises anything.
         debug_assert_eq!(stats.lines, stats.classes.calculate_lines(),
                 "a counted file has {} lines and {} of them landed in a class",
                 stats.lines, stats.classes.calculate_lines());
@@ -664,10 +640,10 @@ impl From<&Language> for Stats {
     }
 }
 
-// What one file came to, on its way into a 'Stats'. Kept apart from it for one reason: the parser
-// identifies a keyword by its position in the language's list, because that is what the matcher
-// hands back, so counting into a vector slot costs no hashing and no string copying in the innermost
-// loop of the parse. The names are attached once per file, in 'add_file'.
+// What one file came to, on its way into a 'Stats'. Kept apart from it because the parser
+// identifies a keyword by its position in the language's list, which is what the matcher hands
+// back, so counting into a vector slot costs no hashing and no string copying in the innermost loop
+// of the parse. The names are attached once per file, in 'add_file'.
 #[derive(Debug,PartialEq,Default)]
 pub(crate) struct FileStats {
     pub lines : usize,
@@ -715,8 +691,7 @@ mod tests {
         Stats::new(1, 0, lines, classes, HashMap::new())
     }
 
-    // The parser cannot produce these: a line is counted once and falls into exactly one of the
-    // classes. They come off a log file whose head was lost.
+    // The parser cannot produce these; they come off a log file whose head was lost.
     #[test]
     fn counts_that_do_not_add_up_give_no_extra_lines_rather_than_a_panic() {
         assert_eq!(0, stats_of(0, 0, 900).calculate_extra_lines(CountingModel::Content));
@@ -743,13 +718,17 @@ mod tests {
         assert_eq!(6, stats.calculate_extra_lines(CountingModel::Region));
     }
 
-    // The wiring '--explain' prints through: a class names itself with the exact strings the
-    // documents and logs already use, and a bucket's name comes from the model it is read under.
+    // 'get_name' indexes NAMES by the variant's own discriminant, so this is not the names being
+    // right, it is 'ALL' listing the variants in the order the names are written in.
     #[test]
-    fn a_class_names_itself_and_a_model_names_its_buckets() {
+    fn every_class_is_listed_in_the_order_its_names_are_written_in() {
         for (i, class) in LineClass::ALL.iter().enumerate() {
             assert_eq!(LineClasses::NAMES[i], class.get_name());
         }
+    }
+
+    #[test]
+    fn a_model_names_its_buckets() {
         assert_eq!("code", CountingModel::Content.get_bucket_name(Bucket::Code));
         assert_eq!("comments", CountingModel::Region.get_bucket_name(Bucket::Comments));
         assert_eq!("extra", CountingModel::Content.get_bucket_name(Bucket::Third));

@@ -1,5 +1,4 @@
-// The module a file was counted under, and the places where the walk changes its mind about which
-// one it is in.
+// The module a file was counted under, and the places where the walk changes which module it is in.
 use std::{collections::HashMap, path::Path};
 
 // Carried through the queue as an index and never as a name: a string key would be an allocation on
@@ -8,7 +7,7 @@ pub type ModuleId = u16;
 
 // A directory's module is decided once on the way in and its children inherit it, so a run that
 // nests nothing looks up nothing at all. Only a target lying inside another target can change the
-// answer part way down, and those are the only paths this table holds.
+// answer part way down, and those are the only paths these two tables hold.
 #[derive(Debug,Default)]
 pub struct Modules {
     // Empty when nothing was named, and then everything belongs to the single bucket 0
@@ -18,10 +17,9 @@ pub struct Modules {
 }
 
 impl Modules {
-    // Built from the resolved paths and never from what was typed, because comparing paths is case
-    // sensitive on every platform: on Windows 'frontend=./Web' over a real './web' would match
-    // nothing, that module would come out empty, and every file would fall into '(unnamed)' with
-    // nothing said about why.
+    // Built from the resolved paths and never from what was typed: where the comparison is case
+    // sensitive, 'frontend=./Web' over a real './web' matches nothing, that module comes out empty,
+    // and every file falls into '(unnamed)' with nothing said about why.
     pub fn of(targets: &[crate::engine::config::Target]) -> Self {
         if targets.iter().all(|x| x.module.is_none()) {
             return Modules::default();
@@ -73,7 +71,6 @@ impl Modules {
         self.names.get(id as usize).and_then(|x| x.as_deref())
     }
 
-    // The module of a target, for the roots the traversal is handed
     pub fn of_target(&self, target: &crate::engine::config::Target) -> ModuleId {
         if self.is_used() {self.id_of(&target.module)} else {0}
     }
@@ -86,8 +83,6 @@ impl Modules {
         !self.file_boundaries.is_empty()
     }
 
-    // Called only when the run declared a target inside another one, which is the only way a child
-    // can belong somewhere other than where its parent does
     pub fn at_dir(&self, path: &Path, inherited: ModuleId) -> ModuleId {
         self.at(&self.dir_boundaries, path, inherited)
     }
@@ -128,8 +123,7 @@ mod tests {
         assert!(!modules.has_dir_boundaries() && !modules.has_file_boundaries());
     }
 
-    // The order is the order they were declared in, except that the leftovers are last because they
-    // are the leftovers. What the report shows is decided by '--sort' and not by this.
+    // What the report shows is decided by '--sort' and not by this order.
     #[test]
     fn the_leftovers_are_a_bucket_of_their_own_and_come_last() {
         let modules = modules_of(&["./src", "code ./src/lib.rs", "docs ./data"]);
@@ -140,15 +134,15 @@ mod tests {
         assert_eq!(Some("docs"), modules.name_of(1));
         assert_eq!(None, modules.name_of(2));
     
-        // One name and there is a second axis, with nothing left over to put in an unnamed row
+        // One named target with nothing outside it, so there is no leftover row
         let modules = modules_of(&["code ./src"]);
         assert!(modules.is_used());
         assert_eq!(1, modules.count());
         assert_eq!(Some("code"), modules.name_of(0));
     }
 
-    // The lookup that a walk pays for is the one that can find something. A nested file target must
-    // not make every directory pay, and a nested directory must not make every file pay.
+    // A nested file target must not make every directory pay for a lookup, and a nested directory
+    // must not make every file pay for one.
     #[test]
     fn only_a_target_inside_another_target_is_a_boundary() {
         let unrelated = modules_of(&["code ./src", "suite ./tests"]);
@@ -161,9 +155,9 @@ mod tests {
         assert!(!nested_file.has_dir_boundaries() && nested_file.has_file_boundaries());
     }
 
-    // A path that does not match falls through to what the parent was, and the match is made on the
-    // resolved path with the platform's own idea of case, or a boundary declared with a different
-    // capitalisation would find nothing and its module would come out empty with nothing printed
+    // Matched with the platform's own idea of case: on Windows a boundary declared with a different
+    // capitalisation would otherwise find nothing, and its module would come out empty with nothing
+    // printed about why
     #[test]
     fn a_boundary_answers_for_its_own_path_and_leaves_the_rest_inherited() {
         let modules = modules_of(&["./", "fixtures ./tests/fixtures"]);

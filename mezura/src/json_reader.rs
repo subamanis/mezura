@@ -6,8 +6,6 @@ use serde_json::{Map, Value};
 
 use super::json_printer::FORMAT_VERSION;
 
-// One parsed document: the result of the run that wrote it, and the things a result does not carry,
-// which are which mezura wrote it, when, the settings the counting obeyed, and what it warned about.
 #[derive(Debug)]
 pub struct Document {
     pub mezura_version: String,
@@ -18,16 +16,15 @@ pub struct Document {
     pub languages_hidden: usize,
     pub warnings: Vec<DocumentWarning>,
     // The counts from the scan block, kept apart from the lists in 'result': the lists are written
-    // only when '--show-faulty-files' asked for them, so their length reads zero for a run that
-    // had failures and did not detail them, and these two do not.
+    // only when '--show-faulty-files' asked for them, so their length reads zero for a run that had
+    // failures and did not detail them, while these two hold the real number.
     pub faulty_files_count: usize,
     pub unreadable_dirs_count: usize,
     pub result: RunResult
 }
 
 // The settings that can change a number, as the run that wrote the document had them: two documents
-// that disagree here were not measuring the same thing. The directories are not among them, they
-// are the result's own targets.
+// that disagree here were not measuring the same thing.
 #[derive(Debug,Clone)]
 pub struct Scope {
     pub exclude: Vec<String>,
@@ -48,12 +45,9 @@ pub struct Scope {
     pub count_generated: bool
 }
 
-// Kept as text rather than as the library's own warning, whose code is a '&'static str': a document
-// written by a later version can carry a code this build has never heard of.
-//
-// The subject is not among them, and is the one member of a warning that is read and thrown away:
-// every message mezura writes names its own subject inside the sentence, so carrying it separately
-// would only put the same word on the screen twice.
+// Kept as text rather than as the library's own warning: a document written by a later version can
+// carry a code this build has never heard of. The subject is read and thrown away, since every
+// message mezura writes names its own subject inside the sentence.
 #[derive(Debug)]
 pub struct DocumentWarning {
     pub code: String,
@@ -67,9 +61,9 @@ pub enum DocumentError {
     // Not "unsupported": the format is only bumped when a key is removed or changes meaning, so a
     // higher one may be missing something read here or may spell it differently.
     FormatTooNew { found: usize },
-    // A valid document of another kind, which without this check would be reported as a broken one
-    // of this kind: a comparison has no 'scan', and "missing 'scan'" sends the reader hunting for
-    // damage in a file with nothing wrong with it.
+    // A valid document of another kind. Without this check a comparison, which has no 'scan' block,
+    // would be reported as "missing 'scan'" and send the reader hunting for damage in a file with
+    // nothing wrong with it.
     NotARun { kind: String },
     // Both carry the path of the offending member, as 'total.lines' or 'languages[2].name'
     Missing(String),
@@ -97,12 +91,10 @@ impl std::error::Error for DocumentError {
     }
 }
 
-// Reads what '--output json' wrote. A key this build does not know is ignored, because adding one is
-// not a change of format.
-//
-// What comes back is what the document carries and nothing more: a document written with
-// '--hide timing' has no timing in it, so 'result.performance' comes back holding a zero duration
-// and one thread of each kind, which is not something that was measured.
+// Reads what '--output json' wrote. A key this build does not know is ignored, because adding one
+// is not a change of format. What comes back is what the document carries and nothing more: written
+// with '--hide timing' it has no timing, so 'result.performance' comes back holding zeros that were
+// never measured.
 pub fn parse(contents: &str) -> Result<Document, DocumentError> {
     let value = serde_json::from_str::<Value>(crate::config_files::strip_byte_order_mark(contents))
             .map_err(DocumentError::NotJson)?;
@@ -116,8 +108,6 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
     if format > FORMAT_VERSION {
         return Err(DocumentError::FormatTooNew { found: format });
     }
-    // Absent from a document of the first builds, which held nothing but runs, so only a kind that
-    // is present and says something else refuses
     if let Some(kind) = root.get("kind").and_then(Value::as_str) && kind != "run" {
         return Err(DocumentError::NotARun { kind: kind.to_owned() });
     }
@@ -154,9 +144,8 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
             total,
             modules,
             nested_languages,
-            // The paths are written only when '--show-faulty-files' asked for them, so an absent
-            // list means they were not detailed, never that nothing went wrong: how many there
-            // were is in 'scan' and is read either way.
+            // An absent list means the paths were not detailed, never that nothing went wrong: how
+            // many there were is in 'scan' and is read either way.
             faulty_files: match root.get("faulty_files") {
                 Some(x) => parse_faulty_files(read_array(x, "faulty_files")?)?,
                 None => Vec::new()
@@ -185,8 +174,8 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
     })
 }
 
-// The one block that travels beyond the run document: a log entry records the same scope, so both
-// kinds read it through here and a key cannot be added to one of them alone
+// A log entry records the same scope, so both kinds of file read it through here and a key cannot
+// be added to one of them alone
 pub(crate) fn parse_scope(scope: &Map<String, Value>) -> Result<(Scope, Vec<Target>), DocumentError> {
     Ok((Scope {
         exclude: read_strings(scope, "exclude", "scope")?,
@@ -217,9 +206,8 @@ pub(crate) fn parse_scope(scope: &Map<String, Value>) -> Result<(Scope, Vec<Targ
 }
 
 // 'code', 'comments', 'extra' and 'average_bytes' are written and not read: all four are worked out
-// from the counts beside them, and a stored copy is the one thing that can disagree with them. The
-// first two are also the writer's counting model showing, and this run folds the classes with its
-// own.
+// from the counts beside them, and the first two are the writer's counting model showing, while
+// this run folds the classes with its own.
 pub(crate) fn parse_stats(entry: &Map<String, Value>, at: &str) -> Result<Stats, DocumentError> {
     let keywords = match entry.get("keywords") {
         Some(x) => parse_keywords(read_object(x, &join_location(at, "keywords"))?, &join_location(at, "keywords"))?,
@@ -234,9 +222,7 @@ pub(crate) fn parse_stats(entry: &Map<String, Value>, at: &str) -> Result<Stats,
         keywords))
 }
 
-// Where every line of the counted files landed, which is what both counting models are folds of.
-// 'code' and 'comments' are written beside them and never read back: they are one such fold, and a
-// stored copy of a derived figure is the one thing that can disagree with what it came from.
+// Where every line of the counted files landed, which is what both counting models are folds of
 pub(crate) fn parse_classes(entry: &Map<String, Value>, at: &str) -> Result<LineClasses, DocumentError> {
     let classes = read_nested(entry, "classes", at)?;
     let at = join_location(at, "classes");
@@ -265,8 +251,8 @@ fn parse_languages(entries: &[Value], at: &str) -> Result<HashMap<String, Stats>
     }).collect()
 }
 
-// A document written before sections existed simply has none, so an older baseline compares as a
-// run whose containers held nothing rather than failing to read
+// A document written before nested languages existed simply has none, so it compares as a run whose
+// containers held nothing rather than failing to read
 fn parse_nested_languages(entries: &[Value], at: &str)
         -> Result<HashMap<String, HashMap<String, Stats>>, DocumentError>
 {
@@ -372,8 +358,8 @@ pub(crate) fn read_text(parent: &Map<String, Value>, key: &str, at: &str) -> Res
             .ok_or_else(|| DocumentError::WrongType { at: join_location(at, key), wanted: "a string" })
 }
 
-// A module that was never given a name, which is what the leftovers of the named ones are called and
-// what an ordinary target has. 'null' is the only place a member of a document may be empty.
+// A module that was never given a name. 'null' is the only place a member of a document may be
+// empty.
 pub(crate) fn read_optional_name(parent: &Map<String, Value>, key: &str, at: &str) -> Result<Option<String>, DocumentError> {
     match read_member(parent, key, at)? {
         Value::Null => Ok(None),
@@ -433,10 +419,9 @@ mod tests {
         crate::test_support::plain_stats_of(files, bytes, lines, code, comments, keywords)
     }
 
-    // Everything the printer can put in a document, so that nothing is left to a shape no test
-    // reaches: two languages, one of them with keywords and one without, a named module beside the
-    // leftovers, and paths carrying the backslashes and quotation marks that have to survive the
-    // escaping on the way out and the way back in.
+    // Everything the printer can put in a document: two languages, one of them with keywords and
+    // one without, a named module beside the leftovers, and paths carrying the backslashes and
+    // quotation marks that have to survive the escaping on the way out and the way back in.
     fn populated() -> (RunResult, Configuration) {
         let rust = parse_stats(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 0]);
         let html = parse_stats(1, 900, 40, 30, 0, HashMap::new());
@@ -467,7 +452,6 @@ mod tests {
         config.engine.should_search_in_dotted = true;
         config.engine.no_gitignore = true;
         config.view.sort_by = SortCriterion::Name;
-        // The two lists of paths are written only when they are asked for, and this asks
         config.view.set_should_show_faulty_files(true);
 
         (result, config)
@@ -490,8 +474,6 @@ mod tests {
         assert_eq!(written.files_present, read.files_present);
         assert_eq!(written.targets, read.targets);
         assert_eq!(written.performance.duration_millis, read.performance.duration_millis);
-        // one entry per target, so the two paths of 'backend' come back as two, in the order they
-        // were declared and each still knowing which module claimed it
         assert_eq!(3, read.targets.len());
         assert_eq!(written.performance.threads, read.performance.threads);
 
@@ -502,8 +484,6 @@ mod tests {
             assert_same_stats(&written.per_language, &read.per_language);
         }
 
-        // The two lists carry the strings that the escaping on the way out has to undo exactly: a
-        // Windows path is backslashes, and one of them holds a quotation mark as well
         assert_eq!(1, read.faulty_files.len());
         assert_eq!("D:\\dev\\a \"b\".rs", read.faulty_files[0].path);
         assert_eq!("stream did not contain valid UTF-8", read.faulty_files[0].error_msg);
@@ -513,8 +493,6 @@ mod tests {
         assert_eq!("Access is denied. (os error 5)", read.unreadable_dirs[0].error_msg);
     }
 
-    // The settings are the half of a document that says whether two of them are comparable at all,
-    // and none of them can be worked out from the counts.
     #[test]
     fn the_settings_the_counting_obeyed_come_back_with_it() {
         let (result, config) = populated();
@@ -537,20 +515,16 @@ mod tests {
                 parse(&create_document(&result, &timestamp, &config)).unwrap().generated_at);
     }
 
-    // Three blocks are written only when there is something to say, so their absence is what carries
-    // the meaning and none of them may read as a measurement of zero.
     #[test]
     fn what_a_document_leaves_out_reads_back_as_what_its_absence_means() {
         let (result, mut config) = populated();
 
-        // Nothing measured it, so what comes back is a zero and not a measurement of zero, which is
-        // the one thing about a document that reading it cannot make honest
         config.view.hidden.timing = true;
         let read = parse(&create_document(&result, &Local::now(), &config)).unwrap();
         assert_eq!(0, read.result.performance.duration_millis);
 
         // '--hide keywords' stops the counting as well as the printing, so the map comes back empty
-        // rather than as a set of zeros, and the scope says why it is empty
+        // rather than as a set of zeros
         config.view.hidden.timing = false;
         config.view.hidden.keywords = true;
         let read = parse(&create_document(&result, &Local::now(), &config)).unwrap();
@@ -558,8 +532,6 @@ mod tests {
         assert!(read.result.total.keyword_occurences.is_empty());
         assert!(!read.scope.keywords_counted);
 
-        // The scan counts come back even when the lists were not asked for, because the lists are
-        // '--show-faulty-files' detail while the counts say whether the numbers are short
         let mut short = populated().0;
         short.faulty_files = vec![mezura_core::FaultyFileDetails::new("a.rs".to_owned(), "no".to_owned(), 1)];
         short.unreadable_dirs = vec![mezura_core::UnreadableDirDetails::new("D:/locked".to_owned(), "no".to_owned())];
@@ -568,15 +540,13 @@ mod tests {
         assert!(undetailed.result.faulty_files.is_empty() && undetailed.result.unreadable_dirs.is_empty());
         assert_eq!((1, 1), (undetailed.faulty_files_count, undetailed.unreadable_dirs_count));
 
-        // A document from a build that had not met the key counted them, all of those builds did,
-        // so its absence must not read as a refusal or as keywords that were hidden
+        // A document without the key was written by a build that always counted them, so its
+        // absence must not read as keywords that were hidden
         config.view.hidden.keywords = false;
         let older = create_document(&result, &Local::now(), &config).replace(",\n    \"keywords_counted\": true", "");
         assert!(!older.contains("keywords_counted"));
         assert!(parse(&older).unwrap().scope.keywords_counted);
 
-        // and a run that named no module still has the one holding everything, so what a document
-        // without the block reads back as has to be that and not an absence of modules
         let (mut plain, config) = populated();
         plain.modules = vec![ModuleResult { name: None, per_language: plain.per_language.clone(), total: plain.total.clone(),
                 nested_languages: HashMap::new(), files: HashMap::new() }];
@@ -590,8 +560,6 @@ mod tests {
         assert_same_stats(&plain.per_language, &read.modules[0].per_language);
     }
 
-    // '--top' cuts the languages and leaves the total whole, so a reading taken off such a document
-    // is not the run, and the one thing that says so is a number nothing else can be derived from.
     #[test]
     fn a_document_that_was_cut_by_top_says_how_many_languages_it_is_short() {
         let (result, mut config) = populated();
@@ -603,9 +571,8 @@ mod tests {
         assert_eq!(result.total, read.result.total);
     }
 
-    // Everything the run said on the error output, which is the half of a document that says whether
-    // the counts can be trusted at all. Written out by hand and not through the printer, because the
-    // collector those come from belongs to the process and every other test of this binary adds to it.
+    // Written out by hand and not through the printer, because the warning collector belongs to the
+    // whole process and every other test of this binary adds to it.
     #[test]
     fn the_warnings_come_back_as_text_and_a_key_this_build_never_heard_of_is_ignored() {
         let read = parse(&minimal_document(
@@ -619,8 +586,6 @@ mod tests {
         assert_eq!("'m' is claimed by two languages.", read.warnings[0].message);
     }
 
-    // Every one of these is a file somebody was handed and passed on, so each has to say which part
-    // of it is wrong rather than that it is not a document.
     #[test]
     fn a_file_that_is_not_a_document_says_which_part_of_it_is_wrong() {
         let error = |body: &str| parse(&minimal_document(body)).unwrap_err().to_string();
@@ -636,13 +601,11 @@ mod tests {
         assert!(error("\"languages\": [{\"name\": \"Rust\"}]").contains("'languages[0].files'"));
         assert!(error("\"modules\": [{\"name\": null, \"total\": {}}]").contains("'modules[0].total.files'"));
 
-        // and one that is there holding something else
         assert!(error("\"warnings\": [{\"code\": 7}]").contains("'warnings[0].code' is not a string"));
         assert!(error("\"warnings\": \"none\"").contains("'warnings' is not an array"));
         assert!(error("\"total\": 5").contains("'total' is not an object"));
         assert!(error("\"modules\": [{\"name\": 7}]").contains("'modules[0].name' is not a string or null"));
 
-        // a target is an object of two members, and either of them being wrong names that target
         let scope_with = |targets: &str| format!("\"scope\": {{\"targets\": {targets}, \"exclude\": [], \
                 \"languages\": [], \"excluded_languages\": [], \"forced_languages\": {{}}, \
                 \"counting\": \"content\", \"search_in_dotted\": false, \"gitignore\": true, \
@@ -650,8 +613,6 @@ mod tests {
         assert!(error(&scope_with("[{\"module\": null}]")).contains("'scope.targets[0].path'"));
         assert!(error(&scope_with("[{\"module\": 7, \"path\": \"x\"}]")).contains("'scope.targets[0].module' is not a string or null"));
 
-        // a later format may have removed a key or changed what one means, so it is refused whole
-        // rather than read as far as it happens to match
         let too_new = FORMAT_VERSION + 1;
         let newer = minimal_document("\"warnings\": []")
                 .replace("\"format\": 1", &format!("\"format\": {too_new}"));
@@ -659,13 +620,13 @@ mod tests {
         assert!(refused.contains(&format!("format {too_new}")) && refused.contains("Update mezura"), "{refused}");
     }
 
-    // Every class at zero, which a document of a run that counted nothing carries
     fn empty_classes() -> String {
         format!("{{{}}}", LineClasses::NAMES.map(|name| format!("\"{name}\": 0")).join(", "))
     }
 
     // Written by hand rather than by the printer, so that a test can leave a member out or spell it
-    // wrong. 'body' is added to it, and replaces any member of the same name.
+    // wrong. 'body' is added to it, and replaces any member of the same name, since the same key
+    // twice is valid JSON and the last one wins.
     fn minimal_document(body: &str) -> String {
         let document = format!("{{\"format\": 1, \"mezura_version\": \"3.0.0\", \
             \"generated_at\": \"2026-07-30T14:22:07+03:00\", \
@@ -678,8 +639,6 @@ mod tests {
                 \"classes\": {}}}, \
             \"languages\": [], \"languages_hidden\": 0, \"faulty_files\": [], \"unreadable_dirs\": [], \
             \"warnings\": [], {body}}}", empty_classes());
-        // the same key twice is valid JSON and the last one wins, which is what lets 'body' replace
-        // one of the members above instead of only adding to them
         assert!(serde_json::from_str::<Value>(&document).is_ok(), "the test's own document is not JSON:\n{document}");
 
         document

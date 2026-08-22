@@ -21,7 +21,7 @@ pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFil
 {
     thread::Builder::new().name(format!("producer-{id}")).spawn(move || {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(||
-                search_for_files(id, files_injector, dirs_injector, worker, idle_producers.clone(),
+                search_for_files(files_injector, dirs_injector, worker, idle_producers.clone(),
                         language_lookup, exclude_matcher, config, modules, &producers_total, &progress)));
         match outcome {
             Ok((total_files, relevant_files, excluded_files, unreadable)) => {
@@ -41,7 +41,7 @@ pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFil
     })
 }
 
-pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<TraversedDir>>, worker: Worker<TraversedDir>, idle_producers: Arc<AtomicUsize>,
+fn search_for_files(files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<TraversedDir>>, worker: Worker<TraversedDir>, idle_producers: Arc<AtomicUsize>,
         language_lookup: SharedLanguageLookup, exclude_matcher: Arc<globset::GlobSet>, config: Arc<EngineConfig>, modules: Arc<Modules>,
         producers_total: &AtomicUsize, progress: &ScanProgress)
 -> (usize,usize,usize,Vec<UnreadableDirDetails>)
@@ -51,7 +51,6 @@ pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>,
     let mut excluded_files = 0;
     let mut unreadable_dirs = Vec::new();
     let mut should_terminate = false;
-    // let mut times_slept = 0;
 
     loop {
         let next_dir  = {
@@ -70,15 +69,17 @@ pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>,
         };
 
         if let Some(dir) = &next_dir {
-            // The producer's twin of the hook in the consumer, and by name for the same reason:
-            // the walk tests below drive this loop directly, so shared state would be a race
+            if should_terminate {
+                should_terminate = false;
+                idle_producers.fetch_sub(1, Ordering::SeqCst);
+            }
+            // The twin of the hook in the consumer, keyed on a name for the same reason: the walk
+            // tests below drive this loop directly and in parallel, so shared state would be a race.
+            // Below the reset above, or a thread that had already counted itself idle is counted
+            // again by the handler that catches this, and the survivors see one dead thread as two.
             #[cfg(test)]
             if dir.path.to_string_lossy().contains("mezura-dead-producer") {
                 panic!("test-induced producer panic");
-            }
-           if should_terminate {
-                should_terminate = false;
-                idle_producers.fetch_sub(1, Ordering::SeqCst);
             }
 
             match fs::read_dir(&dir.path) {
@@ -91,10 +92,9 @@ pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>,
                     traverse_dir(&files_injector, entries, &dirs_injector, &language_lookup, &exclude_matcher, &gitignore_stack,
                             &config, &modules, dir.module, &mut total_files, &mut relevant_files, &mut excluded_files, progress)
                 },
-                // Everything under it is uncounted and nothing else would ever say so: it reaches no
-                // total, not even the number of files looked at. The reason travels with the path,
-                // or a permission, a directory that went away, and a name the filesystem refused all
-                // arrive as one sentence, hundreds of times over a whole drive.
+                // Everything under it goes uncounted and reaches no total, not even the number of
+                // files looked at, and nothing else would say so. The reason travels with the path,
+                // or a permission and a directory that went away arrive as the same sentence.
                 Err(error) => unreadable_dirs.push(UnreadableDirDetails {
                     path: crate::engine::targets::normalise_separators(&dir.path.to_string_lossy()).into_owned(),
                     error_msg: error.to_string()
@@ -110,19 +110,15 @@ pub fn search_for_files(_id: usize, files_injector: Arc<Injector<ParsableFile>>,
             }
 
             thread::sleep(Duration::from_micros(50));
-            // times_slept += 1;
         }
     }
-
-    // print_thread_colored_msg(id, format!("Thread {} |  Exits with findings: {:?}",id,(total_files,relevant_files)));
-    // print_thread_colored_msg(id, format!("Thread {} |  Slept {} times. ",id,times_slept));
 
     (total_files,relevant_files,excluded_files,unreadable_dirs)
 }
 
 // 'module' is decided when the directory is queued and its entries inherit it. The two lookups below
 // only happen in a run with a target inside another target.
-fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, dirs_injector: &Arc<Injector<TraversedDir>>,
+fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: ReadDir, dirs_injector: &Injector<TraversedDir>,
         language_lookup: &LanguageLookup, exclude_matcher: &globset::GlobSet, gitignore_stack: &Option<Arc<GitignoreStack>>,
         config: &EngineConfig, modules: &Modules, module: ModuleId,
         total_files: &mut usize, relevant_files: &mut usize, excluded_files: &mut usize, progress: &ScanProgress)
@@ -135,10 +131,10 @@ fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, 
         if let Ok(ft) = e.file_type() {
             // A link is where files already counted elsewhere get counted again. Tested before the
             // two arms below and not inside them, because the second is reached by everything that
-            // is not a file: on Windows a junction answers no to both 'is_file' and 'is_dir', so it
-            // landed there and was scanned as a directory, and a link to one file landed there too,
-            // failed to open, and vanished without a word. A target named explicitly is still
-            // followed; it is only what the scan finds by itself that must not double back.
+            // is not a file: on Windows a junction answers no to both 'is_file' and 'is_dir', and a
+            // link to one file lands there too, fails to open and vanishes without a word. A target
+            // named explicitly is still followed; only what the scan finds by itself must not
+            // double back.
             if ft.is_symlink() {
                 continue;
             }
@@ -168,16 +164,15 @@ fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, 
                 // anyway, so its length is the same number for free.
                 files_injector.push(ParsableFile::new(path_buf, lang_name, module));
                 progress.record_file_found();
-            } else { //is directory
+            } else {
                 // Read lossily, and only to ask whether it is dotted, which a lossy reading answers
                 // correctly since a leading '.' is ASCII and survives any replacement. Demanding
-                // valid UTF-8 skipped the whole directory over a name used for nothing else.
+                // valid UTF-8 skips the whole directory over a name used for nothing else.
                 let file_name = e.file_name();
                 let dir_name = file_name.to_string_lossy();
                 // '--search-in-dotted' opens the directories somebody made, and git's object database
-                // is not one: nothing in it is source, and scanning it is thousands of files for no
-                // count at all. Tested by name at every depth, so a submodule or a nested clone is
-                // covered too.
+                // is not one: nothing in it is source. Tested by name at every depth, so a submodule
+                // or a nested clone is covered too.
                 if dir_name == ".git" { continue; }
                 if !config.should_search_in_dotted && dir_name.starts_with('.') { continue; }
 
@@ -199,9 +194,8 @@ fn traverse_dir(files_injector: &Arc<Injector<ParsableFile>>, entries: ReadDir, 
     *excluded_files += local_excluded_files;
 }
 
-// These drive the traversal directly instead of going through 'run', because what they are about is
-// what the walk queued and under which module, and a result has folded that into buckets by the time
-// it is returned.
+// These drive the traversal directly instead of going through 'run': what they are about is what the
+// walk queued and under which module, which a result has already folded into buckets.
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -218,12 +212,9 @@ mod tests {
         (total, relevant, excluded, found.into_iter().map(|(name, _)| name).collect())
     }
 
-    // Every file the traversal queued, with the module it was queued under, which is the only place
-    // the attribution can be seen before the counting folds it into a bucket
     fn walk(target: &str, extra_args: &str) -> (usize, usize, usize, Vec<(String, Option<String>)>) {
         // The rule the real parser applies: whitespace separates one target from the next only once a
-        // module has been named, so a path with a space in it survives while nothing is named. These
-        // fixtures live under the temporary directory, whose path carries the account name.
+        // module has been named, so a path with a space in it survives while nothing is named.
         let declares_a_module = target.contains('=');
         let pieces = if declares_a_module {target.split_whitespace().collect::<Vec<_>>()}
                 else {target.split(',').collect::<Vec<_>>()};
@@ -239,8 +230,7 @@ mod tests {
             should_search_in_dotted: extra_args.contains("--search-in-dotted"),
             ..Default::default()
         };
-        // The same first step 'run' takes: the declared targets, resolved with the flags of the
-        // configuration the walk is about to obey
+        // The same first step 'run' takes, with the flags the walk is about to obey
         let targets = crate::engine::targets::resolve(&config.targets, !config.no_gitignore, config.should_search_in_dotted).unwrap();
         let config = Arc::new(config);
         let language_map = Arc::new(crate::languages::keyed_by_name(
@@ -258,7 +248,7 @@ mod tests {
                 &ScanProgress::default());
 
         let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs).unwrap());
-        let (total, relevant, excluded, _) = search_for_files(0, files_injector.clone(), dirs_injector,
+        let (total, relevant, excluded, _) = search_for_files(files_injector.clone(), dirs_injector,
                 Worker::new_fifo(), idle_producers, language_lookup, exclude_matcher, config, modules.clone(),
                 &AtomicUsize::new(1), &ScanProgress::default());
 
@@ -272,13 +262,8 @@ mod tests {
         (total, relevant, excluded, found_files)
     }
 
-    // A directory the walk cannot open takes its whole subtree out of the count, and the run says
-    // nothing at all: no warning, no faulty entry, and 'total_files' does not even record that it was
-    // there. The numbers come back looking complete. This is the one case where mezura returns a
-    // figure it already knows is short, which is the single thing a counter must never do.
-    //
-    // Reproduced with a queued path that does not exist, which is the same 'read_dir' failure a
-    // directory deleted or made unreadable between being queued and being opened produces.
+    // Reproduced with a queued path that does not exist, which fails in 'read_dir' the same way a
+    // directory deleted or made unreadable between being queued and being opened does.
     #[test]
     fn a_directory_that_cannot_be_read_is_reported_and_not_silently_dropped() {
         let root = std::env::temp_dir().join("mezura_unreadable_dir_test");
@@ -301,27 +286,21 @@ mod tests {
         let mut files_present = FilesPresent::default();
         calculate_single_file_stats_or_add_to_injector(&config, &targets, &dirs_injector, &files_injector,
                 &mut files_present, &language_lookup, &modules, &ScanProgress::default());
-        // Queued and then gone, which the walk finds out only when it tries to open it
         dirs_injector.push(TraversedDir::new(std::path::PathBuf::from(&vanished), None, 0));
 
         let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs).unwrap());
-        let (total, relevant, _, unreadable) = search_for_files(0, files_injector, dirs_injector,
+        let (total, relevant, _, unreadable) = search_for_files(files_injector, dirs_injector,
                 Worker::new_fifo(), Arc::new(AtomicUsize::new(0)), language_lookup, exclude_matcher,
                 config, modules, &AtomicUsize::new(1), &ScanProgress::default());
 
         fs::remove_dir_all(&root).unwrap();
 
-        // What it did manage to read is still counted, and the one it could not is named
         assert_eq!((1, 1), (total, relevant));
         assert_eq!(vec![vanished], unreadable.iter().map(|x| x.path.clone()).collect::<Vec<_>>(),
                 "the directory that could not be read went unreported");
-        // with the reason beside it, so that a permission and a path that went away are told apart
         assert!(!unreadable[0].error_msg.is_empty(), "the reason it could not be read was dropped");
     }
 
-    // The object database is never source, and naming it is not something a walk should be able to
-    // do by accident: '--search-in-dotted' asks for the directories somebody made, not for the one
-    // git keeps. At any depth, so that a submodule or a nested clone is covered as well.
     #[test]
     fn the_git_directory_is_never_walked_even_when_dotted_ones_are() {
         let root = std::env::temp_dir().join("mezura_git_skip_test");
@@ -342,7 +321,7 @@ mod tests {
         let (_, _, _, found) = count_files_of(&root_str, "");
         assert_eq!(vec!["a.rs"], found, "the dotted rule alone should have kept all three out");
 
-        // The flag opens the ones somebody created and still not the one git keeps, at either depth
+        // The flag opens the ones somebody created, at either depth, and still not the one git keeps
         let (_, _, _, found) = count_files_of(&root_str, "--search-in-dotted");
         assert_eq!(vec!["a.rs", "deploy.rs"], found, "the object database was walked");
 
@@ -350,7 +329,7 @@ mod tests {
     }
 
     #[test]
-    fn test_overlapping_and_globbed_targets_count_every_file_once() {
+    fn overlapping_and_globbed_targets_count_every_file_once() {
         let root = std::env::temp_dir().join("mezura_overlap_test");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("sub").join("deep")).unwrap();
@@ -362,23 +341,18 @@ mod tests {
         let (_, _, _, found_files) = count_files_of(&root, "");
         assert_eq!(vec!["a.rs", "b.rs", "c.rs"], found_files);
 
-        // Without pruning, the files of the nested targets would appear multiple times
         let (_, _, _, found_files) = count_files_of(&format!("{root},{root}/sub,{root}/sub/deep"), "");
         assert_eq!(vec!["a.rs", "b.rs", "c.rs"], found_files);
 
         let (_, _, _, found_files) = count_files_of(&format!("{root}/sub/deep,{root}/sub"), "");
         assert_eq!(vec!["b.rs", "c.rs"], found_files);
 
-        // Glob matches go through the same pruning
         let (_, _, _, found_files) = count_files_of(&format!("{root}/*,{root}/**/*.rs"), "");
         assert_eq!(vec!["a.rs", "b.rs", "c.rs"], found_files);
 
         fs::remove_dir_all(&root).unwrap();
     }
 
-    // The attribution happens on the way down and never per file, so what this checks is that the
-    // module of a directory reaches every file below it, and that a target nested inside another one
-    // takes its own files back from it however the two were written down.
     #[test]
     fn every_file_is_attributed_to_exactly_one_module() {
         let root = std::env::temp_dir().join("mezura_modules_test");
@@ -437,10 +411,6 @@ mod tests {
         std::os::unix::fs::symlink(original, link).unwrap();
     }
 
-    // The walk used to follow a link and count everything under it a second time, because the arm
-    // that handles a directory is reached by everything that is not a file. A link the run was
-    // pointed at on purpose is a different thing and is still followed: what must not happen is the
-    // walk doubling back on its own discoveries.
     #[test]
     fn a_link_found_during_the_walk_is_not_followed_but_one_that_was_asked_for_is() {
         let root = std::env::temp_dir().join("mezura_symlink_test");
@@ -459,13 +429,13 @@ mod tests {
         assert_eq!(1, relevant);
         assert_eq!(vec!["a.rs"], found);
 
-        // A pattern is not a name. What it matched was found by the program, the same way the walk
-        // finds things, which is already why a match that a .gitignore ignores is dropped.
+        // A pattern is not a name: what it matched was found by the program, which is already why a
+        // match that a .gitignore ignores is dropped.
         let (_, relevant, _, found) = count_files_of(&format!("{root_str}/*"), "");
         assert_eq!(1, relevant, "the link was reached through a pattern and counted a second time");
         assert_eq!(vec!["a.rs"], found);
 
-        // A link to a single file used to take the directory arm too, fail to open and disappear
+        // A link to a single file would otherwise take the directory arm, fail to open and disappear
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(root.join("real").join("a.rs"), root.join("real").join("b.rs")).unwrap();
@@ -478,9 +448,8 @@ mod tests {
     }
 
     // The fixtures sit under the temporary directory, whose path carries the account name, so an
-    // account with a space in it used to be split into two targets that do not exist. Naming a
-    // module changes the rule and needs the path quoted, which is the parser's job and is tested
-    // where the parser lives.
+    // account with a space in it is the ordinary way in. Naming a module changes the rule and needs
+    // the path quoted, which is the parser's job and is tested where the parser lives.
     #[test]
     fn a_target_whose_path_contains_a_space_is_one_target() {
         let root = std::env::temp_dir().join("mezura space test");
@@ -499,9 +468,6 @@ mod tests {
         fs::remove_dir_all(&root).unwrap();
     }
 
-    // A script whose name says nothing is claimed through its '#!' first line: opened only when
-    // it has no extension at all, and only after the ignore checks, so an ignored script stays
-    // unopened and lands in the uncounted remainder rather than in 'excluded'.
     #[test]
     fn an_extensionless_script_is_claimed_through_its_first_line() {
         let root = std::env::temp_dir().join("mezura_shebang_walk_test");
@@ -517,16 +483,16 @@ mod tests {
 
         let (total, relevant, excluded, found) = count_files_of(&root_str, "");
         assert_eq!(vec!["a.rs", "deploy"], found, "the shebang did not claim the script");
-        // 'LICENSE', '.gitignore', the '.xyz' carrying a shebang and the ignored script all stay
-        // in the remainder: an extension keeps a file out of the probe whatever its first line
-        // says, and a file the ignore checks cover is not 'excluded', it was never identified
+        // 'LICENSE', '.gitignore', the '.xyz' carrying a shebang and the ignored script all stay in
+        // the remainder: an extension keeps a file out of the probe whatever its first line says,
+        // and a file the ignore checks cover was never identified, so it is not 'excluded' either
         assert_eq!((6, 2, 0), (total, relevant, excluded));
 
         fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
-    fn test_gitignore_traversal() {
+    fn what_a_gitignore_names_is_left_out_of_the_walk() {
         let root = std::env::temp_dir().join("mezura_gitignore_test");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join(".git")).unwrap();

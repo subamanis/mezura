@@ -1,6 +1,3 @@
-// What the counting needs and nothing else, plus the two types that only it names: a target is a
-// place to walk, and the thread counts decide how many walk it. How the answer is shown is decided
-// in the binary, which is a crate of its own and never seen from here.
 use std::collections::HashMap;
 
 pub const MAX_PRODUCERS_VALUE : usize = 32;
@@ -11,15 +8,12 @@ pub const MIN_CONSUMERS_VALUE : usize = 1;
 pub(crate) const DEF_SEARCH_IN_DOTTED  : bool    = false;
 pub(crate) const DEF_NO_GITIGNORE      : bool    = false;
 
-// The name lives inside the target rather than in a list of its own, so everything that already
-// carries the targets carries the names with them: the saved configuration, the log entry that
-// decides whether two runs are comparable, and the settings echoed in the JSON document.
 #[derive(Debug,PartialEq,Eq,Clone)]
 pub struct Target {
     // 'None' shares the '(unnamed)' row of the report with every other unnamed target.
     pub module: Option<String>,
-    // In whatever state its holder put it: as declared it is what was typed, and the list the run
-    // walks, which is what 'RunResult.targets' reports, holds resolved absolute paths.
+    // What was typed, until the run resolves it: the list 'RunResult.targets' reports holds
+    // absolute paths.
     pub path: String
 }
 
@@ -34,9 +28,9 @@ impl Target {
 }
 
 // By path first, ignoring case where the filesystem does, so two spellings of one place sort
-// together. The two tie-breakers are not decoration: 'Ord' has to agree with 'Eq', which is derived
-// over both fields, or targets differing only in case or only in name compare Equal while '==' says
-// otherwise, and the first 'dedup' over a sorted list drops one.
+// together. The tie-breakers keep 'Ord' agreeing with the derived 'Eq': without them two targets
+// differing only in case or only in module compare Equal while '==' says otherwise, and a 'dedup'
+// over a sorted list drops one of them.
 impl Ord for Target {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         crate::engine::targets::path_comparison_key(&self.path)
@@ -61,10 +55,10 @@ impl std::fmt::Display for Target {
     }
 }
 
-// The two counts are private so that a number the run cannot work with has no way in: zero scanning
-// threads leaves every directory in the queue and answers "nothing found" over a real tree, and zero
-// counting threads returns a result claiming files and zero of everything else.
-#[derive(Debug,PartialEq,Clone)]
+// Private so that a number the run cannot work with has no way in: zero scanning threads leaves
+// every directory in the queue and answers "nothing found" over a real tree, and zero counting
+// threads returns a result claiming files and zero of everything else.
+#[derive(Debug,PartialEq,Eq,Clone,Copy)]
 pub struct Threads {
     producers: usize,
     consumers: usize
@@ -80,10 +74,6 @@ impl Threads {
         }
     }
 
-    pub fn from(threads: (usize,usize)) -> Self {
-        Threads::new(threads.0, threads.1)
-    }
-
     pub fn producers(&self) -> usize {
         self.producers
     }
@@ -93,13 +83,17 @@ impl Threads {
     }
 }
 
+impl From<(usize,usize)> for Threads {
+    fn from(threads: (usize,usize)) -> Self {
+        Threads::new(threads.0, threads.1)
+    }
+}
+
 impl Default for Threads {
     fn default() -> Self {
         let threads = num_cpus::get();
         // Four counting threads per core. What they wait on is a blocking file open, so what decides
-        // the speed is how many reads are in flight and not how many cores exist. Measured, going
-        // from 22 to 96 of them costs nothing on a fast disk with a warm cache, wins 1.20x on a slow
-        // one and 1.97x from cold: free where it does not help, which is the whole argument.
+        // the speed is how many reads are in flight and not how many cores exist.
         if threads <= 4 {
             Threads {
                 producers: 2,
@@ -114,20 +108,14 @@ impl Default for Threads {
     }
 }
 
-// Plain data, so nothing has to be computed in any order before anything else, and no setters, so
-// one expression says everything and can never fall behind the struct:
-//
-//     let config = EngineConfig { count_keywords: false, ..EngineConfig::new(["./src"]) };
-//
 // Every field but 'threads' answers what gets counted. That one answers how fast, and is here only
 // because it is saved and reloaded beside the others; the log leaves it out of what makes two runs
 // comparable.
 #[derive(Debug,PartialEq,Clone)]
 pub struct EngineConfig {
-    // Paths or glob patterns, relative or absolute, exactly as they were written. 'run' resolves
-    // them at its entry with these same settings, so the flags that filter a pattern's matches and
-    // the flags the scan obeys cannot disagree. A relative path is joined to the working directory
-    // at that moment, and 'RunResult.targets' reports what they resolved to.
+    // 'run' resolves these at its entry with the settings beside them, so the flags that filter a
+    // pattern's matches and the flags the scan obeys cannot disagree. A relative path is joined to
+    // the working directory at that moment.
     pub targets: Vec<Target>,
     pub exclude_dirs: Vec<String>,
     pub languages_of_interest: Vec<String>,

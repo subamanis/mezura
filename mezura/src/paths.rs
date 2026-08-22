@@ -1,14 +1,12 @@
 // Where a user's own languages, themes, configurations and logs live. Here and not in the library
-// for two reasons: nothing about counting depends on it, and the sandbox below is chosen with
-// 'cfg!(test)', which is only true in the crate actually being tested. In the library it would stop
-// applying the moment the binary is its own crate, and the tests would go back to reading and
-// writing the real directory without saying so.
+// because the sandbox below is chosen with 'cfg!(test)', which is only true in the crate actually
+// being tested: in the library it would stop applying the moment the binary became its own crate,
+// and the binary's tests would go back to reading and writing the real directory without saying so.
 use std::borrow::Cow;
 use std::sync::LazyLock;
 
 use directories::ProjectDirs;
 
-// The layout of the application's own directory.
 pub const APP_NAME : &str = "mezura";
 pub const LANGUAGES_DIR_NAME : &str = "languages";
 pub const THEMES_DIR_NAME : &str = "themes";
@@ -33,21 +31,14 @@ impl PersistentAppPaths {
     // Linux:    /home/<user_name>/.local/share/mezura
     // MacOs:    /Users/<user_name>/Library/Application Support/mezura
     pub fn get() -> Self {
-        // Tests write real configuration and theme files through these paths, and one interrupted
-        // before its cleanup leaves them behind. In the real directory those are not litter but
-        // loadable configurations that '--show-configs' lists, and 'test_save_load_configs' opens by
-        // demanding its own file is absent, so one interrupted run fails it forever after.
-        //
-        // A temporary directory also keeps the machine's own default configuration out of the tests,
-        // which is what made them behave differently per machine. Asking the system where the real
-        // one is belongs inside the other branch, or a machine with no home directory at all fails
-        // every test that reaches this, over a value the test half never uses.
+        // Tests write real configuration and theme files through these paths, and a run interrupted
+        // before its cleanup leaves loadable configurations behind: 'test_save_load_configs' starts
+        // by demanding its own file is absent, so one such run fails it forever after. Asking the
+        // system where the real directory is has to stay inside the other branch, or a machine with
+        // no home directory fails every test that reaches this.
         let data_dir = if cfg!(test) {
             std::env::temp_dir().join(APP_NAME.to_owned() + "-test").to_string_lossy().into_owned() + "/"
         } else {
-            // Every path in this struct is a String, so a data directory that is not valid UTF-8
-            // cannot be represented at all and nothing below would work. Said out loud rather than
-            // left as a bare unwrap, because the message is the only clue anyone would get.
             ProjectDirs::from("", "", APP_NAME)
                     .expect("no home directory could be found to put the application's data in")
                     .data_dir().to_str()
@@ -72,12 +63,9 @@ pub fn fold_for_comparison(path: &str) -> Cow<'_, str> {
 }
 
 // What the tests read and what they write, kept apart. 'tests/fixtures' holds checked-in inputs and
-// is never written to; 'test_dir' is scratch, ignored by git as a whole, and a test that writes
-// there makes the directory it needs. Both are anchored on the manifest rather than on the
-// executable, so neither depends on where cargo put the test binary or on the working directory.
-//
-// Mixing the two hides a dependency: two tests write a file without creating its directory, and
-// would pass only because a checked-in fixture happened to be sitting in it.
+// is never written to; 'test_dir' is scratch, ignored by git, and a test that writes there makes the
+// directory it needs. Mixing the two hides a dependency: a test that writes a file without creating
+// its directory then passes only because a checked-in fixture happened to be sitting in it.
 #[cfg(test)]
 pub mod test_paths {
     pub const FIXTURES_DIR       : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/");

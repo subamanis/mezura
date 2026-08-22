@@ -2,9 +2,8 @@ use std::collections::HashMap;
 
 use mezura_core::{LineClasses, Stats};
 
-// Every line of a counted file lands in exactly one class, so the lines are the classes added up
-// and are never given separately: a hand written pair that disagreed would print a third column
-// holding a number no class of it accounts for.
+// The lines are the classes added up and are never passed in: a hand written pair that disagreed
+// would print a third column holding a number no class accounts for.
 pub fn stats_of(files: usize, bytes: usize, classes: LineClasses,
     keyword_occurences: HashMap<String, usize>) -> Stats
 {
@@ -13,10 +12,6 @@ pub fn stats_of(files: usize, bytes: usize, classes: LineClasses,
     Stats::new(files, bytes, lines, classes, keyword_occurences)
 }
 
-// A file holding nothing that the two counting models read differently: words in code, words in a
-// comment, and blank lines outside both, which is what everything left over has to be. Both models
-// answer alike for such a file, which is what lets a test about a layout, a document or a log give
-// three numbers and say nothing about where a line sits.
 pub fn plain_stats_of(files: usize, bytes: usize, lines: usize, code: usize, comments: usize,
     keyword_occurences: HashMap<String, usize>) -> Stats
 {

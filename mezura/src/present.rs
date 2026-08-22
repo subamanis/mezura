@@ -1,28 +1,20 @@
-// Turning a result into something a person reads. Kept apart from the run itself, so that counting
-// is a function of its inputs and a caller which wants the numbers and not the report never comes
-// near any of this.
 use mezura_core::{FaultyFileDetails, RunResult, UnreadableDirDetails};
 
 use super::config_manager::Configuration;
 use crate::paths::PERSISTENT_APP_PATHS;
 
-// Reads and never writes, so a caller wanting both the numbers and the report can have the same
-// result twice.
 pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>, config: &Configuration) {
     let datetime_now = chrono::Local::now();
-    // Before anything else, because a scan can come back empty precisely because the directories
-    // could not be opened, and the report would otherwise say "no relevant files" with a straight face
+    // Before anything else: a scan can come back empty precisely because the directories could not
+    // be opened, and the report would otherwise say "no relevant files" with a straight face
     print_unreadable_dirs(&result.unreadable_dirs, config);
 
     if result.files_present.relevant_files == 0 {
-        // Nothing was parsed, so the unreadable directories are the whole of what there is to offer
-        // detail on, and this is the one path where the hint has to come before the sentence below
+        // The one path where the hint comes before the sentence below rather than after it
         print_detail_hint_if_anything_was_hidden(result, config);
-        // A machine consumer must not have to tell "no output" apart from "no code found", so the
-        // document is written even here, whole and with everything zeroed
+        // The document is written even here, whole and zeroed: a machine consumer must not have to
+        // tell "no output" apart from "no code found"
         if config.view.prints_text() {
-            // Worded here and not in the library, because 'run' answers this case with a result and
-            // not an error: the sentence is presentation, like every other sentence
             let activated = get_activated_languages_as_str(config);
             let message = if activated.is_empty() {"No relevant files found in the given directory.".to_owned()}
                     else {format!("No relevant files found in the given directory. {activated}")};
@@ -35,15 +27,13 @@ pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>,
         return;
     }
 
-    // No table of zeros under a real failure, because a table reads as an answer. The document is
-    // still written whole, for the same reason the empty scan writes one. Returning here also keeps
-    // the run out of the log, where a row of zeros makes the next comparison report a collapse and
-    // then a recovery.
+    // No table of zeros under a real failure, and no log entry either: a logged row of zeros makes
+    // the next comparison report a collapse and then a recovery.
     if result.all_relevant_files_were_faulty() {
         print_faulty_files_or_ok(&result.faulty_files, config);
         print_detail_hint_if_anything_was_hidden(result, config);
         if config.view.prints_text() {
-            eprintln!("{}", super::theme::get_active().warning.paint("None of the files were able to be parsed"));
+            eprintln!("{}", super::theme::get_active().warning.paint("None of the files could be parsed."));
             if comparison.is_some() {
                 println!();
             }
@@ -56,9 +46,8 @@ pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>,
     print_files_left_out(result, config);
     print_detail_hint_if_anything_was_hidden(result, config);
 
-    // Every file found was left out, so a table would be a frame around nothing. Returning keeps
-    // the run out of the log too, for the reason the faulty branch above does: a row of zeros is
-    // read by the next comparison as a collapse and then a recovery.
+    // Every file found was left out, so no table and no log entry, for the reason the faulty branch
+    // above returns.
     if result.nothing_of_interest_was_counted() {
         if config.view.prints_text() {
             eprintln!("{}", super::theme::get_active().warning.paint("Nothing was left to count."));
@@ -80,31 +69,26 @@ pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>,
     let existing_log_contents = log_file_path.as_ref().and_then(|path| super::log::extract_file_contents(path));
     super::result_printer::format_and_print_results(result, &existing_log_contents, &datetime_now, config);
 
-    // The reason travels with the warning, because the two that can happen are opposite news: one
-    // says this run was not recorded, the other says this run was not recorded and everything
-    // already in there was kept rather than replaced by it.
     if config.view.log.should_log && let Some(path) = log_file_path
         && let Err(reason) = super::log::log_stats(&path, &existing_log_contents, result, &datetime_now, config) {
         eprintln!("\n{}",super::theme::get_active().warning.paint(&format!("Error while trying to save the log: {reason}")));
     }
 }
 
-// Hiding the status never hides a parsing failure: that would show wrong numbers with nothing
-// to indicate it
+// '--hide' never hides a parsing failure: the numbers would be lower than the tree with nothing
+// to say why. A JSON run has them in the document as well, and still on the error output.
 pub fn print_faulty_files_or_ok(faulty_files: &[FaultyFileDetails], config: &Configuration) {
     if faulty_files.is_empty() {
         if !config.view.hidden.parsing_info && config.view.prints_text() {
             println!("{}\n",super::theme::get_active().success.paint("ok"));
         }
     } else {
-        // A JSON run reports them inside the document as well, but they are a mistake and belong on
-        // the error output in every case, where '--hide' can never suppress them
         let error = &super::theme::get_active().error;
         let (count, subject, pronoun) = (faulty_files.len(),
-                if faulty_files.len() == 1 {"faulty file"} else {"faulty files"},
-                if faulty_files.len() == 1 {"It"} else {"They"});
+                if faulty_files.len() == 1 {"file"} else {"files"},
+                if faulty_files.len() == 1 {"it is"} else {"they are"});
         eprintln!("{} {}", error.paint(&count.to_string()),
-                error.paint(&format!("{subject} detected. {pronoun} will be ignored in stat calculation.")));
+                error.paint(&format!("{subject} could not be parsed, so {pronoun} in no figure below.")));
         if config.view.should_show_faulty_files {
             for f in faulty_files {
                 eprintln!("-- Error: {} \n   for file: {}\n",f.error_msg,f.path);
@@ -114,9 +98,8 @@ pub fn print_faulty_files_or_ok(faulty_files: &[FaultyFileDetails], config: &Con
     }
 }
 
-// On the error output and never hidden by '--hide', both for the reason a faulty file is: the
-// figures are lower than the tree, nothing else would say why, and whoever reads the report out of
-// a pipe must not have to parse around it. A JSON run has it under 'scan'.
+// On the error output and never hidden, for the reason a faulty file is: the figures are lower than
+// the tree and nothing else would say why. A JSON run has it under 'scan'.
 fn print_files_left_out(result: &RunResult, config: &Configuration) {
     if !config.view.prints_text() {
         return;
@@ -138,9 +121,8 @@ fn print_files_left_out(result: &RunResult, config: &Configuration) {
     }
 }
 
-// In the error color and not a milder one, because it is the worse of the two problems: a faulty
-// file is at least counted among the files that were found, while everything under one of these
-// appears in no total at all.
+// In the error color and not a milder one: everything under an unreadable directory appears in no
+// total at all, where a faulty file is at least counted among the files that were found.
 fn print_unreadable_dirs(unreadable_dirs: &[UnreadableDirDetails], config: &Configuration) {
     if unreadable_dirs.is_empty() {return;}
 
@@ -150,8 +132,6 @@ fn print_unreadable_dirs(unreadable_dirs: &[UnreadableDirDetails], config: &Conf
             if unreadable_dirs.len() == 1 {"it"} else {"them"});
     eprintln!("{} {}", error.paint(&count.to_string()),
             error.paint(&format!("{subject} could not be read. Nothing inside {pronoun} was counted.")));
-    // The reason beside the path and not on a line of its own, because on a whole drive this list
-    // runs to hundreds and most of them say the same thing
     if config.view.should_show_faulty_files {
         for dir in unreadable_dirs {
             eprintln!("-- Could not be read ({}):
@@ -162,8 +142,8 @@ fn print_unreadable_dirs(unreadable_dirs: &[UnreadableDirDetails], config: &Conf
     eprintln!();
 }
 
-// A scan that found nothing still owes what was asked for: a tree that lost every file is the
-// everything-gone comparison, not a document that quietly changes kind to 'run'.
+// A scan that found nothing still owes the comparison that was asked for, rather than a plain
+// document of zeros.
 fn print_comparison_or_empty_document(result: &RunResult, comparison: Option<&super::diff::Comparison>,
         datetime_now: &chrono::DateTime<chrono::Local>, config: &Configuration)
 {
@@ -182,18 +162,15 @@ fn print_detail_hint_if_anything_was_hidden(result: &RunResult, config: &Configu
     }
 }
 
-// Once for the run and not once per kind of problem: it is the same flag either way, and a scan that
-// meets both would otherwise tell the reader twice to do one thing.
-//
-// Split from the printing so the decision can be asserted, which is the one thing worth asserting
-// here: three paths through 'present' reach it with a different pair of lists behind them.
+// Once for the run and not once per kind of problem: it is the same flag either way, and a scan
+// that meets both would otherwise tell the reader twice to do one thing.
 fn determine_detail_hint(result: &RunResult, config: &Configuration) -> Option<String> {
     if config.view.should_show_faulty_files
         || (result.unreadable_dirs.is_empty() && result.faulty_files.is_empty()) {
         return None;
     }
 
-    Some(format!("Run with command '--{}' to get detailed info.\n", super::config_manager::SHOW_FAULTY_FILES))
+    Some(format!("Run with '--{}' for the paths and the reasons.\n", super::config_manager::SHOW_FAULTY_FILES))
 }
 
 fn get_activated_languages_as_str(config: &Configuration) -> String {
@@ -213,7 +190,6 @@ fn get_activated_languages_as_str(config: &Configuration) -> String {
     msg
 }
 
-// The log of the configuration this run saved, or failing that of the one it loaded.
 fn determine_log_file_path(config: &Configuration) -> Option<String> {
     let name = config.view.config_name_to_save.as_ref()
             .or(config.view.config_name_to_load.as_ref())?;
@@ -229,8 +205,8 @@ mod tests {
 
     use super::*;
 
-    // One file counted beside whatever went wrong, because a run where nothing at all was counted
-    // is a different case with a branch of its own, and a fixture must not stand in both
+    // One file is always counted beside whatever went wrong: a run where nothing at all was counted
+    // takes a branch of its own, and this fixture must not stand in both.
     fn result_with(unreadable: usize, faulty: usize) -> RunResult {
         let counted = crate::test_support::plain_stats_of(1, 40, 4, 3, 1, HashMap::new());
         RunResult {
@@ -246,9 +222,6 @@ mod tests {
         }
     }
 
-    // A scan that meets both kinds of problem prints two counts, and each of them used to name the
-    // same command underneath it, so the reader was told twice to run one flag. The hint belongs to
-    // the run and not to either list, which is what the first case holds.
     #[test]
     fn the_offer_of_detail_is_made_once_however_many_kinds_of_problem_there_were() {
         let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
@@ -256,23 +229,17 @@ mod tests {
         let both = determine_detail_hint(&result_with(3, 5), &config).expect("a run with both kinds said nothing");
         assert_eq!(1, both.matches("--show-faulty-files").count(), "the same flag was named twice:\n{both}");
 
-        // and it is offered for either kind on its own, since the one flag shows both
         assert!(determine_detail_hint(&result_with(3, 0), &config).is_some(), "only unreadable directories said nothing");
         assert!(determine_detail_hint(&result_with(0, 5), &config).is_some(), "only faulty files said nothing");
 
-        // Nothing to show, nothing offered. A clean run must not carry a line telling the reader to
-        // go and look at problems it did not have.
         assert!(determine_detail_hint(&result_with(0, 0), &config).is_none(), "a clean run offered detail on nothing");
 
-        // and the offer is gone once it has been taken up, or it would point at the output above it
         config.view.should_show_faulty_files = true;
         assert!(determine_detail_hint(&result_with(3, 5), &config).is_none(),
                 "the detail was printed and the reader was still told to ask for it");
     }
 
-    // The log is the history of a configuration's own measurements, and a comparison run may borrow
-    // nothing but still answers a different question, so it never writes an entry. The refusal is
-    // asserted through the real 'present', because that is where the write happens or does not.
+    // Asserted through the real 'present', because that is where the write happens or does not.
     #[test]
     fn a_run_that_compares_writes_no_log_entry() {
         let name = "zz-a-run-that-compares";
@@ -300,14 +267,12 @@ mod tests {
         present(&result, Some(&comparison), &config);
         assert!(!path.exists(), "the comparison run wrote a log entry");
 
-        // and the same configuration without a comparison still logs, so the gate is the baseline
         present(&result, None, &config);
         assert!(path.exists(), "the ordinary run stopped logging");
         std::fs::remove_file(&path).unwrap();
     }
 
-    // Only the file name is asserted: which directory it lands in is the data dir's business, and
-    // the separators around it differ by platform.
+    // Only the file name is asserted: the separators around it differ by platform.
     #[test]
     fn a_logs_file_name_is_the_configuration_name_with_jsonl_on_it() {
         let file_name = |config: &Configuration| determine_log_file_path(config)

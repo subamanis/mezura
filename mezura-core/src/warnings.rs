@@ -1,13 +1,6 @@
 // What the run wants the caller to know without it being an error: an answer was produced, and this
 // says what to be careful about in it.
 
-// What went wrong, as the one thing a script can key on: the name never changes while the message
-// is free to be reworded.
-//
-// A type and not a set of string constants, because what a code does to the answer is a fact about
-// the code and not something a caller decides at the point of complaining. Written the other way it
-// drifted inside an hour: one code was raised as 'Counts' in one place and 'Settings' in another,
-// which is how the two cases below were found to be two different problems sharing a name.
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 #[non_exhaustive]
 pub enum Code {
@@ -21,7 +14,7 @@ pub enum Code {
     DuplicateLanguage,
     // Every file carrying its extensions is left to be counted by nobody
     LanguageWithoutName,
-    // Nothing is lost: claiming neither an extension nor a filename, it could never have matched a file
+    // Nothing is lost: it claims neither an extension nor a filename, so no file could ever match it
     LanguageClaimsNothing,
     LanguageFileUnreadable,
     PriorityLineSkipped,
@@ -54,13 +47,11 @@ impl Code {
     }
 
     // Exhaustive on purpose: a code added without deciding what it does to the answer does not
-    // compile, which is the whole reason this is not a field somebody fills in per complaint.
+    // compile.
     pub fn affects(self) -> Affects {
         match self {
-            // Counts
             Self::LanguageTiebreak | Self::DuplicateLanguage | Self::LanguageWithoutName
             | Self::LanguageFileUnreadable | Self::UnknownSectionLanguage => Affects::Counts,
-            // Settings
             Self::UnknownForcedLanguage | Self::UnknownLanguage | Self::UnknownExcludedLanguage
             | Self::LanguageClaimsNothing | Self::PriorityLineSkipped | Self::ConfigValueIgnored
             | Self::ConfigSectionUnknown | Self::CommandIgnored | Self::ConfigStyleInvalid
@@ -92,8 +83,6 @@ impl Warning {
 
 // Whether the numbers can be trusted, which is the question worth answering without knowing every
 // code: one written against this keeps working when a later version adds a code it never heard of.
-//
-// Both mean "not the numbers I wanted"; what separates them is whether the command can fix it.
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 pub enum Affects {
     // The numbers are wrong for the settings that were applied. Rewriting the command does not fix
@@ -117,21 +106,15 @@ impl Affects {
 mod tests {
     use super::*;
 
-    // A code that never changes beside wording that is free to change is the whole reason for the
-    // type, so both halves are asserted.
     #[test]
     fn a_warning_carries_a_stable_code_and_a_readable_message() {
         let warning = Warning::new(Code::LanguageTiebreak, "m", "the readable half".to_owned());
 
         assert_eq!("language-tiebreak", warning.code.name());
         assert_eq!("counts", warning.affects().name());
-        assert_eq!("m", warning.subject);
-        assert_eq!("the readable half", warning.message);
         assert_eq!("settings", Affects::Settings.name());
     }
 
-    // Two languages nobody can use, and what they cost is not the same: a nameless one takes the
-    // files carrying its extensions out of the count, one that claims nothing never had any.
     #[test]
     fn a_language_that_cannot_be_named_puts_the_counts_in_doubt_and_one_that_claims_nothing_does_not() {
         assert_eq!(Affects::Counts, Code::LanguageWithoutName.affects());

@@ -1,8 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-// The counters a caller can watch from another thread while 'run' blocks. The counters are
-// relaxed: they are read for display, and a reader may be a file behind at any moment. The flag is
-// the exception, release against acquire, so that a reader who sees the walk finished also sees
+// The counters are relaxed: they are read for display, and a reader may be a file behind at any
+// moment. The flag is release against acquire, so a reader who sees the walk finished also sees
 // every file the walk found. Only a run that returns 'Ok' promises 'files_found' is final at that
 // moment: one that panics out raises the flag on its way with the walk still moving.
 #[derive(Debug, Default)]

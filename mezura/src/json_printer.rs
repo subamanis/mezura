@@ -10,8 +10,8 @@ use super::result_printer;
 // check this and not the version of the binary, which moves for reasons that do not concern it.
 pub const FORMAT_VERSION : usize = 1;
 
-// The file rows of one language, in the order the report shows them, beside the path each row prints
-// No shortened path: a document carries the whole one, which is the only form a consumer can open
+// The file rows of one language, in the order the report shows them. The paths are never shortened
+// the way the report shortens them: a document carries the only form a consumer can open.
 type FilesByLanguage<'a> = HashMap<&'a str, Vec<&'a mezura_core::FileEntry>>;
 
 // The document is a designed shape and not a serialization of the structs the program happens to
@@ -45,14 +45,13 @@ pub fn create_document(result: &RunResult, datetime_now: &DateTime<Local>, confi
         format!("  \"languages\": {}", create_languages_array(shown, per_language, nested_languages, &files, config)),
         format!("  \"languages_hidden\": {hidden}"),
         format!("  \"files_hidden\": {files_hidden}"),
-        // The paths of the two, which '--show-faulty-files' asks for here as it does on the screen.
-        // How many there were is in 'scan' either way, so their absence is never a claim that
-        // nothing went wrong.
+        // The paths, which '--show-faulty-files' asks for here as it does on the screen. How many
+        // there were is in 'scan' either way, so an empty list never claims nothing went wrong.
         format!("  \"faulty_files\": {}", create_faulty_files_array(faulty_files, config.view.should_show_faulty_files)),
         format!("  \"unreadable_dirs\": {}", create_unreadable_dirs_array(unreadable_dirs, config.view.should_show_faulty_files)),
         format!("  \"warnings\": {}", create_warnings_array()),
     ];
-    // Absent from a run that named no module, the same way the section is absent from the printed
+    // Absent from a run that named no module, the same way the block is absent from the printed
     // report: a consumer that never asked for a second axis is not handed one holding everything
     if result.has_modules() {
         members.push(format!("  \"modules\": {}", create_modules_array(result, &file_rows, config)));
@@ -71,10 +70,9 @@ pub fn print_comparison_as_json(comparison: &super::diff::Comparison,
     println!("{}", create_comparison_document(comparison, datetime_now, config));
 }
 
-// The comparison as a document: the same vocabulary as a run's document, with every count a triad of
-// 'from', 'to' and 'change'. The sides carry identity and nothing else, since their counts are the
-// halves of the triads; '--top' is not applied, being a decision about a screen, so this document
-// always holds every language of either reading.
+// The comparison as a document: the same vocabulary as a run's, with every count a triad of 'from',
+// 'to' and 'change'. The sides carry identity and nothing else, their counts being the halves of the
+// triads, and '--top' is not applied, so every language of either reading is here.
 fn create_comparison_document(comparison: &super::diff::Comparison, datetime_now: &DateTime<Local>,
         config: &Configuration) -> String
 {
@@ -145,8 +143,8 @@ fn create_comparison_modules_array(pairs: &[super::diff::ModulePair], config: &C
     format!("[\n{}\n  ]", entries.join(",\n"))
 }
 
-// 'brace' is the column each entry's opening brace sits at, so that the same array can be written at
-// the top level and under a module, which are at two depths.
+// 'brace_indent' is the column each entry's opening brace sits at, so that the same array can be
+// written at the top level and under a module, which are at two depths.
 fn create_compared_languages_array(brace_indent: usize, changes: &[super::diff::LanguageStatsChange],
         keywords_counted: bool, baseline_nested: &HashMap<String, HashMap<String, Stats>>,
         subject_nested: &HashMap<String, HashMap<String, Stats>>, model: CountingModel) -> String
@@ -214,15 +212,13 @@ fn create_compared_total_object(member_indent: usize, baseline: &Stats, subject:
     format!("{{\n{}\n{}}}", lines.join(",\n"), " ".repeat(member_indent - 2))
 }
 
-// Identity, and the identity of each source has its own shape: 'source' is the discriminator, so a
-// consumer never guesses from which keys exist. The counts are not here, being the triads' halves.
+// Each kind of source has its own shape, behind the 'source' discriminator, so a consumer never
+// guesses from which keys exist. The counts are not here, being the halves of the triads.
 fn create_side_object(reading: &super::diff::Reading) -> String {
     let mut members = vec![match &reading.source {
         super::diff::Source::Run => String::from("    \"source\": \"run\""),
         super::diff::Source::Document { path } =>
             format!("    \"source\": \"document\",\n    \"path\": \"{}\"", escape(path)),
-        // Both halves, because neither derives from the other: the hash is what was measured, and
-        // what was asked for is what a person recognises later
         super::diff::Source::GitRevision { commit, asked_for } =>
             format!("    \"source\": \"revision\",\n    \"commit\": \"{}\",\n    \"asked_for\": \"{}\"",
                     escape(commit), escape(asked_for))
@@ -230,8 +226,8 @@ fn create_side_object(reading: &super::diff::Reading) -> String {
     members.push(format!("    \"taken_at\": \"{}\"", escape(&reading.taken)));
     members.push(format!("    \"mezura_version\": \"{}\"", escape(reading.version.trim_start_matches('v'))));
     // How the scan of this side went, and only how: without it a side that failed to read half its
-    // files looks like a side that shrank, and the triads above cannot say which. Which files those
-    // were is a question for a run over that side, not for a comparison of two.
+    // files looks like a side that shrank. Which files those were is a question for a run over that
+    // side, not for a comparison of two.
     members.push(format!("    \"scan\": {}", create_scan_object(6, &reading.result.files_present,
             reading.faulty_files_count, reading.result.minified_files, reading.result.generated_files,
             reading.unreadable_dirs_count)));
@@ -244,8 +240,8 @@ fn create_side_object(reading: &super::diff::Reading) -> String {
 }
 
 // The scope in the shape the run document writes it, from wherever the reading carried it. The
-// targets are in it for the same reason they are in the run's: two sides that measured
-// different trees would otherwise read as code that changed.
+// targets are in it because two sides that measured different trees would otherwise read as code
+// that changed.
 fn create_scope_object_of(scope: &super::json_reader::Scope, targets: &[mezura_core::Target]) -> String {
     let members = [
         format!("    \"targets\": {}", create_targets_array(targets)),
@@ -257,6 +253,8 @@ fn create_scope_object_of(scope: &super::json_reader::Scope, targets: &[mezura_c
         format!("    \"search_in_dotted\": {}", scope.search_in_dotted),
         format!("    \"gitignore\": {}", scope.gitignore),
         format!("    \"keywords_counted\": {}", scope.keywords_counted),
+        format!("    \"count_minified\": {}", scope.count_minified),
+        format!("    \"count_generated\": {}", scope.count_generated),
     ];
 
     format!("{{\n{}\n  }}", members.join(",\n"))
@@ -286,12 +284,10 @@ struct WarningEntry {
     message: String
 }
 
-// What makes the two readings two measurements rather than two moments of one: the same facts the
-// screen says above the table, as entries a program can key on.
+// The same facts the screen says above the table, as entries a program can key on
 fn create_comparison_warnings_array(notes: &[super::diff::Note]) -> String {
-    // What this very process warned about comes first, having been said first: it belongs to the
-    // comparison and not to either side, since a side that is a revision was counted by this
-    // process too and a document's own warnings are already inside it
+    // What this very process warned about comes first, having been said first, and belongs to the
+    // comparison rather than to either side: a document's own warnings are already inside it
     let mut entries = super::warning_collector::get_collected_warnings().into_iter()
             .map(|x| WarningEntry {
                 code: x.code.name().to_owned(), affects: x.affects().name(),
@@ -329,8 +325,8 @@ fn create_note_entries(note: &super::diff::Note) -> Vec<WarningEntry> {
     };
     match note {
         // The other half of 'setting-differs': one says the two disagreed, this says they were made
-        // to agree. Without it both scopes simply read alike and nothing tells a value the command
-        // line gave apart from one it borrowed.
+        // to agree. Without it both scopes read alike and nothing tells a value the command line
+        // gave apart from one it borrowed.
         Note::SettingsAdopted { from, settings } => settings.iter()
                 .map(|setting| entry("setting-adopted", Affects::Settings, (*setting).to_owned(),
                     format!("'{setting}' was taken from '{from}', which this run had not set itself, so both readings are counted the same way.")))
@@ -356,8 +352,7 @@ fn create_note_entries(note: &super::diff::Note) -> Vec<WarningEntry> {
 }
 
 // The five figures a comparison compares, each as '{"from": a, "to": b, "change": b - a}'. 'change'
-// is derived and written anyway, because the comparison is the product: handing back two numbers
-// and leaving the subtraction to the reader is handing back the input.
+// is derived and written anyway, the difference being what was asked for.
 fn create_triad_members(indent: &str, before: &Stats, now: &Stats, model: CountingModel) -> Vec<String> {
     [("files", before.files, now.files), ("lines", before.lines, now.lines),
      ("code", before.calculate_code_lines(model), now.calculate_code_lines(model)),
@@ -400,8 +395,8 @@ fn create_scope_object(config: &Configuration, targets: &[mezura_core::Target]) 
         format!("    \"exclude\": {}", create_string_array(&config.engine.exclude_dirs)),
         format!("    \"languages\": {}", create_string_array(&config.engine.languages_of_interest)),
         format!("    \"excluded_languages\": {}", create_string_array(&config.engine.excluded_languages)),
-        // '--force-language m=matlab' decides which language a file is counted as, so it moves numbers
-        // the same way an exclusion does, and two runs that disagree about it are not comparable
+        // '--force-language m=matlab' decides which language a file is counted as, so it moves
+        // numbers the same way an exclusion does
         format!("    \"forced_languages\": {}", create_forced_languages_object(&config.engine.forced_languages)),
         format!("    \"counting\": \"{}\"", config.view.counting.name()),
         format!("    \"search_in_dotted\": {}", config.engine.should_search_in_dotted),
@@ -414,16 +409,11 @@ fn create_scope_object(config: &Configuration, targets: &[mezura_core::Target]) 
     format!("{{\n{}\n  }}", members.join(",\n"))
 }
 
-// 'files_of_interest' is what the status line calls it, and it is not the same as the file count of
-// the total below: the faulty ones were found and are of interest, but nothing of them was counted.
-// Everything the scan itself has to say, and the one block that answers whether the counts beside
-// it are complete. Written per side of a comparison too, which is why 'indent' exists: the same
-// shape at two depths, so a consumer learns it once.
-//
-// The names inside are '<what>_<state>', where the lists that carry the paths are natural English:
-// 'files_faulty' is the count, 'faulty_files' is the array.
-// The counts arrive apart from the lists in the result, because for a side read from a document the
-// lists are only there when that run detailed them, while its scan block counted either way
+// Whether the counts beside it are complete. 'files_of_interest' is not the file count of the total
+// below: a faulty file was found and is of interest, and nothing of it was counted. The counts
+// arrive apart from the lists in the result, because for a side read from a document the lists are
+// only there when that run detailed them while its scan block counted either way. 'indent' exists
+// because the same block is written per side of a comparison, two levels deeper.
 fn create_scan_object(indent: usize, files_present: &mezura_core::FilesPresent,
         faulty_files_count: usize, minified_files_count: usize, generated_files_count: usize,
         unreadable_dirs_count: usize) -> String
@@ -462,9 +452,9 @@ fn create_total_object(total: &Stats, keywords_counted: bool, model: CountingMod
     format!("{{\n{}\n  }}", members.join(",\n"))
 }
 
-// The leftovers of the named modules carry 'null' and not the '(unnamed)' the report prints: a marker
-// spelled as a name is one a real module could be called, and a machine consumer grouping by that
-// key would silently merge the two.
+// The leftovers of the named modules carry 'null' and not the '(unnamed)' the report prints: a
+// marker spelled as a name is one a real module could be given, and a consumer grouping by that key
+// would silently merge the two.
 fn create_modules_array(result: &RunResult, file_rows: &[result_printer::FileRowsOfModule],
         config: &Configuration) -> String
 {
@@ -496,7 +486,8 @@ fn find_shown_files<'a>(of_module: &'a result_printer::FileRowsOfModule<'a>) -> 
             (*language, rows.shown.iter().map(|(_, file)| *file).collect())).collect()
 }
 
-// The document's own 'languages' array is the run and not one part of it
+// The top level 'languages' array is the whole run, so the file rows of every module are merged
+// into one list per language
 fn merge_file_rows<'a>(per_module: &'a [result_printer::FileRowsOfModule<'a>],
         sort_by: mezura_core::SortCriterion, model: CountingModel) -> FilesByLanguage<'a>
 {
@@ -563,7 +554,6 @@ fn create_files_array(files: &[&mezura_core::FileEntry], nested_shown: bool, mod
     format!("[\n{}\n      ]", entries.join(",\n"))
 }
 
-// Absent for a language that holds nothing, so an older document and this one read alike
 fn create_nested_languages_array(sections: &HashMap<String, Stats>, model: CountingModel) -> String {
     let mut sorted = sections.iter().collect::<Vec<_>>();
     sorted.sort_unstable_by_key(|(name, _)| name.as_str());
@@ -640,12 +630,9 @@ fn create_keywords_object(occurences: &HashMap<String, usize>, indent: usize) ->
 }
 
 // Everything the run said on the error output, which a machine consumer never sees. Always present,
-// empty array included, so that a consumer can read it without asking whether the key is there.
-//
-// 'code' is the half that is safe to branch on and 'message' the half that is safe to show, and
-// 'affects' is what lets a consumer written today keep working when a later version adds a code it
-// has never heard of: the question is whether the counts can be trusted, not which of the codes are
-// the serious ones. In emission order, which is the order they were printed in.
+// empty array included. 'code' is the half that is safe to branch on, 'message' the half that is
+// safe to show, and 'affects' is what lets a consumer written today keep working when a later
+// version adds a code it has never heard of. In the order they were printed.
 fn create_warnings_array() -> String {
     let warnings = super::warning_collector::get_collected_warnings();
     if warnings.is_empty() {
@@ -686,9 +673,8 @@ fn create_faulty_files_array(faulty_files: &[FaultyFileDetails], asked_for: bool
     format!("[\n{}\n  ]", entries.join(",\n"))
 }
 
-// Objects and not bare paths, and sorted for the same reason as the faulty files above. A consumer
-// that wants only the paths reads one key of each; one that wants to tell a permission apart from a
-// directory that went away mid-walk could not do it at all while this was an array of strings.
+// Objects and not bare paths, and sorted for the same reason as the faulty files above: a consumer
+// has to be able to tell a refused permission apart from a directory that went away mid-walk.
 fn create_unreadable_dirs_array(unreadable_dirs: &[mezura_core::UnreadableDirDetails], asked_for: bool) -> String {
     if !asked_for || unreadable_dirs.is_empty() {
         return String::from("[]");
@@ -707,13 +693,10 @@ fn create_unreadable_dirs_array(unreadable_dirs: &[mezura_core::UnreadableDirDet
     format!("[\n{}\n  ]", entries.join(",\n"))
 }
 
-// 'scan_ms' and not the 'Exec time' of the footer: what is measured here is the interval that starts
-// before the producers and ends when the consumers are done, which is the phase 'scan' describes.
-// The total is not known yet at this point, and the shell can measure it honestly anyway.
-// The thread counts come from the result and not from the configuration, because they sit beside
-// the measurement they exist to interpret: the configuration holds what was asked for, and the
-// operating system is allowed to grant fewer. A document stating the requested counts next to
-// 'scan_ms' would be lying about the conditions of its own timing.
+// 'scan_ms' and not the 'Exec time' of the footer: what is measured here starts before the producers
+// and ends when the consumers are done, which is the phase 'scan' describes. The thread counts come
+// from the result and not from the configuration, which holds what was asked for while the operating
+// system is allowed to grant fewer.
 fn create_performance_object(performance: &mezura_core::Performance) -> String {
     let threads = format!("{{\n      \"producers\": {},\n      \"consumers\": {}\n    }}",
             performance.threads.producers(), performance.threads.consumers());
@@ -723,7 +706,7 @@ fn create_performance_object(performance: &mezura_core::Performance) -> String {
 
 // One entry per target and not one per module: a module given several paths is several targets that
 // share a name, and grouping them would lose the order they were declared in, which the columns of
-// the report follow. The unnamed ones carry 'null' for the same reason the modules do.
+// the report follow.
 fn create_targets_array(targets: &[mezura_core::Target]) -> String {
     if targets.is_empty() {
         return String::from("[]");
@@ -801,8 +784,7 @@ mod tests {
     }
 
     fn document_of(config: &crate::config_manager::Configuration) -> String {
-        // Summed rather than written out, so that the document is one a run could have produced and
-        // the keywords of the total are the keywords of the languages under it
+        // Summed rather than written out, so the document is one a run could have produced
         let per_language = hashmap![
             "Rust".to_owned() => stats_of(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 1]),
             "HTML".to_owned() => stats_of(1, 900, 40, 30, 0, HashMap::new())];
@@ -814,7 +796,7 @@ mod tests {
     }
 
     #[test]
-    fn every_string_that_json_cannot_carry_raw_is_escape() {
+    fn every_character_that_json_cannot_carry_raw_is_escaped() {
         assert_eq!("a\\\\b", escape("a\\b"));
         assert_eq!("D:\\\\dev\\\\a \\\"b\\\".rs", escape("D:\\dev\\a \"b\".rs"));
         assert_eq!("one\\ntwo\\tthree", escape("one\ntwo\tthree"));
@@ -834,8 +816,8 @@ mod tests {
         assert!(document.contains("\"lines\": 140"));
         assert!(document.contains("\"average_bytes\": 2500"));
         assert!(document.contains("\"scan_ms\": 1180"));
-        // Nothing that the printed output adds: no separators in the four digit numbers, no size
-        // measurement, no percentage, and no layout or theme in the echo of the settings
+        // Nothing the printed output adds: no separators in the numbers, no size measurement, no
+        // percentage, and no layout or theme among the settings
         assert!(!document.contains("5,900"));
         assert!(!document.contains("KB"));
         assert!(!document.contains('%'));
@@ -871,8 +853,8 @@ mod tests {
         // Sorted by name, so that two runs over the same tree produce the same bytes
         assert!(document.find("\"enums\"").unwrap() < document.find("\"structs\"").unwrap());
 
-        // The total carries them too, which is the only figure that survives a '--top' that cuts
-        // the languages they would otherwise have to be added back up from
+        // The total carries them too, being the only figure that survives a '--top' cutting the
+        // languages they would otherwise have to be added back up from
         let at = document.find("\"total\"").unwrap();
         let total_block = &document[at..at + document[at..].find("\"languages\"").unwrap()];
         assert!(total_block.contains("\"keywords\": {"), "{total_block}");
@@ -895,9 +877,6 @@ mod tests {
         assert!(!document.contains("\"scan_ms\""));
     }
 
-    // The key is absent from a run that named nothing, and the leftovers carry 'null': a marker
-    // spelled '(unnamed)' is a name a real module could be given, and a consumer grouping by that key
-    // would merge the two without noticing
     #[test]
     fn the_modules_appear_only_when_one_was_named_and_the_leftovers_have_no_name() {
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
@@ -920,8 +899,6 @@ mod tests {
         let rendered = create_document(&result, &Local::now(), &config);
         assert!(rendered.contains("\"name\": \"backend\""));
         assert!(rendered.contains("\"name\": null"));
-        // Each module carries the same 'total' and 'languages' blocks the document carries for the
-        // whole run, so a consumer reads one shape and not two, and the two of them add up to it
         let block = &rendered[rendered.find("\"modules\"").unwrap()..];
         assert_eq!(2, block.matches("\"total\":").count());
         assert_eq!(2, block.matches("\"languages\":").count());
@@ -929,23 +906,18 @@ mod tests {
         assert!(rendered.contains("\"lines\": 140"));
         assert!(rendered.contains("\"languages_hidden\": 0"));
 
-        // '--top' is per module there too, so a module with one language is not cut by '--top 1'
-        // while the report as a whole has two
+        // '--top' is per module here, so one with a single language is not cut by '--top 1'
         config.view.top_n = Some(1);
         let cut = create_document(&result, &Local::now(), &config);
         assert_eq!(2, cut.matches("\"languages_hidden\": 0").count());
         assert!(cut.contains("\"languages_hidden\": 1"));
     }
 
-    // Everything a run says on the error output is invisible to whoever asked for the document, and
-    // some of it means the counts cannot be trusted. The collector is shared by the whole process,
-    // so this asserts on its own entry rather than on the whole array.
     #[test]
     fn a_warning_reaches_the_document_with_both_of_its_halves() {
         let config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
-        // The key is always written, so a consumer never has to test for it. Whether the array is
-        // empty cannot be asserted: the collector belongs to the process and every other test of
-        // this binary adds to it.
+        // Whether the array is empty cannot be asserted: the collector belongs to the whole process
+        // and every other test of this binary adds to it.
         assert!(document_of(&config).contains("\"warnings\": ["));
 
         super::super::warning_collector::keep(mezura_core::warnings::Warning::new(
@@ -956,16 +928,9 @@ mod tests {
         assert!(rendered.contains("\"subject\": \"a-subject-only-this-test-uses\""));
         assert!(rendered.contains("\"code\": \"language-tiebreak\""));
         assert!(rendered.contains("\"affects\": \"counts\""));
-        // The message is written for a person, so it goes through the same escaping as every other
-        // string here or a quotation mark in it would break the document
         assert!(rendered.contains("quoted \\\"text\\\" and a \\\\ backslash"));
     }
 
-    // One entry per target, so a module given several paths is several entries carrying one name,
-    // and a consumer never has to split a string to find out where a run looked.
-    // It decides which language a file is counted as, so it moves numbers exactly the way an
-    // exclusion does. The log has recorded it among the settings from the start and the document did
-    // not, so two runs that disagreed about it compared silently.
     #[test]
     fn the_extensions_that_were_forced_to_a_language_are_among_the_settings() {
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
@@ -975,8 +940,7 @@ mod tests {
                 "h".to_owned() => "objective-c".to_owned()];
         let document = document_of(&config);
         assert!(document.contains("\"m\": \"matlab\""), "{document}");
-        // by extension, which is the thing a run is asked about and can only be claimed once, and
-        // sorted so that two runs over the same tree produce the same bytes
+        // sorted, so that two runs over the same tree produce the same bytes
         assert!(document.find("\"h\":").unwrap() < document.find("\"m\":").unwrap());
     }
 
@@ -993,13 +957,10 @@ mod tests {
 
         assert!(written.contains("{\"module\": \"tests\", \"path\": \"D:/api/tests\"}"), "{written}");
         assert_eq!(2, written.matches("\"module\": \"tests\"").count());
-        // the unnamed one carries 'null' rather than a name a real module could be given, and a
-        // Windows path is escaped here as it is everywhere else
         assert!(written.contains("{\"module\": null, \"path\": \"D:\\\\web\"}"), "{written}");
         // in the order they were declared, which the report's columns follow, and not sorted
         assert!(written.find("api/tests").unwrap() < written.find("web/tests").unwrap());
 
-        // and a run over the working directory alone still writes the key, empty
         result.targets = Vec::new();
         assert!(create_document(&result, &Local::now(), &config).contains("\"targets\": []"));
     }
@@ -1018,8 +979,6 @@ mod tests {
         }
     }
 
-    // Every count is a triad, the sides carry identity and never counts, and each source's identity
-    // has its own shape behind the 'source' discriminator.
     #[test]
     fn a_comparison_document_holds_both_sides_of_every_figure_and_who_the_sides_were() {
         let config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
@@ -1042,19 +1001,14 @@ mod tests {
         // each side says what it measured, or two sides over different trees would read as change
         assert!(document.contains("{\"module\": \"core\", \"path\": \"D:/proj/src\"}"), "{document}");
 
-        // every figure is the pair and the journey, so nothing has to be subtracted by the reader
         assert!(document.contains("\"lines\": {\"from\": 140, \"to\": 210, \"change\": 70}"), "{document}");
         // a language of only one side has a whole zero side, and the change can be negative
         assert!(document.contains("\"lines\": {\"from\": 40, \"to\": 0, \"change\": -40}"), "{document}");
         assert!(document.contains("\"structs\": {\"from\": 3, \"to\": 5, \"change\": 2}"), "{document}");
 
-        // and it is a document, not a description of one
         assert!(serde_json::from_str::<serde_json::Value>(&document).is_ok(), "{document}");
     }
 
-    // The second axis of a comparison, which is there only when both readings named the same
-    // modules: one that only one of them has would be compared against nothing, and the key being
-    // absent has to be told apart from a run that named none, which is what the warning is for.
     #[test]
     fn the_modules_of_a_comparison_are_written_only_when_both_readings_named_the_same_ones() {
         let config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
@@ -1079,8 +1033,6 @@ mod tests {
         let document = create_comparison_document(&crate::diff::Comparison::of(from(), to, &config, Vec::new()), &datetime, &config);
         assert!(document.contains("\"modules\": ["), "{document}");
         assert!(document.contains("\"name\": \"backend\"") && document.contains("\"name\": null"));
-        // every figure of a module is the same triad as the figures above it, keywords included, and
-        // the leftovers that did not move are in it as a triad of no change
         let block = &document[document.find("\"modules\"").unwrap()..];
         assert!(block.contains("\"lines\": {\"from\": 100, \"to\": 150, \"change\": 50}"), "{block}");
         assert!(block.contains("\"structs\": {\"from\": 3, \"to\": 5, \"change\": 2}"), "{block}");
@@ -1088,7 +1040,6 @@ mod tests {
         assert!(serde_json::from_str::<serde_json::Value>(&document).is_ok(), "{document}");
 
         // A module only one of them has takes the whole key with it, and the reader is told why
-        // rather than left to read the absence as a run that named nothing
         let renamed = with_modules(crate::diff::Source::Run,
                 vec![module(Some("api"), "Rust", 150, 5), module(None, "HTML", 40, 0)]);
         let document = create_comparison_document(&crate::diff::Comparison::of(from(), renamed, &config, Vec::new()), &datetime, &config);
@@ -1097,17 +1048,12 @@ mod tests {
         assert!(document.contains("\"affects\": \"settings\""));
         assert!(document.contains("\"subject\": \"'backend', '(unnamed)' -> 'api', '(unnamed)'\""), "{document}");
 
-        // and two readings that named nothing at all have no second axis and nothing to report
         let plain = create_comparison_document(&crate::diff::Comparison::of(
                 reading_of(crate::diff::Source::Run, HashMap::new()),
                 reading_of(crate::diff::Source::Run, HashMap::new()), &config, Vec::new()), &datetime, &config);
         assert!(!plain.contains("modules"), "{plain}");
     }
 
-    // A side that failed to read half its files reports smaller counts, and the triads alone cannot
-    // say whether that is code that went away or a scan that came back short. The block is the run
-    // document's own, so a consumer learns one shape, and it stops at the counts: which files those
-    // were is a question for a run over that side.
     #[test]
     fn each_side_of_a_comparison_says_how_its_own_scan_went() {
         let config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
@@ -1115,7 +1061,7 @@ mod tests {
             let mut reading = reading_of(source, hashmap!["Rust".to_owned() => stats_of(1, 30, 10, 5, 0, HashMap::new())]);
             reading.result.files_present = FilesPresent {total_files: 9, relevant_files: 4, excluded_files: 5};
             // The counts and not the lists, which is what a document written without
-            // '--show-faulty-files' carries: the block has to be right for that side too
+            // '--show-faulty-files' carries
             reading.faulty_files_count = 2;
             reading.unreadable_dirs_count = 1;
             reading
@@ -1130,7 +1076,7 @@ mod tests {
         assert_eq!(1, from["dirs_unreadable"]);
         assert_eq!(9, from["files_found"]);
         assert_eq!(5, from["files_excluded"]);
-        // and the clean side says so rather than leaving the key out, so nothing has to be guessed
+        // the clean side says so rather than leaving the key out
         assert_eq!(0, to["files_faulty"]);
         assert_eq!(0, to["dirs_unreadable"]);
 
@@ -1143,14 +1089,12 @@ mod tests {
         };
         assert_eq!(keys(&run["scan"]), keys(from));
 
-        // and no list of paths anywhere, on either side: a comparison records how each scan went
-        // and never sets out to compare what went wrong in them
+        // and no list of paths on either side: a comparison records how each scan went and never
+        // compares what went wrong in them
         assert!(!document.contains("faulty_files"), "{document}");
         assert!(!document.contains("unreadable_dirs"), "{document}");
     }
 
-    // The same facts the screen says above the table, as entries a program can key on: the sides'
-    // own warnings stay inside the sides, and what differs between them is the comparison's own.
     #[test]
     fn a_comparison_says_what_makes_its_sides_two_measurements() {
         let config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
@@ -1160,9 +1104,8 @@ mod tests {
         to.version = "3.1.0".to_owned();
         to.scope.search_in_dotted = true;
 
-        // A value the two readings were made to agree on is as much a fact about the numbers as one
-        // they disagreed on, and after the adoption the two scopes read alike, so without this
-        // nothing tells a value the command line gave apart from one it borrowed
+        // After an adoption the two scopes read alike, so without this entry nothing tells a value
+        // the command line gave apart from one it borrowed
         let adopted = crate::diff::Note::SettingsAdopted { from: "old.json".to_owned(), settings: vec!["exclude"] };
         let borrowed = create_comparison_document(&crate::diff::Comparison::of(from(),
                 reading_of(crate::diff::Source::Run, HashMap::new()), &config, vec![adopted]), &datetime, &config);
@@ -1177,10 +1120,37 @@ mod tests {
         assert!(document.contains("\"subject\": \"3.0.0 -> 3.1.0\""));
         assert!(document.contains("\"path\": \"D:/old.json\""));
 
-        // nothing differing writes the key empty rather than leaving the reader to ask for it
         let same = create_comparison_document(&crate::diff::Comparison::of(from(),
                 reading_of(crate::diff::Source::Run, HashMap::new()), &config, Vec::new()), &datetime, &config);
         assert!(same.contains("\"warnings\": []"), "{same}");
+    }
+
+    // A comparison document is read back as a baseline, and every setting its scope leaves out is
+    // filled in by the reader with what an old build would have done. So a side that ran without
+    // one of these comes back claiming it had it, and no later comparison can see the difference.
+    #[test]
+    fn each_side_of_a_comparison_carries_every_setting_a_run_document_carries() {
+        let config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        let datetime = Local::now();
+        let document = create_comparison_document(&crate::diff::Comparison::of(
+                reading_of(crate::diff::Source::Document { path: "D:/old.json".to_owned() }, HashMap::new()),
+                reading_of(crate::diff::Source::Run, HashMap::new()), &config, Vec::new()), &datetime, &config);
+
+        // Read off the run document rather than typed out here, or the direction that will actually
+        // happen slips through: a setting added to one writer and forgotten on the other adds a name
+        // a hand-written list never asks about. Matched with the indent of a scope member, since
+        // several of these names are also keys elsewhere in the document.
+        let run_document = document_of(&config);
+        let settings = run_document.split("\"scope\": {").nth(1).unwrap()
+                .split("\n  }").next().unwrap()
+                .lines().filter(|line| line.starts_with("    \""))
+                .map(|line| line.split('"').nth(1).unwrap()).collect::<Vec<_>>();
+        assert!(settings.len() >= 11, "the run document's scope block was not found: {settings:?}");
+
+        for setting in settings {
+            assert_eq!(2, document.matches(&format!("\n        \"{setting}\":")).count(),
+                    "'{setting}' is not on both sides of the comparison: {document}");
+        }
     }
 
     #[test]
@@ -1206,8 +1176,7 @@ mod tests {
                  FaultyFileDetails::new("src\\a.rs".to_owned(), "nope".to_owned(), 10)],
             FilesPresent {total_files: 3, relevant_files: 3, excluded_files: 0});
 
-        // How many is always said, so a consumer never has to ask for the detail to learn that
-        // something went wrong; the paths are the detail, and are asked for
+        // How many is always said; the paths are the detail, and are asked for
         let counted_only = create_document(&result, &Local::now(), &config);
         assert!(counted_only.contains("\"files_faulty\": 2"));
         assert!(!counted_only.contains("a.rs"), "{counted_only}");
@@ -1219,9 +1188,6 @@ mod tests {
         assert!(document.find("a.rs").unwrap() < document.find("z.rs").unwrap());
     }
 
-    // Objects and not bare paths, so that a consumer can tell a permission apart from a directory
-    // that went away between being queued and being opened. As strings there was one sentence for
-    // every reason, and on a whole drive that is hundreds of rows saying the same word.
     #[test]
     fn the_unreadable_directories_carry_their_reason_in_a_stable_order() {
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
@@ -1241,7 +1207,6 @@ mod tests {
         // sorted by path, since the walk collects these in whichever order its threads hit them
         assert!(written.find("D:/a").unwrap() < written.find("D:/z").unwrap(), "{written}");
 
-        // and a run that opened everything still writes the key, empty
         let clean = result_of(HashMap::new(), Stats::default(), Vec::new(),
                 FilesPresent {total_files: 0, relevant_files: 0, excluded_files: 0});
         assert!(create_document(&clean, &Local::now(), &config).contains("\"unreadable_dirs\": []"));

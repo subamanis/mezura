@@ -63,10 +63,9 @@ const DEF_COMPARE_LEVEL     : usize   = 1;
 // What the always-loaded configuration is called in a message about it, not a file name
 const DEFAULT_CONFIG_LABEL  : &str    = "default";
 
-// Two halves, because the two are asked different questions: the engine is handed only what can
-// change a number, the presentation everything, since echoing what the counting was done with is
-// part of its job. The command line and the configuration file stay flat, the distinction being
-// ours and not the user's, and only 'build' knows that '--hide keywords' answers both.
+// Two halves: the engine is handed only what can change a number, the presentation everything,
+// since echoing what the counting was done with is part of its job. The command line and the
+// configuration file stay flat, and only 'build' knows that '--hide keywords' answers both.
 #[derive(Debug,PartialEq,Clone,Default)]
 pub struct Configuration {
     pub engine: EngineConfig,
@@ -81,8 +80,7 @@ impl Configuration {
                 typed_explicitly: TypedExplicitlyOnCommandLine::default() }
     }
 
-    // One flag answering two questions, so the two halves are set together and never one without
-    // the other
+    // One flag answering two questions, so both halves are set together and never one alone
     #[cfg(test)]
     pub fn set_hidden(&mut self, hidden: Hidden) -> &mut Self {
         self.engine.count_keywords = !hidden.keywords;
@@ -174,9 +172,9 @@ impl Default for ViewConfig {
     }
 }
 
-// A hide list and not a show list: a show list would have to be re-enumerated every time a section
-// is added, and a configuration saved today would silently keep hiding it. Whole sections and parts
-// of them are mixed on purpose, since the user points at what they see.
+// A hide list and not a show list: a show list would have to be written out again every time a
+// section is added, and a configuration saved today would silently keep hiding the new one. Whole
+// sections and parts of them are mixed on purpose, since the user points at what they see.
 #[derive(Debug,PartialEq,Eq,Clone,Copy,Default)]
 pub struct Hidden {
     pub version: bool,
@@ -310,8 +308,8 @@ pub enum ProgressBarStyle {
 
 impl ProgressBarStyle {
     // Each set runs from its faintest step to the one that fills a cell, and a cell is filled
-    // through them in order. 'blocky' owes its gaps to the glyphs themselves: a box is drawn
-    // narrower than the cell it sits in, so a run of them reads as separate boxes.
+    // through them in order. The gaps in 'blocky' come from the glyphs: a box is drawn narrower
+    // than the cell it sits in.
     pub fn get_charset(&self) -> &'static str {
         match self {
             Self::Smooth => "▏▎▍▌▋▊▉█",
@@ -512,7 +510,10 @@ impl LogOption {
 pub enum ArgParsingError {
     UnparsableWorkingDir,
     InvalidPath(String),
-    InvalidPathInConfig(String,String),
+    // The failure as it would have been reported for a typed target, plus the configuration that
+    // named it. Wrapped rather than replaced by one sentence of its own: a pattern that matched only
+    // ignored files and a path that is not there are two different things to go and do.
+    InvalidTargetInConfig(Box<ArgParsingError>,String),
     DoublePath,
     UnrecognisedCommand(String),
     IncorrectCommandArgs(String),
@@ -534,18 +535,21 @@ pub enum ArgParsingError {
 impl Formatted for ArgParsingError {
     fn format(&self) -> ColoredString {
         match self {
-            Self::UnparsableWorkingDir => wrap_message("The current working dir could not be parsed as target dir, try inputing it manually.").red(),
-            Self::InvalidPath(p) => wrap_message(&format!("Path provided is not a valid directory or file:\n'{p}'.")).red(),
-            Self::InvalidPathInConfig(dir,name) => wrap_message(&format!("Specified path '{dir}', in config '{name}', doesn't exist anymore.")).red(),
+            Self::UnparsableWorkingDir => wrap_message("The current working directory could not be read, so there is no target to count. Write the path out: mezura ./some/path").red(),
+            Self::InvalidPath(p) => wrap_message(&format!("'{p}' does not exist as a directory or file.")).red(),
+            Self::InvalidTargetInConfig(inner,name) => {
+                let attribution = wrap_message(&format!("That target was named in config '{name}'.")).red();
+                ColoredString::from(format!("{}\n{attribution}", inner.format()).as_str())
+            },
             Self::DoublePath => wrap_message("Targets already provided as first argument, but --targets command also found.").red(),
-            // Only the mistake is red. What to do about it is not an error, it is the way out.
             Self::UnrecognisedCommand(p) => {
                 let tail = suggestions::formatted_suggestion(p, &message_printer::get_command_names())
                         .unwrap_or_else(|| format!("Run '--{HELP}' to see every command."));
                 let error = format!("--{p} is not recognised as a command.").red();
                 ColoredString::from(format!("{error}\n\n{tail}").as_str())
             },
-            Self::IncorrectCommandArgs(p) => wrap_message(&format!("Incorrect arguments provided for the command '--{p}'.")).red(),
+            // No direction is named: most callers print the help above this and two print it below
+            Self::IncorrectCommandArgs(p) => wrap_message(&format!("'--{p}' was not given arguments it can use. Its help is printed with this message.")).red(),
             Self::UnreadableConfig(name, line, super::config_files::UnreadableCause::NotUtf8) => wrap_message(&format!("Configuration '{name}' stops being readable at line {line}, so none of it was used: the file is not saved as UTF-8.")).red(),
             Self::UnreadableConfig(name, line, super::config_files::UnreadableCause::Io(error)) => wrap_message(&format!("Configuration '{name}' could not be read past line {line}, so none of it was used: {error}")).red(),
             Self::UnexpectedCommandArgs(p) => wrap_message(&format!("Command '--{p}' does not expect any arguments.")).red(),
@@ -630,8 +634,8 @@ impl TypedExplicitlyOnCommandLine {
 pub struct ConfigurationBuilder {
     pub targets:                  Option<Vec<Target>>,
     // Which configuration file supplied the targets, when one did: the run resolves them, and its
-    // error has to name the file the reader cannot see failing. Deliberately absent from
-    // 'add_missing_fields', being bookkeeping about the merge and not a merged value.
+    // error has to name the file the reader cannot see failing. Absent from 'add_missing_fields',
+    // being bookkeeping about the merge and not a merged value.
     pub targets_source:           Option<String>,
     pub exclude_dirs:             Option<Vec<String>>,
     pub languages_of_interest:    Option<Vec<String>>,
@@ -706,18 +710,23 @@ impl ConfigurationBuilder {
         self
     }
 
+    // Every field 'add_missing_fields' merges has to be asked about here, or the answer is "nothing
+    // to fill in" while that one field is still empty, the default configuration is never read at
+    // all, and the value it holds for that field is dropped without a word.
     pub fn has_missing_fields(&self) -> bool {
-        self.exclude_dirs.is_none() || self.languages_of_interest.is_none() || self.forced_languages.is_none() ||
+        self.targets.is_none() || self.exclude_dirs.is_none() || self.languages_of_interest.is_none() ||
+        self.excluded_languages.is_none() || self.forced_languages.is_none() ||
         self.threads.is_none() || self.counting.is_none() || self.should_search_in_dotted.is_none() ||
         self.count_minified.is_none() || self.count_generated.is_none() ||
         self.should_show_faulty_files.is_none() || self.hidden.is_none() || self.no_gitignore.is_none() ||
         self.theme_name.is_none() || self.compare_level.is_none() ||
-        self.config_styles.is_none() || self.bar_thickness.is_none() || self.progress_bar.is_none() || self.number_separator.is_none() || self.decimal_separator.is_none() || self.layout.is_none() || self.sort_by.is_none()
+        self.config_styles.is_none() || self.bar_thickness.is_none() || self.progress_bar.is_none() ||
+        self.number_separator.is_none() || self.decimal_separator.is_none() || self.layout.is_none() ||
+        self.sort_by.is_none() || self.top_n.is_none() || self.by_file.is_none()
     }
 
-    // Said once for both commands, since one word covers them: the run names the model it is
-    // counting with and the word that quantity has there, so that nobody hunts for a column that
-    // was never going to be drawn.
+    // Names the model this run counts with and the word that quantity has there, so that nobody
+    // hunts for a column that was never going to be drawn.
     fn report_a_word_of_the_other_model(command: &str, counting: CountingModel, result: &str) {
         let message = format!("'--{command} {}' names the third column of the other way of counting. \
 This run counts by {}, where that column is '{}', so {result}.",
@@ -736,8 +745,8 @@ This run counts by {}, where that column is '{}', so {result}.",
         let mut sort_by = self.sort_by.unwrap_or_default();
         // The third quantity is called 'extra' where a line is measured by what it says and
         // 'blanks' where it is measured by where it sits, so the other model's word names nothing
-        // this run draws. It is dropped rather than obeyed as though it were the word that belongs,
-        // and from here down 'hidden.extra' is the one flag that says the column is out.
+        // this run draws and is dropped. From here down 'hidden.extra' is the one flag that says
+        // the column is out.
         let (mine, of_the_other_model) = match counting {
             CountingModel::Content => (hidden.extra, hidden.blanks),
             CountingModel::Region => (hidden.blanks, hidden.extra)
@@ -762,9 +771,8 @@ is sorted by lines.", sort_by.name());
                     mezura_core::warnings::Code::CommandIgnored, SORT, message));
             sort_by = SortCriterion::default();
         }
-        // Asked of the engine rather than read from constants of its own, so the help text and the
-        // behaviour cannot answer differently. The literal below stays exhaustive on purpose: a new
-        // field of EngineConfig has to be decided here and not inherited silently.
+        // Asked of the engine rather than kept as constants here, so that the help text and the
+        // behaviour cannot answer differently
         let engine_defaults = EngineConfig::default();
 
         Configuration {
@@ -775,7 +783,7 @@ is sorted by lines.", sort_by.name());
                 languages_of_interest: (self.languages_of_interest).clone().unwrap_or_default(),
                 excluded_languages: (self.excluded_languages).clone().unwrap_or_default(),
                 forced_languages: (self.forced_languages).clone().unwrap_or_default(),
-                threads: self.threads.clone().unwrap_or_default(),
+                threads: self.threads.unwrap_or_default(),
                 should_search_in_dotted: self.should_search_in_dotted.unwrap_or(engine_defaults.should_search_in_dotted),
                 count_minified: self.count_minified.unwrap_or(engine_defaults.count_minified),
                 count_generated: self.count_generated.unwrap_or(engine_defaults.count_generated),
@@ -825,8 +833,10 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
             eprintln!("\n{}", wrap_message(&format!("Nothing to save in theme '{name}': every style is at its default.")).yellow());
         } else {
             match super::theme_files::save_theme_to_file(&crate::paths::PERSISTENT_APP_PATHS.themes_dir, name, &config.view.theme) {
-                Err(_) => eprintln!("\n{}","Error while trying to save the theme.".yellow()),
-                Ok(_) => eprintln!("\nTheme '{name}' saved successfully.")
+                Err(error) => eprintln!("\n{}", wrap_message(&format!(
+                        "Theme '{name}' could not be written to '{}': {error}",
+                        crate::paths::PERSISTENT_APP_PATHS.themes_dir)).yellow()),
+                Ok(_) => eprintln!("\nTheme '{name}' saved. Apply it with '--{THEME} {name}'.")
             }
         }
     }
@@ -834,9 +844,9 @@ pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingEr
     Ok(config)
 }
 
-// The form that reads back as this exact target, which is the syntax 'parse_targets' below accepts. The
-// quotes go around the path and not around the whole thing, because the name is taken from before the
-// first '=' and a leading quote would end up inside it.
+// The form that reads back as this exact target. The quotes go around the path and not around the
+// whole thing, because the name is taken from before the first '=' and a leading quote would end up
+// inside it.
 pub fn format_declared_form(target: &Target) -> String {
     let path = if target.path.contains(char::is_whitespace) {format!("\"{}\"", target.path)} else {target.path.clone()};
     match &target.module {
@@ -845,14 +855,14 @@ pub fn format_declared_form(target: &Target) -> String {
     }
 }
 
-// The run refused the declared targets. The wording is this crate's own, and a configuration file
-// that supplied the targets is named as the culprit: otherwise a 'targets' block nobody can see
-// failing sends the reader hunting through the command they typed.
+// The run refused the declared targets. A configuration file that supplied them is named as the
+// culprit: otherwise a 'targets' block nobody can see failing sends the reader hunting through the
+// command they typed.
 pub fn attribute_targets_error(error: mezura_core::TargetError, targets_source: &Option<String>) -> ArgParsingError {
     match (map_target_error(error), targets_source) {
-        (ArgParsingError::InvalidPath(p), Some(name)) | (ArgParsingError::InvalidGlobPattern(p), Some(name))
-        | (ArgParsingError::NoGlobMatches(p), Some(name)) | (ArgParsingError::AllGlobMatchesIgnored(p), Some(name)) =>
-                ArgParsingError::InvalidPathInConfig(p, name.clone()),
+        (inner @ (ArgParsingError::InvalidPath(_) | ArgParsingError::InvalidGlobPattern(_)
+                | ArgParsingError::NoGlobMatches(_) | ArgParsingError::AllGlobMatchesIgnored(_)), Some(name)) =>
+                ArgParsingError::InvalidTargetInConfig(Box::new(inner), name.clone()),
         (other, _) => other
     }
 }
@@ -1197,8 +1207,10 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         }
 
         match super::config_files::save_existing_commands_from_config_builder_to_file(None, name, &config_builder) {
-            Err(_) => eprintln!("\n{}","Error while trying to save config.".yellow()),
-            Ok(_) => eprintln!("\nConfiguration '{name}' saved successfully.")
+            Err(error) => eprintln!("\n{}", wrap_message(&format!(
+                    "Configuration '{name}' could not be written to '{}': {error}",
+                    crate::paths::PERSISTENT_APP_PATHS.config_dir)).yellow()),
+            Ok(_) => eprintln!("\nConfiguration '{name}' saved. Load it with '--{LOAD} {name}'.")
         }
     }
 
@@ -1222,9 +1234,8 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     }
 
     // No pattern is expanded here, or anywhere in this crate: the run resolves the declared targets
-    // at its entry, under the flags of the same configuration the walk obeys, so the two cannot
-    // answer differently. Only the name of the file that supplied the targets is kept, so that the
-    // run's refusal can name it.
+    // at its entry, under the flags of the same configuration the walk obeys. Only the name of the
+    // file that supplied them is kept, so that the run's refusal can say it.
     config_builder.targets_source = targets_config_source;
 
     if let Some(name) = &config_builder.theme_name {
@@ -1259,8 +1270,7 @@ fn print_config_file_warnings(issues: &[(mezura_core::warnings::Code, String)], 
 // never overridden, so giving it correctly on the command line would still not rescue the run.
 fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_fields: &[&str], config_name: &str) -> Result<(), ArgParsingError> {
     // Destructured with no '..', so a new field of the builder stops the build here until somebody
-    // decides whether it belongs in the match below. Everything bound to '_' is a decision, with
-    // its reason next to it.
+    // decides whether it belongs in the match below.
     let ConfigurationBuilder {
             targets, exclude_dirs, forced_languages, threads, counting, should_search_in_dotted,
             count_minified, count_generated, should_show_faulty_files, hidden, no_gitignore, theme_name, compare_level, bar_thickness,
@@ -1317,10 +1327,8 @@ fn print_warnings_for_commands_that_need_a_loaded_configuration(config_name_to_s
         log: &Option<LogOption>, compare_level: &Option<usize>, diff_against: &Option<String>,
         by_file: &Option<ByFile>)
 {
-    // Printed here rather than kept for later, because this runs before the theme is resolved and
-    // the plain color is the honest fallback; kept as well, so a machine consumer learns that a
-    // command it gave was dropped instead of reading an empty 'warnings'.
-    // Wrapped for the screen and kept whole for the document, the way every warning is handled
+    // Printed here rather than kept for later, since this runs before the theme is resolved, and
+    // kept as well, so that a machine consumer learns a command it gave was dropped
     let ignored = |command: &str, message: String| {
         eprintln!("\n{}", wrap_message(&message).yellow());
         super::warning_collector::keep(mezura_core::warnings::Warning::new(
@@ -1381,8 +1389,7 @@ fn map_target_error(x: mezura_core::engine::targets::TargetError) -> ArgParsingE
 }
 
 // The working directory is not something anybody typed, so it skips the parser that takes typed
-// text apart: one containing a space would be split into two targets, neither of which exists. It
-// exists by definition, so it is taken literally whatever characters its name carries.
+// text apart: one containing a space would be split into two targets, neither of which exists.
 fn create_targets_from_working_dir() -> Result<Vec<Target>, ArgParsingError> {
     if let Ok(path_buf) = std::env::current_dir()
         && let Some(path_str) = path_buf.to_str() {
@@ -1401,19 +1408,18 @@ mod tests {
     use super::*;
 
     // Rendered back into the form they were declared in, so that a test reads the same way whether
-    // the target was named or not. Prepared and nothing more: expansion belongs to the run, and its
-    // behavior is asserted where it lives, in the engine's own tests.
+    // the target was named or not. Nothing is expanded: that belongs to the run and is asserted in
+    // the engine's own tests.
     fn parse_targets(s: &str) -> Result<Vec<String>, ArgParsingError> {
         super::parse_targets(s).map(|targets| targets.iter().map(Target::to_string).collect())
     }
 
-    // The counting driven the way 'main' drives it, with the shipped language files read
-    // from the workspace checkout
+    // The counting driven the way 'main' drives it, with the language files read from the checkout
     fn counted(config: &Configuration) -> mezura_core::RunResult {
         let languages_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../mezura-core/data/languages/");
         let parsed = mezura_core::language_file::parse_languages_in_dir(languages_dir).unwrap().0;
         let (languages, _) = mezura_core::Languages::resolve(&config.engine, parsed, &Default::default());
-        mezura_core::run(&config.engine, languages, None, |_| {}).unwrap()
+        mezura_core::run(&config.engine, languages).unwrap()
     }
 
     fn new_conf(dir: &str) -> Configuration {
@@ -1425,18 +1431,14 @@ mod tests {
         builder.build()
     }
 
-    // The same, with one flag set by hand. The closure has to name the half it lands in, which is
-    // the thing worth stating in a test of what the parsing produces.
     fn conf(dir: &str, edit: impl FnOnce(&mut Configuration)) -> Configuration {
         let mut config = new_conf(dir);
         edit(&mut config);
         config
     }
 
-    // A command given twice keeps the value it was last given, which is what a reader of the line
-    // assumes and what every shell tool does
     #[test]
-    fn test_a_repeated_command_keeps_its_last_value() {
+    fn a_repeated_command_keeps_its_last_value() {
         assert_eq!(Threads::new(3, 11), create_config_from_args("./ --threads 2 10 --threads 3 11").unwrap().engine.threads);
         assert_eq!(Some(4), create_config_from_args("./ --top 9 --top 4").unwrap().view.top_n);
         assert_eq!(SortCriterion::Name, create_config_from_args("./ --sort size --sort name").unwrap().view.sort_by);
@@ -1444,7 +1446,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cmd_arg_parsing() {
+    fn every_way_a_command_line_can_be_wrong_is_reported_as_its_own_mistake() {
         assert_eq!(Err(ArgParsingError::InvalidPath("random".to_owned())), create_config_from_args("random"));
         assert_eq!(Err(ArgParsingError::InvalidPath("./ random".to_owned())), create_config_from_args("./ random"));
         assert_eq!(Err(ArgParsingError::InvalidPath("./ -show-faulty-files".to_owned())), create_config_from_args("--targets ./ -show-faulty-files"));
@@ -1472,7 +1474,12 @@ mod tests {
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("load".to_owned())), create_config_from_args("./ --load   "));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("save".to_owned())), create_config_from_args("./ --save"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("save".to_owned())), create_config_from_args("./ --save   "));
+    }
 
+    // A command's refusal of a bad argument stays beside its acceptance of a good one, so the few
+    // errors below are here and not in the test above
+    #[test]
+    fn every_command_reaches_the_setting_it_names_and_records_that_it_was_typed() {
         assert_ne!(new_conf("../"), create_config_from_args(std::env::current_dir().unwrap().to_str().unwrap()).unwrap());
         assert_eq!(new_conf("./"), create_config_from_args(std::env::current_dir().unwrap().to_str().unwrap()).unwrap());
 
@@ -1510,7 +1517,6 @@ mod tests {
                 create_config_from_args("./ --log  ").unwrap());
     }
 
-    // The only command where a zero means "all of them" rather than "none"
     #[test]
     fn by_file_takes_a_number_or_nothing_and_reads_zero_as_every_file() {
         let by_file = |command: &str| create_config_from_args(command).unwrap().view.by_file;
@@ -1540,7 +1546,7 @@ mod tests {
     }
 
     #[test]
-    fn test_hide_arg_parsing() {
+    fn every_name_hide_accepts_switches_off_its_own_part_and_nothing_else() {
         let hidden = |command: &str| create_config_from_args(command).unwrap().view.hidden;
 
         assert_eq!(Hidden::default(), hidden("./"));
@@ -1568,6 +1574,13 @@ mod tests {
         let every_name = Hidden::get_names().join(",");
         assert_eq!(every_name, Hidden::parse(&every_name).unwrap().to_list_string());
 
+        // One at a time as well, since 'parse' and 'get_pairs' are two lists written by hand and
+        // all seventeen at once cannot tell two names wired to each other's field apart
+        for name in Hidden::get_names() {
+            assert_eq!(name, Hidden::parse(name).unwrap().to_list_string(),
+                    "'--hide {name}' switches off another part of the report");
+        }
+
         // The mask asks whether keywords were hidden, not whether '--hide' was typed at all: a
         // '--hide timing' says nothing about them
         assert!(create_config_from_args("./ --hide keywords,timing").unwrap().typed_explicitly.hide_keywords);
@@ -1575,9 +1588,7 @@ mod tests {
         assert!(!create_config_from_args("./").unwrap().typed_explicitly.hide_keywords);
     }
 
-    // Hiding the column the order comes from would leave an order nothing on the page explains, so
-    // the sort falls back to lines. A JSON document carries every figure whatever is hidden, so
-    // there the order stands as asked.
+    // A JSON document carries every figure whatever is hidden, so there the order stands as asked
     #[test]
     fn sorting_by_a_hidden_column_falls_back_to_lines() {
         let sorted = |command: &str| create_config_from_args(command).unwrap().view.sort_by;
@@ -1589,8 +1600,6 @@ mod tests {
         assert_eq!(SortCriterion::Code, sorted("./ --hide files,comments,extra,size,percentages --sort code"));
     }
 
-    // Each model has its own word for the third column, so the other one asks for a column this run
-    // does not draw: it orders and hides nothing rather than being taken for the word that belongs.
     #[test]
     fn the_word_of_the_other_counting_model_orders_nothing_and_hides_nothing() {
         let view = |command: &str| create_config_from_args(command).unwrap().view;
@@ -1607,7 +1616,7 @@ mod tests {
     }
 
     #[test]
-    fn test_has_any_args() {
+    fn a_command_followed_by_nothing_but_spaces_was_given_no_arguments() {
         assert!(has_any_args("cmnd a"));
         assert!(has_any_args("cmnd    a"));
         assert!(has_any_args("cmnd    a   "));
@@ -1618,7 +1627,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_targets() {
+    fn a_target_is_absolutized_and_one_that_is_not_there_is_refused() {
         assert_eq!(Err(ArgParsingError::InvalidPath("a".to_owned())), parse_targets("a"));
         assert_eq!(Err(ArgParsingError::InvalidPath("a b c".to_owned())), parse_targets("a b c"));
 
@@ -1630,9 +1639,7 @@ mod tests {
         assert_eq!(vec![mezura_core::engine::targets::convert_to_absolute("./"), mezura_core::engine::targets::convert_to_absolute(".././")],
                 parse_targets("./, .././").unwrap());
 
-        // A space is not a separator while nothing is named, so a path is allowed to contain one.
-        // It cannot be: by the time a command line reaches here the shell has split it and taken
-        // the quotes off, so a space inside a path and a space between two paths look the same.
+        // A space is not a separator while no module is named, so a path is allowed to contain one
         assert_eq!(Err(ArgParsingError::InvalidPath("./tests ./src".to_owned())), parse_targets("./tests ./src"));
         assert_eq!(vec![mezura_core::engine::targets::convert_to_absolute("./")], parse_targets(&std::env::current_dir().unwrap().to_string_lossy()).unwrap());
     }
@@ -1642,9 +1649,8 @@ mod tests {
         let src = mezura_core::engine::targets::convert_to_absolute("./src");
         let tests = mezura_core::engine::targets::convert_to_absolute("./tests");
 
-        // The grammar of a target belongs to 'args' and the folding of two spellings of one name to
-        // 'engine::targets'; what is asserted here is the command line's own half, that a declared
-        // name reaches a Target with its path made absolute, and the errors it words.
+        // Only the command line's own half: a declared name reaches a Target with its path made
+        // absolute, and the errors are worded here. The grammar itself belongs to 'args'.
         assert_eq!(vec![format!("code={src}"), format!("suite={tests}")], parse_targets("code=./src suite=./tests").unwrap());
         assert_eq!(vec![format!("code={src}"), tests.clone()], parse_targets("code=./src ./tests").unwrap());
 
@@ -1654,9 +1660,6 @@ mod tests {
         assert_eq!(Err(ArgParsingError::InvalidPath("nope".to_owned())), parse_targets("code=nope"));
     }
 
-    // The targets a configuration declares reach the run as declared, and a mistake in them still
-    // names the configuration: the builder records which file supplied the targets, and the run's
-    // refusal is worded through 'attribute_targets_error' with that name on it.
     #[test]
     fn a_mistake_in_a_configs_targets_still_names_the_configuration() {
         std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
@@ -1676,10 +1679,18 @@ mod tests {
         let languages_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../mezura-core/data/languages/");
         let parsed = mezura_core::language_file::parse_languages_in_dir(languages_dir).unwrap().0;
         let (languages, _) = mezura_core::Languages::resolve(&config.engine, parsed, &Default::default());
-        let mezura_core::RunError::InvalidTargets(inner) = mezura_core::run(&config.engine, languages, None, |_| {}).unwrap_err()
+        let mezura_core::RunError::InvalidTargets(inner) = mezura_core::run(&config.engine, languages).unwrap_err()
                 else { panic!("the run did not refuse the config's targets") };
-        assert_eq!(ArgParsingError::InvalidPathInConfig("./does-not-exist-a2".to_owned(), "a2resolve1".to_owned()),
-                attribute_targets_error(inner, &config.view.targets_source));
+        let attributed = attribute_targets_error(inner, &config.view.targets_source);
+        assert_eq!(ArgParsingError::InvalidTargetInConfig(
+                Box::new(ArgParsingError::InvalidPath("./does-not-exist-a2".to_owned())), "a2resolve1".to_owned()),
+                attributed);
+        // The cause keeps its own sentence, so a pattern that matched only ignored files is not
+        // reported as a path that is gone
+        let ignored = attribute_targets_error(mezura_core::TargetError::AllGlobMatchesIgnored("s/*/x".to_owned()),
+                &Some("a2resolve1".to_owned()));
+        assert!(ignored.format().to_string().contains("--no-gitignore"), "{}", ignored.format());
+        assert!(ignored.format().to_string().contains("named in config 'a2resolve1'"), "{}", ignored.format());
 
         // typed on the command line there is no configuration to name, and a contest never gets
         // one, since naming a file would hide that both declarations are the user's own
@@ -1708,9 +1719,8 @@ mod tests {
         (corpus, corpus_str)
     }
 
-    // The run resolves the targets under the flags of the configuration it was handed, so a glob whose
-    // matches are all gitignored counts them when the flag beside it says to, whichever of the two
-    // came from a file and which from the command line.
+    // The run resolves the targets under the flags of the configuration it was handed, so a glob
+    // whose matches are all gitignored counts them when the flag beside it says to.
     #[test]
     fn a_configs_own_flags_apply_when_its_own_targets_are_resolved() {
         std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
@@ -1731,8 +1741,6 @@ mod tests {
         assert_eq!(1, result.total.files, "the gitignored match was not counted");
     }
 
-    // The same flag, loaded from a configuration, reaches a glob typed on the command line, since
-    // the run reads both off the one merged configuration.
     #[test]
     fn a_loaded_configs_flags_apply_to_a_command_line_glob() {
         std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
@@ -1752,8 +1760,7 @@ mod tests {
         assert_eq!(1, result.total.files, "the gitignored match was not counted");
     }
 
-    // The saved file carries the pattern itself, absolute, and every load expands it fresh. Writing
-    // the matches instead makes the configuration a snapshot pretending to be a rule.
+    // Writing the matches instead would make the configuration a snapshot pretending to be a rule
     #[test]
     fn saving_a_glob_saves_the_pattern_and_not_todays_matches() {
         std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
@@ -1769,7 +1776,6 @@ mod tests {
         create_config_from_args(&format!("{corpus_str}/sub* --save a2save")).unwrap();
         let saved = std::fs::read_to_string(&config_path).unwrap();
 
-        // and a later load hands the run the pattern itself, which expands to whatever exists then
         let loaded = create_config_from_args("--load a2save").unwrap();
         std::fs::remove_file(&config_path).unwrap();
 
@@ -1782,9 +1788,6 @@ mod tests {
         assert_eq!(2, result.total.files);
     }
 
-    // Through '--load', the same file must not be reported as non-existent: it exists, it just
-    // cannot be read whole, and telling the user it is not there sends them looking for a typo in
-    // the name instead of at the file's encoding.
     #[test]
     fn an_unreadable_config_is_not_reported_as_a_missing_one() {
         std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
@@ -1800,10 +1803,8 @@ mod tests {
                 super::super::config_files::UnreadableCause::NotUtf8)), result);
     }
 
-    // A '--' inside a word belongs to the word: tools that encode a hierarchy into a single folder
-    // name produce such paths, and splitting on the substring cuts them into a target that does not
-    // exist and a command that does not parse. A command begins where '--' follows whitespace or
-    // opens the line, which is the only way anybody writes one.
+    // Tools that encode a hierarchy into a single folder name produce such paths, and splitting on
+    // the substring cuts them into a target that does not exist and a command that does not parse.
     #[test]
     fn a_double_dash_inside_a_path_is_not_the_start_of_a_command() {
         let root = std::env::temp_dir().join("mezura--double--dash");
@@ -1825,7 +1826,7 @@ mod tests {
     }
 
     #[test]
-    fn test_save_load_configs() {
+    fn a_saved_configuration_loads_back_into_the_run_that_saved_it() {
         // The saving and loading of configs always goes through the persistent config dir, which doesn't
         // exist yet on a machine where the program has never been executed.
         std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
@@ -1835,7 +1836,7 @@ mod tests {
         let mut saved_config = create_config_builder_from_args("--threads 1 5 --languages lang1, lang2 --save test000").unwrap();
         assert!(Path::new(test_file_path).exists());
         assert_eq!(saved_config.targets.clone().unwrap()[0], Target::of(mezura_core::engine::targets::convert_to_absolute("./")));
-        assert_eq!(saved_config.threads.clone().unwrap(), Threads::new(1, 5));
+        assert_eq!(saved_config.threads.unwrap(), Threads::new(1, 5));
         assert_eq!(saved_config.languages_of_interest.clone().unwrap(), vec!["lang1", "lang2"]);
 
         let mut loaded_config = create_config_builder_from_args("--load test000").unwrap();
@@ -1843,8 +1844,8 @@ mod tests {
         loaded_config.config_name_to_load = None;
         // Bookkeeping about where the targets came from, not a value that was saved
         loaded_config.targets_source = None;
-        // A fact about each command line, not a value that was saved: the first typed its
-        // languages, the second loaded them, and that is exactly what the mask is for
+        // A fact about each command line and not a value that was saved: the first typed its
+        // languages, the second loaded them
         assert!(saved_config.typed_explicitly.languages && !loaded_config.typed_explicitly.languages);
         saved_config.typed_explicitly = TypedExplicitlyOnCommandLine::default();
         assert_eq!(saved_config, loaded_config);
@@ -1861,7 +1862,7 @@ mod tests {
     }
 
     #[test]
-    fn test_theme_arg_parsing() {
+    fn a_theme_named_on_the_command_line_is_loaded_and_an_unknown_one_stops_the_run() {
         std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.themes_dir).unwrap();
         let test_theme_path = &crate::paths::PERSISTENT_APP_PATHS.themes_dir.clone().add("test-theme000.txt");
         // Cleaning up front instead of asserting absence, so that a failed run does not leave
@@ -1896,7 +1897,7 @@ mod tests {
     }
 
     #[test]
-    fn test_load_config_with_invalid_value() {
+    fn a_configuration_holding_a_value_the_run_cannot_use_stops_the_run_and_names_it() {
         std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
         let test_file_path = &crate::paths::PERSISTENT_APP_PATHS.config_dir.clone().add("/test001.txt");
         assert!(!Path::new(test_file_path).exists());
@@ -1916,12 +1917,10 @@ mod tests {
         let forced = |args: &str| create_config_from_args(&format!("./ --force-language {args}")).map(|x| x.engine.forced_languages);
 
         assert_eq!(Ok(hashmap!("m".to_owned() => "matlab".to_owned())), forced("m=matlab"));
-        // Lowercased here so it is keyed the way the lookup will ask for it, while the language name
-        // is kept as it was typed and compared without case later.
+        // Lowercased for the lookup, while the language name is kept as it was typed
         assert_eq!(Ok(hashmap!(".m".to_owned() => "MATLAB".to_owned(), "pl".to_owned() => "perl".to_owned())),
                 forced(".M=MATLAB, pl = perl"));
-        // The dot survives, and it has to: the extension map strips it when it keys itself, while a
-        // whole filename keeps it, so stripping here would leave '.gitignore' impossible to name.
+        // The dot survives, or '.gitignore' could not be named at all
         assert_eq!(Ok(hashmap!(".gitignore".to_owned() => "Ini".to_owned())), forced(".gitignore=Ini"));
 
         for wrong in ["", "matlab", "m=", "=matlab", "m=matlab,perl"] {
@@ -1932,7 +1931,7 @@ mod tests {
     // Every command that 'resolve_invalid_config_fields' does not know about is treated as never
     // overridden, so giving it correctly on the command line would still kill the run
     #[test]
-    fn test_a_command_line_value_rescues_every_invalid_field_of_a_config() {
+    fn a_command_line_value_rescues_every_invalid_field_of_a_config() {
         std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
         let test_file_path = &crate::paths::PERSISTENT_APP_PATHS.config_dir.clone().add("/test002.txt");
         let _ = std::fs::remove_file(test_file_path);
@@ -1941,8 +1940,8 @@ mod tests {
                 ===> by-file\nnope\n\n===> counting\nnope\n\n===> count-minified\nnope\n\n\
                 ===> count-generated\nnope\n").unwrap();
 
-        // A target that does not parse is a target whose files would not be counted, so with no
-        // target on the command line to take its place the run stops instead of counting less
+        // With no target on the command line to take its place, the run stops instead of counting
+        // less than it was asked to
         assert_eq!(Err(ArgParsingError::InvalidValueInConfig("targets".to_owned(), "test002".to_owned())),
                 create_config_from_args("--load test002"));
 
@@ -1964,5 +1963,41 @@ mod tests {
         assert_eq!(hashmap!("m".to_owned() => "matlab".to_owned()), rescued.engine.forced_languages);
 
         std::fs::remove_file(test_file_path).unwrap();
+    }
+
+    // The two have to name the same fields. A field only 'add_missing_fields' knows about is one
+    // whose value in the default configuration is dropped whenever the command line happens to
+    // supply everything else, and nothing says so; a field only 'has_missing_fields' knows about
+    // sends the run to read a configuration it has no use for.
+    #[test]
+    fn a_field_a_configuration_can_fill_is_a_field_the_builder_asks_about() {
+        let donor = || {
+            let mut donor = ConfigurationBuilder::default();
+            donor.add_missing_fields(create_config_builder_from_args(
+                    "./ --exclude a --languages rust --exclude-languages java --force-language m=matlab \
+                    --threads 1 1 --counting region --search-in-dotted --count-minified --count-generated \
+                    --show-faulty-files --hide bar --no-gitignore --compare 3 --bar-thickness fat \
+                    --progress-bar hash --number-separator dot --decimal-separator comma --layout table \
+                    --sort name --top 3 --by-file 8").unwrap());
+            // Neither can come off a command line here: a theme is looked up in the data directory,
+            // and a style block only ever arrives from inside a configuration file
+            donor.theme_name = Some("Mezura".to_owned());
+            donor.config_styles = Some(Vec::new());
+            donor
+        };
+
+        let mut probe = ConfigurationBuilder::default();
+        assert!(probe.has_missing_fields(), "an empty builder needs everything");
+        probe.add_missing_fields(donor());
+        assert!(!probe.has_missing_fields(),
+                "a field is asked about that no configuration can fill, so the default one is read for nothing");
+
+        for (name, clear) in [("excluded_languages", (|x: &mut ConfigurationBuilder| x.excluded_languages = None) as fn(&mut ConfigurationBuilder)),
+                ("targets", |x| x.targets = None), ("top_n", |x| x.top_n = None), ("by_file", |x| x.by_file = None)] {
+            let mut one_short = donor();
+            clear(&mut one_short);
+            assert!(one_short.has_missing_fields(),
+                    "'{name}' is merged from a configuration and never asked about, so its value is dropped");
+        }
     }
 }

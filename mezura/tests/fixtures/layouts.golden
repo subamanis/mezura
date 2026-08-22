@@ -338,7 +338,7 @@ Files:   56.52% Rust - 17.39% JavaScript - 8.70% HTML - 17.39% others   [-┃┃
 
 Lines:   82.39% Rust - 10.97% JavaScript - 3.62% HTML -  3.02% others   [-┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃-]
 
-Size :   85.85% Rust -  8.24% JavaScript - 3.87% HTML -  2.04% others   [-┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃-]
+Size:    85.85% Rust -  8.24% JavaScript - 3.87% HTML -  2.04% others   [-┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃-]
 
 
 ===> overview, top 2
@@ -348,7 +348,7 @@ Files:   56.52% Rust - 17.39% JavaScript - 26.09% others   [-┃┃┃┃┃┃�
 
 Lines:   82.39% Rust - 10.97% JavaScript -  6.64% others   [-┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃-]
 
-Size :   85.85% Rust -  8.24% JavaScript -  5.91% others   [-┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃-]
+Size:    85.85% Rust -  8.24% JavaScript -  5.91% others   [-┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃-]
 
 
 ===> overview, bar hidden
@@ -358,7 +358,7 @@ Files:   56.52% Rust - 17.39% JavaScript - 8.70% HTML - 17.39% others
 
 Lines:   82.39% Rust - 10.97% JavaScript - 3.62% HTML -  3.02% others
 
-Size :   85.85% Rust -  8.24% JavaScript - 3.87% HTML -  2.04% others
+Size:    85.85% Rust -  8.24% JavaScript - 3.87% HTML -  2.04% others
 
 
 ===> modules, list

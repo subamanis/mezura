@@ -32,7 +32,7 @@ const SEPARATOR_LINE : &str = "\u{2500}";
 const SORTED_DESCENDING : char = '\u{2304}';
 const SORTED_ASCENDING : char = '\u{2303}';
 
-// The same, in the list layout, whose rows are far wider and already carry a blank line between them
+// The same for the list layout, whose rows are far wider
 const LIST_INDENT : &str = "    ";
 
 const MATRIX_METRICS : [&str; 3] = ["files", "lines", "code"];
@@ -44,11 +44,16 @@ const MATRIX_LINES_ROW : usize = 1;
 // Kept on both sides of the arrow, so the longest language name still has room around it
 const NAME_GAP : usize = 3;
 
-// The total number of cells the overview's bar is drawn out of, shared between the languages in it
+// The cells of the overview's bar, shared out between the languages in it
 const NUM_OF_VERTICALS : usize = 50;
 
 // How many languages the overview names before folding the rest into OTHERS_NAME
 const OVERVIEW_LANGUAGES : usize = 3;
+
+// The three overview labels are padded to this so their bars start in one column. Padded inside the
+// paint, or a theme setting 'overview-label' to reverse or underline marks five columns on the
+// shortest label and six on the other two.
+const OVERVIEW_LABEL_WIDTH : usize = 6;
 
 const OTHERS_NAME : &str = "others";
 
@@ -68,8 +73,8 @@ pub fn format_and_print_results(result: &RunResult, existing_log_content: &Optio
     let matrix_hidden = config.view.top_n.map_or(0, |top| global_names.len().saturating_sub(top));
     let matrix_names = global_names[..global_names.len() - matrix_hidden].to_vec();
 
-    // The list is cut, but the total below it still counts everything, so the reader is told what
-    // is missing rather than left to wonder why the rows do not add up
+    // The total below the list still counts everything, so the reader is told what is missing
+    // rather than left to wonder why the rows do not add up.
     let hidden_languages = if config.view.layout == Layout::Matrix {matrix_hidden}
             else {groups.iter().map(|x| x.hidden).sum::<usize>()};
 
@@ -78,16 +83,15 @@ pub fn format_and_print_results(result: &RunResult, existing_log_content: &Optio
     let block_width = columns.width(theme);
     let should_print_keywords = !config.view.hidden.keywords;
     // Nothing to cross when no module was named, so the table is printed instead of a grid of one
-    // column. Not an error, since killing a run over how its numbers would be shown costs the
-    // numbers, and not silent either: the reader asked for one layout and is getting another.
+    // column. A warning and not an error: the numbers are worth more than the layout, and the
+    // reader asked for one layout and is getting another.
     let mut layout = config.view.layout;
     if layout == Layout::Matrix && !is_grouped(&groups) {
         layout = Layout::Table;
         eprintln!("\n{}", super::theme::get_active().warning.paint("'--layout matrix' has nothing to cross, since no target was given a name, \
 so the 'table' layout was printed. Use the modules feature to get a matrix: 'mezura frontend=./web backend=./api'."));
     }
-    // The matrix crosses languages with modules and has no third direction for a file to hang in,
-    // so the rows are not printed there and the count of what is missing would be about nothing
+    // The matrix crosses languages with modules and has no third direction for a file to hang in.
     let files_are_shown = layout != Layout::Matrix;
     if config.view.by_file.is_some() && !files_are_shown {
         eprintln!("\n{}", super::theme::get_active().warning.paint("'--by-file' prints nothing under the 'matrix' layout, whose rows are \
@@ -96,12 +100,11 @@ languages crossed with modules. Use any other layout to see the files."));
     let hidden_files = if files_are_shown {count_hidden_files(&groups)} else {0};
     let is_table = layout != Layout::List;
     // With modules there is a sum of the module rows to be shown even when one language made all of
-    // them, and without them a single language would only be repeated by a total under it
+    // them; without them a single language would only be repeated by a total under it.
     let print_total = per_language.len() > 1 || groups.len() > 1;
 
-    // What the rows do not add up to the total for. The two tables take them as rows of their own,
-    // where they sit above the total that does not match them; the other two have no row to be, and
-    // the list prints its total after this point anyway.
+    // The two tables take these as rows of their own, above the total that does not match them; the
+    // other two layouts have no row to put them in.
     let notes = create_hidden_notes(hidden_languages, hidden_files, config);
     let of_the_table = if is_table && layout != Layout::Matrix {notes.as_slice()} else {&[]};
 
@@ -126,15 +129,14 @@ languages crossed with modules. Use any other layout to see the files."));
         if !is_table {
             print_sum(theme, per_language, total, &columns, block_width, should_print_keywords);
         }
-        // The overview is the overview: it stays global however the details were grouped
+        // The overview stays global however the details were grouped
         if !config.view.hidden.overview {
             print_visual_overview(&global_names, per_language, total, config);
         }
     }
 
     // A log of nothing but whitespace has nothing to compare against, and the section would be a
-    // heading with no rows under it. The same file is history the log itself must not destroy, so
-    // the emptiness is asked about here rather than by whoever read it.
+    // heading with no rows under it.
     if !config.view.hidden.history && let Some(content) = existing_log_content
         && !content.trim().is_empty() && config.view.compare_level != 0 {
         print_comparison_to_previous_runs(result, &groups, content, config, datetime_now);
@@ -142,19 +144,16 @@ languages crossed with modules. Use any other layout to see the files."));
 }
 
 // The theme listing runs before a configuration exists, so it cannot go through
-// 'super::theme::get_active()'. It asks for the real rows of one made-up language instead, built by the
-// same functions a run uses, so that the preview cannot drift from what will actually be printed,
-// and it follows the layout and the counting model in effect for the same reason: the third column
-// is labelled by the model, so a preview under the other one names a column the run will not print.
-// The figures are constants, so that every theme is judged against the same row.
+// 'super::theme::get_active()'. It builds the rows of one made-up language through the functions a
+// run uses, and follows the layout and the counting model in effect, since the third column is
+// labelled by the model. The figures are constants, so every theme is judged against the same row.
 pub fn create_theme_sample_rows(theme: &Theme, layout: Layout, model: CountingModel) -> Vec<String> {
     const NAME    : &str   = "Rust";
     const FILES   : usize  = 1_284;
     const BYTES   : usize  = 3_412_500;
 
-    // A whole line for every class, so that the sample obeys both counting models the way a counted
-    // file does. Given as classes and not as three columns because the columns are folds of these,
-    // and a hand written pair that disagreed would print a third column no class of it accounts for.
+    // Given as classes and not as three columns: the columns are folds of these, and a hand written
+    // pair that disagreed would print a third column no class of it accounts for.
     let classes = mezura_core::LineClasses {
         words_in_code: 68_004, string_content: 2_800, comment_words_beside_code: 200,
         words_in_comment: 12_638, punctuation_in_code: 9_100, punctuation_in_comment: 190,
@@ -170,9 +169,8 @@ pub fn create_theme_sample_rows(theme: &Theme, layout: Layout, model: CountingMo
             per_language: &per_language, nested: &NO_NESTED, files: HashMap::new(),
             total: &total, baseline: None}];
 
-    // The two tables keep their keywords in a block of their own, so the sample has to ask for it or
-    // the keyword tokens would go unshown in the two layouts that are now the common ones. One
-    // language leaves nothing for a total to add up: it would only repeat the row above it.
+    // The two tables keep their keywords in a block of their own, so the sample has to ask for it
+    // or the keyword tokens go unshown.
     let with_keywords = |mut lines: Vec<String>| {
         lines.push(String::new());
         lines.extend(format_keyword_block_lines(theme, &groups));
@@ -186,9 +184,7 @@ pub fn create_theme_sample_rows(theme: &Theme, layout: Layout, model: CountingMo
         // The matrix has no second axis to show for one made-up language of one unnamed module, and
         // the tokens it paints are the ones the table already previews
         Layout::Matrix => with_keywords(format_table_lines(theme, &groups, &total, false, &[], sample_view)),
-        // Through the same 'Columns' a run builds, off the same counts the tables were handed, or
-        // the one function whose whole purpose is that the preview cannot drift would be two
-        // previews of two different languages
+        // Through the same 'Columns' a run builds, off the counts the tables were handed
         Layout::List => {
             let columns = Columns::of(&groups, &total, no_hides, model);
             let width = columns.width(theme);
@@ -200,8 +196,8 @@ pub fn create_theme_sample_rows(theme: &Theme, layout: Layout, model: CountingMo
     }
 }
 
-// Ties are broken by name rather than left to the iteration order of the maps, which would make
-// the printed order differ between runs on the very projects where languages are evenly matched
+// Ties are broken by name rather than left to the iteration order of the maps, which would make the
+// printed order differ between two runs on the same data.
 pub(crate) fn get_sorted_language_names(per_language: &HashMap<String, Stats>, criterion: SortCriterion,
     model: CountingModel) -> Vec<String>
 {
@@ -217,8 +213,8 @@ pub(crate) fn get_sorted_language_names(per_language: &HashMap<String, Stats>, c
     names
 }
 
-// One part of the run and the languages inside it, in the order '--sort' put them. A run that named
-// no module has exactly one of these, with no name.
+// The languages are in the order '--sort' put them. A run that named no module has exactly one of
+// these, with no name.
 struct Group<'a> {
     name: Option<&'a str>,
     languages: Vec<String>,
@@ -229,9 +225,8 @@ struct Group<'a> {
     files: FileRowsOfModule<'a>,
     total: &'a Stats,
     // The same part as an earlier reading counted it, under '--diff' and nowhere else, which is what
-    // turns every keyword that moved into 'structs: 60 (+5)'. It belongs to the part rather than to
-    // the block drawn out of them: with modules there is one of these per module, and a block handed
-    // a single map would measure a module's keywords against every module's.
+    // turns every keyword that moved into 'structs: 60 (+5)'. One per module: a block handed a
+    // single map would measure one module's keywords against every module's.
     baseline: Option<&'a HashMap<String, Stats>>
 }
 
@@ -241,10 +236,8 @@ impl Group<'_> {
     }
 }
 
-// The three settings every row of one report has to answer to alike: the order the rows are in,
-// the columns that are drawn, and the fold the counted ones go through. One value rather than three
-// arguments, so that a block cannot be given one of them and miss another, which is the same reason
-// 'Columns' carries the last two for the list layout.
+// One value rather than three arguments, so that a block cannot be given one of them and miss
+// another.
 #[derive(Clone,Copy)]
 struct ViewSettings {
     sort_by: SortCriterion,
@@ -259,19 +252,17 @@ impl ViewSettings {
     }
 }
 
-// One name is enough for the second axis to appear. It cannot stay invisible once other rows exist,
-// or the files of everything unnamed would vanish from between the rows and the total.
+// One name is enough for the second axis to appear, or the files of everything unnamed would vanish
+// from between the rows and the total.
 fn is_grouped(groups: &[Group]) -> bool {
     groups.iter().any(|x| x.name.is_some())
 }
 
-// '--sort' applies at both levels with the same criterion, and '--top' is per module, since the
-// question it asks is about the rows the reader is looking at
+// '--sort' applies at both levels with the same criterion, and '--top' is per module.
 fn create_groups_of<'a>(result: &'a RunResult, config: &Configuration) -> Vec<Group<'a>> {
     // The modules keep the order they were written in and only the languages inside them are
-    // sorted: the order the user named their targets in is already a choice, and it is the only way
-    // of arranging the columns of a matrix they have. The leftovers are last, never having been
-    // declared at all.
+    // sorted: that order is the only say the user has over the columns of a matrix. What no name
+    // claimed comes last.
     let mut groups = result.modules.iter().map(|module| {
         let languages = get_sorted_language_names(&module.per_language, config.view.sort_by, config.view.counting);
         let hidden = config.view.top_n.map_or(0, |top| languages.len().saturating_sub(top));
@@ -420,8 +411,8 @@ enum RowKind {
     Note
 }
 
-// Declared beside each table's own headers, so a sub-row is painted by role and not by position.
-// 'Change' resolves to no paint at all: those cells arrive painted by their direction.
+// A sub-row is painted by role and not by position. 'Change' resolves to no paint at all: those
+// cells arrive painted by their direction.
 #[derive(PartialEq,Eq,Clone,Copy)]
 enum ColumnKind {
     Name,
@@ -433,13 +424,12 @@ enum ColumnKind {
     Size,
     Percent,
     Change,
-    // The percentage of a change, which only a comparison has. '--hide percentages' takes it and
-    // leaves the absolute move, since that is still a change and not a share.
+    // Only a comparison has one. '--hide percentages' takes it and leaves the absolute move.
     ChangePercent
 }
 
-// Which of a table's columns '--hide' leaves standing. Everything that describes a figure follows
-// that figure out, so hiding 'files' never leaves a bare share or a bare change behind.
+// Everything that describes a figure follows that figure out, so hiding 'files' never leaves a bare
+// share or a bare change behind.
 fn create_shown_mask(columns: &[ColumnKind], hidden: config_manager::Hidden) -> Vec<bool> {
     let survives = |kind: ColumnKind| match kind {
         ColumnKind::Files => !hidden.files,
@@ -520,11 +510,9 @@ impl<'a> SubRowStyles<'a> {
     }
 }
 
-// Saturating per class because these numbers arrive from a document as readily as from a run,
-// where nothing promises the sections stay inside the whole. The lines are then what the classes
-// left over add up to, rather than a subtraction of their own: a document whose sections do not
-// fit would otherwise leave a shell holding more code than it has lines, and every layout works
-// the third column out by taking code and comments off them.
+// Saturating per class: these numbers arrive from a document as readily as from a run, and nothing
+// promises the sections stay inside the whole. The lines are then what the classes left over add up
+// to, or a shell could come out holding more code than it has lines.
 fn take_out(shell: &mut Stats, sections: &Stats) {
     shell.bytes = shell.bytes.saturating_sub(sections.bytes);
     shell.classes.subtract(&sections.classes);
@@ -616,9 +604,7 @@ fn create_nested_rows_under<'a>(group: &'a Group<'a>, name: &'a String, grouped:
     rows
 }
 
-// The figures one row of a table draws, and the two the percentages beside them are shares of.
-// The two tables lay them out differently and choose them alike, so the choosing is here and each
-// of them is left with only its own cells.
+// The figures one row of a table draws, and the two that the percentages beside them are shares of.
 struct RowFigures {
     files: usize,
     lines: usize,
@@ -630,8 +616,7 @@ struct RowFigures {
 }
 
 // A module's share is of the whole run, a language's of the module it sits in, and a section's or a
-// file's of the language it came out of: a module reading 100% of itself would say nothing, which
-// is the whole point of the two levels. A note is a sentence about the rows and has no figures.
+// file's of the language it came out of. A note is a sentence about the rows and has no figures.
 fn find_row_figures(row: &NamedRow, total: &Stats, model: CountingModel) -> Option<RowFigures> {
     let shown_against = |stats: &Stats, against: &Stats| RowFigures {
         files: stats.files,
@@ -694,15 +679,14 @@ fn mark_sorted_column<'a>(theme: &'a Theme, headers: &mut [String],
 static UNPAINTED : std::sync::LazyLock<super::theme::Style> =
         std::sync::LazyLock::new(super::theme::Style::plain);
 
-// The column holds modules and languages alike, and the indentation says which is which. Without
-// the change of heading the reader of an uncolored paste is told that 'backend' is a language.
+// Without the change of heading, the reader of an uncolored paste is told that 'backend' is a
+// language.
 fn determine_name_header(groups: &[Group]) -> &'static str {
     if is_grouped(groups) {"Module"} else {"Language"}
 }
 
-// The third column is what is left after code and comments, and each model leaves something else:
-// content leaves the lines that say nothing, region only the blanks outside everything. This is the
-// heading over the cells, and the model itself holds the word the cells use.
+// The third column is what is left after code and comments: content leaves the lines that say
+// nothing, region only the blanks outside everything. The model holds the word the cells use.
 fn get_third_column_header(model: CountingModel) -> &'static str {
     match model {
         CountingModel::Content => "Extra",
@@ -710,9 +694,8 @@ fn get_third_column_header(model: CountingModel) -> &'static str {
     }
 }
 
-// One aligned row per language, no borders: whitespace alignment survives being pasted into a
-// README or a ticket. The header cells reuse the label token of the quantity underneath them and
-// the body cells its number token, so the table needs no styling of its own.
+// The header cells reuse the label token of the quantity underneath them and the body cells its
+// number token, so the table needs no styling of its own.
 fn print_as_table(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool,
         should_print_keywords: bool, notes: &[String], view: ViewSettings)
 {
@@ -733,9 +716,8 @@ fn format_table_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
         notes: &[String], view: ViewSettings) -> Vec<String>
 {
     let ViewSettings { sort_by, hidden, model } = view;
-    // Every counted column carries its own percentage. The two that compare languages ('Files' and
-    // 'Lines') take a share of the total, the two that describe one ('Code' and 'Comments') take a
-    // share of that language's own lines.
+    // The two columns that compare languages ('Files' and 'Lines') take a share of the total, the
+    // two that describe one ('Code' and 'Comments') a share of that language's own lines.
     let headers : [&str; 11] = ["Language", "Files", "%", "Lines", "%", "Code", "%", "Comments", "%",
             get_third_column_header(model), "Size"];
     const COLUMNS : [ColumnKind; 11] = [ColumnKind::Name, ColumnKind::Files, ColumnKind::Percent,
@@ -769,8 +751,7 @@ fn format_table_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
         match find_row_figures(row, total, model) {
             Some(figures) => {
                 let mut cells = format_row_of(theme, &row.cell, &figures);
-                // A branch under a language wears the branch's own size unit, so the tree reads as
-                // one drawing rather than as rows that happen to be indented
+                // A branch under a language wears the branch's own size unit
                 if matches!(row.kind, RowKind::Nested | RowKind::File) {
                     let (size, unit) = super::number_formatter::get_active().size_with_unit(figures.bytes);
                     cells[10] = size + " " + &SubRowStyles::of(theme, row.kind).size_unit.paint(unit).to_string();
@@ -805,8 +786,8 @@ fn format_table_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
             &columns, &tight_after, &header_styles, &body_styles, is_grouped(groups))
 }
 
-// The whole of what '--diff' prints, and the only thing printed at all when both readings were
-// given, since then nothing was counted and there is no report for this to take the place of.
+// The whole of what '--diff' prints, and the only output when both readings were given, since then
+// nothing was counted and there is no report for this to take the place of.
 pub fn print_comparison(comparison: &super::diff::Comparison, config: &Configuration) {
     let theme = super::theme::get_active();
     let (baseline, subject) = (&comparison.baseline, &comparison.subject);
@@ -814,9 +795,8 @@ pub fn print_comparison(comparison: &super::diff::Comparison, config: &Configura
 
     println!("{}.\n", theme.heading.paint("Details"));
     println!("{}", format_comparison_heading(theme, baseline, subject));
-    // Between the heading of the table and its rows, because every one of them is about the figures
-    // directly underneath: what this run borrowed to make them comparable, what makes them two
-    // measurements anyway, and what the table is not showing.
+    // Between the heading of the table and its rows, because every note is about the figures
+    // directly underneath.
     for note in &comparison.notes {
         eprintln!("\n{}", format_note_sentence(theme, note));
     }
@@ -832,8 +812,7 @@ pub fn print_comparison(comparison: &super::diff::Comparison, config: &Configura
         println!("{line}");
     }
 
-    // The total under the rows counts every language whatever '--top' shows, so the reader is told
-    // what is missing rather than left to wonder why the rows do not add up, as the report says it
+    // As in the report: the total under the rows counts every language whatever '--top' shows.
     let hidden = count_languages_hidden_by_top(pairs.as_deref(), &baseline.result, &subject.result, config.view.top_n);
     if hidden > 0 {
         let plural = if hidden == 1 {"language"} else {"languages"};
@@ -852,7 +831,7 @@ pub fn print_comparison(comparison: &super::diff::Comparison, config: &Configura
     println!();
 }
 
-// One printed row of a comparison: its name cell, indent and all, and the two readings behind it.
+// The name cell carries its own indent.
 struct ComparedRow {
     name: String,
     kind: RowKind,
@@ -860,8 +839,7 @@ struct ComparedRow {
     subject: Stats
 }
 
-// What 'named_rows' is to a report, which has one reading to draw. A module gets a row of its own
-// with its languages indented under it, exactly as a grouped report does.
+// A module gets a row of its own with its languages indented under it, as a grouped report does.
 fn create_compared_rows(pairs: Option<&[super::diff::ModulePair]>, baseline: &RunResult, subject: &RunResult,
         config: &Configuration) -> Vec<ComparedRow>
 {
@@ -940,10 +918,9 @@ fn create_compared_sections(change: &super::diff::LanguageStatsChange,
             .collect()
 }
 
-// One part of a comparison as the keyword block reads it: the languages of the rows the table
-// printed, so one cut governs both and the block cannot name a language with no row above it, and
-// what the earlier reading had of each. A language that is gone keeps its row in the table and has
-// no keywords now, so it leaves the list here.
+// The languages are the rows the table printed, so one cut governs both and the block cannot name a
+// language with no row above it. A language that is gone keeps its row in the table and has no
+// keywords now, so it leaves the list here.
 fn create_group_with_baseline<'a>(name: Option<&'a str>, baseline: &'a HashMap<String, Stats>,
         subject: &'a HashMap<String, Stats>, total: &'a Stats, config: &Configuration) -> Group<'a>
 {
@@ -957,15 +934,15 @@ fn create_group_with_baseline<'a>(name: Option<&'a str>, baseline: &'a HashMap<S
             files: HashMap::new(), total, baseline: Some(baseline) }
 }
 
-// What '--top' left out of the rows, counted where they were cut: inside each module when the
-// modules are shown, over everything at once otherwise. Both readings' languages are in it, since a
-// row exists for one that only the earlier had.
+// Counted where the rows were cut: inside each module when the modules are shown, over everything
+// at once otherwise. Both readings' languages are in it, since a row exists for one that only the
+// earlier had.
 fn count_languages_hidden_by_top(pairs: Option<&[super::diff::ModulePair]>, baseline: &RunResult,
         subject: &RunResult, top: Option<usize>) -> usize
 {
     let Some(top) = top else { return 0 };
-    // A row per name either side has, which is what 'create_comparison_rows' builds and cuts, so
-    // the two agree on how many it left out without it having to build any of them
+    // A row per name either side has, which is what 'create_comparison_rows' builds and cuts, so the
+    // two agree on how many it left out without this having to build any of them.
     let cut = |before: &HashMap<String, Stats>, now: &HashMap<String, Stats>| {
         let union = now.keys().chain(before.keys()).collect::<HashSet<_>>().len();
         union - top.min(union)
@@ -1002,15 +979,14 @@ so part of the difference below may be a language counted better since, and not 
             // The word 'modules' is said once, by the first side, and the second reads on from it
             let first = match baseline_modules {
                 Some(names) => format!("'{baseline}' declared modules {names}"),
-                None => format!("'{baseline}' didn't declare any modules")
+                None => format!("'{baseline}' declared no modules")
             };
             let second = match subject_modules {
                 Some(names) => format!("'{subject}' declared {names}"),
-                None => format!("'{subject}' didn't declare any")
+                None => format!("'{subject}' declared none")
             };
-            theme.warning.paint(&format!("{first}, whereas {second}. Module declarations \
-must match between the two sources for the modules to take effect in the comparison. Defaulting to \
-the normal comparison view.")).to_string()
+            theme.warning.paint(&format!("{first}, whereas {second}. Two readings are compared \
+module by module only when they named the same ones, so everything is compared at once instead.")).to_string()
         },
         Note::LayoutFallback { layout } => theme.warning.paint(&format!(
                 "'--{} {layout}' has nothing to show for a comparison, so the 'table' layout was printed.",
@@ -1025,8 +1001,7 @@ so anything a .gitignore ignores is counted on one side alone.")).to_string(),
     }
 }
 
-// The comparison in the boxed frame: the same triads as the table, with each figure's change in the
-// slot its share occupies on a plain run, and 'Extra' gone the same way. The change cells arrive
+// Each figure's change sits in the slot its share occupies on a plain run. The change cells arrive
 // painted by their direction, so the frame's own slot style is plain.
 fn format_boxed_comparison_lines(theme: &Theme, rows: &[ComparedRow], view: ViewSettings) -> Vec<String>
 {
@@ -1037,7 +1012,7 @@ fn format_boxed_comparison_lines(theme: &Theme, rows: &[ComparedRow], view: View
 
     let cells = |before: &Stats, now: &Stats| {
         // The absolute move and its percentage share one slot here, the borders doing the grouping
-        // that the tight gaps do on the table
+        // that the tight gaps do on the table.
         let counted = |was: usize, is: usize| BoxedCell {
             number: format_with_separators(is),
             slot: if was == is {paint_change(theme, was, is, NO_CHANGE)}
@@ -1045,8 +1020,7 @@ fn format_boxed_comparison_lines(theme: &Theme, rows: &[ComparedRow], view: View
                     else {paint_change(theme, was, is, &format!("{}  {}", format_signed_difference(was, is), format_change(was, is)))}
         };
         let (size, unit) = super::number_formatter::get_active().size_with_unit(now.bytes);
-        // The file count moves in single whole things, so its slot carries the move and no
-        // percentage, exactly as on the table
+        // The file count moves in whole things, so its slot carries the move and no percentage.
         let files = BoxedCell {
             number: format_with_separators(now.files),
             slot: paint_change(theme, before.files, now.files, &format_signed_difference(before.files, now.files))
@@ -1086,20 +1060,15 @@ fn format_comparison_heading(theme: &Theme, baseline: &super::diff::Reading, sub
             subject.determine_display_name(), format_readable_time(&subject.taken))
 }
 
-// What '--diff' prints in place of the details, and why it is the details table with columns taken
-// out rather than a block of its own: every figure has room for the change beside it only because the
-// share percentages, 'Extra' and 'Size' are gone. The shares are what the change replaces, 'Extra' is
-// the three columns left over subtracted from the lines, and the size is the one figure genuinely
-// dropped.
+// The details table with the share percentages and 'Extra' taken out, which is what makes room for
+// the change beside every figure.
 fn format_comparison_lines(theme: &Theme, rows: &[ComparedRow], view: ViewSettings) -> Vec<String>
 {
     let ViewSettings { sort_by, hidden, model } = view;
-    // The change columns are left unnamed: their values are two to five characters and the word would
-    // widen the table for nothing, while every one of them carries a sign that says what it is.
-    // The size carries no percentage of its own: it tracks the lines it is made of, so its share of
-    // the change is the one beside them, and a second copy of it costs eight columns
-    // The file count carries no percentage either: it is a handful of whole things, and "two more
-    // files" is the answer where "+5.26%" is the same fact with a decimal point put on it
+    // The change columns are left unnamed: every one carries a sign that says what it is, and a word
+    // would widen the table for nothing. Neither the size nor the file count carries a percentage:
+    // the size tracks the lines whose share is already beside them, and a handful of whole files
+    // reads better as "+2" than as "+5.26%".
     const HEADERS : [&str; 14] = ["Language", "Files", "", "Lines", "", "%", "Code", "", "%",
             "Comments", "", "%", "Size", ""];
     const COLUMNS : [ColumnKind; 14] = [ColumnKind::Name, ColumnKind::Files, ColumnKind::Change,
@@ -1108,8 +1077,6 @@ fn format_comparison_lines(theme: &Theme, rows: &[ComparedRow], view: ViewSettin
             ColumnKind::ChangePercent, ColumnKind::Size, ColumnKind::Change];
 
     let plain = super::theme::Style::plain();
-    // The direction is a property of the value and not of the column, so these two cells arrive
-    // already painted and their column adds nothing
     let cells = |name: String, before: &Stats, now: &Stats| {
         let mut row = vec![name, format_with_separators(now.files),
                 paint_change(theme, before.files, now.files, &format_signed_difference(before.files, now.files))];
@@ -1151,15 +1118,13 @@ fn format_comparison_lines(theme: &Theme, rows: &[ComparedRow], view: ViewSettin
             &body_styles, kinds.contains(&RowKind::Module))
 }
 
-// The counterpart of 'name_header' for a comparison, whose rows are already built: the column holds
-// modules and languages alike, and without the change of heading the reader of an uncolored paste
-// is told that 'backend' is a language.
+// 'determine_name_header' for a comparison, whose rows are already built.
 fn determine_name_header_for(kinds: &[RowKind]) -> &'static str {
     if kinds.contains(&RowKind::Module) {"Module"} else {"Language"}
 }
 
-// A dash and not a zero, and nothing at all where the percentage would go: a column of dashes is
-// read past, while a column of zeros has to be read to find the rows that are not one.
+// A dash and not a zero: a column of dashes is read past, while a column of zeros has to be read to
+// find the rows that are not one.
 fn format_signed_difference(before: usize, now: usize) -> String {
     if before == now {
         return NO_CHANGE.to_owned();
@@ -1190,9 +1155,8 @@ fn format_change(before: usize, now: usize) -> String {
     }
 }
 
-// The three cases already have tokens of their own, since the history section colors the same
-// three. What is added here is only that a figure which did not move is dimmed as well: most rows of
-// a comparison are that, and they are there to be read past rather than read.
+// The three cases share their tokens with the history section. What is added here is that a figure
+// which did not move is dimmed as well: most rows of a comparison are that.
 fn paint_change(theme: &Theme, before: usize, now: usize, text: &str) -> String {
     match now.cmp(&before) {
         std::cmp::Ordering::Greater => theme.change_up.paint(text).to_string(),
@@ -1201,8 +1165,8 @@ fn paint_change(theme: &Theme, before: usize, now: usize, text: &str) -> String 
     }
 }
 
-// The moment the baseline was written, as a person reads a date. Left as it stands when it does not
-// parse, since a document somebody edited by hand is still worth comparing against.
+// Left as it stands when it does not parse: a document somebody edited by hand is still worth
+// comparing against.
 fn format_readable_time(generated_at: &str) -> String {
     match DateTime::parse_from_rfc3339(generated_at) {
         Ok(x) => x.format("%Y-%m-%d %H:%M").to_string(),
@@ -1210,13 +1174,10 @@ fn format_readable_time(generated_at: &str) -> String {
     }
 }
 
-// The alignment the details table and the comparison that replaces it under '--diff' both use: every
-// column as wide as its widest cell, the figures right aligned so that a column can be read down, and
-// the columns named in 'tight_after' sitting two spaces behind the one before them because they
-// belong to it rather than standing on their own.
-//
-// Widths are measured with the escape sequences skipped rather than counted, since a cell is allowed
-// to carry a color of its own, which the size cell does for its unit.
+// Every column is as wide as its widest cell, the figures right aligned, and the columns named in
+// 'tight_after' sit two spaces behind the one before them because they belong to it. Widths are
+// measured with the escape sequences skipped rather than counted, since a cell is allowed to carry
+// a color of its own, which the size cell does for its unit.
 fn draw_aligned_table(theme: &Theme, headers: &[String], rows: &[Vec<String>], kinds: &[RowKind],
         columns: &[ColumnKind], tight_after: &[usize], header_styles: &[&super::theme::Style],
         body_styles: &[&super::theme::Style], grouped: bool) -> Vec<String>
@@ -1229,9 +1190,8 @@ fn draw_aligned_table(theme: &Theme, headers: &[String], rows: &[Vec<String>], k
                     .map(|(row, _)| calculate_widest_visible_line(&row[i]))
                     .max().unwrap_or(0).max(calculate_widest_visible_line(&headers[i]))).collect::<Vec<_>>();
 
-    // The language name and the percentages are not right aligned: a percentage sits a fixed two
-    // spaces after the number it belongs to, and padding it on the left would push it away on exactly
-    // the rows where its column is wider.
+    // The language name and the percentages are not right aligned: padding a percentage on the left
+    // would push it away from its number on exactly the rows where its column is wider.
     let render = |cells: &[String], styles: &[&super::theme::Style]| {
         let mut line = String::with_capacity(140);
         if cells[1..].iter().all(String::is_empty) {
@@ -1247,8 +1207,8 @@ fn draw_aligned_table(theme: &Theme, headers: &[String], rows: &[Vec<String>], k
                 line.push_str(&format!("{}{}{}", " ".repeat(GAP), padding, styles[i].paint(cell)));
             }
         }
-        // A tight column pads on its right, so a table whose last column is one of those ends every
-        // row in whitespace, which survives being pasted anywhere
+        // A tight column pads on its right, so a table ending in one would end every row in
+        // whitespace.
         line.trim_end().to_owned()
     };
 
@@ -1270,19 +1230,17 @@ fn draw_aligned_table(theme: &Theme, headers: &[String], rows: &[Vec<String>], k
                 }
             })).collect::<Vec<_>>();
 
-    // Measured off the rows themselves rather than added up from the widths, which is the only way
-    // it stays right: a row ends where its last cell ends, and a table whose last column is a tight
-    // one has the padding of that column trimmed off the end of every row.
+    // Measured off the rendered rows and not added up from the widths: a table whose last column is
+    // a tight one has that column's padding trimmed off the end of every row.
     let table_width = rendered.iter().map(|x| calculate_widest_visible_line(x)).max().unwrap_or(0);
 
     let mut lines = Vec::with_capacity(rendered.len() + kinds.len());
     let mut rendered = rendered.into_iter();
     lines.push(rendered.next().unwrap_or_default());
     lines.push(theme.separator_header.paint(&SEPARATOR_LINE.repeat(table_width)).to_string());
-    // A blank line closes each module, so the sections are read apart at a glance instead of being
-    // told apart only by the indentation of every second row. Once anything hangs under a language
-    // the same blank closes each language, or one language's tree runs into the name of the next;
-    // a module's first language is not held away from the name it belongs to.
+    // A blank line closes each module. Once anything hangs under a language the same blank closes
+    // each language, or one language's tree runs into the name of the next; a module's first
+    // language is not held away from the name it belongs to.
     let has_sub_rows = kinds.iter().any(|kind| *kind == RowKind::Nested || *kind == RowKind::File);
     let mut previous = None;
     for (position, (line, kind)) in rendered.zip(kinds.iter()).enumerate() {
@@ -1306,8 +1264,7 @@ fn draw_aligned_table(theme: &Theme, headers: &[String], rows: &[Vec<String>], k
     lines
 }
 
-// Languages down, modules across. The nested table answers "what is inside the backend", read down
-// a section; this one answers "how do the modules compare on the same language", read along a row.
+// Languages down, modules across, so one language is read along a row.
 fn print_as_matrix(theme: &Theme, groups: &[Group], languages: &[String], total: &Stats,
         print_total: bool, should_print_keywords: bool, model: CountingModel)
 {
@@ -1361,9 +1318,8 @@ fn format_matrix_lines<'a>(theme: &'a Theme, groups: &[Group], languages: &[Stri
         None => String::new()
     };
 
-    // One language is three rows with its name on the first of them, so it reads as the heading of
-    // its own block. The labels are written once, against the total when there is one and against
-    // the languages when there is not, and the blocks above take their meaning from the same order.
+    // One language is three rows with its name on the first of them. The labels are written once:
+    // against the total when there is one, against the languages when there is not.
     let mut rows = Vec::with_capacity(languages.len() * MATRIX_METRICS.len() + MATRIX_METRICS.len());
     for language in languages {
         for (metric, label) in MATRIX_METRICS.iter().enumerate() {
@@ -1390,8 +1346,8 @@ fn format_matrix_lines<'a>(theme: &'a Theme, groups: &[Group], languages: &[Stri
             .map(|(row,_)| calculate_widest_visible_line(&row[i])).max().unwrap_or(0)
             .max(calculate_widest_visible_line(&headers[i]))).collect::<Vec<_>>();
 
-    // The name and its labels are left aligned like the labels they are, and every figure is right
-    // aligned, so that a column can be compared down and a language across
+    // The name and its labels are left aligned, every figure right aligned, so a column can be
+    // compared down and a language across.
     let render = |cells: &[String], styles: &[&super::theme::Style]| {
         let mut line = String::with_capacity(140);
         for (i, cell) in cells.iter().enumerate() {
@@ -1407,8 +1363,8 @@ fn format_matrix_lines<'a>(theme: &'a Theme, groups: &[Group], languages: &[Stri
         line.trim_end().to_owned()
     };
 
-    // Each of the three rows takes the tokens of the quantity it carries, so the matrix is themed by
-    // what a reader already set for the other layouts and needs nothing of its own
+    // Each of the three rows takes the tokens of the quantity it carries, so the matrix needs no
+    // tokens of its own.
     let number_style = |metric: usize| match metric {
         0 => &theme.files_number,
         1 => &theme.lines_number,
@@ -1431,8 +1387,8 @@ fn format_matrix_lines<'a>(theme: &'a Theme, groups: &[Group], languages: &[Stri
     let table_width = widths.iter().sum::<usize>() + GAP * (headers.len() - 1);
     let mut lines = vec![render(&headers, &header_styles)];
     for (position, (row, metric)) in rows.iter().enumerate() {
-        // A language is three physical rows, so they need to be told apart by something other than
-        // the name sitting on the first of them
+        // A language is three physical rows, told apart by the blank and not only by the name on
+        // the first of them.
         if position > 0 && position % MATRIX_METRICS.len() == 0 {
             lines.push(String::new());
         }
@@ -1451,8 +1407,7 @@ fn format_matrix_lines<'a>(theme: &'a Theme, groups: &[Group], languages: &[Stri
 }
 
 // The same figures as the borderless table, in a drawn frame. Each number and its percentage share
-// one cell here, since the borders already do the grouping that the tight gap does over there, and
-// that brings the whole thing down from eleven columns to seven.
+// one cell here, since the borders already do the grouping that the tight gap does over there.
 fn print_as_boxed_table(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool,
         should_print_keywords: bool, notes: &[String], view: ViewSettings)
 {
@@ -1501,15 +1456,12 @@ fn format_boxed_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
     let described = create_named_rows(groups, print_total, notes);
     let rows = described.iter().map(|row| match find_row_figures(row, total, model) {
         Some(figures) => format_row_of(theme, &row.cell, &figures),
-        // A sentence about the rows and not a row of figures, so it takes the name cell and
-        // leaves the columns empty
+        // A note takes the name cell and leaves the columns empty
         None => (row.cell.clone(),
                 (0..headers.len() - 1).map(|_| BoxedCell { number: String::new(), slot: String::new() }).collect())
     }).collect::<Vec<_>>();
     let kinds = described.iter().map(|row| row.kind).collect::<Vec<_>>();
 
-    // The percentages live in the slots beside the numbers, and a column whose slots are all empty
-    // is drawn without one
     let mask = create_shown_mask(&COLUMNS, hidden);
     let columns = keep_shown(COLUMNS.to_vec(), &mask);
     let mut rows = rows.into_iter()
@@ -1550,8 +1502,6 @@ fn span_across(theme: &Theme, text: &str, inner_widths: &[usize], pad: usize, bo
 // comparison with a change. A column whose slots are all empty is drawn without one.
 struct BoxedCell { number: String, slot: String }
 
-// The frame the boxed layout draws, for whatever columns it is handed: the details fill it with one
-// reading, the comparison with two.
 // 'header_styles' covers the name column too, at its front, since the one carrying the sort marker
 // arrives painted and must not be painted a second time.
 fn draw_boxed_table(theme: &Theme, name_title: &str, headers: &[&str], rows: &[(String, Vec<BoxedCell>)],
@@ -1577,13 +1527,12 @@ fn draw_boxed_table(theme: &Theme, name_title: &str, headers: &[&str], rows: &[(
     let slot_widths = (0..with_figures).map(|i| rows.iter().map(|(_,cells)| calculate_widest_visible_line(&cells[i].slot)).max().unwrap_or(0))
             .collect::<Vec<_>>();
 
-    // A column is as wide as its content needs, or as its header, whichever is more
     let inner_widths = std::iter::once(name_width).chain((0..with_figures).map(|i| {
             let content = number_widths[i] + if slot_widths[i] > 0 {SLOT_GAP + slot_widths[i]} else {0};
             content.max(calculate_widest_visible_line(headers[i + 1]))
         })).collect::<Vec<_>>();
 
-    // Not theme tokens, since they would mean nothing in the other layouts. That needs FEAT-17.
+    // Not theme tokens, since they would mean nothing in the other layouts.
     const BORDER_OUTER : Color = Color::TrueColor { r: 160, g: 160, b: 160 };
     const BORDER_INNER : Color = Color::TrueColor { r: 65, g: 65, b: 65 };
 
@@ -1612,8 +1561,7 @@ fn draw_boxed_table(theme: &Theme, name_title: &str, headers: &[&str], rows: &[(
             .max().unwrap_or(0);
     let mut lines = vec![frame("┌", "┬", "┐", "─", BORDER_OUTER, false)];
 
-    // The titles sit over columns of mixed width, so they are centred rather than pinned to one
-    // side of a cell that is often wider than the word in it
+    // The titles are centred: their columns are often much wider than the word in them.
     let gap = inner_widths[0].saturating_sub(calculate_widest_visible_line(name_title));
     let centred = " ".repeat(gap / 2) + name_title;
     let mut header_cells = vec![header_styles[0].paint(&centred).to_string() + &" ".repeat(gap - gap / 2)];
@@ -1626,18 +1574,17 @@ fn draw_boxed_table(theme: &Theme, name_title: &str, headers: &[&str], rows: &[(
     }
     lines.push(content_row(header_cells, true));
 
-    // The lines that bound the body, and the line that opens a module's section, belong to the
-    // frame: solid and in its shade. Everything inside it is dashed and dim, the notes about what
-    // was left out included, since those are read with the rows and not with the total.
+    // The lines that bound the body, and the line that opens a module's section, are solid and in
+    // the frame's shade. Everything inside is dashed and dim, the notes included, since those are
+    // read with the rows and not with the total.
     for (position, (name, cells)) in rows.iter().enumerate() {
         let kind = kinds[position];
         let is_body = match kind {
             RowKind::Module | RowKind::Total => false,
             RowKind::Language | RowKind::Nested | RowKind::File | RowKind::Note => true
         };
-        // A module's name row is drawn in the frame's own shade, so it is closed on both sides
-        // rather than only above: without the second rule the vertical of the table changes
-        // brightness in the middle of itself and reads as a rendering fault.
+        // A module's name row is closed on both sides and not only above: without the second rule
+        // the vertical changes brightness in the middle of itself and reads as a rendering fault.
         let after_module = position > 0 && kinds[position - 1] == RowKind::Module;
         let separator = if position == 0 || !is_body || after_module {
             frame("├", "┼", "┤", "─", BORDER_OUTER, false)
@@ -1647,7 +1594,7 @@ fn draw_boxed_table(theme: &Theme, name_title: &str, headers: &[&str], rows: &[(
         lines.push(separator);
 
         // Cut into cells it would be one long name and five empty boxes, and the name column would
-        // have to be as wide as a sentence
+        // have to be as wide as a sentence.
         if kind == RowKind::Note {
             lines.push(span_across(theme, name, &inner_widths, PAD, BORDER_OUTER));
             continue;
@@ -1683,7 +1630,7 @@ fn draw_boxed_table(theme: &Theme, name_title: &str, headers: &[&str], rows: &[(
             let number = format!("{}{}", " ".repeat(number_widths[i] - calculate_widest_visible_line(&cell.number)),
                     number_style.paint(&cell.number));
             // A column with no slots holds bare numbers, and those sit on the right edge rather
-            // than huddling on the left of a centred title
+            // than huddling on the left of a centred title.
             if slot_widths[i] == 0 {
                 painted.push(format!("{}{number}", " ".repeat(inner_widths[i + 1] - number_widths[i])));
                 continue;
@@ -1774,17 +1721,16 @@ fn format_individual_lines(theme: &Theme, groups: &[Group], columns: &Columns, b
     lines
 }
 
-// Every column is right aligned to a shared edge. The file count and the line count end at the same
-// place, so the line count, being the longer of the two and the criterion the list is sorted by,
-// reaches further left and is the first thing the eye lands on.
+// Every column is right aligned to a shared edge, and the file count and the line count end at the
+// same place.
 struct Columns {
     name: usize,
     headline: usize,
     code: usize,
     comments: usize,
     extra: usize,
-    // Carried here so that every row a run renders through these functions obeys the same '--hide'
-    // and the same fold
+    // Carried here so that every row rendered through these functions obeys the same '--hide' and
+    // the same fold
     hidden: config_manager::Hidden,
     model: CountingModel
 }
@@ -1821,8 +1767,8 @@ impl Columns {
                 columns.code = columns.code.max(len_of(content_info.calculate_code_lines(model)));
                 columns.comments = columns.comments.max(len_of(content_info.calculate_comment_lines(model)));
                 columns.extra = columns.extra.max(len_of(content_info.calculate_extra_lines(model)));
-                // The markers are asked for rather than assumed, so changing one cannot leave this
-                // column a character short of what gets drawn in it
+                // The markers are measured and not assumed, so changing one cannot leave this column
+                // a character short of what gets drawn in it.
                 let under = indent + BRANCH_INDENT.len();
                 let branch = under + calculate_widest_visible_line(find_branch_marker(false));
                 for (nested, _) in find_sections_of(group, name, content_info) {
@@ -1848,9 +1794,9 @@ impl Columns {
         self.calculate_headline_end() + 1
     }
 
-    // The theme arrives as an argument rather than being read from 'super::theme::get_active()', because
-    // '--show-themes' renders one sample per theme it found, in a single run, and it renders it
-    // through these same functions so that the preview cannot drift from the real output
+    // The theme arrives as an argument and is not read from 'super::theme::get_active()':
+    // '--show-themes' renders one sample per theme it found, in a single run, through these same
+    // functions.
     fn format_breakdown_row(&self, theme: &Theme, painted_name: &str, name_len: usize, lines: usize, code_lines: usize, comment_lines: usize) -> String {
         let (code_percentage, comment_percentage) = calculate_code_and_comment_percentages(lines,code_lines, comment_lines);
         let percent = |value: f64| if self.hidden.percentages {String::new()}
@@ -1899,7 +1845,7 @@ impl Columns {
                 terms.join("  +  "), headline_w = self.headline)
     }
 
-    // The whole row is skipped when both halves are hidden, which is the caller's question to ask
+    // The whole row is skipped when both halves are hidden
     fn prints_files_row(&self) -> bool {
         !(self.hidden.files && self.hidden.size)
     }
@@ -1919,8 +1865,7 @@ impl Columns {
         left + &" ".repeat(width.saturating_sub(used).max(2)) + size_text
     }
 
-    // Rendered once to be measured and again to be printed: once per run costs nothing, and the
-    // width cannot fall behind the row the way a formula would
+    // Rendered once to be measured and again to be printed: a formula would fall behind the row.
     fn width(&self, theme: &Theme) -> usize {
         calculate_widest_visible_line(&self.format_breakdown_row(theme, "", 0, 0, 0, 0))
     }
@@ -1956,10 +1901,9 @@ fn format_sum_lines(theme: &Theme, per_language: &HashMap<String,Stats>, total: 
     lines
 }
 
-// Their own block instead of a trailing column, whose width varies by nature and would destroy the
-// alignment a table exists for. Not aligned by position either: a column of the table means one
-// thing all the way down, while the first keyword of one language and the first of the next are
-// unrelated, so aligning them promises a comparison that does not exist.
+// Their own block and not a trailing column, whose width varies by nature and would destroy the
+// alignment a table exists for. Not aligned by position either: the first keyword of one language
+// and the first of the next are unrelated, so aligning them promises a comparison that is not there.
 fn print_keyword_block(theme: &Theme, groups: &[Group]) {
     let lines = format_keyword_block_lines(theme, groups);
     if !lines.is_empty() {
@@ -2013,11 +1957,9 @@ fn format_keyword_block_lines(theme: &Theme, groups: &[Group]) -> Vec<String> {
 }
 
 // Indented to where the word 'lines' starts on the row above, and wrapped to the width of the block
-// so that a language with many keywords cannot push the section wider than every other row
+// so that a language with many keywords cannot push the section wider than every other row.
 // 'baseline' is the same keywords as an earlier reading counted them, and turns every entry that
-// moved into 'structs: 60 (+5)'. Only the ones that moved are marked: a comma separated sentence with
-// a dash on every entry is harder to read than the sentence, which is the opposite of the table
-// above, where a column of dashes is what lets the eye skip to the rows that are not one.
+// moved into 'structs: 60 (+5)'. Only the ones that moved are marked, unlike the table above.
 fn get_keywords_as_str(theme: &Theme, keyword_occurencies: &HashMap<String,usize>,
         baseline: Option<&HashMap<String,usize>>, indent: usize, width: usize) -> String
 {
@@ -2060,9 +2002,8 @@ fn get_keywords_as_str(theme: &Theme, keyword_occurencies: &HashMap<String,usize
     keyword_info
 }
 
-// Ordered by name, so that a keyword stays in the same place down a report and between two runs
-// A keyword a language declares and no file used says nothing, so it gets no cell. The JSON keeps
-// its zeros: a machine format whose fields appear and disappear per run is worse than a stable one.
+// Ordered by name, so that a keyword stays in the same place down a report and between two runs. A
+// keyword a language declares and no file used gets no cell here, though the JSON keeps its zeros.
 fn create_keyword_entries(keyword_occurencies: &HashMap<String,usize>) -> Vec<(String, String)> {
     let mut sorted_keywords = keyword_occurencies.iter().filter(|(_, count)| **count > 0).collect::<Vec<_>>();
     sorted_keywords.sort_unstable_by_key(|(name,_)| name.as_str());
@@ -2092,7 +2033,7 @@ fn create_keyword_sum_map(per_language: &HashMap<String,Stats>) -> HashMap<Strin
 //
 // Lines: ...
 //
-// Size : ...
+// Size:  ...
 fn print_visual_overview(sorted_language_names: &[String], per_language: &HashMap<String, Stats>, total: &Stats, config: &Configuration)
 {
     print_lines(&format_overview_lines(sorted_language_names, per_language, total, config));
@@ -2100,14 +2041,13 @@ fn print_visual_overview(sorted_language_names: &[String], per_language: &HashMa
 
 fn format_overview_lines(sorted_language_names: &[String], per_language: &HashMap<String, Stats>, total: &Stats, config: &Configuration) -> Vec<String>
 {
-    // The function itself decides whether there is anything to fold
     let (sorted_language_vec, per_language) =
             fold_rest_into_others(sorted_language_names, per_language, total, config.view.top_n);
     let (sorted_language_vec, per_language) =
             (&sorted_language_vec, &per_language);
 
-    // 'others' takes its style by identity and not by position, because --top moves it: with
-    // --top 2 it sits third and used to steal the slot meant for the third language.
+    // 'others' takes its style by identity and not by position, because '--top' moves it: with
+    // '--top 2' it sits third and would take the slot meant for the third language.
     let slots = super::theme::get_active().get_language_slots();
     let styles = sorted_language_vec.iter().enumerate()
             .map(|(i, name)| if name == OTHERS_NAME {slots[slots.len()-1]} else {slots[i.min(slots.len()-2)]}.clone())
@@ -2133,7 +2073,7 @@ fn format_overview_lines(sorted_language_names: &[String], per_language: &HashMa
     let size_verticals = if config.view.hidden.bar {vec![]} else{render::apportion(&sizes_percentages, NUM_OF_VERTICALS)};
 
     // Each percentage is padded to the widest of the three rows in its own position, so the same
-    // language stays in the same column down the section without paying for a gap nobody needs
+    // language stays in the same column down the section.
     let percent_widths = (0..sorted_language_vec.len()).map(|i| {
         format_percent_text(files_percentages[i]).len().max(format_percent_text(lines_percentages[i]).len())
                 .max(format_percent_text(sizes_percentages[i]).len())
@@ -2143,7 +2083,7 @@ fn format_overview_lines(sorted_language_names: &[String], per_language: &HashMa
             sorted_language_vec, &color_func_vec, &bar_func_vec, &percent_widths, config);
     let lines_line = create_overview_line("Lines:", &lines_percentages, &lines_verticals,
             sorted_language_vec, &color_func_vec, &bar_func_vec, &percent_widths, config);
-    let size_line = create_overview_line("Size :", &sizes_percentages, &size_verticals,
+    let size_line = create_overview_line("Size:", &sizes_percentages, &size_verticals,
             sorted_language_vec, &color_func_vec, &bar_func_vec, &percent_widths, config);
 
     vec![format!("{}.", super::theme::get_active().heading.paint("Overview")), String::new(),
@@ -2155,7 +2095,7 @@ fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize], 
 {
     let theme = super::theme::get_active();
     let mut line = String::with_capacity(150);
-    line.push_str(&format!("{}   ", theme.overview_label.paint(prefix)));
+    line.push_str(&format!("{}   ", theme.overview_label.paint(&format!("{prefix:<OVERVIEW_LABEL_WIDTH$}"))));
     for (i,percentage) in percentages.iter().enumerate() {
         let str_perc = format_percent_text(*percentage);
         line.push_str(&format!("{}{} ", " ".repeat(percent_widths[i].saturating_sub(str_perc.len())), paint_overview_percent(theme,*percentage)));
@@ -2182,9 +2122,8 @@ fn add_verticals_str(line: &mut String, files_verticals: &[usize], color_func_ve
     line.push_str(&theme.bar_frame.paint("-]").to_string());
 }
 
-// Returns its own view of the data rather than folding the caller's maps in place: "others" is a
-// creature of the overview and of nothing else, and a result that has been printed once has to
-// still be the result.
+// Its own view of the data and not a fold of the caller's maps: "others" belongs to the overview
+// alone, and a result that has been printed once has to still be the result.
 fn fold_rest_into_others(sorted_language_names: &[String],
         per_language: &HashMap<String, Stats>, total: &Stats, top_n: Option<usize>)
 -> (Vec<String>, HashMap<String, Stats>)
@@ -2247,9 +2186,8 @@ fn get_sizes_percentages(per_language: &HashMap<String,Stats>, languages_name: &
     render::calculate_percentages_of_their_own_sum(&language_size)
 }
 
-// The settings this run counted with, against the ones the entry recorded. A setting the entry never
-// wrote is left alone rather than reported as changed, which is what keeps entries from older
-// versions from being accused of a difference nobody can know about.
+// A setting the entry never wrote is left alone rather than reported as changed, so an entry from
+// an older version is not accused of a difference nobody can know about.
 fn find_settings_changed_since(entry: &super::log::LogEntry, config: &Configuration,
         targets: &[mezura_core::Target]) -> Vec<&'static str>
 {
@@ -2274,8 +2212,8 @@ fn find_settings_changed_since(entry: &super::log::LogEntry, config: &Configurat
     changed
 }
 
-// At the end of the line of the entry it belongs to, since it is a statement about that entry and
-// not about the run. Nothing is printed when nothing changed, or the reader stops seeing it.
+// At the end of the entry's own line, since it is a statement about that entry and not about the
+// run.
 fn format_modified_tag(changed: &[&'static str]) -> String {
     if changed.is_empty() {
         return String::new();
@@ -2287,8 +2225,7 @@ fn format_modified_tag(changed: &[&'static str]) -> String {
 }
 
 // One line per module under the line of the entry, and narrower than it: Files and Extra stay on
-// the total, since what is asked of a module is which part of it moved. With every column repeated,
-// one entry is five wide lines and '--compare 3' stops being readable.
+// the total, or one entry is five wide lines and '--compare 3' stops being readable.
 fn format_module_comparison_lines(entry: &super::log::LogEntry, groups: &[Group],
         model: CountingModel) -> String {
     let theme = super::theme::get_active();
@@ -2298,8 +2235,7 @@ fn format_module_comparison_lines(entry: &super::log::LogEntry, groups: &[Group]
             .collect::<Vec<_>>();
     let width = names.iter().map(|x| calculate_widest_visible_line(x)).max().unwrap_or(0);
 
-    // Right aligned down the entry, since the whole reason these are three narrow columns and not
-    // the full breakdown is that they are meant to be read down rather than across
+    // Right aligned, since these three narrow columns are meant to be read down the entry.
     let compared = names.iter().filter_map(|name| entry.modules.iter().find(|x| &x.name == name)).collect::<Vec<_>>();
     let number_width = |value: &dyn Fn(&super::log::ModuleEntry) -> usize|
             compared.iter().map(|x| format_with_separators(value(x)).len()).max().unwrap_or(0);
@@ -2433,8 +2369,8 @@ fn paint_percent(theme: &Theme, value: f64) -> ColoredString {
     theme.percent.paint(&(format_percent_text(value) + "%"))
 }
 
-// The overview's percentages are the datum of that section rather than an annotation on a count,
-// so they take a token of their own
+// The overview's percentages take a token of their own, being the datum of that section rather
+// than an annotation on a count.
 fn paint_overview_percent(theme: &Theme, value: f64) -> ColoredString {
     theme.overview_percent.paint(&(format_percent_text(value) + "%"))
 }
@@ -2452,10 +2388,9 @@ mod tests {
 
     use super::*;
 
-    // One dataset for every layout, chosen so that the things that break are all present at once: a
-    // long language name next to a short one, figures wide enough to move the shared right edge, a
-    // keyword row long enough to wrap, a language with no keywords at all, a keyword that fired
-    // nowhere, and five languages, one more than the overview shows without folding into "others".
+    // Chosen so that the things that break are all present at once: a long language name next to a
+    // short one, figures wide enough to move the shared right edge, a keyword row long enough to
+    // wrap, and five languages, one more than the overview shows before folding into "others".
     fn sample_data() -> (Vec<String>, HashMap<String, Stats>, Stats) {
         let per_language = hashmap![
             "Rust".to_owned() => crate::test_support::plain_stats_of(13, 416800, 9008, 6122, 505,
@@ -2477,9 +2412,8 @@ mod tests {
         (sorted, per_language, total)
     }
 
-    // The same five languages, split into the shape a run with modules produces: two named ones and
-    // the leftovers. The totals are unchanged by construction, so any difference between the grouped
-    // cases and the ungrouped ones below is the grouping and nothing else.
+    // The same five languages, split into two named modules and the leftovers. The totals are
+    // unchanged by construction, so any difference from the ungrouped cases is the grouping alone.
     fn sample_modules() -> Vec<ModuleResult> {
         let (_, content_info, _) = sample_data();
         let of = |name: Option<&str>, languages: &[&str]| {
@@ -2493,10 +2427,9 @@ mod tests {
              of(None, &["Python", "Java"])]
     }
 
-    // The same five languages as an earlier reading counted them, split the same way, so that every
-    // shape a comparison has to draw is in one dataset: JavaScript shrank, Rust grew, HTML did not
-    // move at all, Python is only there now and Go is only there before. Declared in another order
-    // than the later reading, since the order of the rows is the later one's.
+    // Every shape a comparison has to draw, in one dataset: JavaScript shrank, Rust grew, HTML did
+    // not move at all, Python is only there now and Go is only there before. Declared in another
+    // order than the later reading, since the order of the rows is the later one's.
     fn earlier_modules() -> Vec<ModuleResult> {
         let of = |name: Option<&str>, languages: Vec<(&str, Stats)>| {
             let per_language = languages.into_iter().map(|(x, stats)| (x.to_owned(), stats)).collect::<HashMap<_,_>>();
@@ -2581,9 +2514,8 @@ mod tests {
         }).collect()
     }
 
-    // Two of the HTML files and all three of the Python ones, adding up to exactly what those two
-    // rows of 'sample_data' say: a file row is a share of its language, and a golden showing one
-    // that is larger than the whole reads as a bug in whoever looks at it next.
+    // Adding up to exactly what those two rows of 'sample_data' say: a file row is a share of its
+    // language, and a golden showing one larger than the whole reads as a bug.
     fn sample_files() -> HashMap<String, Vec<mezura_core::FileEntry>> {
         let entry = |path: &str, lines, code, comments, bytes| mezura_core::FileEntry {
             path: format!("D:/x/{path}"),
@@ -2608,8 +2540,8 @@ mod tests {
 
     fn render_every_layout() -> String {
         // Not left to the absence of a terminal: CLICOLOR_FORCE overrides that, and the verification
-        // protocol in CLAUDE.md tells the reader to export it, so the same shell that ran a manual
-        // comparison would otherwise fail this test with a wall of escape codes
+        // protocol tells the reader to export it, so the same shell that ran a manual comparison
+        // would otherwise fail this test with a wall of escape codes.
         colored::control::set_override(false);
 
         let (sorted, content_info, total) = sample_data();
@@ -2624,9 +2556,9 @@ mod tests {
         let columns = Columns::of(&plain, &total, no_hides, content);
         let width = columns.width(theme);
 
-        // HTML holds the two sections, so every layout is rendered once without a container in it
-        // and once with one. Its section names are longer than it is, since the name column is
-        // measured over them too.
+        // HTML holds the two sections, so every layout is rendered once without a container and
+        // once with one. Its section names are longer than it is, since the name column is measured
+        // over them too.
         let sections = sample_sections();
         let with_nested = vec![Group {name: None, languages: sorted.clone(), hidden: 0,
                 per_language: &content_info, nested: &sections, files: HashMap::new(),
@@ -2715,8 +2647,8 @@ mod tests {
         config.view.hidden.bar = true;
         cases.push(("overview, bar hidden".to_owned(), format_overview_lines(&sorted, &content_info, &total, &config)));
 
-        // The same data with a second axis through it. Every layout groups, and the total under them
-        // is the same total, which is what makes the two halves of this file comparable by eye.
+        // The same data with a second axis through it, and the same total under it, which is what
+        // makes the two halves of the golden comparable by eye.
         let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
         let modules = sample_modules();
         let groups = groups_from(&modules, &config);
@@ -2750,9 +2682,8 @@ mod tests {
                 format_table_lines(theme, &groups, &total, true, &[],
                         ViewSettings { sort_by: SortCriterion::Name, ..shown })));
 
-        // The rows of the matrix are the languages of the whole run, and each of them is three
-        // physical rows, so the second case is the one where a module does not have the language
-        // at all and only the middle of the three carries a dash
+        // The second case is the one where a module does not have the language at all and only the
+        // middle of its three physical rows carries a dash.
         config.view.sort_by = SortCriterion::Lines;
         let groups = groups_from(&modules, &config);
         cases.push(("modules, matrix".to_owned(),
@@ -2762,8 +2693,7 @@ mod tests {
         cases.push(("modules, matrix, no total".to_owned(),
                 format_matrix_lines(theme, &groups, &sorted[..1], &total, false, content)));
 
-        // What '--diff' prints in place of everything above. The dates are fixed, being the one part
-        // of the heading that a clock would otherwise write.
+        // The dates are fixed, being the one part of the heading a clock would otherwise write.
         const EARLIER : &str = "2026-07-30T14:22:07+03:00";
         const LATER   : &str = "2026-08-06T09:41:00+03:00";
 
@@ -2787,9 +2717,8 @@ mod tests {
         cases.push(("comparison, boxed".to_owned(),
                 headed(format_boxed_comparison_lines(theme, &rows, ViewSettings::of(&config)), &before, &now)));
 
-        // A comparison obeys the column names too. Its '%' cells are percentages of the change, so
-        // 'percentages' takes them and leaves the absolute move, and every change follows its own
-        // figure out rather than being left beside a column that is gone.
+        // A comparison obeys the column names too: 'percentages' takes the shares of the change and
+        // leaves the absolute move, and every change follows its own figure out.
         let trimmed = crate::config_manager::Hidden { files: true, size: true, percentages: true,
                 ..crate::config_manager::Hidden::default() };
         cases.push(("comparison, columns hidden".to_owned(),
@@ -2823,11 +2752,9 @@ mod tests {
                 &create_compared_rows(Some(&pairs), &before.result, &now.result, &config),
                 ViewSettings::of(&config)), &before, &now)));
 
-        // The two models, over data that tells them apart. Every one of the nine classes is in
-        // play, so each model answers differently in every column and a block handed the wrong one,
-        // or ignoring it and folding the default, cannot pass. The dataset is hand counted and the
-        // arithmetic is written out beside it, since these are the only cases here whose numbers
-        // are the subject rather than the alignment.
+        // The two models, over data that tells them apart: every one of the nine classes is in play,
+        // so a block handed the wrong model, or folding the default, cannot pass. The counts are
+        // hand worked out, being the only cases here whose numbers are the subject.
         //
         // Rust: 100 + 7 + 9 + 40 + 20 + 3 + 25 + 2 + 1 = 207 lines.
         //   content  107 code (100 + 7), 49 comments (9 + 40), 51 extra (20 + 3 + 25 + 2 + 1)
@@ -2903,10 +2830,9 @@ mod tests {
         assert_eq!(arrow_at("a "), arrow_at(&(LIST_INDENT.to_owned() + "D")));
     }
 
-    // Every language of the golden's data is in one module, so its keyword marks would come out the
-    // same whether each module is measured against its own earlier counts or against every module's
-    // added up. This is the case that tells the two apart: 'api' grew by ten and 'web' did not move,
-    // and against the sum of thirty two neither would read as either.
+    // The golden's data cannot tell the two apart, its languages all sitting in one module. Here
+    // 'api' grew by ten and 'web' did not move, and against the sum of thirty two neither of them
+    // would read as either.
     #[test]
     fn a_keyword_under_a_comparison_is_marked_against_the_module_it_is_in() {
         colored::control::set_override(false);
@@ -2989,8 +2915,7 @@ mod tests {
             config
         };
 
-        // Every language keeps its own biggest two, whatever the languages beside it hold: the two
-        // HTML files are both shown and the three Python ones lose their smallest
+        // Every language keeps its own biggest two, whatever the languages beside it hold
         let one_module = || vec![of_module(None, &["HTML", "Python", "Rust"])];
         let together = of_modules(one_module());
         let two = find_files_to_show(&together, &config_of(Some(config_manager::ByFile::Capped(2)), None));
@@ -3027,7 +2952,7 @@ mod tests {
         }
     }
 
-    // What each language of one module shows and what it left out, by language name
+    // (language, files shown, files left out), ordered by language name
     fn sorted_rows<'a>(of_module: &FileRowsOfModule<'a>) -> Vec<(&'a str, usize, usize)> {
         let mut rows = of_module.iter().map(|(language, files)|
                 (*language, files.shown.len(), files.hidden)).collect::<Vec<_>>();
@@ -3040,12 +2965,10 @@ mod tests {
                 .map(|(path, _)| path.rsplit('/').next().unwrap().to_owned()).collect()
     }
 
-    // The header that carries the sort marker arrives already painted, so its bytes are several
-    // times what it draws. Every width of a frame has to be measured with the escapes skipped, and
-    // the one subtraction that was not asked the allocator for nine exabytes. The golden cannot see
-    // this: it turns colour off, and without escapes the two counts differ by two rather than by
-    // thirty. The escapes are written by hand here for the same reason, so that nothing has to touch
-    // the colour override that every other test in this file depends on.
+    // The header carrying the sort marker arrives already painted, so its bytes are several times
+    // what it draws, and the one width that was measured off the bytes asked the allocator for nine
+    // exabytes. The golden cannot see this, since it turns color off; the escapes are written by
+    // hand here so that nothing has to touch the override every other test in this file depends on.
     #[test]
     fn a_header_that_arrives_painted_is_measured_by_what_it_draws() {
         let theme = Theme::default();
@@ -3066,8 +2989,6 @@ mod tests {
                 "the frame is not square once a header carries escapes: {widths:?}");
     }
 
-    // The row shows what is left of the path under the target it was found in, since the target is
-    // the one part of it the reader already knows
     #[test]
     fn a_file_row_drops_the_target_it_was_found_under() {
         let shortened = |path: &str, targets: &[mezura_core::Target]|
@@ -3081,8 +3002,8 @@ mod tests {
         // And a path nothing matches at all keeps its name, which is all that is certainly its own
         assert_eq!("elsewhere.rs", shortened("D:/other/elsewhere.rs", &targets));
 
-        // A glob is one target per file it matched, so without the directory they share every row
-        // would read 'main.rs' and two of them would be the same row twice
+        // A glob is one target per file it matched, so without the directory they share both rows
+        // would read 'main.rs'
         let matched = [mezura_core::Target::of("D:/x/api/main.rs"), mezura_core::Target::of("D:/x/web/main.rs")];
         assert_eq!("api/main.rs", shortened("D:/x/api/main.rs", &matched));
         assert_eq!("web/main.rs", shortened("D:/x/web/main.rs", &matched));
@@ -3091,8 +3012,6 @@ mod tests {
         assert_eq!("stray.rs", shortened("D:/xyz/stray.rs", &matched));
     }
 
-    // A column as wide as the deepest path in a large repository is a column nothing else fits in,
-    // so what is too wide loses whole directories out of its middle
     #[test]
     fn a_path_too_wide_for_its_column_loses_whole_directories_and_never_a_name() {
         let targets = [mezura_core::Target::of("D:/x")];
@@ -3118,7 +3037,6 @@ mod tests {
         }
     }
 
-    // The one block whose row count is not the language count
     #[test]
     fn the_nested_languages_of_a_container_survive_every_layout() {
         colored::control::set_override(false);
@@ -3163,12 +3081,10 @@ mod tests {
         // files hold that section, and the shell is in all of them
         assert_eq!(whole.files, sections[0].1.files);
 
-        // A document holding sections larger than their container must not take the run down.
-        // Built by hand and not through the helper, whose whole job is to refuse counts that no
-        // file could have produced: this one is exactly such a document. Its lines are the
-        // container's and its classes are nothing, which is the shape that tells a shell taking
-        // the two apart from one keeping them together: subtracting them separately leaves every
-        // class of the container behind a line count of zero.
+        // A document holding sections larger than their container must not take the run down. Built
+        // by hand and not through the helper, whose job is to refuse counts no file could have
+        // produced. Its lines are the container's and its classes are nothing, which is the shape
+        // that tells a shell subtracting the two apart from one keeping them together.
         let broken = hashmap!["HTML".to_owned() => hashmap![
                 "JavaScript".to_owned() => Stats::new(9, 99999, 9999, mezura_core::LineClasses::default(),
                         hashmap![])]];
@@ -3184,9 +3100,8 @@ mod tests {
     }
 
     // The golden hands the blocks rows it built itself, so it says nothing about which rows the real
-    // entry point decides to build. That is what this holds: whether the modules are shown at all is
-    // decided when the comparison is assembled, and both answers have to survive every layout and
-    // every '--top'.
+    // entry point builds. Whether the modules are shown at all is decided when the comparison is
+    // assembled, and both answers have to survive every layout and every '--top'.
     #[test]
     fn a_comparison_survives_every_layout_whether_or_not_the_modules_agree() {
         colored::control::set_override(false);
@@ -3194,7 +3109,7 @@ mod tests {
         let earlier = earlier_modules();
         for layout in [Layout::List, Layout::Table, Layout::Boxed, Layout::Matrix] {
             // One past the five languages of the sample, so the boundary where nothing is hidden is
-            // walked as well as the ones where almost everything is
+            // walked too
             for top in 1..=6 {
                 let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
                 config.view.layout = layout;
@@ -3205,16 +3120,16 @@ mod tests {
                         reading_of("older.json", "2026-07-30T14:22:07+03:00", earlier_modules()), now(), &config, Vec::new());
                 let differing = crate::diff::Comparison::of(
                         reading_of("older.json", "2026-07-30T14:22:07+03:00", without_modules(&earlier)), now(), &config, Vec::new());
-                // Through the real entry point, which is where the routing decision now lives
+                // Through the real entry point, where the routing decision is made
                 crate::present::present(&agreeing.subject.result.clone(), Some(&agreeing), &config);
                 crate::present::present(&differing.subject.result.clone(), Some(&differing), &config);
             }
         }
     }
 
-    // The counting has its own golden in tests/stats_golden.rs; this one is the presentation. What
-    // is locked is the shape: alignment, widths, the wrapping of the keyword rows, the folding into
-    // "others" and the apportionment of the bar. Color is not, being turned off above.
+    // The presentation golden; the counting has its own in tests/stats_golden.rs. What is locked is
+    // alignment, widths, the wrapping of the keyword rows, the folding into "others" and the
+    // apportionment of the bar. Color is not, being turned off above.
     #[test]
     fn every_layout_matches_the_golden_file() {
         let golden = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join("layouts.golden");
@@ -3230,10 +3145,9 @@ mod tests {
                 "the printed layouts changed. Read the diff, and if every difference is intended, \
                  regenerate with MEZURA_UPDATE_GOLDEN=1 cargo test");
     }
-    // The three read a different field of one map into the slot its language name occupies, and
-    // that is the whole of what they do: the arithmetic on the figures is 'render::percentages' and
-    // is asserted there. Each language is given three figures that would rank it differently, so a
-    // function reading the wrong field, or filling by the map's own order, cannot pass.
+    // The arithmetic is 'render::percentages' and is asserted there; what is left is which field
+    // lands in which slot. Each language is given three figures that would rank it differently, so
+    // a function reading the wrong field, or filling by the map's own order, cannot pass.
     #[test]
     fn each_overview_row_reads_its_own_field_into_the_slot_of_its_language() {
         let content = hashmap!(
@@ -3272,7 +3186,7 @@ mod tests {
     }
 
     #[test]
-    fn test_retain_most_relevant_and_add_others_field_for_rest() {
+    fn the_languages_past_the_cut_are_folded_into_one_others_row() {
         let sorted_language_names = vec!["a".to_owned(), "b".to_owned(), "c".to_owned(), "d".to_owned(), "e".to_owned()];
         let per_language = hashmap![
             "a".to_owned() => crate::test_support::plain_stats_of(10, 60000, 1000, 800, 0, hashmap![]),
@@ -3286,8 +3200,7 @@ mod tests {
         let (folded_names, folded_per_language) = fold_rest_into_others(
                 &sorted_language_names, &per_language, &total, None);
 
-        // The caller's own data is untouched, so the same result can be printed again or handed to
-        // a second consumer. Folding into "others" produces a separate view and nothing more.
+        // The caller's own data is untouched, the fold producing a separate view
         assert_eq!(5, sorted_language_names.len());
         assert_eq!(5, per_language.len());
         assert_eq!(vec!["a".to_owned(), "b".to_owned(), "c".to_owned(), "others".to_owned()], folded_names);
@@ -3296,10 +3209,9 @@ mod tests {
             "a".to_owned() => crate::test_support::plain_stats_of(10, 60000, 1000, 800, 0, hashmap![]),
             "b".to_owned() => crate::test_support::plain_stats_of(9, 50000, 900, 700, 0, hashmap![]),
             "c".to_owned() => crate::test_support::plain_stats_of(8, 40000, 800, 600, 0, hashmap![]),
-            // The leftovers carry the files, the bytes and the classes of what was folded away as
-            // well as the lines, so the overview's shares are shares of the whole run in all three
-            // of its bars, and the row's own columns are the ones its languages had: 'd' and 'e'
-            // held 500 and 400 lines of code between their 1300
+            // The leftovers carry the files, the bytes and the classes as well as the lines, so all
+            // three bars are shares of the whole run: 'd' and 'e' held 500 and 400 lines of code
+            // between their 1300
             "others".to_owned() => crate::test_support::plain_stats_of(13, 50000, 1300, 900, 0, hashmap![])
             ], folded_per_language);
 
@@ -3309,8 +3221,6 @@ mod tests {
         assert_eq!(total.bytes, Stats::total_of(&folded_per_language).bytes);
     }
 
-    // What the 'modified:' tag reports: the directories beside the scope, and never the keywords,
-    // which move nothing the log records
     #[test]
     fn a_changed_setting_is_tagged_and_a_keyword_setting_never_is() {
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
@@ -3327,9 +3237,8 @@ mod tests {
         assert!(find_settings_changed_since(&same, &config, &[]).is_empty());
         assert!(format_modified_tag(&find_settings_changed_since(&same, &config, &[])).is_empty());
 
-        // One that differs is named, and the names are the ones the reader can look up. The
-        // counting model is not one of them: the entry records every class of line, so it is
-        // folded by the model on screen whichever one it was written under.
+        // The counting model is not one of the names: the entry records every class of line, so it
+        // is folded by the model on screen whichever one it was written under.
         config.view.counting = CountingModel::Region;
         config.engine.no_gitignore = true;
         let changed = find_settings_changed_since(&same, &config, &[]);
@@ -3352,7 +3261,7 @@ mod tests {
     }
 
     #[test]
-    fn test_time_split_from_minutes() {
+    fn a_span_of_minutes_is_split_into_days_hours_and_minutes() {
         assert_eq!((0,0,0),split_minutes_to_D_H_M(0));
         assert_eq!((0,0,59),split_minutes_to_D_H_M(59));
         assert_eq!((0,1,0),split_minutes_to_D_H_M(60));

@@ -156,7 +156,6 @@ mod tests {
         assert_eq!(&Carried::Nothing, carried[1]);
         assert_eq!(&Carried::Comment { opener: "/*".to_owned(), depth: 1, since_line: 2,
                 ends_on_this_line: false }, carried[2]);
-        // the closing line still carries the comment, and says that it ends here
         assert_eq!(&Carried::Comment { opener: "/*".to_owned(), depth: 1, since_line: 2,
                 ends_on_this_line: true }, carried[3]);
         assert_eq!(&Carried::Nothing, carried[4]);
@@ -166,7 +165,6 @@ mod tests {
 
         assert_eq!(LineClass::BlankInComment, explained.lines[2].class);
         assert_eq!(LineClass::StringContent, explained.lines[5].class);
-        // nothing in this file is read by another language
         assert!(explained.lines.iter().all(|line| line.read_as.is_none()));
     }
 
@@ -198,8 +196,6 @@ mod tests {
         assert_eq!(vec![(0, 1, crate::SpanKind::Code)], spans(6));
     }
 
-    // The reason the provenance bit exists: a line that ends the carried comment and opens a new
-    // one of the same symbol. Without it, every following line kept naming the first opener.
     #[test]
     fn a_line_that_ends_a_comment_and_opens_the_same_pair_moves_the_opening_line() {
         let explained = explain_in_own_dir("mezura-explain-reopen", "a.rs",
@@ -208,7 +204,6 @@ mod tests {
         let carried = explained.lines.iter().map(|line| &line.carried).collect::<Vec<_>>();
         assert_eq!(&Carried::Comment { opener: "/*".to_owned(), depth: 1, since_line: 1,
                 ends_on_this_line: true }, carried[2]);
-        // the next line names the reopening line, not the first opener
         assert_eq!(&Carried::Comment { opener: "/*".to_owned(), depth: 1, since_line: 3,
                 ends_on_this_line: false }, carried[3]);
         // and the bare '*/ /*' shape, with nothing between the closer and the opener, moves it too
@@ -227,10 +222,8 @@ mod tests {
 
         let read_as = explained.lines.iter()
                 .map(|line| line.read_as.as_deref()).collect::<Vec<_>>();
-        // the tag lines stay with the shell, the section's lines say who read them
         assert_eq!(vec![None, None, Some("CSS"), Some("CSS"), None], read_as);
         assert_eq!(LineClass::WordsInComment, explained.lines[2].class);
-        // and the carried answers use the section language's own symbols
         assert_eq!(5, explained.classes.calculate_lines());
     }
 

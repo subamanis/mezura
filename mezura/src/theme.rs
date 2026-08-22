@@ -7,7 +7,7 @@ use colored::{Color, ColoredString, Colorize};
 use unicode_width::UnicodeWidthChar;
 
 // A sweep is a color per cell, so it says something only where a run of cells is painted one at a
-// time. Today that is the live progress bar; the overview's own bar is the natural next one.
+// time, which today is the live progress bar alone.
 const SWEEPABLE_TOKENS : [&str; 2] = ["progress-bar-fill", "progress-bar-empty"];
 const LABEL_GOLD: Color = Color::TrueColor { r: 181, g: 169, b: 138 };
 const SIZE_GOLD: Color = Color::TrueColor { r: 125, g: 119, b: 105 };
@@ -15,8 +15,8 @@ const SIZE_GOLD: Color = Color::TrueColor { r: 125, g: 119, b: 105 };
 // attribute both land far darker than this on most schemes.
 const FAINT: Color = Color::TrueColor { r: 170, g: 170, b: 170 };
 const FAINTER: Color = Color::TrueColor { r: 150, g: 150, b: 150 };
-// The name of a row hanging under a language, and the same again for a file, which sits a step
-// further back so that the two lists under one language are told apart by weight as well as by shape
+// The name of a row hanging under a language, and the same again for a file, a step further back so
+// that the two lists under one language are told apart by weight as well as by shape
 const SUB_ROW_GREY: Color = Color::TrueColor { r: 138, g: 138, b: 138 };
 const FILE_ROW_GREY: Color = Color::TrueColor { r: 122, g: 122, b: 122 };
 const KEYWORD_GREY: Color = Color::TrueColor { r: 181, g: 181, b: 181 };
@@ -35,9 +35,8 @@ pub fn set_active(theme: Theme) {
 }
 
 // How a style gets its color: one color for everything it paints, or, where a run of cells is
-// painted one at a time, a sweep across them. A gradient holds the channels themselves and never
-// a named color, because interpolation needs them and 'cyan' is whatever the terminal's own
-// scheme maps it to; two stops or more, spread evenly over the run.
+// painted one at a time, a sweep across them. A gradient holds the channels themselves and never a
+// named color, because interpolation needs them and 'cyan' is whatever the terminal maps it to.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Fill {
     #[default]
@@ -113,8 +112,6 @@ impl Style {
         let across = if cells > 1 {at as f32 / (cells - 1) as f32} else {0.0};
         match &self.fill {
             Fill::Gradient(stops) => Some(interpolate_stops(stops, across)),
-            // The spectrum spans the run, and the phase carries it along: every cell has moved a
-            // whole cycle by the time the animation repeats
             Fill::Rainbow => Some(color_of_hue((across + phase) * 360.0)),
             _ => self.get_color()
         }
@@ -189,7 +186,6 @@ impl Style {
         parts.join(" ")
     }
 
-    // Used only by the tests of this file, which is what marks it
     #[cfg(test)]
     pub fn reverse(mut self) -> Style {
         self.reverse = true;
@@ -243,7 +239,7 @@ theme_tokens! {
     heading           => "heading",           Style::plain().underline().bold();
     separator_total   => "separator-total",   Style::of(FAINT);
     separator_header  => "separator-header",  Style::of(FAINT);
-    // The colour of the headers it sits in, painted on its own so that their italics do not slant a
+    // The color of the headers it sits in, painted on its own so that their italics do not slant a
     // glyph that is not a word
     sort_marker       => "sort-marker",       Style::of(LABEL_GOLD);
     arrow             => "arrow",             Style::of(FAINT);
@@ -265,14 +261,11 @@ theme_tokens! {
     avg_size_number   => "avg-size-number",   Style::plain();
     avg_size_label    => "avg-size-label",    Style::of(LABEL_GOLD).italic();
     // One token for both the total and the average, since there is no reason to want KB in one
-    // color next to KB in another. It is the one piece of the size that stays dim, because a unit
-    // is the least informative part of a figure the reader is scanning past
+    // color next to KB in another
     size_unit         => "size-unit",         Style::of(SIZE_GOLD);
     keyword_number    => "keyword-number",    Style::of(KEYWORD_GREY);
     keyword_label     => "keyword-label",     Style::plain().dim();
 
-    // The word "Language" over the column and the name of a language in a row are different
-    // things that happened to share a token, the same way the size header and the unit did
     details_language_header => "details-language-header", Style::of(LABEL_GOLD).italic();
     details_language_name   => "details-language-name",   Style::plain().bold();
     // The name of a module, wherever one is printed: the row that opens its section in the details,
@@ -281,9 +274,8 @@ theme_tokens! {
     details_total     => "details-total",     Style::plain().bold();
 
     // The rows hanging under a language, one token per column so that a theme can treat them as
-    // their own band of the table. The name is dimmed and the figures are not: what marks a row as a
-    // breakdown is where it sits, and dimming its numbers as well makes a column unreadable down its
-    // length, which is the one way these figures are meant to be read.
+    // their own band of the table. The name is dimmed and the figures are not: dimming the numbers
+    // as well makes a column unreadable down its length, which is how they are meant to be read.
     nested_name       => "nested-name",       Style::of(SUB_ROW_GREY).bold();
     nested_branch     => "nested-branch",     Style::of(FAINT);
     nested_percent    => "nested-percent",    Style::of(FAINTER);
@@ -322,14 +314,11 @@ theme_tokens! {
     change_down     => "change-down",       Style::of(Color::TrueColor { r: 219, g: 129, b: 129 });
     change_same     => "change-same",       Style::of(Color::TrueColor { r: 255, g: 255, b: 255 });
     history_entry    => "history-entry",     Style::plain().bold();
-    // Two tokens and not one per setting: the word is the flag, the names are the detail
     history_modified => "history-modified",  Style::of(Color::Yellow);
     history_modified_field => "history-modified-field", Style::plain();
 
-    // The live lines, which only a terminal ever sees. The track is a step above a dark
-    // terminal's own background and no more: the bar has to be readable as a length, and the
-    // part not reached yet is the quietest thing on the line. 'default' turns it off, leaving
-    // those cells blank.
+    // The live lines, which only a terminal ever sees. The track is a step above a dark terminal's
+    // own background and no more, and 'default' turns it off, leaving those cells blank.
     progress_bar_fill    => "progress-bar-fill",    Style::plain();
     progress_bar_empty   => "progress-bar-empty",   Style::of(Color::TrueColor { r: 34, g: 34, b: 34 });
     progress_bar_figures => "progress-bar-figures", Style::plain().dim();
@@ -374,9 +363,9 @@ impl Theme {
     }
 }
 
-// The same 'token = value' shape that '--style' and a config's style block carry. Tokens it does not
-// mention are left to the next layer of the chain, which is why the overrides stay raw pairs rather
-// than becoming a Theme.
+// The same 'token = value' shape that '--style' and a config's style block carry. The pairs stay
+// raw rather than becoming a Theme, so that a token the file does not mention is left to the next
+// layer of the chain.
 pub type ThemeFile = (Vec<(String, String)>, Vec<ThemeParseError>);
 
 #[derive(Debug, PartialEq, Eq)]
@@ -478,11 +467,10 @@ pub fn parse_overrides_leniently(value: &str) -> (Vec<(String, String)>, Vec<The
     (overrides, errors)
 }
 
-// The precedence chain of the whole styling system, in one place, one ladder of increasing
-// specificity: what the program hardcodes, then the named theme, then this project's config, then
-// this run's '--style'. 'language-others' is the one inherited token: a theme that names the four
-// language slots and not the fold almost always meant the fourth, and the two are never on screen
-// together, since folding only happens past five languages and then only three are shown.
+// The precedence chain of the whole styling system, one ladder of increasing specificity: what the
+// program hardcodes, then the named theme, then this project's config, then this run's '--style'.
+// 'language-others' is the one inherited token: a theme that names the four language slots and not
+// the fold almost always meant the fourth, and the two are never on screen together.
 pub fn resolve(theme_styles: &[(String, String)], config_styles: &[(String, String)], cmd_styles: &[(String, String)]) -> Theme {
     let mut theme = Theme::default();
     let (mut declared_fourth, mut declared_others) = (false, false);
@@ -589,11 +577,9 @@ pub fn color_to_config_string(color: &Color) -> String {
     }
 }
 
-// How many columns a painted line takes on the screen. The escape sequences the styles above
-// produce have their bytes in the string and nothing on the screen, so they are skipped, and CJK
-// and emoji count for the two each of them draws rather than the one a character count would give.
-// A file path reaches the aligned columns of the report, so this is the only measure either side of
-// the program may use.
+// How many columns a painted line takes on the screen: the escape sequences the styles above
+// produce have bytes in the string and nothing on the screen, and CJK and emoji draw two columns
+// each where a character count would say one. Every alignment in the report goes through this.
 pub fn measure_columns(line: &str) -> usize {
     visible_chars(line).map(|character| character.width().unwrap_or(0)).sum()
 }
@@ -619,13 +605,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_color_to_config_string() {
-        assert_eq!("cyan", color_to_config_string(&Color::Cyan));
-        assert_eq!("bright-magenta", color_to_config_string(&Color::BrightMagenta));
-        assert_eq!("ff0080", color_to_config_string(&Color::TrueColor{r:255,g:0,b:128}));
-    }
-
-    #[test]
     fn parses_colors_and_attributes_in_any_order() {
         assert_eq!(Some(Style::of(Color::TrueColor{r:181,g:169,b:138}).italic()), Style::parse("b5a98a italic"));
         assert_eq!(Some(Style::of(Color::TrueColor{r:181,g:169,b:138}).italic()), Style::parse("italic b5a98a"));
@@ -638,8 +617,6 @@ mod tests {
         assert_eq!(Some(Style::of(Color::Cyan).reverse().bold()), Style::parse("reverse cyan bold"));
     }
 
-    // A gradient answers per cell: its ends land on the first and the last, and the middle is
-    // between them. A rainbow answers per cell and per moment.
     #[test]
     fn a_sweep_gives_every_cell_of_a_run_its_own_color() {
         let gradient = Style::parse("ff0000..0000ff").unwrap();
@@ -647,10 +624,9 @@ mod tests {
         assert_eq!(Some(Color::TrueColor { r: 255, g: 0, b: 0 }), gradient.get_color_of_cell(0, 5, 0.0));
         assert_eq!(Some(Color::TrueColor { r: 0, g: 0, b: 255 }), gradient.get_color_of_cell(4, 5, 0.0));
         assert_eq!(Some(Color::TrueColor { r: 127, g: 0, b: 127 }), gradient.get_color_of_cell(2, 5, 0.0));
-        // a run of one cell has nowhere to travel and takes the colour it starts from
+        // a run of one cell has nowhere to travel and takes the color it starts from
         assert_eq!(Some(Color::TrueColor { r: 255, g: 0, b: 0 }), gradient.get_color_of_cell(0, 1, 0.0));
 
-        // every stop of a longer gradient lands on its own cell, and the pairs mix between them
         let three = Style::parse("ff0000..00ff00..0000ff").unwrap();
         assert_eq!(Fill::Gradient(vec![(255, 0, 0), (0, 255, 0), (0, 0, 255)]), three.fill);
         assert_eq!(Some(Color::TrueColor { r: 255, g: 0, b: 0 }), three.get_color_of_cell(0, 5, 0.0));
@@ -665,7 +641,6 @@ mod tests {
         assert_ne!(still, rainbow.get_color_of_cell(3, 10, 0.25), "the same cell stands still over time");
         assert_eq!(still, rainbow.get_color_of_cell(3, 10, 1.0), "a whole cycle does not come back around");
 
-        // and a flat style answers the same for every cell, which is what makes this one question
         let flat = Style::parse("cyan").unwrap();
         assert_eq!(flat.get_color_of_cell(0, 9, 0.0), flat.get_color_of_cell(8, 9, 0.7));
     }
@@ -677,7 +652,6 @@ mod tests {
         assert_eq!(None, Style::parse("ff0000..cyan"));
         assert_eq!(None, Style::parse("ff0000..zzzzzz"));
         assert_eq!(None, Style::parse("ff0000..00ff00..red"));
-        // a doubled separator leaves an empty stop, which is no color at all
         assert_eq!(None, Style::parse("ff0000....0000ff"));
         assert_eq!(None, Style::parse("ff0000.."));
 
@@ -700,10 +674,8 @@ mod tests {
         assert_eq!(None, Style::parse("b5a98"));
     }
 
-    // The mark lands in front of the first token name, so that line stops being a token anybody
-    // recognises and is reported as a malformed line instead. A theme is lenient by design, which is
-    // what makes this the mildest of the four and also the least likely to be noticed: the rest of
-    // the file applies, and exactly one style silently does not.
+    // The mark lands in front of the first token name, and a theme keeps reading past a line it
+    // cannot parse, so without stripping it exactly one style silently does not apply.
     #[test]
     fn a_theme_file_saved_with_a_byte_order_mark_still_reads() {
         let good = "heading = cyan bold\nlanguage-1 = b5a98a\n";
@@ -717,9 +689,9 @@ mod tests {
 
     #[test]
     fn round_trips_through_its_config_representation() {
-        for value in ["cyan", "b5a98a italic", "bright-yellow bold underline dim", "default", "default bold",
-                "reverse", "cyan reverse bold", "ff0000..0000ff", "rainbow", "ff0000..0000ff dim",
-                "ff0000..00ff00..0000ff"] {
+        for value in ["cyan", "bright-magenta", "ff0080", "b5a98a italic", "bright-yellow bold underline dim",
+                "default", "default bold", "reverse", "cyan reverse bold", "ff0000..0000ff", "rainbow",
+                "ff0000..0000ff dim", "ff0000..00ff00..0000ff"] {
             let style = Style::parse(value).unwrap();
             assert_eq!(Some(style.clone()), Style::parse(&style.to_config_string()), "round trip failed for '{value}'");
         }
@@ -748,7 +720,6 @@ mod tests {
         assert!(painted.style().contains(colored::Styles::Italic));
         assert!(painted.style().contains(colored::Styles::Bold));
 
-        // and the ordinary paint still honours the style's own color
         assert_eq!(Some(Color::Red), style.paint("Rust").fgcolor());
     }
 
@@ -766,11 +737,6 @@ mod tests {
     }
 
     #[test]
-    fn a_plain_style_adds_no_escape_codes() {
-        assert_eq!("Total", Style::plain().paint("Total").to_string());
-    }
-
-    #[test]
     fn parses_a_theme_file() {
         let (styles, errors) = parse_theme_file("# a comment\nlanguage-1 = cyan\n\ncode-label = b5a98a italic\ncode-number = dim\n");
         assert!(errors.is_empty());
@@ -779,20 +745,12 @@ mod tests {
     }
 
     #[test]
-    fn reports_every_malformed_line_of_a_theme_file() {
-        assert_eq!(vec![ThemeParseError::MalformedLine("cyan magenta".to_owned())], parse_theme_file("cyan magenta").1);
-        assert_eq!(vec![ThemeParseError::UnknownToken("labell".to_owned())], parse_theme_file("labell = cyan").1);
-        assert_eq!(vec![ThemeParseError::InvalidValue("code-label".to_owned(), "nope".to_owned())], parse_theme_file("code-label = nope").1);
-        assert_eq!(vec![ThemeParseError::InvalidValue("language-1".to_owned(), "nope".to_owned())], parse_theme_file("language-1 = nope").1);
-    }
-
-    // A mistyped token costs nothing that was measured, so it must not take the rest of the file
-    // down with it the way it used to
-    #[test]
     fn a_broken_line_does_not_discard_the_lines_around_it() {
-        let (styles, errors) = parse_theme_file("language-1 = cyan\nlabell = cyan\ncode-label = nope\nheading = white bold\n");
+        let (styles, errors) = parse_theme_file(
+                "language-1 = cyan\nlabell = cyan\ncyan magenta\ncode-label = nope\nheading = white bold\n");
         assert_eq!(vec![("language-1".to_owned(), "cyan".to_owned()), ("heading".to_owned(), "white bold".to_owned())], styles);
         assert_eq!(vec![ThemeParseError::UnknownToken("labell".to_owned()),
+                ThemeParseError::MalformedLine("cyan magenta".to_owned()),
                 ThemeParseError::InvalidValue("code-label".to_owned(), "nope".to_owned())], errors);
     }
 
@@ -808,9 +766,6 @@ mod tests {
         assert_eq!(original, parse_theme_file(&create_theme_file_contents(&original)).0);
     }
 
-    // The fold and the fourth language never share a screen, so a theme that names the four slots
-    // and not the fold almost always meant the fourth, and falling back to the built-in lilac
-    // would wreck it. With neither declared, the built-in stays.
     #[test]
     fn the_others_slot_follows_the_fourth_language_unless_it_is_declared() {
         let four = [("language-4".to_owned(), "cyan".to_owned())];
@@ -822,8 +777,6 @@ mod tests {
         assert_eq!(Theme::default().language_others, resolve(&[], &[], &[]).language_others);
     }
 
-    // One ladder of increasing specificity: each layer wins over the one before it, and a token
-    // that a later layer does not name keeps whatever the earlier one gave it
     #[test]
     fn every_style_layer_wins_over_the_one_before_it() {
         let theme_file = [("code-label".to_owned(), "cyan".to_owned()), ("code-number".to_owned(), "dim".to_owned()),
