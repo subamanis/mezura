@@ -53,7 +53,22 @@ pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>,
     }
 
     print_faulty_files_or_ok(&result.faulty_files, config);
+    print_files_left_out(result, config);
     print_detail_hint_if_anything_was_hidden(result, config);
+
+    // Every file found was left out, so a table would be a frame around nothing. Returning keeps
+    // the run out of the log too, for the reason the faulty branch above does: a row of zeros is
+    // read by the next comparison as a collapse and then a recovery.
+    if result.nothing_of_interest_was_counted() {
+        if config.view.prints_text() {
+            eprintln!("{}", super::theme::get_active().warning.paint("Nothing was left to count."));
+            if comparison.is_some() {
+                println!();
+            }
+        }
+        print_comparison_or_empty_document(result, comparison, &datetime_now, config);
+        return;
+    }
 
     // A comparison takes the report's place whole: no report, no history section, no log entry
     if comparison.is_some() || !config.view.prints_text() {
@@ -95,6 +110,30 @@ pub fn print_faulty_files_or_ok(faulty_files: &[FaultyFileDetails], config: &Con
                 eprintln!("-- Error: {} \n   for file: {}\n",f.error_msg,f.path);
             }
         }
+        eprintln!();
+    }
+}
+
+// On the error output and never hidden by '--hide', both for the reason a faulty file is: the
+// figures are lower than the tree, nothing else would say why, and whoever reads the report out of
+// a pipe must not have to parse around it. A JSON run has it under 'scan'.
+fn print_files_left_out(result: &RunResult, config: &Configuration) {
+    if !config.view.prints_text() {
+        return;
+    }
+    let mut said_something = false;
+    for (count, kind, command) in [(result.minified_files, "minified", crate::config_manager::COUNT_MINIFIED),
+            (result.generated_files, "generated", crate::config_manager::COUNT_GENERATED)] {
+        if count == 0 {
+            continue;
+        }
+        let subject = if count == 1 {"file was"} else {"files were"};
+        eprintln!("{}", super::theme::get_active().summary.paint(&format!(
+                "{} {kind} {subject} left out of the counts. Run with '--{command}' to include them.",
+                crate::number_formatter::format_with_separators(count))));
+        said_something = true;
+    }
+    if said_something {
         eprintln!();
     }
 }
@@ -186,18 +225,22 @@ fn determine_log_file_path(config: &Configuration) -> Option<String> {
 mod tests {
     use std::collections::HashMap;
 
-    use mezura_core::{FilesPresent, Performance, Stats, Threads};
+    use mezura_core::{FilesPresent, Performance, Threads};
 
     use super::*;
 
+    // One file counted beside whatever went wrong, because a run where nothing at all was counted
+    // is a different case with a branch of its own, and a fixture must not stand in both
     fn result_with(unreadable: usize, faulty: usize) -> RunResult {
+        let counted = crate::test_support::plain_stats_of(1, 40, 4, 3, 1, HashMap::new());
         RunResult {
-            per_language: HashMap::new(), total: Stats::default(),
+            per_language: HashMap::from([("Rust".to_owned(), counted.clone())]), total: counted,
             modules: Vec::new(), nested_languages: HashMap::new(), targets: Vec::new(),
-            files_present: FilesPresent {total_files: 1, relevant_files: 1, excluded_files: 0},
+            files_present: FilesPresent {total_files: 2 + faulty, relevant_files: 1 + faulty, excluded_files: 0},
             performance: Performance {duration_millis: 0, threads: Threads::new(1, 1)},
             faulty_files: (0..faulty).map(|i| mezura_core::FaultyFileDetails::new(
                     format!("a{i}.rs"), "no".to_owned(), 1)).collect(),
+            minified_files: 0, generated_files: 0,
             unreadable_dirs: (0..unreadable).map(|i| UnreadableDirDetails::new(
                     format!("D:/d{i}"), "Access is denied. (os error 5)".to_owned())).collect()
         }

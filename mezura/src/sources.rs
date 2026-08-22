@@ -140,7 +140,7 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
         mezura_core::RunResult {
             per_language: HashMap::new(), total: mezura_core::Stats::default(), modules: Vec::new(),
             nested_languages: HashMap::new(),
-            faulty_files: Vec::new(), unreadable_dirs: Vec::new(), targets: Vec::new(),
+            faulty_files: Vec::new(), minified_files: 0, generated_files: 0, unreadable_dirs: Vec::new(), targets: Vec::new(),
             files_present: FilesPresent::default(),
             performance: mezura_core::Performance { duration_millis: 0, threads: config.engine.threads.clone() }
         }

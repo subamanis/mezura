@@ -139,6 +139,10 @@ pub struct EngineConfig {
     // Hiding the keywords stops the counting too, since nothing else reads them and the work would
     // be thrown away.
     pub count_keywords: bool,
+    // Off by default, so a bundle is left out of every figure and reported as skipped
+    pub count_minified: bool,
+    // The same, for a file whose head says a tool wrote it
+    pub count_generated: bool,
     // Off by default: one entry per file, where the run otherwise holds one per language
     pub collect_files: bool
 }
@@ -157,6 +161,8 @@ impl Default for EngineConfig {
             should_search_in_dotted: DEF_SEARCH_IN_DOTTED,
             no_gitignore: DEF_NO_GITIGNORE,
             count_keywords: true,
+            count_minified: false,
+            count_generated: false,
             collect_files: false
         }
     }

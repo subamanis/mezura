@@ -61,11 +61,11 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
         Err(_) => return Err(ConfigFileParseError::FileNotFound(file_name.to_owned()))
     })};
 
-    let (mut targets, mut counting, mut should_search_in_dotted, mut threads, mut exclude_dirs,
+    let (mut targets, mut counting, mut should_search_in_dotted, mut count_minified, mut count_generated, mut threads, mut exclude_dirs,
          mut languages_of_interest, mut excluded_languages, mut forced_languages, mut should_show_faulty_files, mut hidden,
          mut no_gitignore, mut theme_name, mut compare_level, mut config_styles, mut bar_thickness,
          mut progress_bar, mut number_separator, mut decimal_separator, mut layout, mut sort_by, mut top_n,
-         mut by_file) = (None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None);
+         mut by_file) = (None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None);
     let mut issues = ConfigFileIssues::default();
     let mut buf = String::with_capacity(150);
 
@@ -143,6 +143,16 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                 match read_bool_value_from_file(&mut reader, &mut buf) {
                     Ok(x) => should_search_in_dotted = x,
                     Err(()) => issues.invalid_fields.push(config_manager::SEARCH_IN_DOTTED)
+                }
+            } else if id == config_manager::COUNT_MINIFIED {
+                match read_bool_value_from_file(&mut reader, &mut buf) {
+                    Ok(x) => count_minified = x,
+                    Err(()) => issues.invalid_fields.push(config_manager::COUNT_MINIFIED)
+                }
+            } else if id == config_manager::COUNT_GENERATED {
+                match read_bool_value_from_file(&mut reader, &mut buf) {
+                    Ok(x) => count_generated = x,
+                    Err(()) => issues.invalid_fields.push(config_manager::COUNT_GENERATED)
                 }
             } else if id == config_manager::HIDE {
                 buf.clear();
@@ -245,7 +255,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
 
     let builder = ConfigurationBuilder {
         targets, exclude_dirs, languages_of_interest, excluded_languages, forced_languages, threads, counting, should_search_in_dotted,
-        should_show_faulty_files, hidden, no_gitignore, theme_name, compare_level, config_styles, bar_thickness,
+        count_minified, count_generated, should_show_faulty_files, hidden, no_gitignore, theme_name, compare_level, config_styles, bar_thickness,
         progress_bar, number_separator, decimal_separator, layout, sort_by, top_n, by_file,
         ..Default::default()
     };
@@ -315,6 +325,14 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
     if let Some(should_search_in_dotted) = &config_builder.should_search_in_dotted {
         writer.write_all(&[b"\n\n===> ",config_manager::SEARCH_IN_DOTTED.as_bytes(),b"\n"].concat())?;
         writer.write_all(if *should_search_in_dotted {b"yes"} else {b"no"})?;
+    }
+    if let Some(count_minified) = &config_builder.count_minified {
+        writer.write_all(&[b"\n\n===> ",config_manager::COUNT_MINIFIED.as_bytes(),b"\n"].concat())?;
+        writer.write_all(if *count_minified {b"yes"} else {b"no"})?;
+    }
+    if let Some(count_generated) = &config_builder.count_generated {
+        writer.write_all(&[b"\n\n===> ",config_manager::COUNT_GENERATED.as_bytes(),b"\n"].concat())?;
+        writer.write_all(if *count_generated {b"yes"} else {b"no"})?;
     }
     if let Some(should_show_faulty_files) = &config_builder.should_show_faulty_files {
         writer.write_all(&[b"\n\n===> ",config_manager::SHOW_FAULTY_FILES.as_bytes(),b"\n"].concat())?;
@@ -512,7 +530,7 @@ mod tests {
     #[test]
     fn test_save_config_file_and_then_parse_it() -> std::io::Result<()> {
         let command = "./ --exclude a,b,c.txt,d.txt, --counting region --threads 1 1 --hide keywords,timing \
-                --force-language m=matlab,.pl=Perl --by-file 12 \
+                --force-language m=matlab,.pl=Perl --by-file 12 --count-minified --count-generated \
                 --style code-number=green,comments-label=magenta bold,arrow=default dim".to_string();
         let config_builder = config_manager::create_config_builder_from_args(&command).unwrap();
 
@@ -528,6 +546,8 @@ mod tests {
         assert_eq!(config_builder.counting, options.counting);
         assert_eq!(config_builder.should_show_faulty_files, options.should_show_faulty_files);
         assert_eq!(config_builder.should_search_in_dotted, options.should_search_in_dotted);
+        assert_eq!(config_builder.count_minified, options.count_minified);
+        assert_eq!(config_builder.count_generated, options.count_generated);
         assert_eq!(config_builder.hidden, options.hidden);
         assert_eq!(config_builder.by_file, options.by_file);
         // A project that answers a contested extension its own way answers it once, in its config

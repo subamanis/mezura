@@ -4,8 +4,8 @@ use mezura_core::{EngineConfig, Language, Languages, ModuleResult, RunResult, St
 use mezura_core::language_file::PriorityRules;
 
 use super::config_manager::{Configuration, Layout, SortCriterion};
-use super::config_manager::{COUNTING, EXCLUDE, EXCLUDE_LANGUAGES, FORCE_LANGUAGE, LANGUAGES,
-        NO_GITIGNORE, SEARCH_IN_DOTTED};
+use super::config_manager::{COUNTING, COUNT_GENERATED, COUNT_MINIFIED, EXCLUDE, EXCLUDE_LANGUAGES,
+        FORCE_LANGUAGE, LANGUAGES, NO_GITIGNORE, SEARCH_IN_DOTTED};
 use super::json_reader::{DocumentError, DocumentWarning, Scope};
 use super::sources::RevisionSide;
 
@@ -481,7 +481,9 @@ pub fn scope_of(engine: &mezura_core::EngineConfig, counting: mezura_core::Count
         counting: counting.name().to_owned(),
         search_in_dotted: engine.should_search_in_dotted,
         gitignore: !engine.no_gitignore,
-        keywords_counted: engine.count_keywords
+        keywords_counted: engine.count_keywords,
+        count_minified: engine.count_minified,
+        count_generated: engine.count_generated
     }
 }
 
@@ -506,6 +508,8 @@ pub fn find_settings_that_differ(baseline: &Scope, subject: &Scope) -> Vec<&'sta
     if baseline.search_in_dotted != subject.search_in_dotted {differ.push(SEARCH_IN_DOTTED)}
     if baseline.gitignore != subject.gitignore {differ.push(NO_GITIGNORE)}
     if baseline.keywords_counted != subject.keywords_counted {differ.push(HIDE_KEYWORDS)}
+    if baseline.count_minified != subject.count_minified {differ.push(COUNT_MINIFIED)}
+    if baseline.count_generated != subject.count_generated {differ.push(COUNT_GENERATED)}
 
     differ
 }
@@ -560,6 +564,14 @@ pub fn resolve_settings(document: &Scope, config: &mut super::config_manager::Co
         config.engine.count_keywords = document.keywords_counted;
         config.view.hidden.keywords = !document.keywords_counted;
         adopted.push(HIDE_KEYWORDS);
+    }
+    if !typed.count_minified && document.count_minified != config.engine.count_minified {
+        config.engine.count_minified = document.count_minified;
+        adopted.push(COUNT_MINIFIED);
+    }
+    if !typed.count_generated && document.count_generated != config.engine.count_generated {
+        config.engine.count_generated = document.count_generated;
+        adopted.push(COUNT_GENERATED);
     }
 
     adopted
@@ -722,7 +734,7 @@ mod tests {
             let per_language = hashmap!["Rust".to_owned() => stats(100, 70, 2)];
             mezura_core::RunResult {
                 total: Stats::total_of(&per_language), per_language, modules, nested_languages: HashMap::new(),
-                faulty_files: Vec::new(), targets: Vec::new(), unreadable_dirs: Vec::new(),
+                faulty_files: Vec::new(), minified_files: 0, generated_files: 0, targets: Vec::new(), unreadable_dirs: Vec::new(),
                 files_present: mezura_core::FilesPresent {total_files: 2, relevant_files: 2, excluded_files: 0},
                 performance: mezura_core::Performance {duration_millis: 0, threads: mezura_core::Threads::new(1, 1)}
             }
@@ -774,7 +786,7 @@ mod tests {
                 unreadable_dirs_count: 0,
                 result: RunResult {
                     total: Stats::total_of(&per_language), per_language, modules, nested_languages: HashMap::new(),
-                    faulty_files: Vec::new(), targets: Vec::new(), unreadable_dirs: Vec::new(),
+                    faulty_files: Vec::new(), minified_files: 0, generated_files: 0, targets: Vec::new(), unreadable_dirs: Vec::new(),
                     files_present: mezura_core::FilesPresent {total_files: 2, relevant_files: 2, excluded_files: 0},
                     performance: mezura_core::Performance {duration_millis: 0, threads: mezura_core::Threads::new(1, 1)}
                 }
@@ -855,7 +867,7 @@ mod tests {
             let per_language = hashmap!["Rust".to_owned() => stats(100, 70, 2)];
             let result = mezura_core::RunResult {
                 total: Stats::total_of(&per_language), per_language, modules: Vec::new(), nested_languages: HashMap::new(),
-                faulty_files: Vec::new(), targets: Vec::new(), unreadable_dirs: Vec::new(),
+                faulty_files: Vec::new(), minified_files: 0, generated_files: 0, targets: Vec::new(), unreadable_dirs: Vec::new(),
                 files_present: mezura_core::FilesPresent {total_files: 2, relevant_files: 2, excluded_files: 0},
                 performance: mezura_core::Performance {duration_millis: 0, threads: mezura_core::Threads::new(1, 1)}
             };
@@ -913,7 +925,7 @@ mod tests {
         let per_language = hashmap!["Rust".to_owned() => stats(100, 70, 2)];
         let result = mezura_core::RunResult {
             total: Stats::total_of(&per_language), per_language, modules: Vec::new(), nested_languages: HashMap::new(),
-            faulty_files: Vec::new(), targets: Vec::new(), unreadable_dirs: Vec::new(),
+            faulty_files: Vec::new(), minified_files: 0, generated_files: 0, targets: Vec::new(), unreadable_dirs: Vec::new(),
             files_present: mezura_core::FilesPresent {total_files: 2, relevant_files: 2, excluded_files: 0},
             performance: mezura_core::Performance {duration_millis: 0, threads: mezura_core::Threads::new(1, 1)}
         };
@@ -964,7 +976,9 @@ mod tests {
             counting: "region".to_owned(),
             search_in_dotted: false,
             gitignore: false,
-            keywords_counted: true
+            keywords_counted: true,
+            count_minified: false,
+            count_generated: false
         };
 
         // Nothing typed: what differs is taken, what agrees is not reported

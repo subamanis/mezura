@@ -18,6 +18,10 @@ pub struct RunResult {
     pub nested_languages: HashMap<String, HashMap<String, Stats>>,
     pub modules: Vec<ModuleResult>,
     pub faulty_files: Vec<FaultyFileDetails>,
+    // Among 'files_present.relevant_files' and in none of the figures above, the way a faulty
+    // file is
+    pub minified_files: usize,
+    pub generated_files: usize,
     pub files_present: FilesPresent,
     pub performance: Performance,
     // The places actually visited: the targets as given, resolved, with every pattern expanded to
@@ -40,6 +44,12 @@ impl RunResult {
     // and a scan that found nothing would answer yes.
     pub fn all_relevant_files_were_faulty(&self) -> bool {
         !self.faulty_files.is_empty() && self.faulty_files.len() == self.files_present.relevant_files
+    }
+
+    // Files were found and no row came out of them, by any mixture of failing to parse and being
+    // left out as minified or generated. A report drawn from this is a table with nothing in it.
+    pub fn nothing_of_interest_was_counted(&self) -> bool {
+        self.files_present.relevant_files > 0 && self.total.files == 0
     }
 
     // Finding no files after failing to open a directory is not "no code here", it is "I could not
@@ -74,6 +84,8 @@ impl RunResult {
                 total: Stats::default()
             }).collect(),
             faulty_files: Vec::new(),
+            minified_files: 0,
+            generated_files: 0,
             files_present,
             performance,
             targets,

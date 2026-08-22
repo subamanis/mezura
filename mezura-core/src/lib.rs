@@ -157,11 +157,15 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
 
     // Written by whichever consumer stops last, read once they have all been joined.
     let counting_ended = Arc::new(AtomicU64::new(0));
+    // Decided by the counting and not by the walk, so they are read after the joins below
+    let minified_files = Arc::new(AtomicUsize::new(0));
+    let generated_files = Arc::new(AtomicUsize::new(0));
     for i in 0..config.threads.consumers() {
         match engine::consumer::start_parser_thread(i, files_injector.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
                 stats_per_module.clone(), nested_per_module.clone(), files_per_module.clone(),
                 language_map_ref.clone(), nested_definitions.clone(), config.clone(),
-                parsing_started_instant, counting_ended.clone(), progress.clone()) {
+                parsing_started_instant, counting_ended.clone(), minified_files.clone(),
+                generated_files.clone(), progress.clone()) {
             Ok(handle) => consumer_handles.push(handle),
             Err(x) => last_refusal = Some(x)
         }
@@ -229,6 +233,8 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
         return Err(RunError::IncompleteRun { worker_panic: worker_panics.join(" | ") });
     }
 
+    let minified_files = minified_files.load(Ordering::Relaxed);
+    let generated_files = generated_files.load(Ordering::Relaxed);
     let relevant_files_num = files_present.relevant_files;
     if relevant_files_num == 0 {
         return Ok(RunResult::of_nothing(files_present,
@@ -281,6 +287,8 @@ pub fn run(config: &EngineConfig, languages: Languages, progress: Option<Arc<Sca
         nested_languages,
         modules: modules_result,
         faulty_files: std::mem::take(&mut faulty_files_ref.lock().unwrap()),
+        minified_files,
+        generated_files,
         files_present,
         performance: Performance { duration_millis: parsing_duration_millis, threads: threads_used },
         targets: targets.to_vec(),
@@ -318,7 +326,11 @@ pub(crate) fn calculate_single_file_stats_or_add_to_injector(config: &EngineConf
         let module = modules.of_target(target);
         if dir_path.is_file() {
             if let Some(lang_name) = language_lookup.of_path_or_shebang(dir_path) {
-                files_injector.push(ParsableFile::new(dir_path.to_path_buf(), lang_name, module));
+                let queued = match targets.was_written_by_hand(dir_path) {
+                    true => ParsableFile::written_by_hand(dir_path.to_path_buf(), lang_name, module),
+                    false => ParsableFile::new(dir_path.to_path_buf(), lang_name, module)
+                };
+                files_injector.push(queued);
                 files_present.total_files += 1;
                 files_present.relevant_files += 1;
                 progress.record_file_found();
@@ -347,7 +359,10 @@ pub(crate) fn make_language_stats(languages: &HashMap<String,Language>, modules:
 pub(crate) struct ParsableFile {
     pub path: PathBuf,
     pub language_name: Arc<str>,
-    pub module: ModuleId
+    pub module: ModuleId,
+    // Named as a target rather than found by the walk, which is what exempts it from every rule
+    // that skips a file: the ignore files, the dotted names, and the two kinds of skipping below
+    pub written_by_hand: bool
 }
 
 impl ParsableFile {
@@ -355,8 +370,13 @@ impl ParsableFile {
         ParsableFile {
             path,
             language_name,
-            module
+            module,
+            written_by_hand: false
         }
+    }
+
+    pub fn written_by_hand(path: PathBuf, language_name: Arc<str>, module: ModuleId) -> Self {
+        ParsableFile { written_by_hand: true, ..ParsableFile::new(path, language_name, module) }
     }
 }
 

@@ -126,7 +126,8 @@ fn format_entry_line(config: &Configuration, datetime_now: &DateTime<Local>, res
 fn format_scope(config: &Configuration, targets: &[Target]) -> String {
     let engine = &config.engine;
     format!("{{\"targets\":{},\"exclude\":{},\"languages\":{},\"excluded_languages\":{},\
-\"forced_languages\":{},\"counting\":\"{}\",\"search_in_dotted\":{},\"gitignore\":{},\"keywords_counted\":{}}}",
+\"forced_languages\":{},\"counting\":\"{}\",\"search_in_dotted\":{},\"gitignore\":{},\"keywords_counted\":{},\
+\"count_minified\":{},\"count_generated\":{}}}",
             format_targets(targets),
             format_strings(&engine.exclude_dirs),
             format_strings(&engine.languages_of_interest),
@@ -135,7 +136,9 @@ fn format_scope(config: &Configuration, targets: &[Target]) -> String {
             config.view.counting.name(),
             engine.should_search_in_dotted,
             !engine.no_gitignore,
-            engine.count_keywords)
+            engine.count_keywords,
+            engine.count_minified,
+            engine.count_generated)
 }
 
 fn format_stats(total: &Stats) -> String {
@@ -242,7 +245,7 @@ mod tests {
 
     fn result_of(total: Stats, modules: Vec<ModuleResult>) -> RunResult {
         RunResult { per_language: HashMap::new(), modules, nested_languages: HashMap::new(), total,
-                faulty_files: Vec::new(),
+                faulty_files: Vec::new(), minified_files: 0, generated_files: 0,
                 files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(),
                 performance: Performance { duration_millis: 0, threads: Threads::new(1, 1) } }
     }

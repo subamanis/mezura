@@ -43,7 +43,9 @@ pub struct Scope {
     pub gitignore: bool,
     // Whether the keywords were counted at all: '--hide keywords' stops the counting, and a map
     // that is empty because nothing measured it must not read as a count of zero
-    pub keywords_counted: bool
+    pub keywords_counted: bool,
+    pub count_minified: bool,
+    pub count_generated: bool
 }
 
 // Kept as text rather than as the library's own warning, whose code is a '&'static str': a document
@@ -159,6 +161,15 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
                 Some(x) => parse_faulty_files(read_array(x, "faulty_files")?)?,
                 None => Vec::new()
             },
+            // Absent from a document of the first builds, which counted every file they read
+            minified_files: match scan.get("files_minified") {
+                Some(_) => read_number(scan, "files_minified", "scan")?,
+                None => 0
+            },
+            generated_files: match scan.get("files_generated") {
+                Some(_) => read_number(scan, "files_generated", "scan")?,
+                None => 0
+            },
             files_present: FilesPresent {
                 total_files: read_number(scan, "files_found", "scan")?,
                 relevant_files: read_number(scan, "files_of_interest", "scan")?,
@@ -189,6 +200,17 @@ pub(crate) fn parse_scope(scope: &Map<String, Value>) -> Result<(Scope, Vec<Targ
         keywords_counted: match scope.get("keywords_counted") {
             Some(x) => x.as_bool().ok_or(DocumentError::WrongType {
                     at: "scope.keywords_counted".to_owned(), wanted: "true or false" })?,
+            None => true
+        },
+        // Absent for the same reason, and those builds counted every file they could read
+        count_minified: match scope.get("count_minified") {
+            Some(x) => x.as_bool().ok_or(DocumentError::WrongType {
+                    at: "scope.count_minified".to_owned(), wanted: "true or false" })?,
+            None => true
+        },
+        count_generated: match scope.get("count_generated") {
+            Some(x) => x.as_bool().ok_or(DocumentError::WrongType {
+                    at: "scope.count_generated".to_owned(), wanted: "true or false" })?,
             None => true
         }
     }, parse_targets(read_list(scope, "targets", "scope")?)?))
@@ -428,6 +450,8 @@ mod tests {
             per_language,
             nested_languages: HashMap::new(),
             faulty_files: vec![FaultyFileDetails::new("D:\\dev\\a \"b\".rs".to_owned(), "stream did not contain valid UTF-8".to_owned(), 412)],
+            minified_files: 0,
+            generated_files: 0,
             files_present: FilesPresent { total_files: 9, relevant_files: 3, excluded_files: 4 },
             performance: Performance { duration_millis: 1180, threads: Threads::new(2, 8) },
             targets: vec![Target::named("backend", "D:/dev/api"), Target::named("backend", "D:/dev/api-v2"),

@@ -39,7 +39,8 @@ pub fn create_document(result: &RunResult, datetime_now: &DateTime<Local>, confi
         format!("  \"generated_at\": \"{}\"", datetime_now.to_rfc3339_opts(SecondsFormat::Secs, false)),
         format!("  \"scope\": {}", create_scope_object(config,&result.targets)),
         format!("  \"scan\": {}", create_scan_object(4, &result.files_present,
-                result.faulty_files.len(), result.unreadable_dirs.len())),
+                result.faulty_files.len(), result.minified_files, result.generated_files,
+                result.unreadable_dirs.len())),
         format!("  \"total\": {}", create_total_object(total, !config.view.hidden.keywords, config.view.counting)),
         format!("  \"languages\": {}", create_languages_array(shown, per_language, nested_languages, &files, config)),
         format!("  \"languages_hidden\": {hidden}"),
@@ -232,7 +233,8 @@ fn create_side_object(reading: &super::diff::Reading) -> String {
     // files looks like a side that shrank, and the triads above cannot say which. Which files those
     // were is a question for a run over that side, not for a comparison of two.
     members.push(format!("    \"scan\": {}", create_scan_object(6, &reading.result.files_present,
-            reading.faulty_files_count, reading.unreadable_dirs_count)));
+            reading.faulty_files_count, reading.result.minified_files, reading.result.generated_files,
+            reading.unreadable_dirs_count)));
     members.push(format!("    \"scope\": {}", indent(&create_scope_object_of(&reading.scope, &reading.result.targets))));
     // Only what the side's own document recorded: what this very process warned about belongs to
     // the comparison and sits at its top level, wherever the run appears in it
@@ -405,6 +407,8 @@ fn create_scope_object(config: &Configuration, targets: &[mezura_core::Target]) 
         format!("    \"search_in_dotted\": {}", config.engine.should_search_in_dotted),
         format!("    \"gitignore\": {}", !config.engine.no_gitignore),
         format!("    \"keywords_counted\": {}", !config.view.hidden.keywords),
+        format!("    \"count_minified\": {}", config.engine.count_minified),
+        format!("    \"count_generated\": {}", config.engine.count_generated),
     ];
 
     format!("{{\n{}\n  }}", members.join(",\n"))
@@ -421,7 +425,8 @@ fn create_scope_object(config: &Configuration, targets: &[mezura_core::Target]) 
 // The counts arrive apart from the lists in the result, because for a side read from a document the
 // lists are only there when that run detailed them, while its scan block counted either way
 fn create_scan_object(indent: usize, files_present: &mezura_core::FilesPresent,
-        faulty_files_count: usize, unreadable_dirs_count: usize) -> String
+        faulty_files_count: usize, minified_files_count: usize, generated_files_count: usize,
+        unreadable_dirs_count: usize) -> String
 {
     let pad = " ".repeat(indent);
     let members = [
@@ -429,6 +434,8 @@ fn create_scan_object(indent: usize, files_present: &mezura_core::FilesPresent,
         format!("{pad}\"files_of_interest\": {}", files_present.relevant_files),
         format!("{pad}\"files_excluded\": {}", files_present.excluded_files),
         format!("{pad}\"files_faulty\": {faulty_files_count}"),
+        format!("{pad}\"files_minified\": {minified_files_count}"),
+        format!("{pad}\"files_generated\": {generated_files_count}"),
         format!("{pad}\"dirs_unreadable\": {unreadable_dirs_count}"),
     ];
 
@@ -789,7 +796,7 @@ mod tests {
             faulty_files: Vec<FaultyFileDetails>, files_present: FilesPresent) -> RunResult
     {
         RunResult {per_language, modules: Vec::new(), nested_languages: HashMap::new(), total, faulty_files,
-                files_present, targets: Vec::new(), unreadable_dirs: Vec::new(),
+                minified_files: 0, generated_files: 0, files_present, targets: Vec::new(), unreadable_dirs: Vec::new(),
                 performance: mezura_core::Performance { duration_millis: 1180, threads: mezura_core::Threads::new(2, 8) }}
     }
 

@@ -10,12 +10,23 @@ use crate::engine::config::Target;
 // absolute validated paths for granted. It never leaves the crate: a caller holds targets as
 // declared, and resolving them is the run's own first step.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub(crate) struct Targets(Vec<Target>);
+pub(crate) struct Targets {
+    resolved: Vec<Target>,
+    // The paths somebody wrote out, which a pattern's matches are not: a file named by hand is
+    // counted whatever it holds, and one the program found obeys every rule the walk obeys.
+    written_by_hand: std::collections::HashSet<String>
+}
+
+impl Targets {
+    pub(crate) fn was_written_by_hand(&self, path: &Path) -> bool {
+        path.to_str().is_some_and(|path| self.written_by_hand.contains(path))
+    }
+}
 
 impl std::ops::Deref for Targets {
     type Target = [Target];
     fn deref(&self) -> &[Target] {
-        &self.0
+        &self.resolved
     }
 }
 
@@ -100,7 +111,11 @@ pub(crate) fn path_comparison_key(path: &str) -> String {
 pub(crate) fn resolve(declared: &[Target], respect_gitignore: bool, search_in_dotted: bool)
 -> Result<Targets, TargetError>
 {
-    expand_patterns(validate_and_absolutize(declared)?, respect_gitignore, search_in_dotted).map(Targets)
+    let prepared = validate_and_absolutize(declared)?;
+    // Taken before the expansion, which is what turns one pattern into paths nobody typed
+    let written_by_hand = prepared.iter().filter(|target| is_valid_path(&target.path))
+            .map(|target| target.path.clone()).collect();
+    Ok(Targets { resolved: expand_patterns(prepared, respect_gitignore, search_in_dotted)?, written_by_hand })
 }
 
 // A target naming nothing is refused; everything else comes back absolute, with two spellings of one
