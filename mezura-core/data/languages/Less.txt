@@ -1,0 +1,18 @@
+Language
+Less
+
+Extensions
+less
+
+String symbols
+" '
+
+Escape character
+\
+
+Comment symbols
+//
+Multi line comment start
+/*
+Multi line comment end
+*/

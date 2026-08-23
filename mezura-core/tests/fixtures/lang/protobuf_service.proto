@@ -1,0 +1,17 @@
+// mezura-expect lines=17 code=8 comments=3 extra=6 messages=1 services=1 enums=1
+syntax = "proto3";
+
+/* a block comment
+   over two lines */
+enum Level {
+  LOW = 0;
+}
+
+message Ping {
+  option deprecated_note = "a // and a /* open nothing here";
+  string note = 1;   // a trailing comment
+}
+
+service Echo {
+  rpc Send (Ping) returns (Ping);
+}

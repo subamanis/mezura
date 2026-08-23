@@ -1,0 +1,34 @@
+Language
+HCL
+
+Extensions
+tf tfvars hcl
+
+String symbols
+"
+
+Escape character
+\
+
+Comment symbols
+# //
+Multi line comment start
+/*
+Multi line comment end
+*/
+
+Keyword
+    NAME
+    resources
+    ALIASES
+    resource
+Keyword
+    NAME
+    variables
+    ALIASES
+    variable
+Keyword
+    NAME
+    outputs
+    ALIASES
+    output

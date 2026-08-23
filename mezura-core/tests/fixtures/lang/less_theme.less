@@ -1,0 +1,12 @@
+// mezura-expect lines=12 code=5 comments=4 extra=3
+@primary: #336699;   // a trailing comment
+
+/* a block comment
+   over two lines */
+.button {
+    color: @primary;
+    content: "a // and a /* open nothing";
+}
+
+// a full line comment
+.button:hover { color: lighten(@primary, 10%); }

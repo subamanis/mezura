@@ -1,0 +1,34 @@
+Language
+Protocol Buffers
+
+Extensions
+proto
+
+String symbols
+" '
+
+Escape character
+\
+
+Comment symbols
+//
+Multi line comment start
+/*
+Multi line comment end
+*/
+
+Keyword
+    NAME
+    messages
+    ALIASES
+    message
+Keyword
+    NAME
+    services
+    ALIASES
+    service
+Keyword
+    NAME
+    enums
+    ALIASES
+    enum

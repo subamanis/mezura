@@ -1,0 +1,34 @@
+Language
+SystemVerilog
+
+Extensions
+sv svh
+
+String symbols
+"
+
+Escape character
+\
+
+Comment symbols
+//
+Multi line comment start
+/*
+Multi line comment end
+*/
+
+Keyword
+    NAME
+    modules
+    ALIASES
+    module
+Keyword
+    NAME
+    classes
+    ALIASES
+    class
+Keyword
+    NAME
+    interfaces
+    ALIASES
+    interface

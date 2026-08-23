@@ -1,0 +1,23 @@
+Language
+Nix
+
+Extensions
+nix
+
+String symbols
+
+Multi line string symbols
+"
+
+Multi line raw string symbols
+''
+
+Escape character
+\
+
+Comment symbols
+#
+Multi line comment start
+/*
+Multi line comment end
+*/

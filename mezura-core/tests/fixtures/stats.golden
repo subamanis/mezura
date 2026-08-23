@@ -1,4 +1,4 @@
-files=71 lines=861 code=461 comments=219
+files=80 lines=997 code=531 comments=247
 
 Ada
   files=1 lines=8 code=5 comments=2
@@ -97,6 +97,14 @@ GraphQL
   files=1 lines=15 code=9 comments=2
   words_in_code=6 string_content=3 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=2 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   enums=1 inputs=0 interfaces=1 types=1
+Groovy
+  files=1 lines=18 code=9 comments=3
+  words_in_code=8 string_content=1 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=4 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
+  classes=1 interfaces=1 traits=1
+HCL
+  files=1 lines=15 code=7 comments=3
+  words_in_code=7 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=3 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
+  outputs=1 resources=1 variables=1
 HLSL
   files=1 lines=12 code=5 comments=3
   words_in_code=5 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=2 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
@@ -132,6 +140,9 @@ Kotlin
   files=1 lines=11 code=6 comments=2
   words_in_code=4 string_content=2 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=1 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   classes=1 interfaces=1
+Less
+  files=1 lines=12 code=5 comments=4
+  words_in_code=5 string_content=0 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=1 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
 Lisp
   files=1 lines=7 code=3 comments=3
   words_in_code=3 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
@@ -152,6 +163,9 @@ Metal
   files=1 lines=8 code=3 comments=3
   words_in_code=3 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=1 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   structs=1
+Nix
+  files=1 lines=15 code=9 comments=3
+  words_in_code=6 string_content=3 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=2 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
 OCaml
   files=1 lines=14 code=6 comments=5
   words_in_code=6 string_content=0 comment_words_beside_code=0 words_in_comment=5 punctuation_in_code=0 punctuation_in_comment=1 blank=2 blank_in_comment=0 blank_in_string=0
@@ -183,6 +197,10 @@ PowerShell
 Prolog
   files=1 lines=9 code=5 comments=3
   words_in_code=5 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
+Protocol Buffers
+  files=1 lines=17 code=8 comments=3
+  words_in_code=8 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=3 punctuation_in_comment=0 blank=3 blank_in_comment=0 blank_in_string=0
+  enums=1 messages=1 services=1
 Python
   files=2 lines=28 code=17 comments=5
   words_in_code=15 string_content=2 comment_words_beside_code=0 words_in_comment=5 punctuation_in_code=0 punctuation_in_comment=0 blank=6 blank_in_comment=0 blank_in_string=0
@@ -225,6 +243,10 @@ Slang
   files=1 lines=10 code=4 comments=3
   words_in_code=4 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=1 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   interfaces=1 structs=1
+Solidity
+  files=1 lines=16 code=6 comments=4
+  words_in_code=6 string_content=0 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=3 punctuation_in_comment=0 blank=3 blank_in_comment=0 blank_in_string=0
+  contracts=1 functions=1 structs=1
 Svelte
   files=1 lines=13 code=7 comments=4
   words_in_code=7 string_content=0 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=0 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
@@ -232,6 +254,10 @@ Swift
   files=1 lines=12 code=6 comments=2
   words_in_code=4 string_content=2 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=2 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   classes=1 structs=1
+SystemVerilog
+  files=1 lines=14 code=9 comments=3
+  words_in_code=9 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=0 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
+  classes=1 interfaces=1 modules=1
 TSX
   files=1 lines=12 code=6 comments=3
   words_in_code=6 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=1 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
@@ -243,6 +269,13 @@ TypeScript
 VHDL
   files=1 lines=12 code=7 comments=4
   words_in_code=7 string_content=0 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
+Verilog
+  files=1 lines=16 code=9 comments=3
+  words_in_code=9 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=0 punctuation_in_comment=0 blank=4 blank_in_comment=0 blank_in_string=0
+  functions=1 modules=1 tasks=1
+Visual Basic
+  files=1 lines=13 code=8 comments=2
+  words_in_code=8 string_content=0 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=0 punctuation_in_comment=0 blank=3 blank_in_comment=0 blank_in_string=0
 Vue
   files=1 lines=17 code=10 comments=4
   words_in_code=10 string_content=0 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=0 punctuation_in_comment=0 blank=3 blank_in_comment=0 blank_in_string=0

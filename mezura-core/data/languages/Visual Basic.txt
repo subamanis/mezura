@@ -1,0 +1,14 @@
+Language
+Visual Basic
+
+Extensions
+vb
+
+String symbols
+"
+
+Escape character
+none
+
+Comment symbols
+'
