@@ -98,6 +98,19 @@ pub fn print_faulty_files_or_ok(faulty_files: &[FaultyFileDetails], config: &Con
     }
 }
 
+// The one place that decides which of the two a comparison is printed as. A run that scanned reaches
+// it from here and a run that only read documents reaches it from main, and a third format would
+// otherwise have to be remembered in both.
+pub fn print_comparison_as_text_or_json(comparison: &super::diff::Comparison,
+        datetime_now: &chrono::DateTime<chrono::Local>, config: &Configuration)
+{
+    if config.view.prints_text() {
+        super::result_printer::print_comparison(comparison, config);
+    } else {
+        super::json_printer::print_comparison_as_json(comparison, datetime_now, config);
+    }
+}
+
 // On the error output and never hidden, for the reason a faulty file is: the figures are lower than
 // the tree and nothing else would say why. A JSON run has it under 'scan'.
 fn print_files_left_out(result: &RunResult, config: &Configuration) {
@@ -149,8 +162,7 @@ fn print_comparison_or_empty_document(result: &RunResult, comparison: Option<&su
 {
     match comparison {
         // The blank line above it is the caller's: only the caller knows what sits there
-        Some(comparison) if config.view.prints_text() => super::result_printer::print_comparison(comparison, config),
-        Some(comparison) => super::json_printer::print_comparison_as_json(comparison, datetime_now, config),
+        Some(comparison) => print_comparison_as_text_or_json(comparison, datetime_now, config),
         None if config.view.prints_text() => (),
         None => super::json_printer::print_as_json(result, datetime_now, config)
     }

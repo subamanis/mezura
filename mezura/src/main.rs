@@ -207,14 +207,12 @@ Your configurations, themes and logs are left alone.")};
                 Ok(comparison) => {
                     if config.view.prints_text() {
                         println!();
-                        crate::result_printer::print_comparison(&comparison, &config);
-                        // The exec time alone, without the parsing figures: those describe one
-                        // scan, and a comparison had up to two
-                        if !config.view.hidden.timing {
-                            println!("\n{}", crate::theme::get_active().footer.paint(&format_exec_time(&instant)));
-                        }
-                    } else {
-                        crate::json_printer::print_comparison_as_json(&comparison, &chrono::Local::now(), &config);
+                    }
+                    crate::present::print_comparison_as_text_or_json(&comparison, &chrono::Local::now(), &config);
+                    // The exec time alone, without the parsing figures: those describe one scan, and
+                    // a comparison had up to two
+                    if config.view.prints_text() && !config.view.hidden.timing {
+                        println!("\n{}", crate::theme::get_active().footer.paint(&format_exec_time(&instant)));
                     }
                     ExitCode::SUCCESS
                 },
