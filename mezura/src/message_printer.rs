@@ -588,15 +588,25 @@ pub const STYLE_HELP  :  &str =
     One or more 'token=style' pairs separated by commas, for example:
     --style code-number=bright-black,code-label=b5a98a italic,heading=white bold underline
 
-    A style is a color and any number of the attributes 'bold', 'italic', 'underline', 'dim' and
-    'reverse', in any order. The color is a hex value, one of the 16 terminal color names, or
-    'default' to leave the terminal's own foreground alone. 'reverse' swaps the text and
-    background colors, so it stands out without picking one.
+    A style is one or two colors and any number of the attributes 'bold', 'italic', 'underline',
+    'dim' and 'reverse', in any order. A color is a hex value, one of the 16 terminal color names,
+    or 'default' to leave that half to the terminal.
+
+    The colors are the one thing the order decides: the first is what the text is painted in and
+    the second what it sits on, so 'details-total=white 223344' is white on a dark blue and
+    'note=default 3a2f1e' puts a background behind text whose color the terminal chooses.
+    'reverse' still swaps whatever the two end up being, which is how a token stands out without
+    naming either.
 
     The cells of the live progress bar take two forms no other token does: hex values separated
     by '..' fill them with an even gradient, and 'rainbow' walks a spectrum along them. A gradient
     needs hex values, since a color name has no shade to interpolate. Every other token takes one
-    color and says so if given either form.
+    color and says so if given either form. Both forms answer per cell of a run, so neither can be
+    the color a span of text sits on: a background is always a single one.
+
+    A background covers the characters it is given and nothing else, so in a table it stops at the
+    text rather than filling the column: the numbers of a column line up on one side and the color
+    behind them ends where each number does.
 
     Every counted quantity has two tokens, one for the figure and one for the word beside it:
 

@@ -31,9 +31,11 @@ Main changes:
       Long paths lose whole directories out of their middle. The JSON document carries the same
       rows under each language, as "by_file".
   -> Every piece of printed text can now be styled, not just the four colors of the overview.
-      74 tokens are exposed, and each takes a color plus any of bold, italic, underline, dim and
-      reverse, in any order. The cells of the live progress bar also take a "hex..hex" gradient
-      or "rainbow". Run "--help --style" for the full list.
+      74 tokens are exposed, and each takes one or two colors plus any of bold, italic, underline,
+      dim and reverse, in any order. Written out, the first color is the text and the second what it
+      sits on, so "heading=black d7c98a" puts the section titles on a band and "note=default 3a2f1e"
+      colors the background alone. The cells of the live progress bar also take a "hex..hex"
+      gradient or "rainbow". Run "--help --style" for the full list.
   -> A comment line carrying no words now counts as extra, the way a lone brace always did: the
       bare "/*" and "*/" of a block written on their own lines, the "*" of a banner line, a lone
       "//" spacer, a decorative "/*----*/". Comment counts drop visibly on trees written in banner

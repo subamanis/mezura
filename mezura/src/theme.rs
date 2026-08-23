@@ -49,6 +49,9 @@ pub enum Fill {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Style {
     pub fill: Fill,
+    // What the cell is painted on, where the fill is what the glyphs are painted in. Never a
+    // gradient: a sweep answers per cell of a run, and a background belongs to one span of text.
+    pub background: Option<Color>,
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
@@ -119,6 +122,9 @@ impl Style {
 
     fn apply_attributes(&self, painted: ColoredString) -> ColoredString {
         let mut painted = painted;
+        if let Some(background) = self.background {
+            painted = painted.on_color(background);
+        }
         if self.bold {
             painted = painted.bold();
         }
@@ -138,11 +144,15 @@ impl Style {
         painted
     }
 
-    // Every attribute is additive and only one color is allowed, so the order of the tokens carries
-    // no meaning and 'code-label = bold' is as valid as 'code-label = b5a98a italic'
+    // Every attribute is additive and the order of the attributes carries no meaning, so
+    // 'code-label = bold' is as valid as 'code-label = b5a98a italic'. The colors are the one thing
+    // that counts: the first is what the glyphs are painted in and the second what they sit on, so
+    // 'total = white 223344' is white on a dark blue band. A gradient is one word with '..' inside
+    // it, which is why two colors can never be read as one sweep. 'default' holds a place without
+    // filling it, so 'default 223344' leaves the text the color the terminal gives it.
     pub fn parse(value: &str) -> Option<Style> {
         let mut style = Style::plain();
-        let mut color_was_given = false;
+        let mut colors_given = 0;
         let mut token_count = 0;
 
         for token in value.split_whitespace() {
@@ -153,19 +163,21 @@ impl Style {
                 "underline" => style.underline = true,
                 "dim" => style.dim = true,
                 "reverse" => style.reverse = true,
-                "default" => {
-                    if color_was_given { return None; }
-                    color_was_given = true;
-                },
+                "default" => colors_given += 1,
                 _ => {
-                    if color_was_given { return None; }
-                    color_was_given = true;
-                    style.fill = parse_fill(token)?;
+                    match colors_given {
+                        0 => style.fill = parse_fill(token)?,
+                        // A sweep answers per cell of a run and a background is one span, so the
+                        // second color is a flat one or the value does not read at all
+                        1 => style.background = Some(parse_single_color(token)?),
+                        _ => return None
+                    }
+                    colors_given += 1;
                 }
             }
         }
 
-        if token_count == 0 { None } else { Some(style) }
+        if token_count == 0 || colors_given > 2 { None } else { Some(style) }
     }
 
     pub fn to_config_string(&self) -> String {
@@ -177,6 +189,10 @@ impl Style {
                     .collect::<Vec<_>>().join(".."),
             Fill::Rainbow => "rainbow".to_owned()
         });
+        // Straight after the fill, since the two are told apart by which comes first
+        if let Some(background) = &self.background {
+            parts.push(color_to_config_string(background));
+        }
         if self.bold { parts.push("bold".to_owned()); }
         if self.italic { parts.push("italic".to_owned()); }
         if self.underline { parts.push("underline".to_owned()); }
@@ -668,10 +684,46 @@ mod tests {
     fn rejects_malformed_styles() {
         assert_eq!(None, Style::parse(""));
         assert_eq!(None, Style::parse("   "));
-        assert_eq!(None, Style::parse("cyan magenta"));
-        assert_eq!(None, Style::parse("default cyan"));
         assert_eq!(None, Style::parse("italic blinking"));
         assert_eq!(None, Style::parse("b5a98"));
+        // A third color has nowhere to go
+        assert_eq!(None, Style::parse("cyan magenta yellow"));
+        assert_eq!(None, Style::parse("cyan magenta default"));
+    }
+
+    #[test]
+    fn the_second_color_of_a_style_is_what_the_text_sits_on() {
+        let on_magenta = Style::parse("cyan magenta").expect("two colors did not read");
+        assert_eq!(Fill::Flat(Color::Cyan), on_magenta.fill);
+        assert_eq!(Some(Color::Magenta), on_magenta.background);
+
+        // The place is held whichever way round it is left empty, so a background can be given
+        // alone and a foreground can be given without one
+        assert_eq!(Style { fill: Fill::Terminal, background: Some(Color::Cyan), ..Style::plain() },
+                Style::parse("default cyan").unwrap());
+        assert_eq!(Style { fill: Fill::Flat(Color::Cyan), background: None, ..Style::plain() },
+                Style::parse("cyan default").unwrap());
+        assert_eq!(None, Style::parse("cyan").unwrap().background);
+
+        // The attributes are still in any order and still say nothing about which color is which
+        let mixed = Style::parse("bold 001122 italic ffeedd").unwrap();
+        assert_eq!((Fill::Flat(Color::TrueColor {r: 0, g: 0x11, b: 0x22}),
+                Some(Color::TrueColor {r: 0xff, g: 0xee, b: 0xdd}), true, true),
+                (mixed.fill, mixed.background, mixed.bold, mixed.italic));
+
+        // A sweep is one word holding '..', which is what keeps it apart from two colors, and it
+        // has no meaning behind a span of text
+        assert_eq!(Fill::Gradient(vec![(0, 0, 0), (255, 255, 255)]),
+                Style::parse("000000..ffffff").unwrap().fill);
+        assert_eq!(None, Style::parse("cyan 000000..ffffff"));
+        assert_eq!(None, Style::parse("cyan rainbow"));
+
+        // And it survives being written out and read back, which is what '--save-theme' does
+        let written = on_magenta.to_config_string();
+        assert_eq!("cyan magenta", written);
+        assert_eq!(on_magenta, Style::parse(&written).unwrap());
+        let alone = Style::parse("default 223344").unwrap();
+        assert_eq!(alone, Style::parse(&alone.to_config_string()).unwrap());
     }
 
     // The mark lands in front of the first token name, and a theme keeps reading past a line it
