@@ -571,6 +571,41 @@ mod tests {
         Ok(())
     }
 
+    // Every flag above is written from a command line, where a flag is either given or not, so a
+    // saved configuration only ever carried 'yes' and the other half of each of those lines was
+    // written by nobody. A file saying 'no' is not the same as a file saying nothing: the first
+    // answers the question and the second leaves it to the default configuration, so a 'no' that
+    // came back as an absent field would quietly hand the answer to another file.
+    #[test]
+    fn a_flag_a_configuration_turns_off_is_still_off_after_being_saved_and_read_again() {
+        let dir = SCRATCH_CONFIG_DIR.to_owned();
+        std::fs::create_dir_all(&dir).unwrap();
+        let turned_off = format!("===> {}\n./\n\n===> {}\nno\n\n===> {}\nno\n\n===> {}\nno\n\n\
+===> {}\nno\n\n===> {}\nno\n\n===> {}\nno\n",
+                config_manager::TARGETS, config_manager::SEARCH_IN_DOTTED, config_manager::COUNT_MINIFIED,
+                config_manager::COUNT_GENERATED, config_manager::SHOW_FAULTY_FILES,
+                config_manager::NO_GITIGNORE, config_manager::NO_IGNORE_FILES);
+        let path = dir.clone() + "flags-turned-off.txt";
+        std::fs::write(&path, turned_off).unwrap();
+
+        let read = super::super::config_files::parse_config_file(Some("flags-turned-off"), Some(dir.clone())).unwrap().0;
+        let off = |builder: &ConfigurationBuilder| [builder.should_search_in_dotted, builder.count_minified,
+                builder.count_generated, builder.should_show_faulty_files, builder.no_gitignore,
+                builder.no_ignore_files];
+        assert_eq!([Some(false); 6], off(&read), "a configuration saying 'no' was not read as a 'no'");
+
+        super::super::config_files::save_existing_commands_from_config_builder_to_file(
+                Some(dir.clone()), "flags-turned-off-again", None, &read).unwrap();
+        let saved = std::fs::read_to_string(dir.clone() + "flags-turned-off-again.txt").unwrap();
+        let again = super::super::config_files::parse_config_file(Some("flags-turned-off-again"), Some(dir.clone())).unwrap().0;
+
+        assert_eq!(6, saved.matches("\nno").count(), "a flag that was off was not written as a 'no':\n{saved}");
+        assert_eq!([Some(false); 6], off(&again), "a 'no' did not survive being written out and read back");
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(dir + "flags-turned-off-again.txt");
+    }
+
     // A configuration that carried its own log would write an entry on every run that loads it, so
     // the section is refused like any other a file cannot carry, and said out loud.
     #[test]

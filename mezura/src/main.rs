@@ -470,7 +470,8 @@ program to read, and both of them go to the output, so only one of the two can b
 
         return Some(if outcome.failed.is_empty() {ExitCode::SUCCESS} else {ExitCode::FAILURE});
     } else if is_present(THEME_EDITOR) {
-        return match crate::theme_files::generate_theme_editor_page() {
+        return match crate::theme_files::generate_theme_editor_page(
+                &crate::paths::PERSISTENT_APP_PATHS.themes_dir, &crate::paths::PERSISTENT_APP_PATHS.data_dir) {
             Ok(path) => {
                 println!("\nTheme editor page generated at:\n{path}");
                 open_in_browser(&path);

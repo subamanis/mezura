@@ -1,5 +1,9 @@
 use std::{fs, io};
 
+// Where the page's list of themes is written into the template. It is a comment in the HTML, so the
+// page still opens in a browser straight from 'docs/' with no themes in it.
+const THEME_LIST_MARKER : &str = "/*MEZURA_SYSTEM_THEMES*/";
+
 // None means no such file, which is a mistake in the name. A theme that exists always loads,
 // carrying whatever its parser could not read.
 pub fn load_theme(name: &str, themes_dir: &str) -> Option<super::theme::ThemeFile> {
@@ -29,7 +33,9 @@ pub fn save_theme_to_file(themes_dir: &str, name: &str, theme: &super::theme::Th
     fs::write(themes_dir.to_owned() + name + ".txt", super::theme::create_theme_file_contents(&styles))
 }
 
-pub fn generate_theme_editor_page() -> io::Result<String> {
+// The two directories are arguments, as they are for the loading and saving above, so that a test
+// can point the whole of this at a folder of its own.
+pub fn generate_theme_editor_page(themes_dir: &str, data_dir: &str) -> io::Result<String> {
     fn js_escape(s: &str) -> String {
         s.replace('\\', "\\\\").replace('"', "\\\"").replace('<', "\\u003c")
     }
@@ -37,7 +43,7 @@ pub fn generate_theme_editor_page() -> io::Result<String> {
     let template = include_str!("../docs/theme-editor/index.html");
 
     let mut entries: Vec<(String, Vec<String>)> = Vec::new();
-    for entry in fs::read_dir(&crate::paths::PERSISTENT_APP_PATHS.themes_dir)?.flatten() {
+    for entry in fs::read_dir(themes_dir)?.flatten() {
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -55,9 +61,9 @@ pub fn generate_theme_editor_page() -> io::Result<String> {
             tokens.iter().map(|t| format!("\"{}\"", js_escape(t))).collect::<Vec<_>>().join(","))
     }).collect::<Vec<_>>().join(",");
 
-    let page = template.replace("/*MEZURA_SYSTEM_THEMES*/", &format!("SYSTEM_THEMES = [{themes_js}];"));
+    let page = template.replace(THEME_LIST_MARKER, &format!("SYSTEM_THEMES = [{themes_js}];"));
 
-    let out_path = crate::paths::PERSISTENT_APP_PATHS.data_dir.clone() + "theme-editor.html";
+    let out_path = data_dir.to_owned() + "theme-editor.html";
     fs::write(&out_path, page)?;
 
     Ok(out_path)
@@ -86,6 +92,33 @@ mod tests {
         assert_eq!(published, template.replace("\r\n", "\n"),
                 "docs/theme-editor/index.html no longer matches the embedded template it publishes. \
                  Regenerate it with MEZURA_UPDATE_PUBLISHED=1 cargo test -p mezura published_theme_editor");
+    }
+
+    // The test above compares the two copies of the page to each other, so a marker renamed in both
+    // of them keeps it green while the editor opens with no themes to pick from. This one runs the
+    // generation instead, over a themes folder of its own so nothing else in this binary can write
+    // into it while it reads.
+    #[test]
+    fn the_editor_page_is_written_with_the_themes_of_the_data_directory_in_it() {
+        let dir = std::env::temp_dir().join("mezura_theme_editor_test");
+        let (themes_dir, data_dir) = (dir.join("themes/"), dir.join("data/"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&themes_dir).unwrap();
+        std::fs::create_dir_all(&data_dir).unwrap();
+        std::fs::write(themes_dir.join("Ocean.txt"), "language-1 = cyan\n").unwrap();
+        std::fs::write(themes_dir.join("Ember.txt"), "language-1 = red\n").unwrap();
+
+        let path = super::generate_theme_editor_page(&themes_dir.to_string_lossy(),
+                &data_dir.to_string_lossy()).unwrap();
+        let page = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(!page.contains(super::THEME_LIST_MARKER),
+                "the marker the theme list replaces is not in the template any more, so the page \
+                 was written without one");
+        assert!(page.contains("SYSTEM_THEMES = [{name:\"Ember\""), "the themes are not in the page");
+        assert!(page.contains("{name:\"Ocean\""), "only one of the two themes reached the page");
+        assert!(page.contains("\"cyan\""), "a theme reached the page without the colors it declares");
     }
 
     #[test]
