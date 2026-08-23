@@ -1,0 +1,11 @@
+Auto-generated config file.
+
+===> targets
+cli=./mezura
+core=./mezura-core
+
+===> exclude
+fixtures
+
+===> compare
+3

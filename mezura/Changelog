@@ -12,6 +12,17 @@ Main changes:
       "===> targets", so edit or re-save old configurations or their targets will be ignored. The
       JSON documents and log entries record the list as "targets" too, so entries written before
       this change cannot be compared against; delete them.
+  -> A project can now carry its own settings, in a ".mezura" folder beside its code holding a
+      "config.txt" and a log of its own. A run looks for it in the directory holding its targets and
+      then in each directory above it, so it applies from anywhere inside the project, and a run
+      using one says which file it read. Write it with the new "--save-local", which saves the flags
+      of the run with its paths relative to the project so the folder survives being cloned, and
+      ignore it for one run with "--no-local". A run naming a configuration with "--load" leaves it
+      out. What the project does not lock is answered by mezura's own defaults and not by your
+      "default.txt" for everything that decides a number, so two people counting one tree get one
+      answer; the theme, the layout and the separators still come from yours. Inside a project
+      "--log" and "--compare" work without a configuration being named, writing to and reading from
+      the log in the folder.
   -> New "--by-file" command: every counted file gets a row of its own under the language it was
       counted as, with its lines split into code, comments and everything else. Without a number it
       prints every file; "--by-file 20" prints the twenty biggest of each language, by whatever
@@ -587,6 +598,9 @@ Dependencies:
       it really occupies: CJK and emoji glyphs are two columns wide each.
 
 Other:
+  -> A run typed with no arguments at all now takes its targets from a configuration file that names
+      them. Before, it always counted the working directory, so a "===> targets" block could only
+      reach a run that typed at least one command beside it.
   -> Updated default styling. The 'list' layout was rebuilt too: each language is a block of three
       rows, with the file count and size above the name, the line breakdown beside it and the
       keywords below. It is about 50 columns narrower than the same block was before.

@@ -7,6 +7,7 @@ use mezura_core::{CountingModel, EngineConfig, Target, Threads};
 use mezura_core::engine::config::{MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE};
 
 use super::message_printer::{Formatted, wrap_message};
+use super::paths::LocalDir;
 use super::{message_printer, suggestions, theme::Theme};
 
 // Printed at startup and by '--version'. Also in mezura/Cargo.toml, and the two move together.
@@ -43,7 +44,9 @@ pub const LOG                :&str   = "log";
 pub const COMPARE_LEVEL     :&str   = "compare";
 pub const SAVE               :&str   = "save";
 pub const SAVE_THEME         :&str   = "save-theme";
+pub const SAVE_LOCAL         :&str   = "save-local";
 pub const LOAD               :&str   = "load";
+pub const NO_LOCAL           :&str   = "no-local";
 pub const HELP               :&str   = "help";
 pub const VERSION            :&str   = "version";
 pub const CHANGELOG          :&str   = "changelog";
@@ -62,6 +65,12 @@ const DEF_COMPARE_LEVEL     : usize   = 1;
 
 // What the always-loaded configuration is called in a message about it, not a file name
 const DEFAULT_CONFIG_LABEL  : &str    = "default";
+
+// The commands whose value decides what is counted, as against how the count is shown. A project's
+// own configuration is answered for these by the program's defaults and never by this machine's
+// saved ones, and a value of theirs this build cannot read stops the run rather than warning.
+const CHANGES_THE_NUMBERS   : [&str; 10] = [TARGETS, EXCLUDE, LANGUAGES, EXCLUDE_LANGUAGES,
+        FORCE_LANGUAGE, COUNTING, SEARCH_IN_DOTTED, COUNT_MINIFIED, COUNT_GENERATED, NO_GITIGNORE];
 
 // Two halves: the engine is handed only what can change a number, the presentation everything,
 // since echoing what the counting was done with is part of its job. The command line and the
@@ -103,6 +112,10 @@ pub struct ViewConfig {
     pub config_name_to_save: Option<String>,
     pub config_name_to_load: Option<String>,
     pub theme_name_to_save: Option<String>,
+    // The project's own folder, when the run is inside one and was not told to ignore it. It
+    // decides where a log with no configuration named goes, and it says whether the project's
+    // settings were the ones this run counted with.
+    pub local_dir: Option<LocalDir>,
     pub bar_thickness: BarThickness,
     pub progress_bar: ProgressBarStyle,
     pub layout: Layout,
@@ -130,6 +143,18 @@ impl ViewConfig {
         self.output == OutputFormat::Text
     }
 
+    // The project whose log this run writes and reads, when the log is a project's own. A run
+    // naming a configuration keeps that configuration's log wherever it was typed, so it has none.
+    // The one place that decides it: the entries of a project's log record their targets relative
+    // to what this answers, and the history section compares them against the same.
+    pub fn find_project_of_the_log(&self) -> Option<&LocalDir> {
+        if self.config_name_to_save.is_some() || self.config_name_to_load.is_some() {
+            return None;
+        }
+
+        self.local_dir.as_ref()
+    }
+
     #[cfg(test)]
     pub fn set_should_show_faulty_files(&mut self, should_show_faulty_files: bool) -> &mut Self {
         self.should_show_faulty_files = should_show_faulty_files;
@@ -155,6 +180,7 @@ impl Default for ViewConfig {
             config_name_to_save: None,
             config_name_to_load: None,
             theme_name_to_save: None,
+            local_dir: None,
             bar_thickness: BarThickness::default(),
             progress_bar: ProgressBarStyle::default(),
             layout: Layout::default(),
@@ -529,7 +555,8 @@ pub enum ArgParsingError {
     AllGlobMatchesIgnored(String),
     MalformedTarget(String),
     ContestedTarget(String, String, String),
-    MeaninglessWithExplain(String)
+    MeaninglessWithExplain(String),
+    ContradictoryCommands(String, String)
 }
 
 impl Formatted for ArgParsingError {
@@ -581,7 +608,8 @@ impl Formatted for ArgParsingError {
             Self::AllGlobMatchesIgnored(p) => wrap_message(&format!("Everything that the pattern '{p}' matched is skipped, because a .gitignore file ignores it, because it is a dotted path, or because it is a link.\nUse the '--no-gitignore' or '--search-in-dotted' commands to include it, or provide the paths explicitly.")).red(),
             Self::MalformedTarget(p) => wrap_message(&format!("'{p}' names a module with no path after it.\nA target is written as '<module>=<path>', and its paths are separated by commas: 'tests=./api/tests,./web/tests'.")).red(),
             Self::ContestedTarget(path, first, second) => wrap_message(&format!("'{path}' is declared both as '{first}' and as '{second}'.\nEvery file belongs to exactly one module, and there is no more specific of the two to decide it.")).red(),
-            Self::MeaninglessWithExplain(command) => wrap_message(&format!("'--{EXPLAIN}' explains one file line by line and '--{command}' belongs to a report over a whole scan, so the two cannot be asked for together.")).red()
+            Self::MeaninglessWithExplain(command) => wrap_message(&format!("'--{EXPLAIN}' explains one file line by line and '--{command}' belongs to a report over a whole scan, so the two cannot be asked for together.")).red(),
+            Self::ContradictoryCommands(one, other) => wrap_message(&format!("'--{one}' and '--{other}' ask for opposite things, so they cannot be given together.")).red()
         }
     }
 }
@@ -609,7 +637,7 @@ impl TypedExplicitlyOnCommandLine {
             no_gitignore, hidden,
             targets: _, targets_source: _, threads: _, should_show_faulty_files: _, theme_name: _,
             log: _, compare_level: _, config_name_to_save: _, config_name_to_load: _,
-            theme_name_to_save: _, bar_thickness: _, progress_bar: _, number_separator: _, decimal_separator: _,
+            theme_name_to_save: _, local_dir: _, bar_thickness: _, progress_bar: _, number_separator: _, decimal_separator: _,
             layout: _, output: _, explain: _, diff_against: _, sort_by: _, top_n: _, by_file: _, styles: _,
             config_styles: _, theme_styles: _, typed_explicitly: _ } = builder;
 
@@ -658,6 +686,9 @@ pub struct ConfigurationBuilder {
     pub config_name_to_save:      Option<String>,
     pub config_name_to_load:      Option<String>,
     pub theme_name_to_save:       Option<String>,
+    // Found by looking around the targets rather than filled by any command, so it is absent from
+    // 'add_missing_fields' and 'has_missing_fields' along with the two names above it
+    pub local_dir:                Option<LocalDir>,
     pub bar_thickness:            Option<BarThickness>,
     pub progress_bar:             Option<ProgressBarStyle>,
     pub number_separator:         Option<NumberSeparator>,
@@ -707,6 +738,34 @@ impl ConfigurationBuilder {
         if self.sort_by.is_none() {self.sort_by = config.sort_by};
         if self.top_n.is_none() {self.top_n = config.top_n};
         if self.by_file.is_none() {self.by_file = config.by_file};
+        self
+    }
+
+    // What is left of a configuration once everything that decides a number is taken out of it
+    pub fn forget_what_changes_the_numbers(mut self) -> Self {
+        // Exhaustive on purpose: a new field of the builder has to be decided here, in or out,
+        // before this compiles again.
+        let ConfigurationBuilder { targets, exclude_dirs, languages_of_interest, excluded_languages,
+            forced_languages, counting, should_search_in_dotted, count_minified, count_generated, no_gitignore,
+            threads: _, should_show_faulty_files: _, hidden: _, theme_name: _, compare_level: _,
+            bar_thickness: _, progress_bar: _, number_separator: _, decimal_separator: _, layout: _,
+            sort_by: _, top_n: _, by_file: _, config_styles: _,
+            // never carried by a configuration file, so never merged out of one either
+            targets_source: _, log: _, config_name_to_save: _, config_name_to_load: _,
+            theme_name_to_save: _, local_dir: _, output: _, explain: _, diff_against: _,
+            styles: _, theme_styles: _, typed_explicitly: _ } = &mut self;
+
+        *targets = None;
+        *exclude_dirs = None;
+        *languages_of_interest = None;
+        *excluded_languages = None;
+        *forced_languages = None;
+        *counting = None;
+        *should_search_in_dotted = None;
+        *count_minified = None;
+        *count_generated = None;
+        *no_gitignore = None;
+
         self
     }
 
@@ -803,6 +862,7 @@ is sorted by lines.", sort_by.name());
                 config_name_to_save: self.config_name_to_save.clone(),
                 config_name_to_load: self.config_name_to_load.clone(),
                 theme_name_to_save: self.theme_name_to_save.clone(),
+                local_dir: self.local_dir.clone(),
                 bar_thickness: self.bar_thickness.unwrap_or_default(),
                 progress_bar: self.progress_bar.unwrap_or_default(),
                 layout: self.layout.unwrap_or_default(),
@@ -822,7 +882,7 @@ is sorted by lines.", sort_by.name());
     }
 }
 
-// An empty line never reaches here: main checks for it first.
+// An empty line is a run that typed nothing at all, which names no target and no command.
 pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError> {
     let config = create_config_builder_from_args(line)?.build();
 
@@ -855,6 +915,23 @@ pub fn format_declared_form(target: &Target) -> String {
     }
 }
 
+// The same form, written the way a project's own configuration reads it back
+pub fn format_declared_form_relative_to(project_dir: &str, target: &Target) -> String {
+    format_declared_form(&Target { module: target.module.clone(),
+            path: format_path_inside(project_dir, &target.path) })
+}
+
+// How a project spells a place inside it: relative to the project, which is what a configuration
+// found there joins its own relative paths to. Written that way by everything a project keeps, its
+// configuration and its log alike, so a folder shared with the code says the same thing on every
+// disk it is cloned to. A path outside the project has no such spelling and is left as it stands.
+pub fn format_path_inside(project_dir: &str, path: &str) -> String {
+    match std::path::Path::new(path).strip_prefix(project_dir) {
+        Ok(inside) => format!("./{}", crate::paths::normalise_separators(&inside.to_string_lossy())),
+        Err(_) => path.to_owned()
+    }
+}
+
 // The run refused the declared targets. A configuration file that supplied them is named as the
 // culprit: otherwise a 'targets' block nobody can see failing sends the reader hunting through the
 // command they typed.
@@ -871,11 +948,13 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     let mut targets = None;
     let mut options = super::args::split_into_command_segments(line).into_iter();
 
+    // The first segment holds the targets when they were written without '--targets'. It is empty
+    // for a line that opens with a command, and for a line that is empty because nothing at all was
+    // typed, and both of those leave the targets for a configuration file to name.
     if line.trim().starts_with("--") {
-        //ignoring the empty first element that is caused by splitting
         options.next();
     } else {
-        match parse_targets(options.next().unwrap()) {
+        match parse_targets(options.next().unwrap_or_default()) {
             Ok(x) => {
                 if !x.is_empty() {
                     targets = Some(x);
@@ -891,8 +970,9 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     let (mut exclude_dirs, mut languages_of_interest, mut excluded_languages, mut forced_languages, mut threads, mut counting,
          mut search_in_dotted, mut count_minified, mut count_generated, mut show_faulty_files, mut config_name_to_save, mut hidden, mut log,
          mut compare_level, mut config_name_to_load, mut no_gitignore, mut theme_name, mut theme_name_to_save, mut styles, mut bar_thickness,
-         mut progress_bar, mut number_separator, mut decimal_separator, mut layout, mut output, mut explain, mut diff_against, mut sort_by, mut top_n, mut by_file)
-         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
+         mut progress_bar, mut number_separator, mut decimal_separator, mut layout, mut output, mut explain, mut diff_against, mut sort_by, mut top_n, mut by_file,
+         mut save_local, mut no_local)
+         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
     for command in options {
         let (command_name, arguments) = match command.find(" ") {
             Some(index) => command.split_at(index),
@@ -1155,19 +1235,43 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 return Err(ArgParsingError::IncorrectCommandArgs(SAVE_THEME.to_owned()))
             }
             theme_name_to_save = Some(name.to_owned());
+        } else if command_name == SAVE_LOCAL {
+            if has_any_args(command) {
+                message_printer::print_help_message_for_command(SAVE_LOCAL);
+                return Err(ArgParsingError::UnexpectedCommandArgs(SAVE_LOCAL.to_owned()))
+            }
+            save_local = Some(true);
+        } else if command_name == NO_LOCAL {
+            if has_any_args(command) {
+                message_printer::print_help_message_for_command(NO_LOCAL);
+                return Err(ArgParsingError::UnexpectedCommandArgs(NO_LOCAL.to_owned()))
+            }
+            no_local = Some(true);
         } else {
             return Err(ArgParsingError::UnrecognisedCommand(command_name.to_owned()));
         }
     }
 
+    if save_local.is_some() && no_local.is_some() {
+        return Err(ArgParsingError::ContradictoryCommands(SAVE_LOCAL.to_owned(), NO_LOCAL.to_owned()));
+    }
+
+    // Looked for around the targets as they were typed, and never around ones a configuration
+    // supplies: the folder belongs to the code this command names, and what its own settings then
+    // say about targets is decided after it has been found.
+    let typed_paths = targets.iter().flatten().map(|target| target.path.clone()).collect::<Vec<_>>();
+    let local_dir = if no_local.is_some() {None} else {crate::paths::find_local_dir(&typed_paths)};
+
+    // '--save-local' counts as a folder of its own, since a run that writes one has somewhere to
+    // keep a log by the time it would be written
     print_warnings_for_commands_that_need_a_loaded_configuration(&config_name_to_save, &config_name_to_load,
-            &log, &compare_level, &diff_against, &by_file);
+            &log, &compare_level, &diff_against, &by_file, local_dir.is_some() || save_local.is_some());
 
     let mut config_builder = ConfigurationBuilder {
         targets, targets_source: None, exclude_dirs, languages_of_interest, excluded_languages, forced_languages, threads, counting,
         should_search_in_dotted: search_in_dotted, count_minified, count_generated,
         should_show_faulty_files: show_faulty_files,
-        hidden, no_gitignore, theme_name, theme_name_to_save, log, compare_level,
+        hidden, no_gitignore, theme_name, theme_name_to_save, local_dir, log, compare_level,
         config_name_to_save, config_name_to_load, styles, bar_thickness, progress_bar, number_separator, decimal_separator, layout, output, explain, diff_against, sort_by, top_n, by_file,
         config_styles: None, theme_styles: None, typed_explicitly: TypedExplicitlyOnCommandLine::default()
     };
@@ -1201,12 +1305,33 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         }
     }
 
+    // Naming a configuration is asking for that one and no other, so the project's settings are not
+    // merged underneath it. What is left, a run that named none, is where the project answers.
+    if let Some(local) = config_builder.local_dir.clone()
+        && config_builder.config_name_to_load.is_none() && config_builder.config_name_to_save.is_none() {
+        let targets_were_missing = config_builder.targets.is_none();
+        if apply_local_configuration(&mut config_builder, &local)? {
+            if let Some(found) = &mut config_builder.local_dir {
+                found.configuration_applied = true;
+            }
+            if targets_were_missing && config_builder.targets.is_some() {
+                targets_config_source = Some(local.get_config_path());
+            }
+        }
+    }
+
+    // Above the default configuration and below the project's own, so that what is written is the
+    // command line over the project's settings and nothing of this machine's
+    if save_local.is_some() {
+        save_the_local_configuration(&mut config_builder, &typed_paths)?;
+    }
+
     if let Some(name) = &config_builder.config_name_to_save {
         if config_builder.targets.is_none() {
             config_builder.targets = Some(create_targets_from_working_dir()?);
         }
 
-        match super::config_files::save_existing_commands_from_config_builder_to_file(None, name, &config_builder) {
+        match super::config_files::save_existing_commands_from_config_builder_to_file(None, name, None, &config_builder) {
             Err(error) => eprintln!("\n{}", wrap_message(&format!(
                     "Configuration '{name}' could not be written to '{}': {error}",
                     crate::paths::PERSISTENT_APP_PATHS.config_dir)).yellow()),
@@ -1218,7 +1343,20 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         match super::config_files::parse_config_file(None, None) {
             Ok((default_config, issues)) => {
                 print_config_file_warnings(&issues.warnings, DEFAULT_CONFIG_LABEL);
-                resolve_invalid_config_fields(&config_builder, &issues.invalid_fields, DEFAULT_CONFIG_LABEL)?;
+                // Under a project's own configuration this machine's saved defaults answer for the
+                // look of the report and for nothing that decides a number. What the project left
+                // unlocked has to mean the program's default, which is the same for everybody, or
+                // two people counting one tree still get two answers and the file that was supposed
+                // to end that argument never touches the fields the argument is about.
+                let under_a_project = config_builder.local_dir.as_ref().is_some_and(|x| x.configuration_applied);
+                let (default_config, invalid_fields) = if under_a_project {
+                    (default_config.forget_what_changes_the_numbers(),
+                            issues.invalid_fields.iter().copied()
+                                    .filter(|field| !CHANGES_THE_NUMBERS.contains(field)).collect())
+                } else {
+                    (default_config, issues.invalid_fields)
+                };
+                resolve_invalid_config_fields(&config_builder, &invalid_fields, DEFAULT_CONFIG_LABEL)?;
                 let targets_were_missing = config_builder.targets.is_none();
                 config_builder.add_missing_fields(default_config);
                 if targets_were_missing && config_builder.targets.is_some() {
@@ -1259,6 +1397,90 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     Ok(config_builder)
 }
 
+// The project's own configuration, merged under the command line. Answers whether the folder held
+// one at all, since it may hold nothing but a log.
+fn apply_local_configuration(config_builder: &mut ConfigurationBuilder, local: &LocalDir)
+-> Result<bool, ArgParsingError>
+{
+    let file_name = crate::paths::LOCAL_CONFIG_FILE_NAME.trim_end_matches(".txt");
+    let (mut local_config, issues) = match super::config_files::parse_config_file(Some(file_name), Some(local.get_dir_path())) {
+        Ok(x) => x,
+        Err(super::config_files::ConfigFileParseError::FileNotFound(_)) => return Ok(false),
+        Err(super::config_files::ConfigFileParseError::UnreadableLine(_, line, cause)) =>
+                return Err(ArgParsingError::UnreadableConfig(local.get_config_path(), line, cause))
+    };
+
+    let label = local.get_config_path();
+    print_config_file_warnings(&issues.warnings, &label);
+
+    // This file travels with the code to machines and versions it has never met, so a value of its
+    // own that only decides how the report looks is reported and skipped rather than killing
+    // somebody else's run. One that decides what gets counted still stops it, because counting on
+    // with a default is the disagreement between two people's numbers that the file exists to end.
+    let (changes_the_numbers, presentation) : (Vec<&str>, Vec<&str>) = issues.invalid_fields.iter()
+            .partition(|field| CHANGES_THE_NUMBERS.contains(field));
+    for field in presentation {
+        report_ignored_config_value(field, &label);
+    }
+    resolve_invalid_config_fields(config_builder, &changes_the_numbers, &label)?;
+
+    local_config.targets = local_config.targets.map(|declared| rebase_targets_on(&local.project_dir, declared));
+    config_builder.add_missing_fields(local_config);
+
+    Ok(true)
+}
+
+// Written where the next run will look for it: into the folder this one found, from wherever inside
+// the project the command was typed, and otherwise into a new folder at the directory holding the
+// targets.
+fn save_the_local_configuration(config_builder: &mut ConfigurationBuilder, typed_paths: &[String])
+-> Result<(), ArgParsingError>
+{
+    let Some(local) = config_builder.local_dir.clone()
+            .or_else(|| crate::paths::choose_place_for_a_local_dir(typed_paths)) else {
+        eprintln!("\n{}", wrap_message(&format!("'--{SAVE_LOCAL}' has nowhere to write: the targets of this run \
+have no directory holding all of them, so there is no one project for these settings to belong to.")).yellow());
+        return Ok(());
+    };
+
+    if config_builder.targets.is_none() {
+        config_builder.targets = Some(create_targets_from_working_dir()?);
+    }
+
+    let written = std::fs::create_dir_all(local.get_dir_path()).and_then(|()|
+            super::config_files::save_existing_commands_from_config_builder_to_file(Some(local.get_dir_path()),
+                    crate::paths::LOCAL_CONFIG_FILE_NAME.trim_end_matches(".txt"), Some(&local.project_dir), config_builder));
+
+    match written {
+        Err(error) => eprintln!("\n{}", wrap_message(&format!(
+                "The settings of this project could not be written to '{}': {error}", local.get_config_path())).yellow()),
+        Ok(()) => {
+            // A folder this run made is a folder this run has, so a '--log' beside it writes into
+            // the project rather than being told there is nowhere to write
+            config_builder.local_dir = Some(local.clone());
+            eprintln!("\nSaved as the settings of this project, in '{}'.", local.get_config_path());
+        }
+    }
+
+    Ok(())
+}
+
+// A relative target of a project's configuration names a place inside the project, wherever the
+// command happened to be typed from. Joined here, because the run resolves what is still relative
+// against the working directory.
+fn rebase_targets_on(project_dir: &str, targets: Vec<Target>) -> Vec<Target> {
+    targets.into_iter().map(|target| {
+        let declared = std::path::Path::new(&target.path);
+        if declared.is_absolute() || declared.has_root() {
+            target
+        } else {
+            let inside = target.path.trim_start_matches("./");
+            let path = if inside.is_empty() {project_dir.to_owned()} else {format!("{project_dir}/{inside}")};
+            Target { module: target.module, path }
+        }
+    }).collect()
+}
+
 fn print_config_file_warnings(issues: &[(mezura_core::warnings::Code, String)], config_name: &str) {
     for (code, warning) in issues {
         super::warning_collector::emit(mezura_core::warnings::Warning::new(*code, config_name,
@@ -1280,7 +1502,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             languages_of_interest: _, excluded_languages: _,
             // not carried by a configuration file at all
             config_name_to_save: _, config_name_to_load: _, theme_name_to_save: _, output: _,
-            explain: _, diff_against: _, log: _, targets_source: _, typed_explicitly: _,
+            explain: _, diff_against: _, log: _, targets_source: _, local_dir: _, typed_explicitly: _,
             // a style that does not parse is reported per line and skipped, and the rest of the file
             // still applies, so these warn instead of reaching here
             styles: _, config_styles: _, theme_styles: _ } = config_builder;
@@ -1312,8 +1534,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
         };
 
         if is_overridden {
-            super::warning_collector::emit(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::ConfigValueIgnored, field,
-                    format!("Invalid value for the command '--{field}', in config '{config_name}'. The value will be ignored.")));
+            report_ignored_config_value(field, config_name);
         } else {
             message_printer::print_help_message_for_command(field);
             return Err(ArgParsingError::InvalidValueInConfig(field.to_string(), config_name.to_owned()));
@@ -1323,9 +1544,14 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
     Ok(())
 }
 
+fn report_ignored_config_value(field: &str, config_name: &str) {
+    super::warning_collector::emit(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::ConfigValueIgnored, field,
+            format!("Invalid value for the command '--{field}', in config '{config_name}'. The value will be ignored.")));
+}
+
 fn print_warnings_for_commands_that_need_a_loaded_configuration(config_name_to_save: &Option<String>, config_name_to_load: &Option<String>,
         log: &Option<LogOption>, compare_level: &Option<usize>, diff_against: &Option<String>,
-        by_file: &Option<ByFile>)
+        by_file: &Option<ByFile>, a_local_dir_was_found: bool)
 {
     // Printed here rather than kept for later, since this runs before the theme is resolved, and
     // kept as well, so that a machine consumer learns a command it gave was dropped
@@ -1348,7 +1574,9 @@ fn print_warnings_for_commands_that_need_a_loaded_configuration(config_name_to_s
 and the document it reads holds no files.".to_owned());
     }
 
-    if config_name_to_load.is_none() {
+    // A project's folder is a configuration without a name: it has a log of its own, so these two
+    // have somewhere to write to and somewhere to read from even when nothing was named.
+    if config_name_to_load.is_none() && !a_local_dir_was_found {
         if let Some(log) = log && config_name_to_save.is_none() && log.should_log && diff_against.is_none() {
             ignored(LOG, "'--log' command will be ignored, since no config file was specified.".to_owned());
         }
@@ -1999,5 +2227,169 @@ mod tests {
             assert!(one_short.has_missing_fields(),
                     "'{name}' is merged from a configuration and never asked about, so its value is dropped");
         }
+
+        // Everything that decides a number is gone and everything that decides the look is kept,
+        // which is what this machine's saved defaults are allowed to answer for under a project's
+        // own configuration
+        let kept = donor().forget_what_changes_the_numbers();
+        assert_eq!((None, None, None, None, None), (kept.targets, kept.exclude_dirs,
+                kept.languages_of_interest, kept.excluded_languages, kept.forced_languages));
+        assert_eq!((None, None, None, None, None), (kept.counting, kept.should_search_in_dotted,
+                kept.count_minified, kept.count_generated, kept.no_gitignore));
+        assert_eq!((Some(3), Some(Layout::Table), Some(SortCriterion::Name), Some(ByFile::Capped(8))),
+                (kept.top_n, kept.layout, kept.sort_by, kept.by_file));
+        assert_eq!((Some(BarThickness::Fat), Some(ProgressBarStyle::Hash), Some(NumberSeparator::Dot),
+                Some(DecimalSeparator::Comma), Some("Mezura".to_owned())),
+                (kept.bar_thickness, kept.progress_bar, kept.number_separator, kept.decimal_separator, kept.theme_name));
+        assert_eq!((Some(Threads::from((1, 1))), Some(true), Some(3)),
+                (kept.threads, kept.should_show_faulty_files, kept.compare_level));
+        assert!(kept.hidden.is_some_and(|x| x.bar) && kept.config_styles.is_some());
+    }
+
+    // A project of its own, under the temporary directory, which is the only place a test is
+    // allowed to find one in
+    fn build_test_project(test_name: &str, configuration: &str) -> String {
+        let root = std::env::temp_dir().join("mezura-project-".to_owned() + test_name);
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        if !configuration.is_empty() {
+            std::fs::create_dir_all(root.join(crate::paths::LOCAL_DIR_NAME)).unwrap();
+            std::fs::write(root.join(crate::paths::LOCAL_DIR_NAME).join(crate::paths::LOCAL_CONFIG_FILE_NAME),
+                    configuration).unwrap();
+        }
+
+        crate::paths::normalise_separators(&root.to_string_lossy()).into_owned()
+    }
+
+    #[test]
+    fn the_settings_of_a_project_are_found_from_inside_it_and_the_command_line_still_wins() {
+        let project = build_test_project("found-and-overridden",
+                "===> exclude\nnode_modules\n\n===> languages\nrust,java\n\n===> top\n7\n");
+
+        let found = create_config_from_args(&format!("{project}/src")).unwrap();
+        assert_eq!(vec!["node_modules".to_owned()], found.engine.exclude_dirs);
+        assert_eq!(vec!["rust".to_owned(), "java".to_owned()], found.engine.languages_of_interest);
+        assert_eq!(Some(7), found.view.top_n);
+        assert_eq!(Some(project.clone() + "/.mezura/config.txt"),
+                found.view.local_dir.as_ref().map(LocalDir::get_config_path));
+        assert!(found.view.local_dir.is_some_and(|x| x.configuration_applied));
+
+        let overridden = create_config_from_args(&format!("{project}/src --languages python --top 2")).unwrap();
+        assert_eq!(vec!["python".to_owned()], overridden.engine.languages_of_interest);
+        assert_eq!(Some(2), overridden.view.top_n);
+        assert_eq!(vec!["node_modules".to_owned()], overridden.engine.exclude_dirs,
+                "what the command line did not mention was dropped along with what it did");
+
+        let ignored = create_config_from_args(&format!("{project}/src --{NO_LOCAL}")).unwrap();
+        assert!(ignored.engine.exclude_dirs.is_empty() && ignored.view.top_n.is_none());
+        assert_eq!(None, ignored.view.local_dir);
+
+        std::fs::remove_dir_all(&project).unwrap();
+    }
+
+    // Not through a command line, which would have to name a target of its own to be inside the
+    // project at all, and a target it names is the one that wins
+    #[test]
+    fn a_relative_target_of_a_project_names_a_place_inside_that_project() {
+        let declared = vec![Target::named("web", "./src"), Target::of("api/tests"),
+                Target::of("./"), Target::of("/somewhere/else")];
+
+        assert_eq!(vec![Target::named("web", "/work/portal/src"), Target::of("/work/portal/api/tests"),
+                Target::of("/work/portal"), Target::of("/somewhere/else")],
+                rebase_targets_on("/work/portal", declared));
+    }
+
+    // The file travels to machines and versions it has never met, so the two halves of it are not
+    // read with the same severity
+    #[test]
+    fn a_value_a_project_holds_that_this_build_cannot_read_stops_a_count_and_not_a_report() {
+        let looks = build_test_project("presentation-mistake", "===> top\nnope\n\n===> exclude\nbuild\n");
+        let counts = build_test_project("counting-mistake", "===> counting\nnope\n");
+
+        let survived = create_config_from_args(&format!("{looks}/src")).unwrap();
+        assert_eq!(None, survived.view.top_n);
+        assert_eq!(vec!["build".to_owned()], survived.engine.exclude_dirs,
+                "one unreadable value took the rest of the file with it");
+
+        let stopped = create_config_from_args(&format!("{counts}/src"));
+        assert_eq!(Err(ArgParsingError::InvalidValueInConfig(COUNTING.to_owned(),
+                counts.clone() + "/.mezura/config.txt")), stopped);
+        assert_eq!(CountingModel::Region,
+                create_config_from_args(&format!("{counts}/src --{COUNTING} region")).unwrap().view.counting);
+
+        std::fs::remove_dir_all(&looks).unwrap();
+        std::fs::remove_dir_all(&counts).unwrap();
+    }
+
+    #[test]
+    fn a_configuration_asked_for_by_name_leaves_the_project_out_of_the_run() {
+        let project = build_test_project("named-wins", "===> exclude\nnode_modules\n");
+        std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
+        let named = crate::paths::PERSISTENT_APP_PATHS.config_dir.clone().add("zz-named-wins.txt");
+        std::fs::write(&named, "===> top\n5\n").unwrap();
+
+        let loaded = create_config_from_args(&format!("{project}/src --{LOAD} zz-named-wins")).unwrap();
+        assert_eq!(Some(5), loaded.view.top_n);
+        assert!(loaded.engine.exclude_dirs.is_empty(), "the project's settings were merged under a named configuration");
+        // Found all the same, since '--save-local' writes to the folder this run found whatever
+        // else was asked for, and only what it holds was left unused
+        assert!(loaded.view.local_dir.is_some_and(|x| !x.configuration_applied));
+
+        std::fs::remove_file(&named).unwrap();
+        std::fs::remove_dir_all(&project).unwrap();
+    }
+
+    // The folder does not exist when the run starts, so this is the first command anybody types in
+    // a project: it has to leave the run holding the folder it just made, or the '--log' beside it
+    // is refused for a configuration that now exists.
+    // Typing nothing and typing one command that is not a target are the same run as far as the
+    // targets go, and both have to reach the merge without one of their own: a target invented for
+    // the first of them would beat every configuration, so a 'targets' block could never apply to
+    // the commonest way of all to run this, which is to stand in a project and type the name.
+    #[test]
+    fn a_command_line_that_names_nothing_leaves_the_targets_to_a_configuration() {
+        let typed_nothing = create_config_from_args("").unwrap();
+
+        assert_eq!(create_config_from_args("--top 3").unwrap().engine.targets, typed_nothing.engine.targets);
+        assert_eq!(vec![Target::of(mezura_core::engine::targets::convert_to_absolute("./"))],
+                typed_nothing.engine.targets, "a run that named nothing stopped counting the working directory");
+    }
+
+    #[test]
+    fn a_run_that_writes_the_folder_of_a_project_has_somewhere_to_log_to() {
+        let project = build_test_project("save-local-and-log", "");
+
+        let wrote = create_config_from_args(&format!("{project} --{SAVE_LOCAL} --{LOG}")).unwrap();
+        assert_eq!(Some(project.clone()), wrote.view.find_project_of_the_log().map(|x| x.project_dir.clone()));
+        // Nothing was counted with those settings, so nothing announces them
+        assert!(wrote.view.local_dir.is_some_and(|x| !x.configuration_applied));
+
+        std::fs::remove_dir_all(&project).unwrap();
+    }
+
+    #[test]
+    fn what_is_saved_for_a_project_is_what_the_next_run_inside_it_reads() {
+        let project = build_test_project("save-local", "");
+        let written = format!("{project}/{}/{}", crate::paths::LOCAL_DIR_NAME, crate::paths::LOCAL_CONFIG_FILE_NAME);
+
+        create_config_from_args(&format!("{project} --exclude build --top 4 --{SAVE_LOCAL}")).unwrap();
+        assert!(std::path::Path::new(&written).exists(), "no configuration was written for the project");
+        // Relative, or the file names directories that exist on one machine
+        let contents = std::fs::read_to_string(&written).unwrap();
+        assert!(!contents.contains(&project), "the project was written into its own configuration as an absolute path:\n{contents}");
+
+        let read_back = create_config_from_args(&format!("{project}/src")).unwrap();
+        assert_eq!(vec!["build".to_owned()], read_back.engine.exclude_dirs);
+        assert_eq!(Some(4), read_back.view.top_n);
+
+        // Saved again from a run that mentions neither, and both survive: what is saved is the
+        // command line over what the project already held
+        create_config_from_args(&format!("{project} --languages rust --{SAVE_LOCAL}")).unwrap();
+        let after = create_config_from_args(&format!("{project}/src")).unwrap();
+        assert_eq!(vec!["rust".to_owned()], after.engine.languages_of_interest);
+        assert_eq!(vec!["build".to_owned()], after.engine.exclude_dirs);
+        assert_eq!(Some(4), after.view.top_n);
+
+        std::fs::remove_dir_all(&project).unwrap();
     }
 }

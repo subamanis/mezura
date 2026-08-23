@@ -121,7 +121,7 @@ fn format_scope(config: &Configuration, targets: &[Target]) -> String {
     format!("{{\"targets\":{},\"exclude\":{},\"languages\":{},\"excluded_languages\":{},\
 \"forced_languages\":{},\"counting\":\"{}\",\"search_in_dotted\":{},\"gitignore\":{},\"keywords_counted\":{},\
 \"count_minified\":{},\"count_generated\":{}}}",
-            format_targets(targets),
+            format_targets(targets, config),
             format_strings(&engine.exclude_dirs),
             format_strings(&engine.languages_of_interest),
             format_strings(&engine.excluded_languages),
@@ -161,10 +161,18 @@ fn format_modules(result: &RunResult) -> String {
     format!("[{}]", entries.join(","))
 }
 
-fn format_targets(targets: &[Target]) -> String {
+// A project's log is shared the way its code is, so its entries spell their targets the way the
+// project does, relative to itself. Recorded absolutely, the same project counted from two
+// checkouts would report its targets as having changed on every entry the other one wrote, which is
+// the history section's way of saying the numbers are not comparable.
+fn format_targets(targets: &[Target], config: &Configuration) -> String {
     let entries = targets.iter().map(|target| {
         let module = target.module.as_ref().map_or("null".to_owned(), |x| format!("\"{}\"", escape(x)));
-        format!("{{\"module\":{module},\"path\":\"{}\"}}", escape(&target.path))
+        let path = match config.view.find_project_of_the_log() {
+            Some(project) => super::config_manager::format_path_inside(&project.project_dir, &target.path),
+            None => target.path.clone()
+        };
+        format!("{{\"module\":{module},\"path\":\"{}\"}}", escape(&path))
     }).collect::<Vec<_>>();
 
     format!("[{}]", entries.join(","))
@@ -283,6 +291,25 @@ mod tests {
                 &result_of(crate::test_support::plain_stats_of(1, 1, 1, 1, 0, HashMap::new()), Vec::new()))).unwrap();
         assert_eq!(None, plain.name);
         assert!(plain.modules.is_empty());
+    }
+
+    // Or the same project counted from two checkouts of it reads as two measurements, and every
+    // entry the other one wrote is reported as having had its targets changed
+    #[test]
+    fn a_projects_log_records_where_it_counted_the_way_the_project_spells_it() {
+        let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
+        config.view.local_dir = Some(crate::paths::LocalDir::of("/work/portal"));
+        let mut result = result_of(crate::test_support::plain_stats_of(1, 1, 1, 1, 0, HashMap::new()), Vec::new());
+        result.targets = vec![Target::named("web", "/work/portal/web"), Target::of("/somewhere/else")];
+        let now: DateTime<Local> = DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap();
+
+        let entry = parse_entry(&format_entry_line(&config, &now, &result)).unwrap();
+        assert_eq!(vec![Target::named("web", "./web"), Target::of("/somewhere/else")], entry.targets);
+
+        // A configuration asked for by name keeps a log of its own, which is nobody else's to read
+        config.view.config_name_to_load = Some("portal".to_owned());
+        let named = parse_entry(&format_entry_line(&config, &now, &result)).unwrap();
+        assert_eq!(result.targets, named.targets);
     }
 
     #[test]

@@ -59,7 +59,11 @@ fn main() -> ExitCode {
     #[cfg(target_os = "windows")]
     control::set_virtual_terminal(true).unwrap();
 
-    let args_str = read_args_as_str().unwrap_or_else(|| String::from("./"));
+    // Empty when nothing was typed, and never './': a target invented here would be a typed target,
+    // and a typed target beats the one a configuration names, so no configuration could supply the
+    // targets of a run that names none. The working directory answers for that run inside
+    // 'create_config_builder_from_args', after every configuration has had its say.
+    let args_str = read_args_as_str().unwrap_or_default();
 
     // Before the languages are read, or the run that performs it counts with the old files and the
     // change takes two runs to arrive. Skipped for '--restore', which performs this same pass
@@ -149,6 +153,15 @@ Your configurations, themes and logs are left alone.")};
         // version is only missing when that block is not printed
         let separator = if config.view.hidden.directory_info {"\n"} else {""};
         println!("\n{}{separator}", crate::theme::get_active().version.paint(VERSION_ID));
+    }
+
+    // Never silently. A folder in some directory above the one being counted decided what this run
+    // measures, and without this line the only way to find out is to go looking for it.
+    if let Some(local) = &config.view.local_dir
+        && local.configuration_applied && !config.view.hidden.directory_info && config.view.prints_text() {
+        let opening = if config.view.hidden.version {"\n"} else {""};
+        println!("{opening}{}", crate::theme::get_active().note.paint(
+                &format!("Using the settings of this project, from '{}'.", local.get_config_path())));
     }
 
     if !config.engine.languages_of_interest.is_empty() &&

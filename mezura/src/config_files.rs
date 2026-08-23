@@ -278,8 +278,11 @@ pub fn strip_byte_order_mark(contents: &str) -> &str {
 }
 
 // The targets must be set before this is called: they are unwrapped below.
-pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<String>, config_name: &str, config_builder: &ConfigurationBuilder)
--> std::io::Result<()> 
+// 'relative_to' is the project a configuration of its own is being written for, and the targets are
+// then written the way that project reads them back.
+pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<String>, config_name: &str,
+        relative_to: Option<&str>, config_builder: &ConfigurationBuilder)
+-> std::io::Result<()>
 {
     let config_dir = if let Some(dir) = config_path {dir} else {PERSISTENT_APP_PATHS.config_dir.clone()};
     let file_name = config_dir + config_name + ".txt";
@@ -291,8 +294,10 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
     // One target per line, which is what the block reader expects: a module name only reaches the
     // paths written after it when a comma joins them.
     writer.write_all(&[b"\n\n===> ",config_manager::TARGETS.as_bytes(),b"\n"].concat())?;
-    writer.write_all(config_builder.targets.as_ref().unwrap().iter().map(config_manager::format_declared_form)
-            .collect::<Vec<_>>().join("\n").as_bytes())?;
+    writer.write_all(config_builder.targets.as_ref().unwrap().iter().map(|target| match relative_to {
+                Some(project_dir) => config_manager::format_declared_form_relative_to(project_dir, target),
+                None => config_manager::format_declared_form(target)
+            }).collect::<Vec<_>>().join("\n").as_bytes())?;
 
     if let Some(exclude_dirs) = &config_builder.exclude_dirs {
         writer.write_all(&[b"\n\n===> ",config_manager::EXCLUDE.as_bytes(),b"\n"].concat())?;
@@ -525,7 +530,7 @@ mod tests {
 
         std::fs::create_dir_all(SCRATCH_CONFIG_DIR)?;
         let test_config_dir = Some(SCRATCH_CONFIG_DIR.to_owned());
-        super::super::config_files::save_existing_commands_from_config_builder_to_file(test_config_dir, "auto-generated", &config_builder)?;
+        super::super::config_files::save_existing_commands_from_config_builder_to_file(test_config_dir, "auto-generated", None, &config_builder)?;
 
         let (options, issues) = super::super::config_files::parse_config_file(Some("auto-generated"), Some(SCRATCH_CONFIG_DIR.to_owned())).unwrap();
         assert!(issues.invalid_fields.is_empty() && issues.warnings.is_empty());
@@ -627,7 +632,7 @@ mod tests {
                 Target::named("backend", "D:/x/my api"),
                 Target::of("D:/x/loose")];
         let builder = ConfigurationBuilder { targets: Some(declared.clone()), ..Default::default() };
-        save_existing_commands_from_config_builder_to_file(Some(dir.clone()), "modules-round-trip", &builder)?;
+        save_existing_commands_from_config_builder_to_file(Some(dir.clone()), "modules-round-trip", None, &builder)?;
 
         let (options, issues) = parse_config_file(Some("modules-round-trip"), Some(dir)).unwrap();
         assert!(issues.invalid_fields.is_empty());

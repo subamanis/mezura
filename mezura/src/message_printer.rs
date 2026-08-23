@@ -617,7 +617,8 @@ pub const STYLE_HELP  :  &str =
       separator-total          the line above the total
       separator-header         the line under the column titles of the two tables
       summary                  the found / of interest / excluded line
-      note                     the '(+N more languages hidden by --top N)' line
+      note                     the asides about the count: what '--top' hid, what was left out of
+                               it, and the settings of a project it was taken with
       success                  the 'ok' after parsing
       warning                  warnings
       error                    errors
@@ -712,9 +713,12 @@ pub const LOG_HELP  :  &str =
 
     Can take 0..n words as arguments in the cmd.
 
-    Only works with a configuration loaded, since the log belongs to it: the entry is appended to
-    that configuration's file in the 'data/logs' directory, and the file is created if it is not
-    there yet. Any words you give are kept with the entry as its description.
+    The log belongs to a set of settings rather than to a run: with a configuration loaded the entry
+    is appended to that configuration's file in the 'data/logs' directory, and inside a project with
+    a '.mezura' folder it goes to the log in that folder, beside the code. With neither, there is
+    nothing for the entry to belong to and the command says so instead of writing one. The file is
+    created if it is not there yet, and any words you give are kept with the entry as its
+    description.
 
     Cannot be saved in a configuration file, so loading one never writes an entry on its own. A
     '--diff' run is not logged either, and says so instead of writing an entry.
@@ -726,8 +730,8 @@ pub const COMPARE_LEVEL_HELP  :  &str =
 
     1 argument: a number between 0 and 10. Default: 1
 
-    Only works with a configuration loaded, since the entries being compared against are the ones
-    '--log' wrote under it. 0 turns the comparison off.
+    Reads the entries '--log' wrote, so it needs the same thing that command needs: a configuration
+    loaded, or a project with a '.mezura' folder to be inside. 0 turns the comparison off.
 
     Every log entry records the settings that decide what is counted, and an entry that was written
     with different ones is marked 'modified:' followed by their names. The comparison is still shown,
@@ -783,6 +787,40 @@ pub const LOAD_HELP  :  &str =
 
     Give '--load' and '--save' the same name to edit a configuration: it is loaded, your changes
     are applied on top, and the result is written back.
+
+    Naming a configuration is asking for that one and no other, so a project's own settings are left
+    out of a run that names one, and its log stays where every named configuration's log is.
+
+";
+pub const SAVE_LOCAL_HELP  :  &str =
+"--save-local
+    save the flags of this run as the settings of this project
+
+    No arguments.
+
+    Writes a '.mezura' folder beside the code, holding a 'config.txt' with the flags this run used.
+    Every later run inside that directory or under it counts with those flags without being asked,
+    and says which file it took them from. The paths it writes are relative to the project, so the
+    folder means the same places after the code is cloned somewhere else.
+
+    Written where the next run will look for it: into the folder this run found, from wherever
+    inside the project the command was typed, and otherwise into a new one at the directory holding
+    the targets. What the file already held and you did not type again is kept, so a second
+    '--save-local' adds to the project's settings rather than replacing them.
+
+    The targets are part of what a run used, so they are saved with the rest: typing one from inside
+    a subdirectory writes that subdirectory as the project's target, and every later run inside the
+    project then counts it and nothing else.
+
+";
+pub const NO_LOCAL_HELP  :  &str =
+"--no-local
+    ignore the settings of the project being counted
+
+    No arguments.
+
+    Counts as though the project had no '.mezura' folder: your own flags, your own default
+    configuration, and no entry written to the project's log.
 
 ";
 pub const CHANGELOG_HELP  :  &str =
@@ -844,7 +882,7 @@ pub const HELP_HELP  :  &str =
 
 // The full help prints this, the lookup for one command searches it, and the close-match
 // suggestions take their candidates from it, so a new command cannot reach one and miss the others.
-pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 7] = [
+pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 8] = [
     ("What is counted", &[
         (TARGETS, TARGETS_HELP),
         (COUNTING, COUNTING_HELP),
@@ -887,6 +925,10 @@ pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 7] = [
         (SAVE_THEME, SAVE_THEME_HELP),
         (SHOW_CONFIGS, SHOW_CONFIGS_HELP),
         (RESTORE, RESTORE_HELP),
+    ]),
+    ("The settings of a project", &[
+        (SAVE_LOCAL, SAVE_LOCAL_HELP),
+        (NO_LOCAL, NO_LOCAL_HELP),
     ]),
     ("Tuning and diagnostics", &[
         (EXPLAIN, EXPLAIN_HELP),

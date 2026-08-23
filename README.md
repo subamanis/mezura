@@ -16,6 +16,7 @@ Example run on entire Linux Kernel: </br>
 * [Cmd Commands](#cmd-commands)
 * [Scripting](#scripting)
 * [Configuration Files](#configuration-files)
+* [The Settings Of A Project](#the-settings-of-a-project)
 * [Logs and History](#logs-and-history)
 * [Themes](#themes)
 * [Supported Languages](#supported-languages)
@@ -440,7 +441,8 @@ HOW THE REPORT LOOKS
       separator-total          the line above the total
       separator-header         the line under the column titles of the two tables
       summary                  the found / of interest / excluded line
-      note                     the '(+N more languages hidden by --top N)' line
+      note                     the asides about the count: what '--top' hid, what was left out of
+                               it, and the settings of a project it was taken with
       success                  the 'ok' after parsing
       warning                  warnings
       error                    errors
@@ -611,9 +613,12 @@ TAKING THE RESULT ELSEWHERE
 
     Can take 0..n words as arguments in the cmd.
 
-    Only works with a configuration loaded, since the log belongs to it: the entry is appended to
-    that configuration's file in the 'data/logs' directory, and the file is created if it is not
-    there yet. Any words you give are kept with the entry as its description.
+    The log belongs to a set of settings rather than to a run: with a configuration loaded the entry
+    is appended to that configuration's file in the 'data/logs' directory, and inside a project with
+    a '.mezura' folder it goes to the log in that folder, beside the code. With neither, there is
+    nothing for the entry to belong to and the command says so instead of writing one. The file is
+    created if it is not there yet, and any words you give are kept with the entry as its
+    description.
 
     Cannot be saved in a configuration file, so loading one never writes an entry on its own. A
     '--diff' run is not logged either, and says so instead of writing an entry.
@@ -625,8 +630,8 @@ COMPARING WITH EARLIER RUNS
 
     1 argument: a number between 0 and 10. Default: 1
 
-    Only works with a configuration loaded, since the entries being compared against are the ones
-    '--log' wrote under it. 0 turns the comparison off.
+    Reads the entries '--log' wrote, so it needs the same thing that command needs: a configuration
+    loaded, or a project with a '.mezura' folder to be inside. 0 turns the comparison off.
 
     Every log entry records the settings that decide what is counted, and an entry that was written
     with different ones is marked 'modified:' followed by their names. The comparison is still shown,
@@ -711,6 +716,9 @@ YOUR DATA DIRECTORY
     Give '--load' and '--save' the same name to edit a configuration: it is loaded, your changes
     are applied on top, and the result is written back.
 
+    Naming a configuration is asking for that one and no other, so a project's own settings are left
+    out of a run that names one, and its log stays where every named configuration's log is.
+
 --save-theme
     save the way this run looks as a named theme
 
@@ -754,6 +762,35 @@ YOUR DATA DIRECTORY
     and lines for extensions your copy never mentions are added. To change a winner, reorder the
     names on its line; deleting the line brings it back, since a missing line and a line you never
     had look the same. Your copy is saved under 'replaced' whenever anything is added to it.
+
+THE SETTINGS OF A PROJECT
+
+--save-local
+    save the flags of this run as the settings of this project
+
+    No arguments.
+
+    Writes a '.mezura' folder beside the code, holding a 'config.txt' with the flags this run used.
+    Every later run inside that directory or under it counts with those flags without being asked,
+    and says which file it took them from. The paths it writes are relative to the project, so the
+    folder means the same places after the code is cloned somewhere else.
+
+    Written where the next run will look for it: into the folder this run found, from wherever
+    inside the project the command was typed, and otherwise into a new one at the directory holding
+    the targets. What the file already held and you did not type again is kept, so a second
+    '--save-local' adds to the project's settings rather than replacing them.
+
+    The targets are part of what a run used, so they are saved with the rest: typing one from inside
+    a subdirectory writes that subdirectory as the project's target, and every later run inside the
+    project then counts it and nothing else.
+
+--no-local
+    ignore the settings of the project being counted
+
+    No arguments.
+
+    Counts as though the project had no '.mezura' folder: your own flags, your own default
+    configuration, and no entry written to the project's log.
 
 TUNING AND DIAGNOSTICS
 
@@ -913,8 +950,34 @@ By default, there is a configuration file named "default" already present in the
 The priorities of the specified flags are:
 1) cmd
 2) Specific config file
-3) Default config file
-4) Internal defaults
+3) The project's own config file
+4) Default config file
+5) Internal defaults
+
+
+
+## The Settings Of A Project
+A configuration in your data directory is yours and your machine's, so two people counting the same repository get two answers whenever their saved configurations differ, and neither has any way to see that this is why. A project can carry its own settings instead, in a **`.mezura`** folder beside its code:
+
+```
+your-project/
+    .mezura/
+        config.txt
+        log.jsonl
+    src/
+```
+
+`config.txt` is the same format a saved configuration has, and `log.jsonl` the same format a log has. Write the folder with ```mezura <flags> --save-local```, or by hand.
+
+**It is found without being asked for.** A run looks for the folder in the directory holding its targets and then in each directory above it, taking the nearest one, so it applies from anywhere inside the project and a project nested in another one shadows it. A run using one says so, naming the file it read. Ignore it for one run with ```--no-local```, and note that a run naming a configuration with ```--load``` leaves it out entirely.
+
+**Two rules make the file safe to commit.** Its targets are written relative to the folder, so it names the same places on somebody else's disk. And what it does not lock is answered by the program's own defaults rather than by each person's `default.txt`, for everything that decides a number: the targets, the excluded directories, the languages, the counting model and the flags about dotted, minified, generated and ignored files. What only decides how the report looks, the theme and layout and separators, still comes from the personal configuration, since there the point is that everyone has their own.
+
+For the same reason the two halves are read with different severity. A value the file holds that this build cannot read stops the run when it decides what is counted, and is reported and skipped when it only decides how the report looks: the file travels to machines and versions it has never met, and a colour scheme you do not have should not kill somebody's count.
+
+The log in the folder records where it counted the same relative way, so an entry written from one checkout of the project reads as the same measurement from another, rather than as a run over some other tree. Committing it makes the history of the project travel with the code, at the cost that two branches which both logged conflict on merge, since every entry is written at the top of one file.
+
+Nothing in the folder can make the program write a file: `--log`, `--save` and `--save-theme` are not settings a configuration file can carry, so cloning a repository and counting it cannot overwrite anything of yours. `--log` and `--compare` do work inside a project without a configuration being named, writing to and reading from the log in the folder. If you would rather not have that log in your history, add it to your `.gitignore`; mezura never writes one.
 
 
 
@@ -928,7 +991,7 @@ By using the '--compare <N>' flag, the (N) previous logged executions will be re
 for N = 3, it would look like this:
 ![](screenshots/compare-logs.PNG)
 
-Note that a configuration file must be loaded for both '--log' and '--compare' to work.
+Both '--log' and '--compare' need a log to belong to, which means either a configuration loaded by name or a project with a '.mezura' folder to be inside.
 
 
 

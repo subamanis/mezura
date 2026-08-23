@@ -2191,8 +2191,15 @@ fn get_sizes_percentages(per_language: &HashMap<String,Stats>, languages_name: &
 fn find_settings_changed_since(entry: &super::log::LogEntry, config: &Configuration,
         targets: &[mezura_core::Target]) -> Vec<&'static str>
 {
-    let sort = |targets: &[mezura_core::Target]| {
-        let mut sorted = targets.to_vec();
+    // Both sides as the entry would have recorded them, which for a project's log means relative to
+    // the project: the same tree counted from two checkouts of it is one measurement, and only
+    // spelling it absolutely would make the two look different.
+    let as_recorded = |targets: &[mezura_core::Target]| {
+        let mut sorted = match config.view.find_project_of_the_log() {
+            Some(project) => targets.iter().map(|target| mezura_core::Target { module: target.module.clone(),
+                    path: config_manager::format_path_inside(&project.project_dir, &target.path) }).collect(),
+            None => targets.to_vec()
+        };
         sorted.sort();
         sorted
     };
@@ -2200,7 +2207,7 @@ fn find_settings_changed_since(entry: &super::log::LogEntry, config: &Configurat
     let mut changed = Vec::new();
     // The scope cannot carry the targets, so they are compared beside it: the same './src'
     // declared over two different trees is two different measurements
-    if sort(&entry.targets) != sort(targets) {
+    if as_recorded(&entry.targets) != as_recorded(targets) {
         changed.push(config_manager::TARGETS);
     }
     // The log holds no keyword counts, so a run that only stopped counting them changed nothing
@@ -3258,6 +3265,29 @@ mod tests {
         config.engine.count_keywords = false;
         assert!(find_settings_changed_since(&entry_with_targets, &config,
                 &[mezura_core::Target::of("./a"), mezura_core::Target::of("./b")]).is_empty());
+    }
+
+    // The log of a project is shared the way its code is, so an entry from another checkout of it
+    // is the same measurement and not a changed one
+    #[test]
+    fn an_entry_a_second_checkout_of_a_project_wrote_reports_no_change_of_targets() {
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        config.view.local_dir = Some(crate::paths::LocalDir::of("/home/other/portal"));
+        let entry = crate::log::LogEntry { name: None, datetime: Local::now(),
+                scope: crate::diff::scope_of(&config.engine, config.view.counting),
+                targets: vec![mezura_core::Target::of("./web")],
+                total: crate::test_support::plain_stats_of(1, 1, 1, 1, 0, hashmap![]), modules: Vec::new() };
+
+        assert!(find_settings_changed_since(&entry, &config, &[mezura_core::Target::of("/home/other/portal/web")]).is_empty());
+        assert_eq!(vec!["targets"],
+                find_settings_changed_since(&entry, &config, &[mezura_core::Target::of("/home/other/portal/api")]),
+                "a target that really is another one was passed over");
+
+        // Under a configuration asked for by name the log is that configuration's, wherever it was
+        // written, and an entry of it means the paths it wrote
+        config.view.config_name_to_load = Some("portal".to_owned());
+        assert_eq!(vec!["targets"],
+                find_settings_changed_since(&entry, &config, &[mezura_core::Target::of("/home/other/portal/web")]));
     }
 
     #[test]

@@ -111,7 +111,7 @@ fn print_files_left_out(result: &RunResult, config: &Configuration) {
             continue;
         }
         let subject = if count == 1 {"file was"} else {"files were"};
-        eprintln!("{}", super::theme::get_active().summary.paint(&format!(
+        eprintln!("{}", super::theme::get_active().note.paint(&format!(
                 "{} {kind} {subject} left out of the counts. Run with '--{command}' to include them.",
                 crate::number_formatter::format_with_separators(count))));
         said_something = true;
@@ -190,11 +190,14 @@ fn get_activated_languages_as_str(config: &Configuration) -> String {
     msg
 }
 
+// A named configuration keeps its history where every named one's history is kept. A run that named
+// none and found a project's own folder writes into that folder instead, so the history of the
+// project sits beside its code.
 fn determine_log_file_path(config: &Configuration) -> Option<String> {
-    let name = config.view.config_name_to_save.as_ref()
-            .or(config.view.config_name_to_load.as_ref())?;
-
-    Some(PERSISTENT_APP_PATHS.logs_dir.clone() + name + ".jsonl")
+    match config.view.config_name_to_save.as_ref().or(config.view.config_name_to_load.as_ref()) {
+        Some(name) => Some(PERSISTENT_APP_PATHS.logs_dir.clone() + name + ".jsonl"),
+        None => config.view.find_project_of_the_log().map(crate::paths::LocalDir::get_log_path)
+    }
 }
 
 #[cfg(test)]
@@ -287,5 +290,19 @@ mod tests {
         config.view.config_name_to_save = Some("saved".to_owned());
         assert_eq!(Some("saved.jsonl".to_owned()), file_name(&config),
                 "the name being saved did not win over the name being loaded");
+    }
+
+    #[test]
+    fn a_project_keeps_its_history_beside_its_code_and_a_named_configuration_keeps_its_own() {
+        let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
+        config.view.local_dir = Some(crate::paths::LocalDir::of("D:/work/portal"));
+
+        assert_eq!(Some("D:/work/portal/.mezura/log.jsonl".to_owned()), determine_log_file_path(&config));
+
+        // The folder is still the one this run found, and the name still decides: a configuration
+        // somebody asked for by name keeps the history of that configuration and not of the tree
+        config.view.config_name_to_load = Some("portal".to_owned());
+        assert_eq!(Some("portal.jsonl".to_owned()), determine_log_file_path(&config)
+                .map(|path| std::path::Path::new(&path).file_name().unwrap().to_string_lossy().into_owned()));
     }
 }
