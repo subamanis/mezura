@@ -7,6 +7,7 @@ pub const MIN_CONSUMERS_VALUE : usize = 1;
 
 pub(crate) const DEF_SEARCH_IN_DOTTED  : bool    = false;
 pub(crate) const DEF_NO_GITIGNORE      : bool    = false;
+pub(crate) const DEF_NO_IGNORE_FILES   : bool    = false;
 
 #[derive(Debug,PartialEq,Eq,Clone)]
 pub struct Target {
@@ -124,6 +125,10 @@ pub struct EngineConfig {
     pub threads: Threads,
     pub should_search_in_dotted: bool,
     pub no_gitignore: bool,
+    // The '.ignore' and '.rgignore' that ripgrep, the silver searcher and fd read and git does not.
+    // A separate answer from the one above, since obeying the repository and obeying the search
+    // tools are two decisions: a vendored dependency is usually hidden by one and kept by the other.
+    pub no_ignore_files: bool,
     // Hiding the keywords stops the counting too, since nothing else reads them and the work would
     // be thrown away.
     pub count_keywords: bool,
@@ -148,6 +153,7 @@ impl Default for EngineConfig {
             threads: Threads::default(),
             should_search_in_dotted: DEF_SEARCH_IN_DOTTED,
             no_gitignore: DEF_NO_GITIGNORE,
+            no_ignore_files: DEF_NO_IGNORE_FILES,
             count_keywords: true,
             count_minified: false,
             count_generated: false,

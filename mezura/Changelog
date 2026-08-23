@@ -116,7 +116,7 @@ Main changes:
   -> Files that are known by their whole name are now counted: Makefile, Dockerfile,
       CMakeLists.txt, Gemfile, Rakefile and the rest. A language file names them in a new
       "Filenames" field, a file is matched by its name before its extension, and a contest over a
-      name is settled in "extension_priority.txt" under "contested-filenames" or with
+      name is settled in "language_conflicts.txt" under "contested-filenames" or with
       "--force-language Makefile=<language>". Three new languages come with it: Make, Dockerfile and
       CMake.
   -> "JS" is now reported as "JavaScript" and "TS" as "TypeScript". Delete your old logs of those
@@ -128,7 +128,7 @@ Main changes:
   -> A language can now be named by any extension it claims, wherever a language name is expected:
       '--languages js', '--exclude-languages rs', and the same inside a configuration file. An
       extension that two languages claim names the one that owns it for the counting, which is the
-      answer in "extension_priority.txt" or the one "--force-language" gave.
+      answer in "language_conflicts.txt" or the one "--force-language" gave.
   -> The script and style sections of HTML, Vue and Svelte files are now counted with their own
       languages' symbols instead of the file's, so a "//" comment inside a script block is a
       comment and a "lang=\"ts\"" section counts as TypeScript. The file still weighs whole on its
@@ -181,7 +181,7 @@ Main changes:
       changes over. Each update and each "--restore" writes its own folder there, so two of them
       never mix and you can tell which files were moved aside together.
       A language file of your own is never touched, and neither are your themes, your default
-      configuration or "extension_priority.txt".
+      configuration or "language_conflicts.txt".
   -> 34 new languages: Objective-C, MATLAB, Lua, Perl, Prolog, Pascal, Delphi, OCaml, F#, Elm,
       Clojure, Lisp, Scheme, Julia, D, Carbon, COBOL, Fortran, Ada, VHDL, Erlang, GraphQL,
       PowerShell, Svelte, JSX, WebAssembly text, Assembly, GDScript, and the shader languages
@@ -196,13 +196,13 @@ Main changes:
       read with the wrong comment symbols. Pascal keeps ".pas" and ".lpr".
   -> Objective-C takes ".m" and Perl takes ".pl", while ".h" stays with C Header. If you write
       MATLAB or Prolog instead, or want your headers counted as Objective-C, swap the line for it
-      in "extension_priority.txt", or run with "--force-language m=matlab".
+      in "language_conflicts.txt", or run with "--force-language m=matlab".
   -> Two languages that claim the same extension no longer settle it silently. The winner is named
-      in the new "extension_priority.txt" file of the data directory, and when nothing names it, the
+      in the new "language_conflicts.txt" file of the data directory, and when nothing names it, the
       program says which language it gave the extension to and that it only did so alphabetically.
   -> New "--force-language" command: "--force-language m=matlab,pl=perl" decides which language an
       extension belongs to for this run, whether or not another language claims it, and takes a
-      whole filename just as readily. It overrides the priority file and, like every other command,
+      whole filename just as readily. It overrides the conflicts file and, like every other command,
       can be saved in a configuration file.
   -> Extensions are now matched without regard to case, so a file named "MAIN.RS" counts as Rust.
   -> The messages and the help were gone over for wording. Every error now names what failed and
@@ -438,9 +438,9 @@ Bugfixes:
       block comments as code. The README documented that exact misspelling and has been corrected.
   -> A language file saved with a byte order mark now reads. PowerShell's "Set-Content" and older
       versions of Notepad write one, so editing a language file the ordinary way on Windows used to
-      make the language disappear from the count. The same now holds for "extension_priority.txt",
+      make the language disappear from the count. The same now holds for "language_conflicts.txt",
       for a configuration and for a theme file: a mark in front of the first line used to make the
-      whole file do nothing, and for the priority file and the configuration it did so in silence.
+      whole file do nothing, and for the conflicts file and the configuration it did so in silence.
   -> A log you emptied by hand is written to again. Every ordinary way of clearing a file leaves a
       newline behind, and the program read that as a log it had failed to read and refused to touch,
       on that run and on every run after it.
@@ -454,7 +454,7 @@ Bugfixes:
       One whose format really is wrong names the line the reading stopped at, since the blocks have
       to be written in one order and a block in the wrong place makes the whole file unreadable.
   -> Two language files whose names differ only in upper and lower case are now reported, and
-      "--force-language" and "extension_priority.txt" now give the extension to the one you named. Both
+      "--force-language" and "language_conflicts.txt" now give the extension to the one you named. Both
       used to fold the case away and pick the other one, so naming a language exactly as it is
       spelled could hand your files to a different one, with its comment symbols and without a word.
   -> A language that claims one extension in two spellings, such as "h" and ".h", no longer reports
@@ -465,7 +465,7 @@ Bugfixes:
   -> The time a run reports is no longer shortened by a slow "on traversal done" callback that the
       counting outlasted. This only affects a program using mezura as a library.
   -> An extension can now be written with the dot in front of it. ".rs" in a language file, and
-      ".m" in "extension_priority.txt", used to match nothing at all and say nothing about it, while
+      ".m" in "language_conflicts.txt", used to match nothing at all and say nothing about it, while
       "--force-language .m=matlab" had always accepted the dot.
   -> An extension is now matched whatever its length. One longer than 24 characters that also had a
       capital letter in it was never recognised, so those files were silently not counted.

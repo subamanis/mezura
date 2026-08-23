@@ -11,7 +11,7 @@ use crate::engine::identity::IdentifiedBy;
 // because they are two questions: a rule for the extension 'm' says nothing about a file called
 // 'm', and one map for both would let the two answer for each other.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct PriorityRules {
+pub struct ConflictRules {
     pub by_extension : HashMap<String, Vec<String>>,
     pub by_filename : HashMap<String, Vec<String>>
 }
@@ -45,7 +45,7 @@ const KEYWORD                  : &str = "Keyword";
 const KEYWORD_NAME             : &str = "NAME";
 const KEYWORD_ALIASES          : &str = "ALIASES";
 
-// The markers that open the two rule blocks of the extension priority file
+// The markers that open the two rule blocks of the language conflicts file
 const CONTESTED_EXTENSIONS     : &str = "contested-extensions";
 const CONTESTED_FILENAMES      : &str = "contested-filenames";
 
@@ -404,19 +404,23 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
     // were never read.
     if header.is_some() {return None;}
 
-    let mut language = Language::new(lang_name, extensions, string_symbols, comment_symbols,
+    // In the order the file declares them, which is the order the scan numbers them in
+    let strings = match escape_character {
+        Some(byte) => crate::domain::StringRules::escaping_with(byte),
+        None => crate::domain::StringRules::escaping_nothing()
+    }
+            .with_symbols(string_symbols)
+            .with_char_literals(char_literals)
+            .with_multiline_strings(multiline_strings)
+            .with_raw_multiline_strings(raw_multiline_strings)
+            .with_string_pairs(&string_pairs);
+
+    let mut language = Language::new(lang_name, extensions, strings, comment_symbols,
             &multiline_comments.iter().map(|(start, end): &(String, String)| (start.as_str(), end.as_str()))
                     .collect::<Vec<_>>(), keywords);
     language.line_continuation = line_continuation;
-    language.escape_character = escape_character;
 
-    // In the order the file declares them, which is the order the scan numbers them in
     Some(language
-            .with_char_literals(&char_literals.iter().map(String::as_str).collect::<Vec<_>>())
-            .with_multiline_strings(&multiline_strings.iter().map(String::as_str).collect::<Vec<_>>())
-            .with_raw_multiline_strings(&raw_multiline_strings.iter().map(String::as_str).collect::<Vec<_>>())
-            .with_string_pairs(&string_pairs.iter().map(|(open, close)| (open.as_str(), close.as_str()))
-                    .collect::<Vec<_>>())
             .with_nesting_comments(&nesting_comments.iter().map(|(start, end)| (start.as_str(), end.as_str()))
                     .collect::<Vec<_>>())
             .with_leveled_comments(&leveled_comments)
@@ -428,18 +432,18 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
 // A missing file is not a mistake: an installation made by an earlier version has none, and the
 // only consequence is that contested extensions fall back to the alphabetical tiebreak, which
 // announces itself anyway.
-pub fn parse_priority_file(path: impl AsRef<Path>) -> (PriorityRules, Vec<String>) {
+pub fn parse_conflict_rules_file(path: impl AsRef<Path>) -> (ConflictRules, Vec<String>) {
     match fs::read_to_string(path) {
-        Ok(contents) => parse_priority(&contents),
-        Err(_) => (PriorityRules::default(), Vec::new())
+        Ok(contents) => parse_conflict_rules(&contents),
+        Err(_) => (ConflictRules::default(), Vec::new())
     }
 }
 
 // A line that does not parse is reported and skipped while the rest of the file applies, because a
 // mistake here cannot produce a wrong number in silence: the extension it failed to settle falls
 // through to the tiebreak, which says so by name.
-pub fn parse_priority(contents: &str) -> (PriorityRules, Vec<String>) {
-    let mut rules = PriorityRules::default();
+pub fn parse_conflict_rules(contents: &str) -> (ConflictRules, Vec<String>) {
+    let mut rules = ConflictRules::default();
     let mut faulty_lines = Vec::new();
     let mut block = None;
 
@@ -497,7 +501,7 @@ pub fn parse_priority(contents: &str) -> (PriorityRules, Vec<String>) {
 // write one, so it arrives through the ordinary way of editing one of these files on Windows.
 //
 // Every parser of a text format in this crate calls it: a mark in front of the '===>' of the
-// priority file stops that line matching, and every rule in the file is then skipped without so
+// conflicts file stops that line matching, and every rule in the file is then skipped without so
 // much as a faulty line to report it, a line never read being a line never rejected.
 fn strip_byte_order_mark(contents: &str) -> &str {
     contents.trim_start_matches('\u{feff}')
@@ -577,18 +581,18 @@ Comment symbols\n//\n\n\nKeyword\n    NAME\n    classes\n    ALIASES\n    class\
         assert_eq!(vec!["classes"], java.keywords.iter().map(|k| k.descriptive_name.clone()).collect::<Vec<_>>());
     }
     #[test]
-    fn every_contest_between_the_shipped_languages_is_settled_by_the_shipped_priority_file() {
+    fn every_contest_between_the_shipped_languages_is_settled_by_the_shipped_conflicts_file() {
         let (languages, _) = crate::language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap();
-        let (priority, faulty) = crate::language_file::parse_priority_file(
-                DATA_DIR.to_owned() + crate::EXTENSION_PRIORITY_FILE_NAME);
-        assert!(faulty.is_empty(), "the shipped priority file has lines that do not parse: {faulty:?}");
+        let (conflicts, faulty) = crate::language_file::parse_conflict_rules_file(
+                DATA_DIR.to_owned() + crate::LANGUAGE_CONFLICTS_FILE_NAME);
+        assert!(faulty.is_empty(), "the shipped conflicts file has lines that do not parse: {faulty:?}");
 
         // Both maps, since a filename two languages both claim is settled in the same file and
         // would otherwise be the one contest nothing here notices
         let by_name = crate::languages::keyed_by_name(languages);
         let mut unsettled = Vec::new();
-        for (identified_by, rules) in [(IdentifiedBy::Extension, &priority.by_extension),
-                (IdentifiedBy::Filename, &priority.by_filename)] {
+        for (identified_by, rules) in [(IdentifiedBy::Extension, &conflicts.by_extension),
+                (IdentifiedBy::Filename, &conflicts.by_filename)] {
             let (_, report) = crate::engine::identity::build_language_map_by(identified_by, &by_name, rules, &HashMap::new());
             unsettled.extend(report.contested.iter()
                     .filter(|x| x.resolved_by == crate::engine::identity::ResolvedBy::AlphabeticalFallback)
@@ -599,12 +603,12 @@ Comment symbols\n//\n\n\nKeyword\n    NAME\n    classes\n    ALIASES\n    class\
         assert!(unsettled.is_empty(),
                 "these contests are left to the alphabetical tiebreak, so a clean installation is \
                  warned about them on every run. Declare each one in '{}':\n{}",
-                crate::EXTENSION_PRIORITY_FILE_NAME, unsettled.join("\n"));
+                crate::LANGUAGE_CONFLICTS_FILE_NAME, unsettled.join("\n"));
     }
 
     #[test]
-    fn the_priority_file_reads_only_what_is_under_its_headers() {
-        let (rules, faulty) = crate::language_file::parse_priority(
+    fn the_conflicts_file_reads_only_what_is_under_its_headers() {
+        let (rules, faulty) = crate::language_file::parse_conflict_rules(
 "Anything up here is explanation, and this looks exactly like a rule:
     m       Objective-C, MATLAB
 
@@ -625,8 +629,8 @@ Makefile   Make, Automake
         assert!(!rules.by_extension.contains_key("makefile"));
     }
     #[test]
-    fn a_line_of_the_priority_file_that_does_not_parse_is_skipped_and_the_rest_applies() {
-        let (rules, faulty) = crate::language_file::parse_priority(
+    fn a_line_of_the_conflicts_file_that_does_not_parse_is_skipped_and_the_rest_applies() {
+        let (rules, faulty) = crate::language_file::parse_conflict_rules(
 "===> contested-extensions
 m       Objective-C, MATLAB
 justoneword
@@ -825,12 +829,12 @@ Escape character\n\\\n\nComment symbols\n--\n";
     // silence. The shipped copy opens with explanatory text, so the mark sits on a line that is
     // skipped anyway; a user who trims those lines away is the one who pays.
     #[test]
-    fn a_priority_file_saved_with_a_byte_order_mark_still_reads() {
+    fn a_conflicts_file_saved_with_a_byte_order_mark_still_reads() {
         let good = "===> contested-extensions\nm    Objective-C, MATLAB\n";
         let with_mark = "\u{feff}".to_owned() + good;
 
-        let (rules, faulty) = crate::language_file::parse_priority(good);
-        let (rules_with_mark, faulty_with_mark) = crate::language_file::parse_priority(&with_mark);
+        let (rules, faulty) = crate::language_file::parse_conflict_rules(good);
+        let (rules_with_mark, faulty_with_mark) = crate::language_file::parse_conflict_rules(&with_mark);
 
         assert_eq!(rules, rules_with_mark, "the same rules read differently depending on how the editor saved it");
         assert_eq!(faulty, faulty_with_mark);
@@ -867,8 +871,8 @@ Comment symbols\n//\n\nMulti line comment start\n{ (*\nMulti line comment end\n}
         let good = "Language\nPylike\n\nExtensions\npyl\n\nString symbols\n\" '\n\n\
 Multi line string symbols\n\"\"\"\n\nEscape character\n\\\n\nComment symbols\n#\n";
         let parsed = crate::language_file::parse_language(good).expect("the declaration must parse");
-        assert_eq!(vec!["\"".to_owned(), "'".to_owned()], parsed.string_symbols);
-        assert_eq!(vec![MultilineString::escaping("\"\"\"")], parsed.multiline_strings);
+        assert_eq!(vec!["\"".to_owned(), "'".to_owned()], parsed.strings.get_symbols());
+        assert_eq!(vec![MultilineString::escaping("\"\"\"")], parsed.strings.get_multiline_strings());
 
         let twice = good.replace("String symbols\n\" '", "String symbols\n\" ' \"\"\"");
         assert!(crate::language_file::parse_language(&twice).is_none(),
@@ -880,12 +884,12 @@ Multi line string symbols\n\"\"\"\n\nEscape character\n\\\n\nComment symbols\n#\
         let stringless = good.replace("String symbols\n\" '", "String symbols\n")
                 .replace("Multi line string symbols\n\"\"\"\n\n", "");
         let parsed = crate::language_file::parse_language(&stringless).expect("a language with no strings must parse");
-        assert!(parsed.string_symbols.is_empty() && parsed.multiline_strings.is_empty());
+        assert!(parsed.strings.get_symbols().is_empty() && parsed.strings.get_multiline_strings().is_empty());
 
         // and the shipped files that declare crossing strings still do
         for name in ["Python.txt", "JavaScript.txt", "Java.txt", "Rust.txt", "C#.txt", "Go.txt"] {
             let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
-            assert!(!language.multiline_strings.is_empty(), "{name} lost its crossing string declaration");
+            assert!(!language.strings.get_multiline_strings().is_empty(), "{name} lost its crossing string declaration");
         }
     }
 
@@ -896,14 +900,14 @@ Multi line string symbols\n\"\"\"\n\nEscape character\n\\\n\nComment symbols\n#\
         let good = "Language\nGolike\n\nExtensions\ngol\n\nString symbols\n\"\n\n\
 Multi line raw string symbols\n`\n\nEscape character\n\\\n\nComment symbols\n//\n";
         let parsed = crate::language_file::parse_language(good).expect("the declaration must parse");
-        assert_eq!(vec![MultilineString::raw("`")], parsed.multiline_strings);
+        assert_eq!(vec![MultilineString::raw("`")], parsed.strings.get_multiline_strings());
 
         // both blocks at once, numbered in the order the file declares them
         let both = good.replace("Multi line raw string symbols\n`",
                 "Multi line string symbols\n\"\"\"\n\nMulti line raw string symbols\n`");
         let parsed = crate::language_file::parse_language(&both).expect("both blocks must parse");
         assert_eq!(vec![MultilineString::escaping("\"\"\""), MultilineString::raw("`")],
-                parsed.multiline_strings);
+                parsed.strings.get_multiline_strings());
 
         let twice = good.replace("Multi line raw string symbols\n`",
                 "Multi line string symbols\n`\n\nMulti line raw string symbols\n`");
@@ -919,7 +923,7 @@ Multi line raw string symbols\n`\n\nEscape character\n\\\n\nComment symbols\n//\
         // and the shipped files whose crossing form escapes nothing say so
         for name in ["Go.txt", "Odin.txt", "D.txt", "Kotlin.txt", "Shell.txt", "PowerShell.txt"] {
             let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
-            assert!(language.multiline_strings.iter().any(|crossing| !crossing.escapes),
+            assert!(language.strings.get_multiline_strings().iter().any(|crossing| !crossing.escapes),
                     "{name} lost its raw crossing string declaration");
         }
     }
@@ -962,8 +966,8 @@ String symbols\n\n\nComment symbols\n\n";
 Character literal symbols\n'\n\nMulti line string symbols\n\"\n\n\
 Escape character\n\\\n\nComment symbols\n//\n";
         let parsed = crate::language_file::parse_language(good).expect("the declaration must parse");
-        assert_eq!(vec!["'".to_owned()], parsed.char_literal_symbols);
-        assert_eq!(vec![MultilineString::escaping("\"")], parsed.multiline_strings);
+        assert_eq!(vec!["'".to_owned()], parsed.strings.get_char_literals());
+        assert_eq!(vec![MultilineString::escaping("\"")], parsed.strings.get_multiline_strings());
 
         // declared in two lists it refuses the file, empty it refuses the file
         let twice = good.replace("String symbols\n\n", "String symbols\n'\n");
@@ -975,7 +979,7 @@ Escape character\n\\\n\nComment symbols\n//\n";
         // the shipped declarations that use the block
         for name in ["Rust.txt", "D.txt"] {
             let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
-            assert_eq!(vec!["'".to_owned()], language.char_literal_symbols,
+            assert_eq!(vec!["'".to_owned()], language.strings.get_char_literals(),
                     "{name} lost its character literal declaration");
         }
     }
@@ -984,12 +988,12 @@ Escape character\n\\\n\nComment symbols\n//\n";
     fn a_language_that_declares_a_string_has_to_say_what_escapes_it() {
         let good = "Language\nEsclike\n\nExtensions\nesc\n\nString symbols\n\"\n\n\
 Escape character\n\\\n\nComment symbols\n//\n";
-        assert_eq!(Some(b'\\'), parse_language(good).expect("the declaration must parse").escape_character);
+        assert_eq!(Some(b'\\'), parse_language(good).expect("the declaration must parse").strings.get_escape());
 
         let backtick = good.replace("Escape character\n\\", "Escape character\n`");
-        assert_eq!(Some(b'`'), parse_language(&backtick).unwrap().escape_character);
+        assert_eq!(Some(b'`'), parse_language(&backtick).unwrap().strings.get_escape());
         let nothing = good.replace("Escape character\n\\", "Escape character\nnone");
-        assert_eq!(None, parse_language(&nothing).unwrap().escape_character);
+        assert_eq!(None, parse_language(&nothing).unwrap().strings.get_escape());
 
         let missing = good.replace("Escape character\n\\\n\n", "");
         assert!(parse_language(&missing).is_none(),
@@ -1006,7 +1010,7 @@ Escape character\n\\\n\nComment symbols\n//\n";
         for (name, escape) in [("Shell.txt", Some(b'\\')), ("PowerShell.txt", Some(b'`')),
                 ("SQL.txt", None), ("Pascal.txt", None), ("C.txt", Some(b'\\'))] {
             let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
-            assert_eq!(escape, language.escape_character, "{name} declares the wrong escape");
+            assert_eq!(escape, language.strings.get_escape(), "{name} declares the wrong escape");
         }
     }
 
@@ -1030,9 +1034,9 @@ Comment symbols\n--\nMulti line comment start\n--[=*[\nMulti line comment end\n]
     }
 
     #[test]
-    fn a_missing_priority_file_is_not_a_mistake() {
-        let (rules, faulty) = crate::language_file::parse_priority_file("a/path/that/is/not/there.txt");
-        assert_eq!((PriorityRules::default(), Vec::<String>::new()), (rules, faulty));
+    fn a_missing_conflicts_file_is_not_a_mistake() {
+        let (rules, faulty) = crate::language_file::parse_conflict_rules_file("a/path/that/is/not/there.txt");
+        assert_eq!((ConflictRules::default(), Vec::<String>::new()), (rules, faulty));
     }
     // The C++ fixture is a definition that is correct everywhere except for one stray line under the
     // language name, which is the mistake somebody editing a file by hand actually makes. Its
@@ -1081,7 +1085,7 @@ Comment symbols\n--\nMulti line comment start\n--[=*[\nMulti line comment end\n]
             let name = &language.name;
             assert!(!language.extensions.is_empty() || !language.filenames.is_empty(),
                     "{name} declares neither an extension nor a filename");
-            assert!(!language.string_symbols.is_empty() || !language.multiline_strings.is_empty()
+            assert!(!language.strings.get_symbols().is_empty() || !language.strings.get_multiline_strings().is_empty()
                     || name == "HTML" || !language.nested_languages.is_empty(),
                     "{name} declares no string symbol");
         }

@@ -18,7 +18,7 @@ pub mod render;
 pub mod warnings;
 
 pub use domain::{Bucket, CountingModel, Keyword, Language, LeveledPair, LineClass, LineClasses,
-        MultilineString, NestedLanguage, Span, SpanKind, Stats};
+        MultilineString, NestedLanguage, Span, SpanKind, Stats, StringRules};
 pub use engine::config::{EngineConfig, Target, Threads};
 pub use explain::{Carried, ExplainError, ExplainedLine, FileExplanation, explain_file};
 pub use engine::targets::TargetError;
@@ -41,11 +41,11 @@ use crossbeam_deque::{Injector, Worker};
 
 use engine::modules::{ModuleId, Modules};
 
-// The file that decides which language gets an extension that two of them claim. Nothing here reads
-// or writes it: the command line creates it in the user's data directory, parses it, and hands the
-// rules in as a plain map. The name lives here because the warning about an unsettled extension is
-// written here and points the reader at the file.
-pub const EXTENSION_PRIORITY_FILE_NAME : &str = "extension_priority.txt";
+// The file that decides which language gets an extension or a filename that two of them claim.
+// Nothing here reads or writes it: the command line creates it in the user's data directory, parses
+// it, and hands the rules in as a plain map. The name lives here because the warning about an
+// unsettled extension is written here and points the reader at the file.
+pub const LANGUAGE_CONFLICTS_FILE_NAME : &str = "language_conflicts.txt";
 // The name of the report row holding everything no target was given a name for. Not the directory's
 // own name, which would claim files that a named target has already taken out of it.
 pub const UNNAMED_MODULE_NAME : &str = "(unnamed)";

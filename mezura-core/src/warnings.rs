@@ -17,7 +17,7 @@ pub enum Code {
     // Nothing is lost: it claims neither an extension nor a filename, so no file could ever match it
     LanguageClaimsNothing,
     LanguageFileUnreadable,
-    PriorityLineSkipped,
+    ConflictLineSkipped,
     ConfigValueIgnored,
     ConfigSectionUnknown,
     CommandIgnored,
@@ -37,7 +37,7 @@ impl Code {
             Self::LanguageWithoutName => "language-without-name",
             Self::LanguageClaimsNothing => "language-claims-nothing",
             Self::LanguageFileUnreadable => "language-file-unreadable",
-            Self::PriorityLineSkipped => "priority-line-skipped",
+            Self::ConflictLineSkipped => "conflict-line-skipped",
             Self::ConfigValueIgnored => "config-value-ignored",
             Self::ConfigSectionUnknown => "config-section-unknown",
             Self::CommandIgnored => "command-ignored",
@@ -53,7 +53,7 @@ impl Code {
             Self::LanguageTiebreak | Self::DuplicateLanguage | Self::LanguageWithoutName
             | Self::LanguageFileUnreadable | Self::UnknownSectionLanguage => Affects::Counts,
             Self::UnknownForcedLanguage | Self::UnknownLanguage | Self::UnknownExcludedLanguage
-            | Self::LanguageClaimsNothing | Self::PriorityLineSkipped | Self::ConfigValueIgnored
+            | Self::LanguageClaimsNothing | Self::ConflictLineSkipped | Self::ConfigValueIgnored
             | Self::ConfigSectionUnknown | Self::CommandIgnored | Self::ConfigStyleInvalid
             | Self::ThemeUnavailable => Affects::Settings
         }

@@ -13,11 +13,7 @@ pub struct Language {
     // Interpreter names as a '#!' line spells them, 'sh' or 'python', for the scripts whose name
     // says nothing at all. Only a file with no extension and an unclaimed name is ever probed.
     pub shebangs : Vec<String>,
-    pub string_symbols : Vec<String>,
-    // The symbol of a character literal, Rust's and D's '. One that does not close on its own line
-    // is not a literal at all, so a lifetime's lone ' opens nothing, while a '"' shields its quote
-    pub char_literal_symbols : Vec<String>,
-    pub multiline_strings : Vec<MultilineString>,
+    pub strings : StringRules,
     pub comment_symbols : Vec<String>,
     pub multiline_comments : Vec<(String, String)>,
     // The pairs that nest inside themselves, so a closer only ends the block when it has closed
@@ -31,11 +27,6 @@ pub struct Language {
     // joins. C splices anything, including a line comment; JavaScript and Python only continue a
     // string literal; Java, Go and C# have no such thing at all.
     pub line_continuation : Option<LineContinuation>,
-    // What cancels a string symbol standing after it: the backslash in most languages, the backtick
-    // in PowerShell, and nothing in the family that escapes a quote by doubling it. None means a
-    // quote closes whatever stands in front of it, which is what Pascal, Ada, Fortran, COBOL and
-    // standard SQL need.
-    pub escape_character : Option<u8>,
     // Sections of the file that belong to another language, HTML's '<script>' and '<style>'. The
     // lines between the tags are counted with that language's own symbols and reported under it.
     pub nested_languages : Vec<NestedLanguage>,
@@ -47,7 +38,7 @@ pub struct Language {
 impl Language {
     pub fn new(name: impl AsRef<str>,
         extensions: impl IntoIterator<Item = impl AsRef<str>>,
-        string_symbols: impl IntoIterator<Item = impl AsRef<str>>,
+        strings: StringRules,
         comment_symbols: impl IntoIterator<Item = impl AsRef<str>>,
         multiline_comments: &[(&str, &str)],
         keywords: impl IntoIterator<Item = Keyword>) -> Self
@@ -57,18 +48,13 @@ impl Language {
             extensions : owned_strings(extensions),
             filenames : Vec::new(),
             shebangs : Vec::new(),
-            string_symbols : owned_strings(string_symbols),
-            char_literal_symbols : Vec::new(),
-            multiline_strings : Vec::new(),
+            strings,
             comment_symbols : owned_strings(comment_symbols),
             multiline_comments : multiline_comments.iter()
                     .map(|(start, end)| ((*start).to_owned(), (*end).to_owned())).collect(),
             nesting_comments : Vec::new(),
             leveled_comments : Vec::new(),
             line_continuation : None,
-            // The backslash, since every language the constructor is reached from in a test
-            // escapes with it; a language file has to say so itself
-            escape_character : Some(b'\\'),
             nested_languages : Vec::new(),
             keywords : keywords.into_iter().collect(),
             scan_plan : OnceLock::new()
@@ -103,26 +89,6 @@ impl Language {
         self
     }
 
-    pub fn with_char_literals(mut self, symbols: &[&str]) -> Self {
-        self.char_literal_symbols.extend(symbols.iter().map(|x| (*x).to_owned()));
-        self
-    }
-
-    pub fn with_multiline_strings(mut self, symbols: &[&str]) -> Self {
-        self.multiline_strings.extend(symbols.iter().map(|x| MultilineString::escaping(x)));
-        self
-    }
-
-    pub fn with_raw_multiline_strings(mut self, symbols: &[&str]) -> Self {
-        self.multiline_strings.extend(symbols.iter().map(|x| MultilineString::raw(x)));
-        self
-    }
-
-    pub fn with_string_pairs(mut self, pairs: &[(&str, &str)]) -> Self {
-        self.multiline_strings.extend(pairs.iter().map(|(open, close)| MultilineString::of(open, close)));
-        self
-    }
-
     pub fn with_nesting_comments(mut self, pairs: &[(&str, &str)]) -> Self {
         self.nesting_comments.extend(pairs.iter()
                 .map(|(start, end)| ((*start).to_owned(), (*end).to_owned())));
@@ -138,22 +104,22 @@ impl Language {
     // first, the character literals after them and the crossing ones last, which is the order the
     // plan is built in.
     pub(crate) fn get_string_pair_of(&self, symbol: u8) -> (&str, &str) {
+        let (symbols, literals) = (self.strings.get_symbols(), self.strings.get_char_literals());
         let symbol = symbol as usize;
-        if let Some(single) = self.string_symbols.get(symbol) {
+        if let Some(single) = symbols.get(symbol) {
             return (single, single);
         }
-        match self.char_literal_symbols.get(symbol - self.string_symbols.len()) {
+        match literals.get(symbol - symbols.len()) {
             Some(literal) => (literal, literal),
             None => {
-                let crossing = &self.multiline_strings[
-                        symbol - self.string_symbols.len() - self.char_literal_symbols.len()];
+                let crossing = &self.strings.get_multiline_strings()[symbol - symbols.len() - literals.len()];
                 (&crossing.open, &crossing.close)
             }
         }
     }
 
     pub(crate) fn string_crosses_lines(&self, symbol: u8) -> bool {
-        symbol as usize >= self.string_symbols.len() + self.char_literal_symbols.len()
+        symbol as usize >= self.strings.get_symbols().len() + self.strings.get_char_literals().len()
     }
 
     // The one place that knows the numbering: a pair kind added later is one match arm here and not
@@ -208,6 +174,75 @@ pub(crate) enum CommentPair<'a> {
     Plain { start: &'a str, end: &'a str },
     Nesting { start: &'a str, end: &'a str },
     Leveled(&'a LeveledPair)
+}
+
+// The symbols that open a string, and the one byte that cancels the symbol standing after it: the
+// backslash in most languages, the backtick in PowerShell, and nothing in the family that escapes a
+// quote by doubling it, which is what Pascal, Ada, Fortran, COBOL and standard SQL need.
+//
+// Escaping is two questions and the wrong answer to either runs a string past the quote that should
+// have closed it. This byte says which one escapes; 'MultilineString::escapes' says whether anything
+// escapes inside one crossing form, and PowerShell answers them differently per form.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StringRules {
+    escape : Option<u8>,
+    symbols : Vec<String>,
+    char_literals : Vec<String>,
+    multiline : Vec<MultilineString>
+}
+
+impl StringRules {
+    pub fn escaping_with(escape: u8) -> StringRules {
+        StringRules { escape: Some(escape), symbols: Vec::new(), char_literals: Vec::new(),
+                multiline: Vec::new() }
+    }
+
+    pub fn escaping_nothing() -> StringRules {
+        StringRules { escape: None, symbols: Vec::new(), char_literals: Vec::new(), multiline: Vec::new() }
+    }
+
+    pub fn with_symbols(mut self, symbols: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        self.symbols.extend(owned_strings(symbols));
+        self
+    }
+
+    // The symbol of a character literal, Rust's and D's '. One that does not close on its own line
+    // is not a literal at all, so a lifetime's lone ' opens nothing, while a '"' shields its quote
+    pub fn with_char_literals(mut self, symbols: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        self.char_literals.extend(owned_strings(symbols));
+        self
+    }
+
+    pub fn with_multiline_strings(mut self, symbols: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        self.multiline.extend(symbols.into_iter().map(|x| MultilineString::escaping(x.as_ref())));
+        self
+    }
+
+    pub fn with_raw_multiline_strings(mut self, symbols: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        self.multiline.extend(symbols.into_iter().map(|x| MultilineString::raw(x.as_ref())));
+        self
+    }
+
+    pub fn with_string_pairs(mut self, pairs: &[(impl AsRef<str>, impl AsRef<str>)]) -> Self {
+        self.multiline.extend(pairs.iter().map(|(open, close)| MultilineString::of(open.as_ref(), close.as_ref())));
+        self
+    }
+
+    pub fn get_escape(&self) -> Option<u8> {
+        self.escape
+    }
+
+    pub fn get_symbols(&self) -> &[String] {
+        &self.symbols
+    }
+
+    pub fn get_char_literals(&self) -> &[String] {
+        &self.char_literals
+    }
+
+    pub fn get_multiline_strings(&self) -> &[MultilineString] {
+        &self.multiline
+    }
 }
 
 // A string that crosses lines: the same symbol twice for Python's '"""', two different ones for a
@@ -299,15 +334,12 @@ impl PartialEq for Language {
             && self.extensions == other.extensions
             && self.filenames == other.filenames
             && self.shebangs == other.shebangs
-            && self.string_symbols == other.string_symbols
-            && self.char_literal_symbols == other.char_literal_symbols
-            && self.multiline_strings == other.multiline_strings
+            && self.strings == other.strings
             && self.comment_symbols == other.comment_symbols
             && self.multiline_comments == other.multiline_comments
             && self.nesting_comments == other.nesting_comments
             && self.leveled_comments == other.leveled_comments
             && self.line_continuation == other.line_continuation
-            && self.escape_character == other.escape_character
             && self.nested_languages == other.nested_languages
             && self.keywords == other.keywords
     }

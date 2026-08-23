@@ -80,7 +80,7 @@ The program, at compile time, includes the "data" folder in the binary, and duri
 The languages, themes, configurations and logs are then read from those folders, on that first execution as much as on every one after it, so you can reach them and change them:
 add languages of your own, add themes, or edit the default configuration.
 
-Installing a new version updates the language files there, so a correction to a language reaches you without you having to do anything. One that you changed yourself is replaced too, since a language file that has fallen behind counts wrongly, but your copy is kept under ```data/replaced/<version>/<date and time>/``` and the program names it, so you can carry your changes over. Each update or ```--restore``` writes its own folder there, so two of them never mix and the newest is the one at the bottom. A language file of your own is never touched, and neither are your themes, your default configuration or ```extension_priority.txt```: those are written when they are absent and left alone afterwards.
+Installing a new version updates the language files there, so a correction to a language reaches you without you having to do anything. One that you changed yourself is replaced too, since a language file that has fallen behind counts wrongly, but your copy is kept under ```data/replaced/<version>/<date and time>/``` and the program names it, so you can carry your changes over. Each update or ```--restore``` writes its own folder there, so two of them never mix and the newest is the one at the bottom. A language file of your own is never touched, and neither are your themes, your default configuration or ```language_conflicts.txt```: those are written when they are absent and left alone afterwards.
 
 For a file to be counted, some language file in the "data/languages" directory must claim it, either by its extension or by its whole name, in the 'Extensions' or 'Filenames' field, see [Supported Languages](#supported-languages). A file with no extension and a name nothing claims gets one more chance: its first line is read, and if it is a ```#!``` line naming an interpreter some language claims in its 'Shebangs' field, the file is counted as that language, which is how a ```deploy``` or ```configure``` script is counted instead of silently skipped. The interpreter is found past ```/usr/bin/env``` and its flags, and a versioned name falls back to its plain one, so ```#!/usr/bin/env python3.12``` counts as Python.
 
@@ -175,7 +175,7 @@ WHAT IS COUNTED
     'Language', or by any extension it claims, so 'javascript' and 'js' name the same one.
 
     An extension that two languages claim names whichever of them owns it for this run, which is
-    the answer in 'extension_priority.txt' or the one '--force-language' gave.
+    the answer in 'language_conflicts.txt' or the one '--force-language' gave.
 
 --exclude-languages
     count everything except these languages
@@ -198,7 +198,7 @@ WHAT IS COUNTED
     A whole filename works the same way, for the files that have no extension worth reading:
     '--force-language Makefile=python,Jenkinsfile=groovy'
 
-    Overrides the 'extension_priority.txt' file of the data directory.
+    Overrides the 'language_conflicts.txt' file of the data directory.
 
 --no-gitignore
     count the files a .gitignore ignores
@@ -768,7 +768,7 @@ YOUR DATA DIRECTORY
     neither are your themes or your default configuration: those are written when absent and left
     alone.
 
-    'extension_priority.txt' is merged instead. Each line names an extension that several
+    'language_conflicts.txt' is merged instead. Each line names an extension that several
     languages claim, and the first language on the line wins it. Your lines are kept as they are,
     and lines for extensions your copy never mentions are added. To change a winner, reorder the
     names on its line; deleting the line brings it back, since a missing line and a line you never
@@ -1028,7 +1028,7 @@ The user can easily specify a new language by copying the file of a language tha
 
 Header files have their own dedicated languages: `.h` files are counted under "C Header" and `.hpp` files under "C++ Header", since the program cannot know which codebase a header belongs to.
 
-If two or more language files claim the same extension, the winner is the one named in the `extension_priority.txt` file of the data dir, which ships with an answer for every contest between the languages that come with the program. An extension that nobody has named there goes to the language that comes first alphabetically, and the program reports it, since that is a tie-break and not a decision. Either way ```--force-language``` overrides it for a single run or, through a configuration file, for a single project.
+If two or more language files claim the same extension, the winner is the one named in the `language_conflicts.txt` file of the data dir, which ships with an answer for every contest between the languages that come with the program. An extension that nobody has named there goes to the language that comes first alphabetically, and the program reports it, since that is a tie-break and not a decision. Either way ```--force-language``` overrides it for a single run or, through a configuration file, for a single project.
 
 **[The language files guide](LANGUAGE_FILES_GUIDE.md)** is a page of its own: a whole language file to copy, every block with an example, which of the five string blocks a symbol belongs in, and the two mistakes that cost people the most time.
 
@@ -1068,7 +1068,7 @@ With that said, it is important to mention the following limitations:
 
 - Extensions are matched without regard to case, so a file named ```MAIN.RS``` is counted as Rust, and so is one named ```main.rs```. The one thing this loses is the Unix convention where an upper case ```.C``` means C++ while ```.c``` means C: to mezura they are the same extension.
 
-- When two languages claim the same extension or the same filename, only one of them can have it, and the choice changes the numbers rather than only the label, since the loser's files are then parsed with the winner's comment and string symbols. Mezura makes no attempt to settle it by looking inside the files: a guess from the contents would be right most of the time, and the times it was wrong it would be wrong quietly, in the middle of a run, differently for two files with the same extension. So it takes the answer from you and says so every time it has no answer to take. To decide it once, name the winner in the ```extension_priority.txt``` file of the data directory, under ```contested-extensions``` or ```contested-filenames```; to decide it for one run or for one project, use ```--force-language```, which overrides that file and takes a filename as readily as an extension.
+- When two languages claim the same extension or the same filename, only one of them can have it, and the choice changes the numbers rather than only the label, since the loser's files are then parsed with the winner's comment and string symbols. Mezura makes no attempt to settle it by looking inside the files: a guess from the contents would be right most of the time, and the times it was wrong it would be wrong quietly, in the middle of a run, differently for two files with the same extension. So it takes the answer from you and says so every time it has no answer to take. To decide it once, name the winner in the ```language_conflicts.txt``` file of the data directory, under ```contested-extensions``` or ```contested-filenames```; to decide it for one run or for one project, use ```--force-language```, which overrides that file and takes a filename as readily as an extension.
 
 - A regular expression written inside a string is read as a string, escapes included, and creates no inaccuracy. A regex literal, in the languages that have them, can miscount in one way: a comment opener sitting inside it, like the ```/*``` of JavaScript in ```/a[/*]b/```, reads as a comment that has opened, so the lines after it are counted as comment until something closes it. A bare quote inside a regex costs nothing, since those languages declare their quotes as ending with the line.
 

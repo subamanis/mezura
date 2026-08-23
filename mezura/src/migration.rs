@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use colored::Colorize;
 use include_dir::{File, include_dir};
-use mezura_core::EXTENSION_PRIORITY_FILE_NAME;
+use mezura_core::LANGUAGE_CONFLICTS_FILE_NAME;
 
 use crate::config_manager::VERSION_ID;
 use crate::message_printer::wrap_message;
@@ -46,7 +46,7 @@ impl MigrationOutcome {
                 && self.failed.is_empty()
     }
 
-    // Only the language files decide this: a theme or the priority file that could not be written
+    // Only the language files decide this: a theme or the conflicts file that could not be written
     // leaves the counting exactly as it was.
     pub fn every_language_file_is_in_place(&self) -> bool {
         self.languages_failed == 0
@@ -136,7 +136,7 @@ copy as it was is in '{}{REPLACED_DIR_NAME}/{VERSION_ID}/{}/'.",
         // moves counts while every language file is present.
         let counting_with = if self.languages_failed > 0 {
             "Counting with the copies inside the program, so a language file of your own is not in use."
-        } else if self.failed.iter().any(|x| x.starts_with(EXTENSION_PRIORITY_FILE_NAME)) {
+        } else if self.failed.iter().any(|x| x.starts_with(LANGUAGE_CONFLICTS_FILE_NAME)) {
             "Every language file is in place. Until this one is readable, an extension more than one \
 language claims is settled alphabetically, and each such extension says so on its own line."
         } else {
@@ -187,8 +187,8 @@ fn perform_migration(data_dir: &str, force: bool, outcome: &mut MigrationOutcome
     // returns below, and never reaches the merge.
     let carried = shipped_files().into_iter()
             .map(|(relative, contents)| (relative, content_hash(contents)))
-            .chain([(EXTENSION_PRIORITY_FILE_NAME.to_owned(),
-                    content_hash(read_baked_in_extension_priority_contents().as_bytes()))])
+            .chain([(LANGUAGE_CONFLICTS_FILE_NAME.to_owned(),
+                    content_hash(read_baked_in_conflict_rules_contents().as_bytes()))])
             .collect::<HashMap<_, _>>();
     // Asked of every file rather than of the folder holding it: one language file left behind by a
     // quarantine answers "the folder is not empty" while sixty-six others are missing. And asked of
@@ -336,7 +336,7 @@ fn perform_migration(data_dir: &str, force: bool, outcome: &mut MigrationOutcome
                     std::fs::write(&default_config, read_baked_in_default_config_contents())) {
         note_written_file(outcome, default_relative, !recorded.is_empty());
     }
-    merge_the_priority_file(data_dir, &archived_under, &recorded, &mut manifest, outcome);
+    merge_the_conflicts_file(data_dir, &archived_under, &recorded, &mut manifest, outcome);
 
     // Last, and holding only what reached the disk, so whatever failed is absent from the record,
     // missing from the completeness check, and tried again by the next run
@@ -358,52 +358,52 @@ fn note_written_file(outcome: &mut MigrationOutcome, relative: String, was_recor
 // somebody gave to a contested extension, and leaving it alone hides everything a new version adds.
 // What enters the manifest is the shipped copy's hash and never the merged file's, since the record
 // says what was last brought while the file on disk is theirs and ours together.
-fn merge_the_priority_file(data_dir: &str, archived_under: &str, recorded: &HashMap<String, u64>,
+fn merge_the_conflicts_file(data_dir: &str, archived_under: &str, recorded: &HashMap<String, u64>,
         manifest: &mut HashMap<String, u64>, outcome: &mut MigrationOutcome)
 {
-    let path = data_dir.to_owned() + EXTENSION_PRIORITY_FILE_NAME;
-    let ours = read_baked_in_extension_priority_contents();
+    let path = data_dir.to_owned() + LANGUAGE_CONFLICTS_FILE_NAME;
+    let ours = read_baked_in_conflict_rules_contents();
     let brought = content_hash(ours.as_bytes());
     let theirs = match std::fs::read_to_string(&path) {
         Ok(theirs) => theirs,
         // Not there at all is a first installation, or one that lost it. Anything else is a file
         // that is there and unreadable, and writing over it would destroy it without a copy.
         Err(_) if !std::path::Path::new(&path).exists() => {
-            if outcome.attempt(EXTENSION_PRIORITY_FILE_NAME, std::fs::write(&path, &ours)) {
-                manifest.insert(EXTENSION_PRIORITY_FILE_NAME.to_owned(), brought);
-                note_written_file(outcome, EXTENSION_PRIORITY_FILE_NAME.to_owned(),
-                        recorded.contains_key(EXTENSION_PRIORITY_FILE_NAME));
+            if outcome.attempt(LANGUAGE_CONFLICTS_FILE_NAME, std::fs::write(&path, &ours)) {
+                manifest.insert(LANGUAGE_CONFLICTS_FILE_NAME.to_owned(), brought);
+                note_written_file(outcome, LANGUAGE_CONFLICTS_FILE_NAME.to_owned(),
+                        recorded.contains_key(LANGUAGE_CONFLICTS_FILE_NAME));
             }
             return;
         },
         Err(error) => {
-            outcome.attempt(EXTENSION_PRIORITY_FILE_NAME, Err(error));
+            outcome.attempt(LANGUAGE_CONFLICTS_FILE_NAME, Err(error));
             return;
         }
     };
 
-    let Some(merged) = merge_priority_files(&theirs, &ours) else {
-        manifest.insert(EXTENSION_PRIORITY_FILE_NAME.to_owned(), brought);
+    let Some(merged) = merge_conflict_files(&theirs, &ours) else {
+        manifest.insert(LANGUAGE_CONFLICTS_FILE_NAME.to_owned(), brought);
         return;
     };
-    let copied = match archive(data_dir, archived_under, EXTENSION_PRIORITY_FILE_NAME, theirs.as_bytes()) {
+    let copied = match archive(data_dir, archived_under, LANGUAGE_CONFLICTS_FILE_NAME, theirs.as_bytes()) {
         Ok(copied) => copied,
         Err(error) => {
-            outcome.attempt(EXTENSION_PRIORITY_FILE_NAME, Err(error));
+            outcome.attempt(LANGUAGE_CONFLICTS_FILE_NAME, Err(error));
             return;
         }
     };
     // Their file is untouched when the write fails, so the copy would sit in 'replaced' with
     // nothing that ever moved to point at
-    if !outcome.attempt(EXTENSION_PRIORITY_FILE_NAME, std::fs::write(&path, merged)) {
+    if !outcome.attempt(LANGUAGE_CONFLICTS_FILE_NAME, std::fs::write(&path, merged)) {
         if copied {
             let _ = std::fs::remove_file(find_archived_path(data_dir, archived_under,
-                    EXTENSION_PRIORITY_FILE_NAME));
+                    LANGUAGE_CONFLICTS_FILE_NAME));
         }
         return;
     }
-    manifest.insert(EXTENSION_PRIORITY_FILE_NAME.to_owned(), brought);
-    outcome.merged.push(EXTENSION_PRIORITY_FILE_NAME.to_owned());
+    manifest.insert(LANGUAGE_CONFLICTS_FILE_NAME.to_owned(), brought);
+    outcome.merged.push(LANGUAGE_CONFLICTS_FILE_NAME.to_owned());
 }
 
 // Their copy brought up to what this version ships, or None when it already holds all of it. Every
@@ -411,9 +411,9 @@ fn merge_the_priority_file(data_dir: &str, archived_under: &str, recorded: &Hash
 // explanation, a section their copy does not have, and a contest it never mentions. A rule they
 // deleted comes back for that last reason: an extension is handed to another language by reordering
 // the names on its line, which is what the file says to do.
-fn merge_priority_files(theirs: &str, ours: &str) -> Option<String> {
-    let (_, their_blocks) = read_priority_blocks(theirs);
-    let (preamble, our_blocks) = read_priority_blocks(ours);
+fn merge_conflict_files(theirs: &str, ours: &str) -> Option<String> {
+    let (_, their_blocks) = read_conflict_blocks(theirs);
+    let (preamble, our_blocks) = read_conflict_blocks(ours);
     let nothing : Vec<&str> = Vec::new();
 
     let mut merged = preamble;
@@ -448,7 +448,7 @@ fn merge_priority_files(theirs: &str, ours: &str) -> Option<String> {
 }
 
 // The merge matches sections on 'opens' and prints 'marker', which is why a section carries both
-struct PriorityBlock<'a> {
+struct ConflictBlock<'a> {
     opens: Option<Holds>,
     marker: &'a str,
     rules: Vec<&'a str>
@@ -462,8 +462,8 @@ enum Holds {
 
 // The explanation above the first marker, then each section with its rules. Blank lines inside a
 // section are dropped, since the merge writes its own between the sections.
-fn read_priority_blocks(contents: &str) -> (Vec<&str>, Vec<PriorityBlock<'_>>) {
-    let (mut preamble, mut blocks) = (Vec::new(), Vec::<PriorityBlock>::new());
+fn read_conflict_blocks(contents: &str) -> (Vec<&str>, Vec<ConflictBlock<'_>>) {
+    let (mut preamble, mut blocks) = (Vec::new(), Vec::<ConflictBlock>::new());
     let mut current = None;
 
     // A file re-saved by PowerShell or an older Notepad carries a byte order mark, which is not
@@ -478,7 +478,7 @@ fn read_priority_blocks(contents: &str) -> (Vec<&str>, Vec<PriorityBlock<'_>>) {
             current = Some(match opens.and_then(|opens| blocks.iter().position(|x| x.opens == Some(opens))) {
                 Some(already) => already,
                 None => {
-                    blocks.push(PriorityBlock { opens, marker, rules: Vec::new() });
+                    blocks.push(ConflictBlock { opens, marker, rules: Vec::new() });
                     blocks.len() - 1
                 }
             });
@@ -498,7 +498,7 @@ fn read_priority_blocks(contents: &str) -> (Vec<&str>, Vec<PriorityBlock<'_>>) {
 // about what a marker is: '===>contested-extensions' and a marker with a word after its name both
 // open the extensions section for the program that counts.
 fn find_what_the_marker_opens(marker: &str) -> Option<Holds> {
-    let (rules, _) = mezura_core::language_file::parse_priority(&format!("{marker}\nprobe Probe\n"));
+    let (rules, _) = mezura_core::language_file::parse_conflict_rules(&format!("{marker}\nprobe Probe\n"));
 
     if !rules.by_extension.is_empty() {
         Some(Holds::Extensions)
@@ -512,8 +512,8 @@ fn find_what_the_marker_opens(marker: &str) -> Option<Holds> {
 // A net under the merge: if an answer they gave is missing from the result, their file is left
 // exactly as it stands. Bringing them the new rules is worth less than keeping the ones they gave.
 fn every_answer_of_theirs_survived(theirs: &str, merged: &str) -> bool {
-    let (theirs, merged) = (mezura_core::language_file::parse_priority(theirs).0,
-            mezura_core::language_file::parse_priority(merged).0);
+    let (theirs, merged) = (mezura_core::language_file::parse_conflict_rules(theirs).0,
+            mezura_core::language_file::parse_conflict_rules(merged).0);
 
     theirs.by_extension.iter().all(|(key, names)| merged.by_extension.get(key) == Some(names))
             && theirs.by_filename.iter().all(|(key, names)| merged.by_filename.get(key) == Some(names))
@@ -522,7 +522,7 @@ fn every_answer_of_theirs_survived(theirs: &str, merged: &str) -> bool {
 // Keyed by the parser as well, so a rule written '.m' and one written 'M' stay the one contest they
 // are to it. Keyed apart, the merge writes a second line settling what the first already settled.
 fn find_key_of_rule(marker: &str, rule: &str) -> String {
-    let (rules, _) = mezura_core::language_file::parse_priority(&format!("{marker}\n{rule}\n"));
+    let (rules, _) = mezura_core::language_file::parse_conflict_rules(&format!("{marker}\n{rule}\n"));
 
     rules.by_extension.into_keys().chain(rules.by_filename.into_keys()).next()
             // A rule the parser makes nothing of, keyed on its own text so that two copies of it do
@@ -655,15 +655,15 @@ fn read_baked_in_default_config_contents() -> String {
     String::from_utf8_lossy(include_bytes!("../data/config/default.txt")).to_string()
 }
 
-fn read_baked_in_extension_priority_contents() -> String {
-    String::from_utf8_lossy(mezura_core::languages::get_shipped_extension_priority_raw()).to_string()
+fn read_baked_in_conflict_rules_contents() -> String {
+    String::from_utf8_lossy(mezura_core::languages::get_shipped_conflict_rules_raw()).to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use mezura_core::Language;
     use crate::config_manager::VERSION_ID;
-    use crate::migration::{MANIFEST_FILE_NAME, content_hash, merge_priority_files,
+    use crate::migration::{MANIFEST_FILE_NAME, content_hash, merge_conflict_files,
             migrate_data_files, read_manifest, write_manifest};
     use crate::paths::test_paths::SCRATCH_DIR;
 
@@ -754,16 +754,16 @@ mod tests {
 
         // Only the rule under the marker: the same words appear in the explanation as an example,
         // and the explanation is ours and does come back
-        let priority = dir.clone() + mezura_core::EXTENSION_PRIORITY_FILE_NAME;
-        let reordered = std::fs::read_to_string(&priority).unwrap()
+        let conflicts = dir.clone() + mezura_core::LANGUAGE_CONFLICTS_FILE_NAME;
+        let reordered = std::fs::read_to_string(&conflicts).unwrap()
                 .replace("\nm       Objective-C, MATLAB", "\nm       MATLAB, Objective-C");
-        std::fs::write(&priority, &reordered).unwrap();
+        std::fs::write(&conflicts, &reordered).unwrap();
 
         let outcome = migrate_data_files(&dir, true);
         assert!(outcome.replaced.is_empty() && outcome.restored.is_empty() && outcome.added.is_empty());
         assert!(outcome.merged.is_empty(), "a copy already holding every rule was rewritten");
         assert_eq!("settings of my own", std::fs::read_to_string(&config).unwrap());
-        assert_eq!(reordered, std::fs::read_to_string(&priority).unwrap());
+        assert_eq!(reordered, std::fs::read_to_string(&conflicts).unwrap());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -771,25 +771,25 @@ mod tests {
     // An installation made before the 'contested-filenames' block existed has no such block, so
     // nothing in their own copy says the rules it holds can be written at all.
     #[test]
-    fn the_priority_file_gains_what_this_version_adds_and_keeps_every_decision() {
-        let dir = SCRATCH_DIR.to_owned() + "migration-priority-merge/";
+    fn the_conflicts_file_gains_what_this_version_adds_and_keeps_every_decision() {
+        let dir = SCRATCH_DIR.to_owned() + "migration-conflicts-merge/";
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         migrate_data_files(&dir, false);
 
         // A copy written before the second block and the explanation above it existed, holding one
         // answer of their own and one rule about a contest we never had
-        let path = dir.clone() + mezura_core::EXTENSION_PRIORITY_FILE_NAME;
+        let path = dir.clone() + mezura_core::LANGUAGE_CONFLICTS_FILE_NAME;
         let theirs = "How this file worked back then.\n\n===> contested-extensions\nm       MATLAB, Objective-C\nlpr     Lazarus, Pascal\n";
         std::fs::write(&path, theirs).unwrap();
         // and the record that version left, holding the hash of some other text under this name.
         // That record is the only thing that can say a release changed this file.
         let mut recorded = read_manifest(&dir);
-        recorded.insert(mezura_core::EXTENSION_PRIORITY_FILE_NAME.to_owned(), 1);
+        recorded.insert(mezura_core::LANGUAGE_CONFLICTS_FILE_NAME.to_owned(), 1);
         write_manifest(&dir, &recorded).unwrap();
 
         let outcome = migrate_data_files(&dir, false);
-        assert_eq!(vec![mezura_core::EXTENSION_PRIORITY_FILE_NAME.to_owned()], outcome.merged);
+        assert_eq!(vec![mezura_core::LANGUAGE_CONFLICTS_FILE_NAME.to_owned()], outcome.merged);
         assert!(outcome.format_merged().is_some(), "the file was rewritten without a word");
         assert!(outcome.replaced.is_empty(), "the merge reported itself as a replacement too");
 
@@ -799,7 +799,7 @@ mod tests {
         assert!(merged.contains("===> contested-filenames"), "the block that could not be discovered \
                 is still not there:\n{merged}");
         // and the parser agrees that the contest is settled once, their way
-        let (rules, faulty) = mezura_core::language_file::parse_priority(&merged);
+        let (rules, faulty) = mezura_core::language_file::parse_conflict_rules(&merged);
         assert!(faulty.is_empty(), "the merged file does not parse cleanly: {faulty:?}");
         assert_eq!(Some(&vec!["MATLAB".to_owned(), "Objective-C".to_owned()]), rules.by_extension.get("m"));
         assert_eq!(Some(&vec!["C Header".to_owned(), "Objective-C".to_owned()]), rules.by_extension.get("h"));
@@ -807,7 +807,7 @@ mod tests {
         // Their copy as it was is kept: the merge is the one place this pass rewrites a file that
         // was theirs to edit
         assert_eq!(theirs, std::fs::read_to_string(format!("{dir}replaced/{VERSION_ID}/{}/{}",
-                outcome.archived_under, mezura_core::EXTENSION_PRIORITY_FILE_NAME)).unwrap());
+                outcome.archived_under, mezura_core::LANGUAGE_CONFLICTS_FILE_NAME)).unwrap());
 
         assert!(migrate_data_files(&dir, false).did_nothing(),
                 "a merged file was merged again, so every run would say so");
@@ -936,13 +936,13 @@ mod tests {
         assert!(std::path::Path::new(&kept).exists());
         assert!(outcome.replaced.is_empty(), "a missing file came back as a changed one: {:?}", outcome.replaced);
 
-        // and so is the priority file, whose loss sends every contested extension to the tiebreak
-        let priority = dir.clone() + mezura_core::EXTENSION_PRIORITY_FILE_NAME;
-        std::fs::remove_file(&priority).unwrap();
+        // and so is the conflicts file, whose loss sends every contested extension to the tiebreak
+        let conflicts = dir.clone() + mezura_core::LANGUAGE_CONFLICTS_FILE_NAME;
+        std::fs::remove_file(&conflicts).unwrap();
         migrate_data_files(&dir, false);
-        assert!(std::path::Path::new(&priority).exists(),
+        assert!(std::path::Path::new(&conflicts).exists(),
                 "'{}' was left missing, so every contested extension falls to the tiebreak for good",
-                mezura_core::EXTENSION_PRIORITY_FILE_NAME);
+                mezura_core::LANGUAGE_CONFLICTS_FILE_NAME);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -1239,28 +1239,28 @@ mod tests {
     }
 
     #[test]
-    fn merging_the_priority_file_settles_each_contest_once() {
+    fn merging_the_conflicts_file_settles_each_contest_once() {
         let ours = "How it works now.\n\n===> contested-extensions\nh       C Header, Objective-C\nm       Objective-C, MATLAB\n\n===> contested-filenames\n";
 
         // A contest they settled is not settled again further down, whichever spelling they wrote
         // it in: a file with two rules for one extension has the second reported as faulty
-        let merged = merge_priority_files("===> contested-extensions\n.M   MATLAB, Objective-C\n", ours).unwrap();
+        let merged = merge_conflict_files("===> contested-extensions\n.M   MATLAB, Objective-C\n", ours).unwrap();
         assert_eq!(1, merged.matches("MATLAB").count(), "the contest was settled twice:\n{merged}");
         assert!(merged.contains(".M   MATLAB, Objective-C"));
 
         // Their copy already says all of it, so there is nothing to write and nothing to report
-        assert_eq!(None, merge_priority_files(ours, ours));
+        assert_eq!(None, merge_conflict_files(ours, ours));
         // and a copy saved with the line endings of the other system is not a difference
-        assert_eq!(None, merge_priority_files(&ours.replace('\n', "\r\n"), ours));
+        assert_eq!(None, merge_conflict_files(&ours.replace('\n', "\r\n"), ours));
 
         // A section of their own has to survive an older binary that knows nothing about it
-        let merged = merge_priority_files("===> theirs-alone\nq   Something\n", ours).unwrap();
+        let merged = merge_conflict_files("===> theirs-alone\nq   Something\n", ours).unwrap();
         assert!(merged.contains("===> theirs-alone") && merged.contains("q   Something"),
                 "a block of their own was dropped:\n{merged}");
 
         // The explanation is ours and comes back as we write it, so a section that arrives is never
         // one that nothing explains
-        let merged = merge_priority_files("How it worked back then.\n\n===> contested-extensions\nh       C Header, Objective-C\nm       Objective-C, MATLAB\n", ours).unwrap();
+        let merged = merge_conflict_files("How it worked back then.\n\n===> contested-extensions\nh       C Header, Objective-C\nm       Objective-C, MATLAB\n", ours).unwrap();
         assert!(merged.starts_with("How it works now."), "the explanation was left behind:\n{merged}");
     }
 
@@ -1268,12 +1268,12 @@ mod tests {
     // disagree about where a section begins, the merge takes a section for one of their own, writes
     // ours beside it, and the parser lets ours win the contest they had settled.
     #[test]
-    fn merging_the_priority_file_finds_a_section_wherever_the_parser_finds_one() {
+    fn merging_the_conflicts_file_finds_a_section_wherever_the_parser_finds_one() {
         let ours = "How it works now.\n\n===> contested-extensions\nh       C Header, Objective-C\nm       Objective-C, MATLAB\n\n===> contested-filenames\n";
         let settled_once = |theirs: &str, why: &str| {
-            let merged = merge_priority_files(theirs, ours)
+            let merged = merge_conflict_files(theirs, ours)
                     .unwrap_or_else(|| panic!("{why}: their copy was called up to date"));
-            let (rules, faulty) = mezura_core::language_file::parse_priority(&merged);
+            let (rules, faulty) = mezura_core::language_file::parse_conflict_rules(&merged);
             assert!(faulty.is_empty(), "{why}: the merged file has lines the parser rejects: {faulty:?}\n{merged}");
             assert_eq!(Some(&vec!["MATLAB".to_owned(), "Objective-C".to_owned()]), rules.by_extension.get("m"),
                     "{why}: their answer was reversed\n{merged}");
@@ -1287,7 +1287,7 @@ mod tests {
         settled_once("===> contested-extensions   (mine)\nm       MATLAB, Objective-C\n", "a marker with a word after it");
 
         // A second section under the same name, which is what appending to the file looks like
-        let merged = merge_priority_files(
+        let merged = merge_conflict_files(
                 "===> contested-extensions\nm       MATLAB, Objective-C\n\n===> contested-extensions\nlpr     Lazarus, Pascal\n", ours).unwrap();
         assert!(merged.contains("lpr     Lazarus, Pascal"), "the second section was dropped:\n{merged}");
         assert_eq!(1, merged.matches("MATLAB").count(), "the contest was settled twice:\n{merged}");

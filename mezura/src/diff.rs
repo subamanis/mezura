@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use mezura_core::{EngineConfig, Language, Languages, ModuleResult, RunResult, Stats, UNNAMED_MODULE_NAME, render};
-use mezura_core::language_file::PriorityRules;
+use mezura_core::language_file::ConflictRules;
 
 use super::config_manager::{Configuration, Layout, SortCriterion};
 use super::config_manager::{COUNTING, COUNT_GENERATED, COUNT_MINIFIED, EXCLUDE, EXCLUDE_LANGUAGES,
@@ -156,19 +156,19 @@ impl BothSidesNamed {
     // The language complaints are reported here, this being the one form where no run of this
     // program's own will report them
     pub fn into_comparison(self, config: &Configuration,
-            extension_priority: &PriorityRules) -> Result<Comparison, String>
+            conflicts: &ConflictRules) -> Result<Comparison, String>
     {
-        let (_, reported) = Languages::resolve(&config.engine, self.languages.clone(), extension_priority);
+        let (_, reported) = Languages::resolve(&config.engine, self.languages.clone(), conflicts);
         super::warning_collector::report_language_resolution_warnings(reported);
 
         let [baseline, subject] = <[PreparedSide; 2]>::try_from(
                 prepare_sides(vec![self.baseline, self.subject], &config.engine)?)
                 .ok().expect("two sides in, two sides out");
 
-        let (baseline, notes) = baseline.into_reading(config, self.languages.clone(), extension_priority)?;
+        let (baseline, notes) = baseline.into_reading(config, self.languages.clone(), conflicts)?;
         let mut notes_so_far = self.notes_so_far;
         notes_so_far.extend(notes);
-        let (subject, notes) = subject.into_reading(config, self.languages, extension_priority)?;
+        let (subject, notes) = subject.into_reading(config, self.languages, conflicts)?;
         notes_so_far.extend(notes);
 
         Ok(Comparison::of(baseline, subject, config, notes_so_far))
@@ -183,11 +183,11 @@ pub struct BaselineOnly {
 
 impl BaselineOnly {
     pub fn count_baseline(self, config: &Configuration,
-            extension_priority: &PriorityRules) -> Result<CountedBaseline, String>
+            conflicts: &ConflictRules) -> Result<CountedBaseline, String>
     {
         let [baseline] = <[PreparedSide; 1]>::try_from(prepare_sides(vec![self.baseline], &config.engine)?)
                 .ok().expect("one side in, one side out");
-        let (baseline, notes) = baseline.into_reading(config, self.languages, extension_priority)?;
+        let (baseline, notes) = baseline.into_reading(config, self.languages, conflicts)?;
         let mut notes_so_far = self.notes_so_far;
         notes_so_far.extend(notes);
 
@@ -256,12 +256,12 @@ fn prepare_sides(sides: Vec<DiffSide>, engine: &EngineConfig) -> Result<Vec<Prep
 
 impl PreparedSide {
     fn into_reading(self, config: &Configuration, languages: Vec<Language>,
-            extension_priority: &PriorityRules) -> Result<(Reading, Vec<Note>), String>
+            conflicts: &ConflictRules) -> Result<(Reading, Vec<Note>), String>
     {
         match self {
             PreparedSide::Document(reading) => Ok((*reading, Vec::new())),
             PreparedSide::Revision(side) => super::sources::count_git_revision(side, config, languages,
-                    extension_priority).map_err(|x| x.to_string())
+                    conflicts).map_err(|x| x.to_string())
         }
     }
 }

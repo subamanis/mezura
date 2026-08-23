@@ -154,7 +154,7 @@ js css
 **How a spelling becomes a language, in both the tag and the default: extension first, then the
 language's own name.** So `ts` is found because TypeScript claims that extension, and `typescript`
 is found because that is what the language is called, which is what makes `type="text/typescript"`
-work. The extension comes first because that is the form your `extension_priority.txt` answers for,
+work. The extension comes first because that is the form your `language_conflicts.txt` answers for,
 so an extension two languages claim resolves to the same one the counting uses. A spelling nobody
 recognises falls to the region's default rather than losing the block.
 
@@ -223,7 +223,7 @@ Wherever a language name is expected, `--languages`, `--exclude-languages`, and 
 a configuration file, you can write **either the name the file gives it or any extension it
 claims**: `--languages javascript` and `--languages js` are the same request. An extension that two
 languages claim names whichever of them owns it for the counting, which is the answer in
-`extension_priority.txt` or the one `--force-language` gave, so one word never selects one language
+`language_conflicts.txt` or the one `--force-language` gave, so one word never selects one language
 and counts another.
 
 Because that answer is your machine's, a configuration file you share is clearer if it names
@@ -237,7 +237,7 @@ languages by their names. On the command line, type whichever is shorter.
 like `&'a str` from swallowing the line.
 
 **Two languages wanting the same extension.** Only one can have it, and the loser's files are then
-read with the winner's symbols. Name the winner in `extension_priority.txt` in the data directory,
+read with the winner's symbols. Name the winner in `language_conflicts.txt` in the data directory,
 under `contested-extensions` or `contested-filenames`, or use `--force-language` for one run.
 
 ## Checking it

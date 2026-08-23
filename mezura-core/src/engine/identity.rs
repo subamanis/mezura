@@ -361,8 +361,8 @@ mod tests {
         assert_eq!(Some("Dotty"), map.get("dot").map(AsRef::as_ref),
                 "a language declaring '.dot' claims nothing: {map:?}");
 
-        // and a rule of the priority file reaches the same key
-        let (rules, faulty) = crate::language_file::parse_priority(
+        // and a rule of the conflicts file reaches the same key
+        let (rules, faulty) = crate::language_file::parse_conflict_rules(
                 "===> contested-extensions\n.m       MATLAB, Objective-C\n");
         assert!(faulty.is_empty());
         assert_eq!(Some(&vec!["MATLAB".to_owned(), "Objective-C".to_owned()]), rules.by_extension.get("m"));
@@ -576,7 +576,8 @@ mod tests {
     fn shebang_lookup(claims: &[(&str, &[&str])]) -> LanguageLookup {
         let languages = claims.iter()
                 .map(|(name, interpreters)| ((*name).to_owned(),
-                        Language::new(*name, ["zzz"], ["\""], ["#"], &[], []).with_shebangs(interpreters)))
+                        Language::new(*name, ["zzz"], crate::StringRules::escaping_with(b'\\').with_symbols(["\""]),
+                                ["#"], &[], []).with_shebangs(interpreters)))
                 .collect();
         LanguageLookup {
             by_shebang: build_language_map_by(IdentifiedBy::Shebang, &languages,
@@ -652,7 +653,8 @@ mod tests {
         // and the same pair still settles a real interpreter contest
         let contested: HashMap<String, Language> = [("Ash", ["sh"]), ("Bsh", ["sh"])].into_iter()
                 .map(|(name, interpreters)| (name.to_owned(),
-                        Language::new(name, ["zzz"], ["\""], ["#"], &[], []).with_shebangs(&interpreters)))
+                        Language::new(name, ["zzz"], crate::StringRules::escaping_with(b'\\').with_symbols(["\""]),
+                                ["#"], &[], []).with_shebangs(&interpreters)))
                 .collect();
         let forced = hashmap!("sh".to_owned() => "bsh".to_owned());
         let (map, report) = build_language_map_by(IdentifiedBy::Shebang, &contested, &HashMap::new(), &forced);

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use mezura_core::{CountingModel, EngineConfig, Languages, Target, Threads, language_file, languages, run, run_watched};
+use mezura_core::{CountingModel, EngineConfig, Languages, StringRules, Target, Threads, language_file,
+        languages, run, run_watched};
 
 const LANGUAGES_DIR : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/languages/");
 
@@ -56,7 +57,7 @@ fn the_shipped_languages_are_the_files_of_the_languages_directory() {
     assert_eq!(from_disk, baked_in);
 
     // and the rule that settles a contested extension travels with them
-    assert!(!languages::parse_shipped_extension_priority().by_extension.is_empty());
+    assert!(!languages::parse_shipped_conflict_rules().by_extension.is_empty());
 }
 
 // A language a caller builds by hand is counted under the name it carries. It used to be counted
@@ -73,7 +74,8 @@ fn a_language_of_my_own_is_counted_under_the_name_it_carries() {
         threads: Threads::new(1, 1),
         ..EngineConfig::new([root.to_string_lossy().replace('\\', "/")])
     };
-    let mine = mezura_core::Language::new("PetrosLang", ["pal"], ["\""], ["//"], &[],
+    let mine = mezura_core::Language::new("PetrosLang", ["pal"],
+            StringRules::escaping_with(b'\\').with_symbols(["\""]), ["//"], &[],
             [mezura_core::Keyword::new("bindings", ["let"])]);
 
     let (languages, _) = Languages::resolve(&config, [mine], &Default::default());
@@ -97,9 +99,11 @@ fn a_container_file_is_one_file_of_its_language_and_its_sections_are_the_decompo
     std::fs::write(root.join("page.web"), "<p>hello</p>\n<script>\n// a js comment\nvar x = 1;\n</script>\n").unwrap();
     std::fs::write(root.join("plain.js"), "// a comment\nvar y = 2;\n").unwrap();
 
-    let web = mezura_core::Language::new("Web", ["web"], [""; 0], [""; 0], &[("<!--", "-->")], [])
+    let web = mezura_core::Language::new("Web", ["web"], StringRules::escaping_nothing(), [""; 0],
+                    &[("<!--", "-->")], [])
             .with_nested_languages(&[mezura_core::NestedLanguage::of("<script", "</script>", "js")]);
-    let js = mezura_core::Language::new("JS", ["js"], ["\""], ["//"], &[("/*", "*/")], []);
+    let js = mezura_core::Language::new("JS", ["js"], StringRules::escaping_with(b'\\').with_symbols(["\""]),
+            ["//"], &[("/*", "*/")], []);
     let definitions = || [web.clone(), js.clone()];
 
     let config = EngineConfig {
@@ -146,12 +150,15 @@ fn an_empty_or_self_section_gets_no_row_and_an_excluded_one_keeps_its_name() {
     std::fs::write(root.join("empty.web"), "<script src=\"x.js\">\n</script>\n").unwrap();
     std::fs::write(root.join("inner.web"), "<template>\n<p>hi</p>\n</template>\n").unwrap();
 
-    let web = mezura_core::Language::new("Web", ["web"], [""; 0], [""; 0], &[("<!--", "-->")], [])
+    let web = mezura_core::Language::new("Web", ["web"], StringRules::escaping_nothing(), [""; 0],
+                    &[("<!--", "-->")], [])
             .with_nested_languages(&[mezura_core::NestedLanguage::of("<script", "</script>", "js"),
                     mezura_core::NestedLanguage::of("<style", "</style>", "css"),
                     mezura_core::NestedLanguage::of("<template", "</template>", "web")]);
-    let js = mezura_core::Language::new("JS", ["js"], ["\""], ["//"], &[("/*", "*/")], []);
-    let css = mezura_core::Language::new("CSS", ["css"], [""; 0], [""; 0], &[("/*", "*/")], []);
+    let js = mezura_core::Language::new("JS", ["js"], StringRules::escaping_with(b'\\').with_symbols(["\""]),
+            ["//"], &[("/*", "*/")], []);
+    let css = mezura_core::Language::new("CSS", ["css"], StringRules::escaping_nothing(), [""; 0],
+            &[("/*", "*/")], []);
     let definitions = || [web.clone(), js.clone(), css.clone()];
 
     let config = EngineConfig { threads: Threads::new(1, 1),
@@ -193,9 +200,9 @@ fn the_shipped_rule_for_a_contested_extension_is_actually_applied() {
         ..EngineConfig::new([root.to_string_lossy().replace('\\', "/")])
     };
 
-    let named_by_the_rule = languages::parse_shipped_extension_priority().by_extension.get("m")
+    let named_by_the_rule = languages::parse_shipped_conflict_rules().by_extension.get("m")
             .and_then(|order| order.first().cloned())
-            .expect("'m' is no longer settled by the shipped priority file, so pick another extension");
+            .expect("'m' is no longer settled by the shipped conflicts file, so pick another extension");
 
     let (languages, _) = Languages::shipped(&config);
     let counted = run(&config, languages).unwrap();
@@ -265,8 +272,9 @@ fn two_spellings_of_one_name_are_reported_and_force_lang_still_picks_the_one_it_
     std::fs::write(root.join("a.pal"), "/* only a comment */\n").unwrap();
 
     // Identical but for the multiline comment, which is what makes the one line count differently
-    let capital = mezura_core::Language::new("Pal", ["pal"], ["\""], ["//"], &[("/*", "*/")], []);
-    let lower = mezura_core::Language::new("pal", ["pal"], ["\""], ["//"], &[], []);
+    let quoted = || StringRules::escaping_with(b'\\').with_symbols(["\""]);
+    let capital = mezura_core::Language::new("Pal", ["pal"], quoted(), ["//"], &[("/*", "*/")], []);
+    let lower = mezura_core::Language::new("pal", ["pal"], quoted(), ["//"], &[], []);
 
     let counted_forcing = |wanted: &str| {
         let config = EngineConfig {

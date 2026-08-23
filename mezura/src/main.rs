@@ -37,8 +37,8 @@ mod warning_collector;
 use std::{process::ExitCode, sync::Arc, time::Instant};
 
 use colored::*;
-use mezura_core::{CountingModel, EXTENSION_PRIORITY_FILE_NAME, FilesPresent, Language};
-use mezura_core::language_file::PriorityRules;
+use mezura_core::{CountingModel, FilesPresent, LANGUAGE_CONFLICTS_FILE_NAME, Language};
+use mezura_core::language_file::ConflictRules;
 
 use crate::config_manager::{Configuration, OutputFormat};
 use crate::config_manager::{CHANGELOG, COUNTING, HELP, LAYOUT, OUTPUT, RESTORE, SHOW_CONFIGS,
@@ -185,22 +185,22 @@ Your configurations, themes and logs are left alone.")};
         }
     }
 
-    let (extension_priority, faulty_priority_lines) = read_extension_priority();
-    if !faulty_priority_lines.is_empty() {
+    let (conflict_rules, faulty_conflict_lines) = read_conflict_rules();
+    if !faulty_conflict_lines.is_empty() {
         eprintln!("\n{}", crate::message_printer::wrap_message(
-                &format!("Lines that could not be read in '{EXTENSION_PRIORITY_FILE_NAME}', and were skipped:\n{}",
-                faulty_priority_lines.join("\n"))).yellow());
-        for line in &faulty_priority_lines {
-            crate::warning_collector::keep(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::PriorityLineSkipped, line,
-                    format!("'{line}' could not be read in '{EXTENSION_PRIORITY_FILE_NAME}' and was skipped, so any contest it was meant to settle was left to the tiebreak.")));
+                &format!("Lines that could not be read in '{LANGUAGE_CONFLICTS_FILE_NAME}', and were skipped:\n{}",
+                faulty_conflict_lines.join("\n"))).yellow());
+        for line in &faulty_conflict_lines {
+            crate::warning_collector::keep(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::ConflictLineSkipped, line,
+                    format!("'{line}' could not be read in '{LANGUAGE_CONFLICTS_FILE_NAME}' and was skipped, so any contest it was meant to settle was left to the tiebreak.")));
         }
     }
 
     // Above the language resolution, whose selection a document's adopted settings can change, and
-    // below the extension priority, which a side that is a revision is counted with
+    // below the conflict rules, which a side that is a revision is counted with
     let baseline_only = match crate::diff::DiffRequest::of(&mut config, &languages_available) {
         Ok(Some(crate::diff::DiffRequest::BetweenTwoReadings(both))) => {
-            return match both.into_comparison(&config, &extension_priority) {
+            return match both.into_comparison(&config, &conflict_rules) {
                 Ok(comparison) => {
                     if config.view.prints_text() {
                         println!();
@@ -229,7 +229,7 @@ Your configurations, themes and logs are left alone.")};
         }
     };
 
-    let (languages, reported) = mezura_core::Languages::resolve(&config.engine, languages_available, &extension_priority);
+    let (languages, reported) = mezura_core::Languages::resolve(&config.engine, languages_available, &conflict_rules);
     crate::warning_collector::report_language_resolution_warnings(reported);
 
     // Its own answer entirely: no scan, no report, no log.
@@ -238,7 +238,7 @@ Your configurations, themes and logs are left alone.")};
     }
 
     // Above the run, so that a baseline which turns out not to be one costs no scan of the tree
-    let counted_baseline = match baseline_only.map(|x| x.count_baseline(&config, &extension_priority)) {
+    let counted_baseline = match baseline_only.map(|x| x.count_baseline(&config, &conflict_rules)) {
         Some(Ok(x)) => Some(x),
         Some(Err(complaint)) => {
             eprintln!("\n{}\n", crate::theme::get_active().error.paint(&crate::message_printer::wrap_message(&complaint)));
@@ -358,8 +358,9 @@ fn report_unknown_languages(languages_available: &[Language], languages_of_inter
 // Only the file on disk is read, never the baked-in copy: that file is the one the user is meant to
 // edit, and reading a different one would make their edits look like they had no effect. Until the
 // migration pass has written it, every contested extension simply announces its tiebreak.
-fn read_extension_priority() -> (PriorityRules, Vec<String>) {
-    mezura_core::language_file::parse_priority_file(&(crate::paths::PERSISTENT_APP_PATHS.data_dir.clone() + EXTENSION_PRIORITY_FILE_NAME))
+fn read_conflict_rules() -> (ConflictRules, Vec<String>) {
+    mezura_core::language_file::parse_conflict_rules_file(
+            &(crate::paths::PERSISTENT_APP_PATHS.data_dir.clone() + LANGUAGE_CONFLICTS_FILE_NAME))
 }
 
 fn open_in_browser(path: &str) {
@@ -520,7 +521,7 @@ fn asks_for_a_json_document(args_str: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use mezura_core::Language;
+    use mezura_core::{Language, StringRules};
     use crate::report_unknown_languages;
 
     #[test]
@@ -535,8 +536,8 @@ mod tests {
     }
 
     fn java_and_csharp() -> Vec<Language> {
-        vec![Language::new("Java", [""; 0], ["\""], [""; 0], &[], []),
-             Language::new("C#", [""; 0], ["\""], [""; 0], &[], [])]
+        vec![Language::new("Java", [""; 0], StringRules::escaping_nothing(), [""; 0], &[], []),
+             Language::new("C#", [""; 0], StringRules::escaping_nothing(), [""; 0], &[], [])]
     }
 
     #[test]
@@ -556,7 +557,7 @@ mod tests {
     #[test]
     fn a_language_declared_by_two_files_is_suggested_once() {
         let mut available = java_and_csharp();
-        available.push(Language::new("Java", [""; 0], ["\""], [""; 0], &[], []));
+        available.push(Language::new("Java", [""; 0], StringRules::escaping_nothing(), [""; 0], &[], []));
 
         let report = report_unknown_languages(&available, &["jaava".to_owned(), "C#".to_owned()])
                 .unwrap().expect("a misspelling was not reported at all");

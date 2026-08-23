@@ -49,12 +49,12 @@ fn add_advice_to(mut warning: Warning) -> Warning {
     // Deliberately not exhaustive: a new code arriving without a line of advice is a missing nicety
     // and not a wrong answer.
     let advice = match warning.code {
-        // The priority file settles extensions and filenames only. A contested shebang written into
-        // it is skipped without a word, so sending its owner there would be advice that fails
+        // The conflicts file settles extensions and filenames only. A contested shebang written
+        // into it is skipped without a word, so sending its owner there would be advice that fails
         // silently.
         Code::LanguageTiebreak => Some(format!("A contested extension or filename is settled for good in '{}'; \
 '--force-language {}=<language>' decides it for this run.",
-                mezura_core::EXTENSION_PRIORITY_FILE_NAME, warning.subject)),
+                mezura_core::LANGUAGE_CONFLICTS_FILE_NAME, warning.subject)),
         Code::DuplicateLanguage => Some("Delete the copies you do not want from the 'languages' directory of your data directory.".to_owned()),
         Code::UnknownForcedLanguage => Some("Run with '--show-languages' for the ones available to '--force-language'.".to_owned()),
         Code::UnknownLanguage => Some("Run with '--show-languages' for the ones available to '--languages'.".to_owned()),
@@ -97,7 +97,7 @@ mod tests {
         assert!(advised.message.starts_with("The extension 'm' is claimed by MATLAB and Objective-C.\n"),
                 "the library's own sentence was not kept whole:\n{}", advised.message);
         assert!(advised.message.contains("--force-language m=<language>"), "{}", advised.message);
-        assert!(advised.message.contains("extension_priority.txt"), "{}", advised.message);
+        assert!(advised.message.contains("language_conflicts.txt"), "{}", advised.message);
 
         for (code, command) in [(Code::UnknownForcedLanguage, "--force-language"), (Code::UnknownLanguage, "--languages"),
                 (Code::UnknownExcludedLanguage, "--exclude-languages")] {
@@ -105,7 +105,7 @@ mod tests {
             assert!(advised.message.contains(command), "{} did not name '{command}':\n{}", code.name(), advised.message);
         }
 
-        let untouched = add_advice_to(Warning::new(Code::PriorityLineSkipped, "a line",
+        let untouched = add_advice_to(Warning::new(Code::ConflictLineSkipped, "a line",
                 "that line was skipped.".to_owned()));
         assert_eq!("that line was skipped.", untouched.message);
     }

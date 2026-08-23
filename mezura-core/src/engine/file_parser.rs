@@ -116,15 +116,16 @@ impl ScanPlan {
         // The single line symbols first, the character literals after them and the crossing ones
         // last, which is the numbering 'Language::get_string_pair_of' answers to
         let mut entries : Vec<PlanEntry> = Vec::new();
-        for (i, symbol) in language.string_symbols.iter().enumerate() {
+        let (symbols, literals) = (language.strings.get_symbols(), language.strings.get_char_literals());
+        for (i, symbol) in symbols.iter().enumerate() {
             entries.push(PlanEntry::of(STRINGS, i as u8, ROLE_EITHER, symbol.as_bytes()));
         }
-        for (i, symbol) in language.char_literal_symbols.iter().enumerate() {
-            let index = (language.string_symbols.len() + i) as u8;
+        for (i, symbol) in literals.iter().enumerate() {
+            let index = (symbols.len() + i) as u8;
             entries.push(PlanEntry::of(STRINGS, index, ROLE_LITERAL, symbol.as_bytes()));
         }
-        for (i, crossing) in language.multiline_strings.iter().enumerate() {
-            let index = (language.string_symbols.len() + language.char_literal_symbols.len() + i) as u8;
+        for (i, crossing) in language.strings.get_multiline_strings().iter().enumerate() {
+            let index = (symbols.len() + literals.len() + i) as u8;
             let (open, close) = (&crossing.open, &crossing.close);
             if open != close {
                 entries.push(PlanEntry::of(STRINGS, index, ROLE_OPEN, open.as_bytes()));
@@ -362,7 +363,7 @@ fn is_not_escaped(pos: usize, bytes: &[u8], escape: Option<u8>) -> bool {
 fn scan_line(line: &str, language: &Language, buffers: &mut ScanBuffers) {
     let plan = get_or_build_plan_of(language);
     let line_bytes = line.as_bytes();
-    let escape = language.escape_character;
+    let escape = language.strings.get_escape();
     buffers.reset(plan.slots.len());
 
     for chunk in &plan.chunks {
@@ -1165,7 +1166,7 @@ fn ends_with_continuation(line: &str, language: &Language) -> bool {
     let Some(continuation) = &language.line_continuation else { return false };
     let bytes = line.as_bytes();
     bytes.ends_with(continuation.symbol.as_bytes())
-            && is_not_escaped(bytes.len() - continuation.symbol.len(), bytes, language.escape_character)
+            && is_not_escaped(bytes.len() - continuation.symbol.len(), bytes, language.strings.get_escape())
 }
 
 // A stretch of nothing but whitespace is not code, and recording one would say that the line has
@@ -1739,7 +1740,7 @@ mod tests {
     use std::sync::{Arc, LazyLock};
 
     use super::*;
-    use crate::{CountingModel, Keyword, LineClasses, MultilineString, Stats};
+    use crate::{CountingModel, Keyword, LineClasses, Stats, StringRules};
     use crate::test_paths::{FIXTURES_DIR, LANGUAGES_DIR};
     use crate::engine::identity::{IdentifiedBy, LanguageLookup, build_language_map_by};
 
@@ -1853,17 +1854,20 @@ mod tests {
         aliases : vec!["trait".to_owned()]
     });
 
+    // The declaration behind most of the languages below: one double quote, cancelled by a
+    // backslash, which is what the C family and everything shaped like it writes.
+    fn build_backslashed_quotes() -> StringRules {
+        StringRules::escaping_with(b'\\').with_symbols(["\""])
+    }
+
     static JAVA : LazyLock<Language> = LazyLock::new(|| Language {
         name : "java".to_owned(),
         extensions : vec!["java".to_owned()],
         filenames : vec![],
         shebangs : vec![],
-        string_symbols : vec!["\"".to_owned()],
-        char_literal_symbols : vec![],
+        strings : StringRules::escaping_with(b'\\').with_symbols(["\""]),
         line_continuation : None,
-        escape_character : Some(b'\\'),
         nested_languages : vec![],
-        multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned()],
         multiline_comments : vec![("/*".to_owned(), "*/".to_owned())],
         nesting_comments : vec![],
@@ -1877,12 +1881,9 @@ mod tests {
         extensions : vec!["php".to_owned()],
         filenames : vec![],
         shebangs : vec![],
-        string_symbols : vec!["\"".to_owned(), "'".to_owned()],
-        char_literal_symbols : vec![],
+        strings : StringRules::escaping_with(b'\\').with_symbols(["\"", "'"]),
         line_continuation : None,
-        escape_character : Some(b'\\'),
         nested_languages : vec![],
-        multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned(),"#".to_owned()],
         multiline_comments : vec![("/*".to_owned(), "*/".to_owned())],
         nesting_comments : vec![],
@@ -1896,12 +1897,9 @@ mod tests {
         extensions : vec!["py".to_owned()],
         filenames : vec![],
         shebangs : vec![],
-        string_symbols : vec!["\"".to_owned(), "'".to_owned()],
-        char_literal_symbols : vec![],
+        strings : StringRules::escaping_with(b'\\').with_symbols(["\"", "'"]),
         line_continuation : None,
-        escape_character : Some(b'\\'),
         nested_languages : vec![],
-        multiline_strings : vec![],
         comment_symbols : vec!["#".to_owned()],
         multiline_comments : vec![],
         nesting_comments : vec![],
@@ -1915,12 +1913,9 @@ mod tests {
         extensions : vec!["rs".to_owned()],
         filenames : vec![],
         shebangs : vec![],
-        string_symbols : vec!["\"".to_owned()],
-        char_literal_symbols : vec![],
+        strings : StringRules::escaping_with(b'\\').with_symbols(["\""]),
         line_continuation : None,
-        escape_character : Some(b'\\'),
         nested_languages : vec![],
-        multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned()],
         multiline_comments : vec![("/*".to_owned(), "*/".to_owned())],
         nesting_comments : vec![],
@@ -1937,12 +1932,10 @@ mod tests {
         extensions : vec!["py".to_owned()],
         filenames : vec![],
         shebangs : vec![],
-        string_symbols : vec!["\"".to_owned(), "'".to_owned()],
-        char_literal_symbols : vec![],
+        strings : StringRules::escaping_with(b'\\').with_symbols(["\"", "'"])
+                .with_multiline_strings(["\"\"\"", "'''"]),
         line_continuation : None,
-        escape_character : Some(b'\\'),
         nested_languages : vec![],
-        multiline_strings : vec![MultilineString::escaping("\"\"\""), MultilineString::escaping("'''")],
         comment_symbols : vec!["#".to_owned(), "//".to_owned(), "--".to_owned()],
         multiline_comments : vec![],
         nesting_comments : vec![],
@@ -1989,7 +1982,7 @@ mod tests {
     }
 
     fn c_like_with_a_splice() -> Language {
-        Language::new("c-like", ["c"], ["\""], ["//"], &[("/*", "*/")], [])
+        Language::new("c-like", ["c"], build_backslashed_quotes(), ["//"], &[("/*", "*/")], [])
                 .with_line_continuation("\\", true, true)
     }
 
@@ -2019,8 +2012,8 @@ mod tests {
         assert_eq!(1, stats.classes.blank_in_string);
         assert_eq!(1, stats.classes.words_in_comment);
 
-        let crossing = Language::new("py-like", ["py"], ["\""], ["#"], &[], [])
-                .with_multiline_strings(&["\"\"\""]);
+        let crossing = Language::new("py-like", ["py"],
+                build_backslashed_quotes().with_multiline_strings(["\"\"\""]), ["#"], &[], []);
         let stats = parse_lines_whole("\"\"\" open\n\nstill inside \"\"\"\n", &crossing);
         assert_eq!(1, stats.classes.blank_in_string);
         assert_eq!(2, stats.classes.string_content);
@@ -2339,12 +2332,9 @@ mod tests {
         extensions : vec!["lua".to_owned()],
         filenames : vec![],
         shebangs : vec![],
-        string_symbols : vec!["\"".to_owned(), "'".to_owned()],
-        char_literal_symbols : vec![],
+        strings : StringRules::escaping_with(b'\\').with_symbols(["\"", "'"]),
         line_continuation : None,
-        escape_character : Some(b'\\'),
         nested_languages : vec![],
-        multiline_strings : vec![],
         comment_symbols : vec!["--".to_owned()],
         multiline_comments : vec![("--[[".to_owned(), "]]".to_owned())],
         nesting_comments : vec![],
@@ -2372,12 +2362,9 @@ mod tests {
         extensions : vec!["ps1".to_owned()],
         filenames : vec![],
         shebangs : vec![],
-        string_symbols : vec!["\"".to_owned(), "'".to_owned()],
-        char_literal_symbols : vec![],
+        strings : StringRules::escaping_with(b'`').with_symbols(["\"", "'"]),
         line_continuation : None,
-        escape_character : Some(b'`'),
         nested_languages : vec![],
-        multiline_strings : vec![],
         comment_symbols : vec!["#".to_owned()],
         multiline_comments : vec![("<#".to_owned(), "#>".to_owned())],
         nesting_comments : vec![],
@@ -2407,12 +2394,9 @@ mod tests {
         extensions : vec!["pas".to_owned()],
         filenames : vec![],
         shebangs : vec![],
-        string_symbols : vec!["'".to_owned()],
-        char_literal_symbols : vec![],
+        strings : StringRules::escaping_nothing().with_symbols(["'"]),
         line_continuation : None,
-        escape_character : None,
         nested_languages : vec![],
-        multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned()],
         multiline_comments : vec![("{".to_owned(), "}".to_owned()), ("(*".to_owned(), "*)".to_owned())],
         nesting_comments : vec![],
@@ -2428,12 +2412,9 @@ mod tests {
         extensions : vec!["d".to_owned()],
         filenames : vec![],
         shebangs : vec![],
-        string_symbols : vec!["\"".to_owned()],
-        char_literal_symbols : vec![],
+        strings : StringRules::escaping_with(b'\\').with_symbols(["\""]),
         line_continuation : None,
-        escape_character : Some(b'\\'),
         nested_languages : vec![],
-        multiline_strings : vec![],
         comment_symbols : vec!["//".to_owned()],
         multiline_comments : vec![("/*".to_owned(), "*/".to_owned())],
         nesting_comments : vec![("/+".to_owned(), "+/".to_owned())],
@@ -2445,7 +2426,7 @@ mod tests {
     // Lua's long bracket, one declaration covering '--[[ ]]', '--[=[ ]=]' and every level above:
     // the run of '=' is counted at the opener and only an end with the same count closes.
     static LUA_LEVELED : LazyLock<Language> = LazyLock::new(|| Language::new(
-            "lua-leveled", ["lua"], ["\"", "'"], ["--"], &[], [])
+            "lua-leveled", ["lua"], StringRules::escaping_with(b'\\').with_symbols(["\"", "'"]), ["--"], &[], [])
             .with_leveled_comments(&[crate::LeveledPair::of("--[=*[", "]=*]").unwrap()]));
 
     #[test]
@@ -2475,8 +2456,8 @@ mod tests {
     }
 
     static OCAML : LazyLock<Language> = LazyLock::new(|| Language::new(
-            "ocaml-like", ["ml"], [""; 0], [""; 0], &[], [])
-            .with_multiline_strings(&["\""])
+            "ocaml-like", ["ml"], StringRules::escaping_with(b'\\').with_multiline_strings(["\""]),
+            [""; 0], &[], [])
             .with_nesting_comments(&[("(*", "*)")]));
 
     #[test]
@@ -2548,20 +2529,20 @@ mod tests {
     // Strings that open with one symbol and close with another: Rust's raw form and C#'s verbatim
     // form. Their pairs ride beside the ordinary quotes, and inside them nothing escapes.
     static RUST_RAW : LazyLock<Language> = LazyLock::new(|| Language::new(
-            "rust-raw", ["rs"], [""; 0], ["//"], &[("/*", "*/")], [])
-            .with_multiline_strings(&["\""])
-            .with_string_pairs(&[("r#\"", "\"#")]));
+            "rust-raw", ["rs"], StringRules::escaping_with(b'\\').with_multiline_strings(["\""])
+                    .with_string_pairs(&[("r#\"", "\"#")]),
+            ["//"], &[("/*", "*/")], []));
 
     static CSHARP_VERBATIM : LazyLock<Language> = LazyLock::new(|| Language::new(
-            "csharp-verbatim", ["cs"], ["\""], ["//"], &[("/*", "*/")], [])
-            .with_multiline_strings(&["\"\"\""])
-            .with_string_pairs(&[("@\"", "\"")]));
+            "csharp-verbatim", ["cs"], build_backslashed_quotes().with_multiline_strings(["\"\"\""])
+                    .with_string_pairs(&[("@\"", "\"")]),
+            ["//"], &[("/*", "*/")], []));
 
     // The shape of the shipped Rust file: a crossing quote, and the character literal beside it
     static RUST_CHARS : LazyLock<Language> = LazyLock::new(|| Language::new(
-            "rust-chars", ["rs"], [""; 0], ["//"], &[("/*", "*/")], [])
-            .with_char_literals(&["'"])
-            .with_multiline_strings(&["\""]));
+            "rust-chars", ["rs"], StringRules::escaping_with(b'\\').with_char_literals(["'"])
+                    .with_multiline_strings(["\""]),
+            ["//"], &[("/*", "*/")], []));
 
     // A character literal that does not close on its own line is not a literal at all, which keeps
     // a lifetime's lone ' from swallowing the rest of its line. One that does close shields what it
@@ -2611,8 +2592,9 @@ mod tests {
 
         // The byte is chosen from the ones the language already looks for and not from the end of
         // the symbol: on its last punctuation, C++'s 'R"(' would be found by '('
-        let cpp_raw = Language::new("cpp-like", ["cpp"], ["\""], ["//"], &[("/*", "*/")], [])
-                .with_string_pairs(&[("R\"(", ")\"")]);
+        let cpp_raw = Language::new("cpp-like", ["cpp"],
+                build_backslashed_quotes().with_string_pairs(&[("R\"(", ")\"")]),
+                ["//"], &[("/*", "*/")], []);
         let plan = ScanPlan::build(&cpp_raw);
         assert!(plan.chunks.iter().all(|c| !c.bytes[..c.len as usize].contains(&b'(')),
                 "the opener is searched by '(' in a language made of brackets");
@@ -2622,9 +2604,10 @@ mod tests {
     // quote it also holds is searched anyway: declaring the raw pair adds no byte and no pass.
     #[test]
     fn a_symbol_is_searched_by_a_byte_another_symbol_needs_before_one_of_its_own() {
-        let plain = Language::new("cpp-like", ["cpp"], ["\""], ["//"], &[("/*", "*/")], []);
-        let with_raw = Language::new("cpp-like", ["cpp"], ["\""], ["//"], &[("/*", "*/")], [])
-                .with_string_pairs(&[("R\"(", ")\"")]);
+        let plain = Language::new("cpp-like", ["cpp"], build_backslashed_quotes(), ["//"], &[("/*", "*/")], []);
+        let with_raw = Language::new("cpp-like", ["cpp"],
+                build_backslashed_quotes().with_string_pairs(&[("R\"(", ")\"")]),
+                ["//"], &[("/*", "*/")], []);
 
         let bytes_of = |language: &Language| {
             let plan = ScanPlan::build(language);
@@ -2644,13 +2627,12 @@ mod tests {
     // write a quote that escapes nothing inside itself, and only one of them escapes outside one.
     #[test]
     fn what_cancels_a_symbol_is_read_from_the_language_and_not_assumed() {
-        let shell = Language::new("shell-like", ["sh"], [""; 0], ["#"], &[], [])
-                .with_raw_multiline_strings(&["'"]);
-        let mut powershell = Language::new("ps-like", ["ps1"], [""; 0], ["#"], &[], [])
-                .with_raw_multiline_strings(&["'"]);
-        powershell.escape_character = Some(b'`');
-        let mut pascal = Language::new("pascal-like", ["pas"], ["'"], ["//"], &[], []);
-        pascal.escape_character = None;
+        let shell = Language::new("shell-like", ["sh"],
+                StringRules::escaping_with(b'\\').with_raw_multiline_strings(["'"]), ["#"], &[], []);
+        let powershell = Language::new("ps-like", ["ps1"],
+                StringRules::escaping_with(b'`').with_raw_multiline_strings(["'"]), ["#"], &[], []);
+        let pascal = Language::new("pascal-like", ["pas"],
+                StringRules::escaping_nothing().with_symbols(["'"]), ["//"], &[], []);
 
         // the shell escapes with the backslash, so the apostrophe opens nothing
         assert_eq!(TextInfo::from_slice(r"echo I\'m done"),
@@ -2675,8 +2657,9 @@ mod tests {
     // counts the rest of the line as whatever those symbols say.
     #[test]
     fn a_cpp_raw_string_keeps_the_quotes_and_brackets_inside_it() {
-        let cpp = Language::new("cpp-like", ["cpp"], ["\""], ["//"], &[("/*", "*/")], [])
-                .with_string_pairs(&[("R\"(", ")\"")]);
+        let cpp = Language::new("cpp-like", ["cpp"],
+                build_backslashed_quotes().with_string_pairs(&[("R\"(", ")\"")]),
+                ["//"], &[("/*", "*/")], []);
 
         assert_eq!(TextInfo::from_slice_w_literal("auto s = ;"),
                 bounds_multi(r#"auto s = R"(say "hi" // and (stay) code)";"#, &cpp, None, &None));
@@ -2705,9 +2688,10 @@ mod tests {
     // one. What saves it is that the pair cannot open while another string is open.
     #[test]
     fn a_raw_opener_that_appears_inside_an_ordinary_string_is_text() {
-        let rust = Language::new("rust-like", ["rs"], [""; 0], ["//"], &[("/*", "*/")], [])
-                .with_multiline_strings(&["\""])
-                .with_string_pairs(&[("r\"", "\""), ("r#\"", "\"#")]);
+        let rust = Language::new("rust-like", ["rs"],
+                StringRules::escaping_with(b'\\').with_multiline_strings(["\""])
+                        .with_string_pairs(&[("r\"", "\""), ("r#\"", "\"#")]),
+                ["//"], &[("/*", "*/")], []);
 
         assert_eq!(TextInfo::from_slice_w_literal("let s = ;"),
                 bounds_multi(r#"let s = "abcr";"#, &rust, None, &None));
@@ -2759,10 +2743,10 @@ mod tests {
     // halves of this test are the same line in two languages with opposite right answers.
     #[test]
     fn a_one_sided_form_escapes_or_not_as_the_language_declares_and_not_as_its_shape_suggests() {
-        let go = Language::new("go-like", ["go"], ["\""], ["//"], &[("/*", "*/")], [])
-                .with_raw_multiline_strings(&["`"]);
-        let js = Language::new("js-like", ["js"], ["\""], ["//"], &[("/*", "*/")], [])
-                .with_multiline_strings(&["`"]);
+        let go = Language::new("go-like", ["go"],
+                build_backslashed_quotes().with_raw_multiline_strings(["`"]), ["//"], &[("/*", "*/")], []);
+        let js = Language::new("js-like", ["js"],
+                build_backslashed_quotes().with_multiline_strings(["`"]), ["//"], &[("/*", "*/")], []);
 
         assert_eq!(TextInfo::from_slice_w_literal("var sep = ;"),
                 bounds_multi(r"var sep = `C:\`;", &go, None, &None));
@@ -2779,16 +2763,16 @@ mod tests {
     // The languages a section can resolve to, keyed the way the real run keys them: definitions by
     // name, and the attribute values by extension.
     fn section_fixture() -> (HashMap<String, Language>, HashMap<String, Arc<str>>) {
-        let js = Language::new("JS", ["js"], ["\""], ["//"], &[("/*", "*/")],
+        let js = Language::new("JS", ["js"], build_backslashed_quotes(), ["//"], &[("/*", "*/")],
                 [Keyword { descriptive_name: "functions".to_owned(), aliases: vec!["function".to_owned()] }]);
-        let css = Language::new("CSS", ["css"], [""; 0], [""; 0], &[("/*", "*/")], []);
+        let css = Language::new("CSS", ["css"], StringRules::escaping_nothing(), [""; 0], &[("/*", "*/")], []);
         let languages = crate::languages::keyed_by_name(vec![js, css]);
         let extensions = HashMap::from([("js".to_owned(), Arc::from("JS")), ("css".to_owned(), Arc::from("CSS"))]);
         (languages, extensions)
     }
 
     fn web_shell() -> Language {
-        Language::new("web", ["wbl"], [""; 0], [""; 0], &[("<!--", "-->")], [])
+        Language::new("web", ["wbl"], StringRules::escaping_nothing(), [""; 0], &[("<!--", "-->")], [])
                 .with_nested_languages(&[NestedLanguage::of("<script", "</script>", "js"),
                         NestedLanguage::of("<style", "</style>", "css")])
     }
@@ -2834,7 +2818,7 @@ mod tests {
         assert!(report.sections.is_empty(), "a tag inside a comment opened a section");
         assert_eq!((2, 1, 1), content_counts(&report.shell));
 
-        let stringy = Language::new("webstr", ["wbs"], ["\""], [""; 0], &[], [])
+        let stringy = Language::new("webstr", ["wbs"], build_backslashed_quotes(), [""; 0], &[], [])
                 .with_nested_languages(&[NestedLanguage::of("<script", "</script>", "js")]);
         let report = parse_with_sections("x = \"<script>\"\n", &stringy, &languages, &extensions);
         assert!(report.sections.is_empty(), "a tag inside a string opened a section");
@@ -2910,7 +2894,7 @@ mod tests {
 
         // A default nothing can answer for, by extension or by name, leaves the section as shell
         // rather than counting it under a language that does not exist
-        let unknown = Language::new("web", ["wbl"], [""; 0], [""; 0], &[("<!--", "-->")], [])
+        let unknown = Language::new("web", ["wbl"], StringRules::escaping_nothing(), [""; 0], &[("<!--", "-->")], [])
                 .with_nested_languages(&[NestedLanguage::of("<script", "</script>", "nosuchthing")]);
         let report = parse_with_sections("<script>\nvar x = 1;\n</script>\n", &unknown, &languages, &extensions);
         assert!(report.sections.is_empty(), "a section resolved to a language nothing declares");
@@ -2929,10 +2913,10 @@ mod tests {
     // A string ends with its line unless its symbol was declared to cross lines.
     #[test]
     fn an_unbalanced_quote_costs_its_line_and_not_the_rest_of_the_file() {
-        let plain = Language::new("py-like", ["py"], ["\"", "'"], ["#"], &[], [])
-                .with_multiline_strings(&["\"\"\""]);
-        let crossing = Language::new("py-like", ["py"], [""; 0], ["#"], &[], [])
-                .with_multiline_strings(&["\"\"\"", "\"", "'"]);
+        let plain = Language::new("py-like", ["py"], StringRules::escaping_with(b'\\')
+                .with_symbols(["\"", "'"]).with_multiline_strings(["\"\"\""]), ["#"], &[], []);
+        let crossing = Language::new("py-like", ["py"], StringRules::escaping_with(b'\\')
+                .with_multiline_strings(["\"\"\"", "\"", "'"]), ["#"], &[], []);
         let contents = "a = \"unbalanced\nb = 1\nc = 2\n# comment\n";
 
         let stats = parse_lines_whole(contents, &plain);
@@ -2967,12 +2951,9 @@ mod tests {
         extensions : vec!["clj".to_owned()],
         filenames : vec![],
         shebangs : vec![],
-        string_symbols : vec!["\"".to_owned()],
-        char_literal_symbols : vec![],
+        strings : StringRules::escaping_with(b'\\').with_symbols(["\""]),
         line_continuation : None,
-        escape_character : Some(b'\\'),
         nested_languages : vec![],
-        multiline_strings : vec![],
         comment_symbols : vec![";".to_owned()],
         multiline_comments : vec![],
         nesting_comments : vec![],
@@ -3074,7 +3055,7 @@ mod tests {
     // '/*' '*/' pair, so the helper pins the identity to 0 and the assertions stay bare positions.
     fn resolved_double_counting(start_indices: Vec<usize>, end_indices: Vec<usize>, is_comment_open: bool)
     -> (Vec<usize>, Vec<usize>) {
-        let language = Language::new("one-pair", ["x"], ["\""], ["//"], &[("/*", "*/")], []);
+        let language = Language::new("one-pair", ["x"], build_backslashed_quotes(), ["//"], &[("/*", "*/")], []);
         let mut starts = start_indices.into_iter().map(|x| (x, 0u8, 0u8)).collect::<Vec<_>>();
         let mut ends = end_indices.into_iter().map(|x| (x, 0u8, 0u8)).collect::<Vec<_>>();
         resolve_double_counting_of_adjacent_start_and_end_symbols(&mut starts, &mut ends, is_comment_open, &language);
@@ -3124,7 +3105,7 @@ mod tests {
     // comments=6, that reads as code=3 comments=2.
     #[test]
     fn a_close_that_touches_a_reopen_is_not_a_collision_when_the_lengths_differ() {
-        let lua_like = Language::new("lua-like", ["x"], ["\""], ["--"], &[("--[[", "]]")], []);
+        let lua_like = Language::new("lua-like", ["x"], build_backslashed_quotes(), ["--"], &[("--[[", "]]")], []);
         // ]]--[[ with the block open from the line before: both symbols are real
         let (mut starts, mut ends) = (vec![(2usize, 0u8, 0u8)], vec![(0usize, 0u8, 0u8)]);
         resolve_double_counting_of_adjacent_start_and_end_symbols(&mut starts, &mut ends, true, &lua_like);
@@ -3136,7 +3117,8 @@ mod tests {
         assert_eq!(TextInfo::with_open_comment(0),
                 bounds_multi("]]  --[[ reopened", &LUA, Some(0), &None));
         // an HTML-shaped pair, 4 against 3, through a language declaring no line comments
-        let html : Language = Language::new("html-like", ["html"], ["\""], [""; 0], &[("<!--", "-->")], []);
+        let html : Language = Language::new("html-like", ["html"], build_backslashed_quotes(), [""; 0],
+                &[("<!--", "-->")], []);
         assert_eq!(TextInfo::with_open_comment(0), bounds_multi("--><!--", &html, Some(0), &None));
         assert_eq!(TextInfo::with_open_comment(0),
                 bounds_multi("--> <!-- reopened", &html, Some(0), &None));
@@ -3746,16 +3728,16 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
-    // With the priority rules a real run has, so that a contested extension resolves here to the
+    // With the conflict rules a real run has, so that a contested extension resolves here to the
     // language it resolves to on somebody's machine. Without them the tiebreak is alphabetical, and
     // a '.pas' file would be counted as Delphi in the corpus and as Pascal everywhere else.
     fn fixture_lookup() -> LanguageLookup {
-        let priority = crate::languages::parse_shipped_extension_priority();
+        let conflicts = crate::languages::parse_shipped_conflict_rules();
         LanguageLookup {
             by_extension: build_language_map_by(IdentifiedBy::Extension, &LANGUAGE_MAP_REF,
-                    &priority.by_extension, &HashMap::new()).0,
+                    &conflicts.by_extension, &HashMap::new()).0,
             by_filename: build_language_map_by(IdentifiedBy::Filename, &LANGUAGE_MAP_REF,
-                    &priority.by_filename, &HashMap::new()).0,
+                    &conflicts.by_filename, &HashMap::new()).0,
             by_shebang: build_language_map_by(IdentifiedBy::Shebang, &LANGUAGE_MAP_REF,
                     &HashMap::new(), &HashMap::new()).0
         }

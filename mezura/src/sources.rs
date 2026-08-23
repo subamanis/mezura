@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use mezura_core::{EngineConfig, FilesPresent, Language, ScanProgress};
-use mezura_core::language_file::PriorityRules;
+use mezura_core::language_file::ConflictRules;
 
 use super::config_manager::Configuration;
 use super::diff::{Note, Reading};
@@ -83,7 +83,7 @@ pub fn start_acquiring_revisions(resolved: Vec<ResolvedRevision>) -> Vec<Revisio
 }
 
 pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, languages: Vec<Language>,
-        extension_priority: &PriorityRules) -> Result<(Reading, Vec<Note>), GitError>
+        conflicts: &ConflictRules) -> Result<(Reading, Vec<Note>), GitError>
 {
     // Erased when it drops, before this function returns: the whole phase leaves nothing behind on
     // the permanent output
@@ -141,7 +141,7 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
             performance: mezura_core::Performance { duration_millis: 0, threads: config.engine.threads }
         }
     } else {
-        let resolved = mezura_core::Languages::resolve(&of_git_revision, languages, extension_priority).0;
+        let resolved = mezura_core::Languages::resolve(&of_git_revision, languages, conflicts).0;
         let mut result = mezura_core::run_watched(&of_git_revision, resolved, Some(progress.clone()), |_| {})
                 .map_err(|error| GitError::CountingRevision { revision: git_revision.to_owned(), error })?;
         result.targets = counted_declared;

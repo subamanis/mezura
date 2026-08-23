@@ -9,8 +9,9 @@ use crate::paths::PERSISTENT_APP_PATHS;
 
 static CHANGELOG_BYTES : &[u8] = include_bytes!("../Changelog");
 const MESSAGE_WIDTH : usize = 110;
-// The help paints itself and never asks the theme, since it is read before a theme is chosen and
-// adding tokens for it would change the format of every theme file already on a machine.
+// The help paints itself with these rather than through the theme, because it is printed before a
+// theme is chosen: 'main' answers the message-only commands above the line that sets one, so
+// anything that does ask for a theme there is handed the default.
 const HELP_COMMAND : (u8, u8, u8) = (110, 160, 220);
 const HELP_TEXT : (u8, u8, u8) = (140, 140, 140);
 // Far enough from the blue of a command, which stands beside it in the same lists, and washed out
@@ -108,7 +109,7 @@ pub const LANGUAGES_HELP  :  &str =
     'Language', or by any extension it claims, so 'javascript' and 'js' name the same one.
 
     An extension that two languages claim names whichever of them owns it for this run, which is
-    the answer in 'extension_priority.txt' or the one '--force-language' gave.
+    the answer in 'language_conflicts.txt' or the one '--force-language' gave.
 
 ";
 pub const EXCLUDE_LANGUAGES_HELP  :  &str =
@@ -135,7 +136,7 @@ pub const FORCE_LANGUAGE_HELP  :  &str =
     A whole filename works the same way, for the files that have no extension worth reading:
     '--force-language Makefile=python,Jenkinsfile=groovy'
 
-    Overrides the 'extension_priority.txt' file of the data directory.
+    Overrides the 'language_conflicts.txt' file of the data directory.
 
 ";
 pub const THREADS_HELP  :  &str =
@@ -463,7 +464,7 @@ pub const RESTORE_HELP  :  &str =
     neither are your themes or your default configuration: those are written when absent and left
     alone.
 
-    'extension_priority.txt' is merged instead. Each line names an extension that several
+    'language_conflicts.txt' is merged instead. Each line names an extension that several
     languages claim, and the first language on the line wins it. Your lines are kept as they are,
     and lines for extensions your copy never mentions are added. To change a winner, reorder the
     names on its line; deleting the line brings it back, since a missing line and a line you never
@@ -1434,9 +1435,10 @@ mod tests {
 
     #[test]
     fn a_language_declared_by_two_files_is_listed_once() {
-        let twice = vec![Language::new("Java", ["java"], ["\""], ["//"], &[], []),
-                Language::new("Rust", ["rs"], ["\""], ["//"], &[], []),
-                Language::new("Java", ["jav"], ["\""], ["//"], &[], [])];
+        let none = mezura_core::StringRules::escaping_nothing;
+        let twice = vec![Language::new("Java", ["java"], none(), ["//"], &[], []),
+                Language::new("Rust", ["rs"], none(), ["//"], &[], []),
+                Language::new("Java", ["jav"], none(), ["//"], &[], [])];
         let listed = format_supported_languages_message(&twice);
 
         assert_eq!(1, listed.matches("Java").count(), "'Java' was listed more than once:\n{listed}");
@@ -1579,6 +1581,40 @@ mod tests {
             assert!(listed_in(HIDE_HELP, name), "'{name}' is something '--hide' accepts that its help never \
                     lists in a column of its own, so it is neither found by somebody reading the list nor painted in it");
         }
+    }
+
+    // The other four commands that list their values have no name list to check against, so the
+    // help's own two copies are checked against each other and both against the parser: the
+    // sentence that opens 'One argument:' has to name exactly what the columns below it name, and
+    // the command has to accept every one of them. A value reflowed out of its column would
+    // otherwise keep printing, plain among painted siblings, with nothing failing.
+    #[test]
+    fn each_command_that_lists_its_values_paints_the_ones_it_accepts_and_no_others() {
+        fn check(command: &str, help: &str, accepts: impl Fn(&str) -> bool) {
+            let mut in_a_column = help.lines().flat_map(|line| {
+                let runs = split_into_runs(line);
+                find_the_value_names_in(&runs, true).into_iter().map(|at| runs[at].to_owned())
+                        .collect::<Vec<_>>()
+            }).collect::<Vec<_>>();
+            let mut in_the_sentence = help.lines()
+                    .find(|line| line.trim_start().starts_with("One argument:")).unwrap_or_default()
+                    .split('\'').skip(1).step_by(2).map(str::to_owned).collect::<Vec<_>>();
+            in_a_column.sort();
+            in_the_sentence.sort();
+
+            assert_eq!(in_the_sentence, in_a_column, "the values '--{command}' names in its opening \
+                    sentence are not the ones its help lists in a column, so one of the two is wrong \
+                    and the columns are what gets painted");
+            for value in &in_a_column {
+                assert!(accepts(value), "'--{command}' does not accept '{value}', which its help lists \
+                        as one of its values");
+            }
+        }
+
+        check(LAYOUT, LAYOUT_HELP, |x| Layout::parse(x).is_some());
+        check(BAR_THICKNESS, BAR_THICKNESS_HELP, |x| BarThickness::parse(x).is_some());
+        check(NUMBER_SEPARATOR, NUMBER_SEPARATOR_HELP, |x| NumberSeparator::parse(x).is_some());
+        check(PROGRESS_BAR, PROGRESS_BAR_HELP, |x| ProgressBarStyle::parse(x).is_some());
     }
 
     // '--version' reads the release date from the first line of the Changelog, so without this the

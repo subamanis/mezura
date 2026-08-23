@@ -5,7 +5,7 @@ use std::{collections::HashMap, sync::Arc};
 use crate::{Language, warnings};
 use crate::engine::config::EngineConfig;
 use crate::engine::identity::{IdentifiedBy, LanguageLookup, build_language_map_by, extension_key};
-use crate::language_file::PriorityRules;
+use crate::language_file::ConflictRules;
 use crate::warnings::Warning;
 
 // Built by the caller and handed to 'run', rather than inside it, so that its complaints about the
@@ -22,11 +22,11 @@ impl Languages {
     // The languages baked into this crate, so nothing on the machine is read. The command line reads
     // its own folder instead, because a language file there is the user's to edit.
     pub fn shipped(config: &EngineConfig) -> (Self, Vec<Warning>) {
-        Self::resolve(config, parse_shipped_languages(), &parse_shipped_extension_priority())
+        Self::resolve(config, parse_shipped_languages(), &parse_shipped_conflict_rules())
     }
 
     // The shipped set plus languages of the caller's own. Here rather than left to the caller,
-    // because doing it by hand means remembering the shipped priority rules as well: passed a
+    // because doing it by hand means remembering the shipped conflict rules as well: passed a
     // default set instead, a contested extension is settled a different way and the counts come
     // back looking perfectly normal.
     pub fn shipped_with(config: &EngineConfig, extra: impl IntoIterator<Item = Language>)
@@ -34,14 +34,14 @@ impl Languages {
     {
         let mut languages = parse_shipped_languages();
         languages.extend(extra);
-        Self::resolve(config, languages, &parse_shipped_extension_priority())
+        Self::resolve(config, languages, &parse_shipped_conflict_rules())
     }
 
-    // For a caller with languages and priority rules of its own. Keyed here by each language's own
+    // For a caller with languages and conflict rules of its own. Keyed here by each language's own
     // name rather than taken as a map somebody else keyed: in a map whose key and value disagree the
     // key wins, and a language would be counted under a name it does not carry.
     pub fn resolve(config: &EngineConfig, languages: impl IntoIterator<Item = Language>,
-            priority: &PriorityRules) -> (Self, Vec<Warning>)
+            conflicts: &ConflictRules) -> (Self, Vec<Warning>)
     {
         // Unusable ones go first, so that a name nobody can ask for is not in the list when the
         // narrowing below asks whether a name exists. Duplicates are reported last, after the
@@ -53,21 +53,21 @@ impl Languages {
         // Its own complaints about contested extensions are dropped, since the narrowed build below
         // makes them, and a contest between two languages the run then leaves out is not news.
         let (all_extensions, _) = build_language_map_by(IdentifiedBy::Extension, &keyed_by_name(languages.clone()),
-                &priority.by_extension, &config.forced_languages);
+                &conflicts.by_extension, &config.forced_languages);
         let (languages, set_aside, narrowing) = retain_languages_of_interest(languages, &all_extensions, config);
         reported.extend(narrowing);
         reported.extend(find_duplicate_names(&languages));
 
         let by_name = keyed_by_name(languages);
-        let (by_extension, report) = build_language_map_by(IdentifiedBy::Extension, &by_name, &priority.by_extension,
+        let (by_extension, report) = build_language_map_by(IdentifiedBy::Extension, &by_name, &conflicts.by_extension,
                 &config.forced_languages);
         reported.extend(report.collect_warnings());
         // The forced pairs go to both, since '--force-language Makefile=python' and '--force-language
         // txt=python' are the same sentence and the reader has no reason to know which map answers
         let (by_filename, filename_report) = build_language_map_by(IdentifiedBy::Filename, &by_name,
-                &priority.by_filename, &config.forced_languages);
+                &conflicts.by_filename, &config.forced_languages);
         reported.extend(filename_report.collect_warnings());
-        // The priority file has no block for a contested interpreter yet; the forced pairs reach
+        // The conflicts file has no block for a contested interpreter yet; the forced pairs reach
         // this map like the other two, which is how such a contest would be settled by hand.
         let (by_shebang, shebang_report) = build_language_map_by(IdentifiedBy::Shebang, &by_name,
                 &HashMap::new(), &config.forced_languages);
@@ -117,9 +117,9 @@ pub fn parse_shipped_languages() -> Vec<Language> {
             .collect()
 }
 
-// The rule this crate ships for settling an extension that two languages both claim.
-pub fn parse_shipped_extension_priority() -> PriorityRules {
-    crate::language_file::parse_priority(&String::from_utf8_lossy(get_shipped_extension_priority_raw())).0
+// The rules this crate ships for settling an extension or a filename that two languages both claim.
+pub fn parse_shipped_conflict_rules() -> ConflictRules {
+    crate::language_file::parse_conflict_rules(&String::from_utf8_lossy(get_shipped_conflict_rules_raw())).0
 }
 
 // The bytes as they were authored, comments and layout included, so what the installer puts in the
@@ -133,8 +133,8 @@ pub fn get_shipped_language_files_raw() -> Vec<(&'static str, &'static [u8])> {
             .collect()
 }
 
-pub fn get_shipped_extension_priority_raw() -> &'static [u8] {
-    include_bytes!("../data/extension_priority.txt")
+pub fn get_shipped_conflict_rules_raw() -> &'static [u8] {
+    include_bytes!("../data/language_conflicts.txt")
 }
 
 // The names that were asked for and no language answers to, in the order they were given. A
@@ -149,7 +149,7 @@ pub fn find_unknown_language_names(languages: &[Language], wanted: &[String]) ->
 }
 
 // Every place that matches a name goes through this one: choosing, excluding, forcing an extension,
-// and the priority rules.
+// and the conflict rules.
 //
 // 'to_lowercase' and not 'eq_ignore_ascii_case', which agree until a name has a letter outside ASCII:
 // mixing the two takes 'CAFÉ' excluded as 'café' out of the count by one rule while the other
@@ -271,7 +271,7 @@ claims it as an extension. Those sections are counted with the symbols of '{lang
 // comment symbols and the losing one takes its extensions out of the run with it.
 //
 // Grouped through 'is_the_same_language_name' and not by exact spelling, since 'Rust' and 'rust' are
-// one language to '--languages', '--exclude-languages', '--force-language' and the priority file,
+// one language to '--languages', '--exclude-languages', '--force-language' and the conflicts file,
 // all of which fold case.
 pub fn find_duplicate_names(languages: &[Language]) -> Vec<Warning> {
     let mut spellings : HashMap<String, Vec<&str>> = HashMap::new();
@@ -307,7 +307,7 @@ fn retain_languages_of_interest(languages: Vec<Language>, extensions: &HashMap<S
 {
     // A spelling selects a language by the name it carries, or by an extension it owns. The
     // ownership is read from the map the counting itself uses, so '--languages m' means the same
-    // language that every '.m' file is counted as, whether that was settled by the priority file,
+    // language that every '.m' file is counted as, whether that was settled by the conflicts file,
     // by '--force-language' or by the tiebreak.
     let selects = |spelling: &String, language: &Language| {
         is_the_same_language_name(&language.name, spelling)
@@ -346,6 +346,7 @@ fn retain_languages_of_interest(languages: Vec<Language>, extensions: &HashMap<S
 #[cfg(test)]
 mod language_selection_tests {
     use super::*;
+    use crate::StringRules;
     use crate::languages_claiming;
 
     #[test]
@@ -409,30 +410,31 @@ mod language_selection_tests {
         let languages = || languages_claiming(&[("Objective-C", &["m", "mm"]), ("MATLAB", &["m"])])
                 .into_values().collect::<Vec<_>>();
         let config = EngineConfig { languages_of_interest: vec!["m".to_owned()], ..Default::default() };
-        let kept = |priority, forced| {
+        let kept = |conflicts, forced| {
             let extensions = build_language_map_by(IdentifiedBy::Extension, &keyed_by_name(languages()),
-                    priority, forced).0;
+                    conflicts, forced).0;
             retain_languages_of_interest(languages(), &extensions, &config).0
                     .into_iter().map(|x| x.name).collect::<Vec<_>>()
         };
 
         let (nothing_decided, no_forcing) = (HashMap::new(), HashMap::new());
-        let priority = hashmap!("m".to_owned() => vec!["Objective-C".to_owned(), "MATLAB".to_owned()]);
+        let conflicts = hashmap!("m".to_owned() => vec!["Objective-C".to_owned(), "MATLAB".to_owned()]);
         let forced = hashmap!("m".to_owned() => "MATLAB".to_owned());
 
         assert_eq!(vec!["MATLAB"], kept(&nothing_decided, &no_forcing));
-        assert_eq!(vec!["Objective-C"], kept(&priority, &no_forcing));
-        // forcing beats the priority file here as it does everywhere
-        assert_eq!(vec!["MATLAB"], kept(&priority, &forced));
+        assert_eq!(vec!["Objective-C"], kept(&conflicts, &no_forcing));
+        // forcing beats the conflicts file here as it does everywhere
+        assert_eq!(vec!["MATLAB"], kept(&conflicts, &forced));
     }
 
     #[test]
     fn a_region_default_that_names_no_language_is_reported() {
-        let shell = |default: &str| Language::new("Weblike", ["wbl"], [""; 0], [""; 0], &[("<!--", "-->")], [])
+        let shell = |default: &str| Language::new("Weblike", ["wbl"], StringRules::escaping_nothing(),
+                        [""; 0], &[("<!--", "-->")], [])
                 .with_nested_languages(&[crate::NestedLanguage::of("<script", "</script>", default)]);
         let resolved = |default: &str| Languages::resolve(&EngineConfig::default(),
-                vec![shell(default), Language::new("JavaScript", ["js"], ["\""], ["//"], &[], [])],
-                &PriorityRules::default()).1
+                vec![shell(default), Language::new("JavaScript", ["js"], StringRules::escaping_nothing(), ["//"], &[], [])],
+                &ConflictRules::default()).1
                 .into_iter().filter(|x| x.code == warnings::Code::UnknownSectionLanguage).collect::<Vec<_>>();
 
         assert!(resolved("js").is_empty(), "an extension a language claims was called unknown");
@@ -481,8 +483,8 @@ mod language_selection_tests {
 
     #[test]
     fn a_language_name_outside_ascii_is_excluded_and_not_reported_as_missing() {
-        let cafe = || vec![Language::new("CAFÉ", ["cf"], ["\""], ["//"], &[], []),
-                Language::new("Rust", ["rs"], ["\""], ["//"], &[], [])];
+        let cafe = || vec![Language::new("CAFÉ", ["cf"], StringRules::escaping_nothing(), ["//"], &[], []),
+                Language::new("Rust", ["rs"], StringRules::escaping_nothing(), ["//"], &[], [])];
         let names_of = |languages: Vec<Language>| languages.into_iter().map(|x| x.name).collect::<Vec<_>>();
 
         let config = EngineConfig { excluded_languages: vec!["café".to_owned()], ..Default::default() };
@@ -517,16 +519,16 @@ mod language_selection_tests {
     // code=3 and comment=4 code=1.
     #[test]
     fn two_definitions_of_one_name_are_reported_against_the_counts() {
-        let twice = vec![Language::new("Same", ["aa"], ["\""], ["//"], &[], []),
-                Language::new("Same", ["bb"], ["\""], [""; 0], &[("/*", "*/")], []),
-                Language::new("Rust", ["rs"], ["\""], ["//"], &[], [])];
+        let twice = vec![Language::new("Same", ["aa"], StringRules::escaping_nothing(), ["//"], &[], []),
+                Language::new("Same", ["bb"], StringRules::escaping_nothing(), [""; 0], &[("/*", "*/")], []),
+                Language::new("Rust", ["rs"], StringRules::escaping_nothing(), ["//"], &[], [])];
 
         let config = EngineConfig::default();
-        let (languages, _) = Languages::resolve(&config, twice, &PriorityRules::default());
+        let (languages, _) = Languages::resolve(&config, twice, &ConflictRules::default());
         let reported = Languages::resolve(&config,
-                vec![Language::new("Same", ["aa"], ["\""], ["//"], &[], []),
-                     Language::new("Same", ["bb"], ["\""], [""; 0], &[("/*", "*/")], [])],
-                &PriorityRules::default()).1;
+                vec![Language::new("Same", ["aa"], StringRules::escaping_nothing(), ["//"], &[], []),
+                     Language::new("Same", ["bb"], StringRules::escaping_nothing(), [""; 0], &[("/*", "*/")], [])],
+                &ConflictRules::default()).1;
 
         let mine = reported.iter().find(|x| x.code == warnings::Code::DuplicateLanguage)
                 .expect("a language declared twice was dropped in silence");
@@ -539,9 +541,9 @@ mod language_selection_tests {
     #[test]
     fn a_language_that_cannot_be_named_or_matched_is_dropped_and_reported() {
         let unusable = vec![
-            Language::new("   ", ["zz"], ["\""], ["//"], &[], []),
-            Language::new("Claims-Nothing", [""; 0], ["\""], ["//"], &[], []),
-            Language::new("Rust", ["rs"], ["\""], ["//"], &[], [])];
+            Language::new("   ", ["zz"], StringRules::escaping_nothing(), ["//"], &[], []),
+            Language::new("Claims-Nothing", [""; 0], StringRules::escaping_nothing(), ["//"], &[], []),
+            Language::new("Rust", ["rs"], StringRules::escaping_nothing(), ["//"], &[], [])];
 
         let (kept, reported) = drop_the_unusable(unusable);
         assert_eq!(vec!["Rust"], kept.into_iter().map(|x| x.name).collect::<Vec<_>>());
@@ -556,14 +558,14 @@ mod language_selection_tests {
     // What a definition for Makefile or Dockerfile alone looks like: filenames and no extension.
     #[test]
     fn a_language_that_claims_only_filenames_is_kept() {
-        let by_name_only = Language::new("Docky", [""; 0], ["\""], ["#"], &[], [])
+        let by_name_only = Language::new("Docky", [""; 0], StringRules::escaping_nothing(), ["#"], &[], [])
                 .with_filenames(&["Dockerfile"]);
 
         let (kept, reported) = drop_the_unusable(vec![by_name_only]);
         assert_eq!(vec!["Docky"], kept.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), "{reported:?}");
         assert!(reported.is_empty(), "{reported:?}");
 
-        let (languages, _) = Languages::resolve(&EngineConfig::default(), kept, &PriorityRules::default());
+        let (languages, _) = Languages::resolve(&EngineConfig::default(), kept, &ConflictRules::default());
         assert_eq!(Some("Docky"), languages.lookup.of_path(std::path::Path::new("some/dir/Dockerfile")).as_deref());
     }
 
@@ -573,10 +575,10 @@ mod language_selection_tests {
             forced_languages: hashmap!("py".to_owned() => "cobol".to_owned()),
             ..Default::default()
         };
-        let languages = vec![Language::new("Python", ["py"], ["\""], ["#"], &[], [])
+        let languages = vec![Language::new("Python", ["py"], StringRules::escaping_nothing(), ["#"], &[], [])
                 .with_filenames(&["SConstruct"])];
 
-        let (_, reported) = Languages::resolve(&config, languages, &PriorityRules::default());
+        let (_, reported) = Languages::resolve(&config, languages, &ConflictRules::default());
         let mine = reported.iter().filter(|x| x.code == warnings::Code::UnknownForcedLanguage)
                 .collect::<Vec<_>>();
         assert_eq!(1, mine.len(), "said once for each map it could not be used by: {reported:?}");
@@ -605,13 +607,13 @@ mod language_selection_tests {
         assert!(!reported.iter().any(|x| x.subject == "Java"));
     }
 
-    // The shipped priority rules are the half a caller doing this by hand forgets, and forgetting
+    // The shipped conflict rules are the half a caller doing this by hand forgets, and forgetting
     // them is silent: 'm' is claimed by both Objective-C and MATLAB, and without the rules the
     // contest is settled alphabetically instead, so a MATLAB file is counted as Objective-C.
     #[test]
-    fn adding_a_language_of_your_own_keeps_the_shipped_ones_and_their_priority_rules() {
+    fn adding_a_language_of_your_own_keeps_the_shipped_ones_and_their_conflict_rules() {
         let config = EngineConfig::new(["./"]);
-        let mine = Language::new("Nolang-Q9", ["nolangq9"], ["\""], ["//"], &[], []);
+        let mine = Language::new("Nolang-Q9", ["nolangq9"], StringRules::escaping_nothing(), ["//"], &[], []);
         let (by_name, lookup, _) = Languages::shipped_with(&config, [mine]).0.into_parts();
         let (shipped_by_name, shipped_lookup, _) = Languages::shipped(&config).0.into_parts();
 
@@ -619,6 +621,6 @@ mod language_selection_tests {
         assert_eq!(shipped_by_name.len() + 1, by_name.len(), "the shipped ones went with it");
         assert_eq!(shipped_lookup.of_path(std::path::Path::new("a.m")),
                 lookup.of_path(std::path::Path::new("a.m")),
-                "a contested extension was settled differently, so the priority rules were lost");
+                "a contested extension was settled differently, so the conflict rules were lost");
     }
 }
