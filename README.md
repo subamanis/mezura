@@ -439,9 +439,10 @@ HOW THE REPORT LOOKS
       code-number  code-label               avg-size-number  avg-size-label
       extra-number  extra-label             keyword-number  keyword-label
 
-    The "history" section counts the same quantities and takes the same tokens. 'size-unit' is
-    the 'KB' of '430.5 KB total', one token for both sizes, kept apart from the labels so it can
-    stay quiet while 'Size' reads like any column header.
+      size-unit                the 'KB' of '430.5 KB total', one token for both sizes
+
+    The "history" section counts the same quantities and takes the same tokens. The unit is kept
+    apart from the labels so it can stay quiet while 'Size' reads like any column header.
 
     The rest, by where they appear.
 
@@ -489,7 +490,7 @@ HOW THE REPORT LOOKS
       overview-label           the 'Files:', 'Lines:' and 'Size:' row labels
       overview-percent         the percentages of the overview
       bar-frame                the brackets around the overview bar and the live one
-      language-1 language-2 language-3 language-4
+      language-1  language-2  language-3  language-4
                                each language of the bar, its name and the color of its cells.
                                The fourth shows only when nothing was folded into 'others'
       language-others          the folded 'others' entry, which falls back to 'language-4'

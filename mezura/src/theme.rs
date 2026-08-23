@@ -230,7 +230,6 @@ macro_rules! theme_tokens {
                 }
             }
 
-            #[cfg(test)]
             pub fn get_token_names() -> &'static [&'static str] {
                 &[$($name,)+]
             }

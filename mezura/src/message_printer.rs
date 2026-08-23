@@ -13,7 +13,12 @@ const MESSAGE_WIDTH : usize = 110;
 // adding tokens for it would change the format of every theme file already on a machine.
 const HELP_COMMAND : (u8, u8, u8) = (110, 160, 220);
 const HELP_TEXT : (u8, u8, u8) = (140, 140, 140);
+// Far enough from the blue of a command, which stands beside it in the same lists, and washed out
+// enough not to shout over the text it labels
+const HELP_VALUE_NAME : (u8, u8, u8) = (132, 154, 138);
 const LIST_INDENT : usize = 2;
+// Where the help indents a list of values, one to a line, with its description beside it
+const VALUE_LIST_INDENT : usize = 6;
 
 // These constants need to be maintained along with the readme's commands
 pub const TARGETS_HELP  :  &str =
@@ -615,9 +620,10 @@ pub const STYLE_HELP  :  &str =
       code-number  code-label               avg-size-number  avg-size-label
       extra-number  extra-label             keyword-number  keyword-label
 
-    The \"history\" section counts the same quantities and takes the same tokens. 'size-unit' is
-    the 'KB' of '430.5 KB total', one token for both sizes, kept apart from the labels so it can
-    stay quiet while 'Size' reads like any column header.
+      size-unit                the 'KB' of '430.5 KB total', one token for both sizes
+
+    The \"history\" section counts the same quantities and takes the same tokens. The unit is kept
+    apart from the labels so it can stay quiet while 'Size' reads like any column header.
 
     The rest, by where they appear.
 
@@ -665,7 +671,7 @@ pub const STYLE_HELP  :  &str =
       overview-label           the 'Files:', 'Lines:' and 'Size:' row labels
       overview-percent         the percentages of the overview
       bar-frame                the brackets around the overview bar and the live one
-      language-1 language-2 language-3 language-4
+      language-1  language-2  language-3  language-4
                                each language of the bar, its name and the color of its cells.
                                The fourth shows only when nothing was folded into 'others'
       language-others          the folded 'others' entry, which falls back to 'language-4'
@@ -1082,7 +1088,6 @@ fn paint_the_help(text: &str) -> String {
 // Walked by character because a command is written inside quotation marks, '--save', and splitting
 // on spaces would hand back the quotes stuck to the name.
 fn paint_the_commands_named_in(line: &str) -> String {
-    let faded = |text: &str| text.truecolor(HELP_TEXT.0, HELP_TEXT.1, HELP_TEXT.2).to_string();
     let mut painted = String::new();
     let mut plain = String::new();
     let mut chars = line.chars().peekable();
@@ -1095,12 +1100,70 @@ fn paint_the_commands_named_in(line: &str) -> String {
         while chars.peek().is_some_and(|ch| ch.is_ascii_alphanumeric() || "-_".contains(*ch)) {
             named.extend(chars.next());
         }
-        painted += &faded(&plain);
+        painted += &paint_the_value_names_in(&plain, painted.is_empty());
         plain.clear();
         painted += &named.truecolor(HELP_COMMAND.0, HELP_COMMAND.1, HELP_COMMAND.2).to_string();
     }
 
+    let starts_the_line = painted.is_empty();
+
+    painted + &paint_the_value_names_in(&plain, starts_the_line)
+}
+
+// 'starts_the_line' is false for the stretch after a command name, since a value is only ever
+// written at the head of its line.
+fn paint_the_value_names_in(text: &str, starts_the_line: bool) -> String {
+    let runs = split_into_runs(text);
+    let marked = find_the_value_names_in(&runs, starts_the_line);
+    let faded = |text: &str| text.truecolor(HELP_TEXT.0, HELP_TEXT.1, HELP_TEXT.2).to_string();
+    let (mut painted, mut plain) = (String::new(), String::new());
+    for (at, run) in runs.iter().enumerate() {
+        if marked.contains(&at) {
+            painted += &faded(&plain);
+            plain.clear();
+            painted += &run.truecolor(HELP_VALUE_NAME.0, HELP_VALUE_NAME.1, HELP_VALUE_NAME.2).to_string();
+        } else {
+            plain += run;
+        }
+    }
+
     painted + &faded(&plain)
+}
+
+// Every list the help draws puts one value at the head of a line, indented into the list and with
+// the gap to its description after it: '--style', '--hide', '--layout', '--bar-thickness',
+// '--number-separator' and '--progress-bar' are all written that way. Taking the head of the line
+// and nothing else is what keeps a description out of it, since the line explaining 'warning' says
+// only "warnings" and the one explaining 'version' says "the version line at the top".
+//
+// The style tokens are the one list written several to a line, so past the head of the line only a
+// name from that list is taken.
+fn find_the_value_names_in(runs: &[&str], starts_the_line: bool) -> Vec<usize> {
+    let is_a_column_edge = |run: Option<&&str>| run.is_none_or(|neighbour| neighbour.len() > 1);
+    let head_of_the_line = runs.iter().position(|run| !run.trim().is_empty());
+    let is_indented_into_a_list = starts_the_line
+            && runs.first().is_some_and(|indent| indent.trim().is_empty() && indent.len() == VALUE_LIST_INDENT);
+
+    (0..runs.len()).filter(|at| is_a_column_edge(runs.get(at.wrapping_sub(1)))
+            && is_a_column_edge(runs.get(at + 1))
+            && ((is_indented_into_a_list && head_of_the_line == Some(*at))
+                    || crate::theme::Theme::get_token_names().contains(&runs[*at]))).collect()
+}
+
+// Alternating stretches of whitespace and of everything else, so that a word can be asked what
+// stands on each side of it
+fn split_into_runs(text: &str) -> Vec<&str> {
+    let mut runs = Vec::new();
+    let (mut start, mut in_spaces) = (0, text.starts_with(char::is_whitespace));
+    for (at, character) in text.char_indices() {
+        if character.is_whitespace() != in_spaces {
+            runs.push(&text[start..at]);
+            (start, in_spaces) = (at, !in_spaces);
+        }
+    }
+    runs.push(&text[start..]);
+
+    runs
 }
 
 pub fn print_whole_help_message() {
@@ -1468,11 +1531,53 @@ mod tests {
                  Regenerate it with MEZURA_UPDATE_GOLDEN=1 cargo test -p mezura readme");
     }
 
-    // The help is the only place that lists the style tokens, and the README is generated from it.
+    // Asserted on the rule and not on the painted string, because whether anything is painted at
+    // all is a process-wide switch that another test in this binary turns off.
     #[test]
-    fn every_style_token_is_named_in_the_help() {
+    fn a_value_is_marked_where_it_names_itself_and_not_where_a_sentence_uses_the_word() {
+        fn marked(line: &str) -> Vec<&str> {
+            let runs = split_into_runs(line);
+            find_the_value_names_in(&runs, true).into_iter().map(|at| runs[at]).collect()
+        }
+
+        // The word is in the line twice and only the one at the head of it is the value
+        assert_eq!(vec!["version"], marked("      version                  the version line at the top"));
+        // A description of one word is still a description
+        assert_eq!(vec!["warning"], marked("      warning                  warnings"));
+        // Values of a command that has nothing to do with the styling, and one whose description
+        // opens with a character rather than a word
+        assert_eq!(vec!["matrix"], marked("      matrix    languages down, modules across, one number per cell"));
+        assert_eq!(vec!["slim"], marked("      slim     |   plain ASCII, so it renders on any terminal"));
+        // Several to a line, as the table of style tokens is written
+        assert_eq!(vec!["files-number", "files-label", "comments-number", "comments-label"],
+                marked("      files-number  files-label             comments-number  comments-label"));
+
+        // Not indented into a list, so the head of the line is text like any other
+        assert!(marked("    A style is one or two colors and any number of the attributes").is_empty());
+        assert!(marked("        mezura frontend=./web backend=./api").is_empty());
+        // Indented into one, and named after the command it belongs to rather than after a value
+        assert_eq!(vec!["nothing-of-ours"], marked("      nothing-of-ours          is checked past the head of the line"));
+    }
+
+    // The help is the only place that lists these, and the README is generated from it. Asked as a
+    // column rather than as a substring: 'version' also sits inside "the version line at the top",
+    // so a plain search passes for a name nobody ever listed. It is the same question the painter
+    // asks, so this is also what keeps a name from being reflowed out of its column and quietly
+    // printing unpainted.
+    #[test]
+    fn every_value_of_the_two_commands_that_list_them_is_listed_in_a_column() {
+        let listed_in = |help: &str, name: &str| help.lines().any(|line| {
+            let runs = split_into_runs(line);
+            find_the_value_names_in(&runs, true).into_iter().any(|at| runs[at] == name)
+        });
+
         for token in crate::theme::Theme::get_token_names() {
-            assert!(STYLE_HELP.contains(token), "'{token}' is a style token that the help never names");
+            assert!(listed_in(STYLE_HELP, token), "'{token}' is a style token that the help never lists \
+                    in a column of its own, so it is neither found by somebody reading the list nor painted in it");
+        }
+        for name in crate::config_manager::Hidden::get_names() {
+            assert!(listed_in(HIDE_HELP, name), "'{name}' is something '--hide' accepts that its help never \
+                    lists in a column of its own, so it is neither found by somebody reading the list nor painted in it");
         }
     }
 
