@@ -177,6 +177,10 @@ WHAT IS COUNTED
     An extension that two languages claim names whichever of them owns it for this run, which is
     the answer in 'language_conflicts.txt' or the one '--force-language' gave.
 
+    Writing a module and a slash before the name holds it to that module alone, and a module that
+    names any language of its own counts those and nothing else: '--languages rust,web/js' counts
+    Rust everywhere but inside 'web', where it counts JavaScript.
+
 --exclude-languages
     count everything except these languages
 
@@ -188,6 +192,10 @@ WHAT IS COUNTED
     A name that nothing in the scan answers to is reported as having changed nothing, and the run
     carries on.
 
+    Writing a module and a slash before the name holds it to that module alone, and a module that
+    names any language of its own leaves out those and nothing else: '--exclude-languages json,web/xml'
+    leaves out JSON everywhere but inside 'web', where it leaves out XML and counts the JSON.
+
 --force-language
     count an extension as the language you pick, even if another one claims it
 
@@ -197,6 +205,12 @@ WHAT IS COUNTED
 
     A whole filename works the same way, for the files that have no extension worth reading:
     '--force-language Makefile=python,Jenkinsfile=groovy'
+
+    Writing a module and a slash before the extension holds the rule to that module alone, so one
+    repository with MATLAB in one folder and Objective-C in another is counted once:
+    'mezura ios=./ios analysis=./matlab --force-language ios/m=objective-c,analysis/m=matlab'
+    A module keeps every rule you wrote without a module in front of it and answers only the ones
+    it names itself. The module is spelled exactly as the target that declares it.
 
     Overrides the 'language_conflicts.txt' file of the data directory.
 

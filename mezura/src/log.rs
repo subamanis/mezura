@@ -123,9 +123,9 @@ fn format_scope(config: &Configuration, targets: &[Target]) -> String {
 \"keywords_counted\":{},\"count_minified\":{},\"count_generated\":{}}}",
             format_targets(targets, config),
             format_strings(&engine.exclude_dirs),
-            format_strings(&engine.languages_of_interest),
-            format_strings(&engine.excluded_languages),
-            format_forced_languages(&engine.forced_languages),
+            format_strings(&engine.languages_of_interest.to_written_form()),
+            format_strings(&engine.excluded_languages.to_written_form()),
+            format_forced_languages(&engine.forced_languages.to_written_form()),
             config.view.counting.name(),
             engine.should_search_in_dotted,
             !engine.no_gitignore,
@@ -258,7 +258,7 @@ mod tests {
         config.view.set_log_option(LogOption::new(Some("with \"quotes\" in it".to_owned())));
         config.view.counting = mezura_core::CountingModel::Region;
         config.engine.exclude_dirs = vec!["node_modules".to_owned()];
-        config.engine.forced_languages = hashmap!["m".to_owned() => "matlab".to_owned()];
+        config.engine.forced_languages = hashmap!["m".to_owned() => "matlab".to_owned()].into();
 
         let module_of = |name: Option<&str>, lines: usize, code: usize, comments: usize| ModuleResult {
             name: name.map(str::to_owned), per_language: HashMap::new(), nested_languages: HashMap::new(),

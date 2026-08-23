@@ -53,8 +53,14 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
     if !languages.describe_the_same_selection_as(config) {
         return Err(ExplainError::LanguagesFromAnotherConfig);
     }
-    let (by_name, lookup, nested_definitions) = languages.into_parts();
-    let Some(lang_name) = lookup.of_path_or_shebang(path) else {
+    let (by_name, lookups, nested_definitions) = languages.into_parts();
+    // Under the rules of the module the file was named in, so that '--explain ios=./a.m' answers
+    // with the same language the report would have counted it as. Matched against the target that
+    // is this very file, so a config naming several falls back to the rules of the whole run rather
+    // than to whichever target happens to be first.
+    let module = config.targets.iter().find(|target| Path::new(&target.path) == path)
+            .and_then(|target| target.module.as_deref());
+    let Some(lang_name) = lookups.get_of_module_named(module).of_path_or_shebang(path) else {
         return Err(ExplainError::UnclaimedFile);
     };
     let nested_lookup = NestedLanguageLookup {
@@ -269,7 +275,7 @@ mod tests {
     #[test]
     fn languages_resolved_against_other_settings_are_refused() {
         let narrowed = EngineConfig {
-            languages_of_interest: vec!["Rust".to_owned()],
+            languages_of_interest: vec!["Rust".to_owned()].into(),
             ..EngineConfig::default()
         };
         let languages = resolved_languages(&narrowed);

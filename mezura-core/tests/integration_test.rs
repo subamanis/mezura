@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use mezura_core::{CountingModel, EngineConfig, Languages, StringRules, Target, Threads, language_file,
-        languages, run, run_watched};
+use mezura_core::{CountingModel, EngineConfig, ForcedLanguages, LanguageNames, Languages,
+        StringRules, Target, Threads, language_file, languages, run, run_watched};
 
 const LANGUAGES_DIR : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/languages/");
 
@@ -126,7 +126,7 @@ fn a_container_file_is_one_file_of_its_language_and_its_sections_are_the_decompo
     assert!(section.bytes > 0 && section.bytes < 30);
 
     // narrowed to the container language alone, the sections still resolve and still decompose
-    let narrowed = EngineConfig { languages_of_interest: vec!["Web".to_owned()], ..config };
+    let narrowed = EngineConfig { languages_of_interest: vec!["Web".to_owned()].into(), ..config };
     let (languages, _) = Languages::resolve(&narrowed, definitions(), &Default::default());
     let result = run(&narrowed, languages).unwrap();
     std::fs::remove_dir_all(&root).unwrap();
@@ -174,7 +174,7 @@ fn an_empty_or_self_section_gets_no_row_and_an_excluded_one_keeps_its_name() {
     // Excluded by extension spelling, so the exclusion resolves the way '--exclude-languages js'
     // does, and neither the breakdown nor the container's own row moves by a line
     let web_lines = result.per_language["Web"].lines;
-    let excluded = EngineConfig { excluded_languages: vec!["js".to_owned()], ..config };
+    let excluded = EngineConfig { excluded_languages: vec!["js".to_owned()].into(), ..config };
     let (languages, _) = Languages::resolve(&excluded, definitions(), &Default::default());
     let result = run(&excluded, languages).unwrap();
     std::fs::remove_dir_all(&root).unwrap();
@@ -279,7 +279,7 @@ fn two_spellings_of_one_name_are_reported_and_force_lang_still_picks_the_one_it_
     let counted_forcing = |wanted: &str| {
         let config = EngineConfig {
             threads: Threads::new(1, 1),
-            forced_languages: HashMap::from([("pal".to_owned(), wanted.to_owned())]),
+            forced_languages: HashMap::from([("pal".to_owned(), wanted.to_owned())]).into(),
             ..EngineConfig::new([root.to_string_lossy().replace('\\', "/")])
         };
         let (languages, warnings) = Languages::resolve(&config,
@@ -325,13 +325,193 @@ fn asking_for_some_languages_leaves_the_others_out_of_the_result() {
     assert!(everything.len() > 5, "the fixture corpus is too narrow to prove anything: {everything:?}");
     assert!(everything.contains(&"Rust".to_owned()) && everything.contains(&"Java".to_owned()), "{everything:?}");
 
-    assert_eq!(vec!["Rust"], counted_with(|config| config.languages_of_interest = vec!["Rust".to_owned()]));
+    assert_eq!(vec!["Rust"], counted_with(|config| config.languages_of_interest = vec!["Rust".to_owned()].into()));
     // and by a spelling that differs in case, which is the same language
-    assert_eq!(vec!["Rust"], counted_with(|config| config.languages_of_interest = vec!["rUsT".to_owned()]));
+    assert_eq!(vec!["Rust"], counted_with(|config| config.languages_of_interest = vec!["rUsT".to_owned()].into()));
 
-    let without_rust = counted_with(|config| config.excluded_languages = vec!["Rust".to_owned()]);
+    let without_rust = counted_with(|config| config.excluded_languages = vec!["Rust".to_owned()].into());
     assert!(!without_rust.contains(&"Rust".to_owned()), "an excluded language was counted anyway");
     assert_eq!(everything.len() - 1, without_rust.len(), "excluding one language removed more than one");
+}
+
+// One repository with MATLAB in one folder and Objective-C in another used to have to be counted
+// twice and added up by hand, because '--force-language m=matlab' was one answer for the whole run.
+//
+// Counted through 'run', because what is at stake is the number and not the setting: '%' opens a
+// comment in MATLAB and is ordinary code in Objective-C, so the same one-line file is 1 comment
+// under one of them and 1 code line under the other, and that is what is asserted.
+#[test]
+fn a_module_counts_a_contested_extension_as_the_language_it_names_and_the_run_keeps_its_own() {
+    let root = std::env::temp_dir().join("mezura-per-module-force-language");
+    let _ = std::fs::remove_dir_all(&root);
+    for (folder, name) in [("ios", "a.m"), ("analysis", "b.m"), ("shared", "c.m")] {
+        std::fs::create_dir_all(root.join(folder)).unwrap();
+        std::fs::write(root.join(folder).join(name), "% one line\n").unwrap();
+    }
+    let at = |folder: &str| format!("{}/{folder}", root.to_string_lossy().replace('\\', "/"));
+
+    let counted = |forced: ForcedLanguages| {
+        let config = EngineConfig {
+            threads: Threads::new(1, 2),
+            forced_languages: forced,
+            targets: vec![Target::named("ios", at("ios")), Target::named("analysis", at("analysis")),
+                    Target::of(at("shared"))],
+            ..Default::default()
+        };
+        let (languages, warnings) = Languages::shipped(&config);
+        assert!(!warnings.iter().any(|x| x.code == mezura_core::warnings::Code::UnknownModuleScope),
+                "a module the targets declare was called unknown: {warnings:?}");
+        let result = run(&config, languages).unwrap();
+        result.modules.iter().map(|module| (module.name.clone().unwrap_or_else(|| "-".to_owned()),
+                (module.per_language.keys().cloned().collect::<Vec<_>>(),
+                module.total.calculate_comment_lines(CountingModel::Content))))
+                .collect::<HashMap<_,_>>()
+    };
+
+    let scoped = counted(ForcedLanguages::of(HashMap::new(), [
+            ("ios".to_owned(), HashMap::from([("m".to_owned(), "Objective-C".to_owned())])),
+            ("analysis".to_owned(), HashMap::from([("m".to_owned(), "MATLAB".to_owned())]))]));
+    // The run's own answer, which the two rules above must not have disturbed and which the module
+    // that names no rule of its own falls back to
+    let everywhere = counted(ForcedLanguages::of_the_whole_run(
+            HashMap::from([("m".to_owned(), "MATLAB".to_owned())])));
+    std::fs::remove_dir_all(&root).unwrap();
+
+    assert_eq!((vec!["Objective-C".to_owned()], 0), scoped["ios"], "'ios/m=objective-c' did not reach 'ios'");
+    assert_eq!((vec!["MATLAB".to_owned()], 1), scoped["analysis"], "'analysis/m=matlab' did not reach 'analysis'");
+    // Nothing was written for the unnamed leftovers, so the shipped conflicts file decides, and it
+    // gives '.m' to Objective-C
+    assert_eq!((vec!["Objective-C".to_owned()], 0), scoped["-"]);
+
+    for module in ["ios", "analysis", "-"] {
+        assert_eq!((vec!["MATLAB".to_owned()], 1), everywhere[module],
+                "a rule with no module in front of it stopped holding everywhere");
+    }
+}
+
+// A module's own languages replace the run's and do not add to them, which is the only way to say
+// "Swift alone inside ios". Through 'run' for the same reason as above: what is asserted is which
+// languages came back counted.
+#[test]
+fn a_module_can_be_narrowed_to_languages_of_its_own_while_the_rest_of_the_run_keeps_its_list() {
+    let root = std::env::temp_dir().join("mezura-per-module-languages");
+    let _ = std::fs::remove_dir_all(&root);
+    for folder in ["api", "web"] {
+        std::fs::create_dir_all(root.join(folder)).unwrap();
+        std::fs::write(root.join(folder).join("a.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(root.join(folder).join("b.py"), "print(1)\n").unwrap();
+    }
+    let at = |folder: &str| format!("{}/{folder}", root.to_string_lossy().replace('\\', "/"));
+
+    let counted = |of_interest: LanguageNames| {
+        let config = EngineConfig {
+            threads: Threads::new(1, 2),
+            languages_of_interest: of_interest,
+            targets: vec![Target::named("api", at("api")), Target::named("web", at("web"))],
+            ..Default::default()
+        };
+        let (languages, _) = Languages::shipped(&config);
+        run(&config, languages).unwrap().modules.iter().map(|module| {
+            let mut names = module.per_language.keys().cloned().collect::<Vec<_>>();
+            names.sort();
+            (module.name.clone().unwrap(), names)
+        }).collect::<HashMap<_,_>>()
+    };
+
+    let scoped = counted(LanguageNames::of(vec!["rust".to_owned()],
+            [("web".to_owned(), vec!["python".to_owned()])]));
+    let everywhere = counted(LanguageNames::of_the_whole_run(vec!["rust".to_owned()]));
+    std::fs::remove_dir_all(&root).unwrap();
+
+    assert_eq!(vec!["Rust".to_owned()], scoped["api"], "the run's own list stopped holding in a module without one");
+    assert_eq!(vec!["Python".to_owned()], scoped["web"], "'web/python' either did not apply or was added to the run's list");
+    assert_eq!(vec!["Rust".to_owned()], everywhere["api"]);
+    assert_eq!(vec!["Rust".to_owned()], everywhere["web"]);
+}
+
+// A file named as a target of its own, sitting inside a directory target of another module, is
+// found by the walk of the directory around it and booked into the module that named it. Its
+// language was resolved one step earlier than that, so it used to be identified by the rules of the
+// module it was only passing through, and the row it landed in was for a language its own rules
+// never chose.
+#[test]
+fn a_file_that_is_its_own_target_is_identified_by_the_rules_of_the_module_that_named_it() {
+    let root = std::env::temp_dir().join("mezura-nested-file-target-rules");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("a.m"), "% one line\n").unwrap();
+    std::fs::write(root.join("b.m"), "% one line\n").unwrap();
+    let at = |name: &str| format!("{}/{name}", root.to_string_lossy().replace('\\', "/"));
+
+    let config = EngineConfig {
+        threads: Threads::new(1, 1),
+        forced_languages: ForcedLanguages::of(HashMap::new(), [
+                ("around".to_owned(), HashMap::from([("m".to_owned(), "Objective-C".to_owned())])),
+                ("entry".to_owned(), HashMap::from([("m".to_owned(), "MATLAB".to_owned())]))]),
+        targets: vec![Target::named("around", at("")), Target::named("entry", at("a.m"))],
+        ..Default::default()
+    };
+    let (languages, _) = Languages::shipped(&config);
+    let counted = run(&config, languages).unwrap().modules.iter()
+            .map(|module| (module.name.clone().unwrap(), module.per_language.keys().cloned().collect::<Vec<_>>()))
+            .collect::<HashMap<_,_>>();
+    std::fs::remove_dir_all(&root).unwrap();
+
+    assert_eq!(vec!["MATLAB".to_owned()], counted["entry"],
+            "the file named as its own target was identified by the enclosing module's rules");
+    assert_eq!(vec!["Objective-C".to_owned()], counted["around"]);
+}
+
+// Each scoped rule reaches its module by name, so counting a target list that declares other names
+// would leave every one of them doing nothing. Refused rather than counted, the way an ill-matched
+// pair of settings is refused everywhere else: the answer would look perfectly ordinary and be for
+// rules that never applied. A run that scopes nothing is free to count any target list, as before.
+#[test]
+fn languages_carrying_rules_for_one_set_of_modules_are_refused_for_another() {
+    let current_dir = env!("CARGO_MANIFEST_DIR").replace("\\", "/");
+    let of = |module: &str, scoped: bool| EngineConfig {
+        forced_languages: match scoped {
+            true => ForcedLanguages::of(HashMap::new(),
+                    [("ios".to_owned(), HashMap::from([("m".to_owned(), "MATLAB".to_owned())]))]),
+            false => ForcedLanguages::default()
+        },
+        targets: vec![Target::named(module, format!("{current_dir}/src"))],
+        ..Default::default()
+    };
+
+    let (languages, _) = Languages::shipped(&of("ios", true));
+    let refused = run(&of("android", true), languages).err();
+    assert!(matches!(refused, Some(mezura_core::RunError::LanguagesFromAnotherConfig)),
+            "a scoped rule was carried into a run whose modules it does not name: {refused:?}");
+
+    let (languages, _) = Languages::shipped(&of("ios", true));
+    assert!(run(&of("ios", true), languages).is_ok(), "the same modules were refused");
+
+    let (languages, _) = Languages::shipped(&of("ios", false));
+    assert!(run(&of("android", false), languages).is_ok(),
+            "a run that scopes nothing was refused over a module name it never used");
+}
+
+// A rule for a module nobody declared settles nothing, and the counts it was meant to change come
+// out looking perfectly ordinary, so it has to be said out loud.
+#[test]
+fn a_rule_written_for_a_module_this_run_does_not_declare_is_reported() {
+    let current_dir = env!("CARGO_MANIFEST_DIR").replace("\\", "/");
+    let config = EngineConfig {
+        forced_languages: ForcedLanguages::of(HashMap::new(),
+                [("iOS".to_owned(), HashMap::from([("m".to_owned(), "MATLAB".to_owned())]))]),
+        targets: vec![Target::named("ios", format!("{current_dir}/src"))],
+        ..Default::default()
+    };
+
+    let reported = Languages::shipped(&config).1.into_iter()
+            .filter(|x| x.code == mezura_core::warnings::Code::UnknownModuleScope).collect::<Vec<_>>();
+
+    assert_eq!(1, reported.len(), "a rule for a module that does not exist passed in silence: {reported:?}");
+    assert_eq!("iOS", reported[0].subject, "the module names are matched exactly, as the targets are");
+    assert!(reported[0].message.contains("'ios'"), "the message does not say which modules there are: {}",
+            reported[0].message);
+    assert_eq!("settings", reported[0].affects().name());
 }
 
 // The two arguments of 'run' have to describe the same question. They used to be allowed to
@@ -343,7 +523,7 @@ fn asking_for_some_languages_leaves_the_others_out_of_the_result() {
 fn languages_resolved_against_another_configuration_are_refused() {
     let current_dir = env!("CARGO_MANIFEST_DIR").replace("\\", "/");
     let of = |wanted: &str| EngineConfig {
-        languages_of_interest: vec![wanted.to_owned()],
+        languages_of_interest: vec![wanted.to_owned()].into(),
         threads: Threads::new(1, 2),
         ..EngineConfig::new([format!("{current_dir}/src")])
     };
@@ -355,7 +535,7 @@ fn languages_resolved_against_another_configuration_are_refused() {
     // The same names in another order and another case are the same question, and refusing that
     // would turn a guard against wrong answers into a guard against working code
     let mut shuffled = of("Rust");
-    shuffled.languages_of_interest = vec!["RUST".to_owned()];
+    shuffled.languages_of_interest = vec!["RUST".to_owned()].into();
     let (languages, _) = Languages::shipped(&of("Rust"));
     assert!(run(&shuffled, languages).is_ok(), "a difference in case alone was refused");
 

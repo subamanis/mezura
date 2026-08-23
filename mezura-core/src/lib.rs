@@ -19,7 +19,8 @@ pub mod warnings;
 
 pub use domain::{Bucket, CountingModel, Keyword, Language, LeveledPair, LineClass, LineClasses,
         MultilineString, NestedLanguage, Span, SpanKind, Stats, StringRules};
-pub use engine::config::{EngineConfig, Target, Threads};
+pub use engine::config::{EngineConfig, ForcedLanguages, LanguageNames, ScopedByModule, Target,
+        Threads, format_module_scope, split_off_module_scope};
 pub use explain::{Carried, ExplainError, ExplainedLine, FileExplanation, explain_file};
 pub use engine::targets::TargetError;
 pub use languages::Languages;
@@ -51,7 +52,7 @@ pub const LANGUAGE_CONFLICTS_FILE_NAME : &str = "language_conflicts.txt";
 pub const UNNAMED_MODULE_NAME : &str = "(unnamed)";
 
 pub(crate) type FaultyFilesListMut = Arc<Mutex<Vec<FaultyFileDetails>>>;
-pub(crate) type SharedLanguageLookup = Arc<engine::identity::LanguageLookup>;
+pub(crate) type SharedModuleLookups = Arc<engine::identity::ModuleLookups>;
 // One bucket per module. A run where the user named no modules at all has exactly one bucket, so
 // nothing further down has two shapes to handle.
 pub(crate) type StatsMapMut = Arc<Mutex<Vec<HashMap<String,Stats>>>>;
@@ -96,11 +97,13 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     let config = Arc::new(config.clone());
     let faulty_files_ref : FaultyFilesListMut  = Arc::new(Mutex::new(Vec::with_capacity(10)));
     let finish_condition_ref = Arc::new(AtomicBool::new(false));
-    let (by_name, lookup, nested_definitions) = languages.into_parts();
+    let (by_name, lookups, nested_definitions) = languages.into_parts();
     let language_map_ref = Arc::new(by_name);
-    let language_lookup: SharedLanguageLookup = Arc::new(lookup);
     let nested_definitions = Arc::new(nested_definitions);
     let modules = Arc::new(Modules::of(&targets));
+    // Only here can the lookups be put in the order the walk wants them: which number a module was
+    // given is decided by the targets, and the languages were resolved before they were seen.
+    let language_lookups: SharedModuleLookups = Arc::new(lookups.into_lookups_per_module(&modules));
     let stats_per_module : StatsMapMut =
             Arc::new(Mutex::new(make_language_stats(&language_map_ref, modules.count())));
     let nested_per_module : NestedLanguageMapMut =
@@ -123,7 +126,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
                 RunError::InvalidExcludePattern(culprit)
             })?);
     calculate_single_file_stats_or_add_to_injector(&config, &targets, &dirs_injector, &files_injector, &mut files_present,
-            &language_lookup, &modules, &progress);
+            &language_lookups, &modules, &progress);
 
     let files_stats = Arc::new(Mutex::new(files_present));
     let unreadable_dirs = Arc::new(Mutex::new(Vec::new()));
@@ -142,7 +145,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     let mut last_refusal = None;
     for i in 0..config.threads.producers() {
         match engine::producer::start_producer_thread(i, files_injector.clone(), dirs_injector.clone(), Worker::new_fifo(),
-                idle_producers.clone(), language_lookup.clone(), exclude_matcher.clone(),
+                idle_producers.clone(), language_lookups.clone(), exclude_matcher.clone(),
                 config.clone(), files_stats.clone(), modules.clone(), unreadable_dirs.clone(),
                 producers_total.clone(), worker_panics.clone(), progress.clone()) {
             Ok(handle) => producer_handles.push(handle),
@@ -318,14 +321,14 @@ impl Drop for WalkDoneGuard {
 // with it, the module table still hands it back on the way down.
 pub(crate) fn calculate_single_file_stats_or_add_to_injector(config: &EngineConfig, targets: &engine::targets::Targets,
         dirs_injector: &Arc<Injector<TraversedDir>>, files_injector: &Arc<Injector<ParsableFile>>,
-        files_present: &mut FilesPresent, language_lookup: &engine::identity::LanguageLookup, modules: &Modules,
+        files_present: &mut FilesPresent, language_lookups: &engine::identity::ModuleLookups, modules: &Modules,
         progress: &ScanProgress)
 {
     crate::engine::targets::topmost_targets(targets).iter().for_each(|target| {
         let dir_path = Path::new(&target.path);
         let module = modules.of_target(target);
         if dir_path.is_file() {
-            if let Some(lang_name) = language_lookup.of_path_or_shebang(dir_path) {
+            if let Some(lang_name) = language_lookups.get_of_module(module).of_path_or_shebang(dir_path) {
                 let queued = match targets.was_written_by_hand(dir_path) {
                     true => ParsableFile::written_by_hand(dir_path.to_path_buf(), lang_name, module),
                     false => ParsableFile::new(dir_path.to_path_buf(), lang_name, module)

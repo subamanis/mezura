@@ -1,9 +1,7 @@
-use std::collections::HashMap;
-
 use colored::{ColoredString, Colorize};
 #[cfg(test)]
 use colored::Color;
-use mezura_core::{CountingModel, EngineConfig, Target, Threads};
+use mezura_core::{CountingModel, EngineConfig, ForcedLanguages, LanguageNames, Target, Threads};
 use mezura_core::engine::config::{MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE};
 
 use super::message_printer::{Formatted, wrap_message};
@@ -672,7 +670,7 @@ pub struct ConfigurationBuilder {
     pub exclude_dirs:             Option<Vec<String>>,
     pub languages_of_interest:    Option<Vec<String>>,
     pub excluded_languages:       Option<Vec<String>>,
-    pub forced_languages:         Option<HashMap<String,String>>,
+    pub forced_languages:         Option<ForcedLanguages>,
     pub threads:                  Option<Threads>,
     pub counting:                 Option<CountingModel>,
     pub should_search_in_dotted:  Option<bool>,
@@ -847,8 +845,10 @@ is sorted by lines.", sort_by.name());
             engine: EngineConfig {
                 targets: self.targets.clone().unwrap_or_default(),
                 exclude_dirs: (self.exclude_dirs).clone().unwrap_or_default(),
-                languages_of_interest: (self.languages_of_interest).clone().unwrap_or_default(),
-                excluded_languages: (self.excluded_languages).clone().unwrap_or_default(),
+                languages_of_interest: LanguageNames::of_written_form(
+                        &(self.languages_of_interest).clone().unwrap_or_default()),
+                excluded_languages: LanguageNames::of_written_form(
+                        &(self.excluded_languages).clone().unwrap_or_default()),
                 forced_languages: (self.forced_languages).clone().unwrap_or_default(),
                 threads: self.threads.unwrap_or_default(),
                 should_search_in_dotted: self.should_search_in_dotted.unwrap_or(engine_defaults.should_search_in_dotted),
@@ -1646,6 +1646,7 @@ fn create_targets_from_working_dir() -> Result<Vec<Target>, ArgParsingError> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::ops::Add;
     use std::path::Path;
 
@@ -1752,9 +1753,9 @@ mod tests {
                 create_config_from_args("./ --exclude a,b ,  c ").unwrap());
         assert_eq!(conf("./", |c| {c.engine.exclude_dirs = vec!["a/path".to_owned(),"b/path".to_owned()]; c.typed_explicitly.exclude = true;}),
                 create_config_from_args("./ --exclude \"a\\path\", \"b\\path\"").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.languages_of_interest = vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]; c.typed_explicitly.languages = true;}),
+        assert_eq!(conf("./", |c| {c.engine.languages_of_interest = vec!["a".to_owned(),"b".to_owned(),"c".to_owned()].into(); c.typed_explicitly.languages = true;}),
                 create_config_from_args("./ --languages a,b,c").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.languages_of_interest = vec!["a".to_owned()]; c.typed_explicitly.languages = true;}),
+        assert_eq!(conf("./", |c| {c.engine.languages_of_interest = vec!["a".to_owned()].into(); c.typed_explicitly.languages = true;}),
                 create_config_from_args("./ --languages a, ").unwrap());
         assert_eq!(conf("./", |c| {c.view.set_log_option(LogOption::new(Some("this is a test".to_owned())));}),
                 create_config_from_args("./ --log   this is a test ").unwrap());
@@ -2159,18 +2160,44 @@ mod tests {
 
     #[test]
     fn force_lang_takes_pairs_of_an_extension_and_a_language_and_refuses_anything_else() {
-        let forced = |args: &str| create_config_from_args(&format!("./ --force-language {args}")).map(|x| x.engine.forced_languages);
+        let forced = |args: &str| create_config_from_args(&format!("./ --force-language {args}"))
+                .map(|x| x.engine.forced_languages.to_written_form());
+        let scoped = |written: &str| written.split(',').map(|pair| pair.split_once('=').unwrap())
+                .map(|(claimed, language)| (claimed.to_owned(), language.to_owned())).collect::<HashMap<_,_>>();
 
-        assert_eq!(Ok(hashmap!("m".to_owned() => "matlab".to_owned())), forced("m=matlab"));
+        assert_eq!(Ok(scoped("m=matlab")), forced("m=matlab"));
         // Lowercased for the lookup, while the language name is kept as it was typed
-        assert_eq!(Ok(hashmap!(".m".to_owned() => "MATLAB".to_owned(), "pl".to_owned() => "perl".to_owned())),
-                forced(".M=MATLAB, pl = perl"));
+        assert_eq!(Ok(scoped(".m=MATLAB,pl=perl")), forced(".M=MATLAB, pl = perl"));
         // The dot survives, or '.gitignore' could not be named at all
-        assert_eq!(Ok(hashmap!(".gitignore".to_owned() => "Ini".to_owned())), forced(".gitignore=Ini"));
+        assert_eq!(Ok(scoped(".gitignore=Ini")), forced(".gitignore=Ini"));
+        // A module in front of the extension keeps its own capitalisation, being matched against a
+        // target name and not against a language
+        assert_eq!(Ok(scoped("iOS/m=objective-c,pl=perl")), forced("iOS/M=objective-c,pl=perl"));
 
-        for wrong in ["", "matlab", "m=", "=matlab", "m=matlab,perl"] {
+        for wrong in ["", "matlab", "m=", "=matlab", "m=matlab,perl", "ios/=matlab", "/m=matlab",
+                "ios/m/x=matlab"] {
             assert!(forced(wrong).is_err(), "'--force-language {wrong}' was accepted");
         }
+    }
+
+    // The scoped and the plain form of one setting reach the run as the same value however they were
+    // written, or a project's saved settings and the command line that saved them would disagree.
+    #[test]
+    fn a_scoped_setting_survives_being_written_out_and_read_back() {
+        let typed = "./ --force-language ios/m=objective-c,pl=perl --languages rust,web/js \
+--exclude-languages json,web/xml";
+        let config = create_config_from_args(typed).unwrap();
+
+        assert_eq!(hashmap!("ios/m".to_owned() => "objective-c".to_owned(),
+                "pl".to_owned() => "perl".to_owned()), config.engine.forced_languages.to_written_form());
+        assert_eq!(vec!["rust".to_owned(), "web/js".to_owned()],
+                config.engine.languages_of_interest.to_written_form());
+        assert_eq!(vec!["json".to_owned(), "web/xml".to_owned()],
+                config.engine.excluded_languages.to_written_form());
+
+        let written = super::super::args::forced_languages_to_string(&config.engine.forced_languages);
+        assert_eq!("ios/m=objective-c,pl=perl", written);
+        assert_eq!(config.engine.forced_languages, super::super::args::parse_forced_languages(&written).unwrap());
     }
 
     // Every command that 'resolve_invalid_config_fields' does not know about is treated as never
@@ -2205,7 +2232,7 @@ mod tests {
         assert_eq!(ProgressBarStyle::Hash, rescued.view.progress_bar);
         assert_eq!(NumberSeparator::Dot, rescued.view.number_separator);
         assert_eq!(DecimalSeparator::Comma, rescued.view.decimal_separator);
-        assert_eq!(hashmap!("m".to_owned() => "matlab".to_owned()), rescued.engine.forced_languages);
+        assert_eq!(hashmap!("m".to_owned() => "matlab".to_owned()), rescued.engine.forced_languages.to_written_form());
 
         std::fs::remove_file(test_file_path).unwrap();
     }
@@ -2285,14 +2312,14 @@ mod tests {
 
         let found = create_config_from_args(&format!("{project}/src")).unwrap();
         assert_eq!(vec!["node_modules".to_owned()], found.engine.exclude_dirs);
-        assert_eq!(vec!["rust".to_owned(), "java".to_owned()], found.engine.languages_of_interest);
+        assert_eq!(vec!["rust".to_owned(), "java".to_owned()], found.engine.languages_of_interest.to_written_form());
         assert_eq!(Some(7), found.view.top_n);
         assert_eq!(Some(project.clone() + "/.mezura/config.txt"),
                 found.view.local_dir.as_ref().map(LocalDir::get_config_path));
         assert!(found.view.local_dir.is_some_and(|x| x.configuration_applied));
 
         let overridden = create_config_from_args(&format!("{project}/src --languages python --top 2")).unwrap();
-        assert_eq!(vec!["python".to_owned()], overridden.engine.languages_of_interest);
+        assert_eq!(vec!["python".to_owned()], overridden.engine.languages_of_interest.to_written_form());
         assert_eq!(Some(2), overridden.view.top_n);
         assert_eq!(vec!["node_modules".to_owned()], overridden.engine.exclude_dirs,
                 "what the command line did not mention was dropped along with what it did");
@@ -2403,7 +2430,7 @@ mod tests {
         // command line over what the project already held
         create_config_from_args(&format!("{project} --languages rust --{SAVE_LOCAL}")).unwrap();
         let after = create_config_from_args(&format!("{project}/src")).unwrap();
-        assert_eq!(vec!["rust".to_owned()], after.engine.languages_of_interest);
+        assert_eq!(vec!["rust".to_owned()], after.engine.languages_of_interest.to_written_form());
         assert_eq!(vec!["build".to_owned()], after.engine.exclude_dirs);
         assert_eq!(Some(4), after.view.top_n);
 

@@ -394,11 +394,12 @@ fn create_scope_object(config: &Configuration, targets: &[mezura_core::Target]) 
         // './src' over two different trees is two different measurements
         format!("    \"targets\": {}", create_targets_array(targets)),
         format!("    \"exclude\": {}", create_string_array(&config.engine.exclude_dirs)),
-        format!("    \"languages\": {}", create_string_array(&config.engine.languages_of_interest)),
-        format!("    \"excluded_languages\": {}", create_string_array(&config.engine.excluded_languages)),
+        format!("    \"languages\": {}", create_string_array(&config.engine.languages_of_interest.to_written_form())),
+        format!("    \"excluded_languages\": {}", create_string_array(&config.engine.excluded_languages.to_written_form())),
         // '--force-language m=matlab' decides which language a file is counted as, so it moves
         // numbers the same way an exclusion does
-        format!("    \"forced_languages\": {}", create_forced_languages_object(&config.engine.forced_languages)),
+        format!("    \"forced_languages\": {}",
+                create_forced_languages_object(&config.engine.forced_languages.to_written_form())),
         format!("    \"counting\": \"{}\"", config.view.counting.name()),
         format!("    \"search_in_dotted\": {}", config.engine.should_search_in_dotted),
         format!("    \"gitignore\": {}", !config.engine.no_gitignore),
@@ -939,7 +940,7 @@ mod tests {
         assert!(document_of(&config).contains("\"forced_languages\": {}"));
 
         config.engine.forced_languages = hashmap!["m".to_owned() => "matlab".to_owned(),
-                "h".to_owned() => "objective-c".to_owned()];
+                "h".to_owned() => "objective-c".to_owned()].into();
         let document = document_of(&config);
         assert!(document.contains("\"m\": \"matlab\""), "{document}");
         // sorted, so that two runs over the same tree produce the same bytes

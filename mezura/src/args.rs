@@ -1,6 +1,8 @@
 // Turning the text of a command line or a configuration file into values.
 use std::collections::HashMap;
 
+use mezura_core::{ForcedLanguages, format_module_scope, split_off_module_scope};
+
 // A command line, where a space separates one target from the next only once a module is named. It
 // cannot separate them unconditionally: by the time the arguments arrive the shell has split them
 // and eaten the quotes, so a space inside a path and a space between two paths look identical, and
@@ -24,39 +26,48 @@ pub fn parse_targets_in_block(block: &str) -> Result<Vec<(Option<String>, String
     targets_of(split_targets(block, |character| character == '\n'))
 }
 
+// 'rust,ios/swift'. Kept in the written form, module and all, so that a configuration file's block
+// can be read one line at a time and turned into the scoped value once at the end. Only the language
+// itself is lowercased: a module is matched exactly, the way the target that declares it is.
 pub fn parse_languages_to_vec(s: &str) -> Vec<String> {
-    s.split(',')
-    .filter_map(|x| get_trimmed_if_not_empty(&remove_dot_prefix(x.trim()).to_lowercase()))
-    .collect::<Vec<_>>()
+    s.split(',').filter_map(|entry| {
+        let (module, name) = split_off_module_scope(entry.trim());
+        Some(format_module_scope(module, &get_trimmed_if_not_empty(&remove_dot_prefix(name.trim()).to_lowercase())?))
+    }).collect::<Vec<_>>()
 }
 
 pub fn parse_paths_to_vec(s: &str) -> Vec<String> {
     s.split(',').filter_map(cleaned_path).collect::<Vec<_>>()
 }
 
-// 'm=matlab,.pl=perl,Makefile=make'. Lowercased here so the map is keyed the way the lookup asks
-// for it. The leading dot is left alone, which is what lets a whole filename be named at all: the
-// extension side strips it when it keys its map, while '.gitignore' keeps every dot it was written
-// with, being a name and not an extension.
-pub fn parse_forced_languages(s: &str) -> Option<HashMap<String,String>> {
-    let mut forced = HashMap::new();
+// 'm=matlab,.pl=perl,Makefile=make', and 'ios/m=objective-c' for a rule that holds inside one
+// module only. Lowercased here so the map is keyed the way the lookup asks for it, except for the
+// module, which is matched exactly as the target that declares it is. The leading dot is left alone,
+// which is what lets a whole filename be named at all: the extension side strips it when it keys its
+// map, while '.gitignore' keeps every dot it was written with, being a name and not an extension.
+pub fn parse_forced_languages(s: &str) -> Option<ForcedLanguages> {
+    let mut written = HashMap::new();
     for pair in s.split(',').filter_map(get_trimmed_if_not_empty) {
         let (claimed, language) = pair.split_once('=')?;
-        let claimed = claimed.trim().to_lowercase();
-        let language = language.trim();
-        if claimed.is_empty() || language.is_empty() {
+        let (module, claimed) = split_off_module_scope(claimed.trim());
+        let (module, claimed, language) = (module.map(str::trim), claimed.trim(), language.trim());
+        // A slash with nothing on one side of it is a module with no extension after it, or an
+        // extension with no module before it, and neither is a rule anybody can act on.
+        if claimed.is_empty() || language.is_empty() || claimed.contains('/')
+                || module.is_some_and(str::is_empty) {
             return None;
         }
-        forced.insert(claimed, language.to_owned());
+        written.insert(format_module_scope(module, &claimed.to_lowercase()), language.to_owned());
     }
 
-    if forced.is_empty() {None} else {Some(forced)}
+    if written.is_empty() {None} else {Some(ForcedLanguages::of_written_form(&written))}
 }
 
 // Sorted, because this is written into config files and into the log entries a later run compares
 // itself against, and a map's order would make the same setting look like a changed one
-pub fn forced_languages_to_string(forced: &HashMap<String,String>) -> String {
-    let mut pairs = forced.iter().map(|(extension, language)| format!("{extension}={language}")).collect::<Vec<_>>();
+pub fn forced_languages_to_string(forced: &ForcedLanguages) -> String {
+    let mut pairs = forced.to_written_form().into_iter()
+            .map(|(claimed, language)| format!("{claimed}={language}")).collect::<Vec<_>>();
     pairs.sort();
     pairs.join(",")
 }

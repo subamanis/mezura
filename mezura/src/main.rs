@@ -164,15 +164,18 @@ Your configurations, themes and logs are left alone.")};
                 &format!("Using the settings of this project, from '{}'.", local.get_config_path())));
     }
 
-    if !config.engine.languages_of_interest.is_empty() &&
-     config.engine.languages_of_interest.iter().all(|lang| config.engine.excluded_languages.contains(lang)) {
+    // The two lists of the run itself, and not those of a module: one module counting nothing is a
+    // row of zeroes in the report, where the run counting nothing is a run worth stopping.
+    let wanted = config.engine.languages_of_interest.get_of_the_whole_run();
+    if !wanted.is_empty()
+            && wanted.iter().all(|lang| config.engine.excluded_languages.get_of_the_whole_run().contains(lang)) {
         eprintln!("\n{}\n",crate::theme::get_active().error.paint(
                 "Every language named in '--languages' is also named in '--exclude-languages', so nothing would be left to count."));
         return ExitCode::FAILURE;
     }
 
     if !config.engine.languages_of_interest.is_empty() {
-        match report_unknown_languages(&languages_available, &config.engine.languages_of_interest) {
+        match report_unknown_languages(&languages_available, &config.engine.languages_of_interest.get_all_names()) {
             Ok(x) => {
                 if let Some(msg) = x {
                     eprintln!("\n {}", crate::message_printer::wrap_message(&msg));

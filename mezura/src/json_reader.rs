@@ -455,8 +455,8 @@ mod tests {
 
         let mut config = Configuration::new(vec!["./src".to_owned()]);
         config.engine.exclude_dirs = vec!["target".to_owned(), "*.min.js".to_owned()];
-        config.engine.languages_of_interest = vec!["rust".to_owned()];
-        config.engine.excluded_languages = vec!["json".to_owned()];
+        config.engine.languages_of_interest = vec!["rust".to_owned()].into();
+        config.engine.excluded_languages = vec!["json".to_owned()].into();
         config.view.counting = mezura_core::CountingModel::Region;
         config.engine.should_search_in_dotted = true;
         config.engine.no_gitignore = true;

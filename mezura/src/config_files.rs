@@ -500,7 +500,7 @@ fn read_lines_from_file_to_vec<T>(reader: &mut CountingReader, buf: &mut String,
 
 #[cfg(test)]
 mod tests {
-    use mezura_core::Target;
+    use mezura_core::{ForcedLanguages, Target};
 
     use super::super::config_manager::Configuration;
     use super::*;
@@ -534,7 +534,8 @@ mod tests {
     #[test]
     fn a_command_line_written_to_a_configuration_reads_back_as_the_same_command_line() -> std::io::Result<()> {
         let command = "./ --exclude a,b,c.txt,d.txt, --counting region --threads 1 1 --hide keywords,timing \
-                --force-language m=matlab,.pl=Perl --by-file 12 --count-minified --count-generated \
+                --force-language m=matlab,.pl=Perl,ios/h=objective-c --languages rust,web/js \
+                --exclude-languages json,web/xml --by-file 12 --count-minified --count-generated \
                 --style code-number=green,comments-label=magenta bold,arrow=default dim".to_string();
         let config_builder = config_manager::create_config_builder_from_args(&command).unwrap();
 
@@ -555,10 +556,15 @@ mod tests {
         assert_eq!(config_builder.hidden, options.hidden);
         assert_eq!(config_builder.by_file, options.by_file);
         assert_eq!(config_builder.forced_languages, options.forced_languages);
+        assert_eq!(config_builder.languages_of_interest, options.languages_of_interest);
+        assert_eq!(config_builder.excluded_languages, options.excluded_languages);
         // '.pl' keeps its dot through the round trip: an extension drops the dot when it is keyed,
-        // a whole filename keeps it.
-        assert_eq!(Some(hashmap!("m".to_owned() => "matlab".to_owned(), ".pl".to_owned() => "Perl".to_owned())),
+        // a whole filename keeps it. The module a rule was written for survives it too.
+        assert_eq!(Some(ForcedLanguages::of_written_form(&hashmap!("m".to_owned() => "matlab".to_owned(),
+                ".pl".to_owned() => "Perl".to_owned(), "ios/h".to_owned() => "objective-c".to_owned()))),
                 options.forced_languages);
+        assert_eq!(Some(vec!["rust".to_owned(), "web/js".to_owned()]), options.languages_of_interest);
+        assert_eq!(Some(vec!["json".to_owned(), "web/xml".to_owned()]), options.excluded_languages);
         assert_eq!(config_builder.styles, options.config_styles);
         assert_eq!(3, options.config_styles.as_ref().unwrap().len());
 
@@ -598,8 +604,8 @@ mod tests {
 
         let (options, issues) = super::super::config_files::parse_config_file(Some("force-language-block"), Some(dir)).unwrap();
         assert!(issues.invalid_fields.is_empty());
-        assert_eq!(Some(hashmap!("m".to_owned() => "matlab".to_owned(), "pl".to_owned() => "perl".to_owned())),
-                options.forced_languages);
+        assert_eq!(Some(ForcedLanguages::of_written_form(&hashmap!("m".to_owned() => "matlab".to_owned(),
+                "pl".to_owned() => "perl".to_owned()))), options.forced_languages);
 
         std::fs::remove_file(&path)
     }

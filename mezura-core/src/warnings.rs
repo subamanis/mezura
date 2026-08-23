@@ -8,6 +8,8 @@ pub enum Code {
     UnknownForcedLanguage,
     UnknownLanguage,
     UnknownExcludedLanguage,
+    // A rule was written for a module that no target of this run declares, so it settled nothing
+    UnknownModuleScope,
     // A section of another language falls back to the file's own language, so its comments are read
     // with the wrong symbols
     UnknownSectionLanguage,
@@ -32,6 +34,7 @@ impl Code {
             Self::UnknownForcedLanguage => "unknown-forced-language",
             Self::UnknownLanguage => "unknown-language",
             Self::UnknownExcludedLanguage => "unknown-excluded-language",
+            Self::UnknownModuleScope => "unknown-module-scope",
             Self::UnknownSectionLanguage => "unknown-section-language",
             Self::DuplicateLanguage => "duplicate-language",
             Self::LanguageWithoutName => "language-without-name",
@@ -53,6 +56,7 @@ impl Code {
             Self::LanguageTiebreak | Self::DuplicateLanguage | Self::LanguageWithoutName
             | Self::LanguageFileUnreadable | Self::UnknownSectionLanguage => Affects::Counts,
             Self::UnknownForcedLanguage | Self::UnknownLanguage | Self::UnknownExcludedLanguage
+            | Self::UnknownModuleScope
             | Self::LanguageClaimsNothing | Self::ConflictLineSkipped | Self::ConfigValueIgnored
             | Self::ConfigSectionUnknown | Self::CommandIgnored | Self::ConfigStyleInvalid
             | Self::ThemeUnavailable => Affects::Settings

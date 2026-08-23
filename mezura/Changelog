@@ -52,6 +52,14 @@ Main changes:
       they are written, as before, and the JSON document records both the setting and how many
       files were left out. A file you name yourself is always counted, minified or not, the way a
       named file is counted even when a .gitignore covers it.
+  -> "--force-language", "--languages" and "--exclude-languages" can now answer differently inside
+      one module. Write the module and a slash before the value: "mezura ios=./ios analysis=./matlab
+      --force-language ios/m=objective-c,analysis/m=matlab" counts one repository's ".m" files as
+      Objective-C in one folder and as MATLAB in the other, in a single run. Anything written
+      without a module in front of it still holds everywhere, and a module keeps every such rule of
+      "--force-language" that it does not answer itself; for the two lists a module that names any
+      language of its own counts or leaves out those and nothing else. A rule naming a module the
+      run does not declare is reported and changes nothing.
   -> A ".ignore" or ".rgignore" is now obeyed alongside the ".gitignore". Those are the ignore
       files that ripgrep, the silver searcher and fd read and that git does not, and they exist for
       the opposite need: hiding something from your tools while keeping it in version control, so a

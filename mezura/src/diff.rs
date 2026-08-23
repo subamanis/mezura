@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use mezura_core::{EngineConfig, Language, Languages, ModuleResult, RunResult, Stats, UNNAMED_MODULE_NAME, render};
+use mezura_core::{EngineConfig, ForcedLanguages, Language, LanguageNames, Languages, ModuleResult,
+        RunResult, Stats, UNNAMED_MODULE_NAME, render};
 use mezura_core::language_file::ConflictRules;
 
 use super::config_manager::{Configuration, Layout, SortCriterion};
@@ -451,9 +452,9 @@ pub fn format_module_names(result: &RunResult) -> Option<String> {
 pub fn scope_of(engine: &mezura_core::EngineConfig, counting: mezura_core::CountingModel) -> Scope {
     Scope {
         exclude: engine.exclude_dirs.clone(),
-        languages: engine.languages_of_interest.clone(),
-        excluded_languages: engine.excluded_languages.clone(),
-        forced_languages: engine.forced_languages.clone(),
+        languages: engine.languages_of_interest.to_written_form(),
+        excluded_languages: engine.excluded_languages.to_written_form(),
+        forced_languages: engine.forced_languages.to_written_form(),
         counting: counting.name().to_owned(),
         search_in_dotted: engine.should_search_in_dotted,
         gitignore: !engine.no_gitignore,
@@ -507,16 +508,17 @@ pub fn resolve_settings(document: &Scope, config: &mut super::config_manager::Co
         config.engine.exclude_dirs = document.exclude.clone();
         adopted.push(EXCLUDE);
     }
-    if !typed.languages && different(&document.languages, &config.engine.languages_of_interest) {
-        config.engine.languages_of_interest = document.languages.clone();
+    if !typed.languages && different(&document.languages, &config.engine.languages_of_interest.to_written_form()) {
+        config.engine.languages_of_interest = LanguageNames::of_written_form(&document.languages);
         adopted.push(LANGUAGES);
     }
-    if !typed.excluded_languages && different(&document.excluded_languages, &config.engine.excluded_languages) {
-        config.engine.excluded_languages = document.excluded_languages.clone();
+    if !typed.excluded_languages
+            && different(&document.excluded_languages, &config.engine.excluded_languages.to_written_form()) {
+        config.engine.excluded_languages = LanguageNames::of_written_form(&document.excluded_languages);
         adopted.push(EXCLUDE_LANGUAGES);
     }
-    if !typed.forced_languages && document.forced_languages != config.engine.forced_languages {
-        config.engine.forced_languages = document.forced_languages.clone();
+    if !typed.forced_languages && document.forced_languages != config.engine.forced_languages.to_written_form() {
+        config.engine.forced_languages = ForcedLanguages::of_written_form(&document.forced_languages);
         adopted.push(FORCE_LANGUAGE);
     }
     // Only a model this build has can be adopted: a word it does not know names a fold it cannot
@@ -885,10 +887,10 @@ mod tests {
         // A forced language decides which language a file is counted as, so a run that forced one
         // and a run that did not measured different things
         config.engine.exclude_dirs = Vec::new();
-        config.engine.forced_languages = hashmap!["m".to_owned() => "matlab".to_owned()];
+        config.engine.forced_languages = hashmap!["m".to_owned() => "matlab".to_owned()].into();
         assert_eq!(vec!["force-language"], find_settings_that_differ(&document.scope, &scope_of(&config.engine, content)));
 
-        config.engine.forced_languages = HashMap::new();
+        config.engine.forced_languages = ForcedLanguages::default();
         config.engine.no_gitignore = true;
         assert_eq!(vec!["no-gitignore"], find_settings_that_differ(&document.scope,
                 &scope_of(&config.engine, content)));

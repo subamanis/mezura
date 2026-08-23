@@ -180,7 +180,7 @@ pub fn build_language_map_by(identified_by: IdentifiedBy, languages: &HashMap<St
 
 // A file whose whole name is claimed is that language whatever its extension says, which is what
 // makes 'CMakeLists.txt' CMake rather than text.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct LanguageLookup {
     pub by_extension: HashMap<String, Arc<str>>,
     pub by_filename: HashMap<String, Arc<str>>,
@@ -230,6 +230,57 @@ impl LanguageLookup {
         }
         let interpreter = std::str::from_utf8(find_interpreter(line)?).ok()?;
         find_language_of_interpreter(&self.by_shebang, interpreter)
+    }
+}
+
+// One lookup per module, as the settings name the modules. Built once and turned into
+// 'ModuleLookups' the moment the run knows which number each module was given.
+#[derive(Debug)]
+pub struct ScopedLookups {
+    whole_run: LanguageLookup,
+    per_module: HashMap<String, LanguageLookup>
+}
+
+impl ScopedLookups {
+    pub(crate) fn of(whole_run: LanguageLookup, per_module: HashMap<String, LanguageLookup>) -> Self {
+        ScopedLookups { whole_run, per_module }
+    }
+
+    pub(crate) fn get_of_module_named(&self, module: Option<&str>) -> &LanguageLookup {
+        module.and_then(|name| self.per_module.get(name)).unwrap_or(&self.whole_run)
+    }
+
+    // A rule naming a module this run never declared leaves every bucket without one of its own, and
+    // then there is nothing per module to keep: the run is warned about the name elsewhere and walks
+    // with the single lookup it would have had anyway.
+    pub(crate) fn into_lookups_per_module(mut self, modules: &crate::engine::modules::Modules) -> ModuleLookups {
+        let of_each = (0..modules.count())
+                .map(|id| modules.name_of(id as crate::engine::modules::ModuleId)
+                        .and_then(|name| self.per_module.remove(name)))
+                .collect::<Vec<_>>();
+        if of_each.iter().all(Option::is_none) {
+            return ModuleLookups::OfTheWholeRun(self.whole_run);
+        }
+
+        ModuleLookups::OfEachModule(of_each.into_iter()
+                .map(|own| own.unwrap_or_else(|| self.whole_run.clone())).collect())
+    }
+}
+
+// What the walk consults, by the number the file carries rather than by a name, because a name on
+// every file would be a string comparison per file.
+#[derive(Debug)]
+pub enum ModuleLookups {
+    OfTheWholeRun(LanguageLookup),
+    OfEachModule(Vec<LanguageLookup>)
+}
+
+impl ModuleLookups {
+    pub(crate) fn get_of_module(&self, module: crate::engine::modules::ModuleId) -> &LanguageLookup {
+        match self {
+            Self::OfTheWholeRun(lookup) => lookup,
+            Self::OfEachModule(lookups) => &lookups[module as usize]
+        }
     }
 }
 

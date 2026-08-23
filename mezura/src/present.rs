@@ -177,13 +177,13 @@ fn get_activated_languages_as_str(config: &Configuration) -> String {
     let mut msg = if config.engine.languages_of_interest.is_empty() {
         String::new()
     } else {
-        String::from("\n(Activated languages: ") + &config.engine.languages_of_interest.join(", ") + ")"
+        String::from("\n(Activated languages: ") + &config.engine.languages_of_interest.to_written_form().join(", ") + ")"
     }
     ;
     let other = if config.engine.excluded_languages.is_empty() {
         String::new()
     } else {
-        String::from("\n(Excluded languages: ") + &config.engine.excluded_languages.join(", ") + ")"
+        String::from("\n(Excluded languages: ") + &config.engine.excluded_languages.to_written_form().join(", ") + ")"
     };
 
     msg += &other;

@@ -62,6 +62,9 @@ fn add_advice_to(mut warning: Warning) -> Warning {
                 Some("Run with '--show-languages' for the ones available to '--exclude-languages'.".to_owned()),
         Code::UnknownSectionLanguage =>
                 Some("Correct the 'Nested language default' line of that language file in your data dir.".to_owned()),
+        Code::UnknownModuleScope => Some(format!("Name that module in '--{}', as '{}=<path>', or drop it from \
+in front of the rule to have the rule hold everywhere.",
+                super::config_manager::TARGETS, warning.subject)),
         _ => None
     };
 
