@@ -5,7 +5,7 @@ use mezura_core::language_file::ConflictRules;
 
 use super::config_manager::{Configuration, Layout, SortCriterion};
 use super::config_manager::{COUNTING, COUNT_GENERATED, COUNT_MINIFIED, EXCLUDE, EXCLUDE_LANGUAGES,
-        FORCE_LANGUAGE, LANGUAGES, NO_GITIGNORE, SEARCH_IN_DOTTED};
+        FORCE_LANGUAGE, LANGUAGES, NO_GITIGNORE, NO_IGNORE_FILES, SEARCH_IN_DOTTED};
 use super::json_reader::{DocumentError, DocumentWarning, Scope};
 use super::sources::RevisionSide;
 
@@ -457,6 +457,7 @@ pub fn scope_of(engine: &mezura_core::EngineConfig, counting: mezura_core::Count
         counting: counting.name().to_owned(),
         search_in_dotted: engine.should_search_in_dotted,
         gitignore: !engine.no_gitignore,
+        ignore_files: !engine.no_ignore_files,
         keywords_counted: engine.count_keywords,
         count_minified: engine.count_minified,
         count_generated: engine.count_generated
@@ -482,6 +483,7 @@ pub fn find_settings_that_differ(baseline: &Scope, subject: &Scope) -> Vec<&'sta
     if baseline.forced_languages != subject.forced_languages {differ.push(FORCE_LANGUAGE)}
     if baseline.search_in_dotted != subject.search_in_dotted {differ.push(SEARCH_IN_DOTTED)}
     if baseline.gitignore != subject.gitignore {differ.push(NO_GITIGNORE)}
+    if baseline.ignore_files != subject.ignore_files {differ.push(NO_IGNORE_FILES)}
     if baseline.keywords_counted != subject.keywords_counted {differ.push(HIDE_KEYWORDS)}
     if baseline.count_minified != subject.count_minified {differ.push(COUNT_MINIFIED)}
     if baseline.count_generated != subject.count_generated {differ.push(COUNT_GENERATED)}
@@ -532,6 +534,10 @@ pub fn resolve_settings(document: &Scope, config: &mut super::config_manager::Co
     if !typed.no_gitignore && document.gitignore == config.engine.no_gitignore {
         config.engine.no_gitignore = !document.gitignore;
         adopted.push(NO_GITIGNORE);
+    }
+    if !typed.no_ignore_files && document.ignore_files == config.engine.no_ignore_files {
+        config.engine.no_ignore_files = !document.ignore_files;
+        adopted.push(NO_IGNORE_FILES);
     }
     // Both halves of the one flag, or the counting and the printing would disagree
     if !typed.hide_keywords && document.keywords_counted != config.engine.count_keywords {
@@ -908,6 +914,7 @@ mod tests {
             counting: "region".to_owned(),
             search_in_dotted: false,
             gitignore: false,
+            ignore_files: true,
             keywords_counted: true,
             count_minified: false,
             count_generated: false

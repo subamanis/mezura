@@ -27,6 +27,7 @@ pub const COUNT_GENERATED    :&str   = "count-generated";
 pub const SHOW_FAULTY_FILES  :&str   = "show-faulty-files";
 pub const HIDE               :&str   = "hide";
 pub const NO_GITIGNORE       :&str   = "no-gitignore";
+pub const NO_IGNORE_FILES    :&str   = "no-ignore-files";
 pub const THEME              :&str   = "theme";
 pub const STYLE              :&str   = "style";
 pub const BAR_THICKNESS      :&str   = "bar-thickness";
@@ -69,8 +70,9 @@ const DEFAULT_CONFIG_LABEL  : &str    = "default";
 // The commands whose value decides what is counted, as against how the count is shown. A project's
 // own configuration is answered for these by the program's defaults and never by this machine's
 // saved ones, and a value of theirs this build cannot read stops the run rather than warning.
-const CHANGES_THE_NUMBERS   : [&str; 10] = [TARGETS, EXCLUDE, LANGUAGES, EXCLUDE_LANGUAGES,
-        FORCE_LANGUAGE, COUNTING, SEARCH_IN_DOTTED, COUNT_MINIFIED, COUNT_GENERATED, NO_GITIGNORE];
+const CHANGES_THE_NUMBERS   : [&str; 11] = [TARGETS, EXCLUDE, LANGUAGES, EXCLUDE_LANGUAGES,
+        FORCE_LANGUAGE, COUNTING, SEARCH_IN_DOTTED, COUNT_MINIFIED, COUNT_GENERATED, NO_GITIGNORE,
+        NO_IGNORE_FILES];
 
 // Two halves: the engine is handed only what can change a number, the presentation everything,
 // since echoing what the counting was done with is part of its job. The command line and the
@@ -625,6 +627,7 @@ pub struct TypedExplicitlyOnCommandLine {
     pub count_minified: bool,
     pub count_generated: bool,
     pub no_gitignore: bool,
+    pub no_ignore_files: bool,
     pub hide_keywords: bool
 }
 
@@ -634,7 +637,7 @@ impl TypedExplicitlyOnCommandLine {
     fn of(builder: &ConfigurationBuilder) -> Self {
         let ConfigurationBuilder { exclude_dirs, languages_of_interest, excluded_languages,
             forced_languages, counting, should_search_in_dotted, count_minified, count_generated,
-            no_gitignore, hidden,
+            no_gitignore, no_ignore_files, hidden,
             targets: _, targets_source: _, threads: _, should_show_faulty_files: _, theme_name: _,
             log: _, compare_level: _, config_name_to_save: _, config_name_to_load: _,
             theme_name_to_save: _, local_dir: _, bar_thickness: _, progress_bar: _, number_separator: _, decimal_separator: _,
@@ -651,6 +654,7 @@ impl TypedExplicitlyOnCommandLine {
             count_minified: count_minified.is_some(),
             count_generated: count_generated.is_some(),
             no_gitignore: no_gitignore.is_some(),
+            no_ignore_files: no_ignore_files.is_some(),
             hide_keywords: hidden.as_ref().is_some_and(|x| x.keywords)
         }
     }
@@ -677,6 +681,7 @@ pub struct ConfigurationBuilder {
     pub should_show_faulty_files: Option<bool>,
     pub hidden:                   Option<Hidden>,
     pub no_gitignore:             Option<bool>,
+    pub no_ignore_files:          Option<bool>,
     pub theme_name:               Option<String>,
     // Only the command line switches it on. A configuration that carried its own log would write an
     // entry on every run that loads it, so it stays a per-run request and is absent from
@@ -727,6 +732,7 @@ impl ConfigurationBuilder {
         if self.should_show_faulty_files.is_none() {self.should_show_faulty_files = config.should_show_faulty_files};
         if self.hidden.is_none() {self.hidden = config.hidden};
         if self.no_gitignore.is_none() {self.no_gitignore = config.no_gitignore};
+        if self.no_ignore_files.is_none() {self.no_ignore_files = config.no_ignore_files};
         if self.theme_name.is_none() {self.theme_name = config.theme_name};
         if self.compare_level.is_none() {self.compare_level = config.compare_level};
         if self.config_styles.is_none() {self.config_styles = config.config_styles};
@@ -747,6 +753,7 @@ impl ConfigurationBuilder {
         // before this compiles again.
         let ConfigurationBuilder { targets, exclude_dirs, languages_of_interest, excluded_languages,
             forced_languages, counting, should_search_in_dotted, count_minified, count_generated, no_gitignore,
+            no_ignore_files,
             threads: _, should_show_faulty_files: _, hidden: _, theme_name: _, compare_level: _,
             bar_thickness: _, progress_bar: _, number_separator: _, decimal_separator: _, layout: _,
             sort_by: _, top_n: _, by_file: _, config_styles: _,
@@ -765,6 +772,7 @@ impl ConfigurationBuilder {
         *count_minified = None;
         *count_generated = None;
         *no_gitignore = None;
+        *no_ignore_files = None;
 
         self
     }
@@ -778,7 +786,7 @@ impl ConfigurationBuilder {
         self.threads.is_none() || self.counting.is_none() || self.should_search_in_dotted.is_none() ||
         self.count_minified.is_none() || self.count_generated.is_none() ||
         self.should_show_faulty_files.is_none() || self.hidden.is_none() || self.no_gitignore.is_none() ||
-        self.theme_name.is_none() || self.compare_level.is_none() ||
+        self.no_ignore_files.is_none() || self.theme_name.is_none() || self.compare_level.is_none() ||
         self.config_styles.is_none() || self.bar_thickness.is_none() || self.progress_bar.is_none() ||
         self.number_separator.is_none() || self.decimal_separator.is_none() || self.layout.is_none() ||
         self.sort_by.is_none() || self.top_n.is_none() || self.by_file.is_none()
@@ -847,6 +855,7 @@ is sorted by lines.", sort_by.name());
                 count_minified: self.count_minified.unwrap_or(engine_defaults.count_minified),
                 count_generated: self.count_generated.unwrap_or(engine_defaults.count_generated),
                 no_gitignore: self.no_gitignore.unwrap_or(engine_defaults.no_gitignore),
+                no_ignore_files: self.no_ignore_files.unwrap_or(engine_defaults.no_ignore_files),
                 // The two flags that answer both questions: what is counted and what is shown. A
                 // comparison prints no report for file rows to appear in, so none are kept there.
                 count_keywords: !hidden.keywords,
@@ -969,10 +978,10 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     let mut custom_config = None;
     let (mut exclude_dirs, mut languages_of_interest, mut excluded_languages, mut forced_languages, mut threads, mut counting,
          mut search_in_dotted, mut count_minified, mut count_generated, mut show_faulty_files, mut config_name_to_save, mut hidden, mut log,
-         mut compare_level, mut config_name_to_load, mut no_gitignore, mut theme_name, mut theme_name_to_save, mut styles, mut bar_thickness,
+         mut compare_level, mut config_name_to_load, mut no_gitignore, mut no_ignore_files, mut theme_name, mut theme_name_to_save, mut styles, mut bar_thickness,
          mut progress_bar, mut number_separator, mut decimal_separator, mut layout, mut output, mut explain, mut diff_against, mut sort_by, mut top_n, mut by_file,
          mut save_local, mut no_local)
-         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
+         = (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None);
     for command in options {
         let (command_name, arguments) = match command.find(" ") {
             Some(index) => command.split_at(index),
@@ -1079,6 +1088,12 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 return Err(ArgParsingError::UnexpectedCommandArgs(NO_GITIGNORE.to_owned()))
             }
             no_gitignore = Some(true);
+        } else if command_name == NO_IGNORE_FILES {
+            if has_any_args(command) {
+                message_printer::print_help_message_for_command(NO_IGNORE_FILES);
+                return Err(ArgParsingError::UnexpectedCommandArgs(NO_IGNORE_FILES.to_owned()))
+            }
+            no_ignore_files = Some(true);
         } else if command_name == THEME {
             let name = arguments.trim();
             if name.is_empty() {
@@ -1271,7 +1286,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         targets, targets_source: None, exclude_dirs, languages_of_interest, excluded_languages, forced_languages, threads, counting,
         should_search_in_dotted: search_in_dotted, count_minified, count_generated,
         should_show_faulty_files: show_faulty_files,
-        hidden, no_gitignore, theme_name, theme_name_to_save, local_dir, log, compare_level,
+        hidden, no_gitignore, no_ignore_files, theme_name, theme_name_to_save, local_dir, log, compare_level,
         config_name_to_save, config_name_to_load, styles, bar_thickness, progress_bar, number_separator, decimal_separator, layout, output, explain, diff_against, sort_by, top_n, by_file,
         config_styles: None, theme_styles: None, typed_explicitly: TypedExplicitlyOnCommandLine::default()
     };
@@ -1495,7 +1510,8 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
     // decides whether it belongs in the match below.
     let ConfigurationBuilder {
             targets, exclude_dirs, forced_languages, threads, counting, should_search_in_dotted,
-            count_minified, count_generated, should_show_faulty_files, hidden, no_gitignore, theme_name, compare_level, bar_thickness,
+            count_minified, count_generated, should_show_faulty_files, hidden, no_gitignore, no_ignore_files,
+            theme_name, compare_level, bar_thickness,
             progress_bar, number_separator, decimal_separator, layout, sort_by, top_n, by_file,
             // these two accept whatever they are given, so a config can hold no invalid value for
             // them and they never reach 'invalid_fields'
@@ -1519,6 +1535,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             SHOW_FAULTY_FILES => should_show_faulty_files.is_some(),
             HIDE => hidden.is_some(),
             NO_GITIGNORE => no_gitignore.is_some(),
+            NO_IGNORE_FILES => no_ignore_files.is_some(),
             EXCLUDE => exclude_dirs.is_some(),
             FORCE_LANGUAGE => forced_languages.is_some(),
             THEME => theme_name.is_some(),
@@ -2204,7 +2221,7 @@ mod tests {
             donor.add_missing_fields(create_config_builder_from_args(
                     "./ --exclude a --languages rust --exclude-languages java --force-language m=matlab \
                     --threads 1 1 --counting region --search-in-dotted --count-minified --count-generated \
-                    --show-faulty-files --hide bar --no-gitignore --compare 3 --bar-thickness fat \
+                    --show-faulty-files --hide bar --no-gitignore --no-ignore-files --compare 3 --bar-thickness fat \
                     --progress-bar hash --number-separator dot --decimal-separator comma --layout table \
                     --sort name --top 3 --by-file 8").unwrap());
             // Neither can come off a command line here: a theme is looked up in the data directory,
@@ -2234,8 +2251,8 @@ mod tests {
         let kept = donor().forget_what_changes_the_numbers();
         assert_eq!((None, None, None, None, None), (kept.targets, kept.exclude_dirs,
                 kept.languages_of_interest, kept.excluded_languages, kept.forced_languages));
-        assert_eq!((None, None, None, None, None), (kept.counting, kept.should_search_in_dotted,
-                kept.count_minified, kept.count_generated, kept.no_gitignore));
+        assert_eq!((None, None, None, None, None, None), (kept.counting, kept.should_search_in_dotted,
+                kept.count_minified, kept.count_generated, kept.no_gitignore, kept.no_ignore_files));
         assert_eq!((Some(3), Some(Layout::Table), Some(SortCriterion::Name), Some(ByFile::Capped(8))),
                 (kept.top_n, kept.layout, kept.sort_by, kept.by_file));
         assert_eq!((Some(BarThickness::Fat), Some(ProgressBarStyle::Hash), Some(NumberSeparator::Dot),

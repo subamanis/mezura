@@ -104,14 +104,14 @@ pub(crate) fn path_comparison_key(path: &str) -> String {
 // the nested ones are then dropped unless they carry a module of their own.
 //
 // Idempotent, because all of it is existence-first: what one pass resolved, the next takes literally.
-pub(crate) fn resolve(declared: &[Target], respect_gitignore: bool, search_in_dotted: bool)
+pub(crate) fn resolve(declared: &[Target], obeyed: crate::ObeyedIgnoreFiles, search_in_dotted: bool)
 -> Result<Targets, TargetError>
 {
     let prepared = validate_and_absolutize(declared)?;
     // Taken before the expansion, which is what turns one pattern into paths nobody typed
     let written_by_hand = prepared.iter().filter(|target| is_valid_path(&target.path))
             .map(|target| target.path.clone()).collect();
-    Ok(Targets { resolved: expand_patterns(prepared, respect_gitignore, search_in_dotted)?, written_by_hand })
+    Ok(Targets { resolved: expand_patterns(prepared, obeyed, search_in_dotted)?, written_by_hand })
 }
 
 // A relative path or pattern is joined to the working directory, so a saved configuration still
@@ -219,7 +219,7 @@ fn is_ancestor_of(ancestor: &str, path: &str) -> bool {
             && path.as_bytes()[ancestor.len()] == b'/'
 }
 
-fn expand_patterns(targets: Vec<Target>, respect_gitignore: bool, search_in_dotted: bool)
+fn expand_patterns(targets: Vec<Target>, obeyed: crate::ObeyedIgnoreFiles, search_in_dotted: bool)
 -> Result<Vec<Target>, TargetError>
 {
     fn is_dotted(path: &Path) -> bool {
@@ -241,7 +241,7 @@ fn expand_patterns(targets: Vec<Target>, respect_gitignore: bool, search_in_dott
 
             let relevant = matches.iter()
                     .filter(|x| search_in_dotted || !is_dotted(x))
-                    .filter(|x| !respect_gitignore || !GitignoreStack::is_path_ignored(x))
+                    .filter(|x| !GitignoreStack::is_path_ignored(x, obeyed))
                     // A pattern is not a name: what it matched was found by the program, and a link
                     // the walk finds is skipped, since it counts whatever it points at a second
                     // time. Named on its own it is still followed, as any target is.
@@ -423,7 +423,7 @@ mod target_path_tests {
         std::fs::create_dir_all(&bracketed).unwrap();
         let bracketed_str = bracketed.to_str().unwrap().replace('\\', "/");
 
-        let resolved = resolve(&[Target::of(bracketed_str)], true, false);
+        let resolved = resolve(&[Target::of(bracketed_str)], obey_every_ignore_file(), false);
         std::fs::remove_dir_all(&root).unwrap();
 
         let resolved = resolved.unwrap();
@@ -431,8 +431,14 @@ mod target_path_tests {
         assert!(resolved[0].path.ends_with("a[b"), "not kept as itself: {resolved:?}");
     }
 
-    fn resolved_paths(declared: Vec<Target>, respect_gitignore: bool) -> Result<Vec<String>, TargetError> {
-        resolve(&declared, respect_gitignore, false).map(|x| x.iter().map(Target::to_string).collect())
+    fn resolved_paths(declared: Vec<Target>, respect_ignore_files: bool) -> Result<Vec<String>, TargetError> {
+        let obeyed = crate::ObeyedIgnoreFiles { gitignore: respect_ignore_files,
+                search_tools: respect_ignore_files };
+        resolve(&declared, obeyed, false).map(|x| x.iter().map(Target::to_string).collect())
+    }
+
+    fn obey_every_ignore_file() -> crate::ObeyedIgnoreFiles {
+        crate::ObeyedIgnoreFiles { gitignore: true, search_tools: true }
     }
 
     #[test]
@@ -442,9 +448,9 @@ mod target_path_tests {
         std::fs::create_dir_all(&root).unwrap();
         let root_str = root.to_str().unwrap().replace('\\', "/");
 
-        let contested = resolve(&[Target::named("code", root_str.clone()), Target::named("other", root_str.clone())], true, false);
-        let unnamed = resolve(&[Target::named("code", root_str.clone()), Target::of(root_str.clone())], true, false);
-        let repeated = resolve(&[Target::named("code", root_str.clone()), Target::named("code", root_str)], true, false);
+        let contested = resolve(&[Target::named("code", root_str.clone()), Target::named("other", root_str.clone())], obey_every_ignore_file(), false);
+        let unnamed = resolve(&[Target::named("code", root_str.clone()), Target::of(root_str.clone())], obey_every_ignore_file(), false);
+        let repeated = resolve(&[Target::named("code", root_str.clone()), Target::named("code", root_str)], obey_every_ignore_file(), false);
         std::fs::remove_dir_all(&root).unwrap();
 
         assert!(matches!(contested, Err(TargetError::Contested(_, ref a, ref b)) if a == "code" && b == "other"));
@@ -568,7 +574,8 @@ mod target_path_tests {
         let pattern_str = nowhere.join("a?b").to_str().unwrap().replace('\\', "/");
         let plain_str = nowhere.join("plain").to_str().unwrap().replace('\\', "/");
 
-        assert!(matches!(resolve(&[Target::of(pattern_str)], true, false), Err(TargetError::NoGlobMatches(_))));
+        assert!(matches!(resolve(&[Target::of(pattern_str)], obey_every_ignore_file(), false),
+                Err(TargetError::NoGlobMatches(_))));
         assert!(matches!(validate_and_absolutize(&[Target::of(plain_str.clone())]), Err(TargetError::InvalidPath(p)) if p == plain_str));
     }
 

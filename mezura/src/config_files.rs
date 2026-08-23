@@ -61,9 +61,9 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
 
     let (mut targets, mut counting, mut should_search_in_dotted, mut count_minified, mut count_generated, mut threads, mut exclude_dirs,
          mut languages_of_interest, mut excluded_languages, mut forced_languages, mut should_show_faulty_files, mut hidden,
-         mut no_gitignore, mut theme_name, mut compare_level, mut config_styles, mut bar_thickness,
+         mut no_gitignore, mut no_ignore_files, mut theme_name, mut compare_level, mut config_styles, mut bar_thickness,
          mut progress_bar, mut number_separator, mut decimal_separator, mut layout, mut sort_by, mut top_n,
-         mut by_file) = (None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None);
+         mut by_file) = (None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None);
     let mut issues = ConfigFileIssues::default();
     let mut buf = String::with_capacity(150);
 
@@ -164,6 +164,11 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                     Ok(x) => no_gitignore = x,
                     Err(()) => issues.invalid_fields.push(config_manager::NO_GITIGNORE)
                 }
+            } else if id == config_manager::NO_IGNORE_FILES {
+                match read_bool_value_from_file(&mut reader, &mut buf) {
+                    Ok(x) => no_ignore_files = x,
+                    Err(()) => issues.invalid_fields.push(config_manager::NO_IGNORE_FILES)
+                }
             } else if id == config_manager::THEME {
                 buf.clear();
                 let _ = reader.read_line(&mut buf);
@@ -253,7 +258,8 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
 
     let builder = ConfigurationBuilder {
         targets, exclude_dirs, languages_of_interest, excluded_languages, forced_languages, threads, counting, should_search_in_dotted,
-        count_minified, count_generated, should_show_faulty_files, hidden, no_gitignore, theme_name, compare_level, config_styles, bar_thickness,
+        count_minified, count_generated, should_show_faulty_files, hidden, no_gitignore, no_ignore_files,
+        theme_name, compare_level, config_styles, bar_thickness,
         progress_bar, number_separator, decimal_separator, layout, sort_by, top_n, by_file,
         ..Default::default()
     };
@@ -346,6 +352,10 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
     if let Some(no_gitignore) = &config_builder.no_gitignore {
         writer.write_all(&[b"\n\n===> ",config_manager::NO_GITIGNORE.as_bytes(),b"\n"].concat())?;
         writer.write_all(if *no_gitignore {b"yes"} else {b"no"})?;
+    }
+    if let Some(no_ignore_files) = &config_builder.no_ignore_files {
+        writer.write_all(&[b"\n\n===> ",config_manager::NO_IGNORE_FILES.as_bytes(),b"\n"].concat())?;
+        writer.write_all(if *no_ignore_files {b"yes"} else {b"no"})?;
     }
     if let Some(sort_by) = &config_builder.sort_by {
         writer.write_all(&[b"

@@ -67,7 +67,7 @@ The generated stats are the following:
 - The same figures grouped by a named part of the project, if you name one (see the modules section of ```--targets```)
 - Difference of stats between executions 
 
-By default, the files and folders that are ignored by a .gitignore are skipped, so that build artifacts and dependencies don't pollute the stats (see the ```--no-gitignore``` command).
+By default, the files and folders that are ignored by a .gitignore are skipped, so that build artifacts and dependencies don't pollute the stats (see the ```--no-gitignore``` command). A .ignore or .rgignore is obeyed as well, which is what ripgrep, the silver searcher and fd read and git does not, and which is where a vendored dependency that stays in version control is usually named (see ```--no-ignore-files```).
 
 There is a "data" folder in the repository, that contains some already provided language files, themes and the default configuration file.
 The program, at compile time, includes the "data" folder in the binary, and during the first execution, it saves it with the same structure in a persistent path, inside the user's computer, according to the platform's specification. More specifically, the paths per operating system are:
@@ -213,6 +213,26 @@ WHAT IS COUNTED
     A path you wrote out yourself is always counted, even where a .gitignore above it says
     otherwise. The files a glob pattern matched do not count as written out, since mezura is the
     one that found them.
+
+    A .ignore or .rgignore is obeyed too, and is turned off separately with '--no-ignore-files'.
+
+--no-ignore-files
+    count the files a .ignore or a .rgignore hides
+
+    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
+    or 'no' to disable. Default: no
+
+    These are the two ignore files that ripgrep, the silver searcher and fd read and that git does
+    not. They are written in the same format as a .gitignore and are read from the same places, and
+    they exist for the opposite need: hiding something from your tools while keeping it in version
+    control, which is what a vendored dependency or a committed bundle is.
+
+    Kept apart from '--no-gitignore' because they are two decisions. Obeying the repository and
+    obeying whoever set up the search tools are not the same thing, and one flag for both would
+    leave nobody able to say 'obey git, ignore the search tools'.
+
+    Where they disagree, the last word goes to the file with the narrowest audience: a rule in
+    .rgignore beats one in .ignore, which beats one in .gitignore, in the directory they share.
 
 --search-in-dotted
     go into directories whose name starts with a dot

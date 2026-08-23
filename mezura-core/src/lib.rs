@@ -91,8 +91,8 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
         return Err(RunError::LanguagesFromAnotherConfig);
     }
     // Idempotent, so a caller that resolved its own targets earlier loses nothing here.
-    let targets = engine::targets::resolve(&config.targets, !config.no_gitignore, config.should_search_in_dotted)
-            .map_err(RunError::InvalidTargets)?;
+    let targets = engine::targets::resolve(&config.targets, ObeyedIgnoreFiles::of(config),
+            config.should_search_in_dotted).map_err(RunError::InvalidTargets)?;
     let config = Arc::new(config.clone());
     let faulty_files_ref : FaultyFilesListMut  = Arc::new(Mutex::new(Vec::with_capacity(10)));
     let finish_condition_ref = Arc::new(AtomicBool::new(false));
@@ -336,7 +336,7 @@ pub(crate) fn calculate_single_file_stats_or_add_to_injector(config: &EngineConf
                 progress.record_file_found();
             }
         } else if dir_path.is_dir() {
-            let gitignore_stack = if config.no_gitignore { None } else { GitignoreStack::for_root_dir(dir_path) };
+            let gitignore_stack = GitignoreStack::for_root_dir(dir_path, ObeyedIgnoreFiles::of(config));
             dirs_injector.push(TraversedDir::new(dir_path.to_path_buf(), gitignore_stack, module));
         }
     })
@@ -397,8 +397,36 @@ impl TraversedDir {
     }
 }
 
-// The '.gitignore' files that apply at one depth, innermost first, each linked to the one above it.
-// The walk extends the chain as it descends so no directory reparses its parents' rules.
+// Which of the ignore files a walk obeys. Two answers rather than one, because a '.gitignore' is
+// the repository's decision and a '.ignore' is the decision of whoever set up their search tools,
+// and a vendored dependency is routinely kept by the first and hidden by the second.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ObeyedIgnoreFiles {
+    pub gitignore: bool,
+    pub search_tools: bool
+}
+
+impl ObeyedIgnoreFiles {
+    pub fn of(config: &EngineConfig) -> ObeyedIgnoreFiles {
+        ObeyedIgnoreFiles { gitignore: !config.no_gitignore, search_tools: !config.no_ignore_files }
+    }
+
+    pub fn obeys_nothing(self) -> bool {
+        !self.gitignore && !self.search_tools
+    }
+
+    // In the order they overrule each other, which is the order they are read in: the last rule
+    // that matches is the one that answers, so a '!keep' in '.rgignore' stands against an entry in
+    // '.gitignore' however the two files are written. That is the order ripgrep reads them in.
+    fn get_file_names(self) -> impl Iterator<Item = &'static str> {
+        [(".gitignore", self.gitignore), (".ignore", self.search_tools), (".rgignore", self.search_tools)]
+                .into_iter().filter_map(|(name, obeyed)| obeyed.then_some(name))
+    }
+}
+
+// The ignore files that apply at one depth, innermost first, each linked to the one above it. The
+// walk extends the chain as it descends so no directory reparses its parents' rules. One matcher
+// per directory holds all of that directory's files together, which is what gives them their order.
 #[derive(Debug)]
 pub(crate) struct GitignoreStack {
     matcher: ignore::gitignore::Gitignore,
@@ -406,22 +434,32 @@ pub(crate) struct GitignoreStack {
 }
 
 impl GitignoreStack {
-    pub fn extend_with_dir(dir: &Path, parent: Option<Arc<GitignoreStack>>) -> Option<Arc<GitignoreStack>> {
-        let gitignore_path = dir.join(".gitignore");
-        if !gitignore_path.is_file() {
+    pub fn extend_with_dir(dir: &Path, parent: Option<Arc<GitignoreStack>>, obeyed: ObeyedIgnoreFiles)
+    -> Option<Arc<GitignoreStack>>
+    {
+        let mut builder = ignore::gitignore::GitignoreBuilder::new(dir);
+        let mut found_one = false;
+        for name in obeyed.get_file_names() {
+            let path = dir.join(name);
+            if path.is_file() {
+                // Ignored the way 'Gitignore::new' ignores it: a file that could not be read, or a
+                // pattern that does not parse, costs that one rule and not the whole walk
+                let _ = builder.add(&path);
+                found_one = true;
+            }
+        }
+        if !found_one {
             return parent;
         }
 
-        let (matcher, _) = ignore::gitignore::Gitignore::new(&gitignore_path);
-        if matcher.is_empty() {
-            return parent;
+        match builder.build() {
+            Ok(matcher) if !matcher.is_empty() => Some(Arc::new(GitignoreStack { matcher, parent })),
+            _ => parent
         }
-
-        Some(Arc::new(GitignoreStack { matcher, parent }))
     }
 
-    // The .gitignore files of every dir between the repository root and the given dir, excluding it
-    fn of_ancestors(dir: &Path) -> Option<Arc<GitignoreStack>> {
+    // The ignore files of every dir between the repository root and the given dir, excluding it
+    fn of_ancestors(dir: &Path, obeyed: ObeyedIgnoreFiles) -> Option<Arc<GitignoreStack>> {
         if dir.join(".git").exists() {
             return None;
         }
@@ -436,14 +474,17 @@ impl GitignoreStack {
 
         let mut stack = None;
         for ancestor in relevant_ancestors.iter().rev() {
-            stack = Self::extend_with_dir(ancestor, stack);
+            stack = Self::extend_with_dir(ancestor, stack, obeyed);
         }
         stack
     }
 
-    // Explicitly given target dirs are traversed even if a .gitignore of their ancestors ignores them
-    pub fn for_root_dir(dir: &Path) -> Option<Arc<GitignoreStack>> {
-        let stack = Self::of_ancestors(dir);
+    // Explicitly given target dirs are traversed even if an ignore file of their ancestors ignores them
+    pub fn for_root_dir(dir: &Path, obeyed: ObeyedIgnoreFiles) -> Option<Arc<GitignoreStack>> {
+        if obeyed.obeys_nothing() {
+            return None;
+        }
+        let stack = Self::of_ancestors(dir, obeyed);
         if let Some(s) = &stack && s.is_ignored(dir, true) {
             return None;
         }
@@ -451,11 +492,14 @@ impl GitignoreStack {
     }
 
     // Used for paths that the program discovered on its own, like the matches of a glob pattern
-    pub fn is_path_ignored(path: &Path) -> bool {
+    pub fn is_path_ignored(path: &Path, obeyed: ObeyedIgnoreFiles) -> bool {
+        if obeyed.obeys_nothing() {
+            return false;
+        }
         let is_dir = path.is_dir();
         let Some(parent) = path.parent() else { return false };
 
-        let stack = Self::extend_with_dir(parent, Self::of_ancestors(parent));
+        let stack = Self::extend_with_dir(parent, Self::of_ancestors(parent, obeyed), obeyed);
         match stack {
             Some(x) => x.is_ignored_with_ancestor_dirs(path, is_dir),
             None => false

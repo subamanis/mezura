@@ -119,8 +119,8 @@ fn format_entry_line(config: &Configuration, datetime_now: &DateTime<Local>, res
 fn format_scope(config: &Configuration, targets: &[Target]) -> String {
     let engine = &config.engine;
     format!("{{\"targets\":{},\"exclude\":{},\"languages\":{},\"excluded_languages\":{},\
-\"forced_languages\":{},\"counting\":\"{}\",\"search_in_dotted\":{},\"gitignore\":{},\"keywords_counted\":{},\
-\"count_minified\":{},\"count_generated\":{}}}",
+\"forced_languages\":{},\"counting\":\"{}\",\"search_in_dotted\":{},\"gitignore\":{},\"ignore_files\":{},\
+\"keywords_counted\":{},\"count_minified\":{},\"count_generated\":{}}}",
             format_targets(targets, config),
             format_strings(&engine.exclude_dirs),
             format_strings(&engine.languages_of_interest),
@@ -129,6 +129,7 @@ fn format_scope(config: &Configuration, targets: &[Target]) -> String {
             config.view.counting.name(),
             engine.should_search_in_dotted,
             !engine.no_gitignore,
+            !engine.no_ignore_files,
             engine.count_keywords,
             engine.count_minified,
             engine.count_generated)

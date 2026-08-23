@@ -98,6 +98,28 @@ pub const NO_GITIGNORE_HELP  :  &str =
     otherwise. The files a glob pattern matched do not count as written out, since mezura is the
     one that found them.
 
+    A .ignore or .rgignore is obeyed too, and is turned off separately with '--no-ignore-files'.
+
+";
+pub const NO_IGNORE_FILES_HELP  :  &str =
+"--no-ignore-files
+    count the files a .ignore or a .rgignore hides
+
+    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
+    or 'no' to disable. Default: no
+
+    These are the two ignore files that ripgrep, the silver searcher and fd read and that git does
+    not. They are written in the same format as a .gitignore and are read from the same places, and
+    they exist for the opposite need: hiding something from your tools while keeping it in version
+    control, which is what a vendored dependency or a committed bundle is.
+
+    Kept apart from '--no-gitignore' because they are two decisions. Obeying the repository and
+    obeying whoever set up the search tools are not the same thing, and one flag for both would
+    leave nobody able to say 'obey git, ignore the search tools'.
+
+    Where they disagree, the last word goes to the file with the narrowest audience: a rule in
+    .rgignore beats one in .ignore, which beats one in .gitignore, in the directory they share.
+
 ";
 pub const LANGUAGES_HELP  :  &str =
 "--languages
@@ -908,6 +930,7 @@ pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 8] = [
         (EXCLUDE_LANGUAGES, EXCLUDE_LANGUAGES_HELP),
         (FORCE_LANGUAGE, FORCE_LANGUAGE_HELP),
         (NO_GITIGNORE, NO_GITIGNORE_HELP),
+        (NO_IGNORE_FILES, NO_IGNORE_FILES_HELP),
         (SEARCH_IN_DOTTED, SEARCH_IN_DOTTED_HELP),
         (COUNT_MINIFIED, COUNT_MINIFIED_HELP),
         (COUNT_GENERATED, COUNT_GENERATED_HELP),

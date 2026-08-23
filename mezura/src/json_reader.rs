@@ -38,6 +38,8 @@ pub struct Scope {
     pub counting: String,
     pub search_in_dotted: bool,
     pub gitignore: bool,
+    // The '.ignore' and '.rgignore' files, asked separately from the '.gitignore' above
+    pub ignore_files: bool,
     // Whether the keywords were counted at all: '--hide keywords' stops the counting, and a map
     // that is empty because nothing measured it must not read as a count of zero
     pub keywords_counted: bool,
@@ -185,6 +187,13 @@ pub(crate) fn parse_scope(scope: &Map<String, Value>) -> Result<(Scope, Vec<Targ
         counting: read_text(scope, "counting", "scope")?,
         search_in_dotted: read_flag(scope, "search_in_dotted", "scope")?,
         gitignore: read_flag(scope, "gitignore", "scope")?,
+        // Absent from a document of the builds that read no such file, which is what its absence
+        // therefore means
+        ignore_files: match scope.get("ignore_files") {
+            Some(x) => x.as_bool().ok_or(DocumentError::WrongType {
+                    at: "scope.ignore_files".to_owned(), wanted: "true or false" })?,
+            None => false
+        },
         // Absent from a document of the first builds, which all counted them
         keywords_counted: match scope.get("keywords_counted") {
             Some(x) => x.as_bool().ok_or(DocumentError::WrongType {

@@ -84,11 +84,8 @@ fn search_for_files(files_injector: Arc<Injector<ParsableFile>>, dirs_injector: 
 
             match fs::read_dir(&dir.path) {
                 Ok(entries) => {
-                    let gitignore_stack = if config.no_gitignore {
-                        None
-                    } else {
-                        GitignoreStack::extend_with_dir(&dir.path, dir.gitignore_stack.clone())
-                    };
+                    let gitignore_stack = GitignoreStack::extend_with_dir(&dir.path,
+                            dir.gitignore_stack.clone(), crate::ObeyedIgnoreFiles::of(&config));
                     traverse_dir(&files_injector, entries, &dirs_injector, &language_lookup, &exclude_matcher, &gitignore_stack,
                             &config, &modules, dir.module, &mut total_files, &mut relevant_files, &mut excluded_files, progress)
                 },
@@ -227,11 +224,13 @@ mod tests {
             targets: declared,
             threads: crate::Threads::new(1, 1),
             no_gitignore: extra_args.contains("--no-gitignore"),
+            no_ignore_files: extra_args.contains("--no-ignore-files"),
             should_search_in_dotted: extra_args.contains("--search-in-dotted"),
             ..Default::default()
         };
         // The same first step 'run' takes, with the flags the walk is about to obey
-        let targets = crate::engine::targets::resolve(&config.targets, !config.no_gitignore, config.should_search_in_dotted).unwrap();
+        let targets = crate::engine::targets::resolve(&config.targets, crate::ObeyedIgnoreFiles::of(&config),
+                config.should_search_in_dotted).unwrap();
         let config = Arc::new(config);
         let language_map = Arc::new(crate::languages::keyed_by_name(
                 crate::language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0));
@@ -274,7 +273,8 @@ mod tests {
         let vanished = format!("{root_str}/gone");
 
         let config = EngineConfig { threads: crate::Threads::new(1, 1), ..EngineConfig::new([&root_str]) };
-        let targets = crate::engine::targets::resolve(&config.targets, !config.no_gitignore, config.should_search_in_dotted).unwrap();
+        let targets = crate::engine::targets::resolve(&config.targets, crate::ObeyedIgnoreFiles::of(&config),
+                config.should_search_in_dotted).unwrap();
         let config = Arc::new(config);
         let language_map = Arc::new(crate::languages::keyed_by_name(
                 crate::language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0));
@@ -520,6 +520,44 @@ mod tests {
         let (_, relevant, _, found_files) = count_files_of(&format!("{root_str}/ignored_dir"), "");
         assert_eq!(1, relevant);
         assert_eq!(vec!["c.rs"], found_files);
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    // A '.ignore' is what somebody writes to hide a vendored dependency from their search tools
+    // while git keeps it, so obeying only the '.gitignore' counts the whole of it. The two flags are
+    // separate because the two files answer different questions, and the case that proves they are
+    // not one flag is the file each one alone brings back.
+    #[test]
+    fn the_ignore_files_git_does_not_read_are_obeyed_and_are_turned_off_on_their_own() {
+        let root = std::env::temp_dir().join("mezura_ignore_files_test");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::create_dir_all(root.join("vendor")).unwrap();
+        fs::write(root.join(".gitignore"), "built.rs\n").unwrap();
+        fs::write(root.join(".ignore"), "vendor/\nbundle.rs\n").unwrap();
+        // Last word to the narrowest file: '.rgignore' brings the bundle back over the '.ignore'
+        fs::write(root.join(".rgignore"), "!bundle.rs\n").unwrap();
+        fs::write(root.join("mine.rs"), "fn main() {}\n").unwrap();
+        fs::write(root.join("built.rs"), "fn main() {}\n").unwrap();
+        fs::write(root.join("bundle.rs"), "fn main() {}\n").unwrap();
+        fs::write(root.join("vendor").join("dep.rs"), "fn main() {}\n").unwrap();
+
+        let root_str = root.to_str().unwrap().replace('\\', "/");
+
+        let (_, _, _, found_files) = count_files_of(&root_str, "");
+        assert_eq!(vec!["bundle.rs", "mine.rs"], found_files);
+
+        // Only the search tools' files off: what the '.gitignore' hides is still hidden
+        let (_, _, _, found_files) = count_files_of(&root_str, "--no-ignore-files");
+        assert_eq!(vec!["bundle.rs", "dep.rs", "mine.rs"], found_files);
+
+        // Only the '.gitignore' off: what the '.ignore' hides is still hidden
+        let (_, _, _, found_files) = count_files_of(&root_str, "--no-gitignore");
+        assert_eq!(vec!["built.rs", "bundle.rs", "mine.rs"], found_files);
+
+        let (_, _, _, found_files) = count_files_of(&root_str, "--no-gitignore --no-ignore-files");
+        assert_eq!(vec!["built.rs", "bundle.rs", "dep.rs", "mine.rs"], found_files);
 
         fs::remove_dir_all(&root).unwrap();
     }
