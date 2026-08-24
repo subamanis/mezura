@@ -382,6 +382,10 @@ Change in commands:
       file, then --style. So a theme can carry a complete look, your own config can keep a few
       tweaks that survive switching themes, and --style wins over both.
   -> The "Exec time" figure now measures the whole command instead of only the scan.
+  -> "--output json" writes its document on one line now, with no indentation, which makes it
+      between a quarter and a half smaller depending on what was asked for. Every key and every
+      number is the same. To read one yourself, pipe it through "jq .". The same holds for
+      "--explain --output json" and for the document a "--diff" writes.
 
 Performance:
   -> Counting uses well under half the processor time it did, while counting more languages than

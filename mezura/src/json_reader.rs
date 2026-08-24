@@ -552,7 +552,7 @@ mod tests {
         // A document without the key was written by a build that always counted them, so its
         // absence must not read as keywords that were hidden
         config.view.hidden.keywords = false;
-        let older = create_document(&result, &Local::now(), &config).replace(",\n    \"keywords_counted\": true", "");
+        let older = create_document(&result, &Local::now(), &config).replace(",\"keywords_counted\":true", "");
         assert!(!older.contains("keywords_counted"));
         assert!(parse(&older).unwrap().scope.keywords_counted);
 

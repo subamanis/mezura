@@ -519,6 +519,9 @@ pub const OUTPUT_HELP  :  &str =
       mezura ./src --output json > stats.json
       mezura ./src --output json | jq '.total.code'
 
+    The document is written on one line, without spacing to look at. To read one yourself, pipe
+    it through 'jq .'
+
     The counts are plain numbers of lines and bytes, with no thousands separators, no KB or MB,
     no percentages and no colors, whatever the other settings say. '--sort' and '--top' still
     order and cut the languages, and the count of the ones left out is in the document. Of the

@@ -93,40 +93,40 @@ fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel) {
 // line are the contract, everything else is mezura's own and a reader is free to skip it.
 fn print_json(path: &str, explanation: &FileExplanation, model: CountingModel) {
     let (code, comments, third) = fold_totals(explanation, model);
-    let mut document = String::with_capacity(120 + 90 * explanation.lines.len());
-    document.push_str(&format!("{{\n  \"format\": 1,\n  \"counter\": \"mezura\",\n  \"file\": \"{}\",\n",
+    let mut document = String::with_capacity(120 + 70 * explanation.lines.len());
+    document.push_str(&format!("{{\"format\":1,\"counter\":\"mezura\",\"file\":\"{}\",",
             escape(path)));
-    document.push_str(&format!("  \"language\": \"{}\",\n  \"counting\": \"{}\",\n  \"lines\": {},\n",
+    document.push_str(&format!("\"language\":\"{}\",\"counting\":\"{}\",\"lines\":{},",
             escape(&explanation.language), model.name(), explanation.lines.len()));
-    document.push_str(&format!("  \"buckets\": {{ \"code\": {code}, \"comments\": {comments}, \"{}\": {third} }},\n",
+    document.push_str(&format!("\"buckets\":{{\"code\":{code},\"comments\":{comments},\"{}\":{third}}},",
             model.get_third_quantity_name()));
-    document.push_str("  \"per_line\": [");
+    document.push_str("\"per_line\":[");
     for (at, line) in explanation.lines.iter().enumerate() {
         let bucket = model.get_bucket_name(model.fold(line.class));
-        let mut entry = format!("\n    {{ \"line\": {}, \"bucket\": \"{bucket}\", \"class\": \"{}\"",
+        let mut entry = format!("{{\"line\":{},\"bucket\":\"{bucket}\",\"class\":\"{}\"",
                 at + 1, line.class.get_name());
         if let Some(name) = &line.read_as {
-            entry.push_str(&format!(", \"read_as\": \"{}\"", escape(name)));
+            entry.push_str(&format!(",\"read_as\":\"{}\"", escape(name)));
         }
         if let Some(note) = describe_carried(&line.carried) {
-            entry.push_str(&format!(", \"carried\": \"{}\"", escape(&note)));
+            entry.push_str(&format!(",\"carried\":\"{}\"", escape(&note)));
         }
         if !line.spans.is_empty() {
-            entry.push_str(&format!(", \"spans\": [{}]", line.spans.iter()
-                    .map(|span| format!("[{}, {}, \"{}\"]", span.from, span.to, span.kind.get_name()))
-                    .collect::<Vec<_>>().join(", ")));
+            entry.push_str(&format!(",\"spans\":[{}]", line.spans.iter()
+                    .map(|span| format!("[{},{},\"{}\"]", span.from, span.to, span.kind.get_name()))
+                    .collect::<Vec<_>>().join(",")));
         }
-        entry.push_str(" }");
+        entry.push('}');
         if at + 1 < explanation.lines.len() {
             entry.push(',');
         }
         document.push_str(&entry);
     }
-    document.push_str(if explanation.lines.is_empty() {"],\n"} else {"\n  ],\n"});
-    document.push_str(&format!("  \"classes\": {{ {} }}\n}}",
+    document.push_str("],");
+    document.push_str(&format!("\"classes\":{{{}}}}}",
             explanation.classes.to_array().iter().zip(mezura_core::LineClasses::NAMES)
-                    .map(|(count, name)| format!("\"{name}\": {count}"))
-                    .collect::<Vec<_>>().join(", ")));
+                    .map(|(count, name)| format!("\"{name}\":{count}"))
+                    .collect::<Vec<_>>().join(",")));
     println!("{document}");
 }
 
