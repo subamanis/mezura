@@ -415,7 +415,7 @@ impl LineClasses {
         self.to_array().iter().sum()
     }
 
-    pub(crate) fn bump(&mut self, class: LineClass) {
+    pub fn bump(&mut self, class: LineClass) {
         match class {
             LineClass::WordsInCode => self.words_in_code += 1,
             LineClass::StringContent => self.string_content += 1,

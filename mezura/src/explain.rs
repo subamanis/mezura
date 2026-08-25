@@ -3,10 +3,10 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use mezura_core::{Bucket, Carried, CountingModel, ExplainError, FileExplanation, Languages, Span,
-        SpanKind};
+use mezura_core::{Bucket, Carried, CountingModel, ExplainError, FileExplanation, Languages,
+        LineClasses, Span, SpanKind};
 
-use crate::config_manager::Configuration;
+use crate::config_manager::{Configuration, ExplainedLines};
 use crate::json_printer::escape;
 use crate::message_printer::wrap_message;
 use crate::theme::get_active;
@@ -22,10 +22,19 @@ targets. Give the file alone: mezura src/main.rs --explain", config.engine.targe
 file itself: mezura src/main.rs --explain", target.path));
     }
 
+    // The document promises one entry per line of the file, and that promise is what a program
+    // reading it is written against. Narrowing it would break them for nothing, since a program
+    // holding the whole answer takes the lines it wants for free.
+    let asked_for = config.view.explain.unwrap_or(ExplainedLines::WHOLE_FILE);
+    if asked_for != ExplainedLines::WHOLE_FILE && !config.view.prints_text() {
+        return refuse("'--explain' was given lines to show and '--output json' writes an entry for \
+every line of the file, which is what a program reading it expects. Ask for one or the other.");
+    }
+
     match mezura_core::explain_file(path, &config.engine, languages) {
         Ok(explanation) => {
             if config.view.prints_text() {
-                print_text(&target.path, &explanation, config.view.counting);
+                print_text(&target.path, &explanation, config.view.counting, asked_for);
             } else {
                 print_json(&target.path, &explanation, config.view.counting);
             }
@@ -47,7 +56,7 @@ fn refuse(message: &str) -> ExitCode {
     ExitCode::FAILURE
 }
 
-fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel) {
+fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel, asked_for: ExplainedLines) {
     let theme = get_active();
     println!("{}", theme.heading.paint(&format!("{path} as {}, counted by {}",
             explanation.language, model.name())));
@@ -57,11 +66,23 @@ fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel) {
         return;
     }
 
+    let whole_file = asked_for.is_the_whole_file(explanation.lines.len());
+    if !whole_file {
+        println!("{}", theme.note.paint(&format!("Showing lines {} to {} of {}.", asked_for.first,
+                asked_for.last.min(explanation.lines.len()), explanation.lines.len())));
+        println!();
+    }
+
     let width = explanation.lines.len().to_string().len();
+    let mut printed = 0;
     for (at, (source, line)) in explanation.contents.lines().zip(&explanation.lines).enumerate() {
-        if at > 0 {
+        if !asked_for.holds(at + 1) {
+            continue;
+        }
+        if printed > 0 {
             println!();
         }
+        printed += 1;
         let bucket = model.fold(line.class);
         let bucket_style = match bucket {
             Bucket::Code => &theme.code_label,
@@ -80,19 +101,22 @@ fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel) {
         println!("{:>width$}  {verdict}", "");
     }
 
-    let (code, comments, third) = fold_totals(explanation, model);
+    // Two lines when a range was asked for, and the file's own is the second of them: a range total
+    // alone says nothing about the count somebody opened '--explain' to check, and the file's alone
+    // does not answer how much of the range is comment.
     println!();
-    println!("{} {}: {} {}, {} {}, {} {}",
-            theme.lines_number.paint(&explanation.lines.len().to_string()), theme.lines_label.paint("lines"),
-            theme.code_number.paint(&code.to_string()), theme.code_label.paint("code"),
-            theme.comments_number.paint(&comments.to_string()), theme.comments_label.paint("comments"),
-            theme.extra_number.paint(&third.to_string()), theme.extra_label.paint(model.get_third_quantity_name()));
+    if whole_file {
+        print_totals(&explanation.classes, explanation.lines.len(), model, "");
+    } else {
+        print_totals(&collect_classes_of(explanation, asked_for), printed, model, " shown");
+        print_totals(&explanation.classes, explanation.lines.len(), model, " in the file");
+    }
 }
 
 // The document linejudge reads: 'format', 'lines', 'buckets' and one 'per_line' entry per physical
 // line are the contract, everything else is mezura's own and a reader is free to skip it.
 fn print_json(path: &str, explanation: &FileExplanation, model: CountingModel) {
-    let (code, comments, third) = fold_totals(explanation, model);
+    let (code, comments, third) = fold_totals(&explanation.classes, explanation.lines.len(), model);
     let mut document = String::with_capacity(120 + 70 * explanation.lines.len());
     document.push_str(&format!("{{\"format\":1,\"counter\":\"mezura\",\"file\":\"{}\",",
             escape(path)));
@@ -130,10 +154,34 @@ fn print_json(path: &str, explanation: &FileExplanation, model: CountingModel) {
     println!("{document}");
 }
 
-fn fold_totals(explanation: &FileExplanation, model: CountingModel) -> (usize, usize, usize) {
-    let code = model.calculate_code_lines(&explanation.classes);
-    let comments = model.calculate_comment_lines(&explanation.classes);
-    (code, comments, explanation.lines.len() - code - comments)
+fn print_totals(classes: &LineClasses, lines: usize, model: CountingModel, of_what: &str) {
+    let theme = get_active();
+    let (code, comments, third) = fold_totals(classes, lines, model);
+    let label = format!("{}{of_what}", if lines == 1 {"line"} else {"lines"});
+    println!("{} {}: {} {}, {} {}, {} {}",
+            theme.lines_number.paint(&lines.to_string()), theme.lines_label.paint(&label),
+            theme.code_number.paint(&code.to_string()), theme.code_label.paint("code"),
+            theme.comments_number.paint(&comments.to_string()), theme.comments_label.paint("comments"),
+            theme.extra_number.paint(&third.to_string()), theme.extra_label.paint(model.get_third_quantity_name()));
+}
+
+// The nine counts of the lines that were printed, built the way the parser builds the file's own,
+// so that a tenth class arrives here without anybody remembering to come and add it.
+fn collect_classes_of(explanation: &FileExplanation, asked_for: ExplainedLines) -> LineClasses {
+    let mut classes = LineClasses::default();
+    for (at, line) in explanation.lines.iter().enumerate() {
+        if asked_for.holds(at + 1) {
+            classes.bump(line.class);
+        }
+    }
+
+    classes
+}
+
+fn fold_totals(classes: &LineClasses, lines: usize, model: CountingModel) -> (usize, usize, usize) {
+    let code = model.calculate_code_lines(classes);
+    let comments = model.calculate_comment_lines(classes);
+    (code, comments, lines - code - comments)
 }
 
 // A span that would cut a character in half is left unpainted rather than panicking over a

@@ -3,6 +3,8 @@ use std::collections::HashMap;
 
 use mezura_core::{ForcedLanguages, format_module_scope, split_off_module_scope};
 
+use crate::config_manager::ExplainedLines;
+
 // A command line, where a space separates one target from the next only once a module is named. It
 // cannot separate them unconditionally: by the time the arguments arrive the shell has split them
 // and eaten the quotes, so a space inside a path and a space between two paths look identical, and
@@ -70,6 +72,30 @@ pub fn forced_languages_to_string(forced: &ForcedLanguages) -> String {
             .map(|(claimed, language)| format!("{claimed}={language}")).collect::<Vec<_>>();
     pairs.sort();
     pairs.join(",")
+}
+
+// '--explain' with nothing after it, one line number, or two with '..' between them, which is what
+// separates a range everywhere else in the program: '--diff v2..v3' and a theme's 'red..blue'. An
+// end left off is open, and a last line past the end of the file is not a mistake, since whoever
+// asks does not know how long the file is.
+pub fn parse_explained_lines(s: &str) -> Option<ExplainedLines> {
+    let text = s.trim();
+    if text.is_empty() {
+        return Some(ExplainedLines::WHOLE_FILE);
+    }
+
+    let (first, last) = match text.split_once("..") {
+        Some((first, last)) => (parse_end_of_a_range(first, 1)?, parse_end_of_a_range(last, usize::MAX)?),
+        None => {
+            let only = text.trim().parse::<usize>().ok()?;
+            (only, only)
+        }
+    };
+    if first == 0 || last < first {
+        return None;
+    }
+
+    Some(ExplainedLines {first, last})
 }
 
 pub fn parse_usize_value(s: &str, min: usize, max: usize) -> Option<usize> {
@@ -162,6 +188,15 @@ pub fn find_command(line: &str, name: &str) -> Option<usize> {
 // accident. Inside the list a name still starts a new one, which is what lets a saved configuration
 // write 'frontend=./web,backend=./api' and read it back as the two targets it was. The error is the
 // piece that could not be read, always a name with nothing after it.
+fn parse_end_of_a_range(text: &str, when_left_off: usize) -> Option<usize> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Some(when_left_off);
+    }
+
+    text.parse::<usize>().ok()
+}
+
 fn targets_of(tokens: Vec<String>) -> Result<Vec<(Option<String>, String)>, String> {
     let mut targets = Vec::new();
     for token in tokens {
@@ -357,5 +392,25 @@ mod tests {
         assert_eq!(Some((1,1)),parse_two_usize_values("     1       1  ", 1, 4, 1, 12));
         assert_eq!(Some((4,12)),parse_two_usize_values("4 12", 1, 4, 1, 12));
         assert_eq!(Some((2,6)),parse_two_usize_values("2 6", 1, 4, 1, 12));
+    }
+
+    // '..' and not a dash or a space: the program separates a range that way in '--diff v2..v3' and
+    // in a theme's 'red..blue', while a space between two numbers means two settings ('--threads').
+    #[test]
+    fn a_range_of_lines_is_written_the_way_every_other_range_in_the_program_is() {
+        let range = |first, last| Some(ExplainedLines {first, last});
+
+        assert_eq!(Some(ExplainedLines::WHOLE_FILE), parse_explained_lines(""));
+        assert_eq!(range(10, 20), parse_explained_lines("10..20"));
+        assert_eq!(range(13, 13), parse_explained_lines("13"));
+        assert_eq!(range(10, usize::MAX), parse_explained_lines("10.."));
+        assert_eq!(range(1, 20), parse_explained_lines("..20"));
+
+        assert_eq!(None, parse_explained_lines("20..10"));
+        assert_eq!(None, parse_explained_lines("0..10"));
+        assert_eq!(None, parse_explained_lines("10-20"));
+        assert_eq!(None, parse_explained_lines("10 20"));
+        assert_eq!(None, parse_explained_lines("1..2..3"));
+        assert_eq!(None, parse_explained_lines("ten"));
     }
 }

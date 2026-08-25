@@ -18,6 +18,7 @@ pub const DEFAULT_CONFIG_NAME : &str = "default.txt";
 pub const LOCAL_DIR_NAME : &str = ".mezura";
 pub const LOCAL_CONFIG_FILE_NAME : &str = "config.txt";
 pub const LOCAL_LOG_FILE_NAME : &str = "log.jsonl";
+pub const DATA_DIR_VARIABLE : &str = "MEZURA_DATA_DIR";
 
 const GLOB_METACHARACTERS : [char; 4] = ['*', '?', '[', '{'];
 
@@ -29,7 +30,11 @@ pub struct PersistentAppPaths {
     pub languages_dir: String,
     pub themes_dir: String,
     pub config_dir: String,
-    pub logs_dir: String
+    pub logs_dir: String,
+    // Whether the environment named the directory rather than the system. The run says so while it
+    // is true, since a variable left set months ago hides every saved configuration and theme with
+    // nothing on screen to explain where they went.
+    pub named_by_the_environment: bool
 }
 
 impl PersistentAppPaths {
@@ -43,20 +48,23 @@ impl PersistentAppPaths {
         // by demanding its own file is absent, so one such run fails it forever after. Asking the
         // system where the real directory is has to stay inside the other branch, or a machine with
         // no home directory fails every test that reaches this.
-        let data_dir = if cfg!(test) {
-            std::env::temp_dir().join(APP_NAME.to_owned() + "-test").to_string_lossy().into_owned() + "/"
+        let (data_dir, named_by_the_environment) = if cfg!(test) {
+            (std::env::temp_dir().join(APP_NAME.to_owned() + "-test").to_string_lossy().into_owned() + "/", false)
+        } else if let Some(named) = find_the_directory_the_environment_names() {
+            (named, true)
         } else {
-            ProjectDirs::from("", "", APP_NAME)
+            (ProjectDirs::from("", "", APP_NAME)
                     .expect("no home directory could be found to put the application's data in")
                     .data_dir().to_str()
-                    .expect("the application data directory path is not valid UTF-8").to_owned() + "/"
+                    .expect("the application data directory path is not valid UTF-8").to_owned() + "/", false)
         };
         PersistentAppPaths {
             languages_dir: data_dir.clone() + LANGUAGES_DIR_NAME + "/",
             themes_dir: data_dir.clone() + THEMES_DIR_NAME + "/",
             config_dir: data_dir.clone() + CONFIG_DIR_NAME + "/",
             logs_dir: data_dir.clone() + LOGS_DIR_NAME + "/",
-            data_dir
+            data_dir,
+            named_by_the_environment
         }
     }
 }
@@ -111,6 +119,21 @@ pub fn normalise_separators(path: &str) -> Cow<'_, str> {
 
 pub fn fold_for_comparison(path: &str) -> Cow<'_, str> {
     if cfg!(windows) {Cow::Owned(normalise_separators(path).to_lowercase())} else {Cow::Borrowed(path)}
+}
+
+fn find_the_directory_the_environment_names() -> Option<String> {
+    build_data_dir_path(std::env::var_os(DATA_DIR_VARIABLE)?.to_str()?)
+}
+
+// A trailing separator is put back if it is missing, since every path in the directory is built by
+// appending to this one. An empty value is no value, the way RUST_BACKTRACE reads one.
+fn build_data_dir_path(given: &str) -> Option<String> {
+    let named = normalise_separators(given.trim()).into_owned();
+    if named.is_empty() {
+        return None;
+    }
+
+    Some(if named.ends_with('/') {named} else {named + "/"})
 }
 
 fn search_upwards_from(start: &Path) -> Option<LocalDir> {
@@ -216,6 +239,16 @@ mod tests {
 
     fn path_of(root: &Path, relative: &str) -> String {
         normalise_separators(&root.join(relative).to_string_lossy()).into_owned()
+    }
+
+    // Every path under the data directory is built by appending to it, so one arriving without a
+    // separator at the end would put the languages in a folder called 'datalanguages'.
+    #[test]
+    fn a_data_directory_named_by_the_environment_always_ends_in_a_separator() {
+        assert_eq!(Some("C:/tools/mezura-data/".to_owned()), build_data_dir_path("C:\\tools\\mezura-data"));
+        assert_eq!(Some("C:/tools/mezura-data/".to_owned()), build_data_dir_path("  C:/tools/mezura-data/  "));
+        assert_eq!(None, build_data_dir_path("   "));
+        assert_eq!(None, build_data_dir_path(""));
     }
 
     #[test]

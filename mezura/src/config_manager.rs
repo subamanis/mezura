@@ -120,8 +120,9 @@ pub struct ViewConfig {
     pub progress_bar: ProgressBarStyle,
     pub layout: Layout,
     pub output: OutputFormat,
-    // One file explained line by line instead of a report. Command line only, like '--output'.
-    pub explain: bool,
+    // One file explained line by line instead of a report, and which of its lines to print.
+    // Command line only, like '--output'.
+    pub explain: Option<ExplainedLines>,
     // The document this run is compared against, as the path was typed. Read after the settings are
     // built and before anything is counted, so a baseline that is not one costs no scan.
     pub diff_against: Option<String>,
@@ -185,7 +186,7 @@ impl Default for ViewConfig {
             progress_bar: ProgressBarStyle::default(),
             layout: Layout::default(),
             output: OutputFormat::default(),
-            explain: false,
+            explain: None,
             diff_against: None,
             number_separator: NumberSeparator::default(),
             decimal_separator: DecimalSeparator::default(),
@@ -443,6 +444,26 @@ impl OutputFormat {
     }
 }
 
+// Which lines of the file '--explain' prints. The file is always read whole, since a comment that
+// opened above the range decides every line in it; only the printing is narrowed.
+#[derive(Debug,PartialEq,Eq,Clone,Copy)]
+pub struct ExplainedLines {
+    pub first: usize,
+    pub last: usize
+}
+
+impl ExplainedLines {
+    pub const WHOLE_FILE : ExplainedLines = ExplainedLines {first: 1, last: usize::MAX};
+
+    pub fn holds(&self, line_number: usize) -> bool {
+        line_number >= self.first && line_number <= self.last
+    }
+
+    pub fn is_the_whole_file(&self, lines_in_the_file: usize) -> bool {
+        self.first <= 1 && self.last >= lines_in_the_file
+    }
+}
+
 // The keyword rows list several figures side by side, so a grouping character that is also the
 // list's own separator makes one long number out of two short ones
 #[derive(Debug,PartialEq,Eq,Clone,Copy,Default)]
@@ -542,7 +563,8 @@ pub enum ArgParsingError {
     InvalidTargetInConfig(Box<ArgParsingError>,String),
     DoublePath,
     UnrecognisedCommand(String),
-    IncorrectCommandArgs(String),
+    // The command, and what was written after it, empty when nothing was
+    IncorrectCommandArgs(String, String),
     UnexpectedCommandArgs(String),
     NonExistantConfig(String),
     UnreadableConfig(String, usize, super::config_files::UnreadableCause),
@@ -575,8 +597,10 @@ impl Formatted for ArgParsingError {
                 let error = format!("--{p} is not recognised as a command.").red();
                 ColoredString::from(format!("{error}\n\n{tail}").as_str())
             },
-            // No direction is named: most callers print the help above this and two print it below
-            Self::IncorrectCommandArgs(p) => wrap_message(&format!("'--{p}' was not given arguments it can use. Its help is printed with this message.")).red(),
+            Self::IncorrectCommandArgs(command, given) if given.is_empty() =>
+                    wrap_message(&format!("'--{command}' needs a value.")).red(),
+            Self::IncorrectCommandArgs(command, given) =>
+                    wrap_message(&format!("'--{command}' cannot take '{given}'.")).red(),
             Self::UnreadableConfig(name, line, super::config_files::UnreadableCause::NotUtf8) => wrap_message(&format!("Configuration '{name}' stops being readable at line {line}, so none of it was used: the file is not saved as UTF-8.")).red(),
             Self::UnreadableConfig(name, line, super::config_files::UnreadableCause::Io(error)) => wrap_message(&format!("Configuration '{name}' could not be read past line {line}, so none of it was used: {error}")).red(),
             Self::UnexpectedCommandArgs(p) => wrap_message(&format!("Command '--{p}' does not expect any arguments.")).red(),
@@ -701,7 +725,7 @@ pub struct ConfigurationBuilder {
     // names: those two functions exist for what a configuration file can supply, and this is not it
     pub output:                   Option<OutputFormat>,
     // Absent from the same two for the same reason: a per-run diagnostic, never a saved setting
-    pub explain:                  Option<bool>,
+    pub explain:                  Option<ExplainedLines>,
     // Absent from those same two, and for the same reason: a configuration that silently turned
     // every run into a comparison against a file saved months ago is not a setting anybody wants
     pub diff_against:             Option<String>,
@@ -876,7 +900,7 @@ is sorted by lines.", sort_by.name());
                 progress_bar: self.progress_bar.unwrap_or_default(),
                 layout: self.layout.unwrap_or_default(),
                 output: self.output.unwrap_or_default(),
-                explain: self.explain.unwrap_or(false),
+                explain: self.explain,
                 diff_against: self.diff_against.clone(),
                 number_separator: self.number_separator.unwrap_or_default(),
                 decimal_separator: self.decimal_separator.unwrap_or_default(),
@@ -996,7 +1020,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             if let Ok(x) = parse_result {
                 if x.is_empty() {
                     message_printer::print_help_message_for_command(TARGETS);
-                    return Err(ArgParsingError::IncorrectCommandArgs(TARGETS.to_owned()));
+                    return Err(refused_argument(arguments,TARGETS.to_owned()));
                 }
                 targets = Some(x)
             } else {
@@ -1006,27 +1030,27 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             let vec = super::args::parse_paths_to_vec(arguments);
             if vec.is_empty() || mezura_core::engine::targets::validate_exclude_patterns(&vec).is_err() {
                 message_printer::print_help_message_for_command(EXCLUDE);
-                return Err(ArgParsingError::IncorrectCommandArgs(EXCLUDE.to_owned()));
+                return Err(refused_argument(arguments,EXCLUDE.to_owned()));
             }
             exclude_dirs = Some(vec);
         } else if command_name == LANGUAGES {
             let vec = super::args::parse_languages_to_vec(arguments);
             if vec.is_empty() {
                 message_printer::print_help_message_for_command(LANGUAGES);
-                return Err(ArgParsingError::IncorrectCommandArgs(LANGUAGES.to_owned()));
+                return Err(refused_argument(arguments,LANGUAGES.to_owned()));
             }
             languages_of_interest = Some(vec);
         } else if command_name == EXCLUDE_LANGUAGES {
             let vec = super::args::parse_languages_to_vec(arguments);
             if vec.is_empty() {
                 message_printer::print_help_message_for_command(EXCLUDE_LANGUAGES);
-                return Err(ArgParsingError::IncorrectCommandArgs(EXCLUDE_LANGUAGES.to_owned()));
+                return Err(refused_argument(arguments,EXCLUDE_LANGUAGES.to_owned()));
             }
             excluded_languages = Some(vec);
         } else if command_name == FORCE_LANGUAGE {
             let Some(map) = super::args::parse_forced_languages(arguments) else {
                 message_printer::print_help_message_for_command(FORCE_LANGUAGE);
-                return Err(ArgParsingError::IncorrectCommandArgs(FORCE_LANGUAGE.to_owned()));
+                return Err(refused_argument(arguments,FORCE_LANGUAGE.to_owned()));
             };
             forced_languages = Some(map);
         } else if command_name == THREADS {
@@ -1036,14 +1060,14 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 threads = Some(Threads::from(_threads));
             } else {
                 message_printer::print_help_message_for_command(THREADS);
-                return Err(ArgParsingError::IncorrectCommandArgs(THREADS.to_owned()))
+                return Err(refused_argument(arguments,THREADS.to_owned()))
             }
         } else if command_name == COUNTING {
             match CountingModel::parse(arguments) {
                 Some(x) => counting = Some(x),
                 None => {
                     message_printer::print_help_message_for_command(COUNTING);
-                    return Err(ArgParsingError::IncorrectCommandArgs(COUNTING.to_owned()))
+                    return Err(refused_argument(arguments,COUNTING.to_owned()))
                 }
             }
         } else if command_name == SEARCH_IN_DOTTED {
@@ -1073,7 +1097,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         } else if command_name == HIDE {
             if arguments.trim().is_empty() {
                 message_printer::print_help_message_for_command(HIDE);
-                return Err(ArgParsingError::IncorrectCommandArgs(HIDE.to_owned()))
+                return Err(refused_argument(arguments,HIDE.to_owned()))
             }
             match Hidden::parse(arguments) {
                 Ok(x) => hidden = Some(x),
@@ -1098,7 +1122,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             let name = arguments.trim();
             if name.is_empty() {
                 message_printer::print_help_message_for_command(THEME);
-                return Err(ArgParsingError::IncorrectCommandArgs(THEME.to_owned()))
+                return Err(refused_argument(arguments,THEME.to_owned()))
             }
             if super::theme_files::load_theme(name, &crate::paths::PERSISTENT_APP_PATHS.themes_dir).is_none() {
                 return Err(ArgParsingError::NonExistantTheme(name.to_owned()))
@@ -1117,7 +1141,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 Some(x) => top_n = Some(x),
                 None => {
                     message_printer::print_help_message_for_command(TOP);
-                    return Err(ArgParsingError::IncorrectCommandArgs(TOP.to_owned()))
+                    return Err(refused_argument(arguments,TOP.to_owned()))
                 }
             }
         } else if command_name == BY_FILE {
@@ -1130,7 +1154,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                     Some(x) => by_file = Some(x),
                     None => {
                         message_printer::print_help_message_for_command(BY_FILE);
-                        return Err(ArgParsingError::IncorrectCommandArgs(BY_FILE.to_owned()))
+                        return Err(refused_argument(arguments,BY_FILE.to_owned()))
                     }
                 }
             }
@@ -1139,7 +1163,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 Some(x) => sort_by = Some(x),
                 None => {
                     message_printer::print_help_message_for_command(SORT);
-                    return Err(ArgParsingError::IncorrectCommandArgs(SORT.to_owned()))
+                    return Err(refused_argument(arguments,SORT.to_owned()))
                 }
             }
         } else if command_name == BAR_THICKNESS {
@@ -1147,7 +1171,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 Some(x) => bar_thickness = Some(x),
                 None => {
                     message_printer::print_help_message_for_command(BAR_THICKNESS);
-                    return Err(ArgParsingError::IncorrectCommandArgs(BAR_THICKNESS.to_owned()))
+                    return Err(refused_argument(arguments,BAR_THICKNESS.to_owned()))
                 }
             }
         } else if command_name == PROGRESS_BAR {
@@ -1155,7 +1179,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 Some(x) => progress_bar = Some(x),
                 None => {
                     message_printer::print_help_message_for_command(PROGRESS_BAR);
-                    return Err(ArgParsingError::IncorrectCommandArgs(PROGRESS_BAR.to_owned()))
+                    return Err(refused_argument(arguments,PROGRESS_BAR.to_owned()))
                 }
             }
         } else if command_name == LAYOUT {
@@ -1163,7 +1187,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 Some(x) => layout = Some(x),
                 None => {
                     message_printer::print_help_message_for_command(LAYOUT);
-                    return Err(ArgParsingError::IncorrectCommandArgs(LAYOUT.to_owned()))
+                    return Err(refused_argument(arguments,LAYOUT.to_owned()))
                 }
             }
         } else if command_name == OUTPUT {
@@ -1171,20 +1195,22 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 Some(x) => output = Some(x),
                 None => {
                     message_printer::print_help_message_for_command(OUTPUT);
-                    return Err(ArgParsingError::IncorrectCommandArgs(OUTPUT.to_owned()))
+                    return Err(refused_argument(arguments,OUTPUT.to_owned()))
                 }
             }
         } else if command_name == EXPLAIN {
-            if has_any_args(command) {
-                message_printer::print_help_message_for_command(EXPLAIN);
-                return Err(ArgParsingError::UnexpectedCommandArgs(EXPLAIN.to_owned()))
+            match crate::args::parse_explained_lines(arguments) {
+                Some(lines) => explain = Some(lines),
+                None => {
+                    message_printer::print_help_message_for_command(EXPLAIN);
+                    return Err(refused_argument(arguments, EXPLAIN.to_owned()))
+                }
             }
-            explain = Some(true);
         } else if command_name == DIFF {
             let path = arguments.trim();
             if path.is_empty() {
                 message_printer::print_help_message_for_command(DIFF);
-                return Err(ArgParsingError::IncorrectCommandArgs(DIFF.to_owned()))
+                return Err(refused_argument(arguments,DIFF.to_owned()))
             }
             diff_against = Some(path.to_owned());
         } else if command_name == NUMBER_SEPARATOR {
@@ -1192,7 +1218,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 Some(x) => number_separator = Some(x),
                 None => {
                     message_printer::print_help_message_for_command(NUMBER_SEPARATOR);
-                    return Err(ArgParsingError::IncorrectCommandArgs(NUMBER_SEPARATOR.to_owned()))
+                    return Err(refused_argument(arguments,NUMBER_SEPARATOR.to_owned()))
                 }
             }
         } else if command_name == DECIMAL_SEPARATOR {
@@ -1200,7 +1226,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 Some(x) => decimal_separator = Some(x),
                 None => {
                     message_printer::print_help_message_for_command(DECIMAL_SEPARATOR);
-                    return Err(ArgParsingError::IncorrectCommandArgs(DECIMAL_SEPARATOR.to_owned()))
+                    return Err(refused_argument(arguments,DECIMAL_SEPARATOR.to_owned()))
                 }
             }
         } else if command_name == LOG {
@@ -1214,7 +1240,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             let compare_num = super::args::parse_usize_value(arguments, MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL);
             if compare_num.is_none() {
                 message_printer::print_help_message_for_command(COMPARE_LEVEL);
-                return Err(ArgParsingError::IncorrectCommandArgs(COMPARE_LEVEL.to_owned()))
+                return Err(refused_argument(arguments,COMPARE_LEVEL.to_owned()))
             } else {
                 compare_level = compare_num
             }
@@ -1222,7 +1248,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             let config_name = arguments.trim();
             if config_name.is_empty() {
                 message_printer::print_help_message_for_command(LOAD);
-                return Err(ArgParsingError::IncorrectCommandArgs(LOAD.to_owned()));
+                return Err(refused_argument(arguments,LOAD.to_owned()));
             }
 
             match super::config_files::parse_config_file(Some(config_name), None) {
@@ -1240,14 +1266,14 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             let name = arguments.trim();
             if name.is_empty() {
                 message_printer::print_help_message_for_command(SAVE);
-                return Err(ArgParsingError::IncorrectCommandArgs(SAVE.to_owned()))
+                return Err(refused_argument(arguments,SAVE.to_owned()))
             }
             config_name_to_save = Some(name.to_owned());
         } else if command_name == SAVE_THEME {
             let name = arguments.trim();
             if name.is_empty() {
                 message_printer::print_help_message_for_command(SAVE_THEME);
-                return Err(ArgParsingError::IncorrectCommandArgs(SAVE_THEME.to_owned()))
+                return Err(refused_argument(arguments,SAVE_THEME.to_owned()))
             }
             theme_name_to_save = Some(name.to_owned());
         } else if command_name == SAVE_LOCAL {
@@ -1296,7 +1322,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
 
     // Checked here, while every field is still the command line's own: a value one of the files
     // below merges in must not kill an explain run, only a command actually typed beside it.
-    if config_builder.explain == Some(true) {
+    if config_builder.explain.is_some() {
         let typed_beside_it = [(DIFF, config_builder.diff_against.is_some()),
                 (LOG, config_builder.log.is_some()),
                 (COMPARE_LEVEL, config_builder.compare_level.is_some()),
@@ -1414,6 +1440,12 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
 
 // The project's own configuration, merged under the command line. Answers whether the folder held
 // one at all, since it may hold nothing but a log.
+// Carries what was typed into the error, so the message can name it instead of saying that
+// something was wrong
+fn refused_argument(given: &str, command: String) -> ArgParsingError {
+    ArgParsingError::IncorrectCommandArgs(command, given.trim().to_owned())
+}
+
 fn apply_local_configuration(config_builder: &mut ConfigurationBuilder, local: &LocalDir)
 -> Result<bool, ArgParsingError>
 {
@@ -1699,27 +1731,27 @@ mod tests {
         assert_eq!(Err(ArgParsingError::UnrecognisedCommand("random".to_owned())), create_config_from_args("--random"));
         assert_eq!(Err(ArgParsingError::UnrecognisedCommand("random".to_owned())), create_config_from_args("--targets ./ --random"));
         assert_eq!(Err(ArgParsingError::DoublePath), create_config_from_args("./ --targets ./"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("targets".to_owned())), create_config_from_args("--targets"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("targets".to_owned())), create_config_from_args("--targets   "));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 33 10"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 2 129"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads 33"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned())), create_config_from_args("./ --threads A"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("targets".to_owned(), String::new())), create_config_from_args("--targets"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("targets".to_owned(), String::new())), create_config_from_args("--targets   "));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned(), String::new())), create_config_from_args("./ --threads"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned(), "33 10".to_owned())), create_config_from_args("./ --threads 33 10"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned(), "2 129".to_owned())), create_config_from_args("./ --threads 2 129"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned(), "33".to_owned())), create_config_from_args("./ --threads 33"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("threads".to_owned(), "A".to_owned())), create_config_from_args("./ --threads A"));
         assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("show-faulty-files".to_owned())), create_config_from_args("./ --threads 1 1 --show-faulty-files 1"));
         assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("show-faulty-files".to_owned())), create_config_from_args("./ --threads 1 1 --show-faulty-files a"));
         assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("search-in-dotted".to_owned())), create_config_from_args("./ --threads 1 1 --search-in-dotted a"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("counting".to_owned())), create_config_from_args("./ --counting"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("counting".to_owned())), create_config_from_args("./ --counting braces"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("counting".to_owned(), String::new())), create_config_from_args("./ --counting"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("counting".to_owned(), "braces".to_owned())), create_config_from_args("./ --counting braces"));
         assert_eq!(Err(ArgParsingError::UnrecognisedCommand("braces-as-code".to_owned())), create_config_from_args("./ --braces-as-code"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned())), create_config_from_args("./ --exclude"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned())), create_config_from_args("./ --exclude   --threads 4"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned())), create_config_from_args("./ --exclude [invalid"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned(), String::new())), create_config_from_args("./ --exclude"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned(), String::new())), create_config_from_args("./ --exclude   --threads 4"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned(), "[invalid".to_owned())), create_config_from_args("./ --exclude [invalid"));
         assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("no-gitignore".to_owned())), create_config_from_args("./ --no-gitignore a"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("load".to_owned())), create_config_from_args("./ --load"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("load".to_owned())), create_config_from_args("./ --load   "));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("save".to_owned())), create_config_from_args("./ --save"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("save".to_owned())), create_config_from_args("./ --save   "));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("load".to_owned(), String::new())), create_config_from_args("./ --load"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("load".to_owned(), String::new())), create_config_from_args("./ --load   "));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("save".to_owned(), String::new())), create_config_from_args("./ --save"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("save".to_owned(), String::new())), create_config_from_args("./ --save   "));
     }
 
     // A command's refusal of a bad argument stays beside its acceptance of a good one, so the few
@@ -1772,9 +1804,9 @@ mod tests {
         assert_eq!(Some(ByFile::All), by_file("./ --by-file   "));
         assert_eq!(Some(ByFile::Capped(20)), by_file("./ --by-file 20"));
         assert_eq!(Some(ByFile::All), by_file("./ --by-file 0"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs(BY_FILE.to_owned())),
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs(BY_FILE.to_owned(), "nope".to_owned())),
                 create_config_from_args("./ --by-file nope"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs(BY_FILE.to_owned())),
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs(BY_FILE.to_owned(), "-3".to_owned())),
                 create_config_from_args("./ --by-file -3"));
 
         // Asking for the rows is what makes the counting keep them, so the two halves cannot drift
@@ -1807,8 +1839,8 @@ mod tests {
         // The error names the entry that was not understood, instead of the whole command
         assert_eq!(Err(ArgParsingError::InvalidHideTarget("detials".to_owned())),
                 create_config_from_args("./ --hide keywords,detials"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs(HIDE.to_owned())), create_config_from_args("./ --hide"));
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs(HIDE.to_owned())), create_config_from_args("./ --hide   "));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs(HIDE.to_owned(), String::new())), create_config_from_args("./ --hide"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs(HIDE.to_owned(), String::new())), create_config_from_args("./ --hide   "));
 
         // What is written to a config file is what the command line accepts
         assert_eq!("parsing-info,bar,timing", expected.to_list_string());
@@ -2136,7 +2168,7 @@ mod tests {
         assert_eq!(Err(ArgParsingError::NonExistantTheme("definitely-not-a-theme000".to_owned())),
                 create_config_from_args("./ --theme definitely-not-a-theme000"));
 
-        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("theme".to_owned())),
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("theme".to_owned(), String::new())),
                 create_config_from_args("./ --theme"));
 
         std::fs::remove_file(test_theme_path).unwrap();

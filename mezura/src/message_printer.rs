@@ -262,7 +262,18 @@ pub const EXPLAIN_HELP  :  &str =
 "--explain
     show one file line by line instead of printing a report
 
-    No arguments. The target must be exactly one file.
+    No arguments, one line number, or two with '..' between them, the way '--diff' separates two
+    revisions. Either end can be left off. The target must be exactly one file.
+
+      mezura src/main.rs --explain 1210..1230
+      mezura src/main.rs --explain 1213
+      mezura src/main.rs --explain 1210..
+
+    Given lines, only those are printed and the rest of the file is still read, which is what makes
+    the answer right: a comment that opened above them decides every line in them, and each such
+    line says so. A last line past the end of the file is not a mistake. Two totals are printed
+    instead of one, for the lines shown and for the whole file, since the file's own is the number
+    you came to check.
 
     Every line is shown with the bucket it lands in, the class mezura read off it, and, where
     something was still open when the line began, what that was and where it started: 'in a
@@ -280,10 +291,12 @@ pub const EXPLAIN_HELP  :  &str =
 
     '--output json' writes the same answer as a document with one verdict per line and nothing
     else on the output, and no log entry is written. Each verdict carries those stretches as
-    'spans', byte offsets into its line. '--counting' picks the buckets, and the commands
-    choosing what is counted ('--languages', '--force-language' and the rest) apply as in a run.
-    The commands that belong to a report over a whole scan ('--diff', '--log', '--compare',
-    '--sort', '--top', '--by-file') are refused beside it.
+    'spans', byte offsets into its line. It always answers for the whole file, because a program
+    reading it is written against one entry per line, so a run asking for lines and for the
+    document at once is refused. '--counting' picks the buckets, and the commands choosing what is
+    counted ('--languages', '--force-language' and the rest) apply as in a run. The commands that
+    belong to a report over a whole scan ('--diff', '--log', '--compare', '--sort', '--top',
+    '--by-file') are refused beside it.
 
 ";
 
@@ -740,14 +753,13 @@ pub const STYLE_HELP  :  &str =
 ";
 pub const THEME_EDITOR_HELP  :  &str =
 "--theme-editor
-    open a page for tuning the language colors of every theme, and stop
+    open a page for tuning the colors of the report, and stop
 
     No arguments.
 
-    Writes an HTML page carrying the language colors of every theme in your 'data/themes'
-    directory, opens it in your browser, and counts nothing. Every color can be moved there,
-    against a live contrast reading and a mock overview drawn with the bar character the program
-    prints, and the page hands back the five 'language-' lines to paste into a theme file.
+    Writes an HTML page, opens it in your browser, and counts nothing. It shows one run of mezura
+    in the colors of every theme in your 'data/themes' directory, and hands back the lines to paste
+    into a theme file or into the style block of a configuration.
 
 ";
 pub const SHOW_THEMES_HELP  :  &str =

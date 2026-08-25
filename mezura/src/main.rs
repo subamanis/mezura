@@ -155,6 +155,16 @@ Your configurations, themes and logs are left alone.")};
         println!("\n{}{separator}", crate::theme::get_active().version.paint(VERSION_ID));
     }
 
+    // Also never silently, and to the error output because it is about this machine and not about
+    // the count: a variable set weeks ago and forgotten hides every saved configuration, theme and
+    // log, and the run otherwise looks like a fresh installation with no explanation on screen.
+    if crate::paths::PERSISTENT_APP_PATHS.named_by_the_environment {
+        eprintln!("\n{}", crate::theme::get_active().note.paint(&crate::message_printer::wrap_message(
+                &format!("{} names the data directory, so this run reads its languages, themes and \
+configurations from '{}' and not from the usual place.", crate::paths::DATA_DIR_VARIABLE,
+                crate::paths::PERSISTENT_APP_PATHS.data_dir))));
+    }
+
     // Never silently. A folder in some directory above the one being counted decided what this run
     // measures, and without this line the only way to find out is to go looking for it.
     if let Some(local) = &config.view.local_dir
@@ -234,7 +244,7 @@ Your configurations, themes and logs are left alone.")};
     crate::warning_collector::report_language_resolution_warnings(reported);
 
     // Its own answer entirely: no scan, no report, no log.
-    if config.view.explain {
+    if config.view.explain.is_some() {
         return crate::explain::run_explain(&config, languages);
     }
 
@@ -426,7 +436,7 @@ program to read, and both of them go to the output, so only one of the two can b
                 Some(ExitCode::SUCCESS)
             },
             Some(arg) if !arg.starts_with("--") => {
-                println!("\n{}", config_manager::ArgParsingError::IncorrectCommandArgs(CHANGELOG.to_owned()).format());
+                println!("\n{}", config_manager::ArgParsingError::IncorrectCommandArgs(CHANGELOG.to_owned(), arg.to_owned()).format());
                 crate::message_printer::print_help_message_for_command(CHANGELOG);
                 Some(ExitCode::FAILURE)
             },
@@ -499,7 +509,7 @@ program to read, and both of them go to the output, so only one of the two can b
                     Some(ExitCode::SUCCESS)
                 },
                 None => {
-                    println!("\n{}", config_manager::ArgParsingError::IncorrectCommandArgs(SHOW_THEMES.to_owned()).format());
+                    println!("\n{}", config_manager::ArgParsingError::IncorrectCommandArgs(SHOW_THEMES.to_owned(), arg.to_owned()).format());
                     crate::message_printer::print_help_message_for_command(SHOW_THEMES);
                     Some(ExitCode::FAILURE)
                 }

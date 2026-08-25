@@ -15,6 +15,7 @@ Example run on entire Linux Kernel: </br>
 * [Details](#details)
 * [Cmd Commands](#cmd-commands)
 * [Scripting](#scripting)
+* [Coding Agents (MCP)](#coding-agents-mcp)
 * [Configuration Files](#configuration-files)
 * [The Settings Of A Project](#the-settings-of-a-project)
 * [Logs and History](#logs-and-history)
@@ -30,7 +31,7 @@ The only thing you need is the binary, and there are 3 ways to get it:
 
 ### 1. Install it with cargo
 ```bash
-cargo install --locked --git https://github.com/subamanis/mezura
+cargo install --locked --git https://github.com/subamanis/mezura mezura
 ```
 To update an existing installation to the latest version, just run the same command again: it will detect that the repository has new commits, rebuild, and replace the old binary.
 
@@ -79,6 +80,8 @@ The program, at compile time, includes the "data" folder in the binary, and duri
 
 The languages, themes, configurations and logs are then read from those folders, on that first execution as much as on every one after it, so you can reach them and change them:
 add languages of your own, add themes, or edit the default configuration.
+
+Set ```MEZURA_DATA_DIR``` and that folder is used instead, created and filled on the first run there exactly as the usual one was. It is what you need when two versions of mezura have to run on the same machine without treading on each other, since each one rewrites the shared folder into the shape it expects. A run using it says so, every time, because a variable set once and forgotten hides every configuration and theme you saved.
 
 Installing a new version updates the language files there, so a correction to a language reaches you without you having to do anything. One that you changed yourself is replaced too, since a language file that has fallen behind counts wrongly, but your copy is kept under ```data/replaced/<version>/<date and time>/``` and the program names it, so you can carry your changes over. Each update or ```--restore``` writes its own folder there, so two of them never mix and the newest is the one at the bottom. A language file of your own is never touched, and neither are your themes, your default configuration or ```language_conflicts.txt```: those are written when they are absent and left alone afterwards.
 
@@ -616,14 +619,13 @@ HOW THE REPORT LOOKS
     The optional argument is a '--bar-thickness' for the preview bar.
 
 --theme-editor
-    open a page for tuning the language colors of every theme, and stop
+    open a page for tuning the colors of the report, and stop
 
     No arguments.
 
-    Writes an HTML page carrying the language colors of every theme in your 'data/themes'
-    directory, opens it in your browser, and counts nothing. Every color can be moved there,
-    against a live contrast reading and a mock overview drawn with the bar character the program
-    prints, and the page hands back the five 'language-' lines to paste into a theme file.
+    Writes an HTML page, opens it in your browser, and counts nothing. It shows one run of mezura
+    in the colors of every theme in your 'data/themes' directory, and hands back the lines to paste
+    into a theme file or into the style block of a configuration.
 
 TAKING THE RESULT ELSEWHERE
 
@@ -845,7 +847,18 @@ TUNING AND DIAGNOSTICS
 --explain
     show one file line by line instead of printing a report
 
-    No arguments. The target must be exactly one file.
+    No arguments, one line number, or two with '..' between them, the way '--diff' separates two
+    revisions. Either end can be left off. The target must be exactly one file.
+
+      mezura src/main.rs --explain 1210..1230
+      mezura src/main.rs --explain 1213
+      mezura src/main.rs --explain 1210..
+
+    Given lines, only those are printed and the rest of the file is still read, which is what makes
+    the answer right: a comment that opened above them decides every line in them, and each such
+    line says so. A last line past the end of the file is not a mistake. Two totals are printed
+    instead of one, for the lines shown and for the whole file, since the file's own is the number
+    you came to check.
 
     Every line is shown with the bucket it lands in, the class mezura read off it, and, where
     something was still open when the line began, what that was and where it started: 'in a
@@ -863,10 +876,12 @@ TUNING AND DIAGNOSTICS
 
     '--output json' writes the same answer as a document with one verdict per line and nothing
     else on the output, and no log entry is written. Each verdict carries those stretches as
-    'spans', byte offsets into its line. '--counting' picks the buckets, and the commands
-    choosing what is counted ('--languages', '--force-language' and the rest) apply as in a run.
-    The commands that belong to a report over a whole scan ('--diff', '--log', '--compare',
-    '--sort', '--top', '--by-file') are refused beside it.
+    'spans', byte offsets into its line. It always answers for the whole file, because a program
+    reading it is written against one entry per line, so a run asking for lines and for the
+    document at once is refused. '--counting' picks the buckets, and the commands choosing what is
+    counted ('--languages', '--force-language' and the rest) apply as in a run. The commands that
+    belong to a report over a whole scan ('--diff', '--log', '--compare', '--sort', '--top',
+    '--by-file') are refused beside it.
 
 --threads
     how many threads walk the directories and how many parse the files
@@ -985,6 +1000,59 @@ still write the whole JSON document, faulty files and unreadable directories inc
 failure can be read and not only detected.
 
 
+## Coding Agents (MCP)
+
+`mezura-mcp` is a second, separate binary that lets a coding assistant run mezura on its own. It
+speaks the Model Context Protocol, which is how editors like Claude Code, Cursor, Zed and VS Code
+hand tools to a model: the editor starts the binary, asks it what it can do, and the model picks. No
+network and no account are involved.
+
+The assistant could already run `mezura --output json` in a terminal. What this removes is the
+guessing: the model is handed the exact set of options and cannot invent a flag that does not exist,
+and it never has to read the help to find one.
+
+Install it beside mezura:
+
+```bash
+cargo install --locked --git https://github.com/subamanis/mezura mezura-mcp
+```
+
+Then add it to whichever file your editor keeps its servers in (`.mcp.json` in a project,
+`claude_desktop_config.json`, `.vscode/mcp.json`, Zed's `settings.json`, `~/.cursor/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "mezura": { "command": "mezura-mcp" }
+  }
+}
+```
+
+It runs the `mezura` binary rather than counting anything itself, so mezura has to be installed too.
+It looks for it next to itself first, then on the path. If it lives somewhere else, name it:
+
+```json
+{
+  "mcpServers": {
+    "mezura": { "command": "mezura-mcp", "env": { "MEZURA_BIN": "/opt/tools/mezura" } }
+  }
+}
+```
+
+Three tools are offered. `count_lines_of_code` counts a directory or a file and answers with the
+report, which is what to ask for when a person is going to read the answer. `count_lines_of_code_as_json`
+answers with the JSON document instead, for when the numbers are going to be compared or added up.
+`explain_file` goes through one file line by line and says why each line was counted the way it was,
+which is what to reach for when a number looks wrong; it takes a range of lines, so a long file can
+be asked about without the whole of it coming back.
+
+Each of them takes a path, and the counting tools also take languages to keep, paths to leave out,
+how many languages to show, how many files to list under each, and which counting model to use. Every
+call starts mezura afresh, so nothing of one answer can leak into the next, and a project's own
+`.mezura` settings apply exactly as they do on the command line. An answer too long to be read at
+once is refused with what to ask instead, rather than handed over in full or cut in half.
+
+
 ## Configuration Files
 If we plan to run the program many times for a project, it can be bothersome to specify all the flags every time, especially if they contain a lot of target and exclude dirs.
 That's why you can specify many flags in a <b>*configuration file*</b>, and have the program just load that file (see the --load command). <br>
@@ -1052,7 +1120,7 @@ A **theme** is a plain .txt file of ```token = value``` lines, in the "data/them
 
 The four languages of the overview and the folded 'others' entry are five ordinary tokens, ```language-1``` to ```language-4``` and ```language-others```, so a theme sets them the same way it sets everything else.
 
-To make picking those five easier, there is an interactive editor, where every theme is previewed on a mock overview, every color can be adjusted (with live contrast and color distance metrics, so that the result stays readable), and the outcome is turned into the lines you paste into a theme file.
+To make authoring one easier, there is an interactive editor: one run of mezura with a picker for every color that draws it, contrast readings beside them, and a button that hands back the lines of a theme file.
 
 <b>[Open the theme editor online](https://subamanis.github.io/mezura/theme-editor/)</b> to play with the bundled themes, or run ```mezura --theme-editor``` to open it with the themes found on your own machine, including the ones you created.
 
