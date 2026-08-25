@@ -1,0 +1,15 @@
+[package]
+name = "mezura-mcp"
+version = "0.1.0"
+authors = ["subamanis <petrospapa21@gmail.com>"]
+edition = "2024"
+description = "An MCP server that lets a coding agent run mezura, the code stats generator"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/subamanis/mezura"
+readme = "../README.md"
+
+[dependencies]
+rmcp = { version = "3.1.4", features = ["schemars", "server", "transport-io"] }
+schemars = "1"
+serde = { version = "1.0.229", features = ["derive"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "io-std", "process", "time"] }

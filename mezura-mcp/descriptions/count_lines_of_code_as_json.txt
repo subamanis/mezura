@@ -1,0 +1,6 @@
+The same count as 'count_lines_of_code', returned as a JSON document instead of a report to read.
+
+Use this one only when the numbers are going to be computed on: compared against a limit, added up,
+sorted, or written to a file. The document is about ten times the size of the report and carries
+only what was measured, so the percentages and the totals that the report prints have to be worked
+out of it. For a question somebody is going to read the answer to, use 'count_lines_of_code'.

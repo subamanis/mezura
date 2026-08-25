@@ -91,7 +91,7 @@ jobs:
             fi
           done
 
-      # The two packages are published separately and 'mezura' depends on 'mezura-core' by path
+      # The three packages are published separately and 'mezura' depends on 'mezura-core' by path
       # and version at once, which only matters here and at the moment of publishing
-      - name: Both packages still package
+      - name: Every package still packages
         run: cargo package --workspace
