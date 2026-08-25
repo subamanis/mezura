@@ -1,4 +1,4 @@
-files=80 lines=997 code=531 comments=247
+files=81 lines=1006 code=534 comments=251
 
 Ada
   files=1 lines=8 code=5 comments=2
@@ -7,6 +7,9 @@ Ada
 Assembly
   files=1 lines=12 code=6 comments=5
   words_in_code=6 string_content=0 comment_words_beside_code=0 words_in_comment=5 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
+Batch
+  files=1 lines=9 code=3 comments=4
+  words_in_code=3 string_content=0 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=0 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
 C
   files=1 lines=11 code=5 comments=3
   words_in_code=5 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=1 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0

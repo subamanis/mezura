@@ -69,10 +69,11 @@ Main changes:
       count a directory, ask for the same count as a JSON document, or go through one file line by
       line to see why each line was counted the way it was. It runs the mezura you already have and
       nothing goes over the network. See the README for the settings file each editor uses.
-  -> Nine languages are now counted that were not before: Verilog, SystemVerilog, Nix, HCL
+  -> Ten languages are now counted that were not before: Verilog, SystemVerilog, Nix, HCL
       (Terraform), Groovy (including Jenkinsfile and Gradle build files), Protocol Buffers, Visual
-      Basic, Less and Solidity. A hardware, infrastructure or NixOS repository that came back mostly
-      uncounted should now add up.
+      Basic, Less, Solidity and Batch (".bat" and ".cmd"). A hardware, infrastructure or NixOS
+      repository that came back mostly uncounted should now add up, and so should the build scripts
+      of a Windows project, which were skipped entirely until now.
   -> "--force-language", "--languages" and "--exclude-languages" can now answer differently inside
       one module. Write the module and a slash before the value: "mezura ios=./ios analysis=./matlab
       --force-language ios/m=objective-c,analysis/m=matlab" counts one repository's ".m" files as

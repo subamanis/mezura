@@ -1,0 +1,14 @@
+Language
+Batch
+
+Extensions
+bat cmd
+
+String symbols
+"
+
+Escape character
+none
+
+Comment symbols
+rem REM Rem ::
