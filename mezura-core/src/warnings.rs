@@ -18,6 +18,9 @@ pub enum Code {
     LanguageWithoutName,
     // Nothing is lost: it claims neither an extension nor a filename, so no file could ever match it
     LanguageClaimsNothing,
+    // A block comment whose opening and closing symbols are the same text, which the scan cannot
+    // tell apart, so the pair never fires and its comments are counted as code
+    CommentPairNeverCloses,
     LanguageFileUnreadable,
     ConflictLineSkipped,
     ConfigValueIgnored,
@@ -39,6 +42,7 @@ impl Code {
             Self::DuplicateLanguage => "duplicate-language",
             Self::LanguageWithoutName => "language-without-name",
             Self::LanguageClaimsNothing => "language-claims-nothing",
+            Self::CommentPairNeverCloses => "comment-pair-never-closes",
             Self::LanguageFileUnreadable => "language-file-unreadable",
             Self::ConflictLineSkipped => "conflict-line-skipped",
             Self::ConfigValueIgnored => "config-value-ignored",
@@ -54,7 +58,8 @@ impl Code {
     pub fn affects(self) -> Affects {
         match self {
             Self::LanguageTiebreak | Self::DuplicateLanguage | Self::LanguageWithoutName
-            | Self::LanguageFileUnreadable | Self::UnknownSectionLanguage => Affects::Counts,
+            | Self::LanguageFileUnreadable | Self::UnknownSectionLanguage
+            | Self::CommentPairNeverCloses => Affects::Counts,
             Self::UnknownForcedLanguage | Self::UnknownLanguage | Self::UnknownExcludedLanguage
             | Self::UnknownModuleScope
             | Self::LanguageClaimsNothing | Self::ConflictLineSkipped | Self::ConfigValueIgnored

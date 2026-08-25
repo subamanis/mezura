@@ -47,7 +47,8 @@ impl Languages {
         // Unusable ones go first, so that a name nobody can ask for is not in the list when the
         // narrowing below asks whether a name exists. Duplicates are reported last, after the
         // narrowing, so a run that never asked for the language is not told about it.
-        let (languages, mut reported) = drop_the_unusable(languages.into_iter().collect());
+        let (mut languages, mut reported) = drop_the_unusable(languages.into_iter().collect());
+        reported.extend(drop_the_pairs_that_never_fire(&mut languages));
         reported.extend(find_unknown_module_scopes(config));
         reported.extend(find_unknown_names_of_the_selection(&languages, config));
         reported.extend(find_duplicate_names(&languages));
@@ -337,6 +338,29 @@ fn find_unknown_forced_languages(by_name: &HashMap<String, Language>,
     unknown.into_iter().map(|(claimed, wanted)| Warning::new(warnings::Code::UnknownForcedLanguage, claimed,
             format!("Nothing called '{wanted}' is among the languages in use, so '{claimed}' was left as it was.")))
             .collect()
+}
+
+// A pair whose two halves are written the same, Smalltalk's '"like this"', is a pair the scan
+// cannot resolve: every position holds an opening and a closing at once, so no two of them are ever
+// paired and every comment of that language lands in the code. The pair goes and the language
+// stays, since its files are still worth counting with the rest of what it declares.
+fn drop_the_pairs_that_never_fire(languages: &mut [Language]) -> Vec<Warning> {
+    let mut reported = Vec::new();
+    for language in languages.iter_mut() {
+        for pairs in [&mut language.multiline_comments, &mut language.nesting_comments] {
+            pairs.retain(|(start, end)| {
+                if start != end {
+                    return true;
+                }
+                reported.push(Warning::new(warnings::Code::CommentPairNeverCloses, &language.name,
+                        format!("'{}' opens and closes a block comment with the same '{start}', which \
+cannot be told apart, so that pair was dropped and its comments are counted as code.", language.name)));
+                false
+            });
+        }
+    }
+
+    reported
 }
 
 // A language that can never match a file, or can never be named. The file parser refuses both, so
@@ -654,6 +678,30 @@ mod language_selection_tests {
                 "the nameless one is named by what it claims");
         assert_eq!(Some(warnings::Code::LanguageClaimsNothing),
                 reported.iter().find(|x| x.subject == "Claims-Nothing").map(|x| x.code));
+    }
+
+    // Smalltalk's '"like this"'. Accepted in silence before this, and every comment of such a
+    // language went into the code with nothing on screen to say why the numbers looked odd.
+    #[test]
+    fn a_comment_pair_written_the_same_at_both_ends_is_dropped_and_reported() {
+        let mut languages = vec![
+            Language::new("Smalltalky", ["stk"], StringRules::escaping_nothing(), [""; 0],
+                    &[("\"", "\""), ("/*", "*/")], []),
+            Language::new("Rust", ["rs"], StringRules::escaping_nothing(), ["//"], &[("/*", "*/")], [])
+                    .with_nesting_comments(&[("/+", "/+")])];
+
+        let reported = drop_the_pairs_that_never_fire(&mut languages);
+
+        assert_eq!(vec![("/*".to_owned(), "*/".to_owned())], languages[0].multiline_comments,
+                "the pair that works was taken away with the one that does not");
+        assert_eq!(vec![("/*".to_owned(), "*/".to_owned())], languages[1].multiline_comments);
+        assert!(languages[1].nesting_comments.is_empty(), "a nesting pair is refused on the same rule");
+
+        assert_eq!(2, reported.len(), "{reported:?}");
+        assert!(reported.iter().all(|x| x.code == warnings::Code::CommentPairNeverCloses), "{reported:?}");
+        assert_eq!(vec!["Smalltalky", "Rust"], reported.iter().map(|x| x.subject.as_str()).collect::<Vec<_>>());
+        assert_eq!(warnings::Affects::Counts, reported[0].affects(),
+                "the comments of that language land in the code, so the numbers moved");
     }
 
     // What a definition for Makefile or Dockerfile alone looks like: filenames and no extension.
