@@ -8,71 +8,113 @@
   * { box-sizing: border-box; margin: 0; padding: 0; }
   :root { --term-bg: #0c0c0c; --card-bg: #242424; --card-border: #3a3a3a; }
   body { background: #0d0d0d; color: #c8c8c8; font-family: 'Cascadia Code', 'Consolas', monospace; padding: 1rem; }
-  h1 { font-size: 1.4rem; font-weight: 600; color: #eee; margin-bottom: 0.4rem; }
-  .hint { color: #777; font-size: 0.8rem; margin-bottom: 2rem; max-width: 90ch; line-height: 1.5; }
-  #palettes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.2rem; }
-  @media (max-width: 1100px) { #palettes { grid-template-columns: 1fr; } }
-  .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 10px; padding: 1.1rem 1.3rem; }
+  h1 { font-size: 1.5rem; font-weight: 600; color: #eee; margin-bottom: 0.4rem; }
+  .hint { color: #777; font-size: 0.86rem; margin-bottom: 1.4rem; max-width: 92ch; line-height: 1.55; }
+  .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 10px; padding: 1.2rem 1.4rem; }
   #bg-control { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1.4rem; }
-  #bg-control label { font-size: 0.72rem; color: #888; }
-  #bg-control input[type="color"] { width: 32px; height: 26px; border: 1px solid #333; border-radius: 4px; background: #0c0c0c; padding: 1px; cursor: pointer; }
-  #bg-control input[type="text"] { width: 7.6rem; background: #0c0c0c; border: 1px solid #333; border-radius: 4px; color: #ccc; font-family: inherit; font-size: 0.7rem; padding: 0.26rem 0.42rem; }
+  #bg-control label { font-size: 0.78rem; color: #888; }
+  #bg-control input[type="color"] { width: 2.5rem; height: 2rem; border: 1px solid #333; border-radius: 4px; background: #0c0c0c; padding: 1px; cursor: pointer; }
+  #bg-control input[type="text"] { width: 8.4rem; background: #0c0c0c; border: 1px solid #333; border-radius: 4px; color: #ccc; font-family: inherit; font-size: 0.78rem; padding: 0.3rem 0.48rem; }
   #bg-control input[type="text"]:focus { outline: none; border-color: #4a4a4a; }
   #bg-control input[type="text"].invalid { border-color: #a03030; color: #e08080; }
-  .card h2 { font-size: 1rem; font-weight: 600; color: #ddd; margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.75rem; }
-  .card h2 .close { margin-left: auto; background: transparent; border: none; color: #555; font-size: 1rem; padding: 0 0.2rem; cursor: pointer; }
-  .card h2 .close:hover { color: #e07a7a; background: transparent; }
-  .card h2 .reroll { margin-left: auto; background: transparent; border: none; color: #555; font-size: 1.05rem; padding: 0 0.2rem; cursor: pointer; }
-  .card h2 .reroll + .close { margin-left: 0; }
-  .card h2 .reroll:hover { color: #7dc87d; background: transparent; }
-  .card h2 .named-note { font-size: 0.68rem; font-weight: 400; color: #666; }
-  .preview { background: var(--term-bg); border-radius: 6px; padding: 0.7rem 1rem; font-size: 0.74rem; line-height: 1.9; overflow-x: auto; white-space: nowrap; margin-bottom: 0.9rem; }
-  .metric-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 0.6rem; margin-bottom: 0.45rem; font-size: 0.66rem; }
-  .metric-row .rlabel { color: #666; min-width: 7.5rem; }
-  .metric { padding: 0.13rem 0.45rem; border-radius: 4px; border: 1px solid #2e2e2e; color: #999; }
+
+  #strip { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.4rem; }
+  .chip { display: flex; align-items: center; gap: 0.55rem; background: #1c1c1c; border: 1px solid #303030; border-radius: 7px; padding: 0.45rem 0.7rem; cursor: pointer; user-select: none; }
+  .chip:hover { border-color: #4c4c4c; }
+  .chip.on { border-color: #7a6f52; background: #262218; }
+  .chip .cname { font-size: 0.78rem; color: #aaa; }
+  .chip.on .cname { color: #e8dcc0; }
+  .chip .dots { display: flex; gap: 0.15rem; }
+  .chip .dot { width: 0.9rem; height: 0.9rem; border-radius: 2px; }
+  .chip .drop { background: transparent; border: none; color: #4f4f4f; font-size: 0.85rem; padding: 0 0.1rem; cursor: pointer; }
+  .chip .drop:hover { color: #e07a7a; background: transparent; }
+  #add-chip { border-style: dashed; color: #555; font-size: 1.05rem; padding: 0.45rem 0.85rem; }
+  #add-chip:hover { color: #999; }
+
+  #run { background: var(--term-bg); border-radius: 6px; padding: 1.1rem 1.3rem; font-size: 0.84rem; line-height: 1.8; overflow-x: auto; white-space: pre; margin-bottom: 1.3rem; color: #c8c8c8; }
+  #run .tok { cursor: pointer; }
+  #run .tok.lit { outline: 1px solid #6a6a6a; outline-offset: 1px; border-radius: 2px; }
+
+  .metric-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 0.5rem; margin-bottom: 1.2rem; font-size: 0.74rem; }
+  .metric-row .rlabel { color: #666; }
+  .metric-row .rlabel + .metric { margin-left: 0.1rem; }
+  .metric-row .metric + .rlabel { margin-left: 0.9rem; }
+  .metric { padding: 0.16rem 0.5rem; border-radius: 4px; border: 1px solid #2e2e2e; color: #999; }
   .metric.ok { border-color: #2e4a2e; color: #7dc87d; }
   .metric.warn { border-color: #5a4a1e; color: #d8b957; }
   .metric.bad { border-color: #5a2424; color: #e07a7a; }
-  .pickers { display: flex; flex-wrap: wrap; gap: 0.7rem 1rem; margin: 0.9rem 0; }
-  .picker { display: flex; flex-direction: column; gap: 0.3rem; }
-  .picker label { font-size: 0.68rem; color: #888; }
-  .picker .row { display: flex; align-items: center; gap: 0.4rem; }
-  .picker input[type="color"] { width: 32px; height: 26px; border: 1px solid #333; border-radius: 4px; background: #0c0c0c; padding: 1px; cursor: pointer; }
-  .picker input[type="text"] { width: 7.6rem; background: #0c0c0c; border: 1px solid #333; border-radius: 4px; color: #ccc; font-family: inherit; font-size: 0.7rem; padding: 0.26rem 0.42rem; }
+
+  .pickers { display: flex; flex-wrap: wrap; gap: 0.85rem 1.1rem; }
+  .picker { display: flex; flex-direction: column; gap: 0.32rem; }
+  .picker label { font-size: 0.76rem; color: #888; display: flex; align-items: center; gap: 0.34rem; }
+  .picker.lit label { color: #d8b957; }
+  .picker .attrs { font-size: 0.66rem; color: #5e5e5e; letter-spacing: 0.06em; }
+  .picker .restore { background: transparent; border: none; color: #9d9d9d; font-size: 1rem; line-height: 1; padding: 0; cursor: pointer; }
+  .picker .restore:hover { color: #d8b957; background: transparent; }
+  /* Absent rather than dimmed while the token is untouched: it has something to say only after an edit */
+  .picker .restore[disabled] { visibility: hidden; }
+  .picker .row { display: flex; align-items: center; gap: 0.45rem; }
+  .picker .field { position: relative; display: flex; align-items: center; }
+  /* Inside the field and out of the way of it: no pointer, no selection, so dragging across the
+     hex to copy it takes the hex and nothing else */
+  .picker .ratio { position: absolute; right: 0.5rem; font-size: 0.68rem; color: #6e6e6e; pointer-events: none; user-select: none; }
+  .picker .ratio.ok { color: #7dc87d; }
+  .picker .ratio.warn { color: #d8b957; }
+  .picker .ratio.bad { color: #e07a7a; }
+  .picker input[type="color"] { width: 2.5rem; height: 2rem; border: 1px solid #333; border-radius: 4px; background: #0c0c0c; padding: 1px; cursor: pointer; }
+  .picker input[type="text"] { width: 8.4rem; background: #0c0c0c; border: 1px solid #333; border-radius: 4px; color: #ccc; font-family: inherit; font-size: 0.78rem; padding: 0.3rem 2.4rem 0.3rem 0.48rem; }
   .picker input[type="text"]:focus { outline: none; border-color: #4a4a4a; }
   .picker input[type="text"].invalid { border-color: #a03030; color: #e08080; }
-  .out { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
-  .out code { background: #0c0c0c; border: 1px solid #262626; border-radius: 5px; padding: 0.32rem 0.55rem; font-size: 0.7rem; color: #9ecb9e; user-select: all; overflow-x: auto; max-width: 100%; }
-  button { background: #222; color: #bbb; border: 1px solid #383838; border-radius: 5px; padding: 0.3rem 0.7rem; font-family: inherit; font-size: 0.7rem; cursor: pointer; }
+
+  .out { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-top: 1.3rem; }
+  .out .said { font-size: 0.76rem; color: #6b6b6b; }
+  button { background: #222; color: #bbb; border: 1px solid #383838; border-radius: 5px; padding: 0.34rem 0.8rem; font-family: inherit; font-size: 0.78rem; cursor: pointer; }
   button:hover { background: #2d2d2d; color: #ddd; }
   .copied { color: #7dd87d !important; border-color: #3f6b3f !important; }
-  #add-card { display: flex; align-items: center; justify-content: center; min-height: 120px; background: transparent; border: 2px dashed #333; border-radius: 10px; color: #555; font-size: 2.2rem; cursor: pointer; user-select: none; transition: border-color 0.15s, color 0.15s; }
-  #add-card:hover { border-color: #555; color: #999; }
 </style>
 </head>
 <body>
 <h1>mezura themes</h1>
-<p class="hint">Tune each color with the picker or by typing: the field accepts hex values (with or without #) and the 16 named ANSI colors (cyan, bright-magenta, ...), exactly like mezura's own parser. The badges show the contrast of each color against the background (aim for ≥ 4.5) and the ΔE distance between colors that sit next to each other in the output (aim for ≥ 45, below 25 they blend together). Named colors are previewed with Campbell scheme approximations; in a real terminal they follow your own color scheme. The five lines below each playground are the language slots of a theme file: paste them into a .txt in the themes dir, or into the style block of a config. Press + to spawn a new random playground.</p>
+<p class="hint">One run of mezura, painted with the theme you pick, and some of the tokens you can change. A named color is drawn here as the Campbell scheme draws it, so a terminal with its own scheme will differ.</p>
+<p class="hint" id="where"></p>
 <div id="bg-control">
   <label for="bg-color">terminal bg</label>
   <input type="color" id="bg-color" value="#0c0c0c">
   <input type="text" id="bg-text" value="0c0c0c" spellcheck="false">
 </div>
-<div id="palettes"></div>
+<div id="strip"></div>
+<div class="card">
+  <div id="run"></div>
+  <div id="metrics"></div>
+  <div id="groups"></div>
+  <div class="out">
+    <button id="copy">copy theme</button>
+    <button id="reset">reset</button>
+    <span class="said" id="said"></span>
+  </div>
+</div>
 
 <script>
 let SYSTEM_THEMES = null;
+let THEMES_DIR = null;
 /*MEZURA_SYSTEM_THEMES*/
 
+// The fallback for a page opened straight from 'docs/', where no data directory was read. A theme
+// names the tokens it moves and stays silent about the rest, which is what a theme file does, so
+// these carry language colors only while '--theme-editor' hands over whatever each file declares.
+function ofLanguages(one, two, three, four, others) {
+  return { "language-1": one, "language-2": two, "language-3": three,
+           "language-4": four, "language-others": others };
+}
 const PALETTES = [
-  { name: "Mezura",     tokens: ["cyan", "bright-magenta", "bright-yellow", "6ad9bd", "d7c9f0"] },
-  { name: "Dracula",    tokens: ["ff79c6", "8be9fd", "50fa7b", "bd93f9", "bd93f9"] },
-  { name: "Nord",       tokens: ["88c0d0", "81a1c1", "b48ead", "d8dee9", "d8dee9"] },
-  { name: "Gruvbox",    tokens: ["fb4934", "fabd2f", "b8bb26", "83a598", "83a598"] },
-  { name: "Catppuccin", tokens: ["f38ba8", "fab387", "a6e3a1", "cba6f7", "cba6f7"] },
-  { name: "Sunset",     tokens: ["ff5e5b", "ff9e4f", "ffd166", "b0a8b9", "b0a8b9"] },
-  { name: "Neon",       tokens: ["ff2e97", "00f0ff", "f9f002", "9d72ff", "9d72ff"] },
-  { name: "Ocean",      tokens: ["22d3ee", "60a5fa", "34d399", "94a3b8", "94a3b8"] },
+  { name: "Mezura",     styles: {} },
+  { name: "Dracula",    styles: ofLanguages("ff79c6", "8be9fd", "50fa7b", "bd93f9", "bd93f9") },
+  { name: "Nord",       styles: ofLanguages("88c0d0", "81a1c1", "b48ead", "d8dee9", "d8dee9") },
+  { name: "Gruvbox",    styles: ofLanguages("fb4934", "fabd2f", "b8bb26", "83a598", "83a598") },
+  { name: "Catppuccin", styles: ofLanguages("f38ba8", "fab387", "a6e3a1", "cba6f7", "cba6f7") },
+  { name: "Sunset",     styles: ofLanguages("ff5e5b", "ff9e4f", "ffd166", "b0a8b9", "b0a8b9") },
+  { name: "Neon",       styles: ofLanguages("ff2e97", "00f0ff", "f9f002", "9d72ff", "9d72ff") },
+  { name: "Ocean",      styles: ofLanguages("22d3ee", "60a5fa", "34d399", "94a3b8", "94a3b8") },
 ];
 
 const NAMED_COLORS = {
@@ -83,9 +125,91 @@ const NAMED_COLORS = {
   "bright-cyan": "#61D6D6", "bright-white": "#F2F2F2"
 };
 
-const SLOT_LABELS = ["1st lang", "2nd lang", "3rd lang", "4th lang", "others"];
-const GRAY = '<span style="color:#8a8a8a">';
-const state = [];
+// One real run of 'mezura ./ --languages rust,html,c,vue', with the token that paints each stretch
+// beside it. Four languages and nothing folded, which is the one shape where all four language
+// slots are drawn. Regenerate it from a real run rather than editing the numbers by hand: every
+// figure here is a measurement and the column widths are the renderer's arithmetic.
+const SAMPLE = [
+  [["heading","Details"],["","."]],
+  [],
+  [["details-language-header","Language"],["","    "],["files-label","Files"],["","  "],["percent","%"],["","          "],["sort-marker","⌄"],[""," "],["lines-label","Lines"],["","  "],["percent","%"],["","            "],["code-label","Code"],["","  "],["percent","%"],["","         "],["comments-label","Comments"],["","  "],["percent","%"],["","         "],["extra-label","Extra"],["","       "],["total-size-label","Size"]],
+  [["separator-header","────────────────────────────────────────────────────────────────────────────────────────────────────────"]],
+  [["details-language-name","Rust"],["","           "],["files-number","56"],["","  "],["percent","63.64%"],["","      "],["lines-number","29,907"],["","  "],["percent","95.20%"],["","     "],["code-number","18,971"],["","  "],["percent","63.43%"],["","       "],["comments-number","3,800"],["","  "],["percent","12.71%"],["","    "],["extra-number","7,136"],["","     "],["total-size-number","1.5 "],["size-unit","MB"]],
+  [["details-language-name","HTML"],["","           "],["files-number","11"],["","  "],["percent","12.50%"],["","       "],["lines-number","1,285"],["","  "],["percent","4.09%"],["","         "],["code-number","929"],["","  "],["percent","72.30%"],["","          "],["comments-number","96"],["","  "],["percent","7.47%"],["","       "],["extra-number","260"],["","    "],["total-size-number","65.4 "],["size-unit","KB"]],
+  [["details-language-name","C"],["","              "],["files-number","19"],["","  "],["percent","21.59%"],["","         "],["lines-number","171"],["","  "],["percent","0.54%"],["","          "],["code-number","31"],["","  "],["percent","18.13%"],["","         "],["comments-number","134"],["","  "],["percent","78.36%"],["","        "],["extra-number","6"],["","     "],["total-size-number","7.5 "],["size-unit","KB"]],
+  [["details-language-name","Vue"],["","             "],["files-number","2"],["","  "],["percent","2.27%"],["","           "],["lines-number","53"],["","  "],["percent","0.17%"],["","          "],["code-number","18"],["","  "],["percent","33.96%"],["","          "],["comments-number","34"],["","  "],["percent","64.15%"],["","        "],["extra-number","1"],["","     "],["total-size-number","2.3 "],["size-unit","KB"]],
+  [["separator-total","────────────────────────────────────────────────────────────────────────────────────────────────────────"]],
+  [["details-total","Total"],["","          "],["files-number","88"],["","  "],["percent","100.00%"],["","     "],["lines-number","31,416"],["","  "],["percent","100.00%"],["","    "],["code-number","19,949"],["","  "],["percent","63.50%"],["","       "],["comments-number","4,064"],["","  "],["percent","12.94%"],["","    "],["extra-number","7,403"],["","     "],["total-size-number","1.6 "],["size-unit","MB"]],
+  [],
+  [["heading","Overview"],["","."]],
+  [],
+  [["overview-label","Files:"],["","   "],["overview-percent","63.64%"],[""," "],["language-1","Rust"],[""," - "],["overview-percent","12.50%"],[""," "],["language-2","HTML"],[""," - "],["overview-percent","21.59%"],[""," "],["language-3","C"],[""," - "],["overview-percent","2.27%"],[""," "],["language-4","Vue"],["","   "],["bar-frame","[-"],["language-1","┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃"],["language-2","┃┃┃┃┃┃"],["language-3","┃┃┃┃┃┃┃┃┃┃┃"],["language-4","┃"],["bar-frame","-]"]],
+  [],
+  [["overview-label","Lines:"],["","   "],["overview-percent","95.20%"],[""," "],["language-1","Rust"],[""," -  "],["overview-percent","4.09%"],[""," "],["language-2","HTML"],[""," -  "],["overview-percent","0.54%"],[""," "],["language-3","C"],[""," - "],["overview-percent","0.17%"],[""," "],["language-4","Vue"],["","   "],["bar-frame","[-"],["language-1","┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃"],["language-2","┃┃"],["language-3","┃"],["language-4","┃"],["bar-frame","-]"]],
+  [],
+  [["overview-label","Size: "],["","   "],["overview-percent","95.32%"],[""," "],["language-1","Rust"],[""," -  "],["overview-percent","4.08%"],[""," "],["language-2","HTML"],[""," -  "],["overview-percent","0.46%"],[""," "],["language-3","C"],[""," - "],["overview-percent","0.14%"],[""," "],["language-4","Vue"],["","   "],["bar-frame","[-"],["language-1","┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃"],["language-2","┃┃"],["language-3","┃"],["language-4","┃"],["bar-frame","-]"]]
+];
+
+// Grouped by what the eye sees rather than by where the token lives in the program. Each value is
+// the whole style mezura ships for that token, written the way a theme file writes one: the color
+// first, then a background if there is one, then the attributes.
+const GROUPS = [
+  ["The header row", [
+    ["details-language-header", "b5a98a italic"],
+    ["files-label",             "b5a98a italic"],
+    ["lines-label",             "b5a98a italic"],
+    ["code-label",              "b5a98a italic"],
+    ["comments-label",          "b5a98a italic"],
+    ["extra-label",             "b5a98a italic"],
+    ["total-size-label",        "b5a98a italic"],
+    ["sort-marker",             "b5a98a"]
+  ]],
+  ["The rows", [
+    ["details-language-name",   "default bold"],
+    ["details-total",           "default bold"],
+    ["files-number",            "default"],
+    ["lines-number",            "white bold"],
+    ["code-number",             "default"],
+    ["comments-number",         "default"],
+    ["extra-number",            "default"],
+    ["total-size-number",       "default"],
+    ["percent",                 "969696"],
+    ["size-unit",               "7d7769"]
+  ]],
+  ["The frame", [
+    ["heading",                 "default bold underline"],
+    ["separator-header",        "aaaaaa"],
+    ["separator-total",         "aaaaaa"]
+  ]],
+  ["The overview", [
+    ["overview-label",          "default"],
+    ["overview-percent",        "default"],
+    ["bar-frame",               "default"]
+  ]],
+  ["The languages", [
+    ["language-1",              "cyan"],
+    ["language-2",              "bright-magenta"],
+    ["language-3",              "bright-yellow"],
+    ["language-4",              "6ad9bd"],
+    ["language-others",         "d7c9f0"]
+  ]]
+];
+
+const TOKENS = GROUPS.flatMap(group => group[1]);
+const DEFAULTS = Object.fromEntries(TOKENS.map(([token, style]) => [token, style]));
+// The words that are attributes and not colors, so that the second word of a style is read as the
+// background it is when it is anything else
+const ATTR_WORDS = ["bold", "italic", "underline", "dim", "reverse"];
+// The five the overview bar and its names are drawn in, in the order a run fills them
+const LANGUAGE_SLOTS = ["language-1", "language-2", "language-3", "language-4", "language-others"];
+// The fourth slot is drawn only when nothing was folded into 'others', so one run can never show
+// both. The sample is the shape that shows the four, and this says so where the fifth is edited.
+const NO_PREVIEW = { "language-others": "shown in place of language-4 once a run folds languages" };
+// What the color input shows for a token left to the terminal, which has no color of its own
+const TERM_FG = "#c8c8c8";
+
+let themes = [];
+let selected = 0;
 let customCount = 0;
 let termBg = "#0c0c0c";
 
@@ -103,8 +227,24 @@ function normalizeToken(token) {
   return t.replace(/^#/, "");
 }
 
-function slotsFromTokens(tokens) {
-  return tokens.map(t => ({ token: normalizeToken(t), hex: tokenToHex(t) }));
+// A style as its pieces: 'default bold', 'b5a98a italic', 'white 223344 bold reverse'
+function partsOf(style) {
+  const words = style.trim().split(/\s+/);
+  let background = null, at = 1;
+  if (words[1] && !ATTR_WORDS.includes(words[1])) {
+    background = words[1];
+    at = 2;
+  }
+  return { color: words[0], background: background, attrs: words.slice(at) };
+}
+
+function styleOf(parts) {
+  return [parts.color, parts.background].filter(Boolean).concat(parts.attrs).join(" ");
+}
+
+function hexOf(style) {
+  const color = partsOf(style).color;
+  return color === "default" ? TERM_FG : tokenToHex(color);
 }
 
 function hslToHex(h, s, l) {
@@ -125,32 +265,6 @@ function randomTokens() {
   return [vivid(0), vivid(1), vivid(2), vivid(3), muted];
 }
 
-// The character '--bar-thickness medium' draws with, which is the default the program prints
-const BAR_CELL = "┃";
-
-function bar(slots, indices, counts) {
-  let s = GRAY + '  [-</span>';
-  indices.forEach((idx, i) => {
-    s += '<span style="color:' + slots[idx].hex + '">' + BAR_CELL.repeat(counts[i]) + '</span>';
-  });
-  return s + GRAY + '-]</span>';
-}
-
-function previewHtml(slots) {
-  const seg = (idx, name) => '<span style="color:' + slots[idx].hex + '">' + name + '</span>';
-  const l1 = GRAY + 'Files:   57.45% </span>' + seg(0, "Rust") +
-    GRAY + ' - 30.86% </span>' + seg(1, "JS") +
-    GRAY + ' -  8.21% </span>' + seg(2, "Python") +
-    GRAY + ' -  3.48% </span>' + seg(3, "C++") +
-    bar(slots, [0, 1, 2, 3], [29, 15, 4, 2]);
-  const l2 = GRAY + 'Lines:   62.10% </span>' + seg(0, "Rust") +
-    GRAY + ' - 21.35% </span>' + seg(1, "JS") +
-    GRAY + ' - 10.11% </span>' + seg(2, "Python") +
-    GRAY + ' -  6.44% </span>' + seg(4, "others") +
-    bar(slots, [0, 1, 2, 4], [31, 11, 5, 3]);
-  return l1 + "<br>" + l2;
-}
-
 function hexToRgb(hex) {
   const h = hex.replace("#", "");
   return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)];
@@ -167,21 +281,6 @@ function contrastWithBg(hex) {
   return (Math.max(l1,l2) + 0.05) / (Math.min(l1,l2) + 0.05);
 }
 
-function shift(hex, amount) {
-  const rgb = hexToRgb(hex);
-  const dir = relLuminance(rgb) < 0.35 ? 1 : -1;
-  const c = v => Math.max(0, Math.min(255, v + dir * amount)).toString(16).padStart(2, "0");
-  return "#" + c(rgb[0]) + c(rgb[1]) + c(rgb[2]);
-}
-
-function applyTermBg(hex) {
-  termBg = hex;
-  document.documentElement.style.setProperty("--term-bg", hex);
-  document.documentElement.style.setProperty("--card-bg", shift(hex, 24));
-  document.documentElement.style.setProperty("--card-border", shift(hex, 46));
-  state.forEach((s, pi) => { if (s) refresh(pi); });
-}
-
 function rgbToLab(rgb) {
   let [r,g,b] = rgb.map(v => { v /= 255; return v <= 0.04045 ? v/12.92 : Math.pow((v+0.055)/1.055, 2.4); });
   let x = (r*0.4124 + g*0.3576 + b*0.1805) / 0.95047;
@@ -196,152 +295,298 @@ function deltaE(hex1, hex2) {
   return Math.sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2 + (a[2]-b[2])**2);
 }
 
-function metricsHtml(slots) {
-  let bgRow = '<span class="rlabel">vs background</span>';
-  slots.forEach((s, i) => {
-    const ratio = contrastWithBg(s.hex);
+function shift(hex, amount) {
+  const rgb = hexToRgb(hex);
+  const dir = relLuminance(rgb) < 0.35 ? 1 : -1;
+  const c = v => Math.max(0, Math.min(255, v + dir * amount)).toString(16).padStart(2, "0");
+  return "#" + c(rgb[0]) + c(rgb[1]) + c(rgb[2]);
+}
+
+function applyTermBg(hex) {
+  termBg = hex;
+  document.documentElement.style.setProperty("--term-bg", hex);
+  document.documentElement.style.setProperty("--card-bg", shift(hex, 24));
+  document.documentElement.style.setProperty("--card-border", shift(hex, 46));
+  renderMetrics();
+  // Every ratio is against this background, so all of them move with it
+  TOKENS.forEach(([token]) => {
+    if (document.getElementById("ratio-" + token)) paintRatio(token);
+  });
+  // A reversed token paints its text in the background, so it follows it too
+  renderRun();
+}
+
+// Whatever the theme declares over what mezura already does, which is how a theme file is read
+function themeOf(name, styles) {
+  const values = Object.assign({}, DEFAULTS, styles || {});
+  return { name: name, values: values, original: Object.assign({}, values) };
+}
+
+function current() {
+  return themes[selected];
+}
+
+function escapeHtml(text) {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+}
+
+function cssOf(style) {
+  const parts = partsOf(style);
+  let paint = parts.color === "default" ? null : hexOf(style);
+  let behind = parts.background ? tokenToHex(parts.background) : null;
+  // 'reverse' swaps whatever the two ended up being, which is how a token stands out without naming
+  // either of them. The half that was never named is the terminal's own: its background where no
+  // background was given, which is what the text is painted in once they change places.
+  if (parts.attrs.includes("reverse")) {
+    const wasPaint = paint || TERM_FG;
+    const wasBehind = behind || termBg;
+    paint = wasBehind;
+    behind = wasPaint;
+  }
+  let css = paint ? "color:" + paint + ";" : "";
+  if (behind) css += "background:" + behind + ";";
+  if (parts.attrs.includes("bold")) css += "font-weight:700;";
+  if (parts.attrs.includes("italic")) css += "font-style:italic;";
+  if (parts.attrs.includes("underline")) css += "text-decoration:underline;";
+  if (parts.attrs.includes("dim")) css += "opacity:0.62;";
+  return css;
+}
+
+function runHtml() {
+  const values = current().values;
+  return SAMPLE.map(line => line.map(([token, text]) => {
+    if (!token) return escapeHtml(text);
+    return '<span class="tok" data-tok="' + token + '" style="' + cssOf(values[token]) + '">' +
+        escapeHtml(text) + "</span>";
+  }).join("")).join("\n");
+}
+
+// Only what the theme moved. A theme file names the tokens it changes and lets mezura answer for the
+// rest, so a look that changed nothing prints nothing rather than a wall of the defaults.
+// What the theme moved, in the order the run draws it. A theme may name tokens this page has no
+// preview for, the history section or a nested row, and those are carried through untouched rather
+// than dropped: copying a theme has to hand back a theme and not the part of it that fitted here.
+function themeLines() {
+  const values = current().values;
+  const drawn = TOKENS.filter(([token]) => values[token] !== DEFAULTS[token]).map(([token]) => token);
+  const carried = Object.keys(values).filter(token => !(token in DEFAULTS));
+  return drawn.concat(carried).map(token => token + " = " + values[token]);
+}
+
+function metricsHtml() {
+  const values = current().values;
+  const hexes = LANGUAGE_SLOTS.map(slot => hexOf(values[slot]));
+  let row = '<span class="rlabel">vs background</span>';
+  hexes.forEach((hex, i) => {
+    const ratio = contrastWithBg(hex);
     const cls = ratio >= 4.5 ? "ok" : ratio >= 3 ? "warn" : "bad";
-    bgRow += '<span class="metric ' + cls + '">' + (i === 4 ? "others" : (i+1)) + ': ' + ratio.toFixed(1) + '</span>';
+    row += '<span class="metric ' + cls + '">' + (i === 4 ? "others" : (i+1)) + ': ' + ratio.toFixed(1) + '</span>';
   });
-  let pairRow = '<span class="rlabel">between colors</span>';
+  row += '<span class="rlabel">between colors</span>';
   [[0,1],[1,2],[2,3],[2,4]].forEach(([a,b]) => {
-    const de = deltaE(slots[a].hex, slots[b].hex);
+    const de = deltaE(hexes[a], hexes[b]);
     const cls = de >= 45 ? "ok" : de >= 25 ? "warn" : "bad";
-    const bn = b === 4 ? "others" : (b+1);
-    pairRow += '<span class="metric ' + cls + '">' + (a+1) + '↔' + bn + ': ' + Math.round(de) + '</span>';
+    row += '<span class="metric ' + cls + '">' + (a+1) + '↔' + (b === 4 ? "others" : (b+1)) + ': ' + Math.round(de) + '</span>';
   });
-  return '<div class="metric-row">' + bgRow + '</div><div class="metric-row">' + pairRow + '</div>';
+  return '<div class="metric-row">' + row + '</div>';
 }
 
-const SLOT_NAMES = ["language-1", "language-2", "language-3", "language-4", "language-others"];
-
-function commandFor(slots) {
-  return slots.map((s, i) => SLOT_NAMES[i] + " = " + s.token).join("\n");
+function stripHtml() {
+  return themes.map((theme, i) => {
+    const dots = LANGUAGE_SLOTS.map(slot =>
+        '<span class="dot" style="background:' + hexOf(theme.values[slot]) + '"></span>').join("");
+    const drop = theme.custom ? '<button class="drop" data-drop="' + i + '" title="Remove">✕</button>' : "";
+    return '<div class="chip' + (i === selected ? " on" : "") + '" data-pick="' + i + '">' +
+        '<span class="cname">' + escapeHtml(theme.name) + '</span><span class="dots">' + dots + "</span>" + drop + "</div>";
+  }).join("") + '<div class="chip" id="add-chip" title="A theme with random language colors">+</div>';
 }
 
-function refresh(pi) {
-  if (!state[pi]) return;
-  document.getElementById("prev-" + pi).innerHTML = previewHtml(state[pi].slots);
-  document.getElementById("met-" + pi).innerHTML = metricsHtml(state[pi].slots);
-  document.getElementById("cmd-" + pi).textContent = commandFor(state[pi].slots);
+// The field holds the color and the picker moves it; whatever else the style says, a background or
+// an attribute, is shown beside the name and carried through every edit rather than typed again
+// One flow rather than titled sections: the run above says what each token paints, so a heading
+// over a group of them is a name for something the reader is already looking at
+function groupsHtml() {
+  const values = current().values;
+  return '<div class="pickers">' + TOKENS.map(([token]) => {
+      const parts = partsOf(values[token]);
+      const shown = ratioOf(values[token]);
+      const rest = [parts.background ? "on " + parts.background : null].concat(parts.attrs).filter(Boolean).join(" ");
+      return '<div class="picker" id="pick-' + token + '"><label><span>' + token + "</span>" +
+        (rest ? '<span class="attrs">' + escapeHtml(rest) + "</span>" : "") +
+        (NO_PREVIEW[token] ? '<span class="attrs">' + NO_PREVIEW[token] + "</span>" : "") +
+        restoreHtml(token, values[token]) +
+        '</label><div class="row">' +
+        '<input type="color" value="' + hexOf(values[token]).toLowerCase() + '" id="col-' + token + '" data-tok="' + token + '">' +
+        '<span class="field">' +
+        '<input type="text" value="' + parts.color + '" id="txt-' + token + '" data-tok="' + token + '" spellcheck="false">' +
+        '<span class="ratio ' + shown.cls + '" id="ratio-' + token + '">' + shown.text + "</span></span>" +
+        "</div></div>";
+    }).join("") + "</div>";
 }
 
-function padTokens(tokens) {
-  const t = tokens.slice(0, 5);
-  while (t.length < 5) t.push(t[t.length - 1]);
-  return t;
+// How the token's color stands against the terminal background, in the field that sets it. A token
+// left to the terminal has no ratio to give, since the terminal chooses both halves.
+function ratioOf(style) {
+  if (partsOf(style).color === "default") {
+    return { text: "", cls: "" };
+  }
+  const ratio = contrastWithBg(hexOf(style));
+  return { text: ratio.toFixed(1), cls: ratio >= 4.5 ? "ok" : ratio >= 3 ? "warn" : "bad" };
 }
 
-function addCard(name, tokens, closable) {
-  const pi = state.length;
-  tokens = padTokens(tokens);
-  state.push({ name: name, original: [...tokens], slots: slotsFromTokens(tokens) });
-  const slots = state[pi].slots;
-
-  const card = document.createElement("div");
-  card.className = "card";
-  const closeBtn = closable
-    ? '<button class="reroll" title="New random colors" data-reroll="' + pi + '">↻</button>' +
-      '<button class="close" title="Remove this playground" data-close="' + pi + '">✕</button>'
-    : "";
-  const namedNote = tokens.some(t => NAMED_COLORS[normalizeToken(t)]) ? '<span class="named-note">(contains named ANSI colors)</span>' : "";
-  let pickers = "";
-  slots.forEach((s, i) => {
-    pickers += '<div class="picker"><label>' + SLOT_LABELS[i] + '</label><div class="row">' +
-      '<input type="color" value="' + s.hex + '" id="col-' + pi + '-' + i + '" data-p="' + pi + '" data-slot="' + i + '">' +
-      '<input type="text" value="' + s.token + '" id="txt-' + pi + '-' + i + '" data-p="' + pi + '" data-slot="' + i + '" spellcheck="false">' +
-      '</div></div>';
-  });
-  card.innerHTML =
-    '<h2>' + name + ' ' + namedNote + closeBtn + '</h2>' +
-    '<div class="preview" id="prev-' + pi + '">' + previewHtml(slots) + '</div>' +
-    '<div id="met-' + pi + '">' + metricsHtml(slots) + '</div>' +
-    '<div class="pickers">' + pickers + '</div>' +
-    '<div class="out"><code id="cmd-' + pi + '">' + commandFor(slots) + '</code>' +
-    '<button data-copy="' + pi + '">copy</button>' +
-    '<button data-reset="' + pi + '">reset</button></div>';
-
-  document.getElementById("palettes").insertBefore(card, document.getElementById("add-card"));
-  wireCard(card);
+function paintRatio(token) {
+  const shown = ratioOf(current().values[token]);
+  const el = document.getElementById("ratio-" + token);
+  el.textContent = shown.text;
+  el.className = "ratio " + shown.cls;
 }
 
-function wireCard(card) {
-  card.querySelectorAll("button[data-close]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      state[+btn.dataset.close] = null;
-      card.remove();
+// The reset button for one token: back to what this theme declares, which for a theme silent about
+// it is what mezura ships. Not the same as typing 'default' into the field, since that word is a
+// color, the terminal's own, and this is the whole style.
+function restoreHtml(token, style) {
+  const was = current().original[token];
+  return '<button class="restore" data-restore="' + token + '"' + (style === was ? " disabled" : "") +
+      ' title="Back to ' + escapeHtml(current().name) + ': ' + escapeHtml(was) + '">↺</button>';
+}
+
+function renderMetrics() {
+  document.getElementById("metrics").innerHTML = metricsHtml();
+}
+
+// Both directions, because a name alone does not say which stretch of the run it paints and a
+// stretch alone does not say what it is called
+function light(token, on) {
+  document.querySelectorAll('#run .tok[data-tok="' + token + '"]')
+      .forEach(span => span.classList.toggle("lit", on));
+  const picker = document.getElementById("pick-" + token);
+  if (picker) picker.classList.toggle("lit", on);
+}
+
+function say(message) {
+  document.getElementById("said").textContent = message;
+}
+
+function renderRun() {
+  document.getElementById("run").innerHTML = runHtml();
+  document.querySelectorAll("#run .tok").forEach(span => {
+    const token = span.dataset.tok;
+    span.addEventListener("mouseenter", () => light(token, true));
+    span.addEventListener("mouseleave", () => light(token, false));
+    span.addEventListener("click", () => {
+      const field = document.getElementById("txt-" + token);
+      field.focus();
+      field.select();
     });
   });
+}
 
-  card.querySelectorAll("button[data-reroll]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const pi = +btn.dataset.reroll;
-      const tokens = randomTokens();
-      state[pi].original = [...tokens];
-      state[pi].slots = slotsFromTokens(tokens);
-      state[pi].slots.forEach((s, i) => {
-        document.getElementById("col-" + pi + "-" + i).value = s.hex.toLowerCase();
-        const txt = document.getElementById("txt-" + pi + "-" + i);
-        txt.value = s.token;
-        txt.classList.remove("invalid");
-      });
-      refresh(pi);
-    });
-  });
+function renderPickers() {
+  document.getElementById("groups").innerHTML = groupsHtml();
 
-  card.querySelectorAll('input[type="color"]').forEach(input => {
+  function repaint(token, color) {
+    const parts = partsOf(current().values[token]);
+    parts.color = color;
+    current().values[token] = styleOf(parts);
+    // The pickers are not redrawn on a color change, so the one control whose state depends on the
+    // value is brought up to date by hand
+    document.querySelector('button[data-restore="' + token + '"]')
+        .disabled = current().values[token] === current().original[token];
+    paintRatio(token);
+    afterEdit();
+  }
+
+  document.querySelectorAll('#groups input[type="color"]').forEach(input => {
     input.addEventListener("input", () => {
-      const pi = +input.dataset.p, slot = +input.dataset.slot;
-      state[pi].slots[slot] = { token: input.value.replace("#", "").toLowerCase(), hex: input.value };
-      const txt = document.getElementById("txt-" + pi + "-" + slot);
-      txt.value = state[pi].slots[slot].token;
-      txt.classList.remove("invalid");
-      refresh(pi);
+      const token = input.dataset.tok, color = input.value.replace("#", "").toLowerCase();
+      const field = document.getElementById("txt-" + token);
+      field.value = color;
+      field.classList.remove("invalid");
+      repaint(token, color);
     });
   });
 
-  card.querySelectorAll('input[type="text"]').forEach(input => {
+  document.querySelectorAll('#groups input[type="text"]').forEach(input => {
     input.addEventListener("input", () => {
-      const pi = +input.dataset.p, slot = +input.dataset.slot;
-      const hex = tokenToHex(input.value);
-      if (!hex) {
+      const token = input.dataset.tok, typed = input.value.trim().toLowerCase();
+      if (typed !== "default" && !tokenToHex(typed)) {
         input.classList.add("invalid");
         return;
       }
       input.classList.remove("invalid");
-      state[pi].slots[slot] = { token: normalizeToken(input.value), hex: hex };
-      document.getElementById("col-" + pi + "-" + slot).value = hex.toLowerCase();
-      refresh(pi);
+      const color = typed === "default" ? "default" : normalizeToken(typed);
+      document.getElementById("col-" + token).value = hexOf(color).toLowerCase();
+      repaint(token, color);
     });
   });
 
-  card.querySelectorAll("button[data-copy]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const pi = +btn.dataset.copy;
-      const text = document.getElementById("cmd-" + pi).textContent;
-      const done = () => { btn.textContent = "copied"; btn.classList.add("copied");
-        setTimeout(() => { btn.textContent = "copy"; btn.classList.remove("copied"); }, 1200); };
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
-      } else {
-        fallbackCopy(text, done);
-      }
-    });
+  document.querySelectorAll("#groups .picker").forEach(picker => {
+    const token = picker.id.replace("pick-", "");
+    picker.addEventListener("mouseenter", () => light(token, true));
+    picker.addEventListener("mouseleave", () => light(token, false));
   });
 
-  card.querySelectorAll("button[data-reset]").forEach(btn => {
+  // The whole picker is redrawn, since restoring can bring back an attribute the theme had dropped
+  document.querySelectorAll("button[data-restore]").forEach(btn => {
     btn.addEventListener("click", () => {
-      const pi = +btn.dataset.reset;
-      state[pi].slots = slotsFromTokens(state[pi].original);
-      state[pi].slots.forEach((s, i) => {
-        document.getElementById("col-" + pi + "-" + i).value = s.hex.toLowerCase();
-        const txt = document.getElementById("txt-" + pi + "-" + i);
-        txt.value = s.token;
-        txt.classList.remove("invalid");
-      });
-      refresh(pi);
+      current().values[btn.dataset.restore] = current().original[btn.dataset.restore];
+      renderAll();
     });
   });
+}
+
+function renderStrip() {
+  document.getElementById("strip").innerHTML = stripHtml();
+  document.querySelectorAll(".chip[data-pick]").forEach(chip => {
+    chip.addEventListener("click", event => {
+      if (event.target.dataset.drop !== undefined) return;
+      selected = +chip.dataset.pick;
+      renderAll();
+    });
+  });
+  document.querySelectorAll("button[data-drop]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const at = +btn.dataset.drop;
+      themes.splice(at, 1);
+      if (selected >= themes.length) selected = themes.length - 1;
+      else if (selected > at) selected -= 1;
+      renderAll();
+    });
+  });
+  document.getElementById("add-chip").addEventListener("click", () => {
+    customCount += 1;
+    const rolled = randomTokens();
+    const theme = themeOf("Custom " + customCount,
+        ofLanguages(rolled[0], rolled[1], rolled[2], rolled[3], rolled[4]));
+    theme.custom = true;
+    themes.push(theme);
+    selected = themes.length - 1;
+    renderAll();
+  });
+}
+
+// The strip carries the language colors of every theme, so an edit to any of them redraws it too
+function afterEdit() {
+  renderRun();
+  renderMetrics();
+  renderStrip();
+  say("");
+}
+
+function renderAll() {
+  renderStrip();
+  renderRun();
+  renderMetrics();
+  renderPickers();
+  say("");
+}
+
+function copyText(text, done) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
+  } else {
+    fallbackCopy(text, done);
+  }
 }
 
 function fallbackCopy(text, done) {
@@ -354,14 +599,23 @@ function fallbackCopy(text, done) {
   done();
 }
 
-const addBtn = document.createElement("div");
-addBtn.id = "add-card";
-addBtn.title = "New playground with random colors";
-addBtn.textContent = "+";
-document.getElementById("palettes").appendChild(addBtn);
-addBtn.addEventListener("click", () => {
-  customCount += 1;
-  addCard("Custom " + customCount, randomTokens(), true);
+document.getElementById("copy").addEventListener("click", () => {
+  const btn = document.getElementById("copy"), lines = themeLines();
+  if (!lines.length) {
+    say("this is what mezura ships, so a theme file would be empty");
+    return;
+  }
+  copyText(lines.join("\n"), () => {
+    btn.textContent = "copied";
+    btn.classList.add("copied");
+    say(lines.length + (lines.length === 1 ? " line" : " lines"));
+    setTimeout(() => { btn.textContent = "copy theme"; btn.classList.remove("copied"); }, 1200);
+  });
+});
+
+document.getElementById("reset").addEventListener("click", () => {
+  current().values = Object.assign({}, current().original);
+  renderAll();
 });
 
 document.getElementById("bg-color").addEventListener("input", e => {
@@ -380,10 +634,16 @@ document.getElementById("bg-text").addEventListener("input", e => {
   applyTermBg(hex);
 });
 
-(SYSTEM_THEMES || PALETTES).forEach(p => addCard(p.name, p.tokens, false));
-if (SYSTEM_THEMES) {
-  document.querySelector(".hint").textContent += " Showing the themes found on this machine.";
-}
+themes = (SYSTEM_THEMES || PALETTES).map(p => themeOf(p.name, p.styles));
+// A path built by joining what the system gave to what this program appends comes out with both
+// kinds of separator in it, which reads as broken even though Windows opens it
+const themesDir = THEMES_DIR && THEMES_DIR.includes("\\") ? THEMES_DIR.replace(/\//g, "\\") : THEMES_DIR;
+document.getElementById("where").textContent = themesDir
+    ? "These are your own themes, read from " + themesDir + ". Edit them there, or take what you "
+      + "change here with 'copy theme'."
+    : "These are the themes mezura ships. Run 'mezura --theme-editor' to open this page with your "
+      + "own, and to be told where they live.";
+renderAll();
 </script>
 </body>
 </html>

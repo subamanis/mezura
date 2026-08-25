@@ -42,7 +42,7 @@ pub fn generate_theme_editor_page(themes_dir: &str, data_dir: &str) -> io::Resul
 
     let template = include_str!("../docs/theme-editor/index.html");
 
-    let mut entries: Vec<(String, Vec<String>)> = Vec::new();
+    let mut entries: Vec<(String, Vec<(&'static str, String)>)> = Vec::new();
     for entry in fs::read_dir(themes_dir)?.flatten() {
         let path = entry.path();
         if !path.is_file() {
@@ -50,18 +50,24 @@ pub fn generate_theme_editor_page(themes_dir: &str, data_dir: &str) -> io::Resul
         }
         let Some(stem) = path.file_stem().and_then(|x| x.to_str()) else { continue };
         let Ok(contents) = fs::read_to_string(&path) else { continue };
-        // The page edits the language slots only, so the rest of the theme is resolved and dropped
+        // Every token the theme moved and not only its language colors, so a theme that dresses the
+        // whole report arrives at the page as itself. Resolved first, so a file that names a token
+        // twice hands over the value that would actually be printed.
         let resolved = super::theme::resolve(&super::theme::parse_theme_file(&contents).0, &[], &[]);
-        entries.push((stem.to_owned(), resolved.get_language_colors().iter().map(super::theme::color_to_config_string).collect()));
+        entries.push((stem.to_owned(), resolved.find_non_default_tokens()));
     }
     entries.sort_by_key(|x| x.0.to_lowercase());
 
-    let themes_js = entries.iter().map(|(name, tokens)| {
-        format!("{{name:\"{}\",tokens:[{}]}}", js_escape(name),
-            tokens.iter().map(|t| format!("\"{}\"", js_escape(t))).collect::<Vec<_>>().join(","))
+    let themes_js = entries.iter().map(|(name, styles)| {
+        format!("{{name:\"{}\",styles:{{{}}}}}", js_escape(name),
+            styles.iter().map(|(token, value)| format!("\"{token}\":\"{}\"", js_escape(value)))
+                    .collect::<Vec<_>>().join(","))
     }).collect::<Vec<_>>().join(",");
 
-    let page = template.replace(THEME_LIST_MARKER, &format!("SYSTEM_THEMES = [{themes_js}];"));
+    // The directory as well, so the page can say where the files it is showing actually are. The
+    // published copy has neither and says so instead.
+    let page = template.replace(THEME_LIST_MARKER,
+            &format!("SYSTEM_THEMES = [{themes_js}];THEMES_DIR = \"{}\";", js_escape(themes_dir)));
 
     let out_path = data_dir.to_owned() + "theme-editor.html";
     fs::write(&out_path, page)?;
@@ -105,8 +111,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&themes_dir).unwrap();
         std::fs::create_dir_all(&data_dir).unwrap();
-        std::fs::write(themes_dir.join("Ocean.txt"), "language-1 = cyan\n").unwrap();
-        std::fs::write(themes_dir.join("Ember.txt"), "language-1 = red\n").unwrap();
+        // Neither value is the one mezura already uses for that token: a theme that declares the
+        // default declares nothing, since the page has no way to tell it from a theme that is silent
+        std::fs::write(themes_dir.join("Ocean.txt"), "language-1 = 22d3ee\n").unwrap();
+        std::fs::write(themes_dir.join("Ember.txt"), "language-1 = red\npercent = ff0000 italic\n").unwrap();
 
         let path = super::generate_theme_editor_page(&themes_dir.to_string_lossy(),
                 &data_dir.to_string_lossy()).unwrap();
@@ -118,7 +126,13 @@ mod tests {
                  was written without one");
         assert!(page.contains("SYSTEM_THEMES = [{name:\"Ember\""), "the themes are not in the page");
         assert!(page.contains("{name:\"Ocean\""), "only one of the two themes reached the page");
-        assert!(page.contains("\"cyan\""), "a theme reached the page without the colors it declares");
+        assert!(page.contains("\"language-1\":\"22d3ee\""), "a theme reached the page without the colors it declares");
+        // A theme that dresses more than the overview used to arrive with everything but its five
+        // language colors dropped, so the page showed it as indistinguishable from a plain one
+        assert!(page.contains("\"percent\":\"ff0000 italic\""),
+                "a token outside the overview did not reach the page, attributes and all");
+        // Named on the page, so somebody who wants to keep what they tuned knows where to put it
+        assert!(page.contains("THEMES_DIR = \""), "the page was not told where the themes it shows live");
     }
 
     #[test]

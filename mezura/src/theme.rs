@@ -358,10 +358,6 @@ impl Theme {
         [&self.language_1, &self.language_2, &self.language_3, &self.language_4, &self.language_others]
     }
 
-    pub fn get_language_colors(&self) -> [Color; 5] {
-        self.get_language_slots().map(|x| x.get_color().unwrap_or(Color::White))
-    }
-
     pub fn set_token(&mut self, token: &str, value: &str) -> Result<(), ThemeParseError> {
         let style = Style::parse(value).ok_or_else(|| ThemeParseError::InvalidValue(token.to_owned(), value.trim().to_owned()))?;
         if matches!(style.fill, Fill::Gradient(_) | Fill::Rainbow)
