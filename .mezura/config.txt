@@ -3,6 +3,7 @@ Auto-generated config file.
 ===> targets
 cli=./mezura
 core=./mezura-core
+mcp=./mezura-mcp
 
 ===> exclude
 fixtures
