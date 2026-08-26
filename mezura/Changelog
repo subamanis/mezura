@@ -28,14 +28,22 @@ Main changes:
       prints every file; "--by-file 20" prints the twenty biggest of each language, by whatever
       "--sort" is in effect, and says above the total how many it left out. A language whose files
       were cut ends on a branch left hanging, so a tree drawn shut is the whole of what there is.
-      Long paths lose whole directories out of their middle. The JSON document carries the same
-      rows under each language, as "by_file".
+      Long paths lose whole directories out of their middle. Under "--diff" the rows are the files
+      that changed, each with its move beside its figures and "new" or "gone" for a file only one
+      side has; a number then keeps the biggest moves instead of the biggest files, and a JSON
+      baseline must itself have been written with a plain, uncapped "--by-file", which mezura says
+      when it was not.
+      The JSON document carries the same rows under each language, as "by_file", and a run with
+      modules carries them inside each module's own languages.
   -> Every piece of printed text can now be styled, not just the four colors of the overview.
       74 tokens are exposed, and each takes one or two colors plus any of bold, italic, underline,
       dim and reverse, in any order. Written out, the first color is the text and the second what it
       sits on, so "heading=black d7c98a" puts the section titles on a band and "note=default 3a2f1e"
       colors the background alone. The cells of the live progress bar also take a "hex..hex"
-      gradient or "rainbow". Run "--help --style" for the full list.
+      gradient or "rainbow". Run "--help --style" for the full list. The theme editor page sets all
+      three: the color, the background beside it, and each attribute as a letter that lights up
+      when it is on, and its contrast reading is taken against a token's own background where it
+      has one. The keyword line is in the preview too.
   -> A comment line carrying no words now counts as extra, the way a lone brace always did: the
       bare "/*" and "*/" of a block written on their own lines, the "*" of a banner line, a lone
       "//" spacer, a decorative "/*----*/". Comment counts drop visibly on trees written in banner
@@ -69,6 +77,10 @@ Main changes:
       count a directory, ask for the same count as a JSON document, or go through one file line by
       line to see why each line was counted the way it was. It runs the mezura you already have and
       nothing goes over the network. See the README for the settings file each editor uses.
+  -> A language file that opens and closes a block comment with the same symbol, the way Smalltalk
+      writes "like this", now says so. That pair can never be told apart, so it was silently doing
+      nothing and every comment of that language was counted as code. The pair is now dropped, the
+      rest of the language still counts, and the run reports it under "comment-pair-never-closes".
   -> Ten languages are now counted that were not before: Verilog, SystemVerilog, Nix, HCL
       (Terraform), Groovy (including Jenkinsfile and Gradle build files), Protocol Buffers, Visual
       Basic, Less, Solidity and Batch (".bat" and ".cmd"). A hardware, infrastructure or NixOS

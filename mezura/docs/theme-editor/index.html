@@ -46,14 +46,31 @@
 
   .pickers { display: flex; flex-wrap: wrap; gap: 0.85rem 1.1rem; }
   .picker { display: flex; flex-direction: column; gap: 0.32rem; }
-  .picker label { font-size: 0.76rem; color: #888; display: flex; align-items: center; gap: 0.34rem; }
-  .picker.lit label { color: #d8b957; }
+  /* Not a 'label': it labels no control, and a label adopts the first button inside it, which would
+     make the token's own name a second switch for 'bold' */
+  .picker .head { font-size: 0.76rem; color: #888; display: flex; align-items: center; gap: 0.34rem; }
+  .picker.lit .head { color: #d8b957; }
   .picker .attrs { font-size: 0.66rem; color: #5e5e5e; letter-spacing: 0.06em; }
+  .picker .attrs-row { display: flex; gap: 0.16rem; }
+  /* The letter of each attribute, dark while it is off, so a theme is read from what is lit */
+  .picker .attr { background: transparent; border: 1px solid #2c2c2c; border-radius: 3px; color: #646464;
+      font-size: 0.75rem; font-weight: 700; line-height: 1; padding: 0.22rem 0.36rem; cursor: pointer; }
+  .picker .attr:hover { background: #262626; color: #bbb; }
+  .picker .attr.on { color: #d8b957; border-color: #4a4222; background: #201d12; }
   .picker .restore { background: transparent; border: none; color: #9d9d9d; font-size: 1rem; line-height: 1; padding: 0; cursor: pointer; }
   .picker .restore:hover { color: #d8b957; background: transparent; }
   /* Absent rather than dimmed while the token is untouched: it has something to say only after an edit */
   .picker .restore[disabled] { visibility: hidden; }
   .picker .row { display: flex; align-items: center; gap: 0.45rem; }
+  .picker .bg { position: relative; display: flex; align-items: center; }
+  /* Struck through while the token names no background, so an empty swatch is never read as a black one */
+  .picker .bg.none input[type="color"] { opacity: 0.45; }
+  .picker .bg.none::after { content: ""; position: absolute; left: 0.15rem; right: 0.15rem; top: 50%;
+      border-top: 1px solid #8a8a8a; transform: rotate(-32deg); pointer-events: none; }
+  .picker .clear { position: absolute; top: -0.3rem; right: -0.3rem; background: #2a2a2a; border: 1px solid #444;
+      border-radius: 50%; color: #bbb; font-size: 0.55rem; line-height: 1; padding: 0.1rem 0.18rem; cursor: pointer; }
+  .picker .clear:hover { background: #3a2020; color: #e08080; }
+  .picker .clear[disabled] { visibility: hidden; }
   .picker .field { position: relative; display: flex; align-items: center; }
   /* Inside the field and out of the way of it: no pointer, no selection, so dragging across the
      hex to copy it takes the hex and nothing else */
@@ -62,7 +79,9 @@
   .picker .ratio.warn { color: #d8b957; }
   .picker .ratio.bad { color: #e07a7a; }
   .picker input[type="color"] { width: 2.5rem; height: 2rem; border: 1px solid #333; border-radius: 4px; background: #0c0c0c; padding: 1px; cursor: pointer; }
-  .picker input[type="text"] { width: 8.4rem; background: #0c0c0c; border: 1px solid #333; border-radius: 4px; color: #ccc; font-family: inherit; font-size: 0.78rem; padding: 0.3rem 2.4rem 0.3rem 0.48rem; }
+  /* Which of the two the field beside them is reading and writing */
+  .picker input[type="color"].sel { border-color: #e9d596; }
+  .picker input[type="text"] { width: 9rem; background: #0c0c0c; border: 1px solid #333; border-radius: 4px; color: #ccc; font-family: inherit; font-size: 0.78rem; padding: 0.3rem 2.4rem 0.3rem 0.48rem; }
   .picker input[type="text"]:focus { outline: none; border-color: #4a4a4a; }
   .picker input[type="text"].invalid { border-color: #a03030; color: #e08080; }
 
@@ -141,6 +160,11 @@ const SAMPLE = [
   [["separator-total","────────────────────────────────────────────────────────────────────────────────────────────────────────"]],
   [["details-total","Total"],["","          "],["files-number","88"],["","  "],["percent","100.00%"],["","     "],["lines-number","31,416"],["","  "],["percent","100.00%"],["","    "],["code-number","19,949"],["","  "],["percent","63.50%"],["","       "],["comments-number","4,064"],["","  "],["percent","12.94%"],["","    "],["extra-number","7,403"],["","     "],["total-size-number","1.6 "],["size-unit","MB"]],
   [],
+  [["heading","Keywords"],["","."]],
+  [],
+  [["details-language-name","Rust"],["","   "],["keyword-label","enums"],["",": "],["keyword-number","46"],["",", "],["keyword-label","structs"],["",": "],["keyword-number","116"],["",", "],["keyword-label","traits"],["",": "],["keyword-number","2"]],
+  [["details-language-name","C"],["","      "],["keyword-label","structs"],["",": "],["keyword-number","1"]],
+  [],
   [["heading","Overview"],["","."]],
   [],
   [["overview-label","Files:"],["","   "],["overview-percent","63.64%"],[""," "],["language-1","Rust"],[""," - "],["overview-percent","12.50%"],[""," "],["language-2","HTML"],[""," - "],["overview-percent","21.59%"],[""," "],["language-3","C"],[""," - "],["overview-percent","2.27%"],[""," "],["language-4","Vue"],["","   "],["bar-frame","[-"],["language-1","┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃"],["language-2","┃┃┃┃┃┃"],["language-3","┃┃┃┃┃┃┃┃┃┃┃"],["language-4","┃"],["bar-frame","-]"]],
@@ -180,6 +204,10 @@ const GROUPS = [
     ["heading",                 "default bold underline"],
     ["separator-header",        "aaaaaa"],
     ["separator-total",         "aaaaaa"]
+  ]],
+  ["The keywords", [
+    ["keyword-label",           "default dim"],
+    ["keyword-number",          "b5b5b5"]
   ]],
   ["The overview", [
     ["overview-label",          "default"],
@@ -275,10 +303,14 @@ function relLuminance(rgb) {
   return 0.2126*c[0] + 0.7152*c[1] + 0.0722*c[2];
 }
 
-function contrastWithBg(hex) {
-  const l1 = relLuminance(hexToRgb(hex));
-  const l2 = relLuminance(hexToRgb(termBg));
+function contrastOf(one, other) {
+  const l1 = relLuminance(hexToRgb(one));
+  const l2 = relLuminance(hexToRgb(other));
   return (Math.max(l1,l2) + 0.05) / (Math.min(l1,l2) + 0.05);
+}
+
+function contrastWithBg(hex) {
+  return contrastOf(hex, termBg);
 }
 
 function rgbToLab(rgb) {
@@ -308,9 +340,14 @@ function applyTermBg(hex) {
   document.documentElement.style.setProperty("--card-bg", shift(hex, 24));
   document.documentElement.style.setProperty("--card-border", shift(hex, 46));
   renderMetrics();
-  // Every ratio is against this background, so all of them move with it
+  // Every ratio taken against this background moves with it, and so does the empty swatch of every
+  // token that names none, which stands for whatever the terminal is
   TOKENS.forEach(([token]) => {
     if (document.getElementById("ratio-" + token)) paintRatio(token);
+    const behind = document.getElementById("behind-" + token);
+    if (behind && !partsOf(current().values[token]).background) {
+      behind.value = hex;
+    }
   });
   // A reversed token paints its text in the background, so it follows it too
   renderRun();
@@ -410,13 +447,13 @@ function groupsHtml() {
   return '<div class="pickers">' + TOKENS.map(([token]) => {
       const parts = partsOf(values[token]);
       const shown = ratioOf(values[token]);
-      const rest = [parts.background ? "on " + parts.background : null].concat(parts.attrs).filter(Boolean).join(" ");
-      return '<div class="picker" id="pick-' + token + '"><label><span>' + token + "</span>" +
-        (rest ? '<span class="attrs">' + escapeHtml(rest) + "</span>" : "") +
+      return '<div class="picker" id="pick-' + token + '" data-editing="fg"><div class="head"><span>' + token + "</span>" +
+        attributesHtml(token, parts.attrs) +
         (NO_PREVIEW[token] ? '<span class="attrs">' + NO_PREVIEW[token] + "</span>" : "") +
         restoreHtml(token, values[token]) +
-        '</label><div class="row">' +
-        '<input type="color" value="' + hexOf(values[token]).toLowerCase() + '" id="col-' + token + '" data-tok="' + token + '">' +
+        '</div><div class="row">' +
+        '<input type="color" class="sel" value="' + hexOf(values[token]).toLowerCase() + '" id="col-' + token + '" data-tok="' + token + '" title="The color of the text">' +
+        backgroundHtml(token, parts.background) +
         '<span class="field">' +
         '<input type="text" value="' + parts.color + '" id="txt-' + token + '" data-tok="' + token + '" spellcheck="false">' +
         '<span class="ratio ' + shown.cls + '" id="ratio-' + token + '">' + shown.text + "</span></span>" +
@@ -424,13 +461,57 @@ function groupsHtml() {
     }).join("") + "</div>";
 }
 
-// How the token's color stands against the terminal background, in the field that sets it. A token
-// left to the terminal has no ratio to give, since the terminal chooses both halves.
+// Each attribute as its own initial, lit while the style carries it. What shows the state is what
+// changes it, so nothing has to be hovered to find out what a token is wearing.
+function attributesHtml(token, attrs) {
+  return '<span class="attrs-row">' + ATTR_WORDS.map(word =>
+      '<button class="attr' + (attrs.includes(word) ? " on" : "") + '" data-attr="' + word +
+      '" data-tok="' + token + '" title="' + word + '">' + word[0].toUpperCase() + "</button>").join("") +
+      "</span>";
+}
+
+// The background beside the color that sits on it. Struck through while there is none, and the
+// button that clears it keeps its place either way, so setting one moves nothing on the page.
+function backgroundHtml(token, background) {
+  const hex = background ? tokenToHex(background) : termBg;
+  return '<span class="bg' + (background ? "" : " none") + '" id="bg-' + token + '">' +
+      '<input type="color" value="' + hex.toLowerCase() + '" id="behind-' + token + '" data-behind="' + token +
+      '" title="The color behind the text">' +
+      '<button class="clear" data-clear="' + token + '"' + (background ? "" : " disabled") +
+      ' title="Take the background off">✕</button></span>';
+}
+
+// The field writes whichever of the two swatches is picked out, so both halves of a style can be
+// read and typed without a second field. A background nobody set reads as the terminal's own,
+// which is what 'default' says for a color, and typing it back takes the background off.
+function fieldValueOf(token) {
+  const parts = partsOf(current().values[token]);
+  return isEditingBackground(token) ? parts.background || "default" : parts.color;
+}
+
+function isEditingBackground(token) {
+  return document.getElementById("pick-" + token).dataset.editing === "background";
+}
+
+function selectSwatch(token, which) {
+  const picker = document.getElementById("pick-" + token);
+  picker.dataset.editing = which;
+  document.getElementById("col-" + token).classList.toggle("sel", which === "fg");
+  document.getElementById("behind-" + token).classList.toggle("sel", which === "background");
+  const field = document.getElementById("txt-" + token);
+  field.value = fieldValueOf(token);
+  field.classList.remove("invalid");
+}
+
+// How the token's color stands against what is actually behind it: its own background where it
+// names one, the terminal's where it does not. A token that names neither has no ratio to give,
+// since the terminal chooses both halves.
 function ratioOf(style) {
-  if (partsOf(style).color === "default") {
+  const parts = partsOf(style);
+  if (parts.color === "default" && !parts.background) {
     return { text: "", cls: "" };
   }
-  const ratio = contrastWithBg(hexOf(style));
+  const ratio = contrastOf(hexOf(style), parts.background ? tokenToHex(parts.background) : termBg);
   return { text: ratio.toFixed(1), cls: ratio >= 4.5 ? "ok" : ratio >= 3 ? "warn" : "bad" };
 }
 
@@ -484,25 +565,67 @@ function renderRun() {
 function renderPickers() {
   document.getElementById("groups").innerHTML = groupsHtml();
 
-  function repaint(token, color) {
-    const parts = partsOf(current().values[token]);
-    parts.color = color;
-    current().values[token] = styleOf(parts);
-    // The pickers are not redrawn on a color change, so the one control whose state depends on the
-    // value is brought up to date by hand
+  // The pickers are not redrawn on an edit, so the controls whose state depends on the value are
+  // brought up to date by hand
+  function afterTokenEdit(token) {
     document.querySelector('button[data-restore="' + token + '"]')
         .disabled = current().values[token] === current().original[token];
     paintRatio(token);
     afterEdit();
   }
 
+  function repaint(token, color) {
+    const parts = partsOf(current().values[token]);
+    parts.color = color;
+    current().values[token] = styleOf(parts);
+    afterTokenEdit(token);
+  }
+
+  // Picking one out is what opening it already does, so the field follows the swatch a person is
+  // about to change rather than needing a second click of its own
   document.querySelectorAll('#groups input[type="color"]').forEach(input => {
+    input.addEventListener("focus", () =>
+        selectSwatch(input.dataset.tok || input.dataset.behind, input.dataset.tok ? "fg" : "background"));
+  });
+
+  document.querySelectorAll('#groups input[type="color"][data-tok]').forEach(input => {
     input.addEventListener("input", () => {
       const token = input.dataset.tok, color = input.value.replace("#", "").toLowerCase();
       const field = document.getElementById("txt-" + token);
       field.value = color;
       field.classList.remove("invalid");
       repaint(token, color);
+    });
+  });
+
+  // Written back in the order the words are declared and not in the order they were clicked, so
+  // that one theme has one spelling however it was arrived at
+  document.querySelectorAll("#groups button[data-attr]").forEach(chip => {
+    chip.addEventListener("click", () => {
+      const token = chip.dataset.tok, word = chip.dataset.attr;
+      const parts = partsOf(current().values[token]);
+      const wanted = parts.attrs.includes(word) ? parts.attrs.filter(x => x !== word)
+              : parts.attrs.concat(word);
+      parts.attrs = ATTR_WORDS.filter(x => wanted.includes(x));
+      current().values[token] = styleOf(parts);
+      chip.classList.toggle("on");
+      afterTokenEdit(token);
+    });
+  });
+
+  document.querySelectorAll('#groups input[type="color"][data-behind]').forEach(input => {
+    input.addEventListener("input", () => {
+      const token = input.dataset.behind;
+      setBackground(token, input.value.replace("#", "").toLowerCase());
+      document.getElementById("txt-" + token).value = fieldValueOf(token);
+    });
+  });
+
+  document.querySelectorAll("#groups button[data-clear]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const token = btn.dataset.clear;
+      setBackground(token, null);
+      document.getElementById("txt-" + token).value = fieldValueOf(token);
     });
   });
 
@@ -514,11 +637,27 @@ function renderPickers() {
         return;
       }
       input.classList.remove("invalid");
+      if (isEditingBackground(token)) {
+        setBackground(token, typed === "default" ? null : normalizeToken(typed));
+        return;
+      }
       const color = typed === "default" ? "default" : normalizeToken(typed);
       document.getElementById("col-" + token).value = hexOf(color).toLowerCase();
       repaint(token, color);
     });
   });
+
+  // None takes the background off, which is the one state the swatch cannot hold: a color input
+  // always carries a color, so what says there is none is the strike through it
+  function setBackground(token, background) {
+    const parts = partsOf(current().values[token]);
+    parts.background = background;
+    current().values[token] = styleOf(parts);
+    document.getElementById("bg-" + token).classList.toggle("none", !background);
+    document.getElementById("behind-" + token).value = (background ? tokenToHex(background) : termBg).toLowerCase();
+    document.querySelector('button[data-clear="' + token + '"]').disabled = !background;
+    afterTokenEdit(token);
+  }
 
   document.querySelectorAll("#groups .picker").forEach(picker => {
     const token = picker.id.replace("pick-", "");
