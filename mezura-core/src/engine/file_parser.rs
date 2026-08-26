@@ -904,9 +904,13 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
     let from_start = raw_line.trim_ascii_start();
     let line = from_start.trim_ascii_end();
     if line.is_empty() {
+        // A line joined to a comment by a continuation symbol is inside that comment even when it
+        // holds nothing, and the joining ends here: a blank line has nowhere to put the symbol
+        // that would carry it further.
+        let carried_by_a_continuation = state.continued_comment;
         state.continued_comment = false;
         let class = if state.open_str_symbol.is_some() { LineClass::BlankInString }
-                else if state.open_comment.is_some() { LineClass::BlankInComment }
+                else if state.open_comment.is_some() || carried_by_a_continuation { LineClass::BlankInComment }
                 else { LineClass::Blank };
         file_stats.classes.bump(class);
         if EXPLAIN { log.record(class, carried, language, Vec::new()); }
@@ -2000,6 +2004,31 @@ mod tests {
         let stats = parse_lines_whole("/* block */ \\\nint x = 1;\n", &language);
         assert_eq!(1, stats.classes.words_in_code);
         assert_eq!(1, stats.classes.comment_words_beside_code);
+    }
+
+    // The line the splice joined holds nothing, and it is still that comment's line: under the
+    // model that asks which block a line sits in it is a comment, and under the one that asks what
+    // a line says it is as empty as any other blank, which is why the class and not a column says
+    // so. The splice itself ends there, having nowhere to put the symbol that would carry it on.
+    #[test]
+    fn a_blank_line_the_splice_joined_to_a_comment_belongs_to_that_comment() {
+        let language = c_like_with_a_splice();
+        let stats = parse_lines_whole("// a comment \\\n\nint x = 1;\n", &language);
+        assert_eq!(1, stats.classes.blank_in_comment);
+        assert_eq!(0, stats.classes.blank);
+        assert_eq!(1, stats.classes.words_in_comment);
+        assert_eq!(1, stats.classes.words_in_code);
+
+        // Two of them: the first ends the joining, so the second is an ordinary blank
+        let stats = parse_lines_whole("// a comment \\\n\n\nint x = 1;\n", &language);
+        assert_eq!(1, stats.classes.blank_in_comment);
+        assert_eq!(1, stats.classes.blank);
+
+        // A language that does not join lines at all keeps its blank
+        let plain = Language::new("c-like", ["c"], build_backslashed_quotes(), ["//"], &[("/*", "*/")], []);
+        let stats = parse_lines_whole("// a comment \\\n\nint x = 1;\n", &plain);
+        assert_eq!(0, stats.classes.blank_in_comment);
+        assert_eq!(1, stats.classes.blank);
     }
 
     // A symbol that crosses lines on its own is untouched by this, which is what keeps docstrings
