@@ -1,36 +1,54 @@
-// What the run wants the caller to know without it being an error: an answer was produced, and this
-// says what to be careful about in it.
+//! What a run wants the caller to know without it being an error: an answer was produced, and this
+//! says what to be careful about in it.
 
+/// What a warning is about. Stable, so a script can key on it: the wording of a message is free to
+/// change, this is not.
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 #[non_exhaustive]
 pub enum Code {
+    /// Two languages claim one extension and no rule settles it, so it went to the alphabetically
+    /// first of the two.
     LanguageTiebreak,
+    /// An extension was handed to a language name nothing answers to.
     UnknownForcedLanguage,
+    /// A name given to the languages of interest matches no language.
     UnknownLanguage,
+    /// The same, for a name given to the excluded languages.
     UnknownExcludedLanguage,
-    // A rule was written for a module that no target of this run declares, so it settled nothing
+    /// A rule was written for a module that no target of this run declares, so it settled nothing.
     UnknownModuleScope,
-    // A section of another language falls back to the file's own language, so its comments are read
-    // with the wrong symbols
+    /// A section of another language falls back to the file's own language, so its comments are
+    /// read with the wrong symbols.
     UnknownSectionLanguage,
+    /// Two language files carry the same name and only one of them is in play.
     DuplicateLanguage,
-    // Every file carrying its extensions is left to be counted by nobody
+    /// A language definition carries no name, so every file claiming its extensions is left to be
+    /// counted by nobody.
     LanguageWithoutName,
-    // Nothing is lost: it claims neither an extension nor a filename, so no file could ever match it
+    /// A language claims no extension, no file name and no `#!` line, so no file could ever be
+    /// counted as it. Nothing is lost.
     LanguageClaimsNothing,
-    // A block comment whose opening and closing symbols are the same text, which the scan cannot
-    // tell apart, so the pair never fires and its comments are counted as code
+    /// A block comment whose opening and closing symbols are the same text, which the scan cannot
+    /// tell apart, so the pair never fires and its comments are counted as code.
     CommentPairNeverCloses,
+    /// A language file could not be read or does not parse, so that whole language is missing.
     LanguageFileUnreadable,
+    /// A line of the file that settles contested extensions does not parse and was skipped.
     ConflictLineSkipped,
+    /// A configuration file holds a value that could not be used.
     ConfigValueIgnored,
+    /// A configuration file holds a section this version does not know.
     ConfigSectionUnknown,
+    /// A command was given that this run has no use for.
     CommandIgnored,
+    /// A style line does not parse and was skipped, the rest of its file applying.
     ConfigStyleInvalid,
+    /// The theme that was asked for is not installed, so the default was used.
     ThemeUnavailable
 }
 
 impl Code {
+    /// The stable spelling, `language-tiebreak`.
     pub fn name(self) -> &'static str {
         match self {
             Self::LanguageTiebreak => "language-tiebreak",
@@ -53,6 +71,7 @@ impl Code {
         }
     }
 
+    /// Whether this puts the numbers themselves in doubt.
     // Exhaustive on purpose: a code added without deciding what it does to the answer does not
     // compile.
     pub fn affects(self) -> Affects {
@@ -69,40 +88,48 @@ impl Code {
     }
 }
 
-// The three fields are for different readers. 'code' never changes, so a script can key on it, while
-// 'message' is free to be reworded. 'subject' is the one thing the warning is about, so nobody has to
-// dig it back out of the message with a regular expression.
+/// One thing worth knowing about a run that still produced an answer.
+///
+/// The three fields are for three different readers.
 #[derive(Debug,PartialEq,Eq,Clone)]
 #[non_exhaustive]
 pub struct Warning {
+    /// What it is about, in a form a script can key on.
     pub code: Code,
+    /// The one thing it concerns, so nobody has to dig it back out of the message with a regular
+    /// expression: a language name, an extension, a file name.
     pub subject: String,
+    /// The same for a person to read. Free to be reworded between versions.
     pub message: String
 }
 
 impl Warning {
+    /// A warning of that code, about that subject, worded that way.
     pub fn new(code: Code, subject: &str, message: String) -> Self {
         Warning { code, subject: subject.to_owned(), message }
     }
 
+    /// Whether this puts the numbers themselves in doubt.
     pub fn affects(&self) -> Affects {
         self.code.affects()
     }
 }
 
-// Whether the numbers can be trusted, which is the question worth answering without knowing every
-// code: one written against this keeps working when a later version adds a code it never heard of.
+/// Whether the numbers can be trusted, which is the question worth answering without knowing every
+/// code: something written against this keeps working when a later version adds a code it never
+/// heard of.
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 pub enum Affects {
-    // The numbers are wrong for the settings that were applied. Rewriting the command does not fix
-    // it, and nothing should be decided on figures raised with this.
+    /// The numbers are wrong for the settings that were applied. Rewriting the command does not fix
+    /// it, and nothing should be decided on figures raised with this.
     Counts,
-    // The numbers are sound for what was applied, but what was applied is not what was asked for.
-    // Rewriting the command does fix it.
+    /// The numbers are sound for what was applied, but what was applied is not what was asked for.
+    /// Rewriting the command does fix it.
     Settings
 }
 
 impl Affects {
+    /// `counts` or `settings`.
     pub fn name(self) -> &'static str {
         match self {
             Self::Counts => "counts",

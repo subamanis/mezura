@@ -1,29 +1,40 @@
+//! The settings one run is given, and the two ways they can be narrowed to a single named part
+//! of it.
+
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 
+/// The most scanning threads [`Threads::new`] will accept, anything above it being clamped down.
 pub const MAX_PRODUCERS_VALUE : usize = 32;
+/// The fewest, anything below it being clamped up.
 pub const MIN_PRODUCERS_VALUE : usize = 1;
+/// The most counting threads, and the same clamping.
 pub const MAX_CONSUMERS_VALUE : usize = 128;
+/// The fewest.
 pub const MIN_CONSUMERS_VALUE : usize = 1;
 
 pub(crate) const DEF_SEARCH_IN_DOTTED  : bool    = false;
 pub(crate) const DEF_NO_GITIGNORE      : bool    = false;
 pub(crate) const DEF_NO_IGNORE_FILES   : bool    = false;
 
+/// One place to count, and the name its figures are reported under.
 #[derive(Debug,PartialEq,Eq,Clone)]
 pub struct Target {
-    // 'None' shares the '(unnamed)' row of the report with every other unnamed target.
+    /// `None` shares the [`crate::UNNAMED_MODULE_NAME`] row of the report with every other unnamed
+    /// target.
     pub module: Option<String>,
-    // What was typed, until the run resolves it: the list 'RunResult.targets' reports holds
-    // absolute paths.
+    /// A directory, a file, or a glob pattern. Whatever was typed until the run resolves it: the
+    /// list in [`crate::RunResult::targets`] holds absolute paths with every pattern expanded.
     pub path: String
 }
 
 impl Target {
+    /// A place whose figures go into the unnamed row.
     pub fn of(path: impl AsRef<str>) -> Self {
         Target { module: None, path: path.as_ref().to_owned() }
     }
 
+    /// A place reported under a name of its own. Several targets may share one name.
     pub fn named(module: impl AsRef<str>, path: impl AsRef<str>) -> Self {
         Target { module: Some(module.as_ref().to_owned()), path: path.as_ref().to_owned() }
     }
@@ -57,17 +68,20 @@ impl std::fmt::Display for Target {
     }
 }
 
-// The languages a run counts, the ones it leaves out, and the extensions it hands to a language of
-// your choosing. Each of the three can be answered once for the run and again for a single module.
+/// The languages a run counts, or the ones it leaves out: a list of names, which may be scoped to
+/// one named part of the run.
 pub type LanguageNames = ScopedByModule<Vec<String>>;
+/// Extensions handed to a language of the caller's choosing, from the claimed extension or file
+/// name to the language name. Also scopable.
 pub type ForcedLanguages = ScopedByModule<HashMap<String,String>>;
 
-// A setting a module answers differently from the rest of the run, so that one repository can hold
-// MATLAB under one directory and Objective-C under another and be counted once.
-//
-// The fields are private because the two halves are not interchangeable: the run's own answer is the
-// one every module that says nothing falls back to, and a map built by hand out of both would lose
-// that.
+/// A setting one named part of a run answers differently from the rest of it, so that one
+/// repository can hold MATLAB under one directory and Objective-C under another and be counted
+/// once.
+///
+/// The two halves are not interchangeable, which is why the fields are private: the run's own
+/// answer is the one every part that says nothing falls back to, and a map built by hand out of
+/// both would lose that.
 #[derive(Debug,PartialEq,Eq,Clone,Default)]
 pub struct ScopedByModule<T> {
     whole_run: T,
@@ -75,23 +89,27 @@ pub struct ScopedByModule<T> {
 }
 
 impl<T> ScopedByModule<T> {
+    /// One answer, for everywhere.
     pub fn of_the_whole_run(value: T) -> Self {
         ScopedByModule { whole_run: value, per_module: BTreeMap::new() }
     }
 
+    /// The run's own answer, and the parts that answer differently.
     pub fn of(whole_run: T, per_module: impl IntoIterator<Item = (String,T)>) -> Self {
         ScopedByModule { whole_run, per_module: per_module.into_iter().collect() }
     }
 
+    /// What everything that says nothing of its own falls back to.
     pub fn get_of_the_whole_run(&self) -> &T {
         &self.whole_run
     }
 
-    // The modules this setting singles out, which is what a run checks its target names against.
+    /// The parts this setting singles out, which is what a run checks its target names against.
     pub fn get_module_names(&self) -> impl Iterator<Item = &str> {
         self.per_module.keys().map(String::as_str)
     }
 
+    /// Whether anything at all was scoped to a part rather than to the run.
     pub fn is_scoped(&self) -> bool {
         !self.per_module.is_empty()
     }
@@ -108,8 +126,8 @@ impl ScopedByModule<Vec<String>> {
         self.get_declared_by(module).unwrap_or(&self.whole_run)
     }
 
-    // Every name written anywhere in it, whichever module it was written for: whether a language
-    // exists is not a question one module answers differently.
+    /// Every name written anywhere in it, whichever part it was written for: whether a language
+    /// exists is not a question one part of a run answers differently.
     pub fn get_all_names(&self) -> Vec<String> {
         let mut names = self.whole_run.clone();
         for own in self.per_module.values() {
@@ -120,10 +138,13 @@ impl ScopedByModule<Vec<String>> {
         names
     }
 
+    /// Whether it names nothing anywhere.
     pub fn is_empty(&self) -> bool {
         self.whole_run.is_empty() && self.per_module.values().all(Vec::is_empty)
     }
 
+    /// Reads a flat list where a scope is spelled `module/name`, the way a person writes it and a
+    /// configuration file stores it.
     pub fn of_written_form(names: &[String]) -> Self {
         let mut scoped = LanguageNames::default();
         for name in names {
@@ -137,6 +158,7 @@ impl ScopedByModule<Vec<String>> {
         scoped
     }
 
+    /// Back to that flat list.
     pub fn to_written_form(&self) -> Vec<String> {
         self.whole_run.iter().cloned()
                 .chain(self.per_module.iter().flat_map(|(module, names)| names.iter()
@@ -159,10 +181,12 @@ impl ScopedByModule<HashMap<String,String>> {
         }
     }
 
+    /// Whether it holds no rule anywhere.
     pub fn is_empty(&self) -> bool {
         self.whole_run.is_empty() && self.per_module.values().all(HashMap::is_empty)
     }
 
+    /// Reads a flat map whose keys may be spelled `module/extension`.
     pub fn of_written_form(pairs: &HashMap<String,String>) -> Self {
         let mut scoped = ForcedLanguages::default();
         for (claimed, language) in pairs {
@@ -177,6 +201,7 @@ impl ScopedByModule<HashMap<String,String>> {
         scoped
     }
 
+    /// Back to that flat map.
     pub fn to_written_form(&self) -> HashMap<String,String> {
         self.whole_run.iter().map(|(claimed, language)| (claimed.clone(), language.clone()))
                 .chain(self.per_module.iter().flat_map(|(module, rules)| rules.iter()
@@ -201,10 +226,12 @@ impl From<HashMap<String,String>> for ScopedByModule<HashMap<String,String>> {
     }
 }
 
-// 'ios/m' is the extension 'm' inside the module named 'ios'. A module name can hold no slash, so
-// the first one always separates the two. Text with nothing on one side of that slash is not a
-// scope at all and is left whole, which is what makes '/rust' a language name nobody answers to and
-// reports as such, rather than a rule that quietly holds everywhere.
+/// Splits `ios/m` into the part named `ios` and the extension `m`.
+///
+/// A module name can hold no slash, so the first one always separates the two. Text with nothing
+/// on one side of that slash is not a scope at all and comes back whole, which is what makes
+/// `/rust` a language name nobody answers to, reported as such, rather than a rule that quietly
+/// holds everywhere.
 pub fn split_off_module_scope(text: &str) -> (Option<&str>, &str) {
     match text.split_once('/') {
         Some((module, value)) if !module.is_empty() && !value.is_empty() => (Some(module), value),
@@ -212,6 +239,7 @@ pub fn split_off_module_scope(text: &str) -> (Option<&str>, &str) {
     }
 }
 
+/// Puts the two back together, and gives back the value alone when there is no scope.
 pub fn format_module_scope(module: Option<&str>, value: &str) -> String {
     match module {
         Some(module) => format!("{module}/{value}"),
@@ -219,9 +247,11 @@ pub fn format_module_scope(module: Option<&str>, value: &str) -> String {
     }
 }
 
-// Private so that a number the run cannot work with has no way in: zero scanning threads leaves
-// every directory in the queue and answers "nothing found" over a real tree, and zero counting
-// threads returns a result claiming files and zero of everything else.
+/// How many threads scan directories and how many count files.
+///
+/// The two numbers are private so that one the run cannot work with has no way in: zero scanning
+/// threads leaves every directory in the queue and answers "nothing found" over a real tree, and
+/// zero counting threads returns a result claiming files and zero of everything else.
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 pub struct Threads {
     producers: usize,
@@ -229,8 +259,9 @@ pub struct Threads {
 }
 
 impl Threads {
-    // Clamped rather than refused: a count outside the range is a preference the machine cannot
-    // honour, not a mistake worth ending a run over.
+    /// Clamped into range rather than refused: a count outside it is a preference the machine
+    /// cannot honour, not a mistake worth ending a run over. See [`MIN_PRODUCERS_VALUE`] and the
+    /// three constants beside it.
     pub fn new(producers: usize, consumers: usize) -> Self {
         Threads {
             producers: producers.clamp(MIN_PRODUCERS_VALUE, MAX_PRODUCERS_VALUE),
@@ -238,10 +269,12 @@ impl Threads {
         }
     }
 
+    /// How many threads scan directories.
     pub fn producers(&self) -> usize {
         self.producers
     }
 
+    /// How many read and count the files they find.
     pub fn consumers(&self) -> usize {
         self.consumers
     }
@@ -272,34 +305,47 @@ impl Default for Threads {
     }
 }
 
-// Every field but 'threads' answers what gets counted. That one answers how fast, and is here only
-// because it is saved and reloaded beside the others; the log leaves it out of what makes two runs
-// comparable.
+/// What one run counts, and how fast.
+///
+/// Every field but the threads answers what gets counted. That one answers how fast, and is here
+/// only because it is saved and reloaded beside the others.
 #[derive(Debug,PartialEq,Clone)]
 pub struct EngineConfig {
-    // 'run' resolves these at its entry with the settings beside them, so the flags that filter a
-    // pattern's matches and the flags the scan obeys cannot disagree. A relative path is joined to
-    // the working directory at that moment.
+    /// The places to look. [`crate::run`] resolves these at its entry together with the settings
+    /// beside them, so the flags that filter a pattern's matches and the flags the scan obeys
+    /// cannot disagree. A relative path is joined to the working directory at that moment.
     pub targets: Vec<Target>,
+    /// Glob patterns for directories and files to skip, matched at any depth.
     pub exclude_dirs: Vec<String>,
+    /// Count only these. Empty means all of them.
     pub languages_of_interest: LanguageNames,
+    /// Count everything but these.
     pub excluded_languages: LanguageNames,
+    /// Extensions and file names handed to a language of your choosing.
     pub forced_languages: ForcedLanguages,
+    /// How many threads scan and how many count.
     pub threads: Threads,
+    /// Whether to descend into directories and read files whose name begins with a dot.
     pub should_search_in_dotted: bool,
+    /// Whether to ignore what a `.gitignore` says.
     pub no_gitignore: bool,
-    // The '.ignore' and '.rgignore' that ripgrep, the silver searcher and fd read and git does not.
-    // A separate answer from the one above, since obeying the repository and obeying the search
-    // tools are two decisions: a vendored dependency is usually hidden by one and kept by the other.
+    /// Whether to ignore what a `.ignore` or `.rgignore` says: the files ripgrep, the silver
+    /// searcher and fd read and git does not.
+    ///
+    /// A separate answer from the one above, since obeying the repository and obeying the search
+    /// tools are two decisions: a vendored dependency is usually hidden by one and kept by the
+    /// other.
     pub no_ignore_files: bool,
-    // Hiding the keywords stops the counting too, since nothing else reads them and the work would
-    // be thrown away.
+    /// Whether to count the words each language declares. Turning it off stops the counting too,
+    /// since nothing else reads them and the work would be thrown away.
     pub count_keywords: bool,
-    // Off by default, so a bundle is left out of every figure and reported as skipped
+    /// Whether a bundled file goes into the figures. Off by default, which leaves it out of every
+    /// one of them and reports it as skipped.
     pub count_minified: bool,
-    // The same, for a file whose head says a tool wrote it
+    /// The same, for a file whose head says a tool wrote it.
     pub count_generated: bool,
-    // Off by default: one entry per file, where the run otherwise holds one per language
+    /// Whether to keep one entry per file in [`crate::ModuleResult::files`]. Off by default, where
+    /// the run holds one entry per language.
     pub collect_files: bool
 }
 
@@ -326,7 +372,7 @@ impl Default for EngineConfig {
 }
 
 impl EngineConfig {
-    // Everything but the places to look takes the default the command line would have produced.
+    /// Places to look, and the default for everything else.
     pub fn new(targets: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
         EngineConfig {
             targets: targets.into_iter().map(Target::of).collect(),

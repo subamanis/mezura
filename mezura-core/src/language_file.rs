@@ -1,18 +1,24 @@
-// The format of a language file, which is the one thing under this roof that decides a number: what
-// a language is called, which extensions it claims and which symbols open a comment. Reading a
-// definition is this crate's business; installing, replacing and migrating the files that hold them
-// is the command line's, and lives there.
+//! The format of a language file, which is the one thing under this roof that decides a number:
+//! what a language is called, which extensions it claims and which symbols open a comment.
+//!
+//! Reading a definition is this crate's business. Installing, replacing and migrating the files
+//! that hold them belongs to whoever owns the directory they live in.
+
 use std::{collections::HashMap, fs::{self, DirEntry}, path::Path};
 
 use crate::{Keyword, Language};
 use crate::engine::identity::IdentifiedBy;
 
-// What a run knows about extensions and filenames that more than one language claims. Two blocks
-// because they are two questions: a rule for the extension 'm' says nothing about a file called
-// 'm', and one map for both would let the two answer for each other.
+/// Who wins an extension or a file name that more than one language claims. Each entry lists the
+/// languages in the order they get it, the first one present taking it.
+///
+/// Two maps because they are two questions: a rule for the extension `m` says nothing about a file
+/// called `m`, and one map for both would let the two answer for each other.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ConflictRules {
+    /// Keyed by extension, without the dot.
     pub by_extension : HashMap<String, Vec<String>>,
+    /// Keyed by whole file name.
     pub by_filename : HashMap<String, Vec<String>>
 }
 
@@ -56,10 +62,15 @@ const CONTESTED_FILENAMES      : &str = "contested-filenames";
 const REGENERATE_LANGUAGES_HINT : &str =
         "The copies this build ships can be written over them.";
 
+/// Why a whole directory of language files gave nothing usable.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum LanguageDirParseError {
+    /// The directory opened and holds no files.
     NoFilesFound,
+    /// It holds files and not one of them parses.
     NoFilesFormattedProperly,
+    /// The directory itself could not be opened, quoted here.
     PathMissing(String)
 }
 
@@ -78,13 +89,17 @@ impl std::fmt::Display for LanguageDirParseError {
 
 impl std::error::Error for LanguageDirParseError {}
 
-// Two different mistakes: a path that is not there is the caller's, text that does not parse is the
-// file's. Collapsed into one answer, somebody hunts for a formatting problem in a file they
-// misspelled the name of.
+/// Why one language file gave nothing.
+///
+/// Two different mistakes, kept apart: a path that is not there is the caller's, text that does not
+/// parse is the file's. Collapsed into one answer, somebody hunts for a formatting problem in a
+/// file they misspelled the name of.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum LanguageFileError {
+    /// The file could not be opened or read.
     Unreadable(std::io::Error),
-    // The line the reading stopped at, counted from 1
+    /// The line the reading stopped at, counted from 1.
     Malformed(usize)
 }
 
@@ -106,15 +121,18 @@ impl std::error::Error for LanguageFileError {
     }
 }
 
+/// One language file that gave nothing, which is one whole language missing from the count.
 #[derive(Debug)]
 pub struct FaultyLanguageFile {
+    /// As it is spelled on disk, so that somebody can go and open it.
     pub file_name: String,
+    /// What went wrong with it.
     pub error: LanguageFileError
 }
 
+/// Reads every language file in a directory, and the ones that failed beside them.
 // A list and not a map keyed by name, since the name lives in the language itself and a second copy
-// of it is a second thing to disagree. The files that failed come back beside it: each is a whole
-// language missing from the count.
+// of it is a second thing to disagree.
 pub fn parse_languages_in_dir(target_path: impl AsRef<Path>)
 -> Result<(Vec<Language>, Vec<FaultyLanguageFile>), LanguageDirParseError> {
     // As it is spelled on disk: the point of the list is that somebody can go and open the file it
@@ -153,24 +171,24 @@ pub fn parse_languages_in_dir(target_path: impl AsRef<Path>)
     }
 }
 
+/// Reads one language file, naming the line it stopped at if it does not parse.
 pub fn parse_language_file(path: impl AsRef<Path>) -> Result<Language, LanguageFileError> {
     let contents = fs::read_to_string(path).map_err(LanguageFileError::Unreadable)?;
     parse_language_or_faulty_line(&contents).map_err(LanguageFileError::Malformed)
 }
 
-// The one parser of the language file format. A file on disk and the bytes baked into this crate go
-// through it alike, so there is no second parser to drift from.
-//
-// A value sits on the line straight after its header and is taken as it is even when empty, since a
-// language with only multiline comments has an empty 'Comment symbols' value and that empty line is
-// the value, not a separator. Blank lines are skipped only before a header. And every line has to be
-// accounted for: a header left over at the end is one this did not understand, and the file is
-// refused whole, or 'Multiline comment start' written for 'Multi line comment start' passes as a
-// language with no multiline comments and no keywords that counts its block comments as code.
-//
-// None rather than a panic on anything unrecognised: the version migration reads the user's own
-// files through this to ask whether their copy still means what ours does, and one edited into
-// nonsense has to come back as "not the same" and not take the run down.
+/// Reads the text of a language file. A file on disk and the bytes baked into this crate go through
+/// this same parser, so there is no second one to drift from it.
+///
+/// A value sits on the line straight after its header and is taken as it is even when empty, since
+/// a language with only block comments has an empty `Comment symbols` value and that empty line is
+/// the value, not a separator. Blank lines are skipped only before a header. And every line has to
+/// be accounted for: a header left over at the end is one this did not understand and the file is
+/// refused whole, or `Multiline comment start` written for `Multi line comment start` passes as a
+/// language with no block comments and no keywords, which counts its comments as code.
+///
+/// `None` rather than a panic on anything unrecognised, so that a file edited into nonsense can be
+/// answered for rather than taking the run down.
 pub fn parse_language(contents: &str) -> Option<Language> {
     parse_language_or_faulty_line(contents).ok()
 }
@@ -429,9 +447,10 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
             .with_shebangs(&shebangs.iter().map(String::as_str).collect::<Vec<_>>()))
 }
 
-// A missing file is not a mistake: an installation made by an earlier version has none, and the
-// only consequence is that contested extensions fall back to the alphabetical tiebreak, which
-// announces itself anyway.
+/// Reads the file that settles contested extensions, and the lines of it that did not parse.
+///
+/// A missing file is not a mistake and comes back as no rules at all: the only consequence is that
+/// a contested extension falls back to the alphabetical tiebreak, which announces itself anyway.
 pub fn parse_conflict_rules_file(path: impl AsRef<Path>) -> (ConflictRules, Vec<String>) {
     match fs::read_to_string(path) {
         Ok(contents) => parse_conflict_rules(&contents),
@@ -439,9 +458,11 @@ pub fn parse_conflict_rules_file(path: impl AsRef<Path>) -> (ConflictRules, Vec<
     }
 }
 
-// A line that does not parse is reported and skipped while the rest of the file applies, because a
-// mistake here cannot produce a wrong number in silence: the extension it failed to settle falls
-// through to the tiebreak, which says so by name.
+/// The same reading, from text, giving back the rules and the lines that did not parse.
+///
+/// A line that does not parse is reported and skipped while the rest of the file applies, because
+/// a mistake here cannot produce a wrong number in silence: the extension it failed to settle falls
+/// through to the tiebreak, which says so by name.
 pub fn parse_conflict_rules(contents: &str) -> (ConflictRules, Vec<String>) {
     let mut rules = ConflictRules::default();
     let mut faulty_lines = Vec::new();

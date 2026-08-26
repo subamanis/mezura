@@ -12,7 +12,7 @@ use crate::engine::modules::{ModuleId, Modules};
 // how many of them have gone idle against how many started: one that dies without ever going idle
 // makes that count unreachable and the rest wait on it forever. The catch marks the dead one idle on
 // its way out and records what killed it, which 'run' turns into an error after the joins.
-pub fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<TraversedDir>>, worker: Worker<TraversedDir>,
+pub(crate) fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<TraversedDir>>, worker: Worker<TraversedDir>,
         idle_producers: Arc<AtomicUsize>, language_lookups: SharedModuleLookups, exclude_matcher: Arc<globset::GlobSet>,
         config: Arc<EngineConfig>, files_stats: Arc<Mutex<FilesPresent>>, modules: Arc<Modules>,
         unreadable_dirs: Arc<Mutex<Vec<UnreadableDirDetails>>>, producers_total: Arc<AtomicUsize>,

@@ -6,59 +6,70 @@ use crate::{CountingModel, Stats};
 use crate::engine::config::{Target, Threads};
 use crate::engine::modules::{ModuleId, Modules};
 
+/// Everything one run of [`crate::run`] produced.
 #[derive(Debug,Clone)]
 pub struct RunResult {
-    // Across every module. A run where nothing was named has one module holding these same numbers.
+    /// Across every module. A run where nothing was named has one module holding these same
+    /// numbers.
     pub per_language: HashMap<String, Stats>,
+    /// Every language added together.
     pub total: Stats,
-    // The sections other languages held inside container files, container language first and the
-    // section's language inside it. What is in here is already counted in 'per_language' under the
-    // container, so it decomposes those rows and is never added to them; 'files' inside it is the
-    // number of container files the section language appeared in.
+    /// The sections other languages held inside container files, the container's language first
+    /// and the section's language inside it.
+    ///
+    /// What is in here is already counted in `per_language` under the container, so it breaks
+    /// those rows down and is never added to them. The `files` figure inside it is how many
+    /// container files the section language appeared in.
     pub nested_languages: HashMap<String, HashMap<String, Stats>>,
+    /// The same figures once per named part of the run. Always at least one, see [`ModuleResult`].
     pub modules: Vec<ModuleResult>,
+    /// The files that could not be read or parsed, and why.
     pub faulty_files: Vec<FaultyFileDetails>,
-    // Among 'files_present.relevant_files' and in none of the figures above, the way a faulty
-    // file is
+    /// How many bundled files were left out. Counted among `files_present.relevant_files` and in
+    /// none of the figures above, the way a faulty file is.
     pub minified_files: usize,
+    /// The same, for the files whose head says a tool wrote them.
     pub generated_files: usize,
+    /// How many files the scan saw, and how many of them belonged to a language it counts.
     pub files_present: FilesPresent,
+    /// How long it took and on how many threads.
     pub performance: Performance,
-    // The places actually visited: the targets as given, resolved, with every pattern expanded to
-    // what it matched at that moment. A pattern's matches change while its text does not, which is
-    // what a log or a document needs to say that two runs measured the same thing.
+    /// The places actually visited: the targets as given, resolved, with every pattern expanded to
+    /// what it matched at that moment. A pattern's matches change while its text does not, which is
+    /// what a log or a document needs in order to say that two runs measured the same thing.
     pub targets: Vec<Target>,
-    // Directories that could not be opened, so everything inside them is missing from every number
-    // above.
+    /// Directories that could not be opened, so everything inside them is missing from every number
+    /// above.
     pub unreadable_dirs: Vec<UnreadableDirDetails>
 }
 
 impl RunResult {
-    // Largest first by the chosen figure, ties broken by name.
+    /// The languages largest first by the chosen figure, ties broken by name.
     pub fn sort_languages_by(&self, criterion: SortCriterion, model: CountingModel) -> Vec<(&str, &Stats)> {
         sort_languages_by(&self.per_language, criterion, model)
     }
 
-    // The emptiness check is not redundant: without it the two counts are equal when both are zero,
-    // and a scan that found nothing would answer yes.
+    /// Files belonging to a counted language were found and every one of them failed to be read.
     pub fn all_relevant_files_were_faulty(&self) -> bool {
         !self.faulty_files.is_empty() && self.faulty_files.len() == self.files_present.relevant_files
     }
 
-    // Files were found and no row came out of them, by any mixture of failing to parse and being
-    // left out as minified or generated.
+    /// Such files were found and no row came out of them, by any mixture of failing to parse and
+    /// being left out as minified or generated.
     pub fn nothing_of_interest_was_counted(&self) -> bool {
         self.files_present.relevant_files > 0 && self.total.files == 0
     }
 
-    // Finding no files after failing to open a directory is not "no code here", it is "I could not
-    // look". An otherwise empty tree with one unreadable corner answers yes as well, on purpose:
-    // that corner may have held everything.
+    /// Nothing was found and a directory could not be opened, so this is "I could not look" rather
+    /// than "there is no code here".
+    ///
+    /// An otherwise empty tree with one unreadable corner answers yes as well, on purpose: that
+    /// corner may have held everything.
     pub fn nothing_could_be_read(&self) -> bool {
         self.files_present.relevant_files == 0 && !self.unreadable_dirs.is_empty()
     }
 
-    // One name is enough for the second column to appear.
+    /// Whether any part of the run was given a name of its own.
     pub fn has_modules(&self) -> bool {
         self.modules.iter().any(|x| x.name.is_some())
     }
@@ -90,68 +101,90 @@ impl RunResult {
     }
 }
 
-// 'name' is None for whatever the named parts left over, which is also the single part of a run
-// where nothing was named at all.
+/// One named part of a run, and its own figures.
 #[derive(Debug,Clone)]
 pub struct ModuleResult {
+    /// `None` for whatever the named parts left over, which is also the single part of a run where
+    /// nothing was named at all.
     pub name: Option<String>,
+    /// This part's languages.
     pub per_language: HashMap<String, Stats>,
-    // The same decomposition 'RunResult::nested_languages' holds, for this module's files alone
+    /// The same breakdown [`RunResult::nested_languages`] holds, for this part's files alone.
     pub nested_languages: HashMap<String, HashMap<String, Stats>>,
-    // The breakdown of 'per_language', empty unless 'EngineConfig.collect_files' asked for it
+    /// One entry per file, keyed by language. Empty unless [`crate::EngineConfig::collect_files`]
+    /// asked for it.
     pub files: HashMap<String, Vec<FileEntry>>,
+    /// This part's languages added together.
     pub total: Stats
 }
 
 impl ModuleResult {
+    /// The languages largest first by the chosen figure, ties broken by name.
     pub fn sort_languages_by(&self, criterion: SortCriterion, model: CountingModel) -> Vec<(&str, &Stats)> {
         sort_languages_by(&self.per_language, criterion, model)
     }
 }
 
-// What the sections weigh is already inside 'stats', the way a container language's row holds all
-// of its files' lines.
+/// One counted file.
 #[derive(Debug,Clone)]
 pub struct FileEntry {
-    // With forward slashes, whichever way the platform writes them
+    /// Absolute, with forward slashes whichever way the platform writes them.
     pub path: String,
+    /// Its figures, the sections of other languages inside it included, the way a container
+    /// language's row holds all of its files' lines.
     pub stats: Stats,
+    /// What those sections weigh on their own.
     pub nested_languages: HashMap<String, Stats>
 }
 
-// 'threads' is what the run actually got, not what was asked for: the operating system may grant
-// fewer and the run carries on with those.
+/// What the run cost.
 #[derive(Debug,Clone)]
 pub struct Performance {
+    /// From the moment the threads started to the moment the last file was counted.
     pub duration_millis: u128,
+    /// What the run actually got, not what was asked for: the operating system may grant fewer and
+    /// the run carries on with those.
     pub threads: Threads
 }
 
+/// How much of what the scan saw it had reason to count.
 #[derive(Debug,Default,Clone,Copy,PartialEq,Eq)]
 pub struct FilesPresent {
+    /// Every file the scan reached, whatever it was. Links are not followed and are not in here.
     pub total_files: usize,
+    /// Those belonging to a language the run counts, which are the ones it went on to read.
     pub relevant_files: usize,
+    /// Those a language claims that an exclude pattern or an ignore file then took out. A file no
+    /// language claims is not in here, since it was never identified in the first place.
     pub excluded_files: usize
 }
 
-// Which figure decides the order of a report's rows.
+/// Which figure decides the order of a report's rows.
 #[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
 pub enum SortCriterion {
+    /// How many files the language has.
     Files,
+    /// Every line of them.
     #[default]
     Lines,
+    /// The code column under the model being shown.
     Code,
+    /// The comments column under it.
     Comments,
-    // The third quantity under each model, and each word orders by it only under the model that
-    // uses the word: 'extra' names nothing to a run counting by region, where the column is blanks.
+    /// The third column, and only under [`CountingModel::Content`], which is the model that calls
+    /// it `extra`.
     Extra,
+    /// The third column, and only under [`CountingModel::Region`], which is the model that calls
+    /// it `blanks`.
     Blanks,
+    /// Total size on disk.
     Size,
+    /// Alphabetical, ignoring case.
     Name
 }
 
 impl SortCriterion {
-    // The spelling a person types and the one a configuration file stores are the same word.
+    /// Reads the same word a person types and a configuration file stores, trimmed and in any case.
     pub fn parse(value: &str) -> Option<SortCriterion> {
         match value.trim().to_lowercase().as_str() {
             "files" => Some(Self::Files),
@@ -166,6 +199,7 @@ impl SortCriterion {
         }
     }
 
+    /// The spelling [`SortCriterion::parse`] reads back.
     pub fn name(&self) -> &'static str {
         match self {
             Self::Files => "files",
@@ -179,8 +213,8 @@ impl SortCriterion {
         }
     }
 
-    // 'Name' has no figure and every row answers 0, leaving the order to the caller's tiebreak.
-    // Three of the criteria are folds, so what "most code" means follows the model on screen.
+    /// The figure this criterion orders by. [`SortCriterion::Name`] has none and every row answers
+    /// 0, leaving the order to the caller's tiebreak.
     pub fn get_value_of(&self, stats: &Stats, model: CountingModel) -> usize {
         match self {
             Self::Files => stats.files,
@@ -194,16 +228,21 @@ impl SortCriterion {
     }
 }
 
-// Its lines are in no total, but it is counted among the files that were seen.
+/// A file that could not be read or parsed. Its lines are in no total, but it is counted among the
+/// files that were seen.
 #[derive(Debug,Clone)]
 #[non_exhaustive]
 pub struct FaultyFileDetails {
+    /// Absolute, with forward slashes.
     pub path: String,
+    /// What went wrong, in words.
     pub error_msg: String,
+    /// Its size on disk in bytes, which is in no total either.
     pub size: u64
 }
 
 impl FaultyFileDetails {
+    /// The type is non-exhaustive, so this is how a crate outside this one builds it.
     pub fn new(path: String, error_msg: String, size: u64) -> Self {
         FaultyFileDetails {
             path,
@@ -213,15 +252,18 @@ impl FaultyFileDetails {
     }
 }
 
+/// A directory that could not be opened, so nothing inside it reached any figure.
 #[derive(Debug,Clone)]
 #[non_exhaustive]
 pub struct UnreadableDirDetails {
+    /// Absolute, with forward slashes.
     pub path: String,
+    /// What went wrong, in words.
     pub error_msg: String
 }
 
 impl UnreadableDirDetails {
-    // Non-exhaustive, so a crate outside this one cannot build it field by field.
+    /// The type is non-exhaustive, so this is how a crate outside this one builds it.
     pub fn new(path: String, error_msg: String) -> Self {
         UnreadableDirDetails {
             path,
@@ -230,34 +272,42 @@ impl UnreadableDirDetails {
     }
 }
 
-// A run that produced nothing at all, as opposed to a run that produced zeros. Finding no code is a
-// result, and every file failing to parse is a result with the reasons attached, so neither is here.
+/// A run that produced nothing at all, as opposed to a run that produced zeros.
+///
+/// Finding no code is a result, and every file failing to parse is a result with the reasons
+/// attached, so neither of those is here.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum RunError {
-    // Nowhere to look is a malformed question, not an empty answer, and an Ok full of zeros would
-    // dress it up as a measurement. The command line cannot ask it, since a bare run falls back to
-    // the working directory.
+    /// The configuration names no place to look. That is a malformed question rather than an empty
+    /// answer, and an `Ok` full of zeros would dress it up as a measurement.
     NoTargets,
-    // The languages were resolved against a configuration that selects a different set from the one
-    // handed to the run. Refused rather than counted: resolving with a configuration naming Rust and
-    // then counting with one naming Python counts Rust, calls it Rust, and looks like an answer.
-    // Only the three fields resolution reads are compared, with case and order folded, so resolving
-    // once and counting several directories is untouched.
+    /// The languages were resolved against a configuration that selects a different set from the
+    /// one handed to the run, so the counts would not be the ones the settings describe.
+    ///
+    /// Only the three settings that resolution reads are compared, with case and order folded, so
+    /// resolving once and counting several directories with it is untouched.
     LanguagesFromAnotherConfig,
-    // The targets could not be turned into places to visit: a path that names nothing, a pattern
-    // that does not parse or matches nothing, or one place given under two names.
+    /// The targets could not be turned into places to visit: a path that names nothing, a pattern
+    /// that does not parse or matches nothing, or one place given under two names.
     InvalidTargets(crate::engine::targets::TargetError),
-    // The pattern as the caller wrote it, not the longer form the matcher builds from it.
+    /// An exclude pattern does not parse, quoted as the caller wrote it.
     InvalidExcludePattern(String),
-    // The operating system refused every thread of one side. Refusing some but not all is not an
-    // error: fewer threads is the same answer arriving slower. Zero is different, because zero
-    // scanning threads find nothing and zero counting threads count nothing.
-    NoThreadsAvailable { side: &'static str, error: std::io::Error },
-    // A worker died mid-run. Each merges its share of the counting at the end, so whatever it had
-    // done is lost with it. The panic's message travels here; its location already reached the error
-    // output through the panic hook, at the moment it happened.
-    IncompleteRun { worker_panic: String }
+    /// The operating system refused every thread of one side. Refusing some but not all is not an
+    /// error: fewer threads is the same answer arriving slower.
+    NoThreadsAvailable {
+        /// `producer` for the threads that scan directories, `consumer` for the ones that count.
+        side: &'static str,
+        /// What the operating system said.
+        error: std::io::Error
+    },
+    /// A worker died mid-run. Each of them merges its share of the counting at the end, so whatever
+    /// it had done is lost with it and the figures left behind are short.
+    IncompleteRun {
+        /// The panic's message. Its location already reached the error output through the panic
+        /// hook, at the moment it happened.
+        worker_panic: String
+    }
 }
 
 impl std::fmt::Display for RunError {
@@ -285,6 +335,7 @@ impl std::error::Error for RunError {
 // On the type from 'domain.rs' but about results, which is why it is here: adding languages together
 // is what the last row of a report holds.
 impl Stats {
+    /// Every language added together, which is what the last row of a report holds.
     pub fn total_of(languages: &HashMap<String, Stats>) -> Self {
         let mut total = Stats::default();
         for stats in languages.values() {

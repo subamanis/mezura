@@ -1,6 +1,3 @@
-// One file, line by line: the class the walk gave each line, what earlier lines had left open when
-// it began, and which language's rules read it. The answers come out of the same walk that counts,
-// so they cannot disagree with the totals.
 use std::path::Path;
 
 use crate::{EngineConfig, Language, LineClass, LineClasses, Span};
@@ -8,45 +5,102 @@ use crate::domain::CommentPair;
 use crate::engine::file_parser::{CarriedRecord, NestedLanguageLookup, explain_parsed_file};
 use crate::languages::Languages;
 
+/// One file read line by line, as [`explain_file`] answers it.
+#[derive(Debug)]
 pub struct FileExplanation {
+    /// The language whose rules read the file.
     pub language: String,
+    /// The file as it was read, so a caller can show each line beside its answer.
     pub contents: String,
+    /// One entry per line of the file, in order.
     pub lines: Vec<ExplainedLine>,
+    /// The whole file's counts, which are what a run would have added for it.
     pub classes: LineClasses,
 }
 
+/// What one line of the file came to.
+#[derive(Debug)]
 pub struct ExplainedLine {
+    /// Which of the nine it was sorted into.
     pub class: LineClass,
-    // Some where a nested language's rules read the line; None means the file's own language did
+    /// `Some` where a nested language's rules read the line, `None` where the file's own did.
     pub read_as: Option<String>,
+    /// What earlier lines had left open when this one began.
     pub carried: Carried,
-    // The line cut into its stretches of code, string and comment, in order and touching each
-    // other; whitespace at either end of the line sits outside them. Empty on a blank line.
+    /// The line cut into its stretches of code, string and comment, in order and touching each
+    /// other. Whitespace at either end of the line sits outside them, and a blank line has none.
     pub spans: Vec<Span>,
 }
 
-// What was open when the line began. For a comment of a leveled pair the opener is spelled with
-// its level, '--[==[', and the depth is 1; a nesting pair reports its real depth.
-// 'ends_on_this_line' says the carried thing is gone by the line's end: closed on it, or replaced
-// by a new one of the same symbol that the line itself opened. A '*/ code /*' line carries the old
-// comment and ends it, and the next line's answer names the new opener.
+/// What was open when a line began.
 #[derive(Debug, PartialEq)]
 pub enum Carried {
+    /// Nothing: the line starts outside every string and comment.
     Nothing,
-    Comment { opener: String, depth: u32, since_line: usize, ends_on_this_line: bool },
-    Str { opener: String, since_line: usize, ends_on_this_line: bool },
-    CommentContinuation { since_line: usize },
+    /// A block comment.
+    Comment {
+        /// The opening symbol as the file spells it. A long-bracket pair is spelled with its
+        /// level, `--[==[`.
+        opener: String,
+        /// How deep the nesting goes, for a pair that nests. A long-bracket pair always says 1,
+        /// since its level is in the opener instead.
+        depth: u32,
+        /// The line the comment opened on, counted from 1.
+        since_line: usize,
+        /// Whether it is gone by this line's end: closed on it, or replaced by a new one of the
+        /// same symbol that this line itself opened. A `*/ code /*` line carries the old comment
+        /// and ends it, and the next line's answer names the new opener.
+        ends_on_this_line: bool
+    },
+    /// A string running over several lines.
+    Str {
+        /// The opening symbol as the file spells it.
+        opener: String,
+        /// The line the string opened on, counted from 1.
+        since_line: usize,
+        /// Whether it is gone by this line's end, the same way a comment's is.
+        ends_on_this_line: bool
+    },
+    /// The line was joined to the one before it by a line continuation inside a comment.
+    CommentContinuation {
+        /// The line that comment opened on.
+        since_line: usize
+    },
 }
 
+/// Why a file could not be explained.
 #[derive(Debug, PartialEq)]
+#[non_exhaustive]
 pub enum ExplainError {
-    // Refused for the reason 'run' refuses the same pair: the answer would look normal and be for
-    // a different set of languages than the settings describe
+    /// The languages were resolved against a configuration that selects a different set from the
+    /// one handed in. Refused for the reason [`crate::run`] refuses the same pair: the answer would
+    /// look perfectly normal and be for a different set of languages than the settings describe.
     LanguagesFromAnotherConfig,
+    /// No language in play claims this file, so there are no symbols to read it with.
     UnclaimedFile,
+    /// The file could not be read, with what went wrong.
     UnreadableFile(String),
 }
 
+impl std::fmt::Display for ExplainError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LanguagesFromAnotherConfig => write!(f, "The languages were resolved against a configuration that selects a different set of them than the one this explanation was given, so the file would be read with the wrong symbols. Resolve them against the same configuration."),
+            Self::UnclaimedFile => write!(f, "No language in play claims this file, so there is nothing to read it with."),
+            Self::UnreadableFile(x) => write!(f, "The file could not be read: {x}")
+        }
+    }
+}
+
+impl std::error::Error for ExplainError {}
+
+/// Reads one file and answers for every line of it: which class it landed in, what earlier lines
+/// had left open, and which language's rules read it.
+///
+/// The answers come out of the same walk that counts, so they cannot disagree with the totals.
+///
+/// The languages must have been resolved against this same configuration, the way [`crate::run`]
+/// demands.
 pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
     -> Result<FileExplanation, ExplainError>
 {

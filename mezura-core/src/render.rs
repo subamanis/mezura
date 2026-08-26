@@ -1,19 +1,22 @@
-// The arithmetic behind showing a result: shares, percentages, and how a number reads to a person.
-// Nothing here decides a color, a width or a word, and nothing reads a global.
+//! The arithmetic behind showing a result: shares, percentages, and how a number reads to a person.
+//! Nothing here decides a color, a width or a word, and nothing reads a global.
 
 const TINY_THRESHOLD : f64 = 0.01;
 
-// How many cells of a bar of 'total_cells' each share is worth, by largest remainder. Anything
-// visible keeps at least one cell, and that can push the total over the target, since 97/1/1/1 wants
-// fifty-one cells in a bar of fifty: the excess comes off whoever holds the most and never empties
-// anyone, because a cell missing from a share of 96 is invisible while the same cell taken from a
-// share of 3 understates it by a third. So the sum is 'total_cells' unless more shares are visible
-// than there are cells to give them, where it is the number of visible shares.
-//
-// 'shares' are percentages of the same whole, so a list of them that adds up to less than 100 gets a
-// bar that is not full: one language holding a tenth of a project draws four cells of forty, and the
-// thirty six left empty are everything the caller did not name. A caller wanting the largest few
-// drawn against each other instead asks 'calculate_percentages_of_their_own_sum' for its shares.
+/// How many cells of a bar of `total_cells` each share is worth, by largest remainder.
+///
+/// The shares are percentages of the same whole, so a list of them adding up to less than 100 gets
+/// a bar that is not full: one language holding a tenth of a project draws four cells of forty,
+/// and the thirty six left empty are everything the caller did not name. A caller wanting the
+/// largest few drawn against each other instead asks
+/// [`calculate_percentages_of_their_own_sum`] for its shares.
+///
+/// Anything visible keeps at least one cell, so the total comes to `total_cells` unless more shares
+/// are visible than there are cells to give them, where it is the number of visible shares.
+// The at-least-one rule can push the total over the target, since 97/1/1/1 wants fifty-one cells in
+// a bar of fifty: the excess comes off whoever holds the most and never empties anyone, because a
+// cell missing from a share of 96 is invisible while the same cell taken from a share of 3
+// understates it by a third.
 pub fn apportion(shares: &[f64], total_cells: usize) -> Vec<usize> {
     let exact = shares.iter().map(|x| x * total_cells as f64 / 100.0).collect::<Vec<_>>();
     let mut cells = shares.iter().zip(exact.iter())
@@ -51,22 +54,26 @@ pub fn apportion(shares: &[f64], total_cells: usize) -> Vec<usize> {
     cells
 }
 
-// What share of the whole each number holds, the whole being the sum of the numbers themselves. Only
-// right when the list is everything: asking this of the top few gives shares of the few, which look
-// like shares of the whole and are not. A caller that cut its list wants the one below.
-//
-// Rounded to two decimals and summing to 100, with the last entry absorbing what the rounding of the
-// others left over. So the order matters, and a list ending in a leftovers row wants that row last.
+/// What share of the whole each number holds, the whole being the sum of the numbers themselves.
+///
+/// Only right when the list is everything: asking this of the top few gives shares of the few,
+/// which look like shares of the whole and are not. A caller that cut its list wants
+/// [`calculate_percentages_of_a_given_total`].
+///
+/// Rounded to two decimals and summing to 100, with the last entry absorbing what the rounding of
+/// the others left over. So the order matters, and a list ending in a leftovers row wants that row
+/// last.
 pub fn calculate_percentages_of_their_own_sum(numbers: &[usize]) -> Vec<f64> {
     calculate_percentages_of_a_given_total(numbers, numbers.iter().sum())
 }
 
-// The same against a total the caller names: what each number is worth out of everything there was,
-// whether or not everything there was is in the list.
-//
-// A share that rounds to zero comes back as the true small number rather than as zero, so whoever
-// formats it can tell "none" from "too little to show". 'NumberFormat::percent' writes '<0.01' for
-// anything positive that rounds away and 'apportion' gives it no cell, both from the honest figure.
+/// The same against a total the caller names: what each number is worth out of everything there
+/// was, whether or not everything there was is in the list.
+///
+/// A share that rounds to zero comes back as the true small number rather than as zero, so whoever
+/// formats it can tell "none" from "too little to show". [`NumberFormat::percent`] writes `<0.01`
+/// for anything positive that rounds away and [`apportion`] gives it no cell, both from the honest
+/// figure.
 pub fn calculate_percentages_of_a_given_total(numbers: &[usize], total: usize) -> Vec<f64> {
     if total == 0 {
         return vec![0.0; numbers.len()];
@@ -95,9 +102,10 @@ pub fn calculate_percentages_of_a_given_total(numbers: &[usize], total: usize) -
     shares
 }
 
-// How much bigger or smaller the newer figure is, as a percentage of the older one. Signed, so a
-// shrinking count comes back negative, and zero when there was nothing to grow from: a jump out of
-// nothing is not a percentage, and calling it one prints 'inf'.
+/// How much bigger or smaller the newer figure is, as a percentage of the older one.
+///
+/// Signed, so a shrinking count comes back negative, and zero when there was nothing to grow from:
+/// a jump out of nothing is not a percentage, and calling it one prints `inf`.
 pub fn calculate_relative_change(older: usize, newer: usize) -> f64 {
     if older == 0 {
         return 0.0;
@@ -105,9 +113,11 @@ pub fn calculate_relative_change(older: usize, newer: usize) -> f64 {
     (newer as f64 - older as f64) / older as f64 * 100.0
 }
 
-// What a person expects a number to look like, which differs by country and settles nothing about
-// what was counted. Held as a value and passed, never read from a global: two callers in one
-// process are allowed to want different things.
+/// What a person expects a number to look like, which differs by country and settles nothing about
+/// what was counted.
+///
+/// Held as a value and passed, never read from a global: two callers in one process are allowed to
+/// want different things.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NumberFormat {
     thousands: Option<char>,
@@ -115,16 +125,19 @@ pub struct NumberFormat {
 }
 
 impl NumberFormat {
+    /// The character between every three digits, if any, and the one before the decimals.
     pub fn new(thousands: Option<char>, decimal: char) -> Self {
         NumberFormat { thousands, decimal }
     }
 
+    /// A whole number, grouped.
     pub fn integer(&self, number: usize) -> String {
         self.grouped(&number.to_string())
     }
 
-    // Applied to text that is already rounded, so that every rule about rounding stays written with
-    // a dot and only this last step decides what the reader sees.
+    /// Groups digits already written out. Applied to text that is already rounded, so that every
+    /// rule about rounding stays written with a dot and only this last step decides what the reader
+    /// sees.
     pub fn grouped(&self, digits: &str) -> String {
         let Some(separator) = self.thousands else {
             return self.with_decimal_mark(digits);
@@ -147,13 +160,13 @@ impl NumberFormat {
         }
     }
 
-    // A count of bytes in the largest unit that leaves a figure worth reading, so that 2417403 is
-    // 2.4 and not 2417.4.
-    //
-    // Divided by 1000 and not 1024, which is what 'KB' means; the 1024 ladder is spelled 'KiB'.
-    //
-    // A count of bytes is a whole number, so '430.0 B' would claim a precision the figure does not
-    // have: only a divided value has a decimal to show.
+    /// A count of bytes in the largest unit that leaves a figure worth reading, so that 2417403 is
+    /// 2.4 and not 2417.4, and the unit beside it.
+    ///
+    /// Divided by 1000 and not 1024, which is what `KB` means; the 1024 ladder is spelled `KiB`.
+    ///
+    /// Only a divided value gets a decimal: a count of bytes is a whole number, and `430.0 B`
+    /// would claim a precision the figure does not have.
     pub fn size_with_unit(&self, bytes: usize) -> (String, &'static str) {
         if bytes >= 1_000_000_000 {(self.with_decimal_mark(&format!("{:.1}", bytes as f64 / 1_000_000_000f64)), "GB")}
         else if bytes >= 1_000_000 {(self.with_decimal_mark(&format!("{:.1}", bytes as f64 / 1_000_000f64)), "MB")}
@@ -161,15 +174,16 @@ impl NumberFormat {
         else {(self.integer(bytes), "B")}
     }
 
-    // A share that is present but rounds to 0.00 would read as absent, so it is named instead. The
-    // comparison is on the formatted text rather than on the number, which keeps the rule
+    /// A percentage to two decimals, and `<0.01` for a share that is present but would round to
+    /// `0.00` and read as absent.
+    // The comparison is on the formatted text rather than on the number, which keeps the rule
     // independent of how the formatter rounds a halfway value.
     pub fn percent(&self, value: f64) -> String {
         let text = format!("{value:.2}");
         self.with_decimal_mark(&if value > 0.0 && text == "0.00" {"<0.01".to_owned()} else {text})
     }
 
-    // The same, carrying the direction: what a comparison against an earlier run prints.
+    /// The same, carrying the direction: what a comparison against an earlier run prints.
     pub fn signed_percent(&self, value: f64) -> String {
         let magnitude = value.abs();
         let sign = if value > 0.0 {"+"} else if value < 0.0 {"-"} else {""};
@@ -179,7 +193,7 @@ impl NumberFormat {
         format!("{sign}{marker}{}", self.with_decimal_mark(&round_2(magnitude).to_string()))
     }
 
-    // For text a caller has already shaped itself and only wants the mark put on.
+    /// Swaps the dot for this format's decimal mark, for text a caller has already shaped itself.
     pub fn with_decimal_mark(&self, text: &str) -> String {
         match self.decimal {
             '.' => text.to_owned(),

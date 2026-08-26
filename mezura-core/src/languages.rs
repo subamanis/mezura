@@ -1,5 +1,6 @@
-// Which languages a run has in play, and which of them owns an extension two of them claim. The
-// format a language file is written in is 'language_file' next door.
+//! Which languages a run has in play, and which of them owns an extension two of them claim. The
+//! format a language file is written in is [`crate::language_file`] next door.
+
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{Language, warnings};
@@ -9,8 +10,12 @@ use crate::engine::identity::{IdentifiedBy, LanguageLookup, ScopedLookups, build
 use crate::language_file::ConflictRules;
 use crate::warnings::Warning;
 
-// Built by the caller and handed to 'run', rather than inside it, so that its complaints about the
-// settings land with the other complaints about settings and not in the middle of a report.
+/// The languages one run counts with, narrowed by its settings and with every contested extension
+/// already settled.
+///
+/// Built by the caller and handed to [`crate::run`] rather than inside it, so that its complaints
+/// about the settings land with the other complaints about settings and not in the middle of a
+/// report. Whichever settings it was built against are the only ones it may be counted with.
 pub struct Languages {
     by_name: HashMap<String, Language>,
     lookups: ScopedLookups,
@@ -20,16 +25,19 @@ pub struct Languages {
 }
 
 impl Languages {
-    // The languages baked into this crate, so nothing on the machine is read. The command line reads
-    // its own folder instead, because a language file there is the user's to edit.
+    /// The languages baked into this crate, so nothing on the machine is read.
+    ///
+    /// The warnings beside them are what the settings got wrong: a name nothing answers to, a rule
+    /// for a part of the run that does not exist, an extension two languages claim.
     pub fn shipped(config: &EngineConfig) -> (Self, Vec<Warning>) {
         Self::resolve(config, parse_shipped_languages(), &parse_shipped_conflict_rules())
     }
 
-    // The shipped set plus languages of the caller's own. Here rather than left to the caller,
-    // because doing it by hand means remembering the shipped conflict rules as well: passed a
-    // default set instead, a contested extension is settled a different way and the counts come
-    // back looking perfectly normal.
+    /// The shipped set plus languages of the caller's own.
+    ///
+    /// Here rather than left to the caller, because doing it by hand means remembering the shipped
+    /// conflict rules as well: passed a default set instead, a contested extension is settled a
+    /// different way and the counts come back looking perfectly normal.
     pub fn shipped_with(config: &EngineConfig, extra: impl IntoIterator<Item = Language>)
     -> (Self, Vec<Warning>)
     {
@@ -38,9 +46,11 @@ impl Languages {
         Self::resolve(config, languages, &parse_shipped_conflict_rules())
     }
 
-    // For a caller with languages and conflict rules of its own. Keyed here by each language's own
-    // name rather than taken as a map somebody else keyed: in a map whose key and value disagree the
-    // key wins, and a language would be counted under a name it does not carry.
+    /// For a caller with languages and conflict rules of its own, such as one reading a directory
+    /// of language files the user may edit.
+    // Keyed here by each language's own name rather than taken as a map somebody else keyed: in a
+    // map whose key and value disagree the key wins, and a language would be counted under a name
+    // it does not carry.
     pub fn resolve(config: &EngineConfig, languages: impl IntoIterator<Item = Language>,
             conflicts: &ConflictRules) -> (Self, Vec<Warning>)
     {
@@ -101,6 +111,18 @@ impl Languages {
     }
 }
 
+// Written out: a derived one prints every symbol of every language in play, several hundred lines
+// of it for the shipped set.
+impl std::fmt::Debug for Languages {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut in_play = self.by_name.keys().map(String::as_str).collect::<Vec<_>>();
+        in_play.sort_unstable();
+
+        f.debug_struct("Languages").field("in_play", &in_play)
+                .field("kept_for_nested_sections", &self.nested.set_aside.len()).finish_non_exhaustive()
+    }
+}
+
 // What a section of another language resolves against: the whole set's extension map, and the
 // definitions the narrowing took out of play. Empty on any run where no language declares regions.
 #[derive(Default)]
@@ -112,6 +134,7 @@ pub(crate) struct NestedLanguageDefinitions {
 // What this crate ships, parsed for counting and raw for installing. A caller that wants nothing but
 // the default has 'Languages::shipped' and needs none of the four.
 
+/// The shipped language definitions, parsed.
 pub fn parse_shipped_languages() -> Vec<Language> {
     // 'every_shipped_language_file_parses' is what guarantees these all parse. One that somehow did
     // not would be left out rather than panic here.
@@ -120,15 +143,15 @@ pub fn parse_shipped_languages() -> Vec<Language> {
             .collect()
 }
 
-// The rules this crate ships for settling an extension or a filename that two languages both claim.
+/// The shipped rules for settling an extension or a file name that two languages both claim.
 pub fn parse_shipped_conflict_rules() -> ConflictRules {
     crate::language_file::parse_conflict_rules(&String::from_utf8_lossy(get_shipped_conflict_rules_raw())).0
 }
 
-// The bytes as they were authored, comments and layout included, so what the installer puts in the
-// user's folder is a file made to be read and edited. Public because that installer is a separate
-// crate and cannot reach into this one's 'data/'; plain tuples and not the embedder's own file type,
-// so a release of 'include_dir' is never a breaking change of ours.
+/// The shipped language files as they were authored, file name and bytes, comments and layout
+/// included, for a caller writing them out into a folder somebody is meant to read and edit.
+// Plain tuples and not the embedder's own file type, so a release of 'include_dir' is never a
+// breaking change of ours.
 pub fn get_shipped_language_files_raw() -> Vec<(&'static str, &'static [u8])> {
     include_dir::include_dir!("data/languages").files.iter()
             .map(|file| (std::path::Path::new(file.path).file_name().and_then(|x| x.to_str()).unwrap_or(file.path),
@@ -136,14 +159,15 @@ pub fn get_shipped_language_files_raw() -> Vec<(&'static str, &'static [u8])> {
             .collect()
 }
 
+/// The same for the shipped conflict rules, whose file name is [`crate::LANGUAGE_CONFLICTS_FILE_NAME`].
 pub fn get_shipped_conflict_rules_raw() -> &'static [u8] {
     include_bytes!("../data/language_conflicts.txt")
 }
 
-// The names that were asked for and no language answers to, in the order they were given. A
-// language answers to the name it carries and to every extension it claims, so 'js' is not an
-// unknown name while some language counts '.js' files. Which of two languages owns a contested
-// extension is a different question, settled where the narrowing happens.
+/// The names that were asked for and no language answers to, in the order they were given.
+///
+/// A language answers to the name it carries and to every extension it claims, so `js` is not an
+/// unknown name while some language counts `.js` files.
 pub fn find_unknown_language_names(languages: &[Language], wanted: &[String]) -> Vec<String> {
     wanted.iter().filter(|wanted| !languages.iter().any(|language|
                     is_the_same_language_name(&language.name, wanted)
@@ -422,9 +446,10 @@ claims it as an extension. Those sections are counted with the symbols of '{lang
 // counts. Against the counts and not the settings, because the two definitions disagree about
 // comment symbols and the losing one takes its extensions out of the run with it.
 //
-// Grouped through 'is_the_same_language_name' and not by exact spelling, since 'Rust' and 'rust' are
-// one language to '--languages', '--exclude-languages', '--force-language' and the conflicts file,
-// all of which fold case.
+/// A warning for every name two or more languages carry, since only one of them can be in play.
+// Grouped by folded case and not by exact spelling, since 'Rust' and 'rust' are one language to
+// '--languages', '--exclude-languages', '--force-language' and the conflicts file, all of which
+// fold case.
 pub fn find_duplicate_names(languages: &[Language]) -> Vec<Warning> {
     let mut spellings : HashMap<String, Vec<&str>> = HashMap::new();
     for language in languages {

@@ -11,7 +11,7 @@ use memchr::memmem;
 use crate::{EngineConfig, Language, LineClass, NestedLanguage, Span, SpanKind, phase_timing};
 use crate::domain::{CommentPair, FileStats, LineContinuation};
 
-pub const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
+pub(crate) const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
 
 // Real source reaches 350 a line, generated bindings padded into columns, and anything lower
 // drops it out of the count. A bundle is in the thousands.
@@ -99,7 +99,7 @@ impl PlanEntry {
 // the handful with more than three distinct such bytes. A pass yields candidate positions, and only
 // there is the rest of a symbol compared.
 #[derive(Debug, Clone)]
-pub struct ScanPlan {
+pub(crate) struct ScanPlan {
     chunks: Vec<Chunk>,
     first: [u16; 256],
     slots: Vec<Slot>,
@@ -112,7 +112,7 @@ pub struct ScanPlan {
 }
 
 impl ScanPlan {
-    pub fn build(language: &Language) -> ScanPlan {
+    pub(crate) fn build(language: &Language) -> ScanPlan {
         // The single line symbols first, the character literals after them and the crossing ones
         // last, which is the numbering 'Language::get_string_pair_of' answers to
         let mut entries : Vec<PlanEntry> = Vec::new();
@@ -308,7 +308,7 @@ fn get_or_build_plan_of(language: &Language) -> &ScanPlan {
 
 // The per line working memory, owned by the consumer thread and cleared rather than reallocated.
 #[derive(Debug, Default)]
-pub struct ScanBuffers {
+pub(crate) struct ScanBuffers {
     raw_strings: Vec<(usize, u8, u8)>,
     strings: Vec<usize>,
     string_symbols: Vec<u8>,
@@ -338,7 +338,7 @@ impl ScanBuffers {
 // The keyword scratch cannot live in ScanBuffers: while a LineInfo borrows the cleansed line out of
 // it, the whole struct is borrowed, and counting the keywords of that very line needs a free one.
 #[derive(Debug, Default)]
-pub struct ParseBuffers {
+pub(crate) struct ParseBuffers {
     scan: ScanBuffers,
     alias_indices: Vec<usize>,
     // every stretch of the file that is code, gathered line by line so that the keywords can be
@@ -496,12 +496,12 @@ fn take_symbols_at(at: usize, line_bytes: &[u8], plan: &ScanPlan, buffers: &mut 
     }
 }
 
-pub struct KeywordMatcher {
+pub(crate) struct KeywordMatcher {
     aliases_with_indices: Vec<(memmem::Finder<'static>, usize, usize)>,
 }
 
 impl KeywordMatcher {
-    pub fn build(language: &Language) -> Option<KeywordMatcher> {
+    pub(crate) fn build(language: &Language) -> Option<KeywordMatcher> {
         let mut aliases_with_indices = Vec::new();
         for (keyword_index, keyword) in language.keywords.iter().enumerate() {
             for alias in &keyword.aliases {
@@ -519,7 +519,7 @@ impl KeywordMatcher {
 // 'extension_to_name' and 'set_aside' cover the whole shipped set even when a run narrowed its
 // languages, so that '--languages vue' still knows what JavaScript is; a caller with no sections
 // in play hands empty maps.
-pub struct NestedLanguageLookup<'a> {
+pub(crate) struct NestedLanguageLookup<'a> {
     pub languages: &'a HashMap<String, Language>,
     pub extension_to_name: &'a HashMap<String, std::sync::Arc<str>>,
     pub set_aside: &'a HashMap<String, Language>,
@@ -539,13 +539,13 @@ impl NestedLanguageLookup<'_> {
                 .find(|language| language.name.to_lowercase() == lowered)
     }
 
-    pub fn find_by_name(&self, name: &str) -> Option<&Language> {
+    pub(crate) fn find_by_name(&self, name: &str) -> Option<&Language> {
         self.languages.get(name).or_else(|| self.set_aside.get(name))
     }
 }
 
 #[derive(Default)]
-pub struct KeywordMatchers {
+pub(crate) struct KeywordMatchers {
     by_language: HashMap<String, Option<KeywordMatcher>>,
 }
 
@@ -556,26 +556,26 @@ impl KeywordMatchers {
     }
 }
 
-pub struct FileReport {
+pub(crate) struct FileReport {
     pub shell: FileStats,
     pub sections: Vec<SectionReport>,
 }
 
-pub struct SectionReport {
+pub(crate) struct SectionReport {
     pub language: String,
     pub stats: FileStats,
     pub bytes: usize,
 }
 
 impl FileReport {
-    pub fn total_lines(&self) -> usize {
+    pub(crate) fn total_lines(&self) -> usize {
         self.shell.lines + self.sections.iter().map(|section| section.stats.lines).sum::<usize>()
     }
 
     // The whole file as one number, which is what the shell language's row shows: a container file
     // weighs all of its lines. The keywords stay the shell's own, because a section's keywords
     // belong to the section's language and are carried by the sections themselves.
-    pub fn into_whole(mut self) -> FileStats {
+    pub(crate) fn into_whole(mut self) -> FileStats {
         for section in &self.sections {
             self.shell.lines += section.stats.lines;
             self.shell.classes.add(&section.stats.classes);
@@ -584,13 +584,13 @@ impl FileReport {
     }
 }
 
-pub enum FileOutcome {
+pub(crate) enum FileOutcome {
     Counted(FileReport),
     SkippedAsMinified,
     SkippedAsGenerated
 }
 
-pub fn parse_file(path: &Path, lang_name: &str, buf: &mut String, buffers: &mut ParseBuffers,
+pub(crate) fn parse_file(path: &Path, lang_name: &str, buf: &mut String, buffers: &mut ParseBuffers,
     lookup: &NestedLanguageLookup, matchers: &mut KeywordMatchers, config: &EngineConfig,
     written_by_hand: bool)
 -> Result<FileOutcome,String>
@@ -799,16 +799,16 @@ impl ExplainLog {
     }
 
     #[cfg(test)]
-    pub fn get_language_name_of(&self, record: &LineRecord) -> &str {
+    pub(crate) fn get_language_name_of(&self, record: &LineRecord) -> &str {
         &self.languages[record.language as usize]
     }
 
     #[cfg(test)]
-    pub fn records(&self) -> &[LineRecord] {
+    pub(crate) fn records(&self) -> &[LineRecord] {
         &self.records
     }
 
-    pub fn into_parts(self) -> (Vec<LineRecord>, Vec<String>) {
+    pub(crate) fn into_parts(self) -> (Vec<LineRecord>, Vec<String>) {
         (self.records, self.languages)
     }
 }

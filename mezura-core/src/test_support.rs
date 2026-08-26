@@ -15,9 +15,9 @@ macro_rules! hashmap {
 // Anchored on the manifest and not on the working directory, which only happens to be the package
 // root when cargo is the one running the test.
 pub(crate) mod test_paths {
-    pub const DATA_DIR      : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/");
-    pub const LANGUAGES_DIR : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/languages/");
-    pub const FIXTURES_DIR  : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/");
+    pub(crate) const DATA_DIR      : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/");
+    pub(crate) const LANGUAGES_DIR : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/languages/");
+    pub(crate) const FIXTURES_DIR  : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/");
 }
 
 // Languages that differ only in the extensions they claim, for the tests about who wins one.

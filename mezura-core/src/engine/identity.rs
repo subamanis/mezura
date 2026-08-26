@@ -12,14 +12,14 @@ const MAX_IDENTITY_LEN : usize = 32;
 const SHEBANG_READ_LIMIT : usize = 256;
 
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
-pub enum IdentifiedBy {
+pub(crate) enum IdentifiedBy {
     Extension,
     Filename,
     Shebang
 }
 
 impl IdentifiedBy {
-    pub fn name(&self) -> &'static str {
+    pub(crate) fn name(&self) -> &'static str {
         match self {
             Self::Extension => "extension",
             Self::Filename => "filename",
@@ -47,7 +47,7 @@ impl IdentifiedBy {
 // The first two are decisions somebody took; the third is a tiebreak nobody asked for, and the one
 // that can put a language's comments into another's code.
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
-pub enum ResolvedBy {
+pub(crate) enum ResolvedBy {
     ForceLang,
     PriorityFile,
     AlphabeticalFallback
@@ -55,7 +55,7 @@ pub enum ResolvedBy {
 
 #[derive(Debug,PartialEq,Eq,Clone)]
 #[non_exhaustive]
-pub struct ContestedIdentity {
+pub(crate) struct ContestedIdentity {
     pub identity: String,
     pub identified_by: IdentifiedBy,
     pub winner: String,
@@ -65,7 +65,7 @@ pub struct ContestedIdentity {
 
 #[derive(Debug,PartialEq,Eq,Clone,Default)]
 #[non_exhaustive]
-pub struct IdentityReport {
+pub(crate) struct IdentityReport {
     pub contested: Vec<ContestedIdentity>
 }
 
@@ -74,7 +74,7 @@ impl IdentityReport {
     // and saying so every run buries the one line that matters. Each warning says what happened and
     // stops, since what to do about it depends on who is calling: the command line has a file and a
     // flag for it and adds its own sentence, a library caller has neither.
-    pub fn collect_warnings(&self) -> Vec<warnings::Warning> {
+    pub(crate) fn collect_warnings(&self) -> Vec<warnings::Warning> {
         let mut reported = Vec::new();
         for contested in self.contested.iter().filter(|x| x.resolved_by == ResolvedBy::AlphabeticalFallback) {
             reported.push(warnings::Warning::new(warnings::Code::LanguageTiebreak, &contested.identity,
@@ -91,7 +91,7 @@ alphabetically, so the files of the rest are counted with the wrong comment and 
 // Keys are lowercased here, once, and the lookup lowercases what it is given. Before the claimants
 // are counted, not after: left as written, 'cs' and 'CS' look like two extensions, never collide,
 // and each wins silently in different files.
-pub fn build_language_map_by(identified_by: IdentifiedBy, languages: &HashMap<String,Language>,
+pub(crate) fn build_language_map_by(identified_by: IdentifiedBy, languages: &HashMap<String,Language>,
         priority: &HashMap<String,Vec<String>>, forced: &HashMap<String,String>)
         -> (HashMap<String, Arc<str>>, IdentityReport)
 {
@@ -181,14 +181,14 @@ pub fn build_language_map_by(identified_by: IdentifiedBy, languages: &HashMap<St
 // A file whose whole name is claimed is that language whatever its extension says, which is what
 // makes 'CMakeLists.txt' CMake rather than text.
 #[derive(Debug, Default, Clone)]
-pub struct LanguageLookup {
+pub(crate) struct LanguageLookup {
     pub by_extension: HashMap<String, Arc<str>>,
     pub by_filename: HashMap<String, Arc<str>>,
     pub by_shebang: HashMap<String, Arc<str>>
 }
 
 impl LanguageLookup {
-    pub fn of_path(&self, path: &Path) -> Option<Arc<str>> {
+    pub(crate) fn of_path(&self, path: &Path) -> Option<Arc<str>> {
         // The whole name is asked first, and only when a language claims one, so a run whose
         // languages declare no filename pays one branch and no lookup
         if !self.by_filename.is_empty()
@@ -202,20 +202,20 @@ impl LanguageLookup {
 
     // For a file named directly as a target, where nothing between the name lookup and the probe
     // gets to exclude it
-    pub fn of_path_or_shebang(&self, path: &Path) -> Option<Arc<str>> {
+    pub(crate) fn of_path_or_shebang(&self, path: &Path) -> Option<Arc<str>> {
         self.of_path(path).or_else(|| self.of_shebang(path))
     }
 
     // Asked before 'of_shebang' opens anything, so the walk can run its ignore checks in between
     // and a file nobody wants counted is never opened.
-    pub fn needs_a_shebang_probe(&self, path: &Path) -> bool {
+    pub(crate) fn needs_a_shebang_probe(&self, path: &Path) -> bool {
         // 'extension()' answers None for dotfiles too, so a '.bashrc'-shaped name qualifies. The
         // candidates stay few because '.git' is never walked and dotted directories are skipped
         // unless '--search-in-dotted' asks for them.
         !self.by_shebang.is_empty() && path.extension().is_none()
     }
 
-    pub fn of_shebang(&self, path: &Path) -> Option<Arc<str>> {
+    pub(crate) fn of_shebang(&self, path: &Path) -> Option<Arc<str>> {
         if !self.needs_a_shebang_probe(path) {
             return None;
         }
@@ -236,7 +236,7 @@ impl LanguageLookup {
 // One lookup per module, as the settings name the modules. Built once and turned into
 // 'ModuleLookups' the moment the run knows which number each module was given.
 #[derive(Debug)]
-pub struct ScopedLookups {
+pub(crate) struct ScopedLookups {
     whole_run: LanguageLookup,
     per_module: HashMap<String, LanguageLookup>
 }
@@ -270,7 +270,7 @@ impl ScopedLookups {
 // What the walk consults, by the number the file carries rather than by a name, because a name on
 // every file would be a string comparison per file.
 #[derive(Debug)]
-pub enum ModuleLookups {
+pub(crate) enum ModuleLookups {
     OfTheWholeRun(LanguageLookup),
     OfEachModule(Vec<LanguageLookup>)
 }
@@ -284,7 +284,7 @@ impl ModuleLookups {
     }
 }
 
-pub fn find_language_of_identity(language_of: &HashMap<String, Arc<str>>, identity: &str) -> Option<Arc<str>> {
+pub(crate) fn find_language_of_identity(language_of: &HashMap<String, Arc<str>>, identity: &str) -> Option<Arc<str>> {
     if let Some(x) = language_of.get(identity) {
         return Some(x.clone());
     }
@@ -391,7 +391,7 @@ pub(crate) fn identity_key(identified_by: IdentifiedBy, text: &str) -> String {
 }
 
 #[cfg(test)]
-pub fn build_extension_language_map(languages: &HashMap<String,Language>, priority: &HashMap<String,Vec<String>>,
+pub(crate) fn build_extension_language_map(languages: &HashMap<String,Language>, priority: &HashMap<String,Vec<String>>,
         forced: &HashMap<String,String>) -> (HashMap<String, Arc<str>>, IdentityReport)
 {
     build_language_map_by(IdentifiedBy::Extension, languages, priority, forced)

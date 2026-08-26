@@ -3,13 +3,13 @@ use std::{collections::HashMap, path::Path};
 
 // Carried through the queue as an index and never as a name: a string key would be an allocation on
 // every single file.
-pub type ModuleId = u16;
+pub(crate) type ModuleId = u16;
 
 // A directory's module is decided once on the way in and its children inherit it, so a run that
 // nests nothing looks up nothing at all. Only a target lying inside another target can change the
 // answer part way down, and those are the only paths these two tables hold.
 #[derive(Debug,Default)]
-pub struct Modules {
+pub(crate) struct Modules {
     // Empty when nothing was named, and then everything belongs to the single bucket 0
     names: Vec<Option<String>>,
     dir_boundaries: HashMap<String, ModuleId>,
@@ -20,7 +20,7 @@ impl Modules {
     // Built from the resolved paths and never from what was typed: where the comparison is case
     // sensitive, 'frontend=./Web' over a real './web' matches nothing, that module comes out empty,
     // and every file falls into '(unnamed)' with nothing said about why.
-    pub fn of(targets: &[crate::engine::config::Target]) -> Self {
+    pub(crate) fn of(targets: &[crate::engine::config::Target]) -> Self {
         if targets.iter().all(|x| x.module.is_none()) {
             return Modules::default();
         }
@@ -59,35 +59,35 @@ impl Modules {
         self.names.iter().position(|x| x == module).unwrap_or(0) as ModuleId
     }
 
-    pub fn count(&self) -> usize {
+    pub(crate) fn count(&self) -> usize {
         self.names.len().max(1)
     }
 
-    pub fn is_used(&self) -> bool {
+    pub(crate) fn is_used(&self) -> bool {
         !self.names.is_empty()
     }
 
-    pub fn name_of(&self, id: ModuleId) -> Option<&str> {
+    pub(crate) fn name_of(&self, id: ModuleId) -> Option<&str> {
         self.names.get(id as usize).and_then(|x| x.as_deref())
     }
 
-    pub fn of_target(&self, target: &crate::engine::config::Target) -> ModuleId {
+    pub(crate) fn of_target(&self, target: &crate::engine::config::Target) -> ModuleId {
         if self.is_used() {self.id_of(&target.module)} else {0}
     }
 
-    pub fn has_dir_boundaries(&self) -> bool {
+    pub(crate) fn has_dir_boundaries(&self) -> bool {
         !self.dir_boundaries.is_empty()
     }
 
-    pub fn has_file_boundaries(&self) -> bool {
+    pub(crate) fn has_file_boundaries(&self) -> bool {
         !self.file_boundaries.is_empty()
     }
 
-    pub fn at_dir(&self, path: &Path, inherited: ModuleId) -> ModuleId {
+    pub(crate) fn at_dir(&self, path: &Path, inherited: ModuleId) -> ModuleId {
         self.at(&self.dir_boundaries, path, inherited)
     }
 
-    pub fn at_file(&self, path: &Path, inherited: ModuleId) -> ModuleId {
+    pub(crate) fn at_file(&self, path: &Path, inherited: ModuleId) -> ModuleId {
         self.at(&self.file_boundaries, path, inherited)
     }
 

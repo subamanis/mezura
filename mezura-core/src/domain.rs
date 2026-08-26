@@ -3,39 +3,51 @@
 // separates this file from 'result.rs' beside it.
 use std::{collections::HashMap, sync::OnceLock};
 
+/// One language: what it is called, which files belong to it, and the symbols that decide what
+/// each of their lines is.
+///
+/// Built with [`Language::new`] and the `with_` methods, never with a struct literal: one field is
+/// a cache this crate fills as it counts.
 #[derive(Debug, Clone)]
 pub struct Language {
+    /// What the report calls it, and the name `--languages` answers to.
     pub name: String,
+    /// Without the dot, and matched without regard to case.
     pub extensions : Vec<String>,
-    // Whole names, for the files that carry no extension worth reading: 'Makefile', 'Dockerfile',
-    // and 'CMakeLists.txt', whose extension says text and means nothing
+    /// Whole names, for the files that carry no extension worth reading: `Makefile`, `Dockerfile`,
+    /// and `CMakeLists.txt`, whose extension says text and means nothing.
     pub filenames : Vec<String>,
-    // Interpreter names as a '#!' line spells them, 'sh' or 'python', for the scripts whose name
-    // says nothing at all. Only a file with no extension and an unclaimed name is ever probed.
+    /// Interpreter names as a `#!` line spells them, `sh` or `python`, for the scripts whose name
+    /// says nothing at all. Only a file with no extension and an unclaimed name is ever probed.
     pub shebangs : Vec<String>,
+    /// Which quotes open a string, and what escapes one.
     pub strings : StringRules,
+    /// The symbols that make the rest of the line a comment.
     pub comment_symbols : Vec<String>,
+    /// Block comments, opener and closer, ending at the first closer.
     pub multiline_comments : Vec<(String, String)>,
-    // The pairs that nest inside themselves, so a closer only ends the block when it has closed
-    // as many as were opened: OCaml's whole comment syntax, D's '/+ +/' beside its plain '/* */'
+    /// The pairs that nest inside themselves, so a closer only ends the block when it has closed
+    /// as many as were opened: OCaml's whole comment syntax, D's `/+ +/` beside its plain `/* */`.
     pub nesting_comments : Vec<(String, String)>,
-    // Lua's long brackets: a pair written with '=*' in a language file, '--[=*[' with ']=*]',
-    // where the run of '=' is counted at the opener and only an end carrying the same count
-    // closes, so a ']]' inside a '--[==[' block is text
+    /// Lua's long brackets, `--[=*[` with `]=*]`: the run of `=` is counted at the opener and only
+    /// an end carrying the same count closes, so a `]]` inside a `--[==[` block is text.
     pub leveled_comments : Vec<LeveledPair>,
-    // The symbol that joins a line to the next one when it is the last thing on it, and what it
-    // joins. C splices anything, including a line comment; JavaScript and Python only continue a
-    // string literal; Java, Go and C# have no such thing at all.
+    /// The symbol that joins a line to the one after it when it is the last thing on it, and what
+    /// it joins. C splices anything, including a line comment; JavaScript and Python only continue
+    /// a string literal; Java, Go and C# have no such thing at all.
     pub line_continuation : Option<LineContinuation>,
-    // Sections of the file that belong to another language, HTML's '<script>' and '<style>'. The
-    // lines between the tags are counted with that language's own symbols and reported under it.
+    /// Sections of the file that belong to another language, HTML's `<script>` and `<style>`. The
+    /// lines between the tags are counted with that language's own symbols and reported under it.
     pub nested_languages : Vec<NestedLanguage>,
+    /// The words this language is worth counting, `classes` and `structs` and the like.
     pub keywords : Vec<Keyword>,
     // Worked out from the symbols above and reused for every file of this language.
     pub(crate) scan_plan : OnceLock<crate::engine::file_parser::ScanPlan>
 }
 
 impl Language {
+    /// A language with nothing but line and block comments. Everything else is added with the
+    /// `with_` methods below.
     pub fn new(name: impl AsRef<str>,
         extensions: impl IntoIterator<Item = impl AsRef<str>>,
         strings: StringRules,
@@ -61,40 +73,53 @@ impl Language {
         }
     }
 
-    // Takes the parsed pair rather than its text, so that the one place that decides whether a pair
-    // is written correctly is 'LeveledPair::of' and a caller cannot reach a state this has to refuse.
+    /// Adds long-bracket comment pairs. Takes the parsed pair rather than its text, so the one
+    /// place that decides whether a pair is written correctly is [`LeveledPair::of`].
     pub fn with_leveled_comments(mut self, pairs: &[LeveledPair]) -> Self {
         self.leveled_comments.extend(pairs.iter().cloned());
         self
     }
 
+    /// Adds whole file names this language claims.
     pub fn with_filenames(mut self, names: &[&str]) -> Self {
         self.filenames.extend(names.iter().map(|x| (*x).to_owned()));
         self
     }
 
+    /// Adds the interpreter names a `#!` line may carry.
     pub fn with_shebangs(mut self, interpreters: &[&str]) -> Self {
         self.shebangs.extend(interpreters.iter().map(|x| (*x).to_owned()));
         self
     }
 
+    /// Sets the symbol that joins a line to the one after it, and whether the join also happens
+    /// inside a string and inside a comment.
+    ///
+    /// An empty symbol leaves the language with no line continuation at all, since every line ends
+    /// in one and the whole file would join into a single line.
     pub fn with_line_continuation(mut self, symbol: &str, in_strings: bool, in_comments: bool) -> Self {
+        if symbol.is_empty() {
+            return self;
+        }
         self.line_continuation = Some(LineContinuation {
             symbol: symbol.to_owned(), in_strings, in_comments });
         self
     }
 
+    /// Adds sections of the file that another language is counted inside.
     pub fn with_nested_languages(mut self, regions: &[NestedLanguage]) -> Self {
         self.nested_languages.extend(regions.iter().cloned());
         self
     }
 
+    /// Adds comment pairs that nest inside themselves.
     pub fn with_nesting_comments(mut self, pairs: &[(&str, &str)]) -> Self {
         self.nesting_comments.extend(pairs.iter()
                 .map(|(start, end)| ((*start).to_owned(), (*end).to_owned())));
         self
     }
 
+    /// Whether it has any kind of block comment: plain, nesting or long bracket.
     pub fn supports_multiline_comments(&self) -> bool {
         !self.multiline_comments.is_empty() || !self.nesting_comments.is_empty()
                 || !self.leveled_comments.is_empty()
@@ -176,13 +201,14 @@ pub(crate) enum CommentPair<'a> {
     Leveled(&'a LeveledPair)
 }
 
-// The symbols that open a string, and the one byte that cancels the symbol standing after it: the
-// backslash in most languages, the backtick in PowerShell, and nothing in the family that escapes a
-// quote by doubling it, which is what Pascal, Ada, Fortran, COBOL and standard SQL need.
-//
-// Escaping is two questions and the wrong answer to either runs a string past the quote that should
-// have closed it. This byte says which one escapes; 'MultilineString::escapes' says whether anything
-// escapes inside one crossing form, and PowerShell answers them differently per form.
+/// The symbols that open a string, and the one byte that cancels the symbol standing after it: the
+/// backslash in most languages, the backtick in PowerShell, and nothing in the family that escapes
+/// a quote by doubling it, which is what Pascal, Ada, Fortran, COBOL and standard SQL need.
+///
+/// Escaping is two questions, and the wrong answer to either runs a string past the quote that
+/// should have closed it. The byte here says which one escapes; [`MultilineString::escapes`] says
+/// whether anything escapes inside one form that crosses lines, and PowerShell answers the two
+/// differently per form.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StringRules {
     escape : Option<u8>,
@@ -192,124 +218,158 @@ pub struct StringRules {
 }
 
 impl StringRules {
+    /// Rules whose strings are escaped by the given byte, usually a backslash.
     pub fn escaping_with(escape: u8) -> StringRules {
         StringRules { escape: Some(escape), symbols: Vec::new(), char_literals: Vec::new(),
                 multiline: Vec::new() }
     }
 
+    /// Rules for the languages that escape a quote by doubling it and have no escape byte at all.
     pub fn escaping_nothing() -> StringRules {
         StringRules { escape: None, symbols: Vec::new(), char_literals: Vec::new(), multiline: Vec::new() }
     }
 
+    /// Adds quotes that open a string ending with its own line.
     pub fn with_symbols(mut self, symbols: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
         self.symbols.extend(owned_strings(symbols));
         self
     }
 
-    // The symbol of a character literal, Rust's and D's '. One that does not close on its own line
-    // is not a literal at all, so a lifetime's lone ' opens nothing, while a '"' shields its quote
+    /// Adds the symbol of a character literal, Rust's and D's `'`. One that does not close on its
+    /// own line is not a literal at all, so a lifetime's lone `'` opens nothing while `'"'` still
+    /// shields its quote.
     pub fn with_char_literals(mut self, symbols: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
         self.char_literals.extend(owned_strings(symbols));
         self
     }
 
+    /// Adds symbols that open a string running past the end of its line, escapes obeyed inside it.
     pub fn with_multiline_strings(mut self, symbols: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
         self.multiline.extend(symbols.into_iter().map(|x| MultilineString::escaping(x.as_ref())));
         self
     }
 
+    /// The same, for the forms where nothing escapes and only the closing symbol ends the string.
     pub fn with_raw_multiline_strings(mut self, symbols: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
         self.multiline.extend(symbols.into_iter().map(|x| MultilineString::raw(x.as_ref())));
         self
     }
 
+    /// The same again, for the forms opened and closed by different text, such as `r#"` with `"#`.
     pub fn with_string_pairs(mut self, pairs: &[(impl AsRef<str>, impl AsRef<str>)]) -> Self {
         self.multiline.extend(pairs.iter().map(|(open, close)| MultilineString::of(open.as_ref(), close.as_ref())));
         self
     }
 
+    /// The byte that cancels the symbol after it, if this language has one.
     pub fn get_escape(&self) -> Option<u8> {
         self.escape
     }
 
+    /// The quotes whose string ends with its line.
     pub fn get_symbols(&self) -> &[String] {
         &self.symbols
     }
 
+    /// The quotes that open a character literal.
     pub fn get_char_literals(&self) -> &[String] {
         &self.char_literals
     }
 
+    /// The forms whose string may run past the end of its line.
     pub fn get_multiline_strings(&self) -> &[MultilineString] {
         &self.multiline
     }
 }
 
-// A string that crosses lines: the same symbol twice for Python's '"""', two different ones for a
-// raw form like 'r#"' with '"#'. 'escapes' is the one thing the shape cannot answer, since a
-// backtick escapes nothing in Go, Odin and D and does escape in a JavaScript template literal, and
-// '"""' splits the same way between Kotlin and Java. A form written with two different symbols is
-// raw by construction, which is why 'of' takes no flag.
+/// A string that crosses lines: the same symbol twice for Python's `"""`, two different ones for a
+/// raw form like `r#"` with `"#`.
+///
+/// Whether it escapes is the one thing the shape cannot answer, since a backtick escapes nothing in
+/// Go, Odin and D and does escape in a JavaScript template literal, and `"""` splits the same way
+/// between Kotlin and Java. A form written with two different symbols is raw by construction, which
+/// is why [`MultilineString::of`] takes no flag.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MultilineString {
+    /// The text that opens it.
     pub open : String,
+    /// The text that closes it, the same as the opener for a symmetrical form.
     pub close : String,
+    /// Whether the language's escape byte works inside it.
     pub escapes : bool
 }
 
 impl MultilineString {
+    /// One symbol at both ends, escapes obeyed inside.
     pub fn escaping(symbol: &str) -> MultilineString {
         MultilineString { open: symbol.to_owned(), close: symbol.to_owned(), escapes: true }
     }
 
+    /// One symbol at both ends, nothing escaping inside.
     pub fn raw(symbol: &str) -> MultilineString {
         MultilineString { open: symbol.to_owned(), close: symbol.to_owned(), escapes: false }
     }
 
+    /// Different text at each end, which is raw by construction.
     pub fn of(open: &str, close: &str) -> MultilineString {
         MultilineString { open: open.to_owned(), close: close.to_owned(), escapes: false }
     }
 }
 
-// One section of another language inside a file: everything between 'start' and 'end' is counted
-// with that language's own symbols. Which language is read off the opener tag's 'lang' or 'type'
-// attribute through the extension lookup, and 'default' answers when the tag names none: an
-// extension, not a language name, so both paths resolve the same way. The tags match without
-// regard to case, the way HTML reads them.
+/// One section of another language inside a file: everything between the two tags is counted with
+/// that language's own symbols.
+///
+/// Which language it is comes off the opening tag's `lang` or `type` attribute through the
+/// extension lookup, and the default answers when the tag names none. The tags match without
+/// regard to case, the way HTML reads them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NestedLanguage {
+    /// The tag that opens the section, `<script`.
     pub start : String,
+    /// The tag that closes it, `</script>`.
     pub end : String,
+    /// What the section is written in when the tag says nothing. An extension and not a language
+    /// name, so that both paths resolve the same way.
     pub default : String
 }
 
 impl NestedLanguage {
+    /// A section between the two tags, falling back to the named extension.
     pub fn of(start: &str, end: &str, default: &str) -> NestedLanguage {
         NestedLanguage { start: start.to_owned(), end: end.to_owned(), default: default.to_owned() }
     }
 }
 
-// A line ending in this symbol is joined to the one after it, before anything is decided about
-// either. 'in_comments' is what separates C, where the join happens whatever the line held, from
-// JavaScript and Python, where a line comment ends at the newline whatever follows it.
+/// A line ending in this symbol is joined to the one after it, before anything is decided about
+/// either.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LineContinuation {
+    /// The text the line has to end in, usually a backslash.
     pub symbol : String,
+    /// Whether the join also happens inside a string.
     pub in_strings : bool,
+    /// Whether it also happens inside a line comment. This is what separates C, where the join
+    /// happens whatever the line held, from JavaScript and Python, where a line comment ends at
+    /// the newline whatever follows it.
     pub in_comments : bool
 }
 
-// One half of a long-bracket pair: the fixed bytes before the counted run of '=', and the single
-// byte that closes the opener after it. '--[=*[' is prefix "--[", suffix '['.
+/// A long-bracket comment pair, split around the run of `=` that gives it its level: `--[=*[` is
+/// the prefix `--[` and the suffix `[`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LeveledPair {
+    /// The fixed bytes before the run of `=` in the opener.
     pub start_prefix : String,
+    /// The single byte that closes the opener after that run.
     pub start_suffix : u8,
+    /// The fixed bytes before the run of `=` in the closer.
     pub end_prefix : String,
+    /// The single byte that closes the closer after that run.
     pub end_suffix : u8,
 }
 
 impl LeveledPair {
+    /// Splits both halves around their `=*`, and answers `None` if either is not written that way.
     pub fn of(start: &str, end: &str) -> Option<LeveledPair> {
         let (start_prefix, start_suffix) = split_leveled_half(start)?;
         let (end_prefix, end_suffix) = split_leveled_half(end)?;
@@ -345,15 +405,18 @@ impl PartialEq for Language {
     }
 }
 
-// 'descriptive_name' is what the report shows, 'aliases' are the spellings that count towards it, so
-// 'classes' can be counted from both 'class' and 'record'.
+/// A word worth counting occurrences of, under a name of its own.
 #[derive(Debug,PartialEq,Eq,Clone)]
 pub struct Keyword {
+    /// What the report calls the count, `classes`.
     pub descriptive_name : String,
+    /// The spellings that count towards it, so `classes` can be raised by both `class` and
+    /// `record`.
     pub aliases : Vec<String>
 }
 
 impl Keyword {
+    /// A count under the given name, raised by any of the given spellings.
     pub fn new(descriptive_name: impl AsRef<str>, aliases: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
         Keyword {
             descriptive_name : descriptive_name.as_ref().to_owned(),
@@ -362,35 +425,47 @@ impl Keyword {
     }
 }
 
-// Where each line of a file landed, one slot per line, so the nine add up to the lines. "Words"
-// are word bytes: a letter, a digit, or anything above ASCII. A line with none anywhere is
-// punctuation some grammar required, or blank.
+/// Where each line of a file landed, one slot per line, so the nine always add up to the lines.
+///
+/// This is what the counting produces. What a report's code and comment columns show is these nine
+/// folded into three, which is [`CountingModel`] and is chosen when the figures are read, not when
+/// they are taken.
+///
+/// "Words" means word bytes: a letter, a digit, or anything above ASCII. A line with none anywhere
+/// is punctuation some grammar required, or blank.
 #[derive(Debug,PartialEq,Default,Clone)]
 pub struct LineClasses {
+    /// Lines carrying words outside any string or comment.
     pub words_in_code : usize,
-    // Lines whose only content is the inside of a string literal, the middle of a multiline
-    // string being the plain case. String content is data and both models count it as code.
+    /// Lines whose only content is the inside of a string literal, the middle of a string running
+    /// over several lines being the plain case. String content is data, and both models count it
+    /// as code.
     pub string_content : usize,
-    // Words only inside a comment, on a line that also carries code punctuation: '} // words'.
-    // The two models part here, which is why it cannot sit in either neighbour: content reads
-    // the words and says comment, region reads the '}' and says code.
+    /// Words only inside a comment, on a line that also carries code punctuation: `} // words`.
+    /// The two models part here, which is why it is a class of its own: content reads the words
+    /// and says comment, region reads the `}` and says code.
     pub comment_words_beside_code : usize,
+    /// Lines whose words are all inside a comment, with no code on them at all.
     pub words_in_comment : usize,
+    /// Lines of code with no words on them, a lone `});`.
     pub punctuation_in_code : usize,
+    /// The same inside a comment, a line of a drawn box or a row of dashes.
     pub punctuation_in_comment : usize,
+    /// Empty lines outside everything.
     pub blank : usize,
+    /// Empty lines inside a block comment.
     pub blank_in_comment : usize,
+    /// Empty lines inside a string that runs over several lines.
     pub blank_in_string : usize
 }
 
 impl LineClasses {
-    // Everything that walks all nine goes through 'to_array' and 'of_array' paired with these
-    // names, so a tenth class is two lines here and a compiler error at each of the two conversions
-    // rather than a count silently dropped from a document, a log and the overview.
+    /// The nine names, in the order [`LineClasses::to_array`] and [`LineClasses::of_array`] use.
     pub const NAMES : [&'static str; 9] = ["words_in_code", "string_content",
             "comment_words_beside_code", "words_in_comment", "punctuation_in_code",
             "punctuation_in_comment", "blank", "blank_in_comment", "blank_in_string"];
 
+    /// The nine counts in the order of [`LineClasses::NAMES`].
     pub fn of_array(counts: [usize; 9]) -> Self {
         LineClasses {
             words_in_code: counts[0],
@@ -405,16 +480,19 @@ impl LineClasses {
         }
     }
 
+    /// The same nine, back out in that order.
     pub fn to_array(&self) -> [usize; 9] {
         [self.words_in_code, self.string_content, self.comment_words_beside_code,
          self.words_in_comment, self.punctuation_in_code, self.punctuation_in_comment,
          self.blank, self.blank_in_comment, self.blank_in_string]
     }
 
+    /// How many lines were sorted into all nine.
     pub fn calculate_lines(&self) -> usize {
         self.to_array().iter().sum()
     }
 
+    /// Counts one more line of that class.
     pub fn bump(&mut self, class: LineClass) {
         match class {
             LineClass::WordsInCode => self.words_in_code += 1,
@@ -433,14 +511,18 @@ impl LineClasses {
         *self = combine_classes(self, other, |mine, theirs| mine + theirs);
     }
 
-    // Saturating because the numbers taken out may come off a document or a log, where nothing
-    // promises they stay inside what they are taken from
+    /// Takes one set of counts off another, class by class.
+    ///
+    /// Saturating, because the numbers taken out may come off a document or a log, where nothing
+    /// promises they stay inside what they are taken from.
     pub fn subtract(&mut self, other: &LineClasses) {
         *self = combine_classes(self, other, usize::saturating_sub);
     }
 }
 
-// Variant order is the order of 'LineClasses::NAMES', which 'get_name' and 'ALL' index by.
+/// Which of the nine a single line was sorted into. One variant per field of [`LineClasses`],
+/// named after it and described there.
+#[allow(missing_docs)]
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 pub enum LineClass {
     WordsInCode,
@@ -455,43 +537,58 @@ pub enum LineClass {
 }
 
 impl LineClass {
+    /// All nine, in the order of [`LineClasses::NAMES`].
     pub const ALL : [LineClass; 9] = [LineClass::WordsInCode, LineClass::StringContent,
             LineClass::CommentWordsBesideCode, LineClass::WordsInComment, LineClass::PunctuationInCode,
             LineClass::PunctuationInComment, LineClass::Blank, LineClass::BlankInComment,
             LineClass::BlankInString];
 
+    /// The name of the [`LineClasses`] field this class counts into.
     pub fn get_name(&self) -> &'static str {
         LineClasses::NAMES[*self as usize]
     }
 }
 
-// The three columns a model folds a class into. What the third one is called depends on the model,
-// which is 'get_bucket_name'.
+/// One of the three columns a report shows, which is what a [`CountingModel`] folds the nine
+/// classes into.
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 pub enum Bucket {
+    /// The code column.
     Code,
+    /// The comments column.
     Comments,
+    /// Whatever the model counts as neither, whose name it decides:
+    /// [`CountingModel::get_third_quantity_name`].
     Third
 }
 
-// One stretch of a line as '--explain' reports it: which bytes sit inside a string, which inside a
-// comment, and which outside both. 'from' and 'to' are byte offsets into the line as the file
-// spells it, and the symbols that open and close a thing belong to its stretch.
+/// One stretch of a line, as [`crate::explain_file`] reports it: which bytes sit inside a string,
+/// which inside a comment, and which outside both.
+///
+/// The symbols that open and close a thing belong to its own stretch.
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 pub struct Span {
+    /// Byte offset into the line as the file spells it, the stretch's first byte.
     pub from: usize,
+    /// Byte offset one past its last.
     pub to: usize,
+    /// What the bytes between them are.
     pub kind: SpanKind
 }
 
+/// What a [`Span`] holds.
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 pub enum SpanKind {
+    /// Outside any string or comment.
     Code,
+    /// Inside a string literal, its quotes included.
     String,
+    /// Inside a comment, its symbols included.
     Comment
 }
 
 impl SpanKind {
+    /// `code`, `string` or `comment`.
     pub fn get_name(&self) -> &'static str {
         match self {
             Self::Code => "code",
@@ -501,21 +598,25 @@ impl SpanKind {
     }
 }
 
-// Where the code and comment columns come from. The engine only ever fills 'LineClasses'; what a
-// column shows is this fold, chosen at presentation time, so the same run answers both models.
-//
-// 'Content' asks what a line says: words in code make it code, words only in a comment make it a
-// comment, and punctuation and blanks are neither. 'Region' asks where a line sits, which is how
-// cloc, tokei and scc count: any code on the line makes it code, a line inside a comment belongs
-// to the comment whatever it holds, and only a blank outside everything is blank.
+/// Where the code and comment columns come from.
+///
+/// The counting only ever fills a [`LineClasses`]. What a column shows is this fold of those nine
+/// into three, chosen when the figures are read, so one run answers both models and switching
+/// costs no recounting.
 #[derive(Debug,PartialEq,Eq,Clone,Copy,Default)]
 pub enum CountingModel {
+    /// What a line says: words in code make it code, words only in a comment make it a comment,
+    /// and punctuation and blank lines are neither. The third column is called `extra`.
     #[default]
     Content,
+    /// Where a line sits, which is how cloc, tokei and scc count: any code on the line makes it
+    /// code, a line inside a comment belongs to the comment whatever it holds, and only a blank
+    /// outside everything is blank. The third column is called `blanks`.
     Region
 }
 
 impl CountingModel {
+    /// Reads `content` or `region`, trimmed and in any case.
     pub fn parse(value: &str) -> Option<CountingModel> {
         match value.trim().to_lowercase().as_str() {
             "content" => Some(Self::Content),
@@ -524,6 +625,7 @@ impl CountingModel {
         }
     }
 
+    /// The spelling [`CountingModel::parse`] reads back.
     pub fn name(&self) -> &'static str {
         match self {
             Self::Content => "content",
@@ -531,6 +633,7 @@ impl CountingModel {
         }
     }
 
+    /// The other one of the two.
     pub fn get_other(&self) -> CountingModel {
         match self {
             Self::Content => Self::Region,
@@ -538,8 +641,7 @@ impl CountingModel {
         }
     }
 
-    // What the third quantity is called under this model. Every face of a report asks here, or the
-    // table would head a column with a word the document does not use.
+    /// `extra` under [`CountingModel::Content`], `blanks` under [`CountingModel::Region`].
     pub fn get_third_quantity_name(&self) -> &'static str {
         match self {
             Self::Content => "extra",
@@ -547,6 +649,7 @@ impl CountingModel {
         }
     }
 
+    /// What this model heads that column with.
     pub fn get_bucket_name(&self, bucket: Bucket) -> &'static str {
         match bucket {
             Bucket::Code => "code",
@@ -555,8 +658,10 @@ impl CountingModel {
         }
     }
 
-    // The single source of what lands where: the column sums below and the per-line answer of
-    // '--explain' both go through this, so the two cannot disagree.
+    /// Which column a line of that class lands in.
+    ///
+    /// The column sums below and the per-line answer of [`crate::explain_file`] both go through
+    /// this, so the two cannot disagree.
     pub fn fold(&self, class: LineClass) -> Bucket {
         match self {
             Self::Content => match class {
@@ -575,10 +680,12 @@ impl CountingModel {
         }
     }
 
+    /// Adds up every class this model calls code.
     pub fn calculate_code_lines(&self, classes: &LineClasses) -> usize {
         self.sum_the_classes_folding_to(Bucket::Code, classes)
     }
 
+    /// Adds up every class this model calls a comment.
     pub fn calculate_comment_lines(&self, classes: &LineClasses) -> usize {
         self.sum_the_classes_folding_to(Bucket::Comments, classes)
     }
@@ -590,44 +697,56 @@ impl CountingModel {
     }
 }
 
-// The folded columns and the average size are methods rather than fields, so a stored copy cannot
-// drift from the numbers it comes from.
+/// What was counted, for one language, one module or a whole run.
+///
+/// The code and comment columns and the average size are methods rather than fields, so a stored
+/// copy cannot drift from the numbers it came from.
 #[derive(Debug,PartialEq,Default,Clone)]
 pub struct Stats {
+    /// How many files went into these figures.
     pub files : usize,
+    /// Their size on disk, in bytes.
     pub bytes : usize,
+    /// Every line of them, which is also what the nine classes add up to.
     pub lines : usize,
+    /// Where each of those lines landed.
     pub classes : LineClasses,
-    // Added up over a run these are every keyword any language declared, which answers "how many
-    // classes are in this project" across the several languages that have such a thing.
+    /// How often each keyword was found, under the name its language gave the count. Added up over
+    /// a run these are every keyword every language declared, which is what answers "how many
+    /// classes are in this project" across the several languages that have such a thing.
     pub keyword_occurences : HashMap<String,usize>
 }
 
 impl Stats {
+    /// Figures the caller already has, from a log file or a document.
     pub fn new(files: usize, bytes: usize, lines: usize, classes: LineClasses,
             keyword_occurences: HashMap<String,usize>) -> Self
     {
         Stats { files, bytes, lines, classes, keyword_occurences }
     }
 
+    /// The code column under that model.
     pub fn calculate_code_lines(&self, model: CountingModel) -> usize {
         model.calculate_code_lines(&self.classes)
     }
 
+    /// The comments column under that model.
     pub fn calculate_comment_lines(&self, model: CountingModel) -> usize {
         model.calculate_comment_lines(&self.classes)
     }
 
-    // The third column: extra under 'Content', blanks under 'Region'.
-    //
-    // Saturating because the fields are public and this is also built from numbers read off a log
-    // file: counts that do not add up are the caller's arithmetic, not a reason to panic.
+    /// The third column: `extra` under [`CountingModel::Content`], `blanks` under
+    /// [`CountingModel::Region`].
+    ///
+    /// Saturating, because the fields are public and these figures are also built from numbers read
+    /// off a log file: counts that do not add up are the caller's arithmetic, not a reason to panic.
     pub fn calculate_extra_lines(&self, model: CountingModel) -> usize {
         self.lines.saturating_sub(self.calculate_code_lines(model))
                 .saturating_sub(self.calculate_comment_lines(model))
     }
 
-    // Rounded to whole bytes, and zero rather than a division by zero when nothing was counted
+    /// The average file size in whole bytes, and zero rather than a division by zero when nothing
+    /// was counted.
     pub fn calculate_average_size(&self) -> usize {
         self.bytes.checked_div(self.files).unwrap_or(0)
     }
@@ -652,6 +771,7 @@ impl Stats {
         }
     }
 
+    /// Adds another set of figures into this one, keyword counts included.
     pub fn add(&mut self, other: &Stats) {
         self.files += other.files;
         self.bytes += other.bytes;
@@ -765,6 +885,17 @@ mod tests {
         assert_eq!("comments", CountingModel::Region.get_bucket_name(Bucket::Comments));
         assert_eq!("extra", CountingModel::Content.get_bucket_name(Bucket::Third));
         assert_eq!("blanks", CountingModel::Region.get_bucket_name(Bucket::Third));
+    }
+
+    // Every line ends in an empty symbol, so a language carrying one joins its whole file into one
+    // line and reports counts that look ordinary.
+    #[test]
+    fn an_empty_continuation_symbol_leaves_the_language_without_one() {
+        let language = |symbol| Language::new("L", ["l"], StringRules::escaping_nothing(), [""], &[], [])
+                .with_line_continuation(symbol, true, true);
+
+        assert_eq!(None, language("").line_continuation);
+        assert_eq!(Some("\\".to_owned()), language("\\").line_continuation.map(|x| x.symbol));
     }
 
     #[test]

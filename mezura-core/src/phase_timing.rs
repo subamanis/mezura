@@ -7,7 +7,7 @@ use std::time::Instant;
 
 // Resolved once, so an ordinary run pays one predictable branch per file. A reading costs roughly
 // 25 ns, which is affordable once per file and would not be once per line.
-pub static ENABLED : LazyLock<bool> =
+pub(crate) static ENABLED : LazyLock<bool> =
         LazyLock::new(|| is_enabled_by(std::env::var_os("MEZURA_PHASE_TIMING").as_deref()));
 
 static OPEN_NANOS    : AtomicU64 = AtomicU64::new(0);
@@ -21,7 +21,7 @@ static STARVED_NANOS : AtomicU64 = AtomicU64::new(0);
 // Accumulated by one thread, so the hot path touches no shared memory. The atomics above are
 // written once per thread, at its exit.
 #[derive(Debug, Default)]
-pub struct Totals {
+pub(crate) struct Totals {
     pub open_nanos: u64,
     pub read_nanos: u64,
     pub parse_nanos: u64,
@@ -32,7 +32,7 @@ pub struct Totals {
 }
 
 impl Totals {
-    pub fn publish(&self) {
+    pub(crate) fn publish(&self) {
         OPEN_NANOS.fetch_add(self.open_nanos, Ordering::Relaxed);
         READ_NANOS.fetch_add(self.read_nanos, Ordering::Relaxed);
         PARSE_NANOS.fetch_add(self.parse_nanos, Ordering::Relaxed);
@@ -43,11 +43,11 @@ impl Totals {
     }
 }
 
-pub fn now() -> Instant {
+pub(crate) fn now() -> Instant {
     Instant::now()
 }
 
-pub fn nanos_since(start: Instant) -> u64 {
+pub(crate) fn nanos_since(start: Instant) -> u64 {
     start.elapsed().as_nanos() as u64
 }
 
@@ -57,7 +57,7 @@ pub fn nanos_since(start: Instant) -> u64 {
 // there is no denominator.
 //
 // Elapsed and not CPU: a thread blocked in 'open' counts there while it runs no instructions.
-pub fn report(consumers: usize, run_millis: u128) -> String {
+pub(crate) fn report(consumers: usize, run_millis: u128) -> String {
     format_report(&Totals {
         open_nanos: OPEN_NANOS.load(Ordering::Relaxed),
         read_nanos: READ_NANOS.load(Ordering::Relaxed),

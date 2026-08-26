@@ -7,7 +7,7 @@ use crate::{FileEntry, FilesPerModuleMut, NestedLanguageMapMut, EngineConfig, Fa
 use crate::engine::file_parser;
 use crate::languages::NestedLanguageDefinitions;
 
-pub fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
+pub(crate) fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
         stats_per_module: StatsMapMut, nested_per_module: NestedLanguageMapMut, files_per_module: FilesPerModuleMut,
         language_map: Arc<HashMap<String,Language>>, nested_definitions: Arc<NestedLanguageDefinitions>,
         config: Arc<EngineConfig>, started: Instant, counting_ended: Arc<AtomicU64>,

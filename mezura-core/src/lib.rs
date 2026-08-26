@@ -1,4 +1,38 @@
+//! Counts the lines of a codebase: which language every file is written in, and how many of its
+//! lines are code, comments and neither.
+//!
+//! A run takes two things. [`EngineConfig`] says what to count, and [`Languages`] says what the
+//! symbols of each language are. The second is built against the first and refuses to be used with
+//! any other, since counting Rust with settings that name Python would give figures that look
+//! perfectly normal and describe something else.
+//!
+//! ```no_run
+//! use mezura_core::{CountingModel, EngineConfig, Languages, run};
+//!
+//! let config = EngineConfig::new(["./src", "./tests"]);
+//! let (languages, warnings) = Languages::shipped(&config);
+//! for warning in &warnings {
+//!     eprintln!("{}", warning.message);
+//! }
+//!
+//! let result = run(&config, languages)?;
+//! for (name, stats) in result.sort_languages_by(Default::default(), CountingModel::Content) {
+//!     println!("{name}: {} code", stats.calculate_code_lines(CountingModel::Content));
+//! }
+//! # Ok::<(), mezura_core::RunError>(())
+//! ```
+//!
+//! The counting never decides what a comment column shows. It sorts every line into one of the
+//! nine [`LineClasses`], and a [`CountingModel`] folds those nine into the three columns of a
+//! report when the figures are read, so one run answers both models.
+//!
+//! [`run_watched`] is the same run for a caller that needs real time feedback while it happens, and
+//! [`explain_file`] reads a single file line by line and says why each line was counted the way it
+//! was.
+
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
+#![warn(unreachable_pub)]
 #![allow(non_snake_case)]
 
 #[cfg(test)]
@@ -18,7 +52,7 @@ pub mod render;
 pub mod warnings;
 
 pub use domain::{Bucket, CountingModel, Keyword, Language, LeveledPair, LineClass, LineClasses,
-        MultilineString, NestedLanguage, Span, SpanKind, Stats, StringRules};
+        LineContinuation, MultilineString, NestedLanguage, Span, SpanKind, Stats, StringRules};
 pub use engine::config::{EngineConfig, ForcedLanguages, LanguageNames, ScopedByModule, Target,
         Threads, format_module_scope, split_off_module_scope};
 pub use explain::{Carried, ExplainError, ExplainedLine, FileExplanation, explain_file};
@@ -27,7 +61,7 @@ pub use languages::Languages;
 pub use progress::ScanProgress;
 pub use result::{FaultyFileDetails, FileEntry, FilesPresent, ModuleResult, Performance, RunError,
         RunResult, SortCriterion, UnreadableDirDetails};
-pub use warnings::{Affects, Warning};
+pub use warnings::{Affects, Code, Warning};
 
 #[cfg(test)]
 pub(crate) use test_support::{languages_claiming, test_paths};
@@ -42,13 +76,15 @@ use crossbeam_deque::{Injector, Worker};
 
 use engine::modules::{ModuleId, Modules};
 
-// The file that decides which language gets an extension or a filename that two of them claim.
-// Nothing here reads or writes it: the command line creates it in the user's data directory, parses
-// it, and hands the rules in as a plain map. The name lives here because the warning about an
-// unsettled extension is written here and points the reader at the file.
+/// The name of the file that decides which language gets an extension or a file name two of them
+/// claim.
+///
+/// Nothing in this crate reads or writes it: a caller keeps that file wherever it keeps the rest,
+/// parses it with [`language_file::parse_conflict_rules_file`] and hands the rules to
+/// [`Languages::resolve`]. The name is here because the warning about an unsettled extension is
+/// written here and points the reader at the file.
 pub const LANGUAGE_CONFLICTS_FILE_NAME : &str = "language_conflicts.txt";
-// The name of the report row holding everything no target was given a name for. Not the directory's
-// own name, which would claim files that a named target has already taken out of it.
+/// The name of the report row holding everything no target was given a name for.
 pub const UNNAMED_MODULE_NAME : &str = "(unnamed)";
 
 pub(crate) type FaultyFilesListMut = Arc<Mutex<Vec<FaultyFileDetails>>>;
@@ -59,24 +95,28 @@ pub(crate) type StatsMapMut = Arc<Mutex<Vec<HashMap<String,Stats>>>>;
 pub(crate) type NestedLanguageMapMut = Arc<Mutex<Vec<HashMap<String,HashMap<String,Stats>>>>>;
 pub(crate) type FilesPerModuleMut = Arc<Mutex<Vec<HashMap<String, Vec<FileEntry>>>>>;
 
-// Counts the directories and files named in 'config' and returns the figures.
-//
-// 'languages' has to have been resolved against this same 'config', and the run refuses the pair
-// otherwise: resolving is what applies the chosen and excluded languages and the forced extensions,
-// so an ill-matched pair would count one set of languages while the settings say another.
+/// Counts the directories and files the configuration names, and gives back the figures.
+///
+/// The languages must have been resolved against this same configuration, and the run refuses the
+/// pair otherwise: resolving is what applies the chosen and excluded languages and the forced
+/// extensions, so an ill-matched pair would count one set of languages while the settings describe
+/// another.
+///
+/// Blocks until everything has been counted. Failing to read some of the files is not an error, and
+/// comes back in [`RunResult::faulty_files`]; the cases that are one are [`RunError`].
 pub fn run(config: &EngineConfig, languages: Languages) -> Result<RunResult, RunError> {
     run_watched(config, languages, None, |_| {})
 }
 
-// The same run, for a caller drawing it as it happens.
-//
-// 'progress' is moved as files are found and parsed, so a thread of the caller's can draw the
-// counters while this one blocks.
-//
-// 'on_traversal_done' is called once, as soon as the directories have been scanned, with the files
-// found; the counting of those files is still going on at that point. It is called on every run
-// that returns 'Ok', including one that found nothing, and never on a run whose scanning thread
-// died, because the figures such a run leaves behind are lower than what is really on disk.
+/// The same run, for a caller that needs real time feedback while it happens.
+///
+/// The progress counters move as files are found and parsed, so a thread of the caller's can read
+/// them while this one blocks.
+///
+/// `on_traversal_done` is called once, as soon as the directories have been scanned, with the files
+/// that were found; the counting of those files is still going on at that point. It is called on
+/// every run that returns `Ok`, including one that found nothing, and never on a run whose scanning
+/// thread died, because the figures such a run leaves behind are lower than what is really on disk.
 pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option<Arc<ScanProgress>>,
         on_traversal_done: impl FnOnce(FilesPresent)) -> Result<RunResult, RunError>
 {
@@ -299,8 +339,11 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     })
 }
 
-// Whether this run will print its phase report to the error output, as MEZURA_PHASE_TIMING asks.
-// Public so a caller drawing live lines of its own on stderr can keep them out of the report's way.
+/// Whether this run will print a report of where its time went to the error output, which the
+/// `MEZURA_PHASE_TIMING` environment variable asks for.
+///
+/// Worth asking before drawing live lines of your own on the error output, so the two do not land
+/// on top of each other.
 pub fn prints_phase_timing() -> bool {
     *phase_timing::ENABLED
 }
@@ -369,7 +412,7 @@ pub(crate) struct ParsableFile {
 }
 
 impl ParsableFile {
-    pub fn new(path: PathBuf, language_name: Arc<str>, module: ModuleId) -> Self {
+    pub(crate) fn new(path: PathBuf, language_name: Arc<str>, module: ModuleId) -> Self {
         ParsableFile {
             path,
             language_name,
@@ -378,7 +421,7 @@ impl ParsableFile {
         }
     }
 
-    pub fn written_by_hand(path: PathBuf, language_name: Arc<str>, module: ModuleId) -> Self {
+    pub(crate) fn written_by_hand(path: PathBuf, language_name: Arc<str>, module: ModuleId) -> Self {
         ParsableFile { written_by_hand: true, ..ParsableFile::new(path, language_name, module) }
     }
 }
@@ -391,7 +434,7 @@ pub(crate) struct TraversedDir {
 }
 
 impl TraversedDir {
-    pub fn new(path: PathBuf, gitignore_stack: Option<Arc<GitignoreStack>>, module: ModuleId) -> Self {
+    pub(crate) fn new(path: PathBuf, gitignore_stack: Option<Arc<GitignoreStack>>, module: ModuleId) -> Self {
         TraversedDir {
             path,
             gitignore_stack,
@@ -410,11 +453,11 @@ pub(crate) struct ObeyedIgnoreFiles {
 }
 
 impl ObeyedIgnoreFiles {
-    pub fn of(config: &EngineConfig) -> ObeyedIgnoreFiles {
+    pub(crate) fn of(config: &EngineConfig) -> ObeyedIgnoreFiles {
         ObeyedIgnoreFiles { gitignore: !config.no_gitignore, search_tools: !config.no_ignore_files }
     }
 
-    pub fn obeys_nothing(self) -> bool {
+    pub(crate) fn obeys_nothing(self) -> bool {
         !self.gitignore && !self.search_tools
     }
 
@@ -437,7 +480,7 @@ pub(crate) struct GitignoreStack {
 }
 
 impl GitignoreStack {
-    pub fn extend_with_dir(dir: &Path, parent: Option<Arc<GitignoreStack>>, obeyed: ObeyedIgnoreFiles)
+    pub(crate) fn extend_with_dir(dir: &Path, parent: Option<Arc<GitignoreStack>>, obeyed: ObeyedIgnoreFiles)
     -> Option<Arc<GitignoreStack>>
     {
         let mut builder = ignore::gitignore::GitignoreBuilder::new(dir);
@@ -483,7 +526,7 @@ impl GitignoreStack {
     }
 
     // Explicitly given target dirs are traversed even if an ignore file of their ancestors ignores them
-    pub fn for_root_dir(dir: &Path, obeyed: ObeyedIgnoreFiles) -> Option<Arc<GitignoreStack>> {
+    pub(crate) fn for_root_dir(dir: &Path, obeyed: ObeyedIgnoreFiles) -> Option<Arc<GitignoreStack>> {
         if obeyed.obeys_nothing() {
             return None;
         }
@@ -495,7 +538,7 @@ impl GitignoreStack {
     }
 
     // Used for paths that the program discovered on its own, like the matches of a glob pattern
-    pub fn is_path_ignored(path: &Path, obeyed: ObeyedIgnoreFiles) -> bool {
+    pub(crate) fn is_path_ignored(path: &Path, obeyed: ObeyedIgnoreFiles) -> bool {
         if obeyed.obeys_nothing() {
             return false;
         }
@@ -525,7 +568,7 @@ impl GitignoreStack {
         false
     }
 
-    pub fn is_ignored(&self, path: &Path, is_dir: bool) -> bool {
+    pub(crate) fn is_ignored(&self, path: &Path, is_dir: bool) -> bool {
         let mut node = Some(self);
         while let Some(stack) = node {
             match stack.matcher.matched(path, is_dir) {

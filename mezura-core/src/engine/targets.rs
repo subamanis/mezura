@@ -1,5 +1,6 @@
-// Which paths the walk is actually given, once the ones that lie inside other ones have been taken
-// out, and which of the things it finds are excluded.
+//! Turning what somebody typed into places to visit: absolute paths, patterns expanded, and the
+//! ones lying inside other ones taken out.
+
 use std::borrow::Cow;
 use std::path::Path;
 
@@ -29,14 +30,20 @@ impl std::ops::Deref for Targets {
     }
 }
 
-// The command line rewords these; the Display below is what a library caller prints.
+/// Why a target could not be turned into a place to visit. Each variant carries the text it is
+/// about, and the `Display` is what a caller prints.
 #[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TargetError {
+    /// Names neither a directory nor a file, and holds no pattern characters either.
     InvalidPath(String),
+    /// Holds pattern characters and does not parse as a pattern.
     InvalidGlob(String),
+    /// A pattern that matches nothing at all.
     NoGlobMatches(String),
+    /// A pattern whose every match is ignored, dotted or a link, so nothing is left to visit.
     AllGlobMatchesIgnored(String),
+    /// One place declared under two names, which no rule can settle. The path, then the two names.
     Contested(String, String, String)
 }
 
@@ -68,6 +75,7 @@ pub(crate) fn remove_overlapping_targets(targets: Vec<Target>) -> Vec<Target> {
     keep_topmost(targets, |enclosing, target| enclosing.module == target.module)
 }
 
+/// Whether every exclude pattern parses, for refusing a bad one at the moment somebody typed it.
 // The matcher itself stays inside: its type belongs to a dependency, and putting it in the
 // signature would make a release of globset a breaking change of ours.
 pub fn validate_exclude_patterns(exclude_patterns: &[String]) -> Result<(), TargetError> {
@@ -114,12 +122,12 @@ pub(crate) fn resolve(declared: &[Target], obeyed: crate::ObeyedIgnoreFiles, sea
     Ok(Targets { resolved: expand_patterns(prepared, obeyed, search_in_dotted)?, written_by_hand })
 }
 
-// A relative path or pattern is joined to the working directory, so a saved configuration still
-// names the same places when it is loaded from somewhere else.
-//
-// 'run' does this as its first step anyway, so call it only to refuse a bad path at the moment
-// somebody typed it. It does not expand patterns, because which of a pattern's matches survive
-// depends on settings this cannot see.
+/// Checks that every target names something and joins the relative ones to the working directory,
+/// so that a saved configuration still names the same places when it is loaded from somewhere else.
+///
+/// [`crate::run`] does this as its first step anyway, so call it only to refuse a bad path at the
+/// moment somebody typed it. It does not expand patterns, because which of a pattern's matches
+/// survive depends on settings this cannot see.
 pub fn validate_and_absolutize(declared: &[Target]) -> Result<Vec<Target>, TargetError> {
     let mut prepared: Vec<Target> = Vec::with_capacity(declared.len());
     for target in declared {
@@ -165,8 +173,8 @@ fn find_contested_target(targets: &[Target]) -> Result<(), TargetError> {
     Ok(())
 }
 
-// The spelling every resolved path carries: absolute, forward slashes, no trailing separator, and
-// without the '\\?\' prefix that std's 'canonicalize' puts on Windows.
+/// The spelling every resolved path carries: absolute, forward slashes, no trailing separator, and
+/// without the `\\?\` prefix that `std::fs::canonicalize` puts on Windows.
 pub fn convert_to_absolute(s: &str) -> String {
     let p = Path::new(s);
     if p.is_absolute() {

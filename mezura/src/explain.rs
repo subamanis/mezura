@@ -47,7 +47,10 @@ so there is nothing to explain. If its language was narrowed away, drop '--langu
         Err(ExplainError::UnreadableFile(reason)) => refuse(&format!("'{}' could not be read: \
 {reason}", target.path)),
         Err(ExplainError::LanguagesFromAnotherConfig) => refuse("The languages of this run were \
-resolved against different settings, so the answer would be for the wrong selection.")
+resolved against different settings, so the answer would be for the wrong selection."),
+        // 'ExplainError' is non_exhaustive, so a reason added later stops here rather than in the
+        // middle of a run
+        Err(other) => refuse(&format!("'{}' could not be explained: {other}", target.path))
     }
 }
 
