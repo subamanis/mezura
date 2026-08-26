@@ -347,6 +347,18 @@ pub struct ParseBuffers {
     pub timing: phase_timing::Totals,
 }
 
+// A comment symbol spelled with letters is a word and not a prefix: Batch opens a comment with REM,
+// and REMOVE is a command that has to count as one. Only a symbol whose own ends are word characters
+// asks the question at all, so '//' and '#' pay nothing for it.
+fn stands_as_its_own_word(line: &[u8], start: usize, width: usize) -> bool {
+    let is_word = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    let glued_before = is_word(line[start]) && start > 0 && is_word(line[start - 1]);
+    let glued_after = is_word(line[start + width - 1])
+            && line.get(start + width).is_some_and(|byte| is_word(*byte));
+
+    !glued_before && !glued_after
+}
+
 // An even run of the language's escape character in front of a symbol leaves it standing, since each
 // pair escapes itself. A language that declares none escapes nothing anywhere.
 fn is_not_escaped(pos: usize, bytes: &[u8], escape: Option<u8>) -> bool {
@@ -475,7 +487,9 @@ fn take_symbols_at(at: usize, line_bytes: &[u8], plan: &ScanPlan, buffers: &mut 
         buffers.consumed[index] = start + width;
         match slot.kind {
             STRINGS => buffers.raw_strings.push((start, slot.symbol, role)),
-            COMMENTS => buffers.comments.push(start),
+            COMMENTS => if stands_as_its_own_word(line_bytes, start, width) {
+                buffers.comments.push(start);
+            },
             COM_STARTS => buffers.com_starts.push((start, slot.symbol, level)),
             _ => buffers.com_ends.push((start, slot.symbol, level))
         }
@@ -1087,9 +1101,29 @@ fn starts_with_ignoring_case(haystack: &[u8], needle: &[u8]) -> bool {
 // Both cases of the needle's first byte are searched, so '</SCRIPT>' is found as readily as
 // '</script>'.
 fn find_tag_ignoring_case(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    let first = *needle.first()?;
+    let name = needle.strip_suffix(b">").unwrap_or(needle);
+    let first = *name.first()?;
     memchr::memchr2_iter(first.to_ascii_lowercase(), first.to_ascii_uppercase(), haystack)
-            .find(|at| starts_with_ignoring_case(&haystack[*at..], needle))
+            .find(|at| closes_a_tag(&haystack[*at..], name))
+}
+
+// The closing tag is read the way 'find_region_opening' reads the opening one: the name, then
+// whitespace or '>'. What sits between the name and the '>' is not this counter's business, and a
+// browser agrees: measured, '</script >' and '</script foo>' both close the element while
+// '</scriptfoo>' is a different name and closes nothing. A tag that never reaches a '>' on the line
+// it began is not a tag, which is the same line the opener draws.
+fn closes_a_tag(rest: &[u8], name: &[u8]) -> bool {
+    if !starts_with_ignoring_case(rest, name) {
+        return false;
+    }
+    match rest.get(name.len()) {
+        Some(b'>') => true,
+        Some(byte) if byte.is_ascii_whitespace() => {
+            let line_end = memchr::memchr(b'\n', rest).unwrap_or(rest.len());
+            memchr::memchr(b'>', &rest[name.len()..line_end]).is_some()
+        },
+        _ => false
+    }
 }
 
 fn find_case_insensitive(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -1233,7 +1267,8 @@ fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment
     // reads them when no code span comes back.
     if open_comment.is_none() && open_str_symbol.is_none()
             && get_or_build_plan_of(language).line_comment_ends_the_line
-            && language.comment_symbols.iter().any(|symbol| line.as_bytes().starts_with(symbol.as_bytes())) {
+            && language.comment_symbols.iter().any(|symbol| line.as_bytes().starts_with(symbol.as_bytes())
+                    && stands_as_its_own_word(line.as_bytes(), 0, symbol.len())) {
         note_span::<EXPLAIN>(spans, 0, line.len(), SpanKind::Comment);
         return (LineInfo::none_all(false),
                 OpenedHere { ended_in_line_comment: true, ..OpenedHere::default() });
@@ -1728,7 +1763,8 @@ fn resolve_comment_and_multiline_end_overlap(line: &str, language: &Language,
         (at > *end && at < after).then_some(after)
     });
     let starts_a_comment = |at: usize| language.comment_symbols.iter()
-            .any(|symbol| line.as_bytes()[at..].starts_with(symbol.as_bytes()));
+            .any(|symbol| line.as_bytes()[at..].starts_with(symbol.as_bytes())
+                    && stands_as_its_own_word(line.as_bytes(), at, symbol.len()));
 
     for at in comment_indices.iter_mut() {
         if let Some(after) = past_the_end_symbol_at(*at) {
@@ -2336,6 +2372,31 @@ mod tests {
         assert_eq!(vec![3], str_delimiters(&String::from("\"\\''"), &PYTHON, &open_single).0);
     }
 
+    // Batch is the one shipped language that opens a comment with letters, and a language whose
+    // symbols are punctuation must not start paying for the question.
+    #[test]
+    fn a_comment_symbol_spelled_with_letters_is_a_word_and_not_a_prefix() {
+        let batch_like = Language::new("batch-like", ["bat"], StringRules::escaping_nothing(),
+                ["rem", "REM", "::"], &[], []);
+        let counts = |text: &str| content_counts(&parse_lines_whole(text, &batch_like));
+
+        assert_eq!((1, 0, 1), counts("REM a comment\n"));
+        assert_eq!((1, 1, 0), counts("REMOVE /Q file.txt\n"));
+        assert_eq!((1, 1, 0), counts("prerem x\n"));
+        // The word ends where the line does, and a symbol standing alone is still the symbol
+        assert_eq!((1, 0, 1), counts("rem\n"));
+        // An underscore is part of a word the way a letter is: 'REM_TEST' is a command
+        assert_eq!((1, 1, 0), counts("REM_TEST /Q\n"));
+        // '::' is punctuation and asks nothing, glued or not
+        assert_eq!((1, 0, 1), counts("::a comment\n"));
+
+        // The question is asked of the symbol's own ends, so nothing changes for the languages
+        // whose symbols carry no letter at all
+        let c_like = Language::new("c-like", ["c"], build_backslashed_quotes(), ["//"], &[("/*", "*/")], []);
+        assert_eq!(vec![4], comment_delimiters(&String::from("code// a comment"), &c_like));
+        assert_eq!(vec![0], comment_delimiters(&String::from("//x"), &c_like));
+    }
+
     #[test]
     fn a_language_can_declare_more_than_two_comment_symbols() {
         let indices_of = |line: &str| comment_delimiters(&String::from(line), &PYTHON_FULL);
@@ -2909,6 +2970,30 @@ mod tests {
         // And the shell keeps reading the lines it kept, with its own symbols
         let report = parse_with_sections("<p>x</p>\n<script>\n<!-- a note -->\n", &web_shell(), &languages, &extensions);
         assert_eq!((3, 2, 1), content_counts(&report.shell));
+    }
+
+    // The two halves of one pair are read by one rule: the opener already ends where a tag name
+    // ends, and so does the closer. A browser was asked the same three questions and gave these
+    // three answers.
+    #[test]
+    fn a_closing_tag_ends_a_section_wherever_html_says_it_does() {
+        let (languages, extensions) = section_fixture();
+        let closed_by = |closer: &str| parse_with_sections(
+                &format!("<script>\nvar x = 1;\n{closer}\n<p>y</p>\n"), &web_shell(), &languages, &extensions);
+
+        for closer in ["</script>", "</script >", "</script   >", "</SCRIPT >", "</script foo>"] {
+            let report = closed_by(closer);
+            assert_eq!(1, report.sections.len(), "'{closer}' closed no section");
+            assert_eq!((1, 1, 0), content_counts(&report.sections[0].stats), "'{closer}'");
+            assert_eq!(3, report.shell.lines, "'{closer}' left the wrong lines to the shell");
+        }
+
+        // A longer name is another tag and closes nothing, so the section never closes and the
+        // file stays what it was
+        assert!(closed_by("</scriptfoo>").sections.is_empty());
+
+        // Neither does a name that never reaches its '>' on the line it began
+        assert!(closed_by("</script").sections.is_empty());
     }
 
     #[test]
