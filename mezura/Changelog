@@ -1,683 +1,314 @@
 v3.0.0 - unreleased
 
 Main changes:
-  -> A target can now be given a name, and the report is grouped by it as well as by language:
-      "mezura frontend=./web backend=./api" answers how much of the project each part is, in one
-      view and with one total. "mezura ./project tests=./project/tests" separates one part and keeps
-      the rest under a row called "(unnamed)". Name nothing and the output is exactly what it was.
-      A space separates one target from the next only once you have named one, so a path with a
-      space in it still needs nothing but a comma next to it while you name nothing.
-  -> The "--dirs" command is now "--targets", since a target can be a file, a glob pattern or a
-      named module and not only a directory. A saved configuration's "===> dirs" block is now
-      "===> targets", so edit or re-save old configurations or their targets will be ignored. The
-      JSON documents and log entries record the list as "targets" too, so entries written before
-      this change cannot be compared against; delete them.
-  -> A project can now carry its own settings, in a ".mezura" folder beside its code holding a
-      "config.txt" and a log of its own. A run looks for it in the directory holding its targets and
-      then in each directory above it, so it applies from anywhere inside the project, and a run
-      using one says which file it read. Write it with the new "--save-local", which saves the flags
-      of the run with its paths relative to the project so the folder survives being cloned, and
-      ignore it for one run with "--no-local". A run naming a configuration with "--load" leaves it
-      out. What the project does not lock is answered by mezura's own defaults and not by your
-      "default.txt" for everything that decides a number, so two people counting one tree get one
-      answer; the theme, the layout and the separators still come from yours. Inside a project
-      "--log" and "--compare" work without a configuration being named, writing to and reading from
-      the log in the folder.
-  -> New "--by-file" command: every counted file gets a row of its own under the language it was
-      counted as, with its lines split into code, comments and everything else. Without a number it
-      prints every file; "--by-file 20" prints the twenty biggest of each language, by whatever
-      "--sort" is in effect, and says above the total how many it left out. A language whose files
-      were cut ends on a branch left hanging, so a tree drawn shut is the whole of what there is.
-      Long paths lose whole directories out of their middle. Under "--diff" the rows are the files
-      that changed, each with its move beside its figures and "new" or "gone" for a file only one
-      side has; a number then keeps the biggest moves instead of the biggest files, and a JSON
-      baseline must itself have been written with a plain, uncapped "--by-file", which mezura says
-      when it was not.
-      The JSON document carries the same rows under each language, as "by_file", and a run with
-      modules carries them inside each module's own languages.
-  -> Every piece of printed text can now be styled, not just the four colors of the overview.
-      74 tokens are exposed, and each takes one or two colors plus any of bold, italic, underline,
-      dim and reverse, in any order. Written out, the first color is the text and the second what it
-      sits on, so "heading=black d7c98a" puts the section titles on a band and "note=default 3a2f1e"
-      colors the background alone. The cells of the live progress bar also take a "hex..hex"
-      gradient or "rainbow". Run "--help --style" for the full list. The theme editor page sets all
-      three: the color, the background beside it, and each attribute as a letter that lights up
-      when it is on, and its contrast reading is taken against a token's own background where it
-      has one. The keyword line is in the preview too.
-  -> A comment line carrying no words now counts as extra, the way a lone brace always did: the
-      bare "/*" and "*/" of a block written on their own lines, the "*" of a banner line, a lone
-      "//" spacer, a decorative "/*----*/". Comment counts drop visibly on trees written in banner
-      style; code counts do not move.
-  -> New "--explain" command: run on exactly one file, it answers line by line instead of printing
-      a report, with each line's bucket, the class it was read as, and what was still open when the
-      line began. The stretches of each line that sit inside a string or a comment are printed in
-      their own styles. "--output json" writes the same answer as a document with one verdict per
-      line, spans included, for other tools to read. Run "--help --explain" for the details.
-  -> Minified files are now left out of the counts, and the report says how many were. A bundle is
-      a whole program written on one or two lines, so counting it put a file of forty thousand real
-      lines into the report as one line of code. A file counts as minified when its lines average
-      1000 bytes or more, and files under 10 KB are never tested. "--count-minified" counts them as
-      they are written, as before, and the JSON document records both the setting and how many
-      files were left out. A file you name yourself is always counted, minified or not, the way a
-      named file is counted even when a .gitignore covers it.
-  -> "--explain" can now be given the lines to show: "mezura src/main.rs --explain 1210..1230", the
-      same way "--diff" separates two revisions, with either end free to be left off, or a single
-      number for one line. The whole file is still read, so a comment or a string that opened
-      above them is named on every line that carries it, and two totals are printed instead of one,
-      for the lines shown and for the whole file. Without lines nothing changes. Asking for lines
-      together with "--output json" is refused, since that document answers for every line of the
-      file and a program reading it is written against that.
-  -> New "MEZURA_DATA_DIR" environment variable, naming the folder mezura keeps its languages,
-      themes, configurations and logs in. Without it nothing changes. It is what you need when two
-      versions have to run on the same machine, since each of them rewrites a shared folder into the
-      shape it expects. A run using it says so, every time.
-  -> A coding assistant can now run mezura for you, through a second binary called "mezura-mcp".
-      Install it with "cargo install --locked --git https://github.com/subamanis/mezura mezura-mcp"
-      and name it in your editor's list of servers, and Claude Code, Cursor, Zed and VS Code can
-      count a directory, ask for the same count as a JSON document, or go through one file line by
-      line to see why each line was counted the way it was. It runs the mezura you already have and
-      nothing goes over the network. See the README for the settings file each editor uses.
-  -> A language file that opens and closes a block comment with the same symbol, the way Smalltalk
-      writes "like this", now says so. That pair can never be told apart, so it was silently doing
-      nothing and every comment of that language was counted as code. The pair is now dropped, the
-      rest of the language still counts, and the run reports it under "comment-pair-never-closes".
-  -> Ten languages are now counted that were not before: Verilog, SystemVerilog, Nix, HCL
-      (Terraform), Groovy (including Jenkinsfile and Gradle build files), Protocol Buffers, Visual
-      Basic, Less, Solidity and Batch (".bat" and ".cmd"). A hardware, infrastructure or NixOS
-      repository that came back mostly uncounted should now add up, and so should the build scripts
-      of a Windows project, which were skipped entirely until now.
-  -> "--force-language", "--languages" and "--exclude-languages" can now answer differently inside
-      one module. Write the module and a slash before the value: "mezura ios=./ios analysis=./matlab
-      --force-language ios/m=objective-c,analysis/m=matlab" counts one repository's ".m" files as
-      Objective-C in one folder and as MATLAB in the other, in a single run. Anything written
-      without a module in front of it still holds everywhere, and a module keeps every such rule of
-      "--force-language" that it does not answer itself; for the two lists a module that names any
-      language of its own counts or leaves out those and nothing else. A rule naming a module the
-      run does not declare is reported and changes nothing.
-  -> A ".ignore" or ".rgignore" is now obeyed alongside the ".gitignore". Those are the ignore
-      files that ripgrep, the silver searcher and fd read and that git does not, and they exist for
-      the opposite need: hiding something from your tools while keeping it in version control, so a
-      vendored dependency or a committed bundle is what usually lands in one. On a repository that
-      has one, the counts drop by whatever it names. "--no-ignore-files" counts those files as
-      before, separately from "--no-gitignore", so you can obey the repository and ignore the search
-      tools or the other way round. Where two of them disagree in the same folder, a rule in
-      ".rgignore" wins over ".ignore", which wins over ".gitignore".
-  -> Generated files are now left out of the counts too, and reported the same way. A file counts
-      as generated when its first 512 bytes hold "do not edit", "auto-generated", "autogenerated"
-      or "@generated", which is what protobuf output, register maps, ORM models and bindings write
-      in their heads. "--count-generated" counts them as before.
-  -> A file with no extension and a name nothing claims is now opened for its first line, and a
-      "#!" there decides its language: "deploy", "configure" and the scripts of a "bin/" directory
-      are counted instead of silently skipped. The interpreter is matched after "env" and its
-      flags, and a versioned one falls back to its plain name, so "#!/usr/bin/env python3.12"
-      counts as Python. A language file declares its interpreters under a new optional "Shebangs"
-      block; nothing changes for files an extension or "--force-language" already describes.
-  -> New "--counting" command, taking "content" or "region". The default, "content", is the
-      counting mezura always did: a line counts where its words are, and a line saying nothing is
-      extra. "region" counts a line where it sits, the way cloc, tokei and scc do: any code on the
-      line makes it code, a blank inside a comment belongs to the comment, and the extra column
-      gives way to blanks. Both come from the same run; the command only picks the columns shown.
-  -> "--braces-as-code" is removed: what it reached for is the whole of "--counting region". A
-      saved configuration's "===> braces-as-code" block is no longer read, so replace it with a
-      "===> counting" block holding "region" to keep that behaviour.
-  -> The JSON document and the log record where every line landed, as a "classes" block of nine
-      counts, and the scope records "counting" instead of "braces_as_code". "code", "comments" and
-      "extra" are the fold of those counts under the model the scope names. Documents and logs
-      written by an earlier v3.0.0 build cannot be read and have to be taken again.
   -> Comment lines are now counted and reported separately, with their own percentage.
-  -> A language can now declare more than one block comment pair: Pascal and Delphi count both
-      "{ }" and "(* *)", and D counts "/+ +/" beside "/* */". Only the end of the pair that opened
-      a block closes it. In a language file, the two "Multi line comment" lines now take
-      whitespace-separated lists, paired by position.
-  -> A block comment that closes and reopens on the same line no longer counts the rest of the
-      file as code. This hit Lua and HTML, whose opening and closing symbols differ in length.
-  -> Block comments can now nest, declared per pair under "Self-nesting comment start" and
-      "Self-nesting comment end": the block ends only when as many closers as openers have passed,
-      so an OCaml "(* (* *) *)" or a commented-out block in Rust, Haskell, Scala, Kotlin, Swift,
-      Julia, Elm, Lisp, Scheme, MATLAB, WebAssembly text or D's "/+ +/" is read to its real end
-      instead of its first closer.
-  -> A data directory whose files are missing is filled again on the next run, instead of staying
-      empty until the next version. Deleting the "languages" folder, or losing it any other way,
-      used to leave it empty for good while the run silently counted with the copies inside the
-      program.
-  -> Every message the program prints now wraps to the width of the report, including the ones
-      that list files, and the update message no longer says you changed a file when all it knows
-      is that the file is not the one it wrote.
-  -> A keyword that a language declares and no file used is no longer printed as "classes: 0". The
-      JSON document keeps its zeros, so a consumer still gets the same fields every run.
-  -> Two named targets over one path are now refused before anything is counted, so the message
-      names the path you typed. With "--diff" it used to check out the whole repository first and
-      then blame a temporary directory nobody wrote.
-  -> When counting a revision fails, the reason is now reported as what it was. A bad exclude
-      pattern or a thread the system refused used to come out as "git refused".
-  -> A script or style region that held nothing no longer gets a row of zeros in the breakdown,
-      and a region written in the container's own language folds into the file's own row instead
-      of appearing as HTML nested inside HTML.
-  -> "--hide" can now take out columns of the details, not only whole sections: "files",
-      "comments", "extra", "size" and "percentages". A comparison obeys them too, where hiding the
-      percentages leaves the absolute change beside each figure. Hiding the column "--sort" orders
-      by falls back to sorting by lines and says so. The JSON document always carries every figure.
-  -> In the boxed layout a module's name row is now closed by a solid line on both sides. The
-      table's vertical used to change brightness in the middle of itself, which read as a fault.
-  -> Sizes are written "B", "KB", "MB" and "GB" instead of "Bytes", "KBs", "MBs" and "GBs". The
-      plural read as a rate, "40.0 KBs" being one character from kilobytes per second, and the
-      size column is a character narrower for it. The figures and the 1000 they divide by are
-      unchanged.
-  -> Files that are known by their whole name are now counted: Makefile, Dockerfile,
-      CMakeLists.txt, Gemfile, Rakefile and the rest. A language file names them in a new
-      "Filenames" field, a file is matched by its name before its extension, and a contest over a
-      name is settled in "language_conflicts.txt" under "contested-filenames" or with
-      "--force-language Makefile=<language>". Three new languages come with it: Make, Dockerfile and
-      CMake.
-  -> "JS" is now reported as "JavaScript" and "TS" as "TypeScript". Delete your old logs of those
-      projects or a comparison will read the rename as one language disappearing and another
-      appearing. Both '--languages js' and '--languages javascript' select it either way.
-  -> Haskell's counted keyword is now called "types" instead of "data types". It counts the same
-      "data" declarations as before, and the report and the JSON document both use the new name, so
-      a consumer keyed on the old one needs the one word changed.
+  -> Module support: a target can now be given a name, and the report is grouped by it
+      as well as by language. E.g.: "mezura frontend=./web backend=./api"
+  -> A project can now carry its own settings, in a ".mezura" folder, holding a
+      "config.txt" and a log of its own. A run looks for it in the directory holding its targets and
+      then in each directory above it, so it applies from anywhere inside the project.
+      Save a config file locally in your project with the new "--save-local" flag. The targets
+      are saved relative to the project so the folder can be shared.
+  -> Every piece of printed text can now be styled, not just the four colors of the overview.
+      More than 70 tokens are exposed, and each can take a foreground color, background color
+      plus bold, italic, underline, dim, and reverse styling. They apply in order: built-in
+      defaults, then the theme, then your configuration file, then "--style".
+  -> Animation support for long running blocking operations with real time progress bars and spinners.
+      The live lines follow the terminal's width while it is resized, and erase themselves before
+      the report prints. "--hide animations" stops every moving line while keeping what they
+      settle into, which a TERM=dumb terminal also gets on its own.
+  -> The program can now ignore minified files and auto-generated files. Change this with
+      --count-minified and --count-generated.
+  -> New "MEZURA_DATA_DIR" environment variable, naming the folder mezura extracts its
+      data files.
+  -> MCP support, with the mezura-mcp bin target.
+      A coding assistant can now run mezura for you. It comes in the release archive beside mezura,
+      or with "cargo install --locked --git https://github.com/subamanis/mezura mezura-mcp".
+  -> 47 new languages, bringing the shipped set to 77: Objective-C, MATLAB, Lua, Perl,
+      Prolog, Pascal, Delphi, OCaml, F#, Elm, Clojure, Lisp, Scheme, Julia, D, Carbon, COBOL,
+      Fortran, Ada, VHDL, Erlang, GraphQL, PowerShell, Svelte, JSX, WebAssembly text, Assembly,
+      GDScript, Verilog, SystemVerilog, Nix, HCL (Terraform), Groovy, Protocol Buffers, Visual
+      Basic, Less, Solidity, Batch, Make, Dockerfile, CMake, and the shader languages HLSL, GLSL,
+      WGSL, Metal, Slang and ShaderLab.
+  -> "--force-language", "--languages" and "--exclude-languages" can now be specified per-module.
+      Write the module and a slash before the value: "mezura ios=./ios analysis=./matlab
+      --force-language ios/m=objective-c,analysis/m=matlab" counts one repository's ".m" files as
+      Objective-C in one folder and as MATLAB in the other, in a single run.
+  -> A ".ignore" or ".rgignore" is now obeyed alongside the ".gitignore".
+  -> Shebang support added. A file with no extension and a name nothing claims is now opened
+      for its first line, and a "#!" there decides its language. A language file declares its
+      interpreters under a new optional "Shebangs" block.
+  -> Language files are far more expressive, so a language can be described more accurately.
+      New blocks declare the escape character, strings that cross lines apart
+      from ones that end with them, raw strings, string openers and closers written differently,
+      character literals, line continuations and what they carry over, more than one block comment
+      pair, comment pairs that nest, and Lua's long brackets at any level. Any number of each may
+      be declared, where only the first one or two used to be read.
+  -> Files known by their whole name are now counted: Makefile, Dockerfile, CMakeLists.txt,
+      Gemfile, Rakefile and the rest. A language file names them in a new "Filenames" field, and a
+      contest over a name is settled in "language_conflicts.txt" under "contested-filenames".
   -> A language can now be named by any extension it claims, wherever a language name is expected:
-      '--languages js', '--exclude-languages rs', and the same inside a configuration file. An
-      extension that two languages claim names the one that owns it for the counting, which is the
-      answer in "language_conflicts.txt" or the one "--force-language" gave.
-  -> The script and style sections of HTML, Vue and Svelte files are now counted with their own
-      languages' symbols instead of the file's, so a "//" comment inside a script block is a
-      comment and a "lang=\"ts\"" section counts as TypeScript. The file still weighs whole on its
-      own language's row, and under it the report now breaks that row down: how much of it is the
-      file's own language and how much each nested one, with a percentage of the container beside
-      every figure. It shows in every layout and in "--diff", and "--hide nested-languages" turns
-      it off. A language file declares such sections in a new "Nested language" block.
-  -> Lua's counted comment brackets now work at every level: a pair written with "=*" in a
-      language file, like --[=*[ with ]=*], matches any run of "=" and closes only at an end
-      carrying the same count, so a "]]" inside a --[==[ block is text and the block ends where
-      Lua says it ends.
-  -> A string can now open with one symbol and close with another, declared in a language file
-      under "Paired string openers" and "Paired string closers". Rust declares r" and r#" with
-      their closers, C# declares @" with " and C++ declares R"( with )", so a raw or verbatim
-      string holding quotes or a comment opener, or ending in a backslash, no longer counts
-      everything below it as string or comment.
-  -> A language file now declares what escapes a quote, under "Escape character", and the answer is
-      no longer the backslash everywhere. It is the backslash in most languages, the backtick in
-      PowerShell, and "none" in the family that escapes a quote by doubling it: Pascal, Delphi, Ada,
-      Fortran, COBOL, MATLAB, VHDL and SQL. An SQL statement holding a Windows path, 'C:\', used to
-      swallow every comment under it to the end of the file, and a shell line writing an apostrophe
-      as I\'m did the same. Any language file of your own that declares a string of any kind now
-      needs this block, or the file is refused.
-  -> String symbols now split by behavior the way comment symbols always did: the "String
-      symbols" list ends at the end of the line, and a "Multi line string symbols" list holds the
-      ones that cross lines, like Python's """ or a backtick template. An unbalanced quote now
-      costs its own line instead of everything below it. Languages whose plain quote legally
-      spans lines (Rust, Ruby, the shells, PHP, SQL and their kin) declare it crossing and keep
-      their behavior.
-  -> A line ending in a backslash now continues onto the next one where the language says it does,
-      declared in a language file under "Line continuation" and "Continues". A C string written
-      across three lines with backslashes is one string, so a "//" inside it is no longer read as a
-      comment, and a C line comment ending in a backslash carries on to the next line as it really
-      does. C, C++, both header languages and Objective-C continue both strings and comments;
-      JavaScript, TypeScript and Python continue strings only, since their comments end at the
-      newline whatever follows.
-  -> A language file can now name the symbol of a character literal, in a "Character literal
-      symbols" line. A literal has to close on its own line and hold one character or an escape,
-      so Rust's and D's '"' keeps its quote to itself while a lifetime's lone ' opens nothing, and
-      a line like "let msg: &'static str = "don't panic";" no longer counts everything below it as
-      code. Rust, D, F#, OCaml, Haskell and Julia declare it, so a primed name like "x'" and
-      Julia's transpose operator cost nothing. Erlang's quoted atoms are declared as the single
-      line strings they behave as.
-  -> HTML now declares no string symbols at all: its quotes delimit attributes, not strings, so
-      an apostrophe in the text ("it's") no longer swallows the comments and markup below it.
-  -> Language files are now updated automatically when you install a new version, so a correction to
-      a language reaches you without you having to do anything. One you had changed yourself is
-      replaced too, since an out of date language file counts wrongly, but your copy is kept under
-      "data/replaced/<version>/<date and time>/" and the program names it, so you can carry your
-      changes over. Each update and each "--restore" writes its own folder there, so two of them
-      never mix and you can tell which files were moved aside together.
-      A language file of your own is never touched, and neither are your themes, your default
-      configuration or "language_conflicts.txt".
-  -> 34 new languages: Objective-C, MATLAB, Lua, Perl, Prolog, Pascal, Delphi, OCaml, F#, Elm,
-      Clojure, Lisp, Scheme, Julia, D, Carbon, COBOL, Fortran, Ada, VHDL, Erlang, GraphQL,
-      PowerShell, Svelte, JSX, WebAssembly text, Assembly, GDScript, and the shader languages
-      HLSL, GLSL, WGSL, Metal, Slang and ShaderLab.
-  -> Go is called "Go" in the report and no longer "GO". Five language files that were named in
-      lower case, go, java, js, python and ts, are now named like the other sixty-two, so the
-      "languages" folder reads the same way throughout.
-  -> VHDL now counts its block comments. VHDL-2008 writes them as "/* */" and mezura knew only the
-      "--" line comments, so every block comment in a modern VHDL file was counted as code.
-  -> Pascal no longer claims ".pp". Almost every ".pp" file in the wild is a Puppet manifest, which
-      mezura does not support, and counting one as Pascal gave numbers that looked fine and were
-      read with the wrong comment symbols. Pascal keeps ".pas" and ".lpr".
-  -> Objective-C takes ".m" and Perl takes ".pl", while ".h" stays with C Header. If you write
-      MATLAB or Prolog instead, or want your headers counted as Objective-C, swap the line for it
-      in "language_conflicts.txt", or run with "--force-language m=matlab".
+      "--languages js", "--exclude-languages rs", and the same inside a configuration file.
+  -> The script and style sections of HTML, Vue and Svelte files are now counted as nested languages
+  -> Language files are now updated automatically when you install a new version, so a correction
+      to a language reaches you without you having to do anything. One you had changed yourself is
+      replaced too, but your copy is kept under "data/replaced/<version>/<date and time>/" and the
+      program names it. A language file of your own is never touched, and neither are your themes,
+      your default configuration or "language_conflicts.txt".
   -> Two languages that claim the same extension no longer settle it silently. The winner is named
-      in the new "language_conflicts.txt" file of the data directory, and when nothing names it, the
+      in the new "language_conflicts.txt" file of the data directory, and when nothing names it the
       program says which language it gave the extension to and that it only did so alphabetically.
-  -> New "--force-language" command: "--force-language m=matlab,pl=perl" decides which language an
-      extension belongs to for this run, whether or not another language claims it, and takes a
-      whole filename just as readily. It overrides the conflicts file and, like every other command,
-      can be saved in a configuration file.
+  -> Objective-C takes ".m" and Perl takes ".pl", while ".h" stays with C Header. If you write
+      MATLAB or Prolog instead, swap the line for it in "language_conflicts.txt", or run with
+      "--force-language m=matlab".
+  -> Pascal no longer claims ".pp", since almost every ".pp" file in the wild is a Puppet manifest.
+      It keeps ".pas" and ".lpr".
   -> Extensions are now matched without regard to case, so a file named "MAIN.RS" counts as Rust.
-  -> The messages and the help were gone over for wording. Every error now names what failed and
-      what to do about it, one word is used for one thing throughout ("directory", never "dir" or
-      "folder"), and the counts read as English on one file as much as on many. Two printed lines
-      moved: the scan heading is "Analyzing targets" rather than "Analyzing directories", since a
-      target can be a file or a pattern, and the overview's third label is "Size:" rather than
-      "Size :". Anything that reads mezura's output by matching those lines needs updating.
 
 (Breaking!)
   -> Color palettes are now called themes, and carry a whole look instead of four bar colors.
       "--color-palette" is now "--theme", "--show-palettes" is "--show-themes", "--tune-palettes"
-      is "--theme-editor", and the files live in "data/themes" instead of "data/palettes".
-      A theme file is a list of "token = value" lines and nothing else, the same tokens that
-      "--style" takes. Palettes from older versions have to be rewritten in the new format.
+      is "--theme-editor", and the files live in "data/themes" instead of "data/palettes". A theme
+      file is a list of "token = value" lines, the same tokens "--style" takes, so palettes from
+      older versions have to be rewritten.
   -> --colors is removed. The colors of the overview are now five ordinary style tokens,
-      "language-1" to "language-4" and "language-others", so they are set like every other style
-      and can carry bold or italic on the language name. A theme that names "language-4" and not
-      "language-others" gets the same style for both, since the two never appear together.
-  -> A configuration file declares "theme" instead of "color-palette", and can no longer declare
-      "colors". Its "style" block stays, as the per project tweaks on top of the named theme.
+      "language-1" to "language-4" and "language-others", so they are set like every other style.
+      A configuration file can no longer declare "colors".
   -> A configuration file can no longer turn on logging: a hand-added "log" line is ignored and
       named when the file loads. Ask for an entry per run, with "--log".
-  -> --no-visual and --no-keywords are removed, replaced by --hide. Use '--hide bar' and
-      '--hide keywords'.
-  -> The default order of the languages is now the number of lines, and ties are broken
-      alphabetically. Use '--sort size' to get the old order back.
-  -> The "details" section is now a table by default: one aligned row per language, with a
-      percentage next to its files, lines, code and comments, and the keywords in their own block
-      underneath. Use '--layout list' for one block per language instead, which is where the
-      older shape went.
-  -> The overview bar is drawn with the 'medium' character by default. Use '--bar-thickness slim'
-      for the old bar, which is the one that renders on every terminal.
+  -> --no-visual and --no-keywords are removed, replaced by --hide. Use "--hide bar" and
+      "--hide keywords".
+  -> The default order of the languages is now the number of lines, ties broken alphabetically.
+      Use "--sort size" to get the old order back.
+  -> The "details" section is now a table by default, one aligned row per language. Use
+      "--layout list" for an approximation of the layout that older versions printed.
   -> The section that compares this run with previous ones is now called "History" instead of
-      "Progress", since it is the past and not the state of the run in front of you. "Progress"
-      now means the live bar of the run itself, and nothing else.
+      "Progress". "Progress" now means the live bar of the run itself, and nothing else.
   -> "extra" no longer includes the comments: it is the blank lines plus the lines that carry
       no content.
   -> Lines that carry no content are recognised consistently now, whatever punctuation they are
-      made of. The old rule covered only a few shapes, so a small number of lines move between
-      "code" and "extra". "--counting region" counts them all as code.
-  -> The log is now written as JSON, one entry per line, in "data/logs/<config>.jsonl". Each entry
-      records the settings, the totals with the comment count, and the module totals. Logs from
+      made of, so a small number of lines move between "code" and "extra".
+  -> A comment line carrying no words now counts as extra, the way a lone brace always did: the
+      bare "/*" and "*/" of a block written on their own lines, a banner's "*", a lone "//" spacer,
+      a decorative "/*----*/". Comment counts drop visibly on trees written in banner style; code
+      counts do not move.
+  -> The log is now written as JSON, one entry per line, in "data/logs/<config>.jsonl". Logs from
       earlier versions (.txt) are not read or touched; delete them if you do not want them around.
-  -> On a terminal, the "Analyzing directories" line now moves while the scan runs: the dots cycle,
-      and a count of the files found so far appears beside them on a scan long enough to need one.
-      Redirected or piped output is unchanged.
-  -> A parse that will outlast the scan by more than half a second draws a live progress bar on a
-      terminal: the share done and the files done against the files found, with the parsing speed
-      beside them, erased before the report prints. "--hide progress-bar" keeps only the file
-      count.
-  -> New "--progress-bar" command: "smooth", "blocky" or "hash" chooses the characters the live
-      bar is drawn with. "hash" is plain ASCII, for a terminal that draws the block characters
-      wrongly or not at all.
-  -> The live lines fit themselves to the terminal's width, and follow it while it is resized:
-      the bar narrows first, then the speed figures go one by one, until only the file count is
-      left. A revision name longer than 18 characters is shortened with "..".
-  -> Counting a git revision for "--diff" is no longer silent on a terminal: a moving line names
-      the phase, "Writing out '<revision>'" and then "Counting '<revision>'", with the files
-      discovered and the progress bar when the counting is long enough to need one. It erases
-      itself completely before the comparison prints.
-  -> The temporary checkout of a revision is removed in the background: on a large tree that
-      removal used to hold the comparison back for seconds after the counting was done. When it is
-      still running as mezura finishes, a moving "Cleaning up '<revision>'" line says so.
-  -> A "--diff" whose two sides name the same commit is refused, naming both spellings and the
-      commit, and a mistake in the second revision now fails at once, before the first one is
-      written out and counted.
-  -> Writing out a revision for "--diff" now spreads the work over every core, several times
-      faster on a large repository.
   -> Warnings and errors are written to the error output instead of the standard one, so that a
       redirected or piped run carries the report and nothing else. On screen nothing changes.
   -> mezura exits with code 1 when the run failed: an unrecognised command, a wrong value for one,
       a configuration, theme or language name that does not exist, a path that is not there, or a
       set of files where every single one failed to be parsed. Finding no code to count is not a
       failure and still exits 0, and so does a run where only some files failed.
+
 New commands:
+  -> --counting content|region : switches the way mezura groups the lines. "content" is the
+      default and judges a line by what it holds; "region" judges it by the span it sits in, which
+      is how most other counters work.
   -> --hide <list> : leaves parts of the output unprinted. Takes any of version, directory-info,
-      parsing-info, progress-bar, animations, keywords, overview, bar, history and timing,
-      separated by commas or spaces. "animations" stops every moving line while keeping what
-      they settle into, which a TERM=dumb terminal also gets on its own.
-      Errors and warnings are never hidden, so hiding the parsing info still reports files that
-      failed to be parsed.
+      parsing-info, progress-bar, animations, keywords, overview, bar, nested-languages, history
+      and timing, separated by commas or spaces. It also takes out columns of the details:
+      "files", "comments", "extra", "size" and "percentages". Errors and warnings are never hidden.
   -> --style <token>=<value>,... : overrides the style of one or more categories of printed text,
       for a single run. Can also be stored in a configuration file and is kept by --save.
+  -> --explain : run on exactly one file, it answers how the counter classifies each line, one by
+      one. It also takes a range of lines, "--explain 1210..1230", with either end free to be left
+      off.
+  -> --by-file [n] : every counted file gets a row of its own under the language it was counted as.
+      A number keeps only the n biggest of each language, by whatever "--sort" is in effect.
+  -> --force-language <ext>=<language>,... : decides which language an extension or a whole file
+      name belongs to for this run, whether or not another language claims it. It overrides the
+      conflicts file and can be saved in a configuration file.
+  -> --save-local : writes the settings of this run into the project's own ".mezura" folder, with
+      the targets relative to the project. "--no-local" ignores that folder for one run.
   -> --bar-thickness slim|medium|fat|low : chooses the character the overview bar is drawn with.
-      'slim' is the default and the only ASCII one, so it is the fallback for terminals that
-      cannot render box drawing characters.
-  -> --layout table|boxed|list|matrix : chooses the shape of the "details" section. 'boxed' is the
-      table inside a drawn frame, where each number shares a cell with its percentage. 'list' is the
-      block of three rows per language that older versions printed. 'matrix' puts the languages down
-      and the modules across, one number per cell, for comparing folders that are several answers to
-      the same problem rather than several parts of one thing.
-  -> --output text|json : 'json' replaces the whole printed report, status lines and overview
-      included, with one JSON document, so a run can be read by another program. The counts go in
-      as plain numbers of lines and bytes, with no separators, no KB or MB and no percentages, and
-      warnings go to the error output so they never land inside the document as stray text. They are
-      carried inside it under "warnings", each with a code, the subject it is about, the readable
-      message, and whether it puts the counts or only the settings in doubt. The document is written
-      even when there was nothing to count and even when every file failed to parse, so that nobody
-      has to tell an empty file apart from an empty answer, and the exit code still says the run
-      failed. A configuration file cannot declare it.
+      "slim" is the only ASCII one, so it is the fallback for terminals that cannot render box
+      drawing characters.
+  -> --progress-bar smooth|blocky|hash : chooses the characters the live bar is drawn with. "hash"
+      is plain ASCII, for a terminal that draws the block characters wrongly or not at all.
+  -> --layout table|boxed|list|matrix : chooses the shape of the "details" section. "boxed" is the
+      table inside a drawn frame, "list" is the block of three rows per language that older
+      versions printed, and "matrix" puts the languages down and the modules across, one number
+      per cell.
+  -> --output text|json : "json" replaces the whole printed report with one JSON document, so a run
+      can be read by another program. Counts go in as plain numbers, with no separators and no
+      percentages, and warnings are carried under "warnings", each with a code, a subject, a
+      readable message and whether it puts the counts or only the settings in doubt. The document
+      is written even when there was nothing to count and even when every file failed to parse.
   -> --diff <reading> or <older>..<newer> : compares this run against another reading, or two
       readings against each other. A reading is a JSON document an earlier run wrote, or a git
-      revision: "mezura ./src --diff main" counts what "./src" held on "main", on the spot and with
-      this run's settings, and "--diff v2.0.1..v3.0.0" compares two tags to each other. The
-      comparison takes the place of the report, a row per language and one for the total, and every
-      figure carries what it is now and how much it moved. The keywords are marked the same way in
-      the section they already have. A language that only one of the two readings has is marked
-      "new" or "gone" instead of being given a percentage. The settings recorded in the document
-      reach whatever is counted against it, so the two readings measure the same thing; a setting
-      given on the command line itself is kept, and mezura then says the two readings were not
-      taken the same way, since that difference is not code that changed. Named targets get a
-      row each with their languages under them, as long as both readings named the same modules;
-      when they did not, the comparison is of everything at once and mezura says which each of them
-      named. With "--output json" the comparison is written as a JSON document, every count carrying
-      "from", "to" and "change". A comparison run writes no log entry, and "--log" beside it says
-      so. A configuration file cannot declare it.
+      revision: "mezura ./src --diff main" counts what "./src" held on "main", and
+      "--diff v2.0.1..v3.0.0" compares two tags. Every figure carries what it is now and how much
+      it moved, and a language only one side has is marked "new" or "gone". The settings recorded
+      in a document reach whatever is counted against it, so the two sides measure the same thing.
   -> --save-theme <name> : writes the way this run looks into a theme file, flattened into values,
-      so it stands on its own and can be shared. Combined with --save, the configuration that is
-      written points at that theme and carries no styles of its own.
+      so it stands on its own and can be shared.
   -> --number-separator comma|underscore|dot|none : chooses the character that groups the digits of
-      every printed number. The character itself is accepted too, as in '--number-separator _'.
+      every printed number. The character itself is accepted too, as in "--number-separator _".
   -> --decimal-separator dot|comma : chooses the character that separates the decimals of the sizes,
-      the percentages and the execution time. Together with the one above, '1.559.486' and '716,2'.
+      the percentages and the execution time. Together with the one above, "1.559.486" and "716,2".
   -> --sort lines|files|code|comments|extra|size|name : chooses the order of the languages.
   -> --version : prints the version of the binary and the date it was released on.
   -> --restore : writes back every file that ships with mezura and is not in your data directory
-      any more, the language files, the themes and the default configuration, and says which ones.
-      It only creates what is missing: your own files and your edits to the shipped ones are never
-      touched. A missing language file is the reason it exists, since that language just stops
-      being counted without a word.
-  -> --show-themes now previews a theme on a sample of the real details rows and a mock overview,
-      instead of the overview alone, so the headings, labels, numbers, percentages and size figures
-      it declares can be seen before it is picked. It also takes an optional thickness
-      ('--show-themes fat'), so the preview bar matches what --bar-thickness would print.
+      any more, and says which ones. Your own files and your edits to the shipped ones are never
+      touched.
   -> --top <n> : shows only the first n languages, and states underneath how many were hidden.
       The total keeps counting all of them, and the overview never shows more than n either.
 
 Change in commands:
+  -> The "--dirs" command is now "--targets", and a saved configuration's "===> dirs" block is now
+      "===> targets". Edit or re-save old configurations, or their targets are ignored.
+  -> "--braces-as-code" is removed: replace a configuration's "===> braces-as-code" block with a
+      "===> counting" block holding "region" to keep that behaviour.
+  -> "--show-themes" previews a theme on a sample of real details rows and a mock overview, instead
+      of the overview alone. It also takes an optional thickness, "--show-themes fat".
+  -> The theme editor page opened by "--theme-editor" now shows a whole run, details table and
+      overview, and gives a picker to each of the 29 tokens that draw them. Three tokens of the
+      overview could not be changed there at all before, and a theme that dresses more than the
+      overview now reaches the page whole, backgrounds and bold and italics included.
   -> The history section marks an entry that was counted with different settings: "modified:"
-      followed by the names of the ones that changed. The comparison is still shown, because the
-      point is to say whether it can be trusted. Log entries also record '--no-gitignore' now, the
-      one setting that changes the numbers and was not being written down.
-  -> A size in bytes is printed as a whole number now, "900 Bytes" instead of "900.0 Bytes". Only a
-      figure that was divided down to KBs, MBs or GBs has a decimal.
-  -> A language whose keywords are all zero no longer takes a row in the keywords section: it only
-      ever said that the language has keywords your code never wrote.
-  -> A long warning or error is broken between words instead of wherever the terminal happens to
-      end the line.
-  -> 'details-language' is split in two: 'details-language-header' is the word "Language" over the
-      first column of the two tables, 'details-language-name' is the name of a language wherever it
-      appears. The header now reads like the other six instead of standing out on its own.
-  -> The "Size" column header now reads like the other five instead of being darker than them, and
-      the unit next to a size ("KBs", "MBs") has its own token, 'size-unit', which is the part that
-      stays quiet. A theme that set 'total-size-label' to dim it was dimming the header too.
-  -> Styles are applied in this order: built-in defaults, then the theme, then your configuration
-      file, then --style. So a theme can carry a complete look, your own config can keep a few
-      tweaks that survive switching themes, and --style wins over both.
-  -> The "Exec time" figure now measures the whole command instead of only the scan.
-  -> The theme editor page opened by "--theme-editor" is now a whole run and not only the overview
-      bar. It shows the details table and the overview under it, painted with whichever theme you
-      pick from the strip above them, and gives a picker to each of the 29 tokens that draw them,
-      grouped by the header row, the rows, the frame, the overview and the languages. Hovering a
-      picker finds its text in the run and hovering the text finds its picker, clicking the text
-      copies its color, and "copy theme" hands back only the lines you moved away from mezura's
-      own colors, which is what a theme file holds. Three tokens of the overview could not be
-      changed there at all before, and the page drew two of them in a grey mezura never prints.
-      A theme of yours that dresses more than the overview also used to reach the page with
-      everything but its language colors dropped, so it looked no different from a plain one; it
-      now arrives whole, backgrounds and bold and italics included.
-  -> "--output json" writes its document on one line now, with no indentation, which makes it
-      between a quarter and a half smaller depending on what was asked for. Every key and every
-      number is the same. To read one yourself, pipe it through "jq .". The same holds for
-      "--explain --output json" and for the document a "--diff" writes.
+      followed by the names of the ones that changed. Log entries also record "--no-gitignore" now.
+  -> The "Exec time" figure now measures the whole program time instead of only the scan.
 
 Performance:
   -> Counting uses well under half the processor time it did, while counting more languages than
       before, and the counts themselves are unchanged. How much of that reaches the clock is decided
       by your disk: a large repository on a fast NVMe was already close to what the processor can
-      do, while on a slower drive, or with antivirus scanning every file that is opened, the same
-      repository is now counted in a little over half the time.
+      do.
   -> mezura now uses many more threads for reading files, because a thread spends most of its time
       waiting for a file to open rather than working. This is worth nothing on a fast disk whose
       files were read recently, and up to twice the speed on a slow disk or on the first run after
-      a reboot. '--threads' accepts up to 32 producers and 128 consumers now, instead of 8 and 30,
+      a reboot. "--threads" accepts up to 32 producers and 128 consumers now, instead of 8 and 30,
       so it is worth raising if your files live on a slow drive.
 
 Bugfixes:
   -> A setting your default configuration holds is no longer dropped when you load another one.
-      "targets", "exclude-languages", "top" and "by-file" were the four that could go missing: a
-      "--load"ed configuration carrying a "===> style" block and covering every other setting made
-      the run skip the default configuration entirely, and those four of its values were lost
-      without a word.
-  -> A line holding a comment beside nothing but punctuation now counts as a comment. Lines such as
-      "}  // end of function" or "});  // callback" were counted as neither code nor comment, so
-      their comment was reported nowhere and comment counts came out low on any codebase that
-      writes them. With "--counting region" such a line counts as code, since the punctuation is
-      code there and a line carrying both is code.
-  -> A comparison document now records the settings it took from the document it compares against,
-      under the code "setting-adopted". They were only ever said on screen, so with "--output json"
-      nothing at all was said, and both sides simply read alike: a value the command line gave
-      could not be told apart from one borrowed from the baseline.
-  -> A setting named by a comparison is now spelled without its dashes, as "counting" rather than
-      "--counting", both in the sentences above the table and in the "subject" of a JSON warning.
-      It is the same name the history section already used for the same thing.
-  -> Each side of a comparison document now records the targets it measured, under
-      "scope.targets", the way a run document already did. Without it, two sides that measured
-      different trees could not be told apart from code that changed. A side counted from a git
-      revision records the targets as they were asked for, not the temporary checkout they
-      were counted in.
-  -> A comparison now says above its table when a side's own scan leaves the numbers in doubt:
-      a side that found no relevant files at all, one whose files failed to be parsed, and one
-      whose directories could not be read. Before, a baseline that failed to parse half its files
-      simply read as code that shrank. What this run's own scan found is reported as it happens,
-      as before.
-  -> The "scan" block a comparison writes for a side taken from a document now carries that run's
-      true faulty and unreadable counts. It used to say zero whenever the document had not been
-      written with "--show-faulty-files", which no longer decides the counts, only the lists of
-      paths.
-  -> The "scan" block of a JSON document now also says how many directories could not be read, and
-      every side of a comparison document carries that whole block, so a side that failed to read
-      half its files is no longer indistinguishable from a side whose code shrank.
-  -> "--show-faulty-files" now decides whether "--output json" writes the paths of the faulty files
-      and unreadable directories, as it already decided whether they are printed. The counts are in
-      the "scan" block either way, so a document without the lists never says that nothing went
-      wrong, and a document of a whole drive stops carrying hundreds of paths nobody asked for.
-  -> A language file that declares extensions but no name now reports that the counts are in doubt
-      instead of the settings: every file carrying those extensions goes uncounted, which is what
-      an unreadable language file already said. It also has a code of its own,
-      "language-without-name", separate from "language-claims-nothing", which is the harmless
-      case and replaces the "unusable-language" that used to cover both.
-  -> A command that is ignored, "--log" or "--compare" without a loaded configuration, now says so
-      in "--output json" as well, under the code "command-ignored". It was only ever said on screen,
-      so a build step reading the document could not tell that something it asked for was dropped.
-  -> The help text printed beside a mistyped command value now goes to the error output, so
-      "--output json > stats.json" with a mistake in the command leaves an empty file and an exit
-      code instead of a stats.json that holds a help page.
+      "targets", "exclude-languages", "top" and "by-file" were the four that could go missing.
+  -> A block comment that closes and reopens on the same line no longer counts the rest of the file
+      as code. This hit Lua and HTML, whose opening and closing symbols differ in length.
+  -> HTML declares no string symbols at all now: its quotes delimit attributes, not strings, so an
+      apostrophe in the text ("it's") no longer swallows the comments and markup below it.
   -> A log is never emptied by a run that could not read it. It used to be cleared and rebuilt from
-      what had just been read, so a file that was locked, held open by an editor, or damaged came
-      back holding that one run where it had held every previous one, without a word. It is now
-      written beside the old one and moved over it only once it is whole, and a run that cannot read
-      what is there leaves it alone and says why.
-  -> "--show-configs" with no configurations saved now says so, instead of printing the heading
-      followed by an empty line.
+      what had just been read, so a file that was locked or damaged came back holding that one run
+      where it had held every previous one, without a word.
+  -> A log you emptied by hand is written to again.
   -> A language file with a mistyped heading is now reported as a formatting problem instead of
-      being read half way. "Multiline comment start" in place of "Multi line comment start" used to
-      be accepted, and everything below it was dropped without a word, so that language counted its
-      block comments as code. The README documented that exact misspelling and has been corrected.
-  -> A language file saved with a byte order mark now reads. PowerShell's "Set-Content" and older
-      versions of Notepad write one, so editing a language file the ordinary way on Windows used to
-      make the language disappear from the count. The same now holds for "language_conflicts.txt",
-      for a configuration and for a theme file: a mark in front of the first line used to make the
-      whole file do nothing, and for the conflicts file and the configuration it did so in silence.
-  -> A log you emptied by hand is written to again. Every ordinary way of clearing a file leaves a
-      newline behind, and the program read that as a log it had failed to read and refused to touch,
-      on that run and on every run after it.
-  -> Two runs logging to the same file at the same moment no longer damage it.
-  -> The warnings about languages now end with what to do about them: an unknown name points at
-      "--show-languages", and two files declaring one language point at the folder to clean up.
-      The wording of three of them changed slightly to make room for it.
+      being read half way.
   -> A language file that could not be read at all is no longer reported as a formatting problem.
-      A file saved in an encoding mezura cannot read now says so, instead of sending you looking for
-      a mistake in a file whose format is fine, and the reason is now printed beside each file name.
-      One whose format really is wrong names the line the reading stopped at, since the blocks have
-      to be written in one order and a block in the wrong place makes the whole file unreadable.
+      A file saved in an encoding mezura cannot read now says so, and one whose format really is
+      wrong names the line the reading stopped at.
   -> Two language files whose names differ only in upper and lower case are now reported, and
-      "--force-language" and "language_conflicts.txt" now give the extension to the one you named. Both
+      "--force-language" and "language_conflicts.txt" give the extension to the one you named. Both
       used to fold the case away and pick the other one, so naming a language exactly as it is
       spelled could hand your files to a different one, with its comment symbols and without a word.
-  -> A language that claims one extension in two spellings, such as "h" and ".h", no longer reports
-      itself as contesting the extension with itself.
-  -> The history section now reports "--force-language" among the settings that changed since an
-      earlier run. It was written into the log and thrown away on the way back in, so numbers moved
-      with nothing to say why.
-  -> The time a run reports is no longer shortened by a slow "on traversal done" callback that the
-      counting outlasted. This only affects a program using mezura as a library.
-  -> An extension can now be written with the dot in front of it. ".rs" in a language file, and
-      ".m" in "language_conflicts.txt", used to match nothing at all and say nothing about it, while
-      "--force-language .m=matlab" had always accepted the dot.
-  -> An extension is now matched whatever its length. One longer than 24 characters that also had a
-      capital letter in it was never recognised, so those files were silently not counted.
   -> Two language files that declare the same language name are now reported. One of them was used
       and the other discarded in silence, and which one won depended on the file names, so renaming
       a file could change your counts.
-  -> "--exclude-languages" no longer says that a language does not exist when it does. It said so
-      for every excluded language on any run that also used "--languages", and, separately, for any
-      language whose name has a letter outside the English alphabet, which it was excluding anyway.
+  -> A language that claims one extension in two spellings, such as "h" and ".h", no longer reports
+      itself as contesting the extension with itself.
+  -> An extension can now be written with the dot in front of it. ".rs" in a language file, and
+      ".m" in "language_conflicts.txt", used to match nothing at all and say nothing about it.
+  -> "--exclude-languages" no longer says that a language does not exist when it does, and does say
+      so when it is given a name that really is not one, instead of silently excluding nothing.
   -> The "N files found" and "Parsing files" lines now appear the moment the directories have been
-      walked, while the files are still being counted. They used to wait until the counting was over
-      and arrive together with the results.
-  -> A target whose path exists is now always taken literally: a directory with '[' or '{' in its
+      walked, while the files are still being counted, instead of arriving with the results.
+  -> A target whose path exists is now always taken literally: a directory with "[" or "{" in its
       name, or a run started inside one, used to be refused as an invalid glob pattern.
-  -> A size of exactly 1,000 bytes, or a million, or a billion, is now shown in the larger unit:
-      "1.0 KBs" instead of "1,000 Bytes", which is what every value one byte above it already said.
   -> The very first run after a fresh install now counts keywords (classes, structs and the rest).
       They were reported as zero until the second run.
   -> Naming the same directory twice, once with a slash at the end, counted everything in it twice.
       "mezura ./src,./src/" now reports what "mezura ./src" reports.
-  -> "--exclude-languages" now says so when it is given a name that is not a language, instead of
-      silently excluding nothing. Asking for one with "--languages" always did.
   -> A directory that cannot be opened during the scan is now reported, instead of taking everything
-      inside it out of the counts without a word. It is told the same way a file that fails to parse
-      is: the count, and the paths themselves with "--show-faulty-files", each with the reason beside
-      it, so a permission is told apart from a directory that was deleted while the scan was running.
+      inside it out of the counts without a word.
   -> The paths of faulty files are now written with forward slashes throughout, instead of mixing
-      them with backslashes halfway through on Windows. This also applies to the JSON document.
+      them with backslashes halfway through on Windows.
   -> A scan that finds nothing after failing to open a directory now exits with a failure code,
       the same way a run where every file failed to parse always has: that zero is not a count of
       anything. Finding nothing in directories that could actually be read still exits 0.
   -> A path with "--" inside it, like the folder names some tools generate, is no longer cut at it
-      and refused. A command begins only where "--" follows a space or starts the line, and the
-      message-only commands answer only when written as whole words, so "--helpme" is an
-      unrecognised command instead of the help, and a path containing "--version" does not print
-      the version instead of counting.
+      and refused. A command is also only recognised as a whole word now, so "--helpme" is an
+      unrecognised command instead of the help.
   -> A configuration file that stops being readable partway, most often because it was saved in an
       encoding other than UTF-8, now stops the run and names the file and the line. It used to be
       applied up to the unreadable line and silently lose everything after it.
   -> A worker thread dying mid-run now stops the run with an error that carries the reason,
       instead of returning counts that are silently missing that thread's share, or in one
-      arrangement never returning at all. If the operating system refuses some of the requested
-      threads the run simply carries on with fewer, and only refusing every one of them is an error.
+      arrangement never returning at all.
   -> A configuration file's "no-gitignore" and "search-in-dotted" now apply when the targets are
       being worked out, not only during the counting. A config that declared "no-gitignore" beside
-      a glob of gitignored paths died with "doesn't exist anymore", while the same command line
-      counted; the settings of the command line, the loaded configuration and the default one are
-      now merged before any pattern is expanded, wherever the pattern came from.
-  -> "--save" now writes a glob pattern as the pattern, made absolute, instead of the paths it
-      happened to match at the moment of saving. Every load expands it fresh, so a configuration
-      saved with "services/*" keeps meaning that as services come and go.
-  -> "--search-in-dotted" no longer walks into ".git". It opens the dotted directories somebody made,
-      like ".github", and leaves the one git keeps alone, at any depth. On this machine that is six
-      thousand fewer files read for exactly the same counts. Naming ".git" as a target yourself still
-      works, as writing out any path always has.
-  -> A symbolic link, or a Windows junction, that the scan comes across is no longer followed, so
-      whatever it points at is not counted a second time through it. The same goes for one that a
-      glob pattern matched. Expect a smaller count on a project that links one of its own
-      directories in. One that you name as a target yourself is still followed.
-  -> CSS, HTML and SCSS are counted at all now. A language file that declares multiline comments but
-      no keywords was rejected as badly formatted, so those three were dropped from every run with a
-      one line warning and nothing else. Expect them to appear in stats where they were missing.
-  -> The shipped language files describe their languages better. Python now declares triple quotes,
-      so a docstring containing a single quote no longer swallows the lines after it: on the Linux
-      kernel that alone moves 146 lines from "code" to "comments". JavaScript, TypeScript, TSX, Vue
-      and Go declare their backtick strings, so a '//' inside a template literal or a raw string is
-      no longer read as a comment. Java, Kotlin, Scala, Swift, C# and Elixir declare their triple
-      quoted blocks. More extensions are recognised too: cc, cxx and c++ for C++, hh, hxx and h++
-      for C++ headers, mjs, cjs and jsx for JavaScript, mts and cts for TypeScript, pyw and pyi for
-      Python, zsh and ksh for Shell, csx for C#, and sc for Scala.
-  -> If you are upgrading and not installing for the first time, delete the "languages" folder in
-      your data directory: the improved language files above only reach a machine that does not
-      already have them, and the folder is regenerated in full on the next run.
-  -> A language file can declare any number of string and single line comment symbols now. Only the
-      first one or two of each were ever used, and anything past them was ignored without a word.
+      a glob of gitignored paths died with "doesn't exist anymore" while the same command line
+      counted.
+  -> CSS, HTML and SCSS are counted at all now. A language file that declares multiline comments
+      but no keywords was rejected as badly formatted, so those three were dropped from every run
+      with a one line warning and nothing else. Expect them to appear where they were missing.
+  -> The shipped language files describe their languages better. Python declares triple quotes, so
+      a docstring containing a single quote no longer swallows the lines after it. JavaScript,
+      TypeScript, TSX, Vue and Go declare their backtick strings, and Java, Kotlin, Scala, Swift,
+      C# and Elixir their triple quoted blocks. More extensions are recognised too: cc, cxx and c++
+      for C++, hh, hxx and h++ for C++ headers, mjs, cjs and jsx for JavaScript, mts and cts for
+      TypeScript, pyw and pyi for Python, zsh and ksh for Shell, csx for C#, and sc for Scala.
   -> A string that ends in a backslash no longer runs to the end of the file in Go, Odin, D,
       Kotlin, Scala, C#, F#, Shell and PowerShell. A path like `C:\` used to leave the string open,
-      and everything under it, comments included, was counted as code. Language files gained a
-      "Multi line raw string symbols" block for the forms that escape nothing, since a backtick
-      escapes nothing in Go and does escape in a JavaScript template literal.
-  -> The same is now true of the three string forms that were never declared at all: F# verbatim
-      strings (@"..."), D wysiwyg strings (r"...") and PowerShell here strings (@' '@ and @" "@).
-  -> Odin block comments now nest, so one commented-out block holding another ends where it really
-      ends instead of at the first "*/", and the lines between the two closers are comment.
-  -> "--show-languages" now tells you when two files in your languages folder declare the same
-      language. The list prints one line per language, so the copies collapsed into it silently,
-      and this is the command you would run to find them.
-  -> A line that closes a block comment and opens the next one, with nothing or only whitespace
-      between the two symbols, now counts as a comment line. It used to count as neither code nor
-      comment, and with "--counting region" as code.
+      and everything under it, comments included, was counted as code.
+  -> An unbalanced quote now costs its own line instead of every line below it.
+  -> A commented-out block holding another block, and a "]]" inside a Lua "--[==[", are read to
+      their real end instead of stopping at the first closer.
   -> A string that begins exactly where a block comment closes, "*/" straight into a quote with no
       space between, is now read to its real end. Its opening quote used to be taken as its closing
-      one, so the string's text was counted as code and searched for keywords, and a quote that
-      crosses lines could carry the mistake to the end of the file.
+      one, so the string's text was counted as code, and a quote that crosses lines could carry the
+      mistake to the end of the file.
   -> A string that stays open because every symbol that could close it is escaped is no longer cut
       short at a different string symbol on the same line. Languages with more than one string
       symbol, Python and Shell among them, count a few such lines differently than before.
   -> Deleting the languages or the configuration folder no longer costs you your themes and your
       default configuration. The program used to treat that as a fresh installation and write every
       shipped file over the top; now it only puts back what is missing.
+  -> A data directory whose files went missing is filled again on the next run. Deleting the
+      "languages" or the "logs" folder used to leave it empty until the next version of mezura,
+      while the run silently counted with the copies inside the program.
   -> A run that cannot update its data files now counts with the language files inside the program
-      and says so, instead of counting with whatever the folder was left holding. A folder with one
-      language file in it used to pass for a whole installation, and everything else went uncounted
-      without a word.
-  -> Deleting the "logs" folder is now noticed and the folder is written again on the next run, so
-      "--log" has somewhere to write. It used to stay deleted until the next version of mezura.
+      and says so. A folder with one language file in it used to pass for a whole installation, and
+      everything else went uncounted without a word.
   -> Anything of mezura's own that goes missing is now named when it is written again, instead of
-      coming back in silence. A first run, which has lost nothing, still says nothing, and a
-      language file that a new version brings for the first time is not reported as one that was
-      lost. "--restore" tells the two apart in what it prints as well.
-  -> A file of yours that was moved aside by an update that then failed is now reported. The
-      message used to be thrown away with the failure, and nothing ever said where the file went.
-  -> The percentage bar of the overview is now more accurate
-  -> The dashed line above the total now matches the width of the total line.
+      coming back in silence. A first run, which has lost nothing, still says nothing.
+  -> The update message no longer says you changed a file when all it knows is that the file is not
+      the one it wrote.
+  -> The percentage bar of the overview is now more accurate.
   -> A theme file that cannot be fully read no longer stops the program. The lines that do not
-      parse are reported and skipped, and the rest of the file still applies. A palette used to be
-      rejected whole, and the run with it, without saying what was wrong.
+      parse are reported and skipped, and the rest of the file still applies.
   -> A section a config file declares that is not a command is now reported instead of being
       ignored in silence.
-  -> A name that does not exist now says what it is close to, instead of only that it is wrong.
-      This covers an unrecognised command, a theme, a configuration and the names given to
-      '--languages'. When nothing is close, it points at the command that lists what exists.
-  -> '--help' now has an entry of its own in the help, and '--help --help' prints it instead of
-      printing nothing at all.
-
-Dependencies:
-  -> serde_json = "1" was introduced, for the JSON the program now writes and reads: the log
-      entries, the "--output json" document and the documents "--diff" compares.
-  -> terminal_size = "0.4" was introduced, so the live lines can ask the terminal its width and
-      fit themselves to it.
-  -> unicode-width = "0.2" was introduced, so a revision name is measured in the terminal columns
-      it really occupies: CJK and emoji glyphs are two columns wide each.
-
-Other:
   -> A run typed with no arguments at all now takes its targets from a configuration file that names
       them. Before, it always counted the working directory, so a "===> targets" block could only
       reach a run that typed at least one command beside it.
-  -> Updated default styling. The 'list' layout was rebuilt too: each language is a block of three
-      rows, with the file count and size above the name, the line breakdown beside it and the
-      keywords below. It is about 50 columns narrower than the same block was before.
-  -> Sizes of a gigabyte and above are reported in GBs.
+
+Dependencies:
+  -> serde_json = "1", for the JSON the program now writes and reads.
+  -> terminal_size = "0.4", so the live animated lines can fit themselves to the terminal's width.
+  -> unicode-width = "0.2", so a name is measured in the terminal columns it really occupies.
+
+Other:
+  -> "--search-in-dotted" no longer walks into ".git". It opens the dotted directories somebody
+      made, like ".github", and leaves the one git keeps alone, at any depth. Naming ".git" as a
+      target yourself still works.
+  -> A symbolic link, or a Windows junction, that the scan comes across is no longer followed, so
+      whatever it points at is not counted a second time through it. Expect a smaller count on a
+      project that links one of its own directories in. One you name as a target is still followed.
+  -> A name that does not exist now says what it is close to, instead of only that it is wrong.
+      This covers an unrecognised command, a theme, a configuration and the names given to
+      "--languages". When nothing is close, it points at the command that lists what exists.
+  -> Updated default styling. The "list" layout was rebuilt too: each language is a block of three
+      rows.
+  -> Sizes are written "B", "KB", "MB" and "GB" instead of "Bytes", "KBs", "MBs" and "GBs", a whole
+      number of bytes is printed without a decimal, and a gigabyte and above is reported in GB.
+  -> Every message the program prints now wraps to the width of the report, breaking between words
+      instead of wherever the terminal happens to end the line.
+  -> Every error now names what failed and what to do about it, and one word is used for one thing
+      throughout ("directory", never "dir" or "folder").
   -> "--show-languages" prints its list in three columns instead of one name per line, so the whole
       set fits on a screen.
   -> A language with many keywords wraps its keyword row, instead of making the details section
       wider than every other line in it.
-  -> The test suite gained per-language parser fixtures that declare their own hand-verified counts,
-      and a byte-exact comparison of the whole fixture corpus against a recorded result.
   -> mezura is now dual-licensed as MIT OR Apache-2.0, at your option.
   -> The help is printed in colour.
   -> "--help" is now one line per command instead of every command in full. "--help full" prints
