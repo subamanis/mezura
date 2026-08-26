@@ -117,8 +117,11 @@ impl Checkout {
     // Where a path of the working tree is to be found in here, from the prefix that
     // 'find_repository_of' answered with. None when the revision predates it: a directory that did
     // not exist then counts zero rather than stopping the run.
+    // Trimmed of any trailing separator: the repository root's prefix is empty, and a target
+    // ending in '/' matches no file path on a whole-component check
     pub fn find_target_of(&self, prefix: &str) -> Option<String> {
-        let inside = self.path.clone() + "/" + prefix.trim_end_matches('/');
+        let inside = (self.path.clone() + "/" + prefix.trim_end_matches('/'))
+                .trim_end_matches('/').to_owned();
         Path::new(&inside).exists().then_some(inside)
     }
 }
@@ -254,6 +257,10 @@ mod tests {
                     "the revision was not written out to {}", checkout.path);
             assert!(checkout.find_target_of("mezura-core/src/").is_some());
             assert_eq!(None, checkout.find_target_of("a-directory-this-commit-never-had/"));
+            // The repository root's prefix is empty, and its target must not end in a separator
+            // or no file path would match it on a whole-component check
+            let root = checkout.find_target_of("").unwrap();
+            assert!(!root.ends_with('/'), "{root}");
             checkout.path.clone()
         };
         await_checkout_removals();

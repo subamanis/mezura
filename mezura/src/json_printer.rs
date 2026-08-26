@@ -27,8 +27,13 @@ pub fn create_document(result: &RunResult, datetime_now: &DateTime<Local>, confi
     let hidden = config.view.top_n.map_or(0, |top| names.len().saturating_sub(top));
     let shown = &names[..names.len() - hidden];
     let file_rows = result_printer::find_files_to_show(result, config);
-    let files = merge_file_rows(&file_rows, config.view.sort_by, config.view.counting);
-    let files_hidden = file_rows.iter().flat_map(HashMap::values).map(|rows| rows.hidden).sum::<usize>();
+    // With modules the rows are written once, inside each module's own languages, and so are the
+    // counts of what the cap hid: every file belongs to exactly one module
+    let (files, files_hidden) = match result.has_modules() {
+        true => (HashMap::new(), 0),
+        false => (file_rows.first().map(find_shown_files).unwrap_or_default(),
+                file_rows.iter().flat_map(HashMap::values).map(|rows| rows.hidden).sum::<usize>())
+    };
 
     let mut members = vec![
         format!("\"format\":{FORMAT_VERSION}"),
@@ -84,6 +89,22 @@ fn create_comparison_document(comparison: &super::diff::Comparison, datetime_now
     // has nothing to be compared against
     let pairs = comparison.module_pairs();
 
+    // The changed files under each language, the same gate and the same single placement the run
+    // document has: inside the modules when they are written, at the top level otherwise
+    let by_file = comparison.resolve_by_file(config);
+    let bases = by_file.map(|_| super::diff::determine_file_bases(&baseline.result, &subject.result))
+            .unwrap_or_default();
+    let (files, top_level_hidden) = match by_file.filter(|_| pairs.is_none()) {
+        Some(by_file) => {
+            let (files, hidden) = compare_files_per_language(&baseline.result.modules,
+                    &subject.result.modules, &bases, by_file, config);
+            (Some(files), hidden)
+        },
+        None => (None, 0)
+    };
+    let modules = pairs.as_ref().map(|pairs|
+            create_comparison_modules_array(pairs, config, keywords_counted, by_file, &bases));
+
     let mut members = vec![
         format!("\"format\":{FORMAT_VERSION}"),
         String::from("\"kind\":\"comparison\""),
@@ -94,11 +115,15 @@ fn create_comparison_document(comparison: &super::diff::Comparison, datetime_now
         format!("\"total\":{}", create_compared_total_object(&baseline.result.total, &subject.result.total,
                 keywords_counted, config.view.counting)),
         format!("\"languages\":{}", create_compared_languages_array(&rows, keywords_counted,
-                &nested_of(&baseline.result, config), &nested_of(&subject.result, config), config.view.counting)),
+                &nested_of(&baseline.result, config), &nested_of(&subject.result, config),
+                files.as_ref(), config.view.counting)),
+        // Counts the cuts of this level's own rows, the way a run document's does: with modules
+        // the rows and their cuts live inside each module
+        format!("\"files_hidden\":{top_level_hidden}"),
         format!("\"warnings\":{}", create_comparison_warnings_array(&comparison.notes)),
     ];
-    if let Some(pairs) = &pairs {
-        members.push(format!("\"modules\":{}", create_comparison_modules_array(pairs, config, keywords_counted)));
+    if let Some(rendered) = modules {
+        members.push(format!("\"modules\":{rendered}"));
     }
 
     format!("{{{}}}", members.join(","))
@@ -123,11 +148,19 @@ fn nested_of_module(module: &mezura_core::ModuleResult, config: &Configuration)
 // The same shape as a run document's modules, with every count a triad. '--top' does not cut these,
 // the way it does not cut the languages above.
 fn create_comparison_modules_array(pairs: &[super::diff::ModulePair], config: &Configuration,
-        keywords_counted: bool) -> String
+        keywords_counted: bool, by_file: Option<super::config_manager::ByFile>,
+        bases: &(String, String)) -> String
 {
     let entries = pairs.iter().map(|pair| {
         let (rows, _) = super::diff::create_comparison_rows(&pair.before.per_language, &pair.now.per_language,
                 config.view.sort_by, None, config.view.counting);
+        let mut files_hidden = 0;
+        let files = by_file.map(|by_file| {
+            let (files, hidden) = compare_files_per_language(std::slice::from_ref(pair.before),
+                    std::slice::from_ref(pair.now), bases, by_file, config);
+            files_hidden = hidden;
+            files
+        });
         let name = pair.name.map_or("null".to_owned(), |x| format!("\"{}\"", escape(x)));
         let members = [
             format!("\"name\":{name}"),
@@ -135,7 +168,8 @@ fn create_comparison_modules_array(pairs: &[super::diff::ModulePair], config: &C
                     keywords_counted, config.view.counting)),
             format!("\"languages\":{}", create_compared_languages_array(&rows, keywords_counted,
                     &nested_of_module(pair.before, config), &nested_of_module(pair.now, config),
-                    config.view.counting)),
+                    files.as_ref(), config.view.counting)),
+            format!("\"files_hidden\":{files_hidden}"),
         ];
         format!("{{{}}}", members.join(","))
     }).collect::<Vec<_>>();
@@ -145,7 +179,9 @@ fn create_comparison_modules_array(pairs: &[super::diff::ModulePair], config: &C
 
 fn create_compared_languages_array(changes: &[super::diff::LanguageStatsChange],
         keywords_counted: bool, baseline_nested: &HashMap<String, HashMap<String, Stats>>,
-        subject_nested: &HashMap<String, HashMap<String, Stats>>, model: CountingModel) -> String
+        subject_nested: &HashMap<String, HashMap<String, Stats>>,
+        files: Option<&HashMap<String, Vec<super::diff::FileStatsChange>>>,
+        model: CountingModel) -> String
 {
     if changes.is_empty() {
         return String::from("[]");
@@ -153,14 +189,16 @@ fn create_compared_languages_array(changes: &[super::diff::LanguageStatsChange],
 
     let entries = changes.iter().map(|change| create_compared_language_object(&change.name,
             &change.baseline, &change.subject, keywords_counted,
-            baseline_nested.get(&change.name), subject_nested.get(&change.name), model)).collect::<Vec<_>>();
+            baseline_nested.get(&change.name), subject_nested.get(&change.name),
+            files.and_then(|x| x.get(&change.name)).map(Vec::as_slice), model)).collect::<Vec<_>>();
 
     format!("[{}]", entries.join(","))
 }
 
 fn create_compared_language_object(name: &str, baseline: &Stats, subject: &Stats,
         keywords_counted: bool, baseline_nested: Option<&HashMap<String, Stats>>,
-        subject_nested: Option<&HashMap<String, Stats>>, model: CountingModel) -> String
+        subject_nested: Option<&HashMap<String, Stats>>,
+        files: Option<&[super::diff::FileStatsChange]>, model: CountingModel) -> String
 {
     let mut members = vec![format!("\"name\":\"{}\"", escape(name))];
     members.extend(create_triad_members(baseline, subject, model));
@@ -172,8 +210,50 @@ fn create_compared_language_object(name: &str, baseline: &Stats, subject: &Stats
         members.push(format!("\"nested_languages\":{}", create_compared_nested_array(
                 baseline_nested, subject_nested, keywords_counted, model)));
     }
+    if let Some(files) = files.filter(|x| !x.is_empty()) {
+        members.push(format!("\"by_file\":{}", create_compared_files_array(files, model)));
+    }
 
     format!("{{{}}}", members.join(","))
+}
+
+fn compare_files_per_language(baseline_modules: &[mezura_core::ModuleResult],
+        subject_modules: &[mezura_core::ModuleResult], bases: &(String, String),
+        by_file: super::config_manager::ByFile, config: &Configuration)
+-> (HashMap<String, Vec<super::diff::FileStatsChange>>, usize)
+{
+    let baseline = super::diff::collect_files_per_language(baseline_modules);
+    let subject = super::diff::collect_files_per_language(subject_modules);
+    let mut names = baseline.keys().chain(subject.keys()).copied().collect::<Vec<_>>();
+    names.sort_unstable();
+    names.dedup();
+
+    let empty = Vec::new();
+    let mut hidden = 0;
+    let mut per_language = HashMap::new();
+    for name in names {
+        let (rows, cut) = super::diff::create_file_comparison_rows(
+                baseline.get(name).unwrap_or(&empty), subject.get(name).unwrap_or(&empty),
+                bases, by_file, config.view.sort_by, config.view.counting);
+        hidden += cut;
+        if !rows.is_empty() {
+            per_language.insert(name.to_owned(), rows);
+        }
+    }
+
+    (per_language, hidden)
+}
+
+// The 'files' triad is written too: an empty file that appeared or went away moves no other
+// figure, and without it the row would read as a file that did not change.
+fn create_compared_files_array(files: &[super::diff::FileStatsChange], model: CountingModel) -> String {
+    let entries = files.iter().map(|file| {
+        let mut members = vec![format!("\"path\":\"{}\"", escape(&file.path))];
+        members.extend(create_triad_members(&file.baseline, &file.subject, model));
+        format!("{{{}}}", members.join(","))
+    }).collect::<Vec<_>>();
+
+    format!("[{}]", entries.join(","))
 }
 
 // A section only one reading holds is written with the other side at zero, so a '<style>' block
@@ -191,7 +271,7 @@ fn create_compared_nested_array(baseline: Option<&HashMap<String, Stats>>,
     let of = |side: Option<&HashMap<String, Stats>>, name: &str|
             side.and_then(|x| x.get(name)).cloned().unwrap_or_default();
     let entries = names.iter().map(|name| create_compared_language_object(name,
-            &of(baseline, name), &of(subject, name), keywords_counted, None, None, model)).collect::<Vec<_>>();
+            &of(baseline, name), &of(subject, name), keywords_counted, None, None, None, model)).collect::<Vec<_>>();
 
     format!("[{}]", entries.join(","))
 }
@@ -342,6 +422,12 @@ fn create_note_entries(note: &super::diff::Note) -> Vec<WarningEntry> {
                 format!("{} -> {}", names(baseline_modules), names(subject_modules)),
                 String::from("Module declarations must match between the two readings for the modules to take effect, so this document has no 'modules'."))]
         },
+        Note::FilesNotRecorded { about } => vec![
+            entry("files-not-recorded", Affects::Settings, about.clone(),
+                format!("'{about}' was written without '--by-file', so it holds no file rows and this document carries no 'by_file'."))],
+        Note::FilesCut { about, hidden } => vec![
+            entry("files-cut", Affects::Settings, about.clone(),
+                format!("'{about}' was written with a capped '--by-file' and is missing {hidden} of its file rows, so this document carries no 'by_file'."))],
         Note::CountsInDoubt { .. } | Note::NothingCounted { .. } | Note::LayoutFallback { .. }
         | Note::NoGitignoreInCheckout { .. } | Note::MissingInRevision { .. } => Vec::new()
     }
@@ -350,7 +436,14 @@ fn create_note_entries(note: &super::diff::Note) -> Vec<WarningEntry> {
 // The five figures a comparison compares, each as '{"from": a, "to": b, "change": b - a}'. 'change'
 // is derived and written anyway, the difference being what was asked for.
 fn create_triad_members(before: &Stats, now: &Stats, model: CountingModel) -> Vec<String> {
-    [("files", before.files, now.files), ("lines", before.lines, now.lines),
+    let mut members = vec![format!("\"files\":{}", create_triad(before.files, now.files))];
+    members.extend(create_counted_triad_members(before, now, model));
+
+    members
+}
+
+fn create_counted_triad_members(before: &Stats, now: &Stats, model: CountingModel) -> Vec<String> {
+    [("lines", before.lines, now.lines),
      ("code", before.calculate_code_lines(model), now.calculate_code_lines(model)),
      ("comments", before.calculate_comment_lines(model), now.calculate_comment_lines(model)),
      ("bytes", before.bytes, now.bytes)]
@@ -480,26 +573,6 @@ fn create_modules_array(result: &RunResult, file_rows: &[result_printer::FileRow
 fn find_shown_files<'a>(of_module: &'a result_printer::FileRowsOfModule<'a>) -> FilesByLanguage<'a> {
     of_module.iter().map(|(language, rows)|
             (*language, rows.shown.iter().map(|(_, file)| *file).collect())).collect()
-}
-
-// The top level 'languages' array is the whole run, so the file rows of every module are merged
-// into one list per language
-fn merge_file_rows<'a>(per_module: &'a [result_printer::FileRowsOfModule<'a>],
-        sort_by: mezura_core::SortCriterion, model: CountingModel) -> FilesByLanguage<'a>
-{
-    let mut merged: FilesByLanguage<'a> = HashMap::new();
-    for of_module in per_module {
-        for (language, rows) in of_module {
-            merged.entry(language).or_default().extend(rows.shown.iter().map(|(_, file)| *file));
-        }
-    }
-    if per_module.len() > 1 {
-        for files in merged.values_mut() {
-            files.sort_by(|one, other| result_printer::compare_files_by(one, other, sort_by, model));
-        }
-    }
-
-    merged
 }
 
 // An array and not an object keyed by language name, so that the order '--sort' chose survives and
@@ -951,6 +1024,48 @@ mod tests {
         assert!(create_document(&result, &Local::now(), &config).contains("\"targets\":[]"));
     }
 
+    fn file_entry(path: &str, lines: usize, code: usize, bytes: usize) -> mezura_core::FileEntry {
+        mezura_core::FileEntry { path: path.to_owned(),
+                stats: stats_of(1, bytes, lines, code, 0, HashMap::new()),
+                nested_languages: HashMap::new() }
+    }
+
+    #[test]
+    fn the_file_rows_of_a_run_with_modules_are_written_once_inside_them() {
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        config.view.by_file = Some(crate::config_manager::ByFile::All);
+        config.view.hidden.timing = true;
+
+        let module_of = |name: Option<&str>, language: &str, path: &str| {
+            let per_language = hashmap![language.to_owned() => stats_of(1, 900, 30, 24, 0, HashMap::new())];
+            let total = Stats::total_of(&per_language);
+            mezura_core::ModuleResult {name: name.map(str::to_owned), per_language, total,
+                    nested_languages: HashMap::new(),
+                    files: hashmap![language.to_owned() => vec![file_entry(path, 30, 24, 900)]]}
+        };
+        let mut result = result_of(
+            hashmap!["Rust".to_owned() => stats_of(1, 900, 30, 24, 0, HashMap::new()),
+                     "HTML".to_owned() => stats_of(1, 900, 30, 24, 0, HashMap::new())],
+            stats_of(2, 1800, 60, 48, 0, HashMap::new()), Vec::new(),
+            FilesPresent {total_files: 2, relevant_files: 2, excluded_files: 0});
+        result.modules = vec![module_of(Some("backend"), "Rust", "D:/x/api/a.rs"),
+                module_of(None, "HTML", "D:/x/web/i.html")];
+
+        let written = create_document(&result, &Local::now(), &config);
+        let modules_at = written.find("\"modules\"").unwrap();
+        assert_eq!(2, written.matches("\"by_file\"").count(), "{written}");
+        assert!(!written[..modules_at].contains("\"by_file\""), "{written}");
+
+        // and a run that named no module keeps them at the top level
+        result.modules = vec![mezura_core::ModuleResult {name: None, per_language: result.per_language.clone(),
+                total: result.total.clone(), nested_languages: HashMap::new(),
+                files: hashmap!["Rust".to_owned() => vec![file_entry("D:/x/api/a.rs", 30, 24, 900)]]}];
+        let written = create_document(&result, &Local::now(), &config);
+        assert!(!written.contains("\"modules\""));
+        assert_eq!(1, written.matches("\"by_file\"").count(), "{written}");
+        assert!(written.contains("\"path\":\"D:/x/api/a.rs\""), "{written}");
+    }
+
     fn reading_of(source: crate::diff::Source, per_language: HashMap<String, Stats>) -> crate::diff::Reading {
         crate::diff::Reading {
             source,
@@ -960,6 +1075,8 @@ mod tests {
             warnings: Vec::new(),
             faulty_files_count: 0,
             unreadable_dirs_count: 0,
+            files_recorded: true,
+            files_hidden: 0,
             result: result_of(per_language.clone(), Stats::total_of(&per_language), Vec::new(),
                     FilesPresent {total_files: 2, relevant_files: 2, excluded_files: 0})
         }
@@ -1038,6 +1155,58 @@ mod tests {
                 reading_of(crate::diff::Source::Run, HashMap::new()),
                 reading_of(crate::diff::Source::Run, HashMap::new()), &config, Vec::new()), &datetime, &config);
         assert!(!plain.contains("modules"), "{plain}");
+    }
+
+    #[test]
+    fn a_comparison_carries_the_changed_files_when_both_sides_recorded_them() {
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        config.view.by_file = Some(crate::config_manager::ByFile::All);
+        let side_with = |source, files: Vec<mezura_core::FileEntry>| {
+            let per_language = hashmap!["Rust".to_owned() => stats_of(2, 5000, 100, 70, 10, HashMap::new())];
+            let mut reading = reading_of(source, per_language.clone());
+            reading.result.modules = vec![mezura_core::ModuleResult { name: None,
+                    total: Stats::total_of(&per_language), per_language, nested_languages: HashMap::new(),
+                    files: hashmap!["Rust".to_owned() => files] }];
+            reading
+        };
+        let from = || side_with(crate::diff::Source::Document { path: "D:/old.json".to_owned() },
+                vec![file_entry("D:/proj/a.rs", 100, 70, 3000), file_entry("D:/proj/b.rs", 50, 40, 1500),
+                     file_entry("D:/proj/gone.rs", 10, 5, 300)]);
+        let to = || side_with(crate::diff::Source::Run,
+                vec![file_entry("D:/proj/a.rs", 130, 90, 3900), file_entry("D:/proj/b.rs", 50, 40, 1500)]);
+
+        let document = create_comparison_document(&crate::diff::Comparison::of(from(), to(), &config, Vec::new()),
+                &Local::now(), &config);
+        assert!(document.contains("\"by_file\":["), "{document}");
+        assert!(document.contains("\"path\":\"D:/proj/a.rs\""), "{document}");
+        assert!(document.contains("\"lines\":{\"from\":100,\"to\":130,\"change\":30}"), "{document}");
+        assert!(document.contains("\"path\":\"D:/proj/gone.rs\""), "{document}");
+        assert!(document.contains("\"lines\":{\"from\":10,\"to\":0,\"change\":-10}"), "{document}");
+        assert!(document.contains("\"files_hidden\":0"), "{document}");
+        // the unchanged file has no row, and the files triad is written so that an empty file
+        // that appeared or went away still says so
+        assert!(!document.contains("\"path\":\"D:/proj/b.rs\""), "{document}");
+        assert!(document.contains("\"files\":{\"from\":1,\"to\":1,\"change\":0}"), "{document}");
+        assert!(document.contains("\"files\":{\"from\":1,\"to\":0,\"change\":-1}"), "{document}");
+        assert!(serde_json::from_str::<serde_json::Value>(&document).is_ok(), "{document}");
+
+        // the cap keeps the biggest mover and the document says how many it left out
+        config.view.by_file = Some(crate::config_manager::ByFile::Capped(1));
+        let document = create_comparison_document(&crate::diff::Comparison::of(from(), to(), &config, Vec::new()),
+                &Local::now(), &config);
+        assert!(document.contains("\"path\":\"D:/proj/a.rs\"") && !document.contains("gone.rs"), "{document}");
+        assert!(document.contains("\"files_hidden\":1"), "{document}");
+
+        // a baseline that recorded no rows takes the whole key with it, and the reader is told why
+        config.view.by_file = Some(crate::config_manager::ByFile::All);
+        let mut unrecorded = from();
+        unrecorded.files_recorded = false;
+        unrecorded.result.modules[0].files = HashMap::new();
+        let document = create_comparison_document(&crate::diff::Comparison::of(unrecorded, to(), &config, Vec::new()),
+                &Local::now(), &config);
+        assert!(!document.contains("\"by_file\""), "{document}");
+        assert!(document.contains("\"code\":\"files-not-recorded\""), "{document}");
+        assert!(document.contains("\"files_hidden\":0"), "{document}");
     }
 
     #[test]

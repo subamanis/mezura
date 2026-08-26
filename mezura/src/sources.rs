@@ -144,12 +144,35 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
         let resolved = mezura_core::Languages::resolve(&of_git_revision, languages, conflicts).0;
         let mut result = mezura_core::run_watched(&of_git_revision, resolved, Some(progress.clone()), |_| {})
                 .map_err(|error| GitError::CountingRevision { revision: git_revision.to_owned(), error })?;
+        move_file_paths_out_of_checkout(&mut result, &of_git_revision.targets, &counted_declared);
         result.targets = counted_declared;
         result
     };
 
     Ok((Reading::of_git_revision(git_revision, resolved.commit.clone(), resolved.taken_at.clone(),
             result, config), notes))
+}
+
+// The file rows still name the temporary checkout, which is a different directory on every run, so
+// each is given back the declared form of the target it was found under. The two lists correspond
+// by position, having been built together above; the longest match decides, since one declared
+// target may sit inside another's checkout path.
+fn move_file_paths_out_of_checkout(result: &mut mezura_core::RunResult,
+        checkout_targets: &[mezura_core::Target], declared: &[mezura_core::Target])
+{
+    let mut pairs = checkout_targets.iter().zip(declared)
+            .map(|(counted, declared)| (counted.path.as_str(), declared.path.as_str()))
+            .collect::<Vec<_>>();
+    pairs.sort_by_key(|(counted, _)| std::cmp::Reverse(counted.len()));
+
+    for files in result.modules.iter_mut().flat_map(|module| module.files.values_mut()) {
+        for file in files {
+            if let Some((counted, declared)) = pairs.iter().find(|(counted, _)|
+                    super::result_printer::is_inside(&file.path, counted)) {
+                file.path = declared.to_string() + &file.path[counted.len()..];
+            }
+        }
+    }
 }
 
 // The checkout is the same tree at another root, so a pattern written as a full path moves with it
@@ -211,6 +234,34 @@ mod tests {
         let alone = prepare_revisions(&["HEAD"], &engine).unwrap();
         assert_eq!(head.commit, alone[0].commit);
         assert!(prepare_revisions(&[], &engine).unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_file_rows_of_a_revision_get_back_the_declared_form_of_their_targets() {
+        let entry = |path: &str| mezura_core::FileEntry { path: path.to_owned(),
+                stats: mezura_core::Stats::default(), nested_languages: HashMap::new() };
+        let mut result = mezura_core::RunResult {
+            per_language: HashMap::new(), total: mezura_core::Stats::default(),
+            modules: vec![mezura_core::ModuleResult { name: None, per_language: HashMap::new(),
+                    nested_languages: HashMap::new(), total: mezura_core::Stats::default(),
+                    files: hashmap!["Rust".to_owned() => vec![entry("C:/t/chk/api/a.rs"),
+                            entry("C:/t/chk/apix/b.rs"), entry("C:/t/chk/main.rs"),
+                            entry("D:/elsewhere/c.rs")]] }],
+            nested_languages: HashMap::new(), faulty_files: Vec::new(), minified_files: 0,
+            generated_files: 0, files_present: FilesPresent::default(), targets: Vec::new(),
+            unreadable_dirs: Vec::new(),
+            performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }
+        };
+
+        let checkout = [mezura_core::Target::of("C:/t/chk/api"), mezura_core::Target::of("C:/t/chk/main.rs"),
+                mezura_core::Target::of("C:/t/chk")];
+        let declared = [mezura_core::Target::of("D:/r/api-v2"), mezura_core::Target::of("D:/r/main.rs"),
+                mezura_core::Target::of("D:/r")];
+        move_file_paths_out_of_checkout(&mut result, &checkout, &declared);
+
+        // The longest checkout prefix decides, whole components only, and a path outside them stays
+        assert_eq!(vec!["D:/r/api-v2/a.rs", "D:/r/apix/b.rs", "D:/r/main.rs", "D:/elsewhere/c.rs"],
+                result.modules[0].files["Rust"].iter().map(|x| x.path.as_str()).collect::<Vec<_>>());
     }
 
     #[test]

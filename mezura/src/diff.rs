@@ -1,10 +1,11 @@
-use std::collections::HashMap;
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
 
-use mezura_core::{EngineConfig, ForcedLanguages, Language, LanguageNames, Languages, ModuleResult,
-        RunResult, Stats, UNNAMED_MODULE_NAME, render};
+use mezura_core::{EngineConfig, FileEntry, ForcedLanguages, Language, LanguageNames, Languages,
+        ModuleResult, RunResult, Stats, UNNAMED_MODULE_NAME, render};
 use mezura_core::language_file::ConflictRules;
 
-use super::config_manager::{Configuration, Layout, SortCriterion};
+use super::config_manager::{ByFile, Configuration, Layout, SortCriterion};
 use super::config_manager::{COUNTING, COUNT_GENERATED, COUNT_MINIFIED, EXCLUDE, EXCLUDE_LANGUAGES,
         FORCE_LANGUAGE, LANGUAGES, NO_GITIGNORE, NO_IGNORE_FILES, SEARCH_IN_DOTTED};
 use super::json_reader::{DocumentError, DocumentWarning, Scope};
@@ -40,6 +41,11 @@ pub struct Reading {
     // it to, so the lists in 'result' can read empty for a side whose counts are short.
     pub faulty_files_count: usize,
     pub unreadable_dirs_count: usize,
+    // False only for a document written without '--by-file', whose empty file lists must not read
+    // as a tree where every file is new; a side that counted nothing had nothing to record
+    pub files_recorded: bool,
+    // How many rows a capped '--by-file' left out of a document, which would read the same way
+    pub files_hidden: usize,
     pub result: RunResult
 }
 
@@ -54,6 +60,8 @@ impl Reading {
             warnings: Vec::new(),
             faulty_files_count: result.faulty_files.len(),
             unreadable_dirs_count: result.unreadable_dirs.len(),
+            files_recorded: true,
+            files_hidden: 0,
             result
         }
     }
@@ -69,8 +77,16 @@ impl Reading {
             warnings: Vec::new(),
             faulty_files_count: result.faulty_files.len(),
             unreadable_dirs_count: result.unreadable_dirs.len(),
+            files_recorded: true,
+            files_hidden: 0,
             result: result.clone()
         }
+    }
+
+    // Whether a file comparison against this side answers honestly: rows a document never held, or
+    // that a cap left out of it, would all read as files written since
+    pub fn can_pair_files(&self) -> bool {
+        self.files_recorded && self.files_hidden == 0
     }
 
     pub fn determine_display_name(&self) -> String {
@@ -101,6 +117,12 @@ impl Comparison {
     // Computed rather than stored, because the pairs borrow the readings this struct owns
     pub fn module_pairs(&self) -> Option<Vec<ModulePair<'_>>> {
         pair_modules(&self.baseline.result, &self.subject.result)
+    }
+
+    // None unless both sides hold every row there was to pair: against a document written without
+    // '--by-file', or capped by it, every file it is missing would read as new
+    pub fn resolve_by_file(&self, config: &Configuration) -> Option<ByFile> {
+        config.view.by_file.filter(|_| self.baseline.can_pair_files() && self.subject.can_pair_files())
     }
 }
 
@@ -134,6 +156,14 @@ impl DiffRequest {
         };
         let notes_so_far = settings_source.map(|document| adopt_settings_from(document, config))
                 .unwrap_or_default().into_iter().collect();
+
+        // Known before the scan: a document that cannot pair files closes the gate at print time,
+        // so the run should not pay for collecting an entry per file
+        let cannot_pair = |side: &DiffSide| matches!(side,
+                DiffSide::Document(x) if !x.can_pair_files());
+        if cannot_pair(&baseline) || subject.as_ref().is_some_and(cannot_pair) {
+            config.engine.collect_files = false;
+        }
 
         let languages = available.to_vec();
         Ok(Some(match subject {
@@ -315,6 +345,13 @@ pub struct LanguageStatsChange {
     pub subject: Stats
 }
 
+pub struct FileStatsChange {
+    // In the relative form the two sides were paired by
+    pub path: String,
+    pub baseline: Stats,
+    pub subject: Stats
+}
+
 // In the order the later reading declared them, which is the order its own report would use
 pub struct ModulePair<'a> {
     pub name: Option<&'a str>,
@@ -341,6 +378,12 @@ pub enum Note {
     CountsInDoubt { about: String, doubts: Vec<String> },
     // A side whose scan found nothing at all, which the table can only show as zeros
     NothingCounted { about: String },
+    // A document taken without '--by-file', so the file rows this run asked for have nothing to be
+    // paired against
+    FilesNotRecorded { about: String },
+    // A document whose file rows were cut by a '--by-file' number, so the missing ones would read
+    // as new
+    FilesCut { about: String, hidden: usize },
     // None is a side that declared no modules at all
     ModulesDiffer { baseline: String, subject: String, baseline_modules: Option<String>, subject_modules: Option<String> },
     LayoutFallback { layout: &'static str },
@@ -386,6 +429,7 @@ pub fn load(path: &str) -> Result<Reading, LoadError> {
     Ok(Reading { source: Source::Document { path: path.to_owned() }, taken: document.generated_at,
             version: document.mezura_version, scope: document.scope, warnings: document.warnings,
             faulty_files_count: document.faulty_files_count, unreadable_dirs_count: document.unreadable_dirs_count,
+            files_recorded: document.files_recorded, files_hidden: document.files_hidden,
             result: document.result })
 }
 
@@ -420,6 +464,86 @@ pub fn create_comparison_rows(baseline: &HashMap<String, Stats>, subject: &HashM
         subject: subject.get(name).cloned().unwrap_or_default(),
         name: name.clone()
     }).collect(), merged.len())
+}
+
+// The files of one language on both sides, paired by the relative names 'determine_file_bases'
+// chose, and only the ones whose counts moved: in a tree of five thousand files where thirty
+// changed, the rows are those thirty, with a file only one side has among them as 'new' or 'gone'.
+// 'by_file' then keeps the biggest moves, not the biggest files.
+pub fn create_file_comparison_rows(baseline: &[&FileEntry], subject: &[&FileEntry],
+        bases: &(String, String), by_file: ByFile, sort_by: SortCriterion,
+        model: mezura_core::CountingModel) -> (Vec<FileStatsChange>, usize)
+{
+    let mut merged: HashMap<String, (Option<&Stats>, Option<&Stats>)> =
+            HashMap::with_capacity(baseline.len() + subject.len());
+    for file in baseline {
+        merged.insert(relativise(&file.path, &bases.0), (Some(&file.stats), None));
+    }
+    for file in subject {
+        merged.entry(relativise(&file.path, &bases.1)).or_default().1 = Some(&file.stats);
+    }
+
+    // Filtered on the references, so only the rows that survive are built: raw counts that are
+    // equal are equal under either model
+    let mut rows = merged.into_iter()
+            .filter(|(_, (before, now))| before != now)
+            .map(|(path, (before, now))| FileStatsChange {
+                baseline: before.cloned().unwrap_or_default(),
+                subject: now.cloned().unwrap_or_default(),
+                path
+            }).collect::<Vec<_>>();
+
+    // Every row is one file, so a sort by files would measure every move at zero: lines stand in
+    // for it there
+    let criterion = if sort_by == SortCriterion::Files {SortCriterion::Lines} else {sort_by};
+    if criterion == SortCriterion::Name {
+        rows.sort_by(|one, other| one.path.cmp(&other.path));
+    } else {
+        rows.sort_by_cached_key(|row| (std::cmp::Reverse(
+                criterion.get_value_of(&row.baseline, model)
+                        .abs_diff(criterion.get_value_of(&row.subject, model))),
+                row.path.clone()));
+    }
+    let shown = by_file.shown_out_of(rows.len());
+    let hidden = rows.len() - shown;
+    rows.truncate(shown);
+
+    (rows, hidden)
+}
+
+pub fn collect_files_per_language(modules: &[ModuleResult]) -> HashMap<&str, Vec<&FileEntry>> {
+    let mut merged: HashMap<&str, Vec<&FileEntry>> = HashMap::new();
+    for module in modules {
+        for (language, files) in &module.files {
+            merged.entry(language.as_str()).or_default().extend(files.iter());
+        }
+    }
+
+    merged
+}
+
+// Each side's rows are named relative to the common directory of its own targets, so two checkouts
+// of one project pair on the same names. When one side's targets are a subset of the other's, the
+// wider side's directory serves both: a revision that lacks one of the targets would otherwise
+// relativise deeper than the run it is compared against, and nothing would pair. Two sides whose
+// targets merely nest keep their own, since a worktree inside the repository is another tree.
+pub fn determine_file_bases(baseline: &RunResult, subject: &RunResult) -> (String, String) {
+    let of_baseline = super::result_printer::find_common_directory_of(&baseline.targets);
+    let of_subject = super::result_printer::find_common_directory_of(&subject.targets);
+
+    let paths_of = |result: &RunResult| result.targets.iter()
+            .map(|x| fold_path(&x.path).into_owned()).collect::<HashSet<_>>();
+    let (baseline_targets, subject_targets) = (paths_of(baseline), paths_of(subject));
+    let one_holds_the_other = !baseline_targets.is_empty() && !subject_targets.is_empty()
+            && (baseline_targets.is_subset(&subject_targets) || subject_targets.is_subset(&baseline_targets));
+
+    if one_holds_the_other {
+        let outer = if super::result_printer::is_inside(&fold_path(of_subject), &fold_path(of_baseline))
+                {of_baseline} else {of_subject};
+        (outer.to_owned(), outer.to_owned())
+    } else {
+        (of_baseline.to_owned(), of_subject.to_owned())
+    }
 }
 
 // The modules of the two readings matched up by name, and None when there is nothing to show: the
@@ -602,6 +726,14 @@ fn determine_comparison_notes(baseline: &Reading, subject: &Reading, config: &Co
         if !doubts.is_empty() {
             notes.push(Note::CountsInDoubt { about: reading.determine_display_name(), doubts });
         }
+        if config.view.by_file.is_some() {
+            if !reading.files_recorded {
+                notes.push(Note::FilesNotRecorded { about: reading.determine_display_name() });
+            } else if reading.files_hidden > 0 {
+                notes.push(Note::FilesCut { about: reading.determine_display_name(),
+                        hidden: reading.files_hidden });
+            }
+        }
     }
     if modules_unpaired && (baseline.result.has_modules() || subject.result.has_modules()) {
         notes.push(Note::ModulesDiffer { baseline: baseline.determine_display_name(),
@@ -615,6 +747,28 @@ fn determine_comparison_notes(baseline: &Reading, subject: &Reading, config: &Co
     }
 
     notes
+}
+
+// A path the base does not hold keeps its absolute form, which pairs with nothing and is honest
+// about it. Windows spells one path in several cases, so the matching folds the way
+// 'move_excludes_into_checkout' does; the ASCII fold never moves a byte, so the cut lands on the
+// unfolded original.
+fn relativise(path: &str, base: &str) -> String {
+    if base.is_empty() {
+        return path.to_owned();
+    }
+    let (folded_path, folded_base) = (fold_path(path), fold_path(base));
+    if folded_path == folded_base {
+        return path.rsplit('/').next().unwrap_or(path).to_owned();
+    }
+    match folded_path.strip_prefix(folded_base.as_ref()) {
+        Some(rest) if rest.starts_with('/') => path[base.len() + 1..].to_owned(),
+        _ => path.to_owned()
+    }
+}
+
+fn fold_path(path: &str) -> Cow<'_, str> {
+    if cfg!(windows) {Cow::Owned(path.to_ascii_lowercase())} else {Cow::Borrowed(path)}
 }
 
 #[cfg(test)]
@@ -684,6 +838,95 @@ mod tests {
                         .map(|x| x.name.clone()).collect::<Vec<_>>());
     }
 
+    fn entry(path: &str, lines: usize, code: usize) -> FileEntry {
+        FileEntry { path: path.to_owned(), stats: stats(lines, code, 1), nested_languages: HashMap::new() }
+    }
+
+    #[test]
+    fn only_the_files_that_moved_get_rows_and_the_cap_keeps_the_biggest_moves() {
+        let before = [entry("D:/proj/src/a.rs", 100, 70), entry("D:/proj/src/b.rs", 50, 40),
+                entry("D:/proj/src/gone.rs", 10, 5)];
+        let after = [entry("C:/other/proj/src/a.rs", 130, 90), entry("C:/other/proj/src/b.rs", 50, 40),
+                entry("C:/other/proj/src/added.rs", 8, 6)];
+        let (before, after) = (before.iter().collect::<Vec<_>>(), after.iter().collect::<Vec<_>>());
+        let bases = ("D:/proj".to_owned(), "C:/other/proj".to_owned());
+        let model = mezura_core::CountingModel::Content;
+
+        // The unchanged file has no row; the biggest move first, whichever side has the file
+        let (rows, hidden) = create_file_comparison_rows(&before, &after, &bases, ByFile::All,
+                SortCriterion::Lines, model);
+        assert_eq!(0, hidden);
+        assert_eq!(vec!["src/a.rs", "src/gone.rs", "src/added.rs"],
+                rows.iter().map(|x| x.path.as_str()).collect::<Vec<_>>());
+        assert_eq!((100, 130), (rows[0].baseline.lines, rows[0].subject.lines));
+        assert_eq!((10, 0), (rows[1].baseline.lines, rows[1].subject.lines));
+        assert_eq!((0, 8), (rows[2].baseline.lines, rows[2].subject.lines));
+
+        // The cap keeps the biggest moves of what changed, and says how many it left out
+        let (cut, hidden) = create_file_comparison_rows(&before, &after, &bases, ByFile::Capped(1),
+                SortCriterion::Lines, model);
+        assert_eq!((1, 2), (cut.len(), hidden));
+        assert_eq!("src/a.rs", cut[0].path);
+
+        // Under a sort by name the paths themselves order the rows
+        let (named, _) = create_file_comparison_rows(&before, &after, &bases, ByFile::All,
+                SortCriterion::Name, model);
+        assert_eq!(vec!["src/a.rs", "src/added.rs", "src/gone.rs"],
+                named.iter().map(|x| x.path.as_str()).collect::<Vec<_>>());
+
+        // Every row is one file, so a sort by files measures the move in lines instead
+        let (by_files, _) = create_file_comparison_rows(&before, &after, &bases, ByFile::All,
+                SortCriterion::Files, model);
+        assert_eq!(vec!["src/a.rs", "src/gone.rs", "src/added.rs"],
+                by_files.iter().map(|x| x.path.as_str()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_path_is_relativised_only_on_a_whole_component_boundary() {
+        assert_eq!("src/a.rs", relativise("D:/proj/src/a.rs", "D:/proj"));
+        assert_eq!("a.rs", relativise("D:/proj/a.rs", "D:/proj"));
+        assert_eq!("main.rs", relativise("D:/proj/main.rs", "D:/proj/main.rs"));
+        assert_eq!("D:/project-x/a.rs", relativise("D:/project-x/a.rs", "D:/proj"));
+        assert_eq!("D:/elsewhere/a.rs", relativise("D:/elsewhere/a.rs", "D:/proj"));
+        assert_eq!("D:/proj/a.rs", relativise("D:/proj/a.rs", ""));
+
+        // Windows spells one path in several cases, and the cut still lands on the original
+        if cfg!(windows) {
+            assert_eq!("src/A.rs", relativise("d:/Proj/src/A.rs", "D:/proj"));
+        }
+    }
+
+    #[test]
+    fn the_file_bases_agree_only_when_one_sides_targets_are_a_subset_of_the_others() {
+        let with_targets = |paths: &[&str]| {
+            let per_language = hashmap!["Rust".to_owned() => stats(100, 70, 2)];
+            RunResult {
+                total: Stats::total_of(&per_language), per_language, modules: Vec::new(), nested_languages: HashMap::new(),
+                faulty_files: Vec::new(), minified_files: 0, generated_files: 0, unreadable_dirs: Vec::new(),
+                targets: paths.iter().map(|x| mezura_core::Target::of(*x)).collect(),
+                files_present: mezura_core::FilesPresent {total_files: 2, relevant_files: 2, excluded_files: 0},
+                performance: mezura_core::Performance {duration_millis: 0, threads: mezura_core::Threads::new(1, 1)}
+            }
+        };
+
+        // A revision that lacks one of the targets relativises where the run does
+        assert_eq!(("D:/p".to_owned(), "D:/p".to_owned()), determine_file_bases(
+                &with_targets(&["D:/p/src"]), &with_targets(&["D:/p/src", "D:/p/tests"])));
+        assert_eq!(("D:/p".to_owned(), "D:/p".to_owned()), determine_file_bases(
+                &with_targets(&["D:/p/src", "D:/p/tests"]), &with_targets(&["D:/p/src"])));
+
+        // Two checkouts of one project each keep their own root, and pair on the names inside it
+        assert_eq!(("D:/p/src".to_owned(), "C:/w/proj/src".to_owned()), determine_file_bases(
+                &with_targets(&["D:/p/src"]), &with_targets(&["C:/w/proj/src"])));
+
+        // A worktree inside the repository is another tree, not a subset of its targets
+        assert_eq!(("D:/repo".to_owned(), "D:/repo/wt/feature".to_owned()), determine_file_bases(
+                &with_targets(&["D:/repo"]), &with_targets(&["D:/repo/wt/feature"])));
+
+        assert_eq!(("D:/p/src".to_owned(), String::new()), determine_file_bases(
+                &with_targets(&["D:/p/src"]), &with_targets(&[])));
+    }
+
     #[test]
     fn the_modules_are_paired_by_name_and_a_set_that_is_not_the_same_is_not_paired_at_all() {
         let module = |name: Option<&str>, lines: usize| {
@@ -740,6 +983,8 @@ mod tests {
                 warnings: Vec::new(),
                 faulty_files_count: 0,
                 unreadable_dirs_count: 0,
+                files_recorded: true,
+                files_hidden: 0,
                 result: RunResult {
                     total: Stats::total_of(&per_language), per_language, modules, nested_languages: HashMap::new(),
                     faulty_files: Vec::new(), minified_files: 0, generated_files: 0, targets: Vec::new(), unreadable_dirs: Vec::new(),
@@ -804,6 +1049,24 @@ mod tests {
         this_run.result.files_present.relevant_files = 0;
         this_run.faulty_files_count = 3;
         assert!(determine_comparison_notes(&reading("a.json", "3.0.0", Vec::new()), &this_run, &config, Vec::new(), true).is_empty());
+
+        // A document that never recorded file rows is said, and one whose rows a cap cut is said
+        // with the count, both only when this run asked for file rows
+        config.view.by_file = Some(ByFile::All);
+        let mut unrecorded = reading("a.json", "3.0.0", Vec::new());
+        unrecorded.files_recorded = false;
+        assert_eq!(vec![Note::FilesNotRecorded { about: "a.json".to_owned() }],
+                determine_comparison_notes(&unrecorded, &reading("b.json", "3.0.0", Vec::new()), &config, Vec::new(), true));
+        assert!(!unrecorded.can_pair_files());
+        let mut capped = reading("a.json", "3.0.0", Vec::new());
+        capped.files_hidden = 7;
+        assert_eq!(vec![Note::FilesCut { about: "a.json".to_owned(), hidden: 7 }],
+                determine_comparison_notes(&capped, &reading("b.json", "3.0.0", Vec::new()), &config, Vec::new(), true));
+        assert!(!capped.can_pair_files());
+        config.view.by_file = None;
+        let mut unrecorded = reading("a.json", "3.0.0", Vec::new());
+        unrecorded.files_recorded = false;
+        assert!(determine_comparison_notes(&unrecorded, &reading("b.json", "3.0.0", Vec::new()), &config, Vec::new(), true).is_empty());
     }
 
     // Every combination is written out because the answer is a guard over an or-pattern, where the
@@ -862,6 +1125,46 @@ mod tests {
         let (notes, counting) = adopted_by("HEAD~1..HEAD");
         assert!(notes.is_empty(), "{notes:?}");
         assert_eq!(mezura_core::CountingModel::Content, counting);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_baseline_that_cannot_pair_files_turns_the_collecting_off_before_the_scan() {
+        let dir = crate::paths::test_paths::SCRATCH_DIR.to_owned() + "diff-collect-files/";
+        std::fs::create_dir_all(&dir).unwrap();
+        let per_language = hashmap!["Rust".to_owned() => stats(100, 70, 2)];
+        let mut result = RunResult {
+            total: Stats::total_of(&per_language), per_language: per_language.clone(), modules: Vec::new(),
+            nested_languages: HashMap::new(), faulty_files: Vec::new(), minified_files: 0, generated_files: 0,
+            targets: Vec::new(), unreadable_dirs: Vec::new(),
+            files_present: mezura_core::FilesPresent {total_files: 2, relevant_files: 2, excluded_files: 0},
+            performance: mezura_core::Performance {duration_millis: 0, threads: mezura_core::Threads::new(1, 1)}
+        };
+        let write = |name: &str, result: &RunResult, config: &crate::config_manager::Configuration| {
+            let path = format!("{dir}{name}.json");
+            std::fs::write(&path, crate::json_printer::create_document(result, &chrono::Local::now(), config)).unwrap();
+            path
+        };
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        let without_rows = write("without-rows", &result, &config);
+
+        config.view.by_file = Some(ByFile::All);
+        result.modules = vec![ModuleResult { name: None, per_language: per_language.clone(),
+                total: Stats::total_of(&per_language), nested_languages: HashMap::new(),
+                files: hashmap!["Rust".to_owned() => vec![entry("D:/p/a.rs", 100, 70)]] }];
+        let with_rows = write("with-rows", &result, &config);
+
+        let collects_against = |baseline: &str| {
+            let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+            config.view.by_file = Some(ByFile::All);
+            config.engine.collect_files = true;
+            config.view.diff_against = Some(baseline.to_owned());
+            DiffRequest::of(&mut config, &[]).unwrap().unwrap();
+            config.engine.collect_files
+        };
+        assert!(!collects_against(&without_rows), "the run still collects what the gate will discard");
+        assert!(collects_against(&with_rows));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

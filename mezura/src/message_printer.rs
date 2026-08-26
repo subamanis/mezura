@@ -589,8 +589,10 @@ pub const DIFF_HELP  :  &str =
     readings named the same ones; when they did not, everything is compared at once and mezura
     says what each side named.
 
-    '--sort' and '--top' order and cut the rows as ever. Only 'table' and 'boxed' can draw a
-    comparison, so the other two layouts fall back to the table.
+    '--sort' and '--top' order and cut the rows as ever. '--by-file' adds the files that changed
+    under each language, marked 'new' and 'gone' the same way; its number keeps the biggest moves.
+    Only 'table' and 'boxed' can draw a comparison, so the other two layouts fall back to the
+    table.
 
     A document records the settings it was counted with, and this run takes them so both sides
     cover the same tree: a baseline taken with '--exclude target' excludes it here too, and says
@@ -602,7 +604,7 @@ pub const DIFF_HELP  :  &str =
 
     With '--output json' the comparison is a document of its own, the same vocabulary as a run's,
     every count carrying 'from', 'to' and 'change' and the two readings named under 'from' and
-    'to'. '--top' does not cut it.
+    'to'. '--top' does not cut it, and '--by-file' adds the changed files to it, under 'by_file'.
 
     Cannot be saved in a configuration file.
 
@@ -831,7 +833,18 @@ pub const BY_FILE_HELP  :  &str =
 
     A path too wide for its column loses whole directories out of its middle and never a piece of
     the file's own name. A file's keywords are not counted, so a row is one line whatever the
-    language declares. The JSON document carries the same rows under each language, as 'by_file'.
+    language declares. The JSON document carries the same rows under each language, as 'by_file',
+    and a run with modules carries them inside each module's own languages.
+
+    Under '--diff' the rows are the files that changed: each carries its move beside its figures,
+    and a file only one side has is marked 'new' or 'gone'. The number then keeps the biggest
+    moves of each language instead of the biggest files, measured by whatever '--sort' names, and
+    by lines where it names the file count, since every row here is one file. The two sides pair
+    their files by name, relative to each side's own targets, so readings whose targets differ in
+    shape cannot pair.
+    A JSON baseline must have been written with a plain '--by-file': one without rows, or one
+    whose rows a number capped, is missing files that would all read as new, and mezura says so
+    instead of comparing them.
 
 ";
 pub const SAVE_HELP  :  &str =

@@ -341,7 +341,7 @@ pub(crate) fn find_files_to_show<'a>(result: &'a RunResult, config: &Configurati
 }
 
 // The path breaks every tie, so two files of equal size cannot swap places between two runs
-pub(crate) fn compare_files_by(one: &mezura_core::FileEntry, other: &mezura_core::FileEntry,
+fn compare_files_by(one: &mezura_core::FileEntry, other: &mezura_core::FileEntry,
         sort_by: SortCriterion, model: CountingModel) -> std::cmp::Ordering
 {
     sort_by.get_value_of(&other.stats, model).cmp(&sort_by.get_value_of(&one.stats, model))
@@ -350,7 +350,7 @@ pub(crate) fn compare_files_by(one: &mezura_core::FileEntry, other: &mezura_core
 
 // A glob is one target per file it matched, so without this every row of such a run would be a bare
 // name and two files called 'mod.rs' would print as the same row twice
-fn find_common_directory_of(targets: &[mezura_core::Target]) -> &str {
+pub(crate) fn find_common_directory_of(targets: &[mezura_core::Target]) -> &str {
     let Some(first) = targets.first() else { return "" };
 
     let mut common = first.path.as_str();
@@ -367,12 +367,10 @@ fn find_common_directory_of(targets: &[mezura_core::Target]) -> &str {
 }
 
 // Compared by whole components, or 'D:/repository' counts as being inside 'D:/repo'
-fn is_inside(path: &str, directory: &str) -> bool {
+pub(crate) fn is_inside(path: &str, directory: &str) -> bool {
     path == directory || path.strip_prefix(directory).is_some_and(|rest| rest.starts_with('/'))
 }
 
-// What is too wide loses whole components out of its middle and never a piece of one: the file's own
-// name is what tells one row from another, so a name too wide on its own is the floor
 fn shorten_path<'a>(path: &'a str, targets: &[mezura_core::Target], common_directory: &str) -> Cow<'a, str> {
     let relative = targets.iter().filter_map(|target| path.strip_prefix(&target.path))
             .map(|rest| rest.trim_start_matches('/'))
@@ -381,24 +379,8 @@ fn shorten_path<'a>(path: &'a str, targets: &[mezura_core::Target], common_direc
             .or_else(|| path.strip_prefix(common_directory).filter(|rest| rest.starts_with('/'))
                     .map(|rest| rest.trim_start_matches('/')))
             .unwrap_or_else(|| path.rsplit('/').next().unwrap_or(path));
-    if calculate_widest_visible_line(relative) <= SHOWN_PATH_WIDTH {
-        return Cow::Borrowed(relative);
-    }
 
-    let parts = relative.split('/').collect::<Vec<_>>();
-    for kept in (1..parts.len().saturating_sub(1)).rev() {
-        let shortened = format!("{}/{ELIDED}/{}", parts[0], parts[parts.len() - kept..].join("/"));
-        if calculate_widest_visible_line(&shortened) <= SHOWN_PATH_WIDTH {
-            return Cow::Owned(shortened);
-        }
-    }
-
-    let name_alone = format!("{ELIDED}/{}", parts[parts.len() - 1]);
-    if calculate_widest_visible_line(&name_alone) < calculate_widest_visible_line(relative) {
-        return Cow::Owned(name_alone);
-    }
-
-    Cow::Borrowed(relative)
+    elide_long_path(relative)
 }
 
 #[derive(PartialEq,Eq,Clone,Copy)]
@@ -802,7 +784,9 @@ pub fn print_comparison(comparison: &super::diff::Comparison, config: &Configura
     }
     println!();
 
-    let rows = create_compared_rows(pairs.as_deref(), &baseline.result, &subject.result, config);
+    let by_file = comparison.resolve_by_file(config);
+    let (rows, files_hidden) = create_compared_rows(pairs.as_deref(), &baseline.result, &subject.result,
+            by_file, config);
     let view = ViewSettings::of(config);
     let lines = match config.view.layout {
         Layout::Boxed => format_boxed_comparison_lines(theme, &rows, view),
@@ -817,6 +801,11 @@ pub fn print_comparison(comparison: &super::diff::Comparison, config: &Configura
     if hidden > 0 {
         let plural = if hidden == 1 {"language"} else {"languages"};
         println!("\n{}", theme.note.paint(&format!("(+{hidden} more {plural} hidden by --top {})", config.view.top_n.unwrap())));
+    }
+    if files_hidden > 0 && let Some(ByFile::Capped(cap)) = by_file {
+        let plural = if files_hidden == 1 {"file"} else {"files"};
+        println!("\n{}", theme.note.paint(&format!("(+{} more changed {plural} hidden by --{} {cap})",
+                format_with_separators(files_hidden), config_manager::BY_FILE)));
     }
 
     if !config.view.hidden.keywords {
@@ -840,13 +829,22 @@ struct ComparedRow {
 }
 
 // A module gets a row of its own with its languages indented under it, as a grouped report does.
+// 'by_file' is the resolved gate: with it, the changed files of each language hang under its row,
+// and the second figure is how many more movers the cap left out.
 fn create_compared_rows(pairs: Option<&[super::diff::ModulePair]>, baseline: &RunResult, subject: &RunResult,
-        config: &Configuration) -> Vec<ComparedRow>
+        by_file: Option<ByFile>, config: &Configuration) -> (Vec<ComparedRow>, usize)
 {
+    // Nothing about the files is even looked up unless the gate is open: a plain comparison would
+    // otherwise index every parsed file row of both sides to throw the maps away
+    let bases = by_file.map(|_| super::diff::determine_file_bases(baseline, subject));
+    let empty = Vec::new();
     let languages_of = |baseline_languages: &HashMap<String, Stats>, subject_languages: &HashMap<String, Stats>,
             baseline_nested: &HashMap<String, HashMap<String, Stats>>,
-            subject_nested: &HashMap<String, HashMap<String, Stats>>, indent: &str| {
-        super::diff::create_comparison_rows(baseline_languages, subject_languages, config.view.sort_by,
+            subject_nested: &HashMap<String, HashMap<String, Stats>>,
+            baseline_files: &HashMap<&str, Vec<&mezura_core::FileEntry>>,
+            subject_files: &HashMap<&str, Vec<&mezura_core::FileEntry>>, indent: &str| {
+        let mut hidden = 0;
+        let rows = super::diff::create_comparison_rows(baseline_languages, subject_languages, config.view.sort_by,
                 config.view.top_n, config.view.counting)
                 .0.into_iter()
                 .flat_map(|change| {
@@ -855,26 +853,84 @@ fn create_compared_rows(pairs: Option<&[super::diff::ModulePair]>, baseline: &Ru
                     if !config.view.hidden.nested_languages {
                         rows.extend(create_compared_sections(&change, baseline_nested, subject_nested, indent));
                     }
+                    if let (Some(by_file), Some(bases)) = (by_file, bases.as_ref()) {
+                        let (files, cut) = super::diff::create_file_comparison_rows(
+                                baseline_files.get(change.name.as_str()).unwrap_or(&empty),
+                                subject_files.get(change.name.as_str()).unwrap_or(&empty),
+                                bases, by_file, config.view.sort_by, config.view.counting);
+                        hidden += cut;
+                        rows.extend(create_compared_file_rows(files, cut == 0, indent));
+                    }
                     rows
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+        (rows, hidden)
+    };
+    let files_of = |modules| match by_file {
+        Some(_) => super::diff::collect_files_per_language(modules),
+        None => HashMap::new()
     };
 
     let mut rows = Vec::new();
+    let mut files_hidden = 0;
     match pairs {
         Some(pairs) => for pair in pairs {
             rows.push(ComparedRow { name: pair.name.unwrap_or(UNNAMED_MODULE_NAME).to_owned(),
                     kind: RowKind::Module, baseline: pair.before.total.clone(), subject: pair.now.total.clone() });
-            rows.extend(languages_of(&pair.before.per_language, &pair.now.per_language,
-                    &pair.before.nested_languages, &pair.now.nested_languages, GROUP_INDENT));
+            let (of_module, hidden) = languages_of(&pair.before.per_language, &pair.now.per_language,
+                    &pair.before.nested_languages, &pair.now.nested_languages,
+                    &files_of(std::slice::from_ref(pair.before)),
+                    &files_of(std::slice::from_ref(pair.now)), GROUP_INDENT);
+            rows.extend(of_module);
+            files_hidden += hidden;
         },
-        None => rows.extend(languages_of(&baseline.per_language, &subject.per_language,
-                &baseline.nested_languages, &subject.nested_languages, ""))
+        None => {
+            let (of_run, hidden) = languages_of(&baseline.per_language, &subject.per_language,
+                    &baseline.nested_languages, &subject.nested_languages,
+                    &files_of(&baseline.modules), &files_of(&subject.modules), "");
+            rows.extend(of_run);
+            files_hidden += hidden;
+        }
     }
     rows.push(ComparedRow { name: TOTAL_NAME.to_owned(), kind: RowKind::Total,
             baseline: baseline.total.clone(), subject: subject.total.clone() });
 
-    rows
+    (rows, files_hidden)
+}
+
+// 'complete' mirrors the report's tree: a cap that hid movers leaves the last branch hanging open
+fn create_compared_file_rows(files: Vec<super::diff::FileStatsChange>, complete: bool,
+        indent: &str) -> Vec<ComparedRow>
+{
+    let count = files.len();
+    files.into_iter().enumerate().map(|(at, file)| ComparedRow {
+        name: format!("{indent}{BRANCH_INDENT}{}{}",
+                find_file_branch_marker(at + 1 == count && complete), elide_long_path(&file.path)),
+        kind: RowKind::File, baseline: file.baseline, subject: file.subject
+    }).collect()
+}
+
+// What is too wide loses whole components out of its middle and never a piece of one: the file's own
+// name is what tells one row from another, so a name too wide on its own is the floor
+fn elide_long_path(relative: &str) -> Cow<'_, str> {
+    if calculate_widest_visible_line(relative) <= SHOWN_PATH_WIDTH {
+        return Cow::Borrowed(relative);
+    }
+
+    let parts = relative.split('/').collect::<Vec<_>>();
+    for kept in (1..parts.len().saturating_sub(1)).rev() {
+        let shortened = format!("{}/{ELIDED}/{}", parts[0], parts[parts.len() - kept..].join("/"));
+        if calculate_widest_visible_line(&shortened) <= SHOWN_PATH_WIDTH {
+            return Cow::Owned(shortened);
+        }
+    }
+
+    let name_alone = format!("{ELIDED}/{}", parts[parts.len() - 1]);
+    if calculate_widest_visible_line(&name_alone) < calculate_widest_visible_line(relative) {
+        return Cow::Owned(name_alone);
+    }
+
+    Cow::Borrowed(relative)
 }
 
 // A section only one reading holds still gets a row, so one that was added or taken out is visible
@@ -975,6 +1031,13 @@ so part of the difference below may be a language counted better since, and not 
                 doubts.iter().map(|x| format!("-- {x}")).collect::<Vec<_>>().join("\n")),
         Note::NothingCounted { about } => theme.warning.paint(&format!(
                 "'{about}' found no relevant files, so its side of every figure is zero.")).to_string(),
+        Note::FilesNotRecorded { about } => theme.warning.paint(&format!(
+                "'{about}' was written without '--{}', so it holds no file rows and the files \
+themselves are not compared.", config_manager::BY_FILE)).to_string(),
+        Note::FilesCut { about, hidden } => theme.warning.paint(&format!(
+                "'{about}' was written with a capped '--{}' and is missing {hidden} of its file \
+rows, which would all read as new, so the files themselves are not compared. Write it again with \
+a plain '--{}'.", config_manager::BY_FILE, config_manager::BY_FILE)).to_string(),
         Note::ModulesDiffer { baseline, subject, baseline_modules, subject_modules } => {
             // The word 'modules' is said once, by the first side, and the second reads on from it
             let first = match baseline_modules {
@@ -2490,6 +2553,8 @@ mod tests {
             warnings: Vec::new(),
             faulty_files_count: 0,
             unreadable_dirs_count: 0,
+            files_recorded: true,
+            files_hidden: 0,
             result: RunResult {total, per_language, modules, nested_languages: HashMap::new(),
                     faulty_files: Vec::new(), minified_files: 0, generated_files: 0, files_present, targets: Vec::new(),
                     unreadable_dirs: Vec::new(),
@@ -2716,7 +2781,7 @@ mod tests {
             headed
         };
 
-        let rows = create_compared_rows(None, &before.result, &now.result, &config);
+        let (rows, _) = create_compared_rows(None, &before.result, &now.result, None, &config);
         let mut comparison = format_comparison_lines(theme, &rows, ViewSettings::of(&config));
         comparison.extend(format_keyword_block_lines(theme, &[create_group_with_baseline(None, &before.result.per_language,
                 &now.result.per_language, &now.result.total, &config)]));
@@ -2735,6 +2800,39 @@ mod tests {
                 headed(format_boxed_comparison_lines(theme, &rows,
                         ViewSettings { hidden: trimmed, ..ViewSettings::of(&config) }), &before, &now)));
 
+        // The changed files hang under their language: one grown, one gone, one new, and the
+        // unchanged ones with no row. Python's cap left a mover out, so its branch hangs open
+        // where HTML's is drawn shut.
+        let file_entry = |path: &str, lines, code, bytes| mezura_core::FileEntry {
+            path: format!("D:/x/{path}"),
+            stats: crate::test_support::plain_stats_of(1, bytes, lines, code, 0, hashmap![]),
+            nested_languages: HashMap::new()
+        };
+        let with_files = |mut reading: crate::diff::Reading, files: HashMap<String, Vec<mezura_core::FileEntry>>| {
+            reading.result.modules[0].files = files;
+            reading.result.targets = vec![mezura_core::Target::of("D:/x")];
+            reading
+        };
+        let before_files = hashmap![
+            "HTML".to_owned() => vec![file_entry("src/components/Views/Learn.html", 300, 275, 14200),
+                    file_entry("assets/legacy.html", 60, 50, 2400), file_entry("index.html", 96, 86, 4600)],
+            "Rust".to_owned() => vec![file_entry("src/models/repository.rs", 120, 95, 4400),
+                    file_entry("src/main.rs", 80, 65, 3000), file_entry("src/build.rs", 50, 40, 1600)]];
+        let after_files = hashmap![
+            "HTML".to_owned() => vec![file_entry("src/components/Views/Learn.html", 340, 310, 16100),
+                    file_entry("assets/legacy.html", 20, 15, 800), file_entry("index.html", 96, 86, 4600)],
+            "Rust".to_owned() => vec![file_entry("src/models/repository.rs", 100, 80, 3700),
+                    file_entry("src/main.rs", 80, 65, 3000), file_entry("src/cli.rs", 30, 24, 900)]];
+        let (before, now) = (with_files(reading_of("older.json", EARLIER, without_modules(&earlier)), before_files),
+                with_files(reading_of("newer.json", LATER, without_modules(&modules)), after_files));
+        let (rows, hidden) = create_compared_rows(None, &before.result, &now.result,
+                Some(config_manager::ByFile::Capped(2)), &config);
+        assert_eq!(1, hidden);
+        cases.push(("comparison, with files".to_owned(),
+                headed(format_comparison_lines(theme, &rows, ViewSettings::of(&config)), &before, &now)));
+        cases.push(("comparison, with files, boxed".to_owned(),
+                headed(format_boxed_comparison_lines(theme, &rows, ViewSettings::of(&config)), &before, &now)));
+
         // The same two readings with a second axis through them, which is shown because they named
         // the same modules
         let (before, now) = (reading_of("older.json", EARLIER, earlier),
@@ -2744,7 +2842,7 @@ mod tests {
                 .map(|pair| create_group_with_baseline(pair.name, &pair.before.per_language, &pair.now.per_language,
                         &pair.now.total, config)).collect::<Vec<_>>();
 
-        let rows = create_compared_rows(Some(&pairs), &before.result, &now.result, &config);
+        let (rows, _) = create_compared_rows(Some(&pairs), &before.result, &now.result, None, &config);
         let mut comparison = format_comparison_lines(theme, &rows, ViewSettings::of(&config));
         comparison.extend(format_keyword_block_lines(theme, &grouped_keywords(&config)));
         cases.push(("comparison, modules".to_owned(), headed(comparison, &before, &now)));
@@ -2756,7 +2854,7 @@ mod tests {
         // '--top' cuts inside each module here as it does everywhere else
         config.view.top_n = Some(1);
         cases.push(("comparison, modules, top 1".to_owned(), headed(format_comparison_lines(theme,
-                &create_compared_rows(Some(&pairs), &before.result, &now.result, &config),
+                &create_compared_rows(Some(&pairs), &before.result, &now.result, None, &config).0,
                 ViewSettings::of(&config)), &before, &now)));
 
         // The two models, over data that tells them apart: every one of the nine classes is in play,

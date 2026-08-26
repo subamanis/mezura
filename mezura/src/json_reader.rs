@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use mezura_core::{FaultyFileDetails, FilesPresent, LineClasses, ModuleResult, Performance, RunResult,
-        Stats, Target, Threads, UnreadableDirDetails};
+use mezura_core::{FaultyFileDetails, FileEntry, FilesPresent, LineClasses, ModuleResult, Performance,
+        RunResult, Stats, Target, Threads, UnreadableDirDetails};
 use serde_json::{Map, Value};
 
 use super::json_printer::FORMAT_VERSION;
@@ -20,6 +20,12 @@ pub struct Document {
     // failures and did not detail them, while these two hold the real number.
     pub faulty_files_count: usize,
     pub unreadable_dirs_count: usize,
+    // Whether the run wrote file rows at all, so a document taken without '--by-file' is told apart
+    // from one whose files simply did not change. A run that counted nothing had nothing to record,
+    // so it counts as recorded.
+    pub files_recorded: bool,
+    // How many file rows a capped '--by-file' left out of the document, summed over its modules
+    pub files_hidden: usize,
     pub result: RunResult
 }
 
@@ -126,10 +132,14 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
     };
     // A document that named no module leaves the block out, and a run that named none has exactly
     // one module holding everything it counted, which is what the two blocks above already are.
-    let modules = match root.get("modules") {
+    // The file rows a cap left out are counted where the rows themselves live, which is why the
+    // top level's own figure is read only when there are no modules to read it from.
+    let (modules, files_hidden) = match root.get("modules") {
         Some(x) => parse_modules(read_array(x, "modules")?)?,
-        None => vec![ModuleResult { name: None, per_language: per_language.clone(), total: total.clone(),
-                nested_languages: nested_languages.clone(), files: HashMap::new() }]
+        None => (vec![ModuleResult { name: None, per_language: per_language.clone(), total: total.clone(),
+                nested_languages: nested_languages.clone(),
+                files: parse_files(read_list(root, "languages", "")?, "languages")? }],
+                read_optional_number(root, "files_hidden", "")?)
     };
 
     let (scope, targets) = parse_scope(scope)?;
@@ -140,6 +150,9 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
         warnings: parse_warnings(read_list(root, "warnings", "")?)?,
         faulty_files_count: read_number(scan, "files_faulty", "scan")?,
         unreadable_dirs_count: read_number(scan, "dirs_unreadable", "scan")?,
+        // Decided off what was actually parsed, so it can never claim rows the modules do not hold
+        files_recorded: modules.iter().any(|x| !x.files.is_empty()) || total.files == 0,
+        files_hidden,
         scope,
         result: RunResult {
             per_language,
@@ -280,10 +293,13 @@ fn parse_nested_languages(entries: &[Value], at: &str)
     Ok(found)
 }
 
-fn parse_modules(entries: &[Value]) -> Result<Vec<ModuleResult>, DocumentError> {
-    entries.iter().enumerate().map(|(i, entry)| {
+// The modules and, beside them, how many file rows a capped '--by-file' left out of all of them
+fn parse_modules(entries: &[Value]) -> Result<(Vec<ModuleResult>, usize), DocumentError> {
+    let mut hidden = 0;
+    let modules = entries.iter().enumerate().map(|(i, entry)| {
         let at = format!("modules[{i}]");
         let entry = read_object(entry, &at)?;
+        hidden += read_optional_number(entry, "files_hidden", &at)?;
 
         Ok(ModuleResult {
             name: read_optional_name(entry, "name", &at)?,
@@ -291,12 +307,41 @@ fn parse_modules(entries: &[Value]) -> Result<Vec<ModuleResult>, DocumentError> 
             per_language: parse_languages(read_list(entry, "languages", &at)?, &join_location(&at, "languages"))?,
             nested_languages: parse_nested_languages(read_list(entry, "languages", &at)?,
                     &join_location(&at, "languages"))?,
-            // The file rows a document carries are not read back: what a comparison compares is
-            // languages, and a file that was renamed between two readings has no answer yet
-            files: HashMap::new()
+            files: parse_files(read_list(entry, "languages", &at)?, &join_location(&at, "languages"))?
         })
-    }).collect()
+    }).collect::<Result<Vec<_>, DocumentError>>()?;
+
+    Ok((modules, hidden))
 }
+
+// Its own reader rather than 'parse_stats': a file row writes no 'files' count and no keywords, so
+// the row is one file with an empty keyword map.
+fn parse_files(entries: &[Value], at: &str) -> Result<HashMap<String, Vec<FileEntry>>, DocumentError> {
+    let mut found = HashMap::new();
+    for (i, entry) in entries.iter().enumerate() {
+        let at = format!("{at}[{i}]");
+        let entry = read_object(entry, &at)?;
+        let Some(rows) = entry.get("by_file") else { continue };
+        let name = read_text(entry, "name", &at)?;
+
+        let at = join_location(&at, "by_file");
+        let rows = read_array(rows, &at)?;
+        let files = rows.iter().enumerate().map(|(i, row)| {
+            let at = format!("{at}[{i}]");
+            let row = read_object(row, &at)?;
+            Ok(FileEntry {
+                path: read_text(row, "path", &at)?,
+                stats: Stats::new(1, read_number(row, "bytes", &at)?, read_number(row, "lines", &at)?,
+                        parse_classes(row, &at)?, HashMap::new()),
+                nested_languages: HashMap::new()
+            })
+        }).collect::<Result<Vec<_>, DocumentError>>()?;
+        found.insert(name, files);
+    }
+
+    Ok(found)
+}
+
 
 fn parse_performance(entry: &Map<String, Value>) -> Result<Performance, DocumentError> {
     let threads = read_nested(entry, "threads", "performance")?;
@@ -360,6 +405,14 @@ fn read_member<'a>(parent: &'a Map<String, Value>, key: &str, at: &str) -> Resul
 pub(crate) fn read_number(parent: &Map<String, Value>, key: &str, at: &str) -> Result<usize, DocumentError> {
     read_member(parent, key, at)?.as_u64().and_then(|x| usize::try_from(x).ok())
             .ok_or_else(|| DocumentError::WrongType { at: join_location(at, key), wanted: "a whole number" })
+}
+
+// Zero when the key is absent, which is what a document of a build that never wrote it means
+fn read_optional_number(parent: &Map<String, Value>, key: &str, at: &str) -> Result<usize, DocumentError> {
+    match parent.get(key) {
+        Some(_) => read_number(parent, key, at),
+        None => Ok(0)
+    }
 }
 
 pub(crate) fn read_text(parent: &Map<String, Value>, key: &str, at: &str) -> Result<String, DocumentError> {
@@ -567,6 +620,47 @@ mod tests {
         assert_eq!(None, read.modules[0].name);
         assert_eq!(plain.total, read.modules[0].total);
         assert_same_stats(&plain.per_language, &read.modules[0].per_language);
+    }
+
+    #[test]
+    fn the_file_rows_come_back_and_their_absence_reads_as_a_run_that_kept_none() {
+        let (mut result, mut config) = populated();
+        config.view.by_file = Some(crate::config_manager::ByFile::All);
+        let written = FileEntry { path: "D:/dev/api/main.rs".to_owned(),
+                stats: parse_stats(1, 3000, 60, 40, 10, HashMap::new()),
+                nested_languages: HashMap::new() };
+        result.modules[0].files = hashmap!["Rust".to_owned() => vec![written.clone()]];
+
+        let read = parse(&create_document(&result, &Local::now(), &config)).unwrap();
+        assert!(read.files_recorded);
+        let files = &read.result.modules[0].files["Rust"];
+        assert_eq!(1, files.len());
+        assert_eq!("D:/dev/api/main.rs", files[0].path);
+        assert_eq!(written.stats, files[0].stats);
+
+        // A capped run says how many rows its document is missing, wherever the cuts landed
+        config.view.by_file = Some(crate::config_manager::ByFile::Capped(1));
+        result.modules[0].files.get_mut("Rust").unwrap().push(FileEntry {
+                path: "D:/dev/api/lib.rs".to_owned(),
+                stats: parse_stats(1, 500, 10, 8, 1, HashMap::new()),
+                nested_languages: HashMap::new() });
+        let capped = create_document(&result, &Local::now(), &config);
+        let read = parse(&capped).unwrap();
+        assert!(read.files_recorded);
+        assert_eq!(1, read.files_hidden);
+
+        // A document whose top level repeats what its modules already count, as the builds that
+        // wrote the rows twice did, is not counted twice over
+        let repeated = capped.replace("\"files_hidden\":0,\"faulty_files\"", "\"files_hidden\":1,\"faulty_files\"");
+        assert_ne!(capped, repeated);
+        assert_eq!(1, parse(&repeated).unwrap().files_hidden);
+
+        // Written without '--by-file', the same run reads back as one that recorded nothing
+        config.view.by_file = None;
+        let read = parse(&create_document(&result, &Local::now(), &config)).unwrap();
+        assert!(!read.files_recorded);
+        assert_eq!(0, read.files_hidden);
+        assert!(read.result.modules.iter().all(|x| x.files.is_empty()));
     }
 
     #[test]

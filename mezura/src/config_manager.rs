@@ -880,10 +880,9 @@ is sorted by lines.", sort_by.name());
                 count_generated: self.count_generated.unwrap_or(engine_defaults.count_generated),
                 no_gitignore: self.no_gitignore.unwrap_or(engine_defaults.no_gitignore),
                 no_ignore_files: self.no_ignore_files.unwrap_or(engine_defaults.no_ignore_files),
-                // The two flags that answer both questions: what is counted and what is shown. A
-                // comparison prints no report for file rows to appear in, so none are kept there.
+                // The two flags that answer both questions: what is counted and what is shown
                 count_keywords: !hidden.keywords,
-                collect_files: self.by_file.is_some() && self.diff_against.is_none()
+                collect_files: self.by_file.is_some()
             },
             view: ViewConfig {
                 version: VERSION_ID,
@@ -1306,7 +1305,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     // '--save-local' counts as a folder of its own, since a run that writes one has somewhere to
     // keep a log by the time it would be written
     print_warnings_for_commands_that_need_a_loaded_configuration(&config_name_to_save, &config_name_to_load,
-            &log, &compare_level, &diff_against, &by_file, local_dir.is_some() || save_local.is_some());
+            &log, &compare_level, &diff_against, local_dir.is_some() || save_local.is_some());
 
     let mut config_builder = ConfigurationBuilder {
         targets, targets_source: None, exclude_dirs, languages_of_interest, excluded_languages, forced_languages, threads, counting,
@@ -1600,7 +1599,7 @@ fn report_ignored_config_value(field: &str, config_name: &str) {
 
 fn print_warnings_for_commands_that_need_a_loaded_configuration(config_name_to_save: &Option<String>, config_name_to_load: &Option<String>,
         log: &Option<LogOption>, compare_level: &Option<usize>, diff_against: &Option<String>,
-        by_file: &Option<ByFile>, a_local_dir_was_found: bool)
+        a_local_dir_was_found: bool)
 {
     // Printed here rather than kept for later, since this runs before the theme is resolved, and
     // kept as well, so that a machine consumer learns a command it gave was dropped
@@ -1614,13 +1613,6 @@ fn print_warnings_for_commands_that_need_a_loaded_configuration(config_name_to_s
     // reason the entry will not be written is enough.
     if let Some(log) = log && log.should_log && diff_against.is_some() {
         ignored(LOG, "'--log' command will be ignored: a comparison is not logged.".to_owned());
-    }
-
-    // A document holds no file rows to compare against, and a run that showed its own beside a
-    // comparison would be reporting every one of them as new
-    if by_file.is_some() && diff_against.is_some() {
-        ignored(BY_FILE, "'--by-file' command will be ignored: a comparison is between languages, \
-and the document it reads holds no files.".to_owned());
     }
 
     // A project's folder is a configuration without a name: it has a log of its own, so these two
@@ -1813,9 +1805,9 @@ mod tests {
         assert!(!create_config_from_args("./").unwrap().engine.collect_files);
         assert!(create_config_from_args("./ --by-file").unwrap().engine.collect_files);
 
-        // Under '--diff' nothing is collected, but the value is kept or '--save' would drop it
+        // A comparison collects them too, since its subject side is this very run
         let compared = create_config_from_args("./ --by-file 8 --diff old.json").unwrap();
-        assert!(!compared.engine.collect_files);
+        assert!(compared.engine.collect_files);
         assert_eq!(Some(ByFile::Capped(8)), compared.view.by_file);
 
         // What a configuration file stores is what the command line accepts back
