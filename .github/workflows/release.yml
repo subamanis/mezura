@@ -45,28 +45,29 @@ jobs:
       - name: Build
         run: cargo build --release --verbose
 
-      # The archives hold the binary under its plain name, so that it is ready to be
-      # used right after extracting, without having to be renamed
+      # The archives hold the binaries under their plain names, so that they are ready to be used
+      # right after extracting, without having to be renamed. Both go in the same folder because
+      # 'mezura-mcp' looks for 'mezura' beside itself first, which is what lets a client name it
+      # with no path and no environment variable.
       - name: Package for windows
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $name = "mezura-${{ github.ref_name }}-${{ matrix.platform }}"
           New-Item -ItemType Directory -Path $name | Out-Null
-          Copy-Item target/release/mezura.exe -Destination $name
+          Copy-Item target/release/mezura.exe, target/release/mezura-mcp.exe -Destination $name
           Copy-Item LICENSE-MIT, LICENSE-APACHE, mezura/Changelog, README.md -Destination $name
           Compress-Archive -Path $name -DestinationPath "$name.zip"
 
-      # The release profile keeps the debug symbols, so that flamegraphs can be taken from a
-      # local release build. They quadruple the size of the downloaded binary though, and the
-      # windows one does not carry them anyway, since MSVC writes them to a separate .pdb file.
+      # The release profile already strips, so this only keeps the size of what people download
+      # from depending on a profile that gets changed locally to take flamegraphs.
       - name: Package for linux and macos
         if: runner.os != 'Windows'
         run: |
           name="mezura-${{ github.ref_name }}-${{ matrix.platform }}"
-          strip target/release/mezura
+          strip target/release/mezura target/release/mezura-mcp
           mkdir "$name"
-          cp target/release/mezura "$name/"
+          cp target/release/mezura target/release/mezura-mcp "$name/"
           cp LICENSE-MIT LICENSE-APACHE mezura/Changelog README.md "$name/"
           tar czf "$name.tar.gz" "$name"
 
