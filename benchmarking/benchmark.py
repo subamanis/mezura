@@ -54,6 +54,32 @@ def real_home() -> Path:
 
 
 HOME = real_home()
+
+
+def give_back_to_user(root: Path) -> None:
+    user = os.environ.get('SUDO_USER')
+    if not user or PLATFORM == 'windows' or not hasattr(os, 'chown'):
+        return
+    try:
+        import pwd
+        entry = pwd.getpwnam(user)
+    except Exception:
+        return
+    targets = [root] + [p for p in root.rglob('*')]
+    for target in targets:
+        try:
+            os.chown(target, entry.pw_uid, entry.pw_gid, follow_symlinks=False)
+        except OSError:
+            pass
+
+
+def under_home(path: Path) -> Path:
+    text = str(path)
+    if text == '~':
+        return HOME
+    if text.startswith('~' + os.sep) or text.startswith('~/'):
+        return HOME / text[2:]
+    return path.expanduser()
 DEFAULT_TOOLS = HOME / 'Documents' / 'dev' / 'tools'
 DEFAULT_CORPUS = HOME / 'Documents' / 'dev' / 'bench' / 'linux'
 
@@ -256,6 +282,45 @@ def filesystem_of(path: Path) -> str:
     return 'unknown'
 
 
+def device_of(path: Path) -> str:
+    if PLATFORM == 'windows':
+        drive = str(Path(path).resolve())[0]
+        found = powershell(
+            f'$d = (Get-Partition -DriveLetter {drive} | Get-Disk); '
+            f'$p = Get-PhysicalDisk | Where-Object {{$_.DeviceId -eq $d.Number}}; '
+            f'"{{0}}, {{1}}, {{2}}" -f $d.FriendlyName, $p.MediaType, $p.BusType')
+        return found or 'unknown'
+    if PLATFORM == 'macos':
+        out = capture(['diskutil', 'info', str(path)])
+        wanted = ('Device / Media Name', 'Solid State', 'Protocol')
+        found = [line.split(':', 1)[1].strip() for line in out.splitlines()
+                 if line.strip().startswith(wanted) and ':' in line]
+        return ', '.join(found) or 'unknown'
+
+    source = capture(['df', '--output=source', str(path)]).splitlines()
+    if len(source) < 2:
+        return 'unknown'
+    parent = capture(['lsblk', '-no', 'PKNAME', source[-1].strip()]).strip()
+    if not parent:
+        return 'unknown'
+    block = Path('/sys/block') / parent
+
+    def read(where: Path) -> str:
+        try:
+            return where.read_text().strip()
+        except OSError:
+            return ''
+
+    parts = [read(block / 'device' / 'model') or parent]
+    if read(block / 'queue' / 'rotational') == '1':
+        parts.append('spinning')
+    speed = read(block / 'device' / 'device' / 'current_link_speed')
+    width = read(block / 'device' / 'device' / 'current_link_width')
+    if speed:
+        parts.append(f'{speed} x{width}' if width else speed)
+    return ', '.join(parts)
+
+
 def distro() -> str:
     if PLATFORM in ('linux', 'wsl'):
         try:
@@ -275,8 +340,8 @@ def git_state(path: Path, untracked: bool = True) -> dict[str, Any]:
     ok, out = capture_ok(argv, timeout=300)
     if not ok:
         return {'head': head, 'clean': None, 'dirty': []}
-    dirty = [line[3:].split(' -> ')[-1].strip('"')
-             for line in out.splitlines() if len(line) > 3]
+    dirty = [line.split(maxsplit=1)[1].split(' -> ')[-1].strip('"')
+             for line in out.splitlines() if len(line.split(maxsplit=1)) == 2]
     return {'head': head, 'clean': not dirty, 'dirty': dirty}
 
 
@@ -318,6 +383,7 @@ def collect_machine(tools: Path, corpus: Path, repo: Path) -> dict[str, Any]:
         'ram_bytes': ram_bytes(),
         'cpu_scaling': cpu_scaling(),
         'corpus_fs': filesystem_of(corpus),
+        'corpus_device': device_of(corpus),
         'corpus': str(corpus),
         'corpus_head': head['head'],
         'corpus_clean': head['clean'] if head['clean'] is not None else 'could not tell',
@@ -409,6 +475,8 @@ def setup_corpus(corpus: Path, definition: Definition) -> None:
 
 def setup_mezura(tools: Path, repo: Path) -> None:
     binary = tools / f'mezura{EXE}'
+    if not shutil.which('cargo'):
+        raise SystemExit('cargo is needed to build mezura, and it is not on PATH')
     say(f'   cargo build --release in {repo}')
     result = run(['cargo', 'build', '--release'], cwd=repo)
     if result.returncode != 0:
@@ -492,20 +560,22 @@ def prep_plan() -> list[PrepStep]:
 def how_to_elevate() -> tuple[str, str]:
     if PLATFORM == 'windows':
         return 'administrator', 'run it from a terminal opened with "Run as administrator"'
-    return 'root', f'sudo {sys.executable} {" ".join(sys.argv)}'
+    argv = [a for a in sys.argv if a not in ('--setup', '--setup-only')]
+    return 'root', f'sudo {sys.executable} {" ".join(argv)}'
 
 
 def announce_prep(plan: list[PrepStep], assume_yes: bool) -> None:
     if not plan or is_privileged():
         return
     authority, how = how_to_elevate()
-    say(f'This benchmark is meant to be run as {authority}. It would otherwise have:')
+    say(f'Not running as {authority}, so the machine is measured exactly as it is now.')
+    say(f'\nAs {authority} this run would first set:')
     for step in plan:
-        say(f'   - set {step["what"]}')
-    say('and put all of it back when the run ends, however it ends.')
+        say(f'   {step["what"]}')
+    say('and put it back at the end, however the run ends. To do that:')
     say(f'\n   {how}\n')
-    say('Measuring without it still works, but a machine that clocks itself up and down')
-    say('during the run widens the spread and can bury a real difference.')
+    say('The numbers are real either way. But a cpu that clocks itself up and down')
+    say('mid-run widens the spread, and a small difference can disappear into it.')
     if assume_yes:
         say('--yes was given, so carrying on as an ordinary user.')
         return
@@ -807,9 +877,9 @@ def write_notes(res: Path, stamp: str, tools: Path, corpus: Path,
 def read_corpus_def(script_dir: Path, given: str) -> Definition:
     named = script_dir / 'corpora' / f'{given}.conf'
     looks_like_path = os.sep in given or (os.altsep and os.altsep in given)
-    path = Path(given).expanduser() if looks_like_path else named
+    path = under_home(Path(given)) if looks_like_path else named
     if not path.is_file() and not looks_like_path:
-        path = Path(given).expanduser()
+        path = under_home(Path(given))
     if not path.is_file():
         known = sorted(p.stem for p in (script_dir / 'corpora').glob('*.conf'))
         raise SystemExit(f'no corpus definition at {path}\n'
@@ -922,8 +992,8 @@ def main() -> int:
     args = parse_args(read_config(script_dir / 'benchmark.conf'))
     definition = read_corpus_def(script_dir, args.corpus_def)
     repo = script_dir.parent
-    tools = args.tools.expanduser()
-    corpus = args.corpus.expanduser()
+    tools = under_home(args.tools)
+    corpus = under_home(args.corpus)
 
     for name in ('CLICOLOR_FORCE', 'MEZURA_PHASE_TIMING', 'SCC_CONFIG_PATH', 'RAYON_NUM_THREADS'):
         os.environ.pop(name, None)
@@ -931,19 +1001,27 @@ def main() -> int:
     if args.check and not (args.setup or args.setup_only):
         return do_check(corpus, require_ready(tools, corpus, definition), definition)
 
-    plan = [] if args.no_prep else prep_plan()
-    announce_prep(plan, args.yes)
-
     if args.setup or args.setup_only:
-        if is_privileged() and PLATFORM != 'windows':
-            say('NOTE: running the setup as root leaves the binaries, ~/.cargo and target/')
-            say('      owned by root. Do the setup as yourself, then measure with sudo.')
+        if is_privileged():
+            authority = 'administrator' if PLATFORM == 'windows' else 'root'
+            raise SystemExit(
+                f'the setup must not run as {authority}. It builds with cargo and writes into\n'
+                f'  {tools}\n'
+                f'  {HOME / ".cargo"}\n'
+                f'  {repo / "target"}\n'
+                f'and all of it would come out owned by {authority}, which breaks your next\n'
+                f'ordinary build. cargo is usually not even on {authority}\'s PATH.\n\n'
+                f'  {sys.executable} {" ".join(sys.argv)}\n\n'
+                f'Run the setup as yourself, then measure with sudo.')
         tools.mkdir(parents=True, exist_ok=True)
         do_setup(tools, corpus, repo, definition)
         failed = do_check(corpus, require_ready(tools, corpus, definition), definition)
         if failed or args.setup_only:
             return failed
         say('')
+
+    plan = [] if args.no_prep else prep_plan()
+    announce_prep(plan, args.yes)
 
     binaries = require_ready(tools, corpus, definition)
     mezura, control = binaries['mezura'], binaries['control']
@@ -978,7 +1056,7 @@ def measure(args: argparse.Namespace, tools: Path, corpus: Path, mezura: Path, c
     settle = args.settle if args.settle is not None else 3
 
     stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
-    outroot = (args.out.expanduser() if args.out else script_dir / 'results')
+    outroot = (under_home(args.out) if args.out else script_dir / 'results')
     res = outroot / definition['name'] / PLATFORM / stamp
     if res.exists():
         raise SystemExit(f'{res} is already there, refusing to write over it')
@@ -1094,6 +1172,8 @@ def run_phases(args: argparse.Namespace, tools: Path, corpus: Path, repo: Path, 
 
     if not args.keep_raw:
         shutil.rmtree(res / 'out', ignore_errors=True)
+
+    give_back_to_user(outroot)
 
     say(f'done. everything is in {res}')
     if runner.failures:

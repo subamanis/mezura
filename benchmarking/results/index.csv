@@ -1,0 +1,2 @@
+stamp,corpus,platform,mezura_head,mezura_clean,corpus_head,corpus_pinned,prepared,worst_control,t1_mezura_s,t1_scc_s,t1_tokei_s,path
+20260828-230405,linux,linux,9b31de9e483f,True,0ff41df1cb26,True,True,1.0068,0.222657,0.471199,0.474216,linux/linux/20260828-230405

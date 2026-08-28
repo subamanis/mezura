@@ -1,0 +1,24 @@
+date: 2026-08-28T23:04:05+03:00
+platform: linux
+arch: x86_64
+os: Debian GNU/Linux 13 (trixie)
+kernel: 6.12.105+deb13-amd64
+cpu: AMD Ryzen 7 9700X 8-Core Processor
+logical_cores: 16
+ram_bytes: 64950501376
+cpu_scaling: performance
+corpus_fs: ext4 /dev/nvme1n1p3
+corpus_device: Lexar SSD NQ790 2TB, 16.0 GT/s PCIe x4
+corpus: /home/petros/Documents/dev/bench/linux
+corpus_head: 0ff41df1cb268fc69e703a08a57ee14ae967d0ca
+corpus_clean: True
+tools: /home/petros/Documents/dev/tools
+mezura_head: 9b31de9e483f347d1dc091436773cbcfb40e931d
+mezura_clean: True
+mezura_changed_before_building: []
+mezura_changed_beside_the_build: ['benchmarking/benchmark.py', 'enchmarking/MIGRATION.md']
+global_gitignore: none
+hyperfine: hyperfine 1.19.0
+mezura: v3.0.0 (unreleased)
+scc: scc version 4.0.0
+tokei: tokei 14.0.0 compiled with serialization support: json

@@ -1,0 +1,184 @@
+== phase 0: machine state
+   date: 2026-08-28T23:04:05+03:00
+   platform: linux
+   arch: x86_64
+   os: Debian GNU/Linux 13 (trixie)
+   kernel: 6.12.105+deb13-amd64
+   cpu: AMD Ryzen 7 9700X 8-Core Processor
+   logical_cores: 16
+   ram_bytes: 64950501376
+   cpu_scaling: performance
+   corpus_fs: ext4 /dev/nvme1n1p3
+   corpus: /home/petros/Documents/dev/bench/linux
+   corpus_head: 0ff41df1cb268fc69e703a08a57ee14ae967d0ca
+   corpus_clean: True
+   tools: /home/petros/Documents/dev/tools
+   mezura_head: 9b31de9e483f347d1dc091436773cbcfb40e931d
+   mezura_clean: True
+   mezura_changed_before_building: []
+   mezura_changed_beside_the_build: ['benchmarking/benchmark.py', 'enchmarking/MIGRATION.md']
+   global_gitignore: none
+   hyperfine: hyperfine 1.19.0
+   mezura: v3.0.0 (unreleased)
+   scc: scc version 4.0.0
+   tokei: tokei 14.0.0 compiled with serialization support: json
+== phase 0b: output and JSON captures (also the settling runs)
+== phase 1: opening control run (gate: 1.00x inside the interval, or stop here)
+>> control-start
+Benchmark 1: /home/petros/Documents/dev/tools/mezura /home/petros/Documents/dev/bench/linux
+  Time (mean ± σ):     254.8 ms ±  14.5 ms    [User: 2450.3 ms, System: 343.8 ms]
+  Range (min … max):   235.2 ms … 278.9 ms    15 runs
+ 
+Benchmark 2: /home/petros/Documents/dev/tools/control/mezura /home/petros/Documents/dev/bench/linux
+  Time (mean ± σ):     256.5 ms ±  10.0 ms    [User: 2386.9 ms, System: 389.5 ms]
+  Range (min … max):   239.9 ms … 272.5 ms    15 runs
+ 
+Summary
+  /home/petros/Documents/dev/tools/mezura /home/petros/Documents/dev/bench/linux ran
+    1.01 ± 0.07 times faster than /home/petros/Documents/dev/tools/control/mezura /home/petros/Documents/dev/bench/linux
+== phase 2: table 1, same work
+>> t1-fwd
+Benchmark 1: /home/petros/Documents/dev/tools/mezura /home/petros/Documents/dev/bench/linux --languages c,h,s,py,pl,rs,sh --hide keywords --count-minified --count-generated --counting region
+  Time (mean ± σ):     222.7 ms ±   9.8 ms    [User: 2087.7 ms, System: 350.8 ms]
+  Range (min … max):   212.6 ms … 241.4 ms    15 runs
+ 
+Benchmark 2: /home/petros/Documents/dev/tools/scc /home/petros/Documents/dev/bench/linux -i c,h,s,py,pl,rs,sh -c --no-cocomo --no-config
+  Time (mean ± σ):     471.2 ms ±   4.4 ms    [User: 5731.0 ms, System: 402.2 ms]
+  Range (min … max):   468.0 ms … 485.9 ms    15 runs
+ 
+Benchmark 3: /home/petros/Documents/dev/tools/tokei /home/petros/Documents/dev/bench/linux -t "C,C Header,GNU Style Assembly,Python,Perl,Rust,Shell"
+  Time (mean ± σ):     474.2 ms ±   3.0 ms    [User: 5664.3 ms, System: 570.1 ms]
+  Range (min … max):   469.7 ms … 478.8 ms    15 runs
+ 
+Summary
+  /home/petros/Documents/dev/tools/mezura /home/petros/Documents/dev/bench/linux --languages c,h,s,py,pl,rs,sh --hide keywords --count-minified --count-generated --counting region ran
+    2.12 ± 0.09 times faster than /home/petros/Documents/dev/tools/scc /home/petros/Documents/dev/bench/linux -i c,h,s,py,pl,rs,sh -c --no-cocomo --no-config
+    2.13 ± 0.09 times faster than /home/petros/Documents/dev/tools/tokei /home/petros/Documents/dev/bench/linux -t "C,C Header,GNU Style Assembly,Python,Perl,Rust,Shell"
+>> t1-rev
+Benchmark 1: /home/petros/Documents/dev/tools/tokei /home/petros/Documents/dev/bench/linux -t "C,C Header,GNU Style Assembly,Python,Perl,Rust,Shell"
+  Time (mean ± σ):     473.6 ms ±   2.9 ms    [User: 5615.6 ms, System: 610.9 ms]
+  Range (min … max):   468.5 ms … 479.0 ms    15 runs
+ 
+Benchmark 2: /home/petros/Documents/dev/tools/scc /home/petros/Documents/dev/bench/linux -i c,h,s,py,pl,rs,sh -c --no-cocomo --no-config
+  Time (mean ± σ):     471.7 ms ±   1.5 ms    [User: 5746.7 ms, System: 384.5 ms]
+  Range (min … max):   469.1 ms … 474.3 ms    15 runs
+ 
+Benchmark 3: /home/petros/Documents/dev/tools/mezura /home/petros/Documents/dev/bench/linux --languages c,h,s,py,pl,rs,sh --hide keywords --count-minified --count-generated --counting region
+  Time (mean ± σ):     224.1 ms ±   9.0 ms    [User: 2075.6 ms, System: 358.9 ms]
+  Range (min … max):   213.0 ms … 241.5 ms    15 runs
+ 
+Summary
+  /home/petros/Documents/dev/tools/mezura /home/petros/Documents/dev/bench/linux --languages c,h,s,py,pl,rs,sh --hide keywords --count-minified --count-generated --counting region ran
+    2.11 ± 0.08 times faster than /home/petros/Documents/dev/tools/scc /home/petros/Documents/dev/bench/linux -i c,h,s,py,pl,rs,sh -c --no-cocomo --no-config
+    2.11 ± 0.09 times faster than /home/petros/Documents/dev/tools/tokei /home/petros/Documents/dev/bench/linux -t "C,C Header,GNU Style Assembly,Python,Perl,Rust,Shell"
+== phase 3: table 2, out of the box
+>> t2-fwd
+Benchmark 1: /home/petros/Documents/dev/tools/mezura /home/petros/Documents/dev/bench/linux
+  Time (mean ± σ):     257.9 ms ±  10.6 ms    [User: 2425.0 ms, System: 356.4 ms]
+  Range (min … max):   239.9 ms … 278.5 ms    15 runs
+ 
+Benchmark 2: /home/petros/Documents/dev/tools/scc /home/petros/Documents/dev/bench/linux
+  Time (mean ± σ):     688.1 ms ±   3.2 ms    [User: 8934.3 ms, System: 417.7 ms]
+  Range (min … max):   681.9 ms … 695.9 ms    15 runs
+ 
+Benchmark 3: /home/petros/Documents/dev/tools/tokei /home/petros/Documents/dev/bench/linux
+  Time (mean ± σ):     520.2 ms ±   3.2 ms    [User: 6320.6 ms, System: 747.2 ms]
+  Range (min … max):   514.6 ms … 525.9 ms    15 runs
+ 
+Summary
+  /home/petros/Documents/dev/tools/mezura /home/petros/Documents/dev/bench/linux ran
+    2.02 ± 0.08 times faster than /home/petros/Documents/dev/tools/tokei /home/petros/Documents/dev/bench/linux
+    2.67 ± 0.11 times faster than /home/petros/Documents/dev/tools/scc /home/petros/Documents/dev/bench/linux
+>> t2-rev
+Benchmark 1: /home/petros/Documents/dev/tools/tokei /home/petros/Documents/dev/bench/linux
+  Time (mean ± σ):     521.7 ms ±   2.8 ms    [User: 6363.9 ms, System: 726.6 ms]
+  Range (min … max):   518.3 ms … 527.6 ms    15 runs
+ 
+Benchmark 2: /home/petros/Documents/dev/tools/scc /home/petros/Documents/dev/bench/linux
+  Time (mean ± σ):     688.5 ms ±   2.9 ms    [User: 8898.8 ms, System: 425.4 ms]
+  Range (min … max):   684.8 ms … 693.2 ms    15 runs
+ 
+Benchmark 3: /home/petros/Documents/dev/tools/mezura /home/petros/Documents/dev/bench/linux
+  Time (mean ± σ):     257.1 ms ±   9.6 ms    [User: 2412.8 ms, System: 375.6 ms]
+  Range (min … max):   239.9 ms … 279.4 ms    15 runs
+ 
+Summary
+  /home/petros/Documents/dev/tools/mezura /home/petros/Documents/dev/bench/linux ran
+    2.03 ± 0.08 times faster than /home/petros/Documents/dev/tools/tokei /home/petros/Documents/dev/bench/linux
+    2.68 ± 0.10 times faster than /home/petros/Documents/dev/tools/scc /home/petros/Documents/dev/bench/linux
+== phase 4: thread sweep
+>> sweep-scc
+Benchmark 1: /home/petros/Documents/dev/tools/scc /home/petros/Documents/dev/bench/linux -i c,h,s,py,pl,rs,sh -c --no-cocomo --no-config
+  Time (mean ± σ):     471.9 ms ±   2.4 ms    [User: 5788.2 ms, System: 367.8 ms]
+  Range (min … max):   467.3 ms … 476.1 ms    15 runs
+ 
+Benchmark 2: /home/petros/Documents/dev/tools/scc /home/petros/Documents/dev/bench/linux -i c,h,s,py,pl,rs,sh -c --no-cocomo --no-config --file-process-job-workers 32
+  Time (mean ± σ):     452.6 ms ±   2.5 ms    [User: 5849.9 ms, System: 414.7 ms]
+  Range (min … max):   447.4 ms … 456.2 ms    15 runs
+ 
+Benchmark 3: /home/petros/Documents/dev/tools/scc /home/petros/Documents/dev/bench/linux -i c,h,s,py,pl,rs,sh -c --no-cocomo --no-config --file-process-job-workers 64
+  Time (mean ± σ):     450.1 ms ±   3.2 ms    [User: 5911.2 ms, System: 407.2 ms]
+  Range (min … max):   445.1 ms … 458.3 ms    15 runs
+ 
+Benchmark 4: /home/petros/Documents/dev/tools/scc /home/petros/Documents/dev/bench/linux -i c,h,s,py,pl,rs,sh -c --no-cocomo --no-config --file-process-job-workers 32 --directory-walker-job-workers 16
+  Time (mean ± σ):     454.1 ms ±   3.3 ms    [User: 5865.4 ms, System: 404.9 ms]
+  Range (min … max):   449.8 ms … 460.3 ms    15 runs
+ 
+Benchmark 5: /home/petros/Documents/dev/tools/scc /home/petros/Documents/dev/bench/linux -i c,h,s,py,pl,rs,sh -c --no-cocomo --no-config --file-process-job-workers 64 --directory-walker-job-workers 16
+  Time (mean ± σ):     450.4 ms ±   2.8 ms    [User: 5900.8 ms, System: 413.3 ms]
+  Range (min … max):   446.0 ms … 456.1 ms    15 runs
+ 
+Summary
+  /home/petros/Documents/dev/tools/scc /home/petros/Documents/dev/bench/linux -i c,h,s,py,pl,rs,sh -c --no-cocomo --no-config --file-process-job-workers 64 ran
+    1.00 ± 0.01 times faster than /home/petros/Documents/dev/tools/scc /home/petros/Documents/dev/bench/linux -i c,h,s,py,pl,rs,sh -c --no-cocomo --no-config --file-process-job-workers 64 --directory-walker-job-workers 16
+    1.01 ± 0.01 times faster than /home/petros/Documents/dev/tools/scc /home/petros/Documents/dev/bench/linux -i c,h,s,py,pl,rs,sh -c --no-cocomo --no-config --file-process-job-workers 32
+    1.01 ± 0.01 times faster than /home/petros/Documents/dev/tools/scc /home/petros/Documents/dev/bench/linux -i c,h,s,py,pl,rs,sh -c --no-cocomo --no-config --file-process-job-workers 32 --directory-walker-job-workers 16
+    1.05 ± 0.01 times faster than /home/petros/Documents/dev/tools/scc /home/petros/Documents/dev/bench/linux -i c,h,s,py,pl,rs,sh -c --no-cocomo --no-config
+>> sweep-mezura
+Benchmark 1: /home/petros/Documents/dev/tools/mezura /home/petros/Documents/dev/bench/linux --languages c,h,s,py,pl,rs,sh --hide keywords --count-minified --count-generated --counting region
+  Time (mean ± σ):     229.5 ms ±  12.0 ms    [User: 2083.3 ms, System: 349.8 ms]
+  Range (min … max):   210.2 ms … 257.3 ms    15 runs
+ 
+Benchmark 2: /home/petros/Documents/dev/tools/mezura /home/petros/Documents/dev/bench/linux --languages c,h,s,py,pl,rs,sh --hide keywords --count-minified --count-generated --counting region --threads 4 64
+  Time (mean ± σ):     228.2 ms ±  13.8 ms    [User: 2103.2 ms, System: 369.7 ms]
+  Range (min … max):   204.5 ms … 252.7 ms    15 runs
+ 
+Benchmark 3: /home/petros/Documents/dev/tools/mezura /home/petros/Documents/dev/bench/linux --languages c,h,s,py,pl,rs,sh --hide keywords --count-minified --count-generated --counting region --threads 16 64
+  Time (mean ± σ):     228.1 ms ±   7.9 ms    [User: 2051.9 ms, System: 364.0 ms]
+  Range (min … max):   212.9 ms … 244.6 ms    15 runs
+ 
+Benchmark 4: /home/petros/Documents/dev/tools/mezura /home/petros/Documents/dev/bench/linux --languages c,h,s,py,pl,rs,sh --hide keywords --count-minified --count-generated --counting region --threads 8 32
+  Time (mean ± σ):     220.1 ms ±   8.2 ms    [User: 2127.6 ms, System: 339.4 ms]
+  Range (min … max):   204.3 ms … 232.9 ms    15 runs
+ 
+Benchmark 5: /home/petros/Documents/dev/tools/mezura /home/petros/Documents/dev/bench/linux --languages c,h,s,py,pl,rs,sh --hide keywords --count-minified --count-generated --counting region --threads 8 128
+  Time (mean ± σ):     235.6 ms ±   9.2 ms    [User: 2021.7 ms, System: 371.0 ms]
+  Range (min … max):   213.9 ms … 252.2 ms    15 runs
+ 
+Benchmark 6: /home/petros/Documents/dev/tools/mezura /home/petros/Documents/dev/bench/linux --languages c,h,s,py,pl,rs,sh --hide keywords --count-minified --count-generated --counting region --threads 16 128
+  Time (mean ± σ):     235.5 ms ±  10.4 ms    [User: 2029.8 ms, System: 363.3 ms]
+  Range (min … max):   216.1 ms … 256.3 ms    15 runs
+ 
+Summary
+  /home/petros/Documents/dev/tools/mezura /home/petros/Documents/dev/bench/linux --languages c,h,s,py,pl,rs,sh --hide keywords --count-minified --count-generated --counting region --threads 8 32 ran
+    1.04 ± 0.05 times faster than /home/petros/Documents/dev/tools/mezura /home/petros/Documents/dev/bench/linux --languages c,h,s,py,pl,rs,sh --hide keywords --count-minified --count-generated --counting region --threads 16 64
+    1.04 ± 0.07 times faster than /home/petros/Documents/dev/tools/mezura /home/petros/Documents/dev/bench/linux --languages c,h,s,py,pl,rs,sh --hide keywords --count-minified --count-generated --counting region --threads 4 64
+    1.04 ± 0.07 times faster than /home/petros/Documents/dev/tools/mezura /home/petros/Documents/dev/bench/linux --languages c,h,s,py,pl,rs,sh --hide keywords --count-minified --count-generated --counting region
+    1.07 ± 0.06 times faster than /home/petros/Documents/dev/tools/mezura /home/petros/Documents/dev/bench/linux --languages c,h,s,py,pl,rs,sh --hide keywords --count-minified --count-generated --counting region --threads 16 128
+    1.07 ± 0.06 times faster than /home/petros/Documents/dev/tools/mezura /home/petros/Documents/dev/bench/linux --languages c,h,s,py,pl,rs,sh --hide keywords --count-minified --count-generated --counting region --threads 8 128
+== phase 5: closing control run (gate: still 1.00x, or the machine drifted)
+>> control-end
+Benchmark 1: /home/petros/Documents/dev/tools/mezura /home/petros/Documents/dev/bench/linux
+  Time (mean ± σ):     254.0 ms ±  12.0 ms    [User: 2444.5 ms, System: 365.3 ms]
+  Range (min … max):   240.8 ms … 288.3 ms    15 runs
+ 
+Benchmark 2: /home/petros/Documents/dev/tools/control/mezura /home/petros/Documents/dev/bench/linux
+  Time (mean ± σ):     254.0 ms ±   9.7 ms    [User: 2439.6 ms, System: 370.3 ms]
+  Range (min … max):   237.0 ms … 274.6 ms    15 runs
+ 
+Summary
+  /home/petros/Documents/dev/tools/control/mezura /home/petros/Documents/dev/bench/linux ran
+    1.00 ± 0.06 times faster than /home/petros/Documents/dev/tools/mezura /home/petros/Documents/dev/bench/linux
+== summary
+done. everything is in /home/petros/Documents/dev/Rusty/mezura/benchmarking/results/linux/linux/20260828-230405
+fill in notes.md, and check both control runs before believing anything else.
