@@ -18,6 +18,11 @@ pub const BINARY_PATH_VARIABLE : &str = "MEZURA_BIN";
 pub const DATA_DIR_VARIABLE : &str = "MEZURA_DATA_DIR";
 
 const BINARY_NAME : &str = "mezura";
+
+// The report this server parses, and the language files it shares a data directory with, are the
+// shape mezura 3 writes. An older binary on the path answers with its own and nothing here makes
+// sense, so it is refused by name rather than left to fail as a parse.
+const EXPECTED_MAJOR : &str = "3";
 const TIME_LIMIT  : Duration = Duration::from_secs(180);
 
 // The two streams stay apart: a JSON document is written to the first and has to reach the caller
@@ -49,11 +54,34 @@ pub async fn run(arguments: &[String]) -> Result<Output, String> {
     run_the_binary(&find_binary(), None, arguments).await
 }
 
+// Asked once for the life of the server: the answer cannot change under a running process, and a
+// spawn per tool call to find that out would cost more than the call itself.
+fn refuse_a_mezura_of_another_age(binary: &Path) -> Result<(), String> {
+    static CHECKED : std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+    CHECKED.get_or_init(|| {
+        let spoken = std::process::Command::new(binary).arg("--version").output();
+        let Ok(spoken) = spoken else { return Ok(()) };
+        let text = String::from_utf8_lossy(&spoken.stdout);
+        let Some(version) = text.lines().map(str::trim).find(|line| !line.is_empty()) else {
+            return Ok(())
+        };
+        let major = version.trim_start_matches('v').split('.').next().unwrap_or_default();
+        if major == EXPECTED_MAJOR {
+            return Ok(());
+        }
+        Err(format!("'{}' is mezura {version}, and this server speaks to mezura {EXPECTED_MAJOR}. \
+Point {BINARY_PATH_VARIABLE} at a mezura {EXPECTED_MAJOR} binary, or update the one that is \
+installed.", binary.display()))
+    }).clone()
+}
+
 // Both of the first two are arguments so that a test can measure the binary it just built rather
 // than whichever one this machine has installed, and can point it at a data directory of its own
 // rather than writing languages and themes into the real one.
 pub async fn run_the_binary(binary: &Path, data_dir: Option<&Path>, arguments: &[String])
         -> Result<Output, String> {
+    refuse_a_mezura_of_another_age(binary)?;
+
     // The client's own environment is inherited, and one variable in it decides whether mezura
     // paints. 'CLICOLOR_FORCE' makes it paint into a pipe, which fills the answer with escape
     // codes, and it outranks 'NO_COLOR', so the variable has to go rather than be answered.

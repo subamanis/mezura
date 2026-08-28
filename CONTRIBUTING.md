@@ -57,7 +57,9 @@ no code at all.
 2. Add one small sample file to `mezura-core/tests/fixtures/lang/`. Its first line says what the
    counts must be, like `// mezura-expect lines=22 code=10`. Count them by hand. See
    [the fixtures README](mezura-core/tests/fixtures/README.md).
-3. Run `cargo test`.
+3. Run `cargo build --release && cargo test`. The build comes first because the MCP server
+   starts mezura as a separate process, and `cargo test` never builds the binary of another
+   package.
 
 The sample file should look like the language normally looks. Anything weird, a comment symbol
 hiding inside a string, an unbalanced quote, a comment that never closes, goes to `stress-corpus/`

@@ -51,6 +51,22 @@ fn a_tool_asked_for_a_path_that_is_not_there_says_so_instead_of_dying() {
     assert!(text.contains("does not exist"), "the answer does not say what went wrong:\n{text}");
 }
 
+// 'cargo test' builds the binaries of the package under test and no others, so the server would
+// otherwise fall back to whichever mezura this machine has on its path, which on a machine with an
+// older one installed answers with its own language files and nothing here makes sense. Both
+// profiles are searched and the newest wins, since a release build is all a CI runner leaves.
+fn the_mezura_that_was_built() -> std::path::PathBuf {
+    let start = std::path::PathBuf::from(env!("CARGO_BIN_EXE_mezura-mcp"));
+    let name = std::path::PathBuf::from("mezura").with_extension(std::env::consts::EXE_EXTENSION);
+
+    start.ancestors().skip(1)
+            .flat_map(|directory| [directory.join(&name), directory.join("debug").join(&name),
+                    directory.join("release").join(&name)])
+            .filter(|candidate| candidate.is_file())
+            .max_by_key(|candidate| candidate.metadata().and_then(|about| about.modified()).ok())
+            .expect("mezura has not been built, so this server has nothing to run. 'cargo test' never builds the binary of another package, so build it first with 'cargo build' or 'cargo build --release'.")
+}
+
 // Every line of the answer, parsed, in the order it arrived. A notification is not answered, so
 // there are fewer of these than there were requests.
 fn speak_to_the_server(named_after_the_test: &str, requests: &[&str]) -> Vec<Value> {
@@ -61,6 +77,7 @@ fn speak_to_the_server(named_after_the_test: &str, requests: &[&str]) -> Vec<Val
 
     let mut server = Command::new(env!("CARGO_BIN_EXE_mezura-mcp"))
             .env("MEZURA_DATA_DIR", &data_dir)
+            .env("MEZURA_BIN", the_mezura_that_was_built())
             .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
             .spawn().expect("the server would not start");
 
