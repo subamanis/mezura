@@ -1,0 +1,6 @@
+# Copy to benchmark.conf and point these at wherever you keep them.
+# A flag beats an environment variable, which beats this file.
+
+tools  = ~/Documents/dev/tools
+corpus = ~/Documents/dev/bench/linux
+# out  = ~/somewhere/else

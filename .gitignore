@@ -24,3 +24,8 @@ bench_dir
 mezura/test_dir/
 archive
 temp/
+
+# raw tool output from a benchmark run; the numbers are extracted into counts.csv
+benchmarking/results/**/out/
+__pycache__/
+benchmarking/benchmark.conf
