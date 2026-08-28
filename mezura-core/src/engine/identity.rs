@@ -342,18 +342,37 @@ pub(crate) fn find_interpreter(first_line: &[u8]) -> Option<&[u8]> {
 // Looped because one 'read' may legally return short, and an interrupted call is retried
 // instead of being read as "no language".
 fn read_first_bytes(path: &Path) -> Option<([u8; SHEBANG_READ_LIMIT], usize)> {
-    let mut file = File::open(path).ok()?;
+    let mut file = open_for_probe(path)?;
     let mut buffer = [0u8; SHEBANG_READ_LIMIT];
     let mut length = 0;
     while length < SHEBANG_READ_LIMIT {
         match file.read(&mut buffer[length..]) {
             Ok(0) => break,
-            Ok(bytes) => length += bytes,
+            Ok(bytes) => {
+                length += bytes;
+                if memchr::memchr(b'\n', &buffer[..length]).is_some() {
+                    break;
+                }
+            },
             Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == ErrorKind::WouldBlock => break,
             Err(_) => return None
         }
     }
     Some((buffer, length))
+}
+
+// A kernel notification file, such as '/sys/kernel/security/apparmor/revision', gives its value
+// on the first read and makes the next one wait for that value to change, which never comes.
+#[cfg(unix)]
+fn open_for_probe(path: &Path) -> Option<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(path).ok()
+}
+
+#[cfg(not(unix))]
+fn open_for_probe(path: &Path) -> Option<File> {
+    File::open(path).ok()
 }
 
 // The exact spelling first, then one version segment fewer at a time, so a declared 'python3'

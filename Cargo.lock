@@ -534,6 +534,7 @@ dependencies = [
  "globset",
  "ignore",
  "include_dir",
+ "libc",
  "memchr",
  "num_cpus",
 ]
