@@ -404,8 +404,10 @@ fn read_args_as_str() -> String {
 // stop the run with a failure.
 fn handle_message_only_command(args_str: &str, languages_available: &[Language]) -> Option<ExitCode> {
     let is_present = |command: &str| crate::args::find_command(args_str, command).is_some();
-    let message_command = [HELP, VERSION, CHANGELOG, SHOW_LANGUAGES, SHOW_CONFIGS, SHOW_THEMES,
-            THEME_EDITOR, RESTORE].into_iter().find(|x| is_present(x))?;
+    // The one list that decides which command answers when several were typed: the first one
+    // present wins, the refusal below names it, and the match below runs it.
+    let message_command = [HELP, VERSION, CHANGELOG, SHOW_LANGUAGES, SHOW_CONFIGS, RESTORE,
+            THEME_EDITOR, SHOW_THEMES].into_iter().find(|x| is_present(x))?;
 
     // Refused rather than answered, and before the banner below, which would otherwise be the first
     // thing written: 'mezura --output json --help > stats.json' leaves a file named for a document
@@ -419,18 +421,20 @@ program to read, and both of them go to the output, so only one of the two can b
 
     // '--version' prints the line itself, with the release date next to it, so it is answered before
     // the plain banner every other message-only command opens with. With '--help' beside it, the
-    // question is about the command and belongs to the help.
-    if is_present(VERSION) && !is_present(HELP) {
+    // question is about the command and belongs to the help, which 'HELP' standing first in the
+    // list above already decides.
+    if message_command == VERSION {
         crate::message_printer::print_version();
         return Some(ExitCode::SUCCESS);
     }
     println!("\n{}", crate::theme::get_active().version.paint(VERSION_ID));
 
-    if is_present(HELP) {
-        crate::message_printer::print_help_message_for_given_args(args_str);
-        return Some(ExitCode::SUCCESS);
-    } else if is_present(CHANGELOG) {
-        return match crate::args::find_argument_of(args_str, CHANGELOG) {
+    match message_command {
+        HELP => {
+            crate::message_printer::print_help_message_for_given_args(args_str);
+            Some(ExitCode::SUCCESS)
+        },
+        CHANGELOG => match crate::args::find_argument_of(args_str, CHANGELOG) {
             Some("full") => {
                 crate::message_printer::print_changelog(true);
                 Some(ExitCode::SUCCESS)
@@ -444,43 +448,45 @@ program to read, and both of them go to the output, so only one of the two can b
                 crate::message_printer::print_changelog(false);
                 Some(ExitCode::SUCCESS)
             },
-        };
-    } else if is_present(SHOW_LANGUAGES) {
-        crate::message_printer::print_supported_languages(languages_available);
-        // The list is one line per language and not one per file, so two files declaring one name
-        // collapse into a single entry. Reported here because this command returns before the run
-        // that would otherwise say it.
-        for warning in mezura_core::languages::find_duplicate_names(languages_available) {
-            crate::warning_collector::emit(warning);
-        }
-        return Some(ExitCode::SUCCESS);
-    } else if is_present(SHOW_CONFIGS) {
-        crate::message_printer::print_existing_configs();
-        return Some(ExitCode::SUCCESS);
-    } else if is_present(RESTORE) {
-        // The same pass a changed binary performs, asked for by hand, for when something was damaged
-        // while the binary stayed the same. This is the only run that does not perform it on the way
-        // in, which is what leaves this report something to describe.
-        let outcome = migrate_data_files(&crate::paths::PERSISTENT_APP_PATHS.data_dir, true);
-
-        if outcome.did_nothing() {
-            println!("\nEverything that ships with mezura is in place.");
-        }
-        for message in [outcome.format_restored(), outcome.format_replaced(), outcome.format_withdrawn(),
-                outcome.format_merged(), outcome.format_failures()].into_iter().flatten() {
-            println!("{message}");
-        }
-        for (heading, files) in [("Written for the first time", &outcome.added),
-                ("Brought up to date for this version", &outcome.updated)] {
-            if !files.is_empty() {
-                println!("\n{}", crate::message_printer::wrap_message(&format!(
-                        "{heading}:\n{}", files.join(", "))));
+        },
+        SHOW_LANGUAGES => {
+            crate::message_printer::print_supported_languages(languages_available);
+            // The list is one line per language and not one per file, so two files declaring one
+            // name collapse into a single entry. Reported here because this command returns before
+            // the run that would otherwise say it.
+            for warning in mezura_core::languages::find_duplicate_names(languages_available) {
+                crate::warning_collector::emit(warning);
             }
-        }
+            Some(ExitCode::SUCCESS)
+        },
+        SHOW_CONFIGS => {
+            crate::message_printer::print_existing_configs();
+            Some(ExitCode::SUCCESS)
+        },
+        RESTORE => {
+            // The same pass a changed binary performs, asked for by hand, for when something was
+            // damaged while the binary stayed the same. This is the only run that does not perform
+            // it on the way in, which is what leaves this report something to describe.
+            let outcome = migrate_data_files(&crate::paths::PERSISTENT_APP_PATHS.data_dir, true);
 
-        return Some(if outcome.failed.is_empty() {ExitCode::SUCCESS} else {ExitCode::FAILURE});
-    } else if is_present(THEME_EDITOR) {
-        return match crate::theme_files::generate_theme_editor_page(
+            if outcome.did_nothing() {
+                println!("\nEverything that ships with mezura is in place.");
+            }
+            for message in [outcome.format_restored(), outcome.format_replaced(), outcome.format_withdrawn(),
+                    outcome.format_merged(), outcome.format_failures()].into_iter().flatten() {
+                println!("{message}");
+            }
+            for (heading, files) in [("Written for the first time", &outcome.added),
+                    ("Brought up to date for this version", &outcome.updated)] {
+                if !files.is_empty() {
+                    println!("\n{}", crate::message_printer::wrap_message(&format!(
+                            "{heading}:\n{}", files.join(", "))));
+                }
+            }
+
+            Some(if outcome.failed.is_empty() {ExitCode::SUCCESS} else {ExitCode::FAILURE})
+        },
+        THEME_EDITOR => match crate::theme_files::generate_theme_editor_page(
                 &crate::paths::PERSISTENT_APP_PATHS.themes_dir, &crate::paths::PERSISTENT_APP_PATHS.data_dir) {
             Ok(path) => {
                 println!("\nTheme editor page generated at:\n{path}");
@@ -492,37 +498,37 @@ program to read, and both of them go to the output, so only one of the two can b
                         &format!("Unable to generate the theme editor page: {x}")).red());
                 Some(ExitCode::FAILURE)
             }
-        };
-    } else if is_present(SHOW_THEMES) {
-        // The preview follows '--layout' and '--counting', so that what it shows is what a run would
-        // print. Read here by hand, because a message-only command runs before there is a
-        // configuration to ask.
-        let layout = crate::args::find_argument_of(args_str, LAYOUT)
-                .and_then(config_manager::Layout::parse).unwrap_or_default();
-        let counting = crate::args::find_argument_of(args_str, COUNTING)
-                .and_then(CountingModel::parse).unwrap_or_default();
+        },
+        SHOW_THEMES => {
+            // The preview follows '--layout' and '--counting', so that what it shows is what a run
+            // would print. Read here by hand, because a message-only command runs before there is a
+            // configuration to ask.
+            let layout = crate::args::find_argument_of(args_str, LAYOUT)
+                    .and_then(config_manager::Layout::parse).unwrap_or_default();
+            let counting = crate::args::find_argument_of(args_str, COUNTING)
+                    .and_then(CountingModel::parse).unwrap_or_default();
 
-        return match crate::args::find_argument_of(args_str, SHOW_THEMES) {
-            Some(arg) if !arg.starts_with("--") => match config_manager::BarThickness::parse(arg) {
-                Some(thickness) => {
-                    crate::message_printer::print_existing_themes(thickness, layout, counting);
-                    Some(ExitCode::SUCCESS)
+            match crate::args::find_argument_of(args_str, SHOW_THEMES) {
+                Some(arg) if !arg.starts_with("--") => match config_manager::BarThickness::parse(arg) {
+                    Some(thickness) => {
+                        crate::message_printer::print_existing_themes(thickness, layout, counting);
+                        Some(ExitCode::SUCCESS)
+                    },
+                    None => {
+                        println!("\n{}", config_manager::ArgParsingError::IncorrectCommandArgs(SHOW_THEMES.to_owned(), arg.to_owned()).format());
+                        crate::message_printer::print_help_message_for_command(SHOW_THEMES);
+                        Some(ExitCode::FAILURE)
+                    }
                 },
-                None => {
-                    println!("\n{}", config_manager::ArgParsingError::IncorrectCommandArgs(SHOW_THEMES.to_owned(), arg.to_owned()).format());
-                    crate::message_printer::print_help_message_for_command(SHOW_THEMES);
-                    Some(ExitCode::FAILURE)
+                _ => {
+                    crate::message_printer::print_existing_themes(config_manager::BarThickness::default(),
+                            layout, counting);
+                    Some(ExitCode::SUCCESS)
                 }
-            },
-            _ => {
-                crate::message_printer::print_existing_themes(config_manager::BarThickness::default(),
-                        layout, counting);
-                Some(ExitCode::SUCCESS)
             }
-        };
+        },
+        _ => None
     }
-
-    None
 }
 
 fn asks_for_a_json_document(args_str: &str) -> bool {

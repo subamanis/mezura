@@ -61,11 +61,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
         Err(_) => return Err(ConfigFileParseError::FileNotFound(file_name.to_owned()))
     })};
 
-    let (mut targets, mut counting, mut should_search_in_dotted, mut count_minified, mut count_generated, mut threads, mut exclude_dirs,
-         mut languages_of_interest, mut excluded_languages, mut forced_languages, mut should_show_faulty_files, mut hidden,
-         mut no_gitignore, mut no_ignore_files, mut theme_name, mut compare_level, mut config_styles, mut bar_thickness,
-         mut progress_bar, mut number_separator, mut decimal_separator, mut layout, mut sort_by, mut top_n,
-         mut by_file) = (None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None);
+    let mut builder = ConfigurationBuilder::default();
     let mut issues = ConfigFileIssues::default();
     let mut buf = String::with_capacity(150);
 
@@ -78,193 +74,112 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
         if line.starts_with("===>") {
             let id = line.trim_start_matches("===>").split_whitespace().next().unwrap_or("");
 
-            if id == config_manager::TARGETS {
-                // The line ends a target here and a space never does, so a path with one in it needs
-                // no quoting. A target that does not parse would silently not be counted, so it
-                // stops the run rather than warning.
-                let declared = read_lines_from_file_to_vec(&mut reader, &mut buf, |line| vec![line.trim().to_owned()]);
-                match super::args::parse_targets_in_block(&declared.join("\n")) {
-                    Ok(parsed) if !parsed.is_empty() => targets = Some(parsed.into_iter()
-                            .map(|(module, path)| Target { module, path }).collect()),
-                    Ok(_) => {},
-                    Err(_) => issues.invalid_fields.push(config_manager::TARGETS)
-                }
-            } else if id == config_manager::EXCLUDE {
-                let paths = read_lines_from_file_to_vec(&mut reader, &mut buf, super::args::parse_paths_to_vec);
-                if mezura_core::engine::targets::validate_exclude_patterns(&paths).is_err() {
-                    issues.invalid_fields.push(config_manager::EXCLUDE);
-                } else if !paths.is_empty() {
-                    exclude_dirs = Some(paths);
-                }
-            } else if id == config_manager::LANGUAGES {
-                let langs = read_lines_from_file_to_vec(&mut reader, &mut buf, super::args::parse_languages_to_vec);
-                if !langs.is_empty() {
-                    languages_of_interest = Some(langs);
-                }
-            } else if id == config_manager::EXCLUDE_LANGUAGES {
-                let langs = read_lines_from_file_to_vec(&mut reader, &mut buf, super::args::parse_languages_to_vec);
-                if !langs.is_empty() {
-                    excluded_languages = Some(langs);
-                }
-            } else if id == config_manager::FORCE_LANGUAGE {
-                // Read as a block like the other lists: a value written across two lines would
-                // otherwise be cut to its first in silence, since the rest does not begin with
-                // '===>' and the outer loop skips it.
-                let declared = read_lines_from_file_to_vec(&mut reader, &mut buf, |line| vec![line.trim().to_owned()]).join(",");
-                // An empty value is the command left in the file without being used, which is not a
-                // mistake. Anything else that does not parse is one.
-                if declared.split(',').any(|pair| !pair.trim().is_empty()) {
-                    match super::args::parse_forced_languages(&declared) {
-                        Some(x) => forced_languages = Some(x),
-                        None => issues.invalid_fields.push(config_manager::FORCE_LANGUAGE)
+            match id {
+                config_manager::TARGETS => {
+                    // The line ends a target here and a space never does, so a path with one in it
+                    // needs no quoting. A target that does not parse would silently not be counted,
+                    // so it stops the run rather than warning.
+                    let declared = read_lines_from_file_to_vec(&mut reader, &mut buf, |line| vec![line.trim().to_owned()]);
+                    match super::args::parse_targets_in_block(&declared.join("\n")) {
+                        Ok(parsed) if !parsed.is_empty() => builder.targets = Some(parsed.into_iter()
+                                .map(|(module, path)| Target { module, path }).collect()),
+                        Ok(_) => {},
+                        Err(_) => issues.invalid_fields.push(config_manager::TARGETS)
                     }
-                }
-            } else if id == config_manager::THREADS {
-                buf.clear();
-                let _ = reader.read_line(&mut buf);
-                match super::args::parse_two_usize_values(&buf,MIN_PRODUCERS_VALUE, MAX_PRODUCERS_VALUE,
-                        MIN_CONSUMERS_VALUE, MAX_CONSUMERS_VALUE) {
-                    Some(x) => threads = Some(Threads::from(x)),
-                    None => issues.invalid_fields.push(config_manager::THREADS)
-                }
-            } else if id == config_manager::COUNTING {
-                buf.clear();
-                let _ = reader.read_line(&mut buf);
-                match mezura_core::CountingModel::parse(&buf) {
-                    Some(x) => counting = Some(x),
-                    None => issues.invalid_fields.push(config_manager::COUNTING)
-                }
-            } else if id == config_manager::SHOW_FAULTY_FILES {
-                match read_bool_value_from_file(&mut reader, &mut buf) {
-                    Ok(x) => should_show_faulty_files = x,
-                    Err(()) => issues.invalid_fields.push(config_manager::SHOW_FAULTY_FILES)
-                }
-            } else if id == config_manager::SEARCH_IN_DOTTED {
-                match read_bool_value_from_file(&mut reader, &mut buf) {
-                    Ok(x) => should_search_in_dotted = x,
-                    Err(()) => issues.invalid_fields.push(config_manager::SEARCH_IN_DOTTED)
-                }
-            } else if id == config_manager::COUNT_MINIFIED {
-                match read_bool_value_from_file(&mut reader, &mut buf) {
-                    Ok(x) => count_minified = x,
-                    Err(()) => issues.invalid_fields.push(config_manager::COUNT_MINIFIED)
-                }
-            } else if id == config_manager::COUNT_GENERATED {
-                match read_bool_value_from_file(&mut reader, &mut buf) {
-                    Ok(x) => count_generated = x,
-                    Err(()) => issues.invalid_fields.push(config_manager::COUNT_GENERATED)
-                }
-            } else if id == config_manager::HIDE {
-                buf.clear();
-                let _ = reader.read_line(&mut buf);
-                match config_manager::Hidden::parse(&buf) {
-                    Ok(x) => hidden = Some(x),
-                    Err(_) => issues.invalid_fields.push(config_manager::HIDE)
-                }
-            } else if id == config_manager::NO_GITIGNORE {
-                match read_bool_value_from_file(&mut reader, &mut buf) {
-                    Ok(x) => no_gitignore = x,
-                    Err(()) => issues.invalid_fields.push(config_manager::NO_GITIGNORE)
-                }
-            } else if id == config_manager::NO_IGNORE_FILES {
-                match read_bool_value_from_file(&mut reader, &mut buf) {
-                    Ok(x) => no_ignore_files = x,
-                    Err(()) => issues.invalid_fields.push(config_manager::NO_IGNORE_FILES)
-                }
-            } else if id == config_manager::THEME {
-                buf.clear();
-                let _ = reader.read_line(&mut buf);
-                let name = buf.trim();
-                if name.is_empty() || theme_files::load_theme(name, &PERSISTENT_APP_PATHS.themes_dir).is_none() {
-                    issues.invalid_fields.push(config_manager::THEME);
-                } else {
-                    theme_name = Some(name.to_owned());
-                }
-            } else if id == config_manager::SORT {
-                buf.clear();
-                let _ = reader.read_line(&mut buf);
-                match config_manager::SortCriterion::parse(&buf) {
-                    Some(x) => sort_by = Some(x),
-                    None => issues.invalid_fields.push(config_manager::SORT)
-                }
-            } else if id == config_manager::TOP {
-                buf.clear();
-                let _ = reader.read_line(&mut buf);
-                match super::args::parse_usize_value(&buf, 1, usize::MAX) {
-                    Some(x) => top_n = Some(x),
-                    None => issues.invalid_fields.push(config_manager::TOP)
-                }
-            } else if id == config_manager::BY_FILE {
-                buf.clear();
-                let _ = reader.read_line(&mut buf);
-                match config_manager::ByFile::parse(&buf) {
-                    Some(x) => by_file = Some(x),
-                    None => issues.invalid_fields.push(config_manager::BY_FILE)
-                }
-            } else if id == config_manager::BAR_THICKNESS {
-                buf.clear();
-                let _ = reader.read_line(&mut buf);
-                match config_manager::BarThickness::parse(&buf) {
-                    Some(x) => bar_thickness = Some(x),
-                    None => issues.invalid_fields.push(config_manager::BAR_THICKNESS)
-                }
-            } else if id == config_manager::PROGRESS_BAR {
-                buf.clear();
-                let _ = reader.read_line(&mut buf);
-                match config_manager::ProgressBarStyle::parse(&buf) {
-                    Some(x) => progress_bar = Some(x),
-                    None => issues.invalid_fields.push(config_manager::PROGRESS_BAR)
-                }
-            } else if id == config_manager::NUMBER_SEPARATOR {
-                buf.clear();
-                let _ = reader.read_line(&mut buf);
-                match config_manager::NumberSeparator::parse(&buf) {
-                    Some(x) => number_separator = Some(x),
-                    None => issues.invalid_fields.push(config_manager::NUMBER_SEPARATOR)
-                }
-            } else if id == config_manager::DECIMAL_SEPARATOR {
-                buf.clear();
-                let _ = reader.read_line(&mut buf);
-                match config_manager::DecimalSeparator::parse(&buf) {
-                    Some(x) => decimal_separator = Some(x),
-                    None => issues.invalid_fields.push(config_manager::DECIMAL_SEPARATOR)
-                }
-            } else if id == config_manager::LAYOUT {
-                buf.clear();
-                let _ = reader.read_line(&mut buf);
-                match config_manager::Layout::parse(&buf) {
-                    Some(x) => layout = Some(x),
-                    None => issues.invalid_fields.push(config_manager::LAYOUT)
-                }
-            } else if id == config_manager::STYLE {
-                let declared = read_lines_from_file_to_vec(&mut reader, &mut buf, |line| vec![line.trim().to_owned()]);
-                let (declared, errors) = super::theme::parse_overrides_leniently(&declared.join("\n"));
-                issues.warnings.extend(errors.iter().map(|x| (mezura_core::warnings::Code::ConfigStyleInvalid, x.format())));
-                if !declared.is_empty() {
-                    config_styles = Some(declared);
-                }
-            } else if id == config_manager::COMPARE_LEVEL {
-                buf.clear();
-                let _ = reader.read_line(&mut buf);
-                match super::args::parse_usize_value(&buf,MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL) {
-                    Some(x) => compare_level = Some(x),
-                    None => issues.invalid_fields.push(config_manager::COMPARE_LEVEL)
-                }
-            } else {
-                issues.warnings.push((mezura_core::warnings::Code::ConfigSectionUnknown,
-                        format!("'{id}' is not something a configuration file can carry, the section is ignored.")));
+                },
+                config_manager::EXCLUDE => {
+                    let paths = read_lines_from_file_to_vec(&mut reader, &mut buf, super::args::parse_paths_to_vec);
+                    if mezura_core::engine::targets::validate_exclude_patterns(&paths).is_err() {
+                        issues.invalid_fields.push(config_manager::EXCLUDE);
+                    } else if !paths.is_empty() {
+                        builder.exclude_dirs = Some(paths);
+                    }
+                },
+                config_manager::LANGUAGES => {
+                    let langs = read_lines_from_file_to_vec(&mut reader, &mut buf, super::args::parse_languages_to_vec);
+                    if !langs.is_empty() {
+                        builder.languages_of_interest = Some(langs);
+                    }
+                },
+                config_manager::EXCLUDE_LANGUAGES => {
+                    let langs = read_lines_from_file_to_vec(&mut reader, &mut buf, super::args::parse_languages_to_vec);
+                    if !langs.is_empty() {
+                        builder.excluded_languages = Some(langs);
+                    }
+                },
+                config_manager::FORCE_LANGUAGE => {
+                    // Read as a block like the other lists: a value written across two lines would
+                    // otherwise be cut to its first in silence, since the rest does not begin with
+                    // '===>' and the outer loop skips it.
+                    let declared = read_lines_from_file_to_vec(&mut reader, &mut buf, |line| vec![line.trim().to_owned()]).join(",");
+                    // An empty value is the command left in the file without being used, which is
+                    // not a mistake. Anything else that does not parse is one.
+                    if declared.split(',').any(|pair| !pair.trim().is_empty()) {
+                        match super::args::parse_forced_languages(&declared) {
+                            Some(x) => builder.forced_languages = Some(x),
+                            None => issues.invalid_fields.push(config_manager::FORCE_LANGUAGE)
+                        }
+                    }
+                },
+                config_manager::THREADS => read_parsed_value(&mut builder.threads, &mut reader, &mut buf,
+                        config_manager::THREADS, &mut issues,
+                        |x| super::args::parse_two_usize_values(x, MIN_PRODUCERS_VALUE, MAX_PRODUCERS_VALUE,
+                                MIN_CONSUMERS_VALUE, MAX_CONSUMERS_VALUE).map(Threads::from)),
+                config_manager::COUNTING => read_parsed_value(&mut builder.counting, &mut reader, &mut buf,
+                        config_manager::COUNTING, &mut issues, mezura_core::CountingModel::parse),
+                config_manager::SHOW_FAULTY_FILES => read_flag_value(&mut builder.should_show_faulty_files,
+                        &mut reader, &mut buf, config_manager::SHOW_FAULTY_FILES, &mut issues),
+                config_manager::SEARCH_IN_DOTTED => read_flag_value(&mut builder.should_search_in_dotted,
+                        &mut reader, &mut buf, config_manager::SEARCH_IN_DOTTED, &mut issues),
+                config_manager::COUNT_MINIFIED => read_flag_value(&mut builder.count_minified,
+                        &mut reader, &mut buf, config_manager::COUNT_MINIFIED, &mut issues),
+                config_manager::COUNT_GENERATED => read_flag_value(&mut builder.count_generated,
+                        &mut reader, &mut buf, config_manager::COUNT_GENERATED, &mut issues),
+                config_manager::HIDE => read_parsed_value(&mut builder.hidden, &mut reader, &mut buf,
+                        config_manager::HIDE, &mut issues, |x| config_manager::Hidden::parse(x).ok()),
+                config_manager::NO_GITIGNORE => read_flag_value(&mut builder.no_gitignore,
+                        &mut reader, &mut buf, config_manager::NO_GITIGNORE, &mut issues),
+                config_manager::NO_IGNORE_FILES => read_flag_value(&mut builder.no_ignore_files,
+                        &mut reader, &mut buf, config_manager::NO_IGNORE_FILES, &mut issues),
+                config_manager::THEME => read_parsed_value(&mut builder.theme_name, &mut reader, &mut buf,
+                        config_manager::THEME, &mut issues, |x| {
+                            let name = x.trim();
+                            (!name.is_empty() && theme_files::load_theme(name, &PERSISTENT_APP_PATHS.themes_dir).is_some())
+                                    .then(|| name.to_owned())
+                        }),
+                config_manager::SORT => read_parsed_value(&mut builder.sort_by, &mut reader, &mut buf,
+                        config_manager::SORT, &mut issues, config_manager::SortCriterion::parse),
+                config_manager::TOP => read_parsed_value(&mut builder.top_n, &mut reader, &mut buf,
+                        config_manager::TOP, &mut issues, |x| super::args::parse_usize_value(x, 1, usize::MAX)),
+                config_manager::BY_FILE => read_parsed_value(&mut builder.by_file, &mut reader, &mut buf,
+                        config_manager::BY_FILE, &mut issues, config_manager::ByFile::parse),
+                config_manager::BAR_THICKNESS => read_parsed_value(&mut builder.bar_thickness, &mut reader, &mut buf,
+                        config_manager::BAR_THICKNESS, &mut issues, config_manager::BarThickness::parse),
+                config_manager::PROGRESS_BAR => read_parsed_value(&mut builder.progress_bar, &mut reader, &mut buf,
+                        config_manager::PROGRESS_BAR, &mut issues, config_manager::ProgressBarStyle::parse),
+                config_manager::NUMBER_SEPARATOR => read_parsed_value(&mut builder.number_separator, &mut reader, &mut buf,
+                        config_manager::NUMBER_SEPARATOR, &mut issues, config_manager::NumberSeparator::parse),
+                config_manager::DECIMAL_SEPARATOR => read_parsed_value(&mut builder.decimal_separator, &mut reader, &mut buf,
+                        config_manager::DECIMAL_SEPARATOR, &mut issues, config_manager::DecimalSeparator::parse),
+                config_manager::LAYOUT => read_parsed_value(&mut builder.layout, &mut reader, &mut buf,
+                        config_manager::LAYOUT, &mut issues, config_manager::Layout::parse),
+                config_manager::STYLE => {
+                    let declared = read_lines_from_file_to_vec(&mut reader, &mut buf, |line| vec![line.trim().to_owned()]);
+                    let (declared, errors) = super::theme::parse_overrides_leniently(&declared.join("\n"));
+                    issues.warnings.extend(errors.iter().map(|x| (mezura_core::warnings::Code::ConfigStyleInvalid, x.format())));
+                    if !declared.is_empty() {
+                        builder.config_styles = Some(declared);
+                    }
+                },
+                config_manager::COMPARE_LEVEL => read_parsed_value(&mut builder.compare_level, &mut reader, &mut buf,
+                        config_manager::COMPARE_LEVEL, &mut issues,
+                        |x| super::args::parse_usize_value(x, MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL)),
+                _ => issues.warnings.push((mezura_core::warnings::Code::ConfigSectionUnknown,
+                        format!("'{id}' is not something a configuration file can carry, the section is ignored.")))
             }
         }
         buf.clear();
     }
-
-    let builder = ConfigurationBuilder {
-        targets, exclude_dirs, languages_of_interest, excluded_languages, forced_languages, threads, counting, should_search_in_dotted,
-        count_minified, count_generated, should_show_faulty_files, hidden, no_gitignore, no_ignore_files,
-        theme_name, compare_level, config_styles, bar_thickness,
-        progress_bar, number_separator, decimal_separator, layout, sort_by, top_n, by_file,
-        ..Default::default()
-    };
 
     // After the whole file has been walked, so that the line reported is the first failure and not
     // whichever one a block inside happened to meet
@@ -433,6 +348,30 @@ impl CountingReader {
             Ok(size) => size,
             Err(error) => { self.failed_at = Some((self.line, error)); 0 }
         }
+    }
+}
+
+// The one shape most blocks share: the line under the heading, parsed into the field, and the
+// field's own name recorded when it does not parse, so the reported name can never drift from the
+// field it fills. A block that fails leaves the field alone, the way the hand-written arms did.
+fn read_parsed_value<T>(into: &mut Option<T>, reader: &mut CountingReader, buf: &mut String,
+        field: &'static str, issues: &mut ConfigFileIssues, parse: impl FnOnce(&str) -> Option<T>)
+{
+    buf.clear();
+    let _ = reader.read_line(buf);
+    match parse(buf) {
+        Some(x) => *into = Some(x),
+        None => issues.invalid_fields.push(field)
+    }
+}
+
+// The same, for the blocks whose value is 'yes' or 'no' and whose absence means "leave the default"
+fn read_flag_value(into: &mut Option<bool>, reader: &mut CountingReader, buf: &mut String,
+        field: &'static str, issues: &mut ConfigFileIssues)
+{
+    match read_bool_value_from_file(reader, buf) {
+        Ok(x) => *into = x,
+        Err(()) => issues.invalid_fields.push(field)
     }
 }
 
