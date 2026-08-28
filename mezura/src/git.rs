@@ -11,6 +11,8 @@ use super::paths::{fold_for_comparison, normalise_separators};
 // one place and two runs of one revision can overlap
 const CHECKOUT_PREFIX : &str = "mezura-diff-";
 
+static PENDING_REMOVALS : Mutex<Vec<(String, JoinHandle<()>)>> = Mutex::new(Vec::new());
+
 #[derive(Debug)]
 pub enum GitError {
     NotInstalled(std::io::Error),
@@ -140,12 +142,6 @@ impl Drop for Checkout {
     }
 }
 
-static PENDING_REMOVALS : Mutex<Vec<(String, JoinHandle<()>)>> = Mutex::new(Vec::new());
-
-fn remove_worktree(repository: &str, path: &str) {
-    let _ = Command::new("git").args(["-C", repository, "worktree", "remove", "--force", path]).output();
-}
-
 pub fn find_running_removal() -> Option<String> {
     PENDING_REMOVALS.lock().unwrap().iter()
             .find(|(_, removal)| !removal.is_finished())
@@ -184,7 +180,7 @@ pub fn checkout(resolved: &ResolvedRevision) -> Result<Checkout, GitError> {
 // whole, and the prune afterwards drops whatever registration has already lost its directory.
 // Called once per run and never from inside 'checkout': the prune walking the registrations while a
 // parallel write is half registered is the one interference between them.
-pub(crate) fn remove_leftover_checkouts(repository: &str) {
+pub fn remove_leftover_checkouts(repository: &str) {
     let ours = format!("-{}", std::process::id());
     let temp = fold_for_comparison(&std::env::temp_dir().to_string_lossy()).into_owned();
     if let Ok(listed) = Command::new("git").args(["-C", repository, "worktree", "list", "--porcelain"]).output() {
@@ -198,6 +194,10 @@ pub(crate) fn remove_leftover_checkouts(repository: &str) {
         }
     }
     let _ = Command::new("git").args(["-C", repository, "worktree", "prune"]).output();
+}
+
+fn remove_worktree(repository: &str, path: &str) {
+    let _ = Command::new("git").args(["-C", repository, "worktree", "remove", "--force", path]).output();
 }
 
 // None when git ran and answered no, which every caller turns into its own words; an error only

@@ -70,15 +70,6 @@ pub struct AnimatedDisplay {
     opened_own_line: Arc<AtomicBool>
 }
 
-// What the erased line is replaced with when a display finishes. 'Retreat' gives back the line the
-// display opened, cursor and all, so the permanent output is byte for byte what a run without the
-// display prints.
-enum Parting {
-    Settle(String),
-    Erase,
-    Retreat
-}
-
 impl AnimatedDisplay {
     // Idempotent, and called on every path out of the run.
     pub fn finish(&self) {
@@ -115,12 +106,6 @@ impl Drop for AnimatedDisplay {
 
 pub fn set_animations_hidden(hidden: bool) {
     ANIMATIONS_HIDDEN.store(hidden, Ordering::Relaxed);
-}
-
-// Phase timing prints its own report over anything moving, so it counts as hidden too.
-fn animations_are_hidden() -> bool {
-    ANIMATIONS_HIDDEN.load(Ordering::Relaxed) || !std::io::stderr().is_terminal()
-            || mezura_core::prints_phase_timing()
 }
 
 // Prints the walk heading, animated when both output streams are a terminal and static otherwise.
@@ -229,6 +214,15 @@ impl Drop for RemovalsGuard {
     }
 }
 
+// What the erased line is replaced with when a display finishes. 'Retreat' gives back the line the
+// display opened, cursor and all, so the permanent output is byte for byte what a run without the
+// display prints.
+enum Parting {
+    Settle(String),
+    Erase,
+    Retreat
+}
+
 fn write_parting(parting: &Parting) {
     let text = match parting {
         Parting::Settle(line) => format!("{ERASE_BELOW}{line}\n"),
@@ -255,6 +249,12 @@ fn cap_revision_name(name: &str) -> String {
         kept.push(character);
     }
     kept + ".."
+}
+
+// Phase timing prints its own report over anything moving, so it counts as hidden too.
+fn animations_are_hidden() -> bool {
+    ANIMATIONS_HIDDEN.load(Ordering::Relaxed) || !std::io::stderr().is_terminal()
+            || mezura_core::prints_phase_timing()
 }
 
 // One less than the terminal says: the last column is where terminals keep their pending-wrap
@@ -470,7 +470,6 @@ fn animate_walk_line(progress: &ScanProgress, stop: &AtomicBool, heading: &str) 
     }
 }
 
-
 // One line for the whole side, and the label follows the phase: 'Writing out' until the first file
 // of the inner run is found, which is when git has finished materialising the revision, 'Counting'
 // after.
@@ -550,7 +549,6 @@ fn animate_revision_line(progress: &ScanProgress, stop: &AtomicBool, opened: &At
         });
     }
 }
-
 
 fn animate_parsing_line(progress: &ScanProgress, stop: &AtomicBool, show_bar_and_rates: bool, charset: &str) {
     let started = Instant::now();

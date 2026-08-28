@@ -55,8 +55,8 @@ pub use domain::{Bucket, CountingModel, Keyword, Language, LeveledPair, LineClas
         LineContinuation, MultilineString, NestedLanguage, Span, SpanKind, Stats, StringRules};
 pub use engine::config::{EngineConfig, ForcedLanguages, LanguageNames, ScopedByModule, Target,
         Threads, format_module_scope, split_off_module_scope};
-pub use explain::{Carried, ExplainError, ExplainedLine, FileExplanation, explain_file};
 pub use engine::targets::TargetError;
+pub use explain::{Carried, ExplainError, ExplainedLine, FileExplanation, explain_file};
 pub use languages::Languages;
 pub use progress::ScanProgress;
 pub use result::{FaultyFileDetails, FileEntry, FilesPresent, ModuleResult, Performance, RunError,
@@ -165,7 +165,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
                         .cloned().unwrap_or_default();
                 RunError::InvalidExcludePattern(culprit)
             })?);
-    calculate_single_file_stats_or_add_to_injector(&config, &targets, &dirs_injector, &files_injector, &mut files_present,
+    queue_the_targets(&config, &targets, &dirs_injector, &files_injector, &mut files_present,
             &language_lookups, &modules, &progress);
 
     let files_stats = Arc::new(Mutex::new(files_present));
@@ -300,15 +300,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     remove_languages_with_0_files(&mut per_language);
     let total = Stats::total_of(&per_language);
 
-    let mut nested_languages: HashMap<String, HashMap<String, Stats>> = HashMap::new();
-    for bucket in nested_by_module.iter() {
-        for (shell_name, sections) in bucket {
-            let shell_entry = nested_languages.entry(shell_name.clone()).or_default();
-            for (inner_name, stats) in sections {
-                shell_entry.entry(inner_name.clone()).or_default().add(stats);
-            }
-        }
-    }
+    let nested_languages = merge_nested_over_modules(nested_by_module);
 
     let modules_result = per_module.iter_mut().enumerate().map(|(id, bucket)| {
         let mut of_this_module = std::mem::take(bucket);
@@ -356,36 +348,37 @@ impl Drop for WalkDoneGuard {
     }
 }
 
-// Fills the two queues the threads work from: a target that is a single file is counted here and
-// now, a directory is put in the queue for a scanning thread to descend into.
+// Fills the two queues the threads work from: a target that is a single file goes straight onto the
+// file queue, a directory is put in the queue for a scanning thread to descend into.
 //
 // Only the outermost targets are queued. One that sits inside another is reached by the scan of the
 // one around it, and queueing both would count its files twice; the name it was given is not lost
 // with it, the module table still hands it back on the way down.
-pub(crate) fn calculate_single_file_stats_or_add_to_injector(config: &EngineConfig, targets: &engine::targets::Targets,
+pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets::Targets,
         dirs_injector: &Arc<Injector<TraversedDir>>, files_injector: &Arc<Injector<ParsableFile>>,
         files_present: &mut FilesPresent, language_lookups: &engine::identity::ModuleLookups, modules: &Modules,
         progress: &ScanProgress)
 {
-    crate::engine::targets::topmost_targets(targets).iter().for_each(|target| {
+    for target in crate::engine::targets::topmost_targets(targets) {
         let dir_path = Path::new(&target.path);
-        let module = modules.of_target(target);
+        let module = modules.of_target(&target);
         if dir_path.is_file() {
-            if let Some(lang_name) = language_lookups.get_of_module(module).of_path_or_shebang(dir_path) {
-                let queued = match targets.was_written_by_hand(dir_path) {
-                    true => ParsableFile::written_by_hand(dir_path.to_path_buf(), lang_name, module),
-                    false => ParsableFile::new(dir_path.to_path_buf(), lang_name, module)
-                };
-                files_injector.push(queued);
-                files_present.total_files += 1;
-                files_present.relevant_files += 1;
-                progress.record_file_found();
-            }
+            let Some(lang_name) = language_lookups.get_of_module(module).of_path_or_shebang(dir_path) else {
+                continue;
+            };
+            let queued = match targets.was_written_by_hand(dir_path) {
+                true => ParsableFile::written_by_hand(dir_path.to_path_buf(), lang_name, module),
+                false => ParsableFile::new(dir_path.to_path_buf(), lang_name, module)
+            };
+            files_injector.push(queued);
+            files_present.total_files += 1;
+            files_present.relevant_files += 1;
+            progress.record_file_found();
         } else if dir_path.is_dir() {
             let gitignore_stack = GitignoreStack::for_root_dir(dir_path, ObeyedIgnoreFiles::of(config));
             dirs_injector.push(TraversedDir::new(dir_path.to_path_buf(), gitignore_stack, module));
         }
-    })
+    }
 }
 
 // A language nobody wrote a file in would take a row in every report and add nothing to any figure.
@@ -588,6 +581,21 @@ fn merge_over_modules(per_module: &[HashMap<String,Stats>]) -> HashMap<String,St
     for of_a_module in &per_module[1..] {
         for (name, stats) in of_a_module {
             merged.entry(name.clone()).or_default().add(stats);
+        }
+    }
+
+    merged
+}
+
+fn merge_nested_over_modules(nested_by_module: &[HashMap<String, HashMap<String, Stats>>])
+-> HashMap<String, HashMap<String, Stats>> {
+    let mut merged: HashMap<String, HashMap<String, Stats>> = HashMap::new();
+    for bucket in nested_by_module {
+        for (shell_name, sections) in bucket {
+            let shell_entry = merged.entry(shell_name.clone()).or_default();
+            for (inner_name, stats) in sections {
+                shell_entry.entry(inner_name.clone()).or_default().add(stats);
+            }
         }
     }
 

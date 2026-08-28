@@ -7,9 +7,7 @@ use mezura_core::{CountingModel, RunResult, Stats, UNNAMED_MODULE_NAME, render};
 
 use super::config_manager::{self, ByFile, Configuration, Layout, SortCriterion};
 use super::number_formatter::format_with_separators;
-use super::theme::Theme;
-
-type ColorFunc = Box<dyn Fn(&str) -> String>;
+use super::theme::{Style, Theme};
 
 const TOTAL_NAME : &str = "Total";
 
@@ -60,7 +58,6 @@ const OTHERS_NAME : &str = "others";
 pub fn format_and_print_results(result: &RunResult, existing_log_content: &Option<String>,
         datetime_now: &DateTime<Local>, config: &Configuration)
 {
-
     let RunResult {per_language, total, ..} = result;
     let groups = create_groups_of(result, config);
 
@@ -213,6 +210,17 @@ pub(crate) fn get_sorted_language_names(per_language: &HashMap<String, Stats>, c
     names
 }
 
+// The one place that decides which languages survive '--top', so a file row can never hang under a
+// language that has no row above it. Returns the cut list and how many the cut hid.
+pub(crate) fn find_shown_language_names(per_language: &HashMap<String, Stats>, config: &Configuration)
+-> (Vec<String>, usize)
+{
+    let mut names = get_sorted_language_names(per_language, config.view.sort_by, config.view.counting);
+    let hidden = config.view.top_n.map_or(0, |top| names.len().saturating_sub(top));
+    names.truncate(names.len() - hidden);
+    (names, hidden)
+}
+
 // The languages are in the order '--sort' put them. A run that named no module has exactly one of
 // these, with no name.
 struct Group<'a> {
@@ -264,11 +272,10 @@ fn create_groups_of<'a>(result: &'a RunResult, config: &Configuration) -> Vec<Gr
     // sorted: that order is the only say the user has over the columns of a matrix. What no name
     // claimed comes last.
     let mut groups = result.modules.iter().map(|module| {
-        let languages = get_sorted_language_names(&module.per_language, config.view.sort_by, config.view.counting);
-        let hidden = config.view.top_n.map_or(0, |top| languages.len().saturating_sub(top));
+        let (languages, hidden) = find_shown_language_names(&module.per_language, config);
         Group {
             name: module.name.as_deref(),
-            languages: languages[..languages.len() - hidden].to_vec(),
+            languages,
             hidden,
             per_language: &module.per_language,
             // Emptied here and not at each layout, or the next layout forgets to obey the flag
@@ -323,10 +330,9 @@ pub(crate) fn find_files_to_show<'a>(result: &'a RunResult, config: &Configurati
 
     let common_directory = find_common_directory_of(&result.targets);
     result.modules.iter().map(|module| {
-        let names = get_sorted_language_names(&module.per_language, config.view.sort_by, config.view.counting);
-        let hidden = config.view.top_n.map_or(0, |top| names.len().saturating_sub(top));
+        let (names, _) = find_shown_language_names(&module.per_language, config);
 
-        names[..names.len() - hidden].iter().filter_map(|name| {
+        names.iter().filter_map(|name| {
             let (language, entries) = module.files.get_key_value(name.as_str())?;
             let mut files = entries.iter().collect::<Vec<_>>();
             files.sort_by(|one, other| compare_files_by(one, other, config.view.sort_by, config.view.counting));
@@ -410,9 +416,25 @@ enum ColumnKind {
     ChangePercent
 }
 
+// The four facts of one column on one line, so the styles can never drift out of step with the
+// headers beside them: four separate lists one item short would not fail to compile, they would
+// paint the wrong column or panic while drawing.
+struct Column<'a> {
+    header: String,
+    kind: ColumnKind,
+    header_style: &'a Style,
+    body_style: &'a Style
+}
+
+impl<'a> Column<'a> {
+    fn of(header: &str, kind: ColumnKind, header_style: &'a Style, body_style: &'a Style) -> Column<'a> {
+        Column { header: header.to_owned(), kind, header_style, body_style }
+    }
+}
+
 // Everything that describes a figure follows that figure out, so hiding 'files' never leaves a bare
 // share or a bare change behind.
-fn create_shown_mask(columns: &[ColumnKind], hidden: config_manager::Hidden) -> Vec<bool> {
+fn create_shown_mask(columns: &[Column], hidden: config_manager::Hidden) -> Vec<bool> {
     let survives = |kind: ColumnKind| match kind {
         ColumnKind::Files => !hidden.files,
         ColumnKind::Comments => !hidden.comments,
@@ -423,12 +445,12 @@ fn create_shown_mask(columns: &[ColumnKind], hidden: config_manager::Hidden) -> 
     };
     let mut mask = Vec::with_capacity(columns.len());
     let mut figure_shown = true;
-    for kind in columns {
-        match kind {
+    for column in columns {
+        match column.kind {
             ColumnKind::Percent | ColumnKind::ChangePercent | ColumnKind::Change =>
-                    mask.push(figure_shown && survives(*kind)),
+                    mask.push(figure_shown && survives(column.kind)),
             _ => {
-                figure_shown = survives(*kind);
+                figure_shown = survives(column.kind);
                 mask.push(figure_shown);
             }
         }
@@ -446,16 +468,16 @@ static NO_NESTED : std::sync::LazyLock<HashMap<String, HashMap<String, Stats>>> 
 
 // A nested language and a file hang off the same branch and each has its own set of tokens
 struct SubRowStyles<'a> {
-    name: &'a super::theme::Style,
-    branch: &'a super::theme::Style,
-    percent: &'a super::theme::Style,
-    files: &'a super::theme::Style,
-    lines: &'a super::theme::Style,
-    code: &'a super::theme::Style,
-    comments: &'a super::theme::Style,
-    extra: &'a super::theme::Style,
-    size: &'a super::theme::Style,
-    size_unit: &'a super::theme::Style
+    name: &'a Style,
+    branch: &'a Style,
+    percent: &'a Style,
+    files: &'a Style,
+    lines: &'a Style,
+    code: &'a Style,
+    comments: &'a Style,
+    extra: &'a Style,
+    size: &'a Style,
+    size_unit: &'a Style
 }
 
 impl<'a> SubRowStyles<'a> {
@@ -473,7 +495,7 @@ impl<'a> SubRowStyles<'a> {
         }
     }
 
-    fn find_style_of(&self, column: ColumnKind) -> &'a super::theme::Style {
+    fn find_style_of(&self, column: ColumnKind) -> &'a Style {
         match column {
             ColumnKind::Name => self.name,
             ColumnKind::Files => self.files,
@@ -487,7 +509,7 @@ impl<'a> SubRowStyles<'a> {
         }
     }
 
-    fn take_columns(&self, columns: &[ColumnKind]) -> Vec<&'a super::theme::Style> {
+    fn take_columns(&self, columns: &[ColumnKind]) -> Vec<&'a Style> {
         columns.iter().map(|column| self.find_style_of(*column)).collect()
     }
 }
@@ -638,10 +660,8 @@ fn find_section_name_in(cell: &str) -> &str {
 // '--sort' can come from a configuration file, and then nothing else on the page says it. The cell
 // comes back painted and its style is replaced with one that adds nothing: a style laid over the
 // whole of it would put the header's italics on the marker, which is a glyph and not a word.
-fn mark_sorted_column<'a>(theme: &'a Theme, headers: &mut [String],
-        styles: &mut [&'a super::theme::Style], sort_by: SortCriterion)
-{
-    let names_the_order = |header: &String| match sort_by {
+fn mark_sorted_column<'a>(theme: &'a Theme, columns: &mut [Column<'a>], sort_by: SortCriterion) {
+    let names_the_order = |header: &str| match sort_by {
         SortCriterion::Files => header == "Files",
         SortCriterion::Lines => header == "Lines",
         SortCriterion::Code => header == "Code",
@@ -653,16 +673,16 @@ fn mark_sorted_column<'a>(theme: &'a Theme, headers: &mut [String],
         // rather than failing to compile in a released version
         _ => false
     };
-    let Some(at) = headers.iter().position(names_the_order) else { return };
+    let Some(column) = columns.iter_mut().find(|column| names_the_order(&column.header)) else { return };
 
     let marker = if sort_by == SortCriterion::Name {SORTED_ASCENDING} else {SORTED_DESCENDING};
-    headers[at] = format!("{} {}", theme.sort_marker.paint(&marker.to_string()),
-            styles[at].paint(&headers[at]));
-    styles[at] = &UNPAINTED;
+    column.header = format!("{} {}", theme.sort_marker.paint(&marker.to_string()),
+            column.header_style.paint(&column.header));
+    column.header_style = &UNPAINTED;
 }
 
-static UNPAINTED : std::sync::LazyLock<super::theme::Style> =
-        std::sync::LazyLock::new(super::theme::Style::plain);
+static UNPAINTED : std::sync::LazyLock<Style> =
+        std::sync::LazyLock::new(Style::plain);
 
 // Without the change of heading, the reader of an uncolored paste is told that 'backend' is a
 // language.
@@ -703,11 +723,22 @@ fn format_table_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
     let ViewSettings { sort_by, hidden, model } = view;
     // The two columns that compare languages ('Files' and 'Lines') take a share of the total, the
     // two that describe one ('Code' and 'Comments') a share of that language's own lines.
-    let headers : [&str; 11] = ["Language", "Files", "%", "Lines", "%", "Code", "%", "Comments", "%",
-            get_third_column_header(model), "Size"];
-    const COLUMNS : [ColumnKind; 11] = [ColumnKind::Name, ColumnKind::Files, ColumnKind::Percent,
-            ColumnKind::Lines, ColumnKind::Percent, ColumnKind::Code, ColumnKind::Percent,
-            ColumnKind::Comments, ColumnKind::Percent, ColumnKind::Extra, ColumnKind::Size];
+    let percent = |kind| Column::of("%", kind, &theme.percent, &theme.percent);
+    let columns = vec![
+        Column::of(determine_name_header(groups), ColumnKind::Name,
+                &theme.details_language_header, &theme.details_language_name),
+        Column::of("Files", ColumnKind::Files, &theme.files_label, &theme.files_number),
+        percent(ColumnKind::Percent),
+        Column::of("Lines", ColumnKind::Lines, &theme.lines_label, &theme.lines_number),
+        percent(ColumnKind::Percent),
+        Column::of("Code", ColumnKind::Code, &theme.code_label, &theme.code_number),
+        percent(ColumnKind::Percent),
+        Column::of("Comments", ColumnKind::Comments, &theme.comments_label, &theme.comments_number),
+        percent(ColumnKind::Percent),
+        Column::of(get_third_column_header(model), ColumnKind::Extra, &theme.extra_label, &theme.extra_number),
+        Column::of("Size", ColumnKind::Size, &theme.total_size_label, &theme.total_size_number),
+    ];
+    let column_count = columns.len();
 
     fn format_row_of(theme: &Theme, name: &str, figures: &RowFigures) -> Vec<String>
     {
@@ -744,31 +775,19 @@ fn format_table_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
                 cells
             },
             None => {
-                let mut cells = vec![String::new(); headers.len()];
+                let mut cells = vec![String::new(); column_count];
                 cells[0] = row.cell.clone();
                 cells
             }
         }}).collect::<Vec<_>>();
 
-    let mask = create_shown_mask(&COLUMNS, hidden);
-    let columns = keep_shown(COLUMNS.to_vec(), &mask);
-    // A percentage is kept against its number by a gap of its own
-    let tight_after = (0..columns.len()).filter(|at| columns.get(at + 1) == Some(&ColumnKind::Percent))
-            .collect::<Vec<_>>();
+    let mask = create_shown_mask(&columns, hidden);
+    let mut columns = keep_shown(columns, &mask);
     let rows = rows.into_iter().map(|row| keep_shown(row, &mask)).collect::<Vec<_>>();
+    mark_sorted_column(theme, &mut columns, sort_by);
 
-    let mut headers = keep_shown(headers.map(str::to_owned).to_vec(), &mask);
-    headers[0] = determine_name_header(groups).to_owned();
-    let mut header_styles = keep_shown(vec![&theme.details_language_header, &theme.files_label, &theme.percent,
-            &theme.lines_label, &theme.percent, &theme.code_label, &theme.percent, &theme.comments_label,
-            &theme.percent, &theme.extra_label, &theme.total_size_label], &mask);
-    mark_sorted_column(theme, &mut headers, &mut header_styles, sort_by);
-    let body_styles = keep_shown(vec![&theme.details_language_name, &theme.files_number, &theme.percent,
-            &theme.lines_number, &theme.percent, &theme.code_number, &theme.percent, &theme.comments_number,
-            &theme.percent, &theme.extra_number, &theme.total_size_number], &mask);
-
-    draw_aligned_table(theme, &headers, &rows, &described.iter().map(|row| row.kind).collect::<Vec<_>>(),
-            &columns, &tight_after, &header_styles, &body_styles, is_grouped(groups))
+    draw_aligned_table(theme, &columns, &rows, &described.iter().map(|row| row.kind).collect::<Vec<_>>(),
+            is_grouped(groups))
 }
 
 // The whole of what '--diff' prints, and the only output when both readings were given, since then
@@ -1072,9 +1091,14 @@ so anything a .gitignore ignores is counted on one side alone.")).to_string(),
 fn format_boxed_comparison_lines(theme: &Theme, rows: &[ComparedRow], view: ViewSettings) -> Vec<String>
 {
     let ViewSettings { sort_by, hidden, model } = view;
-    const HEADERS : [&str; 6] = ["Language", "Files", "Lines", "Code", "Comments", "Size"];
-    const COLUMNS : [ColumnKind; 6] = [ColumnKind::Name, ColumnKind::Files, ColumnKind::Lines,
-            ColumnKind::Code, ColumnKind::Comments, ColumnKind::Size];
+    let mut columns = vec![
+        Column::of("Language", ColumnKind::Name, &theme.details_language_header, &theme.details_language_name),
+        Column::of("Files", ColumnKind::Files, &theme.files_label, &theme.files_number),
+        Column::of("Lines", ColumnKind::Lines, &theme.lines_label, &theme.lines_number),
+        Column::of("Code", ColumnKind::Code, &theme.code_label, &theme.code_number),
+        Column::of("Comments", ColumnKind::Comments, &theme.comments_label, &theme.comments_number),
+        Column::of("Size", ColumnKind::Size, &theme.total_size_label, &theme.total_size_number),
+    ];
 
     let cells = |before: &Stats, now: &Stats| {
         // The absolute move and its percentage share one slot here, the borders doing the grouping
@@ -1100,22 +1124,15 @@ fn format_boxed_comparison_lines(theme: &Theme, rows: &[ComparedRow], view: View
 
     let drawn = rows.iter().map(|row| (row.name.clone(), cells(&row.baseline, &row.subject))).collect::<Vec<_>>();
     let kinds = rows.iter().map(|row| row.kind).collect::<Vec<_>>();
+    columns[0].header = determine_name_header_for(&kinds).to_owned();
 
-    let mask = create_shown_mask(&COLUMNS, hidden);
-    let columns = keep_shown(COLUMNS.to_vec(), &mask);
+    let mask = create_shown_mask(&columns, hidden);
+    let mut columns = keep_shown(columns, &mask);
     let drawn = drawn.into_iter()
             .map(|(name, cells)| (name, keep_shown(cells, &mask[1..]))).collect::<Vec<_>>();
-    let number_styles = keep_shown(vec![&theme.files_number, &theme.lines_number, &theme.code_number,
-            &theme.comments_number, &theme.total_size_number], &mask[1..]);
+    mark_sorted_column(theme, &mut columns, sort_by);
 
-    let mut headers = keep_shown(HEADERS.map(str::to_owned).to_vec(), &mask);
-    headers[0] = determine_name_header_for(&kinds).to_owned();
-    let mut header_styles = keep_shown(vec![&theme.details_language_header, &theme.files_label,
-            &theme.lines_label, &theme.code_label, &theme.comments_label, &theme.total_size_label], &mask);
-    mark_sorted_column(theme, &mut headers, &mut header_styles, sort_by);
-
-    draw_boxed_table(theme, &headers[0], &headers.iter().map(String::as_str).collect::<Vec<_>>(),
-            &drawn, &kinds, &columns, ColumnKind::Change, &header_styles, &number_styles)
+    draw_boxed_table(theme, &columns, &drawn, &kinds, ColumnKind::Change)
 }
 
 // 'From A to B' and not 'compared A to B': the columns hold B's counts and the signs are the
@@ -1131,18 +1148,26 @@ fn format_comparison_heading(theme: &Theme, baseline: &super::diff::Reading, sub
 fn format_comparison_lines(theme: &Theme, rows: &[ComparedRow], view: ViewSettings) -> Vec<String>
 {
     let ViewSettings { sort_by, hidden, model } = view;
+    let plain = &UNPAINTED;
     // The change columns are left unnamed: every one carries a sign that says what it is, and a word
     // would widen the table for nothing. Neither the size nor the file count carries a percentage:
     // the size tracks the lines whose share is already beside them, and a handful of whole files
     // reads better as "+2" than as "+5.26%".
-    const HEADERS : [&str; 14] = ["Language", "Files", "", "Lines", "", "%", "Code", "", "%",
-            "Comments", "", "%", "Size", ""];
-    const COLUMNS : [ColumnKind; 14] = [ColumnKind::Name, ColumnKind::Files, ColumnKind::Change,
-            ColumnKind::Lines, ColumnKind::Change, ColumnKind::ChangePercent, ColumnKind::Code,
-            ColumnKind::Change, ColumnKind::ChangePercent, ColumnKind::Comments, ColumnKind::Change,
-            ColumnKind::ChangePercent, ColumnKind::Size, ColumnKind::Change];
-
-    let plain = super::theme::Style::plain();
+    let change = |kind| Column::of("", kind, plain, plain);
+    let change_percent = || Column::of("%", ColumnKind::ChangePercent, &theme.percent, plain);
+    let mut columns = vec![
+        Column::of("Language", ColumnKind::Name, &theme.details_language_header, &theme.details_language_name),
+        Column::of("Files", ColumnKind::Files, &theme.files_label, &theme.files_number),
+        change(ColumnKind::Change),
+        Column::of("Lines", ColumnKind::Lines, &theme.lines_label, &theme.lines_number),
+        change(ColumnKind::Change), change_percent(),
+        Column::of("Code", ColumnKind::Code, &theme.code_label, &theme.code_number),
+        change(ColumnKind::Change), change_percent(),
+        Column::of("Comments", ColumnKind::Comments, &theme.comments_label, &theme.comments_number),
+        change(ColumnKind::Change), change_percent(),
+        Column::of("Size", ColumnKind::Size, &theme.total_size_label, &theme.total_size_number),
+        change(ColumnKind::Change),
+    ];
     let cells = |name: String, before: &Stats, now: &Stats| {
         let mut row = vec![name, format_with_separators(now.files),
                 paint_change(theme, before.files, now.files, &format_signed_difference(before.files, now.files))];
@@ -1161,27 +1186,14 @@ fn format_comparison_lines(theme: &Theme, rows: &[ComparedRow], view: ViewSettin
 
     let drawn = rows.iter().map(|row| cells(row.name.clone(), &row.baseline, &row.subject)).collect::<Vec<_>>();
     let kinds = rows.iter().map(|row| row.kind).collect::<Vec<_>>();
+    columns[0].header = determine_name_header_for(&kinds).to_owned();
 
-    let mask = create_shown_mask(&COLUMNS, hidden);
-    let columns = keep_shown(COLUMNS.to_vec(), &mask);
-    // Both the change and its percentage belong to the number before them
-    let tight_after = (0..columns.len()).filter(|at|
-            matches!(columns.get(at + 1), Some(ColumnKind::Change | ColumnKind::ChangePercent)))
-            .collect::<Vec<_>>();
+    let mask = create_shown_mask(&columns, hidden);
+    let mut columns = keep_shown(columns, &mask);
     let drawn = drawn.into_iter().map(|row| keep_shown(row, &mask)).collect::<Vec<_>>();
+    mark_sorted_column(theme, &mut columns, sort_by);
 
-    let mut headers = keep_shown(HEADERS.map(str::to_owned).to_vec(), &mask);
-    let mut header_styles = keep_shown(vec![&theme.details_language_header, &theme.files_label, &plain,
-            &theme.lines_label, &plain, &theme.percent, &theme.code_label, &plain, &theme.percent,
-            &theme.comments_label, &plain, &theme.percent, &theme.total_size_label, &plain], &mask);
-    let body_styles = keep_shown(vec![&theme.details_language_name, &theme.files_number, &plain,
-            &theme.lines_number, &plain, &plain, &theme.code_number, &plain, &plain,
-            &theme.comments_number, &plain, &plain, &theme.total_size_number, &plain], &mask);
-    headers[0] = determine_name_header_for(&kinds).to_owned();
-    mark_sorted_column(theme, &mut headers, &mut header_styles, sort_by);
-
-    draw_aligned_table(theme, &headers, &drawn, &kinds, &columns, &tight_after, &header_styles,
-            &body_styles, kinds.contains(&RowKind::Module))
+    draw_aligned_table(theme, &columns, &drawn, &kinds, kinds.contains(&RowKind::Module))
 }
 
 // 'determine_name_header' for a comparison, whose rows are already built.
@@ -1244,21 +1256,28 @@ fn format_readable_time(generated_at: &str) -> String {
 // 'tight_after' sit two spaces behind the one before them because they belong to it. Widths are
 // measured with the escape sequences skipped rather than counted, since a cell is allowed to carry
 // a color of its own, which the size cell does for its unit.
-fn draw_aligned_table(theme: &Theme, headers: &[String], rows: &[Vec<String>], kinds: &[RowKind],
-        columns: &[ColumnKind], tight_after: &[usize], header_styles: &[&super::theme::Style],
-        body_styles: &[&super::theme::Style], grouped: bool) -> Vec<String>
+fn draw_aligned_table(theme: &Theme, columns: &[Column], rows: &[Vec<String>], kinds: &[RowKind],
+        grouped: bool) -> Vec<String>
 {
     const GAP : usize = 4;
     const TIGHT_GAP : usize = 2;
 
-    let widths = (0..headers.len()).map(|i|
+    // A share, a change and its percentage all belong to the figure before them
+    let tight_after = (0..columns.len()).filter(|at| matches!(columns.get(at + 1).map(|x| x.kind),
+            Some(ColumnKind::Percent | ColumnKind::Change | ColumnKind::ChangePercent)))
+            .collect::<Vec<_>>();
+    let column_kinds = columns.iter().map(|column| column.kind).collect::<Vec<_>>();
+    let header_styles = columns.iter().map(|column| column.header_style).collect::<Vec<_>>();
+    let body_styles = columns.iter().map(|column| column.body_style).collect::<Vec<_>>();
+
+    let widths = (0..columns.len()).map(|i|
             rows.iter().zip(kinds.iter()).filter(|(_, kind)| **kind != RowKind::Note)
                     .map(|(row, _)| calculate_widest_visible_line(&row[i]))
-                    .max().unwrap_or(0).max(calculate_widest_visible_line(&headers[i]))).collect::<Vec<_>>();
+                    .max().unwrap_or(0).max(calculate_widest_visible_line(&columns[i].header))).collect::<Vec<_>>();
 
     // The language name and the percentages are not right aligned: padding a percentage on the left
     // would push it away from its number on exactly the rows where its column is wider.
-    let render = |cells: &[String], styles: &[&super::theme::Style]| {
+    let render = |cells: &[String], styles: &[&Style]| {
         let mut line = String::with_capacity(140);
         if cells[1..].iter().all(String::is_empty) {
             return styles[0].paint(&cells[0]).to_string();
@@ -1278,9 +1297,10 @@ fn draw_aligned_table(theme: &Theme, headers: &[String], rows: &[Vec<String>], k
         line.trim_end().to_owned()
     };
 
-    let of_a_nested = SubRowStyles::of(theme, RowKind::Nested).take_columns(columns);
-    let of_a_file = SubRowStyles::of(theme, RowKind::File).take_columns(columns);
-    let rendered = std::iter::once(render(headers, header_styles))
+    let headers = columns.iter().map(|column| column.header.clone()).collect::<Vec<_>>();
+    let of_a_nested = SubRowStyles::of(theme, RowKind::Nested).take_columns(&column_kinds);
+    let of_a_file = SubRowStyles::of(theme, RowKind::File).take_columns(&column_kinds);
+    let rendered = std::iter::once(render(&headers, &header_styles))
             .chain(rows.iter().zip(kinds.iter()).map(|(row, kind)| match kind {
                 RowKind::Nested => render(row, &of_a_nested),
                 RowKind::File => render(row, &of_a_file),
@@ -1414,7 +1434,7 @@ fn format_matrix_lines<'a>(theme: &'a Theme, groups: &[Group], languages: &[Stri
 
     // The name and its labels are left aligned, every figure right aligned, so a column can be
     // compared down and a language across.
-    let render = |cells: &[String], styles: &[&super::theme::Style]| {
+    let render = |cells: &[String], styles: &[&Style]| {
         let mut line = String::with_capacity(140);
         for (i, cell) in cells.iter().enumerate() {
             let padding = " ".repeat(widths[i] - calculate_widest_visible_line(cell));
@@ -1445,7 +1465,7 @@ fn format_matrix_lines<'a>(theme: &'a Theme, groups: &[Group], languages: &[Stri
     header_styles.extend(groups.iter().map(|_| &theme.details_module));
     header_styles.push(&theme.details_total);
 
-    let styles_for = |name_style: &'a super::theme::Style, metric: usize| {
+    let styles_for = |name_style: &'a Style, metric: usize| {
         [name_style, label_style(metric)].into_iter()
                 .chain((0..headers.len() - 2).map(|_| number_style(metric))).collect::<Vec<_>>()
     };
@@ -1493,10 +1513,17 @@ fn format_boxed_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
         notes: &[String], view: ViewSettings) -> Vec<String>
 {
     let ViewSettings { sort_by, hidden, model } = view;
-    let headers : [&str; 7] = ["Language", "Files", "Lines", "Code", "Comments",
-            get_third_column_header(model), "Size"];
-    const COLUMNS : [ColumnKind; 7] = [ColumnKind::Name, ColumnKind::Files, ColumnKind::Lines,
-            ColumnKind::Code, ColumnKind::Comments, ColumnKind::Extra, ColumnKind::Size];
+    let columns = vec![
+        Column::of(determine_name_header(groups), ColumnKind::Name,
+                &theme.details_language_header, &theme.details_language_name),
+        Column::of("Files", ColumnKind::Files, &theme.files_label, &theme.files_number),
+        Column::of("Lines", ColumnKind::Lines, &theme.lines_label, &theme.lines_number),
+        Column::of("Code", ColumnKind::Code, &theme.code_label, &theme.code_number),
+        Column::of("Comments", ColumnKind::Comments, &theme.comments_label, &theme.comments_number),
+        Column::of(get_third_column_header(model), ColumnKind::Extra, &theme.extra_label, &theme.extra_number),
+        Column::of("Size", ColumnKind::Size, &theme.total_size_label, &theme.total_size_number),
+    ];
+    let column_count = columns.len();
 
     fn format_row_of(theme: &Theme, name: &str, figures: &RowFigures) -> (String, Vec<BoxedCell>)
     {
@@ -1524,12 +1551,12 @@ fn format_boxed_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
         Some(figures) => format_row_of(theme, &row.cell, &figures),
         // A note takes the name cell and leaves the columns empty
         None => (row.cell.clone(),
-                (0..headers.len() - 1).map(|_| BoxedCell { number: String::new(), slot: String::new() }).collect())
+                (0..column_count - 1).map(|_| BoxedCell { number: String::new(), slot: String::new() }).collect())
     }).collect::<Vec<_>>();
     let kinds = described.iter().map(|row| row.kind).collect::<Vec<_>>();
 
-    let mask = create_shown_mask(&COLUMNS, hidden);
-    let columns = keep_shown(COLUMNS.to_vec(), &mask);
+    let mask = create_shown_mask(&columns, hidden);
+    let mut columns = keep_shown(columns, &mask);
     let mut rows = rows.into_iter()
             .map(|(name, cells)| (name, keep_shown(cells, &mask[1..]))).collect::<Vec<_>>();
     if hidden.percentages {
@@ -1539,20 +1566,9 @@ fn format_boxed_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
             }
         }
     }
+    mark_sorted_column(theme, &mut columns, sort_by);
 
-    let header_styles = [&theme.files_label, &theme.lines_label, &theme.code_label,
-            &theme.comments_label, &theme.extra_label, &theme.total_size_label];
-    let number_styles = keep_shown(vec![&theme.files_number, &theme.lines_number, &theme.code_number,
-            &theme.comments_number, &theme.extra_number, &theme.total_size_number], &mask[1..]);
-
-    let mut headers = keep_shown(headers.map(str::to_owned).to_vec(), &mask);
-    headers[0] = determine_name_header(groups).to_owned();
-    let mut header_styles = keep_shown(std::iter::once(&theme.details_language_header)
-            .chain(header_styles).collect::<Vec<_>>(), &mask);
-    mark_sorted_column(theme, &mut headers, &mut header_styles, sort_by);
-
-    draw_boxed_table(theme, &headers[0], &headers.iter().map(String::as_str).collect::<Vec<_>>(),
-            &rows, &kinds, &columns, ColumnKind::Percent, &header_styles, &number_styles)
+    draw_boxed_table(theme, &columns, &rows, &kinds, ColumnKind::Percent)
 }
 
 // The joints are as much text as the cells, so the width is the columns plus every joint
@@ -1568,17 +1584,20 @@ fn span_across(theme: &Theme, text: &str, inner_widths: &[usize], pad: usize, bo
 // comparison with a change. A column whose slots are all empty is drawn without one.
 struct BoxedCell { number: String, slot: String }
 
-// 'header_styles' covers the name column too, at its front, since the one carrying the sort marker
-// arrives painted and must not be painted a second time.
-fn draw_boxed_table(theme: &Theme, name_title: &str, headers: &[&str], rows: &[(String, Vec<BoxedCell>)],
-        kinds: &[RowKind], columns: &[ColumnKind], slot: ColumnKind,
-        header_styles: &[&super::theme::Style], number_styles: &[&super::theme::Style]) -> Vec<String>
+fn draw_boxed_table(theme: &Theme, columns: &[Column], rows: &[(String, Vec<BoxedCell>)],
+        kinds: &[RowKind], slot: ColumnKind) -> Vec<String>
 {
     const SLOT_GAP : usize = 2;
     // One space of air between a border and the text it holds
     const PAD : usize = 1;
 
-    let slot_style : &super::theme::Style = if slot == ColumnKind::Change {&UNPAINTED} else {&theme.percent};
+    let slot_style : &Style = if slot == ColumnKind::Change {&UNPAINTED} else {&theme.percent};
+    let name_title = &columns[0].header;
+    let headers = columns.iter().map(|column| column.header.as_str()).collect::<Vec<_>>();
+    let header_styles = columns.iter().map(|column| column.header_style).collect::<Vec<_>>();
+    // The name column draws its own styles per row, so its body style is never read here
+    let number_styles = columns[1..].iter().map(|column| column.body_style).collect::<Vec<_>>();
+    let column_kinds = columns.iter().map(|column| column.kind).collect::<Vec<_>>();
 
     // The name is drawn on its own, so everything indexed below counts from the column after it
     let with_figures = headers.len() - 1;
@@ -1690,7 +1709,7 @@ fn draw_boxed_table(theme: &Theme, name_title: &str, headers: &[&str], rows: &[(
         for (i, cell) in cells.iter().enumerate() {
             let (number_style, slot_style) = match kind {
                 RowKind::Nested | RowKind::File =>
-                        (of_a_sub_row.find_style_of(columns[i + 1]), of_a_sub_row.find_style_of(slot)),
+                        (of_a_sub_row.find_style_of(column_kinds[i + 1]), of_a_sub_row.find_style_of(slot)),
                 _ => (number_styles[i], slot_style)
             };
             let number = format!("{}{}", " ".repeat(number_widths[i] - calculate_widest_visible_line(&cell.number)),
@@ -2078,19 +2097,14 @@ fn create_keyword_entries(keyword_occurencies: &HashMap<String,usize>) -> Vec<(S
 }
 
 fn create_keyword_sum_map(per_language: &HashMap<String,Stats>) -> HashMap<String,usize> {
-    let mut collective_keywords_map : HashMap<String,usize> = HashMap::new();
-    for content_info in per_language.values() {
-        for keyword in &content_info.keyword_occurences {
-            if *keyword.1 == 0 {continue;}
-            if let Some(x) = collective_keywords_map.get_mut(keyword.0) {
-                *x += *keyword.1;
-            } else {
-                collective_keywords_map.insert(keyword.0.to_owned(), *keyword.1);
-            }
+    let mut sums : HashMap<String,usize> = HashMap::new();
+    for stats in per_language.values() {
+        for (keyword, count) in stats.keyword_occurences.iter().filter(|(_, count)| **count > 0) {
+            *sums.entry(keyword.clone()).or_insert(0) += count;
         }
     }
 
-    collective_keywords_map
+    sums
 }
 
 //                                    OVERVIEW
@@ -2109,8 +2123,6 @@ fn format_overview_lines(sorted_language_names: &[String], per_language: &HashMa
 {
     let (sorted_language_vec, per_language) =
             fold_rest_into_others(sorted_language_names, per_language, total, config.view.top_n);
-    let (sorted_language_vec, per_language) =
-            (&sorted_language_vec, &per_language);
 
     // 'others' takes its style by identity and not by position, because '--top' moves it: with
     // '--top 2' it sits third and would take the slot meant for the third language.
@@ -2118,21 +2130,10 @@ fn format_overview_lines(sorted_language_names: &[String], per_language: &HashMa
     let styles = sorted_language_vec.iter().enumerate()
             .map(|(i, name)| if name == OTHERS_NAME {slots[slots.len()-1]} else {slots[i.min(slots.len()-2)]}.clone())
             .collect::<Vec<_>>();
-    let color_func_vec : Vec<ColorFunc> = styles.iter().cloned()
-            .map(|style| Box::new(move |s: &str| style.paint(s).to_string()) as ColorFunc).collect();
-    // A bar cell takes the color of the slot and none of its attributes: bold or underline on a
-    // block character is not something a terminal shows usefully
-    let bar_func_vec : Vec<ColorFunc> = styles.iter().map(|style| {
-            let color = style.get_color();
-            Box::new(move |s: &str| match color {
-                Some(color) => s.color(color).to_string(),
-                None => s.to_owned()
-            }) as ColorFunc
-        }).collect();
 
-    let files_percentages = get_files_percentages(per_language, sorted_language_vec);
-    let lines_percentages = get_lines_percentages(per_language, sorted_language_vec);
-    let sizes_percentages = get_sizes_percentages(per_language, sorted_language_vec);
+    let files_percentages = get_percentages_of(&per_language, &sorted_language_vec, |x| x.files);
+    let lines_percentages = get_percentages_of(&per_language, &sorted_language_vec, |x| x.lines);
+    let sizes_percentages = get_percentages_of(&per_language, &sorted_language_vec, |x| x.bytes);
 
     let files_verticals = if config.view.hidden.bar {vec![]} else{render::apportion(&files_percentages, NUM_OF_VERTICALS)};
     let lines_verticals = if config.view.hidden.bar {vec![]} else{render::apportion(&lines_percentages, NUM_OF_VERTICALS)};
@@ -2146,18 +2147,18 @@ fn format_overview_lines(sorted_language_names: &[String], per_language: &HashMa
     }).collect::<Vec<_>>();
 
     let files_line = create_overview_line("Files:", &files_percentages, &files_verticals,
-            sorted_language_vec, &color_func_vec, &bar_func_vec, &percent_widths, config);
+            &sorted_language_vec, &styles, &percent_widths, config);
     let lines_line = create_overview_line("Lines:", &lines_percentages, &lines_verticals,
-            sorted_language_vec, &color_func_vec, &bar_func_vec, &percent_widths, config);
+            &sorted_language_vec, &styles, &percent_widths, config);
     let size_line = create_overview_line("Size:", &sizes_percentages, &size_verticals,
-            sorted_language_vec, &color_func_vec, &bar_func_vec, &percent_widths, config);
+            &sorted_language_vec, &styles, &percent_widths, config);
 
     vec![format!("{}.", super::theme::get_active().heading.paint("Overview")), String::new(),
          files_line, String::new(), lines_line, String::new(), size_line, String::new()]
 }
 
 fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize], languages_name: &[String],
-        color_func_vec: &[ColorFunc], bar_func_vec: &[ColorFunc], percent_widths: &[usize], config: &Configuration) -> String
+        styles: &[Style], percent_widths: &[usize], config: &Configuration) -> String
 {
     let theme = super::theme::get_active();
     let mut line = String::with_capacity(150);
@@ -2165,25 +2166,32 @@ fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize], 
     for (i,percentage) in percentages.iter().enumerate() {
         let str_perc = format_percent_text(*percentage);
         line.push_str(&format!("{}{} ", " ".repeat(percent_widths[i].saturating_sub(str_perc.len())), paint_overview_percent(theme,*percentage)));
-        line.push_str(&color_func_vec[i](&languages_name[i]));
+        line.push_str(&styles[i].paint(&languages_name[i]).to_string());
         if i < percentages.len() - 1{
             line.push_str(" - ")
         }
     }
 
     if !config.view.hidden.bar {
-        add_verticals_str(&mut line, verticals, bar_func_vec, config.view.bar_thickness.get_character());
+        add_verticals_str(&mut line, verticals, styles, config.view.bar_thickness.get_character());
     }
 
     line
 }
 
-fn add_verticals_str(line: &mut String, files_verticals: &[usize], color_func_vec: &[ColorFunc], character: &str) {
+// A bar cell takes the color of its slot and none of its attributes: bold or underline on a block
+// character is not something a terminal shows usefully. The cell is painted once and the painted
+// text repeated, so the escape codes come out the same as they always have.
+fn add_verticals_str(line: &mut String, files_verticals: &[usize], styles: &[Style], character: &str) {
     let theme = super::theme::get_active();
     line.push_str("   ");
     line.push_str(&theme.bar_frame.paint("[-").to_string());
     for (i,verticals) in files_verticals.iter().enumerate() {
-        line.push_str(&color_func_vec[i](character).repeat(*verticals));
+        let cell = match styles[i].get_color() {
+            Some(color) => character.color(color).to_string(),
+            None => character.to_owned()
+        };
+        line.push_str(&cell.repeat(*verticals));
     }
     line.push_str(&theme.bar_frame.paint("-]").to_string());
 }
@@ -2222,34 +2230,12 @@ fn fold_rest_into_others(sorted_language_names: &[String],
     (sorted_language_names, per_language)
 }
 
-fn get_files_percentages(per_language: &HashMap<String,Stats>, sorted_language_names: &[String]) -> Vec<f64> {
-    let mut language_files = [0].repeat(per_language.len());
-    per_language.iter().for_each(|e| {
-        let pos = sorted_language_names.iter().position(|name| name == e.0).unwrap();
-        language_files[pos] = e.1.files;
-    });
-
-    render::calculate_percentages_of_their_own_sum(&language_files)
-}
-
-fn get_lines_percentages(per_language: &HashMap<String,Stats>, languages_name: &[String]) -> Vec<f64> {
-    let mut language_lines = [0].repeat(per_language.len());
-    per_language.iter().for_each(|e| {
-        let pos = languages_name.iter().position(|name| name == e.0).unwrap();
-        language_lines[pos] = e.1.lines;
-    });
-
-    render::calculate_percentages_of_their_own_sum(&language_lines)
-}
-
-fn get_sizes_percentages(per_language: &HashMap<String,Stats>, languages_name: &[String]) -> Vec<f64> {
-    let mut language_size = [0].repeat(per_language.len());
-    per_language.iter().for_each(|e| {
-        let pos = languages_name.iter().position(|name| name == e.0).unwrap();
-        language_size[pos] = e.1.bytes;
-    });
-
-    render::calculate_percentages_of_their_own_sum(&language_size)
+fn get_percentages_of(per_language: &HashMap<String,Stats>, sorted_language_names: &[String],
+    value: impl Fn(&Stats) -> usize) -> Vec<f64>
+{
+    let figures = sorted_language_names.iter()
+            .map(|name| per_language.get(name).map_or(0, &value)).collect::<Vec<_>>();
+    render::calculate_percentages_of_their_own_sum(&figures)
 }
 
 // A setting the entry never wrote is left alone rather than reported as changed, so an entry from
@@ -2326,7 +2312,7 @@ fn format_module_comparison_lines(entry: &super::log::LogEntry, groups: &[Group]
         // started being counted on its own. The ones that are not in both are named as what they are.
         let tail = match (now, then) {
             (Some(now), Some(then)) => {
-                let cell = |style: &super::theme::Style, value: usize, then: usize, width: usize| {
+                let cell = |style: &Style, value: usize, then: usize, width: usize| {
                     let text = format_with_separators(then);
                     format!("{}{}({}%)", " ".repeat(width - text.len()), style.paint(&text),
                             paint_percentage(&format_signed_percentage_difference(then, value)))
@@ -2361,7 +2347,8 @@ fn paint_percentage(percentage: &str) -> ColoredString {
 fn print_comparison_to_previous_runs(result: &RunResult, groups: &[Group], log_content: &str,
         config: &Configuration, datetime_now: &DateTime<Local>)
 {
-    println!("\n{}.\n", super::theme::get_active().heading.paint("History"));
+    let theme = super::theme::get_active();
+    println!("\n{}.\n", theme.heading.paint("History"));
 
     let total = &result.total;
     let log_entries = super::log::read_last_entries(log_content, config.view.compare_level);
@@ -2370,7 +2357,7 @@ fn print_comparison_to_previous_runs(result: &RunResult, groups: &[Group], log_c
     for entry in log_entries.iter() {
         let duration = datetime_now.signed_duration_since(entry.datetime);
         let (days, hours, minutes) = split_minutes_to_D_H_M(duration.num_minutes());
-        let arrow = super::theme::get_active().history_entry.paint("->");
+        let arrow = theme.history_entry.paint("->");
         let tag = format_modified_tag(&find_settings_changed_since(entry, config, &result.targets));
         if let Some(name) = &entry.name {
             comparison_str.push_str(&format!("{} \"{}\" ({} days, {} hours and {} minutes ago){}\n",
@@ -2382,12 +2369,12 @@ fn print_comparison_to_previous_runs(result: &RunResult, groups: &[Group], log_c
         }
         let model = config.view.counting;
         comparison_str.push_str(&format!("     Files: {}({}%) Lines: {}({}%) {{Code: {}({}%), Comments: {}({}%), {}: {}({}%)}}\n",
-                super::theme::get_active().files_number.paint(&format_with_separators(entry.total.files)), paint_percentage(&format_signed_percentage_difference(entry.total.files, total.files)),
-                super::theme::get_active().lines_number.paint(&format_with_separators(entry.total.lines)), paint_percentage(&format_signed_percentage_difference(entry.total.lines, total.lines)),
-                super::theme::get_active().code_number.paint(&format_with_separators(entry.total.calculate_code_lines(model))), paint_percentage(&format_signed_percentage_difference(entry.total.calculate_code_lines(model), total.calculate_code_lines(model))),
-                super::theme::get_active().comments_number.paint(&format_with_separators(entry.total.calculate_comment_lines(model))), paint_percentage(&format_signed_percentage_difference(entry.total.calculate_comment_lines(model), total.calculate_comment_lines(model))),
+                theme.files_number.paint(&format_with_separators(entry.total.files)), paint_percentage(&format_signed_percentage_difference(entry.total.files, total.files)),
+                theme.lines_number.paint(&format_with_separators(entry.total.lines)), paint_percentage(&format_signed_percentage_difference(entry.total.lines, total.lines)),
+                theme.code_number.paint(&format_with_separators(entry.total.calculate_code_lines(model))), paint_percentage(&format_signed_percentage_difference(entry.total.calculate_code_lines(model), total.calculate_code_lines(model))),
+                theme.comments_number.paint(&format_with_separators(entry.total.calculate_comment_lines(model))), paint_percentage(&format_signed_percentage_difference(entry.total.calculate_comment_lines(model), total.calculate_comment_lines(model))),
                 get_third_column_header(model),
-                super::theme::get_active().extra_number.paint(&format_with_separators(entry.total.calculate_extra_lines(model))), paint_percentage(&format_signed_percentage_difference(entry.total.calculate_extra_lines(model), total.calculate_extra_lines(model)))));
+                theme.extra_number.paint(&format_with_separators(entry.total.calculate_extra_lines(model))), paint_percentage(&format_signed_percentage_difference(entry.total.calculate_extra_lines(model), total.calculate_extra_lines(model)))));
         // A run that named no module says nothing about them here either; the 'modified: targets'
         // tag is what already reports that the targets are not the ones they were
         if result.has_modules() {
@@ -2398,6 +2385,7 @@ fn print_comparison_to_previous_runs(result: &RunResult, groups: &[Group], log_c
     print!("{comparison_str}");
 }
 
+#[allow(non_snake_case)]
 fn split_minutes_to_D_H_M(mut minutes: i64) -> (i64, i64, i64) {
     let minutes_in_day = 60 * 24;
     let minutes_in_hour = 60;
@@ -3081,16 +3069,16 @@ mod tests {
     fn a_header_that_arrives_painted_is_measured_by_what_it_draws() {
         let theme = Theme::default();
         let painted = format!("\u{1b}[38;2;181;169;138m{SORTED_DESCENDING}\u{1b}[0m Lines");
-        let headers = ["Language", "Files", painted.as_str()];
         let rows = vec![("Rust".to_owned(), vec![
                 BoxedCell { number: "18".to_owned(), slot: "100.00%".to_owned() },
                 BoxedCell { number: "9,355".to_owned(), slot: "100.00%".to_owned() }])];
-        let styles = [&theme.details_language_header, &theme.files_label, &theme.lines_label];
-        let numbers = [&theme.files_number, &theme.lines_number];
 
-        let columns = [ColumnKind::Name, ColumnKind::Files, ColumnKind::Lines];
-        let lines = draw_boxed_table(&theme, "Language", &headers, &rows, &[RowKind::Language],
-                &columns, ColumnKind::Percent, &styles, &numbers);
+        let columns = [
+            Column::of("Language", ColumnKind::Name, &theme.details_language_header, &theme.details_language_name),
+            Column::of("Files", ColumnKind::Files, &theme.files_label, &theme.files_number),
+            Column::of(&painted, ColumnKind::Lines, &theme.lines_label, &theme.lines_number),
+        ];
+        let lines = draw_boxed_table(&theme, &columns, &rows, &[RowKind::Language], ColumnKind::Percent);
 
         let widths = lines.iter().map(|line| calculate_widest_visible_line(line)).collect::<Vec<_>>();
         assert!(widths.windows(2).all(|pair| pair[0] == pair[1]),
@@ -3264,15 +3252,15 @@ mod tests {
             "C".to_owned() => crate::test_support::plain_stats_of(7, 10, 60, 0, 0, hashmap![]));
         let names = ["A".to_owned(), "B".to_owned(), "C".to_owned()];
 
-        assert_eq!(vec![10.0, 20.0, 70.0], get_files_percentages(&content, &names));
-        assert_eq!(vec![30.0, 10.0, 60.0], get_lines_percentages(&content, &names));
-        assert_eq!(vec![60.0, 30.0, 10.0], get_sizes_percentages(&content, &names));
+        assert_eq!(vec![10.0, 20.0, 70.0], get_percentages_of(&content, &names, |x| x.files));
+        assert_eq!(vec![30.0, 10.0, 60.0], get_percentages_of(&content, &names, |x| x.lines));
+        assert_eq!(vec![60.0, 30.0, 10.0], get_percentages_of(&content, &names, |x| x.bytes));
 
         // and the slot follows the name, so the sorted order the overview was given is the order it
         // draws in
         let reversed = ["C".to_owned(), "B".to_owned(), "A".to_owned()];
-        assert_eq!(vec![70.0, 20.0, 10.0], get_files_percentages(&content, &reversed));
-        assert_eq!(vec![60.0, 10.0, 30.0], get_lines_percentages(&content, &reversed));
+        assert_eq!(vec![70.0, 20.0, 10.0], get_percentages_of(&content, &reversed, |x| x.files));
+        assert_eq!(vec![60.0, 10.0, 30.0], get_percentages_of(&content, &reversed, |x| x.lines));
     }
 
     #[test]

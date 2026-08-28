@@ -43,10 +43,6 @@ impl Totals {
     }
 }
 
-pub(crate) fn now() -> Instant {
-    Instant::now()
-}
-
 pub(crate) fn nanos_since(start: Instant) -> u64 {
     start.elapsed().as_nanos() as u64
 }

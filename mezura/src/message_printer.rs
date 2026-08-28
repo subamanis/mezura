@@ -1211,7 +1211,7 @@ fn find_the_value_names_in(runs: &[&str], starts_the_line: bool) -> Vec<usize> {
     let is_indented_into_a_list = starts_the_line
             && runs.first().is_some_and(|indent| indent.trim().is_empty() && indent.len() == VALUE_LIST_INDENT);
 
-    (0..runs.len()).filter(|at| is_a_column_edge(runs.get(at.wrapping_sub(1)))
+    (0..runs.len()).filter(|at| is_a_column_edge(at.checked_sub(1).and_then(|before| runs.get(before)))
             && is_a_column_edge(runs.get(at + 1))
             && ((is_indented_into_a_list && head_of_the_line == Some(*at))
                     || crate::theme::Theme::get_token_names().contains(&runs[*at]))).collect()
@@ -1243,7 +1243,6 @@ pub fn print_the_command_list() {
 }
 
 fn print_the_help(body: &str) {
-
     let mut msg ="
     │  ╲     ╱  ╲
     │ $$╲   ╱  $$  ______   ________  __    __   ______   ______
@@ -1395,26 +1394,16 @@ pub fn print_supported_languages(languages_available: &[Language]) {
 }
 
 pub fn print_existing_configs() {
-    let mut config_names = Vec::with_capacity(10);
-
     let Ok(config_dir) = fs::read_dir(&PERSISTENT_APP_PATHS.config_dir) else {
         println!("{}","Could not read the config dir".yellow());
         return;
     };
-    for path in config_dir.flatten() {
-        if let Ok(f) = path.file_type() && f.is_file() {
-            config_names.push(path.file_name())
-        }
-    }
-    let mut config_names = config_names.iter().filter_map(|x| {
-        // Skipped rather than shown lossily: this list exists to be typed back into '--load'
-        let str = x.to_str()?;
-        if str != "default.txt" {
-            Some(str)
-        } else {
-            None
-        }
-    }).collect::<Vec<_>>();
+    let mut config_names = config_dir.flatten()
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+            // Skipped rather than shown lossily: this list exists to be typed back into '--load'
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| name != "default.txt")
+            .collect::<Vec<_>>();
     config_names.sort_unstable();
     println!("{}", format_existing_configs_message(&config_names));
 }
@@ -1458,7 +1447,7 @@ fn format_in_columns(names: &[String], columns: usize) -> String {
 
 // The empty case gets a sentence of its own: joining no names with the two spaces that indent the
 // first one leaves a heading over a line of two spaces, which reads as a name that failed to print.
-fn format_existing_configs_message(config_names: &[&str]) -> String {
+fn format_existing_configs_message(config_names: &[String]) -> String {
     if config_names.is_empty() {
         format!("{}No configurations found.\n", get_data_dir_str())
     } else {
@@ -1561,7 +1550,7 @@ mod tests {
         assert!(!none.contains("Found these configurations"), "{none}");
         assert!(!none.contains("\n  \n"), "an empty bullet was printed:\n{none}");
 
-        let some = format_existing_configs_message(&["mezura.txt", "portal.txt"]);
+        let some = format_existing_configs_message(&["mezura.txt".to_owned(), "portal.txt".to_owned()]);
         assert!(some.contains("Found these configurations:\n  mezura.txt\n  portal.txt"), "{some}");
         assert!(none.contains("Data directory:") && some.contains("Data directory:"));
     }

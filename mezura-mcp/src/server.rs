@@ -277,25 +277,26 @@ fn as_a_list_of_paths(values: &[String]) -> Result<String, String> {
     Ok(paths.join(","))
 }
 
+fn as_a_list_of_names(values: &[String]) -> Result<String, String> {
+    let names = values.iter().map(|x| as_a_name(x)).collect::<Result<Vec<_>, _>>()?;
+    Ok(names.join(","))
+}
+
 // A name may hold a space, since the list is only ever split on commas, and it may not hold a comma
 // for the same reason.
-fn as_a_list_of_names(values: &[String]) -> Result<String, String> {
-    let mut names = Vec::with_capacity(values.len());
-    for value in values {
-        let name = value.trim();
-        if name.is_empty() {
-            return Err("an empty language name was given".to_owned());
-        }
-        if name.contains(',') {
-            return Err(format!("'{name}' holds a comma, so it is two language names and not one"));
-        }
-        if is_read_as_a_command(name) {
-            return Err(format_refusal_of_a_command(name));
-        }
-        names.push(name);
+fn as_a_name(value: &str) -> Result<&str, String> {
+    let name = value.trim();
+    if name.is_empty() {
+        return Err("an empty language name was given".to_owned());
+    }
+    if name.contains(',') {
+        return Err(format!("'{name}' holds a comma, so it is two language names and not one"));
+    }
+    if is_read_as_a_command(name) {
+        return Err(format_refusal_of_a_command(name));
     }
 
-    Ok(names.join(","))
+    Ok(name)
 }
 
 // mezura is given its arguments and joins them back into one line, where a '--' at the start or

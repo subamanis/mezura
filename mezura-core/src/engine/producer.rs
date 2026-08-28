@@ -1,5 +1,10 @@
-use std::{fs, fs::ReadDir, sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}},
-        thread, thread::JoinHandle, time::Duration};
+use std::fs;
+use std::fs::ReadDir;
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::thread;
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 use crossbeam_deque::{Injector, Steal, Worker};
 
@@ -24,14 +29,14 @@ pub(crate) fn start_producer_thread(id: usize, files_injector: Arc<Injector<Pars
                 search_for_files(files_injector, dirs_injector, worker, idle_producers.clone(),
                         language_lookups, exclude_matcher, config, modules, &producers_total, &progress)));
         match outcome {
-            Ok((total_files, relevant_files, excluded_files, unreadable)) => {
+            Ok((found, unreadable)) => {
                 if !unreadable.is_empty() {
                     unreadable_dirs.lock().unwrap().extend(unreadable);
                 }
                 let mut file_stats_guard = files_stats.lock().unwrap();
-                file_stats_guard.total_files += total_files;
-                file_stats_guard.relevant_files += relevant_files;
-                file_stats_guard.excluded_files += excluded_files;
+                file_stats_guard.total_files += found.total_files;
+                file_stats_guard.relevant_files += found.relevant_files;
+                file_stats_guard.excluded_files += found.excluded_files;
             },
             Err(payload) => {
                 worker_panics.lock().unwrap().push(crate::panic_message(payload.as_ref()));
@@ -44,11 +49,9 @@ pub(crate) fn start_producer_thread(id: usize, files_injector: Arc<Injector<Pars
 fn search_for_files(files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<TraversedDir>>, worker: Worker<TraversedDir>, idle_producers: Arc<AtomicUsize>,
         language_lookups: SharedModuleLookups, exclude_matcher: Arc<globset::GlobSet>, config: Arc<EngineConfig>, modules: Arc<Modules>,
         producers_total: &AtomicUsize, progress: &ScanProgress)
--> (usize,usize,usize,Vec<UnreadableDirDetails>)
+-> (FilesPresent, Vec<UnreadableDirDetails>)
 {
-    let mut total_files = 0;
-    let mut relevant_files = 0;
-    let mut excluded_files = 0;
+    let mut files_present = FilesPresent::default();
     let mut unreadable_dirs = Vec::new();
     let mut should_terminate = false;
 
@@ -87,7 +90,7 @@ fn search_for_files(files_injector: Arc<Injector<ParsableFile>>, dirs_injector: 
                     let gitignore_stack = GitignoreStack::extend_with_dir(&dir.path,
                             dir.gitignore_stack.clone(), crate::ObeyedIgnoreFiles::of(&config));
                     traverse_dir(&files_injector, entries, &dirs_injector, &language_lookups, &exclude_matcher, &gitignore_stack,
-                            &config, &modules, dir.module, &mut total_files, &mut relevant_files, &mut excluded_files, progress)
+                            &config, &modules, dir.module, &mut files_present, progress)
                 },
                 // Everything under it goes uncounted and reaches no total, not even the number of
                 // files looked at, and nothing else would say so. The reason travels with the path,
@@ -110,7 +113,7 @@ fn search_for_files(files_injector: Arc<Injector<ParsableFile>>, dirs_injector: 
         }
     }
 
-    (total_files,relevant_files,excluded_files,unreadable_dirs)
+    (files_present, unreadable_dirs)
 }
 
 // 'module' is decided when the directory is queued and its entries inherit it. The two lookups below
@@ -118,7 +121,7 @@ fn search_for_files(files_injector: Arc<Injector<ParsableFile>>, dirs_injector: 
 fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: ReadDir, dirs_injector: &Injector<TraversedDir>,
         language_lookups: &ModuleLookups, exclude_matcher: &globset::GlobSet, gitignore_stack: &Option<Arc<GitignoreStack>>,
         config: &EngineConfig, modules: &Modules, module: ModuleId,
-        total_files: &mut usize, relevant_files: &mut usize, excluded_files: &mut usize, progress: &ScanProgress)
+        files_present: &mut FilesPresent, progress: &ScanProgress)
 {
     let mut local_total_files = 0;
     let mut local_relevant_files = 0;
@@ -191,9 +194,9 @@ fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: ReadDir, dirs_
         }
     }
 
-    *total_files += local_total_files;
-    *relevant_files += local_relevant_files;
-    *excluded_files += local_excluded_files;
+    files_present.total_files += local_total_files;
+    files_present.relevant_files += local_relevant_files;
+    files_present.excluded_files += local_excluded_files;
 }
 
 // These drive the traversal directly instead of going through 'run': what they are about is what the
@@ -205,7 +208,7 @@ mod tests {
     use super::*;
     use crate::engine::config::Target;
     use crate::engine::targets::build_exclude_matcher;
-    use crate::calculate_single_file_stats_or_add_to_injector;
+    use crate::queue_the_targets;
     use crate::test_paths::LANGUAGES_DIR;
     use crate::engine::identity::{IdentifiedBy, LanguageLookup, ModuleLookups, build_extension_language_map,
             build_language_map_by};
@@ -249,11 +252,11 @@ mod tests {
                         ..Default::default() }));
         let modules = Arc::new(Modules::of(&targets));
         let mut files_present = FilesPresent::default();
-        calculate_single_file_stats_or_add_to_injector(&config, &targets, &dirs_injector, &files_injector, &mut files_present, &language_lookups, &modules,
+        queue_the_targets(&config, &targets, &dirs_injector, &files_injector, &mut files_present, &language_lookups, &modules,
                 &ScanProgress::default());
 
         let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs).unwrap());
-        let (total, relevant, excluded, _) = search_for_files(files_injector.clone(), dirs_injector,
+        let (found, _) = search_for_files(files_injector.clone(), dirs_injector,
                 Worker::new_fifo(), idle_producers, language_lookups, exclude_matcher, config, modules.clone(),
                 &AtomicUsize::new(1), &ScanProgress::default());
 
@@ -264,7 +267,7 @@ mod tests {
         }
         found_files.sort();
 
-        (total, relevant, excluded, found_files)
+        (found.total_files, found.relevant_files, found.excluded_files, found_files)
     }
 
     // Reproduced with a queued path that does not exist, which fails in 'read_dir' the same way a
@@ -290,18 +293,18 @@ mod tests {
         let modules = Arc::new(Modules::of(&targets));
         let (files_injector, dirs_injector) = (Arc::new(Injector::new()), Arc::new(Injector::new()));
         let mut files_present = FilesPresent::default();
-        calculate_single_file_stats_or_add_to_injector(&config, &targets, &dirs_injector, &files_injector,
+        queue_the_targets(&config, &targets, &dirs_injector, &files_injector,
                 &mut files_present, &language_lookups, &modules, &ScanProgress::default());
         dirs_injector.push(TraversedDir::new(std::path::PathBuf::from(&vanished), None, 0));
 
         let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs).unwrap());
-        let (total, relevant, _, unreadable) = search_for_files(files_injector, dirs_injector,
+        let (found, unreadable) = search_for_files(files_injector, dirs_injector,
                 Worker::new_fifo(), Arc::new(AtomicUsize::new(0)), language_lookups, exclude_matcher,
                 config, modules, &AtomicUsize::new(1), &ScanProgress::default());
 
         fs::remove_dir_all(&root).unwrap();
 
-        assert_eq!((1, 1), (total, relevant));
+        assert_eq!((1, 1), (found.total_files, found.relevant_files));
         assert_eq!(vec![vanished], unreadable.iter().map(|x| x.path.clone()).collect::<Vec<_>>(),
                 "the directory that could not be read went unreported");
         assert!(!unreadable[0].error_msg.is_empty(), "the reason it could not be read was dropped");

@@ -174,18 +174,12 @@ language claims is settled alphabetically, and each such extension says so on it
 // safe. 'force' is '--restore': do it again even though there is nothing to do.
 pub fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
     let mut outcome = MigrationOutcome::default();
-    perform_migration(data_dir, force, &mut outcome);
-
-    outcome
-}
-
-fn perform_migration(data_dir: &str, force: bool, outcome: &mut MigrationOutcome) {
     let recorded = read_manifest(data_dir);
     let directories = [LANGUAGES_DIR_NAME, THEMES_DIR_NAME, CONFIG_DIR_NAME, LOGS_DIR_NAME];
     // The priority file belongs here although it is never replaced: this is the record of what was
     // last shipped, and without it a release that adds a rule and no language matches every hash,
     // returns below, and never reaches the merge.
-    let carried = shipped_files().into_iter()
+    let carried = get_shipped_files().into_iter()
             .map(|(relative, contents)| (relative, content_hash(contents)))
             .chain([(LANGUAGE_CONFLICTS_FILE_NAME.to_owned(),
                     content_hash(read_baked_in_conflict_rules_contents().as_bytes()))])
@@ -198,7 +192,7 @@ fn perform_migration(data_dir: &str, force: bool, outcome: &mut MigrationOutcome
             .all(|relative| holds_something(&(data_dir.to_owned() + relative)))
             // The looser question for the ones written once and left alone, since an empty one of
             // those is somebody's decision and not damage
-            && written_once_files().iter()
+            && get_written_once_files().iter()
                     .all(|relative| std::path::Path::new(&(data_dir.to_owned() + relative)).exists())
             // 'is_dir', or a plain file where the folder belongs answers yes forever. The four are
             // named because 'logs' holds nothing that ships and no file above stands for it.
@@ -207,7 +201,7 @@ fn perform_migration(data_dir: &str, force: bool, outcome: &mut MigrationOutcome
     // moved: the two differ for every build made between releases, where the files change and
     // 'VERSION_ID' does not.
     if !force && recorded == carried && everything_is_there {
-        return;
+        return outcome;
     }
 
     // Chosen once, so everything this pass moves aside lands together
@@ -219,14 +213,14 @@ fn perform_migration(data_dir: &str, force: bool, outcome: &mut MigrationOutcome
         let path = data_dir.to_owned() + name;
         let was_there = std::path::Path::new(&path).exists();
         if outcome.attempt(name, std::fs::create_dir_all(&path)) && !was_there {
-            note_written_file(outcome, name.to_owned() + "/", !recorded.is_empty());
+            note_written_file(&mut outcome, name.to_owned() + "/", !recorded.is_empty());
         }
     }
 
     // A file enters the manifest only once it is really on disk with the contents this version
     // ships, so one that could not be written is retried by the next run
     let mut manifest = HashMap::new();
-    for (relative, contents) in shipped_files() {
+    for (relative, contents) in get_shipped_files() {
         let target = data_dir.to_owned() + &relative;
         let shipped_hash = content_hash(contents);
         let was_recorded = recorded.contains_key(&relative);
@@ -241,7 +235,7 @@ fn perform_migration(data_dir: &str, force: bool, outcome: &mut MigrationOutcome
         let Some(on_disk) = on_disk else {
             if outcome.attempt(&relative, std::fs::write(&target, contents)) {
                 manifest.insert(relative.clone(), shipped_hash);
-                note_written_file(outcome, relative, was_recorded);
+                note_written_file(&mut outcome, relative, was_recorded);
             }
             continue;
         };
@@ -284,7 +278,7 @@ fn perform_migration(data_dir: &str, force: bool, outcome: &mut MigrationOutcome
     // Weighed against everything we ship rather than against what this pass manages: a file that
     // moved from the one set to the other, as the themes did, is still shipped
     let still_shipped = carried.keys().cloned()
-            .chain(written_once_files())
+            .chain(get_written_once_files())
             .collect::<HashSet<_>>();
     // A file shipped as 'go.txt' and now as 'Go.txt' is one file on Windows and macOS, so the new
     // name was written over the old while the record still names the old, and deleting by name
@@ -321,11 +315,11 @@ fn perform_migration(data_dir: &str, force: bool, outcome: &mut MigrationOutcome
     // Written when absent and never touched again, and left out of the manifest so nothing can
     // reach them later either. A theme that has fallen behind breaks nothing, since a token it does
     // not name falls back to a default.
-    for (relative, contents) in include_dir!("data/themes").files.iter().map(|file| named(THEMES_DIR_NAME, file)) {
+    for (relative, contents) in include_dir!("data/themes").files.iter().map(|file| build_relative_path(THEMES_DIR_NAME, file)) {
         let target = data_dir.to_owned() + &relative;
         if !std::path::Path::new(&target).exists()
                 && outcome.attempt(&relative, std::fs::write(&target, contents)) {
-            note_written_file(outcome, relative, !recorded.is_empty());
+            note_written_file(&mut outcome, relative, !recorded.is_empty());
         }
     }
 
@@ -334,13 +328,15 @@ fn perform_migration(data_dir: &str, force: bool, outcome: &mut MigrationOutcome
     if !std::path::Path::new(&default_config).exists()
             && outcome.attempt(&default_relative,
                     std::fs::write(&default_config, read_baked_in_default_config_contents())) {
-        note_written_file(outcome, default_relative, !recorded.is_empty());
+        note_written_file(&mut outcome, default_relative, !recorded.is_empty());
     }
-    merge_the_conflicts_file(data_dir, &archived_under, &recorded, &mut manifest, outcome);
+    merge_the_conflicts_file(data_dir, &archived_under, &recorded, &mut manifest, &mut outcome);
 
     // Last, and holding only what reached the disk, so whatever failed is absent from the record,
     // missing from the completeness check, and tried again by the next run
     outcome.attempt(MANIFEST_FILE_NAME, write_manifest(data_dir, &manifest));
+
+    outcome
 }
 
 // A file the manifest never recorded is one this version brings and not one that was lost. The
@@ -582,19 +578,19 @@ fn write_manifest(data_dir: &str, entries: &HashMap<String, u64>) -> Result<(), 
 # written again from the copies inside the program.\n{VERSION_ID}\n{body}\n"))
 }
 
-fn named(dir_name: &str, file: &File<'static>) -> (String, &'static [u8]) {
+fn build_relative_path(dir_name: &str, file: &File<'static>) -> (String, &'static [u8]) {
     let name = std::path::Path::new(file.path).file_name().and_then(|x| x.to_str()).unwrap_or(file.path);
     (dir_name.to_owned() + "/" + name, file.contents)
 }
 
 // Nothing records what these looked like, so the repair check has to name them itself
-fn written_once_files() -> Vec<String> {
-    include_dir!("data/themes").files.iter().map(|file| named(THEMES_DIR_NAME, file).0)
+fn get_written_once_files() -> Vec<String> {
+    include_dir!("data/themes").files.iter().map(|file| build_relative_path(THEMES_DIR_NAME, file).0)
             .chain([format!("{CONFIG_DIR_NAME}/{DEFAULT_CONFIG_NAME}")])
             .collect()
 }
 
-fn shipped_files() -> Vec<(String, &'static [u8])> {
+fn get_shipped_files() -> Vec<(String, &'static [u8])> {
     mezura_core::languages::get_shipped_language_files_raw().into_iter()
             .map(|(name, contents)| (LANGUAGES_DIR_NAME.to_owned() + "/" + name, contents)).collect()
 }

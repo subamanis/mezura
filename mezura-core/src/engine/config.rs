@@ -12,10 +12,6 @@ pub const MAX_CONSUMERS_VALUE : usize = 128;
 /// The fewest.
 pub const MIN_CONSUMERS_VALUE : usize = 1;
 
-pub(crate) const DEF_SEARCH_IN_DOTTED  : bool    = false;
-pub(crate) const DEF_NO_GITIGNORE      : bool    = false;
-pub(crate) const DEF_NO_IGNORE_FILES   : bool    = false;
-
 /// One place to count, and the name its figures are reported under.
 #[derive(Debug,PartialEq,Eq,Clone)]
 pub struct Target {
@@ -290,16 +286,9 @@ impl Default for Threads {
         let threads = num_cpus::get();
         // Four counting threads per core. What they wait on is a blocking file open, so what decides
         // the speed is how many reads are in flight and not how many cores exist.
-        if threads <= 4 {
-            Threads {
-                producers: 2,
-                consumers: (threads * 4).clamp(8, MAX_CONSUMERS_VALUE)
-            }
-        } else {
-            Threads {
-                producers: (threads / 2).clamp(2, MAX_PRODUCERS_VALUE),
-                consumers: (threads * 4).clamp(8, MAX_CONSUMERS_VALUE)
-            }
+        Threads {
+            producers: (threads / 2).clamp(2, MAX_PRODUCERS_VALUE),
+            consumers: (threads * 4).clamp(8, MAX_CONSUMERS_VALUE)
         }
     }
 }
@@ -359,9 +348,9 @@ impl Default for EngineConfig {
             excluded_languages: LanguageNames::default(),
             forced_languages: ForcedLanguages::default(),
             threads: Threads::default(),
-            should_search_in_dotted: DEF_SEARCH_IN_DOTTED,
-            no_gitignore: DEF_NO_GITIGNORE,
-            no_ignore_files: DEF_NO_IGNORE_FILES,
+            should_search_in_dotted: false,
+            no_gitignore: false,
+            no_ignore_files: false,
             count_keywords: true,
             count_minified: false,
             count_generated: false,

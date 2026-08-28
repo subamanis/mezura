@@ -440,20 +440,12 @@ pub fn create_theme_file_contents(styles: &[(String, String)]) -> String {
 // The form used by '--style' and by the 'style' line of a config file: comma separated pairs, the
 // same shape every other list-valued command in the program uses
 pub fn parse_overrides(value: &str) -> Result<Vec<(String, String)>, ThemeParseError> {
-    let mut validation_theme = Theme::default();
-    let mut overrides = Vec::new();
-
-    // Commas on the command line, one per line in a configuration file
-    for entry in value.split([',', '\n']).map(str::trim).filter(|x| !x.is_empty()) {
-        let Some((token, style)) = entry.split_once('=') else {
-            return Err(ThemeParseError::MalformedLine(entry.to_owned()));
-        };
-        let (token, style) = (token.trim().to_lowercase(), style.trim().to_owned());
-        validation_theme.set_token(&token, &style)?;
-        overrides.push((token, style));
+    let (overrides, errors) = parse_overrides_leniently(value);
+    match errors.into_iter().next() {
+        Some(error) => Err(error),
+        None if overrides.is_empty() => Err(ThemeParseError::MalformedLine(value.trim().to_owned())),
+        None => Ok(overrides)
     }
-
-    if overrides.is_empty() { Err(ThemeParseError::MalformedLine(value.trim().to_owned())) } else { Ok(overrides) }
 }
 
 // The same list as above, read the way a file is read: a mistake on one line is reported and the
@@ -581,10 +573,17 @@ pub fn parse_single_color(token: &str) -> Option<Color> {
 pub fn color_to_config_string(color: &Color) -> String {
     match color {
         Color::TrueColor {r, g, b} => format!("{r:02x}{g:02x}{b:02x}"),
-        named => format!("{:?}", named).chars().enumerate().flat_map(|(i, c)| {
-            if i > 0 && c.is_ascii_uppercase() { vec!['-', c.to_ascii_lowercase()] }
-            else { vec![c.to_ascii_lowercase()] }
-        }).collect()
+        named => {
+            let spelled = format!("{named:?}");
+            let mut written = String::with_capacity(spelled.len() + 2);
+            for (i, character) in spelled.chars().enumerate() {
+                if i > 0 && character.is_ascii_uppercase() {
+                    written.push('-');
+                }
+                written.push(character.to_ascii_lowercase());
+            }
+            written
+        }
     }
 }
 

@@ -70,7 +70,7 @@ pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>,
     super::result_printer::format_and_print_results(result, &existing_log_contents, &datetime_now, config);
 
     if config.view.log.should_log && let Some(path) = log_file_path
-        && let Err(reason) = super::log::log_stats(&path, &existing_log_contents, result, &datetime_now, config) {
+        && let Err(reason) = super::log::log_stats(&path, existing_log_contents.as_deref(), result, &datetime_now, config) {
         eprintln!("\n{}",super::theme::get_active().warning.paint(&format!("Error while trying to save the log: {reason}")));
     }
 }

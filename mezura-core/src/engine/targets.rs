@@ -142,10 +142,10 @@ pub fn validate_and_absolutize(declared: &[Target]) -> Result<Vec<Target>, Targe
         // nothing. The other way round, the brackets in a real directory's name, or in the working
         // directory a relative path was joined to, are read as a character class and a place that
         // exists is refused.
-        if !is_valid_path(trimmed) && has_glob_metacharacters(trimmed) {
-            prepared.push(Target { module, path: absolutize_pattern(trimmed) });
-        } else if is_valid_path(trimmed) {
+        if is_valid_path(trimmed) {
             prepared.push(Target { module, path: convert_to_absolute(trimmed) });
+        } else if has_glob_metacharacters(trimmed) {
+            prepared.push(Target { module, path: absolutize_pattern(trimmed) });
         } else {
             return Err(TargetError::InvalidPath(trimmed.to_owned()));
         }

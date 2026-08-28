@@ -81,14 +81,14 @@ impl Language {
     }
 
     /// Adds whole file names this language claims.
-    pub fn with_filenames(mut self, names: &[&str]) -> Self {
-        self.filenames.extend(names.iter().map(|x| (*x).to_owned()));
+    pub fn with_filenames(mut self, names: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        self.filenames.extend(owned_strings(names));
         self
     }
 
     /// Adds the interpreter names a `#!` line may carry.
-    pub fn with_shebangs(mut self, interpreters: &[&str]) -> Self {
-        self.shebangs.extend(interpreters.iter().map(|x| (*x).to_owned()));
+    pub fn with_shebangs(mut self, interpreters: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        self.shebangs.extend(owned_strings(interpreters));
         self
     }
 
@@ -113,9 +113,9 @@ impl Language {
     }
 
     /// Adds comment pairs that nest inside themselves.
-    pub fn with_nesting_comments(mut self, pairs: &[(&str, &str)]) -> Self {
+    pub fn with_nesting_comments(mut self, pairs: &[(impl AsRef<str>, impl AsRef<str>)]) -> Self {
         self.nesting_comments.extend(pairs.iter()
-                .map(|(start, end)| ((*start).to_owned(), (*end).to_owned())));
+                .map(|(start, end)| (start.as_ref().to_owned(), end.as_ref().to_owned())));
         self
     }
 
@@ -190,6 +190,25 @@ impl Language {
             CommentPair::Leveled(pair) => pair.end_prefix.len() + level as usize + 1,
             CommentPair::Plain { end, .. } | CommentPair::Nesting { end, .. } => end.len()
         }
+    }
+}
+
+// Hand written to leave 'scan_plan' out: it is a cache, filled when a language parses its first
+// file, so comparing it would make one language stop equalling its own untouched copy.
+impl PartialEq for Language {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.extensions == other.extensions
+            && self.filenames == other.filenames
+            && self.shebangs == other.shebangs
+            && self.strings == other.strings
+            && self.comment_symbols == other.comment_symbols
+            && self.multiline_comments == other.multiline_comments
+            && self.nesting_comments == other.nesting_comments
+            && self.leveled_comments == other.leveled_comments
+            && self.line_continuation == other.line_continuation
+            && self.nested_languages == other.nested_languages
+            && self.keywords == other.keywords
     }
 }
 
@@ -377,34 +396,6 @@ impl LeveledPair {
     }
 }
 
-// The half before '=*' and the one byte after it; anything else is not a leveled symbol
-fn split_leveled_half(pattern: &str) -> Option<(String, u8)> {
-    let (prefix, rest) = pattern.split_once("=*")?;
-    if prefix.is_empty() || rest.len() != 1 || rest.contains("=*") {
-        return None;
-    }
-    Some((prefix.to_owned(), rest.as_bytes()[0]))
-}
-
-// Hand written to leave 'scan_plan' out: it is a cache, filled when a language parses its first
-// file, so comparing it would make one language stop equalling its own untouched copy.
-impl PartialEq for Language {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
-            && self.extensions == other.extensions
-            && self.filenames == other.filenames
-            && self.shebangs == other.shebangs
-            && self.strings == other.strings
-            && self.comment_symbols == other.comment_symbols
-            && self.multiline_comments == other.multiline_comments
-            && self.nesting_comments == other.nesting_comments
-            && self.leveled_comments == other.leveled_comments
-            && self.line_continuation == other.line_continuation
-            && self.nested_languages == other.nested_languages
-            && self.keywords == other.keywords
-    }
-}
-
 /// A word worth counting occurrences of, under a name of its own.
 #[derive(Debug,PartialEq,Eq,Clone)]
 pub struct Keyword {
@@ -544,8 +535,8 @@ impl LineClass {
             LineClass::BlankInString];
 
     /// The name of the [`LineClasses`] field this class counts into.
-    pub fn name(&self) -> &'static str {
-        LineClasses::NAMES[*self as usize]
+    pub fn name(self) -> &'static str {
+        LineClasses::NAMES[self as usize]
     }
 }
 
@@ -589,7 +580,7 @@ pub enum SpanKind {
 
 impl SpanKind {
     /// `code`, `string` or `comment`.
-    pub fn name(&self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Self::Code => "code",
             Self::String => "string",
@@ -626,7 +617,7 @@ impl CountingModel {
     }
 
     /// The spelling [`CountingModel::parse`] reads back.
-    pub fn name(&self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Self::Content => "content",
             Self::Region => "region"
@@ -634,7 +625,7 @@ impl CountingModel {
     }
 
     /// The other one of the two.
-    pub fn get_other(&self) -> CountingModel {
+    pub fn get_other(self) -> CountingModel {
         match self {
             Self::Content => Self::Region,
             Self::Region => Self::Content
@@ -642,7 +633,7 @@ impl CountingModel {
     }
 
     /// `extra` under [`CountingModel::Content`], `blanks` under [`CountingModel::Region`].
-    pub fn get_third_quantity_name(&self) -> &'static str {
+    pub fn get_third_quantity_name(self) -> &'static str {
         match self {
             Self::Content => "extra",
             Self::Region => "blanks"
@@ -650,7 +641,7 @@ impl CountingModel {
     }
 
     /// What this model heads that column with.
-    pub fn get_bucket_name(&self, bucket: Bucket) -> &'static str {
+    pub fn get_bucket_name(self, bucket: Bucket) -> &'static str {
         match bucket {
             Bucket::Code => "code",
             Bucket::Comments => "comments",
@@ -662,7 +653,7 @@ impl CountingModel {
     ///
     /// The column sums below and the per-line answer of [`crate::explain_file`] both go through
     /// this, so the two cannot disagree.
-    pub fn fold(&self, class: LineClass) -> Bucket {
+    pub fn fold(self, class: LineClass) -> Bucket {
         match self {
             Self::Content => match class {
                 LineClass::WordsInCode | LineClass::StringContent => Bucket::Code,
@@ -681,16 +672,16 @@ impl CountingModel {
     }
 
     /// Adds up every class this model calls code.
-    pub fn calculate_code_lines(&self, classes: &LineClasses) -> usize {
+    pub fn calculate_code_lines(self, classes: &LineClasses) -> usize {
         self.sum_the_classes_folding_to(Bucket::Code, classes)
     }
 
     /// Adds up every class this model calls a comment.
-    pub fn calculate_comment_lines(&self, classes: &LineClasses) -> usize {
+    pub fn calculate_comment_lines(self, classes: &LineClasses) -> usize {
         self.sum_the_classes_folding_to(Bucket::Comments, classes)
     }
 
-    fn sum_the_classes_folding_to(&self, bucket: Bucket, classes: &LineClasses) -> usize {
+    fn sum_the_classes_folding_to(self, bucket: Bucket, classes: &LineClasses) -> usize {
         LineClass::ALL.iter().zip(classes.to_array())
                 .filter(|(class, _)| self.fold(**class) == bucket)
                 .map(|(_, count)| count).sum()
@@ -781,6 +772,15 @@ impl Stats {
             *self.keyword_occurences.entry(keyword.clone()).or_default() += *occurrences;
         }
     }
+
+    /// Every language added together, which is what the last row of a report holds.
+    pub fn total_of(languages: &HashMap<String, Stats>) -> Self {
+        let mut total = Stats::default();
+        for stats in languages.values() {
+            total.add(stats);
+        }
+        total
+    }
 }
 
 // What a run starts each language from: every keyword it declares, at zero. The merge that ends a
@@ -819,6 +819,15 @@ pub(crate) fn owned_strings(items: impl IntoIterator<Item = impl AsRef<str>>) ->
     items.into_iter().map(|x| x.as_ref().to_owned()).collect()
 }
 
+// The half before '=*' and the one byte after it; anything else is not a leveled symbol
+fn split_leveled_half(pattern: &str) -> Option<(String, u8)> {
+    let (prefix, rest) = pattern.split_once("=*")?;
+    if prefix.is_empty() || rest.len() != 1 || rest.contains("=*") {
+        return None;
+    }
+    Some((prefix.to_owned(), rest.as_bytes()[0]))
+}
+
 fn combine_classes(one: &LineClasses, other: &LineClasses,
     of_each: impl Fn(usize, usize) -> usize) -> LineClasses
 {
@@ -827,11 +836,7 @@ fn combine_classes(one: &LineClasses, other: &LineClasses,
 }
 
 fn create_keyword_slots(language: &Language) -> HashMap<String,usize> {
-    let mut map = HashMap::<String,usize>::new();
-    for keyword in &language.keywords {
-        map.insert(keyword.descriptive_name.to_owned(), 0);
-    }
-    map
+    language.keywords.iter().map(|keyword| (keyword.descriptive_name.clone(), 0)).collect()
 }
 
 #[cfg(test)]

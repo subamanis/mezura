@@ -1,10 +1,10 @@
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 
-use mezura_core::warnings::Warning;
+use mezura_core::warnings::{Code, Warning};
 
 // A global because warnings arrive from phases that share no value between them, and some of them
 // run before a configuration exists at all.
-static EMITTED : OnceLock<Mutex<Vec<Warning>>> = OnceLock::new();
+static EMITTED : Mutex<Vec<Warning>> = Mutex::new(Vec::new());
 
 // Printed and kept in one call, so the terminal and the document cannot end up saying two different
 // things about the same warning.
@@ -12,23 +12,23 @@ pub fn emit(warning: Warning) {
     let warning = add_advice_to(warning);
     eprintln!("\n{}", super::theme::get_active().warning
             .paint(&super::message_printer::wrap_message(&warning.message)));
-    emitted().lock().unwrap().push(warning);
+    EMITTED.lock().unwrap().push(warning);
 }
 
 // For the places that print in a shape of their own, and would say it twice if this printed too
 pub fn keep(warning: Warning) {
-    emitted().lock().unwrap().push(add_advice_to(warning));
+    EMITTED.lock().unwrap().push(add_advice_to(warning));
 }
 
 pub fn get_collected_warnings() -> Vec<Warning> {
-    emitted().lock().unwrap().clone()
+    EMITTED.lock().unwrap().clone()
 }
 
 // An unknown name was already put on the screen by 'report_unknown_languages', with a suggested
 // spelling under it, so that one is only kept for the document
 pub fn report_language_resolution_warnings(reported: Vec<Warning>) {
     for warning in reported {
-        if warning.code == mezura_core::warnings::Code::UnknownLanguage {
+        if warning.code == Code::UnknownLanguage {
             keep(warning);
         } else {
             emit(warning);
@@ -36,16 +36,10 @@ pub fn report_language_resolution_warnings(reported: Vec<Warning>) {
     }
 }
 
-fn emitted() -> &'static Mutex<Vec<Warning>> {
-    EMITTED.get_or_init(|| Mutex::new(Vec::new()))
-}
-
 // What a mezura user can do about it, added to the sentence the library wrote. The library cannot
 // say it: a program counting through mezura-core has no data directory and no command line, and
 // would be told to do something it cannot.
 fn add_advice_to(mut warning: Warning) -> Warning {
-    use mezura_core::warnings::Code;
-
     // Deliberately not exhaustive: a new code arriving without a line of advice is a missing nicety
     // and not a wrong answer.
     let advice = match warning.code {
@@ -76,8 +70,6 @@ in front of the rule to have the rule hold everywhere.",
 
 #[cfg(test)]
 mod tests {
-    use mezura_core::warnings::Code;
-
     use super::*;
 
     // The collector is shared by the whole process and the other tests run beside this one, so it

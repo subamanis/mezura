@@ -1,5 +1,9 @@
 // The module a file was counted under, and the places where the walk changes which module it is in.
-use std::{collections::HashMap, path::Path};
+use std::collections::HashMap;
+use std::path::Path;
+
+use crate::engine::config::Target;
+use crate::engine::targets::{normalise_separators, path_comparison_key, topmost_targets};
 
 // Carried through the queue as an index and never as a name: a string key would be an allocation on
 // every single file.
@@ -20,7 +24,7 @@ impl Modules {
     // Built from the resolved paths and never from what was typed: where the comparison is case
     // sensitive, 'frontend=./Web' over a real './web' matches nothing, that module comes out empty,
     // and every file falls into '(unnamed)' with nothing said about why.
-    pub(crate) fn of(targets: &[crate::engine::config::Target]) -> Self {
+    pub(crate) fn of(targets: &[Target]) -> Self {
         if targets.iter().all(|x| x.module.is_none()) {
             return Modules::default();
         }
@@ -37,14 +41,14 @@ impl Modules {
             names.push(unnamed);
         }
 
-        let roots = crate::engine::targets::topmost_targets(targets);
+        let roots = topmost_targets(targets);
         let mut modules = Modules { names, ..Default::default() };
         for target in targets {
             if roots.contains(target) {
                 continue;
             }
             let id = modules.id_of(&target.module);
-            let key = crate::engine::targets::path_comparison_key(target.path.trim_end_matches('/'));
+            let key = path_comparison_key(target.path.trim_end_matches('/'));
             if Path::new(&target.path).is_dir() {
                 modules.dir_boundaries.insert(key, id);
             } else {
@@ -71,7 +75,7 @@ impl Modules {
         self.names.get(id as usize).and_then(|x| x.as_deref())
     }
 
-    pub(crate) fn of_target(&self, target: &crate::engine::config::Target) -> ModuleId {
+    pub(crate) fn of_target(&self, target: &Target) -> ModuleId {
         if self.is_used() {self.id_of(&target.module)} else {0}
     }
 
@@ -93,8 +97,8 @@ impl Modules {
 
     fn at(&self, boundaries: &HashMap<String, ModuleId>, path: &Path, inherited: ModuleId) -> ModuleId {
         let Some(path) = path.to_str() else { return inherited };
-        let path = crate::engine::targets::normalise_separators(path);
-        boundaries.get(&crate::engine::targets::path_comparison_key(&path)).copied().unwrap_or(inherited)
+        let path = normalise_separators(path);
+        boundaries.get(&path_comparison_key(&path)).copied().unwrap_or(inherited)
     }
 }
 
@@ -106,8 +110,8 @@ mod tests {
     // directory or a file to decide which of the two lookups will find it.
     fn modules_of(entries: &[&str]) -> Modules {
         let targets = entries.iter().map(|entry| match entry.split_once(' ') {
-            Some((name, path)) => crate::engine::config::Target::named(name, path),
-            None => crate::engine::config::Target::of(*entry)
+            Some((name, path)) => Target::named(name, path),
+            None => Target::of(*entry)
         }).collect::<Vec<_>>();
     
         Modules::of(&targets)

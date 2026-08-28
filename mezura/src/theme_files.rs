@@ -145,15 +145,15 @@ mod tests {
 
         let expected = vec![("language-1".to_owned(), "cyan".to_owned()), ("language-2".to_owned(), "bright-magenta".to_owned()),
                 ("code-label".to_owned(), "bright-yellow italic".to_owned())];
-        let (loaded, errors) = super::super::theme_files::load_theme("mytheme", dir_str).unwrap();
+        let (loaded, errors) = super::load_theme("mytheme", dir_str).unwrap();
         assert!(errors.is_empty());
         assert_eq!(expected, loaded);
-        assert_eq!(expected, super::super::theme_files::load_theme("MYTHEME", dir_str).unwrap().0);
-        assert!(super::super::theme_files::load_theme("nonexistant", dir_str).is_none());
+        assert_eq!(expected, super::load_theme("MYTHEME", dir_str).unwrap().0);
+        assert!(super::load_theme("nonexistant", dir_str).is_none());
 
-        let (broken, errors) = super::super::theme_files::load_theme("broken", dir_str).unwrap();
+        let (broken, errors) = super::load_theme("broken", dir_str).unwrap();
         assert_eq!(vec![("heading".to_owned(), "white bold".to_owned())], broken);
-        assert_eq!(vec![super::super::theme::ThemeParseError::InvalidValue("language-1".to_owned(), "kaka".to_owned())], errors);
+        assert_eq!(vec![crate::theme::ThemeParseError::InvalidValue("language-1".to_owned(), "kaka".to_owned())], errors);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -164,13 +164,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let dir_str = dir.to_str().unwrap().to_owned() + "/";
 
-        let original = super::super::theme::resolve(&[("language-1".to_owned(), "cyan".to_owned())],
+        let original = crate::theme::resolve(&[("language-1".to_owned(), "cyan".to_owned())],
                 &[("heading".to_owned(), "ff0080 reverse".to_owned())], &[("code-number".to_owned(), "dim".to_owned())]);
-        super::super::theme_files::save_theme_to_file(&dir_str, "written", &original).unwrap();
+        super::save_theme_to_file(&dir_str, "written", &original).unwrap();
 
-        let (styles, errors) = super::super::theme_files::load_theme("written", &dir_str).unwrap();
+        let (styles, errors) = super::load_theme("written", &dir_str).unwrap();
         assert!(errors.is_empty());
-        assert_eq!(original, super::super::theme::resolve(&styles, &[], &[]));
+        assert_eq!(original, crate::theme::resolve(&styles, &[], &[]));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

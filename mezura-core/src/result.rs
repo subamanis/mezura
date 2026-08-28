@@ -203,7 +203,7 @@ impl SortCriterion {
     }
 
     /// The spelling [`SortCriterion::parse`] reads back.
-    pub fn name(&self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Self::Files => "files",
             Self::Lines => "lines",
@@ -218,7 +218,7 @@ impl SortCriterion {
 
     /// The figure this criterion orders by. [`SortCriterion::Name`] has none and every row answers
     /// 0, leaving the order to the caller's tiebreak.
-    pub fn get_value_of(&self, stats: &Stats, model: CountingModel) -> usize {
+    pub fn get_value_of(self, stats: &Stats, model: CountingModel) -> usize {
         match self {
             Self::Files => stats.files,
             Self::Size => stats.bytes,
@@ -332,19 +332,6 @@ impl std::error::Error for RunError {
             Self::InvalidTargets(x) => Some(x),
             _ => None
         }
-    }
-}
-
-// On the type from 'domain.rs' but about results, which is why it is here: adding languages together
-// is what the last row of a report holds.
-impl Stats {
-    /// Every language added together, which is what the last row of a report holds.
-    pub fn total_of(languages: &HashMap<String, Stats>) -> Self {
-        let mut total = Stats::default();
-        for stats in languages.values() {
-            total.add(stats);
-        }
-        total
     }
 }
 

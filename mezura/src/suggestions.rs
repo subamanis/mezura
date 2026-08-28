@@ -23,12 +23,12 @@ pub fn suggest<'a>(input: &str, candidates: &[&'a str]) -> Vec<&'a str> {
         return by_prefix;
     }
 
-    let tolerance = max_edit_distance(&input);
-    candidates.iter().filter(|candidate| edit_distance(&input, &candidate.to_lowercase()) <= tolerance)
+    let tolerance = calculate_max_edit_distance(&input);
+    candidates.iter().filter(|candidate| calculate_edit_distance(&input, &candidate.to_lowercase()) <= tolerance)
             .copied().collect()
 }
 
-pub fn formatted_suggestion(input: &str, candidates: &[&str]) -> Option<String> {
+pub fn format_suggestion(input: &str, candidates: &[&str]) -> Option<String> {
     let matches = suggest(input, candidates);
     if matches.is_empty() {
         return None;
@@ -39,7 +39,7 @@ pub fn formatted_suggestion(input: &str, candidates: &[&str]) -> Option<String> 
 
 // The tolerance grows with the name, because two edits over three letters reaches most of the
 // alphabet: 'rst' offers 'Rust' alone, where a flat two also offers 'CSS', 'JS', 'R' and 'TS'.
-fn max_edit_distance(input: &str) -> usize {
+fn calculate_max_edit_distance(input: &str) -> usize {
     if input.chars().count() < 5 {1} else {2}
 }
 
@@ -54,7 +54,7 @@ fn tokens_match(a: &str, b: &str) -> bool {
     shorter >= MIN_PREFIX && (a.starts_with(b) || b.starts_with(a))
 }
 
-fn edit_distance(a: &str, b: &str) -> usize {
+fn calculate_edit_distance(a: &str, b: &str) -> usize {
     let (a, b) = (a.chars().collect::<Vec<_>>(), b.chars().collect::<Vec<_>>());
     if a.is_empty() || b.is_empty() {
         return a.len().max(b.len());
@@ -83,7 +83,7 @@ mod tests {
 
     #[test]
     fn a_shared_token_beats_the_edit_distance_that_would_miss_it() {
-        assert!(edit_distance("list-themes", "show-themes") > max_edit_distance("list-themes"));
+        assert!(calculate_edit_distance("list-themes", "show-themes") > calculate_max_edit_distance("list-themes"));
         assert_eq!(vec!["show-themes", "theme-editor", "theme", "save-theme"], suggest("list-themes", &COMMANDS));
     }
 
@@ -120,10 +120,10 @@ mod tests {
 
     #[test]
     fn one_edit_is_one_insertion_one_deletion_or_one_substitution() {
-        assert_eq!(0, edit_distance("same", "same"));
-        assert_eq!(1, edit_distance("save", "safe"));
-        assert_eq!(1, edit_distance("theme", "themes"));
-        assert_eq!(4, edit_distance("", "four"));
-        assert_eq!(3, edit_distance("kitten", "sitting"));
+        assert_eq!(0, calculate_edit_distance("same", "same"));
+        assert_eq!(1, calculate_edit_distance("save", "safe"));
+        assert_eq!(1, calculate_edit_distance("theme", "themes"));
+        assert_eq!(4, calculate_edit_distance("", "four"));
+        assert_eq!(3, calculate_edit_distance("kitten", "sitting"));
     }
 }

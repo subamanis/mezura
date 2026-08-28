@@ -23,9 +23,7 @@ pub fn print_as_json(result: &RunResult, datetime_now: &DateTime<Local>, config:
 
 pub fn create_document(result: &RunResult, datetime_now: &DateTime<Local>, config: &Configuration) -> String {
     let RunResult {per_language, total, faulty_files, unreadable_dirs, nested_languages, ..} = result;
-    let names = result_printer::get_sorted_language_names(per_language, config.view.sort_by, config.view.counting);
-    let hidden = config.view.top_n.map_or(0, |top| names.len().saturating_sub(top));
-    let shown = &names[..names.len() - hidden];
+    let (shown, hidden) = result_printer::find_shown_language_names(per_language, config);
     let file_rows = result_printer::find_files_to_show(result, config);
     // With modules the rows are written once, inside each module's own languages, and so are the
     // counts of what the cap hid: every file belongs to exactly one module
@@ -47,7 +45,7 @@ pub fn create_document(result: &RunResult, datetime_now: &DateTime<Local>, confi
                 result.faulty_files.len(), result.minified_files, result.generated_files,
                 result.unreadable_dirs.len())),
         format!("\"total\":{}", create_total_object(total, !config.view.hidden.keywords, config.view.counting)),
-        format!("\"languages\":{}", create_languages_array(shown, per_language, nested_languages, &files, config)),
+        format!("\"languages\":{}", create_languages_array(&shown, per_language, nested_languages, &files, config)),
         format!("\"languages_hidden\":{hidden}"),
         format!("\"files_hidden\":{files_hidden}"),
         // The paths, which '--show-faulty-files' asks for here as it does on the screen. How many
@@ -67,7 +65,7 @@ pub fn create_document(result: &RunResult, datetime_now: &DateTime<Local>, confi
         members.push(format!("\"performance\":{}", create_performance_object(&result.performance)));
     }
 
-    format!("{{{}}}", members.join(","))
+    create_object(members)
 }
 
 pub fn print_comparison_as_json(comparison: &super::diff::Comparison,
@@ -115,7 +113,8 @@ fn create_comparison_document(comparison: &super::diff::Comparison, datetime_now
         format!("\"total\":{}", create_compared_total_object(&baseline.result.total, &subject.result.total,
                 keywords_counted, config.view.counting)),
         format!("\"languages\":{}", create_compared_languages_array(&rows, keywords_counted,
-                &nested_of(&baseline.result, config), &nested_of(&subject.result, config),
+                find_nested(&baseline.result.nested_languages, config),
+                find_nested(&subject.result.nested_languages, config),
                 files.as_ref(), config.view.counting)),
         // Counts the cuts of this level's own rows, the way a run document's does: with modules
         // the rows and their cuts live inside each module
@@ -126,23 +125,13 @@ fn create_comparison_document(comparison: &super::diff::Comparison, datetime_now
         members.push(format!("\"modules\":{rendered}"));
     }
 
-    format!("{{{}}}", members.join(","))
+    create_object(members)
 }
 
-fn nested_of(result: &RunResult, config: &Configuration) -> HashMap<String, HashMap<String, Stats>> {
-    match config.view.hidden.nested_languages {
-        true => HashMap::new(),
-        false => result.nested_languages.clone()
-    }
-}
-
-fn nested_of_module(module: &mezura_core::ModuleResult, config: &Configuration)
-        -> HashMap<String, HashMap<String, Stats>>
+fn find_nested<'a>(nested: &'a HashMap<String, HashMap<String, Stats>>, config: &Configuration)
+-> Option<&'a HashMap<String, HashMap<String, Stats>>>
 {
-    match config.view.hidden.nested_languages {
-        true => HashMap::new(),
-        false => module.nested_languages.clone()
-    }
+    (!config.view.hidden.nested_languages).then_some(nested)
 }
 
 // The same shape as a run document's modules, with every count a triad. '--top' does not cut these,
@@ -151,7 +140,7 @@ fn create_comparison_modules_array(pairs: &[super::diff::ModulePair], config: &C
         keywords_counted: bool, by_file: Option<super::config_manager::ByFile>,
         bases: &(String, String)) -> String
 {
-    let entries = pairs.iter().map(|pair| {
+    create_array(pairs.iter().map(|pair| {
         let (rows, _) = super::diff::create_comparison_rows(&pair.before.per_language, &pair.now.per_language,
                 config.view.sort_by, None, config.view.counting);
         let mut files_hidden = 0;
@@ -167,32 +156,25 @@ fn create_comparison_modules_array(pairs: &[super::diff::ModulePair], config: &C
             format!("\"total\":{}", create_compared_total_object(&pair.before.total, &pair.now.total,
                     keywords_counted, config.view.counting)),
             format!("\"languages\":{}", create_compared_languages_array(&rows, keywords_counted,
-                    &nested_of_module(pair.before, config), &nested_of_module(pair.now, config),
+                    find_nested(&pair.before.nested_languages, config),
+                    find_nested(&pair.now.nested_languages, config),
                     files.as_ref(), config.view.counting)),
             format!("\"files_hidden\":{files_hidden}"),
         ];
-        format!("{{{}}}", members.join(","))
-    }).collect::<Vec<_>>();
-
-    format!("[{}]", entries.join(","))
+        create_object(members)
+    }))
 }
 
 fn create_compared_languages_array(changes: &[super::diff::LanguageStatsChange],
-        keywords_counted: bool, baseline_nested: &HashMap<String, HashMap<String, Stats>>,
-        subject_nested: &HashMap<String, HashMap<String, Stats>>,
+        keywords_counted: bool, baseline_nested: Option<&HashMap<String, HashMap<String, Stats>>>,
+        subject_nested: Option<&HashMap<String, HashMap<String, Stats>>>,
         files: Option<&HashMap<String, Vec<super::diff::FileStatsChange>>>,
         model: CountingModel) -> String
 {
-    if changes.is_empty() {
-        return String::from("[]");
-    }
-
-    let entries = changes.iter().map(|change| create_compared_language_object(&change.name,
+    create_array(changes.iter().map(|change| create_compared_language_object(&change.name,
             &change.baseline, &change.subject, keywords_counted,
-            baseline_nested.get(&change.name), subject_nested.get(&change.name),
-            files.and_then(|x| x.get(&change.name)).map(Vec::as_slice), model)).collect::<Vec<_>>();
-
-    format!("[{}]", entries.join(","))
+            baseline_nested.and_then(|x| x.get(&change.name)), subject_nested.and_then(|x| x.get(&change.name)),
+            files.and_then(|x| x.get(&change.name)).map(Vec::as_slice), model)))
 }
 
 fn create_compared_language_object(name: &str, baseline: &Stats, subject: &Stats,
@@ -214,7 +196,7 @@ fn create_compared_language_object(name: &str, baseline: &Stats, subject: &Stats
         members.push(format!("\"by_file\":{}", create_compared_files_array(files, model)));
     }
 
-    format!("{{{}}}", members.join(","))
+    create_object(members)
 }
 
 fn compare_files_per_language(baseline_modules: &[mezura_core::ModuleResult],
@@ -247,13 +229,11 @@ fn compare_files_per_language(baseline_modules: &[mezura_core::ModuleResult],
 // The 'files' triad is written too: an empty file that appeared or went away moves no other
 // figure, and without it the row would read as a file that did not change.
 fn create_compared_files_array(files: &[super::diff::FileStatsChange], model: CountingModel) -> String {
-    let entries = files.iter().map(|file| {
+    create_array(files.iter().map(|file| {
         let mut members = vec![format!("\"path\":\"{}\"", escape(&file.path))];
         members.extend(create_triad_members(&file.baseline, &file.subject, model));
-        format!("{{{}}}", members.join(","))
-    }).collect::<Vec<_>>();
-
-    format!("[{}]", entries.join(","))
+        create_object(members)
+    }))
 }
 
 // A section only one reading holds is written with the other side at zero, so a '<style>' block
@@ -264,16 +244,11 @@ fn create_compared_nested_array(baseline: Option<&HashMap<String, Stats>>,
     let mut names = baseline.into_iter().chain(subject).flat_map(HashMap::keys).cloned().collect::<Vec<_>>();
     names.sort_unstable();
     names.dedup();
-    if names.is_empty() {
-        return String::from("[]");
-    }
 
     let of = |side: Option<&HashMap<String, Stats>>, name: &str|
             side.and_then(|x| x.get(name)).cloned().unwrap_or_default();
-    let entries = names.iter().map(|name| create_compared_language_object(name,
-            &of(baseline, name), &of(subject, name), keywords_counted, None, None, None, model)).collect::<Vec<_>>();
-
-    format!("[{}]", entries.join(","))
+    create_array(names.iter().map(|name| create_compared_language_object(name,
+            &of(baseline, name), &of(subject, name), keywords_counted, None, None, None, model)))
 }
 
 fn create_compared_total_object(baseline: &Stats, subject: &Stats,
@@ -284,7 +259,7 @@ fn create_compared_total_object(baseline: &Stats, subject: &Stats,
                 &subject.keyword_occurences)));
     }
 
-    format!("{{{}}}", lines.join(","))
+    create_object(lines)
 }
 
 // Each kind of source has its own shape, behind the 'source' discriminator, so a consumer never
@@ -311,7 +286,7 @@ fn create_side_object(reading: &super::diff::Reading) -> String {
     // the comparison and sits at its top level, wherever the run appears in it
     members.push(format!("\"warnings\":{}", create_document_warnings_array(&reading.warnings)));
 
-    format!("{{{}}}", members.join(","))
+    create_object(members)
 }
 
 // The scope in the shape the run document writes it, from wherever the reading carried it. The
@@ -333,24 +308,15 @@ fn create_scope_object_of(scope: &super::json_reader::Scope, targets: &[mezura_c
         format!("\"count_generated\":{}", scope.count_generated),
     ];
 
-    format!("{{{}}}", members.join(","))
+    create_object(members)
 }
 
 fn create_document_warnings_array(warnings: &[super::json_reader::DocumentWarning]) -> String {
-    if warnings.is_empty() {
-        return String::from("[]");
-    }
-
-    let entries = warnings.iter().map(|warning| {
-        let members = [
-            format!("\"code\":\"{}\"", escape(&warning.code)),
-            format!("\"affects\":\"{}\"", escape(&warning.affects)),
-            format!("\"message\":\"{}\"", escape(&warning.message)),
-        ];
-        format!("{{{}}}", members.join(","))
-    }).collect::<Vec<_>>();
-
-    format!("[{}]", entries.join(","))
+    create_array(warnings.iter().map(|warning| create_object([
+        format!("\"code\":\"{}\"", escape(&warning.code)),
+        format!("\"affects\":\"{}\"", escape(&warning.affects)),
+        format!("\"message\":\"{}\"", escape(&warning.message)),
+    ])))
 }
 
 struct WarningEntry {
@@ -373,21 +339,13 @@ fn create_comparison_warnings_array(notes: &[super::diff::Note]) -> String {
     for note in notes {
         entries.extend(create_note_entries(note));
     }
-    if entries.is_empty() {
-        return String::from("[]");
-    }
 
-    let rendered = entries.into_iter().map(|entry| {
-        let members = [
-            format!("\"code\":\"{}\"", entry.code),
-            format!("\"affects\":\"{}\"", entry.affects),
-            format!("\"subject\":\"{}\"", escape(&entry.subject)),
-            format!("\"message\":\"{}\"", escape(&entry.message)),
-        ];
-        format!("{{{}}}", members.join(","))
-    }).collect::<Vec<_>>();
-
-    format!("[{}]", rendered.join(","))
+    create_array(entries.into_iter().map(|entry| create_object([
+        format!("\"code\":\"{}\"", entry.code),
+        format!("\"affects\":\"{}\"", entry.affects),
+        format!("\"subject\":\"{}\"", escape(&entry.subject)),
+        format!("\"message\":\"{}\"", escape(&entry.message)),
+    ])))
 }
 
 // Nothing for the notes that only make sense on a screen: each side already carries its own
@@ -436,14 +394,8 @@ fn create_note_entries(note: &super::diff::Note) -> Vec<WarningEntry> {
 // The five figures a comparison compares, each as '{"from": a, "to": b, "change": b - a}'. 'change'
 // is derived and written anyway, the difference being what was asked for.
 fn create_triad_members(before: &Stats, now: &Stats, model: CountingModel) -> Vec<String> {
-    let mut members = vec![format!("\"files\":{}", create_triad(before.files, now.files))];
-    members.extend(create_counted_triad_members(before, now, model));
-
-    members
-}
-
-fn create_counted_triad_members(before: &Stats, now: &Stats, model: CountingModel) -> Vec<String> {
-    [("lines", before.lines, now.lines),
+    [("files", before.files, now.files),
+     ("lines", before.lines, now.lines),
      ("code", before.calculate_code_lines(model), now.calculate_code_lines(model)),
      ("comments", before.calculate_comment_lines(model), now.calculate_comment_lines(model)),
      ("bytes", before.bytes, now.bytes)]
@@ -462,16 +414,11 @@ fn create_keyword_triads(before: &HashMap<String, usize>, now: &HashMap<String, 
     names.sort_unstable();
     names.dedup();
     names.retain(|name| before.get(name).copied().unwrap_or(0) > 0 || now.get(name).copied().unwrap_or(0) > 0);
-    if names.is_empty() {
-        return String::from("{}");
-    }
 
-    let members = names.into_iter().map(|name| {
+    create_object(names.into_iter().map(|name| {
         let (from, to) = (before.get(&name).copied().unwrap_or(0), now.get(&name).copied().unwrap_or(0));
         format!("\"{}\":{}", escape(&name), create_triad(from, to))
-    }).collect::<Vec<_>>();
-
-    format!("{{{}}}", members.join(","))
+    }))
 }
 
 // Only what can change a number: no theme, no layout, no separators. Without it, two documents that
@@ -497,7 +444,7 @@ fn create_scope_object(config: &Configuration, targets: &[mezura_core::Target]) 
         format!("\"count_generated\":{}", config.engine.count_generated),
     ];
 
-    format!("{{{}}}", members.join(","))
+    create_object(members)
 }
 
 // Whether the counts beside it are complete. 'files_of_interest' is not the file count of the total
@@ -518,7 +465,7 @@ fn create_scan_object(files_present: &mezura_core::FilesPresent,
         format!("\"dirs_unreadable\":{unreadable_dirs_count}"),
     ];
 
-    format!("{{{}}}", members.join(","))
+    create_object(members)
 }
 
 fn create_total_object(total: &Stats, keywords_counted: bool, model: CountingModel) -> String {
@@ -538,7 +485,7 @@ fn create_total_object(total: &Stats, keywords_counted: bool, model: CountingMod
         members.push(format!("\"keywords\":{}", create_keywords_object(&total.keyword_occurences)));
     }
 
-    format!("{{{}}}", members.join(","))
+    create_object(members)
 }
 
 // The leftovers of the named modules carry 'null' and not the '(unnamed)' the report prints: a
@@ -547,11 +494,8 @@ fn create_total_object(total: &Stats, keywords_counted: bool, model: CountingMod
 fn create_modules_array(result: &RunResult, file_rows: &[result_printer::FileRowsOfModule],
         config: &Configuration) -> String
 {
-    let entries = result.modules.iter().zip(file_rows).map(|(module, files)| {
-        let names = result_printer::get_sorted_language_names(&module.per_language, config.view.sort_by,
-                config.view.counting);
-        let hidden = config.view.top_n.map_or(0, |top| names.len().saturating_sub(top));
-        let shown = &names[..names.len() - hidden];
+    create_array(result.modules.iter().zip(file_rows).map(|(module, files)| {
+        let (shown, hidden) = result_printer::find_shown_language_names(&module.per_language, config);
         let files_hidden = files.values().map(|rows| rows.hidden).sum::<usize>();
         let files = find_shown_files(files);
         let name = module.name.as_ref().map_or("null".to_owned(), |x| format!("\"{}\"", escape(x)));
@@ -559,15 +503,13 @@ fn create_modules_array(result: &RunResult, file_rows: &[result_printer::FileRow
             format!("\"name\":{name}"),
             format!("\"total\":{}", create_total_object(&module.total, !config.view.hidden.keywords,
                     config.view.counting)),
-            format!("\"languages\":{}", create_languages_array(shown, &module.per_language,
+            format!("\"languages\":{}", create_languages_array(&shown, &module.per_language,
                     &module.nested_languages, &files, config)),
             format!("\"languages_hidden\":{hidden}"),
             format!("\"files_hidden\":{files_hidden}"),
         ];
-        format!("{{{}}}", members.join(","))
-    }).collect::<Vec<_>>();
-
-    format!("[{}]", entries.join(","))
+        create_object(members)
+    }))
 }
 
 fn find_shown_files<'a>(of_module: &'a result_printer::FileRowsOfModule<'a>) -> FilesByLanguage<'a> {
@@ -581,21 +523,15 @@ fn create_languages_array(shown: &[String], per_language: &HashMap<String, Stats
         nested_languages: &HashMap<String, HashMap<String, Stats>>,
         files: &FilesByLanguage, config: &Configuration) -> String
 {
-    if shown.is_empty() {
-        return String::from("[]");
-    }
-
-    let entries = shown.iter().filter_map(|name| {
+    create_array(shown.iter().filter_map(|name| {
         Some(create_language_object(name, per_language.get(name)?, !config.view.hidden.keywords,
                 !config.view.hidden.nested_languages, nested_languages.get(name),
                 files.get(name.as_str()).map(Vec::as_slice).unwrap_or_default(), config.view.counting))
-    }).collect::<Vec<_>>();
-
-    format!("[{}]", entries.join(","))
+    }))
 }
 
 fn create_files_array(files: &[&mezura_core::FileEntry], nested_shown: bool, model: CountingModel) -> String {
-    let entries = files.iter().map(|file| {
+    create_array(files.iter().map(|file| {
         let stats = &file.stats;
         let mut members = vec![
             format!("\"path\":\"{}\"", escape(&file.path)),
@@ -611,25 +547,21 @@ fn create_files_array(files: &[&mezura_core::FileEntry], nested_shown: bool, mod
             members.push(format!("\"nested_languages\":{}",
                     create_nested_languages_array(&file.nested_languages, model)));
         }
-        format!("{{{}}}", members.join(","))
-    }).collect::<Vec<_>>();
-
-    format!("[{}]", entries.join(","))
+        create_object(members)
+    }))
 }
 
 fn create_nested_languages_array(sections: &HashMap<String, Stats>, model: CountingModel) -> String {
     let mut sorted = sections.iter().collect::<Vec<_>>();
     sorted.sort_unstable_by_key(|(name, _)| name.as_str());
 
-    let entries = sorted.into_iter().map(|(name, info)| format!(
+    create_array(sorted.into_iter().map(|(name, info)| format!(
 "{{\"name\":\"{}\",\"files\":{},\"lines\":{},\"code\":{},\"comments\":{},\"{}\":{},\
 \"bytes\":{},\"classes\":{}}}",
             escape(name), info.files, info.lines, info.calculate_code_lines(model),
             info.calculate_comment_lines(model), model.get_third_quantity_name(),
             info.calculate_extra_lines(model), info.bytes,
-            create_classes_object(&info.classes))).collect::<Vec<_>>();
-
-    format!("[{}]", entries.join(","))
+            create_classes_object(&info.classes))))
 }
 
 // 'nested_shown' reaches the language's own breakdown and the one inside each of its files alike
@@ -661,31 +593,21 @@ fn create_language_object(name: &str, info: &Stats, keywords_counted: bool, nest
         members.push(format!("\"by_file\":{}", create_files_array(files, nested_shown, model)));
     }
 
-    format!("{{{}}}", members.join(","))
+    create_object(members)
 }
 
 // The raw counts behind the folded columns, one member per class, so a consumer can fold them
 // under either model whatever the scope's own was
 fn create_classes_object(classes: &LineClasses) -> String {
-    let members = LineClasses::NAMES.iter().zip(classes.to_array())
-            .map(|(name, count)| format!("\"{name}\":{count}"))
-            .collect::<Vec<_>>();
-
-    format!("{{{}}}", members.join(","))
+    create_object(LineClasses::NAMES.iter().zip(classes.to_array())
+            .map(|(name, count)| format!("\"{name}\":{count}")))
 }
 
 fn create_keywords_object(occurences: &HashMap<String, usize>) -> String {
-    if occurences.is_empty() {
-        return String::from("{}");
-    }
-
     let mut sorted = occurences.iter().collect::<Vec<_>>();
     sorted.sort_unstable_by_key(|(name, _)| name.as_str());
-    let members = sorted.into_iter()
-            .map(|(name, count)| format!("\"{}\":{count}", escape(name)))
-            .collect::<Vec<_>>();
-
-    format!("{{{}}}", members.join(","))
+    create_object(sorted.into_iter()
+            .map(|(name, count)| format!("\"{}\":{count}", escape(name))))
 }
 
 // Everything the run said on the error output, which a machine consumer never sees. Always present,
@@ -693,63 +615,43 @@ fn create_keywords_object(occurences: &HashMap<String, usize>) -> String {
 // safe to show, and 'affects' is what lets a consumer written today keep working when a later
 // version adds a code it has never heard of. In the order they were printed.
 fn create_warnings_array() -> String {
-    let warnings = super::warning_collector::get_collected_warnings();
-    if warnings.is_empty() {
-        return String::from("[]");
-    }
-
-    let entries = warnings.iter().map(|warning| {
-        let members = [
-            format!("\"code\":\"{}\"", escape(warning.code.name())),
-            format!("\"affects\":\"{}\"", warning.affects().name()),
-            format!("\"subject\":\"{}\"", escape(&warning.subject)),
-            format!("\"message\":\"{}\"", escape(&warning.message)),
-        ];
-        format!("{{{}}}", members.join(","))
-    }).collect::<Vec<_>>();
-
-    format!("[{}]", entries.join(","))
+    create_array(super::warning_collector::get_collected_warnings().iter().map(|warning| create_object([
+        format!("\"code\":\"{}\"", escape(warning.code.name())),
+        format!("\"affects\":\"{}\"", warning.affects().name()),
+        format!("\"subject\":\"{}\"", escape(&warning.subject)),
+        format!("\"message\":\"{}\"", escape(&warning.message)),
+    ])))
 }
 
 // Sorted by path, because the faulty files are collected by whichever thread hit them and their
 // order would otherwise change between two runs over the same tree
 fn create_faulty_files_array(faulty_files: &[FaultyFileDetails], asked_for: bool) -> String {
-    if !asked_for || faulty_files.is_empty() {
+    if !asked_for {
         return String::from("[]");
     }
 
     let mut sorted = faulty_files.iter().collect::<Vec<_>>();
     sorted.sort_unstable_by(|a, b| a.path.cmp(&b.path));
-    let entries = sorted.into_iter().map(|file| {
-        let members = [
-            format!("\"path\":\"{}\"", escape(&file.path)),
-            format!("\"bytes\":{}", file.size),
-            format!("\"error\":\"{}\"", escape(&file.error_msg)),
-        ];
-        format!("{{{}}}", members.join(","))
-    }).collect::<Vec<_>>();
-
-    format!("[{}]", entries.join(","))
+    create_array(sorted.into_iter().map(|file| create_object([
+        format!("\"path\":\"{}\"", escape(&file.path)),
+        format!("\"bytes\":{}", file.size),
+        format!("\"error\":\"{}\"", escape(&file.error_msg)),
+    ])))
 }
 
 // Objects and not bare paths, and sorted for the same reason as the faulty files above: a consumer
 // has to be able to tell a refused permission apart from a directory that went away mid-walk.
 fn create_unreadable_dirs_array(unreadable_dirs: &[mezura_core::UnreadableDirDetails], asked_for: bool) -> String {
-    if !asked_for || unreadable_dirs.is_empty() {
+    if !asked_for {
         return String::from("[]");
     }
 
     let mut sorted = unreadable_dirs.iter().collect::<Vec<_>>();
     sorted.sort_unstable_by(|a, b| a.path.cmp(&b.path));
-    let entries = sorted.into_iter().map(|dir| {
-        let members = [
-            format!("\"path\":\"{}\"", escape(&dir.path)),
-            format!("\"error\":\"{}\"", escape(&dir.error_msg)),
-        ];
-        format!("{{{}}}", members.join(","))
-    }).collect::<Vec<_>>();
-
-    format!("[{}]", entries.join(","))
+    create_array(sorted.into_iter().map(|dir| create_object([
+        format!("\"path\":\"{}\"", escape(&dir.path)),
+        format!("\"error\":\"{}\"", escape(&dir.error_msg)),
+    ])))
 }
 
 // 'scan_ms' and not the 'Exec time' of the footer: what is measured here starts before the producers
@@ -767,40 +669,23 @@ fn create_performance_object(performance: &mezura_core::Performance) -> String {
 // share a name, and grouping them would lose the order they were declared in, which the columns of
 // the report follow.
 fn create_targets_array(targets: &[mezura_core::Target]) -> String {
-    if targets.is_empty() {
-        return String::from("[]");
-    }
-
-    let entries = targets.iter().map(|target| {
+    create_array(targets.iter().map(|target| {
         let module = target.module.as_ref().map_or("null".to_owned(), |x| format!("\"{}\"", escape(x)));
         format!("{{\"module\":{module},\"path\":\"{}\"}}", escape(&target.path))
-    }).collect::<Vec<_>>();
-
-    format!("[{}]", entries.join(","))
+    }))
 }
 
 // The extension is the key, since that is what a run is asked about and what can only be claimed
 // once. Sorted, so that two runs over the same tree produce the same bytes.
 fn create_forced_languages_object(forced: &HashMap<String, String>) -> String {
-    if forced.is_empty() {
-        return String::from("{}");
-    }
-
     let mut sorted = forced.iter().collect::<Vec<_>>();
     sorted.sort_unstable_by_key(|(extension, _)| extension.as_str());
-    let members = sorted.into_iter()
-            .map(|(extension, language)| format!("\"{}\":\"{}\"", escape(extension), escape(language)))
-            .collect::<Vec<_>>();
-
-    format!("{{{}}}", members.join(","))
+    create_object(sorted.into_iter()
+            .map(|(extension, language)| format!("\"{}\":\"{}\"", escape(extension), escape(language))))
 }
 
 fn create_string_array(values: &[String]) -> String {
-    if values.is_empty() {
-        return String::from("[]");
-    }
-
-    format!("[{}]", values.iter().map(|x| format!("\"{}\"", escape(x))).collect::<Vec<_>>().join(","))
+    create_array(values.iter().map(|x| format!("\"{}\"", escape(x))))
 }
 
 // Paths are the reason this has to be right: on Windows they arrive with backslashes in them, so
@@ -820,6 +705,14 @@ pub(crate) fn escape(text: &str) -> String {
     }
 
     escaped
+}
+
+pub(crate) fn create_object(members: impl IntoIterator<Item = String>) -> String {
+    format!("{{{}}}", members.into_iter().collect::<Vec<_>>().join(","))
+}
+
+pub(crate) fn create_array(entries: impl IntoIterator<Item = String>) -> String {
+    format!("[{}]", entries.into_iter().collect::<Vec<_>>().join(","))
 }
 
 #[cfg(test)]

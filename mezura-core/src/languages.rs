@@ -1,12 +1,14 @@
 //! Which languages a run has in play, and which of them owns an extension two of them claim. The
 //! format a language file is written in is [`crate::language_file`] next door.
 
-use std::{collections::HashMap, sync::Arc};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::{Language, warnings};
-use crate::engine::config::EngineConfig;
+use crate::engine::config::{EngineConfig, ForcedLanguages, LanguageNames, format_module_scope,
+        split_off_module_scope};
 use crate::engine::identity::{IdentifiedBy, LanguageLookup, ScopedLookups, build_language_map_by,
-        extension_key};
+        extension_key, find_language_named};
 use crate::language_file::ConflictRules;
 use crate::warnings::Warning;
 
@@ -82,7 +84,7 @@ impl Languages {
         reported.extend(find_unknown_forced_languages(&in_play, &config.forced_languages));
         // Two scopes resolving the same contest the same way say so once. Without this a run that
         // scopes anything repeats every tiebreak of the whole language set once per module.
-        let mut already_said = std::collections::HashSet::new();
+        let mut already_said = HashSet::new();
         reported.retain(|warning| already_said.insert((warning.code.name(), warning.subject.clone(),
                 warning.message.clone())));
 
@@ -211,10 +213,10 @@ impl LanguageSelection {
     fn of(config: &EngineConfig) -> Self {
         // Only the half after the slash is folded. A module name is matched exactly, the way the
         // targets that declare it are, so 'IOS/m' and 'ios/m' are rules for two different modules.
-        let folded = |names: &crate::engine::config::LanguageNames| {
+        let folded = |names: &LanguageNames| {
             let mut names = names.to_written_form().iter().map(|written| {
-                let (module, name) = crate::engine::config::split_off_module_scope(written);
-                crate::engine::config::format_module_scope(module, &name.to_lowercase())
+                let (module, name) = split_off_module_scope(written);
+                format_module_scope(module, &name.to_lowercase())
             }).collect::<Vec<_>>();
             names.sort();
             names
@@ -224,8 +226,8 @@ impl LanguageSelection {
             of_interest: folded(&config.languages_of_interest),
             excluded: folded(&config.excluded_languages),
             forced: config.forced_languages.to_written_form().iter().map(|(written, language)| {
-                let (module, claimed) = crate::engine::config::split_off_module_scope(written);
-                (crate::engine::config::format_module_scope(module, &extension_key(claimed)),
+                let (module, claimed) = split_off_module_scope(written);
+                (format_module_scope(module, &extension_key(claimed)),
                         language.to_lowercase())
             }).collect(),
             modules: match config.forced_languages.is_scoped() || config.languages_of_interest.is_scoped()
@@ -348,14 +350,14 @@ fn find_unknown_names_of_the_selection(languages: &[Language], config: &EngineCo
 // Asked once, and not inside the map building, which runs once per kind of identity and per scope
 // and is handed the same pairs every time: asking it there says the same thing several times over.
 fn find_unknown_forced_languages(by_name: &HashMap<String, Language>,
-        forced: &crate::engine::config::ForcedLanguages) -> Vec<Warning>
+        forced: &ForcedLanguages) -> Vec<Warning>
 {
     let mut names = by_name.keys().map(String::as_str).collect::<Vec<_>>();
     names.sort_unstable();
 
     let written = forced.to_written_form();
     let mut unknown = written.iter()
-            .filter(|(_, wanted)| crate::engine::identity::find_language_named(&names, wanted).is_none())
+            .filter(|(_, wanted)| find_language_named(&names, wanted).is_none())
             .collect::<Vec<_>>();
     unknown.sort();
 
@@ -733,7 +735,7 @@ mod language_selection_tests {
     #[test]
     fn a_language_that_claims_only_filenames_is_kept() {
         let by_name_only = Language::new("Docky", [""; 0], StringRules::escaping_nothing(), ["#"], &[], [])
-                .with_filenames(&["Dockerfile"]);
+                .with_filenames(["Dockerfile"]);
 
         let (kept, reported) = drop_the_unusable(vec![by_name_only]);
         assert_eq!(vec!["Docky"], kept.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), "{reported:?}");
@@ -751,7 +753,7 @@ mod language_selection_tests {
             ..Default::default()
         };
         let languages = vec![Language::new("Python", ["py"], StringRules::escaping_nothing(), ["#"], &[], [])
-                .with_filenames(&["SConstruct"])];
+                .with_filenames(["SConstruct"])];
 
         let (_, reported) = Languages::resolve(&config, languages, &ConflictRules::default());
         let mine = reported.iter().filter(|x| x.code == warnings::Code::UnknownForcedLanguage)

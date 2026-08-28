@@ -15,9 +15,9 @@ pub fn parse_targets(s: &str) -> Result<Vec<(Option<String>, String)>, String> {
             .any(|piece| split_off_module_name(piece.trim()).is_some());
 
     if declares_a_module {
-        targets_of(separated)
+        parse_target_tokens(separated)
     } else {
-        targets_of(vec![s.to_owned()])
+        parse_target_tokens(vec![s.to_owned()])
     }
 }
 
@@ -25,7 +25,7 @@ pub fn parse_targets(s: &str) -> Result<Vec<(Option<String>, String)>, String> {
 // next and a space never does. That is the way out of the one thing a command line cannot express:
 // a spaced path in a run that names modules. A trailing comma continues the list onto the next line.
 pub fn parse_targets_in_block(block: &str) -> Result<Vec<(Option<String>, String)>, String> {
-    targets_of(split_targets(block, |character| character == '\n'))
+    parse_target_tokens(split_targets(block, |character| character == '\n'))
 }
 
 // 'rust,ios/swift'. Kept in the written form, module and all, so that a configuration file's block
@@ -39,7 +39,7 @@ pub fn parse_languages_to_vec(s: &str) -> Vec<String> {
 }
 
 pub fn parse_paths_to_vec(s: &str) -> Vec<String> {
-    s.split(',').filter_map(cleaned_path).collect::<Vec<_>>()
+    s.split(',').filter_map(clean_path).collect::<Vec<_>>()
 }
 
 // 'm=matlab,.pl=perl,Makefile=make', and 'ios/m=objective-c' for a rule that holds inside one
@@ -99,15 +99,7 @@ pub fn parse_explained_lines(s: &str) -> Option<ExplainedLines> {
 }
 
 pub fn parse_usize_value(s: &str, min: usize, max: usize) -> Option<usize> {
-    if let Ok(num) = s.trim().parse::<usize>() {
-        if num <= max && num >= min {
-            Some(num)
-        } else {
-            None
-        }
-    } else {
-        None
-    }
+    s.trim().parse::<usize>().ok().filter(|num| (min..=max).contains(num))
 }
 
 pub fn parse_two_usize_values(s: &str, min1: usize, max1: usize, min2: usize, max2: usize) -> Option<(usize,usize)> {
@@ -183,11 +175,13 @@ pub fn find_command(line: &str, name: &str) -> Option<usize> {
     None
 }
 
-// A name holds for the rest of the comma list it opened, so 'frontend=./web,./ui' is one module of
-// two directories, and it stops where that list ends so nothing after a named target joins it by
-// accident. Inside the list a name still starts a new one, which is what lets a saved configuration
-// write 'frontend=./web,backend=./api' and read it back as the two targets it was. The error is the
-// piece that could not be read, always a name with nothing after it.
+// The word after '--name', when the command is on the line and a word follows it. The '+ 2' is the
+// '--' the position above points at.
+pub fn find_argument_of<'a>(line: &'a str, name: &str) -> Option<&'a str> {
+    let at = find_command(line, name)?;
+    line[at + name.len() + 2..].split_whitespace().next()
+}
+
 fn parse_end_of_a_range(text: &str, when_left_off: usize) -> Option<usize> {
     let text = text.trim();
     if text.is_empty() {
@@ -197,7 +191,12 @@ fn parse_end_of_a_range(text: &str, when_left_off: usize) -> Option<usize> {
     text.parse::<usize>().ok()
 }
 
-fn targets_of(tokens: Vec<String>) -> Result<Vec<(Option<String>, String)>, String> {
+// A name holds for the rest of the comma list it opened, so 'frontend=./web,./ui' is one module of
+// two directories, and it stops where that list ends so nothing after a named target joins it by
+// accident. Inside the list a name still starts a new one, which is what lets a saved configuration
+// write 'frontend=./web,backend=./api' and read it back as the two targets it was. The error is the
+// piece that could not be read, always a name with nothing after it.
+fn parse_target_tokens(tokens: Vec<String>) -> Result<Vec<(Option<String>, String)>, String> {
     let mut targets = Vec::new();
     for token in tokens {
         let mut module: Option<String> = None;
@@ -215,7 +214,7 @@ fn targets_of(tokens: Vec<String>) -> Result<Vec<(Option<String>, String)>, Stri
                 None => piece
             };
 
-            match cleaned_path(path) {
+            match clean_path(path) {
                 Some(path) => targets.push((module.clone(), path)),
                 None => return Err(piece.to_owned())
             }
@@ -272,17 +271,13 @@ fn split_off_module_name(piece: &str) -> Option<(&str, &str)> {
     Some((name, path))
 }
 
-fn cleaned_path(piece: &str) -> Option<String> {
+fn clean_path(piece: &str) -> Option<String> {
     let cleansed = &super::paths::normalise_separators(piece.trim()).into_owned();
     get_trimmed_if_not_empty(cleansed.strip_prefix('"').unwrap_or(cleansed).strip_suffix('"').unwrap_or(cleansed))
 }
 
 fn remove_dot_prefix(str: &str) -> &str {
-    if let Some(stripped) = str.strip_prefix('.') {
-        stripped
-    } else {
-        str
-    }
+    str.strip_prefix('.').unwrap_or(str)
 }
 
 #[cfg(test)]

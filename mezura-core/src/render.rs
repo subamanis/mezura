@@ -168,10 +168,12 @@ impl NumberFormat {
     /// Only a divided value gets a decimal: a count of bytes is a whole number, and `430.0 B`
     /// would claim a precision the figure does not have.
     pub fn size_with_unit(&self, bytes: usize) -> (String, &'static str) {
-        if bytes >= 1_000_000_000 {(self.with_decimal_mark(&format!("{:.1}", bytes as f64 / 1_000_000_000f64)), "GB")}
-        else if bytes >= 1_000_000 {(self.with_decimal_mark(&format!("{:.1}", bytes as f64 / 1_000_000f64)), "MB")}
-        else if bytes >= 1_000 {(self.with_decimal_mark(&format!("{:.1}", bytes as f64 / 1_000f64)), "KB")}
-        else {(self.integer(bytes), "B")}
+        for (limit, unit) in [(1_000_000_000, "GB"), (1_000_000, "MB"), (1_000, "KB")] {
+            if bytes >= limit {
+                return (self.with_decimal_mark(&format!("{:.1}", bytes as f64 / limit as f64)), unit);
+            }
+        }
+        (self.integer(bytes), "B")
     }
 
     /// A percentage to two decimals, and `<0.01` for a share that is present but would round to

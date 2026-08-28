@@ -129,25 +129,24 @@ fn print_json(path: &str, explanation: &FileExplanation, model: CountingModel) {
             model.get_third_quantity_name()));
     document.push_str("\"per_line\":[");
     for (at, line) in explanation.lines.iter().enumerate() {
+        if at > 0 {
+            document.push(',');
+        }
         let bucket = model.get_bucket_name(model.fold(line.class));
-        let mut entry = format!("{{\"line\":{},\"bucket\":\"{bucket}\",\"class\":\"{}\"",
-                at + 1, line.class.name());
+        document.push_str(&format!("{{\"line\":{},\"bucket\":\"{bucket}\",\"class\":\"{}\"",
+                at + 1, line.class.name()));
         if let Some(name) = &line.read_as {
-            entry.push_str(&format!(",\"read_as\":\"{}\"", escape(name)));
+            document.push_str(&format!(",\"read_as\":\"{}\"", escape(name)));
         }
         if let Some(note) = describe_carried(&line.carried) {
-            entry.push_str(&format!(",\"carried\":\"{}\"", escape(&note)));
+            document.push_str(&format!(",\"carried\":\"{}\"", escape(&note)));
         }
         if !line.spans.is_empty() {
-            entry.push_str(&format!(",\"spans\":[{}]", line.spans.iter()
+            document.push_str(&format!(",\"spans\":[{}]", line.spans.iter()
                     .map(|span| format!("[{},{},\"{}\"]", span.from, span.to, span.kind.name()))
                     .collect::<Vec<_>>().join(",")));
         }
-        entry.push('}');
-        if at + 1 < explanation.lines.len() {
-            entry.push(',');
-        }
-        document.push_str(&entry);
+        document.push('}');
     }
     document.push_str("],");
     document.push_str(&format!("\"classes\":{{{}}}}}",

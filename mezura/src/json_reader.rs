@@ -166,14 +166,8 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
                 None => Vec::new()
             },
             // Absent from a document of the first builds, which counted every file they read
-            minified_files: match scan.get("files_minified") {
-                Some(_) => read_number(scan, "files_minified", "scan")?,
-                None => 0
-            },
-            generated_files: match scan.get("files_generated") {
-                Some(_) => read_number(scan, "files_generated", "scan")?,
-                None => 0
-            },
+            minified_files: read_optional_number(scan, "files_minified", "scan")?,
+            generated_files: read_optional_number(scan, "files_generated", "scan")?,
             files_present: FilesPresent {
                 total_files: read_number(scan, "files_found", "scan")?,
                 relevant_files: read_number(scan, "files_of_interest", "scan")?,
@@ -202,28 +196,12 @@ pub(crate) fn parse_scope(scope: &Map<String, Value>) -> Result<(Scope, Vec<Targ
         gitignore: read_flag(scope, "gitignore", "scope")?,
         // Absent from a document of the builds that read no such file, which is what its absence
         // therefore means
-        ignore_files: match scope.get("ignore_files") {
-            Some(x) => x.as_bool().ok_or(DocumentError::WrongType {
-                    at: "scope.ignore_files".to_owned(), wanted: "true or false" })?,
-            None => false
-        },
+        ignore_files: read_optional_flag(scope, "ignore_files", "scope", false)?,
         // Absent from a document of the first builds, which all counted them
-        keywords_counted: match scope.get("keywords_counted") {
-            Some(x) => x.as_bool().ok_or(DocumentError::WrongType {
-                    at: "scope.keywords_counted".to_owned(), wanted: "true or false" })?,
-            None => true
-        },
+        keywords_counted: read_optional_flag(scope, "keywords_counted", "scope", true)?,
         // Absent for the same reason, and those builds counted every file they could read
-        count_minified: match scope.get("count_minified") {
-            Some(x) => x.as_bool().ok_or(DocumentError::WrongType {
-                    at: "scope.count_minified".to_owned(), wanted: "true or false" })?,
-            None => true
-        },
-        count_generated: match scope.get("count_generated") {
-            Some(x) => x.as_bool().ok_or(DocumentError::WrongType {
-                    at: "scope.count_generated".to_owned(), wanted: "true or false" })?,
-            None => true
-        }
+        count_minified: read_optional_flag(scope, "count_minified", "scope", true)?,
+        count_generated: read_optional_flag(scope, "count_generated", "scope", true)?
     }, parse_targets(read_list(scope, "targets", "scope")?)?))
 }
 
@@ -342,7 +320,6 @@ fn parse_files(entries: &[Value], at: &str) -> Result<HashMap<String, Vec<FileEn
     Ok(found)
 }
 
-
 fn parse_performance(entry: &Map<String, Value>) -> Result<Performance, DocumentError> {
     let threads = read_nested(entry, "threads", "performance")?;
 
@@ -415,6 +392,14 @@ fn read_optional_number(parent: &Map<String, Value>, key: &str, at: &str) -> Res
     }
 }
 
+// The given fallback when the key is absent, for the flags older documents never wrote
+fn read_optional_flag(parent: &Map<String, Value>, key: &str, at: &str, absent: bool) -> Result<bool, DocumentError> {
+    match parent.get(key) {
+        Some(_) => read_flag(parent, key, at),
+        None => Ok(absent)
+    }
+}
+
 pub(crate) fn read_text(parent: &Map<String, Value>, key: &str, at: &str) -> Result<String, DocumentError> {
     read_member(parent, key, at)?.as_str().map(str::to_owned)
             .ok_or_else(|| DocumentError::WrongType { at: join_location(at, key), wanted: "a string" })
@@ -476,7 +461,7 @@ mod tests {
 
     use super::*;
 
-    fn parse_stats(files: usize, bytes: usize, lines: usize, code: usize, comments: usize,
+    fn stats(files: usize, bytes: usize, lines: usize, code: usize, comments: usize,
             keywords: HashMap<String, usize>) -> Stats {
         crate::test_support::plain_stats_of(files, bytes, lines, code, comments, keywords)
     }
@@ -485,14 +470,14 @@ mod tests {
     // one without, a named module beside the leftovers, and paths carrying the backslashes and
     // quotation marks that have to survive the escaping on the way out and the way back in.
     fn populated() -> (RunResult, Configuration) {
-        let rust = parse_stats(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 0]);
-        let html = parse_stats(1, 900, 40, 30, 0, HashMap::new());
+        let rust = stats(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 0]);
+        let html = stats(1, 900, 40, 30, 0, HashMap::new());
         let per_language = hashmap!["Rust".to_owned() => rust.clone(), "HTML".to_owned() => html.clone()];
 
         let result = RunResult {
             total: Stats::total_of(&per_language),
             modules: vec![
-                ModuleResult { name: Some("backend".to_owned()), per_language: hashmap!["Rust".to_owned() => rust], total: Stats::total_of(&hashmap!["Rust".to_owned() => parse_stats(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 0])]), nested_languages: HashMap::new(), files: HashMap::new() },
+                ModuleResult { name: Some("backend".to_owned()), per_language: hashmap!["Rust".to_owned() => rust], total: Stats::total_of(&hashmap!["Rust".to_owned() => stats(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 0])]), nested_languages: HashMap::new(), files: HashMap::new() },
                 ModuleResult { name: None, per_language: hashmap!["HTML".to_owned() => html.clone()], total: Stats::total_of(&hashmap!["HTML".to_owned() => html]), nested_languages: HashMap::new(), files: HashMap::new() }],
             per_language,
             nested_languages: HashMap::new(),
@@ -627,7 +612,7 @@ mod tests {
         let (mut result, mut config) = populated();
         config.view.by_file = Some(crate::config_manager::ByFile::All);
         let written = FileEntry { path: "D:/dev/api/main.rs".to_owned(),
-                stats: parse_stats(1, 3000, 60, 40, 10, HashMap::new()),
+                stats: stats(1, 3000, 60, 40, 10, HashMap::new()),
                 nested_languages: HashMap::new() };
         result.modules[0].files = hashmap!["Rust".to_owned() => vec![written.clone()]];
 
@@ -642,7 +627,7 @@ mod tests {
         config.view.by_file = Some(crate::config_manager::ByFile::Capped(1));
         result.modules[0].files.get_mut("Rust").unwrap().push(FileEntry {
                 path: "D:/dev/api/lib.rs".to_owned(),
-                stats: parse_stats(1, 500, 10, 8, 1, HashMap::new()),
+                stats: stats(1, 500, 10, 8, 1, HashMap::new()),
                 nested_languages: HashMap::new() });
         let capped = create_document(&result, &Local::now(), &config);
         let read = parse(&capped).unwrap();

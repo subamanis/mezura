@@ -594,7 +594,7 @@ impl Formatted for ArgParsingError {
             },
             Self::DoublePath => wrap_message("Targets already provided as first argument, but --targets command also found.").red(),
             Self::UnrecognisedCommand(p) => {
-                let tail = suggestions::formatted_suggestion(p, &message_printer::get_command_names())
+                let tail = suggestions::format_suggestion(p, &message_printer::get_command_names())
                         .unwrap_or_else(|| format!("Run '--{HELP}' to see every command."));
                 let error = format!("--{p} is not recognised as a command.").red();
                 ColoredString::from(format!("{error}\n\n{tail}").as_str())
@@ -608,14 +608,14 @@ impl Formatted for ArgParsingError {
             Self::UnexpectedCommandArgs(p) => wrap_message(&format!("Command '--{p}' does not expect any arguments.")).red(),
             Self::NonExistantConfig(p) => {
                 let names = super::config_files::read_names_in_dir(&crate::paths::PERSISTENT_APP_PATHS.config_dir);
-                let tail = suggestions::formatted_suggestion(p, &names.iter().map(String::as_str).collect::<Vec<_>>())
+                let tail = suggestions::format_suggestion(p, &names.iter().map(String::as_str).collect::<Vec<_>>())
                         .unwrap_or_else(|| format!("Run '--{SHOW_CONFIGS}' to see the ones you have."));
                 let error = format!("Configuration '{p}' does not exist.").red();
                 ColoredString::from(format!("{error}\n\n{tail}").as_str())
             },
             Self::NonExistantTheme(p) => {
                 let names = super::config_files::read_names_in_dir(&crate::paths::PERSISTENT_APP_PATHS.themes_dir);
-                let tail = suggestions::formatted_suggestion(p, &names.iter().map(String::as_str).collect::<Vec<_>>())
+                let tail = suggestions::format_suggestion(p, &names.iter().map(String::as_str).collect::<Vec<_>>())
                         .unwrap_or_else(|| format!("Run '--{SHOW_THEMES}' to see the ones you have."));
                 let error = format!("Theme '{p}' was not found, or could not be read.").red();
                 ColoredString::from(format!("{error}\n\n{tail}").as_str())
@@ -623,7 +623,7 @@ impl Formatted for ArgParsingError {
             Self::InvalidStyle(p) => wrap_message(p).red(),
             Self::InvalidHideTarget(p) => {
                 let names = Hidden::get_names();
-                let tail = suggestions::formatted_suggestion(p, &names)
+                let tail = suggestions::format_suggestion(p, &names)
                         .unwrap_or_else(|| format!("The options are: {}.", names.join(", ")));
                 let error = format!("'{p}' is not something that can be hidden.").red();
                 ColoredString::from(wrap_message(&format!("{error}\n\n{tail}")).to_string().as_str())
@@ -870,12 +870,12 @@ is sorted by lines.", sort_by.name());
             typed_explicitly: self.typed_explicitly,
             engine: EngineConfig {
                 targets: self.targets.clone().unwrap_or_default(),
-                exclude_dirs: (self.exclude_dirs).clone().unwrap_or_default(),
+                exclude_dirs: self.exclude_dirs.clone().unwrap_or_default(),
                 languages_of_interest: LanguageNames::of_written_form(
-                        &(self.languages_of_interest).clone().unwrap_or_default()),
+                        &self.languages_of_interest.clone().unwrap_or_default()),
                 excluded_languages: LanguageNames::of_written_form(
-                        &(self.excluded_languages).clone().unwrap_or_default()),
-                forced_languages: (self.forced_languages).clone().unwrap_or_default(),
+                        &self.excluded_languages.clone().unwrap_or_default()),
+                forced_languages: self.forced_languages.clone().unwrap_or_default(),
                 threads: self.threads.unwrap_or_default(),
                 should_search_in_dotted: self.should_search_in_dotted.unwrap_or(engine_defaults.should_search_in_dotted),
                 count_minified: self.count_minified.unwrap_or(engine_defaults.count_minified),
@@ -988,15 +988,9 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     if line.trim().starts_with("--") {
         options.next();
     } else {
-        match parse_targets(options.next().unwrap_or_default()) {
-            Ok(x) => {
-                if !x.is_empty() {
-                    targets = Some(x);
-                }
-            },
-            Err(x) => {
-                return Err(x);
-            }
+        let parsed = parse_targets(options.next().unwrap_or_default())?;
+        if !parsed.is_empty() {
+            targets = Some(parsed);
         }
     }
 
@@ -1017,41 +1011,37 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 return Err(ArgParsingError::DoublePath);
             }
 
-            let parse_result = parse_targets(arguments);
-            if let Ok(x) = parse_result {
-                if x.is_empty() {
-                    message_printer::print_help_message_for_command(TARGETS);
-                    return Err(refused_argument(arguments,TARGETS.to_owned()));
-                }
-                targets = Some(x)
-            } else {
-                return Err(parse_result.err().unwrap());
+            let parsed = parse_targets(arguments)?;
+            if parsed.is_empty() {
+                message_printer::print_help_message_for_command(TARGETS);
+                return Err(refuse_argument(arguments,TARGETS.to_owned()));
             }
+            targets = Some(parsed)
         } else if command_name == EXCLUDE {
             let vec = super::args::parse_paths_to_vec(arguments);
             if vec.is_empty() || mezura_core::engine::targets::validate_exclude_patterns(&vec).is_err() {
                 message_printer::print_help_message_for_command(EXCLUDE);
-                return Err(refused_argument(arguments,EXCLUDE.to_owned()));
+                return Err(refuse_argument(arguments,EXCLUDE.to_owned()));
             }
             exclude_dirs = Some(vec);
         } else if command_name == LANGUAGES {
             let vec = super::args::parse_languages_to_vec(arguments);
             if vec.is_empty() {
                 message_printer::print_help_message_for_command(LANGUAGES);
-                return Err(refused_argument(arguments,LANGUAGES.to_owned()));
+                return Err(refuse_argument(arguments,LANGUAGES.to_owned()));
             }
             languages_of_interest = Some(vec);
         } else if command_name == EXCLUDE_LANGUAGES {
             let vec = super::args::parse_languages_to_vec(arguments);
             if vec.is_empty() {
                 message_printer::print_help_message_for_command(EXCLUDE_LANGUAGES);
-                return Err(refused_argument(arguments,EXCLUDE_LANGUAGES.to_owned()));
+                return Err(refuse_argument(arguments,EXCLUDE_LANGUAGES.to_owned()));
             }
             excluded_languages = Some(vec);
         } else if command_name == FORCE_LANGUAGE {
             let Some(map) = super::args::parse_forced_languages(arguments) else {
                 message_printer::print_help_message_for_command(FORCE_LANGUAGE);
-                return Err(refused_argument(arguments,FORCE_LANGUAGE.to_owned()));
+                return Err(refuse_argument(arguments,FORCE_LANGUAGE.to_owned()));
             };
             forced_languages = Some(map);
         } else if command_name == THREADS {
@@ -1061,14 +1051,14 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 threads = Some(Threads::from(_threads));
             } else {
                 message_printer::print_help_message_for_command(THREADS);
-                return Err(refused_argument(arguments,THREADS.to_owned()))
+                return Err(refuse_argument(arguments,THREADS.to_owned()))
             }
         } else if command_name == COUNTING {
             match CountingModel::parse(arguments) {
                 Some(x) => counting = Some(x),
                 None => {
                     message_printer::print_help_message_for_command(COUNTING);
-                    return Err(refused_argument(arguments,COUNTING.to_owned()))
+                    return Err(refuse_argument(arguments,COUNTING.to_owned()))
                 }
             }
         } else if command_name == SEARCH_IN_DOTTED {
@@ -1098,7 +1088,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         } else if command_name == HIDE {
             if arguments.trim().is_empty() {
                 message_printer::print_help_message_for_command(HIDE);
-                return Err(refused_argument(arguments,HIDE.to_owned()))
+                return Err(refuse_argument(arguments,HIDE.to_owned()))
             }
             match Hidden::parse(arguments) {
                 Ok(x) => hidden = Some(x),
@@ -1123,7 +1113,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             let name = arguments.trim();
             if name.is_empty() {
                 message_printer::print_help_message_for_command(THEME);
-                return Err(refused_argument(arguments,THEME.to_owned()))
+                return Err(refuse_argument(arguments,THEME.to_owned()))
             }
             if super::theme_files::load_theme(name, &crate::paths::PERSISTENT_APP_PATHS.themes_dir).is_none() {
                 return Err(ArgParsingError::NonExistantTheme(name.to_owned()))
@@ -1142,7 +1132,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 Some(x) => top_n = Some(x),
                 None => {
                     message_printer::print_help_message_for_command(TOP);
-                    return Err(refused_argument(arguments,TOP.to_owned()))
+                    return Err(refuse_argument(arguments,TOP.to_owned()))
                 }
             }
         } else if command_name == BY_FILE {
@@ -1155,7 +1145,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                     Some(x) => by_file = Some(x),
                     None => {
                         message_printer::print_help_message_for_command(BY_FILE);
-                        return Err(refused_argument(arguments,BY_FILE.to_owned()))
+                        return Err(refuse_argument(arguments,BY_FILE.to_owned()))
                     }
                 }
             }
@@ -1164,7 +1154,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 Some(x) => sort_by = Some(x),
                 None => {
                     message_printer::print_help_message_for_command(SORT);
-                    return Err(refused_argument(arguments,SORT.to_owned()))
+                    return Err(refuse_argument(arguments,SORT.to_owned()))
                 }
             }
         } else if command_name == BAR_THICKNESS {
@@ -1172,7 +1162,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 Some(x) => bar_thickness = Some(x),
                 None => {
                     message_printer::print_help_message_for_command(BAR_THICKNESS);
-                    return Err(refused_argument(arguments,BAR_THICKNESS.to_owned()))
+                    return Err(refuse_argument(arguments,BAR_THICKNESS.to_owned()))
                 }
             }
         } else if command_name == PROGRESS_BAR {
@@ -1180,7 +1170,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 Some(x) => progress_bar = Some(x),
                 None => {
                     message_printer::print_help_message_for_command(PROGRESS_BAR);
-                    return Err(refused_argument(arguments,PROGRESS_BAR.to_owned()))
+                    return Err(refuse_argument(arguments,PROGRESS_BAR.to_owned()))
                 }
             }
         } else if command_name == LAYOUT {
@@ -1188,7 +1178,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 Some(x) => layout = Some(x),
                 None => {
                     message_printer::print_help_message_for_command(LAYOUT);
-                    return Err(refused_argument(arguments,LAYOUT.to_owned()))
+                    return Err(refuse_argument(arguments,LAYOUT.to_owned()))
                 }
             }
         } else if command_name == OUTPUT {
@@ -1196,7 +1186,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 Some(x) => output = Some(x),
                 None => {
                     message_printer::print_help_message_for_command(OUTPUT);
-                    return Err(refused_argument(arguments,OUTPUT.to_owned()))
+                    return Err(refuse_argument(arguments,OUTPUT.to_owned()))
                 }
             }
         } else if command_name == EXPLAIN {
@@ -1204,14 +1194,14 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 Some(lines) => explain = Some(lines),
                 None => {
                     message_printer::print_help_message_for_command(EXPLAIN);
-                    return Err(refused_argument(arguments, EXPLAIN.to_owned()))
+                    return Err(refuse_argument(arguments, EXPLAIN.to_owned()))
                 }
             }
         } else if command_name == DIFF {
             let path = arguments.trim();
             if path.is_empty() {
                 message_printer::print_help_message_for_command(DIFF);
-                return Err(refused_argument(arguments,DIFF.to_owned()))
+                return Err(refuse_argument(arguments,DIFF.to_owned()))
             }
             diff_against = Some(path.to_owned());
         } else if command_name == NUMBER_SEPARATOR {
@@ -1219,7 +1209,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 Some(x) => number_separator = Some(x),
                 None => {
                     message_printer::print_help_message_for_command(NUMBER_SEPARATOR);
-                    return Err(refused_argument(arguments,NUMBER_SEPARATOR.to_owned()))
+                    return Err(refuse_argument(arguments,NUMBER_SEPARATOR.to_owned()))
                 }
             }
         } else if command_name == DECIMAL_SEPARATOR {
@@ -1227,29 +1217,24 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 Some(x) => decimal_separator = Some(x),
                 None => {
                     message_printer::print_help_message_for_command(DECIMAL_SEPARATOR);
-                    return Err(refused_argument(arguments,DECIMAL_SEPARATOR.to_owned()))
+                    return Err(refuse_argument(arguments,DECIMAL_SEPARATOR.to_owned()))
                 }
             }
         } else if command_name == LOG {
-            let value = arguments.trim();
-            if value.is_empty() {
-                log = Some(LogOption::new(None));
-            } else {
-                log = Some(LogOption::new(Some(value.to_owned())));
-            }
+            log = Some(LogOption::new(super::args::get_trimmed_if_not_empty(arguments)));
         } else if command_name == COMPARE_LEVEL {
-            let compare_num = super::args::parse_usize_value(arguments, MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL);
-            if compare_num.is_none() {
-                message_printer::print_help_message_for_command(COMPARE_LEVEL);
-                return Err(refused_argument(arguments,COMPARE_LEVEL.to_owned()))
-            } else {
-                compare_level = compare_num
+            match super::args::parse_usize_value(arguments, MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL) {
+                Some(x) => compare_level = Some(x),
+                None => {
+                    message_printer::print_help_message_for_command(COMPARE_LEVEL);
+                    return Err(refuse_argument(arguments,COMPARE_LEVEL.to_owned()))
+                }
             }
         } else if command_name == LOAD {
             let config_name = arguments.trim();
             if config_name.is_empty() {
                 message_printer::print_help_message_for_command(LOAD);
-                return Err(refused_argument(arguments,LOAD.to_owned()));
+                return Err(refuse_argument(arguments,LOAD.to_owned()));
             }
 
             match super::config_files::parse_config_file(Some(config_name), None) {
@@ -1267,14 +1252,14 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             let name = arguments.trim();
             if name.is_empty() {
                 message_printer::print_help_message_for_command(SAVE);
-                return Err(refused_argument(arguments,SAVE.to_owned()))
+                return Err(refuse_argument(arguments,SAVE.to_owned()))
             }
             config_name_to_save = Some(name.to_owned());
         } else if command_name == SAVE_THEME {
             let name = arguments.trim();
             if name.is_empty() {
                 message_printer::print_help_message_for_command(SAVE_THEME);
-                return Err(refused_argument(arguments,SAVE_THEME.to_owned()))
+                return Err(refuse_argument(arguments,SAVE_THEME.to_owned()))
             }
             theme_name_to_save = Some(name.to_owned());
         } else if command_name == SAVE_LOCAL {
@@ -1439,14 +1424,14 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     Ok(config_builder)
 }
 
-// The project's own configuration, merged under the command line. Answers whether the folder held
-// one at all, since it may hold nothing but a log.
 // Carries what was typed into the error, so the message can name it instead of saying that
 // something was wrong
-fn refused_argument(given: &str, command: String) -> ArgParsingError {
+fn refuse_argument(given: &str, command: String) -> ArgParsingError {
     ArgParsingError::IncorrectCommandArgs(command, given.trim().to_owned())
 }
 
+// The project's own configuration, merged under the command line. Answers whether the folder held
+// one at all, since it may hold nothing but a log.
 fn apply_local_configuration(config_builder: &mut ConfigurationBuilder, local: &LocalDir)
 -> Result<bool, ArgParsingError>
 {

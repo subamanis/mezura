@@ -163,14 +163,12 @@ fn spell_out_carried(carried: CarriedRecord, language: Option<&Language>) -> Car
 }
 
 fn spell_comment_opener(language: &Language, symbol: u8, depth: u32) -> (String, u32) {
-    match language.comment_pairs().nth(symbol as usize) {
-        Some(CommentPair::Plain { start, .. }) => (start.to_owned(), depth),
-        Some(CommentPair::Nesting { start, .. }) => (start.to_owned(), depth),
+    match language.get_comment_pair_of(symbol) {
+        CommentPair::Plain { start, .. } | CommentPair::Nesting { start, .. } => (start.to_owned(), depth),
         // The walk carries the level in the depth slot, and the filler is the '=' the scan plan
         // counts, so the opener comes back exactly as written
-        Some(CommentPair::Leveled(pair)) => (format!("{}{}{}", pair.start_prefix,
-                "=".repeat(depth as usize), pair.start_suffix as char), 1),
-        None => (String::new(), depth),
+        CommentPair::Leveled(pair) => (format!("{}{}{}", pair.start_prefix,
+                "=".repeat(depth as usize), pair.start_suffix as char), 1)
     }
 }
 

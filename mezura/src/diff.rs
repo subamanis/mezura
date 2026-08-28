@@ -52,35 +52,15 @@ pub struct Reading {
 impl Reading {
     pub fn of_git_revision(asked_for: &str, commit: String, taken: String, result: RunResult,
             config: &Configuration) -> Self {
-        Reading {
-            source: Source::GitRevision { commit, asked_for: asked_for.to_owned() },
-            taken,
-            version: super::config_manager::VERSION_ID.trim_start_matches('v').to_owned(),
-            scope: scope_of(&config.engine, config.view.counting),
-            warnings: Vec::new(),
-            faulty_files_count: result.faulty_files.len(),
-            unreadable_dirs_count: result.unreadable_dirs.len(),
-            files_recorded: true,
-            files_hidden: 0,
-            result
-        }
+        Reading::of_a_counted_run(Source::GitRevision { commit, asked_for: asked_for.to_owned() },
+                taken, result, config)
     }
 
     // A copy, because the result is still being presented around the comparison
     pub fn of_this_run(result: &RunResult, taken: &chrono::DateTime<chrono::Local>,
             config: &Configuration) -> Self {
-        Reading {
-            source: Source::Run,
-            taken: taken.to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
-            version: super::config_manager::VERSION_ID.trim_start_matches('v').to_owned(),
-            scope: scope_of(&config.engine, config.view.counting),
-            warnings: Vec::new(),
-            faulty_files_count: result.faulty_files.len(),
-            unreadable_dirs_count: result.unreadable_dirs.len(),
-            files_recorded: true,
-            files_hidden: 0,
-            result: result.clone()
-        }
+        Reading::of_a_counted_run(Source::Run,
+                taken.to_rfc3339_opts(chrono::SecondsFormat::Secs, false), result.clone(), config)
     }
 
     // Whether a file comparison against this side answers honestly: rows a document never held, or
@@ -95,6 +75,21 @@ impl Reading {
             Source::Document { path } => std::path::Path::new(path).file_name()
                     .map_or_else(|| path.clone(), |x| x.to_string_lossy().into_owned()),
             Source::GitRevision { asked_for, .. } => asked_for.clone()
+        }
+    }
+
+    fn of_a_counted_run(source: Source, taken: String, result: RunResult, config: &Configuration) -> Self {
+        Reading {
+            source,
+            taken,
+            version: super::config_manager::VERSION_ID.trim_start_matches('v').to_owned(),
+            scope: scope_of(&config.engine, config.view.counting),
+            warnings: Vec::new(),
+            faulty_files_count: result.faulty_files.len(),
+            unreadable_dirs_count: result.unreadable_dirs.len(),
+            files_recorded: true,
+            files_hidden: 0,
+            result
         }
     }
 }
@@ -192,9 +187,7 @@ impl BothSidesNamed {
         let (_, reported) = Languages::resolve(&config.engine, self.languages.clone(), conflicts);
         super::warning_collector::report_language_resolution_warnings(reported);
 
-        let [baseline, subject] = <[PreparedSide; 2]>::try_from(
-                prepare_sides(vec![self.baseline, self.subject], &config.engine)?)
-                .ok().expect("two sides in, two sides out");
+        let [baseline, subject] = prepare_sides([self.baseline, self.subject], &config.engine)?;
 
         let (baseline, notes) = baseline.into_reading(config, self.languages.clone(), conflicts)?;
         let mut notes_so_far = self.notes_so_far;
@@ -216,8 +209,7 @@ impl BaselineOnly {
     pub fn count_baseline(self, config: &Configuration,
             conflicts: &ConflictRules) -> Result<CountedBaseline, String>
     {
-        let [baseline] = <[PreparedSide; 1]>::try_from(prepare_sides(vec![self.baseline], &config.engine)?)
-                .ok().expect("one side in, one side out");
+        let [baseline] = prepare_sides([self.baseline], &config.engine)?;
         let (baseline, notes) = baseline.into_reading(config, self.languages, conflicts)?;
         let mut notes_so_far = self.notes_so_far;
         notes_so_far.extend(notes);
@@ -235,71 +227,6 @@ impl CountedBaseline {
     pub fn with_subject(self, subject: Reading, config: &Configuration) -> Comparison {
         Comparison::of(self.baseline, subject, config, self.notes_so_far)
     }
-}
-
-// Boxed for the size difference between the variants
-enum DiffSide {
-    Document(Box<Reading>),
-    GitRevision(String)
-}
-
-impl DiffSide {
-    // Which of the two a name is gets decided by what exists on disk: a file is read here and now as
-    // a document, and anything else goes to git exactly as it was written.
-    fn from_name(name: &str) -> Result<Self, String> {
-        match super::sources::read_document(name) {
-            Some(document) => document.map(|x| DiffSide::Document(Box::new(x))),
-            None => Ok(DiffSide::GitRevision(name.to_owned()))
-        }
-    }
-
-    fn needs_counting(&self) -> bool {
-        !matches!(self, DiffSide::Document(_))
-    }
-
-    fn find_revision_name(&self) -> Option<&str> {
-        match self {
-            DiffSide::GitRevision(name) => Some(name),
-            DiffSide::Document(_) => None
-        }
-    }
-}
-
-// The same sides after preparation, as their own type so that an unresolved side cannot reach the
-// counting: one enum with all three shapes would give 'into_reading' an arm for the unprepared one
-// that could only panic or quietly resolve on the spot.
-enum PreparedSide {
-    Document(Box<Reading>),
-    Revision(RevisionSide)
-}
-
-fn prepare_sides(sides: Vec<DiffSide>, engine: &EngineConfig) -> Result<Vec<PreparedSide>, String> {
-    let names = sides.iter().filter_map(DiffSide::find_revision_name).collect::<Vec<_>>();
-    let resolved = super::sources::prepare_revisions(&names, engine).map_err(|x| x.to_string())?;
-    let mut acquiring = super::sources::start_acquiring_revisions(resolved).into_iter();
-
-    Ok(sides.into_iter().map(|side| match side {
-        DiffSide::Document(reading) => PreparedSide::Document(reading),
-        DiffSide::GitRevision(_) => PreparedSide::Revision(acquiring.next()
-                .expect("a resolution for every revision side"))
-    }).collect())
-}
-
-impl PreparedSide {
-    fn into_reading(self, config: &Configuration, languages: Vec<Language>,
-            conflicts: &ConflictRules) -> Result<(Reading, Vec<Note>), String>
-    {
-        match self {
-            PreparedSide::Document(reading) => Ok((*reading, Vec::new())),
-            PreparedSide::Revision(side) => super::sources::count_git_revision(side, config, languages,
-                    conflicts).map_err(|x| x.to_string())
-        }
-    }
-}
-
-fn adopt_settings_from(document: &Reading, config: &mut Configuration) -> Option<Note> {
-    let settings = resolve_settings(&document.scope, config);
-    (!settings.is_empty()).then(|| Note::SettingsAdopted { from: document.determine_display_name(), settings })
 }
 
 // Every one of these stops the run before a single file is counted, so that a mistake in the
@@ -389,32 +316,6 @@ pub enum Note {
     LayoutFallback { layout: &'static str },
     NoGitignoreInCheckout { git_revision: String },
     MissingInRevision { git_revision: String, targets: Vec<String> }
-}
-
-// Splits '--diff a.json..b.json' into the two readings it names, and answers None for the second
-// when only one was given, whose second reading is this run. The trap is that '..' is a separator
-// here and a directory in every filesystem, so '--diff ../old.json' must not come apart into an
-// empty name and '/old.json': what was written is taken whole if it names something that exists.
-fn split_operand(value: &str) -> Result<(&str, Option<&str>), String> {
-    if std::path::Path::new(value).exists() {
-        return Ok((value, None));
-    }
-    // Beyond one there is no telling which is the separator and which is a climb, and guessing would
-    // mean asking the disk about every way of cutting it. Refused instead.
-    if value.matches("..").count() > 1 {
-        return Err(format!("'{value}' has more than one '..' in it, and only one of them can be the \
-separator between the two readings. Write the paths out without the '..' that climbs."));
-    }
-
-    match value.split_once("..") {
-        Some((before, after)) if !before.is_empty() && !after.is_empty() => Ok((before, Some(after))),
-        // A separator with nothing after it is a line left half written, and saying so is worth more
-        // than the "no such file" that reading it whole would produce
-        Some((before, _)) if !before.is_empty() => Err(format!("'{value}' names a reading before the \
-'..' and none after it. Write the second one, or drop the '..' to compare '{before}' against this run.")),
-        // Nothing before it is an ordinary path climbing a directory
-        _ => Ok((value, None))
-    }
 }
 
 pub fn load(path: &str) -> Result<Reading, LoadError> {
@@ -594,17 +495,10 @@ pub fn scope_of(engine: &mezura_core::EngineConfig, counting: mezura_core::Count
 // line, and both sides are folded by the model this run is showing, so two readings taken under
 // different models are still compared exactly.
 pub fn find_settings_that_differ(baseline: &Scope, subject: &Scope) -> Vec<&'static str> {
-    let same = |a: &[String], b: &[String]| {
-        let (mut a, mut b) = (a.to_vec(), b.to_vec());
-        a.sort();
-        b.sort();
-        a == b
-    };
-
     let mut differ = Vec::new();
-    if !same(&baseline.exclude, &subject.exclude) {differ.push(EXCLUDE)}
-    if !same(&baseline.languages, &subject.languages) {differ.push(LANGUAGES)}
-    if !same(&baseline.excluded_languages, &subject.excluded_languages) {differ.push(EXCLUDE_LANGUAGES)}
+    if !hold_the_same_values(&baseline.exclude, &subject.exclude) {differ.push(EXCLUDE)}
+    if !hold_the_same_values(&baseline.languages, &subject.languages) {differ.push(LANGUAGES)}
+    if !hold_the_same_values(&baseline.excluded_languages, &subject.excluded_languages) {differ.push(EXCLUDE_LANGUAGES)}
     if baseline.forced_languages != subject.forced_languages {differ.push(FORCE_LANGUAGE)}
     if baseline.search_in_dotted != subject.search_in_dotted {differ.push(SEARCH_IN_DOTTED)}
     if baseline.gitignore != subject.gitignore {differ.push(NO_GITIGNORE)}
@@ -619,12 +513,7 @@ pub fn find_settings_that_differ(baseline: &Scope, subject: &Scope) -> Vec<&'sta
 // Takes the document's settings for everything this run's own command line did not explicitly set,
 // so that the two readings measure the same thing
 pub fn resolve_settings(document: &Scope, config: &mut super::config_manager::Configuration) -> Vec<&'static str> {
-    let different = |a: &[String], b: &[String]| {
-        let (mut a, mut b) = (a.to_vec(), b.to_vec());
-        a.sort();
-        b.sort();
-        a != b
-    };
+    let different = |a: &[String], b: &[String]| !hold_the_same_values(a, b);
 
     let typed = config.typed_explicitly;
     let mut adopted = Vec::new();
@@ -681,6 +570,99 @@ pub fn resolve_settings(document: &Scope, config: &mut super::config_manager::Co
     }
 
     adopted
+}
+
+// Boxed for the size difference between the variants
+enum DiffSide {
+    Document(Box<Reading>),
+    GitRevision(String)
+}
+
+impl DiffSide {
+    // Which of the two a name is gets decided by what exists on disk: a file is read here and now as
+    // a document, and anything else goes to git exactly as it was written.
+    fn from_name(name: &str) -> Result<Self, String> {
+        match super::sources::read_document(name) {
+            Some(document) => document.map(|x| DiffSide::Document(Box::new(x))),
+            None => Ok(DiffSide::GitRevision(name.to_owned()))
+        }
+    }
+
+    fn needs_counting(&self) -> bool {
+        !matches!(self, DiffSide::Document(_))
+    }
+
+    fn find_revision_name(&self) -> Option<&str> {
+        match self {
+            DiffSide::GitRevision(name) => Some(name),
+            DiffSide::Document(_) => None
+        }
+    }
+}
+
+// The same sides after preparation, as their own type so that an unresolved side cannot reach the
+// counting: one enum with all three shapes would give 'into_reading' an arm for the unprepared one
+// that could only panic or quietly resolve on the spot.
+enum PreparedSide {
+    Document(Box<Reading>),
+    Revision(RevisionSide)
+}
+
+impl PreparedSide {
+    fn into_reading(self, config: &Configuration, languages: Vec<Language>,
+            conflicts: &ConflictRules) -> Result<(Reading, Vec<Note>), String>
+    {
+        match self {
+            PreparedSide::Document(reading) => Ok((*reading, Vec::new())),
+            PreparedSide::Revision(side) => super::sources::count_git_revision(side, config, languages,
+                    conflicts).map_err(|x| x.to_string())
+        }
+    }
+}
+
+fn prepare_sides<const N: usize>(sides: [DiffSide; N], engine: &EngineConfig)
+-> Result<[PreparedSide; N], String>
+{
+    let names = sides.iter().filter_map(DiffSide::find_revision_name).collect::<Vec<_>>();
+    let resolved = super::sources::prepare_revisions(&names, engine).map_err(|x| x.to_string())?;
+    let mut acquiring = super::sources::start_acquiring_revisions(resolved).into_iter();
+
+    Ok(sides.map(|side| match side {
+        DiffSide::Document(reading) => PreparedSide::Document(reading),
+        DiffSide::GitRevision(_) => PreparedSide::Revision(acquiring.next()
+                .expect("a resolution for every revision side"))
+    }))
+}
+
+fn adopt_settings_from(document: &Reading, config: &mut Configuration) -> Option<Note> {
+    let settings = resolve_settings(&document.scope, config);
+    (!settings.is_empty()).then(|| Note::SettingsAdopted { from: document.determine_display_name(), settings })
+}
+
+// Splits '--diff a.json..b.json' into the two readings it names, and answers None for the second
+// when only one was given, whose second reading is this run. The trap is that '..' is a separator
+// here and a directory in every filesystem, so '--diff ../old.json' must not come apart into an
+// empty name and '/old.json': what was written is taken whole if it names something that exists.
+fn split_operand(value: &str) -> Result<(&str, Option<&str>), String> {
+    if std::path::Path::new(value).exists() {
+        return Ok((value, None));
+    }
+    // Beyond one there is no telling which is the separator and which is a climb, and guessing would
+    // mean asking the disk about every way of cutting it. Refused instead.
+    if value.matches("..").count() > 1 {
+        return Err(format!("'{value}' has more than one '..' in it, and only one of them can be the \
+separator between the two readings. Write the paths out without the '..' that climbs."));
+    }
+
+    match value.split_once("..") {
+        Some((before, after)) if !before.is_empty() && !after.is_empty() => Ok((before, Some(after))),
+        // A separator with nothing after it is a line left half written, and saying so is worth more
+        // than the "no such file" that reading it whole would produce
+        Some((before, _)) if !before.is_empty() => Err(format!("'{value}' names a reading before the \
+'..' and none after it. Write the second one, or drop the '..' to compare '{before}' against this run.")),
+        // Nothing before it is an ordinary path climbing a directory
+        _ => Ok((value, None))
+    }
 }
 
 // In the order they are read above the table
@@ -765,6 +747,14 @@ fn relativise(path: &str, base: &str) -> String {
         Some(rest) if rest.starts_with('/') => path[base.len() + 1..].to_owned(),
         _ => path.to_owned()
     }
+}
+
+// The order two lists were written in is not a difference
+fn hold_the_same_values(a: &[String], b: &[String]) -> bool {
+    let (mut a, mut b) = (a.to_vec(), b.to_vec());
+    a.sort();
+    b.sort();
+    a == b
 }
 
 fn fold_path(path: &str) -> Cow<'_, str> {
@@ -900,13 +890,8 @@ mod tests {
     fn the_file_bases_agree_only_when_one_sides_targets_are_a_subset_of_the_others() {
         let with_targets = |paths: &[&str]| {
             let per_language = hashmap!["Rust".to_owned() => stats(100, 70, 2)];
-            RunResult {
-                total: Stats::total_of(&per_language), per_language, modules: Vec::new(), nested_languages: HashMap::new(),
-                faulty_files: Vec::new(), minified_files: 0, generated_files: 0, unreadable_dirs: Vec::new(),
-                targets: paths.iter().map(|x| mezura_core::Target::of(*x)).collect(),
-                files_present: mezura_core::FilesPresent {total_files: 2, relevant_files: 2, excluded_files: 0},
-                performance: mezura_core::Performance {duration_millis: 0, threads: mezura_core::Threads::new(1, 1)}
-            }
+            crate::test_support::plain_result_of(per_language, Vec::new(),
+                    paths.iter().map(|x| mezura_core::Target::of(*x)).collect())
         };
 
         // A revision that lacks one of the targets relativises where the run does
@@ -936,12 +921,7 @@ mod tests {
         };
         let result = |modules: Vec<ModuleResult>| {
             let per_language = hashmap!["Rust".to_owned() => stats(100, 70, 2)];
-            mezura_core::RunResult {
-                total: Stats::total_of(&per_language), per_language, modules, nested_languages: HashMap::new(),
-                faulty_files: Vec::new(), minified_files: 0, generated_files: 0, targets: Vec::new(), unreadable_dirs: Vec::new(),
-                files_present: mezura_core::FilesPresent {total_files: 2, relevant_files: 2, excluded_files: 0},
-                performance: mezura_core::Performance {duration_millis: 0, threads: mezura_core::Threads::new(1, 1)}
-            }
+            crate::test_support::plain_result_of(per_language, modules, Vec::new())
         };
 
         // The order they were declared in is not a difference: the pairs follow the second reading
@@ -985,12 +965,7 @@ mod tests {
                 unreadable_dirs_count: 0,
                 files_recorded: true,
                 files_hidden: 0,
-                result: RunResult {
-                    total: Stats::total_of(&per_language), per_language, modules, nested_languages: HashMap::new(),
-                    faulty_files: Vec::new(), minified_files: 0, generated_files: 0, targets: Vec::new(), unreadable_dirs: Vec::new(),
-                    files_present: mezura_core::FilesPresent {total_files: 2, relevant_files: 2, excluded_files: 0},
-                    performance: mezura_core::Performance {duration_millis: 0, threads: mezura_core::Threads::new(1, 1)}
-                }
+                result: crate::test_support::plain_result_of(per_language, modules, Vec::new())
             }
         };
         let module = |name: &str| {
@@ -1080,12 +1055,7 @@ mod tests {
             let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
             config.view.counting = model;
             let per_language = hashmap!["Rust".to_owned() => stats(100, 70, 2)];
-            let result = mezura_core::RunResult {
-                total: Stats::total_of(&per_language), per_language, modules: Vec::new(), nested_languages: HashMap::new(),
-                faulty_files: Vec::new(), minified_files: 0, generated_files: 0, targets: Vec::new(), unreadable_dirs: Vec::new(),
-                files_present: mezura_core::FilesPresent {total_files: 2, relevant_files: 2, excluded_files: 0},
-                performance: mezura_core::Performance {duration_millis: 0, threads: mezura_core::Threads::new(1, 1)}
-            };
+            let result = crate::test_support::plain_result_of(per_language, Vec::new(), Vec::new());
             std::fs::write(&path, crate::json_printer::create_document(&result, &chrono::Local::now(), &config)).unwrap();
             path
         };
@@ -1134,13 +1104,7 @@ mod tests {
         let dir = crate::paths::test_paths::SCRATCH_DIR.to_owned() + "diff-collect-files/";
         std::fs::create_dir_all(&dir).unwrap();
         let per_language = hashmap!["Rust".to_owned() => stats(100, 70, 2)];
-        let mut result = RunResult {
-            total: Stats::total_of(&per_language), per_language: per_language.clone(), modules: Vec::new(),
-            nested_languages: HashMap::new(), faulty_files: Vec::new(), minified_files: 0, generated_files: 0,
-            targets: Vec::new(), unreadable_dirs: Vec::new(),
-            files_present: mezura_core::FilesPresent {total_files: 2, relevant_files: 2, excluded_files: 0},
-            performance: mezura_core::Performance {duration_millis: 0, threads: mezura_core::Threads::new(1, 1)}
-        };
+        let mut result = crate::test_support::plain_result_of(per_language.clone(), Vec::new(), Vec::new());
         let write = |name: &str, result: &RunResult, config: &crate::config_manager::Configuration| {
             let path = format!("{dir}{name}.json");
             std::fs::write(&path, crate::json_printer::create_document(result, &chrono::Local::now(), config)).unwrap();
@@ -1173,12 +1137,7 @@ mod tests {
     fn the_settings_the_two_readings_were_taken_under_are_compared() {
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         let per_language = hashmap!["Rust".to_owned() => stats(100, 70, 2)];
-        let result = mezura_core::RunResult {
-            total: Stats::total_of(&per_language), per_language, modules: Vec::new(), nested_languages: HashMap::new(),
-            faulty_files: Vec::new(), minified_files: 0, generated_files: 0, targets: Vec::new(), unreadable_dirs: Vec::new(),
-            files_present: mezura_core::FilesPresent {total_files: 2, relevant_files: 2, excluded_files: 0},
-            performance: mezura_core::Performance {duration_millis: 0, threads: mezura_core::Threads::new(1, 1)}
-        };
+        let result = crate::test_support::plain_result_of(per_language, Vec::new(), Vec::new());
         let document = crate::json_reader::parse(&crate::json_printer::create_document(&result,
                 &chrono::Local::now(), &crate::config_manager::Configuration::new(vec!["./src".to_owned()]))).unwrap();
         let content = mezura_core::CountingModel::Content;

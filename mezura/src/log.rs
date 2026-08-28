@@ -1,14 +1,16 @@
 // The log a configuration keeps: one JSON entry per line, the newest first. Writing and reading
 // both live here, so the shape cannot drift between two files.
-use std::{fs::File, io::{self, BufWriter, Read, Write}, path::Path};
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{self, BufWriter, Read, Write};
+use std::path::Path;
 
 use chrono::{DateTime, Local, SecondsFormat};
+use mezura_core::{LineClasses, RunResult, Stats, Target, UNNAMED_MODULE_NAME};
 use serde_json::Value;
 
-use mezura_core::{LineClasses, RunResult, Stats, Target, UNNAMED_MODULE_NAME};
-
 use super::config_manager::Configuration;
-use super::json_printer::escape;
+use super::json_printer::{create_array, create_object, escape};
 use super::json_reader::{DocumentError, Scope};
 use super::json_reader::{parse_classes, parse_scope, parse_stats, read_list, read_nested,
         read_number, read_object, read_optional_name, read_text};
@@ -38,7 +40,7 @@ pub struct ModuleEntry {
 
 // A log is the one output that cannot be measured again, since the trees those runs counted have
 // moved on, so it is never truncated in place.
-pub fn log_stats(path: &str, contents: &Option<String>, result: &RunResult, datetime_now: &DateTime<Local>, config: &Configuration) -> io::Result<()> {
+pub fn log_stats(path: &str, contents: Option<&str>, result: &RunResult, datetime_now: &DateTime<Local>, config: &Configuration) -> io::Result<()> {
     // A file that exists and is not empty has history in it whatever stopped it being read this
     // time: a lock, an editor holding it, bytes that are not UTF-8. Writing this run alone over it
     // would leave one entry where there were twenty.
@@ -83,7 +85,7 @@ pub fn read_last_entries(contents: &str, count: usize) -> Vec<LogEntry> {
             .take(count).collect()
 }
 
-fn write_whole_log(path: &str, contents: &Option<String>, result: &RunResult,
+fn write_whole_log(path: &str, contents: Option<&str>, result: &RunResult,
         datetime_now: &DateTime<Local>, config: &Configuration) -> io::Result<()>
 {
     let mut writer = BufWriter::new(File::create(path)?);
@@ -141,11 +143,8 @@ fn format_stats(total: &Stats) -> String {
 }
 
 fn format_classes(classes: &LineClasses) -> String {
-    let members = LineClasses::NAMES.iter().zip(classes.to_array())
-            .map(|(name, count)| format!("\"{name}\":{count}"))
-            .collect::<Vec<_>>();
-
-    format!("{{{}}}", members.join(","))
+    create_object(LineClasses::NAMES.iter().zip(classes.to_array())
+            .map(|(name, count)| format!("\"{name}\":{count}")))
 }
 
 fn format_modules(result: &RunResult) -> String {
@@ -153,13 +152,11 @@ fn format_modules(result: &RunResult) -> String {
         return String::from("[]");
     }
 
-    let entries = result.modules.iter().map(|module| {
+    create_array(result.modules.iter().map(|module| {
         let name = module.name.as_ref().map_or("null".to_owned(), |name| format!("\"{}\"", escape(name)));
         format!("{{\"name\":{name},\"lines\":{},\"classes\":{}}}",
                 module.total.lines, format_classes(&module.total.classes))
-    }).collect::<Vec<_>>();
-
-    format!("[{}]", entries.join(","))
+    }))
 }
 
 // A project's log is shared the way its code is, so its entries spell their targets the way the
@@ -167,31 +164,26 @@ fn format_modules(result: &RunResult) -> String {
 // checkouts would report its targets as having changed on every entry the other one wrote, which is
 // the history section's way of saying the numbers are not comparable.
 fn format_targets(targets: &[Target], config: &Configuration) -> String {
-    let entries = targets.iter().map(|target| {
+    create_array(targets.iter().map(|target| {
         let module = target.module.as_ref().map_or("null".to_owned(), |x| format!("\"{}\"", escape(x)));
         let path = match config.view.find_project_of_the_log() {
             Some(project) => super::config_manager::format_path_inside(&project.project_dir, &target.path),
             None => target.path.clone()
         };
         format!("{{\"module\":{module},\"path\":\"{}\"}}", escape(&path))
-    }).collect::<Vec<_>>();
-
-    format!("[{}]", entries.join(","))
+    }))
 }
 
 fn format_strings(values: &[String]) -> String {
-    format!("[{}]", values.iter().map(|x| format!("\"{}\"", escape(x))).collect::<Vec<_>>().join(","))
+    create_array(values.iter().map(|x| format!("\"{}\"", escape(x))))
 }
 
 // Sorted, so that two runs with the same settings produce the same bytes
-fn format_forced_languages(forced: &std::collections::HashMap<String, String>) -> String {
+fn format_forced_languages(forced: &HashMap<String, String>) -> String {
     let mut sorted = forced.iter().collect::<Vec<_>>();
     sorted.sort_unstable_by_key(|(extension, _)| extension.as_str());
-    let members = sorted.into_iter()
-            .map(|(extension, language)| format!("\"{}\":\"{}\"", escape(extension), escape(language)))
-            .collect::<Vec<_>>();
-
-    format!("{{{}}}", members.join(","))
+    create_object(sorted.into_iter()
+            .map(|(extension, language)| format!("\"{}\":\"{}\"", escape(extension), escape(language))))
 }
 
 fn parse_entry(line: &str) -> Result<LogEntry, DocumentError> {
@@ -342,12 +334,12 @@ mod tests {
             files: HashMap::new(), total: crate::test_support::plain_stats_of(1, 10, lines, code, comments, HashMap::new()) };
 
         let older = result_of(crate::test_support::plain_stats_of(4, 4000, 400, 300, 0, HashMap::new()), Vec::new());
-        log_stats(&path, &None, &older, &DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap(), &config).unwrap();
+        log_stats(&path, None, &older, &DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap(), &config).unwrap();
 
         let with_modules = result_of(crate::test_support::plain_stats_of(10, 5000, 1000, 700, 200, HashMap::new()),
                 vec![module_of(Some("frontend"), 600, 400, 150), module_of(None, 400, 300, 50)]);
         let history = extract_file_contents(&path);
-        log_stats(&path, &history, &with_modules,
+        log_stats(&path, history.as_deref(), &with_modules,
                 &DateTime::from_str("2021-09-13 04:00:00 +03:00").unwrap(), &config).unwrap();
 
         let entries = read_last_entries(&extract_file_contents(&path).unwrap(), 2);
@@ -384,7 +376,7 @@ mod tests {
         std::fs::write(&path, "AN ENTRY FROM BEFORE\n").unwrap();
         let history = extract_file_contents(&path);
         assert!(history.is_some());
-        log_stats(&path, &history, &result, &now, &config).unwrap();
+        log_stats(&path, history.as_deref(), &result, &now, &config).unwrap();
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(written.contains("AN ENTRY FROM BEFORE"), "the history was dropped:\n{written}");
 
@@ -394,7 +386,7 @@ mod tests {
         let unreadable = extract_file_contents(&path);
         assert!(unreadable.is_none(), "the probe no longer reproduces an unreadable log");
 
-        let refused = log_stats(&path, &unreadable, &result, &now, &config);
+        let refused = log_stats(&path, unreadable.as_deref(), &result, &now, &config);
         assert!(refused.is_err(), "a log that could not be read was overwritten anyway");
         let after = std::fs::read(&path).unwrap();
         assert!(String::from_utf8_lossy(&after).contains("AN ENTRY FROM BEFORE"),
@@ -417,7 +409,7 @@ mod tests {
         for emptied in ["", "\r\n", "\n\n   \n", "   "] {
             std::fs::write(&path, emptied).unwrap();
             let history = extract_file_contents(&path);
-            let written = log_stats(&path, &history, &result, &now, &config);
+            let written = log_stats(&path, history.as_deref(), &result, &now, &config);
             assert!(written.is_ok(), "a log holding {emptied:?} was refused: {:?}", written.err());
             assert_eq!(1, read_last_entries(&std::fs::read_to_string(&path).unwrap(), 5).len(),
                     "a log holding {emptied:?} was left without the entry of this run");

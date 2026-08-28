@@ -1,11 +1,18 @@
-use std::{collections::HashMap, sync::{Arc, atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}}, thread, thread::JoinHandle, time::{Duration, Instant}};
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::thread;
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use crossbeam_deque::{Injector, Steal, Worker};
 
-use crate::{FileEntry, FilesPerModuleMut, NestedLanguageMapMut, EngineConfig, FaultyFileDetails,
-        FaultyFilesListMut, Language, ParsableFile, ScanProgress, Stats, StatsMapMut, phase_timing};
+use crate::{EngineConfig, FaultyFileDetails, FaultyFilesListMut, FileEntry, FilesPerModuleMut,
+        Language, NestedLanguageMapMut, ParsableFile, ScanProgress, Stats, StatsMapMut, phase_timing};
 use crate::engine::file_parser;
 use crate::languages::NestedLanguageDefinitions;
+
+const INITIAL_FILE_BUFFER_BYTES : usize = 150;
 
 pub(crate) fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
         stats_per_module: StatsMapMut, nested_per_module: NestedLanguageMapMut, files_per_module: FilesPerModuleMut,
@@ -31,7 +38,7 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
     config: Arc<EngineConfig>, minified_files: &AtomicUsize, generated_files: &AtomicUsize,
     progress: &ScanProgress)
 {
-    let mut buf = String::with_capacity(150);
+    let mut buf = String::with_capacity(INITIAL_FILE_BUFFER_BYTES);
     let mut parse_buffers = file_parser::ParseBuffers::default();
     let mut idle_iterations = 0u32;
     let mut local_faulty: Vec<FaultyFileDetails> = Vec::new();
@@ -139,7 +146,7 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                 }
                 // Only after the buffer's length has been read as the file's size, never before
                 if buf.capacity() > file_parser::MAX_RETAINED_FILE_BUFFER_BYTES {
-                    buf = String::with_capacity(150);
+                    buf = String::with_capacity(INITIAL_FILE_BUFFER_BYTES);
                 }
             },
             Steal::Retry => {
@@ -152,7 +159,7 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
 
                 // Timed only while the producers are still running: a consumer waiting for work that
                 // has not been discovered yet is the only real starvation here
-                let waited_from = phase_timing::ENABLED.then(phase_timing::now);
+                let waited_from = phase_timing::ENABLED.then(Instant::now);
                 idle_iterations += 1;
                 if idle_iterations < 10 {
                     thread::yield_now();

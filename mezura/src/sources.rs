@@ -240,18 +240,13 @@ mod tests {
     fn the_file_rows_of_a_revision_get_back_the_declared_form_of_their_targets() {
         let entry = |path: &str| mezura_core::FileEntry { path: path.to_owned(),
                 stats: mezura_core::Stats::default(), nested_languages: HashMap::new() };
-        let mut result = mezura_core::RunResult {
-            per_language: HashMap::new(), total: mezura_core::Stats::default(),
-            modules: vec![mezura_core::ModuleResult { name: None, per_language: HashMap::new(),
-                    nested_languages: HashMap::new(), total: mezura_core::Stats::default(),
-                    files: hashmap!["Rust".to_owned() => vec![entry("C:/t/chk/api/a.rs"),
-                            entry("C:/t/chk/apix/b.rs"), entry("C:/t/chk/main.rs"),
-                            entry("D:/elsewhere/c.rs")]] }],
-            nested_languages: HashMap::new(), faulty_files: Vec::new(), minified_files: 0,
-            generated_files: 0, files_present: FilesPresent::default(), targets: Vec::new(),
-            unreadable_dirs: Vec::new(),
-            performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }
-        };
+        let mut result = crate::test_support::plain_result_of(HashMap::new(),
+                vec![mezura_core::ModuleResult { name: None, per_language: HashMap::new(),
+                        nested_languages: HashMap::new(), total: mezura_core::Stats::default(),
+                        files: hashmap!["Rust".to_owned() => vec![entry("C:/t/chk/api/a.rs"),
+                                entry("C:/t/chk/apix/b.rs"), entry("C:/t/chk/main.rs"),
+                                entry("D:/elsewhere/c.rs")]] }],
+                Vec::new());
 
         let checkout = [mezura_core::Target::of("C:/t/chk/api"), mezura_core::Target::of("C:/t/chk/main.rs"),
                 mezura_core::Target::of("C:/t/chk")];

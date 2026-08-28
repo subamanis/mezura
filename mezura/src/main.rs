@@ -1,5 +1,4 @@
 #![forbid(unsafe_code)]
-#![allow(non_snake_case)]
 
 macro_rules! hashmap {
     ($( $key: expr => $val: expr ),*) => {{
@@ -34,10 +33,13 @@ mod theme;
 mod theme_files;
 mod warning_collector;
 
-use std::{process::ExitCode, sync::Arc, time::Instant};
+use std::process::ExitCode;
+use std::sync::Arc;
+use std::time::Instant;
 
-use colored::*;
-use mezura_core::{CountingModel, FilesPresent, LANGUAGE_CONFLICTS_FILE_NAME, Language};
+use colored::{Colorize, control};
+use mezura_core::{CountingModel, FilesPresent, Language};
+use mezura_core::LANGUAGE_CONFLICTS_FILE_NAME;
 use mezura_core::language_file::ConflictRules;
 
 use crate::config_manager::{Configuration, OutputFormat};
@@ -63,7 +65,7 @@ fn main() -> ExitCode {
     // and a typed target beats the one a configuration names, so no configuration could supply the
     // targets of a run that names none. The working directory answers for that run inside
     // 'create_config_builder_from_args', after every configuration has had its say.
-    let args_str = read_args_as_str().unwrap_or_default();
+    let args_str = read_args_as_str();
 
     // Before the languages are read, or the run that performs it counts with the old files and the
     // change takes two runs to arrive. Skipped for '--restore', which performs this same pass
@@ -76,43 +78,7 @@ fn main() -> ExitCode {
         eprintln!("{message}");
     }
 
-    // The pass above just wrote the directory and is the only thing that knows whether it is whole,
-    // so nothing here asks the same question a second time
-    let languages_available = if outcome.every_language_file_is_in_place() {
-        match mezura_core::language_file::parse_languages_in_dir(&crate::paths::PERSISTENT_APP_PATHS.languages_dir) {
-            // A directory that cannot be read is not a reason to refuse to run, and refusing would
-            // be worst of all for the command that repairs it: '--restore' does not perform the
-            // startup pass, so a deleted 'languages' folder would kill the run right here.
-            Err(x) => {
-                // Not offered to somebody who is already running it, who is two lines away from the
-                // report of the restore this same run is about to perform
-                let way_out = if restore_was_asked_for {String::new()}
-                        else {format!("\nRun with '--{RESTORE}' to write them now. \
-Your configurations, themes and logs are left alone.")};
-                eprintln!("\n{}\n", crate::message_printer::wrap_message(&format!(
-                        "{}\nCounting with the copies inside the program until it is there again.{way_out}",
-                        x.format())).yellow());
-                mezura_core::languages::parse_shipped_languages()
-            },
-            Ok((parsed, faulty_files)) => {
-                if !faulty_files.is_empty() {
-                    eprintln!("{}", crate::message_printer::wrap_message(
-                            &crate::message_printer::format_faulty_language_files_message(&faulty_files)).yellow());
-                    // One warning per file and not one for the list, since each is a whole language
-                    // whose files went uncounted and the document has to name which
-                    for faulty in &faulty_files {
-                        let (file, reason) = (&faulty.file_name, &faulty.error);
-                        crate::warning_collector::keep(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::LanguageFileUnreadable, file,
-                                format!("'{file}' could not be used as a language file, so the files of that language were not counted: {reason}.")));
-                    }
-                }
-
-                parsed
-            }
-        }
-    } else {
-        mezura_core::languages::parse_shipped_languages()
-    };
+    let languages_available = read_available_languages(&outcome, restore_was_asked_for);
 
     if let Some(code) = handle_message_only_command(&args_str, &languages_available) {
         return code;
@@ -312,6 +278,45 @@ configurations from '{}' and not from the usual place.", crate::paths::DATA_DIR_
     }
 }
 
+// The pass that ran before this just wrote the data directory and its outcome is the only thing
+// that knows whether it is whole, so nothing here asks the same question a second time.
+fn read_available_languages(outcome: &MigrationOutcome, restore_was_asked_for: bool) -> Vec<Language> {
+    if !outcome.every_language_file_is_in_place() {
+        return mezura_core::languages::parse_shipped_languages();
+    }
+    match mezura_core::language_file::parse_languages_in_dir(&crate::paths::PERSISTENT_APP_PATHS.languages_dir) {
+        // A directory that cannot be read is not a reason to refuse to run, and refusing would
+        // be worst of all for the command that repairs it: '--restore' does not perform the
+        // startup pass, so a deleted 'languages' folder would kill the run right here.
+        Err(x) => {
+            // Not offered to somebody who is already running it, who is two lines away from the
+            // report of the restore this same run is about to perform
+            let way_out = if restore_was_asked_for {String::new()}
+                    else {format!("\nRun with '--{RESTORE}' to write them now. \
+Your configurations, themes and logs are left alone.")};
+            eprintln!("\n{}\n", crate::message_printer::wrap_message(&format!(
+                    "{}\nCounting with the copies inside the program until it is there again.{way_out}",
+                    x.format())).yellow());
+            mezura_core::languages::parse_shipped_languages()
+        },
+        Ok((parsed, faulty_files)) => {
+            if !faulty_files.is_empty() {
+                eprintln!("{}", crate::message_printer::wrap_message(
+                        &crate::message_printer::format_faulty_language_files_message(&faulty_files)).yellow());
+                // One warning per file and not one for the list, since each is a whole language
+                // whose files went uncounted and the document has to name which
+                for faulty in &faulty_files {
+                    let (file, reason) = (&faulty.file_name, &faulty.error);
+                    crate::warning_collector::keep(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::LanguageFileUnreadable, file,
+                            format!("'{file}' could not be used as a language file, so the files of that language were not counted: {reason}.")));
+                }
+            }
+
+            parsed
+        }
+    }
+}
+
 fn format_exec_time(instant: &Instant) -> String {
     format!("Exec time: {} secs ", crate::number_formatter::format_with_decimal_separator(format!("{:.2}", instant.elapsed().as_secs_f32())))
 }
@@ -352,7 +357,7 @@ fn report_unknown_languages(languages_available: &[Language], languages_of_inter
     for name in &unknown {
         report.push_str(&format!("\n{}", crate::theme::get_active().warning.paint(
                 &format!("'{name}' is not a language this installation knows."))));
-        if let Some(x) = crate::suggestions::formatted_suggestion(name, &candidates) {
+        if let Some(x) = crate::suggestions::format_suggestion(name, &candidates) {
             report.push_str(&format!("\n{x}\n"));
         }
     }
@@ -387,15 +392,10 @@ fn open_in_browser(path: &str) {
     }
 }
 
-fn read_args_as_str() -> Option<String> {
-    let args = std::env::args().skip(1)
+fn read_args_as_str() -> String {
+    std::env::args().skip(1)
             .filter_map(|arg| crate::args::get_trimmed_if_not_empty(&arg))
-            .collect::<Vec<String>>();
-    if args.is_empty() {
-        None
-    } else {
-        Some(args.join(" ").trim().to_owned())
-    }
+            .collect::<Vec<String>>().join(" ")
 }
 
 // These commands take no configuration, so nothing could hide the version line from them, and they
@@ -429,8 +429,8 @@ program to read, and both of them go to the output, so only one of the two can b
     if is_present(HELP) {
         crate::message_printer::print_help_message_for_given_args(args_str);
         return Some(ExitCode::SUCCESS);
-    } else if let Some(pos) = crate::args::find_command(args_str, CHANGELOG) {
-        return match args_str[pos + CHANGELOG.len() + 2..].split_whitespace().next() {
+    } else if is_present(CHANGELOG) {
+        return match crate::args::find_argument_of(args_str, CHANGELOG) {
             Some("full") => {
                 crate::message_printer::print_changelog(true);
                 Some(ExitCode::SUCCESS)
@@ -493,16 +493,16 @@ program to read, and both of them go to the output, so only one of the two can b
                 Some(ExitCode::FAILURE)
             }
         };
-    } else if let Some(pos) = crate::args::find_command(args_str, SHOW_THEMES) {
+    } else if is_present(SHOW_THEMES) {
         // The preview follows '--layout' and '--counting', so that what it shows is what a run would
         // print. Read here by hand, because a message-only command runs before there is a
         // configuration to ask.
-        let argument_of = |command: &str| crate::args::find_command(args_str, command)
-                .and_then(|at| args_str[at + command.len() + 2..].split_whitespace().next());
-        let layout = argument_of(LAYOUT).and_then(config_manager::Layout::parse).unwrap_or_default();
-        let counting = argument_of(COUNTING).and_then(CountingModel::parse).unwrap_or_default();
+        let layout = crate::args::find_argument_of(args_str, LAYOUT)
+                .and_then(config_manager::Layout::parse).unwrap_or_default();
+        let counting = crate::args::find_argument_of(args_str, COUNTING)
+                .and_then(CountingModel::parse).unwrap_or_default();
 
-        return match args_str[pos + SHOW_THEMES.len() + 2..].split_whitespace().next() {
+        return match crate::args::find_argument_of(args_str, SHOW_THEMES) {
             Some(arg) if !arg.starts_with("--") => match config_manager::BarThickness::parse(arg) {
                 Some(thickness) => {
                     crate::message_printer::print_existing_themes(thickness, layout, counting);
@@ -526,8 +526,7 @@ program to read, and both of them go to the output, so only one of the two can b
 }
 
 fn asks_for_a_json_document(args_str: &str) -> bool {
-    crate::args::find_command(args_str, OUTPUT)
-            .and_then(|at| args_str[at + OUTPUT.len() + 2..].split_whitespace().next())
+    crate::args::find_argument_of(args_str, OUTPUT)
             .and_then(OutputFormat::parse) == Some(OutputFormat::Json)
 }
 

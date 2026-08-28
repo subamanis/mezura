@@ -1,5 +1,7 @@
 // Reading and writing the configuration files, which are the command line written down.
-use std::{fs::{self, File}, io::{BufRead, BufReader, BufWriter, Write}};
+use std::fs;
+use std::fs::File;
+use std::io::{BufRead, BufReader, BufWriter, Write};
 
 use colored::{ColoredString, Colorize};
 use mezura_core::engine::config::{Target, Threads};
@@ -299,114 +301,76 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
 
     // One target per line, which is what the block reader expects: a module name only reaches the
     // paths written after it when a comma joins them.
-    writer.write_all(&[b"\n\n===> ",config_manager::TARGETS.as_bytes(),b"\n"].concat())?;
-    writer.write_all(config_builder.targets.as_ref().unwrap().iter().map(|target| match relative_to {
+    write_block(&mut writer, config_manager::TARGETS,
+            &config_builder.targets.as_ref().unwrap().iter().map(|target| match relative_to {
                 Some(project_dir) => config_manager::format_declared_form_relative_to(project_dir, target),
                 None => config_manager::format_declared_form(target)
-            }).collect::<Vec<_>>().join("\n").as_bytes())?;
+            }).collect::<Vec<_>>().join("\n"))?;
 
     if let Some(exclude_dirs) = &config_builder.exclude_dirs {
-        writer.write_all(&[b"\n\n===> ",config_manager::EXCLUDE.as_bytes(),b"\n"].concat())?;
-        writer.write_all(exclude_dirs.join(",").as_bytes())?;
+        write_block(&mut writer, config_manager::EXCLUDE, &exclude_dirs.join(","))?;
     }
     if let Some(languages_of_interest) = &config_builder.languages_of_interest {
-        writer.write_all(&[b"\n\n===> ",config_manager::LANGUAGES.as_bytes(),b"\n"].concat())?;
-        writer.write_all(languages_of_interest.join(",").as_bytes())?;
+        write_block(&mut writer, config_manager::LANGUAGES, &languages_of_interest.join(","))?;
     }
     if let Some(exclude_languages) = &config_builder.excluded_languages {
-        writer.write_all(&[b"\n\n===> ",config_manager::EXCLUDE_LANGUAGES.as_bytes(),b"\n"].concat())?;
-        writer.write_all(exclude_languages.join(",").as_bytes())?;
+        write_block(&mut writer, config_manager::EXCLUDE_LANGUAGES, &exclude_languages.join(","))?;
     }
     if let Some(forced_languages) = &config_builder.forced_languages {
-        writer.write_all(&[b"\n\n===> ",config_manager::FORCE_LANGUAGE.as_bytes(),b"\n"].concat())?;
-        writer.write_all(super::args::forced_languages_to_string(forced_languages).as_bytes())?;
+        write_block(&mut writer, config_manager::FORCE_LANGUAGE,
+                &super::args::forced_languages_to_string(forced_languages))?;
     }
     if let Some(threads) = &config_builder.threads {
-        writer.write_all(&[b"\n\n===> ",config_manager::THREADS.as_bytes(),b"\n"].concat())?;
-        writer.write_all((threads.producers().to_string() + " " + &threads.consumers().to_string()).as_bytes())?;
+        write_block(&mut writer, config_manager::THREADS,
+                &format!("{} {}", threads.producers(), threads.consumers()))?;
     }
     if let Some(counting) = &config_builder.counting {
-        writer.write_all(&[b"\n\n===> ",config_manager::COUNTING.as_bytes(),b"\n"].concat())?;
-        writer.write_all(counting.name().as_bytes())?;
+        write_block(&mut writer, config_manager::COUNTING, counting.name())?;
     }
     if let Some(should_search_in_dotted) = &config_builder.should_search_in_dotted {
-        writer.write_all(&[b"\n\n===> ",config_manager::SEARCH_IN_DOTTED.as_bytes(),b"\n"].concat())?;
-        writer.write_all(if *should_search_in_dotted {b"yes"} else {b"no"})?;
+        write_block(&mut writer, config_manager::SEARCH_IN_DOTTED, yes_or_no(*should_search_in_dotted))?;
     }
     if let Some(count_minified) = &config_builder.count_minified {
-        writer.write_all(&[b"\n\n===> ",config_manager::COUNT_MINIFIED.as_bytes(),b"\n"].concat())?;
-        writer.write_all(if *count_minified {b"yes"} else {b"no"})?;
+        write_block(&mut writer, config_manager::COUNT_MINIFIED, yes_or_no(*count_minified))?;
     }
     if let Some(count_generated) = &config_builder.count_generated {
-        writer.write_all(&[b"\n\n===> ",config_manager::COUNT_GENERATED.as_bytes(),b"\n"].concat())?;
-        writer.write_all(if *count_generated {b"yes"} else {b"no"})?;
+        write_block(&mut writer, config_manager::COUNT_GENERATED, yes_or_no(*count_generated))?;
     }
     if let Some(should_show_faulty_files) = &config_builder.should_show_faulty_files {
-        writer.write_all(&[b"\n\n===> ",config_manager::SHOW_FAULTY_FILES.as_bytes(),b"\n"].concat())?;
-        writer.write_all(if *should_show_faulty_files {b"yes"} else {b"no"})?;
+        write_block(&mut writer, config_manager::SHOW_FAULTY_FILES, yes_or_no(*should_show_faulty_files))?;
     }
     if let Some(hidden) = &config_builder.hidden {
-        writer.write_all(&[b"\n\n===> ",config_manager::HIDE.as_bytes(),b"\n"].concat())?;
-        writer.write_all(hidden.to_list_string().as_bytes())?;
+        write_block(&mut writer, config_manager::HIDE, &hidden.to_list_string())?;
     }
     if let Some(no_gitignore) = &config_builder.no_gitignore {
-        writer.write_all(&[b"\n\n===> ",config_manager::NO_GITIGNORE.as_bytes(),b"\n"].concat())?;
-        writer.write_all(if *no_gitignore {b"yes"} else {b"no"})?;
+        write_block(&mut writer, config_manager::NO_GITIGNORE, yes_or_no(*no_gitignore))?;
     }
     if let Some(no_ignore_files) = &config_builder.no_ignore_files {
-        writer.write_all(&[b"\n\n===> ",config_manager::NO_IGNORE_FILES.as_bytes(),b"\n"].concat())?;
-        writer.write_all(if *no_ignore_files {b"yes"} else {b"no"})?;
+        write_block(&mut writer, config_manager::NO_IGNORE_FILES, yes_or_no(*no_ignore_files))?;
     }
     if let Some(sort_by) = &config_builder.sort_by {
-        writer.write_all(&[b"
-
-===> ",config_manager::SORT.as_bytes(),b"
-"].concat())?;
-        writer.write_all(sort_by.name().as_bytes())?;
+        write_block(&mut writer, config_manager::SORT, sort_by.name())?;
     }
-
     if let Some(top_n) = &config_builder.top_n {
-        writer.write_all(&[b"
-
-===> ",config_manager::TOP.as_bytes(),b"
-"].concat())?;
-        writer.write_all(top_n.to_string().as_bytes())?;
+        write_block(&mut writer, config_manager::TOP, &top_n.to_string())?;
     }
-
     if let Some(by_file) = &config_builder.by_file {
-        writer.write_all(&[b"\n\n===> ",config_manager::BY_FILE.as_bytes(),b"\n"].concat())?;
-        writer.write_all(by_file.to_text().as_bytes())?;
+        write_block(&mut writer, config_manager::BY_FILE, &by_file.to_text())?;
     }
-
     if let Some(bar_thickness) = &config_builder.bar_thickness {
-        writer.write_all(&[b"
-
-===> ",config_manager::BAR_THICKNESS.as_bytes(),b"
-"].concat())?;
-        writer.write_all(bar_thickness.name().as_bytes())?;
+        write_block(&mut writer, config_manager::BAR_THICKNESS, bar_thickness.name())?;
     }
-
     if let Some(progress_bar) = &config_builder.progress_bar {
-        writer.write_all(&[b"
-
-===> ",config_manager::PROGRESS_BAR.as_bytes(),b"
-"].concat())?;
-        writer.write_all(progress_bar.name().as_bytes())?;
+        write_block(&mut writer, config_manager::PROGRESS_BAR, progress_bar.name())?;
     }
-
     if let Some(number_separator) = &config_builder.number_separator {
-        writer.write_all(&[b"\n\n===> ",config_manager::NUMBER_SEPARATOR.as_bytes(),b"\n"].concat())?;
-        writer.write_all(number_separator.name().as_bytes())?;
+        write_block(&mut writer, config_manager::NUMBER_SEPARATOR, number_separator.name())?;
     }
-
     if let Some(decimal_separator) = &config_builder.decimal_separator {
-        writer.write_all(&[b"\n\n===> ",config_manager::DECIMAL_SEPARATOR.as_bytes(),b"\n"].concat())?;
-        writer.write_all(decimal_separator.name().as_bytes())?;
+        write_block(&mut writer, config_manager::DECIMAL_SEPARATOR, decimal_separator.name())?;
     }
-
     if let Some(layout) = &config_builder.layout {
-        writer.write_all(&[b"\n\n===> ",config_manager::LAYOUT.as_bytes(),b"\n"].concat())?;
-        writer.write_all(layout.name().as_bytes())?;
+        write_block(&mut writer, config_manager::LAYOUT, layout.name())?;
     }
 
     // The two style layers collapse into one block, in the order they were applied, so that
@@ -415,25 +379,30 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
     let styles = if config_builder.theme_name_to_save.is_some() {Vec::new()}
             else {config_builder.config_styles.iter().chain(config_builder.styles.iter()).flatten().collect::<Vec<_>>()};
     if !styles.is_empty() {
-        let rendered = styles.iter().map(|(token, style)| format!("{token} = {style}")).collect::<Vec<_>>().join("\n");
-        writer.write_all(&[b"\n\n===> ",config_manager::STYLE.as_bytes(),b"\n"].concat())?;
-        writer.write_all(rendered.as_bytes())?;
+        write_block(&mut writer, config_manager::STYLE, &styles.iter()
+                .map(|(token, style)| format!("{token} = {style}")).collect::<Vec<_>>().join("\n"))?;
     }
 
     // A theme that --save-theme is writing in the same run is the one this config should point at
     if let Some(theme_name) = config_builder.theme_name_to_save.as_ref().or(config_builder.theme_name.as_ref()) {
-        writer.write_all(&[b"\n\n===> ",config_manager::THEME.as_bytes(),b"\n"].concat())?;
-        writer.write_all(theme_name.as_bytes())?;
+        write_block(&mut writer, config_manager::THEME, theme_name)?;
     }
     if let Some(compare_level) = &config_builder.compare_level {
-        writer.write_all(&[b"\n\n===> ",config_manager::COMPARE_LEVEL.as_bytes(),b"\n"].concat())?;
-        writer.write_all(compare_level.to_string().as_bytes())?;
+        write_block(&mut writer, config_manager::COMPARE_LEVEL, &compare_level.to_string())?;
     }
 
     writer.write_all(b"\n")?;
     writer.flush()?;
 
     Ok(())
+}
+
+fn write_block(writer: &mut impl Write, name: &str, value: &str) -> std::io::Result<()> {
+    write!(writer, "\n\n===> {name}\n{value}")
+}
+
+fn yes_or_no(value: bool) -> &'static str {
+    if value {"yes"} else {"no"}
 }
 
 pub fn read_names_in_dir(dir: &str) -> Vec<String> {

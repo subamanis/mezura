@@ -1,8 +1,13 @@
 // Which language owns an extension, a whole filename or a shebang interpreter, and how a contest
 // between two of them is settled.
-use std::{collections::HashMap, fs::File, io::ErrorKind, io::Read, path::Path, sync::Arc};
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{ErrorKind, Read};
+use std::path::Path;
+use std::sync::Arc;
 
 use crate::{Language, warnings};
+use crate::engine::modules::{ModuleId, Modules};
 
 // Longer than any extension or filename anybody writes: the stack buffer below is what keeps the
 // case-insensitive lookup from allocating once per file
@@ -36,7 +41,7 @@ impl IdentifiedBy {
     }
 
     // A filename keeps its dots, since '.gitignore' is a name and not an extension of nothing
-    fn key_of(&self, text: &str) -> String {
+    pub(crate) fn key_of(&self, text: &str) -> String {
         match self {
             Self::Extension => extension_key(text),
             Self::Filename | Self::Shebang => text.to_ascii_lowercase()
@@ -54,7 +59,6 @@ pub(crate) enum ResolvedBy {
 }
 
 #[derive(Debug,PartialEq,Eq,Clone)]
-#[non_exhaustive]
 pub(crate) struct ContestedIdentity {
     pub identity: String,
     pub identified_by: IdentifiedBy,
@@ -64,7 +68,6 @@ pub(crate) struct ContestedIdentity {
 }
 
 #[derive(Debug,PartialEq,Eq,Clone,Default)]
-#[non_exhaustive]
 pub(crate) struct IdentityReport {
     pub contested: Vec<ContestedIdentity>
 }
@@ -253,9 +256,9 @@ impl ScopedLookups {
     // A rule naming a module this run never declared leaves every bucket without one of its own, and
     // then there is nothing per module to keep: the run is warned about the name elsewhere and walks
     // with the single lookup it would have had anyway.
-    pub(crate) fn into_lookups_per_module(mut self, modules: &crate::engine::modules::Modules) -> ModuleLookups {
+    pub(crate) fn into_lookups_per_module(mut self, modules: &Modules) -> ModuleLookups {
         let of_each = (0..modules.count())
-                .map(|id| modules.name_of(id as crate::engine::modules::ModuleId)
+                .map(|id| modules.name_of(id as ModuleId)
                         .and_then(|name| self.per_module.remove(name)))
                 .collect::<Vec<_>>();
         if of_each.iter().all(Option::is_none) {
@@ -276,7 +279,7 @@ pub(crate) enum ModuleLookups {
 }
 
 impl ModuleLookups {
-    pub(crate) fn get_of_module(&self, module: crate::engine::modules::ModuleId) -> &LanguageLookup {
+    pub(crate) fn get_of_module(&self, module: ModuleId) -> &LanguageLookup {
         match self {
             Self::OfTheWholeRun(lookup) => lookup,
             Self::OfEachModule(lookups) => &lookups[module as usize]
@@ -384,10 +387,6 @@ pub(crate) fn interpreter_spellings(interpreter: &str) -> Vec<String> {
 // the lookup uses and the two must agree on every byte.
 pub(crate) fn extension_key(extension: &str) -> String {
     extension.trim_start_matches('.').to_ascii_lowercase()
-}
-
-pub(crate) fn identity_key(identified_by: IdentifiedBy, text: &str) -> String {
-    identified_by.key_of(text)
 }
 
 #[cfg(test)]
@@ -628,7 +627,7 @@ mod tests {
         let languages = claims.iter()
                 .map(|(name, interpreters)| ((*name).to_owned(),
                         Language::new(*name, ["zzz"], crate::StringRules::escaping_with(b'\\').with_symbols(["\""]),
-                                ["#"], &[], []).with_shebangs(interpreters)))
+                                ["#"], &[], []).with_shebangs(*interpreters)))
                 .collect();
         LanguageLookup {
             by_shebang: build_language_map_by(IdentifiedBy::Shebang, &languages,
@@ -705,7 +704,7 @@ mod tests {
         let contested: HashMap<String, Language> = [("Ash", ["sh"]), ("Bsh", ["sh"])].into_iter()
                 .map(|(name, interpreters)| (name.to_owned(),
                         Language::new(name, ["zzz"], crate::StringRules::escaping_with(b'\\').with_symbols(["\""]),
-                                ["#"], &[], []).with_shebangs(&interpreters)))
+                                ["#"], &[], []).with_shebangs(interpreters)))
                 .collect();
         let forced = hashmap!("sh".to_owned() => "bsh".to_owned());
         let (map, report) = build_language_map_by(IdentifiedBy::Shebang, &contested, &HashMap::new(), &forced);
