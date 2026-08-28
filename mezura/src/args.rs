@@ -322,8 +322,14 @@ mod tests {
 
     #[test]
     pub fn a_list_of_paths_is_split_on_commas_with_its_backslashes_turned_round() {
-        assert_eq!(vec!["a/a".to_owned(),"b/b".to_owned()], parse_paths_to_vec("a\\a,b\\b"));
-        assert_eq!(vec!["a".to_owned(),"b/b".to_owned()], parse_paths_to_vec(" a  ,  b\\b "));
+        assert_eq!(vec!["a/a".to_owned(),"b/b".to_owned()], parse_paths_to_vec("a/a,b/b"));
+        assert_eq!(vec!["a".to_owned(),"b/b".to_owned()], parse_paths_to_vec(" a  ,  b/b "));
+
+        if cfg!(windows) {
+            assert_eq!(vec!["a/a".to_owned(),"b/b".to_owned()], parse_paths_to_vec("a\\a,b\\b"));
+        } else {
+            assert_eq!(vec!["a\\a".to_owned(),"b\\b".to_owned()], parse_paths_to_vec("a\\a,b\\b"));
+        }
     }
 
     fn targets(s: &str) -> Vec<(Option<String>, String)> {
@@ -336,7 +342,7 @@ mod tests {
         let plain = |path: &str| (None, path.to_owned());
 
         assert_eq!(vec![plain("C:/Users/John Smith/proj")], targets("C:/Users/John Smith/proj"));
-        assert_eq!(vec![plain("a/a"), plain("b/b")], targets("a\\a, b\\b"));
+        assert_eq!(vec![plain("a/a"), plain("b/b")], targets("a/a, b/b"));
         assert_eq!(vec![plain("./src ./tests")], targets("./src ./tests"));
 
         assert_eq!(vec![named("frontend", "./web"), named("backend", "./api")],

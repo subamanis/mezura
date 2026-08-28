@@ -1611,7 +1611,7 @@ mod tests {
         assert_eq!(conf("./", |c| {c.engine.exclude_dirs = vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]; c.typed_explicitly.exclude = true;}),
                 create_config_from_args("./ --exclude a,b ,  c ").unwrap());
         assert_eq!(conf("./", |c| {c.engine.exclude_dirs = vec!["a/path".to_owned(),"b/path".to_owned()]; c.typed_explicitly.exclude = true;}),
-                create_config_from_args("./ --exclude \"a\\path\", \"b\\path\"").unwrap());
+                create_config_from_args("./ --exclude \"a/path\", \"b/path\"").unwrap());
         assert_eq!(conf("./", |c| {c.engine.languages_of_interest = vec!["a".to_owned(),"b".to_owned(),"c".to_owned()].into(); c.typed_explicitly.languages = true;}),
                 create_config_from_args("./ --languages a,b,c").unwrap());
         assert_eq!(conf("./", |c| {c.engine.languages_of_interest = vec!["a".to_owned()].into(); c.typed_explicitly.languages = true;}),

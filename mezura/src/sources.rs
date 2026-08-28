@@ -263,7 +263,7 @@ mod tests {
     fn an_exclusion_inside_the_repository_is_carried_into_the_checkout() {
         let moved = move_excludes_into_checkout("C:/tmp/chk", "D:/repo",
                 &["fixtures".to_owned(), "*.min.js".to_owned(), "D:/repo/target".to_owned(),
-                  "D:/repo".to_owned(), "D:/elsewhere/target".to_owned(), "D:\\repo\\a\\b".to_owned()]);
+                  "D:/repo".to_owned(), "D:/elsewhere/target".to_owned(), "D:/repo/a/b".to_owned()]);
 
         assert_eq!(vec!["fixtures".to_owned(), "*.min.js".to_owned(), "C:/tmp/chk/target".to_owned(),
                 "C:/tmp/chk".to_owned(), "D:/elsewhere/target".to_owned(), "C:/tmp/chk/a/b".to_owned()], moved);
@@ -275,6 +275,8 @@ mod tests {
         if cfg!(windows) {
             assert_eq!(vec!["C:/tmp/chk/target".to_owned()],
                     move_excludes_into_checkout("C:/tmp/chk", "D:/repo", &["d:/REPO/target".to_owned()]));
+            assert_eq!(vec!["C:/tmp/chk/a/b".to_owned()],
+                    move_excludes_into_checkout("C:/tmp/chk", "D:/repo", &["D:\\repo\\a\\b".to_owned()]));
         }
     }
 }

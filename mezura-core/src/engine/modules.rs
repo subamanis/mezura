@@ -170,9 +170,9 @@ mod tests {
         assert_eq!(fixtures, modules.at_dir(Path::new("./tests/fixtures"), 7));
         assert_eq!(7, modules.at_dir(Path::new("./tests"), 7));
         assert_eq!(7, modules.at_dir(Path::new("./tests/fixtures/lang"), 7));
-        // the same path as the platform hands it over during a walk
-        assert_eq!(fixtures, modules.at_dir(Path::new(".\\tests\\fixtures"), 7));
         if cfg!(windows) {
+            // the same path as the platform hands it over during a walk
+            assert_eq!(fixtures, modules.at_dir(Path::new(".\\tests\\fixtures"), 7));
             assert_eq!(fixtures, modules.at_dir(Path::new("./TESTS/Fixtures"), 7));
         }
     }

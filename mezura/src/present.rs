@@ -43,8 +43,8 @@ pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>,
     }
 
     print_faulty_files_or_ok(&result.faulty_files, config);
-    print_files_left_out(result, config);
     print_detail_hint_if_anything_was_hidden(result, config);
+    print_files_left_out(result, config);
 
     // Every file found was left out, so no table and no log entry, for the reason the faulty branch
     // above returns.
@@ -170,7 +170,7 @@ fn print_comparison_or_empty_document(result: &RunResult, comparison: Option<&su
 
 fn print_detail_hint_if_anything_was_hidden(result: &RunResult, config: &Configuration) {
     if let Some(hint) = determine_detail_hint(result, config) {
-        eprintln!("{hint}");
+        eprintln!("{}\n", super::theme::get_active().note.paint(&hint));
     }
 }
 
@@ -182,7 +182,7 @@ fn determine_detail_hint(result: &RunResult, config: &Configuration) -> Option<S
         return None;
     }
 
-    Some(format!("Run with '--{}' for the paths and the reasons.\n", super::config_manager::SHOW_FAULTY_FILES))
+    Some(format!("Run with '--{}' for the paths and the reasons.", super::config_manager::SHOW_FAULTY_FILES))
 }
 
 fn get_activated_languages_as_str(config: &Configuration) -> String {

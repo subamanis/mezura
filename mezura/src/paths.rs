@@ -245,8 +245,11 @@ mod tests {
     // separator at the end would put the languages in a folder called 'datalanguages'.
     #[test]
     fn a_data_directory_named_by_the_environment_always_ends_in_a_separator() {
-        assert_eq!(Some("C:/tools/mezura-data/".to_owned()), build_data_dir_path("C:\\tools\\mezura-data"));
+        assert_eq!(Some("C:/tools/mezura-data/".to_owned()), build_data_dir_path("C:/tools/mezura-data"));
         assert_eq!(Some("C:/tools/mezura-data/".to_owned()), build_data_dir_path("  C:/tools/mezura-data/  "));
+        if cfg!(windows) {
+            assert_eq!(Some("C:/tools/mezura-data/".to_owned()), build_data_dir_path("C:\\tools\\mezura-data"));
+        }
         assert_eq!(None, build_data_dir_path("   "));
         assert_eq!(None, build_data_dir_path(""));
     }

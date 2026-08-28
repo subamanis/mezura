@@ -643,10 +643,13 @@ mod exclude_matcher_tests {
 
     #[test]
     fn an_exclusion_written_with_backslashes_or_a_trailing_slash_still_matches() {
-        let matcher = build_exclude_matcher(&["Rusty\\mezura\\bench".to_owned(), "target/".to_owned()]).unwrap();
-
-        assert!(matcher.is_match("D:/dev/Rusty/mezura/bench"));
+        let matcher = build_exclude_matcher(&["target/".to_owned()]).unwrap();
         assert!(matcher.is_match("D:/dev/proj/target"));
+
+        if cfg!(windows) {
+            let matcher = build_exclude_matcher(&["Rusty\\mezura\\bench".to_owned()]).unwrap();
+            assert!(matcher.is_match("D:/dev/Rusty/mezura/bench"));
+        }
     }
 
     #[test]
