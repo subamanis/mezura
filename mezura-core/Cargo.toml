@@ -1,11 +1,12 @@
 [package]
 name = "mezura-core"
-version = "0.1.0"
+version = "1.0.0"
 authors = ["subamanis <petrospapa21@gmail.com>"]
 edition = "2024"
-description = "The counting engine behind mezura: a multithreaded, customizable code stats generator"
+description = "The fast, multithreaded counting engine behind mezura: identifies each file's language, splits every line into code, comments and everything else, and counts user-defined keywords like classes and structs."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/subamanis/mezura"
+readme = "README.md"
 
 [dependencies]
 memchr = "2.8"

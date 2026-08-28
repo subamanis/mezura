@@ -55,8 +55,8 @@ pub const TARGETS_HELP  :  &str =
     target. Repeating a name adds to it, and one path under two names is refused.
 
     Every file belongs to one module and the most specific path wins, so the second example means
-    'the tests there, the rest of the project here' in either order. What no name claimed becomes
-    a row called '(unnamed)' and comes last; the rest keep the order you wrote them in, which is
+    'the tests there, the rest of the project here' in either order. Files that were not claimed by
+    a module explicitly become a row called '(unnamed)' and it comes last; the rest keep the order you wrote them in, which is
     also the order of the columns in 'matrix'. '--sort' orders the languages inside a module and
     never the modules.
 
@@ -275,12 +275,13 @@ pub const EXPLAIN_HELP  :  &str =
     instead of one, for the lines shown and for the whole file, since the file's own is the number
     you came to check.
 
-    Every line is shown with the bucket it lands in, the class mezura read off it, and, where
-    something was still open when the line began, what that was and where it started: 'in a
-    comment opened by /* on line 23', 'in a string opened by \" on line 7'. A line read by an
-    embedded language names it. The stretches inside a string or a comment are printed in their
-    own styles, which '--style' reaches as 'explain-string' and 'explain-comment', so a symbol
-    swallowed by a string can be seen to be one.
+    Every line is shown with the bucket it lands in, 'code', 'comments' or 'extra', and the class
+    that put it there, 'words_in_code' or 'punctuation_in_comment', which is the raw count both
+    counting models fold into those three. Where something was still open when the line began, it
+    says what and where it started: 'in a comment opened by /* on line 23', 'in a string opened by
+    \" on line 7'. A line read by an embedded language names it. The stretches inside a string or a
+    comment are printed in their own styles, which '--style' reaches as 'explain-string' and
+    'explain-comment', so a symbol swallowed by a string can be seen to be one.
 
       mezura src/main.rs --explain
       mezura src/page.vue --explain --counting region
@@ -1565,7 +1566,7 @@ mod tests {
         assert!(none.contains("Data directory:") && some.contains("Data directory:"));
     }
 
-    const README_HEADING : &str = "## Cmd Commands";
+    const README_HEADING : &str = "### Commands";
     const FENCE : &str = "```";
 
     // The middle part alone is replaceable, so the rest of a hand written document is never touched.
@@ -1586,7 +1587,7 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("README.md");
         let readme = std::fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
         let (before, block, after) = readme_parts(&readme);
-        let generated = create_help_body();
+        let generated = create_help_list();
 
         if std::env::var_os("MEZURA_UPDATE_GOLDEN").is_some() {
             std::fs::write(&path, format!("{before}\n{}\n{after}", generated.trim_end())).unwrap();

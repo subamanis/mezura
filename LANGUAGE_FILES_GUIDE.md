@@ -62,6 +62,7 @@ Three things to know before you start:
 | `Multi line raw string symbols` *(opt)* | Crosses lines, nothing escapes | `` ` `` |
 | `Paired string openers` *(opt)* | Opens with one symbol, closes with another | `r#" @"` |
 | `Paired string closers` | Their closers, in the same order | `"# "` |
+| `Escape character` | Required by any language that declares a string. See below | `\` |
 | `Line continuation` *(opt)* | Joins a line to the next when it ends the line | `\` |
 | `Continues` | What the joining reaches: `strings`, `comments`, or both | `strings comments` |
 | `Comment symbols` | Comments that end with the line | `// #` |
@@ -107,6 +108,22 @@ Odin and D and does escape in a JavaScript template literal. `"""` is raw in Kot
 escaping in Java, Swift and Python. Look it up rather than guessing, because getting it wrong is
 silent: a `` `C:\` `` in the wrong block leaves the string open to the end of the file and every
 comment under it counts as code.
+
+## The escape character
+
+Whatever declares a string of any kind has to say what cancels a quote, in an `Escape character`
+block after the string blocks and before `Line continuation`. **Leave it out and the file is
+refused**, which is the one way a file that looks complete is not.
+
+The value is one ASCII character, or the word `none`. It is the backslash in most languages, the
+backtick in PowerShell, and `none` in the family that escapes a quote by doubling it: Pascal,
+Delphi, Ada, Fortran, COBOL, MATLAB, VHDL and SQL. Getting it wrong is as silent as getting a
+string block wrong: an SQL statement holding `'C:\'` swallows every comment under it to the end of
+the file when the backslash is declared as an escape and SQL has none.
+
+This says which character escapes, not where it is obeyed. Whether it works inside one form that
+crosses lines is decided by the block that form sits in, above. A language with no strings at all,
+like HTML, can leave the block out.
 
 ## Which comment block
 

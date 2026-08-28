@@ -648,7 +648,10 @@ fn mark_sorted_column<'a>(theme: &'a Theme, headers: &mut [String],
         SortCriterion::Comments => header == "Comments",
         SortCriterion::Extra | SortCriterion::Blanks => header == "Extra" || header == "Blanks",
         SortCriterion::Size => header == "Size",
-        SortCriterion::Name => header == "Language" || header == "Module"
+        SortCriterion::Name => header == "Language" || header == "Module",
+        // 'SortCriterion' is non_exhaustive, so a criterion added later leaves the header unmarked
+        // rather than failing to compile in a released version
+        _ => false
     };
     let Some(at) = headers.iter().position(names_the_order) else { return };
 

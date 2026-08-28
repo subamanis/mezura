@@ -240,7 +240,9 @@ impl Hidden {
             // Whichever word was asked for, 'build' has already left the answer in one flag
             SortCriterion::Extra | SortCriterion::Blanks => self.extra,
             SortCriterion::Size => self.size,
-            SortCriterion::Lines | SortCriterion::Code | SortCriterion::Name => false
+            // 'SortCriterion' is non_exhaustive, so a criterion added later orders by a column
+            // this cannot know is hidden, rather than failing to compile in a released version
+            _ => false
         }
     }
 

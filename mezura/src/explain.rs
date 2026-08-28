@@ -94,7 +94,7 @@ fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel, a
         };
         println!("{:>width$}  {}", at + 1, paint_by_spans(source, &line.spans));
         let mut verdict = format!("{}  {}", bucket_style.paint(model.get_bucket_name(bucket)),
-                theme.explain_detail.paint(line.class.get_name()));
+                theme.explain_detail.paint(line.class.name()));
         let mut notes = line.read_as.as_ref().map(|name| format!("read as {name}"))
                 .into_iter().collect::<Vec<_>>();
         notes.extend(describe_carried(&line.carried));
@@ -131,7 +131,7 @@ fn print_json(path: &str, explanation: &FileExplanation, model: CountingModel) {
     for (at, line) in explanation.lines.iter().enumerate() {
         let bucket = model.get_bucket_name(model.fold(line.class));
         let mut entry = format!("{{\"line\":{},\"bucket\":\"{bucket}\",\"class\":\"{}\"",
-                at + 1, line.class.get_name());
+                at + 1, line.class.name());
         if let Some(name) = &line.read_as {
             entry.push_str(&format!(",\"read_as\":\"{}\"", escape(name)));
         }
@@ -140,7 +140,7 @@ fn print_json(path: &str, explanation: &FileExplanation, model: CountingModel) {
         }
         if !line.spans.is_empty() {
             entry.push_str(&format!(",\"spans\":[{}]", line.spans.iter()
-                    .map(|span| format!("[{},{},\"{}\"]", span.from, span.to, span.kind.get_name()))
+                    .map(|span| format!("[{},{},\"{}\"]", span.from, span.to, span.kind.name()))
                     .collect::<Vec<_>>().join(",")));
         }
         entry.push('}');

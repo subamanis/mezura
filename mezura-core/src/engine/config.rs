@@ -1,5 +1,4 @@
-//! The settings one run is given, and the two ways they can be narrowed to a single named part
-//! of it.
+//! The settings one run is given, and the two of them a single module can answer differently.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
@@ -68,20 +67,18 @@ impl std::fmt::Display for Target {
     }
 }
 
-/// The languages a run counts, or the ones it leaves out: a list of names, which may be scoped to
-/// one named part of the run.
+/// A list of language names, either the ones to count or the ones to leave out. Some modules can
+/// name their own instead of the run's.
 pub type LanguageNames = ScopedByModule<Vec<String>>;
-/// Extensions handed to a language of the caller's choosing, from the claimed extension or file
-/// name to the language name. Also scopable.
+/// Extensions and whole file names handed to a language of the caller's choosing, from the claimed
+/// extension to the language name. Some modules can add rules of their own.
 pub type ForcedLanguages = ScopedByModule<HashMap<String,String>>;
 
-/// A setting one named part of a run answers differently from the rest of it, so that one
-/// repository can hold MATLAB under one directory and Objective-C under another and be counted
-/// once.
+/// One setting for the whole run, and the different values some modules give it.
 ///
-/// The two halves are not interchangeable, which is why the fields are private: the run's own
-/// answer is the one every part that says nothing falls back to, and a map built by hand out of
-/// both would lose that.
+/// A module is a target that was given a name, as in `mezura ios=./ios analysis=./matlab`. A
+/// module that names no value of its own uses the run's. This is what lets one repository count
+/// its `.m` files as Objective-C under one directory and as MATLAB under another, in a single run.
 #[derive(Debug,PartialEq,Eq,Clone,Default)]
 pub struct ScopedByModule<T> {
     whole_run: T,
@@ -89,27 +86,29 @@ pub struct ScopedByModule<T> {
 }
 
 impl<T> ScopedByModule<T> {
-    /// One answer, for everywhere.
+    /// One value, used everywhere.
     pub fn of_the_whole_run(value: T) -> Self {
         ScopedByModule { whole_run: value, per_module: BTreeMap::new() }
     }
 
-    /// The run's own answer, and the parts that answer differently.
+    /// The run's value, and the modules that use a different one.
     pub fn of(whole_run: T, per_module: impl IntoIterator<Item = (String,T)>) -> Self {
         ScopedByModule { whole_run, per_module: per_module.into_iter().collect() }
     }
 
-    /// What everything that says nothing of its own falls back to.
+    /// The value every module without one of its own uses.
     pub fn get_of_the_whole_run(&self) -> &T {
         &self.whole_run
     }
 
-    /// The parts this setting singles out, which is what a run checks its target names against.
+    /// The modules this setting names. A run checks these against the names its targets carry, so
+    /// that a rule written for a module nobody declared is reported rather than silently doing
+    /// nothing.
     pub fn get_module_names(&self) -> impl Iterator<Item = &str> {
         self.per_module.keys().map(String::as_str)
     }
 
-    /// Whether anything at all was scoped to a part rather than to the run.
+    /// Whether any module names a value of its own.
     pub fn is_scoped(&self) -> bool {
         !self.per_module.is_empty()
     }
@@ -126,8 +125,8 @@ impl ScopedByModule<Vec<String>> {
         self.get_declared_by(module).unwrap_or(&self.whole_run)
     }
 
-    /// Every name written anywhere in it, whichever part it was written for: whether a language
-    /// exists is not a question one part of a run answers differently.
+    /// Every name in it, the run's and every module's together. Whether a language exists is not
+    /// something one module answers differently, so the check for an unknown name reads this.
     pub fn get_all_names(&self) -> Vec<String> {
         let mut names = self.whole_run.clone();
         for own in self.per_module.values() {

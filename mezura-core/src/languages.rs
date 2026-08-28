@@ -27,8 +27,8 @@ pub struct Languages {
 impl Languages {
     /// The languages baked into this crate, so nothing on the machine is read.
     ///
-    /// The warnings beside them are what the settings got wrong: a name nothing answers to, a rule
-    /// for a part of the run that does not exist, an extension two languages claim.
+    /// The warnings beside them are what the settings got wrong: a language name nothing answers
+    /// to, a rule written for a module no target declares, an extension two languages claim.
     pub fn shipped(config: &EngineConfig) -> (Self, Vec<Warning>) {
         Self::resolve(config, parse_shipped_languages(), &parse_shipped_conflict_rules())
     }

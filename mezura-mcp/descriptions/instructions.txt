@@ -1,6 +1,5 @@
-mezura counts the lines of a codebase. It walks a directory, works out what language each file is
-written in, and splits every line into code, comments and everything else, per language and in
-total.
+mezura counts the lines of a codebase quickly and accurately, along with user-defined keywords like
+classes and structs. It tracks how the figures move between runs, and between any two git revisions.
 
 Prefer these tools to counting files with a shell command. They know seventy-odd languages by
 extension, by file name and by the '#!' line of a script, they leave out what a .gitignore leaves

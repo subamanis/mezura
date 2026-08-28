@@ -21,7 +21,8 @@ pub struct RunResult {
     /// those rows down and is never added to them. The `files` figure inside it is how many
     /// container files the section language appeared in.
     pub nested_languages: HashMap<String, HashMap<String, Stats>>,
-    /// The same figures once per named part of the run. Always at least one, see [`ModuleResult`].
+    /// The same figures once per module. A run where no target was named has exactly one, holding
+    /// everything.
     pub modules: Vec<ModuleResult>,
     /// The files that could not be read or parsed, and why.
     pub faulty_files: Vec<FaultyFileDetails>,
@@ -69,7 +70,7 @@ impl RunResult {
         self.files_present.relevant_files == 0 && !self.unreadable_dirs.is_empty()
     }
 
-    /// Whether any part of the run was given a name of its own.
+    /// Whether any target was given a name, which is what puts the module column in a report.
     pub fn has_modules(&self) -> bool {
         self.modules.iter().any(|x| x.name.is_some())
     }
@@ -101,20 +102,21 @@ impl RunResult {
     }
 }
 
-/// One named part of a run, and its own figures.
+/// One module and its own figures. A module is a target that was given a name, as in
+/// `mezura frontend=./web backend=./api`.
 #[derive(Debug,Clone)]
 pub struct ModuleResult {
-    /// `None` for whatever the named parts left over, which is also the single part of a run where
-    /// nothing was named at all.
+    /// `None` for everything the named targets left over, which on a run where nothing was named
+    /// is the whole of it.
     pub name: Option<String>,
-    /// This part's languages.
+    /// This module's languages.
     pub per_language: HashMap<String, Stats>,
-    /// The same breakdown [`RunResult::nested_languages`] holds, for this part's files alone.
+    /// The same breakdown [`RunResult::nested_languages`] holds, for this module's files alone.
     pub nested_languages: HashMap<String, HashMap<String, Stats>>,
     /// One entry per file, keyed by language. Empty unless [`crate::EngineConfig::collect_files`]
     /// asked for it.
     pub files: HashMap<String, Vec<FileEntry>>,
-    /// This part's languages added together.
+    /// This module's languages added together.
     pub total: Stats
 }
 
@@ -161,6 +163,7 @@ pub struct FilesPresent {
 
 /// Which figure decides the order of a report's rows.
 #[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
+#[non_exhaustive]
 pub enum SortCriterion {
     /// How many files the language has.
     Files,

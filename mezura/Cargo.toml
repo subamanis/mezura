@@ -3,13 +3,13 @@ name = "mezura"
 version = "3.0.0"
 authors = ["subamanis <petrospapa21@gmail.com>"]
 edition = "2024"
-description = "A fast, accurate and very customizable stats generator for programming projects"
+description = "Counts the lines of a codebase quickly and accurately, along with user-defined keywords like classes and structs. Tracks how the figures move between runs, and between any two git revisions."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/subamanis/mezura"
 readme = "../README.md"
 
 [dependencies]
-mezura-core = { path = "../mezura-core", version = "0.1.0" }
+mezura-core = { path = "../mezura-core", version = "1.0.0" }
 colored = "2"
 chrono = "0.4.45"
 directories = "4.0.1"
