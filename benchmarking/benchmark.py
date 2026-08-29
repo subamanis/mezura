@@ -31,7 +31,9 @@ RECORD_FORMAT = 1
 
 CORPUS_KEYS = ('name', 'remote', 'commit', 'languages', 'types')
 CORPUS_REQUIRED = ('name', 'languages', 'types')
-DEFENDER_TOOLS = ('mezura', 'scc', 'tokei')
+# Native executables only: a script tool (cloc is Perl) would run as its interpreter's
+# process, so the Defender exclusion checks would need to look at that name instead.
+TOOLS = ('mezura', 'scc', 'tokei')
 
 EQUAL_WORK_MEZURA = ['--hide', 'keywords', '--count-minified', '--count-generated',
                      '--counting', 'region']
@@ -404,9 +406,7 @@ def collect_machine(tools: Path, corpus: Path, repo: Path) -> dict[str, Any]:
         'mezura_changed_beside_the_build': sorted(beside_it),
         'global_gitignore': capture(['git', 'config', '--get', 'core.excludesFile'], 'none'),
         'hyperfine': capture(['hyperfine', '--version'], 'missing'),
-        'mezura': tool_version(tools / f'mezura{EXE}'),
-        'scc': tool_version(tools / f'scc{EXE}'),
-        'tokei': tool_version(tools / f'tokei{EXE}'),
+        **{name: tool_version(tools / f'{name}{EXE}') for name in TOOLS},
     }
 
 
@@ -433,7 +433,7 @@ def defender_state(corpus: Path, binaries: Binaries) -> dict[str, Any]:
     if PLATFORM != 'windows':
         state = {'defender_realtime': 'not applicable',
                  'defender_corpus_excluded': 'not applicable'}
-        for tool in DEFENDER_TOOLS:
+        for tool in TOOLS:
             state[f'defender_process_excluded_{tool}'] = 'not applicable'
             state[f'defender_binary_excluded_{tool}'] = 'not applicable'
         return state
@@ -444,7 +444,7 @@ def defender_state(corpus: Path, binaries: Binaries) -> dict[str, Any]:
              powershell('(Get-MpComputerStatus).RealTimeProtectionEnabled', 'unknown')}
     state['defender_corpus_excluded'] = unknown if paths is None else sits_under(corpus, paths)
     entries = None if processes is None else [p.replace('/', '\\').lower() for p in processes]
-    for tool in DEFENDER_TOOLS:
+    for tool in TOOLS:
         binary = binaries[tool]
         if entries is None:
             state[f'defender_process_excluded_{tool}'] = unknown
@@ -458,7 +458,7 @@ def defender_state(corpus: Path, binaries: Binaries) -> dict[str, Any]:
 
 
 def refuse_asymmetric_exclusions(state: dict[str, Any]) -> None:
-    values = {tool: state[f'defender_process_excluded_{tool}'] for tool in DEFENDER_TOOLS}
+    values = {tool: state[f'defender_process_excluded_{tool}'] for tool in TOOLS}
     if any(not isinstance(v, bool) for v in values.values()):
         return
     if len(set(values.values())) == 1:
@@ -727,7 +727,7 @@ def do_check(corpus: Path, binaries: Binaries, definition: Definition) -> int:
 
         if PLATFORM == 'windows':
             state = defender_state(corpus, binaries)
-            values = [state[f'defender_process_excluded_{t}'] for t in DEFENDER_TOOLS]
+            values = [state[f'defender_process_excluded_{t}'] for t in TOOLS]
             if any(not isinstance(v, bool) for v in values):
                 say('   MS Defender '
                     + paint('yellow', 'exclusions unreadable without an elevated shell'))
@@ -1020,6 +1020,15 @@ def format_wall(mean: Any, stddev: Any) -> str:
     return f'{text} ± {float(stddev) * 1000:.0f}' if stddev else text
 
 
+def format_versions(machine: dict[str, Any]) -> str:
+    parts = []
+    for tool in TOOLS:
+        raw = str(machine.get(tool, ''))
+        found = re.search(r'v?\d+\.\d+\S*( \([^)]*\))?', raw)
+        parts.append(f'{tool} {found.group(0) if found else raw or "?"}')
+    return ', '.join(parts)
+
+
 def write_results_page(outroot: Path) -> None:
     entries = []
     for found in sorted(outroot.glob('*/*/*/run.json')):
@@ -1057,7 +1066,8 @@ def write_results_page(outroot: Path) -> None:
                   f'{ram}, '
                   f'{machine.get("os", "?")}  ',
                   f'corpus at `{str(machine.get("corpus_head", ""))[:9]}` on '
-                  f'{machine.get("corpus_fs", "?")}, {machine.get("corpus_device", "?")}', '']
+                  f'{machine.get("corpus_fs", "?")}, {machine.get("corpus_device", "?")}  ',
+                  format_versions(machine), '']
         order_moves = []
         for tier, title in (('t1', 'Same work (all three pinned to the same languages and '
                                    'settings)'),
@@ -1075,7 +1085,7 @@ def write_results_page(outroot: Path) -> None:
                                        / min(m1['mean_s'], m2['mean_s']))
             found.sort(key=lambda m: m['mean_s'])
             fastest = found[0]['mean_s']
-            lines += [f'### {title}', '',
+            lines += [f'#### {title}', '',
                       '| tool | wall | vs fastest | total cpu | parallelism | lines/s '
                       '| files | lines |',
                       '|---|---|---|---|---|---|---|---|']
@@ -1108,7 +1118,7 @@ def write_results_page(outroot: Path) -> None:
                      'changed.')
         realtime = machine.get('defender_realtime')
         if realtime not in (None, 'not applicable'):
-            exclusions = [machine.get(f'defender_process_excluded_{t}') for t in DEFENDER_TOOLS]
+            exclusions = [machine.get(f'defender_process_excluded_{t}') for t in TOOLS]
             if any(not isinstance(v, bool) for v in exclusions):
                 verdict = 'whether the tools are excluded from scanning could not be read'
             elif all(exclusions):
@@ -1133,7 +1143,7 @@ def write_results_page(outroot: Path) -> None:
             cells = [f'[{record["settings"]["stamp"]}]({rel}/)',
                      shown_names.get(machine['platform'], machine['platform']),
                      record['settings']['corpus']]
-            for tool in ('mezura', 'scc', 'tokei'):
+            for tool in TOOLS:
                 cells.append(format_wall(mean_of(record['measurements'], 't1', tool), None))
             drift = drift_of(record['measurements'])
             cells.append(as_percent(drift) if drift else '')
@@ -1187,7 +1197,7 @@ def write_notes(res: Path, stamp: str, machine: dict[str, Any], settings: dict[s
     clean = machine['mezura_clean']
     provenance = 'clean' if clean is True else ('dirty' if clean is False else str(clean))
     drift = drift_of(record['measurements']) or 'n/a'
-    exclusions = [machine.get(f'defender_process_excluded_{tool}') for tool in DEFENDER_TOOLS]
+    exclusions = [machine.get(f'defender_process_excluded_{tool}') for tool in TOOLS]
     if PLATFORM != 'windows':
         alike = 'not applicable'
     elif any(not isinstance(v, bool) for v in exclusions):
@@ -1324,7 +1334,7 @@ def parse_args(config: dict[str, str]) -> argparse.Namespace:
 
 
 def require_ready(tools: Path, corpus: Path, definition: Definition) -> Binaries:
-    binaries = {name: tools / f'{name}{EXE}' for name in ('mezura', 'scc', 'tokei')}
+    binaries = {name: tools / f'{name}{EXE}' for name in TOOLS}
     missing = [str(b) for b in binaries.values() if not b.exists()]
     if missing:
         raise SystemExit('these are not there, run with --setup:\n  ' + '\n  '.join(missing))
@@ -1504,7 +1514,7 @@ def run_phases(args: argparse.Namespace, tools: Path, corpus: Path, repo: Path, 
     binaries = {str(p).replace('\\', '/'): name
                 for p, name in ((mezura, 'mezura'), (scc, 'scc'), (tokei, 'tokei'))}
     counts = {}
-    for tool in ('mezura', 'scc', 'tokei'):
+    for tool in TOOLS:
         for tier in ('t1', 't2'):
             counts[(tier, tool)] = totals_from(tool, res / 'out' / f'{tier}-{tool}.json')
 

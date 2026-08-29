@@ -1,0 +1,15 @@
+set,tool,command,mean_s,stddev_s,median_s,min_s,max_s,user_s,system_s,runs,counted_files,counted_lines,lines_per_sec,parallelism,lines_per_cpu_s
+control-end,mezura,/home/petros/dev/tools/mezura /home/petros/dev/bench/linux,0.297856,0.012236,0.298881,0.266765,0.322264,2.585949,0.539377,15,,,,10.49,
+control-start,mezura,/home/petros/dev/tools/mezura /home/petros/dev/bench/linux,0.287944,0.01132,0.290352,0.267179,0.309198,2.585859,0.516395,15,,,,10.77,
+t1-fwd,mezura,"/home/petros/dev/tools/mezura /home/petros/dev/bench/linux --languages c,h,s,py,pl,rs,sh --hide keywords --count-minified --count-generated --counting region",0.25086,0.009741,0.250761,0.237887,0.274546,2.202586,0.516455,15,63864,36036878,143653087,10.84,13253529
+t1-fwd,scc,"/home/petros/dev/tools/scc /home/petros/dev/bench/linux -i c,h,s,py,pl,rs,sh -c --no-cocomo --no-config",0.667588,0.0312,0.660159,0.610513,0.71713,5.960604,1.02256,15,63724,36013098,53945056,10.46,5157132
+t1-fwd,tokei,"/home/petros/dev/tools/tokei /home/petros/dev/bench/linux -t ""C,C Header,GNU Style Assembly,Python,Perl,Rust,Shell""",0.522989,0.030601,0.51319,0.50705,0.629611,5.589355,0.856385,15,63782,36022156,68877472,12.32,5588521
+t1-rev,tokei,"/home/petros/dev/tools/tokei /home/petros/dev/bench/linux -t ""C,C Header,GNU Style Assembly,Python,Perl,Rust,Shell""",0.5395,0.045047,0.526714,0.502161,0.673065,5.585631,0.893591,15,63782,36022156,66769474,12.01,5559642
+t1-rev,scc,"/home/petros/dev/tools/scc /home/petros/dev/bench/linux -i c,h,s,py,pl,rs,sh -c --no-cocomo --no-config",0.646208,0.012605,0.644424,0.629182,0.673765,5.95857,0.968839,15,63724,36013098,55729856,10.72,5198639
+t1-rev,mezura,"/home/petros/dev/tools/mezura /home/petros/dev/bench/linux --languages c,h,s,py,pl,rs,sh --hide keywords --count-minified --count-generated --counting region",0.262617,0.01011,0.258951,0.246162,0.282158,2.243891,0.491846,15,63864,36036878,137222026,10.42,13172637
+t2-fwd,mezura,/home/petros/dev/tools/mezura /home/petros/dev/bench/linux,0.301044,0.008563,0.299079,0.287537,0.31789,2.547488,0.558271,15,66536,35816653,118974753,10.32,11532335
+t2-fwd,scc,/home/petros/dev/tools/scc /home/petros/dev/bench/linux,0.886158,0.031472,0.869995,0.848443,0.94762,9.137527,1.167963,15,83784,39993947,45131867,11.63,3880839
+t2-fwd,tokei,/home/petros/dev/tools/tokei /home/petros/dev/bench/linux,0.569266,0.019508,0.578445,0.533215,0.585643,6.250359,0.913054,15,83843,39992832,70253286,12.58,5582930
+t2-rev,tokei,/home/petros/dev/tools/tokei /home/petros/dev/bench/linux,0.565855,0.0221,0.578039,0.52929,0.588193,6.264181,0.913071,15,83843,39992832,70676772,12.68,5572165
+t2-rev,scc,/home/petros/dev/tools/scc /home/petros/dev/bench/linux,0.900812,0.04008,0.913954,0.840513,0.951195,9.142456,1.154541,15,83784,39993947,44397684,11.43,3884040
+t2-rev,mezura,/home/petros/dev/tools/mezura /home/petros/dev/bench/linux,0.297891,0.012589,0.298149,0.271743,0.333311,2.615463,0.515684,15,66536,35816653,120234157,10.51,11438828

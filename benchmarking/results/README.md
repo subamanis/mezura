@@ -2,12 +2,40 @@
 
 Written by `benchmark.py` after every run, not edited by hand. What every term means and how this was measured: the two sections at the bottom.
 
+## linux corpus, WSL2, 20260829-072844
+
+AMD Ryzen 7 9700X 8-Core Processor, 16 threads, 30 GB usable RAM, Ubuntu 24.04.3 LTS  
+corpus at `0ff41df1c` on ext4 /dev/sdd, unknown  
+mezura v3.0.0 (unreleased), scc 4.0.0, tokei 14.0.0
+
+#### Same work (all three pinned to the same languages and settings)
+
+| tool | wall | vs fastest | total cpu | parallelism | lines/s | files | lines |
+|---|---|---|---|---|---|---|---|
+| mezura | 257 ms ± 12 | 1.00x | 2.73 s | 10.62 | 140M | 63,864 | 36,036,878 |
+| tokei | 531 ms ± 39 | 2.07x | 6.46 s | 12.16 | 68M | 63,782 | 36,022,156 |
+| scc | 657 ms ± 26 | 2.56x | 6.96 s | 10.59 | 55M | 63,724 | 36,013,098 |
+
+#### Out of the box (each tool at its own defaults)
+
+| tool | wall | vs fastest | total cpu | parallelism | lines/s | files | lines |
+|---|---|---|---|---|---|---|---|
+| mezura | 299 ms ± 11 | 1.00x | 3.12 s | 10.41 | 120M | 66,536 | 35,816,653 |
+| tokei | 568 ms ± 21 | 1.90x | 7.17 s | 12.63 | 70M | 83,843 | 39,992,832 |
+| scc | 893 ms ± 37 | 2.98x | 10.30 s | 11.53 | 45M | 83,784 | 39,993,947 |
+
+Trust checks for this run:
+- **Machine steadiness**: the same binary, timed at the start of the run and again at the end, differed by 3.4%.
+- **Command order**: every table ran in both command orders and the numbers above pool the two. Swapping the order moved no tool by more than 4.7%.
+- **Power**: the machine was measured as it was, with no settings changed.
+
 ## linux corpus, Windows, 20260829-050102
 
 AMD Ryzen 7 9700X 8-Core Processor, 16 threads, 62 GB usable RAM, Windows-11-10.0.26200-SP0  
-corpus at `0ff41df1c` on NTFS, Lexar SSD NQ790 2TB, SSD, NVMe
+corpus at `0ff41df1c` on NTFS, Lexar SSD NQ790 2TB, SSD, NVMe  
+mezura v3.0.0 (unreleased), scc 4.0.0, tokei 14.0.0
 
-### Same work (all three pinned to the same languages and settings)
+#### Same work (all three pinned to the same languages and settings)
 
 | tool | wall | vs fastest | total cpu | parallelism | lines/s | files | lines |
 |---|---|---|---|---|---|---|---|
@@ -15,7 +43,7 @@ corpus at `0ff41df1c` on NTFS, Lexar SSD NQ790 2TB, SSD, NVMe
 | tokei | 661 ms ± 35 | 1.91x | 9.15 s | 13.85 | 55M | 63,811 | 36,021,160 |
 | scc | 794 ms ± 17 | 2.29x | 8.74 s | 11.02 | 45M | 63,753 | 36,012,072 |
 
-### Out of the box (each tool at its own defaults)
+#### Out of the box (each tool at its own defaults)
 
 | tool | wall | vs fastest | total cpu | parallelism | lines/s | files | lines |
 |---|---|---|---|---|---|---|---|
@@ -32,9 +60,10 @@ Trust checks for this run:
 ## linux corpus, Native Linux, 20260828-230405
 
 AMD Ryzen 7 9700X 8-Core Processor, 16 threads, 60 GB usable RAM, Debian GNU/Linux 13 (trixie)  
-corpus at `0ff41df1c` on ext4 /dev/nvme1n1p3, Lexar SSD NQ790 2TB, 16.0 GT/s PCIe x4
+corpus at `0ff41df1c` on ext4 /dev/nvme1n1p3, Lexar SSD NQ790 2TB, 16.0 GT/s PCIe x4  
+mezura v3.0.0 (unreleased), scc 4.0.0, tokei 14.0.0
 
-### Same work (all three pinned to the same languages and settings)
+#### Same work (all three pinned to the same languages and settings)
 
 | tool | wall | vs fastest | total cpu | parallelism | lines/s | files | lines |
 |---|---|---|---|---|---|---|---|
@@ -42,7 +71,7 @@ corpus at `0ff41df1c` on ext4 /dev/nvme1n1p3, Lexar SSD NQ790 2TB, 16.0 GT/s PCI
 | scc | 471 ms ± 3 | 2.11x | 6.13 s | 13.01 | 76M | 63,724 | 36,013,098 |
 | tokei | 474 ms ± 3 | 2.12x | 6.23 s | 13.15 | 76M | 63,782 | 36,022,156 |
 
-### Out of the box (each tool at its own defaults)
+#### Out of the box (each tool at its own defaults)
 
 | tool | wall | vs fastest | total cpu | parallelism | lines/s | files | lines |
 |---|---|---|---|---|---|---|---|

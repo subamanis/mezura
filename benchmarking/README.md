@@ -1,7 +1,7 @@
 # Benchmarking
 
 `benchmark.py` measures mezura against scc and tokei on the Linux kernel tree. One file, and it
-detects Linux, WSL, macOS or Windows on its own — there is no platform flag to pass.
+detects Linux, WSL, macOS or Windows on its own, so there is no platform flag to pass.
 
 ## Prerequisites
 
@@ -89,8 +89,8 @@ all good.
 ```
 
 This is what to run before rebooting, letting the machine settle and committing six minutes to
-a real run. It goes through the same gate a real run does — paths, binaries, hyperfine, and the
-corpus sitting on the commit its definition pins — and then does what no static check can:
+a real run. It goes through the same gate a real run does (paths, binaries, hyperfine, and the
+corpus sitting on the commit its definition pins), and then does what no static check can:
 runs the tools, parses what they printed, and looks at the counts.
 
 A count of zero fails the check. It means the definition names a language the tree does not
@@ -141,8 +141,8 @@ Only what genuinely differs between one tree and another lives here. `languages`
 and scc are told to count, as extensions; `types` is the same set as tokei spells it, which is
 language names. Both are needed because the tools do not agree on how a language is named.
 
-The flags that make the three tools do *equal* work — mezura counting by region with keywords
-hidden, scc without complexity or cocomo — are properties of the benchmark, not of the corpus,
+The flags that make the three tools do *equal* work (mezura counting by region with keywords
+hidden, scc without complexity or cocomo) are properties of the benchmark, not of the corpus,
 so they stay in `benchmark.py` and cannot drift between definitions.
 
 `--corpus-def <name>` picks another file under `corpora/`, or takes a path if what you give it
@@ -152,7 +152,7 @@ the command that puts it right. Leave `commit` blank to measure a tree as it sta
 then recorded with `corpus_pinned: false` and can never be quietly compared with a pinned one.
 
 `remote` is only needed to fetch. A tree you already keep locally at the right commit needs no
-remote at all — the setup takes it as it stands. It is refused only when the checkout is on the
+remote at all: the setup takes it as it stands. It is refused only when the checkout is on the
 wrong commit and there is nothing to fetch the right one from, which is the one case nothing
 can fix by itself.
 
@@ -181,15 +181,15 @@ run with links. GitHub renders it as the folder's front page.
 
 Inside a run directory:
 
-- `run.json` — machine, settings, every measurement, every count. Self-contained; this is the
+- `run.json`: machine, settings, every measurement, every count. Self-contained; this is the
   one to read back and to compare across platforms. It opens with `format: 1`: fields may be
   added under the same number, and anything that changes the meaning of an existing field
   bumps it.
-- `summary.csv`, `counts.csv` — the same numbers, flat
-- `machine.txt` — what the run was measured on
-- `<phase>.md` / `<phase>.json` — hyperfine's own output per phase
-- `transcript.txt` — everything that was printed, this script and the tools alike
-- `notes.md` — the checklist to fill in by hand
+- `summary.csv`, `counts.csv`: the same numbers, flat
+- `machine.txt`: what the run was measured on
+- `<phase>.md` / `<phase>.json`: hyperfine's own output per phase
+- `transcript.txt`: everything that was printed, this script and the tools alike
+- `notes.md`: the checklist to fill in by hand
 
 `out/` holds the raw tool output and is deleted once the numbers are read; `--keep-raw` keeps
 it. It is gitignored either way, because tokei's per-file JSON alone is 40 MB.
