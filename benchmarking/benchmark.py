@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import argparse
 import csv
-import filecmp
 import json
+import math
 import os
 import platform
 import re
@@ -13,7 +13,7 @@ import subprocess
 import sys
 import tempfile
 import tarfile
-import threading
+import time
 import urllib.request
 import zipfile
 from datetime import datetime
@@ -27,9 +27,11 @@ Binaries = dict[str, Path]
 
 SCC_VERSION = '4.0.0'
 TOKEI_VERSION = '14.0.0'
+RECORD_FORMAT = 1
 
 CORPUS_KEYS = ('name', 'remote', 'commit', 'languages', 'types')
 CORPUS_REQUIRED = ('name', 'languages', 'types')
+DEFENDER_TOOLS = ('mezura', 'scc', 'tokei')
 
 EQUAL_WORK_MEZURA = ['--hide', 'keywords', '--count-minified', '--count-generated',
                      '--counting', 'region']
@@ -80,8 +82,6 @@ def under_home(path: Path) -> Path:
     if text.startswith('~' + os.sep) or text.startswith('~/'):
         return HOME / text[2:]
     return path.expanduser()
-DEFAULT_TOOLS = HOME / 'Documents' / 'dev' / 'tools'
-DEFAULT_CORPUS = HOME / 'Documents' / 'dev' / 'bench' / 'linux'
 
 SCC_ASSETS = {
     ('linux', 'x86_64'): 'scc_Linux_x86_64.tar.gz',
@@ -128,68 +128,29 @@ class Transcript:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.file = None
-        self.thread = None
-        self.saved = None
 
     def start(self) -> None:
+        global ACTIVE_TRANSCRIPT
+        disable_colors()
         try:
-            self.file = open(self.path, 'wb')
-            read_fd, write_fd = os.pipe()
-            saved_out, saved_err = os.dup(1), os.dup(2)
-            sys.stdout.flush()
-            sys.stderr.flush()
-            os.dup2(write_fd, 1)
-            os.dup2(write_fd, 2)
-            os.close(write_fd)
-            self.saved = (saved_out, saved_err)
+            self.file = open(self.path, 'w', encoding='utf-8', errors='replace')
+        except OSError:
+            self.file = None
+            warn(f'could not capture a transcript into {self.path}')
+            return
+        ACTIVE_TRANSCRIPT = self
 
-            def pump() -> None:
-                while True:
-                    try:
-                        chunk = os.read(read_fd, 4096)
-                    except OSError:
-                        break
-                    if not chunk:
-                        break
-                    try:
-                        self.file.write(chunk)
-                        self.file.flush()
-                    except (OSError, ValueError):
-                        pass
-                    try:
-                        os.write(saved_out, chunk)
-                    except OSError:
-                        pass
-                try:
-                    os.close(read_fd)
-                except OSError:
-                    pass
-
-            self.thread = threading.Thread(target=pump, daemon=True)
-            self.thread.start()
-        except Exception:
-            self.stop()
-            say(f'WARNING: could not capture a transcript into {self.path}')
+    def write(self, message: str) -> None:
+        if self.file:
+            try:
+                self.file.write(message + '\n')
+                self.file.flush()
+            except OSError:
+                pass
 
     def stop(self) -> None:
-        saved = self.saved
-        if saved:
-            try:
-                sys.stdout.flush()
-                sys.stderr.flush()
-                os.dup2(saved[0], 1)
-                os.dup2(saved[1], 2)
-            except OSError:
-                pass
-            self.saved = None
-        if self.thread:
-            self.thread.join(timeout=5)
-            self.thread = None
-        for fd in saved or ():
-            try:
-                os.close(fd)
-            except OSError:
-                pass
+        global ACTIVE_TRANSCRIPT
+        ACTIVE_TRANSCRIPT = None
         if self.file:
             try:
                 self.file.close()
@@ -198,8 +159,53 @@ class Transcript:
             self.file = None
 
 
+ACTIVE_TRANSCRIPT: Optional[Transcript] = None
+
+
 def say(message: str) -> None:
     print(message, flush=True)
+    if ACTIVE_TRANSCRIPT is not None:
+        ACTIVE_TRANSCRIPT.write(message)
+
+
+COLOR_CODES = {'green': '32', 'red': '31', 'yellow': '33', 'bold': '1'}
+COLORS_ON = False
+
+
+def enable_colors() -> None:
+    global COLORS_ON
+    if 'NO_COLOR' in os.environ or not sys.stdout.isatty():
+        return
+    if PLATFORM == 'windows':
+        try:
+            import ctypes
+            kernel = ctypes.windll.kernel32
+            handle = kernel.GetStdHandle(-11)
+            mode = ctypes.c_uint32()
+            if not kernel.GetConsoleMode(handle, ctypes.byref(mode)):
+                return
+            kernel.SetConsoleMode(handle, mode.value | 0x0004)
+        except Exception:
+            return
+    COLORS_ON = True
+
+
+def disable_colors() -> None:
+    global COLORS_ON
+    COLORS_ON = False
+
+
+def paint(color: str, text: str) -> str:
+    return f'\x1b[{COLOR_CODES[color]}m{text}\x1b[0m' if COLORS_ON else text
+
+
+def header(title: str) -> None:
+    say('')
+    say(paint('bold', title))
+
+
+def warn(message: str) -> None:
+    say(paint('yellow', 'WARNING: ') + message)
 
 
 def run(argv: Sequence[str], **kwargs: Any) -> subprocess.CompletedProcess:
@@ -224,7 +230,7 @@ def powershell(script: str, default: str = '') -> str:
 
 
 def quote(part: Any) -> str:
-    part = str(part)
+    part = str(part).replace('\\', '/')
     return f'"{part}"' if ' ' in part and not part.startswith('"') else part
 
 
@@ -332,6 +338,11 @@ def distro() -> str:
     return platform.platform()
 
 
+def parse_porcelain(out: str) -> list[str]:
+    return [line.split(maxsplit=1)[1].split(' -> ')[-1].strip('"')
+            for line in out.splitlines() if len(line.split(maxsplit=1)) == 2]
+
+
 def git_state(path: Path, untracked: bool = True) -> dict[str, Any]:
     head = capture(['git', '-C', str(path), 'rev-parse', 'HEAD'], 'not a git repo')
     argv = ['git', '-C', str(path), 'status', '--porcelain']
@@ -340,8 +351,7 @@ def git_state(path: Path, untracked: bool = True) -> dict[str, Any]:
     ok, out = capture_ok(argv, timeout=300)
     if not ok:
         return {'head': head, 'clean': None, 'dirty': []}
-    dirty = [line.split(maxsplit=1)[1].split(' -> ')[-1].strip('"')
-             for line in out.splitlines() if len(line.split(maxsplit=1)) == 2]
+    dirty = parse_porcelain(out)
     return {'head': head, 'clean': not dirty, 'dirty': dirty}
 
 
@@ -400,6 +410,70 @@ def collect_machine(tools: Path, corpus: Path, repo: Path) -> dict[str, Any]:
     }
 
 
+def parse_exclusion_list(raw: str) -> Optional[list[str]]:
+    if raw.strip().upper().startswith('N/A'):
+        return None
+    return [entry.strip() for entry in raw.split('|') if entry.strip()]
+
+
+def read_defender_list(property_name: str) -> Optional[list[str]]:
+    return parse_exclusion_list(powershell(f'(Get-MpPreference).{property_name} -join "|"'))
+
+
+def sits_under(path: Path, roots: list[str]) -> bool:
+    text = str(path).replace('/', '\\').lower().rstrip('\\')
+    for root in roots:
+        prefix = root.replace('/', '\\').lower().rstrip('\\')
+        if text == prefix or text.startswith(prefix + '\\'):
+            return True
+    return False
+
+
+def defender_state(corpus: Path, binaries: Binaries) -> dict[str, Any]:
+    if PLATFORM != 'windows':
+        state = {'defender_realtime': 'not applicable',
+                 'defender_corpus_excluded': 'not applicable'}
+        for tool in DEFENDER_TOOLS:
+            state[f'defender_process_excluded_{tool}'] = 'not applicable'
+            state[f'defender_binary_excluded_{tool}'] = 'not applicable'
+        return state
+    unknown = 'unknown (needs admin)'
+    processes = read_defender_list('ExclusionProcess')
+    paths = read_defender_list('ExclusionPath')
+    state = {'defender_realtime':
+             powershell('(Get-MpComputerStatus).RealTimeProtectionEnabled', 'unknown')}
+    state['defender_corpus_excluded'] = unknown if paths is None else sits_under(corpus, paths)
+    entries = None if processes is None else [p.replace('/', '\\').lower() for p in processes]
+    for tool in DEFENDER_TOOLS:
+        binary = binaries[tool]
+        if entries is None:
+            state[f'defender_process_excluded_{tool}'] = unknown
+        else:
+            state[f'defender_process_excluded_{tool}'] = (
+                binary.name.lower() in entries
+                or str(binary).replace('/', '\\').lower() in entries)
+        state[f'defender_binary_excluded_{tool}'] = (
+            unknown if paths is None else sits_under(binary, paths))
+    return state
+
+
+def refuse_asymmetric_exclusions(state: dict[str, Any]) -> None:
+    values = {tool: state[f'defender_process_excluded_{tool}'] for tool in DEFENDER_TOOLS}
+    if any(not isinstance(v, bool) for v in values.values()):
+        return
+    if len(set(values.values())) == 1:
+        return
+    excluded = ', '.join(sorted(t for t, v in values.items() if v))
+    included = ', '.join(sorted(t for t, v in values.items() if not v))
+    raise SystemExit(
+        f'{excluded} excluded from Defender real-time scanning, {included} not.\n\n'
+        f'Files opened by an excluded process are never scanned in real time, so this\n'
+        f'run would measure which tool escaped the antivirus, not which counts faster.\n\n'
+        f'  Get-MpPreference | Select -ExpandProperty ExclusionProcess\n'
+        f'  Remove-MpPreference -ExclusionProcess <name>.exe\n\n'
+        f'Either exclude all three or none.')
+
+
 def download(url: str, dest: Path) -> None:
     say(f'   downloading {url}')
     try:
@@ -416,7 +490,7 @@ def setup_scc(tools: Path) -> None:
         return
     asset = SCC_ASSETS.get((PLATFORM, ARCH))
     if not asset:
-        raise SystemExit(f'no scc asset known for {PLATFORM}/{ARCH}; download it by hand into {tools}')
+        raise SystemExit(f'no scc asset known for {PLATFORM}/{ARCH}. Download it by hand into {tools}')
     url = f'https://github.com/boyter/scc/releases/download/v{SCC_VERSION}/{asset}'
     archive = tools / asset
     download(url, archive)
@@ -515,7 +589,7 @@ def prep_cpu_governor() -> Optional[PrepStep]:
             try:
                 path.write_text('performance')
             except OSError as error:
-                say(f'   could not set {path}: {error}')
+                warn(f'could not set {path}: {error}')
 
     def restore() -> None:
         for path, value in current.items():
@@ -568,28 +642,27 @@ def announce_prep(plan: list[PrepStep], assume_yes: bool) -> None:
     if not plan or is_privileged():
         return
     authority, how = how_to_elevate()
+    say('')
     say(f'Not running as {authority}, so the machine is measured exactly as it is now.')
-    say(f'\nAs {authority} this run would first set:')
+    say(f'As {authority} this run would first set:')
     for step in plan:
         say(f'   {step["what"]}')
     say('and put it back at the end, however the run ends. To do that:')
     say(f'\n   {how}\n')
-    say('The numbers are real either way. But a cpu that clocks itself up and down')
-    say('mid-run widens the spread, and a small difference can disappear into it.')
     if assume_yes:
-        say('--yes was given, so carrying on as an ordinary user.')
+        say('--yes given, carrying on.')
         return
     if not sys.stdin.isatty():
-        say('no terminal to ask at, so carrying on as an ordinary user.')
+        say('no terminal to ask at, carrying on.')
         return
     if input('Continue anyway, without it? [y/N] ').strip().lower() not in ('y', 'yes'):
-        raise SystemExit('stopped. nothing was measured and nothing was changed.')
+        raise SystemExit('stopped.')
 
 
 def apply_prep(plan: list[PrepStep], applied: list[PrepStep]) -> list[PrepStep]:
     if not plan or not is_privileged():
         return applied
-    say('== machine preparation')
+    header('== machine preparation')
     for step in plan:
         say(f'   {step["what"]}')
         applied.append(step)
@@ -598,7 +671,7 @@ def apply_prep(plan: list[PrepStep], applied: list[PrepStep]) -> list[PrepStep]:
 
 
 def do_check(corpus: Path, binaries: Binaries, definition: Definition) -> int:
-    mezura, control = binaries['mezura'], binaries['control']
+    mezura = binaries['mezura']
     scc, tokei = binaries['scc'], binaries['tokei']
     mezura_pinned, scc_pinned, tokei_pinned = pinned_flags(definition)
     plans = (
@@ -609,7 +682,7 @@ def do_check(corpus: Path, binaries: Binaries, definition: Definition) -> int:
         ('scc', 't2', [scc, corpus, '--format', 'json']),
         ('tokei', 't2', [tokei, corpus, '--output', 'json']),
     )
-    say(f'== check: {definition["name"]} at {corpus}')
+    header(f'== check: {definition["name"]} at {corpus}')
     bad = []
     with tempfile.TemporaryDirectory() as scratch:
         for tool, tier, argv in plans:
@@ -618,49 +691,64 @@ def do_check(corpus: Path, binaries: Binaries, definition: Definition) -> int:
                 result = run([str(a) for a in argv], stdout=out, stderr=subprocess.PIPE, text=True)
             if result.returncode != 0:
                 reason = (result.stderr or '').strip().splitlines()
-                say(f'   {tool:<7} {tier}  FAILED, exit {result.returncode}'
+                say(f'   {tool:<7} {tier}  ' + paint('red', f'FAILED, exit {result.returncode}')
                     + (f': {reason[0]}' if reason else ''))
                 bad.append(f'{tool} {tier}')
                 continue
             totals = totals_from(tool, path)
             if not totals:
-                say(f'   {tool:<7} {tier}  ran, but no counts could be read from its output')
+                say(f'   {tool:<7} {tier}  '
+                    + paint('red', 'ran, but no counts could be read from its output'))
                 bad.append(f'{tool} {tier}')
                 continue
             if not totals['files']:
-                say(f'   {tool:<7} {tier}  counted nothing at all, so its share of the '
-                    f'{definition["name"]} definition names no language this tree has')
+                say(f'   {tool:<7} {tier}  '
+                    + paint('red', f'counted nothing at all, so its share of the '
+                                   f'{definition["name"]} definition names no language '
+                                   f'this tree has'))
                 bad.append(f'{tool} {tier}')
                 continue
             files = crunch(totals['files'])
             lines = crunch(totals['lines'])
-            say(f'   {tool:<7} {tier}  ok   {files:>10} files  {lines:>14} lines')
+            say(f'   {tool:<7} {tier}  ' + paint('green', 'ok')
+                + f'   {files:>10} files  {lines:>14} lines')
 
+        say('')
         marker = Path(scratch) / 'hyperfine.json'
         result = run(['hyperfine', '-N', '--warmup', '0', '--runs', '2',
                       '--export-json', str(marker), join_cmd([mezura, corpus])],
                      stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
         if result.returncode != 0 or not marker.is_file():
-            say(f'   hyperfine     FAILED: {(result.stderr or "").strip().splitlines()[:1]}')
+            say('   hyperfine   '
+                + paint('red', f'FAILED: {(result.stderr or "").strip().splitlines()[:1]}'))
             bad.append('hyperfine')
         else:
-            say('   hyperfine     ok')
+            say('   hyperfine   ' + paint('green', 'ok'))
 
-        if not control.exists():
-            say('   control       not made yet, the next run will copy it from mezura')
-        elif not filecmp.cmp(mezura, control, shallow=False):
-            say('   control       stale, the next run will refresh it from mezura')
-        elif run([str(control), '--version'], stdout=subprocess.DEVNULL,
-                 stderr=subprocess.DEVNULL).returncode != 0:
-            say('   control       will not run')
-            bad.append('control')
-        else:
-            say('   control       ok')
+        if PLATFORM == 'windows':
+            state = defender_state(corpus, binaries)
+            values = [state[f'defender_process_excluded_{t}'] for t in DEFENDER_TOOLS]
+            if any(not isinstance(v, bool) for v in values):
+                say('   MS Defender '
+                    + paint('yellow', 'exclusions unreadable without an elevated shell'))
+            else:
+                if len(set(values)) == 1:
+                    verdict = ('all three excluded' if values[0]
+                               else paint('yellow', 'none excluded'))
+                    say('   MS Defender ' + paint('green', 'ok') + f', {verdict}')
+                else:
+                    say('   MS Defender ' + paint('red', 'ASYMMETRIC process exclusions'))
+                    bad.append('defender')
+                if state['defender_corpus_excluded'] is True:
+                    say('   corpus        under a Defender exclusion path')
+                else:
+                    say('   corpus      ' + paint('yellow', 'not under any Defender exclusion path'))
 
+    say('')
     if bad:
-        say(f'{len(bad)} of {len(plans) + 1} checks failed: {", ".join(bad)}')
+        say(paint('red', f'{len(bad)} checks failed: {", ".join(bad)}'))
         return 1
-    say('all good. nothing was written.')
+    say(paint('green', 'all good.'))
     return 0
 
 
@@ -668,9 +756,82 @@ def crunch(number: Any) -> str:
     return f'{number:,}' if isinstance(number, int) else str(number)
 
 
+def background_busy_percent(seconds: int = 4) -> Optional[float]:
+    if PLATFORM in ('linux', 'wsl'):
+        def snap() -> tuple[int, int]:
+            numbers = [int(x) for x in Path('/proc/stat').read_text().splitlines()[0].split()[1:]]
+            idle = numbers[3] + (numbers[4] if len(numbers) > 4 else 0)
+            return idle, sum(numbers)
+        idle_before, total_before = snap()
+        time.sleep(seconds)
+        idle_after, total_after = snap()
+        total = total_after - total_before
+        if not total:
+            return None
+        return round(100 * (1 - (idle_after - idle_before) / total), 1)
+    if PLATFORM == 'windows':
+        samples = []
+        for _ in range(seconds):
+            value = powershell(
+                "(Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor "
+                "| Where-Object {$_.Name -eq '_Total'}).PercentProcessorTime").strip()
+            if value.isdigit():
+                samples.append(int(value))
+            time.sleep(1)
+        return round(sum(samples) / len(samples), 1) if samples else None
+    return None
+
+
+def do_noise(corpus: Path, binaries: Binaries, definition: Definition) -> int:
+    cores = os.cpu_count() or 1
+    header('== noise')
+    busy = background_busy_percent()
+    if busy is None:
+        say('   background    not sampled on this platform')
+    else:
+        others = round(busy * cores / 100, 1)
+        say(f'   background    {busy}% busy, ~{others} of {cores} cores')
+
+    with tempfile.TemporaryDirectory() as scratch:
+        marker = Path(scratch) / 'noise.json'
+        result = run(['hyperfine', '-N', '--warmup', '0', '--runs', '5',
+                      '--export-json', str(marker),
+                      join_cmd([binaries['mezura'], corpus])],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        if result.returncode != 0 or not marker.is_file():
+            say('   workload      hyperfine failed')
+            return 1
+        with open(marker, encoding='utf-8') as handle:
+            data = json.load(handle)['results'][0]
+
+    times = data['times']
+    warm = times[1:]
+    warm_mean = sum(warm) / len(warm)
+    spread = round(100 * (max(warm) - min(warm)) / min(warm), 1) if min(warm) else 0.0
+    cpu = (data.get('user') or 0) + (data.get('system') or 0)
+    reached = round(cpu / data['mean'], 1) if data['mean'] else 0.0
+    first = round(times[0] / warm_mean, 2) if warm_mean else 0.0
+
+    say(f'   workload      mezura on {definition["name"]}, 5 runs')
+    say(f'   spread        {spread}% ({round(min(warm) * 1000)} to {round(max(warm) * 1000)} ms)')
+    say(f'   parallelism   {reached} of {cores} cores')
+    say(f'   cache         {"cold" if first >= 1.5 else "warm"}, first run {first}x the warm mean')
+
+    complaints = []
+    if busy is not None and busy >= 10:
+        complaints.append(f'background at {busy}%')
+    if spread >= 15:
+        complaints.append(f'spread at {spread}%')
+    say('')
+    if complaints:
+        say(paint('red', f'not steady: {" and ".join(complaints)}.'))
+        return 1
+    say(paint('green', 'steady.'))
+    return 0
+
+
 def do_setup(tools: Path, corpus: Path, repo: Path, definition: Definition) -> None:
-    say('== setup')
-    (tools / 'control').mkdir(parents=True, exist_ok=True)
+    header('== setup')
     setup_scc(tools)
     setup_tokei(tools)
     setup_corpus(corpus, definition)
@@ -697,7 +858,7 @@ class Runner:
         merged = dict(os.environ, **(env or {}))
         result = run(argv, env=merged)
         if result.returncode != 0:
-            say(f'WARNING: hyperfine reported a problem on {name}')
+            warn(f'hyperfine reported a problem on {name}')
             self.failures.append(name)
 
     def capture_output(self, name: str, command: list[str], as_json: bool) -> None:
@@ -707,7 +868,7 @@ class Runner:
                          stderr=subprocess.DEVNULL if as_json else subprocess.STDOUT)
         if result.returncode != 0:
             label = f'{name}.{suffix}'
-            say(f'WARNING: {command[0]} exited {result.returncode} while writing {label}')
+            warn(f'{command[0]} exited {result.returncode} while writing {label}')
             self.failures.append(label)
 
 
@@ -717,7 +878,7 @@ def totals_from(tool: str, path: Path) -> Optional[Totals]:
             data = json.load(handle)
         return read_totals(tool, data)
     except Exception as error:
-        say(f'WARNING: no counts from {path.name}: {error}')
+        warn(f'no counts from {path.name}: {error}')
         return None
 
 
@@ -751,7 +912,7 @@ def first_token(command: str) -> str:
 
 
 def tool_of(command: str, binaries: dict[str, str]) -> str:
-    return binaries.get(first_token(command), 'unknown')
+    return binaries.get(first_token(command).replace('\\', '/'), 'unknown')
 
 
 def build_record(res: Path, machine: dict[str, Any], settings: dict[str, Any],
@@ -765,12 +926,13 @@ def build_record(res: Path, machine: dict[str, Any], settings: dict[str, Any],
             with open(path, encoding='utf-8') as handle:
                 document = json.load(handle)
         except Exception as error:
-            say(f'WARNING: skipping {path.name}: {error}')
+            warn(f'skipping {path.name}: {error}')
             continue
         for result in document.get('results', []):
             tier = path.stem[:2] if path.stem.startswith(('t1', 't2')) else None
             tool = tool_of(result['command'], binaries)
             counted = counts.get((tier, tool)) if tier else None
+            cpu = (result.get('user') or 0) + (result.get('system') or 0)
             measurements.append({
                 'set': path.stem,
                 'tool': tool,
@@ -786,9 +948,11 @@ def build_record(res: Path, machine: dict[str, Any], settings: dict[str, Any],
                 'counted_files': counted['files'] if counted else None,
                 'counted_lines': counted['lines'] if counted else None,
                 'lines_per_sec': round(counted['lines'] / result['mean']) if counted and result['mean'] else None,
+                'parallelism': round(cpu / result['mean'], 2) if result['mean'] else None,
+                'lines_per_cpu_s': round(counted['lines'] / cpu) if counted and cpu else None,
             })
     return {
-        'format': 1,
+        'format': RECORD_FORMAT,
         'machine': machine,
         'settings': settings,
         'counts': [dict(set=tier, tool=tool, **values)
@@ -800,7 +964,8 @@ def build_record(res: Path, machine: dict[str, Any], settings: dict[str, Any],
 def write_csvs(res: Path, record: dict[str, Any]) -> None:
     with open(res / 'summary.csv', 'w', newline='', encoding='utf-8') as handle:
         fields = ['set', 'tool', 'command', 'mean_s', 'stddev_s', 'median_s', 'min_s', 'max_s',
-                  'user_s', 'system_s', 'runs', 'counted_files', 'counted_lines', 'lines_per_sec']
+                  'user_s', 'system_s', 'runs', 'counted_files', 'counted_lines', 'lines_per_sec',
+                  'parallelism', 'lines_per_cpu_s']
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(record['measurements'])
@@ -811,66 +976,234 @@ def write_csvs(res: Path, record: dict[str, Any]) -> None:
         writer.writerows(record['counts'])
 
 
-INDEX_FIELDS = ['stamp', 'corpus', 'platform', 'mezura_head', 'mezura_clean',
-                'corpus_head', 'corpus_pinned', 'prepared', 'worst_control',
-                't1_mezura_s', 't1_scc_s', 't1_tokei_s', 'path']
-
-
-def worst_control(measurements: list[dict[str, Any]]) -> Any:
-    worst = None
+def drift_of(measurements: list[dict[str, Any]]) -> Any:
+    means = []
     for name in ('control-start', 'control-end'):
-        means = [m['mean_s'] for m in measurements if m['set'] == name and m['mean_s']]
-        if len(means) == 2:
-            ratio = max(means) / min(means)
-            worst = ratio if worst is None else max(worst, ratio)
-    return round(worst, 4) if worst else ''
+        phase = [m['mean_s'] for m in measurements if m['set'] == name and m['mean_s']]
+        if not phase:
+            return ''
+        means.append(phase[0])
+    return round(max(means) / min(means), 4)
 
 
-def mean_of(measurements: list[dict[str, Any]], name: str, tool: str) -> Any:
-    for m in measurements:
-        if m['set'] == name and m['tool'] == tool:
-            return m['mean_s']
-    return ''
+def mean_of(measurements: list[dict[str, Any]], tier: str, tool: str) -> Any:
+    means = [m['mean_s'] for m in measurements
+             if m['tool'] == tool and m['set'] in (f'{tier}-fwd', f'{tier}-rev')
+             and m['mean_s']]
+    return round(sum(means) / len(means), 6) if means else ''
 
 
-def append_index(outroot: Path, record: dict[str, Any], res: Path) -> None:
-    path = outroot / 'index.csv'
-    machine, settings = record['machine'], record['settings']
-    row = {
-        'stamp': settings['stamp'],
-        'corpus': settings['corpus'],
-        'platform': machine['platform'],
-        'mezura_head': str(machine['mezura_head'])[:12],
-        'mezura_clean': machine['mezura_clean'],
-        'corpus_head': str(machine['corpus_head'])[:12],
-        'corpus_pinned': settings['corpus_pinned'],
-        'prepared': bool(settings['machine_prepared']),
-        'worst_control': worst_control(record['measurements']),
-        't1_mezura_s': mean_of(record['measurements'], 't1-fwd', 'mezura'),
-        't1_scc_s': mean_of(record['measurements'], 't1-fwd', 'scc'),
-        't1_tokei_s': mean_of(record['measurements'], 't1-fwd', 'tokei'),
-        'path': str(res.relative_to(outroot)),
-    }
-    fresh = not path.exists()
-    with open(path, 'a', newline='', encoding='utf-8') as handle:
-        writer = csv.DictWriter(handle, fieldnames=INDEX_FIELDS)
-        if fresh:
-            writer.writeheader()
-        writer.writerow(row)
+def pool_orders(m1: dict, m2: Optional[dict]) -> dict:
+    if not m2:
+        return dict(m1)
+    mean = (m1['mean_s'] + m2['mean_s']) / 2
+    spread = math.sqrt(((m1.get('stddev_s') or 0) ** 2 + (m2.get('stddev_s') or 0) ** 2) / 2
+                       + (m1['mean_s'] - m2['mean_s']) ** 2 / 4)
+    user = ((m1.get('user_s') or 0) + (m2.get('user_s') or 0)) / 2
+    system = ((m1.get('system_s') or 0) + (m2.get('system_s') or 0)) / 2
+    counted = m1.get('counted_lines')
+    return {'tool': m1['tool'], 'mean_s': mean, 'stddev_s': spread,
+            'user_s': user, 'system_s': system,
+            'parallelism': round((user + system) / mean, 2) if mean else None,
+            'lines_per_sec': round(counted / mean) if counted and mean else None,
+            'counted_files': m1.get('counted_files'), 'counted_lines': counted}
 
 
-def write_notes(res: Path, stamp: str, tools: Path, corpus: Path,
-                definition: Definition) -> None:
-    pin = definition['commit'][:9] if definition['commit'] else 'not pinned'
+def as_percent(ratio: Any) -> str:
+    return f'{(float(ratio) - 1) * 100:.1f}%'
+
+
+def format_wall(mean: Any, stddev: Any) -> str:
+    if not mean:
+        return ''
+    text = f'{float(mean) * 1000:,.0f} ms'
+    return f'{text} ± {float(stddev) * 1000:.0f}' if stddev else text
+
+
+def write_results_page(outroot: Path) -> None:
+    entries = []
+    for found in sorted(outroot.glob('*/*/*/run.json')):
+        try:
+            with open(found, encoding='utf-8') as handle:
+                record = json.load(handle)
+        except Exception:
+            continue
+        entries.append((record, found.parent.relative_to(outroot).as_posix()))
+    if not entries:
+        return
+
+    latest = {}
+    for record, rel in sorted(entries, key=lambda e: e[0]['settings']['stamp']):
+        latest[(record['settings']['corpus'], record['machine']['platform'])] = (record, rel)
+
+    lines = ['# Benchmark results', '',
+             'Written by `benchmark.py` after every run, not edited by hand. What every term '
+             'means and how this was measured: the two sections at the bottom.', '']
+
+    newest_record = None
+    for (corpus, platform), (record, rel) in sorted(
+            latest.items(), key=lambda kv: kv[1][0]['settings']['stamp'], reverse=True):
+        if newest_record is None:
+            newest_record = record
+        machine = record['machine']
+        drift = drift_of(record['measurements'])
+        prepared = bool(record['settings'].get('machine_prepared'))
+        ram_bytes = machine.get('ram_bytes')
+        ram = f'{ram_bytes / 2 ** 30:.0f} GB usable RAM' if ram_bytes else 'RAM unknown'
+        shown = {'windows': 'Windows', 'linux': 'Native Linux', 'wsl': 'WSL2',
+                 'macos': 'macOS'}.get(platform, platform)
+        lines += [f'## {corpus} corpus, {shown}, {record["settings"]["stamp"]}', '',
+                  f'{machine.get("cpu", "?")}, {machine.get("logical_cores", "?")} threads, '
+                  f'{ram}, '
+                  f'{machine.get("os", "?")}  ',
+                  f'corpus at `{str(machine.get("corpus_head", ""))[:9]}` on '
+                  f'{machine.get("corpus_fs", "?")}, {machine.get("corpus_device", "?")}', '']
+        order_moves = []
+        for tier, title in (('t1', 'Same work (all three pinned to the same languages and '
+                                   'settings)'),
+                            ('t2', 'Out of the box (each tool at its own defaults)')):
+            first = {m['tool']: m for m in record['measurements'] if m['set'] == f'{tier}-fwd'}
+            second = {m['tool']: m for m in record['measurements'] if m['set'] == f'{tier}-rev'}
+            if not first:
+                continue
+            found = []
+            for tool, m1 in first.items():
+                m2 = second.get(tool)
+                found.append(pool_orders(m1, m2))
+                if m2 and min(m1['mean_s'], m2['mean_s']):
+                    order_moves.append(abs(m1['mean_s'] - m2['mean_s'])
+                                       / min(m1['mean_s'], m2['mean_s']))
+            found.sort(key=lambda m: m['mean_s'])
+            fastest = found[0]['mean_s']
+            lines += [f'### {title}', '',
+                      '| tool | wall | vs fastest | total cpu | parallelism | lines/s '
+                      '| files | lines |',
+                      '|---|---|---|---|---|---|---|---|']
+            for m in found:
+                cpu = (m.get('user_s') or 0) + (m.get('system_s') or 0)
+                speed = m.get('lines_per_sec')
+                speed = f'{speed / 1e6:.0f}M' if speed else ''
+                files = f'{m["counted_files"]:,}' if m.get('counted_files') else ''
+                counted = f'{m["counted_lines"]:,}' if m.get('counted_lines') else ''
+                relative = f'{m["mean_s"] / fastest:.2f}x' if fastest else ''
+                lines.append(
+                    f'| {m["tool"]} '
+                    f'| {format_wall(m.get("mean_s"), m.get("stddev_s"))} '
+                    f'| {relative} '
+                    f'| {cpu:.2f} s '
+                    f'| {m.get("parallelism") or ""} '
+                    f'| {speed} | {files} | {counted} |')
+            lines.append('')
+        lines.append('Trust checks for this run:')
+        if drift:
+            lines.append(f'- **Machine steadiness**: the same binary, timed at the start of '
+                         f'the run and again at the end, differed by {as_percent(drift)}.')
+        if order_moves:
+            lines.append(f'- **Command order**: every table ran in both command orders and '
+                         f'the numbers above pool the two. Swapping the order moved no tool '
+                         f'by more than {max(order_moves) * 100:.1f}%.')
+        lines.append('- **Power**: the cpu was set to its high-performance mode for the run '
+                     'and restored after.' if prepared else
+                     '- **Power**: the machine was measured as it was, with no settings '
+                     'changed.')
+        realtime = machine.get('defender_realtime')
+        if realtime not in (None, 'not applicable'):
+            exclusions = [machine.get(f'defender_process_excluded_{t}') for t in DEFENDER_TOOLS]
+            if any(not isinstance(v, bool) for v in exclusions):
+                verdict = 'whether the tools are excluded from scanning could not be read'
+            elif all(exclusions):
+                verdict = 'all three tools equally excluded from real-time scanning'
+            else:
+                verdict = 'no tool excluded, all three scanned equally'
+            lines.append(f'- **Antivirus**: real-time protection {"on" if realtime is True or realtime == "True" else realtime}, {verdict}.')
+        lines.append('')
+
+    if len(entries) > len(latest):
+        shown_names = {'windows': 'Windows', 'linux': 'Native Linux', 'wsl': 'WSL2',
+                       'macos': 'macOS'}
+        lines += ['## Every run', '',
+                  'Same-work times, the sections above show only the latest run per '
+                  'platform. Commits, machine state and everything else: inside each '
+                  'run\'s directory.', '',
+                  '| run | platform | corpus | mezura | scc | tokei | machine steadiness |',
+                  '|---|---|---|---|---|---|---|']
+        for record, rel in sorted(entries, key=lambda e: e[0]['settings']['stamp'],
+                                  reverse=True):
+            machine = record['machine']
+            cells = [f'[{record["settings"]["stamp"]}]({rel}/)',
+                     shown_names.get(machine['platform'], machine['platform']),
+                     record['settings']['corpus']]
+            for tool in ('mezura', 'scc', 'tokei'):
+                cells.append(format_wall(mean_of(record['measurements'], 't1', tool), None))
+            drift = drift_of(record['measurements'])
+            cells.append(as_percent(drift) if drift else '')
+            lines.append('| ' + ' | '.join(cells) + ' |')
+        lines.append('')
+
+    if newest_record is not None:
+        s = newest_record['settings']
+        lines += [
+            '## Methodology', '',
+            f'- hyperfine, no shell: {s.get("warmup", "?")} warmups, '
+            f'{s.get("runs", "?")} timed runs per command, {s.get("settle", "?")} s pause '
+            f'between command series.',
+            '- The machine is restarted and otherwise idle. `--noise` verifies the '
+            'background and the workload spread before anything is measured.',
+            '- Every table is measured twice, in one command order and then in the reverse. '
+            'The numbers shown average the two, and how far they disagreed is printed in '
+            'each run\'s trust checks.',
+            '- The corpus is pinned to a commit. A checkout on any other commit refuses to '
+            'run.',
+            "- Counts come from each tool's own JSON output.",
+            '- Same work: one language set for all three, generated and minified files '
+            'counted by all, gitignore obeyed by all, any extra feature like keyword '
+            'counting and complexity analysis turned off. '
+            'The files and lines columns prove it held.',
+            '- Out of the box: bare `tool <dir>`, nothing else.',
+            '- The exact flags: [the harness README](../README.md).', '',
+            '## Terms', '',
+            '- **wall**: how long a run takes on the clock, mean ± σ over the timed runs, '
+            'in milliseconds.',
+            "- **vs fastest**: this tool's wall divided by the fastest tool's wall in the "
+            'same table.',
+            '- **total cpu**: seconds of processor time, summed over every thread, user '
+            'plus kernel. 16 threads busy for one second is 16 s.',
+            '- **parallelism**: cpu seconds divided by wall seconds: 4.6 s of cpu inside a '
+            '0.35 s run means 13 threads were busy on average.',
+            '- **lines/s**: the lines this tool itself counted, divided by its wall time.',
+            '- **files / lines**: what the tool reported counting. Under "Same work" the '
+            'three must nearly agree. Out of the box they differ by design.',
+            '- **machine steadiness**: the same binary timed at the start and at the end of '
+            'the whole run. The percentage is how far apart the two means came out.', '']
+
+    (outroot / 'README.md').write_text('\n'.join(lines), encoding='utf-8')
+
+
+def write_notes(res: Path, stamp: str, machine: dict[str, Any], settings: dict[str, Any],
+                record: dict[str, Any], definition: Definition) -> None:
+    pin = ('pinned and verified' if settings['corpus_pinned']
+           else 'not pinned, measured as it stands')
+    prepared = ', '.join(settings['machine_prepared']) or 'not prepared, measured as it was'
+    clean = machine['mezura_clean']
+    provenance = 'clean' if clean is True else ('dirty' if clean is False else str(clean))
+    drift = drift_of(record['measurements']) or 'n/a'
+    exclusions = [machine.get(f'defender_process_excluded_{tool}') for tool in DEFENDER_TOOLS]
+    if PLATFORM != 'windows':
+        alike = 'not applicable'
+    elif any(not isinstance(v, bool) for v in exclusions):
+        alike = 'unknown (needs admin)'
+    else:
+        alike = 'all three excluded' if all(exclusions) else 'none excluded'
     (res / 'notes.md').write_text(
-        f'# Benchmark session notes {stamp}\n'
-        f'- [ ] corpus and tools on a local disk, not a network or /mnt mount\n'
-        f'      corpus: {corpus}\n'
-        f'      tools:  {tools}\n'
-        f'- [ ] same corpus as the session this is compared against '
-        f'({definition["name"]} @ {pin})\n'
+        f'# Benchmark session notes {stamp}\n\n'
+        f'corpus:   {settings["corpus"]} @ {str(machine["corpus_head"])[:9]}, {pin}\n'
+        f'          {machine["corpus"]}\n'
+        f'          {machine["corpus_fs"]}, {machine["corpus_device"]}\n'
+        f'mezura:   {str(machine["mezura_head"])[:9]}, {provenance}\n'
+        f'machine:  {prepared}\n'
+        f'          control drift start to end: {drift}\n'
+        f'MS Defender: realtime {machine["defender_realtime"]}, process exclusions: {alike}\n\n'
         f'- [ ] machine quiet during the run\n'
-        f'- [ ] mezura built from the working tree being measured\n'
         f'\nobservations:\n-\n', encoding='utf-8')
 
 
@@ -907,6 +1240,29 @@ def read_corpus_def(script_dir: Path, given: str) -> Definition:
 CONFIG_KEYS = ('tools', 'corpus', 'out')
 
 
+def require_locations(args: argparse.Namespace, script_dir: Path) -> None:
+    if args.tools and args.corpus:
+        return
+    missing = ' and '.join(n for n, v in (('tools', args.tools), ('corpus', args.corpus)) if not v)
+    sample_tools = 'C:/bench/tools' if PLATFORM == 'windows' else '~/bench/tools'
+    sample_corpus = 'C:/bench/linux' if PLATFORM == 'windows' else '~/bench/linux'
+    strays = sorted(p.name for p in script_dir.glob('*.conf') if p.name != 'benchmark.conf')
+    hint = ''
+    if strays and not (script_dir / 'benchmark.conf').is_file():
+        hint = (f'\n\nFound {", ".join(strays)} beside this script. The file that is read is '
+                f'benchmark.conf, nothing else.')
+    raise SystemExit(
+        f'{missing} not set, and there is no default. '
+        f'Set them in one of three ways, strongest first:\n\n'
+        f'  --tools <dir> --corpus <dir>                  for this invocation only\n'
+        f'  MEZURA_BENCH_TOOLS / MEZURA_BENCH_CORPUS      environment\n'
+        f'  {script_dir / "benchmark.conf"}\n'
+        f'      copied from benchmark.conf.example and edited, e.g.\n\n'
+        f'      tools  = {sample_tools}\n'
+        f'      corpus = {sample_corpus}\n\n'
+        f'benchmark.conf is gitignored and machine-local.{hint}')
+
+
 def read_config(path: Path) -> dict[str, str]:
     values = {}
     try:
@@ -935,10 +1291,10 @@ def parse_args(config: dict[str, str]) -> argparse.Namespace:
 
     parser = argparse.ArgumentParser(description='Run the mezura benchmark suite.')
     parser.add_argument('--tools', type=Path,
-                        default=Path(default_for('tools', 'MEZURA_BENCH_TOOLS', DEFAULT_TOOLS)),
+                        default=default_for('tools', 'MEZURA_BENCH_TOOLS', None),
                         help='directory holding the mezura, scc and tokei binaries')
     parser.add_argument('--corpus', type=Path,
-                        default=Path(default_for('corpus', 'MEZURA_BENCH_CORPUS', DEFAULT_CORPUS)),
+                        default=default_for('corpus', 'MEZURA_BENCH_CORPUS', None),
                         help='the checkout that gets counted')
     parser.add_argument('--out', type=Path,
                         default=Path(config['out']) if 'out' in config else None,
@@ -949,7 +1305,12 @@ def parse_args(config: dict[str, str]) -> argparse.Namespace:
                         help='fetch scc, tokei and the corpus, and build mezura, before measuring')
     parser.add_argument('--setup-only', action='store_true', help='do the setup and stop')
     parser.add_argument('--check', action='store_true',
-                        help='run each tool once, prove the numbers can be read, write nothing')
+                        help='run each tool once and prove the numbers can be read')
+    parser.add_argument('--report', action='store_true',
+                        help='rewrite results/README.md from the recorded runs and stop')
+    parser.add_argument('--noise', action='store_true',
+                        help='sample the background and the workload, and say whether the '
+                             'machine is steady enough to benchmark')
     parser.add_argument('--keep-raw', action='store_true',
                         help='keep the raw tool output instead of removing it once read')
     parser.add_argument('--no-prep', action='store_true',
@@ -964,8 +1325,7 @@ def parse_args(config: dict[str, str]) -> argparse.Namespace:
 
 def require_ready(tools: Path, corpus: Path, definition: Definition) -> Binaries:
     binaries = {name: tools / f'{name}{EXE}' for name in ('mezura', 'scc', 'tokei')}
-    binaries['control'] = tools / 'control' / f'mezura{EXE}'
-    missing = [str(b) for name, b in binaries.items() if name != 'control' and not b.exists()]
+    missing = [str(b) for b in binaries.values() if not b.exists()]
     if missing:
         raise SystemExit('these are not there, run with --setup:\n  ' + '\n  '.join(missing))
     if not corpus.is_dir():
@@ -990,16 +1350,28 @@ def require_ready(tools: Path, corpus: Path, definition: Definition) -> Binaries
 def main() -> int:
     script_dir = Path(__file__).resolve().parent
     args = parse_args(read_config(script_dir / 'benchmark.conf'))
+
+    if args.report:
+        outroot = under_home(args.out) if args.out else script_dir / 'results'
+        write_results_page(outroot)
+        say(f'wrote {outroot / "README.md"}')
+        return 0
+
+    require_locations(args, script_dir)
     definition = read_corpus_def(script_dir, args.corpus_def)
     repo = script_dir.parent
     tools = under_home(args.tools)
     corpus = under_home(args.corpus)
 
+    enable_colors()
     for name in ('CLICOLOR_FORCE', 'MEZURA_PHASE_TIMING', 'SCC_CONFIG_PATH', 'RAYON_NUM_THREADS'):
         os.environ.pop(name, None)
 
     if args.check and not (args.setup or args.setup_only):
         return do_check(corpus, require_ready(tools, corpus, definition), definition)
+
+    if args.noise:
+        return do_noise(corpus, require_ready(tools, corpus, definition), definition)
 
     if args.setup or args.setup_only:
         if is_privileged():
@@ -1024,29 +1396,28 @@ def main() -> int:
     announce_prep(plan, args.yes)
 
     binaries = require_ready(tools, corpus, definition)
-    mezura, control = binaries['mezura'], binaries['control']
+    mezura = binaries['mezura']
     scc, tokei = binaries['scc'], binaries['tokei']
 
-    control.parent.mkdir(parents=True, exist_ok=True)
-    if not control.exists() or not filecmp.cmp(mezura, control, shallow=False):
-        say('refreshing the control copy of mezura')
-        shutil.copy2(mezura, control)
+    defender = defender_state(corpus, binaries)
+    refuse_asymmetric_exclusions(defender)
 
     applied = []
     try:
         applied = apply_prep(plan, applied)
-        return measure(args, tools, corpus, mezura, control, scc, tokei, applied, definition)
+        return measure(args, tools, corpus, mezura, scc, tokei, applied, definition, defender)
     finally:
         for step in reversed(applied):
             say(f'putting back: {step["what"]}')
             try:
                 step['restore']()
             except Exception as error:
-                say(f'WARNING: could not put back {step["what"]}: {error}')
+                warn(f'could not put back {step["what"]}: {error}')
 
 
-def measure(args: argparse.Namespace, tools: Path, corpus: Path, mezura: Path, control: Path,
-            scc: Path, tokei: Path, applied: list[PrepStep], definition: Definition) -> int:
+def measure(args: argparse.Namespace, tools: Path, corpus: Path, mezura: Path,
+            scc: Path, tokei: Path, applied: list[PrepStep], definition: Definition,
+            defender: dict[str, Any]) -> int:
     script_dir = Path(__file__).resolve().parent
     repo = script_dir.parent
 
@@ -1065,23 +1436,25 @@ def measure(args: argparse.Namespace, tools: Path, corpus: Path, mezura: Path, c
     transcript = Transcript(res / 'transcript.txt')
     transcript.start()
     try:
-        return run_phases(args, tools, corpus, repo, mezura, control, scc, tokei, applied,
-                          definition, res, outroot, target, warmup, runs, settle, stamp)
+        return run_phases(args, tools, corpus, repo, mezura, scc, tokei, applied,
+                          definition, res, outroot, target, warmup, runs, settle, stamp,
+                          defender)
     finally:
         transcript.stop()
 
 
 def run_phases(args: argparse.Namespace, tools: Path, corpus: Path, repo: Path, mezura: Path,
-               control: Path, scc: Path, tokei: Path, applied: list[PrepStep],
+               scc: Path, tokei: Path, applied: list[PrepStep],
                definition: Definition, res: Path, outroot: Path, target: Path,
-               warmup: int, runs: int, settle: int, stamp: str) -> int:
-    say('== phase 0: machine state')
+               warmup: int, runs: int, settle: int, stamp: str,
+               defender: dict[str, Any]) -> int:
+    header('== phase 0: machine state')
     machine = collect_machine(tools, corpus, repo)
+    machine.update(defender)
     (res / 'machine.txt').write_text(
         '\n'.join(f'{k}: {v}' for k, v in machine.items()) + '\n', encoding='utf-8')
     for line in (res / 'machine.txt').read_text(encoding='utf-8').splitlines():
         say('   ' + line)
-    write_notes(res, stamp, tools, corpus, definition)
 
     runner = Runner(res, warmup, runs, settle)
 
@@ -1093,7 +1466,7 @@ def run_phases(args: argparse.Namespace, tools: Path, corpus: Path, repo: Path, 
     s2 = join_cmd([scc, target])
     k2 = join_cmd([tokei, target])
 
-    say('== phase 0b: output and JSON captures (also the settling runs)')
+    header('== phase 0b: output and JSON captures (also the settling runs)')
     for name, argv in (
         ('t1-mezura', [mezura, target] + mezura_pinned),
         ('t1-scc', [scc, target] + scc_pinned),
@@ -1113,37 +1486,23 @@ def run_phases(args: argparse.Namespace, tools: Path, corpus: Path, repo: Path, 
     ):
         runner.capture_output(name, [str(a) for a in argv], as_json=True)
 
-    say('== phase 1: opening control run (gate: 1.00x inside the interval, or stop here)')
-    runner.hyperfine('control-start', [join_cmd([mezura, target]), join_cmd([control, target])])
+    header('== phase 1: opening control run')
+    runner.hyperfine('control-start', [join_cmd([mezura, target])])
 
-    say('== phase 2: table 1, same work')
+    header('== phase 2: table 1, same work')
     runner.hyperfine('t1-fwd', [m1, s1, k1])
     runner.hyperfine('t1-rev', [k1, s1, m1])
 
-    say('== phase 3: table 2, out of the box')
+    header('== phase 3: table 2, out of the box')
     runner.hyperfine('t2-fwd', [m2, s2, k2])
     runner.hyperfine('t2-rev', [k2, s2, m2])
 
-    say('== phase 4: thread sweep')
-    runner.hyperfine('sweep-scc', [
-            s1,
-            f'{s1} --file-process-job-workers 32',
-            f'{s1} --file-process-job-workers 64',
-            f'{s1} --file-process-job-workers 32 --directory-walker-job-workers 16',
-            f'{s1} --file-process-job-workers 64 --directory-walker-job-workers 16'])
-    runner.hyperfine('sweep-mezura', [
-            m1,
-            f'{m1} --threads 4 64',
-            f'{m1} --threads 16 64',
-            f'{m1} --threads 8 32',
-            f'{m1} --threads 8 128',
-            f'{m1} --threads 16 128'])
-    say('== phase 5: closing control run (gate: still 1.00x, or the machine drifted)')
-    runner.hyperfine('control-end', [join_cmd([mezura, target]), join_cmd([control, target])])
+    header('== phase 4: closing control run')
+    runner.hyperfine('control-end', [join_cmd([mezura, target])])
 
-    say('== summary')
-    binaries = {str(mezura): 'mezura', str(control): 'mezura',
-                str(scc): 'scc', str(tokei): 'tokei'}
+    header('== summary')
+    binaries = {str(p).replace('\\', '/'): name
+                for p, name in ((mezura, 'mezura'), (scc, 'scc'), (tokei, 'tokei'))}
     counts = {}
     for tool in ('mezura', 'scc', 'tokei'):
         for tier in ('t1', 't2'):
@@ -1161,24 +1520,27 @@ def run_phases(args: argparse.Namespace, tools: Path, corpus: Path, repo: Path, 
     }
     try:
         record = build_record(res, machine, settings, counts, binaries)
+        write_notes(res, stamp, machine, settings, record, definition)
         with open(res / 'run.json', 'w', encoding='utf-8') as handle:
             json.dump(record, handle, indent=1)
         write_csvs(res, record)
-        append_index(outroot, record, res)
+        write_results_page(outroot)
     except Exception as error:
-        say(f'WARNING: the summary could not be written: {error}')
+        warn(f'the summary could not be written: {error}')
         say(f'         the raw output is kept in {res / "out"} and the hyperfine exports stand')
         return 1
+
+    say(f'   drift         {drift_of(record["measurements"]) or "n/a"}')
 
     if not args.keep_raw:
         shutil.rmtree(res / 'out', ignore_errors=True)
 
     give_back_to_user(outroot)
 
+    say('')
     say(f'done. everything is in {res}')
     if runner.failures:
-        say(f'hyperfine had trouble with: {", ".join(runner.failures)}')
-    say('fill in notes.md, and check both control runs before believing anything else.')
+        warn(f'hyperfine had trouble with: {", ".join(runner.failures)}')
     return 0
 
 

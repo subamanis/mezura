@@ -22,8 +22,8 @@ python3 benchmark.py --setup
 ```
 
 `--setup` fetches the scc binary for this platform, builds tokei, clones the kernel at the
-pinned commit, builds mezura from this repo and makes the control copy. It skips whatever is
-already there, and finishes by checking its own work.
+pinned commit and builds mezura from this repo. It skips whatever is already there, and
+finishes by checking its own work.
 
 The real run, about six minutes on a quiet machine:
 
@@ -42,27 +42,30 @@ is recorded in `run.json` under `settings.machine_prepared`.
 
 ## Paths
 
-Where you keep things differs per machine, so it is machine-local settings, not a flag you
-retype. Copy `benchmark.conf.example` to `benchmark.conf` (gitignored) and edit:
+Where you keep things differs per machine, so it is machine-local settings, and there is no
+default on purpose: a default is just somebody else's machine. Copy `benchmark.conf.example`
+to `benchmark.conf` (that exact name, beside `benchmark.py`, gitignored) and edit:
 
 ```
-tools  = ~/Documents/dev/tools
-corpus = ~/Documents/dev/bench/linux
+tools  = C:/bench/tools
+corpus = C:/bench/linux
 ```
 
 | setting | flag | environment | default |
 |---|---|---|---|
-| `tools` | `--tools` | `MEZURA_BENCH_TOOLS` | `~/Documents/dev/tools` |
-| `corpus` | `--corpus` | `MEZURA_BENCH_CORPUS` | `~/Documents/dev/bench/linux` |
+| `tools` | `--tools` | `MEZURA_BENCH_TOOLS` | none, must be set |
+| `corpus` | `--corpus` | `MEZURA_BENCH_CORPUS` | none, must be set |
 | `out` | `--out` | | `benchmarking/results` |
 
-A flag beats an environment variable, which beats the file, which beats the default.
+A flag beats an environment variable, which beats the file. With neither set, every mode
+refuses with the recipe, `--check` included: the check answers "am I ready", and without the
+locations there is nothing to be ready about.
 
 Keep the corpus and the tools on a local disk. Measuring across `/mnt` from WSL, or over a
 network share, measures the mount.
 
-Other flags: `--setup-only`, `--check`, `--keep-raw`, `--no-prep`, `--yes`, `--corpus-def`,
-`--warmup`, `--runs`, `--settle`.
+Other flags: `--setup-only`, `--check`, `--noise`, `--report`, `--keep-raw`, `--no-prep`,
+`--yes`, `--corpus-def`, `--warmup`, `--runs`, `--settle`.
 
 ## --check
 
@@ -79,9 +82,10 @@ against the real corpus, reads the counts back out, and proves hyperfine works:
    scc     t1  ok       63,724 files      36,013,098 lines
    tokei   t1  ok       63,782 files      36,022,156 lines
    ...
+
    hyperfine     ok
-   control       ok
-all good. nothing was written.
+
+all good.
 ```
 
 This is what to run before rebooting, letting the machine settle and committing six minutes to
@@ -97,11 +101,29 @@ have, which no static check can see:
                 language this tree has
 ```
 
-The control copy is reported rather than measured. It is missing before the first run and goes
-stale whenever mezura is rebuilt, and neither is a failure: the next run copies it over.
-
 `--setup` runs the check automatically when it finishes, and stops rather than measuring if it
 fails.
+
+## --noise
+
+```
+python3 benchmark.py --noise
+```
+
+Fifteen seconds, writes nothing, and answers "is this machine steady enough to benchmark right
+now" with facts rather than a score. It samples the system-wide CPU for a few seconds with
+nothing of ours running (the absolute signal: how many cores other processes are using), then
+runs the real workload five times, the first one taken cold on purpose, and reports the spread
+across the warm runs, the parallelism the workload reached ((user+system)/wall against the
+core count), and whether the first run shows the tree was cold. The verdict is `steady` or
+`not steady` with the number that caused it; the exit code follows, so it can gate a script.
+
+What it deliberately does not do is compare mezura against a copy of itself: that ratio was
+measured to stay at 1.00 however loaded the machine is, since load hits both sides equally.
+Parallelism and the background sample are the signals that actually move.
+
+Also useful before rebooting into a benchmark session: if `--noise` says several cores are
+busy on a machine you believe is idle, find that process before trusting any number.
 
 ## What gets counted
 
@@ -140,7 +162,7 @@ Only the *path* to a corpus is machine-local. Its identity is part of the defini
 
 ```
 results/
-├── index.csv
+├── README.md
 ├── linux/linux/20260828-193938/
 ├── linux/windows/20260828-214501/
 └── chromium/wsl/20260829-101122/
@@ -149,14 +171,20 @@ results/
 One directory per corpus, then per platform, then per run, named by timestamp to the second.
 Nothing is ever overwritten, and a run that would collide refuses rather than clobber.
 
-`index.csv` gains a row per run: corpus, platform, stamp, which mezura and corpus commit was
-measured, whether the machine was prepared, the worst control ratio and the three t1 means. It answers
-"what have I got, and which of these are comparable" without opening anything.
+Each run's `run.json` is the single source of truth. The results page is generated from
+those, nothing else, so it can never disagree with them.
+
+`results/README.md` is the human-facing page, rewritten after every run (or on demand with
+`--report`): per corpus and platform the latest run's machine line, the two tables with wall,
+cpu, parallelism and lines/s, and the trust checks in plain words, then the catalog of every
+run with links. GitHub renders it as the folder's front page.
 
 Inside a run directory:
 
 - `run.json` — machine, settings, every measurement, every count. Self-contained; this is the
-  one to read back and to compare across platforms.
+  one to read back and to compare across platforms. It opens with `format: 1`: fields may be
+  added under the same number, and anything that changes the meaning of an existing field
+  bumps it.
 - `summary.csv`, `counts.csv` — the same numbers, flat
 - `machine.txt` — what the run was measured on
 - `<phase>.md` / `<phase>.json` — hyperfine's own output per phase
@@ -173,10 +201,24 @@ dirty tree means the binary cannot be traced back to a commit, so the two sides 
 measured the same code. `mezura_clean` ignores untracked files, since they never reach the
 build; `corpus_clean` counts them, since a stray file in the corpus does get counted.
 
-Check both control runs before anything else. They put mezura against a byte-identical copy of
-itself, refreshed whenever the two differ, so a `worst_control` far from 1.00 means the machine
-moved under the measurement and nothing else in that run can be trusted. The control is never
-an older mezura: comparing releases is done afterwards, by reading `index.csv` across runs.
+Check `drift` before anything else: the same mezura binary is measured at the start and at the
+end of the run, and the ratio of those two means says whether the machine moved under the six
+minutes in between. Comparing releases is done afterwards, across the recorded runs.
+(A byte-identical-copy check used to run beside this; it was removed 2026-08-29 after the
+mechanism it guarded against, a per-file antivirus verdict, was measured not to exist: the
+penalty follows the process name alone, and two same-named copies cannot differ by it.)
+
+On Windows the run also records the Defender state: real-time protection, whether the corpus
+sits under an exclusion path, and per tool whether its process is excluded from scanning.
+**Asymmetric process exclusions refuse the run outright**, because files opened by an excluded
+process are never scanned in real time, and the comparison would measure who escaped the
+antivirus rather than who counts faster. Reading the exclusion lists needs an elevated shell;
+unelevated, the record says `unknown (needs admin)` rather than guessing.
+
+`summary.csv` carries two derived columns beside the times: `parallelism`, (user+system)/wall,
+how much of the machine the tool actually harvested, and `lines_per_cpu_s`, how cheaply it
+counted. The first is a property of the thread architecture on that OS, the second of the
+algorithm, and the pair is what to read when a number looks odd.
 
 Then note which table answers which question:
 
@@ -190,7 +232,20 @@ Then note which table answers which question:
 `counts.csv` carries a `model` column and names its third bucket, because `blanks` under the
 region model and `extra` under the content model are not the same quantity.
 
-The two sweeps are there to keep the two apart. `sweep-mezura` shows how much is on the table
-from thread settings alone, so a release that only retuned them is not mistaken for one that
-got genuinely faster. `sweep-scc` measures scc at its own best rather than its default, so the
-headline is not won by benchmarking it badly.
+There are no sweep phases. A sweep result is a fact about one machine and one corpus, banked
+in the run that measured it, not something to re-measure per run: in the recorded runs of
+2026-08-28/29 (this machine, the pinned linux corpus, Windows, WSL2 and native Debian), scc's
+swept best (`--file-process-job-workers 64`) gained 4.7-6% over its default. tokei has no
+thread knob, its rayon pool already takes every core; mezura runs at its shipped default. On
+different hardware the sweep is a different fact and would need measuring there.
+
+## Tests
+
+```
+python3 test_benchmark.py
+```
+
+Covers the parsing that has already bitten once or can: the git porcelain shapes behind the
+provenance fields, the three tool-JSON readers (including tokei's grand-total key, which must
+be read once and not summed in again), the Defender `N/A`-placeholder trap, and the drift
+arithmetic.

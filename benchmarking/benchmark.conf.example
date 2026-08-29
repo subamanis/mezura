@@ -1,6 +1,7 @@
-# Copy to benchmark.conf and point these at wherever you keep them.
+# Copy to benchmark.conf (that exact name, beside benchmark.py) and point these at
+# wherever you keep them on THIS machine. There are no defaults on purpose.
 # A flag beats an environment variable, which beats this file.
 
-tools  = ~/Documents/dev/tools
-corpus = ~/Documents/dev/bench/linux
-# out  = ~/somewhere/else
+tools  = <directory holding the mezura, scc and tokei binaries>
+corpus = <the checkout that gets counted>
+# out  = <where results go; default is results/ beside this script>
