@@ -90,7 +90,7 @@ Trust checks for this run:
 ## Methodology
 
 - hyperfine, with no shell in between. Each section above states its own warmups, timed runs and pause.
-- The machine is restarted and otherwise idle. The harness's `noise` command verifies the background and the workload spread before anything is measured.
+- The machine is restarted and otherwise idle, and the run samples the system-wide cpu before it measures anything, which is the quiet machine trust check above. The harness's `noise` command answers the same question in fifteen seconds, before committing to a run.
 - Every table is measured twice, in one command order and then in the reverse. The numbers shown average the two, and how far they disagreed is printed in each run's trust checks.
 - A corpus definition pins a commit, and a checkout on any other commit refuses to run. A run on an unpinned tree says so beside its corpus line.
 - Counts come from each tool's own JSON output.

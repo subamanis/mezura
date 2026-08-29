@@ -170,7 +170,12 @@ def say(message: str) -> None:
 
 
 COLOR_CODES = {'green': '32', 'red': '31', 'yellow': '33', 'bold': '1',
-               'blue': '38;2;110;160;220'}
+               'blue': '38;2;110;160;220', 'orange': '38;2;220;140;60'}
+BACKGROUND_SAMPLE_SECONDS = 6
+BACKGROUND_STEPS = (3, 6, 10)
+SPREAD_STEPS = (5, 10, 15)
+VERDICTS = (('steady', 'green'), ('relatively steady', 'yellow'),
+            ('somewhat unsteady', 'orange'), ('not steady', 'red'))
 ANSI_ESCAPES = re.compile(r'\x1b\[[0-9;]*m')
 COLORS_ON = False
 
@@ -805,7 +810,7 @@ def crunch(number: Any) -> str:
     return f'{number:,}' if isinstance(number, int) else str(number)
 
 
-def background_busy_percent(seconds: int = 4) -> Optional[float]:
+def background_busy_percent(seconds: int = BACKGROUND_SAMPLE_SECONDS) -> Optional[float]:
     if PLATFORM in ('linux', 'wsl'):
         def snap() -> tuple[int, int]:
             numbers = [int(x) for x in Path('/proc/stat').read_text().splitlines()[0].split()[1:]]
@@ -831,6 +836,14 @@ def background_busy_percent(seconds: int = 4) -> Optional[float]:
     return None
 
 
+def step_of(value: float, steps: tuple[int, int, int]) -> int:
+    return sum(1 for step in steps if value >= step)
+
+
+def paint_by_steps(value: float, steps: tuple[int, int, int], text: str) -> str:
+    return paint(VERDICTS[step_of(value, steps)][1], text)
+
+
 def do_noise(corpus: Path, binaries: Binaries, definition: Definition) -> int:
     cores = os.cpu_count() or 1
     header('== noise')
@@ -839,7 +852,8 @@ def do_noise(corpus: Path, binaries: Binaries, definition: Definition) -> int:
         say('   background    not sampled on this platform')
     else:
         others = round(busy * cores / 100, 1)
-        say(f'   background    {busy}% busy, ~{others} of {cores} cores')
+        say(f'   background    {paint_by_steps(busy, BACKGROUND_STEPS, f"{busy}%")} busy, '
+            f'~{others} of {cores} cores')
 
     with tempfile.TemporaryDirectory() as scratch:
         marker = Path(scratch) / 'noise.json'
@@ -862,21 +876,20 @@ def do_noise(corpus: Path, binaries: Binaries, definition: Definition) -> int:
     first = round(times[0] / warm_mean, 2) if warm_mean else 0.0
 
     say(f'   workload      mezura on {definition["name"]}, 5 runs')
-    say(f'   spread        {spread}% ({round(min(warm) * 1000)} to {round(max(warm) * 1000)} ms)')
+    say(f'   spread        {paint_by_steps(spread, SPREAD_STEPS, f"{spread}%")} '
+        f'({round(min(warm) * 1000)} to {round(max(warm) * 1000)} ms)')
     say(f'   parallelism   {reached} of {cores} cores')
     say(f'   cache         {"cold" if first >= 1.5 else "warm"}, first run {first}x the warm mean')
 
-    complaints = []
-    if busy is not None and busy >= 10:
-        complaints.append(f'background at {busy}%')
-    if spread >= 15:
-        complaints.append(f'spread at {spread}%')
+    zones = [(step_of(spread, SPREAD_STEPS), f'spread at {spread}%')]
+    if busy is not None:
+        zones.append((step_of(busy, BACKGROUND_STEPS), f'background at {busy}%'))
+    worst = max(zone for zone, _ in zones)
+    blamed = ' and '.join(reason for zone, reason in zones if zone == worst)
+    verdict, color = VERDICTS[worst]
     say('')
-    if complaints:
-        say(paint('red', f'not steady: {" and ".join(complaints)}.'))
-        return 1
-    say(paint('green', 'steady.'))
-    return 0
+    say(paint(color, f'{verdict}.' if not worst else f'{verdict}: {blamed}.'))
+    return 1 if worst >= 2 else 0
 
 
 def do_setup(tools: Path, corpus: Path, repo: Path, definition: Definition) -> None:
@@ -885,6 +898,14 @@ def do_setup(tools: Path, corpus: Path, repo: Path, definition: Definition) -> N
     setup_tokei(tools)
     setup_corpus(corpus, definition)
     setup_mezura(tools, repo)
+
+
+def shrink_json(path: Path) -> None:
+    try:
+        document = json.loads(path.read_text(encoding='utf-8'))
+        path.write_text(json.dumps(document, separators=(',', ':')), encoding='utf-8')
+    except (OSError, ValueError) as error:
+        warn(f'could not shrink {path.name}: {error}')
 
 
 class Runner:
@@ -921,6 +942,9 @@ class Runner:
             warn(f'hyperfine reported a problem on {name}'
                  + (f': {detail}' if detail else ''))
             self.failures.append(name)
+        export = self.res / f'{name}.json'
+        if export.is_file():
+            shrink_json(export)
 
     def capture_output(self, name: str, command: list[str], as_json: bool) -> None:
         suffix = 'json' if as_json else 'txt'
@@ -1203,6 +1227,10 @@ def write_results_page(outroot: Path) -> None:
                      'and restored after.' if prepared else
                      '- **Power**: the machine was measured as it was, with no settings '
                      'changed.')
+        busy = machine.get('background_busy_percent')
+        if busy is not None:
+            lines.append(f'- **Quiet machine**: everything other than the benchmark was '
+                         f'using {busy}% of the cpu when the run started.')
         realtime = machine.get('defender_realtime')
         if realtime not in (None, 'not applicable'):
             state = f'real-time protection {"on" if realtime is True or realtime == "True" else realtime}'
@@ -1259,8 +1287,10 @@ def write_results_page(outroot: Path) -> None:
             '## Methodology', '',
             '- hyperfine, with no shell in between. Each section above states its own '
             'warmups, timed runs and pause.',
-            '- The machine is restarted and otherwise idle. The harness\'s `noise` command '
-            'verifies the background and the workload spread before anything is measured.',
+            '- The machine is restarted and otherwise idle, and the run samples the '
+            'system-wide cpu before it measures anything, which is the quiet machine trust '
+            "check above. The harness's `noise` command answers the same question in fifteen "
+            'seconds, before committing to a run.',
             twice,
             '- A corpus definition pins a commit, and a checkout on any other commit '
             'refuses to run. A run on an unpinned tree says so beside its corpus line.',
@@ -1637,6 +1667,7 @@ def run_phases(args: argparse.Namespace, tools: Path, corpus: Path, repo: Path, 
     header('== phase 0: machine state')
     machine = collect_machine(tools, corpus, repo)
     machine.update(defender)
+    machine['background_busy_percent'] = background_busy_percent(BACKGROUND_SAMPLE_SECONDS)
     (res / 'machine.txt').write_text(
         '\n'.join(f'{k}: {v}' for k, v in machine.items()) + '\n', encoding='utf-8')
     for line in (res / 'machine.txt').read_text(encoding='utf-8').splitlines():
@@ -1710,7 +1741,7 @@ def run_phases(args: argparse.Namespace, tools: Path, corpus: Path, repo: Path, 
         record = build_record(res, machine, settings, counts, binaries)
         write_notes(res, stamp, machine, settings, record, definition)
         with open(res / 'run.json', 'w', encoding='utf-8') as handle:
-            json.dump(record, handle, indent=1)
+            json.dump(record, handle, separators=(',', ':'))
         write_csvs(res, record)
         write_results_page(outroot)
     except Exception as error:
