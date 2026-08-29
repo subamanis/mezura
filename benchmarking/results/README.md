@@ -11,19 +11,19 @@ mezura v3.0.0 (unreleased), scc 4.0.0, tokei 14.0.0
 
 #### Same work (all three pinned to the same languages and settings)
 
-| tool | wall | vs fastest | total cpu | parallelism | lines/s | files | lines |
-|---|---|---|---|---|---|---|---|
-| mezura | 257 ms ± 12 | 1.00x | 2.73 s | 10.62 | 140.4M | 63,864 | 36,036,878 |
-| tokei | 531 ms ± 39 | 2.07x | 6.46 s | 12.16 | 67.8M | 63,782 | 36,022,156 |
-| scc | 657 ms ± 26 | 2.56x | 6.96 s | 10.59 | 54.8M | 63,724 | 36,013,098 |
+| tool | wall | vs fastest | user cpu | system cpu | parallelism | lines/s | files | lines |
+|---|---|---|---|---|---|---|---|---|
+| mezura | 257 ms ± 12 | 1.00x | 2.22 s | 0.50 s | 10.62 | 140.4M | 63,864 | 36,036,878 |
+| tokei | 531 ms ± 39 | 2.07x | 5.59 s | 0.87 s | 12.16 | 67.8M | 63,782 | 36,022,156 |
+| scc | 657 ms ± 26 | 2.56x | 5.96 s | 1.00 s | 10.59 | 54.8M | 63,724 | 36,013,098 |
 
 #### Out of the box (each tool at its own defaults)
 
-| tool | wall | vs fastest | total cpu | parallelism | lines/s | files | lines |
-|---|---|---|---|---|---|---|---|
-| mezura | 299 ms ± 11 | 1.00x | 3.12 s | 10.41 | 119.6M | 66,536 | 35,816,653 |
-| tokei | 568 ms ± 21 | 1.90x | 7.17 s | 12.63 | 70.5M | 83,843 | 39,992,832 |
-| scc | 893 ms ± 37 | 2.98x | 10.30 s | 11.53 | 44.8M | 83,784 | 39,993,947 |
+| tool | wall | vs fastest | user cpu | system cpu | parallelism | lines/s | files | lines |
+|---|---|---|---|---|---|---|---|---|
+| mezura | 299 ms ± 11 | 1.00x | 2.58 s | 0.54 s | 10.41 | 119.6M | 66,536 | 35,816,653 |
+| tokei | 568 ms ± 21 | 1.90x | 6.26 s | 0.91 s | 12.63 | 70.5M | 83,843 | 39,992,832 |
+| scc | 893 ms ± 37 | 2.98x | 9.14 s | 1.16 s | 11.53 | 44.8M | 83,784 | 39,993,947 |
 
 Trust checks for this run:
 - **Machine steadiness**: the same binary, timed at the start of the run and again at the end, differed by 3.4%.
@@ -39,19 +39,19 @@ mezura v3.0.0 (unreleased), scc 4.0.0, tokei 14.0.0
 
 #### Same work (all three pinned to the same languages and settings)
 
-| tool | wall | vs fastest | total cpu | parallelism | lines/s | files | lines |
-|---|---|---|---|---|---|---|---|
-| mezura | 346 ms ± 22 | 1.00x | 4.55 s | 13.13 | 104.0M | 63,893 | 36,035,852 |
-| tokei | 661 ms ± 35 | 1.91x | 9.15 s | 13.85 | 54.5M | 63,811 | 36,021,160 |
-| scc | 794 ms ± 17 | 2.29x | 8.74 s | 11.02 | 45.4M | 63,753 | 36,012,072 |
+| tool | wall | vs fastest | user cpu | system cpu | parallelism | lines/s | files | lines |
+|---|---|---|---|---|---|---|---|---|
+| mezura | 346 ms ± 22 | 1.00x | 2.29 s | 2.26 s | 13.13 | 104.0M | 63,893 | 36,035,852 |
+| tokei | 661 ms ± 35 | 1.91x | 6.13 s | 3.02 s | 13.85 | 54.5M | 63,811 | 36,021,160 |
+| scc | 794 ms ± 17 | 2.29x | 6.11 s | 2.63 s | 11.02 | 45.4M | 63,753 | 36,012,072 |
 
 #### Out of the box (each tool at its own defaults)
 
-| tool | wall | vs fastest | total cpu | parallelism | lines/s | files | lines |
-|---|---|---|---|---|---|---|---|
-| mezura | 377 ms ± 23 | 1.00x | 4.98 s | 13.19 | 94.9M | 66,565 | 35,815,627 |
-| tokei | 757 ms ± 35 | 2.01x | 10.40 s | 13.74 | 52.8M | 83,891 | 39,991,863 |
-| scc | 1,007 ms ± 21 | 2.67x | 13.33 s | 13.24 | 39.7M | 83,832 | 39,992,940 |
+| tool | wall | vs fastest | user cpu | system cpu | parallelism | lines/s | files | lines |
+|---|---|---|---|---|---|---|---|---|
+| mezura | 377 ms ± 23 | 1.00x | 2.66 s | 2.31 s | 13.19 | 94.9M | 66,565 | 35,815,627 |
+| tokei | 757 ms ± 35 | 2.01x | 6.82 s | 3.58 s | 13.74 | 52.8M | 83,891 | 39,991,863 |
+| scc | 1,007 ms ± 21 | 2.67x | 10.40 s | 2.93 s | 13.24 | 39.7M | 83,832 | 39,992,940 |
 
 Trust checks for this run:
 - **Machine steadiness**: the same binary, timed at the start of the run and again at the end, differed by 1.3%.
@@ -68,19 +68,19 @@ mezura v3.0.0 (unreleased), scc 4.0.0, tokei 14.0.0
 
 #### Same work (all three pinned to the same languages and settings)
 
-| tool | wall | vs fastest | total cpu | parallelism | lines/s | files | lines |
-|---|---|---|---|---|---|---|---|
-| mezura | 223 ms ± 9 | 1.00x | 2.44 s | 10.91 | 161.3M | 63,864 | 36,036,878 |
-| scc | 471 ms ± 3 | 2.11x | 6.13 s | 13.01 | 76.4M | 63,724 | 36,013,098 |
-| tokei | 474 ms ± 3 | 2.12x | 6.23 s | 13.15 | 76.0M | 63,782 | 36,022,156 |
+| tool | wall | vs fastest | user cpu | system cpu | parallelism | lines/s | files | lines |
+|---|---|---|---|---|---|---|---|---|
+| mezura | 223 ms ± 9 | 1.00x | 2.08 s | 0.35 s | 10.91 | 161.3M | 63,864 | 36,036,878 |
+| scc | 471 ms ± 3 | 2.11x | 5.74 s | 0.39 s | 13.01 | 76.4M | 63,724 | 36,013,098 |
+| tokei | 474 ms ± 3 | 2.12x | 5.64 s | 0.59 s | 13.15 | 76.0M | 63,782 | 36,022,156 |
 
 #### Out of the box (each tool at its own defaults)
 
-| tool | wall | vs fastest | total cpu | parallelism | lines/s | files | lines |
-|---|---|---|---|---|---|---|---|
-| mezura | 258 ms ± 10 | 1.00x | 2.78 s | 10.81 | 139.1M | 66,536 | 35,816,653 |
-| tokei | 521 ms ± 3 | 2.02x | 7.08 s | 13.59 | 76.8M | 83,843 | 39,992,832 |
-| scc | 688 ms ± 3 | 2.67x | 9.34 s | 13.57 | 58.1M | 83,784 | 39,993,947 |
+| tool | wall | vs fastest | user cpu | system cpu | parallelism | lines/s | files | lines |
+|---|---|---|---|---|---|---|---|---|
+| mezura | 258 ms ± 10 | 1.00x | 2.42 s | 0.37 s | 10.81 | 139.1M | 66,536 | 35,816,653 |
+| tokei | 521 ms ± 3 | 2.02x | 6.34 s | 0.74 s | 13.59 | 76.8M | 83,843 | 39,992,832 |
+| scc | 688 ms ± 3 | 2.67x | 8.92 s | 0.42 s | 13.57 | 58.1M | 83,784 | 39,993,947 |
 
 Trust checks for this run:
 - **Machine steadiness**: the same binary, timed at the start of the run and again at the end, differed by 0.3%.
@@ -102,8 +102,9 @@ Trust checks for this run:
 
 - **wall**: how long a run takes on the clock, in milliseconds: the mean of all the timed runs, both command orders together, ± their σ. That σ holds the run-to-run noise plus half the gap between the two orders.
 - **vs fastest**: this tool's wall divided by the fastest tool's wall in the same table.
-- **total cpu**: seconds of processor time, summed over every thread, user plus kernel. 16 threads busy for one second is 16 s.
-- **parallelism**: cpu seconds divided by wall seconds: 4.6 s of cpu inside a 0.35 s run means 13 threads were busy on average.
+- **user cpu**: cpu seconds spent running the tool's own code, summed over every thread. 16 threads busy for one second is 16 s.
+- **system cpu**: cpu seconds spent inside the operating system on the tool's behalf, opening and reading files, plus whatever sits on that path (antivirus, filter drivers).
+- **parallelism**: user plus system cpu, divided by wall: 4.6 s of cpu inside a 0.35 s run means 13 threads were busy on average.
 - **lines/s**: the lines this tool itself counted, divided by its wall time.
 - **files / lines**: what the tool reported counting. Under "Same work" the three must nearly agree. Out of the box they differ by design.
 - **machine steadiness**: the same binary timed at the start and at the end of the whole run. The percentage is how far apart the two means came out.

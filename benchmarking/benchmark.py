@@ -1157,11 +1157,10 @@ def write_results_page(outroot: Path) -> None:
                 record_single = True
             fastest = found[0]['mean_s']
             lines += [f'#### {title}', '',
-                      '| tool | wall | vs fastest | total cpu | parallelism | lines/s '
-                      '| files | lines |',
-                      '|---|---|---|---|---|---|---|---|']
+                      '| tool | wall | vs fastest | user cpu | system cpu | parallelism '
+                      '| lines/s | files | lines |',
+                      '|---|---|---|---|---|---|---|---|---|']
             for m in found:
-                cpu = (m.get('user_s') or 0) + (m.get('system_s') or 0)
                 speed = m.get('lines_per_sec')
                 speed = f'{speed / 1e6:.1f}M' if speed else ''
                 files = f'{m["counted_files"]:,}' if m.get('counted_files') else ''
@@ -1174,7 +1173,8 @@ def write_results_page(outroot: Path) -> None:
                     f'| {m["tool"]} '
                     f'| {wall} '
                     f'| {relative} '
-                    f'| {cpu:.2f} s '
+                    f'| {(m.get("user_s") or 0):.2f} s '
+                    f'| {(m.get("system_s") or 0):.2f} s '
                     f'| {m.get("parallelism") or ""} '
                     f'| {speed} | {files} | {counted} |')
             lines.append('')
@@ -1267,10 +1267,13 @@ def write_results_page(outroot: Path) -> None:
             'run-to-run noise plus half the gap between the two orders.',
             "- **vs fastest**: this tool's wall divided by the fastest tool's wall in the "
             'same table.',
-            '- **total cpu**: seconds of processor time, summed over every thread, user '
-            'plus kernel. 16 threads busy for one second is 16 s.',
-            '- **parallelism**: cpu seconds divided by wall seconds: 4.6 s of cpu inside a '
-            '0.35 s run means 13 threads were busy on average.',
+            "- **user cpu**: cpu seconds spent running the tool's own code, summed over "
+            'every thread. 16 threads busy for one second is 16 s.',
+            "- **system cpu**: cpu seconds spent inside the operating system on the tool's "
+            'behalf, opening and reading files, plus whatever sits on that path (antivirus, '
+            'filter drivers).',
+            '- **parallelism**: user plus system cpu, divided by wall: 4.6 s of cpu inside '
+            'a 0.35 s run means 13 threads were busy on average.',
             '- **lines/s**: the lines this tool itself counted, divided by its wall time.',
             '- **files / lines**: what the tool reported counting. Under "Same work" the '
             'three must nearly agree. Out of the box they differ by design.',
