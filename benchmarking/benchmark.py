@@ -1067,6 +1067,8 @@ def pool_orders(m1: dict, m2: Optional[dict]) -> dict:
             'user_s': user, 'system_s': system,
             'parallelism': round((user + system) / mean, 2) if mean else None,
             'lines_per_sec': round(counted / mean) if counted and mean else None,
+            'lines_per_cpu_s': round(counted / (user + system)) if counted and user + system
+                               else None,
             'counted_files': m1.get('counted_files'), 'counted_lines': counted}
 
 
@@ -1079,6 +1081,10 @@ def format_wall(mean: Any, stddev: Any) -> str:
         return ''
     text = f'{float(mean) * 1000:,.0f} ms'
     return f'{text} ± {float(stddev) * 1000:.0f}' if stddev else text
+
+
+def format_millions(value: Any) -> str:
+    return f'{value / 1e6:.1f}M' if value else ''
 
 
 def format_versions(machine: dict[str, Any]) -> str:
@@ -1132,9 +1138,13 @@ def write_results_page(outroot: Path) -> None:
                   f'{machine.get("corpus_fs", "?")}, {machine.get("corpus_device", "?")}  ']
         if not sett.get('corpus_pinned', True):
             lines.append('not pinned, measured as it stands  ')
+        runs_each = sett.get('runs')
+        timed = (f'{runs_each * 2} timed runs per command ({runs_each} in the first pass '
+                 f'+ {runs_each} in the reverse pass)'
+                 if isinstance(runs_each, int) else '? timed runs per command')
         lines += [format_versions(machine) + '  ',
-                  f'{sett.get("warmup", "?")} warmups, {sett.get("runs", "?")} timed runs '
-                  f'per command, {sett.get("settle", "?")} s pause between command series', '']
+                  f'{sett.get("warmup", "?")} warmups, {timed}, '
+                  f'{sett.get("settle", "?")} s of pause before each command', '']
         order_moves = []
         record_single = False
         for tier, title in (('t1', 'Same work (all three pinned to the same languages and '
@@ -1158,17 +1168,15 @@ def write_results_page(outroot: Path) -> None:
             fastest = found[0]['mean_s']
             lines += [f'#### {title}', '',
                       '| tool | wall | vs fastest | user cpu | system cpu | parallelism '
-                      '| lines/s | files | lines |',
-                      '|---|---|---|---|---|---|---|---|---|']
+                      '| lines/s | lines per cpu second | files | lines |',
+                      '|---|---|---|---|---|---|---|---|---|---|']
             for m in found:
-                speed = m.get('lines_per_sec')
-                speed = f'{speed / 1e6:.1f}M' if speed else ''
-                files = f'{m["counted_files"]:,}' if m.get('counted_files') else ''
-                counted = f'{m["counted_lines"]:,}' if m.get('counted_lines') else ''
                 relative = f'{m["mean_s"] / fastest:.2f}x' if fastest else ''
                 wall = format_wall(m.get('mean_s'), m.get('stddev_s'))
                 if m.get('single_order'):
                     wall += ' (one order only)'
+                files = f'{m["counted_files"]:,}' if m.get('counted_files') else ''
+                counted = f'{m["counted_lines"]:,}' if m.get('counted_lines') else ''
                 lines.append(
                     f'| {m["tool"]} '
                     f'| {wall} '
@@ -1176,7 +1184,9 @@ def write_results_page(outroot: Path) -> None:
                     f'| {(m.get("user_s") or 0):.2f} s '
                     f'| {(m.get("system_s") or 0):.2f} s '
                     f'| {m.get("parallelism") or ""} '
-                    f'| {speed} | {files} | {counted} |')
+                    f'| {format_millions(m.get("lines_per_sec"))} '
+                    f'| {format_millions(m.get("lines_per_cpu_s"))} '
+                    f'| {files} | {counted} |')
             lines.append('')
         lines.append('Trust checks for this run:')
         if drift:
@@ -1275,6 +1285,9 @@ def write_results_page(outroot: Path) -> None:
             '- **parallelism**: user plus system cpu, divided by wall: 4.6 s of cpu inside '
             'a 0.35 s run means 13 threads were busy on average.',
             '- **lines/s**: the lines this tool itself counted, divided by its wall time.',
+            '- **lines per cpu second**: the lines this tool counted, divided by its user '
+            'plus system cpu. How cheaply it counts, with the number of cores taken out '
+            'of the picture.',
             '- **files / lines**: what the tool reported counting. Under "Same work" the '
             'three must nearly agree. Out of the box they differ by design.',
             '- **machine steadiness**: the same binary timed at the start and at the end of '
@@ -1468,7 +1481,7 @@ def parse_args(config: dict[str, str]) -> argparse.Namespace:
     run.add_argument('--runs', type=int, default=None,
                      help='timed runs per command (default 15)')
     run.add_argument('--settle', type=int, default=None,
-                     help='seconds of pause between command series (default 3)')
+                     help='seconds of pause before each command (default 3)')
     run.add_argument('--keep-raw', action='store_true',
                      help='keep the raw tool output instead of removing it once read')
     run.add_argument('--no-prep', action='store_true',

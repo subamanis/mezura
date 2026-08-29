@@ -7,23 +7,23 @@ Written by `benchmark.py` after every run, not edited by hand. What every term m
 AMD Ryzen 7 9700X 8-Core Processor, 16 threads, 30 GB usable RAM, Ubuntu 24.04.3 LTS  
 corpus at `0ff41df1c` on ext4 /dev/sdd, unknown  
 mezura v3.0.0 (unreleased), scc 4.0.0, tokei 14.0.0  
-3 warmups, 15 timed runs per command, 3 s pause between command series
+3 warmups, 30 timed runs per command (15 in the first pass + 15 in the reverse pass), 3 s of pause before each command
 
 #### Same work (all three pinned to the same languages and settings)
 
-| tool | wall | vs fastest | user cpu | system cpu | parallelism | lines/s | files | lines |
-|---|---|---|---|---|---|---|---|---|
-| mezura | 257 ms ± 12 | 1.00x | 2.22 s | 0.50 s | 10.62 | 140.4M | 63,864 | 36,036,878 |
-| tokei | 531 ms ± 39 | 2.07x | 5.59 s | 0.87 s | 12.16 | 67.8M | 63,782 | 36,022,156 |
-| scc | 657 ms ± 26 | 2.56x | 5.96 s | 1.00 s | 10.59 | 54.8M | 63,724 | 36,013,098 |
+| tool | wall | vs fastest | user cpu | system cpu | parallelism | lines/s | lines per cpu second | files | lines |
+|---|---|---|---|---|---|---|---|---|---|
+| mezura | 257 ms ± 12 | 1.00x | 2.22 s | 0.50 s | 10.62 | 140.4M | 13.2M | 63,864 | 36,036,878 |
+| tokei | 531 ms ± 39 | 2.07x | 5.59 s | 0.87 s | 12.16 | 67.8M | 5.6M | 63,782 | 36,022,156 |
+| scc | 657 ms ± 26 | 2.56x | 5.96 s | 1.00 s | 10.59 | 54.8M | 5.2M | 63,724 | 36,013,098 |
 
 #### Out of the box (each tool at its own defaults)
 
-| tool | wall | vs fastest | user cpu | system cpu | parallelism | lines/s | files | lines |
-|---|---|---|---|---|---|---|---|---|
-| mezura | 299 ms ± 11 | 1.00x | 2.58 s | 0.54 s | 10.41 | 119.6M | 66,536 | 35,816,653 |
-| tokei | 568 ms ± 21 | 1.90x | 6.26 s | 0.91 s | 12.63 | 70.5M | 83,843 | 39,992,832 |
-| scc | 893 ms ± 37 | 2.98x | 9.14 s | 1.16 s | 11.53 | 44.8M | 83,784 | 39,993,947 |
+| tool | wall | vs fastest | user cpu | system cpu | parallelism | lines/s | lines per cpu second | files | lines |
+|---|---|---|---|---|---|---|---|---|---|
+| mezura | 299 ms ± 11 | 1.00x | 2.58 s | 0.54 s | 10.41 | 119.6M | 11.5M | 66,536 | 35,816,653 |
+| tokei | 568 ms ± 21 | 1.90x | 6.26 s | 0.91 s | 12.63 | 70.5M | 5.6M | 83,843 | 39,992,832 |
+| scc | 893 ms ± 37 | 2.98x | 9.14 s | 1.16 s | 11.53 | 44.8M | 3.9M | 83,784 | 39,993,947 |
 
 Trust checks for this run:
 - **Machine steadiness**: the same binary, timed at the start of the run and again at the end, differed by 3.4%.
@@ -35,23 +35,23 @@ Trust checks for this run:
 AMD Ryzen 7 9700X 8-Core Processor, 16 threads, 62 GB usable RAM, Windows-11-10.0.26200-SP0  
 corpus at `0ff41df1c` on NTFS, Lexar SSD NQ790 2TB, SSD, NVMe  
 mezura v3.0.0 (unreleased), scc 4.0.0, tokei 14.0.0  
-3 warmups, 15 timed runs per command, 3 s pause between command series
+3 warmups, 30 timed runs per command (15 in the first pass + 15 in the reverse pass), 3 s of pause before each command
 
 #### Same work (all three pinned to the same languages and settings)
 
-| tool | wall | vs fastest | user cpu | system cpu | parallelism | lines/s | files | lines |
-|---|---|---|---|---|---|---|---|---|
-| mezura | 346 ms ± 22 | 1.00x | 2.29 s | 2.26 s | 13.13 | 104.0M | 63,893 | 36,035,852 |
-| tokei | 661 ms ± 35 | 1.91x | 6.13 s | 3.02 s | 13.85 | 54.5M | 63,811 | 36,021,160 |
-| scc | 794 ms ± 17 | 2.29x | 6.11 s | 2.63 s | 11.02 | 45.4M | 63,753 | 36,012,072 |
+| tool | wall | vs fastest | user cpu | system cpu | parallelism | lines/s | lines per cpu second | files | lines |
+|---|---|---|---|---|---|---|---|---|---|
+| mezura | 346 ms ± 22 | 1.00x | 2.29 s | 2.26 s | 13.13 | 104.0M | 7.9M | 63,893 | 36,035,852 |
+| tokei | 661 ms ± 35 | 1.91x | 6.13 s | 3.02 s | 13.85 | 54.5M | 3.9M | 63,811 | 36,021,160 |
+| scc | 794 ms ± 17 | 2.29x | 6.11 s | 2.63 s | 11.02 | 45.4M | 4.1M | 63,753 | 36,012,072 |
 
 #### Out of the box (each tool at its own defaults)
 
-| tool | wall | vs fastest | user cpu | system cpu | parallelism | lines/s | files | lines |
-|---|---|---|---|---|---|---|---|---|
-| mezura | 377 ms ± 23 | 1.00x | 2.66 s | 2.31 s | 13.19 | 94.9M | 66,565 | 35,815,627 |
-| tokei | 757 ms ± 35 | 2.01x | 6.82 s | 3.58 s | 13.74 | 52.8M | 83,891 | 39,991,863 |
-| scc | 1,007 ms ± 21 | 2.67x | 10.40 s | 2.93 s | 13.24 | 39.7M | 83,832 | 39,992,940 |
+| tool | wall | vs fastest | user cpu | system cpu | parallelism | lines/s | lines per cpu second | files | lines |
+|---|---|---|---|---|---|---|---|---|---|
+| mezura | 377 ms ± 23 | 1.00x | 2.66 s | 2.31 s | 13.19 | 94.9M | 7.2M | 66,565 | 35,815,627 |
+| tokei | 757 ms ± 35 | 2.01x | 6.82 s | 3.58 s | 13.74 | 52.8M | 3.8M | 83,891 | 39,991,863 |
+| scc | 1,007 ms ± 21 | 2.67x | 10.40 s | 2.93 s | 13.24 | 39.7M | 3.0M | 83,832 | 39,992,940 |
 
 Trust checks for this run:
 - **Machine steadiness**: the same binary, timed at the start of the run and again at the end, differed by 1.3%.
@@ -64,23 +64,23 @@ Trust checks for this run:
 AMD Ryzen 7 9700X 8-Core Processor, 16 threads, 60 GB usable RAM, Debian GNU/Linux 13 (trixie)  
 corpus at `0ff41df1c` on ext4 /dev/nvme1n1p3, Lexar SSD NQ790 2TB, 16.0 GT/s PCIe x4  
 mezura v3.0.0 (unreleased), scc 4.0.0, tokei 14.0.0  
-3 warmups, 15 timed runs per command, 3 s pause between command series
+3 warmups, 30 timed runs per command (15 in the first pass + 15 in the reverse pass), 3 s of pause before each command
 
 #### Same work (all three pinned to the same languages and settings)
 
-| tool | wall | vs fastest | user cpu | system cpu | parallelism | lines/s | files | lines |
-|---|---|---|---|---|---|---|---|---|
-| mezura | 223 ms ± 9 | 1.00x | 2.08 s | 0.35 s | 10.91 | 161.3M | 63,864 | 36,036,878 |
-| scc | 471 ms ± 3 | 2.11x | 5.74 s | 0.39 s | 13.01 | 76.4M | 63,724 | 36,013,098 |
-| tokei | 474 ms ± 3 | 2.12x | 5.64 s | 0.59 s | 13.15 | 76.0M | 63,782 | 36,022,156 |
+| tool | wall | vs fastest | user cpu | system cpu | parallelism | lines/s | lines per cpu second | files | lines |
+|---|---|---|---|---|---|---|---|---|---|
+| mezura | 223 ms ± 9 | 1.00x | 2.08 s | 0.35 s | 10.91 | 161.3M | 14.8M | 63,864 | 36,036,878 |
+| scc | 471 ms ± 3 | 2.11x | 5.74 s | 0.39 s | 13.01 | 76.4M | 5.9M | 63,724 | 36,013,098 |
+| tokei | 474 ms ± 3 | 2.12x | 5.64 s | 0.59 s | 13.15 | 76.0M | 5.8M | 63,782 | 36,022,156 |
 
 #### Out of the box (each tool at its own defaults)
 
-| tool | wall | vs fastest | user cpu | system cpu | parallelism | lines/s | files | lines |
-|---|---|---|---|---|---|---|---|---|
-| mezura | 258 ms ± 10 | 1.00x | 2.42 s | 0.37 s | 10.81 | 139.1M | 66,536 | 35,816,653 |
-| tokei | 521 ms ± 3 | 2.02x | 6.34 s | 0.74 s | 13.59 | 76.8M | 83,843 | 39,992,832 |
-| scc | 688 ms ± 3 | 2.67x | 8.92 s | 0.42 s | 13.57 | 58.1M | 83,784 | 39,993,947 |
+| tool | wall | vs fastest | user cpu | system cpu | parallelism | lines/s | lines per cpu second | files | lines |
+|---|---|---|---|---|---|---|---|---|---|
+| mezura | 258 ms ± 10 | 1.00x | 2.42 s | 0.37 s | 10.81 | 139.1M | 12.9M | 66,536 | 35,816,653 |
+| tokei | 521 ms ± 3 | 2.02x | 6.34 s | 0.74 s | 13.59 | 76.8M | 5.6M | 83,843 | 39,992,832 |
+| scc | 688 ms ± 3 | 2.67x | 8.92 s | 0.42 s | 13.57 | 58.1M | 4.3M | 83,784 | 39,993,947 |
 
 Trust checks for this run:
 - **Machine steadiness**: the same binary, timed at the start of the run and again at the end, differed by 0.3%.
@@ -106,5 +106,6 @@ Trust checks for this run:
 - **system cpu**: cpu seconds spent inside the operating system on the tool's behalf, opening and reading files, plus whatever sits on that path (antivirus, filter drivers).
 - **parallelism**: user plus system cpu, divided by wall: 4.6 s of cpu inside a 0.35 s run means 13 threads were busy on average.
 - **lines/s**: the lines this tool itself counted, divided by its wall time.
+- **lines per cpu second**: the lines this tool counted, divided by its user plus system cpu. How cheaply it counts, with the number of cores taken out of the picture.
 - **files / lines**: what the tool reported counting. Under "Same work" the three must nearly agree. Out of the box they differ by design.
 - **machine steadiness**: the same binary timed at the start and at the end of the whole run. The percentage is how far apart the two means came out.
