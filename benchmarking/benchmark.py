@@ -133,7 +133,6 @@ class Transcript:
 
     def start(self) -> None:
         global ACTIVE_TRANSCRIPT
-        disable_colors()
         try:
             self.file = open(self.path, 'w', encoding='utf-8', errors='replace')
         except OSError:
@@ -145,7 +144,7 @@ class Transcript:
     def write(self, message: str) -> None:
         if self.file:
             try:
-                self.file.write(message + '\n')
+                self.file.write(ANSI_ESCAPES.sub('', message) + '\n')
                 self.file.flush()
             except OSError:
                 pass
@@ -170,7 +169,9 @@ def say(message: str) -> None:
         ACTIVE_TRANSCRIPT.write(message)
 
 
-COLOR_CODES = {'green': '32', 'red': '31', 'yellow': '33', 'bold': '1'}
+COLOR_CODES = {'green': '32', 'red': '31', 'yellow': '33', 'bold': '1',
+               'blue': '38;2;110;160;220'}
+ANSI_ESCAPES = re.compile(r'\x1b\[[0-9;]*m')
 COLORS_ON = False
 
 
@@ -190,11 +191,6 @@ def enable_colors() -> None:
         except Exception:
             return
     COLORS_ON = True
-
-
-def disable_colors() -> None:
-    global COLORS_ON
-    COLORS_ON = False
 
 
 def paint(color: str, text: str) -> str:
@@ -229,6 +225,10 @@ def capture(argv: Sequence[str], default: str = '', timeout: int = 30) -> str:
 
 def powershell(script: str, default: str = '') -> str:
     return capture(['powershell', '-NoProfile', '-Command', script], default)
+
+
+def powershell_ok(script: str) -> tuple[bool, str]:
+    return capture_ok(['powershell', '-NoProfile', '-Command', script])
 
 
 def quote(part: Any) -> str:
@@ -417,7 +417,14 @@ def parse_exclusion_list(raw: str) -> Optional[list[str]]:
 
 
 def read_defender_list(property_name: str) -> Optional[list[str]]:
-    return parse_exclusion_list(powershell(f'(Get-MpPreference).{property_name} -join "|"'))
+    ok, out = powershell_ok(
+        f'$ErrorActionPreference = "Stop"; '
+        f'try {{ $p = Get-MpPreference; '
+        f'if (-not $p.PSObject.Properties.Match("{property_name}").Count) {{ exit 4 }}; '
+        f'$p.{property_name} -join "|" }} catch {{ exit 3 }}')
+    if not ok:
+        return None
+    return parse_exclusion_list(out)
 
 
 def sits_under(path: Path, roots: list[str]) -> bool:
@@ -437,7 +444,8 @@ def defender_state(corpus: Path, binaries: Binaries) -> dict[str, Any]:
             state[f'defender_process_excluded_{tool}'] = 'not applicable'
             state[f'defender_binary_excluded_{tool}'] = 'not applicable'
         return state
-    unknown = 'unknown (needs admin)'
+    unknown = ('unknown (needs admin)' if not is_privileged()
+               else 'unknown (MS Defender could not be queried)')
     processes = read_defender_list('ExclusionProcess')
     paths = read_defender_list('ExclusionPath')
     state = {'defender_realtime':
@@ -457,21 +465,38 @@ def defender_state(corpus: Path, binaries: Binaries) -> dict[str, Any]:
     return state
 
 
-def refuse_asymmetric_exclusions(state: dict[str, Any]) -> None:
-    values = {tool: state[f'defender_process_excluded_{tool}'] for tool in TOOLS}
-    if any(not isinstance(v, bool) for v in values.values()):
-        return
-    if len(set(values.values())) == 1:
-        return
-    excluded = ', '.join(sorted(t for t, v in values.items() if v))
-    included = ', '.join(sorted(t for t, v in values.items() if not v))
-    raise SystemExit(
-        f'{excluded} excluded from Defender real-time scanning, {included} not.\n\n'
-        f'Files opened by an excluded process are never scanned in real time, so this\n'
-        f'run would measure which tool escaped the antivirus, not which counts faster.\n\n'
-        f'  Get-MpPreference | Select -ExpandProperty ExclusionProcess\n'
-        f'  Remove-MpPreference -ExclusionProcess <name>.exe\n\n'
-        f'Either exclude all three or none.')
+def find_unequal_exclusions(state: dict[str, Any]) -> Optional[str]:
+    problems = []
+    for kind, field in (('process', 'defender_process_excluded'),
+                        ('binary path', 'defender_binary_excluded')):
+        values = {tool: state[f'{field}_{tool}'] for tool in TOOLS}
+        if any(not isinstance(v, bool) for v in values.values()):
+            continue
+        if len(set(values.values())) == 1:
+            continue
+        excluded = ', '.join(sorted(t for t, v in values.items() if v))
+        included = ', '.join(sorted(t for t, v in values.items() if not v))
+        problems.append(f'{kind} exclusions cover {excluded} and not {included}')
+    return '. '.join(problems) or None
+
+
+def refuse_asymmetric_exclusions(state: dict[str, Any], allowed: bool) -> Optional[str]:
+    unequal = find_unequal_exclusions(state)
+    if not unequal:
+        return None
+    if not allowed:
+        raise SystemExit(
+            f'MS Defender does not treat the three tools equally:\n{unequal}.\n\n'
+            f'Files opened by an excluded process are never scanned in real time, so this\n'
+            f'run would measure which tool escaped the antivirus, not which counts faster.\n\n'
+            f'  Get-MpPreference | Select -ExpandProperty ExclusionProcess\n'
+            f'  Get-MpPreference | Select -ExpandProperty ExclusionPath\n'
+            f'  Remove-MpPreference -ExclusionProcess <name>.exe\n\n'
+            f'Either exclude all three or none, or rerun with --allow-unequal-exclusions\n'
+            f'to measure anyway and have the results marked as such.')
+    warn(f'measuring with unequal MS Defender exclusions: {unequal}')
+    warn('the results may not be representative of real performance')
+    return unequal
 
 
 def download(url: str, dest: Path) -> None:
@@ -513,12 +538,22 @@ def setup_tokei(tools: Path) -> None:
     if not shutil.which('cargo'):
         raise SystemExit('cargo is needed to build tokei, and it is not on PATH')
     say(f'   cargo install tokei {TOKEI_VERSION}')
-    result = run(['cargo', 'install', 'tokei', '--version', TOKEI_VERSION, '--locked'])
-    if result.returncode != 0:
-        raise SystemExit('cargo install tokei failed')
-    built = HOME / '.cargo' / 'bin' / f'tokei{EXE}'
-    shutil.copy2(built, binary)
+    with tempfile.TemporaryDirectory() as scratch:
+        result = run(['cargo', 'install', 'tokei', '--version', TOKEI_VERSION, '--locked',
+                      '--root', scratch])
+        if result.returncode != 0:
+            raise SystemExit('cargo install tokei failed')
+        built = Path(scratch) / 'bin' / f'tokei{EXE}'
+        if not built.is_file():
+            raise SystemExit(f'cargo reported success and {built} is not there')
+        shutil.copy2(built, binary)
     say(f'   tokei {TOKEI_VERSION} -> {binary}')
+
+
+def run_git_or_stop(argv: list[str]) -> None:
+    if run(argv).returncode != 0:
+        raise SystemExit('this failed, and the corpus cannot be set up without it:\n  '
+                         + ' '.join(argv))
 
 
 def setup_corpus(corpus: Path, definition: Definition) -> None:
@@ -527,24 +562,34 @@ def setup_corpus(corpus: Path, definition: Definition) -> None:
     if commit and head == commit:
         say(f'   corpus already pinned at {commit[:9]}')
         return
+    checkout = (corpus / '.git').exists() and bool(head)
+    if not commit and (checkout or (corpus.is_dir() and not remote)):
+        say(f'   {definition["name"]} is taken as it stands at {corpus}')
+        return
     if not remote:
         if not corpus.is_dir():
             raise SystemExit(f'{definition["name"]} names no remote to fetch from, '
                              f'so {corpus} has to be there already')
-        if commit:
-            raise SystemExit(f'{corpus}\nis at {head or "no commit at all"}, and '
-                             f'{definition["name"]} pins {commit}.\n'
-                             f'There is no remote to fetch it from, so put the checkout on '
-                             f'that commit yourself, or clear the commit from the definition.')
-        say(f'   {definition["name"]} is taken as it stands at {corpus}')
-        return
+        raise SystemExit(f'{corpus}\nis at {head or "no commit at all"}, and '
+                         f'{definition["name"]} pins {commit}.\n'
+                         f'There is no remote to fetch it from, so put the checkout on '
+                         f'that commit yourself, or clear the commit from the definition.')
+    if (not commit and not checkout and corpus.is_dir()
+            and any(p.name != '.git' for p in corpus.iterdir())):
+        raise SystemExit(f'{corpus}\nalready holds files and is not a git checkout, so the '
+                         f'setup will not write over them. Empty it, point the definition '
+                         f'elsewhere, or clear its remote to measure it as it stands.')
     corpus.mkdir(parents=True, exist_ok=True)
     if not (corpus / '.git').exists():
-        run(['git', 'init', '-q', str(corpus)], check=True)
-        run(['git', '-C', str(corpus), 'remote', 'add', 'origin', remote], check=True)
-    say(f'   fetching {commit[:9]} from {remote}')
-    run(['git', '-C', str(corpus), 'fetch', '--depth', '1', 'origin', commit], check=True)
-    run(['git', '-C', str(corpus), 'checkout', '-q', 'FETCH_HEAD'], check=True)
+        run_git_or_stop(['git', 'init', '-q', str(corpus)])
+        run_git_or_stop(['git', '-C', str(corpus), 'remote', 'add', 'origin', remote])
+    if commit:
+        say(f'   fetching {commit[:9]} from {remote}')
+    else:
+        say(f'   cloning the default branch of {remote}')
+    run_git_or_stop(['git', '-C', str(corpus), 'fetch', '--depth', '1', 'origin',
+                     commit or 'HEAD'])
+    run_git_or_stop(['git', '-C', str(corpus), 'checkout', '-q', 'FETCH_HEAD'])
 
 
 def setup_mezura(tools: Path, repo: Path) -> None:
@@ -634,8 +679,7 @@ def prep_plan() -> list[PrepStep]:
 def how_to_elevate() -> tuple[str, str]:
     if PLATFORM == 'windows':
         return 'administrator', 'run it from a terminal opened with "Run as administrator"'
-    argv = [a for a in sys.argv if a not in ('--setup', '--setup-only')]
-    return 'root', f'sudo {sys.executable} {" ".join(argv)}'
+    return 'root', f'sudo {sys.executable} {" ".join(sys.argv)}'
 
 
 def announce_prep(plan: list[PrepStep], assume_yes: bool) -> None:
@@ -670,7 +714,8 @@ def apply_prep(plan: list[PrepStep], applied: list[PrepStep]) -> list[PrepStep]:
     return applied
 
 
-def do_check(corpus: Path, binaries: Binaries, definition: Definition) -> int:
+def do_check(corpus: Path, binaries: Binaries, definition: Definition,
+             allow_unequal: bool) -> int:
     mezura = binaries['mezura']
     scc, tokei = binaries['scc'], binaries['tokei']
     mezura_pinned, scc_pinned, tokei_pinned = pinned_flags(definition)
@@ -730,15 +775,19 @@ def do_check(corpus: Path, binaries: Binaries, definition: Definition) -> int:
             values = [state[f'defender_process_excluded_{t}'] for t in TOOLS]
             if any(not isinstance(v, bool) for v in values):
                 say('   MS Defender '
-                    + paint('yellow', 'exclusions unreadable without an elevated shell'))
+                    + paint('yellow', f'exclusions {state["defender_process_excluded_mezura"]}'))
             else:
-                if len(set(values)) == 1:
+                unequal = find_unequal_exclusions(state)
+                if unequal:
+                    if allow_unequal:
+                        say('   MS Defender ' + paint('yellow', f'unequal: {unequal}'))
+                    else:
+                        say('   MS Defender ' + paint('red', f'unequal: {unequal}'))
+                        bad.append('defender')
+                else:
                     verdict = ('all three excluded' if values[0]
                                else paint('yellow', 'none excluded'))
                     say('   MS Defender ' + paint('green', 'ok') + f', {verdict}')
-                else:
-                    say('   MS Defender ' + paint('red', 'ASYMMETRIC process exclusions'))
-                    bad.append('defender')
                 if state['defender_corpus_excluded'] is True:
                     say('   corpus        under a Defender exclusion path')
                 else:
@@ -845,6 +894,7 @@ class Runner:
         self.runs = runs
         self.settle = settle
         self.failures = []
+        self.warnings = []
 
     def hyperfine(self, name: str, commands: list[str],
                   env: Optional[dict[str, str]] = None) -> None:
@@ -856,9 +906,20 @@ class Runner:
                  '--export-markdown', str(self.res / f'{name}.md')]
         argv += commands
         merged = dict(os.environ, **(env or {}))
-        result = run(argv, env=merged)
+        result = run(argv, env=merged, stderr=subprocess.PIPE,
+                     encoding='utf-8', errors='replace')
+        stderr_lines = [ANSI_ESCAPES.sub('', line).strip()
+                        for line in (result.stderr or '').splitlines()]
+        for text in stderr_lines:
+            if text.startswith('Warning:'):
+                message = text[len('Warning:'):].strip()
+                warn(f'hyperfine on {name}: {message}')
+                self.warnings.append(f'{name}: {message}')
         if result.returncode != 0:
-            warn(f'hyperfine reported a problem on {name}')
+            detail = next((t for t in stderr_lines if t.startswith('Error')),
+                          next((t for t in stderr_lines if t), ''))
+            warn(f'hyperfine reported a problem on {name}'
+                 + (f': {detail}' if detail else ''))
             self.failures.append(name)
 
     def capture_output(self, name: str, command: list[str], as_json: bool) -> None:
@@ -995,7 +1056,7 @@ def mean_of(measurements: list[dict[str, Any]], tier: str, tool: str) -> Any:
 
 def pool_orders(m1: dict, m2: Optional[dict]) -> dict:
     if not m2:
-        return dict(m1)
+        return dict(m1, single_order=True)
     mean = (m1['mean_s'] + m2['mean_s']) / 2
     spread = math.sqrt(((m1.get('stddev_s') or 0) ** 2 + (m2.get('stddev_s') or 0) ** 2) / 2
                        + (m1['mean_s'] - m2['mean_s']) ** 2 / 4)
@@ -1050,25 +1111,32 @@ def write_results_page(outroot: Path) -> None:
              'means and how this was measured: the two sections at the bottom.', '']
 
     newest_record = None
+    single_order_seen = False
     for (corpus, platform), (record, rel) in sorted(
             latest.items(), key=lambda kv: kv[1][0]['settings']['stamp'], reverse=True):
         if newest_record is None:
             newest_record = record
         machine = record['machine']
+        sett = record['settings']
         drift = drift_of(record['measurements'])
-        prepared = bool(record['settings'].get('machine_prepared'))
+        prepared = bool(sett.get('machine_prepared'))
         ram_bytes = machine.get('ram_bytes')
         ram = f'{ram_bytes / 2 ** 30:.0f} GB usable RAM' if ram_bytes else 'RAM unknown'
         shown = {'windows': 'Windows', 'linux': 'Native Linux', 'wsl': 'WSL2',
                  'macos': 'macOS'}.get(platform, platform)
-        lines += [f'## {corpus} corpus, {shown}, {record["settings"]["stamp"]}', '',
+        lines += [f'## {corpus} corpus, {shown}, {sett["stamp"]}', '',
                   f'{machine.get("cpu", "?")}, {machine.get("logical_cores", "?")} threads, '
                   f'{ram}, '
                   f'{machine.get("os", "?")}  ',
                   f'corpus at `{str(machine.get("corpus_head", ""))[:9]}` on '
-                  f'{machine.get("corpus_fs", "?")}, {machine.get("corpus_device", "?")}  ',
-                  format_versions(machine), '']
+                  f'{machine.get("corpus_fs", "?")}, {machine.get("corpus_device", "?")}  ']
+        if not sett.get('corpus_pinned', True):
+            lines.append('not pinned, measured as it stands  ')
+        lines += [format_versions(machine) + '  ',
+                  f'{sett.get("warmup", "?")} warmups, {sett.get("runs", "?")} timed runs '
+                  f'per command, {sett.get("settle", "?")} s pause between command series', '']
         order_moves = []
+        record_single = False
         for tier, title in (('t1', 'Same work (all three pinned to the same languages and '
                                    'settings)'),
                             ('t2', 'Out of the box (each tool at its own defaults)')):
@@ -1084,6 +1152,9 @@ def write_results_page(outroot: Path) -> None:
                     order_moves.append(abs(m1['mean_s'] - m2['mean_s'])
                                        / min(m1['mean_s'], m2['mean_s']))
             found.sort(key=lambda m: m['mean_s'])
+            if any(m.get('single_order') for m in found):
+                single_order_seen = True
+                record_single = True
             fastest = found[0]['mean_s']
             lines += [f'#### {title}', '',
                       '| tool | wall | vs fastest | total cpu | parallelism | lines/s '
@@ -1092,13 +1163,16 @@ def write_results_page(outroot: Path) -> None:
             for m in found:
                 cpu = (m.get('user_s') or 0) + (m.get('system_s') or 0)
                 speed = m.get('lines_per_sec')
-                speed = f'{speed / 1e6:.0f}M' if speed else ''
+                speed = f'{speed / 1e6:.1f}M' if speed else ''
                 files = f'{m["counted_files"]:,}' if m.get('counted_files') else ''
                 counted = f'{m["counted_lines"]:,}' if m.get('counted_lines') else ''
                 relative = f'{m["mean_s"] / fastest:.2f}x' if fastest else ''
+                wall = format_wall(m.get('mean_s'), m.get('stddev_s'))
+                if m.get('single_order'):
+                    wall += ' (one order only)'
                 lines.append(
                     f'| {m["tool"]} '
-                    f'| {format_wall(m.get("mean_s"), m.get("stddev_s"))} '
+                    f'| {wall} '
                     f'| {relative} '
                     f'| {cpu:.2f} s '
                     f'| {m.get("parallelism") or ""} '
@@ -1109,8 +1183,11 @@ def write_results_page(outroot: Path) -> None:
             lines.append(f'- **Machine steadiness**: the same binary, timed at the start of '
                          f'the run and again at the end, differed by {as_percent(drift)}.')
         if order_moves:
-            lines.append(f'- **Command order**: every table ran in both command orders and '
-                         f'the numbers above pool the two. Swapping the order moved no tool '
+            scope = ('the tables that ran in both command orders pool the two'
+                     if record_single else
+                     'every table ran in both command orders and the numbers above pool '
+                     'the two')
+            lines.append(f'- **Command order**: {scope}. Swapping the order moved no tool '
                          f'by more than {max(order_moves) * 100:.1f}%.')
         lines.append('- **Power**: the cpu was set to its high-performance mode for the run '
                      'and restored after.' if prepared else
@@ -1118,14 +1195,26 @@ def write_results_page(outroot: Path) -> None:
                      'changed.')
         realtime = machine.get('defender_realtime')
         if realtime not in (None, 'not applicable'):
+            state = f'real-time protection {"on" if realtime is True or realtime == "True" else realtime}'
+            unequal = sett.get('unequal_exclusions')
             exclusions = [machine.get(f'defender_process_excluded_{t}') for t in TOOLS]
-            if any(not isinstance(v, bool) for v in exclusions):
-                verdict = 'whether the tools are excluded from scanning could not be read'
-            elif all(exclusions):
-                verdict = 'all three tools equally excluded from real-time scanning'
+            if unequal:
+                lines.append(f'- **Antivirus**: {state}, **unequal MS Defender exclusions '
+                             f'({unequal}), measured with --allow-unequal-exclusions. The '
+                             f'results may not be representative of real performance.**')
             else:
-                verdict = 'no tool excluded, all three scanned equally'
-            lines.append(f'- **Antivirus**: real-time protection {"on" if realtime is True or realtime == "True" else realtime}, {verdict}.')
+                if any(not isinstance(v, bool) for v in exclusions):
+                    verdict = 'whether the tools are excluded from scanning could not be read'
+                elif all(exclusions):
+                    verdict = 'all three tools equally excluded from real-time scanning'
+                elif not any(exclusions):
+                    verdict = 'no tool excluded, all three scanned equally'
+                else:
+                    verdict = ('**unequal exclusions, the results may not be representative '
+                               'of real performance**')
+                lines.append(f'- **Antivirus**: {state}, {verdict}.')
+        for warning in sett.get('hyperfine_warnings') or []:
+            lines.append(f'- **hyperfine warning**: {warning.split(". ")[0].rstrip(".")}.')
         lines.append('')
 
     if len(entries) > len(latest):
@@ -1151,19 +1240,20 @@ def write_results_page(outroot: Path) -> None:
         lines.append('')
 
     if newest_record is not None:
-        s = newest_record['settings']
+        twice = ('- Every table is measured twice, in one command order and then in the '
+                 'reverse. The numbers shown average the two, and how far they disagreed is '
+                 'printed in each run\'s trust checks.')
+        if single_order_seen:
+            twice += ' A row marked "one order only" has just the one.'
         lines += [
             '## Methodology', '',
-            f'- hyperfine, no shell: {s.get("warmup", "?")} warmups, '
-            f'{s.get("runs", "?")} timed runs per command, {s.get("settle", "?")} s pause '
-            f'between command series.',
-            '- The machine is restarted and otherwise idle. `--noise` verifies the '
-            'background and the workload spread before anything is measured.',
-            '- Every table is measured twice, in one command order and then in the reverse. '
-            'The numbers shown average the two, and how far they disagreed is printed in '
-            'each run\'s trust checks.',
-            '- The corpus is pinned to a commit. A checkout on any other commit refuses to '
-            'run.',
+            '- hyperfine, with no shell in between. Each section above states its own '
+            'warmups, timed runs and pause.',
+            '- The machine is restarted and otherwise idle. The harness\'s `noise` command '
+            'verifies the background and the workload spread before anything is measured.',
+            twice,
+            '- A corpus definition pins a commit, and a checkout on any other commit '
+            'refuses to run. A run on an unpinned tree says so beside its corpus line.',
             "- Counts come from each tool's own JSON output.",
             '- Same work: one language set for all three, generated and minified files '
             'counted by all, gitignore obeyed by all, any extra feature like keyword '
@@ -1172,8 +1262,9 @@ def write_results_page(outroot: Path) -> None:
             '- Out of the box: bare `tool <dir>`, nothing else.',
             '- The exact flags: [the harness README](../README.md).', '',
             '## Terms', '',
-            '- **wall**: how long a run takes on the clock, mean ± σ over the timed runs, '
-            'in milliseconds.',
+            '- **wall**: how long a run takes on the clock, in milliseconds: the mean of '
+            'all the timed runs, both command orders together, ± their σ. That σ holds the '
+            'run-to-run noise plus half the gap between the two orders.',
             "- **vs fastest**: this tool's wall divided by the fastest tool's wall in the "
             'same table.',
             '- **total cpu**: seconds of processor time, summed over every thread, user '
@@ -1200,10 +1291,17 @@ def write_notes(res: Path, stamp: str, machine: dict[str, Any], settings: dict[s
     exclusions = [machine.get(f'defender_process_excluded_{tool}') for tool in TOOLS]
     if PLATFORM != 'windows':
         alike = 'not applicable'
+    elif settings.get('unequal_exclusions'):
+        alike = (f'UNEQUAL, measured with --allow-unequal-exclusions: '
+                 f'{settings["unequal_exclusions"]}')
     elif any(not isinstance(v, bool) for v in exclusions):
-        alike = 'unknown (needs admin)'
+        alike = str(machine.get('defender_process_excluded_mezura'))
+    elif all(exclusions):
+        alike = 'all three excluded'
+    elif not any(exclusions):
+        alike = 'none excluded'
     else:
-        alike = 'all three excluded' if all(exclusions) else 'none excluded'
+        alike = 'UNEQUAL'
     (res / 'notes.md').write_text(
         f'# Benchmark session notes {stamp}\n\n'
         f'corpus:   {settings["corpus"]} @ {str(machine["corpus_head"])[:9]}, {pin}\n'
@@ -1295,51 +1393,111 @@ def read_config(path: Path) -> dict[str, str]:
     return values
 
 
+class HelpFormat(argparse.HelpFormatter):
+    def __init__(self, prog: str) -> None:
+        super().__init__(prog, max_help_position=30)
+
+    def format_help(self) -> str:
+        text = super().format_help()
+        painted = []
+        for line in text.splitlines():
+            if line.strip() == '<command>':
+                continue
+            if not COLORS_ON:
+                painted.append(line)
+                continue
+            if line and not line.startswith(' ') and line.endswith(':'):
+                line = paint('bold', line)
+            else:
+                flag = re.match(r'^(\s{2})(-\S[^\s].*?)(\s{2,}.*)$', line)
+                alone = re.match(r'^(\s{2})(-\S.*)$', line)
+                sub = re.match(r'^(\s{4})([a-z][\w-]*)(\s{2,}.*)?$', line)
+                if flag:
+                    line = flag.group(1) + paint('green', flag.group(2)) + flag.group(3)
+                elif alone:
+                    line = alone.group(1) + paint('green', alone.group(2))
+                elif sub:
+                    line = sub.group(1) + paint('blue', sub.group(2)) + (sub.group(3) or '')
+            painted.append(line)
+        return '\n'.join(painted) + '\n'
+
+
 def parse_args(config: dict[str, str]) -> argparse.Namespace:
     def default_for(key: str, env_name: str, fallback: Any) -> str:
         return os.environ.get(env_name) or config.get(key) or fallback
 
-    parser = argparse.ArgumentParser(description='Run the mezura benchmark suite.')
-    parser.add_argument('--tools', type=Path,
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument('--tools', type=Path,
                         default=default_for('tools', 'MEZURA_BENCH_TOOLS', None),
                         help='directory holding the mezura, scc and tokei binaries')
-    parser.add_argument('--corpus', type=Path,
+    common.add_argument('--corpus', type=Path,
                         default=default_for('corpus', 'MEZURA_BENCH_CORPUS', None),
                         help='the checkout that gets counted')
-    parser.add_argument('--out', type=Path,
-                        default=Path(config['out']) if 'out' in config else None,
-                        help='where the results directory is written (default: results/ beside this script)')
-    parser.add_argument('--corpus-def', default='linux',
+    common.add_argument('--corpus-def', default='linux',
                         help='name under corpora/, or a path to a corpus definition file')
-    parser.add_argument('--setup', action='store_true',
-                        help='fetch scc, tokei and the corpus, and build mezura, before measuring')
-    parser.add_argument('--setup-only', action='store_true', help='do the setup and stop')
-    parser.add_argument('--check', action='store_true',
-                        help='run each tool once and prove the numbers can be read')
-    parser.add_argument('--report', action='store_true',
-                        help='rewrite results/README.md from the recorded runs and stop')
-    parser.add_argument('--noise', action='store_true',
-                        help='sample the background and the workload, and say whether the '
-                             'machine is steady enough to benchmark')
-    parser.add_argument('--keep-raw', action='store_true',
-                        help='keep the raw tool output instead of removing it once read')
-    parser.add_argument('--no-prep', action='store_true',
-                        help='do not touch the cpu governor or power scheme, even as root')
-    parser.add_argument('--yes', action='store_true',
-                        help='do not stop to ask when the machine could not be prepared')
-    parser.add_argument('--warmup', type=int, default=None)
-    parser.add_argument('--runs', type=int, default=None)
-    parser.add_argument('--settle', type=int, default=None)
-    return parser.parse_args()
+
+    gate = argparse.ArgumentParser(add_help=False)
+    gate.add_argument('--allow-unequal-exclusions', action='store_true',
+                      help='proceed even when MS Defender does not treat the three tools '
+                           'equally, and mark the results as possibly not representative')
+
+    parser = argparse.ArgumentParser(description='Run the mezura benchmark suite.',
+                                     epilog="benchmark.py <command> --help lists that "
+                                            "command's flags.",
+                                     formatter_class=HelpFormat)
+    commands = parser.add_subparsers(dest='command', metavar='<command>', title='commands')
+
+    def add_command(name: str, description: str,
+                    parents: list) -> argparse.ArgumentParser:
+        return commands.add_parser(name, parents=parents, help=description,
+                                   description=description, formatter_class=HelpFormat)
+
+    def add_out(target: argparse.ArgumentParser, what: str) -> None:
+        target.add_argument('--out', type=Path,
+                            default=Path(config['out']) if 'out' in config else None,
+                            help=f'{what} (default: results/ beside this script)')
+
+    run = add_command('run', 'measure mezura against scc and tokei on the corpus',
+                      [common, gate])
+    add_out(run, 'where the results directory is written')
+    run.add_argument('--warmup', type=int, default=None,
+                     help='untimed runs before the timed ones, per command (default 3)')
+    run.add_argument('--runs', type=int, default=None,
+                     help='timed runs per command (default 15)')
+    run.add_argument('--settle', type=int, default=None,
+                     help='seconds of pause between command series (default 3)')
+    run.add_argument('--keep-raw', action='store_true',
+                     help='keep the raw tool output instead of removing it once read')
+    run.add_argument('--no-prep', action='store_true',
+                     help='do not touch the cpu governor or power scheme, even as root')
+    run.add_argument('--yes', action='store_true',
+                     help='do not stop to ask when the machine could not be prepared')
+    add_command('setup', 'fetch scc and tokei, clone the corpus, build mezura, and finish '
+                         'with the readiness check', [common, gate])
+    add_command('check', 'run each tool once and prove the numbers can be read',
+                [common, gate])
+    add_command('noise', 'sample the background and the workload, and say whether the '
+                         'machine is steady enough to benchmark', [common])
+    report = add_command('report', 'rewrite results/README.md from the recorded runs', [])
+    add_out(report, 'the results directory to read and rewrite')
+
+    args = parser.parse_args()
+    if not args.command:
+        parser.print_help()
+        raise SystemExit(2)
+    return args
 
 
 def require_ready(tools: Path, corpus: Path, definition: Definition) -> Binaries:
     binaries = {name: tools / f'{name}{EXE}' for name in TOOLS}
     missing = [str(b) for b in binaries.values() if not b.exists()]
     if missing:
-        raise SystemExit('these are not there, run with --setup:\n  ' + '\n  '.join(missing))
+        raise SystemExit('these are not there, run the setup first:\n  '
+                         + '\n  '.join(missing)
+                         + f'\n\n  python3 {sys.argv[0]} setup')
     if not corpus.is_dir():
-        raise SystemExit(f'the corpus is not there: {corpus}\nrun with --setup')
+        raise SystemExit(f'the corpus is not there: {corpus}\n\n'
+                         f'  python3 {sys.argv[0]} setup')
     if not shutil.which('hyperfine'):
         raise SystemExit('hyperfine is not on PATH')
 
@@ -1351,7 +1509,7 @@ def require_ready(tools: Path, corpus: Path, definition: Definition) -> Binaries
             f'  wanted: {definition["commit"]}\n'
             f'  found:  {head}\n'
             f'Numbers measured against a different tree compare with nothing else.\n\n'
-            f'  python3 {sys.argv[0]} --setup\n\n'
+            f'  python3 {sys.argv[0]} setup\n\n'
             f'puts it right. To measure a tree as it stands, write a corpus definition for '
             f'it with no commit.')
     return binaries
@@ -1359,12 +1517,14 @@ def require_ready(tools: Path, corpus: Path, definition: Definition) -> Binaries
 
 def main() -> int:
     script_dir = Path(__file__).resolve().parent
+    enable_colors()
     args = parse_args(read_config(script_dir / 'benchmark.conf'))
 
-    if args.report:
+    if args.command == 'report':
         outroot = under_home(args.out) if args.out else script_dir / 'results'
         write_results_page(outroot)
-        say(f'wrote {outroot / "README.md"}')
+        give_back_to_user(outroot)
+        say(paint('green', 'wrote ') + str(outroot / 'README.md'))
         return 0
 
     require_locations(args, script_dir)
@@ -1373,17 +1533,10 @@ def main() -> int:
     tools = under_home(args.tools)
     corpus = under_home(args.corpus)
 
-    enable_colors()
     for name in ('CLICOLOR_FORCE', 'MEZURA_PHASE_TIMING', 'SCC_CONFIG_PATH', 'RAYON_NUM_THREADS'):
         os.environ.pop(name, None)
 
-    if args.check and not (args.setup or args.setup_only):
-        return do_check(corpus, require_ready(tools, corpus, definition), definition)
-
-    if args.noise:
-        return do_noise(corpus, require_ready(tools, corpus, definition), definition)
-
-    if args.setup or args.setup_only:
+    if args.command == 'setup':
         if is_privileged():
             authority = 'administrator' if PLATFORM == 'windows' else 'root'
             raise SystemExit(
@@ -1397,10 +1550,15 @@ def main() -> int:
                 f'Run the setup as yourself, then measure with sudo.')
         tools.mkdir(parents=True, exist_ok=True)
         do_setup(tools, corpus, repo, definition)
-        failed = do_check(corpus, require_ready(tools, corpus, definition), definition)
-        if failed or args.setup_only:
-            return failed
-        say('')
+        return do_check(corpus, require_ready(tools, corpus, definition), definition,
+                        args.allow_unequal_exclusions)
+
+    if args.command == 'check':
+        return do_check(corpus, require_ready(tools, corpus, definition), definition,
+                        args.allow_unequal_exclusions)
+
+    if args.command == 'noise':
+        return do_noise(corpus, require_ready(tools, corpus, definition), definition)
 
     plan = [] if args.no_prep else prep_plan()
     announce_prep(plan, args.yes)
@@ -1410,12 +1568,13 @@ def main() -> int:
     scc, tokei = binaries['scc'], binaries['tokei']
 
     defender = defender_state(corpus, binaries)
-    refuse_asymmetric_exclusions(defender)
+    unequal = refuse_asymmetric_exclusions(defender, args.allow_unequal_exclusions)
 
     applied = []
     try:
         applied = apply_prep(plan, applied)
-        return measure(args, tools, corpus, mezura, scc, tokei, applied, definition, defender)
+        return measure(args, tools, corpus, mezura, scc, tokei, applied, definition, defender,
+                       unequal)
     finally:
         for step in reversed(applied):
             say(f'putting back: {step["what"]}')
@@ -1427,7 +1586,7 @@ def main() -> int:
 
 def measure(args: argparse.Namespace, tools: Path, corpus: Path, mezura: Path,
             scc: Path, tokei: Path, applied: list[PrepStep], definition: Definition,
-            defender: dict[str, Any]) -> int:
+            defender: dict[str, Any], unequal: Optional[str]) -> int:
     script_dir = Path(__file__).resolve().parent
     repo = script_dir.parent
 
@@ -1448,16 +1607,17 @@ def measure(args: argparse.Namespace, tools: Path, corpus: Path, mezura: Path,
     try:
         return run_phases(args, tools, corpus, repo, mezura, scc, tokei, applied,
                           definition, res, outroot, target, warmup, runs, settle, stamp,
-                          defender)
+                          defender, unequal)
     finally:
         transcript.stop()
+        give_back_to_user(outroot)
 
 
 def run_phases(args: argparse.Namespace, tools: Path, corpus: Path, repo: Path, mezura: Path,
                scc: Path, tokei: Path, applied: list[PrepStep],
                definition: Definition, res: Path, outroot: Path, target: Path,
                warmup: int, runs: int, settle: int, stamp: str,
-               defender: dict[str, Any]) -> int:
+               defender: dict[str, Any], unequal: Optional[str]) -> int:
     header('== phase 0: machine state')
     machine = collect_machine(tools, corpus, repo)
     machine.update(defender)
@@ -1527,6 +1687,8 @@ def run_phases(args: argparse.Namespace, tools: Path, corpus: Path, repo: Path, 
         'corpus_pinned': bool(definition['commit'])
                          and machine['corpus_head'] == definition['commit'],
         'machine_prepared': [step['what'] for step in applied],
+        'unequal_exclusions': unequal,
+        'hyperfine_warnings': runner.warnings,
     }
     try:
         record = build_record(res, machine, settings, counts, binaries)
@@ -1544,8 +1706,6 @@ def run_phases(args: argparse.Namespace, tools: Path, corpus: Path, repo: Path, 
 
     if not args.keep_raw:
         shutil.rmtree(res / 'out', ignore_errors=True)
-
-    give_back_to_user(outroot)
 
     say('')
     say(f'done. everything is in {res}')

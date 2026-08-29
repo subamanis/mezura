@@ -6,7 +6,7 @@ detects Linux, WSL, macOS or Windows on its own, so there is no platform flag to
 ## Prerequisites
 
 Python 3.9+, [hyperfine](https://github.com/sharkdp/hyperfine) on PATH (Debian 12 ships 1.15,
-the minimum), git, and cargo for `--setup`.
+the minimum), git, and cargo for the setup.
 
 ```
 sudo apt update && sudo apt install -y build-essential git hyperfine python3 curl
@@ -14,21 +14,22 @@ sudo apt update && sudo apt install -y build-essential git hyperfine python3 cur
 
 ## Running it
 
-First time on a machine. Not with sudo, or the binaries, `~/.cargo` and `target/` end up owned
-by root:
+First time on a machine, and not with sudo, which the setup refuses: run as root, the
+binaries, `~/.cargo` and `target/` would come out owned by root.
 
 ```
-python3 benchmark.py --setup
+python3 benchmark.py setup
 ```
 
-`--setup` fetches the scc binary for this platform, builds tokei, clones the kernel at the
-pinned commit and builds mezura from this repo. It skips whatever is already there, and
-finishes by checking its own work.
+`setup` fetches the scc binary for this platform, builds tokei, clones the kernel at the
+pinned commit and builds mezura from this repo. It skips whatever is already there (mezura
+alone is always rebuilt), finishes by checking its own work, and stops. Measuring is always a
+second invocation, the `run` command.
 
-The real run, about six minutes on a quiet machine:
+The real run, about three minutes on a quiet machine:
 
 ```
-sudo python3 benchmark.py
+sudo python3 benchmark.py run
 ```
 
 As root it sets the cpu governor to `performance` (Linux) or the power scheme to High
@@ -57,23 +58,25 @@ corpus = C:/bench/linux
 | `corpus` | `--corpus` | `MEZURA_BENCH_CORPUS` | none, must be set |
 | `out` | `--out` | | `benchmarking/results` |
 
-A flag beats an environment variable, which beats the file. With neither set, every mode
-refuses with the recipe, `--check` included: the check answers "am I ready", and without the
-locations there is nothing to be ready about.
+A flag beats an environment variable, which beats the file. With neither set, every command
+but `report` refuses with the recipe, `check` included: the check answers "am I ready", and
+without the locations there is nothing to be ready about. `report` needs only the recorded
+runs, so it works without them and writes beside this script, or wherever `--out` points.
 
 Keep the corpus and the tools on a local disk. Measuring across `/mnt` from WSL, or over a
 network share, measures the mount.
 
-Other flags: `--setup-only`, `--check`, `--noise`, `--report`, `--keep-raw`, `--no-prep`,
-`--yes`, `--corpus-def`, `--warmup`, `--runs`, `--settle`.
+The commands are `run`, `setup`, `check`, `noise` and `report`, and a bare invocation prints
+the help. Each command lists its own flags under `benchmark.py <command> --help`, with a
+line of explanation apiece.
 
-## --check
+## check
 
 ```
-python3 benchmark.py --check
+python3 benchmark.py check
 ```
 
-Three seconds, and it writes nothing at all. It runs each of the six tool invocations once
+A few seconds, and it writes nothing at all. It runs each of the six tool invocations once
 against the real corpus, reads the counts back out, and proves hyperfine works:
 
 ```
@@ -88,10 +91,13 @@ against the real corpus, reads the counts back out, and proves hyperfine works:
 all good.
 ```
 
-This is what to run before rebooting, letting the machine settle and committing six minutes to
+This is what to run before rebooting, letting the machine settle and committing minutes to
 a real run. It goes through the same gate a real run does (paths, binaries, hyperfine, and the
 corpus sitting on the commit its definition pins), and then does what no static check can:
-runs the tools, parses what they printed, and looks at the counts.
+runs the tools, parses what they printed, and looks at the counts. On Windows it also
+reports the MS Defender state (exclusions equal, unequal or unreadable). An inequality fails
+the check the same way it refuses the run, and `--allow-unequal-exclusions` downgrades it to
+a warning in both.
 
 A count of zero fails the check. It means the definition names a language the tree does not
 have, which no static check can see:
@@ -101,13 +107,12 @@ have, which no static check can see:
                 language this tree has
 ```
 
-`--setup` runs the check automatically when it finishes, and stops rather than measuring if it
-fails.
+`setup` finishes by running this same check, and its exit code is the check's.
 
-## --noise
+## noise
 
 ```
-python3 benchmark.py --noise
+python3 benchmark.py noise
 ```
 
 Fifteen seconds, writes nothing, and answers "is this machine steady enough to benchmark right
@@ -122,7 +127,7 @@ What it deliberately does not do is compare mezura against a copy of itself: tha
 measured to stay at 1.00 however loaded the machine is, since load hits both sides equally.
 Parallelism and the background sample are the signals that actually move.
 
-Also useful before rebooting into a benchmark session: if `--noise` says several cores are
+Also useful before rebooting into a benchmark session: if `noise` says several cores are
 busy on a machine you believe is idle, find that process before trusting any number.
 
 ## What gets counted
@@ -147,14 +152,15 @@ so they stay in `benchmark.py` and cannot drift between definitions.
 
 `--corpus-def <name>` picks another file under `corpora/`, or takes a path if what you give it
 has a separator in it. A definition with a `commit` is checked before every run and before
-every `--check`, not only under `--setup`: a checkout sitting on anything else is refused, with
+every `check`, not only under `setup`: a checkout sitting on anything else is refused, with
 the command that puts it right. Leave `commit` blank to measure a tree as it stands; the run is
 then recorded with `corpus_pinned: false` and can never be quietly compared with a pinned one.
 
 `remote` is only needed to fetch. A tree you already keep locally at the right commit needs no
 remote at all: the setup takes it as it stands. It is refused only when the checkout is on the
 wrong commit and there is nothing to fetch the right one from, which is the one case nothing
-can fix by itself.
+can fix by itself. A definition with a remote and a blank commit clones the remote's default
+branch when the corpus is not there yet, and otherwise leaves the checkout exactly as it is.
 
 Only the *path* to a corpus is machine-local. Its identity is part of the definition.
 
@@ -175,7 +181,7 @@ Each run's `run.json` is the single source of truth. The results page is generat
 those, nothing else, so it can never disagree with them.
 
 `results/README.md` is the human-facing page, rewritten after every run (or on demand with
-`--report`): per corpus and platform the latest run's machine line, the two tables with wall,
+`report`): per corpus and platform the latest run's machine line, the two tables with wall,
 cpu, parallelism and lines/s, and the trust checks in plain words, then the catalog of every
 run with links. GitHub renders it as the folder's front page.
 
@@ -188,7 +194,9 @@ Inside a run directory:
 - `summary.csv`, `counts.csv`: the same numbers, flat
 - `machine.txt`: what the run was measured on
 - `<phase>.md` / `<phase>.json`: hyperfine's own output per phase
-- `transcript.txt`: everything that was printed, this script and the tools alike
+- `transcript.txt`: every line this script printed from phase 0 on, hyperfine's warnings
+  included. The timing tables live in the `<phase>.md` / `<phase>.json` exports beside it,
+  and the machine preparation and Defender state are in `run.json` and `notes.md`
 - `notes.md`: the checklist to fill in by hand
 
 `out/` holds the raw tool output and is deleted once the numbers are read; `--keep-raw` keeps
@@ -196,10 +204,13 @@ it. It is gitignored either way, because tokei's per-file JSON alone is 40 MB.
 
 ## Comparing runs across machines
 
-Two runs are comparable only if `mezura_head` matches and `mezura_clean` is true in both. A
-dirty tree means the binary cannot be traced back to a commit, so the two sides may not have
-measured the same code. `mezura_clean` ignores untracked files, since they never reach the
-build; `corpus_clean` counts them, since a stray file in the corpus does get counted.
+Two runs are comparable only if `mezura_head` matches and `mezura_clean` is true in both.
+`mezura_clean` asks whether the binary can be traced back to that commit: it turns false only
+for changed tracked files that reach the build, meaning the workspace members and the two
+Cargo manifests. Untracked files never count. Tracked edits outside the build (this script,
+documents) leave it true and are listed under `mezura_changed_beside_the_build`, while the
+ones that dirtied it are listed under `mezura_changed_before_building`. `corpus_clean` counts
+every stray file, since a stray file in the corpus does get counted.
 
 Check `drift` before anything else: the same mezura binary is measured at the start and at the
 end of the run, and the ratio of those two means says whether the machine moved under the six
@@ -209,11 +220,14 @@ mechanism it guarded against, a per-file antivirus verdict, was measured not to 
 penalty follows the process name alone, and two same-named copies cannot differ by it.)
 
 On Windows the run also records the Defender state: real-time protection, whether the corpus
-sits under an exclusion path, and per tool whether its process is excluded from scanning.
-**Asymmetric process exclusions refuse the run outright**, because files opened by an excluded
-process are never scanned in real time, and the comparison would measure who escaped the
-antivirus rather than who counts faster. Reading the exclusion lists needs an elevated shell;
-unelevated, the record says `unknown (needs admin)` rather than guessing.
+sits under an exclusion path, and per tool whether its process is excluded from scanning and
+whether its binary sits under an excluded path. **Unequal exclusions refuse the run outright**,
+because files opened by an excluded process are never scanned in real time, and the comparison
+would measure who escaped the antivirus rather than who counts faster. `--allow-unequal-exclusions`
+measures anyway, and then the run record, the notes and the results page all carry a bold
+warning that the results may not be representative of real performance. Reading the exclusion
+lists needs an elevated shell; unelevated, the record says `unknown (needs admin)` rather than
+guessing, and when Defender itself cannot be queried it says so instead.
 
 `summary.csv` carries two derived columns beside the times: `parallelism`, (user+system)/wall,
 how much of the machine the tool actually harvested, and `lines_per_cpu_s`, how cheaply it
@@ -234,9 +248,10 @@ region model and `extra` under the content model are not the same quantity.
 
 There are no sweep phases. A sweep result is a fact about one machine and one corpus, banked
 in the run that measured it, not something to re-measure per run: in the recorded runs of
-2026-08-28/29 (this machine, the pinned linux corpus, Windows, WSL2 and native Debian), scc's
-swept best (`--file-process-job-workers 64`) gained 4.7-6% over its default. tokei has no
-thread knob, its rayon pool already takes every core; mezura runs at its shipped default. On
+2026-08-28/29 (this machine, the pinned linux corpus, Windows and native Debian), scc's
+swept best (`--file-process-job-workers 64`) gained 4.6% over its default on native Debian
+and about 1% on Windows. tokei has no thread knob, its rayon pool already takes every core.
+mezura's own sweep came out inside its noise, so it runs at its shipped default. On
 different hardware the sweep is a different fact and would need measuring there.
 
 ## Tests

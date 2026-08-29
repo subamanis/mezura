@@ -6,23 +6,24 @@ Written by `benchmark.py` after every run, not edited by hand. What every term m
 
 AMD Ryzen 7 9700X 8-Core Processor, 16 threads, 30 GB usable RAM, Ubuntu 24.04.3 LTS  
 corpus at `0ff41df1c` on ext4 /dev/sdd, unknown  
-mezura v3.0.0 (unreleased), scc 4.0.0, tokei 14.0.0
+mezura v3.0.0 (unreleased), scc 4.0.0, tokei 14.0.0  
+3 warmups, 15 timed runs per command, 3 s pause between command series
 
 #### Same work (all three pinned to the same languages and settings)
 
 | tool | wall | vs fastest | total cpu | parallelism | lines/s | files | lines |
 |---|---|---|---|---|---|---|---|
-| mezura | 257 ms ± 12 | 1.00x | 2.73 s | 10.62 | 140M | 63,864 | 36,036,878 |
-| tokei | 531 ms ± 39 | 2.07x | 6.46 s | 12.16 | 68M | 63,782 | 36,022,156 |
-| scc | 657 ms ± 26 | 2.56x | 6.96 s | 10.59 | 55M | 63,724 | 36,013,098 |
+| mezura | 257 ms ± 12 | 1.00x | 2.73 s | 10.62 | 140.4M | 63,864 | 36,036,878 |
+| tokei | 531 ms ± 39 | 2.07x | 6.46 s | 12.16 | 67.8M | 63,782 | 36,022,156 |
+| scc | 657 ms ± 26 | 2.56x | 6.96 s | 10.59 | 54.8M | 63,724 | 36,013,098 |
 
 #### Out of the box (each tool at its own defaults)
 
 | tool | wall | vs fastest | total cpu | parallelism | lines/s | files | lines |
 |---|---|---|---|---|---|---|---|
-| mezura | 299 ms ± 11 | 1.00x | 3.12 s | 10.41 | 120M | 66,536 | 35,816,653 |
-| tokei | 568 ms ± 21 | 1.90x | 7.17 s | 12.63 | 70M | 83,843 | 39,992,832 |
-| scc | 893 ms ± 37 | 2.98x | 10.30 s | 11.53 | 45M | 83,784 | 39,993,947 |
+| mezura | 299 ms ± 11 | 1.00x | 3.12 s | 10.41 | 119.6M | 66,536 | 35,816,653 |
+| tokei | 568 ms ± 21 | 1.90x | 7.17 s | 12.63 | 70.5M | 83,843 | 39,992,832 |
+| scc | 893 ms ± 37 | 2.98x | 10.30 s | 11.53 | 44.8M | 83,784 | 39,993,947 |
 
 Trust checks for this run:
 - **Machine steadiness**: the same binary, timed at the start of the run and again at the end, differed by 3.4%.
@@ -33,23 +34,24 @@ Trust checks for this run:
 
 AMD Ryzen 7 9700X 8-Core Processor, 16 threads, 62 GB usable RAM, Windows-11-10.0.26200-SP0  
 corpus at `0ff41df1c` on NTFS, Lexar SSD NQ790 2TB, SSD, NVMe  
-mezura v3.0.0 (unreleased), scc 4.0.0, tokei 14.0.0
+mezura v3.0.0 (unreleased), scc 4.0.0, tokei 14.0.0  
+3 warmups, 15 timed runs per command, 3 s pause between command series
 
 #### Same work (all three pinned to the same languages and settings)
 
 | tool | wall | vs fastest | total cpu | parallelism | lines/s | files | lines |
 |---|---|---|---|---|---|---|---|
-| mezura | 346 ms ± 22 | 1.00x | 4.55 s | 13.13 | 104M | 63,893 | 36,035,852 |
-| tokei | 661 ms ± 35 | 1.91x | 9.15 s | 13.85 | 55M | 63,811 | 36,021,160 |
-| scc | 794 ms ± 17 | 2.29x | 8.74 s | 11.02 | 45M | 63,753 | 36,012,072 |
+| mezura | 346 ms ± 22 | 1.00x | 4.55 s | 13.13 | 104.0M | 63,893 | 36,035,852 |
+| tokei | 661 ms ± 35 | 1.91x | 9.15 s | 13.85 | 54.5M | 63,811 | 36,021,160 |
+| scc | 794 ms ± 17 | 2.29x | 8.74 s | 11.02 | 45.4M | 63,753 | 36,012,072 |
 
 #### Out of the box (each tool at its own defaults)
 
 | tool | wall | vs fastest | total cpu | parallelism | lines/s | files | lines |
 |---|---|---|---|---|---|---|---|
-| mezura | 377 ms ± 23 | 1.00x | 4.98 s | 13.19 | 95M | 66,565 | 35,815,627 |
-| tokei | 757 ms ± 35 | 2.01x | 10.40 s | 13.74 | 53M | 83,891 | 39,991,863 |
-| scc | 1,007 ms ± 21 | 2.67x | 13.33 s | 13.24 | 40M | 83,832 | 39,992,940 |
+| mezura | 377 ms ± 23 | 1.00x | 4.98 s | 13.19 | 94.9M | 66,565 | 35,815,627 |
+| tokei | 757 ms ± 35 | 2.01x | 10.40 s | 13.74 | 52.8M | 83,891 | 39,991,863 |
+| scc | 1,007 ms ± 21 | 2.67x | 13.33 s | 13.24 | 39.7M | 83,832 | 39,992,940 |
 
 Trust checks for this run:
 - **Machine steadiness**: the same binary, timed at the start of the run and again at the end, differed by 1.3%.
@@ -61,23 +63,24 @@ Trust checks for this run:
 
 AMD Ryzen 7 9700X 8-Core Processor, 16 threads, 60 GB usable RAM, Debian GNU/Linux 13 (trixie)  
 corpus at `0ff41df1c` on ext4 /dev/nvme1n1p3, Lexar SSD NQ790 2TB, 16.0 GT/s PCIe x4  
-mezura v3.0.0 (unreleased), scc 4.0.0, tokei 14.0.0
+mezura v3.0.0 (unreleased), scc 4.0.0, tokei 14.0.0  
+3 warmups, 15 timed runs per command, 3 s pause between command series
 
 #### Same work (all three pinned to the same languages and settings)
 
 | tool | wall | vs fastest | total cpu | parallelism | lines/s | files | lines |
 |---|---|---|---|---|---|---|---|
-| mezura | 223 ms ± 9 | 1.00x | 2.44 s | 10.91 | 161M | 63,864 | 36,036,878 |
-| scc | 471 ms ± 3 | 2.11x | 6.13 s | 13.01 | 76M | 63,724 | 36,013,098 |
-| tokei | 474 ms ± 3 | 2.12x | 6.23 s | 13.15 | 76M | 63,782 | 36,022,156 |
+| mezura | 223 ms ± 9 | 1.00x | 2.44 s | 10.91 | 161.3M | 63,864 | 36,036,878 |
+| scc | 471 ms ± 3 | 2.11x | 6.13 s | 13.01 | 76.4M | 63,724 | 36,013,098 |
+| tokei | 474 ms ± 3 | 2.12x | 6.23 s | 13.15 | 76.0M | 63,782 | 36,022,156 |
 
 #### Out of the box (each tool at its own defaults)
 
 | tool | wall | vs fastest | total cpu | parallelism | lines/s | files | lines |
 |---|---|---|---|---|---|---|---|
-| mezura | 258 ms ± 10 | 1.00x | 2.78 s | 10.81 | 139M | 66,536 | 35,816,653 |
-| tokei | 521 ms ± 3 | 2.02x | 7.08 s | 13.59 | 77M | 83,843 | 39,992,832 |
-| scc | 688 ms ± 3 | 2.67x | 9.34 s | 13.57 | 58M | 83,784 | 39,993,947 |
+| mezura | 258 ms ± 10 | 1.00x | 2.78 s | 10.81 | 139.1M | 66,536 | 35,816,653 |
+| tokei | 521 ms ± 3 | 2.02x | 7.08 s | 13.59 | 76.8M | 83,843 | 39,992,832 |
+| scc | 688 ms ± 3 | 2.67x | 9.34 s | 13.57 | 58.1M | 83,784 | 39,993,947 |
 
 Trust checks for this run:
 - **Machine steadiness**: the same binary, timed at the start of the run and again at the end, differed by 0.3%.
@@ -86,10 +89,10 @@ Trust checks for this run:
 
 ## Methodology
 
-- hyperfine, no shell: 3 warmups, 15 timed runs per command, 3 s pause between command series.
-- The machine is restarted and otherwise idle. `--noise` verifies the background and the workload spread before anything is measured.
+- hyperfine, with no shell in between. Each section above states its own warmups, timed runs and pause.
+- The machine is restarted and otherwise idle. The harness's `noise` command verifies the background and the workload spread before anything is measured.
 - Every table is measured twice, in one command order and then in the reverse. The numbers shown average the two, and how far they disagreed is printed in each run's trust checks.
-- The corpus is pinned to a commit. A checkout on any other commit refuses to run.
+- A corpus definition pins a commit, and a checkout on any other commit refuses to run. A run on an unpinned tree says so beside its corpus line.
 - Counts come from each tool's own JSON output.
 - Same work: one language set for all three, generated and minified files counted by all, gitignore obeyed by all, any extra feature like keyword counting and complexity analysis turned off. The files and lines columns prove it held.
 - Out of the box: bare `tool <dir>`, nothing else.
@@ -97,7 +100,7 @@ Trust checks for this run:
 
 ## Terms
 
-- **wall**: how long a run takes on the clock, mean ± σ over the timed runs, in milliseconds.
+- **wall**: how long a run takes on the clock, in milliseconds: the mean of all the timed runs, both command orders together, ± their σ. That σ holds the run-to-run noise plus half the gap between the two orders.
 - **vs fastest**: this tool's wall divided by the fastest tool's wall in the same table.
 - **total cpu**: seconds of processor time, summed over every thread, user plus kernel. 16 threads busy for one second is 16 s.
 - **parallelism**: cpu seconds divided by wall seconds: 4.6 s of cpu inside a 0.35 s run means 13 threads were busy on average.
