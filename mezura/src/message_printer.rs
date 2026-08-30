@@ -1606,14 +1606,16 @@ so do not edit it by hand. Regenerate it with `MEZURA_UPDATE_GOLDEN=1 cargo test
 commands_document`.\n\n");
         for (group, commands) in COMMAND_HELP {
             let anchor = group.to_lowercase().replace(' ', "-");
-            let links = commands.iter().map(|(name, _)| format!("[--{name}](#--{name})"))
-                    .collect::<Vec<_>>().join(", ");
-            document.push_str(&format!("- [{group}](#{anchor}): {links}\n"));
+            document.push_str(&format!("- [{group}](#{anchor})\n"));
+            for (name, _) in commands {
+                document.push_str(&format!("  - [--{name}](#cmd-{name})\n"));
+            }
         }
         for (group, commands) in COMMAND_HELP {
             document.push_str(&format!("\n## {group}\n"));
             for (name, help) in commands {
-                document.push_str(&format!("\n### --{name}\n\n```\n{}\n```\n", help.trim_matches('\n')));
+                document.push_str(&format!("\n### <a id=\"cmd-{name}\" name=\"cmd-{name}\"></a>--{name}\n\n```\n{}\n```\n",
+                        help.trim_matches('\n')));
             }
         }
 
