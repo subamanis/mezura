@@ -5,7 +5,7 @@ Extensions
 vim vimrc
 
 Filenames
-.vimrc _vimrc .gvimrc _gvimrc .exrc
+.vimrc _vimrc vimrc .gvimrc _gvimrc gvimrc .exrc
 
 String symbols
 ' "
