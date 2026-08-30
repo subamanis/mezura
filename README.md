@@ -71,8 +71,8 @@ Things it does that most counters do not:
 - **Extension conflict resolution.** If two languages contest the same extension, you can decide which one will claim it. You can set a global preference, or decide per-project, or even per-module in the same run. See [Supported languages](#supported-languages).
 - **Data driven.** All the files, languages and the settings mezura uses are extracted to your machine, where they can be inspected, changed, or extended very easily. See [The data directory](#the-data-directory).
 
-Also, it's fast. Faster-than-any-other-counter kind of fast.  
-And it's also the most accurate. See [How it compares](#how-it-compares).
+Also, it's the fastest line counter. See [How it compares](#how-it-compares).  
+And it's also the most accurate at what it measures. See [Accuracy and limitations](#accuracy-and-limitations).
 
 
 ## Installation
@@ -476,7 +476,7 @@ your-project/
 
 **It is found without being asked for.** A run looks for the folder in the directory holding its targets and then in each directory above it, taking the nearest one, so it applies from anywhere inside the project and a project nested in another one shadows it. A run using one says so, naming the file it read. Ignore it for one run with ```--no-local```, and note that a run naming a configuration with ```--load``` leaves it out entirely.
 
-**Two rules make it safe to commit.** Its targets are written relative to the folder, so it names the same places on somebody else's disk. And anything it does not set falls back to mezura's own defaults instead of each person's `default.txt`, for everything that decides a number, so two people get one answer. The theme, the layout and the separators still come from the personal config, since there the point is that everyone has their own.
+**It is safe to commit.** Its targets are written relative to the folder, so it names the same places on somebody else's disk. And anything it does not set falls back to mezura's own defaults instead of each person's `default.txt`, for everything that decides a number, so two people get one answer. The theme, the layout and the separators still come from the personal config, since there the point is that everyone has their own.
 
 
 The priorities of the specified flags are:
@@ -506,11 +506,9 @@ To make authoring one easier, there is an interactive editor: one run of mezura 
 
 ## Supported languages
 
-Mezura ships with over 80 supported languages, which realistically will contain any real language you will ever use. Still, this number seems considerably smaller than the 200+ languages supported by some other counters. The thing to note about that is that most counters try to support as many file types as possible, even text files or json / yaml files etc. These are not programming languages, this is noise that has nothing to do with the code, so it doesn't ship with mezura by default.
-
+Mezura ships with over 80 supported languages, which realistically will contain any real language you will ever use. Still, this number seems considerably smaller than the 200+ languages supported by some other counters. The thing to note about that is that most counters try to support as many file types as possible, even text files or json / yaml files etc. These are not programming languages, this is noise that has nothing to do with the code, so it doesn't ship with mezura by default. The set of shipped languages is kept small on purpose because the rarer a language is, the more of the files carrying its extension are unrelated files that just happen to share it, and counting those as that language would only pollute the report of the average user. A language you are missing is easy to add yourself (see below), and if you think an important one is missing for everyone, open an issue or a PR.
 
 All the supported languages can be found in your [The data directory](#the-data-directory). Every language is a text file that can be inspected and even modified, and **you can easily expand the collection of languages** with your own definitions, by adding more text in files there.
-
 
 If two or more language files claim the same extension, the winner is the one named in the `language_conflicts.txt` file of the data dir, which ships with an answer for every contest between the languages that come with the program. An extension that nobody has named there goes to the language that comes first alphabetically, and the program reports it, since that is a tie-break and not a decision. ```--force-language``` overrides it for a single run, or through a configuration file for a single project. It can also answer differently per module in the same run, so ```mezura ios=./ios analysis=./matlab --force-language ios/m=objective-c,analysis/m=matlab``` counts one repository's ```.m``` files as Objective-C in one folder and as MATLAB in the other.
 
@@ -556,18 +554,28 @@ With that said, it is important to mention the following limitations:
 
 ## How it compares
 
-<!-- When linejudge goes public: the conformance SVG (mezura, tokei and scc over the corpus) goes here. -->
-<!-- When measured: the hyperfine speed table against scc, tokei and cloc goes here. -->
+Against [scc](https://github.com/boyter/scc) and [tokei](https://github.com/XAMPPRocky/tokei), the
+two fastest counters around, on the Linux repository tree, from a native Debian environment,
+measured with hyperfine over 3 warmups and 30 timed runs per command:
 
-If you don't require the keyword counting functionality of this program, the history tracking
-feature, or the unusual shape of its report, use the [scc](https://github.com/boyter/scc) project
-written in Go, which is very good.
+| tool | time | vs fastest | lines/s | files | lines |
+|---|---|---|---|---|---|
+| mezura 3.0.0 | 223 ms ± 9 | 1.00x | 161.3M | 63,864 | 36,036,878 |
+| scc 4.0.0 | 471 ms ± 3 | 2.11x | 76.4M | 63,724 | 36,013,098 |
+| tokei 14.0.0 | 474 ms ± 3 | 2.12x | 76.0M | 63,782 | 36,022,156 |
 
-Other alternative projects you can check are:
-- [tokei](https://github.com/XAMPPRocky/tokei)
-- [cloc](https://github.com/AlDanial/cloc)
-- [loc](https://github.com/cgag/loc)
-- [sloc](https://github.com/flosse/sloc)
+The comparison is equal work on purpose: the same languages over the same tree for all three,
+mezura pinned to the same counting model the other two use, the gitignore obeyed by everyone, and
+each tool's flags turning off whatever it does beyond the counting itself (keyword counting for
+mezura, complexity and cost estimates for scc).  
+The files and lines columns are the proof of the equal work.  
+Measured on Debian 13, a Ryzen 7 9700X with 16 threads and a Lexar NQ790 PCIe gen4 NVMe disk.
+
+mezura comes out first on every platform it was measured on,
+both by using each counter's default settings, and by using the curated flags that guarantee equal work.
+The runs on the other platforms it was tested on, the exact flags, the trust checks every run carries,
+the full methodology and the recorded numbers of each run
+are on [the results page](benchmarking/results/README.md).
 
 
 ## Performance
@@ -605,13 +613,13 @@ large directory, or the numbers say nothing.
 
 ### Windows and antivirus
 
-Opening a file is far more expensive on Windows than on Linux: every open walks the object manager, the security descriptor and the whole filter driver stack, which is where antivirus and other minifilters sit. Since mezura opens one file after another, this dominates: **on Windows the program is I/O bound, and most of its time is spent waiting on `File::open` rather than counting anything**. On Linux the same open is cheap, so the program is parsing bound and the time goes where it should, into the parser.
+Opening a file is far more expensive on Windows than on Linux: every open walks the object manager, the security descriptor and the whole filter driver stack, which is where antivirus and other minifilters sit. Since mezura opens one file after another, this dominates: **on Windows the program is I/O bound, and most of its time is spent waiting on `File::open` rather than counting anything**. On Linux the same open is nearly free, and the run's cpu goes almost entirely into mezura's own work instead of the operating system's.
 
-The practical consequence is that the same repository on the same machine is measurably faster to analyze from Linux (~2x speedup), and that on Windows the biggest wins come from removing work from the open path rather than from making the parser faster. Worth knowing when reading a profile of your own: a thread that is waiting for a core, and not for the disk, is still counted as waiting inside the open it was about to make, so a large `File::open` share is a question rather than a verdict.
+The practical consequence is that the same repository on the same machine is measurably faster to analyze from Linux (~1.4x speedup).
 
-That baseline cost is structural and does not go away. What can be removed is what sits on top of it: because every open traverses the filter stack, real-time antivirus protection ends up inside mezura's hot path, inspecting each file as it is opened, and it multiplies an already expensive operation. Excluding mezura from that scanning does not make Windows open files as cheaply as Linux does, it only removes the worst amplifier, which on a large tree is the difference between not-as-fast-as-could-be and slow.
+That baseline cost is structural and does not go away. What can be removed is what sits on top of it: because every open traverses the filter stack, real-time antivirus protection ends up inside mezura's hot path, inspecting each file as it is opened, and it multiplies an already expensive operation. Excluding mezura from that scanning makes a very big difference on the performance.
 
-To exclude mezura from Windows Defender real-time scanning:
+**To exclude mezura from Windows Defender real-time scanning**:
 
 1. Open PowerShell as Administrator
 2. Run:
@@ -632,9 +640,7 @@ Remove-MpPreference -ExclusionProcess "mezura.exe"
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for how to get a change in. Adding a language is the most
-common contribution and usually needs no code at all: [the language files guide](LANGUAGE_FILES_GUIDE.md)
-shows the whole file to write.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to get a change in.
 
 
 ## License
@@ -646,6 +652,6 @@ Licensed under either of
 
 at your option.
 
-Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in
+Any contribution intentionally submitted for inclusion in
 this work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any
 additional terms or conditions.
