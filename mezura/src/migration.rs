@@ -752,7 +752,7 @@ mod tests {
         // and the explanation is ours and does come back
         let conflicts = dir.clone() + mezura_core::LANGUAGE_CONFLICTS_FILE_NAME;
         let reordered = std::fs::read_to_string(&conflicts).unwrap()
-                .replace("\nm       Objective-C, MATLAB", "\nm       MATLAB, Objective-C");
+                .replace("\nm       MATLAB, Objective-C", "\nm       Objective-C, MATLAB");
         std::fs::write(&conflicts, &reordered).unwrap();
 
         let outcome = migrate_data_files(&dir, true);
@@ -776,7 +776,7 @@ mod tests {
         // A copy written before the second block and the explanation above it existed, holding one
         // answer of their own and one rule about a contest we never had
         let path = dir.clone() + mezura_core::LANGUAGE_CONFLICTS_FILE_NAME;
-        let theirs = "How this file worked back then.\n\n===> contested-extensions\nm       MATLAB, Objective-C\nlpr     Lazarus, Pascal\n";
+        let theirs = "How this file worked back then.\n\n===> contested-extensions\nm       Objective-C, MATLAB\nlpr     Lazarus, Pascal\n";
         std::fs::write(&path, theirs).unwrap();
         // and the record that version left, holding the hash of some other text under this name.
         // That record is the only thing that can say a release changed this file.
@@ -790,15 +790,16 @@ mod tests {
         assert!(outcome.replaced.is_empty(), "the merge reported itself as a replacement too");
 
         let merged = std::fs::read_to_string(&path).unwrap();
-        assert!(merged.contains("m       MATLAB, Objective-C"), "their answer was lost:\n{merged}");
+        assert!(merged.contains("m       Objective-C, MATLAB"), "their answer was lost:\n{merged}");
         assert!(merged.contains("lpr     Lazarus, Pascal"), "a rule of their own was lost:\n{merged}");
         assert!(merged.contains("===> contested-filenames"), "the block that could not be discovered \
                 is still not there:\n{merged}");
         // and the parser agrees that the contest is settled once, their way
         let (rules, faulty) = mezura_core::language_file::parse_conflict_rules(&merged);
         assert!(faulty.is_empty(), "the merged file does not parse cleanly: {faulty:?}");
-        assert_eq!(Some(&vec!["MATLAB".to_owned(), "Objective-C".to_owned()]), rules.by_extension.get("m"));
-        assert_eq!(Some(&vec!["C Header".to_owned(), "Objective-C".to_owned()]), rules.by_extension.get("h"));
+        assert_eq!(Some(&vec!["Objective-C".to_owned(), "MATLAB".to_owned()]), rules.by_extension.get("m"));
+        assert_eq!(Some(&vec!["C Header".to_owned(), "C++ Header".to_owned(), "Objective-C".to_owned()]),
+                rules.by_extension.get("h"));
 
         // Their copy as it was is kept: the merge is the one place this pass rewrites a file that
         // was theirs to edit

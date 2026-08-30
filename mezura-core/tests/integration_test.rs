@@ -186,33 +186,35 @@ fn an_empty_or_self_section_gets_no_row_and_an_excluded_one_keeps_its_name() {
 
 // 'Languages::shipped' is the door that also applies the rule for an extension two languages both
 // claim, and nothing was proving it did: every other test counts trees of '.rs' where nothing is
-// contested, so replacing that rule with an empty one passed the whole suite. '.m' is claimed by
-// both Objective-C and MATLAB, and the file that ships names the winner.
+// contested, so replacing that rule with an empty one passed the whole suite. '.pas' is claimed by
+// both Pascal and Delphi, and the file that ships names the winner. It is the extension used here
+// because it is the only shipped contest whose answer differs from the alphabetical tiebreak, which
+// is what makes the last assertion able to fail.
 #[test]
 fn the_shipped_rule_for_a_contested_extension_is_actually_applied() {
     let root = std::env::temp_dir().join("mezura-contested-extension");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
-    std::fs::write(root.join("a.m"), "// one line of something\n").unwrap();
+    std::fs::write(root.join("a.pas"), "// one line of something\n").unwrap();
 
     let config = EngineConfig {
         threads: Threads::new(1, 1),
         ..EngineConfig::new([root.to_string_lossy().replace('\\', "/")])
     };
 
-    let named_by_the_rule = languages::parse_shipped_conflict_rules().by_extension.get("m")
+    let named_by_the_rule = languages::parse_shipped_conflict_rules().by_extension.get("pas")
             .and_then(|order| order.first().cloned())
-            .expect("'m' is no longer settled by the shipped conflicts file, so pick another extension");
+            .expect("'pas' is no longer settled by the shipped conflicts file, so pick another extension");
 
     let (languages, _) = Languages::shipped(&config);
     let counted = run(&config, languages).unwrap();
     std::fs::remove_dir_all(&root).unwrap();
 
     assert_eq!(vec![&named_by_the_rule], counted.per_language.keys().collect::<Vec<_>>(),
-            "'.m' went to a language the priority file does not name");
+            "'.pas' went to a language the priority file does not name");
     // and the alphabetical tiebreak would have given it to the other one, so the assertion above
     // really is about the rule and not about a coincidence
-    assert_ne!("MATLAB", named_by_the_rule);
+    assert_ne!("Delphi", named_by_the_rule);
 }
 
 // The whole run and the sum of its modules are the same measurement, so they have to agree about
@@ -380,8 +382,8 @@ fn a_module_counts_a_contested_extension_as_the_language_it_names_and_the_run_ke
     assert_eq!((vec!["Objective-C".to_owned()], 0), scoped["ios"], "'ios/m=objective-c' did not reach 'ios'");
     assert_eq!((vec!["MATLAB".to_owned()], 1), scoped["analysis"], "'analysis/m=matlab' did not reach 'analysis'");
     // Nothing was written for the unnamed leftovers, so the shipped conflicts file decides, and it
-    // gives '.m' to Objective-C
-    assert_eq!((vec!["Objective-C".to_owned()], 0), scoped["-"]);
+    // gives '.m' to MATLAB
+    assert_eq!((vec!["MATLAB".to_owned()], 1), scoped["-"]);
 
     for module in ["ios", "analysis", "-"] {
         assert_eq!((vec!["MATLAB".to_owned()], 1), everywhere[module],

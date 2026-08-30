@@ -5,7 +5,7 @@ Extensions
 m
 
 String symbols
-"
+" '
 
 Escape character
 none

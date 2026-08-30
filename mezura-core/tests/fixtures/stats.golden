@@ -1,4 +1,4 @@
-files=81 lines=1006 code=534 comments=251
+files=81 lines=1007 code=535 comments=251
 
 Ada
   files=1 lines=8 code=5 comments=2
@@ -155,8 +155,8 @@ Lua
   words_in_code=9 string_content=1 comment_words_beside_code=0 words_in_comment=8 punctuation_in_code=0 punctuation_in_comment=1 blank=2 blank_in_comment=0 blank_in_string=0
   functions=2
 MATLAB
-  files=1 lines=9 code=4 comments=2
-  words_in_code=4 string_content=0 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=0 punctuation_in_comment=2 blank=1 blank_in_comment=0 blank_in_string=0
+  files=1 lines=10 code=5 comments=2
+  words_in_code=5 string_content=0 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=0 punctuation_in_comment=2 blank=1 blank_in_comment=0 blank_in_string=0
   classes=1
 Make
   files=1 lines=15 code=9 comments=3
