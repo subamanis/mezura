@@ -6,6 +6,7 @@ use colored::{Color, ColoredString, Colorize};
 use mezura_core::{CountingModel, RunResult, Stats, UNNAMED_MODULE_NAME, render};
 
 use super::config_manager::{self, ByFile, Configuration, Layout, SortCriterion};
+use super::message_printer::wrap_message;
 use super::number_formatter::format_with_separators;
 use super::theme::{Style, Theme};
 
@@ -105,15 +106,15 @@ languages crossed with modules. Use any other layout to see the files."));
     // them; without them a single language would only be repeated by a total under it.
     let print_total = per_language.len() > 1 || groups.len() > 1;
 
-    // The two tables take these as rows of their own, above the total that does not match them; the
-    // other two layouts have no row to put them in.
+    // The tables take these as rows of their own, above the total that does not match them; the
+    // list has no row to put them in.
     let notes = create_hidden_notes(hidden_languages, hidden_files, config);
-    let of_the_table = if is_table && layout != Layout::Matrix {notes.as_slice()} else {&[]};
+    let of_the_table = if is_table {notes.as_slice()} else {&[]};
 
     let view = ViewSettings::of(config);
     match layout {
         Layout::Matrix => print_as_matrix(theme, &groups, &matrix_names, total, print_total,
-                should_print_keywords, config.view.counting),
+                should_print_keywords, of_the_table, config.view.counting),
         Layout::Boxed => print_as_boxed_table(theme, &groups, total, print_total, should_print_keywords,
                 of_the_table, view),
         Layout::Table => print_as_table(theme, &groups, total, print_total, should_print_keywords,
@@ -1033,34 +1034,37 @@ fn count_languages_hidden_by_top(pairs: Option<&[super::diff::ModulePair]>, base
     }
 }
 
+// Wrapped before painting, since the wrap counts characters and an escape code is not one.
 fn format_note_sentence(theme: &Theme, note: &super::diff::Note) -> String {
     use super::diff::Note;
-    match note {
+    let sentence = match note {
         Note::SettingsAdopted { from, settings } => {
             let one = settings.len() == 1;
             let (was, value, it) = if one {("has", "value", "it")} else {("have", "values", "them")};
-            theme.warning.paint(&format!("'{}' {was} been overridden by the {value} recorded \
-in '{from}', so both readings are counted the same way. Provide {it} explicitly in the command line to \
-keep your own.", settings.join("', '"))).to_string()
+            format!("'{}' {was} been overridden by the {value} recorded in '{from}', so both readings \
+are counted the same way. Provide {it} explicitly in the command line to keep your own.",
+                    settings.join("', '"))
         },
-        Note::SettingsDiffer { baseline, subject, settings } => theme.warning.paint(&format!(
+        Note::SettingsDiffer { baseline, subject, settings } => format!(
                 "'{baseline}' and '{subject}' were not taken with the same {}, so part of the difference below is \
-those settings and not code that changed.", settings.join(", "))).to_string(),
-        Note::VersionsDiffer { baseline, baseline_version, subject, subject_version } => theme.warning.paint(&format!(
+those settings and not code that changed.", settings.join(", ")),
+        Note::VersionsDiffer { baseline, baseline_version, subject, subject_version } => format!(
                 "'{baseline}' was counted by mezura {baseline_version} and '{subject}' by {subject_version}, \
-so part of the difference below may be a language counted better since, and not code that changed.")).to_string(),
-        Note::CountsInDoubt { about, doubts } => format!("{}\n{}", theme.warning.paint(&format!(
-                "The run that took '{about}' was not sure of its own counts:")),
-                doubts.iter().map(|x| format!("-- {x}")).collect::<Vec<_>>().join("\n")),
-        Note::NothingCounted { about } => theme.warning.paint(&format!(
-                "'{about}' found no relevant files, so its side of every figure is zero.")).to_string(),
-        Note::FilesNotRecorded { about } => theme.warning.paint(&format!(
+so part of the difference below may be a language counted better since, and not code that changed."),
+        // The doubt lines stay unpainted, so this one does not take the shared tail
+        Note::CountsInDoubt { about, doubts } => return format!("{}\n{}",
+                theme.warning.paint(&wrap_message(&format!(
+                        "The run that took '{about}' was not sure of its own counts:"))),
+                doubts.iter().map(|x| wrap_message(&format!("-- {x}"))).collect::<Vec<_>>().join("\n")),
+        Note::NothingCounted { about } => format!(
+                "'{about}' holds no counted files at all, so its side of every figure is zero."),
+        Note::FilesNotRecorded { about } => format!(
                 "'{about}' was written without '--{}', so it holds no file rows and the files \
-themselves are not compared.", config_manager::BY_FILE)).to_string(),
-        Note::FilesCut { about, hidden } => theme.warning.paint(&format!(
+themselves are not compared.", config_manager::BY_FILE),
+        Note::FilesCut { about, hidden } => format!(
                 "'{about}' was written with a capped '--{}' and is missing {hidden} of its file \
 rows, which would all read as new, so the files themselves are not compared. Write it again with \
-a plain '--{}'.", config_manager::BY_FILE, config_manager::BY_FILE)).to_string(),
+a plain '--{}'.", config_manager::BY_FILE, config_manager::BY_FILE),
         Note::ModulesDiffer { baseline, subject, baseline_modules, subject_modules } => {
             // The word 'modules' is said once, by the first side, and the second reads on from it
             let first = match baseline_modules {
@@ -1071,20 +1075,22 @@ a plain '--{}'.", config_manager::BY_FILE, config_manager::BY_FILE)).to_string()
                 Some(names) => format!("'{subject}' declared {names}"),
                 None => format!("'{subject}' declared none")
             };
-            theme.warning.paint(&format!("{first}, whereas {second}. Two readings are compared \
-module by module only when they named the same ones, so everything is compared at once instead.")).to_string()
+            format!("{first}, whereas {second}. Two readings are compared module by module only \
+when they named the same ones, so everything is compared at once instead.")
         },
-        Note::LayoutFallback { layout } => theme.warning.paint(&format!(
+        Note::LayoutFallback { layout } => format!(
                 "'--{} {layout}' has nothing to show for a comparison, so the 'table' layout was printed.",
-                config_manager::LAYOUT)).to_string(),
-        Note::NoGitignoreInCheckout { git_revision } => theme.warning.paint(&format!(
+                config_manager::LAYOUT),
+        Note::NoGitignoreInCheckout { git_revision } => format!(
                 "'--no-gitignore' cannot reach '{git_revision}': a checkout holds only what git tracks, \
-so anything a .gitignore ignores is counted on one side alone.")).to_string(),
+so anything a .gitignore ignores is counted on one side alone."),
         Note::MissingInRevision { git_revision, targets } => {
             let named = targets.iter().map(|x| format!("'{x}'")).collect::<Vec<_>>().join(", no ");
-            theme.warning.paint(&format!("'{git_revision}' has no {named}, so it counts as nothing there.")).to_string()
+            format!("'{git_revision}' has no {named}, so it counts as nothing there.")
         }
-    }
+    };
+
+    theme.warning.paint(&wrap_message(&sentence)).to_string()
 }
 
 // Each figure's change sits in the slot its share occupies on a plain run. The change cells arrive
@@ -1353,10 +1359,10 @@ fn draw_aligned_table(theme: &Theme, columns: &[Column], rows: &[Vec<String>], k
 
 // Languages down, modules across, so one language is read along a row.
 fn print_as_matrix(theme: &Theme, groups: &[Group], languages: &[String], total: &Stats,
-        print_total: bool, should_print_keywords: bool, model: CountingModel)
+        print_total: bool, should_print_keywords: bool, notes: &[String], model: CountingModel)
 {
     println!("{}.\n", theme.heading.paint("Details"));
-    for line in format_matrix_lines(theme, groups, languages, total, print_total, model) {
+    for line in format_matrix_lines(theme, groups, languages, total, print_total, notes, model) {
         println!("{line}");
     }
 
@@ -1379,7 +1385,7 @@ fn print_as_matrix(theme: &Theme, groups: &[Group], languages: &[String], total:
 }
 
 fn format_matrix_lines<'a>(theme: &'a Theme, groups: &[Group], languages: &[String], total: &Stats,
-        print_total: bool, model: CountingModel) -> Vec<String>
+        print_total: bool, notes: &[String], model: CountingModel) -> Vec<String>
 {
     const GAP : usize = 4;
     const TOTAL_HEADER : &str = "Total";
@@ -1480,6 +1486,12 @@ fn format_matrix_lines<'a>(theme: &'a Theme, groups: &[Group], languages: &[Stri
             lines.push(String::new());
         }
         lines.push(render(row, &styles_for(&theme.details_language_name, *metric)));
+    }
+    if !notes.is_empty() {
+        lines.push(String::new());
+    }
+    for note in notes {
+        lines.push(theme.note.paint(note).to_string());
     }
     // One module and one language leaves nothing for a total to add up, and here it would repeat
     // the single row twice over, since the matrix already carries a Total column.
@@ -2351,10 +2363,13 @@ fn format_module_comparison_lines(entry: &super::log::LogEntry, groups: &[Group]
                     format!("{}{}({}%)", " ".repeat(width - text.len()), style.paint(&text),
                             paint_percentage(&format_signed_percentage_difference(then, value)))
                 };
-                format!("Lines: {}   Code: {}   Comments: {}",
+                format!("{} {}   {} {}   {} {}",
+                        theme.history_label.paint("Lines:"),
                         cell(&theme.lines_number, now.lines, then.lines, lines_width),
+                        theme.history_label.paint("Code:"),
                         cell(&theme.code_number, now.calculate_code_lines(model),
                                 model.calculate_code_lines(&then.classes), code_width),
+                        theme.history_label.paint("Comments:"),
                         cell(&theme.comments_number, now.calculate_comment_lines(model),
                                 model.calculate_comment_lines(&then.classes), comments_width))
             },
@@ -2392,23 +2407,24 @@ fn print_comparison_to_previous_runs(result: &RunResult, groups: &[Group], log_c
         let duration = datetime_now.signed_duration_since(entry.datetime);
         let (days, hours, minutes) = split_minutes_to_D_H_M(duration.num_minutes());
         let arrow = theme.history_entry.paint("->");
+        let age = theme.history_age.paint(&format!("({days} days, {hours} hours and {minutes} minutes ago)"));
         let tag = format_modified_tag(&find_settings_changed_since(entry, config, &result.targets));
         if let Some(name) = &entry.name {
-            comparison_str.push_str(&format!("{} \"{}\" ({} days, {} hours and {} minutes ago){}\n",
-                    arrow, name, days, hours, minutes, tag));
+            comparison_str.push_str(&format!("{arrow} \"{name}\" {age}{tag}\n"));
         } else {
-            let then_str = entry.datetime.naive_local().to_string();
-            comparison_str.push_str(&format!("{} {} ({} days, {} hours and {} minutes ago){}\n",
-                    arrow, then_str, days, hours, minutes, tag));
+            comparison_str.push_str(&format!("{arrow} {} {age}{tag}\n", entry.datetime.naive_local()));
         }
         let model = config.view.counting;
-        comparison_str.push_str(&format!("     Files: {}({}%) Lines: {}({}%) {{Code: {}({}%), Comments: {}({}%), {}: {}({}%)}}\n",
-                theme.files_number.paint(&format_with_separators(entry.total.files)), paint_percentage(&format_signed_percentage_difference(entry.total.files, total.files)),
-                theme.lines_number.paint(&format_with_separators(entry.total.lines)), paint_percentage(&format_signed_percentage_difference(entry.total.lines, total.lines)),
-                theme.code_number.paint(&format_with_separators(entry.total.calculate_code_lines(model))), paint_percentage(&format_signed_percentage_difference(entry.total.calculate_code_lines(model), total.calculate_code_lines(model))),
-                theme.comments_number.paint(&format_with_separators(entry.total.calculate_comment_lines(model))), paint_percentage(&format_signed_percentage_difference(entry.total.calculate_comment_lines(model), total.calculate_comment_lines(model))),
-                get_third_column_header(model),
-                theme.extra_number.paint(&format_with_separators(entry.total.calculate_extra_lines(model))), paint_percentage(&format_signed_percentage_difference(entry.total.calculate_extra_lines(model), total.calculate_extra_lines(model)))));
+        let field = |name: &str, style: &Style, then: usize, now: usize| format!("{} {}({}%)",
+                theme.history_label.paint(name), style.paint(&format_with_separators(then)),
+                paint_percentage(&format_signed_percentage_difference(then, now)));
+        comparison_str.push_str(&format!("     {} {} {} {} {}\n",
+                field("Files:", &theme.files_number, entry.total.files, total.files),
+                field("Lines:", &theme.lines_number, entry.total.lines, total.lines),
+                field("Code:", &theme.code_number, entry.total.calculate_code_lines(model), total.calculate_code_lines(model)),
+                field("Comments:", &theme.comments_number, entry.total.calculate_comment_lines(model), total.calculate_comment_lines(model)),
+                field(&format!("{}:", get_third_column_header(model)), &theme.extra_number,
+                        entry.total.calculate_extra_lines(model), total.calculate_extra_lines(model))));
         // A run that named no module says nothing about them here either; the 'modified: targets'
         // tag is what already reports that the targets are not the ones they were
         if result.has_modules() {
@@ -2712,7 +2728,9 @@ mod tests {
         let file_width = file_columns.width(theme);
         cases.push(("list, with files".to_owned(),
                 format_individual_lines(theme, &with_files, &file_columns, file_width, false)));
-        let a_note = vec!["(+4 more files hidden by --by-file 1)".to_owned()];
+        let mut note_config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
+        note_config.view.by_file = Some(ByFile::Capped(1));
+        let a_note = create_hidden_notes(0, 4, &note_config);
         cases.push(("table, with files".to_owned(),
                 format_table_lines(theme, &with_files, &total, true, &a_note, shown)));
         cases.push(("boxed, with files".to_owned(),
@@ -2723,8 +2741,8 @@ mod tests {
                 per_language: &content_info, nested: &sections,
                 files: hashmap!["HTML" => files_of("HTML", 0), "Python" => files_of("Python", 4)],
                 total: &total, baseline: None}];
-        let both_notes = vec!["(+1 more language hidden by --top 4)".to_owned(),
-                "(+4 more files hidden by --by-file 1)".to_owned()];
+        note_config.view.top_n = Some(4);
+        let both_notes = create_hidden_notes(1, 4, &note_config);
         cases.push(("table, both notes".to_owned(),
                 format_table_lines(theme, &both_cuts, &total, true, &both_notes, shown)));
 
@@ -2780,7 +2798,7 @@ mod tests {
         // means a note, which is where the blank line a module opens and the one a note opens meet.
         config.view.top_n = Some(1);
         let groups = groups_from(&modules, &config);
-        let note = vec!["(+3 more languages hidden by --top 1)".to_owned()];
+        let note = create_hidden_notes(3, 0, &config);
         cases.push(("modules, table, top 1".to_owned(),
                 format_table_lines(theme, &groups, &total, true, &note, shown)));
 
@@ -2796,11 +2814,13 @@ mod tests {
         config.view.sort_by = SortCriterion::Lines;
         let groups = groups_from(&modules, &config);
         cases.push(("modules, matrix".to_owned(),
-                format_matrix_lines(theme, &groups, &sorted, &total, true, content)));
+                format_matrix_lines(theme, &groups, &sorted, &total, true, &[], content)));
+        config.view.top_n = Some(2);
+        let matrix_note = create_hidden_notes(sorted.len() - 2, 0, &config);
         cases.push(("modules, matrix, top 2".to_owned(),
-                format_matrix_lines(theme, &groups, &sorted[..2], &total, true, content)));
+                format_matrix_lines(theme, &groups, &sorted[..2], &total, true, &matrix_note, content)));
         cases.push(("modules, matrix, no total".to_owned(),
-                format_matrix_lines(theme, &groups, &sorted[..1], &total, false, content)));
+                format_matrix_lines(theme, &groups, &sorted[..1], &total, false, &[], content)));
 
         // The dates are fixed, being the one part of the heading a clock would otherwise write.
         const EARLIER : &str = "2026-07-30T14:22:07+03:00";

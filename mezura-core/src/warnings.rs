@@ -39,6 +39,8 @@ pub enum Code {
     ConfigValueIgnored,
     /// A configuration file holds a section this version does not know.
     ConfigSectionUnknown,
+    /// A configuration file declares the same section more than once.
+    ConfigSectionRepeated,
     /// A command was given that this run has no use for.
     CommandIgnored,
     /// A style line does not parse and was skipped, the rest of its file applying.
@@ -65,6 +67,7 @@ impl Code {
             Self::ConflictLineSkipped => "conflict-line-skipped",
             Self::ConfigValueIgnored => "config-value-ignored",
             Self::ConfigSectionUnknown => "config-section-unknown",
+            Self::ConfigSectionRepeated => "config-section-repeated",
             Self::CommandIgnored => "command-ignored",
             Self::ConfigStyleInvalid => "config-style-invalid",
             Self::ThemeUnavailable => "theme-unavailable"
@@ -82,7 +85,8 @@ impl Code {
             Self::UnknownForcedLanguage | Self::UnknownLanguage | Self::UnknownExcludedLanguage
             | Self::UnknownModuleScope
             | Self::LanguageClaimsNothing | Self::ConflictLineSkipped | Self::ConfigValueIgnored
-            | Self::ConfigSectionUnknown | Self::CommandIgnored | Self::ConfigStyleInvalid
+            | Self::ConfigSectionUnknown | Self::ConfigSectionRepeated
+            | Self::CommandIgnored | Self::ConfigStyleInvalid
             | Self::ThemeUnavailable => Affects::Settings
         }
     }

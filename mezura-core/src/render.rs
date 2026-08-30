@@ -184,22 +184,22 @@ impl NumberFormat {
         if value == 0.0 {
             return "0".to_owned();
         }
-        let text = if value >= 100.0 {format!("{value:.0}")}
-                else if value >= 10.0 {format!("{value:.1}")}
+        let text = if value >= 100.0 || format!("{value:.1}") == "100.0" {format!("{value:.0}")}
+                else if value >= 10.0 || format!("{value:.2}") == "10.00" {format!("{value:.1}")}
                 else {format!("{value:.2}")};
 
         self.with_decimal_mark(&if text == "0.00" {"<0.01".to_owned()} else {text})
     }
 
-    /// The same, carrying the direction: what a comparison against an earlier run prints. Two
-    /// decimals throughout, where a share above drops to one.
+    /// The same tiers, carrying the direction: what a comparison against an earlier run prints.
     pub fn signed_percent(&self, value: f64) -> String {
         let magnitude = value.abs();
         let sign = if value > 0.0 {"+"} else if value < 0.0 {"-"} else {""};
-        let (marker, magnitude) = if magnitude > 0.0 && magnitude < TINY_THRESHOLD {(" <", TINY_THRESHOLD)}
-                else {("", magnitude)};
+        if magnitude > 0.0 && magnitude < TINY_THRESHOLD {
+            return format!("{sign} <{}", self.percent(TINY_THRESHOLD));
+        }
 
-        format!("{sign}{marker}{}", self.with_decimal_mark(&round_2(magnitude).to_string()))
+        format!("{sign}{}", self.percent(magnitude))
     }
 
     /// Swaps the dot for this format's decimal mark, for text a caller has already shaped itself.
@@ -217,10 +217,6 @@ impl Default for NumberFormat {
     fn default() -> Self {
         NumberFormat { thousands: Some(','), decimal: '.' }
     }
-}
-
-fn round_2(number: f64) -> f64 {
-    (number * 100.0).round() / 100.0
 }
 
 #[cfg(test)]
@@ -354,7 +350,10 @@ mod tests {
         assert_eq!("0", format.percent(0.0));
         assert_eq!("0.01", format.percent(0.01));
         assert_eq!("9.99", format.percent(9.994));
+        assert_eq!("10.0", format.percent(9.996));
         assert_eq!("12.3", format.percent(12.345));
+        assert_eq!("99.9", format.percent(99.94));
+        assert_eq!("100", format.percent(99.996));
         assert_eq!("100", format.percent(100.0));
 
         for value in [0.0, 0.000375, 0.01, 9.9, 99.99, 100.0] {
@@ -413,8 +412,12 @@ mod tests {
     fn a_signed_percentage_carries_its_direction_and_names_the_tiny_ones() {
         let format = NumberFormat::default();
         assert_eq!("0", format.signed_percent(calculate_relative_change(100, 100)));
-        assert_eq!("-10", format.signed_percent(calculate_relative_change(100, 90)));
+        assert_eq!("-10.0", format.signed_percent(calculate_relative_change(100, 90)));
         assert_eq!("+100", format.signed_percent(calculate_relative_change(100, 200)));
+        assert_eq!("+123", format.signed_percent(123.456));
+        assert_eq!("-34.9", format.signed_percent(-34.87));
+        assert_eq!("+10.0", format.signed_percent(9.996));
+        assert_eq!("+100", format.signed_percent(99.996));
         assert_eq!("+ <0.01", format.signed_percent(calculate_relative_change(22819, 22820)));
         assert_eq!("+0.01", format.signed_percent(0.01));
     }

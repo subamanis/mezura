@@ -65,7 +65,7 @@ Things it does that most counters do not:
 - **Diff view of git revisions or json files.** You can see the diff between the current state and a git revision, or between two revisions, or between an earlier run that was saved in a json file. See [Diffs](#diffs).
 - **Very customizable output.** You have a lot of control about how mezura counts, and also about how 
   it presents the results to you. You don't like the layout? You find it very busy with many sections? You don't want the animations? You can change everything. See [Commands](#commands).
-- **Themes.** Everything printed can be styled and colored: 72 tokens, 13 bundled themes, and an [interactive web editor](https://subamanis.github.io/mezura/theme-editor/) to experiment. See [Themes](#themes).
+- **Themes.** Everything printed can be styled and colored: 78 tokens, 13 bundled themes, and an [interactive web editor](https://subamanis.github.io/mezura/theme-editor/) to experiment. See [Themes](#themes).
 - **Output for programs.** One JSON document with `--output json`, and an MCP server so a coding
   assistant can run mezura itself. See [Taking the result elsewhere](#taking-the-result-elsewhere).
 - **Extension conflict resolution.** If two languages contest the same extension, you can decide which one will claim it. You can set a global preference, or decide per-project, or even per-module in the same run. See [Supported languages](#supported-languages).
@@ -489,7 +489,7 @@ The priorities of the specified flags are:
 
 ## Themes
 
-Everything the program prints can be styled: 72 tokens, each taking a text color, a background color, and any of bold, italic, underline, dim and reverse. Colors are hex values or one of the 16 standard terminal color names, which follow the color scheme of your terminal. You can set just the background and leave the text to the terminal, or the other way round. The live progress bar can also take a gradient between two colors, or a rainbow. Run ```--help --style``` for the full list of tokens.
+Everything the program prints can be styled: 78 tokens, each taking a text color, a background color, and any of bold, italic, underline, dim and reverse. Colors are hex values or one of the 16 standard terminal color names, which follow the color scheme of your terminal. You can set just the background and leave the text to the terminal, or the other way round. The live progress bar can also take a gradient between two colors, or a rainbow. Run ```--help --style``` for the full list of tokens.
 
 A **theme** is a plain .txt file of ```token = value``` lines, in the "themes" folder of your [data directory](#the-data-directory). It carries only how the output looks, never what is measured, so it can be shared as it is. Apply one with ```--theme <name>```, list the ones you have with ```--show-themes```, and write the current look into a new one with ```--save-theme <name>```.
 

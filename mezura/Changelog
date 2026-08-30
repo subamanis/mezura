@@ -84,6 +84,9 @@ Main changes:
       "--layout list" for an approximation of the layout that older versions printed.
   -> The section that compares this run with previous ones is now called "History" instead of
       "Progress". "Progress" now means the live bar of the run itself, and nothing else.
+  -> A command given twice in one command line now stops the run, instead of the second value
+      quietly replacing the first. A section declared twice in a configuration file is pointed
+      out instead.
   -> "extra" no longer includes the comments: it is the blank lines plus the lines that carry
       no content.
   -> Lines that carry no content are recognised consistently now, whatever punctuation they are
@@ -288,6 +291,7 @@ Dependencies:
   -> unicode-width = "0.2", so a name is measured in the terminal columns it really occupies.
 
 Other:
+  -> Every percentage drops decimals as it grows: two below 10, one below 100, none from 100 up.
   -> "--search-in-dotted" no longer walks into ".git". It opens the dotted directories somebody
       made, like ".github", and leaves the one git keeps alone, at any depth. Naming ".git" as a
       target yourself still works.

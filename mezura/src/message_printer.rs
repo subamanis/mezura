@@ -719,10 +719,14 @@ pub const STYLE_HELP  :  &str =
     row to the one above, and 'percent' is of the container for a section and of its language
     for a file.
 
-    An '--explain' run. Its verdict words follow the label tokens above, the first two below
-    paint stretches of the source lines, and anything neither keeps the terminal's own color:
+    An '--explain' run. The two span tokens paint stretches of the source lines, and anything
+    none of these names keeps the terminal's own color:
+      explain-heading          the file line at the top
       explain-string           the stretches of a line that sit inside a string
       explain-comment          the stretches that sit inside a comment
+      explain-code             the word 'code' on a verdict row
+      explain-comments         the word 'comments' on a verdict row
+      explain-extra            the third quantity's word on a verdict row, 'extra' or 'blanks'
       explain-detail           the class name on a verdict row
 
     The overview:
@@ -740,6 +744,8 @@ pub const STYLE_HELP  :  &str =
 
     The history section, which compares this run with the ones before it:
       history-entry            the '->' of an entry
+      history-age              the '(2 days, 3 hours and 5 minutes ago)' of an entry
+      history-label            the 'Files:', 'Lines:', 'Code:' and 'Comments:' words of an entry
       history-modified         the word 'modified:' on an entry counted with other settings
       history-modified-field   the names of the settings that changed since that entry
 
@@ -1590,6 +1596,48 @@ mod tests {
         assert_eq!(block.trim(), generated.trim(),
                 "the command list in the README no longer matches the help texts, which are the source. \
                  Regenerate it with MEZURA_UPDATE_GOLDEN=1 cargo test -p mezura readme");
+    }
+
+    fn create_commands_document() -> String {
+        let mut document = String::with_capacity(60_000);
+        document.push_str("# Commands\n\nThe full help of every command, exactly as \
+`mezura --help <command>` prints it. A test writes this file from the help texts themselves, \
+so do not edit it by hand. Regenerate it with `MEZURA_UPDATE_GOLDEN=1 cargo test -p mezura \
+commands_document`.\n\n");
+        for (group, commands) in COMMAND_HELP {
+            let anchor = group.to_lowercase().replace(' ', "-");
+            let links = commands.iter().map(|(name, _)| format!("[--{name}](#--{name})"))
+                    .collect::<Vec<_>>().join(", ");
+            document.push_str(&format!("- [{group}](#{anchor}): {links}\n"));
+        }
+        for (group, commands) in COMMAND_HELP {
+            document.push_str(&format!("\n## {group}\n"));
+            for (name, help) in commands {
+                document.push_str(&format!("\n### --{name}\n\n```\n{}\n```\n", help.trim_matches('\n')));
+            }
+        }
+
+        document
+    }
+
+    // The whole document is written from the help texts, so anything it should say that the help
+    // does not belongs in the README instead.
+    #[test]
+    fn the_commands_document_is_the_help_itself() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("COMMANDS.md");
+        let generated = create_commands_document();
+
+        if std::env::var_os("MEZURA_UPDATE_GOLDEN").is_some() {
+            std::fs::write(&path, &generated).unwrap();
+            return;
+        }
+
+        let document = std::fs::read_to_string(&path)
+                .expect("COMMANDS.md is missing; write it with MEZURA_UPDATE_GOLDEN=1 cargo test -p mezura commands_document")
+                .replace("\r\n", "\n");
+        assert_eq!(document, generated,
+                "COMMANDS.md no longer matches the help texts, which are the source. \
+                 Regenerate it with MEZURA_UPDATE_GOLDEN=1 cargo test -p mezura commands_document");
     }
 
     // Asserted on the rule and not on the painted string, because whether anything is painted at

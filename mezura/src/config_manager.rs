@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use colored::{ColoredString, Colorize};
 #[cfg(test)]
 use colored::Color;
@@ -564,6 +566,7 @@ pub enum ArgParsingError {
     // ignored files and a path that is not there are two different things to go and do.
     InvalidTargetInConfig(Box<ArgParsingError>,String),
     DoublePath,
+    RepeatedCommand(String),
     UnrecognisedCommand(String),
     // The command, and what was written after it, empty when nothing was
     IncorrectCommandArgs(String, String),
@@ -593,6 +596,9 @@ impl Formatted for ArgParsingError {
                 ColoredString::from(format!("{}\n{attribution}", inner.format()).as_str())
             },
             Self::DoublePath => wrap_message("Targets already provided as first argument, but --targets command also found.").red(),
+            Self::RepeatedCommand(c) => wrap_message(&format!("'--{c}' appears more than once in the \
+command line. Give it once; a command that takes several values takes them together, like '--hide \
+overview,keywords'.")).red(),
             Self::UnrecognisedCommand(p) => {
                 let tail = suggestions::format_suggestion(p, &message_printer::get_command_names())
                         .unwrap_or_else(|| format!("Run '--{HELP}' to see every command."));
@@ -996,11 +1002,15 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
 
     let mut custom_config = None;
     let (mut save_local, mut no_local) = (false, false);
+    let mut seen_commands = HashSet::new();
     for command in options {
         let (command_name, arguments) = match command.find(" ") {
             Some(index) => command.split_at(index),
             None => (command.trim(), "")
         };
+        if !seen_commands.insert(command_name.to_owned()) {
+            return Err(ArgParsingError::RepeatedCommand(command_name.to_owned()));
+        }
         match command_name {
             TARGETS => {
                 if config_builder.targets.is_some() {
@@ -1543,11 +1553,13 @@ mod tests {
     }
 
     #[test]
-    fn a_repeated_command_keeps_its_last_value() {
-        assert_eq!(Threads::new(3, 11), create_config_from_args("./ --threads 2 10 --threads 3 11").unwrap().engine.threads);
-        assert_eq!(Some(4), create_config_from_args("./ --top 9 --top 4").unwrap().view.top_n);
-        assert_eq!(SortCriterion::Name, create_config_from_args("./ --sort size --sort name").unwrap().view.sort_by);
-        assert_eq!(Layout::Boxed, create_config_from_args("./ --layout list --layout boxed").unwrap().view.layout);
+    fn a_repeated_command_is_refused_instead_of_keeping_either_value() {
+        assert_eq!(Err(ArgParsingError::RepeatedCommand("threads".to_owned())),
+                create_config_from_args("./ --threads 2 10 --threads 3 11"));
+        assert_eq!(Err(ArgParsingError::RepeatedCommand("hide".to_owned())),
+                create_config_from_args("./ --hide overview --hide keywords"));
+        assert_eq!(Err(ArgParsingError::RepeatedCommand("search-in-dotted".to_owned())),
+                create_config_from_args("./ --search-in-dotted --search-in-dotted"));
     }
 
     #[test]

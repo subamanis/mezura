@@ -1,4 +1,5 @@
 // Reading and writing the configuration files, which are the command line written down.
+use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -64,6 +65,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
     let mut builder = ConfigurationBuilder::default();
     let mut issues = ConfigFileIssues::default();
     let mut buf = String::with_capacity(150);
+    let mut seen_sections = HashSet::new();
 
     loop {
         let size = reader.read_line(&mut buf);
@@ -72,9 +74,11 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
         // comparison and spares the loop a special case
         let line = strip_byte_order_mark(buf.trim());
         if line.starts_with("===>") {
-            let id = line.trim_start_matches("===>").split_whitespace().next().unwrap_or("");
+            let id = line.trim_start_matches("===>").split_whitespace().next().unwrap_or("").to_owned();
+            let repeated = !seen_sections.insert(id.clone());
+            let mut known = true;
 
-            match id {
+            match id.as_str() {
                 config_manager::TARGETS => {
                     // The line ends a target here and a space never does, so a path with one in it
                     // needs no quoting. A target that does not parse would silently not be counted,
@@ -174,8 +178,16 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                 config_manager::COMPARE_LEVEL => read_parsed_value(&mut builder.compare_level, &mut reader, &mut buf,
                         config_manager::COMPARE_LEVEL, &mut issues,
                         |x| super::args::parse_usize_value(x, MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL)),
-                _ => issues.warnings.push((mezura_core::warnings::Code::ConfigSectionUnknown,
-                        format!("'{id}' is not something a configuration file can carry, the section is ignored.")))
+                _ => {
+                    known = false;
+                    issues.warnings.push((mezura_core::warnings::Code::ConfigSectionUnknown,
+                            format!("'{id}' is not something a configuration file can carry, the section is ignored.")));
+                }
+            }
+            if known && repeated {
+                issues.warnings.push((mezura_core::warnings::Code::ConfigSectionRepeated,
+                        format!("'{id}' is declared more than once in this configuration. Delete every \
+declaration of it but the one you want.")));
             }
         }
         buf.clear();
@@ -534,6 +546,23 @@ mod tests {
         let mut loaded = ConfigurationBuilder::default();
         loaded.add_missing_fields(options);
         assert!(!loaded.build().view.log.should_log);
+
+        std::fs::remove_file(&path)
+    }
+
+    #[test]
+    fn a_section_declared_twice_is_pointed_out() -> std::io::Result<()> {
+        let dir = SCRATCH_CONFIG_DIR.to_owned();
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.clone() + "says-top-twice.txt";
+        std::fs::write(&path, "===> targets\n./\n\n===> top\n3\n\n===> top\n5\n")?;
+
+        let (options, issues) = super::super::config_files::parse_config_file(Some("says-top-twice"), Some(dir)).unwrap();
+        assert_eq!(Some(5), options.top_n);
+        assert!(issues.invalid_fields.is_empty());
+        assert!(issues.warnings.iter().any(|(code, message)|
+                *code == mezura_core::warnings::Code::ConfigSectionRepeated && message.contains("'top'")),
+                "the repeated section was not named: {:?}", issues.warnings);
 
         std::fs::remove_file(&path)
     }

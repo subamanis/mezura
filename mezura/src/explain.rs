@@ -61,7 +61,7 @@ fn refuse(message: &str) -> ExitCode {
 
 fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel, asked_for: ExplainedLines) {
     let theme = get_active();
-    println!("{}", theme.heading.paint(&format!("{path} as {}, counted by {}",
+    println!("{}", theme.explain_heading.paint(&format!("{path} as {}, counted by {}",
             explanation.language, model.name())));
     println!();
     if explanation.lines.is_empty() {
@@ -88,9 +88,9 @@ fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel, a
         printed += 1;
         let bucket = model.fold(line.class);
         let bucket_style = match bucket {
-            Bucket::Code => &theme.code_label,
-            Bucket::Comments => &theme.comments_label,
-            Bucket::Third => &theme.extra_label
+            Bucket::Code => &theme.explain_code,
+            Bucket::Comments => &theme.explain_comments,
+            Bucket::Third => &theme.explain_extra
         };
         println!("{:>width$}  {}", at + 1, paint_by_spans(source, &line.spans));
         let mut verdict = format!("{}  {}", bucket_style.paint(model.get_bucket_name(bucket)),
@@ -162,9 +162,9 @@ fn print_totals(classes: &LineClasses, lines: usize, model: CountingModel, of_wh
     let label = format!("{}{of_what}", if lines == 1 {"line"} else {"lines"});
     println!("{} {}: {} {}, {} {}, {} {}",
             theme.lines_number.paint(&lines.to_string()), theme.lines_label.paint(&label),
-            theme.code_number.paint(&code.to_string()), theme.code_label.paint("code"),
-            theme.comments_number.paint(&comments.to_string()), theme.comments_label.paint("comments"),
-            theme.extra_number.paint(&third.to_string()), theme.extra_label.paint(model.get_third_quantity_name()));
+            theme.code_number.paint(&code.to_string()), theme.explain_code.paint("code"),
+            theme.comments_number.paint(&comments.to_string()), theme.explain_comments.paint("comments"),
+            theme.extra_number.paint(&third.to_string()), theme.explain_extra.paint(model.get_third_quantity_name()));
 }
 
 // The nine counts of the lines that were printed, built the way the parser builds the file's own,

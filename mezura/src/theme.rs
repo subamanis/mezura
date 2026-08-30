@@ -331,6 +331,8 @@ theme_tokens! {
     change_down     => "change-down",       Style::of(Color::TrueColor { r: 219, g: 129, b: 129 });
     change_same     => "change-same",       Style::of(Color::TrueColor { r: 255, g: 255, b: 255 });
     history_entry    => "history-entry",     Style::plain().bold();
+    history_age      => "history-age",       Style::plain().dim().italic();
+    history_label    => "history-label",     Style::of(FAINT);
     history_modified => "history-modified",  Style::of(Color::Yellow);
     history_modified_field => "history-modified-field", Style::plain();
 
@@ -341,10 +343,15 @@ theme_tokens! {
     progress_bar_figures => "progress-bar-figures", Style::plain().dim();
 
     summary           => "summary",           Style::plain();
-    // '--explain': the two span styles paint stretches inside a source line, and 'explain-detail'
-    // is the secondary text of a verdict row. The bucket words take the label tokens above.
+    // '--explain': the heading is the file line at the top, the two span styles paint stretches
+    // inside a source line, the three bucket tokens paint the verdict words, and 'explain-detail'
+    // is the secondary text of a verdict row.
+    explain_heading   => "explain-heading",   Style::plain().bold();
     explain_string    => "explain-string",    Style::of(Color::Green);
     explain_comment   => "explain-comment",   Style::of(Color::BrightBlack).italic();
+    explain_code      => "explain-code",      Style::of(Color::Cyan);
+    explain_comments  => "explain-comments",  Style::of(Color::BrightBlack).italic();
+    explain_extra     => "explain-extra",     Style::of(LABEL_GOLD).italic();
     explain_detail    => "explain-detail",    Style::of(Color::BrightBlack);
     note              => "note",              Style::plain().dim().italic();
     success           => "success",           Style::of(Color::BrightGreen);
