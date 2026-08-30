@@ -499,73 +499,87 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     One or more 'token=style' pairs separated by commas, for example:
     --style code-number=bright-black,code-label=b5a98a italic,heading=white bold underline
 
-    A style is one or two colors and any number of the attributes 'bold', 'italic', 'underline',
-    'dim' and 'reverse', in any order. A color is a hex value, one of the 16 terminal color names,
-    or 'default' to leave that half to the terminal.
+    A style is one or two colors and any of 'bold', 'italic', 'underline', 'dim' and 'reverse'.
+    A color is a hex value, a terminal color name, or 'default' to leave it to the terminal. The
+    first color is the text, the second the background behind it.
 
-    The colors are the one thing the order decides: the first is what the text is painted in and
-    the second what it sits on, so 'details-total=white 223344' is white on a dark blue and
-    'note=default 3a2f1e' puts a background behind text whose color the terminal chooses.
-    'reverse' still swaps whatever the two end up being, which is how a token stands out without
-    naming either.
+    Run '--theme-editor' to see most of these as an interactive webpage.
 
-    The cells of the live progress bar take two forms no other token does: hex values separated
-    by '..' fill them with an even gradient, and 'rainbow' walks a spectrum along them. A gradient
-    needs hex values, since a color name has no shade to interpolate. Every other token takes one
-    color and says so if given either form. Both forms answer per cell of a run, so neither can be
-    the color a span of text sits on: a background is always a single one.
+    The tokens, in the order their text appears on the screen.
 
-    A background covers the characters it is given and nothing else, so in a table it stops at the
-    text rather than filling the column: the numbers of a column line up on one side and the color
-    behind them ends where each number does.
-
-    Every counted quantity has two tokens, one for the figure and one for the word beside it:
-
-      files-number  files-label             comments-number  comments-label
-      lines-number  lines-label             total-size-number  total-size-label
-      code-number  code-label               keyword-number  keyword-label
-      extra-number  extra-label
-
-      size-unit                the 'KB' of '430.5 KB'
-
-    The "history" section counts the same quantities and takes the same tokens. The unit is kept
-    apart from the labels so it can stay quiet while 'Size' reads like any column header.
-
-    The rest, by where they appear.
-
-    The page:
+    The top of the run:
       version                  the version line at the top
+      note                     the asides: the settings of a project, what '--top' hid, the
+                               notes above the total
       heading                  the section titles and the 'Analyzing targets' lines
       summary                  the found / of interest / excluded line
-      note                     the asides about the count: what '--top' hid, what was left out of
-                               it, and the settings of a project it was taken with
       success                  the 'ok' after parsing
-      warning                  warnings
-      error                    errors
-      footer                   the execution time line
+      warning                  warnings, wherever one is printed
+      error                    errors, wherever one is printed
 
-    The details tables:
+    The live lines. Their cells alone also take two hex values as 'a..b' for an even gradient,
+    or 'rainbow':
+      progress-bar-fill        the cells the progress bar has drawn
+      progress-bar-empty       the cells it has not reached, a faint track behind the whole
+                               bar. 'default' takes the track away and leaves them blank
+      progress-bar-figures     the file counts, the share done and the speed figures
+
+    The header row of the details:
       details-language-header  the word 'Language' over the first column of the two tables
+      files-label  lines-label  code-label  comments-label  extra-label  total-size-label
+                               the titles of the counted columns
+      sort-marker              the arrow beside the title of the column '--sort' ordered by
+      separator-header         the line under the column titles of the two tables
+
+    The rows of the details:
       details-language-name    the name of a language, in a row and in the keywords block
       details-module           the name of a module, wherever one is printed
-      details-total            the word 'Total'
-      separator-header         the line under the column titles of the two tables
-      separator-total          the line above the total
+      files-number  lines-number  code-number  comments-number  extra-number  total-size-number
+                               the figures of the counted columns, here and in the history section
+      size-unit                the 'KB' of '430.5 KB'
       percent                  the percentages of the details rows
-      sort-marker              the arrow beside the title of the column '--sort' ordered by
       arrow                    the '->' and the '|' of a 'list' row, in that layout only
 
     The rows hanging under a language, one token per column, twice over: 'nested-' for the
-    sections inside a container file, 'file-' for the rows of a '--by-file' run:
+    sections inside a container file, 'file-' for the rows of a '--by-file' run. 'name' is the
+    section's language or the file's path, 'branch' the tree characters tying the row to the one
+    above, and 'percent' is of the container for a section and of its language for a file:
 
       nested-name  nested-branch  nested-files  nested-lines  nested-code  nested-comments
       nested-extra  nested-size  nested-size-unit  nested-percent
       file-name  file-branch  file-files  file-lines  file-code  file-comments
       file-extra  file-size  file-size-unit  file-percent
 
-    'name' is the section's language or the file's path, 'branch' the tree characters tying the
-    row to the one above, and 'percent' is of the container for a section and of its language
-    for a file.
+    The total:
+      separator-total          the line above the total
+      details-total            the word 'Total'
+
+    The keywords:
+      keyword-label            the name of a keyword
+      keyword-number           its count
+
+    The overview:
+      overview-label           the 'Files:', 'Lines:' and 'Size:' row labels
+      overview-percent         the percentages of the overview
+      bar-frame                the brackets around the overview bar and the live one
+      language-1  language-2  language-3  language-4
+                               each language of the bar, its name and the color of its cells.
+                               The fourth shows only when nothing was folded into 'others'. Only
+                               the color reaches the cells; bold and the rest apply to the name
+      language-others          the folded 'others' entry, which falls back to 'language-4'
+                               where a theme names that one and not this
+
+    The history section, whose figures take the same number tokens as the table:
+      history-entry            the '->' of an entry
+      history-age              the '(2 days, 3 hours and 5 minutes ago)' of an entry
+      history-label            the 'Files:', 'Lines:', 'Code:' and 'Comments:' words of an entry
+      history-modified         the word 'modified:' on an entry counted with other settings
+      history-modified-field   the names of the settings that changed since that entry
+      change-up  change-down  change-same
+                               a figure that moved, here and in a '--diff' comparison alike
+
+    The last line:
+      footer                   the execution time line
 
     An '--explain' run. The two span tokens paint stretches of the source lines, and anything
     none of these names keeps the terminal's own color:
@@ -576,35 +590,6 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
       explain-comments         the word 'comments' on a verdict row
       explain-extra            the third quantity's word on a verdict row, 'extra' or 'blanks'
       explain-detail           the class name on a verdict row
-
-    The overview:
-      overview-label           the 'Files:', 'Lines:' and 'Size:' row labels
-      overview-percent         the percentages of the overview
-      bar-frame                the brackets around the overview bar and the live one
-      language-1  language-2  language-3  language-4
-                               each language of the bar, its name and the color of its cells.
-                               The fourth shows only when nothing was folded into 'others'
-      language-others          the folded 'others' entry, which falls back to 'language-4'
-                               where a theme names that one and not this
-
-    A figure that moved, in the history section and in a '--diff' comparison alike:
-      change-up  change-down  change-same
-
-    The history section, which compares this run with the ones before it:
-      history-entry            the '->' of an entry
-      history-age              the '(2 days, 3 hours and 5 minutes ago)' of an entry
-      history-label            the 'Files:', 'Lines:', 'Code:' and 'Comments:' words of an entry
-      history-modified         the word 'modified:' on an entry counted with other settings
-      history-modified-field   the names of the settings that changed since that entry
-
-    The live lines, which only a terminal ever sees:
-      progress-bar-fill        the cells the progress bar has drawn
-      progress-bar-empty       the cells it has not reached, a faint track behind the whole
-                               bar. 'default' takes the track away and leaves them blank
-      progress-bar-figures     the file counts, the share done and the speed figures
-
-    Only the color of a 'language-' token reaches the cells of the overview bar; bold, italic and
-    the rest apply to the language name alone.
 
     A theme file and the style block of a config take the same tokens, and each wins over the
     last: built-in defaults, then the theme, then the config, then '--style' for this run.
