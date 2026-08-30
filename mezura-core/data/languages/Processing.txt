@@ -1,0 +1,32 @@
+Language
+Processing
+
+Extensions
+pde
+
+String symbols
+"
+
+Character literal symbols
+'
+
+Escape character
+\
+
+Comment symbols
+//
+Multi line comment start
+/*
+Multi line comment end
+*/
+
+Keyword
+    NAME
+    classes
+    ALIASES
+    class
+Keyword
+    NAME
+    interfaces
+    ALIASES
+    interface

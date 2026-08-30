@@ -1,0 +1,30 @@
+Language
+Emacs Lisp
+
+Extensions
+el
+
+Filenames
+.emacs _emacs .spacemacs .gnus .viper abbrev_defs .abbrev_defs Cask Eask
+
+String symbols
+
+Multi line string symbols
+"
+
+Escape character
+\
+
+Comment symbols
+;
+
+Keyword
+    NAME
+    functions
+    ALIASES
+    (defun defun
+Keyword
+    NAME
+    macros
+    ALIASES
+    (defmacro defmacro

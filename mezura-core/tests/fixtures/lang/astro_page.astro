@@ -1,0 +1,17 @@
+<!-- mezura-expect lines=17 code=11 comments=4 extra=2 -->
+---
+import Card from './Card.astro';
+const title = "Home";
+---
+<main>
+  <Card title={title} />
+  <!-- a markup comment -->
+</main>
+<script>
+// a js comment
+console.log(title)
+</script>
+<style>
+/* a css comment */
+main { padding: 0; }
+</style>

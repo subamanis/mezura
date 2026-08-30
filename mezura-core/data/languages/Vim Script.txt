@@ -1,0 +1,23 @@
+Language
+Vim Script
+
+Extensions
+vim vimrc
+
+Filenames
+.vimrc _vimrc .gvimrc _gvimrc .exrc
+
+String symbols
+' "
+
+Escape character
+\
+
+Comment symbols
+"
+
+Keyword
+    NAME
+    functions
+    ALIASES
+    function function!

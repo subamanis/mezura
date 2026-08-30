@@ -55,7 +55,7 @@ Things it does that most counters do not:
   See [The counting model](#the-counting-model).
 - **Keyword counting.** Occurrences of words you pick per language, classes, structs, traits,
   anything, counted only where they appear as code and never inside a string or a comment.
-- **Nested languages.** The `<script>` and `<style>` blocks of HTML, Vue and Svelte files are
+- **Nested languages.** The `<script>` and `<style>` blocks of HTML, Vue, Svelte and Astro files are
   counted as the distinct languages they hold.
 - **Modules.** Give a name to parts of a project and the report is grouped by these parts as well as by
   language. This way you can split your project into e.g. Frontend and Backend and Tests and see distinct reports for each module in the same table in the same run. See [Modules](#modules).
@@ -535,7 +535,7 @@ All of this is measured against the [LineJudge](https://loc-conformance.github.i
 
 With that said, it is important to mention the following limitations:
 
-- Another language inside a file is only found where its opening tag sits on one line, the way ```<script>``` and ```<style>``` do. Languages that interleave mid-line are outside that: the ```<?php ?>``` of PHP and the ERB, JSP and Blade family are read as one language from beginning to end. An opening tag split over two lines stays with the file's own language.
+- Another language inside a file is only found where its opening tag sits on one line, the way ```<script>``` and ```<style>``` do. Languages that interleave mid-line are outside that: the ```<?php ?>``` of PHP and the ERB, JSP and Blade family are read as one language from beginning to end. An opening tag split over two lines stays with the file's own language. A section fenced by something that is not a tag is outside it too: the ```---``` frontmatter at the top of an Astro file holds TypeScript, and its ```//``` lines are counted as code rather than as comments. The ```<script>``` and ```<style>``` blocks of the same file are read as the languages they hold, as they are in Vue and Svelte.
 
 - Keywords are counted as words, not as meaning. Every ```class``` in code is counted, whatever it means there.
 

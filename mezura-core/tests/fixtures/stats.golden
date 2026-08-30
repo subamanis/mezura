@@ -1,4 +1,4 @@
-files=81 lines=1007 code=535 comments=251
+files=85 lines=1050 code=563 comments=260
 
 Ada
   files=1 lines=8 code=5 comments=2
@@ -7,6 +7,9 @@ Ada
 Assembly
   files=1 lines=12 code=6 comments=5
   words_in_code=6 string_content=0 comment_words_beside_code=0 words_in_comment=5 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
+Astro
+  files=1 lines=17 code=11 comments=4
+  words_in_code=11 string_content=0 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=2 punctuation_in_comment=0 blank=0 blank_in_comment=0 blank_in_string=0
 Batch
   files=1 lines=9 code=3 comments=4
   words_in_code=3 string_content=0 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=0 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
@@ -73,6 +76,10 @@ Elm
   files=1 lines=15 code=9 comments=4
   words_in_code=7 string_content=2 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=0 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   types=1
+Emacs Lisp
+  files=1 lines=9 code=6 comments=1
+  words_in_code=4 string_content=2 comment_words_beside_code=0 words_in_comment=1 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=1
+  functions=1 macros=1
 Erlang
   files=1 lines=10 code=5 comments=3
   words_in_code=5 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=0 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
@@ -197,6 +204,10 @@ PowerShell
   files=1 lines=17 code=10 comments=3
   words_in_code=5 string_content=5 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=1 punctuation_in_comment=2 blank=1 blank_in_comment=0 blank_in_string=0
   classes=0
+Processing
+  files=1 lines=10 code=5 comments=3
+  words_in_code=5 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=2 punctuation_in_comment=0 blank=0 blank_in_comment=0 blank_in_string=0
+  classes=1 interfaces=0
 Prolog
   files=1 lines=9 code=5 comments=3
   words_in_code=5 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
@@ -276,6 +287,10 @@ Verilog
   files=1 lines=16 code=9 comments=3
   words_in_code=9 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=0 punctuation_in_comment=0 blank=4 blank_in_comment=0 blank_in_string=0
   functions=1 modules=1 tasks=1
+Vim Script
+  files=1 lines=7 code=6 comments=1
+  words_in_code=6 string_content=0 comment_words_beside_code=0 words_in_comment=1 punctuation_in_code=0 punctuation_in_comment=0 blank=0 blank_in_comment=0 blank_in_string=0
+  functions=1
 Visual Basic
   files=1 lines=13 code=8 comments=2
   words_in_code=8 string_content=0 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=0 punctuation_in_comment=0 blank=3 blank_in_comment=0 blank_in_string=0

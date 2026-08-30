@@ -1,0 +1,21 @@
+Language
+Astro
+
+Extensions
+astro
+
+String symbols
+
+Comment symbols
+
+Multi line comment start
+<!--
+Multi line comment end
+-->
+
+Nested language start
+<script <style
+Nested language end
+</script> </style>
+Nested language default
+js css
