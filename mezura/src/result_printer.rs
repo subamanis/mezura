@@ -1259,8 +1259,8 @@ fn format_readable_time(generated_at: &str) -> String {
 fn draw_aligned_table(theme: &Theme, columns: &[Column], rows: &[Vec<String>], kinds: &[RowKind],
         grouped: bool) -> Vec<String>
 {
-    const GAP : usize = 4;
-    const TIGHT_GAP : usize = 2;
+    const GAP : usize = 3;
+    const TIGHT_GAP : usize = 1;
 
     // A share, a change and its percentage all belong to the figure before them
     let tight_after = (0..columns.len()).filter(|at| matches!(columns.get(at + 1).map(|x| x.kind),
@@ -1788,7 +1788,7 @@ fn format_individual_lines(theme: &Theme, groups: &[Group], columns: &Columns, b
                 let styles = SubRowStyles::of(theme, if of_a_file {RowKind::File} else {RowKind::Nested});
                 let name = format!("{indent}{BRANCH_INDENT}{}{}", styles.branch.paint(branch),
                         styles.name.paint(branch_name));
-                lines.push(columns.format_nested_row(&styles, &name,
+                lines.push(columns.format_nested_row(theme, &styles, &name,
                         indent.len() + BRANCH_INDENT.len() + calculate_widest_visible_line(branch)
                                 + calculate_widest_visible_line(branch_name),
                         stats.lines, stats.calculate_code_lines(columns.model),
@@ -1814,6 +1814,9 @@ struct Columns {
     code: usize,
     comments: usize,
     extra: usize,
+    // The percentages sit inside brackets in the middle of a row, so a row whose share reaches two
+    // digits pushes everything after it one to the right unless they are all drawn the same width
+    percent: usize,
     // Carried here so that every row rendered through these functions obeys the same '--hide' and
     // the same fold
     hidden: config_manager::Hidden,
@@ -1826,12 +1829,18 @@ impl Columns {
         let grouped = is_grouped(groups);
         let indent = if grouped {LIST_INDENT.len()} else {0};
         let len_of = |value: usize| format_with_separators(value).len();
+        let percent_len_of = |stats: &Stats| {
+            let (code, comments) = calculate_code_and_comment_percentages(stats.lines,
+                    stats.calculate_code_lines(model), stats.calculate_comment_lines(model));
+            (format_percent_text(code).len() + 1).max(format_percent_text(comments).len() + 1)
+        };
         let mut columns = Columns {
             name: TOTAL_NAME.len(),
             headline: len_of(total.files).max(len_of(total.lines)),
             code: len_of(total.calculate_code_lines(model)),
             comments: len_of(total.calculate_comment_lines(model)),
             extra: len_of(total.calculate_extra_lines(model)),
+            percent: percent_len_of(total),
             hidden,
             model
         };
@@ -1852,16 +1861,19 @@ impl Columns {
                 columns.code = columns.code.max(len_of(content_info.calculate_code_lines(model)));
                 columns.comments = columns.comments.max(len_of(content_info.calculate_comment_lines(model)));
                 columns.extra = columns.extra.max(len_of(content_info.calculate_extra_lines(model)));
+                columns.percent = columns.percent.max(percent_len_of(content_info));
                 // The markers are measured and not assumed, so changing one cannot leave this column
                 // a character short of what gets drawn in it.
                 let under = indent + BRANCH_INDENT.len();
                 let branch = under + calculate_widest_visible_line(find_branch_marker(false));
-                for (nested, _) in find_sections_of(group, name, content_info) {
+                for (nested, stats) in find_sections_of(group, name, content_info) {
                     columns.name = columns.name.max(calculate_widest_visible_line(&nested) + branch);
+                    columns.percent = columns.percent.max(percent_len_of(&stats));
                 }
                 let file_branch = under + calculate_widest_visible_line(find_file_branch_marker(false));
-                for (path, _) in group.files.get(name.as_str()).map(|rows| rows.shown.as_slice()).unwrap_or_default() {
+                for (path, file) in group.files.get(name.as_str()).map(|rows| rows.shown.as_slice()).unwrap_or_default() {
                     columns.name = columns.name.max(calculate_widest_visible_line(path) + file_branch);
+                    columns.percent = columns.percent.max(percent_len_of(&file.stats));
                 }
             }
         }
@@ -1879,13 +1891,23 @@ impl Columns {
         self.calculate_headline_end() + 1
     }
 
+    // Padded outside the paint, since a style with a background would otherwise colour the spaces,
+    // and measured off the text, since painted bytes are several times what they draw.
+    fn format_percent_cell(&self, value: f64, style: &super::theme::Style) -> String {
+        if self.hidden.percentages {
+            return String::new();
+        }
+        let text = format_percent_text(value) + "%";
+
+        format!(" ({}{})", " ".repeat(self.percent.saturating_sub(text.len())), style.paint(&text))
+    }
+
     // The theme arrives as an argument and is not read from 'super::theme::get_active()':
     // '--show-themes' renders one sample per theme it found, in a single run, through these same
     // functions.
     fn format_breakdown_row(&self, theme: &Theme, painted_name: &str, name_len: usize, lines: usize, code_lines: usize, comment_lines: usize) -> String {
         let (code_percentage, comment_percentage) = calculate_code_and_comment_percentages(lines,code_lines, comment_lines);
-        let percent = |value: f64| if self.hidden.percentages {String::new()}
-                else {format!(" ({})", paint_percent(theme, value))};
+        let percent = |value: f64| self.format_percent_cell(value, &theme.percent);
         let mut terms = vec![format!("{:>code_w$} {}{}",
                 theme.code_number.paint(&format_with_separators(code_lines)), theme.code_label.paint("code"),
                 percent(code_percentage), code_w = self.code)];
@@ -1905,28 +1927,30 @@ impl Columns {
                 terms.join("  +  "), headline_w = self.headline)
     }
 
-    fn format_nested_row(&self, styles: &SubRowStyles, painted_name: &str, name_len: usize, lines: usize,
-            code_lines: usize, comment_lines: usize) -> String
+    // The words take the same tokens as they do on a language row, since they are the same words and
+    // the sub-row band is a band of figures. Painting them with the figure's token puts a number's
+    // weight and color on 'lines' and 'code', which no other row does.
+    fn format_nested_row(&self, theme: &Theme, styles: &SubRowStyles, painted_name: &str, name_len: usize,
+            lines: usize, code_lines: usize, comment_lines: usize) -> String
     {
         let (code_percentage, comment_percentage) = calculate_code_and_comment_percentages(lines, code_lines, comment_lines);
-        let percent = |value: f64| if self.hidden.percentages {String::new()}
-                else {format!(" ({})", styles.percent.paint(&(format_percent_text(value) + "%")))};
+        let percent = |value: f64| self.format_percent_cell(value, styles.percent);
         let mut terms = vec![format!("{:>code_w$} {}{}",
-                styles.code.paint(&format_with_separators(code_lines)), styles.code.paint("code"),
+                styles.code.paint(&format_with_separators(code_lines)), theme.code_label.paint("code"),
                 percent(code_percentage), code_w = self.code)];
         if !self.hidden.comments {
             terms.push(format!("{:>comments_w$} {}{}",
                     styles.comments.paint(&format_with_separators(comment_lines)),
-                    styles.comments.paint("comments"), percent(comment_percentage), comments_w = self.comments));
+                    theme.comments_label.paint("comments"), percent(comment_percentage), comments_w = self.comments));
         }
         if !self.hidden.extra {
             terms.push(format!("{:>extra_w$} {}",
                     styles.extra.paint(&format_with_separators(lines - code_lines - comment_lines)),
-                    styles.extra.paint(self.model.get_third_quantity_name()), extra_w = self.extra));
+                    theme.extra_label.paint(self.model.get_third_quantity_name()), extra_w = self.extra));
         }
         format!("{}{}{}{}{:>headline_w$} {} {{ {} }}",
                 painted_name, " ".repeat(self.name - name_len + NAME_GAP), styles.branch.paint("->"), " ".repeat(NAME_GAP),
-                styles.lines.paint(&format_with_separators(lines)), styles.lines.paint("lines"),
+                styles.lines.paint(&format_with_separators(lines)), theme.lines_label.paint("lines"),
                 terms.join("  +  "), headline_w = self.headline)
     }
 
@@ -2168,7 +2192,7 @@ fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize], 
         line.push_str(&format!("{}{} ", " ".repeat(percent_widths[i].saturating_sub(str_perc.len())), paint_overview_percent(theme,*percentage)));
         line.push_str(&styles[i].paint(&languages_name[i]).to_string());
         if i < percentages.len() - 1{
-            line.push_str(" - ")
+            line.push_str("   ")
         }
     }
 
@@ -2185,7 +2209,7 @@ fn create_overview_line(prefix: &str, percentages: &[f64], verticals: &[usize], 
 fn add_verticals_str(line: &mut String, files_verticals: &[usize], styles: &[Style], character: &str) {
     let theme = super::theme::get_active();
     line.push_str("   ");
-    line.push_str(&theme.bar_frame.paint("[-").to_string());
+    line.push_str(&theme.bar_frame.paint("[").to_string());
     for (i,verticals) in files_verticals.iter().enumerate() {
         let cell = match styles[i].get_color() {
             Some(color) => character.color(color).to_string(),
@@ -2193,7 +2217,7 @@ fn add_verticals_str(line: &mut String, files_verticals: &[usize], styles: &[Sty
         };
         line.push_str(&cell.repeat(*verticals));
     }
-    line.push_str(&theme.bar_frame.paint("-]").to_string());
+    line.push_str(&theme.bar_frame.paint("]").to_string());
 }
 
 // Its own view of the data and not a fold of the caller's maps: "others" belongs to the overview
@@ -2423,11 +2447,6 @@ fn format_size(theme: &Theme, total_bytes: usize, average_bytes: usize) -> Strin
 
 fn format_percent_text(value: f64) -> String {
     super::number_formatter::get_active().percent(value)
-}
-
-// The '%' is painted with the number, or it keeps the default color while the digits fade
-fn paint_percent(theme: &Theme, value: f64) -> ColoredString {
-    theme.percent.paint(&(format_percent_text(value) + "%"))
 }
 
 // The overview's percentages take a token of their own, being the datum of that section rather
