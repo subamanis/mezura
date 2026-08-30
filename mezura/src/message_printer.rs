@@ -918,8 +918,8 @@ pub const SHOW_LANGUAGES_HELP  :  &str =
     there teaches mezura another language.
 
     A name on the list that cannot count anything is reported under it: two files declaring one
-    language, and a language whose every extension was given to another one by
-    'language_conflicts.txt', which is the file to reorder to hand one back.
+    language, and a language whose every extension is held by another one, which a line in
+    'language_conflicts.txt' hands back.
 
 ";
 pub const SHOW_CONFIGS_HELP  :  &str =

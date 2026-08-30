@@ -164,16 +164,7 @@ configurations from '{}' and not from the usual place.", crate::paths::DATA_DIR_
         }
     }
 
-    let (conflict_rules, faulty_conflict_lines) = read_conflict_rules();
-    if !faulty_conflict_lines.is_empty() {
-        eprintln!("\n{}", crate::message_printer::wrap_message(
-                &format!("Lines that could not be read in '{LANGUAGE_CONFLICTS_FILE_NAME}', and were skipped:\n{}",
-                faulty_conflict_lines.join("\n"))).yellow());
-        for line in &faulty_conflict_lines {
-            crate::warning_collector::keep(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::ConflictLineSkipped, line,
-                    format!("'{line}' could not be read in '{LANGUAGE_CONFLICTS_FILE_NAME}' and was skipped, so any contest it was meant to settle was left to the tiebreak.")));
-        }
-    }
+    let conflict_rules = read_conflict_rules();
 
     // Above the language resolution, whose selection a document's adopted settings can change, and
     // below the conflict rules, which a side that is a revision is counted with
@@ -384,17 +375,28 @@ fn report_languages_that_lost_every_claim(lost: Vec<mezura_core::warnings::Warni
     };
 
     eprintln!("\n{}", crate::theme::get_active().warning.paint(&crate::message_printer::wrap_message(
-            &format!("{named} {} installed, and every extension and name {they}. Move a name to the front of \
-its line in '{}' to hand that extension back.", if first.is_empty() {"is"} else {"are"},
+            &format!("{named} {} installed, and every extension and name {they}. A line in '{}' hands an \
+extension back, to whichever name it puts first.", if first.is_empty() {"is"} else {"are"},
             mezura_core::LANGUAGE_CONFLICTS_FILE_NAME))));
 }
 
 // Only the file on disk is read, never the baked-in copy: that file is the one the user is meant to
 // edit, and reading a different one would make their edits look like they had no effect. Until the
 // migration pass has written it, every contested extension simply announces its tiebreak.
-fn read_conflict_rules() -> (ConflictRules, Vec<String>) {
-    mezura_core::language_file::parse_conflict_rules_file(
-            &(crate::paths::PERSISTENT_APP_PATHS.data_dir.clone() + LANGUAGE_CONFLICTS_FILE_NAME))
+fn read_conflict_rules() -> ConflictRules {
+    let (rules, faulty_lines) = mezura_core::language_file::parse_conflict_rules_file(
+            &(crate::paths::PERSISTENT_APP_PATHS.data_dir.clone() + LANGUAGE_CONFLICTS_FILE_NAME));
+    if !faulty_lines.is_empty() {
+        eprintln!("\n{}", crate::message_printer::wrap_message(
+                &format!("Lines that could not be read in '{LANGUAGE_CONFLICTS_FILE_NAME}', and were skipped:\n{}",
+                faulty_lines.join("\n"))).yellow());
+        for line in &faulty_lines {
+            crate::warning_collector::keep(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::ConflictLineSkipped, line,
+                    format!("'{line}' could not be read in '{LANGUAGE_CONFLICTS_FILE_NAME}' and was skipped, so any contest it was meant to settle was left to the tiebreak.")));
+        }
+    }
+
+    rules
 }
 
 fn open_in_browser(path: &str) {
@@ -476,7 +478,7 @@ program to read, and both of them go to the output, so only one of the two can b
                 crate::warning_collector::emit(warning);
             }
             report_languages_that_lost_every_claim(mezura_core::languages::find_languages_that_lost_every_claim(
-                    languages_available, &read_conflict_rules().0));
+                    languages_available, &read_conflict_rules()));
             Some(ExitCode::SUCCESS)
         },
         SHOW_CONFIGS => {

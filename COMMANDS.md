@@ -310,8 +310,8 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     there teaches mezura another language.
 
     A name on the list that cannot count anything is reported under it: two files declaring one
-    language, and a language whose every extension was given to another one by
-    'language_conflicts.txt', which is the file to reorder to hand one back.
+    language, and a language whose every extension is held by another one, which a line in
+    'language_conflicts.txt' hands back.
 ```
 
 ## How the report looks
