@@ -476,7 +476,6 @@ fn create_total_object(total: &Stats, keywords_counted: bool, model: CountingMod
         format!("\"comments\":{}", total.calculate_comment_lines(model)),
         format!("\"{}\":{}", model.get_third_quantity_name(), total.calculate_extra_lines(model)),
         format!("\"bytes\":{}", total.bytes),
-        format!("\"average_bytes\":{}", total.calculate_average_size()),
         format!("\"classes\":{}", create_classes_object(&total.classes)),
     ];
     // Every language of the run added up, which is the only place the figure survives '--top': the
@@ -577,7 +576,6 @@ fn create_language_object(name: &str, info: &Stats, keywords_counted: bool, nest
         format!("\"comments\":{}", info.calculate_comment_lines(model)),
         format!("\"{}\":{}", model.get_third_quantity_name(), info.calculate_extra_lines(model)),
         format!("\"bytes\":{}", info.bytes),
-        format!("\"average_bytes\":{}", info.calculate_average_size()),
         format!("\"classes\":{}", create_classes_object(&info.classes)),
     ];
     // Absent when they were not counted, since '--hide keywords' also stops the counting. An empty
@@ -766,7 +764,6 @@ mod tests {
         assert!(document.contains("\"mezura_version\":\"3.0.0\""));
         assert!(document.contains("\"generated_at\":\"2026-07-30T14:22:07+03:00\""));
         assert!(document.contains("\"lines\":140"));
-        assert!(document.contains("\"average_bytes\":2500"));
         assert!(document.contains("\"scan_ms\":1180"));
         // Nothing the printed output adds: no separators in the numbers, no size measurement, no
         // percentage, and no layout or theme among the settings

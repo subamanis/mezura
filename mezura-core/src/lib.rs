@@ -655,7 +655,6 @@ mod tests {
         assert_eq!(3000, total.calculate_code_lines(CountingModel::Content));
         assert_eq!(200, total.calculate_comment_lines(CountingModel::Content));
         assert_eq!(800, total.calculate_extra_lines(CountingModel::Content));
-        assert_eq!(5000, total.calculate_average_size());
         // 'classes' is declared by two of the three, so its total is 7 + 2
         assert_eq!(Some(&9), total.keyword_occurences.get("classes"));
         assert_eq!(Some(&5), total.keyword_occurences.get("structs"));

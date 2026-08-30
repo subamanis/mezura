@@ -344,17 +344,17 @@ pub const HIDE_HELP  :  &str =
       nested-languages  the rows that break a container file down, so a '.vue' weighs whole on
                       the Vue row with no sign of the TypeScript and CSS inside it
       overview        the whole percentages section
-      bar             only the [-|||-] bar of the overview, keeping the percentages and the colors
+      bar             only the [|||] bar of the overview, keeping the percentages and the colors
       history         the comparison with previous runs (the same as '--compare 0')
       timing          the execution time line at the bottom
       files           the files column of the details rows
       comments        the comments column of the details rows
       extra           the third column of the details rows, which is what '--counting content'
-                      leaves after code and comments
+                      leaves after code and comments. The 'list' layout does not print it at
+                      all, so there it hides nothing
       blanks          the same column under '--counting region'. Each word belongs to one model,
                       so naming the other one's hides nothing and says so
-      size            the size column of the details rows, and the size half of the 'list'
-                      layout's files line
+      size            the size column of the details rows, and the size that closes a 'list' row
       percentages     every percentage of the details rows, keeping the numbers they describe
 
     The column names reach every layout except 'matrix', whose three rows stay whole. Hiding the
@@ -478,9 +478,10 @@ pub const LAYOUT_HELP  :  &str =
       boxed     the same figures inside a drawn frame. Each number shares a cell with its
                 percentage, which makes it narrower than 'table'. Needs a terminal that can
                 draw box characters.
-      list      one block of three rows per language: the file count and the size above the
-                name, the line breakdown beside it, the keywords below. Wider, and it cannot
-                be read down a column, but it reads well for a handful of languages.
+      list      one row per language, reading left to right: the file count, the line count,
+                then how the lines split, with the size after a '|' at the end. The keywords
+                hang under it. It cannot be read down a column, and it leaves out the third
+                quantity that the two tables carry.
       matrix    languages down, modules across, one number per cell, so a row says how the
                 modules compare on the same language. That one number is whatever '--sort'
                 is ordering by, named in a line above the table, and a dash is a language
@@ -488,7 +489,8 @@ pub const LAYOUT_HELP  :  &str =
                 so it says so and prints 'table' instead.
 
     The percentage beside 'Files' and 'Lines' is the language's share of the whole scan. The one
-    beside 'Code' and 'Comments' is its share of that language's own lines.
+    beside 'Code' and 'Comments' is its share of that language's own lines. A percentage that comes
+    out zero is left out, since the count next to it is already a zero.
 
     In the two tables the keywords cannot be a column without destroying the alignment, so they
     are printed as their own block underneath, one line per language. '--hide keywords' still
@@ -673,10 +675,10 @@ pub const STYLE_HELP  :  &str =
 
       files-number  files-label             comments-number  comments-label
       lines-number  lines-label             total-size-number  total-size-label
-      code-number  code-label               avg-size-number  avg-size-label
-      extra-number  extra-label             keyword-number  keyword-label
+      code-number  code-label               keyword-number  keyword-label
+      extra-number  extra-label
 
-      size-unit                the 'KB' of '430.5 KB total', one token for both sizes
+      size-unit                the 'KB' of '430.5 KB'
 
     The \"history\" section counts the same quantities and takes the same tokens. The unit is kept
     apart from the labels so it can stay quiet while 'Size' reads like any column header.
@@ -703,7 +705,7 @@ pub const STYLE_HELP  :  &str =
       separator-total          the line above the total
       percent                  the percentages of the details rows
       sort-marker              the arrow beside the title of the column '--sort' ordered by
-      arrow                    the '->' after a language name, in the 'list' layout only
+      arrow                    the '->' and the '|' of a 'list' row, in that layout only
 
     The rows hanging under a language, one token per column, twice over: 'nested-' for the
     sections inside a container file, 'file-' for the rows of a '--by-file' run:
@@ -1327,8 +1329,9 @@ pub fn print_changelog(full: bool) {
 pub fn print_existing_themes(bar_thickness: BarThickness, layout: Layout, counting: CountingModel) {
     // Five entries, so that every language slot including the fold gets to show itself. The
     // verticals add up to the width of a real bar.
+    // The cells add up to NUM_OF_VERTICALS, so a theme is judged on a bar of the length a run draws
     const MOCK_PERCENTAGES : [(&str, f64, usize); 5] =
-            [("first", 40.0, 20), ("second", 26.0, 13), ("third", 16.0, 8), ("fourth", 10.0, 5), ("others", 8.0, 4)];
+            [("first", 40.0, 18), ("second", 26.0, 12), ("third", 16.0, 7), ("fourth", 10.0, 5), ("others", 8.0, 4)];
     const INDENT : &str = "     ";
     // Puts the bar under the first percentage, past the width of the "Lines:" label and its gap
     const BAR_INDENT : usize = 9;
@@ -1370,12 +1373,13 @@ pub fn print_existing_themes(bar_thickness: BarThickness, layout: Layout, counti
         msg.push_str(&format!("{INDENT}{}   ", theme.overview_label.paint("Lines:")));
         let slots = theme.get_language_slots();
         for (i, (lang, percentage, _)) in MOCK_PERCENTAGES.iter().enumerate() {
-            msg.push_str(&format!("{} {}", theme.overview_percent.paint(&format!("{percentage:>5.2}%")), slots[i].paint(lang)));
-            if i < MOCK_PERCENTAGES.len()-1 {msg.push_str(" - ")}
+            let text = crate::number_formatter::get_active().percent(*percentage) + "%";
+            msg.push_str(&format!("{:>5} {}", theme.overview_percent.paint(&text), slots[i].paint(lang)));
+            if i < MOCK_PERCENTAGES.len()-1 {msg.push_str("   ")}
         }
 
-        // On its own line: five language slots plus a fifty cell bar do not fit next to each other
-        msg.push_str(&format!("\n{INDENT}{}{}", " ".repeat(BAR_INDENT), theme.bar_frame.paint("[-")));
+        // On its own line: five language slots plus the bar do not fit next to each other
+        msg.push_str(&format!("\n{INDENT}{}{}", " ".repeat(BAR_INDENT), theme.bar_frame.paint("[")));
         for (i, (_, _, verticals)) in MOCK_PERCENTAGES.iter().enumerate() {
             let cell = bar_thickness.get_character().repeat(*verticals);
             msg.push_str(&match slots[i].get_color() {
@@ -1383,7 +1387,7 @@ pub fn print_existing_themes(bar_thickness: BarThickness, layout: Layout, counti
                 None => cell
             });
         }
-        msg.push_str(&format!("{}\n", theme.bar_frame.paint("-]")));
+        msg.push_str(&format!("{}\n", theme.bar_frame.paint("]")));
     }
 
     println!("{msg}");

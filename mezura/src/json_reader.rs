@@ -205,9 +205,9 @@ pub(crate) fn parse_scope(scope: &Map<String, Value>) -> Result<(Scope, Vec<Targ
     }, parse_targets(read_list(scope, "targets", "scope")?)?))
 }
 
-// 'code', 'comments', 'extra' and 'average_bytes' are written and not read: all four are worked out
-// from the counts beside them, and the first two are the writer's counting model showing, while
-// this run folds the classes with its own.
+// 'code', 'comments' and 'extra' are written and not read: all three are worked out from the counts
+// beside them, and the first two are the writer's counting model showing, while this run folds the
+// classes with its own.
 pub(crate) fn parse_stats(entry: &Map<String, Value>, at: &str) -> Result<Stats, DocumentError> {
     let keywords = match entry.get("keywords") {
         Some(x) => parse_keywords(read_object(x, &join_location(at, "keywords"))?, &join_location(at, "keywords"))?,

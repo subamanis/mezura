@@ -736,12 +736,6 @@ impl Stats {
                 .saturating_sub(self.calculate_comment_lines(model))
     }
 
-    /// The average file size in whole bytes, and zero rather than a division by zero when nothing
-    /// was counted.
-    pub fn calculate_average_size(&self) -> usize {
-        self.bytes.checked_div(self.files).unwrap_or(0)
-    }
-
     pub(crate) fn add_file(&mut self, stats: &FileStats, bytes: usize, keywords: &[Keyword]) {
         // The walk counts a line and then sorts it into exactly one class, so the two have to
         // agree, and this is the only door a counted file comes through. Not on 'add' below, which
@@ -903,9 +897,4 @@ mod tests {
         assert_eq!(Some("\\".to_owned()), language("\\").line_continuation.map(|x| x.symbol));
     }
 
-    #[test]
-    fn an_average_size_over_no_files_is_zero_rather_than_a_division_by_zero() {
-        assert_eq!(0, Stats::default().calculate_average_size());
-        assert_eq!(250, Stats::new(4, 1000, 0, LineClasses::default(), HashMap::new()).calculate_average_size());
-    }
 }

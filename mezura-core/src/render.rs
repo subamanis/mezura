@@ -176,16 +176,23 @@ impl NumberFormat {
         (self.integer(bytes), "B")
     }
 
-    /// A percentage to two decimals, and `<0.01` for a share that is present but would round to
-    /// `0.00` and read as absent.
+    /// A percentage: no decimals at a whole hundred, one from ten up, two below it, and `<0.01` for
+    /// a share that is present but would round to `0.00`.
     // The comparison is on the formatted text rather than on the number, which keeps the rule
     // independent of how the formatter rounds a halfway value.
     pub fn percent(&self, value: f64) -> String {
-        let text = format!("{value:.2}");
-        self.with_decimal_mark(&if value > 0.0 && text == "0.00" {"<0.01".to_owned()} else {text})
+        if value == 0.0 {
+            return "0".to_owned();
+        }
+        let text = if value >= 100.0 {format!("{value:.0}")}
+                else if value >= 10.0 {format!("{value:.1}")}
+                else {format!("{value:.2}")};
+
+        self.with_decimal_mark(&if text == "0.00" {"<0.01".to_owned()} else {text})
     }
 
-    /// The same, carrying the direction: what a comparison against an earlier run prints.
+    /// The same, carrying the direction: what a comparison against an earlier run prints. Two
+    /// decimals throughout, where a share above drops to one.
     pub fn signed_percent(&self, value: f64) -> String {
         let magnitude = value.abs();
         let sign = if value > 0.0 {"+"} else if value < 0.0 {"-"} else {""};
@@ -321,7 +328,7 @@ mod tests {
 
         // One that really is absent stays a flat zero and keeps no cell
         let shares = calculate_percentages_of_their_own_sum(&[500_000, 299_997, 0]);
-        assert_eq!("0.00", format.percent(shares[2]));
+        assert_eq!("0", format.percent(shares[2]));
         assert_eq!(0, apportion(&shares, BAR)[2]);
 
         // The figure a caller reads is the true share and not a marker standing in for it
@@ -339,20 +346,20 @@ mod tests {
         assert_eq!(vec![0.0, 0.0], calculate_percentages_of_a_given_total(&[0, 0], 0));
     }
 
-    // A report pads every percentage into a five column field, so '<0.01' has to fit in it. 100.00
-    // is the one value that does not, which is why such padding saturates.
+    // A report pads every percentage into a five column field, and '<0.01' is the widest that goes
+    // in it.
     #[test]
-    fn every_percentage_but_a_full_hundred_fits_a_five_column_field() {
+    fn every_percentage_fits_a_five_column_field() {
         let format = NumberFormat::default();
-        assert_eq!("0.00", format.percent(0.0));
+        assert_eq!("0", format.percent(0.0));
         assert_eq!("0.01", format.percent(0.01));
-        assert_eq!("12.35", format.percent(12.345));
-        assert_eq!("100.00", format.percent(100.0));
+        assert_eq!("9.99", format.percent(9.994));
+        assert_eq!("12.3", format.percent(12.345));
+        assert_eq!("100", format.percent(100.0));
 
-        for value in [0.0, 0.000375, 0.01, 9.9, 99.99] {
+        for value in [0.0, 0.000375, 0.01, 9.9, 99.99, 100.0] {
             assert!(format.percent(value).len() <= 5, "'{}' does not fit the column", format.percent(value));
         }
-        assert_eq!(6, format.percent(100.0).len());
     }
 
     // The boundary belongs to the larger unit: a thousand bytes is one KB.
@@ -392,7 +399,7 @@ mod tests {
         let european = NumberFormat::new(Some('.'), ',');
         assert_eq!("1.234.567", european.integer(1234567));
         assert_eq!("1.234,5", european.grouped("1234.5"));
-        assert_eq!("12,35", european.percent(12.345));
+        assert_eq!("12,3", european.percent(12.345));
 
         // The unit boundaries are the test above; here only that the mark reaches a size too
         assert_eq!(("2,4".to_owned(), "MB"), european.size_with_unit(2_417_403));

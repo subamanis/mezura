@@ -127,9 +127,9 @@ New commands:
   -> --progress-bar smooth|blocky|hash : chooses the characters the live bar is drawn with. "hash"
       is plain ASCII, for a terminal that draws the block characters wrongly or not at all.
   -> --layout table|boxed|list|matrix : chooses the shape of the "details" section. "boxed" is the
-      table inside a drawn frame, "list" is the block of three rows per language that older
-      versions printed, and "matrix" puts the languages down and the modules across, one number
-      per cell.
+      table inside a drawn frame, "list" is one row per language with the size after a "|", the
+      shape older versions printed, and "matrix" puts the languages down and the modules across,
+      one number per cell.
   -> --output text|json : "json" replaces the whole printed report with one JSON document, so a run
       can be read by another program. Counts go in as plain numbers, with no separators and no
       percentages, and warnings are carried under "warnings", each with a code, a subject, a
@@ -297,8 +297,8 @@ Other:
   -> A name that does not exist now says what it is close to, instead of only that it is wrong.
       This covers an unrecognised command, a theme, a configuration and the names given to
       "--languages". When nothing is close, it points at the command that lists what exists.
-  -> Updated default styling. The "list" layout was rebuilt too: each language is a block of three
-      rows.
+  -> Updated default styling. The "list" layout was rebuilt too: one row per language, reading
+      left to right, with the size after a "|" at the end.
   -> Sizes are written "B", "KB", "MB" and "GB" instead of "Bytes", "KBs", "MBs" and "GBs", a whole
       number of bytes is printed without a decimal, and a gigabyte and above is reported in GB.
   -> Every message the program prints now wraps to the width of the report, breaking between words

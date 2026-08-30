@@ -21,7 +21,6 @@ const SUB_ROW_TEAL: Color = Color::TrueColor { r: 93, g: 135, b: 134 };
 const SUB_ROW_TEAL_BRIGHT: Color = Color::TrueColor { r: 112, g: 153, b: 152 };
 const SUB_ROW_TEAL_FAINT: Color = Color::TrueColor { r: 85, g: 102, b: 102 };
 const FILE_ROW_GREY: Color = Color::TrueColor { r: 122, g: 122, b: 122 };
-const KEYWORD_GREY: Color = Color::TrueColor { r: 181, g: 181, b: 181 };
 
 static ACTIVE_THEME: OnceLock<Theme> = OnceLock::new();
 static DEFAULT_THEME: LazyLock<Theme> = LazyLock::new(Theme::default);
@@ -236,6 +235,11 @@ macro_rules! theme_tokens {
                 &[$($name,)+]
             }
 
+            #[cfg(test)]
+            pub fn find_all_tokens(&self) -> Vec<(&'static str, String)> {
+                vec![$(($name, self.$field.to_config_string())),+]
+            }
+
             pub fn find_non_default_tokens(&self) -> Vec<(&'static str, String)> {
                 let defaults = Theme::default();
                 let mut entries = Vec::new();
@@ -275,12 +279,8 @@ theme_tokens! {
     extra_label       => "extra-label",       Style::of(LABEL_GOLD).italic();
     total_size_number => "total-size-number", Style::plain();
     total_size_label  => "total-size-label",  Style::of(LABEL_GOLD).italic();
-    avg_size_number   => "avg-size-number",   Style::plain();
-    avg_size_label    => "avg-size-label",    Style::of(LABEL_GOLD).italic();
-    // One token for both the total and the average, since there is no reason to want KB in one
-    // color next to KB in another
     size_unit         => "size-unit",         Style::of(SIZE_GOLD);
-    keyword_number    => "keyword-number",    Style::of(KEYWORD_GREY);
+    keyword_number    => "keyword-number",    Style::of(FAINTER);
     keyword_label     => "keyword-label",     Style::plain().dim();
 
     details_language_header => "details-language-header", Style::of(LABEL_GOLD).italic();

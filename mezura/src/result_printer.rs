@@ -39,11 +39,16 @@ const MATRIX_METRICS : [&str; 3] = ["files", "lines", "code"];
 // the language marks with a dash. Blanking the other two keeps a sparse matrix free of punctuation.
 const MATRIX_LINES_ROW : usize = 1;
 
-// Kept on both sides of the arrow, so the longest language name still has room around it
-const NAME_GAP : usize = 3;
+// Kept on both sides of the arrow, and before the size that closes the row
+const NAME_GAP : usize = 2;
+
+// Named, because the keywords row is indented past them by arithmetic and not by rendering a row
+const FILES_WORD : &str = "files";
+const ARROW : &str = "->";
+const SIZE_DIVIDER : &str = "|";
 
 // The cells of the overview's bar, shared out between the languages in it
-const NUM_OF_VERTICALS : usize = 50;
+const NUM_OF_VERTICALS : usize = 46;
 
 // How many languages the overview names before folding the rest into OTHERS_NAME
 const OVERVIEW_LANGUAGES : usize = 3;
@@ -185,9 +190,9 @@ pub fn create_theme_sample_rows(theme: &Theme, layout: Layout, model: CountingMo
         Layout::List => {
             let columns = Columns::of(&groups, &total, no_hides, model);
             let width = columns.width(theme);
-            vec![columns.format_files_row(theme, FILES, &format_size(theme, BYTES, BYTES / FILES), width),
-                 columns.format_breakdown_row(theme, &theme.details_language_name.paint(NAME).to_string(),
-                        NAME.len(), lines, code, comments),
+            let row = columns.format_breakdown_row(theme, &theme.details_language_name.paint(NAME).to_string(),
+                    NAME.len(), FILES, lines, code, comments);
+            vec![columns.append_size(&theme.arrow, &row, &format_size(theme, BYTES), width),
                  get_keywords_as_str(theme, &keywords, None, columns.calculate_words_start(), width)]
         }
     }
@@ -742,12 +747,8 @@ fn format_table_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
 
     fn format_row_of(theme: &Theme, name: &str, figures: &RowFigures) -> Vec<String>
     {
-        fn format_percent_cell(value: f64) -> String {
-            format_percent_text(value) + "%"
-        }
-
         fn format_share(part: usize, whole: usize) -> String {
-            format_percent_cell(if whole == 0 {0.0} else {part as f64 / whole as f64 * 100.0})
+            format_percent_or_blank(if whole == 0 {0.0} else {part as f64 / whole as f64 * 100.0})
         }
 
         let RowFigures { files, lines, code, comments, bytes, against_files, against_lines } = *figures;
@@ -756,8 +757,8 @@ fn format_table_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
         vec![name.to_owned(),
          format_with_separators(files), format_share(files, against_files),
          format_with_separators(lines), format_share(lines, against_lines),
-         format_with_separators(code), format_percent_cell(code_percentage),
-         format_with_separators(comments), format_percent_cell(comment_percentage),
+         format_with_separators(code), format_percent_or_blank(code_percentage),
+         format_with_separators(comments), format_percent_or_blank(comment_percentage),
          format_with_separators(lines - code - comments),
          size + " " + &theme.size_unit.paint(unit).to_string()]
     }
@@ -1528,7 +1529,7 @@ fn format_boxed_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
     fn format_row_of(theme: &Theme, name: &str, figures: &RowFigures) -> (String, Vec<BoxedCell>)
     {
         fn format_share(part: usize, whole: usize) -> String {
-            format_percent_text(if whole == 0 {0.0} else {part as f64 / whole as f64 * 100.0}) + "%"
+            format_percent_or_blank(if whole == 0 {0.0} else {part as f64 / whole as f64 * 100.0})
         }
         fn create_cell(number: String, slot: String) -> BoxedCell {
             BoxedCell { number, slot }
@@ -1540,8 +1541,8 @@ fn format_boxed_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
         (name.to_owned(), vec![
             create_cell(format_with_separators(files), format_share(files, against_files)),
             create_cell(format_with_separators(lines), format_share(lines, against_lines)),
-            create_cell(format_with_separators(code), format_percent_text(code_percentage) + "%"),
-            create_cell(format_with_separators(comments), format_percent_text(comment_percentage) + "%"),
+            create_cell(format_with_separators(code), format_percent_or_blank(code_percentage)),
+            create_cell(format_with_separators(comments), format_percent_or_blank(comment_percentage)),
             create_cell(format_with_separators(lines - code - comments), String::new()),
             create_cell(size + " " + &theme.size_unit.paint(unit).to_string(), String::new())])
     }
@@ -1751,13 +1752,10 @@ fn format_individual_lines(theme: &Theme, groups: &[Group], columns: &Columns, b
         if grouped {
             let name = group.get_displayed_name();
             let stats = group.total;
-            if columns.prints_files_row() {
-                lines.push(columns.format_files_row(theme, stats.files,
-                        &format_size(theme, stats.bytes, stats.calculate_average_size()), block_width));
-            }
-            lines.push(columns.format_breakdown_row(theme, &theme.details_module.paint(name).to_string(),
-                    calculate_widest_visible_line(name), stats.lines,
-                    stats.calculate_code_lines(columns.model), stats.calculate_comment_lines(columns.model)));
+            let row = columns.format_breakdown_row(theme, &theme.details_module.paint(name).to_string(),
+                    calculate_widest_visible_line(name), stats.files, stats.lines,
+                    stats.calculate_code_lines(columns.model), stats.calculate_comment_lines(columns.model));
+            lines.push(columns.append_size(&theme.arrow, &row, &format_size(theme, stats.bytes), block_width));
         }
 
         for (i, lang_name) in group.languages.iter().enumerate() {
@@ -1766,15 +1764,11 @@ fn format_individual_lines(theme: &Theme, groups: &[Group], columns: &Columns, b
                 lines.push(String::new());
             }
 
-            if columns.prints_files_row() {
-                lines.push(columns.format_files_row(theme, content_info.files,
-                        &format_size(theme, content_info.bytes, content_info.calculate_average_size()), block_width));
-            }
-            lines.push(columns.format_breakdown_row(theme, &(indent.to_owned() + &theme.details_language_name.paint(lang_name).to_string()),
-                    calculate_widest_visible_line(lang_name) + indent.len(), content_info.lines,
+            let row = columns.format_breakdown_row(theme, &(indent.to_owned() + &theme.details_language_name.paint(lang_name).to_string()),
+                    calculate_widest_visible_line(lang_name) + indent.len(), content_info.files, content_info.lines,
                     content_info.calculate_code_lines(columns.model),
-                    content_info.calculate_comment_lines(columns.model)));
-            // No files row: the count and the average size above describe whole files
+                    content_info.calculate_comment_lines(columns.model));
+            lines.push(columns.append_size(&theme.arrow, &row, &format_size(theme, content_info.bytes), block_width));
             let sections = find_sections_of(group, lang_name, content_info);
             let of_language = group.files.get(lang_name.as_str());
             let files = of_language.map(|rows| rows.shown.as_slice()).unwrap_or_default();
@@ -1788,11 +1782,13 @@ fn format_individual_lines(theme: &Theme, groups: &[Group], columns: &Columns, b
                 let styles = SubRowStyles::of(theme, if of_a_file {RowKind::File} else {RowKind::Nested});
                 let name = format!("{indent}{BRANCH_INDENT}{}{}", styles.branch.paint(branch),
                         styles.name.paint(branch_name));
-                lines.push(columns.format_nested_row(theme, &styles, &name,
+                let row = columns.format_nested_row(theme, &styles, &name,
                         indent.len() + BRANCH_INDENT.len() + calculate_widest_visible_line(branch)
                                 + calculate_widest_visible_line(branch_name),
-                        stats.lines, stats.calculate_code_lines(columns.model),
-                        stats.calculate_comment_lines(columns.model)));
+                        if of_a_file {None} else {Some(stats.files)}, stats.lines,
+                        stats.calculate_code_lines(columns.model),
+                        stats.calculate_comment_lines(columns.model));
+                lines.push(columns.append_size(styles.branch, &row, &format_sub_row_size(&styles, stats.bytes), block_width));
             }
             if should_print_keywords {
                 let keywords = get_keywords_as_str(theme, &content_info.keyword_occurences, None, columns.calculate_words_start(), block_width);
@@ -1810,10 +1806,11 @@ fn format_individual_lines(theme: &Theme, groups: &[Group], columns: &Columns, b
 // same place.
 struct Columns {
     name: usize,
-    headline: usize,
+    files: usize,
+    lines: usize,
+    size: usize,
     code: usize,
     comments: usize,
-    extra: usize,
     // The percentages sit inside brackets in the middle of a row, so a row whose share reaches two
     // digits pushes everything after it one to the right unless they are all drawn the same width
     percent: usize,
@@ -1828,22 +1825,13 @@ impl Columns {
     {
         let grouped = is_grouped(groups);
         let indent = if grouped {LIST_INDENT.len()} else {0};
-        let len_of = |value: usize| format_with_separators(value).len();
-        let percent_len_of = |stats: &Stats| {
-            let (code, comments) = calculate_code_and_comment_percentages(stats.lines,
-                    stats.calculate_code_lines(model), stats.calculate_comment_lines(model));
-            (format_percent_text(code).len() + 1).max(format_percent_text(comments).len() + 1)
-        };
         let mut columns = Columns {
             name: TOTAL_NAME.len(),
-            headline: len_of(total.files).max(len_of(total.lines)),
-            code: len_of(total.calculate_code_lines(model)),
-            comments: len_of(total.calculate_comment_lines(model)),
-            extra: len_of(total.calculate_extra_lines(model)),
-            percent: percent_len_of(total),
+            files: 0, lines: 0, size: 0, code: 0, comments: 0, percent: 0,
             hidden,
             model
         };
+        columns.measure(total);
 
         // The total holds the largest of every column, except when --top hid the language that made
         // it so, which is why the shown ones are measured too instead of assumed smaller
@@ -1852,28 +1840,24 @@ impl Columns {
             // the column it sits in makes the padding of its row a subtraction below zero.
             if grouped {
                 columns.name = columns.name.max(calculate_widest_visible_line(group.get_displayed_name()));
+                columns.measure(group.total);
             }
             for name in &group.languages {
                 let content_info = group.per_language.get(name).unwrap();
                 columns.name = columns.name.max(calculate_widest_visible_line(name) + indent);
-                columns.headline = columns.headline.max(len_of(group.per_language.get(name).unwrap().files))
-                        .max(len_of(content_info.lines));
-                columns.code = columns.code.max(len_of(content_info.calculate_code_lines(model)));
-                columns.comments = columns.comments.max(len_of(content_info.calculate_comment_lines(model)));
-                columns.extra = columns.extra.max(len_of(content_info.calculate_extra_lines(model)));
-                columns.percent = columns.percent.max(percent_len_of(content_info));
+                columns.measure(content_info);
                 // The markers are measured and not assumed, so changing one cannot leave this column
                 // a character short of what gets drawn in it.
                 let under = indent + BRANCH_INDENT.len();
                 let branch = under + calculate_widest_visible_line(find_branch_marker(false));
                 for (nested, stats) in find_sections_of(group, name, content_info) {
                     columns.name = columns.name.max(calculate_widest_visible_line(&nested) + branch);
-                    columns.percent = columns.percent.max(percent_len_of(&stats));
+                    columns.measure(&stats);
                 }
                 let file_branch = under + calculate_widest_visible_line(find_file_branch_marker(false));
                 for (path, file) in group.files.get(name.as_str()).map(|rows| rows.shown.as_slice()).unwrap_or_default() {
                     columns.name = columns.name.max(calculate_widest_visible_line(path) + file_branch);
-                    columns.percent = columns.percent.max(percent_len_of(&file.stats));
+                    columns.measure(&file.stats);
                 }
             }
         }
@@ -1881,14 +1865,41 @@ impl Columns {
         columns
     }
 
-    // Where the file count and the line count both end
-    fn calculate_headline_end(&self) -> usize {
-        self.name + 2 * NAME_GAP + 2 + self.headline
+    fn measure(&mut self, stats: &Stats) {
+        let len_of = |value: usize| format_with_separators(value).len();
+        let (code, comments) = calculate_code_and_comment_percentages(stats.lines,
+                stats.calculate_code_lines(self.model), stats.calculate_comment_lines(self.model));
+        self.files = self.files.max(len_of(stats.files));
+        self.lines = self.lines.max(len_of(stats.lines));
+        self.size = self.size.max(calculate_size_text_width(stats.bytes));
+        self.code = self.code.max(len_of(stats.calculate_code_lines(self.model)));
+        self.comments = self.comments.max(len_of(stats.calculate_comment_lines(self.model)));
+        self.percent = self.percent.max(format_percent_text(code).len() + 1)
+                .max(format_percent_text(comments).len() + 1);
     }
 
-    // Where the words 'files' and 'lines' start, and with them the keywords row
+    fn format_files_cell(&self, number: &ColoredString, label: &ColoredString) -> String {
+        if self.hidden.files {
+            return String::new();
+        }
+
+        format!("{:>files_w$} {}{}", number, label, " ".repeat(NAME_GAP), files_w = self.files)
+    }
+
+    // A row for one file always counts one, so the cell keeps its width and nothing else
+    fn format_blank_files_cell(&self) -> String {
+        if self.hidden.files {
+            return String::new();
+        }
+
+        " ".repeat(self.files + 1 + FILES_WORD.len() + NAME_GAP)
+    }
+
+    // Where the word 'lines' starts, and with it the keywords row
     fn calculate_words_start(&self) -> usize {
-        self.calculate_headline_end() + 1
+        let files_part = if self.hidden.files {0} else {self.files + FILES_WORD.len() + 1 + NAME_GAP};
+
+        self.name + NAME_GAP + files_part + ARROW.len() + NAME_GAP + self.lines + 1
     }
 
     // Padded outside the paint, since a style with a background would otherwise colour the spaces,
@@ -1896,6 +1907,10 @@ impl Columns {
     fn format_percent_cell(&self, value: f64, style: &super::theme::Style) -> String {
         if self.hidden.percentages {
             return String::new();
+        }
+        // The width stays, or the rest of the row steps left on the languages that have none
+        if value == 0.0 {
+            return " ".repeat(self.percent + 3);
         }
         let text = format_percent_text(value) + "%";
 
@@ -1905,7 +1920,8 @@ impl Columns {
     // The theme arrives as an argument and is not read from 'super::theme::get_active()':
     // '--show-themes' renders one sample per theme it found, in a single run, through these same
     // functions.
-    fn format_breakdown_row(&self, theme: &Theme, painted_name: &str, name_len: usize, lines: usize, code_lines: usize, comment_lines: usize) -> String {
+    fn format_breakdown_row(&self, theme: &Theme, painted_name: &str, name_len: usize, files: usize,
+            lines: usize, code_lines: usize, comment_lines: usize) -> String {
         let (code_percentage, comment_percentage) = calculate_code_and_comment_percentages(lines,code_lines, comment_lines);
         let percent = |value: f64| self.format_percent_cell(value, &theme.percent);
         let mut terms = vec![format!("{:>code_w$} {}{}",
@@ -1916,22 +1932,20 @@ impl Columns {
                     theme.comments_number.paint(&format_with_separators(comment_lines)),
                     theme.comments_label.paint("comments"), percent(comment_percentage), comments_w = self.comments));
         }
-        if !self.hidden.extra {
-            terms.push(format!("{:>extra_w$} {}",
-                    theme.extra_number.paint(&format_with_separators(lines - code_lines - comment_lines)),
-                    theme.extra_label.paint(self.model.get_third_quantity_name()), extra_w = self.extra));
-        }
-        format!("{}{}{}{}{:>headline_w$} {} {{ {} }}",
-                painted_name, " ".repeat(self.name - name_len + NAME_GAP), theme.arrow.paint("->"), " ".repeat(NAME_GAP),
+        format!("{}{}{}{}{}{:>lines_w$} {}  {}",
+                painted_name, " ".repeat(self.name - name_len + NAME_GAP),
+                self.format_files_cell(&theme.files_number.paint(&format_with_separators(files)),
+                        &theme.files_label.paint(FILES_WORD)),
+                theme.arrow.paint(ARROW), " ".repeat(NAME_GAP),
                 theme.lines_number.paint(&format_with_separators(lines)), theme.lines_label.paint("lines"),
-                terms.join("  +  "), headline_w = self.headline)
+                terms.join(" + "), lines_w = self.lines)
     }
 
     // The words take the same tokens as they do on a language row, since they are the same words and
     // the sub-row band is a band of figures. Painting them with the figure's token puts a number's
     // weight and color on 'lines' and 'code', which no other row does.
     fn format_nested_row(&self, theme: &Theme, styles: &SubRowStyles, painted_name: &str, name_len: usize,
-            lines: usize, code_lines: usize, comment_lines: usize) -> String
+            files: Option<usize>, lines: usize, code_lines: usize, comment_lines: usize) -> String
     {
         let (code_percentage, comment_percentage) = calculate_code_and_comment_percentages(lines, code_lines, comment_lines);
         let percent = |value: f64| self.format_percent_cell(value, styles.percent);
@@ -1943,40 +1957,39 @@ impl Columns {
                     styles.comments.paint(&format_with_separators(comment_lines)),
                     theme.comments_label.paint("comments"), percent(comment_percentage), comments_w = self.comments));
         }
-        if !self.hidden.extra {
-            terms.push(format!("{:>extra_w$} {}",
-                    styles.extra.paint(&format_with_separators(lines - code_lines - comment_lines)),
-                    theme.extra_label.paint(self.model.get_third_quantity_name()), extra_w = self.extra));
-        }
-        format!("{}{}{}{}{:>headline_w$} {} {{ {} }}",
-                painted_name, " ".repeat(self.name - name_len + NAME_GAP), styles.branch.paint("->"), " ".repeat(NAME_GAP),
+        format!("{}{}{}{}{}{:>lines_w$} {}  {}",
+                painted_name, " ".repeat(self.name - name_len + NAME_GAP),
+                match files {
+                    Some(count) => self.format_files_cell(&styles.files.paint(&format_with_separators(count)),
+                            &theme.files_label.paint(FILES_WORD)),
+                    None => self.format_blank_files_cell()
+                },
+                styles.branch.paint(ARROW), " ".repeat(NAME_GAP),
                 styles.lines.paint(&format_with_separators(lines)), theme.lines_label.paint("lines"),
-                terms.join("  +  "), headline_w = self.headline)
+                terms.join(" + "), lines_w = self.lines)
     }
 
-    // The whole row is skipped when both halves are hidden
-    fn prints_files_row(&self) -> bool {
-        !(self.hidden.files && self.hidden.size)
-    }
-
-    // The size text ends where the row below it does
-    fn format_files_row(&self, theme: &Theme, files: usize, size_text: &str, width: usize) -> String {
-        let left = if self.hidden.files {String::new()} else {
-            format!("{}{:>headline_w$} {}", " ".repeat(self.calculate_headline_end() - self.headline),
-                    theme.files_number.paint(&format_with_separators(files)), theme.files_label.paint("files"),
-                    headline_w = self.headline)
-        };
+    // The divider takes the arrow's token, or a sub-row ends up with its two punctuation marks in
+    // two colors. The size is right aligned to the block, so the units end in one column.
+    fn append_size(&self, divider: &super::theme::Style, counted: &str, size_text: &str, width: usize) -> String {
         if self.hidden.size {
-            return left;
+            return counted.to_owned();
         }
-        let used = calculate_widest_visible_line(&left) + calculate_widest_visible_line(size_text);
+        let gap = " ".repeat(NAME_GAP);
+        let used = calculate_widest_visible_line(counted) + 2 * NAME_GAP + SIZE_DIVIDER.len()
+                + calculate_widest_visible_line(size_text);
 
-        left + &" ".repeat(width.saturating_sub(used).max(2)) + size_text
+        format!("{counted}{gap}{}{gap}{}{size_text}", divider.paint(SIZE_DIVIDER),
+                " ".repeat(width.saturating_sub(used)))
     }
 
-    // Rendered once to be measured and again to be printed: a formula would fall behind the row.
+    // The counted half is rendered once to be measured and again to be printed, since a formula
+    // would fall behind the row; the size is the widest one this run holds.
     fn width(&self, theme: &Theme) -> usize {
-        calculate_widest_visible_line(&self.format_breakdown_row(theme, "", 0, 0, 0, 0))
+        let counted = self.format_breakdown_row(theme, "", 0, 0, 0, 0, 0);
+
+        calculate_widest_visible_line(&counted)
+                + if self.hidden.size {0} else {2 * NAME_GAP + SIZE_DIVIDER.len() + self.size}
     }
 }
 
@@ -1991,13 +2004,10 @@ fn format_sum_lines(theme: &Theme, per_language: &HashMap<String,Stats>, total: 
 {
     // The separator spans the block, which every row of the details section already fits exactly
     let mut lines = vec![format!("{} ",theme.separator_total.paint(&SEPARATOR_LINE.repeat(block_width)))];
-    if columns.prints_files_row() {
-        lines.push(columns.format_files_row(theme, total.files,
-                &format_size(theme, total.bytes, total.calculate_average_size()), block_width));
-    }
-    lines.push(columns.format_breakdown_row(theme, &theme.details_total.paint(TOTAL_NAME).to_string(),
-            TOTAL_NAME.len(), total.lines, total.calculate_code_lines(columns.model),
-            total.calculate_comment_lines(columns.model)));
+    let row = columns.format_breakdown_row(theme, &theme.details_total.paint(TOTAL_NAME).to_string(),
+            TOTAL_NAME.len(), total.files, total.lines, total.calculate_code_lines(columns.model),
+            total.calculate_comment_lines(columns.model));
+    lines.push(columns.append_size(&theme.arrow, &row, &format_size(theme, total.bytes), block_width));
 
     if should_print_keywords {
         let keywords_line = get_keywords_as_str(theme, &create_keyword_sum_map(per_language), None, columns.calculate_words_start(), block_width);
@@ -2435,14 +2445,31 @@ fn calculate_widest_visible_line(text: &str) -> usize {
     text.lines().map(crate::theme::measure_columns).max().unwrap_or(0)
 }
 
-fn format_size(theme: &Theme, total_bytes: usize, average_bytes: usize) -> String {
-    let (total, total_unit) = super::number_formatter::get_active().size_with_unit(total_bytes);
-    let (average, average_unit) = super::number_formatter::get_active().size_with_unit(average_bytes);
-    format!("{} {} {} - {} {} {}",
-            theme.total_size_number.paint(&total),
-            theme.size_unit.paint(total_unit), theme.total_size_label.paint("total"),
-            theme.avg_size_number.paint(&average),
-            theme.size_unit.paint(average_unit), theme.avg_size_label.paint("average"))
+fn format_size(theme: &Theme, bytes: usize) -> String {
+    let (size, unit) = super::number_formatter::get_active().size_with_unit(bytes);
+
+    format!("{} {}", theme.total_size_number.paint(&size), theme.size_unit.paint(unit))
+}
+
+// The same text in the tokens of a row hanging under a language
+fn format_sub_row_size(styles: &SubRowStyles, bytes: usize) -> String {
+    let (size, unit) = super::number_formatter::get_active().size_with_unit(bytes);
+
+    format!("{} {}", styles.size.paint(&size), styles.size_unit.paint(unit))
+}
+
+fn calculate_size_text_width(bytes: usize) -> usize {
+    let (size, unit) = super::number_formatter::get_active().size_with_unit(bytes);
+
+    size.len() + unit.len() + 1
+}
+
+fn format_percent_or_blank(value: f64) -> String {
+    if value == 0.0 {
+        return String::new();
+    }
+
+    format_percent_text(value) + "%"
 }
 
 fn format_percent_text(value: f64) -> String {

@@ -111,6 +111,29 @@ mod tests {
                  MEZURA_UPDATE_PUBLISHED=1 cargo test -p mezura published_theme_editor");
     }
 
+    // The page carries its own copy of the style mezura ships for every token it lets somebody edit,
+    // and nothing generates it, so a token restyled in 'theme.rs' alone leaves the page lying.
+    #[test]
+    fn the_editor_page_names_the_styles_mezura_ships() {
+        let page = include_str!("../docs/theme-editor/index.html");
+        let shipped = crate::theme::Theme::default().find_all_tokens().into_iter()
+                .collect::<std::collections::HashMap<_, _>>();
+
+        // The last entry of a group carries no comma, and dropping those leaves one token of every
+        // group unchecked
+        let listed = page.lines().filter_map(|line| {
+            let entry = line.trim().trim_end_matches(',').strip_prefix("[\"")?.strip_suffix(']')?;
+            let (token, style) = entry.split_once("\",")?;
+            Some((token.to_owned(), style.trim().trim_matches('"').to_owned()))
+        }).collect::<Vec<_>>();
+
+        assert!(listed.len() > 20, "the page's list of tokens was not found, so nothing was compared");
+        for (token, style) in listed {
+            assert_eq!(shipped.get(token.as_str()), Some(&style),
+                    "the theme editor says '{token}' is '{style}', which is not what this build ships");
+        }
+    }
+
     // The test above compares the two copies of the page to each other, so a marker renamed in both
     // of them keeps it green while the editor opens with no themes to pick from. This one runs the
     // generation instead, over a themes folder of its own so nothing else in this binary can write

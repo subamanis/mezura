@@ -27,7 +27,6 @@ code-label = 7de7ff italic
 comments-label = 7de7ff italic
 extra-label = 7de7ff italic
 total-size-label = 6d9da8 italic
-avg-size-label = 6d9da8 italic
 size-unit = 6d9da8
 keyword-label = a779d9
 keyword-number = f8f8f2
