@@ -28,11 +28,11 @@ comments-label = 8ec07c italic
 extra-label = 8ec07c italic
 total-size-label = 928374 italic
 size-unit = 928374
-keyword-label = d3869b
+keyword-label = ca4d3f
 keyword-number = ebdbb2
 percent = a89984
-separator-header = 504945
-separator-total = 504945
+separator-header = ca4d3f
+separator-total = ca4d3f
 
 nested-name = bdae93 bold
 nested-branch = 7c6f64
@@ -69,7 +69,3 @@ history-modified-field = 8ec07c
 progress-bar-fill = fb4934..fabd2f
 progress-bar-empty = 3c3836
 progress-bar-figures = a89984
-
-explain-string = b8bb26
-explain-comment = a89984 italic
-explain-detail = a89984

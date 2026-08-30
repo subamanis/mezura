@@ -69,7 +69,3 @@ history-modified-field = 7de7ff
 progress-bar-fill = ff79c6..8be9fd
 progress-bar-empty = 44475a
 progress-bar-figures = 6272a4
-
-explain-string = 50fa7b
-explain-comment = 6272a4 italic
-explain-detail = 6272a4
