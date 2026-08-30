@@ -28,6 +28,8 @@ pub enum Code {
     /// A language claims no extension, no file name and no `#!` line, so no file could ever be
     /// counted as it. Nothing is lost.
     LanguageClaimsNothing,
+    /// Every extension and name a language claims went to another one, so no file can reach it.
+    LanguageLostEveryClaim,
     /// A block comment whose opening and closing symbols are the same text, which the scan cannot
     /// tell apart, so the pair never fires and its comments are counted as code.
     CommentPairNeverCloses,
@@ -62,6 +64,7 @@ impl Code {
             Self::DuplicateLanguage => "duplicate-language",
             Self::LanguageWithoutName => "language-without-name",
             Self::LanguageClaimsNothing => "language-claims-nothing",
+            Self::LanguageLostEveryClaim => "language-lost-every-claim",
             Self::CommentPairNeverCloses => "comment-pair-never-closes",
             Self::LanguageFileUnreadable => "language-file-unreadable",
             Self::ConflictLineSkipped => "conflict-line-skipped",
@@ -84,7 +87,8 @@ impl Code {
             | Self::CommentPairNeverCloses => Affects::Counts,
             Self::UnknownForcedLanguage | Self::UnknownLanguage | Self::UnknownExcludedLanguage
             | Self::UnknownModuleScope
-            | Self::LanguageClaimsNothing | Self::ConflictLineSkipped | Self::ConfigValueIgnored
+            | Self::LanguageClaimsNothing | Self::LanguageLostEveryClaim
+            | Self::ConflictLineSkipped | Self::ConfigValueIgnored
             | Self::ConfigSectionUnknown | Self::ConfigSectionRepeated
             | Self::CommandIgnored | Self::ConfigStyleInvalid
             | Self::ThemeUnavailable => Affects::Settings

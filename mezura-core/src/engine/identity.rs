@@ -192,14 +192,19 @@ pub(crate) struct LanguageLookup {
 
 impl LanguageLookup {
     pub(crate) fn of_path(&self, path: &Path) -> Option<Arc<str>> {
+        self.of_name(Path::new(path.file_name()?))
+    }
+
+    // The walk knows a name before it knows a path, and nothing below reads more than the name
+    pub(crate) fn of_name(&self, name: &Path) -> Option<Arc<str>> {
         // The whole name is asked first, and only when a language claims one, so a run whose
         // languages declare no filename pays one branch and no lookup
         if !self.by_filename.is_empty()
-                && let Some(name) = path.file_name().and_then(|x| x.to_str())
-                && let Some(language) = find_language_of_identity(&self.by_filename, name) {
+                && let Some(text) = name.to_str()
+                && let Some(language) = find_language_of_identity(&self.by_filename, text) {
             return Some(language);
         }
-        let extension = path.extension().and_then(|x| x.to_str())?;
+        let extension = name.extension().and_then(|x| x.to_str())?;
         find_language_of_identity(&self.by_extension, extension)
     }
 

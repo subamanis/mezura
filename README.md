@@ -521,11 +521,17 @@ The program is able to understand and parse correctly arbitrarily complex code s
 For example in a line like ```/*class"*/" class" aclass```, it will not count "class" as a keyword since the first is inside a comment, the second inside a string and the third has a prefix.
 Additionally:
 - It checks for escaped characters, for example ```/"``` will not be counted as a string symbol
+
 - It resolves symbols that are side by side, for example ```*/*``` is normally identified as both a closing and an opening comment symbol, but the program will understand the correct usage.
+
 - A language that writes comments in more than one way gets all of them, and each one ends only with its own closing symbol. Pascal writes ```{ }``` and ```(* *)```, D writes ```/* */``` and ```/+ +/```, and a stray ```*)``` inside a ```{ }``` comment is just text.
+
 - A comment written inside another comment does not end it early. This is how OCaml, Rust, Haskell, F#, Scala, Kotlin, Swift, Julia, Elm, Lisp, Scheme, MATLAB and WebAssembly text read their own code, so commenting out a block that already had comments in it counts as the comment it is. In C and the languages that follow it the first ```*/``` really does end the comment, and that is what the program does there.
+
 - Lua's ```--[==[``` comments are read to their real end, so a ```]]``` written inside one is text.
+
 - A comment that ends and another that begins on the same line (```]]--[[``` in Lua, ```--><!--``` in HTML) are read as two comments.
+
 - Strings are read with the same care. A quote left open by mistake costs its own line instead of everything below it, a Python docstring or a JavaScript backtick still runs for as many lines as it likes, and the raw forms that end with a different symbol than they started with, like Rust's ```r#"..."#``` or C#'s ```@"..."```, end where the language says they do even when they finish with a backslash.
 
 All of this is measured against the [LineJudge](https://loc-conformance.github.io/linejudge/) conformance suite:

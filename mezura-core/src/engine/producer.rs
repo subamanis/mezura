@@ -1,5 +1,6 @@
 use std::fs;
 use std::fs::ReadDir;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
@@ -90,7 +91,7 @@ fn search_for_files(files_injector: Arc<Injector<ParsableFile>>, dirs_injector: 
                     let gitignore_stack = GitignoreStack::extend_with_dir(&dir.path,
                             dir.gitignore_stack.clone(), crate::ObeyedIgnoreFiles::of(&config));
                     traverse_dir(&files_injector, entries, &dirs_injector, &language_lookups, &exclude_matcher, &gitignore_stack,
-                            &config, &modules, dir.module, &mut files_present, progress)
+                            &config, &modules, dir.module, &dir.path, &mut files_present, progress)
                 },
                 // Everything under it goes uncounted and reaches no total, not even the number of
                 // files looked at, and nothing else would say so. The reason travels with the path,
@@ -120,7 +121,7 @@ fn search_for_files(files_injector: Arc<Injector<ParsableFile>>, dirs_injector: 
 // only happen in a run with a target inside another target.
 fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: ReadDir, dirs_injector: &Injector<TraversedDir>,
         language_lookups: &ModuleLookups, exclude_matcher: &globset::GlobSet, gitignore_stack: &Option<Arc<GitignoreStack>>,
-        config: &EngineConfig, modules: &Modules, module: ModuleId,
+        config: &EngineConfig, modules: &Modules, module: ModuleId, dir_path: &Path,
         files_present: &mut FilesPresent, progress: &ScanProgress)
 {
     let mut local_total_files = 0;
@@ -140,17 +141,23 @@ fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: ReadDir, dirs_
             }
             if ft.is_file() {
                 local_total_files += 1;
-                let path_buf = e.path();
+                let file_name = e.file_name();
+                let name = Path::new(&file_name);
                 // Which module the file is in is settled before its language is named, and not
                 // after, because a module can be given rules of its own: a file that is a target
                 // itself, sitting inside a directory target of another module, would otherwise be
                 // identified by the rules of the module it is only passing through.
-                let module = if file_boundaries {modules.at_file(&path_buf, module)} else {module};
+                let of_module = file_boundaries.then(|| dir_path.join(&file_name));
+                let module = match &of_module {
+                    Some(path) => modules.at_file(path, module),
+                    None => module
+                };
                 let language_lookup = language_lookups.get_of_module(module);
-                let claimed = language_lookup.of_path(&path_buf);
-                if claimed.is_none() && !language_lookup.needs_a_shebang_probe(&path_buf) {
+                let claimed = language_lookup.of_name(name);
+                if claimed.is_none() && !language_lookup.needs_a_shebang_probe(name) {
                     continue;
                 }
+                let path_buf = of_module.unwrap_or_else(|| dir_path.join(&file_name));
                 // The ignore checks sit between the name lookup and the probe, so a covered file
                 // is never opened. Only a claimed file counts as excluded; an unclaimed candidate
                 // was never identified, so it stays in the uncounted remainder.
@@ -181,7 +188,7 @@ fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: ReadDir, dirs_
                 if dir_name == ".git" { continue; }
                 if !config.should_search_in_dotted && dir_name.starts_with('.') { continue; }
 
-                let pathbuf = e.path();
+                let pathbuf = dir_path.join(&file_name);
                 if !exclude_matcher.is_empty() && exclude_matcher.is_match(&pathbuf) {
                     continue;
                 }

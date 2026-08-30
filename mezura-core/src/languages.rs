@@ -479,6 +479,31 @@ that takes one and {times} languages in the report, each counting part of the fi
     }).collect()
 }
 
+/// A warning for every language whose every extension, file name and `#!` name went to another one.
+pub fn find_languages_that_lost_every_claim(languages: &[Language], conflicts: &ConflictRules) -> Vec<Warning> {
+    let by_name = keyed_by_name(languages.to_vec());
+    let (nothing_forced, no_rules) = (HashMap::new(), HashMap::new());
+    let winners = [(IdentifiedBy::Extension, &conflicts.by_extension),
+            (IdentifiedBy::Filename, &conflicts.by_filename),
+            (IdentifiedBy::Shebang, &no_rules)].into_iter()
+            .flat_map(|(identified_by, rules)|
+                    build_language_map_by(identified_by, &by_name, rules, &nothing_forced).0.into_values())
+            .collect::<HashSet<Arc<str>>>();
+
+    let mut lost = languages.iter()
+            .filter(|language| !language.extensions.is_empty() || !language.filenames.is_empty()
+                    || !language.shebangs.is_empty())
+            .filter(|language| !winners.contains(language.name.as_str()))
+            .map(|language| language.name.as_str())
+            .collect::<Vec<_>>();
+    lost.sort();
+    lost.dedup();
+
+    lost.into_iter().map(|name| Warning::new(warnings::Code::LanguageLostEveryClaim, name,
+            format!("'{name}' is installed, and every extension and name it claims belongs to another \
+language, so no file can be counted as it."))).collect()
+}
+
 // What one scope leaves in play. The ones it removes are not dropped by the caller either, because
 // a section inside a counted file may still be written in one of them.
 fn retain_languages_of_interest(languages: Vec<Language>, extensions: &HashMap<String, Arc<str>>,
@@ -552,6 +577,31 @@ mod language_selection_tests {
         // that had just worked
         assert!(find_unknown_language_names(&languages(), &["cs".to_owned(), "RS".to_owned()]).is_empty());
         assert_eq!(vec!["nosuch"], find_unknown_language_names(&languages(), &["nosuch".to_owned()]));
+    }
+
+    #[test]
+    fn a_language_that_lost_every_contest_is_named_and_one_that_kept_a_claim_is_not() {
+        let languages = languages_claiming(&[("Winner", &["x", "y"]), ("Loser", &["x"]),
+                ("Halfway", &["y", "z"]), ("Alone", &["q"])]).into_values().collect::<Vec<_>>();
+        let conflicts = ConflictRules {
+            by_extension: hashmap!("x".to_owned() => vec!["Winner".to_owned(), "Loser".to_owned()],
+                    "y".to_owned() => vec!["Winner".to_owned(), "Halfway".to_owned()]),
+            by_filename: HashMap::new()
+        };
+
+        let named = |warnings: Vec<Warning>| warnings.into_iter().map(|x| x.subject).collect::<Vec<_>>();
+        assert_eq!(vec!["Loser".to_owned()], named(find_languages_that_lost_every_claim(&languages, &conflicts)),
+                "'Halfway' kept '.z' and 'Alone' was never contested, so neither is unreachable");
+        assert_eq!(warnings::Code::LanguageLostEveryClaim,
+                find_languages_that_lost_every_claim(&languages, &conflicts)[0].code);
+
+        let handed_back = ConflictRules {
+            by_extension: hashmap!("x".to_owned() => vec!["Loser".to_owned(), "Winner".to_owned()],
+                    "y".to_owned() => vec!["Winner".to_owned(), "Halfway".to_owned()]),
+            by_filename: HashMap::new()
+        };
+        assert!(find_languages_that_lost_every_claim(&languages, &handed_back).is_empty(),
+                "'Winner' still holds '.y', so reordering '.x' leaves nobody unreachable");
     }
 
     #[test]

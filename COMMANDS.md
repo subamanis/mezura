@@ -308,6 +308,10 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
 
     Lists by name what is in the 'data/languages/' directory, and counts nothing. Adding a file
     there teaches mezura another language.
+
+    A name on the list that cannot count anything is reported under it: two files declaring one
+    language, and a language whose every extension was given to another one by
+    'language_conflicts.txt', which is the file to reorder to hand one back.
 ```
 
 ## How the report looks

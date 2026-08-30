@@ -50,6 +50,8 @@ fn add_advice_to(mut warning: Warning) -> Warning {
 '--force-language {}=<language>' decides it for this run.",
                 mezura_core::LANGUAGE_CONFLICTS_FILE_NAME, warning.subject)),
         Code::DuplicateLanguage => Some("Delete the copies you do not want from the 'languages' directory of your data directory.".to_owned()),
+        Code::LanguageLostEveryClaim => Some(format!("Move its name to the front of the line for one of \
+those extensions in '{}' to hand that one back.", mezura_core::LANGUAGE_CONFLICTS_FILE_NAME)),
         Code::UnknownForcedLanguage => Some("Run with '--show-languages' for the ones available to '--force-language'.".to_owned()),
         Code::UnknownLanguage => Some("Run with '--show-languages' for the ones available to '--languages'.".to_owned()),
         Code::UnknownExcludedLanguage =>

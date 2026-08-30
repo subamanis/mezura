@@ -371,6 +371,24 @@ fn report_unknown_languages(languages_available: &[Language], languages_of_inter
     Ok(if report.is_empty() {None} else {Some(report)})
 }
 
+fn report_languages_that_lost_every_claim(lost: Vec<mezura_core::warnings::Warning>) {
+    let names = lost.iter().map(|x| format!("'{}'", x.subject)).collect::<Vec<_>>();
+    for warning in lost {
+        crate::warning_collector::keep(warning);
+    }
+    let Some((last, first)) = names.split_last() else { return };
+    let (named, they) = match first {
+        [] => (last.clone(), "it claims belongs to another language, so no file can be counted as it"),
+        _ => (format!("{} and {last}", first.join(", ")),
+                "they claim belongs to another language, so no file can be counted as them")
+    };
+
+    eprintln!("\n{}", crate::theme::get_active().warning.paint(&crate::message_printer::wrap_message(
+            &format!("{named} {} installed, and every extension and name {they}. Move a name to the front of \
+its line in '{}' to hand that extension back.", if first.is_empty() {"is"} else {"are"},
+            mezura_core::LANGUAGE_CONFLICTS_FILE_NAME))));
+}
+
 // Only the file on disk is read, never the baked-in copy: that file is the one the user is meant to
 // edit, and reading a different one would make their edits look like they had no effect. Until the
 // migration pass has written it, every contested extension simply announces its tiebreak.
@@ -457,6 +475,8 @@ program to read, and both of them go to the output, so only one of the two can b
             for warning in mezura_core::languages::find_duplicate_names(languages_available) {
                 crate::warning_collector::emit(warning);
             }
+            report_languages_that_lost_every_claim(mezura_core::languages::find_languages_that_lost_every_claim(
+                    languages_available, &read_conflict_rules().0));
             Some(ExitCode::SUCCESS)
         },
         SHOW_CONFIGS => {
