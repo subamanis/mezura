@@ -2,7 +2,7 @@ Language
 HLSL
 
 Extensions
-hlsl hlsli fx fxh
+hlsl hlsli fx fxh cginc
 
 String symbols
 "

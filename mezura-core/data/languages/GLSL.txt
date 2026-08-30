@@ -2,7 +2,7 @@ Language
 GLSL
 
 Extensions
-glsl vert frag geom comp tesc tese
+glsl vert frag geom comp tesc tese vsh fsh
 
 String symbols
 "

@@ -4,6 +4,9 @@ Zig
 Extensions
 zig
 
+Filenames
+build.zig.zon
+
 String symbols
 "
 

@@ -2,7 +2,7 @@ Language
 Ada
 
 Extensions
-adb ads
+adb ads ada
 
 String symbols
 "

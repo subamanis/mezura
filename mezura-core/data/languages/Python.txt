@@ -2,7 +2,7 @@ Language
 Python
 
 Extensions
-py pyw pyi
+py pyw pyi gyp gypi
 
 Shebangs
 python

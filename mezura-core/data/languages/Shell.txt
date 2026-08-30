@@ -2,7 +2,7 @@ Language
 Shell
 
 Extensions
-sh bash zsh ksh
+sh bash zsh ksh bats
 
 Shebangs
 sh bash zsh ksh dash

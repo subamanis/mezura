@@ -2,7 +2,7 @@ Language
 Lisp
 
 Extensions
-lisp lsp
+lisp lsp asd
 
 String symbols
 

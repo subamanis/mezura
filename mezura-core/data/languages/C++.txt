@@ -2,7 +2,7 @@ Language
 C++
 
 Extensions
-cpp cc cxx c++
+cpp cc cxx c++ ino cppm ixx
 
 String symbols
 "

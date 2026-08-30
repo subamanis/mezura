@@ -2,7 +2,7 @@ Language
 Ruby
 
 Extensions
-rb
+rb rake gemspec podspec
 
 Filenames
 Gemfile Rakefile Vagrantfile Podfile Brewfile

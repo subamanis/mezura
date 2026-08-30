@@ -2,7 +2,7 @@ Language
 Scala
 
 Extensions
-scala
+scala sbt sc
 
 String symbols
 "

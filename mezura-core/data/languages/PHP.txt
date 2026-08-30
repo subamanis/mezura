@@ -2,7 +2,7 @@ Language
 PHP
 
 Extensions
-php
+php ctp php5
 
 Shebangs
 php

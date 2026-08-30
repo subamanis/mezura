@@ -2,7 +2,7 @@ Language
 HTML
 
 Extensions
-html htm
+html htm xhtml
 
 String symbols
 

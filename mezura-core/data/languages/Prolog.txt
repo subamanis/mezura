@@ -2,7 +2,7 @@ Language
 Prolog
 
 Extensions
-pl pro
+pl pro prolog
 
 String symbols
 ' "
