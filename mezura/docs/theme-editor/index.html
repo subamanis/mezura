@@ -118,23 +118,15 @@ let SYSTEM_THEMES = null;
 let THEMES_DIR = null;
 /*MEZURA_SYSTEM_THEMES*/
 
-// The fallback for a page opened straight from 'docs/', where no data directory was read. A theme
-// names the tokens it moves and stays silent about the rest, which is what a theme file does, so
-// these carry language colors only while '--theme-editor' hands over whatever each file declares.
+// The fallback for a page opened straight from 'docs/', where no data directory was read.
+// Publishing fills it with the themes mezura ships; this line is what the template alone opens with.
+let SHIPPED_THEMES = [{ name: "Mezura", styles: {} }];
+/*MEZURA_SHIPPED_THEMES*/
+
 function ofLanguages(one, two, three, four, others) {
   return { "language-1": one, "language-2": two, "language-3": three,
            "language-4": four, "language-others": others };
 }
-const PALETTES = [
-  { name: "Mezura",     styles: {} },
-  { name: "Dracula",    styles: ofLanguages("ff79c6", "8be9fd", "50fa7b", "bd93f9", "bd93f9") },
-  { name: "Nord",       styles: ofLanguages("88c0d0", "81a1c1", "b48ead", "d8dee9", "d8dee9") },
-  { name: "Gruvbox",    styles: ofLanguages("fb4934", "fabd2f", "b8bb26", "83a598", "83a598") },
-  { name: "Catppuccin", styles: ofLanguages("f38ba8", "fab387", "a6e3a1", "cba6f7", "cba6f7") },
-  { name: "Sunset",     styles: ofLanguages("ff5e5b", "ff9e4f", "ffd166", "b0a8b9", "b0a8b9") },
-  { name: "Neon",       styles: ofLanguages("ff2e97", "00f0ff", "f9f002", "9d72ff", "9d72ff") },
-  { name: "Ocean",      styles: ofLanguages("22d3ee", "60a5fa", "34d399", "94a3b8", "94a3b8") },
-];
 
 const NAMED_COLORS = {
   "black": "#0C0C0C", "red": "#C50F1F", "green": "#13A10E", "yellow": "#C19C00",
@@ -151,27 +143,30 @@ const NAMED_COLORS = {
 const SAMPLE = [
   [["heading","Details"],["","."]],
   [],
-  [["details-language-header","Language"],["","    "],["files-label","Files"],["","  "],["percent","%"],["","          "],["sort-marker","⌄"],[""," "],["lines-label","Lines"],["","  "],["percent","%"],["","            "],["code-label","Code"],["","  "],["percent","%"],["","         "],["comments-label","Comments"],["","  "],["percent","%"],["","         "],["extra-label","Extra"],["","       "],["total-size-label","Size"]],
-  [["separator-header","────────────────────────────────────────────────────────────────────────────────────────────────────────"]],
-  [["details-language-name","Rust"],["","           "],["files-number","56"],["","  "],["percent","63.64%"],["","      "],["lines-number","29,907"],["","  "],["percent","95.20%"],["","     "],["code-number","18,971"],["","  "],["percent","63.43%"],["","       "],["comments-number","3,800"],["","  "],["percent","12.71%"],["","    "],["extra-number","7,136"],["","     "],["total-size-number","1.5 "],["size-unit","MB"]],
-  [["details-language-name","HTML"],["","           "],["files-number","11"],["","  "],["percent","12.50%"],["","       "],["lines-number","1,285"],["","  "],["percent","4.09%"],["","         "],["code-number","929"],["","  "],["percent","72.30%"],["","          "],["comments-number","96"],["","  "],["percent","7.47%"],["","       "],["extra-number","260"],["","    "],["total-size-number","65.4 "],["size-unit","KB"]],
-  [["details-language-name","C"],["","              "],["files-number","19"],["","  "],["percent","21.59%"],["","         "],["lines-number","171"],["","  "],["percent","0.54%"],["","          "],["code-number","31"],["","  "],["percent","18.13%"],["","         "],["comments-number","134"],["","  "],["percent","78.36%"],["","        "],["extra-number","6"],["","     "],["total-size-number","7.5 "],["size-unit","KB"]],
-  [["details-language-name","Vue"],["","             "],["files-number","2"],["","  "],["percent","2.27%"],["","           "],["lines-number","53"],["","  "],["percent","0.17%"],["","          "],["code-number","18"],["","  "],["percent","33.96%"],["","          "],["comments-number","34"],["","  "],["percent","64.15%"],["","        "],["extra-number","1"],["","     "],["total-size-number","2.3 "],["size-unit","KB"]],
-  [["separator-total","────────────────────────────────────────────────────────────────────────────────────────────────────────"]],
-  [["details-total","Total"],["","          "],["files-number","88"],["","  "],["percent","100.00%"],["","     "],["lines-number","31,416"],["","  "],["percent","100.00%"],["","    "],["code-number","19,949"],["","  "],["percent","63.50%"],["","       "],["comments-number","4,064"],["","  "],["percent","12.94%"],["","    "],["extra-number","7,403"],["","     "],["total-size-number","1.6 "],["size-unit","MB"]],
+  [["details-language-header","Language"],["","      "],["files-label","Files"],["","  "],["percent","%"],["","          "],["sort-marker","⌄"],[""," "],["lines-label","Lines"],["","  "],["percent","%"],["","            "],["code-label","Code"],["","  "],["percent","%"],["","         "],["comments-label","Comments"],["","  "],["percent","%"],["","         "],["extra-label","Extra"],["","        "],["total-size-label","Size"]],
+  [["separator-header","───────────────────────────────────────────────────────────────────────────────────────────────────────────"]],
+  [["details-language-name","TSX"],["","              "],["files-number","54"],["","  "],["percent","38.57%"],["","       "],["lines-number","5,626"],["","  "],["percent","36.51%"],["","      "],["code-number","4,118"],["","  "],["percent","73.20%"],["","         "],["comments-number","136"],["","  "],["percent","2.42%"],["","     "],["extra-number","1,372"],["","    "],["total-size-number","186.3 "],["size-unit","KB"]],
+  [["details-language-name","SCSS"],["","             "],["files-number","52"],["","  "],["percent","37.14%"],["","       "],["lines-number","5,261"],["","  "],["percent","34.14%"],["","      "],["code-number","3,554"],["","  "],["percent","67.55%"],["","          "],["comments-number","40"],["","  "],["percent","0.76%"],["","     "],["extra-number","1,667"],["","     "],["total-size-number","98.9 "],["size-unit","KB"]],
+  [["details-language-name","TypeScript"],["","       "],["files-number","24"],["","  "],["percent","17.14%"],["","       "],["lines-number","3,408"],["","  "],["percent","22.12%"],["","      "],["code-number","2,132"],["","  "],["percent","62.56%"],["","         "],["comments-number","451"],["","  "],["percent","13.23%"],["","      "],["extra-number","825"],["","    "],["total-size-number","156.8 "],["size-unit","KB"]],
+  [["details-language-name","Shell"],["","             "],["files-number","6"],["","  "],["percent","4.29%"],["","          "],["lines-number","948"],["","  "],["percent","6.15%"],["","         "],["code-number","660"],["","  "],["percent","69.62%"],["","         "],["comments-number","102"],["","  "],["percent","10.76%"],["","      "],["extra-number","186"],["","     "],["total-size-number","25.0 "],["size-unit","KB"]],
+  [["details-language-name","JavaScript"],["","        "],["files-number","2"],["","  "],["percent","1.43%"],["","          "],["lines-number","136"],["","  "],["percent","0.88%"],["","          "],["code-number","98"],["","  "],["percent","72.06%"],["","           "],["comments-number","0"],["","  "],["percent","0.00%"],["","        "],["extra-number","38"],["","      "],["total-size-number","4.4 "],["size-unit","KB"]],
+  [["details-language-name","HTML"],["","              "],["files-number","1"],["","  "],["percent","0.71%"],["","           "],["lines-number","23"],["","  "],["percent","0.15%"],["","          "],["code-number","21"],["","  "],["percent","91.30%"],["","           "],["comments-number","1"],["","  "],["percent","4.35%"],["","         "],["extra-number","1"],["","      "],["total-size-number","1.2 "],["size-unit","KB"]],
+  [["details-language-name","SQL"],["","               "],["files-number","1"],["","  "],["percent","0.71%"],["","            "],["lines-number","7"],["","  "],["percent","0.05%"],["","           "],["code-number","6"],["","  "],["percent","85.71%"],["","           "],["comments-number","0"],["","  "],["percent","0.00%"],["","         "],["extra-number","1"],["","       "],["total-size-number","479 "],["size-unit","B"]],
+  [["separator-total","───────────────────────────────────────────────────────────────────────────────────────────────────────────"]],
+  [["details-total","Total"],["","           "],["files-number","140"],["","  "],["percent","100.00%"],["","     "],["lines-number","15,409"],["","  "],["percent","100.00%"],["","    "],["code-number","10,589"],["","  "],["percent","68.72%"],["","         "],["comments-number","730"],["","  "],["percent","4.74%"],["","     "],["extra-number","4,090"],["","    "],["total-size-number","473.2 "],["size-unit","KB"]],
   [],
   [["heading","Keywords"],["","."]],
   [],
-  [["details-language-name","Rust"],["","   "],["keyword-label","enums"],["",": "],["keyword-number","46"],["",", "],["keyword-label","structs"],["",": "],["keyword-number","116"],["",", "],["keyword-label","traits"],["",": "],["keyword-number","2"]],
-  [["details-language-name","C"],["","      "],["keyword-label","structs"],["",": "],["keyword-number","1"]],
+  [["details-language-name","TSX"],["","   "],["keyword-label","interfaces"],["",": "],["keyword-number","33"]],
+  [["details-language-name","SQL"],["","   "],["keyword-label","tables"],["",": "],["keyword-number","4"]],
   [],
   [["heading","Overview"],["","."]],
   [],
-  [["overview-label","Files:"],["","   "],["overview-percent","63.64%"],[""," "],["language-1","Rust"],[""," - "],["overview-percent","12.50%"],[""," "],["language-2","HTML"],[""," - "],["overview-percent","21.59%"],[""," "],["language-3","C"],[""," - "],["overview-percent","2.27%"],[""," "],["language-4","Vue"],["","   "],["bar-frame","[-"],["language-1","┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃"],["language-2","┃┃┃┃┃┃"],["language-3","┃┃┃┃┃┃┃┃┃┃┃"],["language-4","┃"],["bar-frame","-]"]],
+  [["overview-label","Files:"],["","   "],["overview-percent","38.57%"],[""," "],["language-1","TSX"],[""," - "],["overview-percent","37.14%"],[""," "],["language-2","SCSS"],[""," - "],["overview-percent","17.14%"],[""," "],["language-3","TypeScript"],[""," - "],["overview-percent","7.15%"],[""," "],["language-others","others"],["","   "],["bar-frame","[-"],["language-1","┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃"],["language-2","┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃"],["language-3","┃┃┃┃┃┃┃┃┃"],["language-others","┃┃┃┃"],["bar-frame","-]"]],
   [],
-  [["overview-label","Lines:"],["","   "],["overview-percent","95.20%"],[""," "],["language-1","Rust"],[""," -  "],["overview-percent","4.09%"],[""," "],["language-2","HTML"],[""," -  "],["overview-percent","0.54%"],[""," "],["language-3","C"],[""," - "],["overview-percent","0.17%"],[""," "],["language-4","Vue"],["","   "],["bar-frame","[-"],["language-1","┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃"],["language-2","┃┃"],["language-3","┃"],["language-4","┃"],["bar-frame","-]"]],
+  [["overview-label","Lines:"],["","   "],["overview-percent","36.51%"],[""," "],["language-1","TSX"],[""," - "],["overview-percent","34.14%"],[""," "],["language-2","SCSS"],[""," - "],["overview-percent","22.12%"],[""," "],["language-3","TypeScript"],[""," - "],["overview-percent","7.23%"],[""," "],["language-others","others"],["","   "],["bar-frame","[-"],["language-1","┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃"],["language-2","┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃"],["language-3","┃┃┃┃┃┃┃┃┃┃┃"],["language-others","┃┃┃┃"],["bar-frame","-]"]],
   [],
-  [["overview-label","Size: "],["","   "],["overview-percent","95.32%"],[""," "],["language-1","Rust"],[""," -  "],["overview-percent","4.08%"],[""," "],["language-2","HTML"],[""," -  "],["overview-percent","0.46%"],[""," "],["language-3","C"],[""," - "],["overview-percent","0.14%"],[""," "],["language-4","Vue"],["","   "],["bar-frame","[-"],["language-1","┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃"],["language-2","┃┃"],["language-3","┃"],["language-4","┃"],["bar-frame","-]"]]
+  [["overview-label","Size: "],["","   "],["overview-percent","39.38%"],[""," "],["language-1","TSX"],[""," - "],["overview-percent","20.91%"],[""," "],["language-2","SCSS"],[""," - "],["overview-percent","33.15%"],[""," "],["language-3","TypeScript"],[""," - "],["overview-percent","6.56%"],[""," "],["language-others","others"],["","   "],["bar-frame","[-"],["language-1","┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃"],["language-2","┃┃┃┃┃┃┃┃┃┃"],["language-3","┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃"],["language-others","┃┃┃"],["bar-frame","-]"]]
 ];
 
 // Grouped by what the eye sees rather than by where the token lives in the program. Each value is
@@ -189,8 +184,8 @@ const GROUPS = [
     ["sort-marker",             "b5a98a"]
   ]],
   ["The rows", [
-    ["details-language-name",   "default bold"],
-    ["details-total",           "default bold"],
+    ["details-language-name",   "cyan"],
+    ["details-total",           "bright-magenta"],
     ["files-number",            "default"],
     ["lines-number",            "white bold"],
     ["code-number",             "default"],
@@ -230,9 +225,9 @@ const DEFAULTS = Object.fromEntries(TOKENS.map(([token, style]) => [token, style
 const ATTR_WORDS = ["bold", "italic", "underline", "dim", "reverse"];
 // The five the overview bar and its names are drawn in, in the order a run fills them
 const LANGUAGE_SLOTS = ["language-1", "language-2", "language-3", "language-4", "language-others"];
-// The fourth slot is drawn only when nothing was folded into 'others', so one run can never show
-// both. The sample is the shape that shows the four, and this says so where the fifth is edited.
-const NO_PREVIEW = { "language-others": "shown in place of language-4 once a run folds languages" };
+// The overview keeps three languages and folds the rest into 'others', drawing a fourth only when
+// the run has exactly four, so one run never shows both. The sample is the shape that folds.
+const NO_PREVIEW = { "language-4": "shown in place of 'others' when a run has exactly four languages" };
 // What the color input shows for a token left to the terminal, which has no color of its own
 const TERM_FG = "#c8c8c8";
 
@@ -773,7 +768,7 @@ document.getElementById("bg-text").addEventListener("input", e => {
   applyTermBg(hex);
 });
 
-themes = (SYSTEM_THEMES || PALETTES).map(p => themeOf(p.name, p.styles));
+themes = (SYSTEM_THEMES || SHIPPED_THEMES).map(p => themeOf(p.name, p.styles));
 // A path built by joining what the system gave to what this program appends comes out with both
 // kinds of separator in it, which reads as broken even though Windows opens it
 const themesDir = THEMES_DIR && THEMES_DIR.includes("\\") ? THEMES_DIR.replace(/\//g, "\\") : THEMES_DIR;

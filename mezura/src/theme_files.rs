@@ -1,8 +1,10 @@
 use std::{fs, io};
 
-// Where the page's list of themes is written into the template. It is a comment in the HTML, so the
-// page still opens in a browser straight from 'docs/' with no themes in it.
+// Where the page's themes are written into the template, the installed ones at the first and the
+// shipped ones at the second. Both are comments in the HTML, so the template opens on its own.
 const THEME_LIST_MARKER : &str = "/*MEZURA_SYSTEM_THEMES*/";
+#[cfg(test)]
+const SHIPPED_LIST_MARKER : &str = "/*MEZURA_SHIPPED_THEMES*/";
 
 // None means no such file, which is a mistake in the name. A theme that exists always loads,
 // carrying whatever its parser could not read.
@@ -36,12 +38,22 @@ pub fn save_theme_to_file(themes_dir: &str, name: &str, theme: &super::theme::Th
 // The two directories are arguments, as they are for the loading and saving above, so that a test
 // can point the whole of this at a folder of its own.
 pub fn generate_theme_editor_page(themes_dir: &str, data_dir: &str) -> io::Result<String> {
-    fn js_escape(s: &str) -> String {
-        s.replace('\\', "\\\\").replace('"', "\\\"").replace('<', "\\u003c")
-    }
-
     let template = include_str!("../docs/theme-editor/index.html");
+    // The directory as well, so the page can say where the files it is showing actually are. The
+    // published copy has no such directory and says so instead.
+    let page = template.replace(THEME_LIST_MARKER,
+            &format!("SYSTEM_THEMES = [{}];THEMES_DIR = \"{}\";",
+                    build_themes_js(themes_dir)?, js_escape(themes_dir)));
 
+    let out_path = data_dir.to_owned() + "theme-editor.html";
+    fs::write(&out_path, page)?;
+
+    Ok(out_path)
+}
+
+// Carries every token a theme moves and not only its language colors, and resolves each file first,
+// so one that names a token twice hands over the value that would be printed.
+fn build_themes_js(themes_dir: &str) -> io::Result<String> {
     let mut entries: Vec<(String, Vec<(&'static str, String)>)> = Vec::new();
     for entry in fs::read_dir(themes_dir)?.flatten() {
         let path = entry.path();
@@ -50,54 +62,53 @@ pub fn generate_theme_editor_page(themes_dir: &str, data_dir: &str) -> io::Resul
         }
         let Some(stem) = path.file_stem().and_then(|x| x.to_str()) else { continue };
         let Ok(contents) = fs::read_to_string(&path) else { continue };
-        // Every token the theme moved and not only its language colors, so a theme that dresses the
-        // whole report arrives at the page as itself. Resolved first, so a file that names a token
-        // twice hands over the value that would actually be printed.
         let resolved = super::theme::resolve(&super::theme::parse_theme_file(&contents).0, &[], &[]);
         entries.push((stem.to_owned(), resolved.find_non_default_tokens()));
     }
     entries.sort_by_key(|x| x.0.to_lowercase());
 
-    let themes_js = entries.iter().map(|(name, styles)| {
+    Ok(entries.iter().map(|(name, styles)| {
         format!("{{name:\"{}\",styles:{{{}}}}}", js_escape(name),
             styles.iter().map(|(token, value)| format!("\"{token}\":\"{}\"", js_escape(value)))
                     .collect::<Vec<_>>().join(","))
-    }).collect::<Vec<_>>().join(",");
+    }).collect::<Vec<_>>().join(","))
+}
 
-    // The directory as well, so the page can say where the files it is showing actually are. The
-    // published copy has neither and says so instead.
-    let page = template.replace(THEME_LIST_MARKER,
-            &format!("SYSTEM_THEMES = [{themes_js}];THEMES_DIR = \"{}\";", js_escape(themes_dir)));
-
-    let out_path = data_dir.to_owned() + "theme-editor.html";
-    fs::write(&out_path, page)?;
-
-    Ok(out_path)
+fn js_escape(text: &str) -> String {
+    text.replace('\\', "\\\\").replace('"', "\\\"").replace('<', "\\u003c")
 }
 
 #[cfg(test)]
 mod tests {
     // The page exists twice: embedded above so 'cargo package' can carry it, and at
-    // 'docs/theme-editor/index.html' which GitHub Pages publishes. Neither can replace the other,
-    // since Pages serves only from the repository's 'docs/' and the package refuses paths outside
-    // its own directory.
+    // 'docs/theme-editor/index.html' which GitHub Pages publishes, carrying the shipped themes since
+    // nobody opening it on the web has run the program. Neither can replace the other, since Pages
+    // serves only from the repository's 'docs/' and the package refuses paths outside its own.
     #[test]
-    fn the_published_theme_editor_is_the_embedded_one() {
+    fn the_published_theme_editor_is_the_embedded_one_carrying_the_shipped_themes() {
         let template = include_str!("../docs/theme-editor/index.html");
+        let shipped_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data").join("themes");
+        let expected = template.replace(super::SHIPPED_LIST_MARKER,
+                &format!("SHIPPED_THEMES = [{}];",
+                        super::build_themes_js(&shipped_dir.to_string_lossy()).unwrap()));
         let published_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("..").join("docs").join("theme-editor").join("index.html");
 
         // Its own switch and not MEZURA_UPDATE_GOLDEN: refreshing test fixtures must not be able to
         // republish the site as a side effect.
         if std::env::var_os("MEZURA_UPDATE_PUBLISHED").is_some() {
-            std::fs::write(&published_path, template).unwrap();
+            std::fs::write(&published_path, &expected).unwrap();
             return;
         }
 
+        assert!(template.contains(super::SHIPPED_LIST_MARKER),
+                "the marker the shipped themes replace is not in the template any more, so the \
+                 published page would be left with the one theme the template opens with");
         let published = std::fs::read_to_string(&published_path).unwrap().replace("\r\n", "\n");
-        assert_eq!(published, template.replace("\r\n", "\n"),
-                "docs/theme-editor/index.html no longer matches the embedded template it publishes. \
-                 Regenerate it with MEZURA_UPDATE_PUBLISHED=1 cargo test -p mezura published_theme_editor");
+        assert_eq!(published, expected.replace("\r\n", "\n"),
+                "docs/theme-editor/index.html no longer matches the embedded template and the themes \
+                 in data/themes. Regenerate it with \
+                 MEZURA_UPDATE_PUBLISHED=1 cargo test -p mezura published_theme_editor");
     }
 
     // The test above compares the two copies of the page to each other, so a marker renamed in both

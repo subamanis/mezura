@@ -3,3 +3,15 @@ language-2 = bright-magenta
 language-3 = bright-yellow
 language-4 = 6ad9bd
 language-others = d7c9f0
+
+details-language-name = cyan
+details-total = bright-magenta
+
+nested-name = 5d8786
+nested-percent = 556666
+nested-files = 5d8786
+nested-lines = 709998
+nested-code = 5d8786
+nested-comments = 5d8786
+nested-extra = 5d8786
+nested-size = 5d8786

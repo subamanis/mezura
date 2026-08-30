@@ -493,7 +493,7 @@ Everything the program prints can be styled: 74 tokens, each taking a text color
 
 A **theme** is a plain .txt file of ```token = value``` lines, in the "themes" folder of your [data directory](#the-data-directory). It carries only how the output looks, never what is measured, so it can be shared as it is. Apply one with ```--theme <name>```, list the ones you have with ```--show-themes```, and write the current look into a new one with ```--save-theme <name>```.
 
-8 themes are bundled: **Mezura** (the default one), Catppuccin, Dracula, Forest, Gruvbox, Meadow, Neon and Ocean. Edit them, or add your own by dropping a file there.
+13 themes are bundled. **Mezura** is the default look. Catppuccin, Dracula, Forest, Gruvbox, Meadow and Ocean come in two versions each: the plain name dresses the whole report, headings, labels, sub-rows and all, while the ```-minimal``` one changes the colors and little else. Edit them, or add your own by dropping a file there.
 
 The four languages of the overview and the folded 'others' entry are five ordinary tokens, ```language-1``` to ```language-4``` and ```language-others```, so a theme sets them the same way it sets everything else.
 

@@ -686,8 +686,6 @@ pub const STYLE_HELP  :  &str =
     The page:
       version                  the version line at the top
       heading                  the section titles and the 'Analyzing targets' lines
-      separator-total          the line above the total
-      separator-header         the line under the column titles of the two tables
       summary                  the found / of interest / excluded line
       note                     the asides about the count: what '--top' hid, what was left out of
                                it, and the settings of a project it was taken with
@@ -701,6 +699,8 @@ pub const STYLE_HELP  :  &str =
       details-language-name    the name of a language, in a row and in the keywords block
       details-module           the name of a module, wherever one is printed
       details-total            the word 'Total'
+      separator-header         the line under the column titles of the two tables
+      separator-total          the line above the total
       percent                  the percentages of the details rows
       sort-marker              the arrow beside the title of the column '--sort' ordered by
       arrow                    the '->' after a language name, in the 'list' layout only

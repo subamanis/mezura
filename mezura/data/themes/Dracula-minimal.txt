@@ -1,0 +1,22 @@
+language-1 = ff79c6
+language-2 = 8be9fd
+language-3 = 50fa7b
+language-4 = bd93f9
+language-others = ffb86c
+
+version = ff79c6
+heading = white bold underline
+details-language-name = ff79c6 bold
+details-total = 7de7ff bold
+sort-marker = ff79c6
+
+nested-name = a9b3d0 bold
+nested-branch = 6272a4
+nested-percent = 6272a4
+nested-files = 8e97b5
+nested-lines = f8f8f2 bold
+nested-code = 8e97b5
+nested-comments = 8e97b5
+nested-extra = 8e97b5
+nested-size = 8e97b5
+nested-size-unit = 6d9da8

@@ -15,9 +15,11 @@ const SIZE_GOLD: Color = Color::TrueColor { r: 125, g: 119, b: 105 };
 // attribute both land far darker than this on most schemes.
 const FAINT: Color = Color::TrueColor { r: 170, g: 170, b: 170 };
 const FAINTER: Color = Color::TrueColor { r: 150, g: 150, b: 150 };
-// The name of a row hanging under a language, and the same again for a file, a step further back so
-// that the two lists under one language are told apart by weight as well as by shape
-const SUB_ROW_GREY: Color = Color::TrueColor { r: 138, g: 138, b: 138 };
+// The rows hanging under a language, and the same again for a file: a teal band and a grey one, so
+// that the two lists under one language are told apart by color as well as by shape
+const SUB_ROW_TEAL: Color = Color::TrueColor { r: 93, g: 135, b: 134 };
+const SUB_ROW_TEAL_BRIGHT: Color = Color::TrueColor { r: 112, g: 153, b: 152 };
+const SUB_ROW_TEAL_FAINT: Color = Color::TrueColor { r: 85, g: 102, b: 102 };
 const FILE_ROW_GREY: Color = Color::TrueColor { r: 122, g: 122, b: 122 };
 const KEYWORD_GREY: Color = Color::TrueColor { r: 181, g: 181, b: 181 };
 
@@ -282,24 +284,24 @@ theme_tokens! {
     keyword_label     => "keyword-label",     Style::plain().dim();
 
     details_language_header => "details-language-header", Style::of(LABEL_GOLD).italic();
-    details_language_name   => "details-language-name",   Style::plain().bold();
+    details_language_name   => "details-language-name",   Style::of(Color::Cyan);
     // The name of a module, wherever one is printed: the row that opens its section in the details,
     // its heading in the keywords, and its line in the history section
     details_module    => "details-module",    Style::of(LABEL_GOLD).bold();
-    details_total     => "details-total",     Style::plain().bold();
+    details_total     => "details-total",     Style::of(Color::BrightMagenta);
 
     // The rows hanging under a language, one token per column so that a theme can treat them as
-    // their own band of the table. The name is dimmed and the figures are not: dimming the numbers
-    // as well makes a column unreadable down its length, which is how they are meant to be read.
-    nested_name       => "nested-name",       Style::of(SUB_ROW_GREY).bold();
+    // their own band of the table. They are set apart by color and not by dimming: a column of dim
+    // numbers is unreadable down its length, which is how they are meant to be read.
+    nested_name       => "nested-name",       Style::of(SUB_ROW_TEAL);
     nested_branch     => "nested-branch",     Style::of(FAINT);
-    nested_percent    => "nested-percent",    Style::of(FAINTER);
-    nested_files      => "nested-files",      Style::plain();
-    nested_lines      => "nested-lines",      Style::of(Color::White).bold();
-    nested_code       => "nested-code",       Style::plain();
-    nested_comments   => "nested-comments",   Style::plain();
-    nested_extra      => "nested-extra",      Style::plain();
-    nested_size       => "nested-size",       Style::plain();
+    nested_percent    => "nested-percent",    Style::of(SUB_ROW_TEAL_FAINT);
+    nested_files      => "nested-files",      Style::of(SUB_ROW_TEAL);
+    nested_lines      => "nested-lines",      Style::of(SUB_ROW_TEAL_BRIGHT);
+    nested_code       => "nested-code",       Style::of(SUB_ROW_TEAL);
+    nested_comments   => "nested-comments",   Style::of(SUB_ROW_TEAL);
+    nested_extra      => "nested-extra",      Style::of(SUB_ROW_TEAL);
+    nested_size       => "nested-size",       Style::of(SUB_ROW_TEAL);
     nested_size_unit  => "nested-size-unit",  Style::of(SIZE_GOLD);
 
     // The same set again for the files of a '--by-file' run. They hang under a language beside the

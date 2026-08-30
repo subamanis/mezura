@@ -1,0 +1,22 @@
+language-1 = yellow
+language-2 = 82e3e2
+language-3 = 99ff00
+language-4 = ffe5a3
+language-others = ffe5a3
+
+version = d8f26b
+heading = white bold underline
+details-language-name = d8f26b bold
+details-total = 8fd8d6 bold
+sort-marker = d8f26b
+
+nested-name = b6c9ae bold
+nested-branch = 7d8e80
+nested-percent = 7d8e80
+nested-files = 9db096
+nested-lines = e8f2df bold
+nested-code = 9db096
+nested-comments = 9db096
+nested-extra = 9db096
+nested-size = 9db096
+nested-size-unit = 6f9392

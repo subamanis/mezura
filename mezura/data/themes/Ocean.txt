@@ -1,4 +1,76 @@
 language-1 = 22d3ee
-language-2 = 60a5fa
-language-3 = 34d399
+language-2 = 6094fb
+language-3 = 63caa4
 language-4 = 94a3b8
+language-others = cbd5e1
+
+version = 22d3ee
+heading = 22d3ee reverse bold
+sort-marker = fbbf24
+arrow = 74899c
+bar-frame = 5b7688
+summary = e2e8f0
+footer = 74899c italic
+note = 74899c italic
+success = 63caa4
+warning = fbbf24
+error = f87171
+
+details-language-header = 7dd3fc 232643 italic
+details-language-name = 22d3ee bold
+details-module = 818cf8 bold
+details-total = 7dd3fc reverse
+
+files-label = 7dd3fc 232643 italic
+lines-label = 7dd3fc 232643 italic
+code-label = 7dd3fc 232643 italic
+comments-label = 7dd3fc 232643 italic
+extra-label = 7dd3fc 232643 italic
+total-size-label = 5b7688 232643 italic
+avg-size-label = 5b7688 italic
+size-unit = 5b7688
+keyword-label = 818cf8
+keyword-number = e2e8f0
+percent = 74899c
+separator-header = 334155
+separator-total = 334155
+
+nested-name = a3b4c6 bold
+nested-branch = 64798c
+nested-percent = 64798c
+nested-files = 8b9db0
+nested-lines = e2e8f0 bold
+nested-code = 8b9db0
+nested-comments = 8b9db0
+nested-extra = 8b9db0
+nested-size = 8b9db0
+nested-size-unit = 5b7688
+
+file-name = 92a3b5
+file-branch = 64798c
+file-percent = 64798c
+file-files = 7d8fa1
+file-lines = c3d0dd bold
+file-code = 7d8fa1
+file-comments = 7d8fa1
+file-extra = 7d8fa1
+file-size = 7d8fa1
+file-size-unit = 5b7688
+
+overview-label = 7dd3fc 232643
+overview-percent = e2e8f0
+
+change-up = 63caa4
+change-down = f87171
+change-same = e2e8f0
+history-entry = 22d3ee bold
+history-modified = fbbf24
+history-modified-field = 7dd3fc
+
+progress-bar-fill = 22d3ee..6094fb
+progress-bar-empty = 1e293b
+progress-bar-figures = 74899c
+
+explain-string = 63caa4
+explain-comment = 74899c italic
+explain-detail = 74899c

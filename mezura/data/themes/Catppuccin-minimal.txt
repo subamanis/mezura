@@ -1,0 +1,22 @@
+language-1 = ff759c
+language-2 = fab387
+language-3 = a6e3a1
+language-4 = cba6f7
+language-others = f5e0dc
+
+version = cba6f7
+heading = white bold underline
+details-language-name = cba6f7 bold
+details-total = 89dceb bold
+sort-marker = cba6f7
+
+nested-name = a6adc8 bold
+nested-branch = 6c7086
+nested-percent = 6c7086
+nested-files = 9399b2
+nested-lines = cdd6f4 bold
+nested-code = 9399b2
+nested-comments = 9399b2
+nested-extra = 9399b2
+nested-size = 9399b2
+nested-size-unit = 6f8a92
