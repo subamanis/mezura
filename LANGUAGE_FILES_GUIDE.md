@@ -56,6 +56,8 @@ Three things to know before you start:
 | `Extensions` | Extensions, no dot, case ignored | `cpp cxx cc` |
 | `Filenames` *(opt)* | Whole names, for files an extension cannot describe | `Makefile Dockerfile` |
 | `Shebangs` *(opt)* | Interpreters a `#!` first line may name, for scripts with no extension | `sh bash zsh` |
+| `Identifying line starts` *(opt)* | Comma-separated literals; a line beginning with one, blanks aside, identifies a contested file as this language | `function, classdef, %` |
+| `Identifying line contains` *(opt)* | The same, found anywhere in a line | `std::` |
 | `String symbols` | Strings that end with the line | `" '` |
 | `Character literal symbols` *(opt)* | Wraps a single character, like Rust's `'a'` | `'` |
 | `Multi line string symbols` *(opt)* | Crosses lines, backslash escapes | `"""` |

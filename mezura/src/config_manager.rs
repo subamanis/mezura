@@ -211,28 +211,28 @@ pub struct Hidden {
     pub directory_info: bool,
     pub parsing_info: bool,
     pub progress_bar: bool,
+    pub animations: bool,
     pub keywords: bool,
     pub nested_languages: bool,
-    pub overview: bool,
-    pub bar: bool,
-    pub history: bool,
-    pub timing: bool,
-    pub animations: bool,
     pub files: bool,
     pub comments: bool,
     pub extra: bool,
     pub blanks: bool,
     pub size: bool,
-    pub percentages: bool
+    pub percentages: bool,
+    pub overview: bool,
+    pub bar: bool,
+    pub history: bool,
+    pub timing: bool
 }
 
 impl Hidden {
     fn get_pairs(self) -> [(&'static str, bool); 17] {
         [("version", self.version), ("directory-info", self.directory_info), ("parsing-info", self.parsing_info),
          ("progress-bar", self.progress_bar), ("animations", self.animations), ("keywords", self.keywords),
-         ("nested-languages", self.nested_languages), ("overview", self.overview), ("bar", self.bar),
-         ("history", self.history), ("timing", self.timing), ("files", self.files), ("comments", self.comments),
-         ("extra", self.extra), ("blanks", self.blanks), ("size", self.size), ("percentages", self.percentages)]
+         ("nested-languages", self.nested_languages), ("files", self.files), ("comments", self.comments),
+         ("extra", self.extra), ("blanks", self.blanks), ("size", self.size), ("percentages", self.percentages),
+         ("overview", self.overview), ("bar", self.bar), ("history", self.history), ("timing", self.timing)]
     }
 
     // Whether '--sort' was asked to order by a column this run does not draw
@@ -261,16 +261,16 @@ impl Hidden {
                 "animations" => hidden.animations = true,
                 "keywords" => hidden.keywords = true,
                 "nested-languages" => hidden.nested_languages = true,
-                "overview" => hidden.overview = true,
-                "bar" => hidden.bar = true,
-                "history" => hidden.history = true,
-                "timing" => hidden.timing = true,
                 "files" => hidden.files = true,
                 "comments" => hidden.comments = true,
                 "extra" => hidden.extra = true,
                 "blanks" => hidden.blanks = true,
                 "size" => hidden.size = true,
                 "percentages" => hidden.percentages = true,
+                "overview" => hidden.overview = true,
+                "bar" => hidden.bar = true,
+                "history" => hidden.history = true,
+                "timing" => hidden.timing = true,
                 _ => return Err(entry.to_owned())
             }
         }
