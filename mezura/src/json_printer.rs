@@ -306,6 +306,7 @@ fn create_scope_object_of(scope: &super::json_reader::Scope, targets: &[mezura_c
         format!("\"keywords_counted\":{}", scope.keywords_counted),
         format!("\"count_minified\":{}", scope.count_minified),
         format!("\"count_generated\":{}", scope.count_generated),
+        format!("\"use_heuristics\":{}", scope.use_heuristics),
     ];
 
     create_object(members)
@@ -442,6 +443,7 @@ fn create_scope_object(config: &Configuration, targets: &[mezura_core::Target]) 
         format!("\"keywords_counted\":{}", !config.view.hidden.keywords),
         format!("\"count_minified\":{}", config.engine.count_minified),
         format!("\"count_generated\":{}", config.engine.count_generated),
+        format!("\"use_heuristics\":{}", config.engine.use_heuristics),
     ];
 
     create_object(members)

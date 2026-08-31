@@ -29,6 +29,8 @@ const LANGUAGE                 : &str = "Language";
 const EXTENSIONS               : &str = "Extensions";
 const FILENAMES                : &str = "Filenames";
 const SHEBANGS                 : &str = "Shebangs";
+const IDENTIFYING_LINE_STARTS   : &str = "Identifying line starts";
+const IDENTIFYING_LINE_CONTAINS : &str = "Identifying line contains";
 const STRING_SYMBOLS           : &str = "String symbols";
 const MULTILINE_STRINGS        : &str = "Multi line string symbols";
 const MULTILINE_RAW_STRINGS    : &str = "Multi line raw string symbols";
@@ -231,6 +233,19 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         next = read_next_header(lines)?;
     }
     if extensions.is_empty() && filenames.is_empty() && shebangs.is_empty() {return None;}
+
+    let mut identifying_line_starts = Vec::new();
+    if next == IDENTIFYING_LINE_STARTS {
+        identifying_line_starts = split_line_on_commas(&read_value_line(lines)?);
+        if identifying_line_starts.is_empty() {return None;}
+        next = read_next_header(lines)?;
+    }
+    let mut identifying_line_contains = Vec::new();
+    if next == IDENTIFYING_LINE_CONTAINS {
+        identifying_line_contains = split_line_on_commas(&read_value_line(lines)?);
+        if identifying_line_contains.is_empty() {return None;}
+        next = read_next_header(lines)?;
+    }
 
     if next != STRING_SYMBOLS {return None;}
     let string_symbols = split_line_on_whitespace(&read_value_line(lines)?);
@@ -441,7 +456,8 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
             .with_leveled_comments(&leveled_comments)
             .with_nested_languages(&nested_languages)
             .with_filenames(&filenames)
-            .with_shebangs(&shebangs))
+            .with_shebangs(&shebangs)
+            .with_identification(&identifying_line_starts, &identifying_line_contains))
 }
 
 /// Reads the file that settles contested extensions, and the lines of it that did not parse.
@@ -489,8 +505,7 @@ pub fn parse_conflict_rules(contents: &str) -> (ConflictRules, Vec<String>) {
             faulty_lines.push(line.to_owned());
             continue;
         };
-        let names = claimants.split(',').map(str::trim).filter(|x| !x.is_empty())
-                .map(str::to_owned).collect::<Vec<_>>();
+        let names = split_line_on_commas(claimants);
         if names.is_empty() {
             faulty_lines.push(line.to_owned());
             continue;
@@ -563,6 +578,10 @@ impl<'a> Iterator for LineReader<'a> {
 
 fn split_line_on_whitespace(line: &str) -> Vec<String> {
     line.split_whitespace().map(str::trim).filter(|x| !x.is_empty()).map(str::to_owned).collect()
+}
+
+fn split_line_on_commas(line: &str) -> Vec<String> {
+    line.split(',').map(str::trim).filter(|x| !x.is_empty()).map(str::to_owned).collect()
 }
 
 #[cfg(test)]
@@ -944,6 +963,27 @@ Multi line raw string symbols\n`\n\nEscape character\n\\\n\nComment symbols\n//\
             assert!(language.strings.get_multiline_strings().iter().any(|crossing| !crossing.escapes),
                     "{name} lost its raw crossing string declaration");
         }
+    }
+
+    #[test]
+    fn identification_literals_split_on_commas_so_one_may_hold_a_space() {
+        let good = "Language\nPerlish\n\nExtensions\npx\n\n\
+Identifying line starts\nuse strict, my $, =head\n\nIdentifying line contains\n:-, std::\n\n\
+String symbols\n\"\n\nEscape character\n\\\n\nComment symbols\n#\n";
+        let parsed = parse_language(good).expect("the declaration must parse");
+        assert_eq!(vec!["use strict".to_owned(), "my $".to_owned(), "=head".to_owned()],
+                parsed.identifying_line_starts);
+        assert_eq!(vec![":-".to_owned(), "std::".to_owned()], parsed.identifying_line_contains);
+
+        let alone = good.replace("Identifying line starts\nuse strict, my $, =head\n\n", "");
+        assert_eq!(vec![":-".to_owned(), "std::".to_owned()],
+                parse_language(&alone).expect("one block alone must parse").identifying_line_contains);
+        let empty = good.replace("use strict, my $, =head", " ,, ");
+        assert!(parse_language(&empty).is_none(), "a declared block holding nothing was accepted");
+        let without = good.replace("Identifying line starts\nuse strict, my $, =head\n\n", "")
+                .replace("Identifying line contains\n:-, std::\n\n", "");
+        assert!(parse_language(&without).expect("optional blocks may be absent")
+                .identifying_line_starts.is_empty());
     }
 
     #[test]

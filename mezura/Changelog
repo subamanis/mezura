@@ -32,6 +32,11 @@ Main changes:
       Basic, Less, Solidity, Batch, Make, Dockerfile, CMake, and the shader languages HLSL, GLSL,
       WGSL, Metal, Slang and ShaderLab.
   -> More extensions are recognised for the languages already shipped.
+  -> A file of a contested extension is identified by its content: a "#!" line first, then
+      evidence like a line starting with "@interface" (Objective-C) or "function" (MATLAB), so one
+      folder of ".m" or ".h" files splits correctly between the languages sharing it. A file whose
+      content says nothing falls back to "language_conflicts.txt", "--explain" names the evidence
+      that decided, and the new "--no-heuristics" turns the reading off.
   -> "--force-language", "--languages" and "--exclude-languages" can now be specified per-module.
       Write the module and a slash before the value: "mezura ios=./ios analysis=./matlab
       --force-language ios/m=objective-c,analysis/m=matlab" counts one repository's ".m" files as
@@ -61,9 +66,9 @@ Main changes:
   -> Two languages that claim the same extension no longer settle it silently. The winner is named
       in the new "language_conflicts.txt" file of the data directory, and when nothing names it the
       program says which language it gave the extension to and that it only did so alphabetically.
-  -> MATLAB takes ".m" and Perl takes ".pl", while ".h" stays with C Header. If you write
-      Objective-C or Prolog instead, swap the line for it in "language_conflicts.txt", or run with
-      "--force-language m=objective-c".
+  -> When a file's content names neither side, MATLAB takes ".m" and Perl takes ".pl", while ".h"
+      stays with C Header. If those defaults read your files wrongly, swap the line for it in
+      "language_conflicts.txt", or run with "--force-language m=objective-c".
   -> Pascal no longer claims ".pp", since almost every ".pp" file in the wild is a Puppet manifest.
       It keeps ".pas" and ".lpr".
   -> Extensions are now matched without regard to case, so a file named "MAIN.RS" counts as Rust.
@@ -295,6 +300,7 @@ Dependencies:
 
 Other:
   -> Every percentage drops decimals as it grows: two below 10, one below 100, none from 100 up.
+      A change past 999% is printed as "+ >999%", the way a change under 0.01% reads "+ <0.01%".
   -> "--search-in-dotted" no longer walks into ".git". It opens the dotted directories somebody
       made, like ".github", and leaves the one git keeps alone, at any depth. Naming ".git" as a
       target yourself still works.

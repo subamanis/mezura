@@ -258,6 +258,19 @@ pub const COUNT_GENERATED_HELP  :  &str =
     A file left out is reported above the table and appears in no figure.
 
 ";
+pub const NO_HEURISTICS_HELP  :  &str =
+"--no-heuristics
+    never try to automatically resolve the contest when two languages claim the same extension
+
+    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
+    or 'no' to disable. Default: no
+
+    An extension two languages claim is normally settled by reading the head of each file: a '#!'
+    line first, then evidence like a line starting with 'function' (MATLAB) or '@interface'
+    (Objective-C). A file whose content says nothing falls back to the order in
+    'language_conflicts.txt', and under this flag every file does.
+
+";
 pub const EXPLAIN_HELP  :  &str =
 "--explain
     show one file line by line instead of printing a report
@@ -282,6 +295,9 @@ pub const EXPLAIN_HELP  :  &str =
     \" on line 7'. A line read by an embedded language names it. The stretches inside a string or a
     comment are printed in their own styles, which '--style' reaches as 'explain-string' and
     'explain-comment', so a symbol swallowed by a string can be seen to be one.
+
+    A file whose extension two languages claim also says what identified it, the line and the
+    evidence found there, and the JSON document carries the same under 'identified_by'.
 
       mezura src/main.rs --explain
       mezura src/page.vue --explain --counting region
@@ -343,10 +359,6 @@ pub const HIDE_HELP  :  &str =
                       stops them being counted, so it is the only name here that makes a run faster
       nested-languages  the rows that break a container file down, so a '.vue' weighs whole on
                       the Vue row with no sign of the TypeScript and CSS inside it
-      overview        the whole percentages section
-      bar             only the [|||] bar of the overview, keeping the percentages and the colors
-      history         the comparison with previous runs (the same as '--compare 0')
-      timing          the execution time line at the bottom
       files           the files column of the details rows
       comments        the comments column of the details rows
       extra           the third column of the details rows, which is what '--counting content'
@@ -356,6 +368,10 @@ pub const HIDE_HELP  :  &str =
                       so naming the other one's hides nothing and says so
       size            the size column of the details rows, and the size that closes a 'list' row
       percentages     every percentage of the details rows, keeping the numbers they describe
+      overview        the whole percentages section
+      bar             only the [|||] bar of the overview, keeping the percentages and the colors
+      history         the comparison with previous runs (the same as '--compare 0')
+      timing          the execution time line at the bottom
 
     The column names reach every layout except 'matrix', whose three rows stay whole. Hiding the
     column '--sort' orders by falls back to sorting by lines, and says so.
@@ -974,6 +990,7 @@ pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 8] = [
         (SEARCH_IN_DOTTED, SEARCH_IN_DOTTED_HELP),
         (COUNT_MINIFIED, COUNT_MINIFIED_HELP),
         (COUNT_GENERATED, COUNT_GENERATED_HELP),
+        (NO_HEURISTICS, NO_HEURISTICS_HELP),
         (SHOW_LANGUAGES, SHOW_LANGUAGES_HELP),
     ]),
     ("How the report looks", &[

@@ -7,17 +7,15 @@ use std::sync::Arc;
 use crate::{Language, warnings};
 use crate::engine::config::{EngineConfig, ForcedLanguages, LanguageNames, format_module_scope,
         split_off_module_scope};
-use crate::engine::identity::{IdentifiedBy, LanguageLookup, ScopedLookups, build_language_map_by,
-        extension_key, find_language_named};
+use crate::engine::identity::{IdentifiedBy, IdentityReport, LanguageLookup, ResolvedBy,
+        ScopedLookups, build_language_map_by, extension_key, find_language_named};
 use crate::language_file::ConflictRules;
 use crate::warnings::Warning;
 
 /// The languages one run counts with, narrowed by its settings and with every contested extension
 /// already settled.
 ///
-/// Built by the caller and handed to [`crate::run`] rather than inside it, so that its complaints
-/// about the settings land with the other complaints about settings and not in the middle of a
-/// report. Whichever settings it was built against are the only ones it may be counted with.
+/// Whichever settings it was built against are the only ones it may be counted with.
 pub struct Languages {
     by_name: HashMap<String, Language>,
     lookups: ScopedLookups,
@@ -35,11 +33,8 @@ impl Languages {
         Self::resolve(config, parse_shipped_languages(), &parse_shipped_conflict_rules())
     }
 
-    /// The shipped set plus languages of the caller's own.
-    ///
-    /// Here rather than left to the caller, because doing it by hand means remembering the shipped
-    /// conflict rules as well: passed a default set instead, a contested extension is settled a
-    /// different way and the counts come back looking perfectly normal.
+    /// The shipped set plus language definitions the caller wrote itself, settled by the shipped
+    /// conflict rules.
     pub fn shipped_with(config: &EngineConfig, extra: impl IntoIterator<Item = Language>)
     -> (Self, Vec<Warning>)
     {
@@ -50,9 +45,6 @@ impl Languages {
 
     /// For a caller with languages and conflict rules of its own, such as one reading a directory
     /// of language files the user may edit.
-    // Keyed here by each language's own name rather than taken as a map somebody else keyed: in a
-    // map whose key and value disagree the key wins, and a language would be counted under a name
-    // it does not carry.
     pub fn resolve(config: &EngineConfig, languages: impl IntoIterator<Item = Language>,
             conflicts: &ConflictRules) -> (Self, Vec<Warning>)
     {
@@ -82,16 +74,13 @@ impl Languages {
             }
         }
         reported.extend(find_unknown_forced_languages(&in_play, &config.forced_languages));
-        // Two scopes resolving the same contest the same way say so once. Without this a run that
-        // scopes anything repeats every tiebreak of the whole language set once per module.
+        // Without this a run that scopes anything repeats every tiebreak once per module.
         let mut already_said = HashSet::new();
         reported.retain(|warning| already_said.insert((warning.code.name(), warning.subject.clone(),
                 warning.message.clone())));
 
-        // A section names its language whatever the run narrowed itself to, which is why the
-        // languages the narrowing set aside are kept and the map handed over is the one built over
-        // everything. Only carried when a language in play declares regions, so an ordinary run
-        // holds no second copy of anything.
+        // A section can be written in a language the narrowing took out, so those definitions are
+        // kept. Only when something in play declares regions, or an ordinary run pays for a copy.
         let mut nested = NestedLanguageDefinitions::default();
         let set_aside = everything.into_iter().filter(|(name, _)| !in_play.contains_key(name))
                 .collect::<HashMap<_,_>>();
@@ -125,21 +114,19 @@ impl std::fmt::Debug for Languages {
     }
 }
 
-// What a section of another language resolves against: the whole set's extension map, and the
-// definitions the narrowing took out of play. Empty on any run where no language declares regions.
+// Empty on any run where no language declares regions.
 #[derive(Default)]
 pub(crate) struct NestedLanguageDefinitions {
     pub set_aside: HashMap<String, Language>,
     pub extension_to_name: HashMap<String, std::sync::Arc<str>>,
 }
 
-// What this crate ships, parsed for counting and raw for installing. A caller that wants nothing but
-// the default has 'Languages::shipped' and needs none of the four.
+// What this crate ships, parsed for counting and raw for installing.
 
 /// The shipped language definitions, parsed.
 pub fn parse_shipped_languages() -> Vec<Language> {
-    // 'every_shipped_language_file_parses' is what guarantees these all parse. One that somehow did
-    // not would be left out rather than panic here.
+    // 'every_shipped_language_file_parses' is what guarantees these all parse. One that did not
+    // would be left out rather than panic here.
     get_shipped_language_files_raw().into_iter()
             .filter_map(|(_, contents)| crate::language_file::parse_language(&String::from_utf8_lossy(contents)))
             .collect()
@@ -177,9 +164,6 @@ pub fn find_unknown_language_names(languages: &[Language], wanted: &[String]) ->
             .cloned().collect()
 }
 
-// Every place that matches a name goes through this one: choosing, excluding, forcing an extension,
-// and the conflict rules.
-//
 // 'to_lowercase' and not 'eq_ignore_ascii_case', which agree until a name has a letter outside ASCII:
 // mixing the two takes 'CAFÉ' excluded as 'café' out of the count by one rule while the other
 // reports it, in the same run, as a name that does not exist.
@@ -187,26 +171,24 @@ pub(crate) fn is_the_same_language_name(one: &str, other: &str) -> bool {
     one.to_lowercase() == other.to_lowercase()
 }
 
-// By the name each language carries. A later declaration of a name wins, which is what happens when
-// a directory holds two files for one language.
+// A later declaration of a name wins, which is what a directory holding two files for one language
+// comes down to.
 pub(crate) fn keyed_by_name(languages: impl IntoIterator<Item = Language>) -> HashMap<String, Language> {
     languages.into_iter().map(|language| (language.name.clone(), language)).collect()
 }
 
-// The whole of what building a 'Languages' reads from the settings. Nothing else can change the set
-// that comes out, which is why the directories are not here and one 'Languages' counts several.
-//
-// Normalised the way the matching is: neither order nor case matters, so two settings that would
-// have produced this same set compare equal and no honest run is refused.
+// The whole of what building a 'Languages' reads from the settings, normalised the way the matching
+// is. Neither order nor case matters, so two settings that would produce this same set compare
+// equal and no honest run is refused.
 #[derive(PartialEq, Eq, Debug)]
 struct LanguageSelection {
     of_interest: Vec<String>,
     excluded: Vec<String>,
     forced: HashMap<String, String>,
-    // Empty until a module is given a rule of its own, and only then do the names the targets
-    // declare decide anything: each rule reaches its module by name, so a run whose targets name
-    // other modules would leave every one of those rules doing nothing, in silence.
-    modules: Vec<String>
+    // Empty until a module is given a rule of its own. Only then does a name the targets declare
+    // decide anything.
+    modules: Vec<String>,
+    use_heuristics: bool
 }
 
 impl LanguageSelection {
@@ -240,7 +222,8 @@ impl LanguageSelection {
                     declared.dedup();
                     declared
                 }
-            }
+            },
+            use_heuristics: config.use_heuristics
         }
     }
 }
@@ -254,16 +237,11 @@ struct ResolvedScope {
     reported: Vec<Warning>
 }
 
-// Everything one scope answers for itself: which languages are in play there, what identifies them,
-// and which language an extension names when '--languages' is given one.
 fn resolve_one_scope(languages: &[Language], everything: &HashMap<String, Language>, config: &EngineConfig,
         module: Option<&str>, conflicts: &ConflictRules) -> ResolvedScope
 {
     let forced = config.forced_languages.get_rules_of_module(module);
-    // Over everything, before the narrowing, because it answers two questions the narrowed set
-    // cannot: which language an extension names when '--languages' is given one, and what a section
-    // inside a container file is written in when the run narrowed that language away. Its own
-    // complaints about contested extensions are dropped, since the narrowed build below makes them,
+    // Its complaints about contested extensions are dropped. The narrowed build below makes them,
     // and a contest between two languages the run then leaves out is not news.
     let (all_extensions, _) = build_language_map_by(IdentifiedBy::Extension, everything,
             &conflicts.by_extension, &forced);
@@ -286,8 +264,28 @@ fn resolve_one_scope(languages: &[Language], everything: &HashMap<String, Langua
             &HashMap::new(), &forced);
     reported.extend(shebang_report.collect_warnings());
 
-    ResolvedScope { in_play: by_name, lookup: LanguageLookup { by_extension, by_filename, by_shebang },
+    let contested = if config.use_heuristics {find_contested_with_evidence(&report, &by_name)}
+            else {HashMap::new()};
+    ResolvedScope { in_play: by_name,
+            lookup: LanguageLookup { by_extension, by_filename, by_shebang, contested },
             all_extensions, reported }
+}
+
+fn find_contested_with_evidence(report: &IdentityReport, by_name: &HashMap<String, Language>)
+        -> HashMap<String, Arc<[Arc<str>]>>
+{
+    report.contested.iter()
+            .filter(|contest| contest.resolved_by != ResolvedBy::ForceLang)
+            .filter_map(|contest| {
+                let claimants = std::iter::once(&contest.winner).chain(&contest.losers)
+                        .filter(|name| by_name.contains_key(name.as_str()))
+                        .map(|name| Arc::from(name.as_str()))
+                        .collect::<Vec<Arc<str>>>();
+                let declares_evidence = |name: &Arc<str>| by_name.get(name.as_ref())
+                        .is_some_and(Language::declares_identification);
+                (claimants.len() > 1 && claimants.iter().any(declares_evidence))
+                        .then(|| (contest.identity.clone(), claimants.into()))
+            }).collect()
 }
 
 // Sorted and without repeats, so that the same settings resolve their modules in the same order
@@ -302,9 +300,8 @@ fn find_modules_with_rules_of_their_own(config: &EngineConfig) -> Vec<String> {
     named
 }
 
-// A rule written for a module the run never declared changes nothing, and the counts it was meant to
-// change come out looking perfectly ordinary. The names are matched exactly, as the targets match
-// them, so a difference in capitalisation lands here too.
+// The names are matched exactly, as the targets match them, so a difference in capitalisation lands
+// here too.
 fn find_unknown_module_scopes(config: &EngineConfig) -> Vec<Warning> {
     let mut declared = config.targets.iter().filter_map(|target| target.module.as_deref()).collect::<Vec<_>>();
     declared.sort_unstable();
@@ -322,8 +319,7 @@ module of that name. It declares {}, so the rule was not used.",
             .collect()
 }
 
-// Over every scope at once, because whether a language exists is not a question one module answers
-// differently, and naming the same missing language in two of them is one mistake and not two.
+// Over every scope at once. Naming the same missing language in two of them is one mistake, not two.
 fn find_unknown_names_of_the_selection(languages: &[Language], config: &EngineConfig) -> Vec<Warning> {
     let mut reported = Vec::new();
     if !config.languages_of_interest.is_empty() {
@@ -335,10 +331,6 @@ fn find_unknown_names_of_the_selection(languages: &[Language], config: &EngineCo
 
     // Asked of the whole list and not of what the selection above left of it: checked after the
     // narrowing, '--languages Java --exclude-languages Rust' reports that Rust does not exist.
-    //
-    // Under a code of its own, and not the one above it, because the command line has already put
-    // that one on the screen with a suggested spelling and keeps it only for the document. This one
-    // has no other voice.
     for name in find_unknown_language_names(languages, &config.excluded_languages.get_all_names()) {
         reported.push(Warning::new(warnings::Code::UnknownExcludedLanguage, &name,
                 format!("'{name}' is not among the languages in use, so excluding it changed nothing.")));
@@ -348,7 +340,7 @@ fn find_unknown_names_of_the_selection(languages: &[Language], config: &EngineCo
 }
 
 // Asked once, and not inside the map building, which runs once per kind of identity and per scope
-// and is handed the same pairs every time: asking it there says the same thing several times over.
+// and is handed the same pairs every time.
 fn find_unknown_forced_languages(by_name: &HashMap<String, Language>,
         forced: &ForcedLanguages) -> Vec<Warning>
 {
@@ -366,10 +358,8 @@ fn find_unknown_forced_languages(by_name: &HashMap<String, Language>,
             .collect()
 }
 
-// A pair whose two halves are written the same, Smalltalk's '"like this"', is a pair the scan
-// cannot resolve: every position holds an opening and a closing at once, so no two of them are ever
-// paired and every comment of that language lands in the code. The pair goes and the language
-// stays, since its files are still worth counting with the rest of what it declares.
+// With both halves written the same, Smalltalk's '"like this"', every position holds an opening and
+// a closing at once and no two of them are ever paired. The pair goes and the language stays.
 fn drop_the_pairs_that_never_fire(languages: &mut [Language]) -> Vec<Warning> {
     let mut reported = Vec::new();
     for language in languages.iter_mut() {
@@ -389,8 +379,7 @@ cannot be told apart, so that pair was dropped and its comments are counted as c
     reported
 }
 
-// A language that can never match a file, or can never be named. The file parser refuses both, so
-// what this catches is a caller building one by hand.
+// The file parser refuses both of these, so what this catches is a caller building one by hand.
 fn drop_the_unusable(languages: Vec<Language>) -> (Vec<Language>, Vec<Warning>) {
     let mut reported = Vec::new();
     let kept = languages.into_iter().filter(|language| {
@@ -414,12 +403,8 @@ fn drop_the_unusable(languages: Vec<Language>) -> (Vec<Language>, Vec<Warning>) 
     (kept, reported)
 }
 
-// A region's default names the language its sections fall to when their own tag names none, and
-// nothing at the time a language file is read can tell whether that name exists, since the file
-// knows only itself. Asked here against exactly the two maps the section lookup will consult, so the
-// check and what it predicts cannot drift. Left unreported it is silent and expensive: every unnamed
-// section goes back to being read with the container's own symbols, so a '//' inside a script block
-// counts as code.
+// Asked against exactly the two maps the section lookup will consult, so the check and what it
+// predicts cannot drift.
 fn find_unresolvable_region_defaults(by_name: &HashMap<String, Language>,
     set_aside: &HashMap<String, Language>, extensions: &HashMap<String, Arc<str>>) -> Vec<Warning>
 {
@@ -443,15 +428,10 @@ fn find_unresolvable_region_defaults(by_name: &HashMap<String, Language>,
 claims it as an extension. Those sections are counted with the symbols of '{language}' instead."))).collect()
 }
 
-// Two definitions of one name: the second silently replaces the first when the map is built, and
-// which one is second is whatever order the directory was read in, so renaming a file changes the
-// counts. Against the counts and not the settings, because the two definitions disagree about
-// comment symbols and the losing one takes its extensions out of the run with it.
-//
 /// A warning for every name two or more languages carry, since only one of them can be in play.
-// Grouped by folded case and not by exact spelling, since 'Rust' and 'rust' are one language to
-// '--languages', '--exclude-languages', '--force-language' and the conflicts file, all of which
-// fold case.
+// Which one survives is whatever order the directory was read in, so renaming a file changes the
+// counts. Grouped by folded case, since 'Rust' and 'rust' are one language to every command that
+// takes a name.
 pub fn find_duplicate_names(languages: &[Language]) -> Vec<Warning> {
     let mut spellings : HashMap<String, Vec<&str>> = HashMap::new();
     for language in languages {
@@ -464,9 +444,6 @@ pub fn find_duplicate_names(languages: &[Language]) -> Vec<Warning> {
     duplicated.into_iter().map(|found| {
         let times = found.len();
         let name = found[0];
-        // Identical spellings collapse into one entry of the map and one of them is simply gone;
-        // spellings that differ in case are separate entries that both survive, take a row each in
-        // the report and split the count of one language between them.
         let detail = if found.iter().all(|other| *other == name) {
             format!("'{name}' is declared {times} times, and only one of those declarations was used. \
 Which one is not decided by anything you can see, so the counts of '{name}' depend on it.")
@@ -494,6 +471,8 @@ pub fn find_languages_that_lost_every_claim(languages: &[Language], conflicts: &
             .filter(|language| !language.extensions.is_empty() || !language.filenames.is_empty()
                     || !language.shebangs.is_empty())
             .filter(|language| !winners.contains(language.name.as_str()))
+            // One that declares identification can still win files by their content
+            .filter(|language| !language.declares_identification())
             .map(|language| language.name.as_str())
             .collect::<Vec<_>>();
     lost.sort();
@@ -504,15 +483,11 @@ pub fn find_languages_that_lost_every_claim(languages: &[Language], conflicts: &
 language, so no file can be counted as it."))).collect()
 }
 
-// What one scope leaves in play. The ones it removes are not dropped by the caller either, because
-// a section inside a counted file may still be written in one of them.
 fn retain_languages_of_interest(languages: Vec<Language>, extensions: &HashMap<String, Arc<str>>,
         of_interest: &[String], excluded: &[String]) -> Vec<Language>
 {
-    // A spelling selects a language by the name it carries, or by an extension it owns. The
-    // ownership is read from the map the counting itself uses, so '--languages m' means the same
-    // language that every '.m' file is counted as here, whether that was settled by the conflicts
-    // file, by '--force-language' or by the tiebreak.
+    // Ownership is read from the map the counting itself uses, so '--languages m' means the same
+    // language every '.m' file is counted as here, however that was settled.
     let selects = |spelling: &String, language: &Language| {
         is_the_same_language_name(&language.name, spelling)
                 || extensions.get(&extension_key(spelling))
@@ -577,6 +552,33 @@ mod language_selection_tests {
         // that had just worked
         assert!(find_unknown_language_names(&languages(), &["cs".to_owned(), "RS".to_owned()]).is_empty());
         assert_eq!(vec!["nosuch"], find_unknown_language_names(&languages(), &["nosuch".to_owned()]));
+    }
+
+    #[test]
+    fn a_contest_reaches_the_contenders_map_only_with_evidence_and_never_once_forced() {
+        let build = |with_evidence: bool, forced: &HashMap<String, String>| {
+            let mut languages = languages_claiming(&[("Alpha", &["x"]), ("Zed", &["x"]), ("Solo", &["y"])]);
+            if with_evidence {
+                languages.get_mut("Zed").unwrap().identifying_line_starts = vec!["zeddoc".to_owned()];
+            }
+            let (_, report) = crate::engine::identity::build_extension_language_map(
+                    &languages, &HashMap::new(), forced);
+            find_contested_with_evidence(&report, &languages)
+        };
+
+        let nothing_forced = HashMap::new();
+        let contested = build(true, &nothing_forced);
+        let contenders = contested.get("x").expect("the one contest with evidence is missing");
+        assert_eq!(vec!["Alpha".to_owned(), "Zed".to_owned()],
+                contenders.iter().map(|x| x.to_string()).collect::<Vec<_>>(),
+                "the fallback winner must come first, so evidence is asked in the standing order");
+        assert_eq!(1, contested.len(), "an uncontested extension grew contenders");
+
+        assert!(build(false, &nothing_forced).is_empty(),
+                "a contest nobody declares evidence for still costs a lookup per file");
+        let forced = hashmap!("x".to_owned() => "Zed".to_owned());
+        assert!(build(true, &forced).is_empty(),
+                "a forced extension is settled, and content must not overrule the person");
     }
 
     #[test]
@@ -717,8 +719,6 @@ mod language_selection_tests {
                 "'Rust' exists and was reported as missing: {reported:?}");
     }
 
-    // With the same source and only the file names changed, the two definitions gave comment=0
-    // code=3 and comment=4 code=1.
     #[test]
     fn two_definitions_of_one_name_are_reported_against_the_counts() {
         let twice = vec![Language::new("Same", ["aa"], StringRules::escaping_nothing(), ["//"], &[], []),
@@ -757,8 +757,7 @@ mod language_selection_tests {
                 reported.iter().find(|x| x.subject == "Claims-Nothing").map(|x| x.code));
     }
 
-    // Smalltalk's '"like this"'. Accepted in silence before this, and every comment of such a
-    // language went into the code with nothing on screen to say why the numbers looked odd.
+    // Smalltalk's '"like this"'.
     #[test]
     fn a_comment_pair_written_the_same_at_both_ends_is_dropped_and_reported() {
         let mut languages = vec![
@@ -836,9 +835,8 @@ mod language_selection_tests {
         assert!(!reported.iter().any(|x| x.subject == "Java"));
     }
 
-    // The shipped conflict rules are the half a caller doing this by hand forgets, and forgetting
-    // them is silent: 'm' is claimed by both Objective-C and MATLAB, and without the rules the
-    // contest is settled alphabetically instead, so a MATLAB file is counted as Objective-C.
+    // Without the shipped rules, 'm' goes to Objective-C alphabetically and a MATLAB file is
+    // counted as Objective-C.
     #[test]
     fn adding_a_language_of_your_own_keeps_the_shipped_ones_and_their_conflict_rules() {
         let config = EngineConfig::new(["./"]);

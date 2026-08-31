@@ -7,7 +7,7 @@ use mezura_core::language_file::ConflictRules;
 
 use super::config_manager::{ByFile, Configuration, Layout, SortCriterion};
 use super::config_manager::{COUNTING, COUNT_GENERATED, COUNT_MINIFIED, EXCLUDE, EXCLUDE_LANGUAGES,
-        FORCE_LANGUAGE, LANGUAGES, NO_GITIGNORE, NO_IGNORE_FILES, SEARCH_IN_DOTTED};
+        FORCE_LANGUAGE, LANGUAGES, NO_GITIGNORE, NO_HEURISTICS, NO_IGNORE_FILES, SEARCH_IN_DOTTED};
 use super::json_reader::{DocumentError, DocumentWarning, Scope};
 use super::sources::RevisionSide;
 
@@ -486,7 +486,8 @@ pub fn scope_of(engine: &mezura_core::EngineConfig, counting: mezura_core::Count
         ignore_files: !engine.no_ignore_files,
         keywords_counted: engine.count_keywords,
         count_minified: engine.count_minified,
-        count_generated: engine.count_generated
+        count_generated: engine.count_generated,
+        use_heuristics: engine.use_heuristics
     }
 }
 
@@ -506,6 +507,7 @@ pub fn find_settings_that_differ(baseline: &Scope, subject: &Scope) -> Vec<&'sta
     if baseline.keywords_counted != subject.keywords_counted {differ.push(HIDE_KEYWORDS)}
     if baseline.count_minified != subject.count_minified {differ.push(COUNT_MINIFIED)}
     if baseline.count_generated != subject.count_generated {differ.push(COUNT_GENERATED)}
+    if baseline.use_heuristics != subject.use_heuristics {differ.push(NO_HEURISTICS)}
 
     differ
 }
@@ -567,6 +569,10 @@ pub fn resolve_settings(document: &Scope, config: &mut super::config_manager::Co
     if !typed.count_generated && document.count_generated != config.engine.count_generated {
         config.engine.count_generated = document.count_generated;
         adopted.push(COUNT_GENERATED);
+    }
+    if !typed.no_heuristics && document.use_heuristics != config.engine.use_heuristics {
+        config.engine.use_heuristics = document.use_heuristics;
+        adopted.push(NO_HEURISTICS);
     }
 
     adopted
@@ -1181,7 +1187,8 @@ mod tests {
             ignore_files: true,
             keywords_counted: true,
             count_minified: false,
-            count_generated: false
+            count_generated: false,
+            use_heuristics: true
         };
 
         // Nothing typed: what differs is taken, what agrees is not reported
@@ -1216,6 +1223,16 @@ mod tests {
         config.engine.no_gitignore = true;
         config.view.counting = mezura_core::CountingModel::Region;
         assert!(resolve_settings(&document, &mut config).is_empty());
+
+        let no_reading = Scope { use_heuristics: false, gitignore: true,
+                counting: "content".to_owned(), exclude: Vec::new(), ..document.clone() };
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        assert_eq!(vec!["no-heuristics"], resolve_settings(&no_reading, &mut config));
+        assert!(!config.engine.use_heuristics);
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        config.typed_explicitly.no_heuristics = true;
+        assert!(resolve_settings(&no_reading, &mut config).is_empty());
+        assert!(config.engine.use_heuristics);
 
         let without_keywords = Scope { keywords_counted: false, gitignore: true,
                 counting: "content".to_owned(), exclude: Vec::new(), ..document };

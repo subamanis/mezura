@@ -4,6 +4,9 @@ Prolog
 Extensions
 pl pro prolog
 
+Identifying line starts
+:-
+
 String symbols
 ' "
 

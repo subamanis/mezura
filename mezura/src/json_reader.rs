@@ -50,7 +50,8 @@ pub struct Scope {
     // that is empty because nothing measured it must not read as a count of zero
     pub keywords_counted: bool,
     pub count_minified: bool,
-    pub count_generated: bool
+    pub count_generated: bool,
+    pub use_heuristics: bool
 }
 
 // Kept as text rather than as the library's own warning: a document written by a later version can
@@ -201,7 +202,9 @@ pub(crate) fn parse_scope(scope: &Map<String, Value>) -> Result<(Scope, Vec<Targ
         keywords_counted: read_optional_flag(scope, "keywords_counted", "scope", true)?,
         // Absent for the same reason, and those builds counted every file they could read
         count_minified: read_optional_flag(scope, "count_minified", "scope", true)?,
-        count_generated: read_optional_flag(scope, "count_generated", "scope", true)?
+        count_generated: read_optional_flag(scope, "count_generated", "scope", true)?,
+        // Absent from a document of the builds that never read a file to identify it
+        use_heuristics: read_optional_flag(scope, "use_heuristics", "scope", false)?
     }, parse_targets(read_list(scope, "targets", "scope")?)?))
 }
 

@@ -10,6 +10,9 @@ use crate::languages::Languages;
 pub struct FileExplanation {
     /// The language whose rules read the file.
     pub language: String,
+    /// The evidence that identified a contested file, the literal and its line, or None where the
+    /// extension alone answered.
+    pub identified_by: Option<(String, usize)>,
     /// The file as it was read, so a caller can show each line beside its answer.
     pub contents: String,
     /// One entry per line of the file, in order.
@@ -114,16 +117,25 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
     // than to whichever target happens to be first.
     let module = config.targets.iter().find(|target| Path::new(&target.path) == path)
             .and_then(|target| target.module.as_deref());
-    let Some(lang_name) = lookups.get_of_module_named(module).of_path_or_shebang(path) else {
+    let lookup = lookups.get_of_module_named(module);
+    let Some(mut lang_name) = lookup.of_path_or_shebang(path) else {
         return Err(ExplainError::UnclaimedFile);
     };
+    let contents = std::fs::read_to_string(path)
+            .map_err(|error| ExplainError::UnreadableFile(error.to_string()))?;
+    let mut identified_by = None;
+    if let Some(contenders) = lookup.find_contenders(path)
+        && let Some((name, literal, line)) = crate::engine::file_parser::find_identified_language(
+                &contents, &contenders, &by_name, &lookup.by_shebang) {
+        identified_by = Some((literal, line));
+        lang_name = name;
+    }
     let nested_lookup = NestedLanguageLookup {
         languages: &by_name,
         extension_to_name: &nested_definitions.extension_to_name,
         set_aside: &nested_definitions.set_aside,
     };
-    let (contents, report, log) = explain_parsed_file(path, &lang_name, &nested_lookup, config)
-            .map_err(ExplainError::UnreadableFile)?;
+    let (contents, report, log) = explain_parsed_file(contents, &lang_name, &nested_lookup, config);
 
     let language = lang_name.to_string();
     let (records, names) = log.into_parts();
@@ -140,7 +152,7 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
     let whole = report.into_whole();
     debug_assert_eq!(whole.lines, lines.len(),
             "a file of {} lines got {} per-line records", whole.lines, lines.len());
-    Ok(FileExplanation { language, contents, lines, classes: whole.classes })
+    Ok(FileExplanation { language, identified_by, contents, lines, classes: whole.classes })
 }
 
 // The record holds symbol numbers; what a reader gets is the symbol as the file spells it. The

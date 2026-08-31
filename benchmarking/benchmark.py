@@ -36,7 +36,7 @@ CORPUS_REQUIRED = ('name', 'languages', 'types')
 TOOLS = ('mezura', 'scc', 'tokei')
 
 EQUAL_WORK_MEZURA = ['--hide', 'keywords', '--count-minified', '--count-generated',
-                     '--counting', 'region']
+                     '--counting', 'region', '--no-heuristics']
 EQUAL_WORK_SCC = ['-c', '--no-cocomo', '--no-config']
 EQUAL_WORK_TOKEI = []
 

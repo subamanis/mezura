@@ -205,7 +205,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     for i in 0..config.threads.consumers() {
         match engine::consumer::start_parser_thread(i, files_injector.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
                 stats_per_module.clone(), nested_per_module.clone(), files_per_module.clone(),
-                language_map_ref.clone(), nested_definitions.clone(), config.clone(),
+                language_map_ref.clone(), nested_definitions.clone(), language_lookups.clone(), config.clone(),
                 parsing_started_instant, counting_ended.clone(), minified_files.clone(),
                 generated_files.clone(), progress.clone()) {
             Ok(handle) => consumer_handles.push(handle),
@@ -363,14 +363,15 @@ pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets
         let dir_path = Path::new(&target.path);
         let module = modules.of_target(&target);
         if dir_path.is_file() {
-            let Some(lang_name) = language_lookups.get_of_module(module).of_path_or_shebang(dir_path) else {
+            let lookup = language_lookups.get_of_module(module);
+            let Some(lang_name) = lookup.of_path_or_shebang(dir_path) else {
                 continue;
             };
             let queued = match targets.was_written_by_hand(dir_path) {
                 true => ParsableFile::written_by_hand(dir_path.to_path_buf(), lang_name, module),
                 false => ParsableFile::new(dir_path.to_path_buf(), lang_name, module)
             };
-            files_injector.push(queued);
+            files_injector.push(queued.with_contenders(lookup.find_contenders(dir_path)));
             files_present.total_files += 1;
             files_present.relevant_files += 1;
             progress.record_file_found();
@@ -401,7 +402,8 @@ pub(crate) struct ParsableFile {
     pub module: ModuleId,
     // Named as a target rather than found by the walk, which is what exempts it from every rule
     // that skips a file: the ignore files, the dotted names, and being minified or generated
-    pub written_by_hand: bool
+    pub written_by_hand: bool,
+    pub contenders: Option<Arc<[Arc<str>]>>
 }
 
 impl ParsableFile {
@@ -410,12 +412,18 @@ impl ParsableFile {
             path,
             language_name,
             module,
-            written_by_hand: false
+            written_by_hand: false,
+            contenders: None
         }
     }
 
     pub(crate) fn written_by_hand(path: PathBuf, language_name: Arc<str>, module: ModuleId) -> Self {
         ParsableFile { written_by_hand: true, ..ParsableFile::new(path, language_name, module) }
+    }
+
+    pub(crate) fn with_contenders(mut self, contenders: Option<Arc<[Arc<str>]>>) -> Self {
+        self.contenders = contenders;
+        self
     }
 }
 

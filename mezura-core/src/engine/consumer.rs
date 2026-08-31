@@ -17,14 +17,15 @@ const INITIAL_FILE_BUFFER_BYTES : usize = 150;
 pub(crate) fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
         stats_per_module: StatsMapMut, nested_per_module: NestedLanguageMapMut, files_per_module: FilesPerModuleMut,
         language_map: Arc<HashMap<String,Language>>, nested_definitions: Arc<NestedLanguageDefinitions>,
+        language_lookups: crate::SharedModuleLookups,
         config: Arc<EngineConfig>, started: Instant, counting_ended: Arc<AtomicU64>,
         minified_files: Arc<AtomicUsize>, generated_files: Arc<AtomicUsize>,
         progress: Arc<ScanProgress>) -> std::io::Result<JoinHandle<()>>
 {
     thread::Builder::new().name(format!("consumer-{id}")).spawn(move || {
         start_parsing_files(files_injector, faulty_files, finish_condition, stats_per_module,
-                nested_per_module, files_per_module, language_map, nested_definitions, config,
-                &minified_files, &generated_files, &progress);
+                nested_per_module, files_per_module, language_map, nested_definitions, language_lookups,
+                config, &minified_files, &generated_files, &progress);
         // The last thing this thread does, and the only honest answer to how long the counting took:
         // 'run' joins these threads after calling the caller's callback, so its own clock cannot tell
         // the two apart.
@@ -35,6 +36,7 @@ pub(crate) fn start_parser_thread(id: usize, files_injector: Arc<Injector<Parsab
 fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
     stats_per_module: StatsMapMut, nested_per_module: NestedLanguageMapMut, files_per_module: FilesPerModuleMut,
     language_map: Arc<HashMap<String,Language>>, nested_definitions: Arc<NestedLanguageDefinitions>,
+    language_lookups: crate::SharedModuleLookups,
     config: Arc<EngineConfig>, minified_files: &AtomicUsize, generated_files: &AtomicUsize,
     progress: &ScanProgress)
 {
@@ -45,6 +47,7 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
     let mut local_minified = 0;
     let mut local_generated = 0;
     let mut keyword_matchers = file_parser::KeywordMatchers::default();
+    let mut identification_matchers = file_parser::IdentificationMatchers::default();
     // The module is an index into the outer vector and never part of the key: a composite one would
     // be an allocation on every file, and a run without modules simply has a vector of one.
     let modules = stats_per_module.lock().unwrap().len();
@@ -84,9 +87,12 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                 let lookup = file_parser::NestedLanguageLookup { languages: &language_map,
                         extension_to_name: &nested_definitions.extension_to_name,
                         set_aside: &nested_definitions.set_aside };
+                let shebang_map = &language_lookups.get_of_module(parsable_file.module).by_shebang;
                 match file_parser::parse_file(&parsable_file.path, lang_name, &mut buf, &mut parse_buffers,
-                        &lookup, &mut keyword_matchers, &config, parsable_file.written_by_hand) {
-                    Ok(file_parser::FileOutcome::Counted(report)) => {
+                        &lookup, &mut keyword_matchers, &mut identification_matchers, &config,
+                        parsable_file.written_by_hand, parsable_file.contenders.as_deref(), shebang_map) {
+                    Ok(file_parser::FileOutcome::Counted(report, resolved)) => {
+                        let lang_name = resolved.as_deref().unwrap_or(lang_name);
                         progress.record_file_parsed(report.total_lines());
                         let keywords = &language_map.get(lang_name).unwrap().keywords;
                         let bytes = buf.len();

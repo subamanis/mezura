@@ -2,6 +2,7 @@
 //! Nothing here decides a color, a width or a word, and nothing reads a global.
 
 const TINY_THRESHOLD : f64 = 0.01;
+const HUGE_THRESHOLD : f64 = 999.0;
 
 /// How many cells of a bar of `total_cells` each share is worth, by largest remainder.
 ///
@@ -197,6 +198,9 @@ impl NumberFormat {
         let sign = if value > 0.0 {"+"} else if value < 0.0 {"-"} else {""};
         if magnitude > 0.0 && magnitude < TINY_THRESHOLD {
             return format!("{sign} <{}", self.percent(TINY_THRESHOLD));
+        }
+        if magnitude > HUGE_THRESHOLD {
+            return format!("{sign} >{}", self.percent(HUGE_THRESHOLD));
         }
 
         format!("{sign}{}", self.percent(magnitude))
@@ -409,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    fn a_signed_percentage_carries_its_direction_and_names_the_tiny_ones() {
+    fn a_signed_percentage_carries_its_direction_and_names_the_tiny_and_the_huge_ones() {
         let format = NumberFormat::default();
         assert_eq!("0", format.signed_percent(calculate_relative_change(100, 100)));
         assert_eq!("-10.0", format.signed_percent(calculate_relative_change(100, 90)));
@@ -420,5 +424,12 @@ mod tests {
         assert_eq!("+100", format.signed_percent(99.996));
         assert_eq!("+ <0.01", format.signed_percent(calculate_relative_change(22819, 22820)));
         assert_eq!("+0.01", format.signed_percent(0.01));
+        assert_eq!("+999", format.signed_percent(999.0));
+        assert_eq!("+ >999", format.signed_percent(calculate_relative_change(1, 213)));
+
+        for value in [0.0, 0.000375, -34.87, 999.0, 999.5, 21200.0, 999900.0] {
+            assert!(format.signed_percent(value).chars().count() <= 7,
+                    "'{}' does not fit the column", format.signed_percent(value));
+        }
     }
 }

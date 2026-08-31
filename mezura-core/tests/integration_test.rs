@@ -217,6 +217,38 @@ fn the_shipped_rule_for_a_contested_extension_is_actually_applied() {
     assert_ne!("Delphi", named_by_the_rule);
 }
 
+#[test]
+fn a_contested_extension_is_identified_by_its_content_and_falls_back_without_any() {
+    let root = std::env::temp_dir().join("mezura-content-identification");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("with.conx"), "zeddoc\ncode();\n").unwrap();
+    std::fs::write(root.join("without.conx"), "code();\ncode();\n").unwrap();
+
+    let counted = |use_heuristics: bool| {
+        let config = EngineConfig { threads: Threads::new(1, 2), use_heuristics,
+                ..EngineConfig::new([root.to_string_lossy().replace('\\', "/")]) };
+        let claimants = vec![
+            mezura_core::Language::new("Alpha", ["conx"], StringRules::escaping_nothing(), ["//"], &[], []),
+            mezura_core::Language::new("Zed", ["conx"], StringRules::escaping_nothing(), ["//"], &[], [])
+                    .with_identification(["zeddoc"], [""; 0])];
+        let (languages, _) = Languages::resolve(&config, claimants, &Default::default());
+        run(&config, languages).unwrap().per_language.iter()
+                .map(|(name, stats)| (name.clone(), stats.files)).collect::<HashMap<_, _>>()
+    };
+
+    let identified = counted(true);
+    assert_eq!(Some(&1), identified.get("Zed"),
+            "the evidence never reached the counting thread: {identified:?}");
+    assert_eq!(Some(&1), identified.get("Alpha"),
+            "a file with no evidence stopped falling back to the standing order: {identified:?}");
+    let fallback = counted(false);
+    assert_eq!(Some(&2), fallback.get("Alpha"),
+            "'use_heuristics: false' still identified by content: {fallback:?}");
+
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
 // The whole run and the sum of its modules are the same measurement, so they have to agree about
 // what is in it. Every language the run selected is given a bucket with its own keyword names set to
 // zero, and the run total used to be summed before those empty buckets were dropped while a module

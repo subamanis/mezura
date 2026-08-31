@@ -187,7 +187,8 @@ pub(crate) fn build_language_map_by(identified_by: IdentifiedBy, languages: &Has
 pub(crate) struct LanguageLookup {
     pub by_extension: HashMap<String, Arc<str>>,
     pub by_filename: HashMap<String, Arc<str>>,
-    pub by_shebang: HashMap<String, Arc<str>>
+    pub by_shebang: HashMap<String, Arc<str>>,
+    pub contested: HashMap<String, Arc<[Arc<str>]>>
 }
 
 impl LanguageLookup {
@@ -212,6 +213,25 @@ impl LanguageLookup {
     // gets to exclude it
     pub(crate) fn of_path_or_shebang(&self, path: &Path) -> Option<Arc<str>> {
         self.of_path(path).or_else(|| self.of_shebang(path))
+    }
+
+    pub(crate) fn find_contenders(&self, name: &Path) -> Option<Arc<[Arc<str>]>> {
+        if self.contested.is_empty() {
+            return None;
+        }
+        let extension = name.extension()?.to_str()?;
+        let contenders = self.contested.get(extension).cloned().or_else(|| {
+            extension.bytes().any(|b| b.is_ascii_uppercase())
+                    .then(|| self.contested.get(&extension.to_ascii_lowercase()).cloned()).flatten()
+        })?;
+        // A whole name outranks its extension in 'of_name', so a file claimed by name, including
+        // one '--force-language' named outright, is never handed back to the extension's contest.
+        if !self.by_filename.is_empty()
+                && name.file_name().and_then(|x| x.to_str())
+                        .is_some_and(|x| find_language_of_identity(&self.by_filename, x).is_some()) {
+            return None;
+        }
+        Some(contenders)
     }
 
     // Asked before 'of_shebang' opens anything, so the walk can run its ignore checks in between

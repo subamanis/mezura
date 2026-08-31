@@ -14,6 +14,7 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
   - [--search-in-dotted](#cmd-search-in-dotted)
   - [--count-minified](#cmd-count-minified)
   - [--count-generated](#cmd-count-generated)
+  - [--no-heuristics](#cmd-no-heuristics)
   - [--show-languages](#cmd-show-languages)
 - [How the report looks](#how-the-report-looks)
   - [--layout](#cmd-layout)
@@ -298,6 +299,21 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     A file left out is reported above the table and appears in no figure.
 ```
 
+### <a id="cmd-no-heuristics" name="cmd-no-heuristics"></a>--no-heuristics
+
+```
+--no-heuristics
+    never try to automatically resolve the contest when two languages claim the same extension
+
+    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
+    or 'no' to disable. Default: no
+
+    An extension two languages claim is normally settled by reading the head of each file: a '#!'
+    line first, then evidence like a line starting with 'function' (MATLAB) or '@interface'
+    (Objective-C). A file whose content says nothing falls back to the order in
+    'language_conflicts.txt', and under this flag every file does.
+```
+
 ### <a id="cmd-show-languages" name="cmd-show-languages"></a>--show-languages
 
 ```
@@ -449,10 +465,6 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
                       stops them being counted, so it is the only name here that makes a run faster
       nested-languages  the rows that break a container file down, so a '.vue' weighs whole on
                       the Vue row with no sign of the TypeScript and CSS inside it
-      overview        the whole percentages section
-      bar             only the [|||] bar of the overview, keeping the percentages and the colors
-      history         the comparison with previous runs (the same as '--compare 0')
-      timing          the execution time line at the bottom
       files           the files column of the details rows
       comments        the comments column of the details rows
       extra           the third column of the details rows, which is what '--counting content'
@@ -462,6 +474,10 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
                       so naming the other one's hides nothing and says so
       size            the size column of the details rows, and the size that closes a 'list' row
       percentages     every percentage of the details rows, keeping the numbers they describe
+      overview        the whole percentages section
+      bar             only the [|||] bar of the overview, keeping the percentages and the colors
+      history         the comparison with previous runs (the same as '--compare 0')
+      timing          the execution time line at the bottom
 
     The column names reach every layout except 'matrix', whose three rows stay whole. Hiding the
     column '--sort' orders by falls back to sorting by lines, and says so.
@@ -986,6 +1002,9 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     " on line 7'. A line read by an embedded language names it. The stretches inside a string or a
     comment are printed in their own styles, which '--style' reaches as 'explain-string' and
     'explain-comment', so a symbol swallowed by a string can be seen to be one.
+
+    A file whose extension two languages claim also says what identified it, the line and the
+    evidence found there, and the JSON document carries the same under 'identified_by'.
 
       mezura src/main.rs --explain
       mezura src/page.vue --explain --counting region

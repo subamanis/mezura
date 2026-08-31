@@ -334,7 +334,9 @@ pub struct EngineConfig {
     pub count_generated: bool,
     /// Whether to keep one entry per file in [`crate::ModuleResult::files`]. Off by default, where
     /// the run holds one entry per language.
-    pub collect_files: bool
+    pub collect_files: bool,
+    /// Whether a file of a contested extension is identified by its content. On by default.
+    pub use_heuristics: bool
 }
 
 // Written out rather than derived, because a derived 'count_keywords' would be false and anyone
@@ -354,7 +356,8 @@ impl Default for EngineConfig {
             count_keywords: true,
             count_minified: false,
             count_generated: false,
-            collect_files: false
+            collect_files: false,
+            use_heuristics: true
         }
     }
 }

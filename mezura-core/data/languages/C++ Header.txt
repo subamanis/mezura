@@ -4,6 +4,12 @@ C++ Header
 Extensions
 hpp hh hxx h++ h inl ipp tcc tpp
 
+Identifying line starts
+template, namespace, public:, private:, protected:
+
+Identifying line contains
+std::
+
 String symbols
 "
 

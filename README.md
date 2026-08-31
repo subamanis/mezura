@@ -49,28 +49,28 @@ Example run on the entire Linux kernel:
 
 Things it does that most counters do not:
 
-- **Two counting models to pick from.** By default a line counts by what it says: a blank line inside a comment
-  is blank, a lone `}` is neither code nor comment.  
-  `--counting region` switches to the model most other counters use, so the behavior matches theirs.  
-  See [The counting model](#the-counting-model).
+- **Ensures the right language for each file.** When two languages claim one extension, the way `.m` is both MATLAB and Objective-C, every file is identified by its own content: a `#!` line first, then  heuristics on its content. And you always have the last word: set your preferences globally in `language_conflicts.txt`, or per-project through its configuration, or `--force-language` for one run, or even per module in the same run. See [Supported languages](#supported-languages).
 - **Keyword counting.** Occurrences of words you pick per language, classes, structs, traits,
   anything, counted only where they appear as code and never inside a string or a comment.
 - **Nested languages.** The `<script>` and `<style>` blocks of HTML, Vue, Svelte and Astro files are
   counted as the distinct languages they hold.
 - **Modules.** Give a name to parts of a project and the report is grouped by these parts as well as by
   language. This way you can split your project into e.g. Frontend and Backend and Tests and see distinct reports for each module in the same table in the same run. See [Modules](#modules).
-- **Per-line explanations.** `--explain` shows one file line by line with the verdict for each
-  line, for checking a count that looks wrong. See `--explain` in [COMMANDS.md](COMMANDS.md).
 - **Track the history of your codebase.** Log runs and compare against earlier ones, or diff against a git revision.   See [Tracking growth](#tracking-growth).
 - **Diff view of git revisions or json files.** You can see the diff between the current state and a git revision, or between two revisions, or between an earlier run that was saved in a json file. See [Diffs](#diffs).
+- **Two counting models to pick from.** By default a line counts by what it says: a blank line inside a comment
+  is blank, a lone `}` is neither code nor comment.  
+  `--counting region` switches to the model most other counters use, so the behavior matches theirs.  
+  See [The counting model](#the-counting-model).
+- **Per-line explanations.** `--explain` shows one file line by line with the verdict for each
+  line, for checking a count that looks wrong. See `--explain` in [COMMANDS.md](COMMANDS.md).
 - **Very customizable output.** You have a lot of control about how mezura counts, and also about how 
   it presents the results to you. You don't like the layout? You find it very busy with many sections? You don't want the animations? You can change everything. See [Commands](#commands).
 - **Themes.** Everything printed can be styled and colored: 78 tokens, 13 bundled themes, and an [interactive web editor](https://subamanis.github.io/mezura/theme-editor/) to experiment. See [Themes](#themes).
 - **Output for programs.** One JSON document with `--output json`, and an MCP server so a coding
   assistant can run mezura itself. See [Taking the result elsewhere](#taking-the-result-elsewhere).
-- **Extension conflict resolution.** If two languages contest the same extension, you can decide which one will claim it. You can set a global preference, or decide per-project, or even per-module in the same run. See [Supported languages](#supported-languages).
-- **Data driven.** All the files, languages and the settings mezura uses are extracted to your machine, where they can be inspected, changed, or extended very easily. See [The data directory](#the-data-directory).
-
+- **Data driven.** All the files, languages and the settings mezura uses are extracted to your machine, where they can be inspected, changed, or extended very easily. See [The data directory](#the-data-directory).  
+  
 Also, it's the fastest line counter. See [How it compares](#how-it-compares).  
 And it's also the most accurate at what it measures. See [Accuracy and limitations](#accuracy-and-limitations).
 
@@ -137,6 +137,8 @@ WHAT IS COUNTED
   --search-in-dotted   go into directories whose name starts with a dot
   --count-minified     count the minified files that are left out by default
   --count-generated    count the generated files that are left out by default
+  --no-heuristics      never try to automatically resolve the contest when two languages claim the same
+                       extension
   --show-languages     print the languages this installation knows and stop
 
 HOW THE REPORT LOOKS
@@ -510,7 +512,7 @@ Mezura ships with over 80 supported languages, which realistically will contain 
 
 All the supported languages can be found in your [The data directory](#the-data-directory). Every language is a text file that can be inspected and even modified, and **you can easily expand the collection of languages** with your own definitions, by adding more text in files there.
 
-If two or more language files claim the same extension, the winner is the one named in the `language_conflicts.txt` file of the data dir, which ships with an answer for every contest between the languages that come with the program. An extension that nobody has named there goes to the language that comes first alphabetically, and the program reports it, since that is a tie-break and not a decision. ```--force-language``` overrides it for a single run, or through a configuration file for a single project. It can also answer differently per module in the same run, so ```mezura ios=./ios analysis=./matlab --force-language ios/m=objective-c,analysis/m=matlab``` counts one repository's ```.m``` files as Objective-C in one folder and as MATLAB in the other.
+If two or more language files claim the same extension, each file of it is identified by its own content: a `#!` line first, then the evidence the language files declare, so a `.m` opening with `@interface` counts as Objective-C where one opening with `function` counts as MATLAB. A file whose content says nothing falls back to the winner named in the `language_conflicts.txt` file of the data dir, which ships with an answer for every contest between the languages that come with the program. An extension that nobody has named there goes to the language that comes first alphabetically, and the program reports it, since that is a tie-break and not a decision. ```--force-language``` overrides all of it for a single run, or through a configuration file for a single project. It can also answer differently per module in the same run, so ```mezura ios=./ios analysis=./matlab --force-language ios/m=objective-c,analysis/m=matlab``` counts one repository's ```.m``` files as Objective-C in one folder and as MATLAB in the other.
 
 **[The language files guide](LANGUAGE_FILES_GUIDE.md)** is a page of its own: a whole language file to copy, every block with an example, which of the five string blocks a symbol belongs in, and the two mistakes that cost people the most time.
 
@@ -555,7 +557,7 @@ With that said, it is important to mention the following limitations:
 
 - ```=*``` in a comment symbol means "any number of ```=```", so a language whose symbol really contained ```=*``` could not be declared. None is known.
 
-- Two languages claiming one extension is settled by you, not by looking inside the files, and the loser's files are then parsed with the winner's symbols. See ```language_conflicts.txt``` and ```--force-language```.
+- Two languages claiming one extension is settled per file, by a ```#!``` line or by evidence the language files declare, and only the files whose content says nothing follow the standing order of ```language_conflicts.txt```, parsed with that winner's symbols. ```--force-language``` decides outright, and ```--no-heuristics``` turns the content reading off.
 
 
 ## How it compares

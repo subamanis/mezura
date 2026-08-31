@@ -63,6 +63,10 @@ fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel, a
     let theme = get_active();
     println!("{}", theme.explain_heading.paint(&format!("{path} as {}, counted by {}",
             explanation.language, model.name())));
+    if let Some((literal, line)) = &explanation.identified_by {
+        println!("{}", theme.note.paint(&format!("Its extension is contested, and line {line} \
+carrying '{literal}' is what identified it.")));
+    }
     println!();
     if explanation.lines.is_empty() {
         println!("{}", theme.note.paint("The file has no lines."));
@@ -125,6 +129,10 @@ fn print_json(path: &str, explanation: &FileExplanation, model: CountingModel) {
             escape(path)));
     document.push_str(&format!("\"language\":\"{}\",\"counting\":\"{}\",\"lines\":{},",
             escape(&explanation.language), model.name(), explanation.lines.len()));
+    if let Some((literal, line)) = &explanation.identified_by {
+        document.push_str(&format!("\"identified_by\":{{\"line\":{line},\"evidence\":\"{}\"}},",
+                escape(literal)));
+    }
     document.push_str(&format!("\"buckets\":{{\"code\":{code},\"comments\":{comments},\"{}\":{third}}},",
             model.get_third_quantity_name()));
     document.push_str("\"per_line\":[");

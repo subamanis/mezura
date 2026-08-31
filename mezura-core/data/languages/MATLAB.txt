@@ -4,6 +4,9 @@ MATLAB
 Extensions
 m
 
+Identifying line starts
+function, classdef, %
+
 String symbols
 " '
 

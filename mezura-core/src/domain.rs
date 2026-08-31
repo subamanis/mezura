@@ -41,6 +41,10 @@ pub struct Language {
     pub nested_languages : Vec<NestedLanguage>,
     /// The words this language is worth counting, `classes` and `structs` and the like.
     pub keywords : Vec<Keyword>,
+    /// Literals identifying this language when a line begins with one, leading whitespace aside.
+    pub identifying_line_starts : Vec<String>,
+    /// The same, for a literal found anywhere in a line.
+    pub identifying_line_contains : Vec<String>,
     // Worked out from the symbols above and reused for every file of this language.
     pub(crate) scan_plan : OnceLock<crate::engine::file_parser::ScanPlan>
 }
@@ -69,8 +73,21 @@ impl Language {
             line_continuation : None,
             nested_languages : Vec::new(),
             keywords : keywords.into_iter().collect(),
+            identifying_line_starts : Vec::new(),
+            identifying_line_contains : Vec::new(),
             scan_plan : OnceLock::new()
         }
+    }
+
+    /// Adds the content evidence that identifies this language when its extension is contested.
+    /// An empty literal identifies nothing and is dropped.
+    pub fn with_identification(mut self, line_starts: impl IntoIterator<Item = impl AsRef<str>>,
+        line_contains: impl IntoIterator<Item = impl AsRef<str>>) -> Self
+    {
+        let kept = |x: Vec<String>| x.into_iter().filter(|literal| !literal.is_empty()).collect();
+        self.identifying_line_starts = kept(owned_strings(line_starts));
+        self.identifying_line_contains = kept(owned_strings(line_contains));
+        self
     }
 
     /// Adds long-bracket comment pairs. Takes the parsed pair rather than its text, so the one
@@ -123,6 +140,10 @@ impl Language {
     pub fn supports_multiline_comments(&self) -> bool {
         !self.multiline_comments.is_empty() || !self.nesting_comments.is_empty()
                 || !self.leveled_comments.is_empty()
+    }
+
+    pub(crate) fn declares_identification(&self) -> bool {
+        !self.identifying_line_starts.is_empty() || !self.identifying_line_contains.is_empty()
     }
 
     // The scan numbers every string symbol of a language in one sequence, the single line ones

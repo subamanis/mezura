@@ -7,6 +7,9 @@ pl pm
 Shebangs
 perl
 
+Identifying line starts
+use strict, use warnings, my $, package, =head1
+
 String symbols
 
 Multi line string symbols
