@@ -1,0 +1,15 @@
+set,tool,command,mean_s,stddev_s,median_s,min_s,max_s,user_s,system_s,runs,counted_files,counted_lines,lines_per_sec,parallelism,lines_per_cpu_s
+control-end,mezura,D:/dev/tools/counters-benchmark/mezura.exe D:/dev/bench-corpora/linux,0.37541,0.020452,0.367318,0.352748,0.420929,2.7375,2.269792,15,,,,13.34,
+control-start,mezura,D:/dev/tools/counters-benchmark/mezura.exe D:/dev/bench-corpora/linux,0.376442,0.020792,0.367989,0.35221,0.419412,2.635417,2.360417,15,,,,13.27,
+t1-fwd,mezura,"D:/dev/tools/counters-benchmark/mezura.exe D:/dev/bench-corpora/linux --languages c,h,s,py,pl,rs,sh --hide keywords --count-minified --count-generated --counting region --no-heuristics",0.344053,0.023869,0.334977,0.318735,0.396054,2.325,2.204167,15,63893,36035852,104739155,13.16,7956398
+t1-fwd,scc,"D:/dev/tools/counters-benchmark/scc.exe D:/dev/bench-corpora/linux -i c,h,s,py,pl,rs,sh -c --no-cocomo --no-config",0.794285,0.016249,0.790698,0.770286,0.8287,5.785417,2.93125,15,63753,36012072,45338980,10.97,4131404
+t1-fwd,tokei,"D:/dev/tools/counters-benchmark/tokei.exe D:/dev/bench-corpora/linux -t ""C,C Header,GNU Style Assembly,Python,Perl,Rust,Shell""",0.671758,0.063888,0.665941,0.628547,0.889327,6.158333,3.05625,15,63811,36021160,53622198,13.72,3909147
+t1-rev,tokei,"D:/dev/tools/counters-benchmark/tokei.exe D:/dev/bench-corpora/linux -t ""C,C Header,GNU Style Assembly,Python,Perl,Rust,Shell""",0.676127,0.06757,0.672053,0.625351,0.899458,6.177083,3.082292,15,63811,36021160,53275693,13.69,3890237
+t1-rev,scc,"D:/dev/tools/counters-benchmark/scc.exe D:/dev/bench-corpora/linux -i c,h,s,py,pl,rs,sh -c --no-cocomo --no-config",0.798226,0.019436,0.800957,0.775504,0.843539,5.965625,2.852083,15,63753,36012072,45115155,11.05,4084063
+t1-rev,mezura,"D:/dev/tools/counters-benchmark/mezura.exe D:/dev/bench-corpora/linux --languages c,h,s,py,pl,rs,sh --hide keywords --count-minified --count-generated --counting region --no-heuristics",0.342792,0.015865,0.339756,0.317865,0.371163,2.277083,2.278125,15,63893,36035852,105124493,13.29,7910912
+t2-fwd,mezura,D:/dev/tools/counters-benchmark/mezura.exe D:/dev/bench-corpora/linux,0.384906,0.020511,0.379417,0.357076,0.42404,2.704167,2.313542,15,66568,35815794,93050646,13.04,7137879
+t2-fwd,scc,D:/dev/tools/counters-benchmark/scc.exe D:/dev/bench-corpora/linux,1.006994,0.022739,1.019359,0.965743,1.029783,10.267708,3.051042,15,83832,39992940,39715190,13.23,3002755
+t2-fwd,tokei,D:/dev/tools/counters-benchmark/tokei.exe D:/dev/bench-corpora/linux,0.754014,0.025549,0.751664,0.718182,0.80315,6.708333,3.616667,15,83891,39991863,53038607,13.69,3873304
+t2-rev,tokei,D:/dev/tools/counters-benchmark/tokei.exe D:/dev/bench-corpora/linux,0.750156,0.029713,0.742063,0.710308,0.807488,6.960417,3.45625,15,83891,39991863,53311381,13.89,3839219
+t2-rev,scc,D:/dev/tools/counters-benchmark/scc.exe D:/dev/bench-corpora/linux,1.00797,0.022839,1.015993,0.967547,1.029349,10.339583,3.048958,15,83832,39992940,39676707,13.28,2987102
+t2-rev,mezura,D:/dev/tools/counters-benchmark/mezura.exe D:/dev/bench-corpora/linux,0.376353,0.021249,0.367359,0.353374,0.413896,2.738542,2.298958,15,66568,35815794,95165508,13.39,7109835

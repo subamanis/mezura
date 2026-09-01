@@ -132,8 +132,12 @@ exit 1, so a script can gate on it.
 
 | | steady | relatively steady | somewhat unsteady | not steady |
 |---|---|---|---|---|
-| background | < 3% | 3 to 6% | 6 to 10% | 10% and up |
+| background | < 0.75 cores | 0.75 to 1.5 | 1.5 to 3 | 3 cores and up |
 | spread | < 5% | 5 to 10% | 10 to 15% | 15% and up |
+
+The background is judged in cores' worth of other work, so one set of thresholds means the same
+thing on a laptop and on a 32-core server. The percentage of the whole machine is printed beside
+it and is what goes into `run.json`.
 
 A real run samples the background the same way before it measures anything, and records it in
 `run.json`, so every published table can say how quiet the machine was.

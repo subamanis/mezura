@@ -2,6 +2,36 @@
 
 Written by `benchmark.py` after every run, not edited by hand. What every term means and how this was measured: the two sections at the bottom.
 
+## linux corpus, Windows, 20260901-195326
+
+AMD Ryzen 7 9700X 8-Core Processor, 16 threads, 62 GB usable RAM, Windows-11-10.0.26200-SP0  
+corpus at `0ff41df1c` on NTFS, Lexar SSD NQ790 2TB, SSD, NVMe  
+mezura v3.0.0 (unreleased), scc 4.0.0, tokei 14.0.0  
+3 warmups, 30 timed runs per command (15 in the first pass + 15 in the reverse pass), 3 s of pause before each command
+
+#### Same work (all three pinned to the same languages and settings)
+
+| tool | wall | vs fastest | user cpu | system cpu | parallelism | lines/s | lines per cpu second | files | lines |
+|---|---|---|---|---|---|---|---|---|---|
+| mezura | 343 ms ± 20 | 1.00x | 2.30 s | 2.24 s | 13.23 | 104.9M | 7.9M | 63,893 | 36,035,852 |
+| tokei | 674 ms ± 66 | 1.96x | 6.17 s | 3.07 s | 13.71 | 53.4M | 3.9M | 63,811 | 36,021,160 |
+| scc | 796 ms ± 18 | 2.32x | 5.88 s | 2.89 s | 11.01 | 45.2M | 4.1M | 63,753 | 36,012,072 |
+
+#### Out of the box (each tool at its own defaults)
+
+| tool | wall | vs fastest | user cpu | system cpu | parallelism | lines/s | lines per cpu second | files | lines |
+|---|---|---|---|---|---|---|---|---|---|
+| mezura | 381 ms ± 21 | 1.00x | 2.72 s | 2.31 s | 13.21 | 94.1M | 7.1M | 66,568 | 35,815,794 |
+| tokei | 752 ms ± 28 | 1.98x | 6.83 s | 3.54 s | 13.79 | 53.2M | 3.9M | 83,891 | 39,991,863 |
+| scc | 1,007 ms ± 23 | 2.65x | 10.30 s | 3.05 s | 13.25 | 39.7M | 3.0M | 83,832 | 39,992,940 |
+
+Trust checks for this run:
+- **Machine steadiness**: the same binary, timed at the start of the run and again at the end, differed by 0.3%.
+- **Command order**: every table ran in both command orders and the numbers above pool the two. Swapping the order moved no tool by more than 2.3%.
+- **Power**: the cpu was set to its high-performance mode for the run and restored after.
+- **Quiet machine**: everything other than the benchmark was using 0.4% of the cpu when the run started, about 0.1 of 16 cores.
+- **Antivirus**: real-time protection on, all three tools equally excluded from real-time scanning.
+
 ## linux corpus, WSL2, 20260829-072844
 
 AMD Ryzen 7 9700X 8-Core Processor, 16 threads, 30 GB usable RAM, Ubuntu 24.04.3 LTS  
@@ -29,35 +59,6 @@ Trust checks for this run:
 - **Machine steadiness**: the same binary, timed at the start of the run and again at the end, differed by 3.4%.
 - **Command order**: every table ran in both command orders and the numbers above pool the two. Swapping the order moved no tool by more than 4.7%.
 - **Power**: the machine was measured as it was, with no settings changed.
-
-## linux corpus, Windows, 20260829-050102
-
-AMD Ryzen 7 9700X 8-Core Processor, 16 threads, 62 GB usable RAM, Windows-11-10.0.26200-SP0  
-corpus at `0ff41df1c` on NTFS, Lexar SSD NQ790 2TB, SSD, NVMe  
-mezura v3.0.0 (unreleased), scc 4.0.0, tokei 14.0.0  
-3 warmups, 30 timed runs per command (15 in the first pass + 15 in the reverse pass), 3 s of pause before each command
-
-#### Same work (all three pinned to the same languages and settings)
-
-| tool | wall | vs fastest | user cpu | system cpu | parallelism | lines/s | lines per cpu second | files | lines |
-|---|---|---|---|---|---|---|---|---|---|
-| mezura | 346 ms ± 22 | 1.00x | 2.29 s | 2.26 s | 13.13 | 104.0M | 7.9M | 63,893 | 36,035,852 |
-| tokei | 661 ms ± 35 | 1.91x | 6.13 s | 3.02 s | 13.85 | 54.5M | 3.9M | 63,811 | 36,021,160 |
-| scc | 794 ms ± 17 | 2.29x | 6.11 s | 2.63 s | 11.02 | 45.4M | 4.1M | 63,753 | 36,012,072 |
-
-#### Out of the box (each tool at its own defaults)
-
-| tool | wall | vs fastest | user cpu | system cpu | parallelism | lines/s | lines per cpu second | files | lines |
-|---|---|---|---|---|---|---|---|---|---|
-| mezura | 377 ms ± 23 | 1.00x | 2.66 s | 2.31 s | 13.19 | 94.9M | 7.2M | 66,565 | 35,815,627 |
-| tokei | 757 ms ± 35 | 2.01x | 6.82 s | 3.58 s | 13.74 | 52.8M | 3.8M | 83,891 | 39,991,863 |
-| scc | 1,007 ms ± 21 | 2.67x | 10.40 s | 2.93 s | 13.24 | 39.7M | 3.0M | 83,832 | 39,992,940 |
-
-Trust checks for this run:
-- **Machine steadiness**: the same binary, timed at the start of the run and again at the end, differed by 1.3%.
-- **Command order**: every table ran in both command orders and the numbers above pool the two. Swapping the order moved no tool by more than 2.1%.
-- **Power**: the cpu was set to its high-performance mode for the run and restored after.
-- **Antivirus**: real-time protection on, all three tools equally excluded from real-time scanning.
 
 ## linux corpus, Native Linux, 20260828-230405
 
@@ -87,6 +88,17 @@ Trust checks for this run:
 - **Command order**: every table ran in both command orders and the numbers above pool the two. Swapping the order moved no tool by more than 0.6%.
 - **Power**: the cpu was set to its high-performance mode for the run and restored after.
 
+## Every run
+
+Same-work times, the sections above show only the latest run per platform. Commits, machine state and everything else: inside each run's directory.
+
+| run | platform | corpus | mezura | scc | tokei | machine steadiness |
+|---|---|---|---|---|---|---|
+| [20260901-195326](linux/windows/20260901-195326/) | Windows | linux | 343 ms | 796 ms | 674 ms | 0.3% |
+| [20260829-072844](linux/wsl/20260829-072844/) | WSL2 | linux | 257 ms | 657 ms | 531 ms | 3.4% |
+| [20260829-050102](linux/windows/20260829-050102/) | Windows | linux | 346 ms | 794 ms | 661 ms | 1.3% |
+| [20260828-230405](linux/linux/20260828-230405/) | Native Linux | linux | 223 ms | 471 ms | 474 ms | 0.3% |
+
 ## Methodology
 
 - hyperfine, with no shell in between. Each section above states its own warmups, timed runs and pause.
@@ -107,5 +119,5 @@ Trust checks for this run:
 - **parallelism**: user plus system cpu, divided by wall: 4.6 s of cpu inside a 0.35 s run means 13 threads were busy on average.
 - **lines/s**: the lines this tool itself counted, divided by its wall time.
 - **lines per cpu second**: the lines this tool counted, divided by its user plus system cpu. How cheaply it counts, with the number of cores taken out of the picture.
-- **files / lines**: what the tool reported counting. Under "Same work" the three must nearly agree. Out of the box they differ by design.
+- **files / lines**: what the tool reported counting. Under "Same work" the three must nearly agree. Out of the box they differ by design. The same commit checks out a few files differently per platform, so counts across two sections differ by a fraction of a percent.
 - **machine steadiness**: the same binary timed at the start and at the end of the whole run. The percentage is how far apart the two means came out.
