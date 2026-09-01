@@ -3,6 +3,7 @@ name = "mezura-core"
 version = "1.0.0"
 authors = ["subamanis <petrospapa21@gmail.com>"]
 edition = "2024"
+rust-version = "1.88"
 description = "The fast, multithreaded counting engine behind mezura: identifies each file's language, splits every line into code, comments and everything else, and counts user-defined keywords like classes and structs."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/subamanis/mezura"

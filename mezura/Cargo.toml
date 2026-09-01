@@ -3,6 +3,7 @@ name = "mezura"
 version = "3.0.0"
 authors = ["subamanis <petrospapa21@gmail.com>"]
 edition = "2024"
+rust-version = "1.88"
 description = "Counts the lines of a codebase quickly and accurately, along with user-defined keywords like classes and structs. Tracks how the figures move between runs, and between any two git revisions."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/subamanis/mezura"
