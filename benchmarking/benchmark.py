@@ -172,7 +172,7 @@ def say(message: str) -> None:
 COLOR_CODES = {'green': '32', 'red': '31', 'yellow': '33', 'bold': '1',
                'blue': '38;2;110;160;220', 'orange': '38;2;220;140;60'}
 BACKGROUND_SAMPLE_SECONDS = 6
-BACKGROUND_STEPS = (3, 6, 10)
+BACKGROUND_CORE_STEPS = (0.75, 1.5, 3.0)
 SPREAD_STEPS = (5, 10, 15)
 VERDICTS = (('steady', 'green'), ('relatively steady', 'yellow'),
             ('somewhat unsteady', 'orange'), ('not steady', 'red'))
@@ -824,23 +824,32 @@ def background_busy_percent(seconds: int = BACKGROUND_SAMPLE_SECONDS) -> Optiona
             return None
         return round(100 * (1 - (idle_after - idle_before) / total), 1)
     if PLATFORM == 'windows':
-        samples = []
-        for _ in range(seconds):
-            value = powershell(
-                "(Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor "
-                "| Where-Object {$_.Name -eq '_Total'}).PercentProcessorTime").strip()
-            if value.isdigit():
-                samples.append(int(value))
-            time.sleep(1)
-        return round(sum(samples) / len(samples), 1) if samples else None
+        import ctypes
+
+        def snap() -> Optional[tuple[int, int]]:
+            idle, kernel, user = ctypes.c_uint64(), ctypes.c_uint64(), ctypes.c_uint64()
+            ok = ctypes.windll.kernel32.GetSystemTimes(
+                ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user))
+            return (idle.value, kernel.value + user.value) if ok else None
+        before = snap()
+        if before is None:
+            return None
+        time.sleep(seconds)
+        after = snap()
+        if after is None:
+            return None
+        total = after[1] - before[1]
+        if not total:
+            return None
+        return round(100 * (1 - (after[0] - before[0]) / total), 1)
     return None
 
 
-def step_of(value: float, steps: tuple[int, int, int]) -> int:
+def step_of(value: float, steps: tuple[float, float, float]) -> int:
     return sum(1 for step in steps if value >= step)
 
 
-def paint_by_steps(value: float, steps: tuple[int, int, int], text: str) -> str:
+def paint_by_steps(value: float, steps: tuple[float, float, float], text: str) -> str:
     return paint(VERDICTS[step_of(value, steps)][1], text)
 
 
@@ -849,11 +858,12 @@ def do_noise(corpus: Path, binaries: Binaries, definition: Definition) -> int:
     header('== noise')
     busy = background_busy_percent()
     if busy is None:
+        others = None
         say('   background    not sampled on this platform')
     else:
         others = round(busy * cores / 100, 1)
-        say(f'   background    {paint_by_steps(busy, BACKGROUND_STEPS, f"{busy}%")} busy, '
-            f'~{others} of {cores} cores')
+        say(f'   background    {busy}% busy, '
+            f'{paint_by_steps(others, BACKGROUND_CORE_STEPS, f"~{others} of {cores} cores")}')
 
     with tempfile.TemporaryDirectory() as scratch:
         marker = Path(scratch) / 'noise.json'
@@ -882,8 +892,9 @@ def do_noise(corpus: Path, binaries: Binaries, definition: Definition) -> int:
     say(f'   cache         {"cold" if first >= 1.5 else "warm"}, first run {first}x the warm mean')
 
     zones = [(step_of(spread, SPREAD_STEPS), f'spread at {spread}%')]
-    if busy is not None:
-        zones.append((step_of(busy, BACKGROUND_STEPS), f'background at {busy}%'))
+    if others is not None:
+        zones.append((step_of(others, BACKGROUND_CORE_STEPS),
+                      f'background at {others} of {cores} cores'))
     worst = max(zone for zone, _ in zones)
     blamed = ' and '.join(reason for zone, reason in zones if zone == worst)
     verdict, color = VERDICTS[worst]
@@ -1228,9 +1239,12 @@ def write_results_page(outroot: Path) -> None:
                      '- **Power**: the machine was measured as it was, with no settings '
                      'changed.')
         busy = machine.get('background_busy_percent')
+        busy_cores = machine.get('logical_cores')
         if busy is not None:
+            share = (f', about {round(busy * busy_cores / 100, 1)} of {busy_cores} cores'
+                     if busy_cores else '')
             lines.append(f'- **Quiet machine**: everything other than the benchmark was '
-                         f'using {busy}% of the cpu when the run started.')
+                         f'using {busy}% of the cpu when the run started{share}.')
         realtime = machine.get('defender_realtime')
         if realtime not in (None, 'not applicable'):
             state = f'real-time protection {"on" if realtime is True or realtime == "True" else realtime}'
@@ -1319,7 +1333,9 @@ def write_results_page(outroot: Path) -> None:
             'plus system cpu. How cheaply it counts, with the number of cores taken out '
             'of the picture.',
             '- **files / lines**: what the tool reported counting. Under "Same work" the '
-            'three must nearly agree. Out of the box they differ by design.',
+            'three must nearly agree. Out of the box they differ by design. The same commit '
+            'checks out a few files differently per platform, so counts across two sections '
+            'differ by a fraction of a percent.',
             '- **machine steadiness**: the same binary timed at the start and at the end of '
             'the whole run. The percentage is how far apart the two means came out.', '']
 
