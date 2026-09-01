@@ -117,21 +117,38 @@ fn print_files_left_out(result: &RunResult, config: &Configuration) {
     if !config.view.prints_text() {
         return;
     }
-    let mut said_something = false;
-    for (count, kind, command) in [(result.minified_files, "minified", crate::config_manager::COUNT_MINIFIED),
-            (result.generated_files, "generated", crate::config_manager::COUNT_GENERATED)] {
-        if count == 0 {
-            continue;
+    let lines = format_files_left_out(result, config.view.should_show_skipped_files);
+    for line in &lines {
+        if line.starts_with("-- ") {
+            eprintln!("{line}");
+        } else {
+            eprintln!("{}", super::theme::get_active().note.paint(line));
         }
-        let subject = if count == 1 {"file was"} else {"files were"};
-        eprintln!("{}", super::theme::get_active().note.paint(&format!(
-                "{} {kind} {subject} left out of the counts. Run with '--{command}' to include them.",
-                crate::number_formatter::format_with_separators(count))));
-        said_something = true;
     }
-    if said_something {
+    if !lines.is_empty() {
         eprintln!();
     }
+}
+
+fn format_files_left_out(result: &RunResult, show_skipped: bool) -> Vec<String> {
+    let mut lines = Vec::new();
+    for (paths, kind, command) in [(&result.skipped_files.minified, "minified", crate::config_manager::COUNT_MINIFIED),
+            (&result.skipped_files.generated, "generated", crate::config_manager::COUNT_GENERATED),
+            (&result.skipped_files.not_code, "non-code", crate::config_manager::COUNT_NOT_CODE)] {
+        if paths.is_empty() {
+            continue;
+        }
+        let subject = if paths.len() == 1 {"file was"} else {"files were"};
+        lines.push(format!("{} {kind} {subject} left out of the counts. Run with '--{command}' to include them.",
+                crate::number_formatter::format_with_separators(paths.len())));
+        if show_skipped {
+            lines.extend(paths.iter().map(|path| format!("-- {path}")));
+        }
+    }
+    if !lines.is_empty() && !show_skipped {
+        lines.push(format!("'--{}' lists them.", crate::config_manager::SHOW_SKIPPED));
+    }
+    lines
 }
 
 // In the error color and not a milder one: everything under an unreadable directory appears in no
@@ -220,6 +237,30 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn the_left_out_notes_name_each_kind_and_the_paths_only_when_asked() {
+        let mut result = result_with(0, 0);
+        result.skipped_files = mezura_core::SkippedFiles {
+            minified: vec!["D:/x/bundle.js".to_owned()],
+            generated: Vec::new(),
+            not_code: vec!["D:/x/a.d".to_owned(), "D:/x/b.d".to_owned()]
+        };
+
+        let quiet = format_files_left_out(&result, false);
+        assert_eq!(3, quiet.len(), "{quiet:?}");
+        assert!(quiet[0].starts_with("1 minified file was left out"), "{quiet:?}");
+        assert!(quiet[1].starts_with("2 non-code files were left out"), "{quiet:?}");
+        assert_eq!("'--show-skipped' lists them.", quiet[2]);
+
+        let listed = format_files_left_out(&result, true);
+        assert_eq!(vec!["-- D:/x/bundle.js".to_owned()], listed[1..2].to_vec());
+        assert!(listed.contains(&"-- D:/x/a.d".to_owned()) && listed.contains(&"-- D:/x/b.d".to_owned()));
+        assert!(!listed.iter().any(|line| line.contains("lists them")), "{listed:?}");
+
+        assert!(format_files_left_out(&result_with(0, 0), false).is_empty(),
+                "a run with nothing skipped still said something");
+    }
+
     // One file is always counted beside whatever went wrong: a run where nothing at all was counted
     // takes a branch of its own, and this fixture must not stand in both.
     fn result_with(unreadable: usize, faulty: usize) -> RunResult {
@@ -231,7 +272,7 @@ mod tests {
             performance: Performance {duration_millis: 0, threads: Threads::new(1, 1)},
             faulty_files: (0..faulty).map(|i| mezura_core::FaultyFileDetails::new(
                     format!("a{i}.rs"), "no".to_owned(), 1)).collect(),
-            minified_files: 0, generated_files: 0,
+            skipped_files: mezura_core::SkippedFiles::default(),
             unreadable_dirs: (0..unreadable).map(|i| UnreadableDirDetails::new(
                     format!("D:/d{i}"), "Access is denied. (os error 5)".to_owned())).collect()
         }
@@ -273,6 +314,7 @@ mod tests {
             scope: crate::diff::scope_of(&mezura_core::EngineConfig::default(), mezura_core::CountingModel::Content),
             warnings: Vec::new(),
             faulty_files_count: 0,
+            skipped_counts: crate::json_reader::SkippedCounts::default(),
             unreadable_dirs_count: 0,
             files_recorded: true,
             files_hidden: 0,

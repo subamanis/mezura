@@ -175,7 +175,7 @@ fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: ReadDir, dirs_
                 // The size is not asked for: the counting thread reads the file into a buffer
                 // anyway, so its length is the same number for free.
                 files_injector.push(ParsableFile::new(path_buf, lang_name, module)
-                        .with_contenders(language_lookup.find_contenders(name)));
+                        .with_extension_rules(language_lookup.find_extension_rules(name)));
                 progress.record_file_found();
             } else {
                 // Read lossily, and only to ask whether it is dotted, which a lossy reading answers

@@ -1,4 +1,5 @@
-Which language wins an extension that more than one of them claims.
+Which language wins an extension that more than one of them claims, and which files wearing an
+extension are not code at all.
 
 Two languages can want the same extension: '.m' is Objective-C to one person and MATLAB to another,
 '.pl' is Perl to one and Prolog to another. Only one of them can have it, and the choice matters more
@@ -16,10 +17,10 @@ The names are the ones the language files declare, and neither they nor the exte
 capitalisation. A language you have removed, or one that never existed, is skipped and the next name
 on the line is tried.
 
-Change who wins by reordering the names on a line, not by deleting the line. This file is yours to
-edit and is never replaced, so every answer you give here survives an update; what an update does
-add is the rules for contests your copy does not mention at all, and a line you removed is one your
-copy does not mention. Your copy as it stood is kept under 'replaced' whenever anything is added.
+Change who wins by reordering the names on a line, not by deleting the line. A copy you have not
+edited is brought whole to each new version. An edited copy is merged: your contest lines are kept,
+lines for extensions your copy does not mention are added, and your file as it stood is saved under
+'replaced'. A line you removed is one your copy does not mention, so an update brings it back.
 
 This file settles a contested file whose content says nothing. A language file may declare
 'Identifying line starts' evidence, a line beginning with 'function' says MATLAB where one
@@ -46,6 +47,15 @@ languages you add:
 
     Makefile    Make, Automake
 
+Some files carry a language's extension without being that language's code, or any code. Every
+'.pro' of an Android project is a ProGuard configuration and not Prolog, and a build directory
+fills with make and cargo dependency files ending in '.d' that are not the D language. The last
+two markers hold, per extension, the give-away text of such files: a file whose head has a line
+beginning with one of the first list's entries, or containing one of the second's, is left out of
+the count and reported as skipped. '--count-not-code' turns this check off, and '--no-heuristics'
+turns it off along with the rest. These marker lists belong to the program and are brought to what
+each version ships; a line you add for an extension this file does not mention is kept.
+
 Everything above is explanation and is ignored, exactly as in a configuration file. The rules
 are the lines below each marker.
 
@@ -56,3 +66,9 @@ pl      Perl, Prolog
 pas     Pascal, Delphi
 
 ===> contested-filenames
+
+===> not-code-when-a-line-starts
+pro     -keep, -dontwarn, -keepattributes, -keepclassmembers, -dontobfuscate, -dontoptimize, -include, -injars, -libraryjars, -printmapping
+
+===> not-code-when-a-line-contains
+d       .o:, .rlib:, .rmeta:, .exe:, .dll:, .so:, .dylib:

@@ -122,7 +122,7 @@ fn format_scope(config: &Configuration, targets: &[Target]) -> String {
     let engine = &config.engine;
     format!("{{\"targets\":{},\"exclude\":{},\"languages\":{},\"excluded_languages\":{},\
 \"forced_languages\":{},\"counting\":\"{}\",\"search_in_dotted\":{},\"gitignore\":{},\"ignore_files\":{},\
-\"keywords_counted\":{},\"count_minified\":{},\"count_generated\":{},\"use_heuristics\":{}}}",
+\"keywords_counted\":{},\"count_minified\":{},\"count_generated\":{},\"count_not_code\":{},\"use_heuristics\":{}}}",
             format_targets(targets, config),
             format_strings(&engine.exclude_dirs),
             format_strings(&engine.languages_of_interest.to_written_form()),
@@ -135,6 +135,7 @@ fn format_scope(config: &Configuration, targets: &[Target]) -> String {
             engine.count_keywords,
             engine.count_minified,
             engine.count_generated,
+            engine.count_not_code,
             engine.use_heuristics)
 }
 
@@ -240,7 +241,7 @@ mod tests {
 
     fn result_of(total: Stats, modules: Vec<ModuleResult>) -> RunResult {
         RunResult { per_language: HashMap::new(), modules, nested_languages: HashMap::new(), total,
-                faulty_files: Vec::new(), minified_files: 0, generated_files: 0,
+                faulty_files: Vec::new(), skipped_files: mezura_core::SkippedFiles::default(),
                 files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(),
                 performance: Performance { duration_millis: 0, threads: Threads::new(1, 1) } }
     }

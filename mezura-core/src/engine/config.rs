@@ -332,6 +332,8 @@ pub struct EngineConfig {
     pub count_minified: bool,
     /// The same, for a file whose head says a tool wrote it.
     pub count_generated: bool,
+    /// The same, for a file whose head says it is not code at all, like a '.d' dependency file.
+    pub count_not_code: bool,
     /// Whether to keep one entry per file in [`crate::ModuleResult::files`]. Off by default, where
     /// the run holds one entry per language.
     pub collect_files: bool,
@@ -356,6 +358,7 @@ impl Default for EngineConfig {
             count_keywords: true,
             count_minified: false,
             count_generated: false,
+            count_not_code: false,
             collect_files: false,
             use_heuristics: true
         }

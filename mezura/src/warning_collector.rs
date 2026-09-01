@@ -43,9 +43,8 @@ fn add_advice_to(mut warning: Warning) -> Warning {
     // Deliberately not exhaustive: a new code arriving without a line of advice is a missing nicety
     // and not a wrong answer.
     let advice = match warning.code {
-        // The conflicts file settles extensions and filenames only. A contested shebang written
-        // into it is skipped without a word, so sending its owner there would be advice that fails
-        // silently.
+        // The conflicts file has no block for interpreters. A contested shebang written into it is
+        // skipped without a word, so sending its owner there would be advice that fails silently.
         Code::LanguageTiebreak => Some(format!("A contested extension or filename is settled for good in '{}'; \
 '--force-language {}=<language>' decides it for this run.",
                 mezura_core::LANGUAGE_CONFLICTS_FILE_NAME, warning.subject)),

@@ -56,11 +56,11 @@ pub use domain::{Bucket, CountingModel, Keyword, Language, LeveledPair, LineClas
 pub use engine::config::{EngineConfig, ForcedLanguages, LanguageNames, ScopedByModule, Target,
         Threads, format_module_scope, split_off_module_scope};
 pub use engine::targets::TargetError;
-pub use explain::{Carried, ExplainError, ExplainedLine, FileExplanation, explain_file};
+pub use explain::{Carried, ExplainError, ExplainedLine, FileExplanation, ScanSkip, explain_file};
 pub use languages::Languages;
 pub use progress::ScanProgress;
 pub use result::{FaultyFileDetails, FileEntry, FilesPresent, ModuleResult, Performance, RunError,
-        RunResult, SortCriterion, UnreadableDirDetails};
+        RunResult, SkippedFiles, SortCriterion, UnreadableDirDetails};
 pub use warnings::{Affects, Code, Warning};
 
 #[cfg(test)]
@@ -200,14 +200,13 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     // Written by whichever consumer stops last, read once they have all been joined.
     let counting_ended = Arc::new(AtomicU64::new(0));
     // Decided by the counting and not by the walk, so they are read after the joins below
-    let minified_files = Arc::new(AtomicUsize::new(0));
-    let generated_files = Arc::new(AtomicUsize::new(0));
+    let skipped_files: Arc<Mutex<SkippedFiles>> = Arc::new(Mutex::new(SkippedFiles::default()));
     for i in 0..config.threads.consumers() {
         match engine::consumer::start_parser_thread(i, files_injector.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
                 stats_per_module.clone(), nested_per_module.clone(), files_per_module.clone(),
                 language_map_ref.clone(), nested_definitions.clone(), language_lookups.clone(), config.clone(),
-                parsing_started_instant, counting_ended.clone(), minified_files.clone(),
-                generated_files.clone(), progress.clone()) {
+                parsing_started_instant, counting_ended.clone(), skipped_files.clone(),
+                progress.clone()) {
             Ok(handle) => consumer_handles.push(handle),
             Err(x) => last_refusal = Some(x)
         }
@@ -277,8 +276,12 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
         return Err(RunError::IncompleteRun { worker_panic: worker_panics.join(" | ") });
     }
 
-    let minified_files = minified_files.load(Ordering::Relaxed);
-    let generated_files = generated_files.load(Ordering::Relaxed);
+    // Sorted here and not by a presenter, because the threads append in whichever order they
+    // finish and two runs over one tree must print one list.
+    let mut skipped_files = std::mem::take(&mut *skipped_files.lock().unwrap());
+    skipped_files.minified.sort_unstable();
+    skipped_files.generated.sort_unstable();
+    skipped_files.not_code.sort_unstable();
     let relevant_files_num = files_present.relevant_files;
     if relevant_files_num == 0 {
         return Ok(RunResult::of_nothing(files_present,
@@ -322,8 +325,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
         nested_languages,
         modules: modules_result,
         faulty_files: std::mem::take(&mut faulty_files_ref.lock().unwrap()),
-        minified_files,
-        generated_files,
+        skipped_files,
         files_present,
         performance: Performance { duration_millis: parsing_duration_millis, threads: threads_used },
         targets: targets.to_vec(),
@@ -371,7 +373,7 @@ pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets
                 true => ParsableFile::written_by_hand(dir_path.to_path_buf(), lang_name, module),
                 false => ParsableFile::new(dir_path.to_path_buf(), lang_name, module)
             };
-            files_injector.push(queued.with_contenders(lookup.find_contenders(dir_path)));
+            files_injector.push(queued.with_extension_rules(lookup.find_extension_rules(dir_path)));
             files_present.total_files += 1;
             files_present.relevant_files += 1;
             progress.record_file_found();
@@ -401,9 +403,9 @@ pub(crate) struct ParsableFile {
     pub language_name: Arc<str>,
     pub module: ModuleId,
     // Named as a target rather than found by the walk, which is what exempts it from every rule
-    // that skips a file: the ignore files, the dotted names, and being minified or generated
+    // that skips a file. The ignore files, the dotted names and the head checks all pass it through.
     pub written_by_hand: bool,
-    pub contenders: Option<Arc<[Arc<str>]>>
+    pub extension_rules: Option<Arc<engine::identity::ExtensionRules>>
 }
 
 impl ParsableFile {
@@ -413,7 +415,7 @@ impl ParsableFile {
             language_name,
             module,
             written_by_hand: false,
-            contenders: None
+            extension_rules: None
         }
     }
 
@@ -421,8 +423,8 @@ impl ParsableFile {
         ParsableFile { written_by_hand: true, ..ParsableFile::new(path, language_name, module) }
     }
 
-    pub(crate) fn with_contenders(mut self, contenders: Option<Arc<[Arc<str>]>>) -> Self {
-        self.contenders = contenders;
+    pub(crate) fn with_extension_rules(mut self, extension_rules: Option<Arc<engine::identity::ExtensionRules>>) -> Self {
+        self.extension_rules = extension_rules;
         self
     }
 }

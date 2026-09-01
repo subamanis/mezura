@@ -41,8 +41,8 @@ pub fn create_document(result: &RunResult, datetime_now: &DateTime<Local>, confi
         format!("\"mezura_version\":\"{}\"", escape(config.view.version.trim_start_matches('v'))),
         format!("\"generated_at\":\"{}\"", datetime_now.to_rfc3339_opts(SecondsFormat::Secs, false)),
         format!("\"scope\":{}", create_scope_object(config,&result.targets)),
-        format!("\"scan\":{}", create_scan_object(&result.files_present,
-                result.faulty_files.len(), result.minified_files, result.generated_files,
+        format!("\"scan\":{}", create_scan_object(&result.files_present, result.faulty_files.len(),
+                &super::json_reader::SkippedCounts::of(&result.skipped_files),
                 result.unreadable_dirs.len())),
         format!("\"total\":{}", create_total_object(total, !config.view.hidden.keywords, config.view.counting)),
         format!("\"languages\":{}", create_languages_array(&shown, per_language, nested_languages, &files, config)),
@@ -51,6 +51,8 @@ pub fn create_document(result: &RunResult, datetime_now: &DateTime<Local>, confi
         // The paths, which '--show-faulty-files' asks for here as it does on the screen. How many
         // there were is in 'scan' either way, so an empty list never claims nothing went wrong.
         format!("\"faulty_files\":{}", create_faulty_files_array(faulty_files, config.view.should_show_faulty_files)),
+        format!("\"skipped_files\":{}", create_skipped_files_object(&result.skipped_files,
+                config.view.should_show_skipped_files)),
         format!("\"unreadable_dirs\":{}", create_unreadable_dirs_array(unreadable_dirs, config.view.should_show_faulty_files)),
         format!("\"warnings\":{}", create_warnings_array()),
     ];
@@ -279,8 +281,7 @@ fn create_side_object(reading: &super::diff::Reading) -> String {
     // files looks like a side that shrank. Which files those were is a question for a run over that
     // side, not for a comparison of two.
     members.push(format!("\"scan\":{}", create_scan_object(&reading.result.files_present,
-            reading.faulty_files_count, reading.result.minified_files, reading.result.generated_files,
-            reading.unreadable_dirs_count)));
+            reading.faulty_files_count, &reading.skipped_counts, reading.unreadable_dirs_count)));
     members.push(format!("\"scope\":{}", create_scope_object_of(&reading.scope, &reading.result.targets)));
     // Only what the side's own document recorded: what this very process warned about belongs to
     // the comparison and sits at its top level, wherever the run appears in it
@@ -306,6 +307,7 @@ fn create_scope_object_of(scope: &super::json_reader::Scope, targets: &[mezura_c
         format!("\"keywords_counted\":{}", scope.keywords_counted),
         format!("\"count_minified\":{}", scope.count_minified),
         format!("\"count_generated\":{}", scope.count_generated),
+        format!("\"count_not_code\":{}", scope.count_not_code),
         format!("\"use_heuristics\":{}", scope.use_heuristics),
     ];
 
@@ -443,6 +445,7 @@ fn create_scope_object(config: &Configuration, targets: &[mezura_core::Target]) 
         format!("\"keywords_counted\":{}", !config.view.hidden.keywords),
         format!("\"count_minified\":{}", config.engine.count_minified),
         format!("\"count_generated\":{}", config.engine.count_generated),
+        format!("\"count_not_code\":{}", config.engine.count_not_code),
         format!("\"use_heuristics\":{}", config.engine.use_heuristics),
     ];
 
@@ -453,17 +456,17 @@ fn create_scope_object(config: &Configuration, targets: &[mezura_core::Target]) 
 // below: a faulty file was found and is of interest, and nothing of it was counted. The counts
 // arrive apart from the lists in the result, because for a side read from a document the lists are
 // only there when that run detailed them while its scan block counted either way.
-fn create_scan_object(files_present: &mezura_core::FilesPresent,
-        faulty_files_count: usize, minified_files_count: usize, generated_files_count: usize,
-        unreadable_dirs_count: usize) -> String
+fn create_scan_object(files_present: &mezura_core::FilesPresent, faulty_files_count: usize,
+        skipped: &super::json_reader::SkippedCounts, unreadable_dirs_count: usize) -> String
 {
     let members = [
         format!("\"files_found\":{}", files_present.total_files),
         format!("\"files_of_interest\":{}", files_present.relevant_files),
         format!("\"files_excluded\":{}", files_present.excluded_files),
         format!("\"files_faulty\":{faulty_files_count}"),
-        format!("\"files_minified\":{minified_files_count}"),
-        format!("\"files_generated\":{generated_files_count}"),
+        format!("\"files_minified\":{}", skipped.minified),
+        format!("\"files_generated\":{}", skipped.generated),
+        format!("\"files_not_code\":{}", skipped.not_code),
         format!("\"dirs_unreadable\":{unreadable_dirs_count}"),
     ];
 
@@ -623,6 +626,21 @@ fn create_warnings_array() -> String {
     ])))
 }
 
+fn create_skipped_files_object(skipped: &mezura_core::SkippedFiles, asked_for: bool) -> String {
+    let paths = |list: &[String]| {
+        if !asked_for {
+            return String::from("[]");
+        }
+        create_array(list.iter().map(|path| format!("\"{}\"", escape(path))))
+    };
+
+    create_object([
+        format!("\"minified\":{}", paths(&skipped.minified)),
+        format!("\"generated\":{}", paths(&skipped.generated)),
+        format!("\"not_code\":{}", paths(&skipped.not_code)),
+    ])
+}
+
 // Sorted by path, because the faulty files are collected by whichever thread hit them and their
 // order would otherwise change between two runs over the same tree
 fn create_faulty_files_array(faulty_files: &[FaultyFileDetails], asked_for: bool) -> String {
@@ -731,7 +749,7 @@ mod tests {
             faulty_files: Vec<FaultyFileDetails>, files_present: FilesPresent) -> RunResult
     {
         RunResult {per_language, modules: Vec::new(), nested_languages: HashMap::new(), total, faulty_files,
-                minified_files: 0, generated_files: 0, files_present, targets: Vec::new(), unreadable_dirs: Vec::new(),
+                skipped_files: mezura_core::SkippedFiles::default(), files_present, targets: Vec::new(), unreadable_dirs: Vec::new(),
                 performance: mezura_core::Performance { duration_millis: 1180, threads: mezura_core::Threads::new(2, 8) }}
     }
 
@@ -966,6 +984,7 @@ mod tests {
             scope: crate::diff::scope_of(&mezura_core::EngineConfig::default(), mezura_core::CountingModel::Content),
             warnings: Vec::new(),
             faulty_files_count: 0,
+            skipped_counts: crate::json_reader::SkippedCounts::default(),
             unreadable_dirs_count: 0,
             files_recorded: true,
             files_hidden: 0,
@@ -1199,6 +1218,33 @@ mod tests {
                         "'{setting}' is missing from the '{side}' side of the comparison: {document}");
             }
         }
+    }
+
+    #[test]
+    fn the_skipped_lists_are_written_only_when_asked_for_and_the_counts_either_way() {
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        let mut result = result_of(HashMap::new(), Stats::default(),
+                Vec::new(), FilesPresent {total_files: 3, relevant_files: 3, excluded_files: 0});
+        result.skipped_files = mezura_core::SkippedFiles {
+            minified: vec!["D:/x/bundle.js".to_owned()],
+            generated: Vec::new(),
+            not_code: vec!["D:/x/a.d".to_owned(), "D:/x/b.d".to_owned()]
+        };
+
+        let document = create_document(&result, &Local::now(), &config);
+        assert!(document.contains("\"files_minified\":1"), "{document}");
+        assert!(document.contains("\"files_not_code\":2"), "{document}");
+        assert!(document.contains("\"skipped_files\":{\"minified\":[],\"generated\":[],\"not_code\":[]}"),
+                "the lists were written without '--show-skipped': {document}");
+
+        config.view.should_show_skipped_files = true;
+        let detailed = create_document(&result, &Local::now(), &config);
+        assert!(detailed.contains("\"not_code\":[\"D:/x/a.d\",\"D:/x/b.d\"]"), "{detailed}");
+        assert!(detailed.contains("\"minified\":[\"D:/x/bundle.js\"]"), "{detailed}");
+
+        let read_back = crate::json_reader::parse(&detailed).unwrap();
+        assert_eq!(2, read_back.skipped_counts.not_code);
+        assert_eq!(vec!["D:/x/a.d".to_owned(), "D:/x/b.d".to_owned()], read_back.result.skipped_files.not_code);
     }
 
     #[test]

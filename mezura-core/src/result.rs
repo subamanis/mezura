@@ -26,11 +26,9 @@ pub struct RunResult {
     pub modules: Vec<ModuleResult>,
     /// The files that could not be read or parsed, and why.
     pub faulty_files: Vec<FaultyFileDetails>,
-    /// How many bundled files were left out. Counted among `files_present.relevant_files` and in
-    /// none of the figures above, the way a faulty file is.
-    pub minified_files: usize,
-    /// The same, for the files whose head says a tool wrote them.
-    pub generated_files: usize,
+    /// The files the head checks left out, by kind and by path. Counted among
+    /// `files_present.relevant_files` and in none of the figures above, the way a faulty file is.
+    pub skipped_files: SkippedFiles,
     /// How many files the scan saw, and how many of them belonged to a language it counts.
     pub files_present: FilesPresent,
     /// How long it took and on how many threads.
@@ -56,7 +54,7 @@ impl RunResult {
     }
 
     /// Such files were found and no row came out of them, by any mixture of failing to parse and
-    /// being left out as minified or generated.
+    /// being left out as minified, generated or not code.
     pub fn nothing_of_interest_was_counted(&self) -> bool {
         self.files_present.relevant_files > 0 && self.total.files == 0
     }
@@ -92,8 +90,7 @@ impl RunResult {
                 total: Stats::default()
             }).collect(),
             faulty_files: Vec::new(),
-            minified_files: 0,
-            generated_files: 0,
+            skipped_files: SkippedFiles::default(),
             files_present,
             performance,
             targets,
@@ -229,6 +226,18 @@ impl SortCriterion {
             Self::Name => 0
         }
     }
+}
+
+/// The paths of the files a run set aside after reading their head, by the reason each was set
+/// aside for.
+#[derive(Debug, Clone, Default)]
+pub struct SkippedFiles {
+    /// Bundled files, recognised by an average line of 1000 bytes or more.
+    pub minified: Vec<String>,
+    /// Files whose head says a tool wrote them.
+    pub generated: Vec<String>,
+    /// Files whose head says they are not code at all, like a `.d` dependency file.
+    pub not_code: Vec<String>
 }
 
 /// A file that could not be read or parsed. Its lines are in no total, but it is counted among the

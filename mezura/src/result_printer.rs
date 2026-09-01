@@ -1054,7 +1054,7 @@ so part of the difference below may be a language counted better since, and not 
         // The doubt lines stay unpainted, so this one does not take the shared tail
         Note::CountsInDoubt { about, doubts } => return format!("{}\n{}",
                 theme.warning.paint(&wrap_message(&format!(
-                        "The run that took '{about}' was not sure of its own counts:"))),
+                        "Part of '{about}' was never counted:"))),
                 doubts.iter().map(|x| wrap_message(&format!("-- {x}"))).collect::<Vec<_>>().join("\n")),
         Note::NothingCounted { about } => format!(
                 "'{about}' holds no counted files at all, so its side of every figure is zero."),
@@ -2605,11 +2605,12 @@ mod tests {
             scope: crate::diff::scope_of(&mezura_core::EngineConfig::default(), CountingModel::Content),
             warnings: Vec::new(),
             faulty_files_count: 0,
+            skipped_counts: crate::json_reader::SkippedCounts::default(),
             unreadable_dirs_count: 0,
             files_recorded: true,
             files_hidden: 0,
             result: RunResult {total, per_language, modules, nested_languages: HashMap::new(),
-                    faulty_files: Vec::new(), minified_files: 0, generated_files: 0, files_present, targets: Vec::new(),
+                    faulty_files: Vec::new(), skipped_files: mezura_core::SkippedFiles::default(), files_present, targets: Vec::new(),
                     unreadable_dirs: Vec::new(),
                     performance: mezura_core::Performance {duration_millis: 0, threads: mezura_core::Threads::new(1, 1)}}
         }
@@ -2618,7 +2619,7 @@ mod tests {
     fn groups_from<'a>(modules: &'a [ModuleResult], config: &crate::config_manager::Configuration) -> Vec<Group<'a>> {
         let result = RunResult {per_language: HashMap::new(),
                 modules: Vec::new(), nested_languages: HashMap::new(), total: Stats::default(), faulty_files: Vec::new(),
-                minified_files: 0, generated_files: 0, files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(), performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
+                skipped_files: mezura_core::SkippedFiles::default(), files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(), performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
         let mut result = result;
         result.modules = modules.iter().map(|x| ModuleResult {
             name: x.name.clone(),
@@ -3028,7 +3029,7 @@ mod tests {
         let of_modules = |modules: Vec<ModuleResult>| RunResult {
             per_language: content_info.clone(), modules, nested_languages: HashMap::new(),
             total: crate::test_support::plain_stats_of(23, 485500, 10934, 7643, 650, hashmap![]),
-            faulty_files: Vec::new(), minified_files: 0, generated_files: 0, files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(), performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
+            faulty_files: Vec::new(), skipped_files: mezura_core::SkippedFiles::default(), files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(), performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
         let single = || vec![ModuleResult {name: None, per_language: content_info.clone(),
                 total: Stats::total_of(&content_info), nested_languages: HashMap::new(), files: HashMap::new()}];
 
@@ -3065,7 +3066,7 @@ mod tests {
         };
         let of_modules = |modules: Vec<ModuleResult>| RunResult {
             per_language: content_info.clone(), modules, nested_languages: HashMap::new(),
-            total: total.clone(), faulty_files: Vec::new(), minified_files: 0, generated_files: 0, files_present: FilesPresent::default(),
+            total: total.clone(), faulty_files: Vec::new(), skipped_files: mezura_core::SkippedFiles::default(), files_present: FilesPresent::default(),
             targets: vec![mezura_core::Target::of("D:/x")], unreadable_dirs: Vec::new(),
             performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
 
@@ -3212,7 +3213,7 @@ mod tests {
             modules: vec![ModuleResult { name: None, per_language: content_info.clone(),
                     total: Stats::total_of(&content_info), nested_languages: nested.clone(), files: HashMap::new() }],
             nested_languages: nested.clone(), total: total.clone(), faulty_files: Vec::new(),
-            minified_files: 0, generated_files: 0, files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(),
+            skipped_files: mezura_core::SkippedFiles::default(), files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(),
             performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
 
         for layout in [Layout::List, Layout::Table, Layout::Boxed, Layout::Matrix] {

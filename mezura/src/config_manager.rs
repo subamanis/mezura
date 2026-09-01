@@ -24,7 +24,9 @@ pub const COUNTING           :&str   = "counting";
 pub const SEARCH_IN_DOTTED   :&str   = "search-in-dotted";
 pub const COUNT_MINIFIED     :&str   = "count-minified";
 pub const COUNT_GENERATED    :&str   = "count-generated";
+pub const COUNT_NOT_CODE     :&str   = "count-not-code";
 pub const SHOW_FAULTY_FILES  :&str   = "show-faulty-files";
+pub const SHOW_SKIPPED       :&str   = "show-skipped";
 pub const HIDE               :&str   = "hide";
 pub const NO_GITIGNORE       :&str   = "no-gitignore";
 pub const NO_IGNORE_FILES    :&str   = "no-ignore-files";
@@ -71,9 +73,9 @@ const DEFAULT_CONFIG_LABEL  : &str    = "default";
 // The commands whose value decides what is counted, as against how the count is shown. A project's
 // own configuration is answered for these by the program's defaults and never by this machine's
 // saved ones, and a value of theirs this build cannot read stops the run rather than warning.
-const CHANGES_THE_NUMBERS   : [&str; 12] = [TARGETS, EXCLUDE, LANGUAGES, EXCLUDE_LANGUAGES,
-        FORCE_LANGUAGE, COUNTING, SEARCH_IN_DOTTED, COUNT_MINIFIED, COUNT_GENERATED, NO_GITIGNORE,
-        NO_IGNORE_FILES, NO_HEURISTICS];
+const CHANGES_THE_NUMBERS   : [&str; 13] = [TARGETS, EXCLUDE, LANGUAGES, EXCLUDE_LANGUAGES,
+        FORCE_LANGUAGE, COUNTING, SEARCH_IN_DOTTED, COUNT_MINIFIED, COUNT_GENERATED, COUNT_NOT_CODE,
+        NO_GITIGNORE, NO_IGNORE_FILES, NO_HEURISTICS];
 
 // Two halves: the engine is handed only what can change a number, the presentation everything,
 // since echoing what the counting was done with is part of its job. The command line and the
@@ -109,6 +111,7 @@ pub struct ViewConfig {
     // the file the reader cannot see failing
     pub targets_source: Option<String>,
     pub should_show_faulty_files: bool,
+    pub should_show_skipped_files: bool,
     pub hidden: Hidden,
     pub log: LogOption,
     pub compare_level: usize,
@@ -178,6 +181,7 @@ impl Default for ViewConfig {
             version: VERSION_ID,
             targets_source: None,
             should_show_faulty_files: DEF_SHOW_FAULTY_FILES,
+            should_show_skipped_files: false,
             hidden: Hidden::default(),
             log: LogOption::default(),
             compare_level: DEF_COMPARE_LEVEL,
@@ -657,6 +661,7 @@ pub struct TypedExplicitlyOnCommandLine {
     pub search_in_dotted: bool,
     pub count_minified: bool,
     pub count_generated: bool,
+    pub count_not_code: bool,
     pub no_gitignore: bool,
     pub no_ignore_files: bool,
     pub no_heuristics: bool,
@@ -669,8 +674,9 @@ impl TypedExplicitlyOnCommandLine {
     fn of(builder: &ConfigurationBuilder) -> Self {
         let ConfigurationBuilder { exclude_dirs, languages_of_interest, excluded_languages,
             forced_languages, counting, should_search_in_dotted, count_minified, count_generated,
-            no_gitignore, no_ignore_files, no_heuristics, hidden,
-            targets: _, targets_source: _, threads: _, should_show_faulty_files: _, theme_name: _,
+            count_not_code, no_gitignore, no_ignore_files, no_heuristics, hidden,
+            targets: _, targets_source: _, threads: _, should_show_faulty_files: _,
+            should_show_skipped_files: _, theme_name: _,
             log: _, compare_level: _, config_name_to_save: _, config_name_to_load: _,
             theme_name_to_save: _, local_dir: _, bar_thickness: _, progress_bar: _, number_separator: _, decimal_separator: _,
             layout: _, output: _, explain: _, diff_against: _, sort_by: _, top_n: _, by_file: _, styles: _,
@@ -685,6 +691,7 @@ impl TypedExplicitlyOnCommandLine {
             search_in_dotted: should_search_in_dotted.is_some(),
             count_minified: count_minified.is_some(),
             count_generated: count_generated.is_some(),
+            count_not_code: count_not_code.is_some(),
             no_gitignore: no_gitignore.is_some(),
             no_ignore_files: no_ignore_files.is_some(),
             no_heuristics: no_heuristics.is_some(),
@@ -711,7 +718,9 @@ pub struct ConfigurationBuilder {
     pub should_search_in_dotted:  Option<bool>,
     pub count_minified:           Option<bool>,
     pub count_generated:          Option<bool>,
+    pub count_not_code:           Option<bool>,
     pub should_show_faulty_files: Option<bool>,
+    pub should_show_skipped_files: Option<bool>,
     pub hidden:                   Option<Hidden>,
     pub no_gitignore:             Option<bool>,
     pub no_ignore_files:          Option<bool>,
@@ -763,7 +772,9 @@ impl ConfigurationBuilder {
         if self.should_search_in_dotted.is_none() {self.should_search_in_dotted = config.should_search_in_dotted};
         if self.count_minified.is_none() {self.count_minified = config.count_minified};
         if self.count_generated.is_none() {self.count_generated = config.count_generated};
+        if self.count_not_code.is_none() {self.count_not_code = config.count_not_code};
         if self.should_show_faulty_files.is_none() {self.should_show_faulty_files = config.should_show_faulty_files};
+        if self.should_show_skipped_files.is_none() {self.should_show_skipped_files = config.should_show_skipped_files};
         if self.hidden.is_none() {self.hidden = config.hidden};
         if self.no_gitignore.is_none() {self.no_gitignore = config.no_gitignore};
         if self.no_ignore_files.is_none() {self.no_ignore_files = config.no_ignore_files};
@@ -787,9 +798,10 @@ impl ConfigurationBuilder {
         // Exhaustive on purpose: a new field of the builder has to be decided here, in or out,
         // before this compiles again.
         let ConfigurationBuilder { targets, exclude_dirs, languages_of_interest, excluded_languages,
-            forced_languages, counting, should_search_in_dotted, count_minified, count_generated, no_gitignore,
-            no_ignore_files, no_heuristics,
-            threads: _, should_show_faulty_files: _, hidden: _, theme_name: _, compare_level: _,
+            forced_languages, counting, should_search_in_dotted, count_minified, count_generated,
+            count_not_code, no_gitignore, no_ignore_files, no_heuristics,
+            threads: _, should_show_faulty_files: _, should_show_skipped_files: _, hidden: _,
+            theme_name: _, compare_level: _,
             bar_thickness: _, progress_bar: _, number_separator: _, decimal_separator: _, layout: _,
             sort_by: _, top_n: _, by_file: _, config_styles: _,
             // never carried by a configuration file, so never merged out of one either
@@ -806,6 +818,7 @@ impl ConfigurationBuilder {
         *should_search_in_dotted = None;
         *count_minified = None;
         *count_generated = None;
+        *count_not_code = None;
         *no_gitignore = None;
         *no_ignore_files = None;
         *no_heuristics = None;
@@ -821,7 +834,8 @@ impl ConfigurationBuilder {
         self.excluded_languages.is_none() || self.forced_languages.is_none() ||
         self.threads.is_none() || self.counting.is_none() || self.should_search_in_dotted.is_none() ||
         self.count_minified.is_none() || self.count_generated.is_none() ||
-        self.should_show_faulty_files.is_none() || self.hidden.is_none() || self.no_gitignore.is_none() ||
+        self.count_not_code.is_none() || self.should_show_faulty_files.is_none() ||
+        self.should_show_skipped_files.is_none() || self.hidden.is_none() || self.no_gitignore.is_none() ||
         self.no_ignore_files.is_none() || self.no_heuristics.is_none() ||
         self.theme_name.is_none() || self.compare_level.is_none() ||
         self.config_styles.is_none() || self.bar_thickness.is_none() || self.progress_bar.is_none() ||
@@ -893,6 +907,7 @@ is sorted by lines.", sort_by.name());
                 should_search_in_dotted: self.should_search_in_dotted.unwrap_or(engine_defaults.should_search_in_dotted),
                 count_minified: self.count_minified.unwrap_or(engine_defaults.count_minified),
                 count_generated: self.count_generated.unwrap_or(engine_defaults.count_generated),
+                count_not_code: self.count_not_code.unwrap_or(engine_defaults.count_not_code),
                 no_gitignore: self.no_gitignore.unwrap_or(engine_defaults.no_gitignore),
                 no_ignore_files: self.no_ignore_files.unwrap_or(engine_defaults.no_ignore_files),
                 use_heuristics: !self.no_heuristics.unwrap_or(!engine_defaults.use_heuristics),
@@ -904,6 +919,7 @@ is sorted by lines.", sort_by.name());
                 version: VERSION_ID,
                 targets_source: self.targets_source.clone(),
                 should_show_faulty_files: self.should_show_faulty_files.unwrap_or(DEF_SHOW_FAULTY_FILES),
+                should_show_skipped_files: self.should_show_skipped_files.unwrap_or(false),
                 hidden,
                 log: self.log.clone().unwrap_or_default(),
                 compare_level: self.compare_level.unwrap_or(DEF_COMPARE_LEVEL),
@@ -1048,7 +1064,9 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             SEARCH_IN_DOTTED => config_builder.should_search_in_dotted = Some(take_flag(command, SEARCH_IN_DOTTED)?),
             COUNT_MINIFIED => config_builder.count_minified = Some(take_flag(command, COUNT_MINIFIED)?),
             COUNT_GENERATED => config_builder.count_generated = Some(take_flag(command, COUNT_GENERATED)?),
+            COUNT_NOT_CODE => config_builder.count_not_code = Some(take_flag(command, COUNT_NOT_CODE)?),
             SHOW_FAULTY_FILES => config_builder.should_show_faulty_files = Some(take_flag(command, SHOW_FAULTY_FILES)?),
+            SHOW_SKIPPED => config_builder.should_show_skipped_files = Some(take_flag(command, SHOW_SKIPPED)?),
             HIDE => {
                 if arguments.trim().is_empty() {
                     message_printer::print_help_message_for_command(HIDE);
@@ -1395,8 +1413,9 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
     // decides whether it belongs in the match below.
     let ConfigurationBuilder {
             targets, exclude_dirs, forced_languages, threads, counting, should_search_in_dotted,
-            count_minified, count_generated, should_show_faulty_files, hidden, no_gitignore, no_ignore_files,
-            no_heuristics, theme_name, compare_level, bar_thickness,
+            count_minified, count_generated, count_not_code, should_show_faulty_files,
+            should_show_skipped_files, hidden,
+            no_gitignore, no_ignore_files, no_heuristics, theme_name, compare_level, bar_thickness,
             progress_bar, number_separator, decimal_separator, layout, sort_by, top_n, by_file,
             // these two accept whatever they are given, so a config can hold no invalid value for
             // them and they never reach 'invalid_fields'
@@ -1417,7 +1436,9 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             SEARCH_IN_DOTTED => should_search_in_dotted.is_some(),
             COUNT_MINIFIED => count_minified.is_some(),
             COUNT_GENERATED => count_generated.is_some(),
+            COUNT_NOT_CODE => count_not_code.is_some(),
             SHOW_FAULTY_FILES => should_show_faulty_files.is_some(),
+            SHOW_SKIPPED => should_show_skipped_files.is_some(),
             HIDE => hidden.is_some(),
             NO_GITIGNORE => no_gitignore.is_some(),
             NO_IGNORE_FILES => no_ignore_files.is_some(),
@@ -1626,6 +1647,10 @@ mod tests {
                 create_config_from_args("./ --count-minified yes"));
         assert_eq!(conf("./", |c| {c.engine.count_generated = true; c.typed_explicitly.count_generated = true;}),
                 create_config_from_args("./ --count-generated").unwrap());
+        assert_eq!(conf("./", |c| {c.engine.count_not_code = true; c.typed_explicitly.count_not_code = true;}),
+                create_config_from_args("./ --count-not-code").unwrap());
+        assert_eq!(conf("./", |c| {c.view.should_show_skipped_files = true;}),
+                create_config_from_args("./ --show-skipped").unwrap());
         assert_eq!(conf("./", |c| {c.engine.no_gitignore = true; c.typed_explicitly.no_gitignore = true;}),
                 create_config_from_args("./ --no-gitignore").unwrap());
         assert_eq!(conf("./", |c| {c.view.set_should_show_faulty_files(true);}),
@@ -2091,7 +2116,7 @@ mod tests {
         std::fs::write(test_file_path, "===> targets\nfrontend=\n\n===> sort\nnope\n\n===> top\nnope\n\n===> bar-thickness\nnope\n\n\
                 ===> progress-bar\nnope\n\n===> number-separator\nnope\n\n===> decimal-separator\nnope\n\n===> force-language\nnope\n\n\
                 ===> by-file\nnope\n\n===> counting\nnope\n\n===> count-minified\nnope\n\n\
-                ===> count-generated\nnope\n\n===> no-heuristics\nnope\n").unwrap();
+                ===> count-generated\nnope\n\n===> count-not-code\nnope\n\n===> no-heuristics\nnope\n").unwrap();
 
         // With no target on the command line to take its place, the run stops instead of counting
         // less than it was asked to
@@ -2102,8 +2127,8 @@ mod tests {
                 create_config_from_args("./ --load test002"));
 
         let rescued = create_config_from_args(
-                "./ --load test002 --sort name --top 3 --bar-thickness fat --progress-bar hash --number-separator dot --decimal-separator comma --force-language m=matlab --by-file 8 --counting region --count-minified --count-generated --no-heuristics").unwrap();
-        assert!(rescued.engine.count_minified && rescued.engine.count_generated);
+                "./ --load test002 --sort name --top 3 --bar-thickness fat --progress-bar hash --number-separator dot --decimal-separator comma --force-language m=matlab --by-file 8 --counting region --count-minified --count-generated --count-not-code --no-heuristics").unwrap();
+        assert!(rescued.engine.count_minified && rescued.engine.count_generated && rescued.engine.count_not_code);
         assert!(!rescued.engine.use_heuristics);
         assert_eq!(Some(ByFile::Capped(8)), rescued.view.by_file);
         assert_eq!(vec![Target::of(mezura_core::engine::targets::convert_to_absolute("./"))], rescued.engine.targets);
@@ -2130,7 +2155,7 @@ mod tests {
             donor.add_missing_fields(create_config_builder_from_args(
                     "./ --exclude a --languages rust --exclude-languages java --force-language m=matlab \
                     --threads 1 1 --counting region --search-in-dotted --count-minified --count-generated \
-                    --show-faulty-files --hide bar --no-gitignore --no-ignore-files --no-heuristics \
+                    --count-not-code --show-faulty-files --show-skipped --hide bar --no-gitignore --no-ignore-files --no-heuristics \
                     --compare 3 --bar-thickness fat \
                     --progress-bar hash --number-separator dot --decimal-separator comma --layout table \
                     --sort name --top 3 --by-file 8").unwrap());
@@ -2161,8 +2186,9 @@ mod tests {
         let kept = donor().forget_what_changes_the_numbers();
         assert_eq!((None, None, None, None, None), (kept.targets, kept.exclude_dirs,
                 kept.languages_of_interest, kept.excluded_languages, kept.forced_languages));
-        assert_eq!((None, None, None, None, None, None), (kept.counting, kept.should_search_in_dotted,
-                kept.count_minified, kept.count_generated, kept.no_gitignore, kept.no_ignore_files));
+        assert_eq!((None, None, None, None, None, None, None), (kept.counting, kept.should_search_in_dotted,
+                kept.count_minified, kept.count_generated, kept.count_not_code, kept.no_gitignore,
+                kept.no_ignore_files));
         assert_eq!((Some(3), Some(Layout::Table), Some(SortCriterion::Name), Some(ByFile::Capped(8))),
                 (kept.top_n, kept.layout, kept.sort_by, kept.by_file));
         assert_eq!((Some(BarThickness::Fat), Some(ProgressBarStyle::Hash), Some(NumberSeparator::Dot),

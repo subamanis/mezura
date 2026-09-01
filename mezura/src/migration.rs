@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use colored::Colorize;
 use include_dir::{File, include_dir};
 use mezura_core::LANGUAGE_CONFLICTS_FILE_NAME;
+use mezura_core::language_file::ConflictBlock;
 
 use crate::config_manager::VERSION_ID;
 use crate::message_printer::wrap_message;
@@ -114,7 +115,7 @@ change.", if count == 1 {"it"} else {"them"})).yellow()))
         }
 
         Some(format!("\n{}\n", wrap_message(&format!(
-                "Added the rules {VERSION_ID} brings to '{}', and kept every rule you had written. Your \
+                "Brought '{}' to what {VERSION_ID} ships, keeping every contest you had settled. Your \
 copy as it was is in '{}{REPLACED_DIR_NAME}/{VERSION_ID}/{}/'.",
                 self.merged.join("', '"), crate::paths::PERSISTENT_APP_PATHS.data_dir,
                 self.archived_under)).yellow()))
@@ -378,6 +379,19 @@ fn merge_the_conflicts_file(data_dir: &str, archived_under: &str, recorded: &Has
         }
     };
 
+    // Never edited by them, so there is no answer to keep, and the merge below could not bring an
+    // updated marker list whose extension their copy already carries a line for.
+    if recorded.get(LANGUAGE_CONFLICTS_FILE_NAME) == Some(&content_hash(theirs.as_bytes())) {
+        if !reads_the_same(&theirs, &ours) {
+            if !outcome.attempt(LANGUAGE_CONFLICTS_FILE_NAME, std::fs::write(&path, &ours)) {
+                return;
+            }
+            outcome.updated.push(LANGUAGE_CONFLICTS_FILE_NAME.to_owned());
+        }
+        manifest.insert(LANGUAGE_CONFLICTS_FILE_NAME.to_owned(), brought);
+        return;
+    }
+
     let Some(merged) = merge_conflict_files(&theirs, &ours) else {
         manifest.insert(LANGUAGE_CONFLICTS_FILE_NAME.to_owned(), brought);
         return;
@@ -417,13 +431,24 @@ fn merge_conflict_files(theirs: &str, ours: &str) -> Option<String> {
         let theirs_here = their_blocks.iter()
                 .find(|x| x.opens.is_some() && x.opens == ours_here.opens)
                 .map(|x| &x.rules).unwrap_or(&nothing);
-        let already_settled = theirs_here.iter().map(|rule| find_key_of_rule(ours_here.marker, rule))
-                .collect::<HashSet<_>>();
 
         merged.push(ours_here.marker);
-        merged.extend(theirs_here.iter().copied());
-        merged.extend(ours_here.rules.iter().copied()
-                .filter(|rule| !already_settled.contains(&find_key_of_rule(ours_here.marker, rule))));
+        // A contest line is their answer and outlives every release. A not-code line is our marker
+        // list, which grows between releases, so there the shipped line wins and only their rules
+        // for extensions we do not mention are kept.
+        if matches!(ours_here.opens, Some(ConflictBlock::NotCodeLineStarts | ConflictBlock::NotCodeLineContains)) {
+            let ours_settled = ours_here.rules.iter().map(|rule| find_key_of_rule(ours_here.opens, rule))
+                    .collect::<HashSet<_>>();
+            merged.extend(ours_here.rules.iter().copied());
+            merged.extend(theirs_here.iter().copied()
+                    .filter(|rule| !ours_settled.contains(&find_key_of_rule(ours_here.opens, rule))));
+        } else {
+            let already_settled = theirs_here.iter().map(|rule| find_key_of_rule(ours_here.opens, rule))
+                    .collect::<HashSet<_>>();
+            merged.extend(theirs_here.iter().copied());
+            merged.extend(ours_here.rules.iter().copied()
+                    .filter(|rule| !already_settled.contains(&find_key_of_rule(ours_here.opens, rule))));
+        }
         merged.push("");
     }
     // A block of their own, under a marker this version knows nothing about, is theirs to keep
@@ -444,22 +469,16 @@ fn merge_conflict_files(theirs: &str, ours: &str) -> Option<String> {
 }
 
 // The merge matches sections on 'opens' and prints 'marker', which is why a section carries both
-struct ConflictBlock<'a> {
-    opens: Option<Holds>,
+struct ConflictSection<'a> {
+    opens: Option<ConflictBlock>,
     marker: &'a str,
     rules: Vec<&'a str>
 }
 
-#[derive(PartialEq, Eq, Clone, Copy)]
-enum Holds {
-    Extensions,
-    Filenames
-}
-
 // The explanation above the first marker, then each section with its rules. Blank lines inside a
 // section are dropped, since the merge writes its own between the sections.
-fn read_conflict_blocks(contents: &str) -> (Vec<&str>, Vec<ConflictBlock<'_>>) {
-    let (mut preamble, mut blocks) = (Vec::new(), Vec::<ConflictBlock>::new());
+fn read_conflict_blocks(contents: &str) -> (Vec<&str>, Vec<ConflictSection<'_>>) {
+    let (mut preamble, mut blocks) = (Vec::new(), Vec::<ConflictSection>::new());
     let mut current = None;
 
     // A file re-saved by PowerShell or an older Notepad carries a byte order mark, which is not
@@ -468,13 +487,13 @@ fn read_conflict_blocks(contents: &str) -> (Vec<&str>, Vec<ConflictBlock<'_>>) {
     for line in crate::config_files::strip_byte_order_mark(contents).lines() {
         if line.trim_start().starts_with("===>") {
             let marker = line.trim();
-            let opens = find_what_the_marker_opens(marker);
+            let opens = mezura_core::language_file::find_block_of_marker(marker);
             // Two sections under one name are one section to the parser, which simply reopens the
             // block, and a file grows a second one by the ordinary act of appending to it
             current = Some(match opens.and_then(|opens| blocks.iter().position(|x| x.opens == Some(opens))) {
                 Some(already) => already,
                 None => {
-                    blocks.push(ConflictBlock { opens, marker, rules: Vec::new() });
+                    blocks.push(ConflictSection { opens, marker, rules: Vec::new() });
                     blocks.len() - 1
                 }
             });
@@ -490,40 +509,32 @@ fn read_conflict_blocks(contents: &str) -> (Vec<&str>, Vec<ConflictBlock<'_>>) {
     (preamble, blocks)
 }
 
-// Asked of the parser that reads the file rather than answered here, so the two cannot disagree
-// about what a marker is: '===>contested-extensions' and a marker with a word after its name both
-// open the extensions section for the program that counts.
-fn find_what_the_marker_opens(marker: &str) -> Option<Holds> {
-    let (rules, _) = mezura_core::language_file::parse_conflict_rules(&format!("{marker}\nprobe Probe\n"));
-
-    if !rules.by_extension.is_empty() {
-        Some(Holds::Extensions)
-    } else if !rules.by_filename.is_empty() {
-        Some(Holds::Filenames)
-    } else {
-        None
-    }
-}
-
-// A net under the merge: if an answer they gave is missing from the result, their file is left
+// A net under the merge. If an answer they gave is missing from the result, their file is left
 // exactly as it stands. Bringing them the new rules is worth less than keeping the ones they gave.
 fn every_answer_of_theirs_survived(theirs: &str, merged: &str) -> bool {
     let (theirs, merged) = (mezura_core::language_file::parse_conflict_rules(theirs).0,
             mezura_core::language_file::parse_conflict_rules(merged).0);
 
-    theirs.by_extension.iter().all(|(key, names)| merged.by_extension.get(key) == Some(names))
-            && theirs.by_filename.iter().all(|(key, names)| merged.by_filename.get(key) == Some(names))
+    ConflictBlock::ALL.into_iter().all(|block| {
+        // A not-code line of theirs is replaced by the shipped one on purpose, so for those two
+        // blocks the net only demands that the extension still has a line at all.
+        let replaced_on_purpose = matches!(block,
+                ConflictBlock::NotCodeLineStarts | ConflictBlock::NotCodeLineContains);
+        theirs.get_of_block(block).iter().all(|(key, names)| match merged.get_of_block(block).get(key) {
+            Some(kept) => replaced_on_purpose || kept == names,
+            None => false
+        })
+    })
 }
 
 // Keyed by the parser as well, so a rule written '.m' and one written 'M' stay the one contest they
 // are to it. Keyed apart, the merge writes a second line settling what the first already settled.
-fn find_key_of_rule(marker: &str, rule: &str) -> String {
-    let (rules, _) = mezura_core::language_file::parse_conflict_rules(&format!("{marker}\n{rule}\n"));
-
-    rules.by_extension.into_keys().chain(rules.by_filename.into_keys()).next()
+fn find_key_of_rule(opens: Option<ConflictBlock>, rule: &str) -> String {
+    opens.and_then(|block| mezura_core::language_file::find_key_of_rule(block, rule))
             // A rule the parser makes nothing of, keyed on its own text so that two copies of it do
-            // not both survive
-            .unwrap_or_else(|| rule.trim().to_ascii_lowercase())
+            // not both survive. The prefix keeps it out of the real keys, or a lone 'd' would
+            // count as the settled answer for the extension 'd' and knock the shipped rule out.
+            .unwrap_or_else(|| format!("could not be read: {}", rule.trim().to_ascii_lowercase()))
 }
 
 // Trailing whitespace, the line endings and the blank lines at the end of a file are not what the
@@ -535,13 +546,22 @@ fn reads_the_same(one: &str, other: &str) -> bool {
     significant(one) == significant(other)
 }
 
-// FNV-1a with every '\r' dropped. The shipped files are written with them, so an editor that saves
-// one back with unix endings would make it look edited at every release.
+// FNV-1a over the file as 'reads_the_same' sees it. Line endings, whitespace at a line's end and
+// blank lines at the end of the file are dropped, so an editor that re-saves a file without
+// changing what it says does not make it look edited at every release.
 fn content_hash(bytes: &[u8]) -> u64 {
+    let lines = || bytes.split(|b| *b == b'\n').map(|line| line.trim_ascii_end());
+    let last_full = lines().enumerate().filter(|(_, line)| !line.is_empty()).map(|(at, _)| at).last();
     let mut hash : u64 = 0xcbf29ce484222325;
-    for byte in bytes.iter().filter(|x| **x != b'\r') {
-        hash ^= *byte as u64;
+    let mut eat = |byte: u8| {
+        hash ^= byte as u64;
         hash = hash.wrapping_mul(0x100000001b3);
+    };
+    for line in lines().take(last_full.map_or(0, |at| at + 1)) {
+        for byte in line {
+            eat(*byte);
+        }
+        eat(b'\n');
     }
 
     hash
@@ -760,6 +780,57 @@ mod tests {
         assert!(outcome.merged.is_empty(), "a copy already holding every rule was rewritten");
         assert_eq!("settings of my own", std::fs::read_to_string(&config).unwrap());
         assert_eq!(reordered, std::fs::read_to_string(&conflicts).unwrap());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_not_code_marker_list_is_ours_and_wins_the_merge_while_their_extras_survive() {
+        let theirs = "===> contested-extensions\nm       Objective-C, MATLAB\n\n\
+                ===> not-code-when-a-line-contains\nd       .o:\nobj     .custom:\nd\n";
+        let ours = crate::migration::read_baked_in_conflict_rules_contents();
+
+        let merged = merge_conflict_files(theirs, &ours).expect("the old marker list was kept as an answer");
+        let (rules, faulty) = mezura_core::language_file::parse_conflict_rules(&merged);
+
+        assert_eq!(Some(&vec!["Objective-C".to_owned(), "MATLAB".to_owned()]), rules.by_extension.get("m"),
+                "their contest answer was lost to the merge");
+        assert!(rules.not_code_line_contains.get("d").is_some_and(|markers| markers.contains(&".dll:".to_owned())),
+                "the shipped marker list did not win over their old line:\n{merged}");
+        assert_eq!(Some(&vec![".custom:".to_owned()]), rules.not_code_line_contains.get("obj"),
+                "a marker line of their own for an extension we do not mention was lost");
+        assert!(faulty.iter().any(|(_, line)| line == "d"),
+                "their unreadable line was dropped instead of carried and reported");
+        assert!(crate::migration::every_answer_of_theirs_survived(theirs, &merged),
+                "the net rejects the merge it was just relaxed for");
+    }
+
+    #[test]
+    fn an_unedited_conflicts_file_is_replaced_whole_so_a_changed_marker_list_arrives() {
+        let dir = SCRATCH_DIR.to_owned() + "migration-conflicts-unedited/";
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        migrate_data_files(&dir, false);
+
+        let path = dir.clone() + mezura_core::LANGUAGE_CONFLICTS_FILE_NAME;
+        let older_release = "===> contested-extensions\nm       MATLAB, Objective-C\n\n\
+                ===> not-code-when-a-line-contains\nd       .o:\n";
+        std::fs::write(&path, older_release).unwrap();
+        let mut recorded = read_manifest(&dir);
+        recorded.insert(mezura_core::LANGUAGE_CONFLICTS_FILE_NAME.to_owned(),
+                content_hash(older_release.as_bytes()));
+        write_manifest(&dir, &recorded).unwrap();
+
+        let outcome = migrate_data_files(&dir, false);
+        assert!(outcome.merged.is_empty(), "a file they never edited was merged instead of replaced");
+        assert_eq!(vec![mezura_core::LANGUAGE_CONFLICTS_FILE_NAME.to_owned()], outcome.updated);
+        assert!(outcome.restored.is_empty(), "an update was announced as a repair of missing data");
+        let brought = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(crate::migration::read_baked_in_conflict_rules_contents(), brought);
+        assert!(brought.contains(".dll:"), "the shipped marker list did not arrive:\n{brought}");
+
+        assert!(migrate_data_files(&dir, false).did_nothing(),
+                "a replaced file was touched again, so every run would say so");
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -1032,7 +1103,7 @@ mod tests {
         // What an older version's copy looks like: the contents differ from what we ship, and the
         // manifest records exactly what is on disk
         let lua = dir.clone() + "languages/Lua.txt";
-        let older = std::fs::read_to_string(&lua).unwrap().replace("Lua", "Lua ");
+        let older = std::fs::read_to_string(&lua).unwrap().replace("Lua", "Lua5");
         std::fs::write(&lua, &older).unwrap();
         let mut recorded = read_manifest(&dir);
         recorded.insert("languages/Lua.txt".to_owned(), content_hash(older.as_bytes()));
@@ -1045,7 +1116,7 @@ mod tests {
         assert_eq!(vec!["languages/Lua.txt".to_owned()], outcome.updated);
         assert!(outcome.replaced.is_empty(), "a file of ours was treated as one of theirs: {:?}", outcome.replaced);
         assert!(outcome.format_updated().is_some(), "the file was brought up to date in silence");
-        assert!(!std::fs::read_to_string(&lua).unwrap().contains("Lua "), "the file was not brought up to date");
+        assert!(!std::fs::read_to_string(&lua).unwrap().contains("Lua5"), "the file was not brought up to date");
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

@@ -13,12 +13,26 @@ pub struct FileExplanation {
     /// The evidence that identified a contested file, the literal and its line, or None where the
     /// extension alone answered.
     pub identified_by: Option<(String, usize)>,
+    /// Why a directory scan under the same configuration would leave this file out of the counts,
+    /// or None where it would count it. A file given by name is counted either way.
+    pub left_out_of_a_scan: Option<ScanSkip>,
     /// The file as it was read, so a caller can show each line beside its answer.
     pub contents: String,
     /// One entry per line of the file, in order.
     pub lines: Vec<ExplainedLine>,
     /// The whole file's counts, which are what a run would have added for it.
     pub classes: LineClasses,
+}
+
+/// The head check that would set the file aside in a directory scan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanSkip {
+    /// A marker of `language_conflicts.txt` says the file is not code at all.
+    NotCode,
+    /// The average line is 1000 bytes or more.
+    Minified,
+    /// The head says a tool wrote the file.
+    Generated
 }
 
 /// What one line of the file came to.
@@ -124,12 +138,14 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
     let contents = std::fs::read_to_string(path)
             .map_err(|error| ExplainError::UnreadableFile(error.to_string()))?;
     let mut identified_by = None;
-    if let Some(contenders) = lookup.find_contenders(path)
+    let extension_rules = lookup.find_extension_rules(path);
+    if let Some(contenders) = extension_rules.as_ref().and_then(|rules| rules.contenders.as_deref())
         && let Some((name, literal, line)) = crate::engine::file_parser::find_identified_language(
-                &contents, &contenders, &by_name, &lookup.by_shebang) {
+                &contents, contenders, &by_name, &lookup.by_shebang) {
         identified_by = Some((literal, line));
         lang_name = name;
     }
+    let left_out_of_a_scan = find_scan_skip(&contents, extension_rules.as_deref(), config);
     let nested_lookup = NestedLanguageLookup {
         languages: &by_name,
         extension_to_name: &nested_definitions.extension_to_name,
@@ -152,7 +168,24 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
     let whole = report.into_whole();
     debug_assert_eq!(whole.lines, lines.len(),
             "a file of {} lines got {} per-line records", whole.lines, lines.len());
-    Ok(FileExplanation { language, identified_by, contents, lines, classes: whole.classes })
+    Ok(FileExplanation { language, identified_by, left_out_of_a_scan, contents, lines,
+            classes: whole.classes })
+}
+
+// The same checks in the same order as 'parse_file', each silenced by the flag that counts its kind
+fn find_scan_skip(contents: &str, rules: Option<&crate::engine::identity::ExtensionRules>,
+        config: &EngineConfig) -> Option<ScanSkip> {
+    if !config.count_not_code && rules.and_then(|x| x.not_code.as_ref())
+            .is_some_and(|matcher| matcher.finds_a_marker(contents)) {
+        return Some(ScanSkip::NotCode);
+    }
+    if !config.count_minified && crate::engine::file_parser::is_minified(contents) {
+        return Some(ScanSkip::Minified);
+    }
+    if !config.count_generated && crate::engine::file_parser::is_generated(contents) {
+        return Some(ScanSkip::Generated);
+    }
+    None
 }
 
 // The record holds symbol numbers; what a reader gets is the symbol as the file spells it. The

@@ -14,6 +14,7 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
   - [--search-in-dotted](#cmd-search-in-dotted)
   - [--count-minified](#cmd-count-minified)
   - [--count-generated](#cmd-count-generated)
+  - [--count-not-code](#cmd-count-not-code)
   - [--no-heuristics](#cmd-no-heuristics)
   - [--show-languages](#cmd-show-languages)
 - [How the report looks](#how-the-report-looks)
@@ -49,6 +50,7 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
   - [--explain](#cmd-explain)
   - [--threads](#cmd-threads)
   - [--show-faulty-files](#cmd-show-faulty-files)
+  - [--show-skipped](#cmd-show-skipped)
 - [The program itself](#the-program-itself)
   - [--help](#cmd-help)
   - [--version](#cmd-version)
@@ -69,10 +71,10 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     exists exactly as written is taken literally, so a directory named with one of those characters
     is still a directory. A target inside another target is dropped, so nothing is counted twice.
 
-    A path you write out is always counted, even if it is ignored, dotted, a link, minified or
-    generated. The matches of a pattern were found by mezura rather than named by you, so those
-    are skipped like any other found path (see '--no-gitignore', '--search-in-dotted',
-    '--count-minified' and '--count-generated').
+    A path you write out is always counted, even if it is ignored, dotted, a link, minified,
+    generated or not code. The matches of a pattern were found by mezura rather than named by you,
+    so those are skipped like any other found path (see '--no-gitignore', '--search-in-dotted',
+    '--count-minified', '--count-generated' and '--count-not-code').
 
     In Windows Powershell the commas need a backtick, or the whole list needs quotation marks:
     <path1>`, <path2>`, <path3>   or   "<path1>, <path2>, <path3>"
@@ -299,6 +301,26 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     A file left out is reported above the table and appears in no figure.
 ```
 
+### <a id="cmd-count-not-code" name="cmd-count-not-code"></a>--count-not-code
+
+```
+--count-not-code
+    count the non-code files that are left out by default
+
+    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
+    or 'no' to disable. Default: no
+
+    Some files wear a language's extension without holding any code: a make or cargo build fills
+    with dependency files ending in '.d' that are not the D language, and every '.pro' of an Android
+    project is a ProGuard configuration and not Prolog. A file whose head has the give-away text
+    listed per extension in 'language_conflicts.txt' is left out of the counts; this flag turns
+    that check off. A file it would have set aside can still be left out by the minified or
+    generated checks, each with its own flag. '--no-heuristics' also stops the reading that finds
+    the markers.
+
+    A file left out is reported above the table and appears in no figure.
+```
+
 ### <a id="cmd-no-heuristics" name="cmd-no-heuristics"></a>--no-heuristics
 
 ```
@@ -312,6 +334,9 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     line first, then evidence like a line starting with 'function' (MATLAB) or '@interface'
     (Objective-C). A file whose content says nothing falls back to the order in
     'language_conflicts.txt', and under this flag every file does.
+
+    It also stops the reading that leaves out files whose head says they are not code, so '.d'
+    dependency files and the like are counted again; see '--count-not-code'.
 ```
 
 ### <a id="cmd-show-languages" name="cmd-show-languages"></a>--show-languages
@@ -930,11 +955,11 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     neither are your themes or your default configuration: those are written when absent and left
     alone.
 
-    'language_conflicts.txt' is merged instead. Each line names an extension that several
-    languages claim, and the first language on the line wins it. Your lines are kept as they are,
-    and lines for extensions your copy never mentions are added. To change a winner, reorder the
-    names on its line; deleting the line brings it back, since a missing line and a line you never
-    had look the same. Your copy is saved under 'replaced' whenever anything is added to it.
+    A 'language_conflicts.txt' you have not edited is brought whole to each new version. An edited
+    one is merged: your contest lines are kept as they are, lines for extensions your copy never
+    mentions are added, the not-code marker lists are taken from the new version, and your file as
+    it stood is saved under 'replaced'. To change a winner, reorder the names on its line; deleting
+    the line brings it back, since a missing line and a line you never had look the same.
 ```
 
 ## The settings of a project
@@ -1004,7 +1029,9 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     'explain-comment', so a symbol swallowed by a string can be seen to be one.
 
     A file whose extension two languages claim also says what identified it, the line and the
-    evidence found there, and the JSON document carries the same under 'identified_by'.
+    evidence found there, and the JSON document carries the same under 'identified_by'. A file that
+    a directory scan would leave out as minified, generated or not code says so in a note, and in
+    the document under 'left_out_of_a_scan'; the named file itself is always counted.
 
       mezura src/main.rs --explain
       mezura src/page.vue --explain --counting region
@@ -1061,6 +1088,24 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     how many there were is in the 'scan' block either way, so a document without the lists never
     claims that nothing went wrong. A comparison document carries the counts of each side and no
     lists at all.
+```
+
+### <a id="cmd-show-skipped" name="cmd-show-skipped"></a>--show-skipped
+
+```
+--show-skipped
+    name the files that were left out as minified, generated or not code
+
+    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
+    or 'no' to disable. Default: no
+
+    The report already says how many files each head check left out, and this flag adds the path of
+    every one under its note, so a file that vanished from the figures can be found and judged. The
+    checks themselves are described under '--count-minified', '--count-generated' and
+    '--count-not-code', which are also the flags that bring the files back into the counts.
+
+    '--output json' obeys it too: the 'skipped_files' lists are written only when it is given,
+    while how many there were is in the 'scan' block either way.
 ```
 
 ## The program itself

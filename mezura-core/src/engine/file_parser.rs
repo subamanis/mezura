@@ -34,6 +34,7 @@ const GENERATED_MARKERS : [&str; 4] = ["do not edit", "auto-generated", "autogen
 // Measured over 280 labeled files. Accuracy at 8KB equals the whole file on every shipped contest,
 // and 1KB loses the evidence sitting under license headers.
 const IDENTIFICATION_BYTES : usize = 8_192;
+const NOT_CODE_MARKER_LINES : usize = 8;
 
 const NO_SLOT : u16 = u16::MAX;
 
@@ -90,13 +91,14 @@ impl FileReport {
 pub(crate) enum FileOutcome {
     Counted(FileReport, Option<Arc<str>>),
     SkippedAsMinified,
-    SkippedAsGenerated
+    SkippedAsGenerated,
+    SkippedAsNotCode
 }
 
 pub(crate) fn parse_file(path: &Path, lang_name: &str, buf: &mut String, buffers: &mut ParseBuffers,
     lookup: &NestedLanguageLookup, matchers: &mut KeywordMatchers,
     id_matchers: &mut IdentificationMatchers, config: &EngineConfig,
-    written_by_hand: bool, contenders: Option<&[Arc<str>]>,
+    written_by_hand: bool, extension_rules: Option<&crate::engine::identity::ExtensionRules>,
     shebang_map: &HashMap<String, Arc<str>>)
 -> Result<FileOutcome,String>
 {
@@ -127,6 +129,11 @@ pub(crate) fn parse_file(path: &Path, lang_name: &str, buf: &mut String, buffers
     // A file the user named is counted whatever it holds, the same way the directory scan counts a
     // named file that a '.gitignore' covers.
     if !written_by_hand {
+        if !config.count_not_code && extension_rules
+                .and_then(|rules| rules.not_code.as_ref())
+                .is_some_and(|matcher| matcher.finds_a_marker(buf)) {
+            return Ok(FileOutcome::SkippedAsNotCode);
+        }
         if !config.count_minified && is_minified(buf) {
             return Ok(FileOutcome::SkippedAsMinified);
         }
@@ -135,7 +142,7 @@ pub(crate) fn parse_file(path: &Path, lang_name: &str, buf: &mut String, buffers
         }
     }
 
-    let resolved = contenders
+    let resolved = extension_rules.and_then(|rules| rules.contenders.as_deref())
             .and_then(|c| identify_language(buf, c, lookup.languages, shebang_map, id_matchers))
             .map(|(name, _)| name);
     let lang_name = resolved.as_deref().unwrap_or(lang_name);
@@ -605,16 +612,21 @@ fn take_symbols_at(at: usize, line_bytes: &[u8], plan: &ScanPlan, buffers: &mut 
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct IdentificationMatcher {
     rules: Vec<(memmem::Finder<'static>, String, bool)>,
 }
 
 impl IdentificationMatcher {
     pub(crate) fn build(language: &Language) -> Option<IdentificationMatcher> {
+        Self::of(&language.identifying_line_starts, &language.identifying_line_contains)
+    }
+
+    pub(crate) fn of(line_starts: &[String], line_contains: &[String]) -> Option<IdentificationMatcher> {
         let rule = |literal: &String, at_line_start: bool|
                 (memmem::Finder::new(literal.as_str()).into_owned(), literal.clone(), at_line_start);
-        let rules = language.identifying_line_starts.iter().map(|x| rule(x, true))
-                .chain(language.identifying_line_contains.iter().map(|x| rule(x, false)))
+        let rules = line_starts.iter().filter(|x| !x.is_empty()).map(|x| rule(x, true))
+                .chain(line_contains.iter().filter(|x| !x.is_empty()).map(|x| rule(x, false)))
                 .collect::<Vec<_>>();
         if rules.is_empty() {None} else {Some(IdentificationMatcher { rules })}
     }
@@ -625,22 +637,43 @@ impl IdentificationMatcher {
             while let Some(offset) = finder.find(&head[from..]) {
                 let at = from + offset;
                 from = at + 1;
-                if evidence_stands(head, at, literal.len(), *at_line_start) {
+                if evidence_stands(head, at, literal.len(), *at_line_start, false) {
                     return Some((at, literal.as_str()));
                 }
             }
             None
         }).min_by_key(|(at, _)| *at)
     }
+
+    // A line-start marker may run into a longer word ('-keep' catches '-keepnames') and reads the
+    // deeper byte window, since a directive can sit behind a long comment header. A contains marker
+    // keeps the word boundary and is believed only on the top lines, where a dependency file's
+    // rules sit and a stray token inside real code rarely does.
+    pub(crate) fn finds_a_marker(&self, buf: &str) -> bool {
+        let head = head_of(buf);
+        let lines = first_lines_of(buf, NOT_CODE_MARKER_LINES);
+        self.rules.iter().any(|(finder, literal, at_line_start)| {
+            let hay = if *at_line_start {head} else {lines};
+            let mut from = 0;
+            while let Some(offset) = finder.find(&hay[from..]) {
+                let at = from + offset;
+                from = at + 1;
+                if evidence_stands(hay, at, literal.len(), *at_line_start, *at_line_start) {
+                    return true;
+                }
+            }
+            false
+        })
+    }
 }
 
 // A literal must not run into a word on either side, so 'class' passes over 'classic_t'.
-fn evidence_stands(head: &[u8], at: usize, len: usize, at_line_start: bool) -> bool {
+fn evidence_stands(head: &[u8], at: usize, len: usize, at_line_start: bool, allows_a_word_after: bool) -> bool {
     let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
     if len == 0 {
         return false;
     }
-    if is_word(head[at + len - 1]) && head.get(at + len).copied().is_some_and(is_word) {
+    if !allows_a_word_after && is_word(head[at + len - 1]) && head.get(at + len).copied().is_some_and(is_word) {
         return false;
     }
     if is_word(head[at]) && at > 0 && is_word(head[at - 1]) {
@@ -712,7 +745,27 @@ fn find_shebang_language(head: &[u8], shebang_map: &HashMap<String, Arc<str>>) -
 }
 
 fn head_of(buf: &str) -> &[u8] {
-    &buf.as_bytes()[..buf.len().min(IDENTIFICATION_BYTES)]
+    let bytes = strip_bom(buf.as_bytes());
+    &bytes[..bytes.len().min(IDENTIFICATION_BYTES)]
+}
+
+// Uncapped on purpose. A cargo dependency file writes each rule on one line, which can run tens of
+// kilobytes past the identification window, and its artifact rule sits on the third line or later.
+fn first_lines_of(buf: &str, lines: usize) -> &[u8] {
+    let bytes = strip_bom(buf.as_bytes());
+    let mut from = 0;
+    for _ in 0..lines {
+        match memchr::memchr(b'\n', &bytes[from..]) {
+            Some(at) => from += at + 1,
+            None => return bytes
+        }
+    }
+    &bytes[..from]
+}
+
+// A byte order mark is not whitespace, so left in place it defeats every line-start rule.
+fn strip_bom(bytes: &[u8]) -> &[u8] {
+    bytes.strip_prefix(b"\xef\xbb\xbf".as_slice()).unwrap_or(bytes)
 }
 
 fn first_line_of(head: &[u8]) -> &[u8] {
@@ -781,7 +834,7 @@ impl KeywordMatchers {
 
 // The average and not where the first break falls: webpack writes a licence comment on line one
 // and the payload on line two.
-fn is_minified(contents: &str) -> bool {
+pub(crate) fn is_minified(contents: &str) -> bool {
     if contents.len() < SMALLEST_FILE_WORTH_TESTING {
         return false;
     }
@@ -790,7 +843,7 @@ fn is_minified(contents: &str) -> bool {
 }
 
 // The head, lowercased into a buffer of its own so the markers can be matched without case
-fn is_generated(contents: &str) -> bool {
+pub(crate) fn is_generated(contents: &str) -> bool {
     let head = &contents.as_bytes()[..contents.len().min(GENERATED_MARKER_BYTES)];
     let mut lowercased = [0u8; GENERATED_MARKER_BYTES];
     lowercased[..head.len()].copy_from_slice(head);
@@ -2025,7 +2078,8 @@ mod tests {
                 false, None, &HashMap::new())? {
             FileOutcome::Counted(report, _) => Ok(report),
             FileOutcome::SkippedAsMinified => panic!("{} was skipped as minified", path.display()),
-            FileOutcome::SkippedAsGenerated => panic!("{} was skipped as generated", path.display())
+            FileOutcome::SkippedAsGenerated => panic!("{} was skipped as generated", path.display()),
+            FileOutcome::SkippedAsNotCode => panic!("{} was skipped as not code", path.display())
         }
     }
 
@@ -3789,6 +3843,29 @@ mod tests {
                 identify(&format!("{}\nzeddoc\n{padding}", &padding[..IDENTIFICATION_BYTES / 2])));
     }
 
+    #[test]
+    fn a_marker_matches_as_a_prefix_on_the_first_two_lines_where_identification_would_not() {
+        let matcher = IdentificationMatcher::of(&["-keep".to_owned()], &[".o:".to_owned()]).unwrap();
+
+        assert!(matcher.finds_a_marker("-keepnames class * { *; }\n"));
+        assert!(matcher.find_evidence("-keepnames class * { *; }\n".as_bytes()).is_none(),
+                "identification loosened into prefix matching");
+
+        assert!(matcher.finds_a_marker(&format!("{} main.o: src\nrest\n", "x".repeat(3 * IDENTIFICATION_BYTES))),
+                "a marker at the end of one long first line was not read");
+        assert!(matcher.finds_a_marker("main.d: src\n\nlibmain.o: src\n"),
+                "a marker on the third line, where cargo writes its artifact rule, was not read");
+        assert!(!matcher.finds_a_marker(&format!("{}main.o: y\n", "code\n".repeat(NOT_CODE_MARKER_LINES))),
+                "a contains marker past the top lines was believed");
+        assert!(matcher.finds_a_marker("\u{feff}-keep class x\n"),
+                "a byte order mark defeated a line-start marker");
+
+        let contains_word = IdentificationMatcher::of(&[], &["bundle".to_owned()]).unwrap();
+        assert!(!contains_word.finds_a_marker("a bundled thing\n"),
+                "a contains marker matched a prefix of a longer word");
+        assert!(contains_word.finds_a_marker("a bundle of things\n"));
+    }
+
     // The markers as the tools really write them, taken off files found on a whole drive
     #[test]
     fn a_file_whose_head_says_a_tool_wrote_it_is_left_out() {
@@ -3841,7 +3918,7 @@ mod tests {
                     &conflicts.by_filename, &HashMap::new()).0,
             by_shebang: build_language_map_by(IdentifiedBy::Shebang, &LANGUAGE_MAP_REF,
                     &HashMap::new(), &HashMap::new()).0,
-            contested: HashMap::new()
+            extension_rules: HashMap::new()
         }
     }
 

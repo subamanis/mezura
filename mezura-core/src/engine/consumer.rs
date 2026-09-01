@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 use crossbeam_deque::{Injector, Steal, Worker};
 
 use crate::{EngineConfig, FaultyFileDetails, FaultyFilesListMut, FileEntry, FilesPerModuleMut,
-        Language, NestedLanguageMapMut, ParsableFile, ScanProgress, Stats, StatsMapMut, phase_timing};
+        Language, NestedLanguageMapMut, ParsableFile, ScanProgress, SkippedFiles, Stats, StatsMapMut,
+        phase_timing};
 use crate::engine::file_parser;
 use crate::languages::NestedLanguageDefinitions;
 
@@ -19,13 +20,13 @@ pub(crate) fn start_parser_thread(id: usize, files_injector: Arc<Injector<Parsab
         language_map: Arc<HashMap<String,Language>>, nested_definitions: Arc<NestedLanguageDefinitions>,
         language_lookups: crate::SharedModuleLookups,
         config: Arc<EngineConfig>, started: Instant, counting_ended: Arc<AtomicU64>,
-        minified_files: Arc<AtomicUsize>, generated_files: Arc<AtomicUsize>,
+        skipped_files: Arc<Mutex<SkippedFiles>>,
         progress: Arc<ScanProgress>) -> std::io::Result<JoinHandle<()>>
 {
     thread::Builder::new().name(format!("consumer-{id}")).spawn(move || {
         start_parsing_files(files_injector, faulty_files, finish_condition, stats_per_module,
                 nested_per_module, files_per_module, language_map, nested_definitions, language_lookups,
-                config, &minified_files, &generated_files, &progress);
+                config, &skipped_files, &progress);
         // The last thing this thread does, and the only honest answer to how long the counting took:
         // 'run' joins these threads after calling the caller's callback, so its own clock cannot tell
         // the two apart.
@@ -37,15 +38,13 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
     stats_per_module: StatsMapMut, nested_per_module: NestedLanguageMapMut, files_per_module: FilesPerModuleMut,
     language_map: Arc<HashMap<String,Language>>, nested_definitions: Arc<NestedLanguageDefinitions>,
     language_lookups: crate::SharedModuleLookups,
-    config: Arc<EngineConfig>, minified_files: &AtomicUsize, generated_files: &AtomicUsize,
-    progress: &ScanProgress)
+    config: Arc<EngineConfig>, skipped_files: &Mutex<SkippedFiles>, progress: &ScanProgress)
 {
     let mut buf = String::with_capacity(INITIAL_FILE_BUFFER_BYTES);
     let mut parse_buffers = file_parser::ParseBuffers::default();
     let mut idle_iterations = 0u32;
     let mut local_faulty: Vec<FaultyFileDetails> = Vec::new();
-    let mut local_minified = 0;
-    let mut local_generated = 0;
+    let mut local_skipped = SkippedFiles::default();
     let mut keyword_matchers = file_parser::KeywordMatchers::default();
     let mut identification_matchers = file_parser::IdentificationMatchers::default();
     // The module is an index into the outer vector and never part of the key: a composite one would
@@ -90,7 +89,8 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                 let shebang_map = &language_lookups.get_of_module(parsable_file.module).by_shebang;
                 match file_parser::parse_file(&parsable_file.path, lang_name, &mut buf, &mut parse_buffers,
                         &lookup, &mut keyword_matchers, &mut identification_matchers, &config,
-                        parsable_file.written_by_hand, parsable_file.contenders.as_deref(), shebang_map) {
+                        parsable_file.written_by_hand, parsable_file.extension_rules.as_deref(),
+                        shebang_map) {
                     Ok(file_parser::FileOutcome::Counted(report, resolved)) => {
                         let lang_name = resolved.as_deref().unwrap_or(lang_name);
                         progress.record_file_parsed(report.total_lines());
@@ -138,11 +138,15 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                     },
                     Ok(file_parser::FileOutcome::SkippedAsMinified) => {
                         progress.record_file_parsed(0);
-                        local_minified += 1;
+                        local_skipped.minified.push(spell_out(&parsable_file.path));
                     },
                     Ok(file_parser::FileOutcome::SkippedAsGenerated) => {
                         progress.record_file_parsed(0);
-                        local_generated += 1;
+                        local_skipped.generated.push(spell_out(&parsable_file.path));
+                    },
+                    Ok(file_parser::FileOutcome::SkippedAsNotCode) => {
+                        progress.record_file_parsed(0);
+                        local_skipped.not_code.push(spell_out(&parsable_file.path));
                     },
                     Err(x) => {
                         progress.record_file_parsed(0);
@@ -187,11 +191,12 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
     if !local_faulty.is_empty() {
         faulty_files.lock().unwrap().extend(local_faulty);
     }
-    if local_minified > 0 {
-        minified_files.fetch_add(local_minified, Ordering::Relaxed);
-    }
-    if local_generated > 0 {
-        generated_files.fetch_add(local_generated, Ordering::Relaxed);
+    if !local_skipped.minified.is_empty() || !local_skipped.generated.is_empty()
+            || !local_skipped.not_code.is_empty() {
+        let mut global = skipped_files.lock().unwrap();
+        global.minified.append(&mut local_skipped.minified);
+        global.generated.append(&mut local_skipped.generated);
+        global.not_code.append(&mut local_skipped.not_code);
     }
 
     if local_stats.iter().any(|bucket| !bucket.is_empty()) {

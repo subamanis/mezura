@@ -389,10 +389,18 @@ fn read_conflict_rules() -> ConflictRules {
     if !faulty_lines.is_empty() {
         eprintln!("\n{}", crate::message_printer::wrap_message(
                 &format!("Lines that could not be read in '{LANGUAGE_CONFLICTS_FILE_NAME}', and were skipped:\n{}",
-                faulty_lines.join("\n"))).yellow());
-        for line in &faulty_lines {
+                faulty_lines.iter().map(|(_, line)| line.as_str()).collect::<Vec<_>>().join("\n"))).yellow());
+        for (block, line) in &faulty_lines {
+            let consequence = match block {
+                mezura_core::language_file::ConflictBlock::ContestedExtensions
+                        | mezura_core::language_file::ConflictBlock::ContestedFilenames =>
+                        "so any contest it was meant to settle was left to the tiebreak",
+                mezura_core::language_file::ConflictBlock::NotCodeLineStarts
+                        | mezura_core::language_file::ConflictBlock::NotCodeLineContains =>
+                        "so the files of its extension keep being counted"
+            };
             crate::warning_collector::keep(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::ConflictLineSkipped, line,
-                    format!("'{line}' could not be read in '{LANGUAGE_CONFLICTS_FILE_NAME}' and was skipped, so any contest it was meant to settle was left to the tiebreak.")));
+                    format!("'{line}' could not be read in '{LANGUAGE_CONFLICTS_FILE_NAME}' and was skipped, {consequence}.")));
         }
     }
 

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use mezura_core::{FaultyFileDetails, FileEntry, FilesPresent, LineClasses, ModuleResult, Performance,
-        RunResult, Stats, Target, Threads, UnreadableDirDetails};
+        RunResult, SkippedFiles, Stats, Target, Threads, UnreadableDirDetails};
 use serde_json::{Map, Value};
 
 use super::json_printer::FORMAT_VERSION;
@@ -19,6 +19,7 @@ pub struct Document {
     // only when '--show-faulty-files' asked for them, so their length reads zero for a run that had
     // failures and did not detail them, while these two hold the real number.
     pub faulty_files_count: usize,
+    pub skipped_counts: SkippedCounts,
     pub unreadable_dirs_count: usize,
     // Whether the run wrote file rows at all, so a document taken without '--by-file' is told apart
     // from one whose files simply did not change. A run that counted nothing had nothing to record,
@@ -51,7 +52,24 @@ pub struct Scope {
     pub keywords_counted: bool,
     pub count_minified: bool,
     pub count_generated: bool,
+    pub count_not_code: bool,
     pub use_heuristics: bool
+}
+
+// The scan block's counts of the files the head checks set aside, kept apart from the lists in
+// 'result' the way the faulty count is. The lists are written only when '--show-skipped' asked.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SkippedCounts {
+    pub minified: usize,
+    pub generated: usize,
+    pub not_code: usize
+}
+
+impl SkippedCounts {
+    pub fn of(skipped: &SkippedFiles) -> SkippedCounts {
+        SkippedCounts { minified: skipped.minified.len(), generated: skipped.generated.len(),
+                not_code: skipped.not_code.len() }
+    }
 }
 
 // Kept as text rather than as the library's own warning: a document written by a later version can
@@ -150,6 +168,12 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
         languages_hidden: read_number(root, "languages_hidden", "")?,
         warnings: parse_warnings(read_list(root, "warnings", "")?)?,
         faulty_files_count: read_number(scan, "files_faulty", "scan")?,
+        // Absent from a document of the first builds, which counted every file they read
+        skipped_counts: SkippedCounts {
+            minified: read_optional_number(scan, "files_minified", "scan")?,
+            generated: read_optional_number(scan, "files_generated", "scan")?,
+            not_code: read_optional_number(scan, "files_not_code", "scan")?
+        },
         unreadable_dirs_count: read_number(scan, "dirs_unreadable", "scan")?,
         // Decided off what was actually parsed, so it can never claim rows the modules do not hold
         files_recorded: modules.iter().any(|x| !x.files.is_empty()) || total.files == 0,
@@ -166,9 +190,11 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
                 Some(x) => parse_faulty_files(read_array(x, "faulty_files")?)?,
                 None => Vec::new()
             },
-            // Absent from a document of the first builds, which counted every file they read
-            minified_files: read_optional_number(scan, "files_minified", "scan")?,
-            generated_files: read_optional_number(scan, "files_generated", "scan")?,
+            // An absent object means the same for these lists, and their counts sit in 'scan' too
+            skipped_files: match root.get("skipped_files") {
+                Some(x) => parse_skipped_files(read_object(x, "skipped_files")?)?,
+                None => SkippedFiles::default()
+            },
             files_present: FilesPresent {
                 total_files: read_number(scan, "files_found", "scan")?,
                 relevant_files: read_number(scan, "files_of_interest", "scan")?,
@@ -203,6 +229,7 @@ pub(crate) fn parse_scope(scope: &Map<String, Value>) -> Result<(Scope, Vec<Targ
         // Absent for the same reason, and those builds counted every file they could read
         count_minified: read_optional_flag(scope, "count_minified", "scope", true)?,
         count_generated: read_optional_flag(scope, "count_generated", "scope", true)?,
+        count_not_code: read_optional_flag(scope, "count_not_code", "scope", true)?,
         // Absent from a document of the builds that never read a file to identify it
         use_heuristics: read_optional_flag(scope, "use_heuristics", "scope", false)?
     }, parse_targets(read_list(scope, "targets", "scope")?)?))
@@ -346,6 +373,14 @@ fn parse_warnings(entries: &[Value]) -> Result<Vec<DocumentWarning>, DocumentErr
     }).collect()
 }
 
+fn parse_skipped_files(object: &Map<String, Value>) -> Result<SkippedFiles, DocumentError> {
+    Ok(SkippedFiles {
+        minified: read_strings(object, "minified", "skipped_files")?,
+        generated: read_strings(object, "generated", "skipped_files")?,
+        not_code: read_strings(object, "not_code", "skipped_files")?
+    })
+}
+
 fn parse_faulty_files(entries: &[Value]) -> Result<Vec<FaultyFileDetails>, DocumentError> {
     entries.iter().enumerate().map(|(i, entry)| {
         let at = format!("faulty_files[{i}]");
@@ -485,8 +520,7 @@ mod tests {
             per_language,
             nested_languages: HashMap::new(),
             faulty_files: vec![FaultyFileDetails::new("D:\\dev\\a \"b\".rs".to_owned(), "stream did not contain valid UTF-8".to_owned(), 412)],
-            minified_files: 0,
-            generated_files: 0,
+            skipped_files: SkippedFiles::default(),
             files_present: FilesPresent { total_files: 9, relevant_files: 3, excluded_files: 4 },
             performance: Performance { duration_millis: 1180, threads: Threads::new(2, 8) },
             targets: vec![Target::named("backend", "D:/dev/api"), Target::named("backend", "D:/dev/api-v2"),

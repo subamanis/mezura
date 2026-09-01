@@ -67,6 +67,11 @@ fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel, a
         println!("{}", theme.note.paint(&format!("Its extension is contested, and line {line} \
 carrying '{literal}' is what identified it.")));
     }
+    if let Some(skip) = explanation.left_out_of_a_scan {
+        println!("{}", theme.note.paint(&format!("A directory scan leaves this file out as \
+{}. It is counted here because you named it. '--{}' stops leaving it out for that reason.",
+                name_of_skip(skip), command_that_counts(skip))));
+    }
     println!();
     if explanation.lines.is_empty() {
         println!("{}", theme.note.paint("The file has no lines."));
@@ -133,6 +138,9 @@ fn print_json(path: &str, explanation: &FileExplanation, model: CountingModel) {
         document.push_str(&format!("\"identified_by\":{{\"line\":{line},\"evidence\":\"{}\"}},",
                 escape(literal)));
     }
+    if let Some(skip) = explanation.left_out_of_a_scan {
+        document.push_str(&format!("\"left_out_of_a_scan\":\"{}\",", name_of_skip(skip)));
+    }
     document.push_str(&format!("\"buckets\":{{\"code\":{code},\"comments\":{comments},\"{}\":{third}}},",
             model.get_third_quantity_name()));
     document.push_str("\"per_line\":[");
@@ -186,6 +194,22 @@ fn collect_classes_of(explanation: &FileExplanation, asked_for: ExplainedLines) 
     }
 
     classes
+}
+
+fn name_of_skip(skip: mezura_core::ScanSkip) -> &'static str {
+    match skip {
+        mezura_core::ScanSkip::NotCode => "not code",
+        mezura_core::ScanSkip::Minified => "minified",
+        mezura_core::ScanSkip::Generated => "generated"
+    }
+}
+
+fn command_that_counts(skip: mezura_core::ScanSkip) -> &'static str {
+    match skip {
+        mezura_core::ScanSkip::NotCode => crate::config_manager::COUNT_NOT_CODE,
+        mezura_core::ScanSkip::Minified => crate::config_manager::COUNT_MINIFIED,
+        mezura_core::ScanSkip::Generated => crate::config_manager::COUNT_GENERATED
+    }
 }
 
 fn fold_totals(classes: &LineClasses, lines: usize, model: CountingModel) -> (usize, usize, usize) {

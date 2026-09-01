@@ -264,11 +264,37 @@ fn resolve_one_scope(languages: &[Language], everything: &HashMap<String, Langua
             &HashMap::new(), &forced);
     reported.extend(shebang_report.collect_warnings());
 
-    let contested = if config.use_heuristics {find_contested_with_evidence(&report, &by_name)}
-            else {HashMap::new()};
+    let extension_rules = if config.use_heuristics {
+        build_extension_rules(find_contested_with_evidence(&report, &by_name), conflicts, &forced)
+    } else {HashMap::new()};
     ResolvedScope { in_play: by_name,
-            lookup: LanguageLookup { by_extension, by_filename, by_shebang, contested },
+            lookup: LanguageLookup { by_extension, by_filename, by_shebang, extension_rules },
             all_extensions, reported }
+}
+
+// A forced extension is the user's outright answer, so no marker takes its files out of the count.
+fn build_extension_rules(contested: HashMap<String, Arc<[Arc<str>]>>, conflicts: &ConflictRules,
+        forced: &HashMap<String, String>) -> HashMap<String, Arc<crate::engine::identity::ExtensionRules>>
+{
+    let empty = Vec::new();
+    let forced_keys = forced.keys().map(|x| extension_key(x)).collect::<HashSet<_>>();
+    let mut rules: HashMap<String, crate::engine::identity::ExtensionRules> = contested.into_iter()
+            .map(|(extension, contenders)| (extension,
+                    crate::engine::identity::ExtensionRules { contenders: Some(contenders), not_code: None }))
+            .collect();
+    for extension in conflicts.not_code_line_starts.keys().chain(conflicts.not_code_line_contains.keys()) {
+        if forced_keys.contains(extension) {
+            continue;
+        }
+        let starts = conflicts.not_code_line_starts.get(extension).unwrap_or(&empty);
+        let contains = conflicts.not_code_line_contains.get(extension).unwrap_or(&empty);
+        if let Some(matcher) = crate::engine::file_parser::IdentificationMatcher::of(starts, contains) {
+            rules.entry(extension.clone())
+                    .or_insert(crate::engine::identity::ExtensionRules { contenders: None, not_code: None })
+                    .not_code = Some(matcher);
+        }
+    }
+    rules.into_iter().map(|(extension, rules)| (extension, Arc::new(rules))).collect()
 }
 
 fn find_contested_with_evidence(report: &IdentityReport, by_name: &HashMap<String, Language>)
@@ -588,7 +614,7 @@ mod language_selection_tests {
         let conflicts = ConflictRules {
             by_extension: hashmap!("x".to_owned() => vec!["Winner".to_owned(), "Loser".to_owned()],
                     "y".to_owned() => vec!["Winner".to_owned(), "Halfway".to_owned()]),
-            by_filename: HashMap::new()
+            ..Default::default()
         };
 
         let named = |warnings: Vec<Warning>| warnings.into_iter().map(|x| x.subject).collect::<Vec<_>>();
@@ -600,7 +626,7 @@ mod language_selection_tests {
         let handed_back = ConflictRules {
             by_extension: hashmap!("x".to_owned() => vec!["Loser".to_owned(), "Winner".to_owned()],
                     "y".to_owned() => vec!["Winner".to_owned(), "Halfway".to_owned()]),
-            by_filename: HashMap::new()
+            ..Default::default()
         };
         assert!(find_languages_that_lost_every_claim(&languages, &handed_back).is_empty(),
                 "'Winner' still holds '.y', so reordering '.x' leaves nobody unreachable");

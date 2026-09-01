@@ -9,8 +9,8 @@ It lets you decide what counts as what, and how the report looks.
 The figures can be grouped by language, by module and by file.  
 Windows, Linux and macOS binaries are built and tested on every release.
 
-Example run on the entire Linux kernel:
-<img src="screenshots/example-linux.png" width="1000">
+The whole Linux kernel (some languages were cut for screenshot purposes):
+<img src="screenshots/hero2.png" width="1000">
 
 
 ## Table of contents
@@ -20,10 +20,10 @@ Example run on the entire Linux kernel:
   * [Quick start](#quick-start)
   * [Commands](#commands)
   * [Modules](#modules)
+  * [Layouts](#layouts)
 * [What is counted](#what-is-counted)
   * [The counting model](#the-counting-model)
   * [What is skipped](#what-is-skipped)
-  * [The data directory](#the-data-directory)
 * [Taking the result elsewhere](#taking-the-result-elsewhere)
   * [JSON output](#json-output)
   * [Coding agents (MCP)](#coding-agents-mcp)
@@ -34,6 +34,7 @@ Example run on the entire Linux kernel:
 * [Configuration](#configuration)
   * [Your own configurations](#your-own-configurations)
   * [The settings of a project](#the-settings-of-a-project)
+  * [The data directory](#the-data-directory)
 * [Themes](#themes)
 * [Supported languages](#supported-languages)
 * [Accuracy and limitations](#accuracy-and-limitations)
@@ -50,6 +51,7 @@ Example run on the entire Linux kernel:
 Things it does that most counters do not:
 
 - **Ensures the right language for each file.** When two languages claim one extension, the way `.m` is both MATLAB and Objective-C, every file is identified by its own content: a `#!` line first, then  heuristics on its content. And you always have the last word: set your preferences globally in `language_conflicts.txt`, or per-project through its configuration, or `--force-language` for one run, or even per module in the same run. See [Supported languages](#supported-languages).
+- **Discards non-code files with a matching extension** (no more Make dependency `.d` files counted as the D language!). Alongside the minified and generated files that are skipped by default, they are reported as skipped. See [What is skipped](#what-is-skipped).
 - **Keyword counting.** Occurrences of words you pick per language, classes, structs, traits,
   anything, counted only where they appear as code and never inside a string or a comment.
 - **Nested languages.** The `<script>` and `<style>` blocks of HTML, Vue, Svelte and Astro files are
@@ -137,6 +139,7 @@ WHAT IS COUNTED
   --search-in-dotted   go into directories whose name starts with a dot
   --count-minified     count the minified files that are left out by default
   --count-generated    count the generated files that are left out by default
+  --count-not-code     count the non-code files that are left out by default
   --no-heuristics      never try to automatically resolve the contest when two languages claim the same
                        extension
   --show-languages     print the languages this installation knows and stop
@@ -185,6 +188,7 @@ TUNING AND DIAGNOSTICS
   --explain            show one file line by line instead of printing a report
   --threads            how many threads walk the directories and how many parse the files
   --show-faulty-files  name the files that could not be parsed, and what went wrong with each
+  --show-skipped       name the files that were left out as minified, generated or not code
 
 THE PROGRAM ITSELF
 
@@ -210,11 +214,48 @@ means "the tests there, the rest of the project here". Targets that were not exp
 are shown under a row called `(unnamed)`. A comma continues a module and a space ends it,
  so `tests=./api/tests,./web/tests` is one module of two directories.
 
-Each module gets its own block of rows in the report, with its own languages and totals, and the
-history section then records how each module grew. `--layout matrix` crosses them: languages down,
-modules across, one figure per cell.
+Each module gets its own block of rows, with its own languages and totals, and the history section
+then records how each module grew.
+
+<img src="screenshots/modules-with-unnamed.png" width="1000">
+
+`--layout matrix` crosses them instead, languages down and modules across, one figure per cell.
+
+<img src="screenshots/modules-matrix.png" width="700">
 
 The full rules (glob patterns, repeated names, ordering) are under `--targets` in
+[COMMANDS.md](COMMANDS.md).
+
+### Layouts
+
+The details section comes in four shapes. `table` is the default and `boxed` draws the same figures
+inside a frame, both of them aligned so a column can be read down. `list` gives each language a
+sentence instead, reading left to right, and `matrix` answers a different question, languages down
+and modules across.
+
+<details>
+<summary><b>The four layouts on the same run</b></summary>
+
+`--layout table`
+
+<img src="screenshots/table-layout.png" width="1000">
+
+`--layout boxed`
+
+<img src="screenshots/boxed-layout.png" width="1000">
+
+`--layout list`
+
+<img src="screenshots/list-layout.png" width="1000">
+
+`--layout matrix`
+
+<img src="screenshots/matrix-layout.png" width="700">
+
+</details>
+
+`--hide` takes any part of the output away, whole sections or single columns, and `--sort`, `--top`
+and `--by-file` decide what the rows are and in what order. They are all listed in
 [COMMANDS.md](COMMANDS.md).
 
 
@@ -239,56 +280,23 @@ region-based counting, run `mezura --counting region`**.
 
 ### What is skipped
 
-By default, the files and folders that are ignored by a .gitignore are skipped, so that build
-artifacts and dependencies don't pollute the stats (see `--no-gitignore`). A .ignore or .rgignore
-is obeyed as well, which is what ripgrep, the silver searcher and fd read and git does not, and
-which is where a vendored dependency that stays in version control is usually named (see
-`--no-ignore-files`).
+Files and folders named in a .gitignore, .ignore or .rgignore are skipped (see `--no-gitignore`
+and `--no-ignore-files`). Directories whose name starts with a dot are skipped unless
+`--search-in-dotted` is given, and `.git` is never traversed at all.
 
-Directories whose name starts with a dot, like `.vscode` or `.github`, are skipped unless
-`--search-in-dotted` is given. The `.git` directory is never traversed at all.
+Three checks on a file's head can also set it aside, each reported above the table with its own
+count: minified (an average line of 1000 bytes or more), generated (a marker like `do not edit` or
+`@generated` in the first 512 bytes), and not code at all (give-away text listed per extension in
+`language_conflicts.txt`, the way a `.d` dependency file is not the D language and a ProGuard
+`.pro` is not Prolog). Each check has its own flag that turns it off: `--count-minified`,
+`--count-generated`, `--count-not-code`. The not-code check is also off under `--no-heuristics`.
+`--show-skipped` prints the paths, and `--explain` on such a file says which check set it aside.
+The reasoning behind the tests is in [Accuracy and limitations](#accuracy-and-limitations).
 
-Minified files (an average line of 1000 bytes or more) and generated files (a marker like
-`do not edit` or `@generated` in the first 512 bytes) are left out and reported above the table,
-since a bundle counted as one line of code would make the report wrong in both directions at once.
-`--count-minified` and `--count-generated` bring them back, and the reasoning behind both tests is
-in [Accuracy and limitations](#accuracy-and-limitations).
+A path you write out yourself is always counted, even if it is ignored, dotted, a link, minified,
+generated or not code. The matches of a glob pattern were found by mezura rather than named by
+you, so those are skipped like any other found path.
 
-A path you write out yourself is always counted, even if it is ignored, dotted, a link, minified or
-generated. The matches of a glob pattern were found by mezura rather than named by you, so those
-are skipped like any other found path.
-
-### The data directory
-
-There is a "data" folder in the repository, that contains some already provided language files,
-themes and the default configuration file. The program, at compile time, includes the "data" folder
-in the binary, and during the first execution, it saves it with the same structure in a persistent
-path, inside the user's computer, according to the platform's specification. More specifically, the
-paths per operating system are:
-```
-    Windows:  %APPDATA%\mezura
-    Linux:    /home/$USER/.local/share/mezura
-    MacOs:    /Users/$USER/Library/Application Support/mezura
-```
-
-The languages, themes, configurations and logs are then read from those folders, on that first
-execution as much as on every one after it, so you can reach them and change them: add languages of
-your own, add themes, or edit the default configuration.
-
-Set `MEZURA_DATA_DIR` and that folder is used instead, created and filled on the first run there
-exactly as the usual one was. It is what you need when two versions of mezura have to run on the
-same machine without treading on each other, since each one rewrites the shared folder into the
-shape it expects. A run using it says so, every time, because a variable set once and forgotten
-hides every configuration and theme you saved.
-
-Installing a new version updates the language files there, so a correction to a language reaches
-you without you having to do anything. One that you changed yourself is replaced too, since a
-language file that has fallen behind counts wrongly, but your copy is kept under
-`data/replaced/<version>/<date and time>/` and the program names it, so you can carry your changes
-over. Each update or `--restore` writes its own folder there, so two of them never mix and the
-newest is the one at the bottom. A language file of your own is never touched, and neither are your
-themes, your default configuration or `language_conflicts.txt`: those are written when they are
-absent and left alone afterwards.
 
 
 ## Taking the result elsewhere
@@ -411,8 +419,9 @@ time, or that is not there any more, is named as such instead of being compared 
 entry written by a run that named none has no such block.
 
 By using the `--compare <N>` flag, the (N) previous logged executions will be retrieved from the
-file and will be compared and printed to the screen. For example for N = 3, it would look like this:
-![](screenshots/compare-logs.PNG)
+file and will be compared and printed to the screen. For example for N = 2, it would look like this:
+
+<img src="screenshots/compare.png" width="1000">
 
 Both `--log` and `--compare` need a log to belong to, which means either a configuration loaded by
 name or a project with a `.mezura` folder to be inside.
@@ -429,9 +438,11 @@ mezura ./src --diff v2.0.1..v3.0.0
 ```
 
 A reading is either a JSON document an earlier run wrote, or a git revision, which is checked out
-to a temporary directory and counted on the spot with this run's settings and targets. Every figure
-shows what it is now, how much it moved and by what percentage, and a language only one side has is
-marked `new` or `gone`.
+to a temporary directory and counted on the spot with this run's settings and targets.
+
+<img src="screenshots/diff.png" width="1000">
+
+A language only one side has is marked `new` or `gone`, and a figure that did not move is a dash.
 
 Add `--by-file` and the files that changed get rows of their own under each language, marked `new`
 and `gone` the same way; a number keeps the biggest movers of each language instead of the biggest
@@ -488,6 +499,39 @@ The priorities of the specified flags are:
 4) Default config file
 5) Internal defaults
 
+### The data directory
+
+There is a "data" folder in the repository, that contains some already provided language files,
+themes and the default configuration file. The program, at compile time, includes the "data" folder
+in the binary, and during the first execution, it saves it with the same structure in a persistent
+path, inside the user's computer, according to the platform's specification. More specifically, the
+paths per operating system are:
+```
+    Windows:  %APPDATA%\mezura
+    Linux:    /home/$USER/.local/share/mezura
+    MacOs:    /Users/$USER/Library/Application Support/mezura
+```
+
+The languages, themes, configurations and logs are then read from those folders, on that first
+execution as much as on every one after it, so you can reach them and change them: add languages of
+your own, add themes, or edit the default configuration.
+
+Set `MEZURA_DATA_DIR` and that folder is used instead, created and filled on the first run there
+exactly as the usual one was. It is what you need when two versions of mezura have to run on the
+same machine without treading on each other, since each one rewrites the shared folder into the
+shape it expects. A run using it says so, every time, because a variable set once and forgotten
+hides every configuration and theme you saved.
+
+Installing a new version updates the language files there, so a correction to a language reaches
+you without you having to do anything. One that you changed yourself is replaced too, since a
+language file that has fallen behind counts wrongly, but your copy is kept under
+`data/replaced/<version>/<date and time>/` and the program names it, so you can carry your changes
+over. Each update or `--restore` writes its own folder there, so two of them never mix and the
+newest is the one at the bottom. A language file of your own is never touched, and neither are your
+themes or your default configuration: those are written when they are absent and left alone
+afterwards. A `language_conflicts.txt` you have not edited is brought whole to each new version;
+an edited one is merged, with your lines kept and your file as it stood saved under `replaced`.
+
 
 ## Themes
 
@@ -497,13 +541,17 @@ A **theme** is a plain .txt file of ```token = value``` lines, in the "themes" f
 
 13 themes are bundled. **Mezura** is the default look. Catppuccin, Dracula, Forest, Gruvbox, Meadow and Ocean come in two versions each: the plain name dresses the whole report, headings, labels, sub-rows and all, while the ```-minimal``` one changes the colors and little else. Edit them, or add your own by dropping a file there.
 
+```--show-themes``` previews each of them on the same figures, which is where these three come from:
+
+<img src="screenshots/theme-showcase.png" width="900">
+
 The four languages of the overview and the folded 'others' entry are five ordinary tokens, ```language-1``` to ```language-4``` and ```language-others```, so a theme sets them the same way it sets everything else.
 
 To make authoring one easier, there is an interactive editor: one run of mezura with a picker for every token that draws it, its color, its background and its attributes, contrast readings beside them, and a button that hands back the lines of a theme file.
 
 <b>[Open the theme editor online](https://subamanis.github.io/mezura/theme-editor/)</b> to play with the bundled themes, or run ```mezura --theme-editor``` to open it with the themes found on your own machine, including the ones you created.
 
-<a href="https://subamanis.github.io/mezura/theme-editor/"><img src="screenshots/palette-tuner.png" width="900"></a>
+<a href="https://subamanis.github.io/mezura/theme-editor/"><img src="screenshots/theme-editor.png" width="900"></a>
 
 
 ## Supported languages

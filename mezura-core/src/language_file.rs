@@ -11,17 +11,82 @@ use std::path::Path;
 use crate::{Keyword, Language, LeveledPair, LineContinuation, NestedLanguage, StringRules};
 use crate::engine::identity::IdentifiedBy;
 
-/// Who wins an extension or a file name that more than one language claims. Each entry lists the
-/// languages in the order they get it, the first one present taking it.
+/// What the language conflicts file decides. It names who wins an extension or a file name that
+/// more than one language claims, and it lists the literals that mark a file of an extension as
+/// not code at all.
 ///
-/// Two maps because they are two questions: a rule for the extension `m` says nothing about a file
-/// called `m`, and one map for both would let the two answer for each other.
+/// The contest maps list languages in the order they get the identity, the first one present
+/// taking it. The not-code maps list marker literals, not languages. Separate maps because they
+/// are separate questions. A rule for the extension `m` says nothing about a file called `m`.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ConflictRules {
     /// Keyed by extension, without the dot.
     pub by_extension : HashMap<String, Vec<String>>,
     /// Keyed by whole file name.
-    pub by_filename : HashMap<String, Vec<String>>
+    pub by_filename : HashMap<String, Vec<String>>,
+    /// Literals that mark a file of this extension as not code when a line begins with one.
+    pub not_code_line_starts : HashMap<String, Vec<String>>,
+    /// The same, for a literal found anywhere in a line.
+    pub not_code_line_contains : HashMap<String, Vec<String>>
+}
+
+impl ConflictRules {
+    /// The rules under one block of the file.
+    pub fn get_of_block(&self, block: ConflictBlock) -> &HashMap<String, Vec<String>> {
+        match block {
+            ConflictBlock::ContestedExtensions => &self.by_extension,
+            ConflictBlock::ContestedFilenames => &self.by_filename,
+            ConflictBlock::NotCodeLineStarts => &self.not_code_line_starts,
+            ConflictBlock::NotCodeLineContains => &self.not_code_line_contains
+        }
+    }
+
+    fn get_of_block_mut(&mut self, block: ConflictBlock) -> &mut HashMap<String, Vec<String>> {
+        match block {
+            ConflictBlock::ContestedExtensions => &mut self.by_extension,
+            ConflictBlock::ContestedFilenames => &mut self.by_filename,
+            ConflictBlock::NotCodeLineStarts => &mut self.not_code_line_starts,
+            ConflictBlock::NotCodeLineContains => &mut self.not_code_line_contains
+        }
+    }
+}
+
+/// One rule block of the language conflicts file, named by the marker that opens it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConflictBlock {
+    /// `===> contested-extensions`, filling [`ConflictRules::by_extension`].
+    ContestedExtensions,
+    /// `===> contested-filenames`, filling [`ConflictRules::by_filename`].
+    ContestedFilenames,
+    /// `===> not-code-when-a-line-starts`, filling [`ConflictRules::not_code_line_starts`].
+    NotCodeLineStarts,
+    /// `===> not-code-when-a-line-contains`, filling [`ConflictRules::not_code_line_contains`].
+    NotCodeLineContains
+}
+
+impl ConflictBlock {
+    /// Every block, in the order the shipped file writes them.
+    pub const ALL: [ConflictBlock; 4] = [ConflictBlock::ContestedExtensions,
+            ConflictBlock::ContestedFilenames, ConflictBlock::NotCodeLineStarts,
+            ConflictBlock::NotCodeLineContains];
+
+    /// The key under which this block files a rule's first word, folded the way the parser folds it.
+    pub fn key_of(self, claimed: &str) -> String {
+        match self {
+            ConflictBlock::ContestedExtensions | ConflictBlock::NotCodeLineStarts
+                    | ConflictBlock::NotCodeLineContains => IdentifiedBy::Extension.key_of(claimed),
+            ConflictBlock::ContestedFilenames => IdentifiedBy::Filename.key_of(claimed)
+        }
+    }
+
+    fn marker(self) -> &'static str {
+        match self {
+            ConflictBlock::ContestedExtensions => CONTESTED_EXTENSIONS,
+            ConflictBlock::ContestedFilenames => CONTESTED_FILENAMES,
+            ConflictBlock::NotCodeLineStarts => NOT_CODE_LINE_STARTS,
+            ConflictBlock::NotCodeLineContains => NOT_CODE_LINE_CONTAINS
+        }
+    }
 }
 
 // The headers a language file is written with, spelled as they appear in it
@@ -55,9 +120,11 @@ const KEYWORD                  : &str = "Keyword";
 const KEYWORD_NAME             : &str = "NAME";
 const KEYWORD_ALIASES          : &str = "ALIASES";
 
-// The markers that open the two rule blocks of the language conflicts file
+// The markers that open the rule blocks of the language conflicts file
 const CONTESTED_EXTENSIONS     : &str = "contested-extensions";
 const CONTESTED_FILENAMES      : &str = "contested-filenames";
+const NOT_CODE_LINE_STARTS     : &str = "not-code-when-a-line-starts";
+const NOT_CODE_LINE_CONTAINS   : &str = "not-code-when-a-line-contains";
 
 // No command is named here: this crate does not know the command line's. Whoever prints it adds the
 // way out, the way 'warning_collector' does for the language warnings. And nothing here promises a
@@ -464,19 +531,20 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
 ///
 /// A missing file is not a mistake and comes back as no rules at all: the only consequence is that
 /// a contested extension falls back to the alphabetical tiebreak, which announces itself anyway.
-pub fn parse_conflict_rules_file(path: impl AsRef<Path>) -> (ConflictRules, Vec<String>) {
+pub fn parse_conflict_rules_file(path: impl AsRef<Path>) -> (ConflictRules, Vec<(ConflictBlock, String)>) {
     match fs::read_to_string(path) {
         Ok(contents) => parse_conflict_rules(&contents),
         Err(_) => (ConflictRules::default(), Vec::new())
     }
 }
 
-/// The same reading, from text, giving back the rules and the lines that did not parse.
+/// The same reading, from text, giving back the rules and the lines that did not parse, each with
+/// the block it sat under.
 ///
-/// A line that does not parse is reported and skipped while the rest of the file applies, because
-/// a mistake here cannot produce a wrong number in silence: the extension it failed to settle falls
-/// through to the tiebreak, which says so by name.
-pub fn parse_conflict_rules(contents: &str) -> (ConflictRules, Vec<String>) {
+/// A line that does not parse is reported and skipped while the rest of the file applies. Under a
+/// contest block the extension it failed to settle falls through to the tiebreak, which says so by
+/// name, and under a not-code block the files of its extension simply keep being counted.
+pub fn parse_conflict_rules(contents: &str) -> (ConflictRules, Vec<(ConflictBlock, String)>) {
     let mut rules = ConflictRules::default();
     let mut faulty_lines = Vec::new();
     let mut block = None;
@@ -489,44 +557,44 @@ pub fn parse_conflict_rules(contents: &str) -> (ConflictRules, Vec<String>) {
         // skipped rather than read as a rule for an extension named '===>', which would be neither
         // applied nor reported.
         if line.starts_with("===>") {
-            let name = line.trim_start_matches("===>").split_whitespace().next().unwrap_or_default();
-            block = if name.eq_ignore_ascii_case(CONTESTED_EXTENSIONS) {
-                Some(IdentifiedBy::Extension)
-            } else if name.eq_ignore_ascii_case(CONTESTED_FILENAMES) {
-                Some(IdentifiedBy::Filename)
-            } else {
-                None
-            };
+            block = find_block_of_marker(line);
             continue;
         }
         let Some(block) = block else { continue };
 
-        let Some((claimed, claimants)) = line.split_once(char::is_whitespace) else {
-            faulty_lines.push(line.to_owned());
+        let Some((claimed, names)) = split_rule_line(line) else {
+            faulty_lines.push((block, line.to_owned()));
             continue;
         };
-        let names = split_line_on_commas(claimants);
-        if names.is_empty() {
-            faulty_lines.push(line.to_owned());
-            continue;
-        }
 
         // The first declaration is the one that counts, so that a second one cannot silently undo a
         // decision sitting a few lines above it in the same file. Keyed the way a language's own
         // declaration is keyed, dot and case alike, or a rule written '.m' would settle nothing and
         // never say why.
-        let of_block = match block {
-            IdentifiedBy::Extension => &mut rules.by_extension,
-            IdentifiedBy::Filename => &mut rules.by_filename,
-            IdentifiedBy::Shebang => unreachable!("no marker opens a shebang block")
-        };
-        match of_block.entry(block.key_of(claimed)) {
-            std::collections::hash_map::Entry::Occupied(_) => faulty_lines.push(line.to_owned()),
+        match rules.get_of_block_mut(block).entry(block.key_of(claimed)) {
+            std::collections::hash_map::Entry::Occupied(_) => faulty_lines.push((block, line.to_owned())),
             std::collections::hash_map::Entry::Vacant(slot) => { slot.insert(names); }
         }
     }
 
     (rules, faulty_lines)
+}
+
+/// Which block a `===>` marker line opens, read exactly the way [`parse_conflict_rules`] reads it,
+/// or None for a line that is no marker or a marker this build does not know.
+pub fn find_block_of_marker(line: &str) -> Option<ConflictBlock> {
+    let line = line.trim();
+    if !line.starts_with("===>") {
+        return None;
+    }
+    let name = line.trim_start_matches("===>").split_whitespace().next().unwrap_or_default();
+    ConflictBlock::ALL.into_iter().find(|block| name.eq_ignore_ascii_case(block.marker()))
+}
+
+/// The key under which [`parse_conflict_rules`] would file this rule line of the given block, or
+/// None for a line it would reject.
+pub fn find_key_of_rule(block: ConflictBlock, line: &str) -> Option<String> {
+    split_rule_line(line.trim()).map(|(claimed, _)| block.key_of(claimed))
 }
 
 // A byte order mark is three bytes that mean "this is UTF-8" and carry no text, and 'trim' does not
@@ -582,6 +650,12 @@ fn split_line_on_whitespace(line: &str) -> Vec<String> {
 
 fn split_line_on_commas(line: &str) -> Vec<String> {
     line.split(',').map(str::trim).filter(|x| !x.is_empty()).map(str::to_owned).collect()
+}
+
+fn split_rule_line(line: &str) -> Option<(&str, Vec<String>)> {
+    let (claimed, values) = line.split_once(char::is_whitespace)?;
+    let values = split_line_on_commas(values);
+    if values.is_empty() {None} else {Some((claimed, values))}
 }
 
 #[cfg(test)]
@@ -655,6 +729,12 @@ pl       Perl
 
 ===> contested-filenames
 Makefile   Make, Automake
+
+===> not-code-when-a-line-starts
+.PRO     -keep, -dontwarn
+
+===> not-code-when-a-line-contains
+d       .o:, .rlib:
 ");
         assert!(faulty.is_empty());
         assert_eq!(2, rules.by_extension.len());
@@ -664,7 +744,27 @@ Makefile   Make, Automake
         // a name lands in its own map and is not answered by a rule about extensions
         assert_eq!(Some(&vec!["Make".to_owned(), "Automake".to_owned()]), rules.by_filename.get("makefile"));
         assert!(!rules.by_extension.contains_key("makefile"));
+
+        assert_eq!(Some(&vec!["-keep".to_owned(), "-dontwarn".to_owned()]), rules.not_code_line_starts.get("pro"));
+        assert_eq!(Some(&vec![".o:".to_owned(), ".rlib:".to_owned()]), rules.not_code_line_contains.get("d"));
+        assert!(!rules.by_extension.contains_key("pro") && !rules.by_extension.contains_key("d"));
     }
+    #[test]
+    fn a_marker_is_recognised_with_or_without_spacing_and_a_rule_is_keyed_by_its_block() {
+        assert_eq!(Some(ConflictBlock::ContestedExtensions), find_block_of_marker("===>contested-extensions"));
+        assert_eq!(Some(ConflictBlock::ContestedExtensions), find_block_of_marker("  ===> Contested-Extensions and a note"));
+        assert_eq!(Some(ConflictBlock::NotCodeLineContains), find_block_of_marker("===> not-code-when-a-line-contains"));
+        assert_eq!(None, find_block_of_marker("===> some-section-added-later"));
+        assert_eq!(None, find_block_of_marker("not a marker at all"));
+
+        assert_eq!(Some("pro".to_owned()),
+                find_key_of_rule(ConflictBlock::NotCodeLineStarts, ".PRO  -keep, -dontwarn"));
+        assert_eq!(Some("makefile.am".to_owned()),
+                find_key_of_rule(ConflictBlock::ContestedFilenames, "Makefile.am  Make, Automake"));
+        assert_eq!(None, find_key_of_rule(ConflictBlock::ContestedExtensions, "justoneword"));
+        assert_eq!(None, find_key_of_rule(ConflictBlock::ContestedExtensions, "v  ,  ,"));
+    }
+
     #[test]
     fn a_line_of_the_conflicts_file_that_does_not_parse_is_skipped_and_the_rest_applies() {
         let (rules, faulty) = parse_conflict_rules(
@@ -680,7 +780,9 @@ pl      Perl, Prolog
         assert_eq!(1, rules.by_extension.len());
         // the second declaration is the one that loses, and the decision above it stands
         assert_eq!(Some(&vec!["Objective-C".to_owned(), "MATLAB".to_owned()]), rules.by_extension.get("m"));
-        assert_eq!(vec!["justoneword".to_owned(), "m       Prolog".to_owned(), "v       ,  ,".to_owned()], faulty);
+        assert_eq!(vec![(ConflictBlock::ContestedExtensions, "justoneword".to_owned()),
+                (ConflictBlock::ContestedExtensions, "m       Prolog".to_owned()),
+                (ConflictBlock::ContestedExtensions, "v       ,  ,".to_owned())], faulty);
     }
 
     #[test]
@@ -1094,7 +1196,7 @@ Comment symbols\n--\nMulti line comment start\n--[=*[\nMulti line comment end\n]
     #[test]
     fn a_missing_conflicts_file_is_not_a_mistake() {
         let (rules, faulty) = parse_conflict_rules_file("a/path/that/is/not/there.txt");
-        assert_eq!((ConflictRules::default(), Vec::<String>::new()), (rules, faulty));
+        assert_eq!((ConflictRules::default(), Vec::<(ConflictBlock, String)>::new()), (rules, faulty));
     }
     // The C++ fixture is a definition that is correct everywhere except for one stray line under the
     // language name, which is the mistake somebody editing a file by hand actually makes. Its

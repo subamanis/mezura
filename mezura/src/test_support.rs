@@ -28,8 +28,8 @@ pub fn plain_result_of(per_language: HashMap<String, Stats>, modules: Vec<Module
 {
     RunResult {
         total: Stats::total_of(&per_language), per_language, modules, targets,
-        nested_languages: HashMap::new(), faulty_files: Vec::new(), minified_files: 0,
-        generated_files: 0, unreadable_dirs: Vec::new(),
+        nested_languages: HashMap::new(), faulty_files: Vec::new(),
+        skipped_files: mezura_core::SkippedFiles::default(), unreadable_dirs: Vec::new(),
         files_present: FilesPresent { total_files: 2, relevant_files: 2, excluded_files: 0 },
         performance: Performance { duration_millis: 0, threads: Threads::new(1, 1) }
     }

@@ -6,8 +6,9 @@ use mezura_core::{EngineConfig, FileEntry, ForcedLanguages, Language, LanguageNa
 use mezura_core::language_file::ConflictRules;
 
 use super::config_manager::{ByFile, Configuration, Layout, SortCriterion};
-use super::config_manager::{COUNTING, COUNT_GENERATED, COUNT_MINIFIED, EXCLUDE, EXCLUDE_LANGUAGES,
-        FORCE_LANGUAGE, LANGUAGES, NO_GITIGNORE, NO_HEURISTICS, NO_IGNORE_FILES, SEARCH_IN_DOTTED};
+use super::config_manager::{COUNTING, COUNT_GENERATED, COUNT_MINIFIED, COUNT_NOT_CODE, EXCLUDE,
+        EXCLUDE_LANGUAGES, FORCE_LANGUAGE, LANGUAGES, NO_GITIGNORE, NO_HEURISTICS, NO_IGNORE_FILES,
+        SEARCH_IN_DOTTED};
 use super::json_reader::{DocumentError, DocumentWarning, Scope};
 use super::sources::RevisionSide;
 
@@ -40,6 +41,7 @@ pub struct Reading {
     // Counts and not lists: a document details the failures only when '--show-faulty-files' asked
     // it to, so the lists in 'result' can read empty for a side whose counts are short.
     pub faulty_files_count: usize,
+    pub skipped_counts: super::json_reader::SkippedCounts,
     pub unreadable_dirs_count: usize,
     // False only for a document written without '--by-file', whose empty file lists must not read
     // as a tree where every file is new; a side that counted nothing had nothing to record
@@ -86,6 +88,7 @@ impl Reading {
             scope: scope_of(&config.engine, config.view.counting),
             warnings: Vec::new(),
             faulty_files_count: result.faulty_files.len(),
+            skipped_counts: super::json_reader::SkippedCounts::of(&result.skipped_files),
             unreadable_dirs_count: result.unreadable_dirs.len(),
             files_recorded: true,
             files_hidden: 0,
@@ -329,7 +332,8 @@ pub fn load(path: &str) -> Result<Reading, LoadError> {
 
     Ok(Reading { source: Source::Document { path: path.to_owned() }, taken: document.generated_at,
             version: document.mezura_version, scope: document.scope, warnings: document.warnings,
-            faulty_files_count: document.faulty_files_count, unreadable_dirs_count: document.unreadable_dirs_count,
+            faulty_files_count: document.faulty_files_count, skipped_counts: document.skipped_counts,
+            unreadable_dirs_count: document.unreadable_dirs_count,
             files_recorded: document.files_recorded, files_hidden: document.files_hidden,
             result: document.result })
 }
@@ -487,6 +491,7 @@ pub fn scope_of(engine: &mezura_core::EngineConfig, counting: mezura_core::Count
         keywords_counted: engine.count_keywords,
         count_minified: engine.count_minified,
         count_generated: engine.count_generated,
+        count_not_code: engine.count_not_code,
         use_heuristics: engine.use_heuristics
     }
 }
@@ -507,6 +512,7 @@ pub fn find_settings_that_differ(baseline: &Scope, subject: &Scope) -> Vec<&'sta
     if baseline.keywords_counted != subject.keywords_counted {differ.push(HIDE_KEYWORDS)}
     if baseline.count_minified != subject.count_minified {differ.push(COUNT_MINIFIED)}
     if baseline.count_generated != subject.count_generated {differ.push(COUNT_GENERATED)}
+    if baseline.count_not_code != subject.count_not_code {differ.push(COUNT_NOT_CODE)}
     if baseline.use_heuristics != subject.use_heuristics {differ.push(NO_HEURISTICS)}
 
     differ
@@ -569,6 +575,10 @@ pub fn resolve_settings(document: &Scope, config: &mut super::config_manager::Co
     if !typed.count_generated && document.count_generated != config.engine.count_generated {
         config.engine.count_generated = document.count_generated;
         adopted.push(COUNT_GENERATED);
+    }
+    if !typed.count_not_code && document.count_not_code != config.engine.count_not_code {
+        config.engine.count_not_code = document.count_not_code;
+        adopted.push(COUNT_NOT_CODE);
     }
     if !typed.no_heuristics && document.use_heuristics != config.engine.use_heuristics {
         config.engine.use_heuristics = document.use_heuristics;
@@ -968,6 +978,7 @@ mod tests {
                 scope: scope_of(&mezura_core::EngineConfig::default(), mezura_core::CountingModel::Content),
                 warnings: Vec::new(),
                 faulty_files_count: 0,
+                skipped_counts: crate::json_reader::SkippedCounts::default(),
                 unreadable_dirs_count: 0,
                 files_recorded: true,
                 files_hidden: 0,
@@ -1188,6 +1199,7 @@ mod tests {
             keywords_counted: true,
             count_minified: false,
             count_generated: false,
+            count_not_code: false,
             use_heuristics: true
         };
 

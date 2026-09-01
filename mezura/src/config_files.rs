@@ -131,6 +131,8 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                                 MIN_CONSUMERS_VALUE, MAX_CONSUMERS_VALUE).map(Threads::from)),
                 config_manager::COUNTING => read_parsed_value(&mut builder.counting, &mut reader, &mut buf,
                         config_manager::COUNTING, &mut issues, mezura_core::CountingModel::parse),
+                config_manager::SHOW_SKIPPED => read_flag_value(&mut builder.should_show_skipped_files,
+                        &mut reader, &mut buf, config_manager::SHOW_SKIPPED, &mut issues),
                 config_manager::SHOW_FAULTY_FILES => read_flag_value(&mut builder.should_show_faulty_files,
                         &mut reader, &mut buf, config_manager::SHOW_FAULTY_FILES, &mut issues),
                 config_manager::SEARCH_IN_DOTTED => read_flag_value(&mut builder.should_search_in_dotted,
@@ -139,6 +141,8 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                         &mut reader, &mut buf, config_manager::COUNT_MINIFIED, &mut issues),
                 config_manager::COUNT_GENERATED => read_flag_value(&mut builder.count_generated,
                         &mut reader, &mut buf, config_manager::COUNT_GENERATED, &mut issues),
+                config_manager::COUNT_NOT_CODE => read_flag_value(&mut builder.count_not_code,
+                        &mut reader, &mut buf, config_manager::COUNT_NOT_CODE, &mut issues),
                 config_manager::HIDE => read_parsed_value(&mut builder.hidden, &mut reader, &mut buf,
                         config_manager::HIDE, &mut issues, |x| config_manager::Hidden::parse(x).ok()),
                 config_manager::NO_GITIGNORE => read_flag_value(&mut builder.no_gitignore,
@@ -265,8 +269,14 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
     if let Some(count_generated) = &config_builder.count_generated {
         write_block(&mut writer, config_manager::COUNT_GENERATED, yes_or_no(*count_generated))?;
     }
+    if let Some(count_not_code) = &config_builder.count_not_code {
+        write_block(&mut writer, config_manager::COUNT_NOT_CODE, yes_or_no(*count_not_code))?;
+    }
     if let Some(should_show_faulty_files) = &config_builder.should_show_faulty_files {
         write_block(&mut writer, config_manager::SHOW_FAULTY_FILES, yes_or_no(*should_show_faulty_files))?;
+    }
+    if let Some(should_show_skipped_files) = &config_builder.should_show_skipped_files {
+        write_block(&mut writer, config_manager::SHOW_SKIPPED, yes_or_no(*should_show_skipped_files))?;
     }
     if let Some(hidden) = &config_builder.hidden {
         write_block(&mut writer, config_manager::HIDE, &hidden.to_list_string())?;
@@ -461,7 +471,7 @@ mod tests {
         let command = "./ --exclude a,b,c.txt,d.txt, --counting region --threads 1 1 --hide keywords,timing \
                 --force-language m=matlab,.pl=Perl,ios/h=objective-c --languages rust,web/js \
                 --exclude-languages json,web/xml --by-file 12 --count-minified --count-generated \
-                --no-heuristics \
+                --count-not-code --no-heuristics \
                 --style code-number=green,comments-label=magenta bold,arrow=default dim".to_string();
         let config_builder = config_manager::create_config_builder_from_args(&command).unwrap();
 
@@ -479,6 +489,7 @@ mod tests {
         assert_eq!(config_builder.should_search_in_dotted, options.should_search_in_dotted);
         assert_eq!(config_builder.count_minified, options.count_minified);
         assert_eq!(config_builder.count_generated, options.count_generated);
+        assert_eq!(Some(true), options.count_not_code);
         assert_eq!(Some(true), options.no_heuristics);
         assert_eq!(config_builder.hidden, options.hidden);
         assert_eq!(config_builder.by_file, options.by_file);
@@ -508,26 +519,26 @@ mod tests {
         let dir = SCRATCH_CONFIG_DIR.to_owned();
         std::fs::create_dir_all(&dir).unwrap();
         let turned_off = format!("===> {}\n./\n\n===> {}\nno\n\n===> {}\nno\n\n===> {}\nno\n\n\
-===> {}\nno\n\n===> {}\nno\n\n===> {}\nno\n",
+===> {}\nno\n\n===> {}\nno\n\n===> {}\nno\n\n===> {}\nno\n",
                 config_manager::TARGETS, config_manager::SEARCH_IN_DOTTED, config_manager::COUNT_MINIFIED,
-                config_manager::COUNT_GENERATED, config_manager::SHOW_FAULTY_FILES,
+                config_manager::COUNT_GENERATED, config_manager::COUNT_NOT_CODE, config_manager::SHOW_FAULTY_FILES,
                 config_manager::NO_GITIGNORE, config_manager::NO_IGNORE_FILES);
         let path = dir.clone() + "flags-turned-off.txt";
         std::fs::write(&path, turned_off).unwrap();
 
         let read = super::super::config_files::parse_config_file(Some("flags-turned-off"), Some(dir.clone())).unwrap().0;
         let off = |builder: &ConfigurationBuilder| [builder.should_search_in_dotted, builder.count_minified,
-                builder.count_generated, builder.should_show_faulty_files, builder.no_gitignore,
-                builder.no_ignore_files];
-        assert_eq!([Some(false); 6], off(&read), "a configuration saying 'no' was not read as a 'no'");
+                builder.count_generated, builder.count_not_code, builder.should_show_faulty_files,
+                builder.no_gitignore, builder.no_ignore_files];
+        assert_eq!([Some(false); 7], off(&read), "a configuration saying 'no' was not read as a 'no'");
 
         super::super::config_files::save_existing_commands_from_config_builder_to_file(
                 Some(dir.clone()), "flags-turned-off-again", None, &read).unwrap();
         let saved = std::fs::read_to_string(dir.clone() + "flags-turned-off-again.txt").unwrap();
         let again = super::super::config_files::parse_config_file(Some("flags-turned-off-again"), Some(dir.clone())).unwrap().0;
 
-        assert_eq!(6, saved.matches("\nno").count(), "a flag that was off was not written as a 'no':\n{saved}");
-        assert_eq!([Some(false); 6], off(&again), "a 'no' did not survive being written out and read back");
+        assert_eq!(7, saved.matches("\nno").count(), "a flag that was off was not written as a 'no':\n{saved}");
+        assert_eq!([Some(false); 7], off(&again), "a 'no' did not survive being written out and read back");
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(dir + "flags-turned-off-again.txt");

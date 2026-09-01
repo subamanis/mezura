@@ -249,6 +249,60 @@ fn a_contested_extension_is_identified_by_its_content_and_falls_back_without_any
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+// Through the shipped rules on purpose, so emptying their block fails here and not in a build dir.
+#[test]
+fn a_dependency_file_is_skipped_as_not_code_and_two_flags_bring_it_back() {
+    let root = std::env::temp_dir().join("mezura-not-code");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("main.d"), "main.o: main.c \\\n  main.h\n").unwrap();
+    std::fs::write(root.join("real.d"), "import std.stdio;\nvoid main() {}\n").unwrap();
+
+    let counted = |use_heuristics: bool, count_not_code: bool| {
+        let config = EngineConfig { threads: Threads::new(1, 2), use_heuristics, count_not_code,
+                ..EngineConfig::new([root.to_string_lossy().replace('\\', "/")]) };
+        let (languages, _) = Languages::shipped(&config);
+        let counted = run(&config, languages).unwrap();
+        (counted.skipped_files.not_code.len(), counted.per_language.get("D").map(|stats| stats.files))
+    };
+
+    assert_eq!((1, Some(1)), counted(true, false),
+            "the dependency file was not set aside, or the real D file went with it");
+    assert_eq!((0, Some(2)), counted(true, true),
+            "'count_not_code' still left the dependency file out");
+    assert_eq!((0, Some(2)), counted(false, false),
+            "'use_heuristics: false' still read heads for the not-code markers");
+
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+// The three counting flags decide per file, not per resolved set, so one resolve serves a run that
+// counts everything. The heuristics switch shapes the lookups themselves, so that one still refuses.
+#[test]
+fn a_resolved_set_of_languages_serves_a_run_whose_counting_flags_differ() {
+    let root = std::env::temp_dir().join("mezura-resolved-reuse");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("main.d"), "main.o: main.c \\\n  main.h\n").unwrap();
+    std::fs::write(root.join("real.d"), "import std.stdio;\nvoid main() {}\n").unwrap();
+
+    let base = EngineConfig { threads: Threads::new(1, 2),
+            ..EngineConfig::new([root.to_string_lossy().replace('\\', "/")]) };
+    let (languages, _) = Languages::shipped(&base);
+    let counting_all = EngineConfig { count_minified: true, count_generated: true,
+            count_not_code: true, ..base.clone() };
+    let counted = run(&counting_all, languages).unwrap();
+    assert_eq!(Some(2), counted.per_language.get("D").map(|stats| stats.files),
+            "a counting flag invalidated the resolved set or the dependency file stayed out");
+
+    let (languages, _) = Languages::shipped(&base);
+    let no_heuristics = EngineConfig { use_heuristics: false, ..base };
+    assert!(run(&no_heuristics, languages).is_err(),
+            "a run without heuristics accepted lookups resolved with them");
+
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
 // The whole run and the sum of its modules are the same measurement, so they have to agree about
 // what is in it. Every language the run selected is given a bucket with its own keyword names set to
 // zero, and the run total used to be summed before those empty buckets were dropped while a module
@@ -740,7 +794,9 @@ fn a_minified_file_is_of_interest_counted_by_nothing_and_reported() {
     let (languages, _) = Languages::shipped(&config);
     let result = run(&config, languages).unwrap();
 
-    assert_eq!(1, result.minified_files);
+    assert_eq!(1, result.skipped_files.minified.len());
+    assert!(result.skipped_files.minified[0].ends_with("bundle.js"),
+            "the skipped path does not name the bundle: {:?}", result.skipped_files.minified);
     assert_eq!(2, result.files_present.relevant_files, "the bundle was dropped by the walk instead of the counting");
     assert_eq!(2, result.total.lines, "the bundle's lines reached the total");
     assert_eq!(1, result.total.files);
@@ -752,7 +808,7 @@ fn a_minified_file_is_of_interest_counted_by_nothing_and_reported() {
     let result = run(&config, languages).unwrap();
     std::fs::remove_dir_all(&root).unwrap();
 
-    assert_eq!(0, result.minified_files);
+    assert_eq!(0, result.skipped_files.minified.len());
     assert_eq!(22, result.total.lines);
     assert_eq!(2, result.total.files);
 }
@@ -775,8 +831,8 @@ fn a_file_named_as_a_target_is_counted_however_it_looks() {
     let (languages, _) = Languages::shipped(&config);
     let result = run(&config, languages).unwrap();
 
-    assert_eq!(0, result.minified_files, "a file named on the command line was left out");
-    assert_eq!(0, result.generated_files, "a file named on the command line was left out");
+    assert_eq!(0, result.skipped_files.minified.len(), "a file named on the command line was left out");
+    assert_eq!(0, result.skipped_files.generated.len(), "a file named on the command line was left out");
     assert_eq!(2, result.total.files);
     assert_eq!(23, result.total.lines);
     assert!(!result.nothing_of_interest_was_counted());
@@ -789,8 +845,8 @@ fn a_file_named_as_a_target_is_counted_however_it_looks() {
     let result = run(&config, languages).unwrap();
     std::fs::remove_dir_all(&root).unwrap();
 
-    assert_eq!(1, result.minified_files);
-    assert_eq!(1, result.generated_files);
+    assert_eq!(1, result.skipped_files.minified.len());
+    assert_eq!(1, result.skipped_files.generated.len());
     assert_eq!(0, result.total.files);
     // and with every file of interest left out there is no row to draw, which is what stops the
     // report printing a table with nothing in it and the log taking a row of zeros
@@ -811,8 +867,8 @@ fn a_generated_file_is_of_interest_counted_by_nothing_and_reported() {
     let (languages, _) = Languages::shipped(&config);
     let result = run(&config, languages).unwrap();
 
-    assert_eq!(1, result.generated_files);
-    assert_eq!(0, result.minified_files, "a generated file was reported as minified");
+    assert_eq!(1, result.skipped_files.generated.len());
+    assert_eq!(0, result.skipped_files.minified.len(), "a generated file was reported as minified");
     assert_eq!(2, result.files_present.relevant_files);
     assert_eq!(1, result.total.files);
     assert_eq!(3, result.total.lines);
@@ -823,7 +879,7 @@ fn a_generated_file_is_of_interest_counted_by_nothing_and_reported() {
     let result = run(&config, languages).unwrap();
     std::fs::remove_dir_all(&root).unwrap();
 
-    assert_eq!(0, result.generated_files);
+    assert_eq!(0, result.skipped_files.generated.len());
     assert_eq!(2, result.total.files);
     assert_eq!(6, result.total.lines);
 }

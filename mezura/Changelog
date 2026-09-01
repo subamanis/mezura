@@ -37,6 +37,10 @@ Main changes:
       folder of ".m" or ".h" files splits correctly between the languages sharing it. A file whose
       content says nothing falls back to "language_conflicts.txt", "--explain" names the evidence
       that decided, and the new "--no-heuristics" turns the reading off.
+  -> Non-code files wearing a language's extension, like ".d" dependency files and ProGuard ".pro"
+      configurations, are now skipped and reported. "--count-not-code" counts them anyway.
+  -> The new "--show-skipped" names every file left out as minified, generated or not code, and
+      "--explain" says when the file it explains would be left out of a directory scan.
   -> "--force-language", "--languages" and "--exclude-languages" can now be specified per-module.
       Write the module and a slash before the value: "mezura ios=./ios analysis=./matlab
       --force-language ios/m=objective-c,analysis/m=matlab" counts one repository's ".m" files as
