@@ -11,9 +11,11 @@ script. It leaves out what a `.gitignore` leaves out, counts the `<script>` and 
 of a page under their own languages, and reads a file properly enough that a comment symbol inside
 a string is not mistaken for a comment. An extension claimed by more than one language is resolved
 by reading the file's own content, and a file wearing a language's extension without holding code,
-like a `.d` dependency file, is set aside and reported. `EngineConfig::use_heuristics` turns off
-both of those readings, and `count_not_code` counts such a file anyway while leaving the
-identification in place.
+like a `.d` dependency file, is set aside. `EngineConfig::use_heuristics` turns off both of those
+readings, and `count_not_code` counts such a file anyway while leaving the identification in place.
+Bundled and generated files are set aside the same way, under `count_minified` and
+`count_generated`, and `RunResult::skipped_files` names every file that was, by the reason it was
+set aside for.
 
 This is the library. For the command line program, the report it prints and the settings it takes,
 see the [main README](https://github.com/subamanis/mezura).
@@ -71,7 +73,8 @@ Both come out of the same run, so switching costs no recounting.
 `run_watched` is the same run for a caller that needs real time feedback while it happens, and
 `explain_file` reads a single file line by line and says why each line was counted the way it was:
 the class it landed in, what earlier lines had left open, and which stretches of it sit inside a
-string or a comment.
+string or a comment. It also says what identified the file when its extension is contested, and why
+a directory scan would have left it out.
 
 Languages of your own go in through `Languages::shipped_with`, and a caller keeping its own
 directory of language files parses them with `language_file` and hands them to `Languages::resolve`.
