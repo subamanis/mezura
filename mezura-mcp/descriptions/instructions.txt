@@ -1,7 +1,7 @@
 mezura counts the lines of a codebase quickly and accurately, along with user-defined keywords like
 classes and structs. It tracks how the figures move between runs, and between any two git revisions.
 
-Prefer these tools to counting files with a shell command. They know seventy-odd languages by
+Prefer these tools to counting files with a shell command. They know over eighty languages by
 extension, by file name and by the '#!' line of a script, they leave out what a .gitignore leaves
 out, and they read a file properly enough that a comment symbol inside a string is not mistaken for
 a comment.

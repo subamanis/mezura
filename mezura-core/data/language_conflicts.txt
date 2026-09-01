@@ -33,8 +33,8 @@ The four that ship are the only contests the shipped languages have between them
 four has an answer that is right for everybody:
 
   h     C Header over C++ Header and Objective-C, whose headers are also '.h' files. There is no way
-        to tell them apart from the name. On GitHub, 57 of every hundred '.h' files are C, 42 are
-        C++ and 2 are Objective-C, so a C++ project is the swap this line is most often wanted for.
+        to tell them apart from the name. On GitHub, 55 of every hundred '.h' files are C, 36 are
+        C++ and 9 are Objective-C, so a C++ project is the swap this line is most often wanted for.
   m     MATLAB over Objective-C. Both are common and neither is close to a majority: 59 of every
         hundred '.m' files on GitHub are MATLAB. Objective-C also answers to '.mm', so it still
         counts the part of a project that is not contested; MATLAB has no second extension at all.

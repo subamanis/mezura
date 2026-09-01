@@ -6,10 +6,14 @@ The fast, multithreaded counting engine behind
 [mezura](https://github.com/subamanis/mezura): identifies each file's language, splits every line
 into code, comments and everything else, and counts user-defined keywords like classes and structs.
 
-77 languages ship with it, identified by extension, by whole file name and by the `#!` line of a
+Over eighty languages ship with it, identified by extension, by whole file name and by the `#!` line of a
 script. It leaves out what a `.gitignore` leaves out, counts the `<script>` and `<style>` sections
 of a page under their own languages, and reads a file properly enough that a comment symbol inside
-a string is not mistaken for a comment.
+a string is not mistaken for a comment. An extension claimed by more than one language is resolved
+by reading the file's own content, and a file wearing a language's extension without holding code,
+like a `.d` dependency file, is set aside and reported. `EngineConfig::use_heuristics` turns off
+both of those readings, and `count_not_code` counts such a file anyway while leaving the
+identification in place.
 
 This is the library. For the command line program, the report it prints and the settings it takes,
 see the [main README](https://github.com/subamanis/mezura).
@@ -52,9 +56,8 @@ something else.
 
 ## Two answers from one run
 
-The counting never decides what a comment column shows. It sorts every line into one of nine
-classes, and a `CountingModel` folds those nine into the three columns of a report when the figures
-are read.
+Every line is sorted into one of nine classes, and a `CountingModel` folds those nine into the three
+columns of a report.
 
 `Content` asks what a line says: words in code make it code, words only in a comment make it a
 comment, and punctuation and blank lines are neither. `Region` asks where a line sits, which is how
