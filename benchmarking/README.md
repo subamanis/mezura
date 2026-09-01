@@ -181,6 +181,9 @@ Only the *path* to a corpus is machine-local. Its identity is part of the defini
 
 ## Where results go
 
+A finished run prints its two tables and any hyperfine warning in the terminal, so the answer
+is on screen before anything below is opened.
+
 ```
 results/
 ├── README.md
@@ -204,9 +207,9 @@ Inside a run directory:
 - `summary.csv`, `counts.csv`: the same numbers, flat
 - `machine.txt`: what the run was measured on
 - `<phase>.md` / `<phase>.json`: hyperfine's own output per phase
-- `transcript.txt`: every line this script printed from phase 0 on, hyperfine's warnings
-  included. The timing tables are in the exports beside it, and the machine preparation and
-  Defender state are in `run.json` and `notes.md`
+- `transcript.txt`: every line this script printed from phase 0 on, hyperfine's warnings and
+  the two summary tables included. The machine preparation and Defender state are in
+  `run.json` and `notes.md`
 - `notes.md`: the checklist to fill in by hand
 
 `out/` holds the raw tool output and is deleted once the numbers are read, unless `--keep-raw`

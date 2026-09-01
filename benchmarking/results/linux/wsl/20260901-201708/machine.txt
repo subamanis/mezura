@@ -1,0 +1,33 @@
+date: 2026-09-01T20:17:08+03:00
+platform: wsl
+arch: x86_64
+os: Ubuntu 24.04.3 LTS
+kernel: 6.6.87.2-microsoft-standard-WSL2
+cpu: AMD Ryzen 7 9700X 8-Core Processor
+logical_cores: 16
+ram_bytes: 32415862784
+cpu_scaling: none
+corpus_fs: ext4 /dev/sdd
+corpus_device: unknown
+corpus: /home/petros/dev/bench/linux
+corpus_head: 0ff41df1cb268fc69e703a08a57ee14ae967d0ca
+corpus_clean: True
+tools: /home/petros/dev/tools
+mezura_head: 37eeeb0fe5206090e612b140e7afc45187bffa41
+mezura_clean: True
+mezura_changed_before_building: []
+mezura_changed_beside_the_build: ['benchmarking/results/linux/linux/20260828-230405/control-end.md', 'benchmarking/results/linux/linux/20260828-230405/control-start.md', 'benchmarking/results/linux/linux/20260828-230405/counts.csv', 'benchmarking/results/linux/linux/20260828-230405/machine.txt', 'benchmarking/results/linux/linux/20260828-230405/notes.md', 'benchmarking/results/linux/linux/20260828-230405/summary.csv', 'benchmarking/results/linux/linux/20260828-230405/t1-fwd.md', 'benchmarking/results/linux/linux/20260828-230405/t1-rev.md', 'benchmarking/results/linux/linux/20260828-230405/t2-fwd.md', 'benchmarking/results/linux/linux/20260828-230405/t2-rev.md', 'benchmarking/results/linux/linux/20260828-230405/transcript.txt', 'benchmarking/results/linux/windows/20260829-050102/control-end.md', 'benchmarking/results/linux/windows/20260829-050102/control-start.md', 'benchmarking/results/linux/windows/20260829-050102/counts.csv', 'benchmarking/results/linux/windows/20260829-050102/machine.txt', 'benchmarking/results/linux/windows/20260829-050102/notes.md', 'benchmarking/results/linux/windows/20260829-050102/summary.csv', 'benchmarking/results/linux/windows/20260829-050102/t1-fwd.md', 'benchmarking/results/linux/windows/20260829-050102/t1-rev.md', 'benchmarking/results/linux/windows/20260829-050102/t2-fwd.md', 'benchmarking/results/linux/windows/20260829-050102/t2-rev.md', 'benchmarking/results/linux/windows/20260829-050102/transcript.txt']
+global_gitignore: none
+hyperfine: hyperfine 1.18.0
+mezura: v3.0.0 (unreleased)
+scc: scc version 4.0.0
+tokei: tokei 14.0.0 compiled with serialization support: json
+defender_realtime: not applicable
+defender_corpus_excluded: not applicable
+defender_process_excluded_mezura: not applicable
+defender_binary_excluded_mezura: not applicable
+defender_process_excluded_scc: not applicable
+defender_binary_excluded_scc: not applicable
+defender_process_excluded_tokei: not applicable
+defender_binary_excluded_tokei: not applicable
+background_busy_percent: 0.0

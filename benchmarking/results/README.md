@@ -2,6 +2,36 @@
 
 Written by `benchmark.py` after every run, not edited by hand. What every term means and how this was measured: the two sections at the bottom.
 
+## linux corpus, WSL2, 20260901-201708
+
+AMD Ryzen 7 9700X 8-Core Processor, 16 threads, 30 GB usable RAM, Ubuntu 24.04.3 LTS  
+corpus at `0ff41df1c` on ext4 /dev/sdd, unknown  
+mezura v3.0.0 (unreleased), scc 4.0.0, tokei 14.0.0  
+3 warmups, 30 timed runs per command (15 in the first pass + 15 in the reverse pass), 3 s of pause before each command
+
+#### Same work (all three pinned to the same languages and settings)
+
+| tool | wall | vs fastest | user cpu | system cpu | parallelism | lines/s | lines per cpu second | files | lines |
+|---|---|---|---|---|---|---|---|---|---|
+| mezura | 241 ms ± 9 | 1.00x | 2.22 s | 0.53 s | 11.4 | 149.4M | 13.1M | 63,864 | 36,036,878 |
+| tokei | 476 ms ± 4 | 1.97x | 5.58 s | 0.83 s | 13.45 | 75.6M | 5.6M | 63,782 | 36,022,156 |
+| scc | 603 ms ± 14 | 2.50x | 5.92 s | 0.94 s | 11.38 | 59.8M | 5.3M | 63,724 | 36,013,098 |
+
+#### Out of the box (each tool at its own defaults)
+
+| tool | wall | vs fastest | user cpu | system cpu | parallelism | lines/s | lines per cpu second | files | lines |
+|---|---|---|---|---|---|---|---|---|---|
+| mezura | 277 ms ± 9 | 1.00x | 2.61 s | 0.55 s | 11.4 | 129.3M | 11.3M | 66,539 | 35,816,820 |
+| tokei | 533 ms ± 9 | 1.93x | 6.24 s | 0.91 s | 13.4 | 75.0M | 5.6M | 83,843 | 39,992,832 |
+| scc | 847 ms ± 20 | 3.06x | 9.10 s | 1.12 s | 12.08 | 47.2M | 3.9M | 83,784 | 39,993,947 |
+
+Trust checks for this run:
+- **Machine steadiness**: the same binary, timed at the start of the run and again at the end, differed by 0.9%.
+- **Command order**: every table ran in both command orders and the numbers above pool the two. Swapping the order moved no tool by more than 3.0%.
+- **Power**: the machine was measured as it was, with no settings changed.
+- **Quiet machine**: everything other than the benchmark was using 0.0% of the cpu when the run started, about 0.0 of 16 cores.
+- **hyperfine warning**: t1-rev: Statistical outliers were detected.
+
 ## linux corpus, Windows, 20260901-195326
 
 AMD Ryzen 7 9700X 8-Core Processor, 16 threads, 62 GB usable RAM, Windows-11-10.0.26200-SP0  
@@ -31,34 +61,6 @@ Trust checks for this run:
 - **Power**: the cpu was set to its high-performance mode for the run and restored after.
 - **Quiet machine**: everything other than the benchmark was using 0.4% of the cpu when the run started, about 0.1 of 16 cores.
 - **Antivirus**: real-time protection on, all three tools equally excluded from real-time scanning.
-
-## linux corpus, WSL2, 20260829-072844
-
-AMD Ryzen 7 9700X 8-Core Processor, 16 threads, 30 GB usable RAM, Ubuntu 24.04.3 LTS  
-corpus at `0ff41df1c` on ext4 /dev/sdd, unknown  
-mezura v3.0.0 (unreleased), scc 4.0.0, tokei 14.0.0  
-3 warmups, 30 timed runs per command (15 in the first pass + 15 in the reverse pass), 3 s of pause before each command
-
-#### Same work (all three pinned to the same languages and settings)
-
-| tool | wall | vs fastest | user cpu | system cpu | parallelism | lines/s | lines per cpu second | files | lines |
-|---|---|---|---|---|---|---|---|---|---|
-| mezura | 257 ms ± 12 | 1.00x | 2.22 s | 0.50 s | 10.62 | 140.4M | 13.2M | 63,864 | 36,036,878 |
-| tokei | 531 ms ± 39 | 2.07x | 5.59 s | 0.87 s | 12.16 | 67.8M | 5.6M | 63,782 | 36,022,156 |
-| scc | 657 ms ± 26 | 2.56x | 5.96 s | 1.00 s | 10.59 | 54.8M | 5.2M | 63,724 | 36,013,098 |
-
-#### Out of the box (each tool at its own defaults)
-
-| tool | wall | vs fastest | user cpu | system cpu | parallelism | lines/s | lines per cpu second | files | lines |
-|---|---|---|---|---|---|---|---|---|---|
-| mezura | 299 ms ± 11 | 1.00x | 2.58 s | 0.54 s | 10.41 | 119.6M | 11.5M | 66,536 | 35,816,653 |
-| tokei | 568 ms ± 21 | 1.90x | 6.26 s | 0.91 s | 12.63 | 70.5M | 5.6M | 83,843 | 39,992,832 |
-| scc | 893 ms ± 37 | 2.98x | 9.14 s | 1.16 s | 11.53 | 44.8M | 3.9M | 83,784 | 39,993,947 |
-
-Trust checks for this run:
-- **Machine steadiness**: the same binary, timed at the start of the run and again at the end, differed by 3.4%.
-- **Command order**: every table ran in both command orders and the numbers above pool the two. Swapping the order moved no tool by more than 4.7%.
-- **Power**: the machine was measured as it was, with no settings changed.
 
 ## linux corpus, Native Linux, 20260828-230405
 
@@ -94,6 +96,7 @@ Same-work times, the sections above show only the latest run per platform. Commi
 
 | run | platform | corpus | mezura | scc | tokei | machine steadiness |
 |---|---|---|---|---|---|---|
+| [20260901-201708](linux/wsl/20260901-201708/) | WSL2 | linux | 241 ms | 603 ms | 476 ms | 0.9% |
 | [20260901-195326](linux/windows/20260901-195326/) | Windows | linux | 343 ms | 796 ms | 674 ms | 0.3% |
 | [20260829-072844](linux/wsl/20260829-072844/) | WSL2 | linux | 257 ms | 657 ms | 531 ms | 3.4% |
 | [20260829-050102](linux/windows/20260829-050102/) | Windows | linux | 346 ms | 794 ms | 661 ms | 1.3% |
