@@ -1122,6 +1122,50 @@ def format_millions(value: Any) -> str:
     return f'{value / 1e6:.1f}M' if value else ''
 
 
+def collect_tier_rows(measurements: list[dict], tier: str) -> tuple[list[dict], list[float]]:
+    first = {m['tool']: m for m in measurements if m['set'] == f'{tier}-fwd'}
+    second = {m['tool']: m for m in measurements if m['set'] == f'{tier}-rev'}
+    rows, order_moves = [], []
+    for tool, one in first.items():
+        other = second.get(tool)
+        rows.append(pool_orders(one, other))
+        if other and min(one['mean_s'], other['mean_s']):
+            order_moves.append(abs(one['mean_s'] - other['mean_s'])
+                               / min(one['mean_s'], other['mean_s']))
+    rows.sort(key=lambda m: m['mean_s'])
+    fastest = rows[0]['mean_s'] if rows else 0
+    for row in rows:
+        row['relative'] = f'{row["mean_s"] / fastest:.2f}x' if fastest else ''
+    return rows, order_moves
+
+
+def say_summary_tables(measurements: list[dict]) -> None:
+    columns = (('tool', 9), ('wall', 16), ('vs fastest', 12), ('user cpu', 11),
+               ('system cpu', 13), ('parallelism', 14), ('files', 10), ('lines', 0))
+    for tier, title in (('t1', 'Same work'), ('t2', 'Out of the box')):
+        rows, _ = collect_tier_rows(measurements, tier)
+        if not rows:
+            continue
+        say('')
+        say('   ' + paint('bold', title))
+        say('   ' + paint('blue', ''.join(name.ljust(width)
+                                          for name, width in columns).rstrip()))
+        for position, row in enumerate(rows):
+            wall = format_wall(row.get('mean_s'), row.get('stddev_s'))
+            if row.get('single_order'):
+                wall += ' (one order)'
+            values = (row['tool'], wall, row['relative'],
+                      f'{row.get("user_s") or 0:.2f} s', f'{row.get("system_s") or 0:.2f} s',
+                      f'{row.get("parallelism") or 0:.2f}',
+                      f'{row["counted_files"]:,}' if row.get('counted_files') else '',
+                      f'{row["counted_lines"]:,}' if row.get('counted_lines') else '')
+            cells = [text.ljust(width) for text, (_, width) in zip(values, columns)]
+            cells[0] = paint('bold', cells[0])
+            if not position:
+                cells[1] = paint('green', cells[1])
+            say('   ' + ''.join(cells).rstrip())
+
+
 def format_versions(machine: dict[str, Any]) -> str:
     parts = []
     for tool in TOOLS:
@@ -1185,28 +1229,18 @@ def write_results_page(outroot: Path) -> None:
         for tier, title in (('t1', 'Same work (all three pinned to the same languages and '
                                    'settings)'),
                             ('t2', 'Out of the box (each tool at its own defaults)')):
-            first = {m['tool']: m for m in record['measurements'] if m['set'] == f'{tier}-fwd'}
-            second = {m['tool']: m for m in record['measurements'] if m['set'] == f'{tier}-rev'}
-            if not first:
+            found, moves = collect_tier_rows(record['measurements'], tier)
+            if not found:
                 continue
-            found = []
-            for tool, m1 in first.items():
-                m2 = second.get(tool)
-                found.append(pool_orders(m1, m2))
-                if m2 and min(m1['mean_s'], m2['mean_s']):
-                    order_moves.append(abs(m1['mean_s'] - m2['mean_s'])
-                                       / min(m1['mean_s'], m2['mean_s']))
-            found.sort(key=lambda m: m['mean_s'])
+            order_moves += moves
             if any(m.get('single_order') for m in found):
                 single_order_seen = True
                 record_single = True
-            fastest = found[0]['mean_s']
             lines += [f'#### {title}', '',
                       '| tool | wall | vs fastest | user cpu | system cpu | parallelism '
                       '| lines/s | lines per cpu second | files | lines |',
                       '|---|---|---|---|---|---|---|---|---|---|']
             for m in found:
-                relative = f'{m["mean_s"] / fastest:.2f}x' if fastest else ''
                 wall = format_wall(m.get('mean_s'), m.get('stddev_s'))
                 if m.get('single_order'):
                     wall += ' (one order only)'
@@ -1215,7 +1249,7 @@ def write_results_page(outroot: Path) -> None:
                 lines.append(
                     f'| {m["tool"]} '
                     f'| {wall} '
-                    f'| {relative} '
+                    f'| {m["relative"]} '
                     f'| {(m.get("user_s") or 0):.2f} s '
                     f'| {(m.get("system_s") or 0):.2f} s '
                     f'| {m.get("parallelism") or ""} '
@@ -1766,6 +1800,12 @@ def run_phases(args: argparse.Namespace, tools: Path, corpus: Path, repo: Path, 
         return 1
 
     say(f'   drift         {drift_of(record["measurements"]) or "n/a"}')
+    say_summary_tables(record['measurements'])
+    if runner.warnings:
+        say('')
+        for text in runner.warnings:
+            name, _, message = text.partition(': ')
+            warn(f'{message.split(". ")[0].rstrip(".")}, on {name}')
 
     if not args.keep_raw:
         shutil.rmtree(res / 'out', ignore_errors=True)
