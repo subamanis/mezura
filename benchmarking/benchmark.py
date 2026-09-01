@@ -453,7 +453,7 @@ def defender_state(corpus: Path, binaries: Binaries) -> dict[str, Any]:
                else 'unknown (MS Defender could not be queried)')
     processes = read_defender_list('ExclusionProcess')
     paths = read_defender_list('ExclusionPath')
-    state = {'defender_realtime':
+    state: dict[str, Any] = {'defender_realtime':
              powershell('(Get-MpComputerStatus).RealTimeProtectionEnabled', 'unknown')}
     state['defender_corpus_excluded'] = unknown if paths is None else sits_under(corpus, paths)
     entries = None if processes is None else [p.replace('/', '\\').lower() for p in processes]

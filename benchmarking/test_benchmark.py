@@ -34,6 +34,7 @@ class ToolJsonReaders(unittest.TestCase):
         data = {'scope': {'counting': 'content'},
                 'total': {'files': 4, 'lines': 100, 'code': 70, 'comments': 20, 'extra': 10}}
         totals = read_totals('mezura', data)
+        assert totals is not None
         self.assertEqual(totals['model'], 'content')
         self.assertEqual(totals['third'], 'extra')
         self.assertEqual(totals['value'], 10)
@@ -53,6 +54,7 @@ class ToolJsonReaders(unittest.TestCase):
                 'Total': {'code': 15, 'comments': 3, 'blanks': 4,
                           'reports': [{'name': 'a.c'}, {'name': 'b.c'}, {'name': 'c.rs'}]}}
         totals = read_totals('tokei', data)
+        assert totals is not None
         self.assertEqual(totals['lines'], 22)
         self.assertEqual(totals['files'], 3)
         self.assertEqual(totals['code'], 15)
