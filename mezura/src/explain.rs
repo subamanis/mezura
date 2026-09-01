@@ -4,9 +4,9 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use mezura_core::{Bucket, Carried, CountingModel, ExplainError, FileExplanation, Languages,
-        LineClasses, Span, SpanKind};
+        LineClasses, ScanSkip, Span, SpanKind};
 
-use crate::config_manager::{Configuration, ExplainedLines};
+use crate::config_manager::{Configuration, ExplainedLines, get_command_that_counts};
 use crate::json_printer::escape;
 use crate::message_printer::wrap_message;
 use crate::theme::get_active;
@@ -68,9 +68,14 @@ fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel, a
 carrying '{literal}' is what identified it.")));
     }
     if let Some(skip) = explanation.left_out_of_a_scan {
+        let reason = match skip {
+            ScanSkip::Minified => "minified",
+            ScanSkip::Generated => "generated",
+            ScanSkip::NotCode => "not code"
+        };
         println!("{}", theme.note.paint(&format!("A directory scan leaves this file out as \
-{}. It is counted here because you named it. '--{}' stops leaving it out for that reason.",
-                name_of_skip(skip), command_that_counts(skip))));
+{reason}. It is counted here because you named it. '--{}' stops leaving it out for that reason.",
+                get_command_that_counts(skip))));
     }
     println!();
     if explanation.lines.is_empty() {
@@ -139,7 +144,7 @@ fn print_json(path: &str, explanation: &FileExplanation, model: CountingModel) {
                 escape(literal)));
     }
     if let Some(skip) = explanation.left_out_of_a_scan {
-        document.push_str(&format!("\"left_out_of_a_scan\":\"{}\",", name_of_skip(skip)));
+        document.push_str(&format!("\"left_out_of_a_scan\":\"{}\",", skip.name()));
     }
     document.push_str(&format!("\"buckets\":{{\"code\":{code},\"comments\":{comments},\"{}\":{third}}},",
             model.get_third_quantity_name()));
@@ -194,22 +199,6 @@ fn collect_classes_of(explanation: &FileExplanation, asked_for: ExplainedLines) 
     }
 
     classes
-}
-
-fn name_of_skip(skip: mezura_core::ScanSkip) -> &'static str {
-    match skip {
-        mezura_core::ScanSkip::NotCode => "not code",
-        mezura_core::ScanSkip::Minified => "minified",
-        mezura_core::ScanSkip::Generated => "generated"
-    }
-}
-
-fn command_that_counts(skip: mezura_core::ScanSkip) -> &'static str {
-    match skip {
-        mezura_core::ScanSkip::NotCode => crate::config_manager::COUNT_NOT_CODE,
-        mezura_core::ScanSkip::Minified => crate::config_manager::COUNT_MINIFIED,
-        mezura_core::ScanSkip::Generated => crate::config_manager::COUNT_GENERATED
-    }
 }
 
 fn fold_totals(classes: &LineClasses, lines: usize, model: CountingModel) -> (usize, usize, usize) {

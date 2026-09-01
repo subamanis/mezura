@@ -634,11 +634,8 @@ fn create_skipped_files_object(skipped: &mezura_core::SkippedFiles, asked_for: b
         create_array(list.iter().map(|path| format!("\"{}\"", escape(path))))
     };
 
-    create_object([
-        format!("\"minified\":{}", paths(&skipped.minified)),
-        format!("\"generated\":{}", paths(&skipped.generated)),
-        format!("\"not_code\":{}", paths(&skipped.not_code)),
-    ])
+    create_object(mezura_core::ScanSkip::ALL.map(|kind|
+            format!("\"{}\":{}", kind.name(), paths(skipped.get_of_kind(kind)))))
 }
 
 // Sorted by path, because the faulty files are collected by whichever thread hit them and their

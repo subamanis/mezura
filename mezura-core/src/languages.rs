@@ -16,6 +16,7 @@ use crate::warnings::Warning;
 /// already settled.
 ///
 /// Whichever settings it was built against are the only ones it may be counted with.
+#[derive(Clone)]
 pub struct Languages {
     by_name: HashMap<String, Language>,
     lookups: ScopedLookups,
@@ -115,7 +116,7 @@ impl std::fmt::Debug for Languages {
 }
 
 // Empty on any run where no language declares regions.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct NestedLanguageDefinitions {
     pub set_aside: HashMap<String, Language>,
     pub extension_to_name: HashMap<String, std::sync::Arc<str>>,
@@ -180,7 +181,7 @@ pub(crate) fn keyed_by_name(languages: impl IntoIterator<Item = Language>) -> Ha
 // The whole of what building a 'Languages' reads from the settings, normalised the way the matching
 // is. Neither order nor case matters, so two settings that would produce this same set compare
 // equal and no honest run is refused.
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 struct LanguageSelection {
     of_interest: Vec<String>,
     excluded: Vec<String>,

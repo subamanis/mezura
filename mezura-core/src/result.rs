@@ -228,6 +228,31 @@ impl SortCriterion {
     }
 }
 
+/// The head check that sets a file aside in a directory scan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanSkip {
+    /// The average line is 1000 bytes or more.
+    Minified,
+    /// The head says a tool wrote the file.
+    Generated,
+    /// A marker of `language_conflicts.txt` says the file is not code at all.
+    NotCode
+}
+
+impl ScanSkip {
+    /// All three, in the order of the fields of [`SkippedFiles`].
+    pub const ALL : [ScanSkip; 3] = [ScanSkip::Minified, ScanSkip::Generated, ScanSkip::NotCode];
+
+    /// `minified`, `generated` or `not_code`, the [`SkippedFiles`] field this kind is listed under.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Minified => "minified",
+            Self::Generated => "generated",
+            Self::NotCode => "not_code"
+        }
+    }
+}
+
 /// The paths of the files a run set aside after reading their head, by the reason each was set
 /// aside for.
 #[derive(Debug, Clone, Default)]
@@ -238,6 +263,30 @@ pub struct SkippedFiles {
     pub generated: Vec<String>,
     /// Files whose head says they are not code at all, like a `.d` dependency file.
     pub not_code: Vec<String>
+}
+
+impl SkippedFiles {
+    /// The paths set aside for one reason.
+    pub fn get_of_kind(&self, kind: ScanSkip) -> &[String] {
+        match kind {
+            ScanSkip::Minified => &self.minified,
+            ScanSkip::Generated => &self.generated,
+            ScanSkip::NotCode => &self.not_code
+        }
+    }
+
+    /// How many files were set aside, for whatever reason.
+    pub fn calculate_files(&self) -> usize {
+        self.minified.len() + self.generated.len() + self.not_code.len()
+    }
+
+    pub(crate) fn get_of_kind_mut(&mut self, kind: ScanSkip) -> &mut Vec<String> {
+        match kind {
+            ScanSkip::Minified => &mut self.minified,
+            ScanSkip::Generated => &mut self.generated,
+            ScanSkip::NotCode => &mut self.not_code
+        }
+    }
 }
 
 /// A file that could not be read or parsed. Its lines are in no total, but it is counted among the

@@ -22,9 +22,8 @@
 //! # Ok::<(), mezura_core::RunError>(())
 //! ```
 //!
-//! The counting never decides what a comment column shows. It sorts every line into one of the
-//! nine [`LineClasses`], and a [`CountingModel`] folds those nine into the three columns of a
-//! report when the figures are read, so one run answers both models.
+//! Every line is sorted into one of the nine [`LineClasses`], and a [`CountingModel`] folds those
+//! nine into the three columns of a report, so one run answers both models.
 //!
 //! [`run_watched`] is the same run for a caller that needs real time feedback while it happens, and
 //! [`explain_file`] reads a single file line by line and says why each line was counted the way it
@@ -56,11 +55,11 @@ pub use domain::{Bucket, CountingModel, Keyword, Language, LeveledPair, LineClas
 pub use engine::config::{EngineConfig, ForcedLanguages, LanguageNames, ScopedByModule, Target,
         Threads, format_module_scope, split_off_module_scope};
 pub use engine::targets::TargetError;
-pub use explain::{Carried, ExplainError, ExplainedLine, FileExplanation, ScanSkip, explain_file};
+pub use explain::{Carried, ExplainError, ExplainedLine, FileExplanation, explain_file};
 pub use languages::Languages;
 pub use progress::ScanProgress;
 pub use result::{FaultyFileDetails, FileEntry, FilesPresent, ModuleResult, Performance, RunError,
-        RunResult, SkippedFiles, SortCriterion, UnreadableDirDetails};
+        RunResult, ScanSkip, SkippedFiles, SortCriterion, UnreadableDirDetails};
 pub use warnings::{Affects, Code, Warning};
 
 #[cfg(test)]
@@ -279,9 +278,9 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     // Sorted here and not by a presenter, because the threads append in whichever order they
     // finish and two runs over one tree must print one list.
     let mut skipped_files = std::mem::take(&mut *skipped_files.lock().unwrap());
-    skipped_files.minified.sort_unstable();
-    skipped_files.generated.sort_unstable();
-    skipped_files.not_code.sort_unstable();
+    for kind in ScanSkip::ALL {
+        skipped_files.get_of_kind_mut(kind).sort_unstable();
+    }
     let relevant_files_num = files_present.relevant_files;
     if relevant_files_num == 0 {
         return Ok(RunResult::of_nothing(files_present,

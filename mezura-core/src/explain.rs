@@ -1,8 +1,8 @@
 use std::path::Path;
 
-use crate::{EngineConfig, Language, LineClass, LineClasses, Span};
+use crate::{EngineConfig, Language, LineClass, LineClasses, ScanSkip, Span};
 use crate::domain::CommentPair;
-use crate::engine::file_parser::{CarriedRecord, NestedLanguageLookup, explain_parsed_file};
+use crate::engine::file_parser::{CarriedRecord, NestedLanguageLookup, explain_parsed_file, find_scan_skip};
 use crate::languages::Languages;
 
 /// One file read line by line, as [`explain_file`] answers it.
@@ -22,17 +22,6 @@ pub struct FileExplanation {
     pub lines: Vec<ExplainedLine>,
     /// The whole file's counts, which are what a run would have added for it.
     pub classes: LineClasses,
-}
-
-/// The head check that would set the file aside in a directory scan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScanSkip {
-    /// A marker of `language_conflicts.txt` says the file is not code at all.
-    NotCode,
-    /// The average line is 1000 bytes or more.
-    Minified,
-    /// The head says a tool wrote the file.
-    Generated
 }
 
 /// What one line of the file came to.
@@ -170,22 +159,6 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
             "a file of {} lines got {} per-line records", whole.lines, lines.len());
     Ok(FileExplanation { language, identified_by, left_out_of_a_scan, contents, lines,
             classes: whole.classes })
-}
-
-// The same checks in the same order as 'parse_file', each silenced by the flag that counts its kind
-fn find_scan_skip(contents: &str, rules: Option<&crate::engine::identity::ExtensionRules>,
-        config: &EngineConfig) -> Option<ScanSkip> {
-    if !config.count_not_code && rules.and_then(|x| x.not_code.as_ref())
-            .is_some_and(|matcher| matcher.finds_a_marker(contents)) {
-        return Some(ScanSkip::NotCode);
-    }
-    if !config.count_minified && crate::engine::file_parser::is_minified(contents) {
-        return Some(ScanSkip::Minified);
-    }
-    if !config.count_generated && crate::engine::file_parser::is_generated(contents) {
-        return Some(ScanSkip::Generated);
-    }
-    None
 }
 
 // The record holds symbol numbers; what a reader gets is the symbol as the file spells it. The

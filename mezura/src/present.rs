@@ -1,4 +1,4 @@
-use mezura_core::{FaultyFileDetails, RunResult, UnreadableDirDetails};
+use mezura_core::{FaultyFileDetails, RunResult, ScanSkip, UnreadableDirDetails};
 
 use super::config_manager::Configuration;
 use crate::paths::PERSISTENT_APP_PATHS;
@@ -132,15 +132,20 @@ fn print_files_left_out(result: &RunResult, config: &Configuration) {
 
 fn format_files_left_out(result: &RunResult, show_skipped: bool) -> Vec<String> {
     let mut lines = Vec::new();
-    for (paths, kind, command) in [(&result.skipped_files.minified, "minified", crate::config_manager::COUNT_MINIFIED),
-            (&result.skipped_files.generated, "generated", crate::config_manager::COUNT_GENERATED),
-            (&result.skipped_files.not_code, "non-code", crate::config_manager::COUNT_NOT_CODE)] {
+    for kind in ScanSkip::ALL {
+        let paths = result.skipped_files.get_of_kind(kind);
         if paths.is_empty() {
             continue;
         }
+        let word = match kind {
+            ScanSkip::Minified => "minified",
+            ScanSkip::Generated => "generated",
+            ScanSkip::NotCode => "non-code"
+        };
         let subject = if paths.len() == 1 {"file was"} else {"files were"};
-        lines.push(format!("{} {kind} {subject} left out of the counts. Run with '--{command}' to include them.",
-                crate::number_formatter::format_with_separators(paths.len())));
+        lines.push(format!("{} {word} {subject} left out of the counts. Run with '--{}' to include them.",
+                crate::number_formatter::format_with_separators(paths.len()),
+                crate::config_manager::get_command_that_counts(kind)));
         if show_skipped {
             lines.extend(paths.iter().map(|path| format!("-- {path}")));
         }

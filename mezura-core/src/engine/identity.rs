@@ -275,7 +275,7 @@ impl LanguageLookup {
 
 // One lookup per module, as the settings name the modules. Built once and turned into
 // 'ModuleLookups' the moment the run knows which number each module was given.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct ScopedLookups {
     whole_run: LanguageLookup,
     per_module: HashMap<String, LanguageLookup>

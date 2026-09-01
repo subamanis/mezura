@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use memchr::memmem;
 
-use crate::{EngineConfig, Language, LineClass, NestedLanguage, Span, SpanKind, phase_timing};
+use crate::{EngineConfig, Language, LineClass, NestedLanguage, ScanSkip, Span, SpanKind, phase_timing};
 use crate::domain::{CommentPair, FileStats, LineContinuation};
 
 pub(crate) const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
@@ -90,9 +90,7 @@ impl FileReport {
 
 pub(crate) enum FileOutcome {
     Counted(FileReport, Option<Arc<str>>),
-    SkippedAsMinified,
-    SkippedAsGenerated,
-    SkippedAsNotCode
+    Skipped(ScanSkip)
 }
 
 pub(crate) fn parse_file(path: &Path, lang_name: &str, buf: &mut String, buffers: &mut ParseBuffers,
@@ -128,18 +126,8 @@ pub(crate) fn parse_file(path: &Path, lang_name: &str, buf: &mut String, buffers
     // Before the parse, which is what the skip saves: a bundle is the most expensive file there is.
     // A file the user named is counted whatever it holds, the same way the directory scan counts a
     // named file that a '.gitignore' covers.
-    if !written_by_hand {
-        if !config.count_not_code && extension_rules
-                .and_then(|rules| rules.not_code.as_ref())
-                .is_some_and(|matcher| matcher.finds_a_marker(buf)) {
-            return Ok(FileOutcome::SkippedAsNotCode);
-        }
-        if !config.count_minified && is_minified(buf) {
-            return Ok(FileOutcome::SkippedAsMinified);
-        }
-        if !config.count_generated && is_generated(buf) {
-            return Ok(FileOutcome::SkippedAsGenerated);
-        }
+    if !written_by_hand && let Some(kind) = find_scan_skip(buf, extension_rules, config) {
+        return Ok(FileOutcome::Skipped(kind));
     }
 
     let resolved = extension_rules.and_then(|rules| rules.contenders.as_deref())
@@ -832,9 +820,25 @@ impl KeywordMatchers {
     }
 }
 
-// The average and not where the first break falls: webpack writes a licence comment on line one
+// The order decides which reason a file that trips two of the checks is reported under
+pub(crate) fn find_scan_skip(contents: &str, rules: Option<&crate::engine::identity::ExtensionRules>,
+        config: &EngineConfig) -> Option<ScanSkip> {
+    if !config.count_not_code && rules.and_then(|x| x.not_code.as_ref())
+            .is_some_and(|matcher| matcher.finds_a_marker(contents)) {
+        return Some(ScanSkip::NotCode);
+    }
+    if !config.count_minified && is_minified(contents) {
+        return Some(ScanSkip::Minified);
+    }
+    if !config.count_generated && is_generated(contents) {
+        return Some(ScanSkip::Generated);
+    }
+    None
+}
+
+// The average and not where the first break falls. Webpack writes a licence comment on line one
 // and the payload on line two.
-pub(crate) fn is_minified(contents: &str) -> bool {
+fn is_minified(contents: &str) -> bool {
     if contents.len() < SMALLEST_FILE_WORTH_TESTING {
         return false;
     }
@@ -843,7 +847,7 @@ pub(crate) fn is_minified(contents: &str) -> bool {
 }
 
 // The head, lowercased into a buffer of its own so the markers can be matched without case
-pub(crate) fn is_generated(contents: &str) -> bool {
+fn is_generated(contents: &str) -> bool {
     let head = &contents.as_bytes()[..contents.len().min(GENERATED_MARKER_BYTES)];
     let mut lowercased = [0u8; GENERATED_MARKER_BYTES];
     lowercased[..head.len()].copy_from_slice(head);
@@ -2077,9 +2081,7 @@ mod tests {
                 &mut KeywordMatchers::default(), &mut IdentificationMatchers::default(), config,
                 false, None, &HashMap::new())? {
             FileOutcome::Counted(report, _) => Ok(report),
-            FileOutcome::SkippedAsMinified => panic!("{} was skipped as minified", path.display()),
-            FileOutcome::SkippedAsGenerated => panic!("{} was skipped as generated", path.display()),
-            FileOutcome::SkippedAsNotCode => panic!("{} was skipped as not code", path.display())
+            FileOutcome::Skipped(kind) => panic!("{} was skipped as {}", path.display(), kind.name())
         }
     }
 
@@ -3789,7 +3791,7 @@ mod tests {
             matches!(parse_file(path, "JavaScript", &mut buf, &mut ParseBuffers::default(),
                     &shipped_lookup(), &mut KeywordMatchers::default(),
                     &mut IdentificationMatchers::default(), config, false, None, &HashMap::new()),
-                    Ok(FileOutcome::SkippedAsMinified))
+                    Ok(FileOutcome::Skipped(ScanSkip::Minified)))
         };
 
         let payload = format!("var a{};\n", "x".repeat(4000));
@@ -3880,7 +3882,7 @@ mod tests {
             matches!(parse_file(&path, "JavaScript", &mut buf, &mut ParseBuffers::default(),
                     &shipped_lookup(), &mut KeywordMatchers::default(),
                     &mut IdentificationMatchers::default(), config, false, None, &HashMap::new()),
-                    Ok(FileOutcome::SkippedAsGenerated))
+                    Ok(FileOutcome::Skipped(ScanSkip::Generated)))
         };
         let default = EngineConfig::default();
         let counting_everything = EngineConfig { count_generated: true, ..Default::default() };

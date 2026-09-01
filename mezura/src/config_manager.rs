@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use colored::{ColoredString, Colorize};
 #[cfg(test)]
 use colored::Color;
-use mezura_core::{CountingModel, EngineConfig, ForcedLanguages, LanguageNames, Target, Threads};
+use mezura_core::{CountingModel, EngineConfig, ForcedLanguages, LanguageNames, ScanSkip, Target, Threads};
 use mezura_core::engine::config::{MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE};
 
 use super::message_printer::{Formatted, wrap_message};
@@ -993,6 +993,14 @@ pub fn format_path_inside(project_dir: &str, path: &str) -> String {
     match std::path::Path::new(path).strip_prefix(project_dir) {
         Ok(inside) => format!("./{}", crate::paths::normalise_separators(&inside.to_string_lossy())),
         Err(_) => path.to_owned()
+    }
+}
+
+pub fn get_command_that_counts(kind: ScanSkip) -> &'static str {
+    match kind {
+        ScanSkip::Minified => COUNT_MINIFIED,
+        ScanSkip::Generated => COUNT_GENERATED,
+        ScanSkip::NotCode => COUNT_NOT_CODE
     }
 }
 

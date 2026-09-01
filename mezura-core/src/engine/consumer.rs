@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 use crossbeam_deque::{Injector, Steal, Worker};
 
 use crate::{EngineConfig, FaultyFileDetails, FaultyFilesListMut, FileEntry, FilesPerModuleMut,
-        Language, NestedLanguageMapMut, ParsableFile, ScanProgress, SkippedFiles, Stats, StatsMapMut,
-        phase_timing};
+        Language, NestedLanguageMapMut, ParsableFile, ScanProgress, ScanSkip, SkippedFiles, Stats,
+        StatsMapMut, phase_timing};
 use crate::engine::file_parser;
 use crate::languages::NestedLanguageDefinitions;
 
@@ -136,17 +136,9 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                                     .or_default().add_file(&whole, bytes, keywords); }
                         }
                     },
-                    Ok(file_parser::FileOutcome::SkippedAsMinified) => {
+                    Ok(file_parser::FileOutcome::Skipped(kind)) => {
                         progress.record_file_parsed(0);
-                        local_skipped.minified.push(spell_out(&parsable_file.path));
-                    },
-                    Ok(file_parser::FileOutcome::SkippedAsGenerated) => {
-                        progress.record_file_parsed(0);
-                        local_skipped.generated.push(spell_out(&parsable_file.path));
-                    },
-                    Ok(file_parser::FileOutcome::SkippedAsNotCode) => {
-                        progress.record_file_parsed(0);
-                        local_skipped.not_code.push(spell_out(&parsable_file.path));
+                        local_skipped.get_of_kind_mut(kind).push(spell_out(&parsable_file.path));
                     },
                     Err(x) => {
                         progress.record_file_parsed(0);
@@ -191,12 +183,11 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
     if !local_faulty.is_empty() {
         faulty_files.lock().unwrap().extend(local_faulty);
     }
-    if !local_skipped.minified.is_empty() || !local_skipped.generated.is_empty()
-            || !local_skipped.not_code.is_empty() {
+    if local_skipped.calculate_files() > 0 {
         let mut global = skipped_files.lock().unwrap();
-        global.minified.append(&mut local_skipped.minified);
-        global.generated.append(&mut local_skipped.generated);
-        global.not_code.append(&mut local_skipped.not_code);
+        for kind in ScanSkip::ALL {
+            global.get_of_kind_mut(kind).append(local_skipped.get_of_kind_mut(kind));
+        }
     }
 
     if local_stats.iter().any(|bucket| !bucket.is_empty()) {
