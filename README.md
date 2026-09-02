@@ -617,9 +617,9 @@ measured with hyperfine over 3 warmups and 30 timed runs per command:
 
 | tool | time | vs fastest | lines/s | files | lines |
 |---|---|---|---|---|---|
-| mezura 3.0.0 | 223 ms ± 9 | 1.00x | 161.3M | 63,864 | 36,036,878 |
-| scc 4.0.0 | 471 ms ± 3 | 2.11x | 76.4M | 63,724 | 36,013,098 |
-| tokei 14.0.0 | 474 ms ± 3 | 2.12x | 76.0M | 63,782 | 36,022,156 |
+| mezura 3.0.0 | 228 ms ± 10 | 1.00x | 158.0M | 63,864 | 36,036,878 |
+| scc 4.0.0 | 472 ms ± 3 | 2.07x | 76.3M | 63,724 | 36,013,098 |
+| tokei 14.0.0 | 474 ms ± 3 | 2.08x | 76.0M | 63,782 | 36,022,156 |
 
 The comparison is equal work on purpose: the same languages over the same tree for all three,
 mezura pinned to the same counting model the other two use, the gitignore obeyed by everyone, and
