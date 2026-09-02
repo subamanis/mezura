@@ -1,13 +1,15 @@
 [package]
 name = "mezura-mcp"
-version = "0.1.0"
-authors = ["subamanis <petrospapa21@gmail.com>"]
+version = "1.0.0"
+authors = ["Petros Papatheodorou <petrospapa21@gmail.com>"]
 edition = "2024"
 rust-version = "1.88"
 description = "An MCP server that lets a coding agent run mezura and read the counts back."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/subamanis/mezura"
-readme = "../README.md"
+readme = "README.md"
+keywords = ["mcp", "model-context-protocol", "loc", "lines-of-code", "cloc"]
+categories = ["development-tools", "command-line-utilities"]
 
 [dependencies]
 rmcp = { version = "3.1.4", features = ["schemars", "server", "transport-io"] }

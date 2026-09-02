@@ -10,7 +10,7 @@ The figures can be grouped by language, by module and by file.
 Windows, Linux and macOS binaries are built and tested on every release.
 
 The whole Linux kernel (some languages were cut for screenshot purposes):
-<img src="screenshots/hero2.png" width="1000">
+<img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/hero2.png" width="1000">
 
 
 ## Table of contents
@@ -65,7 +65,7 @@ Things it does that most counters do not:
   `--counting region` switches to the model most other counters use, so the behavior matches theirs.  
   See [The counting model](#the-counting-model).
 - **Per-line explanations.** `--explain` shows one file line by line with the verdict for each
-  line, for checking a count that looks wrong. See `--explain` in [COMMANDS.md](COMMANDS.md).
+  line, for checking a count that looks wrong. See `--explain` in [COMMANDS.md](https://github.com/subamanis/mezura/blob/HEAD/COMMANDS.md).
 - **Very customizable output.** You have a lot of control about how mezura counts, and also about how 
   it presents the results to you. You don't like the layout? You find it very busy with many sections? You don't want the animations? You can change everything. See [Commands](#commands).
 - **Themes.** Everything printed can be styled and colored: 78 tokens, 13 bundled themes, and an [interactive web editor](https://subamanis.github.io/mezura/theme-editor/) to experiment. See [Themes](#themes).
@@ -95,7 +95,6 @@ cargo build --release
 
 ### 3. Download the prebuilt binary
 Grab the one for your platform from the [latest release](https://github.com/subamanis/mezura/releases/latest).
-Windows, Linux and macOS binaries are built and tested on every tagged version.
 
 
 ## Usage
@@ -198,7 +197,7 @@ THE PROGRAM ITSELF
 ```
 
 Run `--help <command>` for the full text of one command, or `--help full` for all of them. The same
-texts are in [COMMANDS.md](COMMANDS.md), so they can be read without a terminal.
+texts are in [COMMANDS.md](https://github.com/subamanis/mezura/blob/HEAD/COMMANDS.md), so they can be read without a terminal.
 
 ### Modules
 
@@ -212,19 +211,19 @@ mezura ./project tests=./project/tests
 Every file belongs to exactly one module and the most specific path wins, so the second example
 means "the tests there, the rest of the project here". Targets that were not explicitly claimed by a module
 are shown under a row called `(unnamed)`. A comma continues a module and a space ends it,
- so `tests=./api/tests,./web/tests` is one module of two directories.
+so `tests=./api/tests,./web/tests` is one module of two directories.
 
 Each module gets its own block of rows, with its own languages and totals, and the history section
 then records how each module grew.
 
-<img src="screenshots/modules-with-unnamed.png" width="1000">
+<img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/modules-with-unnamed.png" width="1000">
 
 `--layout matrix` crosses them instead, languages down and modules across, one figure per cell.
 
-<img src="screenshots/modules-matrix.png" width="700">
+<img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/modules-matrix.png" width="700">
 
 The full rules (glob patterns, repeated names, ordering) are under `--targets` in
-[COMMANDS.md](COMMANDS.md).
+[COMMANDS.md](https://github.com/subamanis/mezura/blob/HEAD/COMMANDS.md).
 
 ### Layouts
 
@@ -238,25 +237,25 @@ and modules across.
 
 `--layout table`
 
-<img src="screenshots/table-layout.png" width="1000">
+<img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/table-layout.png" width="1000">
 
 `--layout boxed`
 
-<img src="screenshots/boxed-layout.png" width="1000">
+<img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/boxed-layout.png" width="1000">
 
 `--layout list`
 
-<img src="screenshots/list-layout.png" width="1000">
+<img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/list-layout.png" width="1000">
 
 `--layout matrix`
 
-<img src="screenshots/matrix-layout.png" width="700">
+<img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/matrix-layout.png" width="700">
 
 </details>
 
 `--hide` takes any part of the output away, whole sections or single columns, and `--sort`, `--top`
 and `--by-file` decide what the rows are and in what order. They are all listed in
-[COMMANDS.md](COMMANDS.md).
+[COMMANDS.md](https://github.com/subamanis/mezura/blob/HEAD/COMMANDS.md).
 
 
 ## What is counted
@@ -355,7 +354,7 @@ Install it beside mezura:
 cargo install --locked --git https://github.com/subamanis/mezura mezura-mcp
 ```
 
-Then add it to whichever file your editor keeps its servers in 
+Then add it to whichever file your editor keeps its servers in:
 ```json
 {
   "mcpServers": {
@@ -411,7 +410,7 @@ Inside the 'data/logs' folder, the program will save log files that correspond t
 configurations every time `--log` is given. A log is a .jsonl file: one JSON entry per line, the
 newest first, so it is read by any JSON tool one line at a time. Each entry records the settings the run was counted with
 (the target directories, the counting model, and so on, so you can see if at some point the
-configuration got modified)
+configuration got modified).
 
 A run that names its targets records its modules in the entry, and the history section then carries
 one narrow line per module: which of them grew, and by how much. A module that was not there last
@@ -421,7 +420,7 @@ entry written by a run that named none has no such block.
 By using the `--compare <N>` flag, the (N) previous logged executions will be retrieved from the
 file and will be compared and printed to the screen. For example for N = 2, it would look like this:
 
-<img src="screenshots/compare.png" width="1000">
+<img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/compare.png" width="1000">
 
 Both `--log` and `--compare` need a log to belong to, which means either a configuration loaded by
 name or a project with a `.mezura` folder to be inside.
@@ -440,7 +439,7 @@ mezura ./src --diff v2.0.1..v3.0.0
 A reading is either a JSON document an earlier run wrote, or a git revision, which is checked out
 to a temporary directory and counted on the spot with this run's settings and targets.
 
-<img src="screenshots/diff.png" width="1000">
+<img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/diff.png" width="1000">
 
 A language only one side has is marked `new` or `gone`, and a figure that did not move is a dash.
 
@@ -495,7 +494,7 @@ your-project/
 The priorities of the specified flags are:
 1) cmd
 2) Specific config file
-3) The project's own config file
+3) The project's own config file (only when no config file is loaded by name)
 4) Default config file
 5) Internal defaults
 
@@ -507,7 +506,7 @@ in the binary, and during the first execution, it saves it with the same structu
 path, inside the user's computer, according to the platform's specification. More specifically, the
 paths per operating system are:
 ```
-    Windows:  %APPDATA%\mezura
+    Windows:  %APPDATA%\mezura\data
     Linux:    /home/$USER/.local/share/mezura
     MacOs:    /Users/$USER/Library/Application Support/mezura
 ```
@@ -543,7 +542,7 @@ A **theme** is a plain .txt file of ```token = value``` lines, in the "themes" f
 
 ```--show-themes``` previews each of them on the same figures, which is where these three come from:
 
-<img src="screenshots/theme-showcase.png" width="900">
+<img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/theme-showcase.png" width="900">
 
 The four languages of the overview and the folded 'others' entry are five ordinary tokens, ```language-1``` to ```language-4``` and ```language-others```, so a theme sets them the same way it sets everything else.
 
@@ -551,7 +550,7 @@ To make authoring one easier, there is an interactive editor: one run of mezura 
 
 <b>[Open the theme editor online](https://subamanis.github.io/mezura/theme-editor/)</b> to play with the bundled themes, or run ```mezura --theme-editor``` to open it with the themes found on your own machine, including the ones you created.
 
-<a href="https://subamanis.github.io/mezura/theme-editor/"><img src="screenshots/theme-editor.png" width="900"></a>
+<a href="https://subamanis.github.io/mezura/theme-editor/"><img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/theme-editor.png" width="900"></a>
 
 
 ## Supported languages
@@ -562,9 +561,9 @@ All the supported languages can be found in [the data directory](#the-data-direc
 
 If two or more language files claim the same extension, each file of it is identified by its own content: a `#!` line first, then the evidence the language files declare, so a `.m` opening with `@interface` counts as Objective-C where one opening with `function` counts as MATLAB. A file whose content says nothing falls back to the winner named in the `language_conflicts.txt` file of the data dir, which ships with an answer for every contest between the languages that come with the program. An extension that nobody has named there goes to the language that comes first alphabetically, and the program reports it, since that is a tie-break and not a decision. ```--force-language``` overrides all of it for a single run, or through a configuration file for a single project. It can also answer differently per module in the same run, so ```mezura ios=./ios analysis=./matlab --force-language ios/m=objective-c,analysis/m=matlab``` counts one repository's ```.m``` files as Objective-C in one folder and as MATLAB in the other.
 
-**[Language choices](LANGUAGE_CHOICES.md)** is the short page behind those answers: which language gets each contested extension, and which files are left out of the count.
+**[Language choices](https://github.com/subamanis/mezura/blob/HEAD/LANGUAGE_CHOICES.md)** is the short page behind those answers: which language gets each contested extension, and which files are left out of the count.
 
-**[The language files guide](LANGUAGE_FILES_GUIDE.md)** is a page of its own: a whole language file to copy, every block with an example, which of the five string blocks a symbol belongs in, and the two mistakes that cost people the most time.
+**[The language files guide](https://github.com/subamanis/mezura/blob/HEAD/LANGUAGE_FILES_GUIDE.md)** is a page of its own: a whole language file to copy, every block with an example, which of the five string blocks a symbol belongs in, and the two mistakes that cost people the most time.
 
 
 ## Accuracy and limitations
@@ -633,7 +632,7 @@ mezura comes out first on every platform it was measured on,
 both by using each counter's default settings, and by using the curated flags that guarantee equal work.
 The runs on the other platforms it was tested on, the exact flags, the trust checks every run carries,
 the full methodology and the recorded numbers of each run
-are on [the results page](benchmarking/results/README.md).
+are on [the results page](https://github.com/subamanis/mezura/blob/HEAD/benchmarking/results/README.md).
 
 
 ## Performance
@@ -673,7 +672,7 @@ large directory, or the numbers say nothing.
 
 Opening a file is far more expensive on Windows than on Linux: every open walks the object manager, the security descriptor and the whole filter driver stack, which is where antivirus and other minifilters sit. Since mezura opens one file after another, this dominates: **on Windows the program is I/O bound, and most of its time is spent waiting on `File::open` rather than counting anything**. On Linux the same open is nearly free, and the run's cpu goes almost entirely into mezura's own work instead of the operating system's.
 
-The practical consequence is that the same repository on the same machine is measurably faster to analyze from Linux (~1.4x speedup).
+The practical consequence is that the same repository on the same machine is measurably faster to analyze from Linux (~1.5x speedup).
 
 That baseline cost is structural and does not go away. What can be removed is what sits on top of it: because every open traverses the filter stack, real-time antivirus protection ends up inside mezura's hot path, inspecting each file as it is opened, and it multiplies an already expensive operation. Excluding mezura from that scanning makes a very big difference on the performance.
 
@@ -698,15 +697,15 @@ Remove-MpPreference -ExclusionProcess "mezura.exe"
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for how to get a change in.
+See [CONTRIBUTING.md](https://github.com/subamanis/mezura/blob/HEAD/CONTRIBUTING.md) for how to get a change in.
 
 
 ## License
 
 Licensed under either of
 
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or https://www.apache.org/licenses/LICENSE-2.0)
-- MIT license ([LICENSE-MIT](LICENSE-MIT) or https://opensource.org/licenses/MIT)
+- Apache License, Version 2.0 ([LICENSE-APACHE](https://github.com/subamanis/mezura/blob/HEAD/LICENSE-APACHE) or https://www.apache.org/licenses/LICENSE-2.0)
+- MIT license ([LICENSE-MIT](https://github.com/subamanis/mezura/blob/HEAD/LICENSE-MIT) or https://opensource.org/licenses/MIT)
 
 at your option.
 

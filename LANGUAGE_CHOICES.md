@@ -9,7 +9,7 @@ the count. The shares are GitHub code search totals, taken 2026-09-01.
 |---|---|---|
 | `.h` | C Header | 55% C, 36% C++, 9% Objective-C |
 | `.m` | MATLAB | 59% MATLAB, 41% Objective-C. Objective-C also has `.mm`, MATLAB has nothing else |
-| `.pl` | Perl | 91% Perl, 9% Prolog. Prolog also has `.pro` and `.prolog` |
+| `.pl` | Perl | 91% Perl, 9% Prolog. Prolog also has `.pro` and `.prolog`, and even `.pro` is Prolog only 1% of the time (67% is IDL) |
 | `.pas` | Pascal | Delphi also has `.dpr` and `.dpk` |
 
 The table is the fallback. A file is identified by its own content first: the `#!` line, then the

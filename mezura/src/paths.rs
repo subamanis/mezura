@@ -38,10 +38,9 @@ pub struct PersistentAppPaths {
 }
 
 impl PersistentAppPaths {
-    //Persistent paths:
-    // Windows:  C:/Users/<user_name>/AppData/Roaming/mezura
-    // Linux:    /home/<user_name>/.local/share/mezura
-    // MacOs:    /Users/<user_name>/Library/Application Support/mezura
+    // Persistent paths. Windows keeps them under %APPDATA%/mezura/data, Linux under
+    // /home/<user_name>/.local/share/mezura and macOS under
+    // /Users/<user_name>/Library/Application Support/mezura
     pub fn get() -> Self {
         // Tests write real configuration and theme files through these paths, and a run interrupted
         // before its cleanup leaves loadable configurations behind: 'test_save_load_configs' starts
