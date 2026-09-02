@@ -39,11 +39,13 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings -A clippy::too_many_arguments
 
-      - name: Test
-        run: cargo test --verbose
-
       - name: Build
         run: cargo build --release --verbose
+
+      # After the build. The MCP server's tests start the mezura binary, which 'cargo test' never
+      # builds for another package.
+      - name: Test
+        run: cargo test --verbose
 
       # The archives hold the binaries under their plain names, so that they are ready to be used
       # right after extracting, without having to be renamed. Both go in the same folder because
