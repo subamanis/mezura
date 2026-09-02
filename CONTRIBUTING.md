@@ -62,8 +62,11 @@ no code at all.
    package.
 
 The sample file should look like the language normally looks. Anything weird, a comment symbol
-hiding inside a string, an unbalanced quote, a comment that never closes, goes to `stress-corpus/`
-instead, where the tricky cases live.
+hiding inside a string, an unbalanced quote, a comment that never closes, is a case for
+[LineJudge](https://github.com/loc-conformance/linejudge), the conformance corpus every counter is
+measured against. CI runs it on every change, holding the build to `.linejudge/recorded/mezura.toml`;
+a fix that moves an answer regenerates that file in the same commit with
+`linejudge record --counter mezura --bin target/release/mezura`.
 
 ## Tests
 

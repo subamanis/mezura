@@ -34,6 +34,16 @@ jobs:
         with:
           fetch-depth: 2
 
+      # The goldens are compared across machines and a checkout that rewrote line endings would
+      # fail in ways that look like counting bugs. The check looks for CRLF alone, since a file
+      # with no line ending at all has nothing to be LF.
+      - name: No file was checked out with CRLF
+        shell: bash
+        run: |
+          if git ls-files --eol | grep -E "w/(crlf|mixed)"; then
+            echo "the working copy holds a file with CRLF line endings"; exit 1
+          fi
+
       - name: Install the Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -42,6 +52,19 @@ jobs:
 
       - name: Build
         run: cargo build --release --verbose
+
+      # The conformance gate. linejudge holds the cases and mezura's declared rules, and the
+      # record under .linejudge says what this build must keep answering, so a parser change that
+      # moves an answer regenerates that file in the same commit with 'linejudge record'.
+      - name: Install linejudge
+        run: cargo install linejudge@0.1.0
+
+      - name: Check against the conformance corpus
+        shell: bash
+        run: |
+          bin=target/release/mezura
+          if [ "$RUNNER_OS" = "Windows" ]; then bin="$bin.exe"; fi
+          linejudge check --counter mezura --bin "$bin"
 
       # too_many_arguments is the one lint deliberately left unfixed: silencing it would mean
       # restructuring the producer and consumer signatures for no benefit

@@ -3564,155 +3564,16 @@ mod tests {
         assert!(failures.is_empty(), "\n{} fixture check(s) failed:\n  {}\n", failures.len(), failures.join("\n  "));
     }
 
-    // The stress corpus lives at the top of the repository rather than in this crate, since its
-    // files carry a pair of counts per counting tool and are meant to be run by any of them. It is
-    // therefore absent from a crate downloaded off crates.io, hence None rather than a failure.
-    fn stress_corpus_dir() -> Option<std::path::PathBuf> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("stress-corpus");
-        root.is_dir().then_some(root)
-    }
-
-    // '7 lines 1 code 6 comment', the shape every counter writes its own numbers in, read by the
-    // word that follows each number so the order in the line does not matter
-    fn parse_stress_counts(line: &str, marker: &str) -> Option<(usize, usize, usize)> {
-        let words = line.split_once(marker)?.1.split_whitespace().collect::<Vec<_>>();
-        let value_before = |name: &str| words.iter().position(|word| *word == name)
-                .and_then(|at| at.checked_sub(1))
-                .and_then(|at| words[at].parse::<usize>().ok());
-        Some((value_before("lines")?, value_before("code")?, value_before("comment")?))
-    }
-
-    // The sections a line declares, as 'mezura-section TS 2 lines 1 code 1 comment', one per line,
-    // the language being the first word after the marker. A case in a container language needs
-    // them: its three totals are the same whether the sections were found at all.
-    //
-    // 'real-section' carries no tool's name because whether a '<script lang="ts">' block is
-    // TypeScript is a fact about the file: a tool calling it JavaScript is wrong rather than
-    // differently defined. Which lines are code and which are comment is the part that is
-    // genuinely per tool, and that is what the two totals are for.
-    fn parse_stress_sections(header: &str, marker: &str) -> Vec<(String, (usize, usize, usize))> {
-        header.lines().filter_map(|line| {
-            let rest = line.split_once(marker)?.1;
-            let language = rest.split_whitespace().next()?;
-            Some((language.to_owned(), parse_stress_counts(rest, language)?))
-        }).collect()
-    }
-
-    fn sorted_sections(header: &str, marker: &str) -> Vec<(String, (usize, usize, usize))> {
-        let mut sections = parse_stress_sections(header, marker);
-        sections.sort();
-        sections
-    }
-
-    // Whether a tool's answer is the right one, in both halves: the totals it declares against the
-    // totals it wants, and the sections it declares against the sections the file has.
-    fn tool_is_right_in(header: &str, tool: &str) -> bool {
-        parse_stress_counts(header, &format!("{tool}-real")) == parse_stress_counts(header, &format!("{tool}-count"))
-                && sorted_sections(header, &format!("{tool}-section")) == sorted_sections(header, "real-section")
-    }
-
-    // A tool's note explains why its answer is not the right one, so it belongs to exactly the
-    // cases where the two disagree. A case that gets something wrong and says nothing reads as a
-    // passing case, and a note left after the answer was fixed reads as a fault that is gone.
-    fn check_the_note_of(header: &str, tool: &str, name: &str) -> Option<String> {
-        // A case is free to say nothing about a tool, and most say nothing about any but ours
-        parse_stress_counts(header, &format!("{tool}-count"))?;
-
-        match (tool_is_right_in(header, tool), header.contains(&format!("{tool}:"))) {
-            (false, false) => Some(format!("{name}: '{tool}' does not give the right answer here and no \
-                    '{tool}:' line says what it gets wrong")),
-            (true, false) => None,
-            (true, true) => Some(format!("{name}: has a '{tool}:' line while '{tool}' gives the right \
-                    answer, so either the note is stale or the numbers are")),
-            (false, true) => None
-        }
-    }
-
-    // Each file of the corpus declares the honest answer and the answer mezura gives today. The
-    // assertion is on the second, so a case mezura gets wrong keeps the suite green while saying
-    // so out loud, and the moment the answer changes at all somebody has to look: a fix has to
-    // promote the file in the same commit, and a wrong answer that changed shape is not a fix.
-    #[test]
-    fn the_stress_corpus_answers_are_the_ones_declared() {
-        let Some(root) = stress_corpus_dir() else { return };
-        let lookup = fixture_lookup();
-        let config = EngineConfig::default();
-
-        let (mut failures, mut known_wrong, mut checked) = (Vec::new(), 0, 0);
-        for path in fixture_paths(&root) {
-            let name = path.file_name().unwrap().to_string_lossy().into_owned();
-            // The folder describes and licenses itself beside the cases; only a file with an
-            // extension is one, since every case is source in some language
-            if !name.contains('.') || name.ends_with(".md") { continue; }
-
-            let contents = std::fs::read_to_string(&path).unwrap();
-            // Generous: a case carrying another counter's numbers beside ours, with a line per
-            // section of each, has a far longer header than the plainest one needs
-            let header = contents.lines().take(20).collect::<Vec<_>>().join("\n");
-            let (Some(real), Some(declared)) = (parse_stress_counts(&header, "mezura-real"),
-                    parse_stress_counts(&header, "mezura-count")) else {
-                failures.push(format!("{name}: needs a 'mezura-real' and a 'mezura-count' line, each \
-                        written as 'N lines N code N comment'"));
-                continue;
-            };
-            let Some(lang_name) = lookup.of_path(&path) else {
-                failures.push(format!("{name}: no supported language claims this name or its extension"));
-                continue;
-            };
-
-            let mut buf = String::new();
-            let report = parse_file_report(&path, lang_name.as_ref(), &mut buf, &config)
-                    .unwrap_or_else(|x| panic!("{name} could not be parsed: {x}"));
-            let mut found = report.sections.iter().map(|section|
-                    (section.language.clone(), content_counts(&section.stats))).collect::<Vec<_>>();
-            let stats = report.into_whole();
-            let counted = content_counts(&stats);
-
-            // Compared as sets: the order sections appear in is the file's business
-            let sections = sorted_sections(&header, "mezura-section");
-            found.sort();
-            if sections != found {
-                failures.push(format!("{name} ({lang_name}): declares the sections {sections:?} \
-                        and found {found:?}"));
-            }
-
-            if counted != declared {
-                let verdict = if counted == real && found == sorted_sections(&header, "real-section") {
-                    "it is now right, so promote the file"
-                } else {
-                    "it is wrong in a new way"
-                };
-                failures.push(format!("{name} ({lang_name}): declared {declared:?}, counted {counted:?}, \
-                        honest {real:?}. {verdict}"));
-            } else if !tool_is_right_in(&header, "mezura") {
-                known_wrong += 1;
-            }
-            for tool in ["mezura", "tokei"] {
-                failures.extend(check_the_note_of(&header, tool, &name));
-            }
-            checked += 1;
-        }
-
-        println!("stress corpus: {checked} cases, {known_wrong} of them known wrong");
-        assert!(checked > 0, "no stress cases were found in {}", root.display());
-        assert!(failures.is_empty(), "\n{} stress case(s) moved:\n  {}\n", failures.len(), failures.join("\n  "));
-    }
-
     // Counting and explaining are one function, but the explain records are written beside the
-    // class counts and a slip would part them. Every fixture and every stress case goes through
-    // both, compared class by class and line by line.
+    // class counts and a slip would part them. Every fixture goes through both, compared class by
+    // class and line by line.
     #[test]
     fn explaining_a_file_answers_exactly_what_counting_it_does() {
         let lookup = fixture_lookup();
         let config = EngineConfig::default();
 
-        let mut paths = fixture_paths(&fixtures_dir());
-        if let Some(corpus) = stress_corpus_dir() {
-            paths.extend(fixture_paths(&corpus));
-        }
-
         let mut checked = 0;
-        for path in paths {
+        for path in fixture_paths(&fixtures_dir()) {
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
             if name.ends_with(".md") { continue; }
             let Some(lang_name) = lookup.of_path_or_shebang(&path) else { continue };

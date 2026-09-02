@@ -1,0 +1,592 @@
+counter = "mezura"
+version = "v3.0.0 (unreleased)"
+measured-with = "linejudge 0.1.0"
+
+[answer.1010-code_then_comment_on_one_line.content]
+counted = { lines = 2, code = 2, comments = 0, extra = 0 }
+
+[answer.1010-code_then_comment_on_one_line.region]
+counted = { lines = 2, code = 2, comments = 0, blanks = 0 }
+
+[answer.1020-comment_then_code_then_comment.content]
+counted = { lines = 2, code = 2, comments = 0, extra = 0 }
+
+[answer.1020-comment_then_code_then_comment.region]
+counted = { lines = 2, code = 2, comments = 0, blanks = 0 }
+
+[answer.1030-brace_and_trailing_comment.content]
+counted = { lines = 3, code = 2, comments = 1, extra = 0 }
+
+[answer.1030-brace_and_trailing_comment.region]
+counted = { lines = 3, code = 3, comments = 0, blanks = 0 }
+
+[answer.1040-pairs_in_either_order.content]
+counted = { lines = 8, code = 4, comments = 2, extra = 2 }
+
+[answer.1040-pairs_in_either_order.region]
+counted = { lines = 8, code = 8, comments = 0, blanks = 0 }
+
+[answer.1050-block_comment_holding_line_comment.content]
+counted = { lines = 4, code = 1, comments = 3, extra = 0 }
+
+[answer.1050-block_comment_holding_line_comment.region]
+counted = { lines = 4, code = 1, comments = 3, blanks = 0 }
+
+[answer.1060-line_comment_holding_block_open.content]
+counted = { lines = 2, code = 1, comments = 1, extra = 0 }
+
+[answer.1060-line_comment_holding_block_open.region]
+counted = { lines = 2, code = 1, comments = 1, blanks = 0 }
+
+[answer.1070-block_comment_closed_then_line_comment.content]
+counted = { lines = 2, code = 1, comments = 1, extra = 0 }
+
+[answer.1070-block_comment_closed_then_line_comment.region]
+counted = { lines = 2, code = 1, comments = 1, blanks = 0 }
+
+[answer.1080-block_close_touching_a_line_comment.content]
+counted = { lines = 2, code = 1, comments = 1, extra = 0 }
+
+[answer.1080-block_close_touching_a_line_comment.region]
+counted = { lines = 2, code = 1, comments = 1, blanks = 0 }
+
+[answer.1090-block_comment_closed_after_a_line_comment.content]
+counted = { lines = 7, code = 2, comments = 2, extra = 3 }
+
+[answer.1090-block_comment_closed_after_a_line_comment.region]
+counted = { lines = 7, code = 4, comments = 3, blanks = 0 }
+
+[answer.1100-close_touching_reopen_plain.content]
+counted = { lines = 4, code = 1, comments = 2, extra = 1 }
+
+[answer.1100-close_touching_reopen_plain.region]
+counted = { lines = 4, code = 1, comments = 3, blanks = 0 }
+
+[answer.1110-close_and_reopen_with_a_space.content]
+counted = { lines = 4, code = 1, comments = 2, extra = 1 }
+
+[answer.1110-close_and_reopen_with_a_space.region]
+counted = { lines = 4, code = 1, comments = 3, blanks = 0 }
+
+[answer.1120-close_then_code_then_stray_and_reopen.content]
+counted = { lines = 4, code = 2, comments = 1, extra = 1 }
+
+[answer.1120-close_then_code_then_stray_and_reopen.region]
+counted = { lines = 4, code = 2, comments = 2, blanks = 0 }
+
+[answer.1130-closer_in_code_with_nothing_open.content]
+counted = { lines = 2, code = 1, comments = 1, extra = 0 }
+
+[answer.1130-closer_in_code_with_nothing_open.region]
+counted = { lines = 2, code = 1, comments = 1, blanks = 0 }
+
+[answer.1140-three_slashes_are_one_comment.content]
+counted = { lines = 2, code = 1, comments = 1, extra = 0 }
+
+[answer.1140-three_slashes_are_one_comment.region]
+counted = { lines = 2, code = 1, comments = 1, blanks = 0 }
+
+[answer.1150-doc_comment_opening_after_code.content]
+counted = { lines = 3, code = 2, comments = 1, extra = 0 }
+
+[answer.1150-doc_comment_opening_after_code.region]
+counted = { lines = 3, code = 2, comments = 1, blanks = 0 }
+
+[answer.1160-two_comment_pairs_of_one_language.content]
+counted = { lines = 3, code = 1, comments = 2, extra = 0 }
+
+[answer.1160-two_comment_pairs_of_one_language.region]
+counted = { lines = 3, code = 1, comments = 2, blanks = 0 }
+
+[answer.1170-pascal_writes_two_pairs.content]
+counted = { lines = 3, code = 1, comments = 2, extra = 0 }
+
+[answer.1170-pascal_writes_two_pairs.region]
+counted = { lines = 3, code = 1, comments = 2, blanks = 0 }
+
+[answer.1180-cmake_bracket_comment.content]
+counted = { lines = 4, code = 1, comments = 2, extra = 1 }
+
+[answer.1180-cmake_bracket_comment.region]
+counted = { lines = 4, code = 1, comments = 3, blanks = 0 }
+
+[answer.1190-nested_block_comment_that_does_not.content]
+counted = { lines = 2, code = 1, comments = 1, extra = 0 }
+
+[answer.1190-nested_block_comment_that_does_not.region]
+counted = { lines = 2, code = 1, comments = 1, blanks = 0 }
+
+[answer.1200-nested_block_comment_that_nests.content]
+counted = { lines = 2, code = 1, comments = 1, extra = 0 }
+
+[answer.1200-nested_block_comment_that_nests.region]
+counted = { lines = 2, code = 1, comments = 1, blanks = 0 }
+
+[answer.1210-close_touching_reopen_nesting.content]
+counted = { lines = 4, code = 1, comments = 2, extra = 1 }
+
+[answer.1210-close_touching_reopen_nesting.region]
+counted = { lines = 4, code = 1, comments = 3, blanks = 0 }
+
+[answer.1220-nested_block_comment_in_odin.content]
+counted = { lines = 6, code = 2, comments = 3, extra = 1 }
+
+[answer.1220-nested_block_comment_in_odin.region]
+counted = { lines = 6, code = 2, comments = 4, blanks = 0 }
+
+[answer.1230-a_comment_word_at_the_head_of_a_longer_word.content]
+counted = { lines = 3, code = 2, comments = 1, extra = 0 }
+
+[answer.1230-a_comment_word_at_the_head_of_a_longer_word.region]
+counted = { lines = 3, code = 2, comments = 1, blanks = 0 }
+
+[answer.2010-comment_symbol_inside_string.content]
+counted = { lines = 2, code = 2, comments = 0, extra = 0 }
+
+[answer.2010-comment_symbol_inside_string.region]
+counted = { lines = 2, code = 2, comments = 0, blanks = 0 }
+
+[answer.2020-string_symbol_inside_comment.content]
+counted = { lines = 2, code = 1, comments = 1, extra = 0 }
+
+[answer.2020-string_symbol_inside_comment.region]
+counted = { lines = 2, code = 1, comments = 1, blanks = 0 }
+
+[answer.2030-string_symbol_of_another_kind_inside.content]
+counted = { lines = 2, code = 2, comments = 0, extra = 0 }
+
+[answer.2030-string_symbol_of_another_kind_inside.region]
+counted = { lines = 2, code = 2, comments = 0, blanks = 0 }
+
+[answer.2040-comment_pair_opening_inside_a_string.content]
+counted = { lines = 3, code = 2, comments = 1, extra = 0 }
+
+[answer.2040-comment_pair_opening_inside_a_string.region]
+counted = { lines = 3, code = 2, comments = 1, blanks = 0 }
+
+[answer.2050-string_opening_after_block_close.content]
+counted = { lines = 3, code = 1, comments = 2, extra = 0 }
+
+[answer.2050-string_opening_after_block_close.region]
+counted = { lines = 3, code = 1, comments = 2, blanks = 0 }
+
+[answer.2060-backtick_template_holding_a_comment.content]
+counted = { lines = 4, code = 4, comments = 0, extra = 0 }
+
+[answer.2060-backtick_template_holding_a_comment.region]
+counted = { lines = 4, code = 4, comments = 0, blanks = 0 }
+
+[answer.2070-verbatim_string_crossing_lines.content]
+counted = { lines = 3, code = 2, comments = 1, extra = 0 }
+
+[answer.2070-verbatim_string_crossing_lines.region]
+counted = { lines = 3, code = 2, comments = 1, blanks = 0 }
+
+[answer.2080-odd_triple_quote_count.content]
+counted = { lines = 5, code = 4, comments = 1, extra = 0 }
+
+[answer.2080-odd_triple_quote_count.region]
+counted = { lines = 5, code = 4, comments = 1, blanks = 0 }
+
+[answer.2090-docstring_holding_a_comment_symbol.content]
+counted = { lines = 5, code = 5, comments = 0, extra = 0 }
+
+[answer.2090-docstring_holding_a_comment_symbol.region]
+counted = { lines = 5, code = 5, comments = 0, blanks = 0 }
+
+[answer.2100-triple_quoted_data_not_documentation.content]
+counted = { lines = 6, code = 5, comments = 0, extra = 1 }
+
+[answer.2100-triple_quoted_data_not_documentation.region]
+counted = { lines = 6, code = 6, comments = 0, blanks = 0 }
+
+[answer.2110-here_string_holding_an_apostrophe.content]
+counted = { lines = 5, code = 4, comments = 1, extra = 0 }
+
+[answer.2110-here_string_holding_an_apostrophe.region]
+counted = { lines = 5, code = 4, comments = 1, blanks = 0 }
+
+[answer.2120-heredoc_holding_an_apostrophe.content]
+is-known-failure = true
+counted = { lines = 5, code = 5, comments = 0, extra = 0 }
+note = """
+the apostrophe opens a string and every comment under it is counted as code"""
+
+[answer.2120-heredoc_holding_an_apostrophe.region]
+is-known-failure = true
+counted = { lines = 5, code = 5, comments = 0, blanks = 0 }
+note = """
+the apostrophe opens a string and every comment under it is counted as code"""
+
+[answer.2130-raw_string_holding_quotes.content]
+counted = { lines = 2, code = 1, comments = 1, extra = 0 }
+
+[answer.2130-raw_string_holding_quotes.region]
+counted = { lines = 2, code = 1, comments = 1, blanks = 0 }
+
+[answer.2140-raw_string_holding_its_own_closing_bracket.content]
+counted = { lines = 5, code = 5, comments = 0, extra = 0 }
+
+[answer.2140-raw_string_holding_its_own_closing_bracket.region]
+counted = { lines = 5, code = 5, comments = 0, blanks = 0 }
+
+[answer.2150-delimited_raw_string_names_its_own_closer.content]
+is-known-failure = true
+counted = { lines = 4, code = 1, comments = 3, extra = 0 }
+note = """
+the plain R"( is declared and this delimited form is not, so the block opener inside the string
+opens a comment"""
+
+[answer.2150-delimited_raw_string_names_its_own_closer.region]
+is-known-failure = true
+counted = { lines = 4, code = 1, comments = 3, blanks = 0 }
+note = """
+the plain R"( is declared and this delimited form is not, so the block opener inside the string
+opens a comment"""
+
+[answer.2170-lua_level_bracket_holding_plain_close.content]
+counted = { lines = 4, code = 1, comments = 2, extra = 1 }
+
+[answer.2170-lua_level_bracket_holding_plain_close.region]
+counted = { lines = 4, code = 1, comments = 3, blanks = 0 }
+
+[answer.2180-lua_short_closer_hiding_the_real_one.content]
+counted = { lines = 3, code = 1, comments = 1, extra = 1 }
+
+[answer.2180-lua_short_closer_hiding_the_real_one.region]
+counted = { lines = 3, code = 1, comments = 2, blanks = 0 }
+
+[answer.2190-triple_quote_read_as_three_short_ones.content]
+counted = { lines = 5, code = 5, comments = 0, extra = 0 }
+
+[answer.2190-triple_quote_read_as_three_short_ones.region]
+counted = { lines = 5, code = 5, comments = 0, blanks = 0 }
+
+[answer.3010-escaped_quote_before_comment.content]
+counted = { lines = 2, code = 2, comments = 0, extra = 0 }
+
+[answer.3010-escaped_quote_before_comment.region]
+counted = { lines = 2, code = 2, comments = 0, blanks = 0 }
+
+[answer.3020-multiline_string_ending_in_backslash.content]
+counted = { lines = 6, code = 2, comments = 2, extra = 2 }
+
+[answer.3020-multiline_string_ending_in_backslash.region]
+counted = { lines = 6, code = 2, comments = 4, blanks = 0 }
+
+[answer.3030-raw_string_ending_in_backslash.content]
+counted = { lines = 2, code = 1, comments = 1, extra = 0 }
+
+[answer.3030-raw_string_ending_in_backslash.region]
+counted = { lines = 2, code = 1, comments = 1, blanks = 0 }
+
+[answer.3050-verbatim_string_ending_in_a_backslash.content]
+counted = { lines = 3, code = 2, comments = 1, extra = 0 }
+
+[answer.3050-verbatim_string_ending_in_a_backslash.region]
+counted = { lines = 3, code = 2, comments = 1, blanks = 0 }
+
+[answer.3070-backslash_before_a_closing_quote_in_sql.content]
+counted = { lines = 3, code = 2, comments = 1, extra = 0 }
+
+[answer.3070-backslash_before_a_closing_quote_in_sql.region]
+counted = { lines = 3, code = 2, comments = 1, blanks = 0 }
+
+[answer.3080-backtick_escapes_inside_a_double_quoted_string.content]
+counted = { lines = 3, code = 2, comments = 1, extra = 0 }
+
+[answer.3080-backtick_escapes_inside_a_double_quoted_string.region]
+counted = { lines = 3, code = 2, comments = 1, blanks = 0 }
+
+[answer.3090-backtick_before_a_single_quoted_string.content]
+counted = { lines = 3, code = 2, comments = 1, extra = 0 }
+
+[answer.3090-backtick_before_a_single_quoted_string.region]
+counted = { lines = 3, code = 2, comments = 1, blanks = 0 }
+
+[answer.4010-char_literal_holding_a_quote.content]
+counted = { lines = 3, code = 1, comments = 2, extra = 0 }
+
+[answer.4010-char_literal_holding_a_quote.region]
+counted = { lines = 3, code = 1, comments = 2, blanks = 0 }
+
+[answer.4020-two_char_literals_holding_escapes.content]
+counted = { lines = 6, code = 2, comments = 3, extra = 1 }
+
+[answer.4020-two_char_literals_holding_escapes.region]
+counted = { lines = 6, code = 3, comments = 3, blanks = 0 }
+
+[answer.4030-character_written_with_a_backslash.content]
+counted = { lines = 3, code = 2, comments = 1, extra = 0 }
+
+[answer.4030-character_written_with_a_backslash.region]
+counted = { lines = 3, code = 2, comments = 1, blanks = 0 }
+
+[answer.4040-escaped_apostrophe_outside_quotes.content]
+counted = { lines = 4, code = 2, comments = 2, extra = 0 }
+
+[answer.4040-escaped_apostrophe_outside_quotes.region]
+counted = { lines = 4, code = 2, comments = 2, blanks = 0 }
+
+[answer.4050-lifetime_and_apostrophe_in_string.content]
+counted = { lines = 3, code = 1, comments = 2, extra = 0 }
+
+[answer.4050-lifetime_and_apostrophe_in_string.region]
+counted = { lines = 3, code = 1, comments = 2, blanks = 0 }
+
+[answer.4060-primed_identifier_haskell.content]
+counted = { lines = 3, code = 2, comments = 1, extra = 0 }
+
+[answer.4060-primed_identifier_haskell.region]
+counted = { lines = 3, code = 2, comments = 1, blanks = 0 }
+
+[answer.4070-primed_identifier_ocaml.content]
+counted = { lines = 3, code = 2, comments = 1, extra = 0 }
+
+[answer.4070-primed_identifier_ocaml.region]
+counted = { lines = 3, code = 2, comments = 1, blanks = 0 }
+
+[answer.4080-primed_identifier_and_apostrophe.content]
+counted = { lines = 3, code = 2, comments = 1, extra = 0 }
+
+[answer.4080-primed_identifier_and_apostrophe.region]
+counted = { lines = 3, code = 2, comments = 1, blanks = 0 }
+
+[answer.4090-transpose_operator_and_char.content]
+counted = { lines = 3, code = 2, comments = 1, extra = 0 }
+
+[answer.4090-transpose_operator_and_char.region]
+counted = { lines = 3, code = 2, comments = 1, blanks = 0 }
+
+[answer.5010-line_splice_inside_a_string.content]
+counted = { lines = 4, code = 4, comments = 0, extra = 0 }
+
+[answer.5010-line_splice_inside_a_string.region]
+counted = { lines = 4, code = 4, comments = 0, blanks = 0 }
+
+[answer.5020-blank_line_inside_a_spliced_string.content]
+counted = { lines = 4, code = 2, comments = 1, extra = 1 }
+
+[answer.5020-blank_line_inside_a_spliced_string.region]
+counted = { lines = 4, code = 3, comments = 1, blanks = 0 }
+
+[answer.5030-line_splice_inside_a_comment.content]
+counted = { lines = 3, code = 1, comments = 2, extra = 0 }
+
+[answer.5030-line_splice_inside_a_comment.region]
+counted = { lines = 3, code = 1, comments = 2, blanks = 0 }
+
+[answer.5040-line_splice_in_a_comment_with_no_words.content]
+counted = { lines = 4, code = 2, comments = 1, extra = 1 }
+
+[answer.5040-line_splice_in_a_comment_with_no_words.region]
+counted = { lines = 4, code = 2, comments = 2, blanks = 0 }
+
+[answer.5050-line_splice_after_a_closed_block_comment.content]
+counted = { lines = 4, code = 2, comments = 2, extra = 0 }
+
+[answer.5050-line_splice_after_a_closed_block_comment.region]
+counted = { lines = 4, code = 2, comments = 2, blanks = 0 }
+
+[answer.5060-code_then_a_spliced_line_comment.content]
+counted = { lines = 3, code = 2, comments = 1, extra = 0 }
+
+[answer.5060-code_then_a_spliced_line_comment.region]
+counted = { lines = 3, code = 2, comments = 1, blanks = 0 }
+
+[answer.5070-blank_line_inside_a_spliced_comment.content]
+counted = { lines = 3, code = 1, comments = 1, extra = 1 }
+
+[answer.5070-blank_line_inside_a_spliced_comment.region]
+counted = { lines = 3, code = 1, comments = 2, blanks = 0 }
+
+[answer.6010-html_has_no_strings.content]
+counted = { lines = 3, code = 2, comments = 1, extra = 0 }
+
+[answer.6010-html_has_no_strings.region]
+counted = { lines = 3, code = 2, comments = 1, blanks = 0 }
+
+[answer.6020-comment_opener_inside_an_attribute.content]
+is-known-failure = true
+counted = { lines = 3, code = 1, comments = 2, extra = 0 }
+note = """
+HTML declares no string symbols, on purpose, because its quotes hold attributes and its text is
+full of apostrophes. The price is this one: a quoted opener cannot be seen"""
+
+[answer.6020-comment_opener_inside_an_attribute.region]
+is-known-failure = true
+counted = { lines = 3, code = 1, comments = 2, blanks = 0 }
+note = """
+HTML declares no string symbols, on purpose, because its quotes hold attributes and its text is
+full of apostrophes. The price is this one: a quoted opener cannot be seen"""
+
+[answer.6030-opening_tag_split_over_two_lines.content]
+is-known-failure = true
+counted = { lines = 5, code = 5, comments = 0, extra = 0 }
+counted-regions = []
+note = """
+the block is not found, so the comment inside it is read with the page's symbols, and HTML has
+no //"""
+
+[answer.6030-opening_tag_split_over_two_lines.region]
+is-known-failure = true
+counted = { lines = 5, code = 5, comments = 0, blanks = 0 }
+counted-regions = []
+note = """
+the block is not found, so the comment inside it is read with the page's symbols, and HTML has
+no //"""
+
+[answer.6040-script_tag_in_upper_case.content]
+counted = { lines = 6, code = 5, comments = 1, extra = 0 }
+counted-regions = [
+    { language = "JavaScript", lines = 2, code = 1, comments = 1, extra = 0 },
+]
+
+[answer.6040-script_tag_in_upper_case.region]
+counted = { lines = 6, code = 5, comments = 1, blanks = 0 }
+counted-regions = [
+    { language = "JavaScript", lines = 2, code = 1, comments = 1, blanks = 0 },
+]
+
+[answer.6050-script_closer_written_with_a_space.content]
+counted = { lines = 4, code = 4, comments = 0, extra = 0 }
+counted-regions = [
+    { language = "JavaScript", lines = 1, code = 1, comments = 0, extra = 0 },
+]
+
+[answer.6050-script_closer_written_with_a_space.region]
+counted = { lines = 4, code = 4, comments = 0, blanks = 0 }
+counted-regions = [
+    { language = "JavaScript", lines = 1, code = 1, comments = 0, blanks = 0 },
+]
+
+[answer.6060-script_closer_inside_a_string.content]
+counted = { lines = 5, code = 5, comments = 0, extra = 0 }
+
+[answer.6060-script_closer_inside_a_string.region]
+counted = { lines = 5, code = 5, comments = 0, blanks = 0 }
+
+[answer.6070-script_opener_that_never_closes.content]
+counted = { lines = 2, code = 2, comments = 0, extra = 0 }
+
+[answer.6070-script_opener_that_never_closes.region]
+counted = { lines = 2, code = 2, comments = 0, blanks = 0 }
+
+[answer.6080-block_named_by_a_mime_type.content]
+counted = { lines = 4, code = 3, comments = 1, extra = 0 }
+counted-regions = [
+    { language = "TypeScript", lines = 2, code = 1, comments = 1, extra = 0 },
+]
+
+[answer.6080-block_named_by_a_mime_type.region]
+counted = { lines = 4, code = 3, comments = 1, blanks = 0 }
+counted-regions = [
+    { language = "TypeScript", lines = 2, code = 1, comments = 1, blanks = 0 },
+]
+
+[answer.6090-vue_blocks_count_as_their_own_languages.content]
+counted = { lines = 13, code = 9, comments = 3, extra = 1 }
+counted-regions = [
+    { language = "CSS", lines = 2, code = 1, comments = 1, extra = 0 },
+    { language = "JavaScript", lines = 3, code = 1, comments = 1, extra = 1 },
+]
+
+[answer.6090-vue_blocks_count_as_their_own_languages.region]
+counted = { lines = 13, code = 9, comments = 3, blanks = 1 }
+counted-regions = [
+    { language = "CSS", lines = 2, code = 1, comments = 1, blanks = 0 },
+    { language = "JavaScript", lines = 3, code = 1, comments = 1, blanks = 1 },
+]
+
+[answer.6100-block_language_named_by_the_tag.content]
+counted = { lines = 11, code = 9, comments = 2, extra = 0 }
+counted-regions = [
+    { language = "SCSS", lines = 2, code = 1, comments = 1, extra = 0 },
+    { language = "TypeScript", lines = 2, code = 1, comments = 1, extra = 0 },
+]
+
+[answer.6100-block_language_named_by_the_tag.region]
+counted = { lines = 11, code = 9, comments = 2, blanks = 0 }
+counted-regions = [
+    { language = "SCSS", lines = 2, code = 1, comments = 1, blanks = 0 },
+    { language = "TypeScript", lines = 2, code = 1, comments = 1, blanks = 0 },
+]
+
+[answer.6110-php_block_holding_html_around_it.content]
+is-known-failure = true
+counted = { lines = 7, code = 5, comments = 0, extra = 2 }
+counted-regions = []
+note = """
+the file is read as php from beginning to end, so the html comment is counted with php's symbols,
+which do not include it"""
+
+[answer.6110-php_block_holding_html_around_it.region]
+is-known-failure = true
+counted = { lines = 7, code = 7, comments = 0, blanks = 0 }
+counted-regions = []
+note = """
+the file is read as php from beginning to end, so the html comment is counted with php's symbols,
+which do not include it"""
+
+[answer.6120-script_inside_html_inside_php.content]
+is-known-failure = true
+counted = { lines = 11, code = 8, comments = 1, extra = 2 }
+counted-regions = []
+note = """
+the file is read as php from beginning to end, so neither block is found; the totals survive
+because php happens to bucket every line the same way the three languages do"""
+
+[answer.6120-script_inside_html_inside_php.region]
+is-known-failure = true
+counted = { lines = 11, code = 10, comments = 1, blanks = 0 }
+counted-regions = []
+note = """
+the file is read as php from beginning to end, so neither block is found"""
+
+[answer.7010-regex_literal_holding_a_quote.content]
+counted = { lines = 3, code = 2, comments = 1, extra = 0 }
+
+[answer.7010-regex_literal_holding_a_quote.region]
+counted = { lines = 3, code = 2, comments = 1, blanks = 0 }
+
+[answer.7020-regex_holding_a_comment_opener.content]
+is-known-failure = true
+counted = { lines = 3, code = 1, comments = 2, extra = 0 }
+note = """
+the /* opens a comment and swallows the two lines under it"""
+
+[answer.7020-regex_holding_a_comment_opener.region]
+is-known-failure = true
+counted = { lines = 3, code = 1, comments = 2, blanks = 0 }
+note = """
+the /* opens a comment and swallows the two lines under it"""
+
+[answer.8010-punctuation_only_line.content]
+counted = { lines = 3, code = 2, comments = 0, extra = 1 }
+
+[answer.8010-punctuation_only_line.region]
+counted = { lines = 3, code = 3, comments = 0, blanks = 0 }
+
+[answer.8020-blank_line_inside_block_comment.content]
+counted = { lines = 4, code = 1, comments = 2, extra = 1 }
+
+[answer.8020-blank_line_inside_block_comment.region]
+counted = { lines = 4, code = 1, comments = 3, blanks = 0 }
+
+[answer.8030-blank_line_inside_a_multiline_string.content]
+counted = { lines = 6, code = 5, comments = 0, extra = 1 }
+
+[answer.8030-blank_line_inside_a_multiline_string.region]
+counted = { lines = 6, code = 6, comments = 0, blanks = 0 }
+
+[answer.8040-doc_comment_with_no_text.content]
+counted = { lines = 4, code = 1, comments = 2, extra = 1 }
+
+[answer.8040-doc_comment_with_no_text.region]
+counted = { lines = 4, code = 1, comments = 3, blanks = 0 }
+
+[answer.8050-doc_comment_with_no_text_ending_a_block.content]
+counted = { lines = 3, code = 1, comments = 1, extra = 1 }
+
+[answer.8050-doc_comment_with_no_text_ending_a_block.region]
+counted = { lines = 3, code = 1, comments = 2, blanks = 0 }
