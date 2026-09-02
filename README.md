@@ -587,10 +587,9 @@ Additionally:
 
 - Strings are read with the same care. A quote left open by mistake costs its own line instead of everything below it, a Python docstring or a JavaScript backtick still runs for as many lines as it likes, and the raw forms that end with a different symbol than they started with, like Rust's ```r#"..."#``` or C#'s ```@"..."```, end where the language says they do even when they finish with a backslash.
 
-All of this is measured against the [LineJudge](https://loc-conformance.github.io/linejudge/) conformance suite:
+All of this is measured against the [LineJudge](https://loc-conformance.github.io/linejudge/) conformance suite, once per counting model:
 
-[![content](https://loc-conformance.github.io/linejudge/badges/mezura.content.svg)](https://loc-conformance.github.io/linejudge/)
-[![region](https://loc-conformance.github.io/linejudge/badges/mezura.region.svg)](https://loc-conformance.github.io/linejudge/)
+`--counting content` [![content](https://loc-conformance.github.io/linejudge/badges/mezura.content.svg)](https://loc-conformance.github.io/linejudge/) and `--counting region` [![region](https://loc-conformance.github.io/linejudge/badges/mezura.region.svg)](https://loc-conformance.github.io/linejudge/)
 
 With that said, it is important to mention the following limitations:
 

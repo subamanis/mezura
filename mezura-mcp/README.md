@@ -1,5 +1,6 @@
 # mezura-mcp
 
+[![crates.io](https://img.shields.io/crates/v/mezura-mcp.svg)](https://crates.io/crates/mezura-mcp)
 [![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/subamanis/mezura#license)
 
 An MCP server that lets a coding assistant run [mezura](https://github.com/subamanis/mezura), the

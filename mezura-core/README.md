@@ -1,5 +1,8 @@
 # mezura-core
 
+[![conformance](https://loc-conformance.github.io/linejudge/badges/mezura.content.svg)](https://loc-conformance.github.io/linejudge/)
+[![docs.rs](https://docs.rs/mezura-core/badge.svg)](https://docs.rs/mezura-core)
+[![crates.io](https://img.shields.io/crates/v/mezura-core.svg)](https://crates.io/crates/mezura-core)
 [![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/subamanis/mezura#license)
 
 The fast, multithreaded counting engine behind
