@@ -8,7 +8,7 @@ description = "An MCP server that lets a coding agent run mezura and read the co
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/subamanis/mezura"
 readme = "README.md"
-keywords = ["mcp", "model-context-protocol", "loc", "lines-of-code", "cloc"]
+keywords = ["mcp", "mcp-server", "loc", "lines-of-code", "code-metrics"]
 categories = ["development-tools", "command-line-utilities"]
 
 [dependencies]
