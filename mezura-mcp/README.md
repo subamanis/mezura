@@ -9,7 +9,7 @@ counted the way it was.
 ## Installation
 
 ```bash
-cargo install --locked --git https://github.com/subamanis/mezura mezura-mcp
+cargo install mezura-mcp
 ```
 
 Or take it from the [latest release](https://github.com/subamanis/mezura/releases/latest), where it

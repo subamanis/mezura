@@ -1,6 +1,8 @@
 # Changelog
 
-## 1.0.0, unreleased
+## 1.0.0, 2026-09-02
+
+13,509 Total lines  -  8,144 Code lines
 
 The first release: the counting engine of mezura as a library. `run` counts a directory and
 answers per language, per module and per file, `explain_file` reads one file line by line and says

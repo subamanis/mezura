@@ -83,9 +83,9 @@ The only thing you need is the binary, and there are 3 ways to get it:
 
 ### 1. Install it with cargo
 ```bash
-cargo install --locked --git https://github.com/subamanis/mezura mezura
+cargo install mezura
 ```
-To update an existing installation to the latest version, just run the same command again: it will detect that the repository has new commits, rebuild, and replace the old binary.
+To update an existing installation to the latest version, just run the same command again: it will fetch the newest published version, rebuild, and replace the old binary.
 
 ### 2. Build it yourself
 After cloning or downloading the repo:
@@ -351,7 +351,7 @@ failure can be read and not only detected.
 Install it beside mezura:
 
 ```bash
-cargo install --locked --git https://github.com/subamanis/mezura mezura-mcp
+cargo install mezura-mcp
 ```
 
 Then add it to whichever file your editor keeps its servers in:
