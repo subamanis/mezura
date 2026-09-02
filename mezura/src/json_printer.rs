@@ -750,6 +750,11 @@ mod tests {
                 performance: mezura_core::Performance { duration_millis: 1180, threads: mezura_core::Threads::new(2, 8) }}
     }
 
+    // Through the local zone, since the document prints local time and the runner's zone is not ours
+    fn generated_at() -> DateTime<Local> {
+        DateTime::parse_from_rfc3339("2026-07-30T14:22:07+03:00").unwrap().with_timezone(&Local)
+    }
+
     fn document_of(config: &crate::config_manager::Configuration) -> String {
         // Summed rather than written out, so the document is one a run could have produced
         let per_language = hashmap![
@@ -757,9 +762,7 @@ mod tests {
             "HTML".to_owned() => stats_of(1, 900, 40, 30, 0, HashMap::new())];
         let result = result_of(per_language.clone(), Stats::total_of(&per_language), Vec::new(),
             FilesPresent {total_files: 5, relevant_files: 3, excluded_files: 2});
-        let datetime = DateTime::parse_from_rfc3339("2026-07-30T14:22:07+03:00").unwrap().with_timezone(&Local);
-
-        create_document(&result, &datetime, config)
+        create_document(&result, &generated_at(), config)
     }
 
     #[test]
@@ -779,7 +782,8 @@ mod tests {
 
         assert!(document.contains(&format!("\"format\":{FORMAT_VERSION}")));
         assert!(document.contains("\"mezura_version\":\"3.0.0\""));
-        assert!(document.contains("\"generated_at\":\"2026-07-30T14:22:07+03:00\""));
+        assert!(document.contains(&format!("\"generated_at\":\"{}\"",
+                generated_at().to_rfc3339_opts(SecondsFormat::Secs, false))));
         assert!(document.contains("\"lines\":140"));
         assert!(document.contains("\"scan_ms\":1180"));
         // Nothing the printed output adds: no separators in the numbers, no size measurement, no
