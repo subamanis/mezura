@@ -1,0 +1,33 @@
+date: 2026-09-02T05:49:40+03:00
+platform: linux
+arch: x86_64
+os: Debian GNU/Linux 13 (trixie)
+kernel: 6.12.105+deb13-amd64
+cpu: AMD Ryzen 7 9700X 8-Core Processor
+logical_cores: 16
+ram_bytes: 64950501376
+cpu_scaling: performance
+corpus_fs: ext4 /dev/nvme0n1p3
+corpus_device: Lexar SSD NQ790 2TB, 16.0 GT/s PCIe x4
+corpus: /home/petros/Documents/dev/bench/linux
+corpus_head: 0ff41df1cb268fc69e703a08a57ee14ae967d0ca
+corpus_clean: True
+tools: /home/petros/Documents/dev/tools
+mezura_head: c7f828436e0c4470b602f4b91b225c6f5dba8474
+mezura_clean: True
+mezura_changed_before_building: []
+mezura_changed_beside_the_build: []
+global_gitignore: none
+hyperfine: hyperfine 1.19.0
+mezura: v3.0.0 (unreleased)
+scc: scc version 4.0.0
+tokei: tokei 14.0.0 compiled with serialization support: json
+defender_realtime: not applicable
+defender_corpus_excluded: not applicable
+defender_process_excluded_mezura: not applicable
+defender_binary_excluded_mezura: not applicable
+defender_process_excluded_scc: not applicable
+defender_binary_excluded_scc: not applicable
+defender_process_excluded_tokei: not applicable
+defender_binary_excluded_tokei: not applicable
+background_busy_percent: 0.2
