@@ -26,6 +26,7 @@ mod paths;
 mod present;
 mod result_printer;
 mod sources;
+mod startup_timing;
 mod suggestions;
 #[cfg(test)]
 mod test_support;
@@ -34,7 +35,7 @@ mod theme_files;
 mod warning_collector;
 
 use std::process::ExitCode;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Instant;
 
 use colored::{Colorize, control};
@@ -47,11 +48,14 @@ use crate::config_manager::{CHANGELOG, COUNTING, HELP, LAYOUT, OUTPUT, RESTORE, 
         SHOW_LANGUAGES, SHOW_THEMES, THEME_EDITOR, VERSION, VERSION_ID};
 use crate::message_printer::Formatted;
 use crate::migration::{MigrationOutcome, migrate_data_files};
+use crate::startup_timing::{Report, Step, measure, record, record_language_files, stamp};
 
 fn main() -> ExitCode {
     // Dropped last of all: a '--diff' removes its temporary checkouts on background threads, and
     // exiting before they finish would leave a half-deleted tree in the temp directory
     let _removals = crate::animated_display::RemovalsGuard;
+
+    let mut timing = Report::of_this_run();
 
     // Started here and not at the scan, so the footer answers for the whole command: a '--diff' pays
     // for checkouts and baseline counting long before any scan of this run begins
@@ -65,27 +69,31 @@ fn main() -> ExitCode {
     // and a typed target beats the one a configuration names, so no configuration could supply the
     // targets of a run that names none. The working directory answers for that run inside
     // 'create_config_builder_from_args', after every configuration has had its say.
-    let args_str = read_args_as_str();
+    let args_str = measure(Step::Args, read_args_as_str);
+
+    // Forced here so that finding the data directory is a step of its own.
+    measure(Step::Paths, || LazyLock::force(&crate::paths::PERSISTENT_APP_PATHS));
 
     // Before the languages are read, or the run that performs it counts with the old files and the
     // change takes two runs to arrive. Skipped for '--restore', which performs this same pass
     // itself and exists in order to report it.
     let restore_was_asked_for = crate::args::find_command(&args_str, RESTORE).is_some();
-    let outcome = if restore_was_asked_for {MigrationOutcome::default()}
-            else {migrate_data_files(&crate::paths::PERSISTENT_APP_PATHS.data_dir, false)};
+    let outcome = measure(Step::Migration, || if restore_was_asked_for {MigrationOutcome::default()}
+            else {migrate_data_files(&crate::paths::PERSISTENT_APP_PATHS.data_dir, false)});
     for message in [outcome.format_restored(), outcome.format_replaced(), outcome.format_updated(),
             outcome.format_restyled(), outcome.format_withdrawn(), outcome.format_merged(),
             outcome.format_failures()].into_iter().flatten() {
         eprintln!("{message}");
     }
 
-    let languages_available = read_available_languages(&outcome, restore_was_asked_for);
+    let languages_available = measure(Step::Languages,
+            || read_available_languages(&outcome, restore_was_asked_for));
 
     if let Some(code) = handle_message_only_command(&args_str, &languages_available) {
         return code;
     }
 
-    let mut config = match config_manager::create_config_from_args(&args_str) {
+    let mut config = match measure(Step::Config, || config_manager::create_config_from_args(&args_str)) {
         Ok(config) => config,
         Err(x) => {
             eprintln!("\n{}\n",x.format());
@@ -128,7 +136,7 @@ fn main() -> ExitCode {
     if crate::paths::PERSISTENT_APP_PATHS.named_by_the_environment {
         eprintln!("\n{}", crate::theme::get_active().note.paint(&crate::message_printer::wrap_message(
                 &format!("{} names the data directory, so this run reads its languages, themes and \
-configurations from '{}' and not from the usual place.", crate::paths::DATA_DIR_VARIABLE,
+                        configurations from '{}' and not from the usual place.", crate::paths::DATA_DIR_VARIABLE,
                 crate::paths::PERSISTENT_APP_PATHS.data_dir))));
     }
 
@@ -165,7 +173,7 @@ configurations from '{}' and not from the usual place.", crate::paths::DATA_DIR_
         }
     }
 
-    let conflict_rules = read_conflict_rules();
+    let conflict_rules = measure(Step::Conflicts, read_conflict_rules);
 
     // Above the language resolution, whose selection a document's adopted settings can change, and
     // below the conflict rules, which a side that is a revision is counted with
@@ -198,7 +206,8 @@ configurations from '{}' and not from the usual place.", crate::paths::DATA_DIR_
         }
     };
 
-    let (languages, reported) = mezura_core::Languages::resolve(&config.engine, languages_available, &conflict_rules);
+    let (languages, reported) = measure(Step::Resolve,
+            || mezura_core::Languages::resolve(&config.engine, languages_available, &conflict_rules));
     crate::warning_collector::report_language_resolution_warnings(reported);
 
     // Its own answer entirely: no scan, no report, no log.
@@ -216,6 +225,8 @@ configurations from '{}' and not from the usual place.", crate::paths::DATA_DIR_
         None => None
     };
 
+    timing.print_startup();
+    let at = stamp();
     let progress = Arc::new(mezura_core::ScanProgress::default());
     let live = crate::animated_display::start_walk_display(&config, progress.clone());
 
@@ -229,14 +240,17 @@ configurations from '{}' and not from the usual place.", crate::paths::DATA_DIR_
         x.finish();
     }
     live.finish();
+    record(Step::Run, at);
     match outcome {
         Ok(result) => {
+            let at = stamp();
             let comparison = counted_baseline.map(|baseline| baseline.with_subject(
                     crate::diff::Reading::of_this_run(&result, &chrono::Local::now(), &config), &config));
             crate::present::present(&result, comparison.as_ref(), &config);
             // Already presented above as the failures they are. The exit code keeps its meaning:
             // 1 is a run that did not happen, every file unparseable or every place unopenable.
             if result.all_relevant_files_were_faulty() || result.nothing_could_be_read() {
+                record(Step::Printing, at);
                 return ExitCode::FAILURE;
             }
             // The document has its own 'scan_ms' measured inside the run; this is the only place
@@ -254,6 +268,7 @@ configurations from '{}' and not from the usual place.", crate::paths::DATA_DIR_
                 };
                 println!("\n{}",crate::theme::get_active().footer.paint(&(perf + &metrics)));
             }
+            record(Step::Printing, at);
             ExitCode::SUCCESS
         },
         // A bad target surfaces here, because the run is what resolves the declared ones. The
@@ -274,7 +289,9 @@ configurations from '{}' and not from the usual place.", crate::paths::DATA_DIR_
 // that knows whether it is whole, so nothing here asks the same question a second time.
 fn read_available_languages(outcome: &MigrationOutcome, restore_was_asked_for: bool) -> Vec<Language> {
     if !outcome.every_language_file_is_in_place() {
-        return mezura_core::languages::parse_shipped_languages();
+        let shipped = mezura_core::languages::parse_shipped_languages();
+        record_language_files(shipped.len());
+        return shipped;
     }
     match mezura_core::language_file::parse_languages_in_dir(&crate::paths::PERSISTENT_APP_PATHS.languages_dir) {
         // A directory that cannot be read is not a reason to refuse to run, and refusing would
@@ -285,13 +302,16 @@ fn read_available_languages(outcome: &MigrationOutcome, restore_was_asked_for: b
             // report of the restore this same run is about to perform
             let way_out = if restore_was_asked_for {String::new()}
                     else {format!("\nRun with '--{RESTORE}' to write them now. \
-Your configurations, themes and logs are left alone.")};
+                            Your configurations, themes and logs are left alone.")};
             eprintln!("\n{}\n", crate::message_printer::wrap_message(&format!(
                     "{}\nCounting with the copies inside the program until it is there again.{way_out}",
                     x.format())).yellow());
-            mezura_core::languages::parse_shipped_languages()
+            let shipped = mezura_core::languages::parse_shipped_languages();
+            record_language_files(shipped.len());
+            shipped
         },
         Ok((parsed, faulty_files)) => {
+            record_language_files(parsed.len() + faulty_files.len());
             if !faulty_files.is_empty() {
                 eprintln!("{}", crate::message_printer::wrap_message(
                         &crate::message_printer::format_faulty_language_files_message(&faulty_files)).yellow());
@@ -377,7 +397,7 @@ fn report_languages_that_lost_every_claim(lost: Vec<mezura_core::warnings::Warni
 
     eprintln!("\n{}", crate::theme::get_active().warning.paint(&crate::message_printer::wrap_message(
             &format!("{named} {} installed, and every extension and name {they}. A line in '{}' hands an \
-extension back, to whichever name it puts first.", if first.is_empty() {"is"} else {"are"},
+                    extension back, to whichever name it puts first.", if first.is_empty() {"is"} else {"are"},
             mezura_core::LANGUAGE_CONFLICTS_FILE_NAME))));
 }
 
@@ -444,7 +464,7 @@ fn handle_message_only_command(args_str: &str, languages_available: &[Language])
     if asks_for_a_json_document(args_str) {
         eprintln!("\n{}\n", crate::theme::get_active().error.paint(&crate::message_printer::wrap_message(&format!(
                 "'--{message_command}' prints a message to read and '--output json' writes a document for a \
-program to read, and both of them go to the output, so only one of the two can be asked for at a time."))));
+                        program to read, and both of them go to the output, so only one of the two can be asked for at a time."))));
         return Some(ExitCode::FAILURE);
     }
 
