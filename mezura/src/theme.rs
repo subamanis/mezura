@@ -636,6 +636,14 @@ mod tests {
         assert_eq!(Some(Style::of(Color::Cyan).reverse().bold()), Style::parse("reverse cyan bold"));
     }
 
+    // 'colored' 2.2.0 hid this behind COLORTERM, which almost no Windows terminal sets, and every
+    // hex colour came out as the nearest of the sixteen. This fails if the pin against it is lifted.
+    #[test]
+    fn a_hex_colour_leaves_as_twenty_four_bit() {
+        assert_eq!(Color::TrueColor{r:203,g:166,b:247}.to_fg_str(), "38;2;203;166;247");
+        assert_eq!(Color::TrueColor{r:0,g:0,b:0}.to_bg_str(), "48;2;0;0;0");
+    }
+
     #[test]
     fn a_sweep_gives_every_cell_of_a_run_its_own_color() {
         let gradient = Style::parse("ff0000..0000ff").unwrap();

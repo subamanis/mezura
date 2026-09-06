@@ -781,7 +781,8 @@ mod tests {
         let document = document_of(&config);
 
         assert!(document.contains(&format!("\"format\":{FORMAT_VERSION}")));
-        assert!(document.contains("\"mezura_version\":\"3.0.0\""));
+        assert!(document.contains(&format!("\"mezura_version\":\"{}\"",
+                crate::config_manager::VERSION_ID.trim_start_matches('v'))));
         assert!(document.contains(&format!("\"generated_at\":\"{}\"",
                 generated_at().to_rfc3339_opts(SecondsFormat::Secs, false))));
         assert!(document.contains("\"lines\":140"));

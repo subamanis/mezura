@@ -1,3 +1,10 @@
+v3.0.1 - unreleased
+
+Bugfixes:
+  -> A shipped theme you never edited now follows the version you run, and one you did edit is
+      still yours. "--restore" brings the shipped one back.
+  -> Colours are no longer flattened to the sixteen terminal ones after "cargo install".
+
 v3.0.0 - 2026-09-02
 
   33,474 Total lines  -  21,133 Code lines

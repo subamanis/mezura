@@ -1,6 +1,6 @@
 [package]
 name = "mezura"
-version = "3.0.0"
+version = "3.0.1"
 authors = ["Petros Papatheodorou <petrospapa21@gmail.com>"]
 edition = "2024"
 rust-version = "1.88"
@@ -13,7 +13,7 @@ categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 mezura-core = { path = "../mezura-core", version = "1.0.0" }
-colored = "2"
+colored = "=2.0.0"
 chrono = "0.4.45"
 directories = "4.0.1"
 include_dir = "0.6.2"
