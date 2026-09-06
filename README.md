@@ -676,13 +676,22 @@ MEZURA_PHASE_TIMING=1 mezura <some_big_directory>
 $env:MEZURA_PHASE_TIMING = "1"; mezura <some_big_directory>
 ```
 
-The report goes to the error output, three lines:
+The report goes to the error output:
 
-1. how long the directory walk ran, how long the counting continued after it, and how many files
-   were still queued when the walk ended
-2. time spent opening, reading and parsing, summed over every consumer thread, so the shares are
-   the point and not the total
-3. how many times the consumers sat with nothing to do while the walk was still running
+- `[startup]`: everything before the counting begins, step by step (the arguments, finding the data
+  directory, keeping it in step with the binary, the language files, the conflict rules, the
+  configuration, which languages this run counts with)
+- `[phase]`: how long the directory walk ran, how long the counting continued after it, and how many
+  files were still queued when the walk ended
+- `[phase]`: the share of the consumers' time spent starved (an empty queue while the walk was still
+  running), opening, reading and parsing, with the milliseconds behind each, summed over every
+  consumer thread, so the shares are the point
+- `[phase]`: how many files and megabytes were read, and at what rate per thread
+- `[finish]`: the counting, the printing, and the whole command
+
+When there are more consumers than the machine has hardware threads, one more `[phase]` line says
+so: the shares are of elapsed time, so a thread waiting for a core is counted in whatever phase it
+was in, and a large "open" share can mean threads queued for a core with the disk idle.
 
 A deep queue and little starvation mean the parsing is the constraint, and more consumers pay. An
 empty queue and heavy starvation mean the walk is the constraint. Measure with a release build on a

@@ -2,11 +2,18 @@ v3.1.0 - unreleased
 
 Main changes:
   -> New "--output markdown", a report as a markdown table (maybe for a CI step to put in a pull request?).
+  -> "MEZURA_PHASE_TIMING" now also reports the time before and after the count, the milliseconds
+      behind each share, and when the counting threads outnumber the cores.
+
+Performance:
+  -> Counting a large tree is about a fifth faster.
 
 Bugfixes:
   -> A shipped theme you never edited now follows the version you run, and one you did edit is
       still yours. "--restore" brings the shipped one back.
   -> Colours are no longer flattened to the sixteen terminal ones after "cargo install".
+  -> Files that could not be parsed and directories that could not be read are listed in path order.
+  -> A file that went away while it was being counted keeps its listed size in the faulty files list.
 
 v3.0.0 - 2026-09-02
 
