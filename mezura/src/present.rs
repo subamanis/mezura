@@ -60,7 +60,7 @@ pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>,
     }
 
     // A comparison takes the report's place whole: no report, no history section, no log entry
-    if comparison.is_some() || !config.view.prints_text() {
+    if comparison.is_some() || !config.view.prints_a_report() {
         print_comparison_or_empty_document(result, comparison, &datetime_now, config);
         return;
     }
@@ -104,7 +104,7 @@ pub fn print_faulty_files_or_ok(faulty_files: &[FaultyFileDetails], config: &Con
 pub fn print_comparison_as_text_or_json(comparison: &super::diff::Comparison,
         datetime_now: &chrono::DateTime<chrono::Local>, config: &Configuration)
 {
-    if config.view.prints_text() {
+    if config.view.prints_a_report() {
         super::result_printer::print_comparison(comparison, config);
     } else {
         super::json_printer::print_comparison_as_json(comparison, datetime_now, config);
@@ -185,7 +185,7 @@ fn print_comparison_or_empty_document(result: &RunResult, comparison: Option<&su
     match comparison {
         // The blank line above it is the caller's: only the caller knows what sits there
         Some(comparison) => print_comparison_as_text_or_json(comparison, datetime_now, config),
-        None if config.view.prints_text() => (),
+        None if config.view.prints_a_report() => (),
         None => super::json_printer::print_as_json(result, datetime_now, config)
     }
 }

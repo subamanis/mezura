@@ -11,7 +11,7 @@ use super::paths::LocalDir;
 use super::{message_printer, suggestions, theme::Theme};
 
 // Printed at startup and by '--version'. Also in mezura/Cargo.toml, and the two move together.
-pub const VERSION_ID : &str = "v3.0.1";
+pub const VERSION_ID : &str = "v3.1.0";
 
 // command flags
 pub const TARGETS            :&str   = "targets";
@@ -148,6 +148,11 @@ impl ViewConfig {
     // readable, so that a single stray line cannot make it unparseable
     pub fn prints_text(&self) -> bool {
         self.output == OutputFormat::Text
+    }
+
+    // Markdown answers this one like text and every other question like JSON
+    pub fn prints_a_report(&self) -> bool {
+        self.output != OutputFormat::Json
     }
 
     // The project whose log this run writes and reads, when the log is a project's own. A run
@@ -440,7 +445,8 @@ impl ByFile {
 pub enum OutputFormat {
     #[default]
     Text,
-    Json
+    Json,
+    Markdown
 }
 
 impl OutputFormat {
@@ -448,6 +454,7 @@ impl OutputFormat {
         match value.trim().to_lowercase().as_str() {
             "text" => Some(Self::Text),
             "json" => Some(Self::Json),
+            "markdown" | "md" => Some(Self::Markdown),
             _ => None
         }
     }
@@ -881,7 +888,7 @@ This run counts by {}, where that column is '{}', so {result}.",
         }
         // Decided here, after a configuration file has had its say on both halves. A JSON document
         // carries every figure whatever is hidden, so there the order stands as asked.
-        if hidden.hides_column_of(sort_by) && self.output.unwrap_or_default() == OutputFormat::Text {
+        if hidden.hides_column_of(sort_by) && self.output.unwrap_or_default() != OutputFormat::Json {
             let message = format!("'--{SORT} {}' orders by a column '--{HIDE} {0}' takes out, so the report \
 is sorted by lines.", sort_by.name());
             eprintln!("\n{}", wrap_message(&message).yellow());

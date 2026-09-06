@@ -27,6 +27,7 @@ The whole Linux kernel (some languages were cut for screenshot purposes):
   * [The counting model](#the-counting-model)
   * [What is skipped](#what-is-skipped)
 * [Taking the result elsewhere](#taking-the-result-elsewhere)
+  * [Markdown output](#markdown-output)
   * [JSON output](#json-output)
   * [Coding agents (MCP)](#coding-agents-mcp)
   * [As a library](#as-a-library)
@@ -163,7 +164,7 @@ HOW THE REPORT LOOKS
 
 TAKING THE RESULT ELSEWHERE
 
-  --output             text for a person, or one JSON document for another program
+  --output             text for a person, markdown for a page, or one JSON document for another program
   --log                append this run to the log of the loaded configuration
 
 COMPARING WITH EARLIER RUNS
@@ -301,6 +302,24 @@ you, so those are skipped like any other found path.
 
 
 ## Taking the result elsewhere
+
+### Markdown output
+
+`--output markdown` prints the details as a markdown table, for a build step to leave in a pull request or a job summary.
+
+```bash
+mezura ./src --diff origin/main --output markdown >> $GITHUB_STEP_SUMMARY
+```
+
+<img src="screenshots/markdown.png" width="900">
+
+The modules, the languages under them and the changed files under those are all rows of the one table, at the depth the printed report draws them at.
+
+It is the report and not a document of its own, so `--hide`, `--sort` and `--top` cut and order it exactly as they do the printed one, and `--by-file` hangs the changed files under each language. Markdown has one table shape, so `--layout` has nothing to choose between and is ignored, and the colours, the overview bar and the history section are left out, all three being terminal drawings.
+
+A warning that puts the numbers in doubt, an unreadable language file among them, is written under the table as well as to the error output, since whoever reads the page is the one deciding on those numbers. The ones that only report an ignored setting stay on the error output alone, where the build log keeps them.
+
+Counting a git revision needs the full history, so a workflow doing the above wants `fetch-depth: 0` on its checkout.
 
 ### JSON output
 

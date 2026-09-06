@@ -22,6 +22,12 @@ targets. Give the file alone: mezura src/main.rs --explain", config.engine.targe
 file itself: mezura src/main.rs --explain", target.path));
     }
 
+    // Refused, so that asking for one format never quietly hands back another
+    if config.view.output == crate::config_manager::OutputFormat::Markdown {
+        return refuse("'--explain' answers line by line and has no markdown form. Use \
+'--output text' to read it, or '--output json' for a program to read it.");
+    }
+
     // The document promises one entry per line of the file, and that promise is what a program
     // reading it is written against. Narrowing it would break them for nothing, since a program
     // holding the whole answer takes the lines it wants for free.

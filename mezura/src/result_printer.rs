@@ -88,14 +88,16 @@ pub fn format_and_print_results(result: &RunResult, existing_log_content: &Optio
     // Nothing to cross when no module was named, so the table is printed instead of a grid of one
     // column. A warning and not an error: the numbers are worth more than the layout, and the
     // reader asked for one layout and is getting another.
+    // Markdown never reaches the four below, so a word about them would name nothing that printed
+    let markdown = config.view.output == config_manager::OutputFormat::Markdown;
     let mut layout = config.view.layout;
-    if layout == Layout::Matrix && !is_grouped(&groups) {
+    if !markdown && layout == Layout::Matrix && !is_grouped(&groups) {
         layout = Layout::Table;
         eprintln!("\n{}", super::theme::get_active().warning.paint("'--layout matrix' has nothing to cross, since no target was given a name, \
 so the 'table' layout was printed. Use the modules feature to get a matrix: 'mezura frontend=./web backend=./api'."));
     }
     // The matrix crosses languages with modules and has no third direction for a file to hang in.
-    let files_are_shown = layout != Layout::Matrix;
+    let files_are_shown = markdown || layout != Layout::Matrix;
     if config.view.by_file.is_some() && !files_are_shown {
         eprintln!("\n{}", super::theme::get_active().warning.paint("'--by-file' prints nothing under the 'matrix' layout, whose rows are \
 languages crossed with modules. Use any other layout to see the files."));
@@ -112,6 +114,10 @@ languages crossed with modules. Use any other layout to see the files."));
     let of_the_table = if is_table {notes.as_slice()} else {&[]};
 
     let view = ViewSettings::of(config);
+    if markdown {
+        print_as_markdown(theme, &groups, total, print_total, should_print_keywords, &notes, view);
+        return;
+    }
     match layout {
         Layout::Matrix => print_as_matrix(theme, &groups, &matrix_names, total, print_total,
                 should_print_keywords, of_the_table, config.view.counting),
@@ -707,6 +713,41 @@ fn get_third_column_header(model: CountingModel) -> &'static str {
 
 // The header cells reuse the label token of the quantity underneath them and the body cells its
 // number token, so the table needs no styling of its own.
+fn print_as_markdown(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool,
+        should_print_keywords: bool, notes: &[String], view: ViewSettings)
+{
+    println!("### Details\n");
+    for line in format_markdown_lines(theme, groups, total, print_total, notes, view) {
+        println!("{line}");
+    }
+
+    if should_print_keywords {
+        let lines = format_markdown_keyword_lines(theme, groups);
+        if !lines.is_empty() {
+            println!("\n### Keywords\n");
+            for line in lines {
+                println!("{line}");
+            }
+        }
+    }
+    print_markdown_warnings();
+}
+
+// Whoever reads the page decides on the figures, and one about a setting decides nothing there
+fn print_markdown_warnings() {
+    let doubted = super::warning_collector::get_collected_warnings().into_iter()
+            .filter(|warning| warning.affects() == mezura_core::warnings::Affects::Counts)
+            .collect::<Vec<_>>();
+    if doubted.is_empty() {
+        return;
+    }
+
+    println!("\n### Warnings\n");
+    for warning in doubted {
+        println!("- {}", escape_markdown_cell(&warning.message));
+    }
+}
+
 fn print_as_table(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool,
         should_print_keywords: bool, notes: &[String], view: ViewSettings)
 {
@@ -723,10 +764,10 @@ fn print_as_table(theme: &Theme, groups: &[Group], total: &Stats, print_total: b
     println!();
 }
 
-fn format_table_lines(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool,
-        notes: &[String], view: ViewSettings) -> Vec<String>
+fn build_table_cells<'a>(theme: &'a Theme, groups: &[Group], total: &Stats, print_total: bool,
+        notes: &[String], view: ViewSettings) -> (Vec<Column<'a>>, Vec<Vec<String>>, Vec<RowKind>)
 {
-    let ViewSettings { sort_by, hidden, model } = view;
+    let ViewSettings { sort_by: _, hidden, model } = view;
     // The two columns that compare languages ('Files' and 'Lines') take a share of the total, the
     // two that describe one ('Code' and 'Comments') a share of that language's own lines.
     let percent = |kind| Column::of("%", kind, &theme.percent, &theme.percent);
@@ -784,12 +825,100 @@ fn format_table_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
         }}).collect::<Vec<_>>();
 
     let mask = create_shown_mask(&columns, hidden);
-    let mut columns = keep_shown(columns, &mask);
+    let columns = keep_shown(columns, &mask);
     let rows = rows.into_iter().map(|row| keep_shown(row, &mask)).collect::<Vec<_>>();
-    mark_sorted_column(theme, &mut columns, sort_by);
 
-    draw_aligned_table(theme, &columns, &rows, &described.iter().map(|row| row.kind).collect::<Vec<_>>(),
-            is_grouped(groups))
+    (columns, rows, described.iter().map(|row| row.kind).collect())
+}
+
+fn format_table_lines(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool,
+        notes: &[String], view: ViewSettings) -> Vec<String>
+{
+    let (mut columns, rows, kinds) = build_table_cells(theme, groups, total, print_total, notes, view);
+    mark_sorted_column(theme, &mut columns, view.sort_by);
+
+    draw_aligned_table(theme, &columns, &rows, &kinds, is_grouped(groups))
+}
+
+fn format_markdown_lines(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool,
+        notes: &[String], view: ViewSettings) -> Vec<String>
+{
+    let (columns, rows, kinds) = build_table_cells(theme, groups, total, print_total, notes, view);
+
+    draw_markdown_table(&columns, &rows, &kinds)
+}
+
+// A markdown cell keeps no leading space, so the depth of a row has to be spelled out
+fn indent_for_markdown(cell: &str) -> String {
+    let depth = cell.len() - cell.trim_start_matches(' ').len();
+    "&nbsp;".repeat(depth * 2) + cell.trim_start_matches(' ')
+}
+
+fn escape_markdown_cell(cell: &str) -> String {
+    cell.replace('|', "\\|")
+}
+
+fn emphasise_the_name_in(cell: &str) -> String {
+    let name = find_section_name_in(cell);
+    match cell.rfind(name).filter(|_| !name.is_empty()) {
+        Some(at) => format!("{}*{name}*", &cell[..at]),
+        None => cell.to_owned()
+    }
+}
+
+fn escape_markdown_name(cell: &str) -> String {
+    let mut escaped = String::with_capacity(cell.len());
+    for character in cell.chars() {
+        if matches!(character, '|' | '*' | '_' | '`' | '[' | ']' | '<' | '>') {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
+}
+
+fn draw_markdown_table(columns: &[Column], rows: &[Vec<String>], kinds: &[RowKind]) -> Vec<String> {
+    let headers = columns.iter().enumerate()
+            .map(|(at, column)| if at == 0 {column.header.clone()} else {escape_markdown_cell(&column.header)})
+            .collect::<Vec<_>>();
+    let alignment = columns.iter().enumerate()
+            .map(|(at, _)| if at == 0 {"---"} else {"---:"}).collect::<Vec<_>>();
+
+    let mut lines = vec![format!("| {} |", headers.join(" | ")),
+            format!("|{}|", alignment.join("|"))];
+    let mut notes = Vec::new();
+    for (row, kind) in rows.iter().zip(kinds) {
+        if matches!(kind, RowKind::Note) {
+            notes.push(row[0].trim().to_owned());
+            continue;
+        }
+        let mut cells = row.iter().enumerate().map(|(at, cell)| {
+            let cell = cell.trim_end();
+            if at > 0 {
+                return escape_markdown_cell(cell);
+            }
+            let named = escape_markdown_name(cell);
+            // Leaned over before the indent is spelled out, or the marks land on the spaces
+            indent_for_markdown(&match kind {
+                RowKind::Nested => emphasise_the_name_in(&named),
+                _ => named
+            })
+        }).collect::<Vec<_>>();
+        match kind {
+            RowKind::Module if !cells[0].is_empty() => cells[0] = format!("**{}**", cells[0]),
+            RowKind::Total => cells = cells.into_iter()
+                    .map(|cell| if cell.is_empty() {cell} else {format!("**{cell}**")}).collect(),
+            _ => ()
+        }
+        lines.push(format!("| {} |", cells.join(" | ")));
+    }
+
+    for note in notes {
+        lines.push(String::new());
+        lines.push(note);
+    }
+
+    lines
 }
 
 // The whole of what '--diff' prints, and the only output when both readings were given, since then
@@ -799,8 +928,14 @@ pub fn print_comparison(comparison: &super::diff::Comparison, config: &Configura
     let (baseline, subject) = (&comparison.baseline, &comparison.subject);
     let pairs = comparison.module_pairs();
 
-    println!("{}.\n", theme.heading.paint("Details"));
-    println!("{}", format_comparison_heading(theme, baseline, subject));
+    let markdown_wanted = config.view.output == config_manager::OutputFormat::Markdown;
+    if markdown_wanted {
+        println!("### Details\n");
+        println!("{}", format_markdown_comparison_heading(baseline, subject));
+    } else {
+        println!("{}.\n", theme.heading.paint("Details"));
+        println!("{}", format_comparison_heading(theme, baseline, subject));
+    }
     // Between the heading of the table and its rows, because every note is about the figures
     // directly underneath.
     for note in &comparison.notes {
@@ -812,7 +947,9 @@ pub fn print_comparison(comparison: &super::diff::Comparison, config: &Configura
     let (rows, files_hidden) = create_compared_rows(pairs.as_deref(), &baseline.result, &subject.result,
             by_file, config);
     let view = ViewSettings::of(config);
+    let markdown = config.view.output == config_manager::OutputFormat::Markdown;
     let lines = match config.view.layout {
+        _ if markdown => format_markdown_comparison_lines(theme, &rows, view),
         Layout::Boxed => format_boxed_comparison_lines(theme, &rows, view),
         _ => format_comparison_lines(theme, &rows, view)
     };
@@ -839,7 +976,20 @@ pub fn print_comparison(comparison: &super::diff::Comparison, config: &Configura
             None => vec![create_group_with_baseline(None, &baseline.result.per_language, &subject.result.per_language,
                     &subject.result.total, config)]
         };
-        print_keyword_block(theme, &groups);
+        if markdown_wanted {
+            let lines = format_markdown_keyword_lines(theme, &groups);
+            if !lines.is_empty() {
+                println!("\n### Keywords\n");
+                for line in lines {
+                    println!("{line}");
+                }
+            }
+        } else {
+            print_keyword_block(theme, &groups);
+        }
+    }
+    if markdown_wanted {
+        print_markdown_warnings();
     }
     println!();
 }
@@ -1150,11 +1300,18 @@ fn format_comparison_heading(theme: &Theme, baseline: &super::diff::Reading, sub
             subject.determine_display_name(), format_readable_time(&subject.taken))
 }
 
+fn format_markdown_comparison_heading(baseline: &super::diff::Reading, subject: &super::diff::Reading) -> String {
+    format!("From `{}` ({}) to `{}` ({})",
+            escape_markdown_name(&baseline.determine_display_name()), format_readable_time(&baseline.taken),
+            escape_markdown_name(&subject.determine_display_name()), format_readable_time(&subject.taken))
+}
+
 // The details table with the share percentages and 'Extra' taken out, which is what makes room for
 // the change beside every figure.
-fn format_comparison_lines(theme: &Theme, rows: &[ComparedRow], view: ViewSettings) -> Vec<String>
+fn build_comparison_cells<'a>(theme: &'a Theme, rows: &[ComparedRow], view: ViewSettings)
+        -> (Vec<Column<'a>>, Vec<Vec<String>>, Vec<RowKind>)
 {
-    let ViewSettings { sort_by, hidden, model } = view;
+    let ViewSettings { sort_by: _, hidden, model } = view;
     let plain = &UNPAINTED;
     // The change columns are left unnamed: every one carries a sign that says what it is, and a word
     // would widen the table for nothing. Neither the size nor the file count carries a percentage:
@@ -1196,11 +1353,30 @@ fn format_comparison_lines(theme: &Theme, rows: &[ComparedRow], view: ViewSettin
     columns[0].header = determine_name_header_for(&kinds).to_owned();
 
     let mask = create_shown_mask(&columns, hidden);
-    let mut columns = keep_shown(columns, &mask);
+    let columns = keep_shown(columns, &mask);
     let drawn = drawn.into_iter().map(|row| keep_shown(row, &mask)).collect::<Vec<_>>();
-    mark_sorted_column(theme, &mut columns, sort_by);
+
+    (columns, drawn, kinds)
+}
+
+fn format_comparison_lines(theme: &Theme, rows: &[ComparedRow], view: ViewSettings) -> Vec<String>
+{
+    let (mut columns, drawn, kinds) = build_comparison_cells(theme, rows, view);
+    mark_sorted_column(theme, &mut columns, view.sort_by);
 
     draw_aligned_table(theme, &columns, &drawn, &kinds, kinds.contains(&RowKind::Module))
+}
+
+fn format_markdown_comparison_lines(theme: &Theme, rows: &[ComparedRow], view: ViewSettings) -> Vec<String>
+{
+    let (mut columns, drawn, kinds) = build_comparison_cells(theme, rows, view);
+    for column in &mut columns {
+        if column.header.is_empty() && column.kind == ColumnKind::Change {
+            column.header = "change".to_owned();
+        }
+    }
+
+    draw_markdown_table(&columns, &drawn, &kinds)
 }
 
 // 'determine_name_header' for a comparison, whose rows are already built.
@@ -2047,6 +2223,46 @@ fn print_keyword_block(theme: &Theme, groups: &[Group]) {
     }
 }
 
+// A zero that moved keeps its row, the movement being the whole point of it
+fn gather_keyword_rows<'a>(theme: &Theme, groups: &'a [Group])
+        -> Vec<(&'a Group<'a>, Vec<(&'a String, String)>)>
+{
+    groups.iter().map(|group| (group, group.languages.iter().filter_map(|name| {
+            let was = group.baseline.and_then(|x| x.get(name)).map(|x| &x.keyword_occurences);
+            let occurrences = &group.per_language.get(name).unwrap().keyword_occurences;
+            if occurrences.values().all(|x| *x == 0) && was.is_none_or(|x| x.values().all(|y| *y == 0)) {
+                return None;
+            }
+            let keywords = get_keywords_as_str(theme, occurrences, was, 0, usize::MAX);
+            if keywords.is_empty() {None} else {Some((name, keywords))}
+        }).collect::<Vec<_>>())).filter(|(_, rows)| !rows.is_empty()).collect()
+}
+
+fn format_markdown_keyword_lines(theme: &Theme, groups: &[Group]) -> Vec<String> {
+    let rows = gather_keyword_rows(theme, groups);
+    if rows.is_empty() {
+        return Vec::new();
+    }
+
+    let grouped = is_grouped(groups);
+    let mut lines = if grouped {vec!["| Module | Language | Keywords |".to_owned(),
+                    "|---|---|---|".to_owned()]}
+            else {vec!["| Language | Keywords |".to_owned(), "|---|---|".to_owned()]};
+    for (group, keyword_rows) in rows {
+        for (name, keywords) in keyword_rows {
+            let (name, keywords) = (escape_markdown_name(name), escape_markdown_cell(keywords.trim()));
+            if grouped {
+                lines.push(format!("| {} | {name} | {keywords} |",
+                        escape_markdown_name(group.get_displayed_name())));
+            } else {
+                lines.push(format!("| {name} | {keywords} |"));
+            }
+        }
+    }
+
+    lines
+}
+
 // Nested the way the table is, because ungrouped keywords under a grouped table cannot be read:
 // 'Rust structs: 210' with no way to tell whose they are. A language appears only under the modules
 // it is in, which keeps the block from growing by the product of the two.
@@ -2054,18 +2270,7 @@ fn format_keyword_block_lines(theme: &Theme, groups: &[Group]) -> Vec<String> {
     const GAP : usize = 3;
 
     let grouped = is_grouped(groups);
-    let rows = groups.iter().map(|group| (group, group.languages.iter().filter_map(|name| {
-            // A language that only the baseline had has no row here at all, having no keywords now
-            let was = group.baseline.and_then(|x| x.get(name)).map(|x| &x.keyword_occurences);
-            let occurrences = &group.per_language.get(name).unwrap().keyword_occurences;
-            // Nothing but zeros says only that the language declares keywords this code never
-            // wrote. A zero that moved keeps its row, the movement being the whole point of it.
-            if occurrences.values().all(|x| *x == 0) && was.is_none_or(|x| x.values().all(|y| *y == 0)) {
-                return None;
-            }
-            let keywords = get_keywords_as_str(theme, occurrences, was, 0, usize::MAX);
-            if keywords.is_empty() {None} else {Some((name, keywords))}
-        }).collect::<Vec<_>>())).filter(|(_, rows)| !rows.is_empty()).collect::<Vec<_>>();
+    let rows = gather_keyword_rows(theme, groups);
 
     if rows.is_empty() {
         return Vec::new();
@@ -2736,6 +2941,14 @@ mod tests {
                 format_table_lines(theme, &with_files, &total, true, &a_note, shown)));
         cases.push(("boxed, with files".to_owned(),
                 format_boxed_lines(theme, &with_files, &total, true, &a_note, shown)));
+
+        let mut markdown = format_markdown_lines(theme, &plain, &total, true, &[], shown);
+        markdown.extend(format_markdown_keyword_lines(theme, &plain));
+        cases.push(("markdown".to_owned(), markdown));
+        cases.push(("markdown, with nested languages".to_owned(),
+                format_markdown_lines(theme, &with_nested, &total, true, &[], shown)));
+        cases.push(("markdown, with files and a note".to_owned(),
+                format_markdown_lines(theme, &with_files, &total, true, &a_note, shown)));
 
         // Two sentences are one paragraph: a blank line above the first, none between them
         let both_cuts = vec![Group {name: None, languages: sorted[..4].to_vec(), hidden: 1,

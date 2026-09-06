@@ -1,4 +1,7 @@
-v3.0.1 - unreleased
+v3.1.0 - unreleased
+
+Main changes:
+  -> New "--output markdown", a report as a markdown table (maybe for a CI step to put in a pull request?).
 
 Bugfixes:
   -> A shipped theme you never edited now follows the version you run, and one you did edit is
