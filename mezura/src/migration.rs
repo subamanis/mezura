@@ -11,6 +11,7 @@ use crate::config_manager::VERSION_ID;
 use crate::message_printer::wrap_message;
 use crate::paths::{CONFIG_DIR_NAME, DEFAULT_CONFIG_NAME, LANGUAGES_DIR_NAME, LOGS_DIR_NAME,
         THEMES_DIR_NAME};
+use crate::startup_timing::{Step, measure};
 
 const MANIFEST_FILE_NAME : &str = "installed.txt";
 const REPLACED_DIR_NAME : &str = "replaced";
@@ -76,7 +77,7 @@ impl MigrationOutcome {
         let (count, plural) = (self.replaced.len(), if self.replaced.len() == 1 {"file"} else {"files"});
         Some(format!("\n{}\n", wrap_message(&format!(
                 "Updated the data files for {VERSION_ID}.\n{count} {plural} on disk {} not {} mezura had written, \
-so {} kept in '{}{REPLACED_DIR_NAME}/{VERSION_ID}/{}/' in case you want anything out of {}:\n  {}",
+                        so {} kept in '{}{REPLACED_DIR_NAME}/{VERSION_ID}/{}/' in case you want anything out of {}:\n  {}",
                 if count == 1 {"was"} else {"were"}, if count == 1 {"the one"} else {"the ones"},
                 if count == 1 {"it was"} else {"they were"},
                 crate::paths::PERSISTENT_APP_PATHS.data_dir, self.archived_under,
@@ -94,7 +95,7 @@ so {} kept in '{}{REPLACED_DIR_NAME}/{VERSION_ID}/{}/' in case you want anything
         let (count, plural) = (self.updated.len(), if self.updated.len() == 1 {"file"} else {"files"});
         Some(format!("\n{}\n", wrap_message(&format!(
                 "Brought {count} data {plural} up to date for {VERSION_ID}, so counts that depend on {} may \
-change.", if count == 1 {"it"} else {"them"})).yellow()))
+                        change.", if count == 1 {"it"} else {"them"})).yellow()))
     }
 
     pub fn format_restyled(&self) -> Option<String> {
@@ -128,7 +129,7 @@ change.", if count == 1 {"it"} else {"them"})).yellow()))
 
         Some(format!("\n{}\n", wrap_message(&format!(
                 "Brought '{}' to what {VERSION_ID} ships, keeping every contest you had settled. Your \
-copy as it was is in '{}{REPLACED_DIR_NAME}/{VERSION_ID}/{}/'.",
+                        copy as it was is in '{}{REPLACED_DIR_NAME}/{VERSION_ID}/{}/'.",
                 self.merged.join("', '"), crate::paths::PERSISTENT_APP_PATHS.data_dir,
                 self.archived_under)).yellow()))
     }
@@ -151,7 +152,7 @@ copy as it was is in '{}{REPLACED_DIR_NAME}/{VERSION_ID}/{}/'.",
             "Counting with the copies inside the program, so a language file of your own is not in use."
         } else if self.failed.iter().any(|x| x.starts_with(LANGUAGE_CONFLICTS_FILE_NAME)) {
             "Every language file is in place. Until this one is readable, an extension more than one \
-language claims is settled alphabetically, and each such extension says so on its own line."
+                    language claims is settled alphabetically, and each such extension says so on its own line."
         } else {
             "Every language file is in place, so the counting is unaffected."
         };
@@ -187,32 +188,43 @@ language claims is settled alphabetically, and each such extension says so on it
 // safe. 'force' is '--restore': do it again even though there is nothing to do.
 pub fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
     let mut outcome = MigrationOutcome::default();
-    let recorded = read_manifest(data_dir);
     let directories = [LANGUAGES_DIR_NAME, THEMES_DIR_NAME, CONFIG_DIR_NAME, LOGS_DIR_NAME];
-    // The priority file belongs here although it is never replaced: this is the record of what was
-    // last shipped, and without it a release that adds a rule and no language matches every hash,
-    // returns below, and never reaches the merge.
-    let carried = get_shipped_files().into_iter()
-            .chain(get_shipped_theme_files())
-            .map(|(relative, contents)| (relative, content_hash(contents)))
-            .chain([(LANGUAGE_CONFLICTS_FILE_NAME.to_owned(),
-                    content_hash(read_baked_in_conflict_rules_contents().as_bytes()))])
-            .collect::<HashMap<_, _>>();
-    // Asked of every file rather than of the folder holding it: one language file left behind by a
-    // quarantine answers "the folder is not empty" while sixty-six others are missing. And asked of
-    // what this version ships rather than of what the record remembers, since a file that could not
-    // be written is absent from both and the record would call it present.
-    let everything_is_there = get_shipped_files().iter()
-            .map(|(relative, _)| relative.clone())
-            .chain([LANGUAGE_CONFLICTS_FILE_NAME.to_owned()])
-            .all(|relative| holds_something(&(data_dir.to_owned() + &relative)))
-            // The looser question for the ones written once and left alone, since an empty one of
-            // those is somebody's decision and not damage
-            && get_written_once_files().iter()
-                    .all(|relative| std::path::Path::new(&(data_dir.to_owned() + relative)).exists())
-            // 'is_dir', or a plain file where the folder belongs answers yes forever. The four are
-            // named because 'logs' holds nothing that ships and no file above stands for it.
-            && directories.iter().all(|name| std::path::Path::new(&(data_dir.to_owned() + name)).is_dir());
+    // Two stretches under one name, since the record of what was last written and the listing of
+    // what is there now are both reads of the data directory
+    let recorded = measure(Step::MigrationCheck, || read_manifest(data_dir));
+
+    let (shipped, carried) = measure(Step::MigrationHash, || {
+        // The priority file belongs here although it is never replaced: this is the record of what
+        // was last shipped, and without it a release that adds a rule and no language matches every
+        // hash, returns below, and never reaches the merge.
+        let shipped = get_shipped_files();
+        let carried = shipped.iter().map(|(relative, contents)| (relative.clone(), *contents))
+                .chain(get_shipped_theme_files())
+                .map(|(relative, contents)| (relative, content_hash(contents)))
+                .chain([(LANGUAGE_CONFLICTS_FILE_NAME.to_owned(),
+                        content_hash(read_baked_in_conflict_rules_contents().as_bytes()))])
+                .collect::<HashMap<_, _>>();
+        (shipped, carried)
+    });
+
+    let everything_is_there = measure(Step::MigrationCheck, || {
+        // Asked of every file rather than of the folder holding it: one language file left behind by
+        // a quarantine answers "the folder is not empty" while sixty-six others are missing. And
+        // asked of what this version ships rather than of what the record remembers, since a file
+        // that could not be written is absent from both and the record would call it present.
+        let listed = DataDirListing::of(data_dir, &[LANGUAGES_DIR_NAME, THEMES_DIR_NAME, CONFIG_DIR_NAME]);
+        shipped.iter()
+                .all(|(relative, _)| listed.find_length_of(relative).is_some_and(|length| length > 0))
+                && holds_something(&(data_dir.to_owned() + LANGUAGE_CONFLICTS_FILE_NAME))
+                // The looser question for the ones written once and left alone, since an empty one
+                // of those is somebody's decision and not damage
+                && get_written_once_files().iter()
+                        .all(|relative| listed.find_length_of(relative).is_some())
+                // 'is_dir', or a plain file where the folder belongs answers yes forever. The four
+                // are named because 'logs' holds nothing that ships and no file above stands for it.
+                && directories.iter().all(|name| std::path::Path::new(&(data_dir.to_owned() + name)).is_dir())
+    });
+
     // Whether the record describes the files this binary carries, and not whether the version string
     // moved: the two differ for every build made between releases, where the files change and
     // 'VERSION_ID' does not.
@@ -236,7 +248,7 @@ pub fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
     // A file enters the manifest only once it is really on disk with the contents this version
     // ships, so one that could not be written is retried by the next run
     let mut manifest = HashMap::new();
-    for (relative, contents) in get_shipped_files() {
+    for (relative, contents) in shipped {
         let target = data_dir.to_owned() + &relative;
         let shipped_hash = content_hash(contents);
         let was_recorded = recorded.contains_key(&relative);
@@ -652,9 +664,9 @@ fn write_manifest(data_dir: &str, entries: &HashMap<String, u64>) -> Result<(), 
 
     std::fs::write(data_dir.to_owned() + MANIFEST_FILE_NAME,
             format!("# Written by mezura. It records which files it installed and what they looked like,\n\
-# so that an update can tell a file you edited from one it wrote itself. Delete it and the next\n\
-# run has no way to tell: every file of ours that you have changed is moved into 'replaced' and\n\
-# written again from the copies inside the program.\n{VERSION_ID}\n{body}\n"))
+                    # so that an update can tell a file you edited from one it wrote itself. Delete it and the next\n\
+                    # run has no way to tell: every file of ours that you have changed is moved into 'replaced' and\n\
+                    # written again from the copies inside the program.\n{VERSION_ID}\n{body}\n"))
 }
 
 fn build_relative_path(dir_name: &str, file: &File<'static>) -> (String, &'static [u8]) {
@@ -712,6 +724,40 @@ fn find_archived_path(data_dir: &str, archived_under: &str, relative: &str) -> S
 // is no longer a language definition, and every run then reports it as faulty
 fn holds_something(path: &str) -> bool {
     std::fs::metadata(path).map(|x| x.len() > 0).unwrap_or(false)
+}
+
+struct DataDirListing {
+    data_dir: String,
+    lengths: HashMap<String, u64>
+}
+
+impl DataDirListing {
+    fn of(data_dir: &str, directories: &[&str]) -> Self {
+        let mut lengths = HashMap::new();
+        for name in directories {
+            for entry in std::fs::read_dir(format!("{data_dir}{name}")).into_iter().flatten().flatten() {
+                let Ok(file_name) = entry.file_name().into_string() else {continue};
+                // A listing describes a symbolic link itself and never what it points at, so that
+                // one file is asked of the filesystem after all
+                let length = match entry.file_type() {
+                    Ok(kind) if !kind.is_symlink() => entry.metadata().ok().map(|x| x.len()),
+                    _ => std::fs::metadata(entry.path()).ok().map(|x| x.len())
+                };
+                if let Some(length) = length {
+                    lengths.insert(format!("{name}/{file_name}"), length);
+                }
+            }
+        }
+
+        DataDirListing { data_dir: data_dir.to_owned(), lengths }
+    }
+
+    // A file the listing spells in another case is the same file wherever the filesystem ignores
+    // case, so a miss asks the disk once before calling it absent.
+    fn find_length_of(&self, relative: &str) -> Option<u64> {
+        self.lengths.get(relative).copied()
+                .or_else(|| std::fs::metadata(format!("{}{relative}", self.data_dir)).ok().map(|x| x.len()))
+    }
 }
 
 // Named after the moment the pass ran, which sorts as it reads and holds no character a path
@@ -1092,8 +1138,29 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    // Nothing else catches this: the run falls back to the copies baked into the binary and counts
-    // correctly, so the only symptom is a data directory that can no longer be edited.
+    // The early return is the one path that leaves 'archived_under' empty, so it says whether the
+    // pass took the installation as complete.
+    #[test]
+    fn a_complete_installation_is_left_alone_by_the_next_pass() {
+        let dir = SCRATCH_DIR.to_owned() + "migration-complete/";
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        migrate_data_files(&dir, false);
+
+        assert!(migrate_data_files(&dir, false).archived_under.is_empty(),
+                "a second pass over a complete installation did not return early");
+
+        std::fs::rename(dir.clone() + "languages/Rust.txt", dir.clone() + "languages/rust.txt").unwrap();
+        let recased = migrate_data_files(&dir, false);
+        if cfg!(windows) {
+            assert!(recased.archived_under.is_empty(), "a file spelled in another case was taken as missing");
+        }
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // The run falls back to the copies baked into the binary and counts correctly, so the only
+    // symptom is a data directory that can no longer be edited.
     #[test]
     fn an_installation_that_lost_its_files_is_repaired_even_though_the_binary_has_not_moved() {
         let dir = SCRATCH_DIR.to_owned() + "migration-emptied/";

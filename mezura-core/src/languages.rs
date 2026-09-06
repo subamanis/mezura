@@ -338,9 +338,9 @@ fn find_unknown_module_scopes(config: &EngineConfig) -> Vec<Warning> {
             .filter(|named| !declared.contains(&named.as_str()))
             .map(|named| Warning::new(warnings::Code::UnknownModuleScope, &named, match declared.is_empty() {
                 true => format!("'{named}' is written as the module a rule belongs to, and this run declares no \
-modules at all, so the rule was not used."),
+                        modules at all, so the rule was not used."),
                 false => format!("'{named}' is written as the module a rule belongs to, and this run declares no \
-module of that name. It declares {}, so the rule was not used.",
+                        module of that name. It declares {}, so the rule was not used.",
                         declared.iter().map(|name| format!("'{name}'")).collect::<Vec<_>>().join(", "))
             }))
             .collect()
@@ -397,7 +397,7 @@ fn drop_the_pairs_that_never_fire(languages: &mut [Language]) -> Vec<Warning> {
                 }
                 reported.push(Warning::new(warnings::Code::CommentPairNeverCloses, &language.name,
                         format!("'{}' opens and closes a block comment with the same '{start}', which \
-cannot be told apart, so that pair was dropped and its comments are counted as code.", language.name)));
+                                cannot be told apart, so that pair was dropped and its comments are counted as code.", language.name)));
                 false
             });
         }
@@ -452,7 +452,7 @@ fn find_unresolvable_region_defaults(by_name: &HashMap<String, Language>,
 
     unresolvable.into_iter().map(|(language, default)| Warning::new(warnings::Code::UnknownSectionLanguage, default,
             format!("'{language}' says its sections fall to '{default}', and no language answers to that name or \
-claims it as an extension. Those sections are counted with the symbols of '{language}' instead."))).collect()
+                    claims it as an extension. Those sections are counted with the symbols of '{language}' instead."))).collect()
 }
 
 /// A warning for every name two or more languages carry, since only one of them can be in play.
@@ -473,10 +473,10 @@ pub fn find_duplicate_names(languages: &[Language]) -> Vec<Warning> {
         let name = found[0];
         let detail = if found.iter().all(|other| *other == name) {
             format!("'{name}' is declared {times} times, and only one of those declarations was used. \
-Which one is not decided by anything you can see, so the counts of '{name}' depend on it.")
+                    Which one is not decided by anything you can see, so the counts of '{name}' depend on it.")
         } else {
             format!("'{}' are {times} spellings of one name, so they are one language to every command \
-that takes one and {times} languages in the report, each counting part of the files.",
+                    that takes one and {times} languages in the report, each counting part of the files.",
                     found.join("' and '"))
         };
         Warning::new(warnings::Code::DuplicateLanguage, name, detail)
@@ -507,7 +507,7 @@ pub fn find_languages_that_lost_every_claim(languages: &[Language], conflicts: &
 
     lost.into_iter().map(|name| Warning::new(warnings::Code::LanguageLostEveryClaim, name,
             format!("'{name}' is installed, and every extension and name it claims belongs to another \
-language, so no file can be counted as it."))).collect()
+                    language, so no file can be counted as it."))).collect()
 }
 
 fn retain_languages_of_interest(languages: Vec<Language>, extensions: &HashMap<String, Arc<str>>,

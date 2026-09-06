@@ -82,7 +82,7 @@ impl IdentityReport {
         for contested in self.contested.iter().filter(|x| x.resolved_by == ResolvedBy::AlphabeticalFallback) {
             reported.push(warnings::Warning::new(warnings::Code::LanguageTiebreak, &contested.identity,
                     format!("The {} '{}' is claimed by {} and {}. It was given to {} only because that name comes first \
-alphabetically, so the files of the rest are counted with the wrong comment and string symbols.",
+                            alphabetically, so the files of the rest are counted with the wrong comment and string symbols.",
                     contested.identified_by.name(), contested.identity, contested.winner, contested.losers.join(", "),
                     contested.winner)));
         }

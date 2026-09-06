@@ -182,9 +182,14 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     // carries on with what it was given. Zero of either side is the exception, below.
     let parsing_started_instant = Instant::now();
     let mut last_refusal = None;
-    for i in 0..config.threads.producers() {
-        match engine::producer::start_producer_thread(i, files_injector.clone(), dirs_injector.clone(), Worker::new_fifo(),
-                idle_producers.clone(), language_lookups.clone(), exclude_matcher.clone(),
+    // Each producer keeps the subdirectories it finds and every other one can take them off it, so
+    // the queues have to exist before any thread starts.
+    let workers = (0..config.threads.producers())
+            .map(|_| Worker::<TraversedDir>::new_lifo()).collect::<Vec<_>>();
+    let stealers = Arc::new(workers.iter().map(Worker::stealer).collect::<Vec<_>>());
+    for (i, worker) in workers.into_iter().enumerate() {
+        match engine::producer::start_producer_thread(i, files_injector.clone(), dirs_injector.clone(), worker,
+                stealers.clone(), idle_producers.clone(), language_lookups.clone(), exclude_matcher.clone(),
                 config.clone(), files_stats.clone(), modules.clone(), unreadable_dirs.clone(),
                 producers_total.clone(), worker_panics.clone(), progress.clone()) {
             Ok(handle) => producer_handles.push(handle),
@@ -368,9 +373,10 @@ pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets
             let Some(lang_name) = lookup.of_path_or_shebang(dir_path) else {
                 continue;
             };
+            let size = std::fs::metadata(dir_path).map_or(0, |m| m.len());
             let queued = match targets.was_written_by_hand(dir_path) {
-                true => ParsableFile::written_by_hand(dir_path.to_path_buf(), lang_name, module),
-                false => ParsableFile::new(dir_path.to_path_buf(), lang_name, module)
+                true => ParsableFile::written_by_hand(dir_path.to_path_buf(), lang_name, module, size),
+                false => ParsableFile::new(dir_path.to_path_buf(), lang_name, module, size)
             };
             files_injector.push(queued.with_extension_rules(lookup.find_extension_rules(dir_path)));
             files_present.total_files += 1;
@@ -401,6 +407,9 @@ pub(crate) struct ParsableFile {
     pub path: PathBuf,
     pub language_name: Arc<str>,
     pub module: ModuleId,
+    // As the directory listing gave it. Zero where it could not, and the read then goes on until
+    // the file ends.
+    pub size: u64,
     // Named as a target rather than found by the walk, which is what exempts it from every rule
     // that skips a file. The ignore files, the dotted names and the head checks all pass it through.
     pub written_by_hand: bool,
@@ -408,18 +417,19 @@ pub(crate) struct ParsableFile {
 }
 
 impl ParsableFile {
-    pub(crate) fn new(path: PathBuf, language_name: Arc<str>, module: ModuleId) -> Self {
+    pub(crate) fn new(path: PathBuf, language_name: Arc<str>, module: ModuleId, size: u64) -> Self {
         ParsableFile {
             path,
             language_name,
             module,
+            size,
             written_by_hand: false,
             extension_rules: None
         }
     }
 
-    pub(crate) fn written_by_hand(path: PathBuf, language_name: Arc<str>, module: ModuleId) -> Self {
-        ParsableFile { written_by_hand: true, ..ParsableFile::new(path, language_name, module) }
+    pub(crate) fn written_by_hand(path: PathBuf, language_name: Arc<str>, module: ModuleId, size: u64) -> Self {
+        ParsableFile { written_by_hand: true, ..ParsableFile::new(path, language_name, module, size) }
     }
 
     pub(crate) fn with_extension_rules(mut self, extension_rules: Option<Arc<engine::identity::ExtensionRules>>) -> Self {
@@ -466,7 +476,7 @@ impl ObeyedIgnoreFiles {
     // In the order they overrule each other, which is the order they are read in: the last rule
     // that matches is the one that answers, so a '!keep' in '.rgignore' stands against an entry in
     // '.gitignore' however the two files are written. That is the order ripgrep reads them in.
-    fn get_file_names(self) -> impl Iterator<Item = &'static str> {
+    pub(crate) fn get_file_names(self) -> impl Iterator<Item = &'static str> {
         [(".gitignore", self.gitignore), (".ignore", self.search_tools), (".rgignore", self.search_tools)]
                 .into_iter().filter_map(|(name, obeyed)| obeyed.then_some(name))
     }
@@ -482,28 +492,33 @@ pub(crate) struct GitignoreStack {
 }
 
 impl GitignoreStack {
-    pub(crate) fn extend_with_dir(dir: &Path, parent: Option<Arc<GitignoreStack>>, obeyed: ObeyedIgnoreFiles)
+    // The names must arrive in the order 'get_file_names' gives them, since the last rule that
+    // matches is the one that answers.
+    pub(crate) fn extend_with_ignore_files(dir: &Path, parent: Option<Arc<GitignoreStack>>, names: &[&str])
     -> Option<Arc<GitignoreStack>>
     {
-        let mut builder = ignore::gitignore::GitignoreBuilder::new(dir);
-        let mut found_one = false;
-        for name in obeyed.get_file_names() {
-            let path = dir.join(name);
-            if path.is_file() {
-                // Ignored the way 'Gitignore::new' ignores it: a file that could not be read, or a
-                // pattern that does not parse, costs that one rule and not the whole walk
-                let _ = builder.add(&path);
-                found_one = true;
-            }
-        }
-        if !found_one {
+        if names.is_empty() {
             return parent;
+        }
+
+        let mut builder = ignore::gitignore::GitignoreBuilder::new(dir);
+        for name in names {
+            // Ignored the way 'Gitignore::new' ignores it: a file that could not be read, or a
+            // pattern that does not parse, costs that one rule and not the whole walk
+            let _ = builder.add(dir.join(name));
         }
 
         match builder.build() {
             Ok(matcher) if !matcher.is_empty() => Some(Arc::new(GitignoreStack { matcher, parent })),
             _ => parent
         }
+    }
+
+    pub(crate) fn extend_with_dir(dir: &Path, parent: Option<Arc<GitignoreStack>>, obeyed: ObeyedIgnoreFiles)
+    -> Option<Arc<GitignoreStack>>
+    {
+        let present = obeyed.get_file_names().filter(|name| dir.join(name).is_file()).collect::<Vec<_>>();
+        Self::extend_with_ignore_files(dir, parent, &present)
     }
 
     // The ignore files of every dir between the repository root and the given dir, excluding it
