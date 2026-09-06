@@ -74,7 +74,8 @@ fn main() -> ExitCode {
     let outcome = if restore_was_asked_for {MigrationOutcome::default()}
             else {migrate_data_files(&crate::paths::PERSISTENT_APP_PATHS.data_dir, false)};
     for message in [outcome.format_restored(), outcome.format_replaced(), outcome.format_updated(),
-            outcome.format_withdrawn(), outcome.format_merged(), outcome.format_failures()].into_iter().flatten() {
+            outcome.format_restyled(), outcome.format_withdrawn(), outcome.format_merged(),
+            outcome.format_failures()].into_iter().flatten() {
         eprintln!("{message}");
     }
 
@@ -507,7 +508,8 @@ program to read, and both of them go to the output, so only one of the two can b
                 println!("{message}");
             }
             for (heading, files) in [("Written for the first time", &outcome.added),
-                    ("Brought up to date for this version", &outcome.updated)] {
+                    ("Brought up to date for this version", &outcome.updated),
+                    ("Themes brought up to date for this version", &outcome.restyled)] {
                 if !files.is_empty() {
                     println!("\n{}", crate::message_printer::wrap_message(&format!(
                             "{heading}:\n{}", files.join(", "))));

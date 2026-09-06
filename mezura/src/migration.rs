@@ -27,6 +27,8 @@ pub struct MigrationOutcome {
     // Ours, unchanged since we wrote it, and corrected by this version: nothing of theirs is at
     // stake, and their counts still move.
     pub updated: Vec<String>,
+    // The same for a theme, kept apart because the message above says counts may have moved
+    pub restyled: Vec<String>,
     pub withdrawn: Vec<String>,
     pub merged: Vec<String>,
     // Under 'replaced/<version>/', named after the moment the pass ran. One folder per pass, or
@@ -43,8 +45,8 @@ impl MigrationOutcome {
     // Asked by '--restore', which has to say something even when there was nothing to do
     pub fn did_nothing(&self) -> bool {
         self.restored.is_empty() && self.added.is_empty() && self.replaced.is_empty()
-                && self.updated.is_empty() && self.withdrawn.is_empty() && self.merged.is_empty()
-                && self.failed.is_empty()
+                && self.updated.is_empty() && self.restyled.is_empty() && self.withdrawn.is_empty()
+                && self.merged.is_empty() && self.failed.is_empty()
     }
 
     // Only the language files decide this: a theme or the conflicts file that could not be written
@@ -93,6 +95,16 @@ so {} kept in '{}{REPLACED_DIR_NAME}/{VERSION_ID}/{}/' in case you want anything
         Some(format!("\n{}\n", wrap_message(&format!(
                 "Brought {count} data {plural} up to date for {VERSION_ID}, so counts that depend on {} may \
 change.", if count == 1 {"it"} else {"them"})).yellow()))
+    }
+
+    pub fn format_restyled(&self) -> Option<String> {
+        if self.restyled.is_empty() {
+            return None;
+        }
+
+        let (count, plural) = (self.restyled.len(), if self.restyled.len() == 1 {"theme"} else {"themes"});
+        Some(format!("\n{}\n", wrap_message(&format!(
+                "Brought {count} shipped {plural} up to date for {VERSION_ID}.")).yellow()))
     }
 
     // Deleted from their directory, which is more than a replaced file loses
@@ -181,6 +193,7 @@ pub fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
     // last shipped, and without it a release that adds a rule and no language matches every hash,
     // returns below, and never reaches the merge.
     let carried = get_shipped_files().into_iter()
+            .chain(get_shipped_theme_files())
             .map(|(relative, contents)| (relative, content_hash(contents)))
             .chain([(LANGUAGE_CONFLICTS_FILE_NAME.to_owned(),
                     content_hash(read_baked_in_conflict_rules_contents().as_bytes()))])
@@ -189,8 +202,10 @@ pub fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
     // quarantine answers "the folder is not empty" while sixty-six others are missing. And asked of
     // what this version ships rather than of what the record remembers, since a file that could not
     // be written is absent from both and the record would call it present.
-    let everything_is_there = carried.keys()
-            .all(|relative| holds_something(&(data_dir.to_owned() + relative)))
+    let everything_is_there = get_shipped_files().iter()
+            .map(|(relative, _)| relative.clone())
+            .chain([LANGUAGE_CONFLICTS_FILE_NAME.to_owned()])
+            .all(|relative| holds_something(&(data_dir.to_owned() + &relative)))
             // The looser question for the ones written once and left alone, since an empty one of
             // those is somebody's decision and not damage
             && get_written_once_files().iter()
@@ -313,15 +328,59 @@ pub fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
         }
     }
 
-    // Written when absent and never touched again, and left out of the manifest so nothing can
-    // reach them later either. A theme that has fallen behind breaks nothing, since a token it does
-    // not name falls back to a default.
-    for (relative, contents) in include_dir!("data/themes").files.iter().map(|file| build_relative_path(THEMES_DIR_NAME, file)) {
+    // A theme is taste, so an edited one is kept where an edited language file is replaced, and the
+    // record is what tells an edited one from a theme nobody ever touched.
+    let record_predates_themes = !recorded.is_empty()
+            && !recorded.keys().any(|relative| relative.starts_with(THEMES_DIR_NAME));
+    for (relative, contents) in get_shipped_theme_files() {
         let target = data_dir.to_owned() + &relative;
-        if !std::path::Path::new(&target).exists()
-                && outcome.attempt(&relative, std::fs::write(&target, contents)) {
-            note_written_file(&mut outcome, relative, !recorded.is_empty());
+        let shipped_hash = content_hash(contents);
+        let was_recorded = recorded.contains_key(&relative);
+
+        let Some(on_disk) = std::fs::read(&target).ok() else {
+            if !std::path::Path::new(&target).exists()
+                    && outcome.attempt(&relative, std::fs::write(&target, contents)) {
+                manifest.insert(relative.clone(), shipped_hash);
+                note_written_file(&mut outcome, relative, was_recorded || record_predates_themes);
+            }
+            continue;
+        };
+
+        let on_disk_hash = content_hash(&on_disk);
+        if on_disk_hash == shipped_hash {
+            manifest.insert(relative, shipped_hash);
+            continue;
         }
+        if recorded.get(&relative) == Some(&on_disk_hash) {
+            if outcome.attempt(&relative, std::fs::write(&target, contents)) {
+                manifest.insert(relative.clone(), shipped_hash);
+                outcome.restyled.push(relative);
+            }
+            continue;
+        }
+        // Theirs, and '--restore' is how ours is asked for back. An unrecorded one predates the
+        // record and could be either, so it is brought up to date once with theirs kept beside it
+        if was_recorded && !force {
+            // Recording theirs would have the next run read it back as untouched and take it away
+            manifest.insert(relative.clone(), recorded[&relative]);
+            continue;
+        }
+        let copied = match archive(data_dir, &archived_under, &relative, &on_disk) {
+            Ok(copied) => copied,
+            Err(error) => {
+                outcome.attempt(&relative, Err(error));
+                continue;
+            }
+        };
+        outcome.replaced.push(relative.clone());
+        if !outcome.attempt(&relative, std::fs::write(&target, contents)) {
+            outcome.replaced.pop();
+            if copied {
+                let _ = std::fs::remove_file(find_archived_path(data_dir, &archived_under, &relative));
+            }
+            continue;
+        }
+        manifest.insert(relative, shipped_hash);
     }
 
     let default_config = format!("{data_dir}{CONFIG_DIR_NAME}/{DEFAULT_CONFIG_NAME}");
@@ -341,8 +400,8 @@ pub fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
 }
 
 // A file the manifest never recorded is one this version brings and not one that was lost. The
-// themes and the default configuration are outside the manifest, so for those the question is only
-// whether this installation existed before.
+// default configuration is outside the manifest, so for it the question is only whether this
+// installation existed before, and a theme asks the same where the record is older than themes.
 fn note_written_file(outcome: &mut MigrationOutcome, relative: String, was_recorded: bool) {
     if was_recorded {
         outcome.restored.push(relative);
@@ -603,11 +662,14 @@ fn build_relative_path(dir_name: &str, file: &File<'static>) -> (String, &'stati
     (dir_name.to_owned() + "/" + name, file.contents)
 }
 
-// Nothing records what these looked like, so the repair check has to name them itself
 fn get_written_once_files() -> Vec<String> {
-    include_dir!("data/themes").files.iter().map(|file| build_relative_path(THEMES_DIR_NAME, file).0)
+    get_shipped_theme_files().into_iter().map(|(relative, _)| relative)
             .chain([format!("{CONFIG_DIR_NAME}/{DEFAULT_CONFIG_NAME}")])
             .collect()
+}
+
+fn get_shipped_theme_files() -> Vec<(String, &'static [u8])> {
+    include_dir!("data/themes").files.iter().map(|file| build_relative_path(THEMES_DIR_NAME, file)).collect()
 }
 
 fn get_shipped_files() -> Vec<(String, &'static [u8])> {
@@ -718,10 +780,17 @@ mod tests {
 
         // A theme is taste and a language file is numbers, so an expanded theme keeps what it holds
         let theme = dir.clone() + "themes/Dracula.txt";
-        let mine = std::fs::read_to_string(&theme).unwrap() + "\nheading = #ff0000";
+        let shipped_theme = std::fs::read_to_string(&theme).unwrap();
+        let mine = shipped_theme.clone() + "\nheading = #ff0000";
         std::fs::write(&theme, &mine).unwrap();
-        assert!(migrate_data_files(&dir, true).replaced.is_empty());
+        assert!(migrate_data_files(&dir, false).replaced.is_empty());
         assert_eq!(mine, std::fs::read_to_string(&theme).unwrap());
+
+        let restored = migrate_data_files(&dir, true);
+        assert_eq!(vec!["themes/Dracula.txt".to_owned()], restored.replaced);
+        assert_eq!(shipped_theme, std::fs::read_to_string(&theme).unwrap());
+        assert_eq!(mine, std::fs::read_to_string(format!("{dir}replaced/{}/{}/themes/Dracula.txt",
+                VERSION_ID, restored.archived_under)).unwrap());
 
         // A file of their own is never ours to touch, whatever happens around it
         let theirs = dir.clone() + "languages/Mine.txt";
@@ -732,6 +801,69 @@ mod tests {
         assert_eq!(vec!["languages/Zig.txt".to_owned()], third.restored);
         assert!(third.replaced.is_empty() && third.added.is_empty());
         assert_eq!("not a language file at all", std::fs::read_to_string(&theirs).unwrap());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_theme_nobody_touched_follows_the_versions_while_an_edited_one_stays() {
+        let dir = SCRATCH_DIR.to_owned() + "migration-themes/";
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        migrate_data_files(&dir, false);
+
+        let path = |name: &str| format!("{dir}themes/{name}.txt");
+        let held = |name: &str| std::fs::read_to_string(path(name)).unwrap();
+        let (dracula, forest) = (held("Dracula"), held("Forest"));
+
+        let older = "heading = ff0000\n";
+        std::fs::write(path("Dracula"), older).unwrap();
+        let mut manifest = read_manifest(&dir);
+        manifest.insert("themes/Dracula.txt".to_owned(), content_hash(older.as_bytes()));
+        manifest.remove("themes/Forest.txt");
+        write_manifest(&dir, &manifest).unwrap();
+        std::fs::write(path("Ocean"), "heading = 00ff00\n").unwrap();
+        std::fs::write(path("Forest"), "heading = 0000ff\n").unwrap();
+
+        let pass = migrate_data_files(&dir, false);
+
+        assert_eq!(dracula, held("Dracula"), "a theme they never touched was left behind");
+        assert_eq!(vec!["themes/Dracula.txt".to_owned()], pass.restyled);
+        assert!(pass.updated.is_empty(),
+                "a theme was announced under the message that says counts may have moved");
+        assert!(!pass.replaced.contains(&"themes/Dracula.txt".to_owned()),
+                "a theme they never touched was announced as one of theirs being moved aside");
+
+        assert_eq!("heading = 00ff00\n", held("Ocean"), "a theme they edited was taken away");
+
+        assert_eq!(forest, held("Forest"), "a theme older than the record was left behind");
+        assert_eq!(vec!["themes/Forest.txt".to_owned()], pass.replaced);
+        assert_eq!("heading = 0000ff\n", std::fs::read_to_string(format!(
+                "{dir}replaced/{}/{}/themes/Forest.txt", VERSION_ID, pass.archived_under)).unwrap());
+
+        std::fs::write(path("Forest"), "heading = 111111\n").unwrap();
+        assert!(migrate_data_files(&dir, false).replaced.is_empty());
+        assert_eq!("heading = 111111\n", held("Forest"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_theme_lost_from_an_installation_older_than_the_record_was_lost_and_not_brought() {
+        let dir = SCRATCH_DIR.to_owned() + "migration-older-record/";
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        migrate_data_files(&dir, false);
+
+        let mut manifest = read_manifest(&dir);
+        manifest.retain(|relative, _| !relative.starts_with("themes"));
+        write_manifest(&dir, &manifest).unwrap();
+        std::fs::remove_file(dir.clone() + "themes/Ocean.txt").unwrap();
+
+        let pass = migrate_data_files(&dir, false);
+        assert_eq!(vec!["themes/Ocean.txt".to_owned()], pass.restored,
+                "a theme they lost was announced as one this version brings");
+        assert!(pass.added.is_empty());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
