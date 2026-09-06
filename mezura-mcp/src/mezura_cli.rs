@@ -70,8 +70,8 @@ fn refuse_a_mezura_of_another_age(binary: &Path) -> Result<(), String> {
             return Ok(());
         }
         Err(format!("'{}' is mezura {version}, and this server speaks to mezura {EXPECTED_MAJOR}. \
-Point {BINARY_PATH_VARIABLE} at a mezura {EXPECTED_MAJOR} binary, or update the one that is \
-installed.", binary.display()))
+                Point {BINARY_PATH_VARIABLE} at a mezura {EXPECTED_MAJOR} binary, or update the one that is \
+                installed.", binary.display()))
     }).clone()
 }
 
@@ -98,15 +98,15 @@ pub async fn run_the_binary(binary: &Path, data_dir: Option<&Path>, arguments: &
         Ok(child) => child,
         Err(error) => return Err(format!(
                 "mezura could not be started from '{}': {error}.\nInstall it with \
-'cargo install --locked --git https://github.com/subamanis/mezura mezura', or set the environment \
-variable {BINARY_PATH_VARIABLE} to the path of the binary.", binary.display()))
+                        'cargo install --locked --git https://github.com/subamanis/mezura mezura', or set the environment \
+                        variable {BINARY_PATH_VARIABLE} to the path of the binary.", binary.display()))
     };
 
     let finished = match tokio::time::timeout(TIME_LIMIT, child.wait_with_output()).await {
         Ok(Ok(finished)) => finished,
         Ok(Err(error)) => return Err(format!("mezura was started and then could not be read: {error}")),
         Err(_) => return Err(format!("mezura was still running after {} seconds and was stopped. \
-Ask for a smaller part of the tree.", TIME_LIMIT.as_secs()))
+                Ask for a smaller part of the tree.", TIME_LIMIT.as_secs()))
     };
 
     let text = String::from_utf8_lossy(&finished.stdout).trim().to_owned();

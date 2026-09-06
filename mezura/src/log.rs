@@ -109,7 +109,7 @@ fn format_entry_line(config: &Configuration, datetime_now: &DateTime<Local>, res
             .map_or("null".to_owned(), |name| format!("\"{}\"", escape(name)));
 
     format!("{{\"format\":{LOG_FORMAT_VERSION},\"kind\":\"{LOG_ENTRY_KIND}\",\"name\":{name},\
-\"taken_at\":\"{}\",\"scope\":{},\"total\":{},\"modules\":{}}}",
+            \"taken_at\":\"{}\",\"scope\":{},\"total\":{},\"modules\":{}}}",
             datetime_now.to_rfc3339_opts(SecondsFormat::Secs, false),
             format_scope(config, &result.targets),
             format_stats(&result.total),
@@ -121,8 +121,8 @@ fn format_entry_line(config: &Configuration, datetime_now: &DateTime<Local>, res
 fn format_scope(config: &Configuration, targets: &[Target]) -> String {
     let engine = &config.engine;
     format!("{{\"targets\":{},\"exclude\":{},\"languages\":{},\"excluded_languages\":{},\
-\"forced_languages\":{},\"counting\":\"{}\",\"search_in_dotted\":{},\"gitignore\":{},\"ignore_files\":{},\
-\"keywords_counted\":{},\"count_minified\":{},\"count_generated\":{},\"count_not_code\":{},\"use_heuristics\":{}}}",
+            \"forced_languages\":{},\"counting\":\"{}\",\"search_in_dotted\":{},\"gitignore\":{},\"ignore_files\":{},\
+            \"keywords_counted\":{},\"count_minified\":{},\"count_generated\":{},\"count_not_code\":{},\"use_heuristics\":{}}}",
             format_targets(targets, config),
             format_strings(&engine.exclude_dirs),
             format_strings(&engine.languages_of_interest.to_written_form()),

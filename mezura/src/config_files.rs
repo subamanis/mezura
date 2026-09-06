@@ -193,7 +193,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
             if known && repeated {
                 issues.warnings.push((mezura_core::warnings::Code::ConfigSectionRepeated,
                         format!("'{id}' is declared more than once in this configuration. Delete every \
-declaration of it but the one you want.")));
+                                declaration of it but the one you want.")));
             }
         }
         buf.clear();
@@ -519,7 +519,7 @@ mod tests {
         let dir = SCRATCH_CONFIG_DIR.to_owned();
         std::fs::create_dir_all(&dir).unwrap();
         let turned_off = format!("===> {}\n./\n\n===> {}\nno\n\n===> {}\nno\n\n===> {}\nno\n\n\
-===> {}\nno\n\n===> {}\nno\n\n===> {}\nno\n\n===> {}\nno\n",
+                ===> {}\nno\n\n===> {}\nno\n\n===> {}\nno\n\n===> {}\nno\n",
                 config_manager::TARGETS, config_manager::SEARCH_IN_DOTTED, config_manager::COUNT_MINIFIED,
                 config_manager::COUNT_GENERATED, config_manager::COUNT_NOT_CODE, config_manager::SHOW_FAULTY_FILES,
                 config_manager::NO_GITIGNORE, config_manager::NO_IGNORE_FILES);

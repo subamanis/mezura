@@ -250,11 +250,11 @@ impl std::fmt::Display for LoadError {
             // A key that is absent gets its own sentence: nothing needs to have gone wrong, an older
             // mezura simply had not met it
             Self::NotADocument { path, error: DocumentError::Missing(at) } => write!(f, "'{path}' is incomplete \
-and will not be parsed. Maybe it was written by an older version of mezura, or it has been modified. \
-It is missing '{at}'."),
+                    and will not be parsed. Maybe it was written by an older version of mezura, or it has been modified. \
+                    It is missing '{at}'."),
             Self::NotADocument { path, error } => write!(f, "'{path}' could not be read as a mezura document. {error}"),
             Self::Incomplete { path, missing } => write!(f, "'{path}' was written with '--top' and is missing {missing} of \
-its languages, so comparing against it would report every one of them as deleted. Write it again without '--top'.")
+                    its languages, so comparing against it would report every one of them as deleted. Write it again without '--top'.")
         }
     }
 }
@@ -667,7 +667,7 @@ fn split_operand(value: &str) -> Result<(&str, Option<&str>), String> {
     // mean asking the disk about every way of cutting it. Refused instead.
     if value.matches("..").count() > 1 {
         return Err(format!("'{value}' has more than one '..' in it, and only one of them can be the \
-separator between the two readings. Write the paths out without the '..' that climbs."));
+                separator between the two readings. Write the paths out without the '..' that climbs."));
     }
 
     match value.split_once("..") {
@@ -675,7 +675,7 @@ separator between the two readings. Write the paths out without the '..' that cl
         // A separator with nothing after it is a line left half written, and saying so is worth more
         // than the "no such file" that reading it whole would produce
         Some((before, _)) if !before.is_empty() => Err(format!("'{value}' names a reading before the \
-'..' and none after it. Write the second one, or drop the '..' to compare '{before}' against this run.")),
+                '..' and none after it. Write the second one, or drop the '..' to compare '{before}' against this run.")),
         // Nothing before it is an ordinary path climbing a directory
         _ => Ok((value, None))
     }

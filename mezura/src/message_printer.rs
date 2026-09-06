@@ -1660,9 +1660,9 @@ mod tests {
     fn create_commands_document() -> String {
         let mut document = String::with_capacity(60_000);
         document.push_str("# Commands\n\nThe full help of every command, exactly as \
-`mezura --help <command>` prints it. A test writes this file from the help texts themselves, \
-so do not edit it by hand. Regenerate it with `MEZURA_UPDATE_GOLDEN=1 cargo test -p mezura \
-commands_document`.\n\n");
+                `mezura --help <command>` prints it. A test writes this file from the help texts themselves, \
+                so do not edit it by hand. Regenerate it with `MEZURA_UPDATE_GOLDEN=1 cargo test -p mezura \
+                commands_document`.\n\n");
         for (group, commands) in COMMAND_HELP {
             let anchor = group.to_lowercase().replace(' ', "-");
             document.push_str(&format!("- [{group}](#{anchor})\n"));

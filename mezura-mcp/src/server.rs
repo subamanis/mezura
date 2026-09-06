@@ -79,27 +79,28 @@ impl ServerHandler for MezuraServer {
 #[serde(deny_unknown_fields)]
 pub struct CountArguments {
     #[schemars(description = "The directory or file to count. An absolute path is safest; a \
-relative one is taken from the directory this server was started in.")]
+            relative one is taken from the directory this server was started in.")]
     pub path: String,
     #[schemars(description = "Paths to leave out, as glob patterns. A pattern with no slash in it \
-leaves out a file or directory of that name at any depth ('node_modules', '*.min.js'); a pattern \
-with slashes matches the end of the whole path ('src/generated').")]
+            leaves out a file or directory of that name at any depth ('node_modules', '*.min.js'); \
+            a pattern with slashes matches the end of the whole path ('src/generated').")]
     pub exclude: Option<Vec<String>>,
     #[schemars(description = "Count only these languages and leave every other one out, named \
-either by language ('rust', 'c++') or by any extension they claim ('js' names JavaScript). Leave \
-it out to count everything.")]
+            either by language ('rust', 'c++') or by any extension they claim ('js' names \
+            JavaScript). Leave it out to count everything.")]
     pub languages: Option<Vec<String>>,
     #[schemars(description = "Show only this many languages, the largest first, with a line \
-underneath saying how many were left out. 0 shows every language, and so does leaving it out.")]
+            underneath saying how many were left out. 0 shows every language, and so does leaving \
+            it out.")]
     pub top: Option<u32>,
     #[schemars(description = "Also give files a row of their own, this many under each language, \
-the largest first, at most 50. Leave it out for no file rows at all.")]
+            the largest first, at most 50. Leave it out for no file rows at all.")]
     #[schemars(range(max = 50))]
     pub by_file: Option<u32>,
     #[schemars(description = "What a line of code is. 'content', the default, counts a line by the \
-words on it, so a line holding nothing but '}' is neither code nor comment. 'region' counts a line \
-by where it sits, the way cloc, tokei and scc do; use it when the numbers are going to be compared \
-against one of those.")]
+            words on it, so a line holding nothing but '}' is neither code nor comment. 'region' \
+            counts a line by where it sits, the way cloc, tokei and scc do; use it when the \
+            numbers are going to be compared against one of those.")]
     pub counting: Option<Counting>,
 }
 
@@ -142,8 +143,8 @@ impl CountArguments {
         // client is held to, so the number is checked here as well as declared there.
         if let Some(by_file) = self.by_file {
             if by_file > MOST_FILE_ROWS {
-                return Err(format!("'by_file' was {by_file}, and at most {MOST_FILE_ROWS} files can \
-be listed under each language. The report would be too long to read."));
+                return Err(format!("'by_file' was {by_file}, and at most {MOST_FILE_ROWS} files \
+                        can be listed under each language. The report would be too long to read."));
             }
             arguments.push(mezura_cli::BY_FILE.to_owned());
             arguments.push(by_file.to_string());
@@ -161,19 +162,19 @@ be listed under each language. The report would be too long to read."));
 #[serde(deny_unknown_fields)]
 pub struct ExplainArguments {
     #[schemars(description = "The one file to go through, line by line. An absolute path is \
-safest; a relative one is taken from the directory this server was started in.")]
+            safest; a relative one is taken from the directory this server was started in.")]
     pub path: String,
     #[schemars(description = "The first line to print. The whole file is still read, so a comment \
-or a string that opened above this line is named on every line that carries it. Leave it out to \
-start at the top.")]
+            or a string that opened above this line is named on every line that carries it. Leave \
+            it out to start at the top.")]
     pub first_line: Option<u32>,
     #[schemars(description = "The last line to print. Past the end of the file is not a mistake. \
-Leave it out to go to the end, and leave both out for the whole file, which is a lot of text for a \
-long one.")]
+            Leave it out to go to the end, and leave both out for the whole file, which is a lot \
+            of text for a long one.")]
     pub last_line: Option<u32>,
     #[schemars(description = "What a line of code is. 'content', the default, counts a line by the \
-words on it, so a line holding nothing but '}' is neither code nor comment. 'region' counts a line \
-by where it sits, the way cloc, tokei and scc do.")]
+            words on it, so a line holding nothing but '}' is neither code nor comment. 'region' \
+            counts a line by where it sits, the way cloc, tokei and scc do.")]
     pub counting: Option<Counting>,
 }
 
@@ -205,7 +206,7 @@ impl ExplainArguments {
         if let (Some(first), Some(last)) = (self.first_line, self.last_line)
                 && last < first {
             return Err(format!("'last_line' is {last} and 'first_line' is {first}, so there is \
-nothing between them"));
+                    nothing between them"));
         }
 
         let written = |line: Option<u32>| line.map(|x| x.to_string()).unwrap_or_default();
@@ -262,8 +263,8 @@ fn as_a_path(value: &str) -> Result<String, String> {
         return Err("an empty path was given, so there is nothing to count".to_owned());
     }
     if value.contains(',') {
-        return Err(format!("'{value}' holds a comma, which mezura reads as the end of one path and \
-the start of the next, so this path cannot be given to it"));
+        return Err(format!("'{value}' holds a comma, which mezura reads as the end of one path \
+                and the start of the next, so this path cannot be given to it"));
     }
     if is_read_as_a_command(value) {
         return Err(format_refusal_of_a_command(value));
@@ -310,8 +311,8 @@ fn is_read_as_a_command(value: &str) -> bool {
 }
 
 fn format_refusal_of_a_command(value: &str) -> String {
-    format!("'{value}' holds '--', which mezura reads as the start of a command rather than as part \
-of a value, so it cannot be given")
+    format!("'{value}' holds '--', which mezura reads as the start of a command rather than as \
+            part of a value, so it cannot be given")
 }
 
 #[cfg(test)]

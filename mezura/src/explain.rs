@@ -14,18 +14,19 @@ use crate::theme::get_active;
 pub fn run_explain(config: &Configuration, languages: Languages) -> ExitCode {
     let [target] = &config.engine.targets[..] else {
         return refuse(&format!("'--explain' answers for exactly one file, and this run names {} \
-targets. Give the file alone: mezura src/main.rs --explain", config.engine.targets.len()));
+                targets. Give the file alone: mezura src/main.rs --explain",
+                config.engine.targets.len()));
     };
     let path = Path::new(&target.path);
     if !path.is_file() {
         return refuse(&format!("'--explain' answers for one file, and '{}' is not one. Give the \
-file itself: mezura src/main.rs --explain", target.path));
+                file itself: mezura src/main.rs --explain", target.path));
     }
 
     // Refused, so that asking for one format never quietly hands back another
     if config.view.output == crate::config_manager::OutputFormat::Markdown {
-        return refuse("'--explain' answers line by line and has no markdown form. Use \
-'--output text' to read it, or '--output json' for a program to read it.");
+        return refuse("'--explain' answers line by line and has no markdown form. Use '--output \
+                text' to read it, or '--output json' for a program to read it.");
     }
 
     // The document promises one entry per line of the file, and that promise is what a program
@@ -34,7 +35,8 @@ file itself: mezura src/main.rs --explain", target.path));
     let asked_for = config.view.explain.unwrap_or(ExplainedLines::WHOLE_FILE);
     if asked_for != ExplainedLines::WHOLE_FILE && !config.view.prints_text() {
         return refuse("'--explain' was given lines to show and '--output json' writes an entry for \
-every line of the file, which is what a program reading it expects. Ask for one or the other.");
+                every line of the file, which is what a program reading it expects. Ask for one or \
+                the other.");
     }
 
     match mezura_core::explain_file(path, &config.engine, languages) {
@@ -47,13 +49,15 @@ every line of the file, which is what a program reading it expects. Ask for one 
             ExitCode::SUCCESS
         },
         Err(ExplainError::UnclaimedFile) => refuse(&format!("No language of this run claims '{}', \
-so there is nothing to explain. If its language was narrowed away, drop '--languages' or \
-'--exclude-languages'; if the extension is unknown, '--force-language' hands it to a language.",
+                so there is nothing to explain. If its language was narrowed away, drop \
+                '--languages' or '--exclude-languages'; if the extension is unknown, \
+                '--force-language' hands it to a language.",
                 target.path)),
         Err(ExplainError::UnreadableFile(reason)) => refuse(&format!("'{}' could not be read: \
-{reason}", target.path)),
+                {reason}", target.path)),
         Err(ExplainError::LanguagesFromAnotherConfig) => refuse("The languages of this run were \
-resolved against different settings, so the answer would be for the wrong selection."),
+                resolved against different settings, so the answer would be for the wrong \
+                selection."),
         // 'ExplainError' is non_exhaustive, so a reason added later stops here rather than in the
         // middle of a run
         Err(other) => refuse(&format!("'{}' could not be explained: {other}", target.path))
@@ -71,7 +75,7 @@ fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel, a
             explanation.language, model.name())));
     if let Some((literal, line)) = &explanation.identified_by {
         println!("{}", theme.note.paint(&format!("Its extension is contested, and line {line} \
-carrying '{literal}' is what identified it.")));
+                carrying '{literal}' is what identified it.")));
     }
     if let Some(skip) = explanation.left_out_of_a_scan {
         let reason = match skip {
@@ -80,7 +84,7 @@ carrying '{literal}' is what identified it.")));
             ScanSkip::NotCode => "not code"
         };
         println!("{}", theme.note.paint(&format!("A directory scan leaves this file out as \
-{reason}. It is counted here because you named it. '--{}' stops leaving it out for that reason.",
+                {reason}. It is counted here because you named it. '--{}' stops leaving it out for that reason.",
                 get_command_that_counts(skip))));
     }
     println!();

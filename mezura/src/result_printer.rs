@@ -93,14 +93,17 @@ pub fn format_and_print_results(result: &RunResult, existing_log_content: &Optio
     let mut layout = config.view.layout;
     if !markdown && layout == Layout::Matrix && !is_grouped(&groups) {
         layout = Layout::Table;
-        eprintln!("\n{}", super::theme::get_active().warning.paint("'--layout matrix' has nothing to cross, since no target was given a name, \
-so the 'table' layout was printed. Use the modules feature to get a matrix: 'mezura frontend=./web backend=./api'."));
+        eprintln!("\n{}", super::theme::get_active().warning.paint(
+                "'--layout matrix' has nothing to cross, since no target was given a name, so the \
+                'table' layout was printed. Use the modules feature to get a matrix: 'mezura \
+                frontend=./web backend=./api'."));
     }
     // The matrix crosses languages with modules and has no third direction for a file to hang in.
     let files_are_shown = markdown || layout != Layout::Matrix;
     if config.view.by_file.is_some() && !files_are_shown {
-        eprintln!("\n{}", super::theme::get_active().warning.paint("'--by-file' prints nothing under the 'matrix' layout, whose rows are \
-languages crossed with modules. Use any other layout to see the files."));
+        eprintln!("\n{}", super::theme::get_active().warning.paint(
+                "'--by-file' prints nothing under the 'matrix' layout, whose rows are languages \
+                crossed with modules. Use any other layout to see the files."));
     }
     let hidden_files = if files_are_shown {count_hidden_files(&groups)} else {0};
     let is_table = layout != Layout::List;
@@ -1191,16 +1194,18 @@ fn format_note_sentence(theme: &Theme, note: &super::diff::Note) -> String {
         Note::SettingsAdopted { from, settings } => {
             let one = settings.len() == 1;
             let (was, value, it) = if one {("has", "value", "it")} else {("have", "values", "them")};
-            format!("'{}' {was} been overridden by the {value} recorded in '{from}', so both readings \
-are counted the same way. Provide {it} explicitly in the command line to keep your own.",
+            format!("'{}' {was} been overridden by the {value} recorded in '{from}', so both \
+                    readings are counted the same way. Provide {it} explicitly in the command line \
+                    to keep your own.",
                     settings.join("', '"))
         },
         Note::SettingsDiffer { baseline, subject, settings } => format!(
-                "'{baseline}' and '{subject}' were not taken with the same {}, so part of the difference below is \
-those settings and not code that changed.", settings.join(", ")),
+                "'{baseline}' and '{subject}' were not taken with the same {}, so part of the \
+                difference below is those settings and not code that changed.", settings.join(", ")),
         Note::VersionsDiffer { baseline, baseline_version, subject, subject_version } => format!(
-                "'{baseline}' was counted by mezura {baseline_version} and '{subject}' by {subject_version}, \
-so part of the difference below may be a language counted better since, and not code that changed."),
+                "'{baseline}' was counted by mezura {baseline_version} and '{subject}' by \
+                {subject_version}, so part of the difference below may be a language counted \
+                better since, and not code that changed."),
         // The doubt lines stay unpainted, so this one does not take the shared tail
         Note::CountsInDoubt { about, doubts } => return format!("{}\n{}",
                 theme.warning.paint(&wrap_message(&format!(
@@ -1210,11 +1215,11 @@ so part of the difference below may be a language counted better since, and not 
                 "'{about}' holds no counted files at all, so its side of every figure is zero."),
         Note::FilesNotRecorded { about } => format!(
                 "'{about}' was written without '--{}', so it holds no file rows and the files \
-themselves are not compared.", config_manager::BY_FILE),
+                themselves are not compared.", config_manager::BY_FILE),
         Note::FilesCut { about, hidden } => format!(
                 "'{about}' was written with a capped '--{}' and is missing {hidden} of its file \
-rows, which would all read as new, so the files themselves are not compared. Write it again with \
-a plain '--{}'.", config_manager::BY_FILE, config_manager::BY_FILE),
+                rows, which would all read as new, so the files themselves are not compared. Write \
+                it again with a plain '--{}'.", config_manager::BY_FILE, config_manager::BY_FILE),
         Note::ModulesDiffer { baseline, subject, baseline_modules, subject_modules } => {
             // The word 'modules' is said once, by the first side, and the second reads on from it
             let first = match baseline_modules {
@@ -1226,14 +1231,14 @@ a plain '--{}'.", config_manager::BY_FILE, config_manager::BY_FILE),
                 None => format!("'{subject}' declared none")
             };
             format!("{first}, whereas {second}. Two readings are compared module by module only \
-when they named the same ones, so everything is compared at once instead.")
+                    when they named the same ones, so everything is compared at once instead.")
         },
         Note::LayoutFallback { layout } => format!(
                 "'--{} {layout}' has nothing to show for a comparison, so the 'table' layout was printed.",
                 config_manager::LAYOUT),
         Note::NoGitignoreInCheckout { git_revision } => format!(
-                "'--no-gitignore' cannot reach '{git_revision}': a checkout holds only what git tracks, \
-so anything a .gitignore ignores is counted on one side alone."),
+                "'--no-gitignore' cannot reach '{git_revision}': a checkout holds only what git \
+                tracks, so anything a .gitignore ignores is counted on one side alone."),
         Note::MissingInRevision { git_revision, targets } => {
             let named = targets.iter().map(|x| format!("'{x}'")).collect::<Vec<_>>().join(", no ");
             format!("'{git_revision}' has no {named}, so it counts as nothing there.")

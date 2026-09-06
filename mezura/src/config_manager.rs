@@ -609,8 +609,8 @@ impl Formatted for ArgParsingError {
             },
             Self::DoublePath => wrap_message("Targets already provided as first argument, but --targets command also found.").red(),
             Self::RepeatedCommand(c) => wrap_message(&format!("'--{c}' appears more than once in the \
-command line. Give it once; a command that takes several values takes them together, like '--hide \
-overview,keywords'.")).red(),
+                    command line. Give it once; a command that takes several values takes them together, like '--hide \
+                    overview,keywords'.")).red(),
             Self::UnrecognisedCommand(p) => {
                 let tail = suggestions::format_suggestion(p, &message_printer::get_command_names())
                         .unwrap_or_else(|| format!("Run '--{HELP}' to see every command."));
@@ -854,7 +854,7 @@ impl ConfigurationBuilder {
     // hunts for a column that was never going to be drawn.
     fn report_a_word_of_the_other_model(command: &str, counting: CountingModel, result: &str) {
         let message = format!("'--{command} {}' names the third column of the other way of counting. \
-This run counts by {}, where that column is '{}', so {result}.",
+                This run counts by {}, where that column is '{}', so {result}.",
                 counting.get_other().get_third_quantity_name(), counting.name(),
                 counting.get_third_quantity_name());
         eprintln!("\n{}", wrap_message(&message).yellow());
@@ -890,7 +890,7 @@ This run counts by {}, where that column is '{}', so {result}.",
         // carries every figure whatever is hidden, so there the order stands as asked.
         if hidden.hides_column_of(sort_by) && self.output.unwrap_or_default() != OutputFormat::Json {
             let message = format!("'--{SORT} {}' orders by a column '--{HIDE} {0}' takes out, so the report \
-is sorted by lines.", sort_by.name());
+                    is sorted by lines.", sort_by.name());
             eprintln!("\n{}", wrap_message(&message).yellow());
             super::warning_collector::keep(mezura_core::warnings::Warning::new(
                     mezura_core::warnings::Code::CommandIgnored, SORT, message));
@@ -1372,7 +1372,7 @@ fn save_the_local_configuration(config_builder: &mut ConfigurationBuilder, typed
     let Some(local) = config_builder.local_dir.clone()
             .or_else(|| crate::paths::choose_place_for_a_local_dir(typed_paths)) else {
         eprintln!("\n{}", wrap_message(&format!("'--{SAVE_LOCAL}' has nowhere to write: the targets of this run \
-have no directory holding all of them, so there is no one project for these settings to belong to.")).yellow());
+                have no directory holding all of them, so there is no one project for these settings to belong to.")).yellow());
         return Ok(());
     };
 
@@ -2106,7 +2106,7 @@ mod tests {
     #[test]
     fn a_scoped_setting_survives_being_written_out_and_read_back() {
         let typed = "./ --force-language ios/m=objective-c,pl=perl --languages rust,web/js \
---exclude-languages json,web/xml";
+                --exclude-languages json,web/xml";
         let config = create_config_from_args(typed).unwrap();
 
         assert_eq!(hashmap!("ios/m".to_owned() => "objective-c".to_owned(),
