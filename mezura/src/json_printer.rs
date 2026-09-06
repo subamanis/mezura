@@ -638,35 +638,31 @@ fn create_skipped_files_object(skipped: &mezura_core::SkippedFiles, asked_for: b
             format!("\"{}\":{}", kind.name(), paths(skipped.get_of_kind(kind)))))
 }
 
-// Sorted by path, because the faulty files are collected by whichever thread hit them and their
-// order would otherwise change between two runs over the same tree
 fn create_faulty_files_array(faulty_files: &[FaultyFileDetails], asked_for: bool) -> String {
     if !asked_for {
         return String::from("[]");
     }
 
-    let mut sorted = faulty_files.iter().collect::<Vec<_>>();
-    sorted.sort_unstable_by(|a, b| a.path.cmp(&b.path));
-    create_array(sorted.into_iter().map(|file| create_object([
-        format!("\"path\":\"{}\"", escape(&file.path)),
-        format!("\"bytes\":{}", file.size),
-        format!("\"error\":\"{}\"", escape(&file.error_msg)),
-    ])))
+    create_array(crate::present::sort_by_path(faulty_files, |x| x.path.as_str())
+            .into_iter().map(|file| create_object([
+                format!("\"path\":\"{}\"", escape(&file.path)),
+                format!("\"bytes\":{}", file.size),
+                format!("\"error\":\"{}\"", escape(&file.error_msg)),
+            ])))
 }
 
-// Objects and not bare paths, and sorted for the same reason as the faulty files above: a consumer
-// has to be able to tell a refused permission apart from a directory that went away mid-walk.
+// Objects and not bare paths, so that a consumer can tell a refused permission apart from a
+// directory that went away while the scan was running.
 fn create_unreadable_dirs_array(unreadable_dirs: &[mezura_core::UnreadableDirDetails], asked_for: bool) -> String {
     if !asked_for {
         return String::from("[]");
     }
 
-    let mut sorted = unreadable_dirs.iter().collect::<Vec<_>>();
-    sorted.sort_unstable_by(|a, b| a.path.cmp(&b.path));
-    create_array(sorted.into_iter().map(|dir| create_object([
-        format!("\"path\":\"{}\"", escape(&dir.path)),
-        format!("\"error\":\"{}\"", escape(&dir.error_msg)),
-    ])))
+    create_array(crate::present::sort_by_path(unreadable_dirs, |x| x.path.as_str())
+            .into_iter().map(|dir| create_object([
+                format!("\"path\":\"{}\"", escape(&dir.path)),
+                format!("\"error\":\"{}\"", escape(&dir.error_msg)),
+            ])))
 }
 
 // 'scan_ms' and not the 'Exec time' of the footer: what is measured here starts before the producers
