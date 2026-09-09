@@ -1,4 +1,4 @@
-// mezura-expect lines=43 code=18 comments=4 extra=21 structs=1 enums=1 macros=1 language=C3
+// mezura-expect lines=45 code=19 comments=4 extra=22 structs=1 enums=1 macros=2 language=C3
 module greeter;
 
 import std::io;
@@ -31,6 +31,8 @@ macro String @render(Greeting g)
 {
 	return g.volume == Volume.LOUD ? g.name.to_upper(mem) : g.name;
 }
+
+macro int[<*>] @twice(int[<*>] lanes) => lanes + lanes;
 
 const char BANG = '!';
 

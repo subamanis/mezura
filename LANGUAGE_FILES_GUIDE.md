@@ -72,6 +72,8 @@ Three things to know before you start:
 | `Multi line comment end` | Their closers, in the same order | `*/ }` |
 | `Self-nesting comment start` *(opt)* | Openers of blocks that nest inside themselves | `(*` |
 | `Self-nesting comment end` | Their closers, in the same order | `*)` |
+| `Cancelled symbols` *(opt)* | Symbols that stop counting when one character sits in front of them | `<* *>` |
+| `Cancelled after` | The character that cancels each, in the same order | `[ <` |
 | `Nested language start` *(opt)* | Openers of sections written in another language | `<script <style` |
 | `Nested language end` | Their closers, in the same order | `</script> </style>` |
 | `Nested language default` | The extension each section falls to when its tag names none | `js css` |
@@ -148,6 +150,24 @@ Multi line comment end
 
 That is the only place in the format where characters do not stand for themselves, and it works
 only in these two blocks.
+
+## When a symbol is part of something longer
+
+A few languages write one of their symbols inside a longer form of their own, where it is not that
+symbol at all. C3 opens a documentation comment with `<*` and closes it with `*>`, and writes a
+vector of unknown length as `int[<*>]`, where `[<` is one token and neither half is a comment:
+
+```
+Cancelled symbols
+<* *>
+Cancelled after
+[ <
+```
+
+Read it as "a `<*` right after a `[` is not a comment opener, and a `*>` right after a `<` is not a
+closer". The two lines are matched by position, the symbol has to be one this file declares
+somewhere, and what cancels it is one character sitting immediately in front of it. A symbol at the
+very start of a line has nothing in front of it and always counts.
 
 ## Sections of another language
 

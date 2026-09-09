@@ -114,6 +114,8 @@ const MULTILINE_COMMENT_START  : &str = "Multi line comment start";
 const MULTILINE_COMMENT_END    : &str = "Multi line comment end";
 const SELF_NESTING_COMMENT_START : &str = "Self-nesting comment start";
 const SELF_NESTING_COMMENT_END   : &str = "Self-nesting comment end";
+const CANCELLED_SYMBOLS        : &str = "Cancelled symbols";
+const CANCELLED_AFTER          : &str = "Cancelled after";
 const NESTED_LANGUAGE_START    : &str = "Nested language start";
 const NESTED_LANGUAGE_END      : &str = "Nested language end";
 const NESTED_LANGUAGE_DEFAULT  : &str = "Nested language default";
@@ -469,6 +471,29 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         return None;
     }
 
+    // A symbol the character in front of it takes away, because there the two are one longer form
+    // of the language. A symbol this language never declared, or a cancelling character wider than
+    // one byte, would do nothing at all, so both refuse the file.
+    let mut cancelled_symbols = Vec::new();
+    if header.as_deref() == Some(CANCELLED_SYMBOLS) {
+        let symbols = split_line_on_whitespace(&read_value_line(lines)?);
+        if symbols.is_empty() || read_next_header(lines)?.as_str() != CANCELLED_AFTER {return None;}
+        let cancelling = split_line_on_whitespace(&read_value_line(lines)?);
+        if cancelling.len() != symbols.len() {return None;}
+        if cancelling.iter().any(|text| text.len() != 1) {return None;}
+        let declared = string_symbols.iter().chain(&char_literals).chain(&multiline_strings)
+                .chain(&raw_multiline_strings)
+                .chain(string_pairs.iter().flat_map(|(open, close)| [open, close]))
+                .chain(&comment_symbols)
+                .chain(multiline_comments.iter().flat_map(|(start, end)| [start, end]))
+                .chain(nesting_comments.iter().flat_map(|(start, end)| [start, end]))
+                .collect::<Vec<&String>>();
+        if symbols.iter().any(|symbol| !declared.contains(&symbol)) {return None;}
+        cancelled_symbols = symbols.into_iter()
+                .zip(cancelling.iter().map(|text| text.as_bytes()[0])).collect();
+        header = read_next_header(lines);
+    }
+
     // Sections of another language inside a file, HTML's script and style tags. Three lists paired
     // by position: the opener, its closer, and the language the section falls to when the tag
     // names none, written as an extension so it resolves the way a 'lang' attribute does.
@@ -524,6 +549,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
     Some(language
             .with_nesting_comments(&nesting_comments)
             .with_leveled_comments(&leveled_comments)
+            .with_cancelled_symbols(&cancelled_symbols)
             .with_nested_languages(&nested_languages)
             .with_filenames(&filenames)
             .with_shebangs(&shebangs)
@@ -1037,6 +1063,26 @@ pl      Perl, Prolog
         let d = parse_language_file(LANGUAGES_DIR.to_owned() + "D.txt").unwrap();
         assert_eq!((1, 1), (d.multiline_comments.len(), d.nesting_comments.len()),
                 "D.txt no longer declares its plain pair beside its nesting one");
+    }
+
+    #[test]
+    fn a_cancelled_symbol_names_one_the_language_declares_and_the_character_that_takes_it_away() {
+        let vectorish = "Language\nVectorish\n\nExtensions\nvec\n\nString symbols\n\"\n\n\
+                Escape character\n\\\n\n\
+                Comment symbols\n//\nMulti line comment start\n<*\nMulti line comment end\n*>\n\n\
+                Cancelled symbols\n<* *>\nCancelled after\n[ <\n";
+        let parsed = parse_language(vectorish).expect("the declaration must parse");
+        assert_eq!(vec![("<*".to_owned(), b'['), ("*>".to_owned(), b'<')], parsed.cancelled_symbols);
+
+        let unknown = vectorish.replace("Cancelled symbols\n<*", "Cancelled symbols\n/*");
+        assert!(parse_language(&unknown).is_none(), "a symbol this language never declared was accepted");
+        let uneven = vectorish.replace("[ <", "[");
+        assert!(parse_language(&uneven).is_none(), "two symbols with one cancelling character were accepted");
+        let two_bytes = vectorish.replace("[ <", "[[ <");
+        assert!(parse_language(&two_bytes).is_none(), "a cancelling character of two bytes was accepted");
+
+        let c3 = parse_language_file(LANGUAGES_DIR.to_owned() + "C3.txt").unwrap();
+        assert_eq!(2, c3.cancelled_symbols.len(), "C3.txt no longer declares its vector exception");
     }
 
     #[test]

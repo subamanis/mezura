@@ -7,6 +7,9 @@ Main changes:
   -> New language: Mercury. It claims ".m" beside MATLAB and Objective-C, and a file saying
       ":- module" or "ft=mercury" is counted as Mercury.
   -> New language: C3, which takes ".c3", ".c3i" and ".c3t", bringing the shipped set to 83.
+  -> A language file can now say that a symbol does not count when a given character sits right in
+      front of it, in a "Cancelled symbols" block. C3 needs it: "int[<*>]" is a vector and not a
+      comment opener.
 
 Performance:
   -> Counting a large tree is about a fifth faster.

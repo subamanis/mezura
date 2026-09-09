@@ -201,6 +201,7 @@ struct Slot {
     anchor: u8,
     filler: u8,
     suffix: u8,
+    cancelled_by: u8,
     next: u16,
 }
 
@@ -216,16 +217,18 @@ struct PlanEntry {
     role: u8,
     filler: u8,
     suffix: u8,
+    cancelled_by: u8,
     bytes: Box<[u8]>,
 }
 
 impl PlanEntry {
     fn of(kind: u8, symbol: u8, role: u8, bytes: &[u8]) -> PlanEntry {
-        PlanEntry { kind, symbol, role, filler: 0, suffix: 0, bytes: bytes.into() }
+        PlanEntry { kind, symbol, role, filler: 0, suffix: 0, cancelled_by: 0, bytes: bytes.into() }
     }
 
     fn leveled(kind: u8, symbol: u8, prefix: &[u8], suffix: u8) -> PlanEntry {
-        PlanEntry { kind, symbol, role: ROLE_EITHER, filler: b'=', suffix, bytes: prefix.into() }
+        PlanEntry { kind, symbol, role: ROLE_EITHER, filler: b'=', suffix, cancelled_by: 0,
+                bytes: prefix.into() }
     }
 }
 
@@ -288,6 +291,11 @@ impl ScanPlan {
                 }
             }
         }
+        for (symbol, cancelling) in &language.cancelled_symbols {
+            for entry in entries.iter_mut().filter(|entry| *entry.bytes == *symbol.as_bytes()) {
+                entry.cancelled_by = *cancelling;
+            }
+        }
         entries.retain(|entry| !entry.bytes.is_empty());
         let line_comment_ends_the_line = !entries.iter().filter(|entry| entry.kind == COM_STARTS)
                 .any(|start| entries.iter().filter(|entry| entry.kind == COMMENTS)
@@ -309,6 +317,7 @@ impl ScanPlan {
                 anchor,
                 filler: entry.filler,
                 suffix: entry.suffix,
+                cancelled_by: entry.cancelled_by,
                 next: NO_SLOT,
             });
             symbols.push(entry.bytes.clone());
@@ -570,6 +579,12 @@ fn take_symbols_at(at: usize, line_bytes: &[u8], plan: &ScanPlan, buffers: &mut 
             _ => line_bytes[start..].starts_with(&plan.symbols[index])
         };
         if !matched { continue }
+        // Where the language writes the symbol and the character before it as one longer form, the
+        // symbol is part of that form and not itself. C3's '<*' opens a documentation comment
+        // everywhere except in 'int[<*>]', which is a vector of unknown length.
+        if slot.cancelled_by != 0 && start > 0 && line_bytes[start - 1] == slot.cancelled_by {
+            continue;
+        }
         // The level is carried beside the position, so only an end with the same count answers it
         let mut level = 0u8;
         let mut width = slot.len as usize;
@@ -3343,6 +3358,29 @@ mod tests {
         // /* */*/*//*
         assert_eq!((vec![0,6,9],vec![3]), resolved_double_counting(vec![0,4,6,9], vec![3,5,7], false));
         assert_eq!((vec![0,6,9],vec![3]), resolved_double_counting(vec![0,4,6,9], vec![3,5,7], true));
+    }
+
+    // Without the declaration the opener wins and the closer that shares its asterisk is dropped,
+    // which is right for C's '/*/' and leaves the rest of the file inside a comment here.
+    #[test]
+    fn a_symbol_the_character_in_front_of_it_cancels_opens_nothing() {
+        let vectorish = Language::new("vectorish", ["vec"], build_backslashed_quotes(), ["//"],
+                &[("<*", "*>")], [])
+                .with_cancelled_symbols(&[("<*", b'['), ("*>", b'<')]);
+
+        let stats = parse_lines_whole("macro rotate(int[<*>] x)\nreturn x;\n", &vectorish);
+        assert_eq!((2, 0), (stats.classes.words_in_code, stats.classes.words_in_comment));
+
+        let plain = Language::new("vectorish", ["vec"], build_backslashed_quotes(), ["//"],
+                &[("<*", "*>")], []);
+        let stats = parse_lines_whole("macro rotate(int[<*>] x)\nreturn x;\n", &plain);
+        assert_eq!((1, 1), (stats.classes.words_in_code, stats.classes.words_in_comment));
+
+        let stats = parse_lines_whole("<*\n a comment\n*>\nreturn x;\n", &vectorish);
+        assert_eq!((1, 1), (stats.classes.words_in_code, stats.classes.words_in_comment));
+        let stats = parse_lines_whole("<*\n the type int[<*>] holds one lane\n a second line\n*>\nreturn x;\n",
+                &vectorish);
+        assert_eq!((1, 2), (stats.classes.words_in_code, stats.classes.words_in_comment));
     }
 
     // Lua's pair is 4 bytes on one side and 2 on the other, and one shared collision window sees a

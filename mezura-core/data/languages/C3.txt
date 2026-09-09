@@ -27,6 +27,11 @@ Self-nesting comment start
 Self-nesting comment end
 */
 
+Cancelled symbols
+<* *>
+Cancelled after
+[ <
+
 Keyword
 NAME
 structs

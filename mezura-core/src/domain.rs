@@ -32,6 +32,10 @@ pub struct Language {
     /// Lua's long brackets, `--[=*[` with `]=*]`: the run of `=` is counted at the opener and only
     /// an end carrying the same count closes, so a `]]` inside a `--[==[` block is text.
     pub leveled_comments : Vec<LeveledPair>,
+    /// Symbols the character before them takes away, because there the two belong to a longer form
+    /// of the language. C3 opens a documentation comment with `<*` and writes a vector of unknown
+    /// length as `int[<*>]`, where `[<` is one token and neither half is a comment.
+    pub cancelled_symbols : Vec<(String, u8)>,
     /// The symbol that joins a line to the one after it when it is the last thing on it, and what
     /// it joins. C splices anything, including a line comment; JavaScript and Python only continue
     /// a string literal; Java, Go and C# have no such thing at all.
@@ -70,6 +74,7 @@ impl Language {
                     .map(|(start, end)| ((*start).to_owned(), (*end).to_owned())).collect(),
             nesting_comments : Vec::new(),
             leveled_comments : Vec::new(),
+            cancelled_symbols : Vec::new(),
             line_continuation : None,
             nested_languages : Vec::new(),
             keywords : keywords.into_iter().collect(),
@@ -133,6 +138,14 @@ impl Language {
     pub fn with_nesting_comments(mut self, pairs: &[(impl AsRef<str>, impl AsRef<str>)]) -> Self {
         self.nesting_comments.extend(pairs.iter()
                 .map(|(start, end)| (start.as_ref().to_owned(), end.as_ref().to_owned())));
+        self
+    }
+
+    /// Adds symbols that stop counting as themselves when the given character sits right in front
+    /// of them.
+    pub fn with_cancelled_symbols(mut self, symbols: &[(impl AsRef<str>, u8)]) -> Self {
+        self.cancelled_symbols.extend(symbols.iter()
+                .map(|(symbol, after)| (symbol.as_ref().to_owned(), *after)));
         self
     }
 
