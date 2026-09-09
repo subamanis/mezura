@@ -1,4 +1,4 @@
-files=85 lines=1050 code=563 comments=260
+files=86 lines=1096 code=592 comments=264
 
 Ada
   files=1 lines=8 code=5 comments=2
@@ -169,6 +169,10 @@ Make
   files=1 lines=15 code=9 comments=3
   words_in_code=9 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=0 punctuation_in_comment=0 blank=3 blank_in_comment=0 blank_in_string=0
   includes=1
+Mercury
+  files=1 lines=46 code=29 comments=4
+  words_in_code=25 string_content=4 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=0 punctuation_in_comment=0 blank=13 blank_in_comment=0 blank_in_string=0
+  functions=2 predicates=2 types=1
 Metal
   files=1 lines=8 code=3 comments=3
   words_in_code=3 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=1 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0

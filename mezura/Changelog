@@ -4,6 +4,8 @@ Main changes:
   -> New "--output markdown", a report as a markdown table (maybe for a CI step to put in a pull request?).
   -> "MEZURA_PHASE_TIMING" now also reports the time before and after the count, the milliseconds
       behind each share, and when the counting threads outnumber the cores.
+  -> New language: Mercury, bringing the shipped set to 82. It claims ".m" beside MATLAB and
+      Objective-C, and a file saying ":- module" or "ft=mercury" is counted as Mercury.
 
 Performance:
   -> Counting a large tree is about a fifth faster.
@@ -14,6 +16,12 @@ Bugfixes:
   -> Colours are no longer flattened to the sixteen terminal ones after "cargo install".
   -> Files that could not be parsed and directories that could not be read are listed in path order.
   -> A file that went away while it was being counted keeps its listed size in the faulty files list.
+
+Other:
+  -> A "%" comment no longer identifies a MATLAB file, since every Mercury file opens with one.
+      MATLAB answers to "%%", "function" and "classdef" now.
+
+-----------------------------------------------------------------------------------------------------------
 
 v3.0.0 - 2026-09-02
 

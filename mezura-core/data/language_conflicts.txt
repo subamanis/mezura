@@ -1,8 +1,8 @@
 Which language wins an extension that more than one of them claims, and which files wearing an
 extension are not code at all.
 
-Two languages can want the same extension: '.m' is Objective-C to one person and MATLAB to another,
-'.pl' is Perl to one and Prolog to another. Only one of them can have it, and the choice matters more
+Two languages can want the same extension, and sometimes three: '.m' is Objective-C to one person,
+MATLAB to another and Mercury to a third, '.pl' is Perl to one and Prolog to another. Only one of them can have it, and the choice matters more
 than a label, because the wrong language means the wrong comment symbols, and then every comment line
 of the loser is counted as code.
 
@@ -10,7 +10,7 @@ Without a line here, the extension goes to whichever language name comes first a
 the program says so on every run so that it is never a silent decision. Write the extension, then the
 languages that claim it separated by commas. The first name takes it and the rest lose their claim:
 
-    m       Objective-C, MATLAB
+    m       Objective-C, MATLAB, Mercury
     pl      Perl, Prolog
 
 The names are the ones the language files declare, and neither they nor the extension care about
@@ -24,7 +24,8 @@ lines for extensions your copy does not mention are added, and your file as it s
 
 This file settles a contested file whose content says nothing. A language file may declare
 'Identifying line starts' evidence, a line beginning with 'function' says MATLAB where one
-beginning with '@interface' says Objective-C, and found evidence wins over the order written here;
+beginning with '@interface' says Objective-C and one beginning with ':- module' says Mercury, and
+found evidence wins over the order written here;
 '--no-heuristics' turns that reading off. To decide a contest outright for one run, or for one
 project through its configuration file, use '--force-language', as in '--force-language m=matlab',
 which overrides both the evidence and this file.
@@ -35,9 +36,12 @@ four has an answer that is right for everybody:
   h     C Header over C++ Header and Objective-C, whose headers are also '.h' files. There is no way
         to tell them apart from the name. On GitHub, 55 of every hundred '.h' files are C, 36 are
         C++ and 9 are Objective-C, so a C++ project is the swap this line is most often wanted for.
-  m     MATLAB over Objective-C. Both are common and neither is close to a majority: 59 of every
-        hundred '.m' files on GitHub are MATLAB. Objective-C also answers to '.mm', so it still
-        counts the part of a project that is not contested; MATLAB has no second extension at all.
+  m     MATLAB over Objective-C and Mercury. The first two are common and neither is close to a
+        majority: 59 of every hundred '.m' files on GitHub are MATLAB. Objective-C also answers to
+        '.mm', so it still counts the part of a project that is not contested; MATLAB and Mercury
+        have no second extension at all. Mercury is the rare one and seldom needs this line, since
+        its files open with a ':- module' declaration or carry a 'ft=mercury' modeline, and either
+        one is evidence that wins the file on its own.
   pl    Perl over Prolog. Prolog also answers to '.pro' and '.prolog'.
   pas   Pascal over Delphi. Delphi also answers to '.dpr' and '.dpk'.
 
@@ -61,7 +65,7 @@ are the lines below each marker.
 
 ===> contested-extensions
 h       C Header, C++ Header, Objective-C
-m       MATLAB, Objective-C
+m       MATLAB, Objective-C, Mercury
 pl      Perl, Prolog
 pas     Pascal, Delphi
 

@@ -1,0 +1,46 @@
+Language
+Mercury
+
+Extensions
+m
+
+Identifying line starts
+:- module, :- interface, :- implementation, :- import_module, :- pred, :- func, :- type, :- pragma
+
+Identifying line contains
+ft=mercury
+
+String symbols
+
+
+Character literal symbols
+'
+
+Multi line string symbols
+"
+
+Escape character
+\
+
+Comment symbols
+%
+Multi line comment start
+/*
+Multi line comment end
+*/
+
+Keyword
+NAME
+types
+ALIASES
+type
+Keyword
+NAME
+predicates
+ALIASES
+pred
+Keyword
+NAME
+functions
+ALIASES
+func
