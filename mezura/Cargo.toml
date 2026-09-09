@@ -12,7 +12,7 @@ keywords = ["loc", "lines-of-code", "cloc", "analytics", "code-metrics"]
 categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
-mezura-core = { path = "../mezura-core", version = "1.0.0" }
+mezura-core = { path = "../mezura-core", version = "1.1.0" }
 colored = "=2.0.0"
 chrono = "0.4.45"
 directories = "4.0.1"
