@@ -48,11 +48,18 @@ pub fn run_explain(config: &Configuration, languages: Languages) -> ExitCode {
             }
             ExitCode::SUCCESS
         },
-        Err(ExplainError::UnclaimedFile) => refuse(&format!("No language of this run claims '{}', \
-                so there is nothing to explain. If its language was narrowed away, drop \
-                '--languages' or '--exclude-languages'; if the extension is unknown, \
-                '--force-language' hands it to a language.",
-                target.path)),
+        Err(ExplainError::UnclaimedFile) => {
+            let read_no_first_line = match config.engine.detect_shebangs {
+                true => "",
+                false => " This run was given '--no-shebang', so a file with no extension is \
+                        claimed by nothing."
+            };
+            refuse(&format!("No language of this run claims '{}', \
+                    so there is nothing to explain. If its language was narrowed away, drop \
+                    '--languages' or '--exclude-languages'; if the extension is unknown, \
+                    '--force-language' hands it to a language.{read_no_first_line}",
+                    target.path))
+        },
         Err(ExplainError::UnreadableFile(reason)) => refuse(&format!("'{}' could not be read: \
                 {reason}", target.path)),
         Err(ExplainError::LanguagesFromAnotherConfig) => refuse("The languages of this run were \

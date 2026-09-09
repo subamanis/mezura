@@ -16,6 +16,7 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
   - [--count-generated](#cmd-count-generated)
   - [--count-not-code](#cmd-count-not-code)
   - [--no-heuristics](#cmd-no-heuristics)
+  - [--no-shebang](#cmd-no-shebang)
   - [--show-languages](#cmd-show-languages)
 - [How the report looks](#how-the-report-looks)
   - [--layout](#cmd-layout)
@@ -337,6 +338,27 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
 
     It also stops the reading that leaves out files whose head says they are not code, so '.d'
     dependency files and the like are counted again; see '--count-not-code'.
+
+    '--no-shebang' takes the '#!' line out of this contest as well, and out of the naming of files
+    that have no extension at all.
+```
+
+### <a id="cmd-no-shebang" name="cmd-no-shebang"></a>--no-shebang
+
+```
+--no-shebang
+    identify every file by its name alone, leaving the '#!' line inside it unread
+
+    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
+    or 'no' to disable. Default: no
+
+    A file with no extension is normally opened and its first line read, so that a script called
+    'configure' counts as the language that line names. Under this flag such a file is never
+    opened and appears in no figure, and the '#!' line also stops settling an extension that two
+    languages claim. A whole file name a language declares, like 'Makefile', is unaffected.
+
+    Two uses. It makes a run comparable to a counter that knows extensions alone, and it spares the
+    scan an open and a read for every file that has no extension.
 ```
 
 ### <a id="cmd-show-languages" name="cmd-show-languages"></a>--show-languages

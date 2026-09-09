@@ -291,6 +291,25 @@ pub const NO_HEURISTICS_HELP  :  &str =
     It also stops the reading that leaves out files whose head says they are not code, so '.d'
     dependency files and the like are counted again; see '--count-not-code'.
 
+    '--no-shebang' takes the '#!' line out of this contest as well, and out of the naming of files
+    that have no extension at all.
+
+";
+pub const NO_SHEBANG_HELP  :  &str =
+"--no-shebang
+    identify every file by its name alone, leaving the '#!' line inside it unread
+
+    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
+    or 'no' to disable. Default: no
+
+    A file with no extension is normally opened and its first line read, so that a script called
+    'configure' counts as the language that line names. Under this flag such a file is never
+    opened and appears in no figure, and the '#!' line also stops settling an extension that two
+    languages claim. A whole file name a language declares, like 'Makefile', is unaffected.
+
+    Two uses. It makes a run comparable to a counter that knows extensions alone, and it spares the
+    scan an open and a read for every file that has no extension.
+
 ";
 pub const EXPLAIN_HELP  :  &str =
 "--explain
@@ -1043,6 +1062,7 @@ pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 8] = [
         (COUNT_GENERATED, COUNT_GENERATED_HELP),
         (COUNT_NOT_CODE, COUNT_NOT_CODE_HELP),
         (NO_HEURISTICS, NO_HEURISTICS_HELP),
+        (NO_SHEBANG, NO_SHEBANG_HELP),
         (SHOW_LANGUAGES, SHOW_LANGUAGES_HELP),
     ]),
     ("How the report looks", &[

@@ -8,7 +8,7 @@ use mezura_core::language_file::ConflictRules;
 use super::config_manager::{ByFile, Configuration, Layout, SortCriterion};
 use super::config_manager::{COUNTING, COUNT_GENERATED, COUNT_MINIFIED, COUNT_NOT_CODE, EXCLUDE,
         EXCLUDE_LANGUAGES, FORCE_LANGUAGE, LANGUAGES, NO_GITIGNORE, NO_HEURISTICS, NO_IGNORE_FILES,
-        SEARCH_IN_DOTTED};
+        NO_SHEBANG, SEARCH_IN_DOTTED};
 use super::json_reader::{DocumentError, DocumentWarning, Scope};
 use super::sources::RevisionSide;
 
@@ -492,7 +492,8 @@ pub fn scope_of(engine: &mezura_core::EngineConfig, counting: mezura_core::Count
         count_minified: engine.count_minified,
         count_generated: engine.count_generated,
         count_not_code: engine.count_not_code,
-        use_heuristics: engine.use_heuristics
+        use_heuristics: engine.use_heuristics,
+        shebangs: engine.detect_shebangs
     }
 }
 
@@ -514,6 +515,7 @@ pub fn find_settings_that_differ(baseline: &Scope, subject: &Scope) -> Vec<&'sta
     if baseline.count_generated != subject.count_generated {differ.push(COUNT_GENERATED)}
     if baseline.count_not_code != subject.count_not_code {differ.push(COUNT_NOT_CODE)}
     if baseline.use_heuristics != subject.use_heuristics {differ.push(NO_HEURISTICS)}
+    if baseline.shebangs != subject.shebangs {differ.push(NO_SHEBANG)}
 
     differ
 }
@@ -583,6 +585,10 @@ pub fn resolve_settings(document: &Scope, config: &mut super::config_manager::Co
     if !typed.no_heuristics && document.use_heuristics != config.engine.use_heuristics {
         config.engine.use_heuristics = document.use_heuristics;
         adopted.push(NO_HEURISTICS);
+    }
+    if !typed.no_shebang && document.shebangs != config.engine.detect_shebangs {
+        config.engine.detect_shebangs = document.shebangs;
+        adopted.push(NO_SHEBANG);
     }
 
     adopted
@@ -1200,10 +1206,11 @@ mod tests {
             count_minified: false,
             count_generated: false,
             count_not_code: false,
-            use_heuristics: true
+            use_heuristics: true,
+            shebangs: true
         };
 
-        // Nothing typed: what differs is taken, what agrees is not reported
+        // Nothing typed, so what differs is taken and what agrees is not reported
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         let adopted = resolve_settings(&document, &mut config);
         assert_eq!(vec!["exclude", "counting", "no-gitignore"], adopted);
@@ -1245,6 +1252,16 @@ mod tests {
         config.typed_explicitly.no_heuristics = true;
         assert!(resolve_settings(&no_reading, &mut config).is_empty());
         assert!(config.engine.use_heuristics);
+
+        let by_name_alone = Scope { shebangs: false, gitignore: true,
+                counting: "content".to_owned(), exclude: Vec::new(), ..document.clone() };
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        assert_eq!(vec!["no-shebang"], resolve_settings(&by_name_alone, &mut config));
+        assert!(!config.engine.detect_shebangs);
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        config.typed_explicitly.no_shebang = true;
+        assert!(resolve_settings(&by_name_alone, &mut config).is_empty());
+        assert!(config.engine.detect_shebangs);
 
         let without_keywords = Scope { keywords_counted: false, gitignore: true,
                 counting: "content".to_owned(), exclude: Vec::new(), ..document };

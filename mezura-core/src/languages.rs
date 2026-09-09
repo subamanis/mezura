@@ -189,7 +189,8 @@ struct LanguageSelection {
     // Empty until a module is given a rule of its own. Only then does a name the targets declare
     // decide anything.
     modules: Vec<String>,
-    use_heuristics: bool
+    use_heuristics: bool,
+    detect_shebangs: bool
 }
 
 impl LanguageSelection {
@@ -224,7 +225,8 @@ impl LanguageSelection {
                     declared
                 }
             },
-            use_heuristics: config.use_heuristics
+            use_heuristics: config.use_heuristics,
+            detect_shebangs: config.detect_shebangs
         }
     }
 }
@@ -259,11 +261,15 @@ fn resolve_one_scope(languages: &[Language], everything: &HashMap<String, Langua
     let (by_filename, filename_report) = build_language_map_by(IdentifiedBy::Filename, &by_name,
             &conflicts.by_filename, &forced);
     reported.extend(filename_report.collect_warnings());
-    // The conflicts file has no block for a contested interpreter yet; the forced pairs reach this
+    // The conflicts file has no block for a contested interpreter yet. The forced pairs reach this
     // map like the other two, which is how such a contest would be settled by hand.
-    let (by_shebang, shebang_report) = build_language_map_by(IdentifiedBy::Shebang, &by_name,
-            &HashMap::new(), &forced);
-    reported.extend(shebang_report.collect_warnings());
+    // Leaving it empty is the whole of 'detect_shebangs'. No reader opens a file over an empty map.
+    let by_shebang = if config.detect_shebangs {
+        let (map, shebang_report) = build_language_map_by(IdentifiedBy::Shebang, &by_name,
+                &HashMap::new(), &forced);
+        reported.extend(shebang_report.collect_warnings());
+        map
+    } else {HashMap::new()};
 
     let extension_rules = if config.use_heuristics {
         build_extension_rules(find_contested_with_evidence(&report, &by_name), conflicts, &forced)

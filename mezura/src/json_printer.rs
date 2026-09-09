@@ -309,6 +309,7 @@ fn create_scope_object_of(scope: &super::json_reader::Scope, targets: &[mezura_c
         format!("\"count_generated\":{}", scope.count_generated),
         format!("\"count_not_code\":{}", scope.count_not_code),
         format!("\"use_heuristics\":{}", scope.use_heuristics),
+        format!("\"shebangs\":{}", scope.shebangs),
     ];
 
     create_object(members)
@@ -447,6 +448,7 @@ fn create_scope_object(config: &Configuration, targets: &[mezura_core::Target]) 
         format!("\"count_generated\":{}", config.engine.count_generated),
         format!("\"count_not_code\":{}", config.engine.count_not_code),
         format!("\"use_heuristics\":{}", config.engine.use_heuristics),
+        format!("\"shebangs\":{}", config.engine.detect_shebangs),
     ];
 
     create_object(members)

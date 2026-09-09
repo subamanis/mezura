@@ -31,6 +31,7 @@ pub const HIDE               :&str   = "hide";
 pub const NO_GITIGNORE       :&str   = "no-gitignore";
 pub const NO_IGNORE_FILES    :&str   = "no-ignore-files";
 pub const NO_HEURISTICS      :&str   = "no-heuristics";
+pub const NO_SHEBANG         :&str   = "no-shebang";
 pub const THEME              :&str   = "theme";
 pub const STYLE              :&str   = "style";
 pub const BAR_THICKNESS      :&str   = "bar-thickness";
@@ -73,9 +74,9 @@ const DEFAULT_CONFIG_LABEL  : &str    = "default";
 // The commands whose value decides what is counted, as against how the count is shown. A project's
 // own configuration is answered for these by the program's defaults and never by this machine's
 // saved ones, and a value of theirs this build cannot read stops the run rather than warning.
-const CHANGES_THE_NUMBERS   : [&str; 13] = [TARGETS, EXCLUDE, LANGUAGES, EXCLUDE_LANGUAGES,
+const CHANGES_THE_NUMBERS   : [&str; 14] = [TARGETS, EXCLUDE, LANGUAGES, EXCLUDE_LANGUAGES,
         FORCE_LANGUAGE, COUNTING, SEARCH_IN_DOTTED, COUNT_MINIFIED, COUNT_GENERATED, COUNT_NOT_CODE,
-        NO_GITIGNORE, NO_IGNORE_FILES, NO_HEURISTICS];
+        NO_GITIGNORE, NO_IGNORE_FILES, NO_HEURISTICS, NO_SHEBANG];
 
 // Two halves: the engine is handed only what can change a number, the presentation everything,
 // since echoing what the counting was done with is part of its job. The command line and the
@@ -672,6 +673,7 @@ pub struct TypedExplicitlyOnCommandLine {
     pub no_gitignore: bool,
     pub no_ignore_files: bool,
     pub no_heuristics: bool,
+    pub no_shebang: bool,
     pub hide_keywords: bool
 }
 
@@ -681,7 +683,7 @@ impl TypedExplicitlyOnCommandLine {
     fn of(builder: &ConfigurationBuilder) -> Self {
         let ConfigurationBuilder { exclude_dirs, languages_of_interest, excluded_languages,
             forced_languages, counting, should_search_in_dotted, count_minified, count_generated,
-            count_not_code, no_gitignore, no_ignore_files, no_heuristics, hidden,
+            count_not_code, no_gitignore, no_ignore_files, no_heuristics, no_shebang, hidden,
             targets: _, targets_source: _, threads: _, should_show_faulty_files: _,
             should_show_skipped_files: _, theme_name: _,
             log: _, compare_level: _, config_name_to_save: _, config_name_to_load: _,
@@ -702,6 +704,7 @@ impl TypedExplicitlyOnCommandLine {
             no_gitignore: no_gitignore.is_some(),
             no_ignore_files: no_ignore_files.is_some(),
             no_heuristics: no_heuristics.is_some(),
+            no_shebang: no_shebang.is_some(),
             hide_keywords: hidden.as_ref().is_some_and(|x| x.keywords)
         }
     }
@@ -732,6 +735,7 @@ pub struct ConfigurationBuilder {
     pub no_gitignore:             Option<bool>,
     pub no_ignore_files:          Option<bool>,
     pub no_heuristics:            Option<bool>,
+    pub no_shebang:               Option<bool>,
     pub theme_name:               Option<String>,
     // Only the command line switches it on. A configuration that carried its own log would write an
     // entry on every run that loads it, so it stays a per-run request and is absent from
@@ -786,6 +790,7 @@ impl ConfigurationBuilder {
         if self.no_gitignore.is_none() {self.no_gitignore = config.no_gitignore};
         if self.no_ignore_files.is_none() {self.no_ignore_files = config.no_ignore_files};
         if self.no_heuristics.is_none() {self.no_heuristics = config.no_heuristics};
+        if self.no_shebang.is_none() {self.no_shebang = config.no_shebang};
         if self.theme_name.is_none() {self.theme_name = config.theme_name};
         if self.compare_level.is_none() {self.compare_level = config.compare_level};
         if self.config_styles.is_none() {self.config_styles = config.config_styles};
@@ -806,7 +811,7 @@ impl ConfigurationBuilder {
         // before this compiles again.
         let ConfigurationBuilder { targets, exclude_dirs, languages_of_interest, excluded_languages,
             forced_languages, counting, should_search_in_dotted, count_minified, count_generated,
-            count_not_code, no_gitignore, no_ignore_files, no_heuristics,
+            count_not_code, no_gitignore, no_ignore_files, no_heuristics, no_shebang,
             threads: _, should_show_faulty_files: _, should_show_skipped_files: _, hidden: _,
             theme_name: _, compare_level: _,
             bar_thickness: _, progress_bar: _, number_separator: _, decimal_separator: _, layout: _,
@@ -829,6 +834,7 @@ impl ConfigurationBuilder {
         *no_gitignore = None;
         *no_ignore_files = None;
         *no_heuristics = None;
+        *no_shebang = None;
 
         self
     }
@@ -843,7 +849,7 @@ impl ConfigurationBuilder {
         self.count_minified.is_none() || self.count_generated.is_none() ||
         self.count_not_code.is_none() || self.should_show_faulty_files.is_none() ||
         self.should_show_skipped_files.is_none() || self.hidden.is_none() || self.no_gitignore.is_none() ||
-        self.no_ignore_files.is_none() || self.no_heuristics.is_none() ||
+        self.no_ignore_files.is_none() || self.no_heuristics.is_none() || self.no_shebang.is_none() ||
         self.theme_name.is_none() || self.compare_level.is_none() ||
         self.config_styles.is_none() || self.bar_thickness.is_none() || self.progress_bar.is_none() ||
         self.number_separator.is_none() || self.decimal_separator.is_none() || self.layout.is_none() ||
@@ -918,6 +924,7 @@ impl ConfigurationBuilder {
                 no_gitignore: self.no_gitignore.unwrap_or(engine_defaults.no_gitignore),
                 no_ignore_files: self.no_ignore_files.unwrap_or(engine_defaults.no_ignore_files),
                 use_heuristics: !self.no_heuristics.unwrap_or(!engine_defaults.use_heuristics),
+                detect_shebangs: !self.no_shebang.unwrap_or(!engine_defaults.detect_shebangs),
                 // The two flags that answer both questions: what is counted and what is shown
                 count_keywords: !hidden.keywords,
                 collect_files: self.by_file.is_some()
@@ -1098,6 +1105,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             NO_GITIGNORE => config_builder.no_gitignore = Some(take_flag(command, NO_GITIGNORE)?),
             NO_IGNORE_FILES => config_builder.no_ignore_files = Some(take_flag(command, NO_IGNORE_FILES)?),
             NO_HEURISTICS => config_builder.no_heuristics = Some(take_flag(command, NO_HEURISTICS)?),
+            NO_SHEBANG => config_builder.no_shebang = Some(take_flag(command, NO_SHEBANG)?),
             THEME => {
                 let name = take_name(THEME, arguments)?;
                 if super::theme_files::load_theme(&name, &crate::paths::PERSISTENT_APP_PATHS.themes_dir).is_none() {
@@ -1430,8 +1438,8 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             targets, exclude_dirs, forced_languages, threads, counting, should_search_in_dotted,
             count_minified, count_generated, count_not_code, should_show_faulty_files,
             should_show_skipped_files, hidden,
-            no_gitignore, no_ignore_files, no_heuristics, theme_name, compare_level, bar_thickness,
-            progress_bar, number_separator, decimal_separator, layout, sort_by, top_n, by_file,
+            no_gitignore, no_ignore_files, no_heuristics, no_shebang, theme_name, compare_level,
+            bar_thickness, progress_bar, number_separator, decimal_separator, layout, sort_by, top_n, by_file,
             // these two accept whatever they are given, so a config can hold no invalid value for
             // them and they never reach 'invalid_fields'
             languages_of_interest: _, excluded_languages: _,
@@ -1458,6 +1466,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             NO_GITIGNORE => no_gitignore.is_some(),
             NO_IGNORE_FILES => no_ignore_files.is_some(),
             NO_HEURISTICS => no_heuristics.is_some(),
+            NO_SHEBANG => no_shebang.is_some(),
             EXCLUDE => exclude_dirs.is_some(),
             FORCE_LANGUAGE => forced_languages.is_some(),
             THEME => theme_name.is_some(),
@@ -2131,7 +2140,8 @@ mod tests {
         std::fs::write(test_file_path, "===> targets\nfrontend=\n\n===> sort\nnope\n\n===> top\nnope\n\n===> bar-thickness\nnope\n\n\
                 ===> progress-bar\nnope\n\n===> number-separator\nnope\n\n===> decimal-separator\nnope\n\n===> force-language\nnope\n\n\
                 ===> by-file\nnope\n\n===> counting\nnope\n\n===> count-minified\nnope\n\n\
-                ===> count-generated\nnope\n\n===> count-not-code\nnope\n\n===> no-heuristics\nnope\n").unwrap();
+                ===> count-generated\nnope\n\n===> count-not-code\nnope\n\n===> no-heuristics\nnope\n\n\
+                ===> no-shebang\nnope\n").unwrap();
 
         // With no target on the command line to take its place, the run stops instead of counting
         // less than it was asked to
@@ -2142,9 +2152,10 @@ mod tests {
                 create_config_from_args("./ --load test002"));
 
         let rescued = create_config_from_args(
-                "./ --load test002 --sort name --top 3 --bar-thickness fat --progress-bar hash --number-separator dot --decimal-separator comma --force-language m=matlab --by-file 8 --counting region --count-minified --count-generated --count-not-code --no-heuristics").unwrap();
+                "./ --load test002 --sort name --top 3 --bar-thickness fat --progress-bar hash --number-separator dot --decimal-separator comma --force-language m=matlab --by-file 8 --counting region --count-minified --count-generated --count-not-code --no-heuristics --no-shebang").unwrap();
         assert!(rescued.engine.count_minified && rescued.engine.count_generated && rescued.engine.count_not_code);
         assert!(!rescued.engine.use_heuristics);
+        assert!(!rescued.engine.detect_shebangs);
         assert_eq!(Some(ByFile::Capped(8)), rescued.view.by_file);
         assert_eq!(vec![Target::of(mezura_core::engine::targets::convert_to_absolute("./"))], rescued.engine.targets);
         assert_eq!(CountingModel::Region, rescued.view.counting);
@@ -2170,7 +2181,7 @@ mod tests {
             donor.add_missing_fields(create_config_builder_from_args(
                     "./ --exclude a --languages rust --exclude-languages java --force-language m=matlab \
                     --threads 1 1 --counting region --search-in-dotted --count-minified --count-generated \
-                    --count-not-code --show-faulty-files --show-skipped --hide bar --no-gitignore --no-ignore-files --no-heuristics \
+                    --count-not-code --show-faulty-files --show-skipped --hide bar --no-gitignore --no-ignore-files --no-heuristics --no-shebang \
                     --compare 3 --bar-thickness fat \
                     --progress-bar hash --number-separator dot --decimal-separator comma --layout table \
                     --sort name --top 3 --by-file 8").unwrap());

@@ -15,7 +15,7 @@ the count. The shares are GitHub code search totals, taken 2026-09-01.
 The table is the fallback. A file is identified by its own content first: the `#!` line, then the
 evidence its candidate languages declare, so a `.m` opening with `@interface` is Objective-C, one
 opening with `function` is MATLAB, and one opening with `:- module` is Mercury. `--no-heuristics`
-turns that off. Mercury is the reason the table matters least for `.m`: its files carry a
+turns that off, and `--no-shebang` takes the `#!` line out of it on its own. Mercury is the reason the table matters least for `.m`: its files carry a
 `:- module` declaration or a `ft=mercury` modeline at the top, and over the Mercury compiler's own
 4,164 files that evidence wins all but one of them.
 

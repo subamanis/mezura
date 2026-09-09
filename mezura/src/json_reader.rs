@@ -53,7 +53,8 @@ pub struct Scope {
     pub count_minified: bool,
     pub count_generated: bool,
     pub count_not_code: bool,
-    pub use_heuristics: bool
+    pub use_heuristics: bool,
+    pub shebangs: bool
 }
 
 // The scan block's counts of the files the head checks set aside, kept apart from the lists in
@@ -231,7 +232,9 @@ pub(crate) fn parse_scope(scope: &Map<String, Value>) -> Result<(Scope, Vec<Targ
         count_generated: read_optional_flag(scope, "count_generated", "scope", true)?,
         count_not_code: read_optional_flag(scope, "count_not_code", "scope", true)?,
         // Absent from a document of the builds that never read a file to identify it
-        use_heuristics: read_optional_flag(scope, "use_heuristics", "scope", false)?
+        use_heuristics: read_optional_flag(scope, "use_heuristics", "scope", false)?,
+        // Absent from a document of every build that had no way to turn the probe off
+        shebangs: read_optional_flag(scope, "shebangs", "scope", true)?
     }, parse_targets(read_list(scope, "targets", "scope")?)?))
 }
 

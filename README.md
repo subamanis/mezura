@@ -144,6 +144,7 @@ WHAT IS COUNTED
   --count-not-code     count the non-code files that are left out by default
   --no-heuristics      never try to automatically resolve the contest when two languages claim the same
                        extension
+  --no-shebang         identify every file by its name alone, leaving the '#!' line inside it unread
   --show-languages     print the languages this installation knows and stop
 
 HOW THE REPORT LOOKS
@@ -582,6 +583,8 @@ All the supported languages can be found in [the data directory](#the-data-direc
 
 If two or more language files claim the same extension, each file of it is identified by its own content: a `#!` line first, then the evidence the language files declare, so a `.m` opening with `@interface` counts as Objective-C, one opening with `function` counts as MATLAB, and one opening with `:- module` counts as Mercury. A file whose content says nothing falls back to the winner named in the `language_conflicts.txt` file of the data dir, which ships with an answer for every contest between the languages that come with the program. An extension that nobody has named there goes to the language that comes first alphabetically, and the program reports it, since that is a tie-break and not a decision. ```--force-language``` overrides all of it for a single run, or through a configuration file for a single project. It can also answer differently per module in the same run, so ```mezura ios=./ios analysis=./matlab --force-language ios/m=objective-c,analysis/m=matlab``` counts one repository's ```.m``` files as Objective-C in one folder and as MATLAB in the other.
 
+A file with **no extension at all** is named by the same `#!` line, so a script called `configure` is counted as the language that line names, and a whole file name a language claims, like `Makefile`, is answered before either. ```--no-shebang``` turns that first line off everywhere, which is how a run is made comparable with a counter that only knows extensions: files with no extension go uncounted and are never opened, and a contested extension is settled without it.
+
 **[Language choices](https://github.com/subamanis/mezura/blob/HEAD/LANGUAGE_CHOICES.md)** is the short page behind those answers: which language gets each contested extension, and which files are left out of the count.
 
 **[The language files guide](https://github.com/subamanis/mezura/blob/HEAD/LANGUAGE_FILES_GUIDE.md)** is a page of its own: a whole language file to copy, every block with an example, which of the five string blocks a symbol belongs in, and the two mistakes that cost people the most time.
@@ -626,7 +629,7 @@ With that said, it is important to mention the following limitations:
 
 - ```=*``` in a comment symbol means "any number of ```=```", so a language whose symbol really contained ```=*``` could not be declared. None is known.
 
-- Two languages claiming one extension is settled per file, by a ```#!``` line or by evidence the language files declare, and only the files whose content says nothing follow the standing order of ```language_conflicts.txt```, parsed with that winner's symbols. ```--force-language``` decides outright, and ```--no-heuristics``` turns the content reading off.
+- Two languages claiming one extension is settled per file, by a ```#!``` line or by evidence the language files declare, and only the files whose content says nothing follow the standing order of ```language_conflicts.txt```, parsed with that winner's symbols. ```--force-language``` decides outright, ```--no-heuristics``` turns the content reading off, and ```--no-shebang``` takes the ```#!``` line out of the whole business, the naming of files that carry no extension included.
 
 
 ## How it compares

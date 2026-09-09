@@ -10,6 +10,9 @@ Main changes:
   -> A language file can now say that a symbol does not count when a given character sits right in
       front of it, in a "Cancelled symbols" block. C3 needs it: "int[<*>]" is a vector and not a
       comment opener.
+  -> New "--no-shebang", which names every file by its extension or its whole name and reads no "#!"
+      line, so a run can be lined up with a counter that only knows extensions. A file with no
+      extension is then left uncounted, and the scan never opens it.
 
 Performance:
   -> Counting a large tree is about a fifth faster.

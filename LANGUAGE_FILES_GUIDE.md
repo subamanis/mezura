@@ -55,7 +55,7 @@ Three things to know before you start:
 | `Language` | The name shown in the report | `Kotlin` |
 | `Extensions` | Extensions, no dot, case ignored | `cpp cxx cc` |
 | `Filenames` *(opt)* | Whole names, for files an extension cannot describe | `Makefile Dockerfile` |
-| `Shebangs` *(opt)* | Interpreters a `#!` first line may name, for scripts with no extension | `sh bash zsh` |
+| `Shebangs` *(opt)* | Interpreters a `#!` first line may name, for scripts with no extension and for a contested one | `sh bash zsh` |
 | `Identifying line starts` *(opt)* | Comma-separated literals; a line beginning with one, blanks aside, identifies a contested file as this language | `function, classdef, %` |
 | `Identifying line contains` *(opt)* | The same, found anywhere in a line | `std::` |
 | `String symbols` | Strings that end with the line | `" '` |
@@ -82,11 +82,13 @@ Three things to know before you start:
 A block marked *(opt)* can be left out entirely. One that has "in the same order" under it comes
 with its partner or not at all.
 
-`Shebangs` is consulted only for a file with no extension whose name nothing claims: its first
-line is read, and the interpreter named there, found past `/usr/bin/env` and its flags, is matched
-against these names. A versioned interpreter falls back to its plain name, so `python` alone
-covers `python3` and `python3.12`; name a versioned form explicitly only when it belongs to a
-different language, the way `perl6` is Raku and not Perl.
+`Shebangs` is consulted for a file with no extension whose name nothing claims, and for a file whose
+extension two languages claim: its first line is read, and the program named there, found past
+`/usr/bin/env` and its flags, is matched against these names. A versioned interpreter falls back to
+its plain name, so `python` alone covers `python3` and `python3.12`; name a versioned form
+explicitly only when it belongs to a different language, the way `perl6` is Raku and not Perl.
+`--no-shebang` reads no such line, so those extensionless files go uncounted and a contested
+extension is settled without it.
 
 ## Which string block
 
