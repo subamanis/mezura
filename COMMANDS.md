@@ -41,6 +41,7 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
 - [Your data directory](#your-data-directory)
   - [--save](#cmd-save)
   - [--load](#cmd-load)
+  - [--no-default-config](#cmd-no-default-config)
   - [--save-theme](#cmd-save-theme)
   - [--show-configs](#cmd-show-configs)
   - [--restore](#cmd-restore)
@@ -940,6 +941,23 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     out of a run that names one, and its log stays where every named configuration's log is.
 ```
 
+### <a id="cmd-no-default-config" name="cmd-no-default-config"></a>--no-default-config
+
+```
+--no-default-config
+    ignore the default configuration of this machine
+
+    No arguments.
+
+    Whatever the command line and the project being counted leave unset is normally filled from the
+    'default' configuration in your data directory. Under this flag that file is never read, so the
+    run answers with the program's own defaults and counts the same on any machine. A default
+    configuration that cannot be read stops an ordinary run, and under this flag there is nothing
+    to stop.
+
+    The settings of the project being counted are a separate question, answered by '--no-local'.
+```
+
 ### <a id="cmd-save-theme" name="cmd-save-theme"></a>--save-theme
 
 ```
@@ -1031,6 +1049,9 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
 
     Counts as though the project had no '.mezura' folder: your own flags, your own default
     configuration, and no entry written to the project's log.
+
+    Give '--no-default-config' beside it and the run has neither, which is how a tree is counted
+    with the program's own defaults and nothing of this machine.
 ```
 
 ## Tuning and diagnostics

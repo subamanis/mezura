@@ -177,6 +177,7 @@ YOUR DATA DIRECTORY
 
   --save               save the flags of this run as a named configuration
   --load               take the flags of this run from a saved configuration file
+  --no-default-config  ignore the default configuration of this machine
   --save-theme         save the way this run looks as a named theme
   --show-configs       print the configurations this installation holds and stop
   --restore            put the data directory back to what this version ships, and stop
@@ -492,7 +493,8 @@ By default, there is a configuration file named "default" already present in the
 your [data directory](#the-data-directory), that gets loaded on every run. There, you can customize your preferences and they will
 apply to all runs, unless overridden by giving a different command on the command line, or by
 loading a specific configuration. For example, if you prefer the counting model of the other
-counters, you can put a "===> counting" block holding "region" there.
+counters, you can put a "===> counting" block holding "region" there. ```--no-default-config``` leaves that file
+out of a single run, so the run answers with mezura's own defaults and counts the same on any machine.
 
 ### The settings of a project
 

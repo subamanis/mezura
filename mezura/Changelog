@@ -13,6 +13,8 @@ Main changes:
   -> New "--no-shebang", which names every file by its extension or its whole name and reads no "#!"
       line, so a run can be lined up with a counter that only knows extensions. A file with no
       extension is then left uncounted, and the scan never opens it.
+  -> New "--no-default-config", which leaves your saved default configuration out of one run, so it
+      answers with the program's own defaults. Two machines then count a tree the same way.
 
 Performance:
   -> Counting a large tree is about a fifth faster.

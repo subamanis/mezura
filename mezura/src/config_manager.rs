@@ -52,6 +52,7 @@ pub const SAVE_THEME         :&str   = "save-theme";
 pub const SAVE_LOCAL         :&str   = "save-local";
 pub const LOAD               :&str   = "load";
 pub const NO_LOCAL           :&str   = "no-local";
+pub const NO_DEFAULT_CONFIG  :&str   = "no-default-config";
 pub const HELP               :&str   = "help";
 pub const VERSION            :&str   = "version";
 pub const CHANGELOG          :&str   = "changelog";
@@ -1047,7 +1048,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     }
 
     let mut custom_config = None;
-    let (mut save_local, mut no_local) = (false, false);
+    let (mut save_local, mut no_local, mut no_default_config) = (false, false, false);
     let mut seen_commands = HashSet::new();
     for command in options {
         let (command_name, arguments) = match command.find(" ") {
@@ -1161,6 +1162,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             SAVE_THEME => config_builder.theme_name_to_save = Some(take_name(SAVE_THEME, arguments)?),
             SAVE_LOCAL => save_local = take_flag(command, SAVE_LOCAL)?,
             NO_LOCAL => no_local = take_flag(command, NO_LOCAL)?,
+            NO_DEFAULT_CONFIG => no_default_config = take_flag(command, NO_DEFAULT_CONFIG)?,
             _ => return Err(ArgParsingError::UnrecognisedCommand(command_name.to_owned()))
         }
     }
@@ -1244,36 +1246,9 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         }
     }
 
-    if config_builder.has_missing_fields() {
-        match super::config_files::parse_config_file(None, None) {
-            Ok((default_config, issues)) => {
-                print_config_file_warnings(&issues.warnings, DEFAULT_CONFIG_LABEL);
-                // Under a project's own configuration this machine's saved defaults answer for the
-                // look of the report and for nothing that decides a number. What the project left
-                // unlocked has to mean the program's default, which is the same for everybody, or
-                // two people counting one tree still get two answers and the file that was supposed
-                // to end that argument never touches the fields the argument is about.
-                let under_a_project = config_builder.local_dir.as_ref().is_some_and(|x| x.configuration_applied);
-                let (default_config, invalid_fields) = if under_a_project {
-                    (default_config.forget_what_changes_the_numbers(),
-                            issues.invalid_fields.iter().copied()
-                                    .filter(|field| !CHANGES_THE_NUMBERS.contains(field)).collect())
-                } else {
-                    (default_config, issues.invalid_fields)
-                };
-                resolve_invalid_config_fields(&config_builder, &invalid_fields, DEFAULT_CONFIG_LABEL)?;
-                let targets_were_missing = config_builder.targets.is_none();
-                config_builder.add_missing_fields(default_config);
-                if targets_were_missing && config_builder.targets.is_some() {
-                    targets_config_source = Some(DEFAULT_CONFIG_LABEL.to_owned());
-                }
-            },
-            // An absent default configuration is an ordinary machine. A half-readable one is not,
-            // and skipping it in silence would run with whatever defaults it no longer supplies.
-            Err(super::config_files::ConfigFileParseError::UnreadableLine(file, line, cause)) =>
-                return Err(ArgParsingError::UnreadableConfig(file, line, cause)),
-            Err(_) => {}
-        }
+    if !no_default_config && config_builder.has_missing_fields()
+            && apply_default_configuration(&mut config_builder)? {
+        targets_config_source = Some(DEFAULT_CONFIG_LABEL.to_owned());
     }
 
     // No pattern is expanded here, or anywhere in this crate: the run resolves the declared targets
@@ -1354,10 +1329,8 @@ fn apply_local_configuration(config_builder: &mut ConfigurationBuilder, local: &
     let label = local.get_config_path();
     print_config_file_warnings(&issues.warnings, &label);
 
-    // This file travels with the code to machines and versions it has never met, so a value of its
-    // own that only decides how the report looks is reported and skipped rather than killing
-    // somebody else's run. One that decides what gets counted still stops it, because counting on
-    // with a default is the disagreement between two people's numbers that the file exists to end.
+    // A bad value here is skipped when it decides how the report looks and stops the run when it
+    // decides what gets counted.
     let (changes_the_numbers, presentation) : (Vec<&str>, Vec<&str>) = issues.invalid_fields.iter()
             .partition(|field| CHANGES_THE_NUMBERS.contains(field));
     for field in presentation {
@@ -1371,8 +1344,37 @@ fn apply_local_configuration(config_builder: &mut ConfigurationBuilder, local: &
     Ok(true)
 }
 
-// Written where the next run will look for it: into the folder this one found, from wherever inside
-// the project the command was typed, and otherwise into a new folder at the directory holding the
+// Answers whether the default configuration was the file that supplied the targets.
+fn apply_default_configuration(config_builder: &mut ConfigurationBuilder)
+-> Result<bool, ArgParsingError>
+{
+    let (default_config, issues) = match super::config_files::parse_config_file(None, None) {
+        Ok(x) => x,
+        // An absent default configuration is an ordinary machine. A half-readable one stops the run.
+        Err(super::config_files::ConfigFileParseError::UnreadableLine(file, line, cause)) =>
+                return Err(ArgParsingError::UnreadableConfig(file, line, cause)),
+        Err(_) => return Ok(false)
+    };
+
+    print_config_file_warnings(&issues.warnings, DEFAULT_CONFIG_LABEL);
+    // Under a project's configuration this machine's defaults fill the look of the report only.
+    let under_a_project = config_builder.local_dir.as_ref().is_some_and(|x| x.configuration_applied);
+    let (default_config, invalid_fields) = if under_a_project {
+        (default_config.forget_what_changes_the_numbers(),
+                issues.invalid_fields.iter().copied()
+                        .filter(|field| !CHANGES_THE_NUMBERS.contains(field)).collect())
+    } else {
+        (default_config, issues.invalid_fields)
+    };
+    resolve_invalid_config_fields(config_builder, &invalid_fields, DEFAULT_CONFIG_LABEL)?;
+    let targets_were_missing = config_builder.targets.is_none();
+    config_builder.add_missing_fields(default_config);
+
+    Ok(targets_were_missing && config_builder.targets.is_some())
+}
+
+// Written where the next run will look for it. That is the folder this one found, from wherever
+// inside the project the command was typed, and otherwise a new folder at the directory holding the
 // targets.
 fn save_the_local_configuration(config_builder: &mut ConfigurationBuilder, typed_paths: &[String])
 -> Result<(), ArgParsingError>
