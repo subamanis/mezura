@@ -15,6 +15,8 @@ Performance:
   -> Counting a large tree is about a fifth faster.
 
 Bugfixes:
+  -> A keyword written back to back with nothing in between counts as nothing however long the run
+      is, and a file holding such a run no longer takes minutes to count.
   -> A shipped theme you never edited now follows the version you run, and one you did edit is
       still yours. "--restore" brings the shipped one back.
   -> Colours are no longer flattened to the sixteen terminal ones after "cargo install".

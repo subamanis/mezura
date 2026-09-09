@@ -1912,19 +1912,15 @@ fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher
         indices.extend(alias_finder.find_iter(bytes));
         if indices.is_empty() { continue; }
 
-        // A hit touching the next one is part of a longer word, so neither of the two counts
-        let mut counter = 0;
-        while !indices.is_empty() && counter < indices.len()-1 {
-            if indices[counter] + alias_len == indices[counter+1] {
-                indices.remove(counter);
-                indices.remove(counter);
-            }
-            counter += 1;
-        }
-
         // both lists ascend, so the stretch that could hold the next hit is never behind us
         let mut span = 0;
-        for at in indices.iter() {
+        for (found, at) in indices.iter().enumerate() {
+            // A hit touching another of the same alias is part of a longer word and never counts
+            if (found > 0 && indices[found - 1] + alias_len == *at)
+                    || indices.get(found + 1).is_some_and(|next| at + alias_len == *next) {
+                continue;
+            }
+
             while span < spans.len() && (spans[span].1 as usize) <= *at { span += 1; }
             if span == spans.len() { break; }
 
@@ -3245,6 +3241,43 @@ mod tests {
         // and neither form fires on a longer word
         assert_eq!(0, count_of("(defnx foo)"));
         assert_eq!(0, count_of("(mydefn foo)"));
+    }
+
+    // Every shipped alias ends in a letter or a dot, which is not accepted in front of a keyword,
+    // so a run of them already answered zero and no shipped count can move. The synthetic alias
+    // here is the one shape whose own bytes are accepted on both sides, and it is the whole of
+    // what the rule decides.
+    #[test]
+    fn a_run_of_touching_aliases_counts_as_nothing() {
+        let clojure = KeywordMatcher::build(&CLOJURE).unwrap();
+        let defns = |line: &str| {
+            let mut file_stats = FileStats::with_keywords(std::slice::from_ref(&DEFN));
+            keywords_of(line, &clojure, &mut file_stats);
+            file_stats.keyword_occurences[0]
+        };
+
+        assert_eq!(0, defns("(defn(defn"));
+        assert_eq!(0, defns("(defn(defn(defn"));
+        assert_eq!(0, defns("(defn(defn(defn(defn"));
+        assert_eq!(0, defns("(defn(defn(defn(defn(defn"));
+        assert_eq!(2, defns("(defn (defn"));
+        assert_eq!(1, defns("(defn(defn (defn"));
+
+        let braced = Keyword::new("braced", ["{x{"]);
+        let language = Language::new("braced", ["bx"], build_backslashed_quotes(), [";"], &[],
+                [braced.clone()]);
+        let matcher = KeywordMatcher::build(&language).unwrap();
+        let braces = |line: &str| {
+            let mut file_stats = FileStats::with_keywords(std::slice::from_ref(&braced));
+            keywords_of(line, &matcher, &mut file_stats);
+            file_stats.keyword_occurences[0]
+        };
+
+        assert_eq!(1, braces("{x{"));
+        assert_eq!(2, braces("{x{ {x{"));
+        let chains = (2..=7).map(|n| braces(&"{x{".repeat(n))).collect::<Vec<usize>>();
+        assert_eq!(vec![0, 0, 0, 0, 0, 0], chains);
+        assert_eq!(1, braces("{x{{x{ {x{"));
     }
 
     // Every symbol of a kind has to be searched in the same pass, otherwise its positions would not
