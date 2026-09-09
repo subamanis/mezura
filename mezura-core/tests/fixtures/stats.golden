@@ -1,4 +1,4 @@
-files=86 lines=1096 code=592 comments=264
+files=87 lines=1139 code=610 comments=268
 
 Ada
   files=1 lines=8 code=5 comments=2
@@ -33,6 +33,10 @@ C++ Header
   files=1 lines=13 code=5 comments=5
   words_in_code=5 string_content=0 comment_words_beside_code=0 words_in_comment=5 punctuation_in_code=1 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   classes=1 structs=1
+C3
+  files=1 lines=43 code=18 comments=4
+  words_in_code=17 string_content=1 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=12 punctuation_in_comment=2 blank=7 blank_in_comment=0 blank_in_string=0
+  enums=1 macros=1 structs=1
 CMake
   files=1 lines=15 code=7 comments=5
   words_in_code=7 string_content=0 comment_words_beside_code=0 words_in_comment=5 punctuation_in_code=0 punctuation_in_comment=1 blank=2 blank_in_comment=0 blank_in_string=0

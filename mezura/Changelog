@@ -4,8 +4,9 @@ Main changes:
   -> New "--output markdown", a report as a markdown table (maybe for a CI step to put in a pull request?).
   -> "MEZURA_PHASE_TIMING" now also reports the time before and after the count, the milliseconds
       behind each share, and when the counting threads outnumber the cores.
-  -> New language: Mercury, bringing the shipped set to 82. It claims ".m" beside MATLAB and
-      Objective-C, and a file saying ":- module" or "ft=mercury" is counted as Mercury.
+  -> New language: Mercury. It claims ".m" beside MATLAB and Objective-C, and a file saying
+      ":- module" or "ft=mercury" is counted as Mercury.
+  -> New language: C3, which takes ".c3", ".c3i" and ".c3t", bringing the shipped set to 83.
 
 Performance:
   -> Counting a large tree is about a fifth faster.

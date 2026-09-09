@@ -1,0 +1,44 @@
+Language
+C3
+
+Extensions
+c3 c3i c3t
+
+String symbols
+"
+
+Character literal symbols
+'
+
+Multi line raw string symbols
+`
+
+Escape character
+\
+
+Comment symbols
+//
+Multi line comment start
+<*
+Multi line comment end
+*>
+Self-nesting comment start
+/*
+Self-nesting comment end
+*/
+
+Keyword
+NAME
+structs
+ALIASES
+struct
+Keyword
+NAME
+enums
+ALIASES
+enum
+Keyword
+NAME
+macros
+ALIASES
+macro
