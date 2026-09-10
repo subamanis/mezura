@@ -118,3 +118,30 @@ jobs:
       # and version at once, which only matters here and at the moment of publishing
       - name: Every package still packages
         run: cargo package --workspace
+
+  # Everything above builds from Cargo.lock, which is what nobody installing from crates.io gets:
+  # 'cargo install' resolves fresh unless it is given '--locked'. That gap shipped once already, in
+  # v3.0.0, where 'colored' resolved to a version that hid every 24-bit colour behind an
+  # environment variable and turned the themes white. Allowed to fail, because a dependency
+  # published at any hour must never turn main red on its own.
+  latest-dependencies:
+    name: latest dependencies (what 'cargo install' resolves)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Resolve every dependency to its newest compatible version
+        run: cargo update
+
+      - name: Build
+        run: cargo build --release --verbose
+
+      # The tests are the half that matters. A dependency that changes behaviour without changing
+      # its API compiles perfectly, and only an assertion on what comes out can see it.
+      - name: Test
+        run: cargo test --verbose

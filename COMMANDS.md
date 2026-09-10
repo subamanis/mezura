@@ -16,6 +16,7 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
   - [--count-generated](#cmd-count-generated)
   - [--count-not-code](#cmd-count-not-code)
   - [--no-heuristics](#cmd-no-heuristics)
+  - [--no-shebang](#cmd-no-shebang)
   - [--show-languages](#cmd-show-languages)
 - [How the report looks](#how-the-report-looks)
   - [--layout](#cmd-layout)
@@ -40,6 +41,7 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
 - [Your data directory](#your-data-directory)
   - [--save](#cmd-save)
   - [--load](#cmd-load)
+  - [--no-default-config](#cmd-no-default-config)
   - [--save-theme](#cmd-save-theme)
   - [--show-configs](#cmd-show-configs)
   - [--restore](#cmd-restore)
@@ -337,18 +339,45 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
 
     It also stops the reading that leaves out files whose head says they are not code, so '.d'
     dependency files and the like are counted again; see '--count-not-code'.
+
+    '--no-shebang' takes the '#!' line out of this contest as well, and out of the naming of files
+    that have no extension at all.
+```
+
+### <a id="cmd-no-shebang" name="cmd-no-shebang"></a>--no-shebang
+
+```
+--no-shebang
+    identify every file by its name alone, leaving the '#!' line inside it unread
+
+    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
+    or 'no' to disable. Default: no
+
+    A file with no extension is normally opened and its first line read, so that a script called
+    'configure' counts as the language that line names. Under this flag such a file is never
+    opened and appears in no figure, and the '#!' line also stops settling an extension that two
+    languages claim. A whole file name a language declares, like 'Makefile', is unaffected.
+
+    Two uses. It makes a run comparable to a counter that knows extensions alone, and it spares the
+    scan an open and a read for every file that has no extension.
 ```
 
 ### <a id="cmd-show-languages" name="cmd-show-languages"></a>--show-languages
 
 ```
 --show-languages
-    print the languages this installation knows and stop
+    print the languages this installation knows, with their extensions, and stop
 
     No arguments.
 
-    Lists by name what is in the 'data/languages/' directory, and counts nothing. Adding a file
-    there teaches mezura another language.
+    Lists what is in the 'data/languages/' directory, each name beside the extensions it claims,
+    and counts nothing. Adding a file there teaches mezura another language.
+
+    A star marks an extension another language holds, and the line under the list says which one.
+    The order in 'language_conflicts.txt' decides the holder, and an extension no line there
+    mentions goes to whichever name comes first alphabetically. Such a file is still counted as the
+    starred language when its own content says which language it is, and '--no-heuristics' turns
+    that reading off.
 
     A name on the list that cannot count anything is reported under it: two files declaring one
     language, and a language whose every extension is held by another one, which a line in
@@ -744,9 +773,21 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
 
 ```
 --output
-    text for a person, or one JSON document for another program
+    text for a person, markdown for a page, or one JSON document for another program
 
-    One argument: 'text' or 'json'. Default: text
+    One argument: 'text', 'markdown' or 'json'. Default: text
+
+    'markdown' prints the details as a markdown table, for a build step to put in a pull request
+    or a job summary.
+
+      mezura ./src --diff origin/main --output markdown >> $GITHUB_STEP_SUMMARY
+
+    It is still the report, so '--hide', '--sort', '--top' and '--by-file' all apply. '--layout'
+    does not, there being one table shape, and the colors, the overview and the history section
+    are left out as terminal drawings. '--explain' has no markdown form and says so.
+
+    A warning that puts the numbers in doubt goes under the table as well as to the error output.
+    One about an ignored setting stays on the error output alone.
 
     'json' replaces the whole output, status lines and overview included, with a single document,
     so another program can read the run.
@@ -906,6 +947,23 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     out of a run that names one, and its log stays where every named configuration's log is.
 ```
 
+### <a id="cmd-no-default-config" name="cmd-no-default-config"></a>--no-default-config
+
+```
+--no-default-config
+    ignore the default configuration of this machine
+
+    No arguments.
+
+    Whatever the command line and the project being counted leave unset is normally filled from the
+    'default' configuration in your data directory. Under this flag that file is never read, so the
+    run answers with the program's own defaults and counts the same on any machine. A default
+    configuration that cannot be read stops an ordinary run, and under this flag there is nothing
+    to stop.
+
+    The settings of the project being counted are a separate question, answered by '--no-local'.
+```
+
 ### <a id="cmd-save-theme" name="cmd-save-theme"></a>--save-theme
 
 ```
@@ -997,6 +1055,9 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
 
     Counts as though the project had no '.mezura' folder: your own flags, your own default
     configuration, and no entry written to the project's log.
+
+    Give '--no-default-config' beside it and the run has neither, which is how a tree is counted
+    with the program's own defaults and nothing of this machine.
 ```
 
 ## Tuning and diagnostics

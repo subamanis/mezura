@@ -276,8 +276,42 @@ fn a_dependency_file_is_skipped_as_not_code_and_two_flags_bring_it_back() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+#[test]
+fn a_script_with_no_extension_is_counted_by_its_shebang_until_the_setting_says_no() {
+    let root = std::env::temp_dir().join("mezura-shebang-setting");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("deploy"), "#!/usr/bin/env bash\necho hi\n").unwrap();
+    std::fs::write(root.join("build.sh"), "echo hi\n").unwrap();
+    // Perl wins '.pl' by the standing order and Prolog wins it by the line it declares as evidence.
+    // The file below holds both, so it is Perl only while the '#!' line still decides.
+    std::fs::write(root.join("contested.pl"), "#!/usr/bin/perl\n:- module(x).\n").unwrap();
+
+    let counted = |detect_shebangs: bool| {
+        let config = EngineConfig { threads: Threads::new(1, 2), detect_shebangs,
+                ..EngineConfig::new([root.to_string_lossy().replace('\\', "/")]) };
+        let (languages, _) = Languages::shipped(&config);
+        run(&config, languages).unwrap().per_language.iter()
+                .map(|(name, stats)| (name.clone(), stats.files)).collect::<HashMap<_, _>>()
+    };
+
+    let reading = counted(true);
+    assert_eq!(Some(&2), reading.get("Shell"),
+            "the script with no extension was not identified by its '#!' line");
+    assert_eq!(Some(&1), reading.get("Perl"),
+            "the '#!' line stopped settling a contested extension: {reading:?}");
+    let by_name_alone = counted(false);
+    assert_eq!(Some(&1), by_name_alone.get("Shell"),
+            "'detect_shebangs: false' still read a first line to name a file");
+    assert_eq!(Some(&1), by_name_alone.get("Prolog"),
+            "'detect_shebangs: false' still let a '#!' line settle a contested extension: {by_name_alone:?}");
+
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
 // The three counting flags decide per file, not per resolved set, so one resolve serves a run that
-// counts everything. The heuristics switch shapes the lookups themselves, so that one still refuses.
+// counts everything. The heuristics switch shapes the lookups themselves, so that one still refuses,
+// and so does the interpreter map.
 #[test]
 fn a_resolved_set_of_languages_serves_a_run_whose_counting_flags_differ() {
     let root = std::env::temp_dir().join("mezura-resolved-reuse");
@@ -296,9 +330,14 @@ fn a_resolved_set_of_languages_serves_a_run_whose_counting_flags_differ() {
             "a counting flag invalidated the resolved set or the dependency file stayed out");
 
     let (languages, _) = Languages::shipped(&base);
-    let no_heuristics = EngineConfig { use_heuristics: false, ..base };
+    let no_heuristics = EngineConfig { use_heuristics: false, ..base.clone() };
     assert!(run(&no_heuristics, languages).is_err(),
             "a run without heuristics accepted lookups resolved with them");
+
+    let (languages, _) = Languages::shipped(&base);
+    let by_name_alone = EngineConfig { detect_shebangs: false, ..base };
+    assert!(run(&by_name_alone, languages).is_err(),
+            "a run that names files without their '#!' line accepted lookups resolved with it");
 
     std::fs::remove_dir_all(&root).unwrap();
 }

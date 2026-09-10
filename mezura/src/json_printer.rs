@@ -309,6 +309,7 @@ fn create_scope_object_of(scope: &super::json_reader::Scope, targets: &[mezura_c
         format!("\"count_generated\":{}", scope.count_generated),
         format!("\"count_not_code\":{}", scope.count_not_code),
         format!("\"use_heuristics\":{}", scope.use_heuristics),
+        format!("\"shebangs\":{}", scope.shebangs),
     ];
 
     create_object(members)
@@ -447,6 +448,7 @@ fn create_scope_object(config: &Configuration, targets: &[mezura_core::Target]) 
         format!("\"count_generated\":{}", config.engine.count_generated),
         format!("\"count_not_code\":{}", config.engine.count_not_code),
         format!("\"use_heuristics\":{}", config.engine.use_heuristics),
+        format!("\"shebangs\":{}", config.engine.detect_shebangs),
     ];
 
     create_object(members)
@@ -638,35 +640,31 @@ fn create_skipped_files_object(skipped: &mezura_core::SkippedFiles, asked_for: b
             format!("\"{}\":{}", kind.name(), paths(skipped.get_of_kind(kind)))))
 }
 
-// Sorted by path, because the faulty files are collected by whichever thread hit them and their
-// order would otherwise change between two runs over the same tree
 fn create_faulty_files_array(faulty_files: &[FaultyFileDetails], asked_for: bool) -> String {
     if !asked_for {
         return String::from("[]");
     }
 
-    let mut sorted = faulty_files.iter().collect::<Vec<_>>();
-    sorted.sort_unstable_by(|a, b| a.path.cmp(&b.path));
-    create_array(sorted.into_iter().map(|file| create_object([
-        format!("\"path\":\"{}\"", escape(&file.path)),
-        format!("\"bytes\":{}", file.size),
-        format!("\"error\":\"{}\"", escape(&file.error_msg)),
-    ])))
+    create_array(crate::present::sort_by_path(faulty_files, |x| x.path.as_str())
+            .into_iter().map(|file| create_object([
+                format!("\"path\":\"{}\"", escape(&file.path)),
+                format!("\"bytes\":{}", file.size),
+                format!("\"error\":\"{}\"", escape(&file.error_msg)),
+            ])))
 }
 
-// Objects and not bare paths, and sorted for the same reason as the faulty files above: a consumer
-// has to be able to tell a refused permission apart from a directory that went away mid-walk.
+// Objects and not bare paths, so that a consumer can tell a refused permission apart from a
+// directory that went away while the scan was running.
 fn create_unreadable_dirs_array(unreadable_dirs: &[mezura_core::UnreadableDirDetails], asked_for: bool) -> String {
     if !asked_for {
         return String::from("[]");
     }
 
-    let mut sorted = unreadable_dirs.iter().collect::<Vec<_>>();
-    sorted.sort_unstable_by(|a, b| a.path.cmp(&b.path));
-    create_array(sorted.into_iter().map(|dir| create_object([
-        format!("\"path\":\"{}\"", escape(&dir.path)),
-        format!("\"error\":\"{}\"", escape(&dir.error_msg)),
-    ])))
+    create_array(crate::present::sort_by_path(unreadable_dirs, |x| x.path.as_str())
+            .into_iter().map(|dir| create_object([
+                format!("\"path\":\"{}\"", escape(&dir.path)),
+                format!("\"error\":\"{}\"", escape(&dir.error_msg)),
+            ])))
 }
 
 // 'scan_ms' and not the 'Exec time' of the footer: what is measured here starts before the producers
@@ -781,7 +779,8 @@ mod tests {
         let document = document_of(&config);
 
         assert!(document.contains(&format!("\"format\":{FORMAT_VERSION}")));
-        assert!(document.contains("\"mezura_version\":\"3.0.0\""));
+        assert!(document.contains(&format!("\"mezura_version\":\"{}\"",
+                crate::config_manager::VERSION_ID.trim_start_matches('v'))));
         assert!(document.contains(&format!("\"generated_at\":\"{}\"",
                 generated_at().to_rfc3339_opts(SecondsFormat::Secs, false))));
         assert!(document.contains("\"lines\":140"));

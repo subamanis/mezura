@@ -11,7 +11,7 @@ use super::paths::LocalDir;
 use super::{message_printer, suggestions, theme::Theme};
 
 // Printed at startup and by '--version'. Also in mezura/Cargo.toml, and the two move together.
-pub const VERSION_ID : &str = "v3.0.0";
+pub const VERSION_ID : &str = "v3.1.0";
 
 // command flags
 pub const TARGETS            :&str   = "targets";
@@ -31,6 +31,7 @@ pub const HIDE               :&str   = "hide";
 pub const NO_GITIGNORE       :&str   = "no-gitignore";
 pub const NO_IGNORE_FILES    :&str   = "no-ignore-files";
 pub const NO_HEURISTICS      :&str   = "no-heuristics";
+pub const NO_SHEBANG         :&str   = "no-shebang";
 pub const THEME              :&str   = "theme";
 pub const STYLE              :&str   = "style";
 pub const BAR_THICKNESS      :&str   = "bar-thickness";
@@ -51,6 +52,7 @@ pub const SAVE_THEME         :&str   = "save-theme";
 pub const SAVE_LOCAL         :&str   = "save-local";
 pub const LOAD               :&str   = "load";
 pub const NO_LOCAL           :&str   = "no-local";
+pub const NO_DEFAULT_CONFIG  :&str   = "no-default-config";
 pub const HELP               :&str   = "help";
 pub const VERSION            :&str   = "version";
 pub const CHANGELOG          :&str   = "changelog";
@@ -73,9 +75,9 @@ const DEFAULT_CONFIG_LABEL  : &str    = "default";
 // The commands whose value decides what is counted, as against how the count is shown. A project's
 // own configuration is answered for these by the program's defaults and never by this machine's
 // saved ones, and a value of theirs this build cannot read stops the run rather than warning.
-const CHANGES_THE_NUMBERS   : [&str; 13] = [TARGETS, EXCLUDE, LANGUAGES, EXCLUDE_LANGUAGES,
+const CHANGES_THE_NUMBERS   : [&str; 14] = [TARGETS, EXCLUDE, LANGUAGES, EXCLUDE_LANGUAGES,
         FORCE_LANGUAGE, COUNTING, SEARCH_IN_DOTTED, COUNT_MINIFIED, COUNT_GENERATED, COUNT_NOT_CODE,
-        NO_GITIGNORE, NO_IGNORE_FILES, NO_HEURISTICS];
+        NO_GITIGNORE, NO_IGNORE_FILES, NO_HEURISTICS, NO_SHEBANG];
 
 // Two halves: the engine is handed only what can change a number, the presentation everything,
 // since echoing what the counting was done with is part of its job. The command line and the
@@ -148,6 +150,11 @@ impl ViewConfig {
     // readable, so that a single stray line cannot make it unparseable
     pub fn prints_text(&self) -> bool {
         self.output == OutputFormat::Text
+    }
+
+    // Markdown answers this one like text and every other question like JSON
+    pub fn prints_a_report(&self) -> bool {
+        self.output != OutputFormat::Json
     }
 
     // The project whose log this run writes and reads, when the log is a project's own. A run
@@ -440,7 +447,8 @@ impl ByFile {
 pub enum OutputFormat {
     #[default]
     Text,
-    Json
+    Json,
+    Markdown
 }
 
 impl OutputFormat {
@@ -448,6 +456,7 @@ impl OutputFormat {
         match value.trim().to_lowercase().as_str() {
             "text" => Some(Self::Text),
             "json" => Some(Self::Json),
+            "markdown" | "md" => Some(Self::Markdown),
             _ => None
         }
     }
@@ -602,8 +611,8 @@ impl Formatted for ArgParsingError {
             },
             Self::DoublePath => wrap_message("Targets already provided as first argument, but --targets command also found.").red(),
             Self::RepeatedCommand(c) => wrap_message(&format!("'--{c}' appears more than once in the \
-command line. Give it once; a command that takes several values takes them together, like '--hide \
-overview,keywords'.")).red(),
+                    command line. Give it once; a command that takes several values takes them together, like '--hide \
+                    overview,keywords'.")).red(),
             Self::UnrecognisedCommand(p) => {
                 let tail = suggestions::format_suggestion(p, &message_printer::get_command_names())
                         .unwrap_or_else(|| format!("Run '--{HELP}' to see every command."));
@@ -665,6 +674,7 @@ pub struct TypedExplicitlyOnCommandLine {
     pub no_gitignore: bool,
     pub no_ignore_files: bool,
     pub no_heuristics: bool,
+    pub no_shebang: bool,
     pub hide_keywords: bool
 }
 
@@ -674,7 +684,7 @@ impl TypedExplicitlyOnCommandLine {
     fn of(builder: &ConfigurationBuilder) -> Self {
         let ConfigurationBuilder { exclude_dirs, languages_of_interest, excluded_languages,
             forced_languages, counting, should_search_in_dotted, count_minified, count_generated,
-            count_not_code, no_gitignore, no_ignore_files, no_heuristics, hidden,
+            count_not_code, no_gitignore, no_ignore_files, no_heuristics, no_shebang, hidden,
             targets: _, targets_source: _, threads: _, should_show_faulty_files: _,
             should_show_skipped_files: _, theme_name: _,
             log: _, compare_level: _, config_name_to_save: _, config_name_to_load: _,
@@ -695,6 +705,7 @@ impl TypedExplicitlyOnCommandLine {
             no_gitignore: no_gitignore.is_some(),
             no_ignore_files: no_ignore_files.is_some(),
             no_heuristics: no_heuristics.is_some(),
+            no_shebang: no_shebang.is_some(),
             hide_keywords: hidden.as_ref().is_some_and(|x| x.keywords)
         }
     }
@@ -725,6 +736,7 @@ pub struct ConfigurationBuilder {
     pub no_gitignore:             Option<bool>,
     pub no_ignore_files:          Option<bool>,
     pub no_heuristics:            Option<bool>,
+    pub no_shebang:               Option<bool>,
     pub theme_name:               Option<String>,
     // Only the command line switches it on. A configuration that carried its own log would write an
     // entry on every run that loads it, so it stays a per-run request and is absent from
@@ -779,6 +791,7 @@ impl ConfigurationBuilder {
         if self.no_gitignore.is_none() {self.no_gitignore = config.no_gitignore};
         if self.no_ignore_files.is_none() {self.no_ignore_files = config.no_ignore_files};
         if self.no_heuristics.is_none() {self.no_heuristics = config.no_heuristics};
+        if self.no_shebang.is_none() {self.no_shebang = config.no_shebang};
         if self.theme_name.is_none() {self.theme_name = config.theme_name};
         if self.compare_level.is_none() {self.compare_level = config.compare_level};
         if self.config_styles.is_none() {self.config_styles = config.config_styles};
@@ -799,7 +812,7 @@ impl ConfigurationBuilder {
         // before this compiles again.
         let ConfigurationBuilder { targets, exclude_dirs, languages_of_interest, excluded_languages,
             forced_languages, counting, should_search_in_dotted, count_minified, count_generated,
-            count_not_code, no_gitignore, no_ignore_files, no_heuristics,
+            count_not_code, no_gitignore, no_ignore_files, no_heuristics, no_shebang,
             threads: _, should_show_faulty_files: _, should_show_skipped_files: _, hidden: _,
             theme_name: _, compare_level: _,
             bar_thickness: _, progress_bar: _, number_separator: _, decimal_separator: _, layout: _,
@@ -822,6 +835,7 @@ impl ConfigurationBuilder {
         *no_gitignore = None;
         *no_ignore_files = None;
         *no_heuristics = None;
+        *no_shebang = None;
 
         self
     }
@@ -836,7 +850,7 @@ impl ConfigurationBuilder {
         self.count_minified.is_none() || self.count_generated.is_none() ||
         self.count_not_code.is_none() || self.should_show_faulty_files.is_none() ||
         self.should_show_skipped_files.is_none() || self.hidden.is_none() || self.no_gitignore.is_none() ||
-        self.no_ignore_files.is_none() || self.no_heuristics.is_none() ||
+        self.no_ignore_files.is_none() || self.no_heuristics.is_none() || self.no_shebang.is_none() ||
         self.theme_name.is_none() || self.compare_level.is_none() ||
         self.config_styles.is_none() || self.bar_thickness.is_none() || self.progress_bar.is_none() ||
         self.number_separator.is_none() || self.decimal_separator.is_none() || self.layout.is_none() ||
@@ -847,7 +861,7 @@ impl ConfigurationBuilder {
     // hunts for a column that was never going to be drawn.
     fn report_a_word_of_the_other_model(command: &str, counting: CountingModel, result: &str) {
         let message = format!("'--{command} {}' names the third column of the other way of counting. \
-This run counts by {}, where that column is '{}', so {result}.",
+                This run counts by {}, where that column is '{}', so {result}.",
                 counting.get_other().get_third_quantity_name(), counting.name(),
                 counting.get_third_quantity_name());
         eprintln!("\n{}", wrap_message(&message).yellow());
@@ -881,9 +895,9 @@ This run counts by {}, where that column is '{}', so {result}.",
         }
         // Decided here, after a configuration file has had its say on both halves. A JSON document
         // carries every figure whatever is hidden, so there the order stands as asked.
-        if hidden.hides_column_of(sort_by) && self.output.unwrap_or_default() == OutputFormat::Text {
+        if hidden.hides_column_of(sort_by) && self.output.unwrap_or_default() != OutputFormat::Json {
             let message = format!("'--{SORT} {}' orders by a column '--{HIDE} {0}' takes out, so the report \
-is sorted by lines.", sort_by.name());
+                    is sorted by lines.", sort_by.name());
             eprintln!("\n{}", wrap_message(&message).yellow());
             super::warning_collector::keep(mezura_core::warnings::Warning::new(
                     mezura_core::warnings::Code::CommandIgnored, SORT, message));
@@ -911,6 +925,7 @@ is sorted by lines.", sort_by.name());
                 no_gitignore: self.no_gitignore.unwrap_or(engine_defaults.no_gitignore),
                 no_ignore_files: self.no_ignore_files.unwrap_or(engine_defaults.no_ignore_files),
                 use_heuristics: !self.no_heuristics.unwrap_or(!engine_defaults.use_heuristics),
+                detect_shebangs: !self.no_shebang.unwrap_or(!engine_defaults.detect_shebangs),
                 // The two flags that answer both questions: what is counted and what is shown
                 count_keywords: !hidden.keywords,
                 collect_files: self.by_file.is_some()
@@ -1033,7 +1048,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     }
 
     let mut custom_config = None;
-    let (mut save_local, mut no_local) = (false, false);
+    let (mut save_local, mut no_local, mut no_default_config) = (false, false, false);
     let mut seen_commands = HashSet::new();
     for command in options {
         let (command_name, arguments) = match command.find(" ") {
@@ -1091,6 +1106,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             NO_GITIGNORE => config_builder.no_gitignore = Some(take_flag(command, NO_GITIGNORE)?),
             NO_IGNORE_FILES => config_builder.no_ignore_files = Some(take_flag(command, NO_IGNORE_FILES)?),
             NO_HEURISTICS => config_builder.no_heuristics = Some(take_flag(command, NO_HEURISTICS)?),
+            NO_SHEBANG => config_builder.no_shebang = Some(take_flag(command, NO_SHEBANG)?),
             THEME => {
                 let name = take_name(THEME, arguments)?;
                 if super::theme_files::load_theme(&name, &crate::paths::PERSISTENT_APP_PATHS.themes_dir).is_none() {
@@ -1146,6 +1162,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             SAVE_THEME => config_builder.theme_name_to_save = Some(take_name(SAVE_THEME, arguments)?),
             SAVE_LOCAL => save_local = take_flag(command, SAVE_LOCAL)?,
             NO_LOCAL => no_local = take_flag(command, NO_LOCAL)?,
+            NO_DEFAULT_CONFIG => no_default_config = take_flag(command, NO_DEFAULT_CONFIG)?,
             _ => return Err(ArgParsingError::UnrecognisedCommand(command_name.to_owned()))
         }
     }
@@ -1229,36 +1246,9 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         }
     }
 
-    if config_builder.has_missing_fields() {
-        match super::config_files::parse_config_file(None, None) {
-            Ok((default_config, issues)) => {
-                print_config_file_warnings(&issues.warnings, DEFAULT_CONFIG_LABEL);
-                // Under a project's own configuration this machine's saved defaults answer for the
-                // look of the report and for nothing that decides a number. What the project left
-                // unlocked has to mean the program's default, which is the same for everybody, or
-                // two people counting one tree still get two answers and the file that was supposed
-                // to end that argument never touches the fields the argument is about.
-                let under_a_project = config_builder.local_dir.as_ref().is_some_and(|x| x.configuration_applied);
-                let (default_config, invalid_fields) = if under_a_project {
-                    (default_config.forget_what_changes_the_numbers(),
-                            issues.invalid_fields.iter().copied()
-                                    .filter(|field| !CHANGES_THE_NUMBERS.contains(field)).collect())
-                } else {
-                    (default_config, issues.invalid_fields)
-                };
-                resolve_invalid_config_fields(&config_builder, &invalid_fields, DEFAULT_CONFIG_LABEL)?;
-                let targets_were_missing = config_builder.targets.is_none();
-                config_builder.add_missing_fields(default_config);
-                if targets_were_missing && config_builder.targets.is_some() {
-                    targets_config_source = Some(DEFAULT_CONFIG_LABEL.to_owned());
-                }
-            },
-            // An absent default configuration is an ordinary machine. A half-readable one is not,
-            // and skipping it in silence would run with whatever defaults it no longer supplies.
-            Err(super::config_files::ConfigFileParseError::UnreadableLine(file, line, cause)) =>
-                return Err(ArgParsingError::UnreadableConfig(file, line, cause)),
-            Err(_) => {}
-        }
+    if !no_default_config && config_builder.has_missing_fields()
+            && apply_default_configuration(&mut config_builder)? {
+        targets_config_source = Some(DEFAULT_CONFIG_LABEL.to_owned());
     }
 
     // No pattern is expanded here, or anywhere in this crate: the run resolves the declared targets
@@ -1339,10 +1329,8 @@ fn apply_local_configuration(config_builder: &mut ConfigurationBuilder, local: &
     let label = local.get_config_path();
     print_config_file_warnings(&issues.warnings, &label);
 
-    // This file travels with the code to machines and versions it has never met, so a value of its
-    // own that only decides how the report looks is reported and skipped rather than killing
-    // somebody else's run. One that decides what gets counted still stops it, because counting on
-    // with a default is the disagreement between two people's numbers that the file exists to end.
+    // A bad value here is skipped when it decides how the report looks and stops the run when it
+    // decides what gets counted.
     let (changes_the_numbers, presentation) : (Vec<&str>, Vec<&str>) = issues.invalid_fields.iter()
             .partition(|field| CHANGES_THE_NUMBERS.contains(field));
     for field in presentation {
@@ -1356,8 +1344,37 @@ fn apply_local_configuration(config_builder: &mut ConfigurationBuilder, local: &
     Ok(true)
 }
 
-// Written where the next run will look for it: into the folder this one found, from wherever inside
-// the project the command was typed, and otherwise into a new folder at the directory holding the
+// Answers whether the default configuration was the file that supplied the targets.
+fn apply_default_configuration(config_builder: &mut ConfigurationBuilder)
+-> Result<bool, ArgParsingError>
+{
+    let (default_config, issues) = match super::config_files::parse_config_file(None, None) {
+        Ok(x) => x,
+        // An absent default configuration is an ordinary machine. A half-readable one stops the run.
+        Err(super::config_files::ConfigFileParseError::UnreadableLine(file, line, cause)) =>
+                return Err(ArgParsingError::UnreadableConfig(file, line, cause)),
+        Err(_) => return Ok(false)
+    };
+
+    print_config_file_warnings(&issues.warnings, DEFAULT_CONFIG_LABEL);
+    // Under a project's configuration this machine's defaults fill the look of the report only.
+    let under_a_project = config_builder.local_dir.as_ref().is_some_and(|x| x.configuration_applied);
+    let (default_config, invalid_fields) = if under_a_project {
+        (default_config.forget_what_changes_the_numbers(),
+                issues.invalid_fields.iter().copied()
+                        .filter(|field| !CHANGES_THE_NUMBERS.contains(field)).collect())
+    } else {
+        (default_config, issues.invalid_fields)
+    };
+    resolve_invalid_config_fields(config_builder, &invalid_fields, DEFAULT_CONFIG_LABEL)?;
+    let targets_were_missing = config_builder.targets.is_none();
+    config_builder.add_missing_fields(default_config);
+
+    Ok(targets_were_missing && config_builder.targets.is_some())
+}
+
+// Written where the next run will look for it. That is the folder this one found, from wherever
+// inside the project the command was typed, and otherwise a new folder at the directory holding the
 // targets.
 fn save_the_local_configuration(config_builder: &mut ConfigurationBuilder, typed_paths: &[String])
 -> Result<(), ArgParsingError>
@@ -1365,7 +1382,7 @@ fn save_the_local_configuration(config_builder: &mut ConfigurationBuilder, typed
     let Some(local) = config_builder.local_dir.clone()
             .or_else(|| crate::paths::choose_place_for_a_local_dir(typed_paths)) else {
         eprintln!("\n{}", wrap_message(&format!("'--{SAVE_LOCAL}' has nowhere to write: the targets of this run \
-have no directory holding all of them, so there is no one project for these settings to belong to.")).yellow());
+                have no directory holding all of them, so there is no one project for these settings to belong to.")).yellow());
         return Ok(());
     };
 
@@ -1423,8 +1440,8 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             targets, exclude_dirs, forced_languages, threads, counting, should_search_in_dotted,
             count_minified, count_generated, count_not_code, should_show_faulty_files,
             should_show_skipped_files, hidden,
-            no_gitignore, no_ignore_files, no_heuristics, theme_name, compare_level, bar_thickness,
-            progress_bar, number_separator, decimal_separator, layout, sort_by, top_n, by_file,
+            no_gitignore, no_ignore_files, no_heuristics, no_shebang, theme_name, compare_level,
+            bar_thickness, progress_bar, number_separator, decimal_separator, layout, sort_by, top_n, by_file,
             // these two accept whatever they are given, so a config can hold no invalid value for
             // them and they never reach 'invalid_fields'
             languages_of_interest: _, excluded_languages: _,
@@ -1451,6 +1468,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             NO_GITIGNORE => no_gitignore.is_some(),
             NO_IGNORE_FILES => no_ignore_files.is_some(),
             NO_HEURISTICS => no_heuristics.is_some(),
+            NO_SHEBANG => no_shebang.is_some(),
             EXCLUDE => exclude_dirs.is_some(),
             FORCE_LANGUAGE => forced_languages.is_some(),
             THEME => theme_name.is_some(),
@@ -2099,7 +2117,7 @@ mod tests {
     #[test]
     fn a_scoped_setting_survives_being_written_out_and_read_back() {
         let typed = "./ --force-language ios/m=objective-c,pl=perl --languages rust,web/js \
---exclude-languages json,web/xml";
+                --exclude-languages json,web/xml";
         let config = create_config_from_args(typed).unwrap();
 
         assert_eq!(hashmap!("ios/m".to_owned() => "objective-c".to_owned(),
@@ -2124,7 +2142,8 @@ mod tests {
         std::fs::write(test_file_path, "===> targets\nfrontend=\n\n===> sort\nnope\n\n===> top\nnope\n\n===> bar-thickness\nnope\n\n\
                 ===> progress-bar\nnope\n\n===> number-separator\nnope\n\n===> decimal-separator\nnope\n\n===> force-language\nnope\n\n\
                 ===> by-file\nnope\n\n===> counting\nnope\n\n===> count-minified\nnope\n\n\
-                ===> count-generated\nnope\n\n===> count-not-code\nnope\n\n===> no-heuristics\nnope\n").unwrap();
+                ===> count-generated\nnope\n\n===> count-not-code\nnope\n\n===> no-heuristics\nnope\n\n\
+                ===> no-shebang\nnope\n").unwrap();
 
         // With no target on the command line to take its place, the run stops instead of counting
         // less than it was asked to
@@ -2135,9 +2154,10 @@ mod tests {
                 create_config_from_args("./ --load test002"));
 
         let rescued = create_config_from_args(
-                "./ --load test002 --sort name --top 3 --bar-thickness fat --progress-bar hash --number-separator dot --decimal-separator comma --force-language m=matlab --by-file 8 --counting region --count-minified --count-generated --count-not-code --no-heuristics").unwrap();
+                "./ --load test002 --sort name --top 3 --bar-thickness fat --progress-bar hash --number-separator dot --decimal-separator comma --force-language m=matlab --by-file 8 --counting region --count-minified --count-generated --count-not-code --no-heuristics --no-shebang").unwrap();
         assert!(rescued.engine.count_minified && rescued.engine.count_generated && rescued.engine.count_not_code);
         assert!(!rescued.engine.use_heuristics);
+        assert!(!rescued.engine.detect_shebangs);
         assert_eq!(Some(ByFile::Capped(8)), rescued.view.by_file);
         assert_eq!(vec![Target::of(mezura_core::engine::targets::convert_to_absolute("./"))], rescued.engine.targets);
         assert_eq!(CountingModel::Region, rescued.view.counting);
@@ -2163,7 +2183,7 @@ mod tests {
             donor.add_missing_fields(create_config_builder_from_args(
                     "./ --exclude a --languages rust --exclude-languages java --force-language m=matlab \
                     --threads 1 1 --counting region --search-in-dotted --count-minified --count-generated \
-                    --count-not-code --show-faulty-files --show-skipped --hide bar --no-gitignore --no-ignore-files --no-heuristics \
+                    --count-not-code --show-faulty-files --show-skipped --hide bar --no-gitignore --no-ignore-files --no-heuristics --no-shebang \
                     --compare 3 --bar-thickness fat \
                     --progress-bar hash --number-separator dot --decimal-separator comma --layout table \
                     --sort name --top 3 --by-file 8").unwrap());

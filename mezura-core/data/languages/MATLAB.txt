@@ -5,7 +5,7 @@ Extensions
 m
 
 Identifying line starts
-function, classdef, %
+function, classdef, %%
 
 String symbols
 " '

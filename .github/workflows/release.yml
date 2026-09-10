@@ -88,17 +88,30 @@ jobs:
       contents: write
 
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download every archive
         uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
 
-      # Attaches the archives to the release of this tag. If the release was already created
-      # by hand from the github UI, only the files are added to it and the notes that were
-      # written there are left untouched. If it does not exist yet, it is created.
+      # Everything above the dashes that separate this version from the one before it. The file is
+      # written for a terminal, so a fence keeps its columns and its arrows.
+      - name: Cut the notes of this version out of the Changelog
+        run: |
+          {
+            echo '```'
+            sed '/^---/,$d' mezura/Changelog
+            echo '```'
+          } > notes.md
+
+      # Attaches the archives to the release of this tag, creating it if it does not exist yet.
+      # The notes come from the Changelog on every run, so anything written into the github UI
+      # before the tag was pushed is replaced.
       - name: Attach the archives to the release
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*
           fail_on_unmatched_files: true
+          body_path: notes.md

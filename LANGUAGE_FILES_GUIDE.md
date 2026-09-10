@@ -55,7 +55,7 @@ Three things to know before you start:
 | `Language` | The name shown in the report | `Kotlin` |
 | `Extensions` | Extensions, no dot, case ignored | `cpp cxx cc` |
 | `Filenames` *(opt)* | Whole names, for files an extension cannot describe | `Makefile Dockerfile` |
-| `Shebangs` *(opt)* | Interpreters a `#!` first line may name, for scripts with no extension | `sh bash zsh` |
+| `Shebangs` *(opt)* | Interpreters a `#!` first line may name, for scripts with no extension and for a contested one | `sh bash zsh` |
 | `Identifying line starts` *(opt)* | Comma-separated literals; a line beginning with one, blanks aside, identifies a contested file as this language | `function, classdef, %` |
 | `Identifying line contains` *(opt)* | The same, found anywhere in a line | `std::` |
 | `String symbols` | Strings that end with the line | `" '` |
@@ -72,6 +72,8 @@ Three things to know before you start:
 | `Multi line comment end` | Their closers, in the same order | `*/ }` |
 | `Self-nesting comment start` *(opt)* | Openers of blocks that nest inside themselves | `(*` |
 | `Self-nesting comment end` | Their closers, in the same order | `*)` |
+| `Cancelled symbols` *(opt)* | Symbols that stop counting when one character sits in front of them | `<* *>` |
+| `Cancelled after` | The character that cancels each, in the same order | `[ <` |
 | `Nested language start` *(opt)* | Openers of sections written in another language | `<script <style` |
 | `Nested language end` | Their closers, in the same order | `</script> </style>` |
 | `Nested language default` | The extension each section falls to when its tag names none | `js css` |
@@ -80,11 +82,13 @@ Three things to know before you start:
 A block marked *(opt)* can be left out entirely. One that has "in the same order" under it comes
 with its partner or not at all.
 
-`Shebangs` is consulted only for a file with no extension whose name nothing claims: its first
-line is read, and the interpreter named there, found past `/usr/bin/env` and its flags, is matched
-against these names. A versioned interpreter falls back to its plain name, so `python` alone
-covers `python3` and `python3.12`; name a versioned form explicitly only when it belongs to a
-different language, the way `perl6` is Raku and not Perl.
+`Shebangs` is consulted for a file with no extension whose name nothing claims, and for a file whose
+extension two languages claim: its first line is read, and the program named there, found past
+`/usr/bin/env` and its flags, is matched against these names. A versioned interpreter falls back to
+its plain name, so `python` alone covers `python3` and `python3.12`; name a versioned form
+explicitly only when it belongs to a different language, the way `perl6` is Raku and not Perl.
+`--no-shebang` reads no such line, so those extensionless files go uncounted and a contested
+extension is settled without it.
 
 ## Which string block
 
@@ -148,6 +152,24 @@ Multi line comment end
 
 That is the only place in the format where characters do not stand for themselves, and it works
 only in these two blocks.
+
+## When a symbol is part of something longer
+
+A few languages write one of their symbols inside a longer form of their own, where it is not that
+symbol at all. C3 opens a documentation comment with `<*` and closes it with `*>`, and writes a
+vector of unknown length as `int[<*>]`, where `[<` is one token and neither half is a comment:
+
+```
+Cancelled symbols
+<* *>
+Cancelled after
+[ <
+```
+
+Read it as "a `<*` right after a `[` is not a comment opener, and a `*>` right after a `<` is not a
+closer". The two lines are matched by position, the symbol has to be one this file declares
+somewhere, and what cancels it is one character sitting immediately in front of it. A symbol at the
+very start of a line has nothing in front of it and always counts.
 
 ## Sections of another language
 
@@ -258,8 +280,13 @@ like `&'a str` from swallowing the line.
 **Two languages wanting the same extension.** Only one can have it, and the loser's files are then
 read with the winner's symbols. Name the winner in `language_conflicts.txt` in the data directory,
 under `contested-extensions` or `contested-filenames`, or use `--force-language` for one run.
+`--show-languages` stars every extension your language lost and names who took it.
 
 ## Checking it
 
 Run mezura over a folder holding one file of your language. If the file could not be read, mezura
 says so at the top of the run and names the line.
+
+`--show-languages` is the other half of the check. Your language belongs on that list with the
+extensions you gave it beside it, and a star on one of them means another language takes those
+files.

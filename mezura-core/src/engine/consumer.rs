@@ -40,7 +40,7 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
     language_lookups: crate::SharedModuleLookups,
     config: Arc<EngineConfig>, skipped_files: &Mutex<SkippedFiles>, progress: &ScanProgress)
 {
-    let mut buf = String::with_capacity(INITIAL_FILE_BUFFER_BYTES);
+    let mut buf = Vec::with_capacity(INITIAL_FILE_BUFFER_BYTES);
     let mut parse_buffers = file_parser::ParseBuffers::default();
     let mut idle_iterations = 0u32;
     let mut local_faulty: Vec<FaultyFileDetails> = Vec::new();
@@ -87,15 +87,15 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                         extension_to_name: &nested_definitions.extension_to_name,
                         set_aside: &nested_definitions.set_aside };
                 let shebang_map = &language_lookups.get_of_module(parsable_file.module).by_shebang;
-                match file_parser::parse_file(&parsable_file.path, lang_name, &mut buf, &mut parse_buffers,
-                        &lookup, &mut keyword_matchers, &mut identification_matchers, &config,
-                        parsable_file.written_by_hand, parsable_file.extension_rules.as_deref(),
+                match file_parser::parse_file(&parsable_file.path, parsable_file.size, lang_name, &mut buf,
+                        &mut parse_buffers, &lookup, &mut keyword_matchers, &mut identification_matchers,
+                        &config, parsable_file.written_by_hand, parsable_file.extension_rules.as_deref(),
                         shebang_map) {
                     Ok(file_parser::FileOutcome::Counted(report, resolved)) => {
                         let lang_name = resolved.as_deref().unwrap_or(lang_name);
                         progress.record_file_parsed(report.total_lines());
                         let keywords = &language_map.get(lang_name).unwrap().keywords;
-                        let bytes = buf.len();
+                        let bytes = report.bytes;
                         let module = parsable_file.module as usize;
                         let mut of_this_file = config.collect_files.then(HashMap::<String, Stats>::new);
                         // A nested section is booked beside the file's own row and never into it:
@@ -143,12 +143,11 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                     Err(x) => {
                         progress.record_file_parsed(0);
                         local_faulty.push(FaultyFileDetails::new(spell_out(&parsable_file.path), x,
-                                parsable_file.path.metadata().map_or(0, |m| m.len())))
+                                parsable_file.size))
                     }
                 }
-                // Only after the buffer's length has been read as the file's size, never before
                 if buf.capacity() > file_parser::MAX_RETAINED_FILE_BUFFER_BYTES {
-                    buf = String::with_capacity(INITIAL_FILE_BUFFER_BYTES);
+                    buf = Vec::with_capacity(INITIAL_FILE_BUFFER_BYTES);
                 }
             },
             Steal::Retry => {

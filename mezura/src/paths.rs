@@ -52,10 +52,7 @@ impl PersistentAppPaths {
         } else if let Some(named) = find_the_directory_the_environment_names() {
             (named, true)
         } else {
-            (ProjectDirs::from("", "", APP_NAME)
-                    .expect("no home directory could be found to put the application's data in")
-                    .data_dir().to_str()
-                    .expect("the application data directory path is not valid UTF-8").to_owned() + "/", false)
+            (get_the_system_data_dir(), false)
         };
         PersistentAppPaths {
             languages_dir: data_dir.clone() + LANGUAGES_DIR_NAME + "/",
@@ -118,6 +115,21 @@ pub fn normalise_separators(path: &str) -> Cow<'_, str> {
 
 pub fn fold_for_comparison(path: &str) -> Cow<'_, str> {
     if cfg!(windows) {Cow::Owned(normalise_separators(path).to_lowercase())} else {Cow::Borrowed(path)}
+}
+
+// On Windows the roaming folder is what 'APPDATA' holds. Asking the shell for the same folder
+// costs two calls into it before any counting has started.
+fn get_the_system_data_dir() -> String {
+    #[cfg(windows)]
+    if let Some(roaming) = std::env::var_os("APPDATA").filter(|value| !value.is_empty())
+            && let Some(path) = Path::new(&roaming).join(APP_NAME).join("data").to_str() {
+        return path.to_owned() + "/";
+    }
+
+    ProjectDirs::from("", "", APP_NAME)
+            .expect("no home directory could be found to put the application's data in")
+            .data_dir().to_str()
+            .expect("the application data directory path is not valid UTF-8").to_owned() + "/"
 }
 
 fn find_the_directory_the_environment_names() -> Option<String> {

@@ -5,6 +5,8 @@ use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
+use crate::render::NumberFormat;
+
 // Resolved once, so an ordinary run pays one predictable branch per file. A reading costs roughly
 // 25 ns, which is affordable once per file and would not be once per line.
 pub(crate) static ENABLED : LazyLock<bool> =
@@ -62,7 +64,7 @@ pub(crate) fn report(consumers: usize, run_millis: u128) -> String {
         files: FILES.load(Ordering::Relaxed),
         starved: STARVED.load(Ordering::Relaxed),
         starved_nanos: STARVED_NANOS.load(Ordering::Relaxed)
-    }, consumers, run_millis)
+    }, consumers, run_millis, std::thread::available_parallelism().map_or(0, |x| x.get()))
 }
 
 // The value and not merely the presence of the name: asking 'is_some' makes
@@ -75,7 +77,7 @@ fn is_enabled_by(value: Option<&std::ffi::OsStr>) -> bool {
 
 // Split from the reading of the statics so that the arithmetic can be asserted: those are global to
 // the process and every test that counts anything adds to them.
-fn format_report(totals: &Totals, consumers: usize, run_millis: u128) -> String {
+fn format_report(totals: &Totals, consumers: usize, run_millis: u128, hardware_threads: usize) -> String {
     let consumers = consumers.max(1);
     // Every consumer is alive for the whole run, so this is what there was to spend, and the four
     // shares below are of it and close on 100%. Shares of the busy time alone would hide the
@@ -92,11 +94,26 @@ fn format_report(totals: &Totals, consumers: usize, run_millis: u128) -> String 
     let consumer_word = if consumers == 1 {"consumer"} else {"consumers"};
     let wait_word = if totals.starved == 1 {"wait"} else {"waits"};
 
-    format!("[phase] {consumers} {consumer_word}: starved {:.1}% ({} {wait_word}) | open {:.1}% | read {:.1}% | parse {:.1}%\n\
-[phase] {} files, {:.1} MB, read at {:.2} GB/s per thread",
-        share(totals.starved_nanos), totals.starved, share(totals.open_nanos),
-        share(totals.read_nanos), share(totals.parse_nanos),
+    // Without it a large 'open' share reads as a slow disk when it is threads queued for a core
+    let queueing = if hardware_threads > 0 && consumers > hardware_threads {
+        let hardware_word = if hardware_threads == 1 {"hardware thread"} else {"hardware threads"};
+        format!("\n[phase] shares are of elapsed time over {consumers} {consumer_word} on \
+                {hardware_threads} {hardware_word}, so a thread waiting for a core counts in the phase it is in")
+    } else {
+        String::new()
+    };
+
+    format!("[phase] {consumers} {consumer_word}: starved {:.1}% ({} {wait_word}) | open {:.1}% ({}) | read {:.1}% ({}) | parse {:.1}% ({})\n\
+            [phase] {} files, {:.1} MB, read at {:.2} GB/s per thread{queueing}",
+        share(totals.starved_nanos), totals.starved,
+        share(totals.open_nanos), format_summed_millis(totals.open_nanos),
+        share(totals.read_nanos), format_summed_millis(totals.read_nanos),
+        share(totals.parse_nanos), format_summed_millis(totals.parse_nanos),
         totals.files, totals.bytes as f64 / 1_048_576.0, read_gb_per_second)
+}
+
+fn format_summed_millis(nanos: u64) -> String {
+    format!("{} ms", NumberFormat::new(Some(','), '.').integer((nanos / 1_000_000) as usize))
 }
 
 #[cfg(test)]
@@ -112,10 +129,10 @@ mod tests {
             starved: 131_681, starved_nanos: 165_012_000_000
         };
         // 64 threads alive for 3,482 ms is 222,848 ms to spend, and the four below account for 98.5%
-        let report = format_report(&totals, 64, 3482);
+        let report = format_report(&totals, 64, 3482, 64);
 
-        assert!(report.contains("64 consumers: starved 74.0% (131681 waits) | open 13.6% | read 4.4% | parse 6.5%"),
-                "{report}");
+        assert!(report.contains("64 consumers: starved 74.0% (131681 waits) | open 13.6% (30,228 ms) \
+                | read 4.4% (9,763 ms) | parse 6.5% (14,442 ms)"), "{report}");
         assert!(report.contains("308744 files, 7280.2 MB, read at 0.78 GB/s per thread"), "{report}");
     }
 
@@ -126,8 +143,25 @@ mod tests {
         let trickling = Totals {starved: 131_681, starved_nanos: 165_012_000_000, ..Default::default()};
         let stalled = Totals {starved: 12, starved_nanos: 165_012_000_000, ..Default::default()};
 
-        assert!(format_report(&trickling, 64, 3482).contains("starved 74.0% (131681 waits)"));
-        assert!(format_report(&stalled, 64, 3482).contains("starved 74.0% (12 waits)"));
+        assert!(format_report(&trickling, 64, 3482, 64).contains("starved 74.0% (131681 waits)"));
+        assert!(format_report(&stalled, 64, 3482, 64).contains("starved 74.0% (12 waits)"));
+    }
+
+    #[test]
+    fn more_consumers_than_cores_is_said_out_loud_and_a_core_each_is_not() {
+        let totals = Totals::default();
+        let crowded = format_report(&totals, 64, 3482, 16);
+
+        assert!(crowded.contains("[phase] shares are of elapsed time over 64 consumers on 16 hardware \
+                threads, so a thread waiting for a core counts in the phase it is in"), "{crowded}");
+
+        for hardware_threads in [64, 128] {
+            let roomy = format_report(&totals, 64, 3482, hardware_threads);
+            assert!(!roomy.contains("hardware thread"),
+                    "{hardware_threads} hardware threads for 64 consumers was still called crowded:\n{roomy}");
+        }
+
+        assert!(!format_report(&totals, 64, 3482, 0).contains("hardware thread"));
     }
 
     #[test]
@@ -147,9 +181,10 @@ mod tests {
     // diagnostic must not be the thing that takes the process down.
     #[test]
     fn a_run_with_nothing_in_it_reports_zeroes_rather_than_dividing_by_zero() {
-        let report = format_report(&Totals::default(), 0, 0);
+        let report = format_report(&Totals::default(), 0, 0, 0);
 
-        assert!(report.contains("1 consumer: starved 0.0% (0 waits) | open 0.0% | read 0.0% | parse 0.0%"), "{report}");
+        assert!(report.contains("1 consumer: starved 0.0% (0 waits) | open 0.0% (0 ms) | read 0.0% (0 ms) \
+                | parse 0.0% (0 ms)"), "{report}");
         assert!(report.contains("0 files, 0.0 MB, read at 0.00 GB/s per thread"), "{report}");
     }
 }

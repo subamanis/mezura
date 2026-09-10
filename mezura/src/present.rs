@@ -60,7 +60,7 @@ pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>,
     }
 
     // A comparison takes the report's place whole: no report, no history section, no log entry
-    if comparison.is_some() || !config.view.prints_text() {
+    if comparison.is_some() || !config.view.prints_a_report() {
         print_comparison_or_empty_document(result, comparison, &datetime_now, config);
         return;
     }
@@ -90,7 +90,7 @@ pub fn print_faulty_files_or_ok(faulty_files: &[FaultyFileDetails], config: &Con
         eprintln!("{} {}", error.paint(&count.to_string()),
                 error.paint(&format!("{subject} could not be parsed, so {pronoun} in no figure below.")));
         if config.view.should_show_faulty_files {
-            for f in faulty_files {
+            for f in sort_by_path(faulty_files, |x| x.path.as_str()) {
                 eprintln!("-- Error: {} \n   for file: {}\n",f.error_msg,f.path);
             }
         }
@@ -104,11 +104,20 @@ pub fn print_faulty_files_or_ok(faulty_files: &[FaultyFileDetails], config: &Con
 pub fn print_comparison_as_text_or_json(comparison: &super::diff::Comparison,
         datetime_now: &chrono::DateTime<chrono::Local>, config: &Configuration)
 {
-    if config.view.prints_text() {
+    if config.view.prints_a_report() {
         super::result_printer::print_comparison(comparison, config);
     } else {
         super::json_printer::print_comparison_as_json(comparison, datetime_now, config);
     }
+}
+
+// Whichever thread met the file or the directory is the one that added it, so without this the same
+// tree prints its failures in a different order every run.
+pub(crate) fn sort_by_path<T>(items: &[T], get_path: impl Fn(&T) -> &str) -> Vec<&T> {
+    let mut sorted = items.iter().collect::<Vec<_>>();
+    sorted.sort_unstable_by(|a, b| get_path(a).cmp(get_path(b)));
+
+    sorted
 }
 
 // On the error output and never hidden, for the reason a faulty file is: the figures are lower than
@@ -168,7 +177,7 @@ fn print_unreadable_dirs(unreadable_dirs: &[UnreadableDirDetails], config: &Conf
     eprintln!("{} {}", error.paint(&count.to_string()),
             error.paint(&format!("{subject} could not be read. Nothing inside {pronoun} was counted.")));
     if config.view.should_show_faulty_files {
-        for dir in unreadable_dirs {
+        for dir in sort_by_path(unreadable_dirs, |x| x.path.as_str()) {
             eprintln!("-- Could not be read ({}):
    {}
 ", dir.error_msg, dir.path);
@@ -185,7 +194,7 @@ fn print_comparison_or_empty_document(result: &RunResult, comparison: Option<&su
     match comparison {
         // The blank line above it is the caller's: only the caller knows what sits there
         Some(comparison) => print_comparison_as_text_or_json(comparison, datetime_now, config),
-        None if config.view.prints_text() => (),
+        None if config.view.prints_a_report() => (),
         None => super::json_printer::print_as_json(result, datetime_now, config)
     }
 }

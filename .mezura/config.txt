@@ -1,7 +1,6 @@
 Auto-generated config file.
 
 ===> targets
-bench=./benchmarking
 cli=./mezura
 core=./mezura-core
 mcp=./mezura-mcp

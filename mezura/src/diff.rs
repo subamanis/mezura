@@ -8,7 +8,7 @@ use mezura_core::language_file::ConflictRules;
 use super::config_manager::{ByFile, Configuration, Layout, SortCriterion};
 use super::config_manager::{COUNTING, COUNT_GENERATED, COUNT_MINIFIED, COUNT_NOT_CODE, EXCLUDE,
         EXCLUDE_LANGUAGES, FORCE_LANGUAGE, LANGUAGES, NO_GITIGNORE, NO_HEURISTICS, NO_IGNORE_FILES,
-        SEARCH_IN_DOTTED};
+        NO_SHEBANG, SEARCH_IN_DOTTED};
 use super::json_reader::{DocumentError, DocumentWarning, Scope};
 use super::sources::RevisionSide;
 
@@ -250,11 +250,11 @@ impl std::fmt::Display for LoadError {
             // A key that is absent gets its own sentence: nothing needs to have gone wrong, an older
             // mezura simply had not met it
             Self::NotADocument { path, error: DocumentError::Missing(at) } => write!(f, "'{path}' is incomplete \
-and will not be parsed. Maybe it was written by an older version of mezura, or it has been modified. \
-It is missing '{at}'."),
+                    and will not be parsed. Maybe it was written by an older version of mezura, or it has been modified. \
+                    It is missing '{at}'."),
             Self::NotADocument { path, error } => write!(f, "'{path}' could not be read as a mezura document. {error}"),
             Self::Incomplete { path, missing } => write!(f, "'{path}' was written with '--top' and is missing {missing} of \
-its languages, so comparing against it would report every one of them as deleted. Write it again without '--top'.")
+                    its languages, so comparing against it would report every one of them as deleted. Write it again without '--top'.")
         }
     }
 }
@@ -492,7 +492,8 @@ pub fn scope_of(engine: &mezura_core::EngineConfig, counting: mezura_core::Count
         count_minified: engine.count_minified,
         count_generated: engine.count_generated,
         count_not_code: engine.count_not_code,
-        use_heuristics: engine.use_heuristics
+        use_heuristics: engine.use_heuristics,
+        shebangs: engine.detect_shebangs
     }
 }
 
@@ -514,6 +515,7 @@ pub fn find_settings_that_differ(baseline: &Scope, subject: &Scope) -> Vec<&'sta
     if baseline.count_generated != subject.count_generated {differ.push(COUNT_GENERATED)}
     if baseline.count_not_code != subject.count_not_code {differ.push(COUNT_NOT_CODE)}
     if baseline.use_heuristics != subject.use_heuristics {differ.push(NO_HEURISTICS)}
+    if baseline.shebangs != subject.shebangs {differ.push(NO_SHEBANG)}
 
     differ
 }
@@ -583,6 +585,10 @@ pub fn resolve_settings(document: &Scope, config: &mut super::config_manager::Co
     if !typed.no_heuristics && document.use_heuristics != config.engine.use_heuristics {
         config.engine.use_heuristics = document.use_heuristics;
         adopted.push(NO_HEURISTICS);
+    }
+    if !typed.no_shebang && document.shebangs != config.engine.detect_shebangs {
+        config.engine.detect_shebangs = document.shebangs;
+        adopted.push(NO_SHEBANG);
     }
 
     adopted
@@ -667,7 +673,7 @@ fn split_operand(value: &str) -> Result<(&str, Option<&str>), String> {
     // mean asking the disk about every way of cutting it. Refused instead.
     if value.matches("..").count() > 1 {
         return Err(format!("'{value}' has more than one '..' in it, and only one of them can be the \
-separator between the two readings. Write the paths out without the '..' that climbs."));
+                separator between the two readings. Write the paths out without the '..' that climbs."));
     }
 
     match value.split_once("..") {
@@ -675,7 +681,7 @@ separator between the two readings. Write the paths out without the '..' that cl
         // A separator with nothing after it is a line left half written, and saying so is worth more
         // than the "no such file" that reading it whole would produce
         Some((before, _)) if !before.is_empty() => Err(format!("'{value}' names a reading before the \
-'..' and none after it. Write the second one, or drop the '..' to compare '{before}' against this run.")),
+                '..' and none after it. Write the second one, or drop the '..' to compare '{before}' against this run.")),
         // Nothing before it is an ordinary path climbing a directory
         _ => Ok((value, None))
     }
@@ -1200,10 +1206,11 @@ mod tests {
             count_minified: false,
             count_generated: false,
             count_not_code: false,
-            use_heuristics: true
+            use_heuristics: true,
+            shebangs: true
         };
 
-        // Nothing typed: what differs is taken, what agrees is not reported
+        // Nothing typed, so what differs is taken and what agrees is not reported
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         let adopted = resolve_settings(&document, &mut config);
         assert_eq!(vec!["exclude", "counting", "no-gitignore"], adopted);
@@ -1245,6 +1252,16 @@ mod tests {
         config.typed_explicitly.no_heuristics = true;
         assert!(resolve_settings(&no_reading, &mut config).is_empty());
         assert!(config.engine.use_heuristics);
+
+        let by_name_alone = Scope { shebangs: false, gitignore: true,
+                counting: "content".to_owned(), exclude: Vec::new(), ..document.clone() };
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        assert_eq!(vec!["no-shebang"], resolve_settings(&by_name_alone, &mut config));
+        assert!(!config.engine.detect_shebangs);
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        config.typed_explicitly.no_shebang = true;
+        assert!(resolve_settings(&by_name_alone, &mut config).is_empty());
+        assert!(config.engine.detect_shebangs);
 
         let without_keywords = Scope { keywords_counted: false, gitignore: true,
                 counting: "content".to_owned(), exclude: Vec::new(), ..document };

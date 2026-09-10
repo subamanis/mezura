@@ -151,6 +151,8 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                         &mut reader, &mut buf, config_manager::NO_IGNORE_FILES, &mut issues),
                 config_manager::NO_HEURISTICS => read_flag_value(&mut builder.no_heuristics,
                         &mut reader, &mut buf, config_manager::NO_HEURISTICS, &mut issues),
+                config_manager::NO_SHEBANG => read_flag_value(&mut builder.no_shebang,
+                        &mut reader, &mut buf, config_manager::NO_SHEBANG, &mut issues),
                 config_manager::THEME => read_parsed_value(&mut builder.theme_name, &mut reader, &mut buf,
                         config_manager::THEME, &mut issues, |x| {
                             let name = x.trim();
@@ -193,7 +195,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
             if known && repeated {
                 issues.warnings.push((mezura_core::warnings::Code::ConfigSectionRepeated,
                         format!("'{id}' is declared more than once in this configuration. Delete every \
-declaration of it but the one you want.")));
+                                declaration of it but the one you want.")));
             }
         }
         buf.clear();
@@ -289,6 +291,9 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
     }
     if let Some(no_heuristics) = &config_builder.no_heuristics {
         write_block(&mut writer, config_manager::NO_HEURISTICS, yes_or_no(*no_heuristics))?;
+    }
+    if let Some(no_shebang) = &config_builder.no_shebang {
+        write_block(&mut writer, config_manager::NO_SHEBANG, yes_or_no(*no_shebang))?;
     }
     if let Some(sort_by) = &config_builder.sort_by {
         write_block(&mut writer, config_manager::SORT, sort_by.name())?;
@@ -471,7 +476,7 @@ mod tests {
         let command = "./ --exclude a,b,c.txt,d.txt, --counting region --threads 1 1 --hide keywords,timing \
                 --force-language m=matlab,.pl=Perl,ios/h=objective-c --languages rust,web/js \
                 --exclude-languages json,web/xml --by-file 12 --count-minified --count-generated \
-                --count-not-code --no-heuristics \
+                --count-not-code --no-heuristics --no-shebang \
                 --style code-number=green,comments-label=magenta bold,arrow=default dim".to_string();
         let config_builder = config_manager::create_config_builder_from_args(&command).unwrap();
 
@@ -491,6 +496,7 @@ mod tests {
         assert_eq!(config_builder.count_generated, options.count_generated);
         assert_eq!(Some(true), options.count_not_code);
         assert_eq!(Some(true), options.no_heuristics);
+        assert_eq!(Some(true), options.no_shebang);
         assert_eq!(config_builder.hidden, options.hidden);
         assert_eq!(config_builder.by_file, options.by_file);
         assert_eq!(config_builder.forced_languages, options.forced_languages);
@@ -519,7 +525,7 @@ mod tests {
         let dir = SCRATCH_CONFIG_DIR.to_owned();
         std::fs::create_dir_all(&dir).unwrap();
         let turned_off = format!("===> {}\n./\n\n===> {}\nno\n\n===> {}\nno\n\n===> {}\nno\n\n\
-===> {}\nno\n\n===> {}\nno\n\n===> {}\nno\n\n===> {}\nno\n",
+                ===> {}\nno\n\n===> {}\nno\n\n===> {}\nno\n\n===> {}\nno\n",
                 config_manager::TARGETS, config_manager::SEARCH_IN_DOTTED, config_manager::COUNT_MINIFIED,
                 config_manager::COUNT_GENERATED, config_manager::COUNT_NOT_CODE, config_manager::SHOW_FAULTY_FILES,
                 config_manager::NO_GITIGNORE, config_manager::NO_IGNORE_FILES);

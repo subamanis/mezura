@@ -27,6 +27,7 @@ The whole Linux kernel (some languages were cut for screenshot purposes):
   * [The counting model](#the-counting-model)
   * [What is skipped](#what-is-skipped)
 * [Taking the result elsewhere](#taking-the-result-elsewhere)
+  * [Markdown output](#markdown-output)
   * [JSON output](#json-output)
   * [Coding agents (MCP)](#coding-agents-mcp)
   * [As a library](#as-a-library)
@@ -40,7 +41,6 @@ The whole Linux kernel (some languages were cut for screenshot purposes):
 * [Themes](#themes)
 * [Supported languages](#supported-languages)
 * [Accuracy and limitations](#accuracy-and-limitations)
-* [How it compares](#how-it-compares)
 * [Performance](#performance)
   * [Threads and phase timing](#threads-and-phase-timing)
   * [Windows and antivirus](#windows-and-antivirus)
@@ -52,7 +52,7 @@ The whole Linux kernel (some languages were cut for screenshot purposes):
 
 Things it does that most counters do not:
 
-- **Ensures the right language for each file.** When two languages claim one extension, the way `.m` is both MATLAB and Objective-C, every file is identified by its own content: a `#!` line first, then  heuristics on its content. And you always have the last word: set your preferences globally in `language_conflicts.txt`, or per-project through its configuration, or `--force-language` for one run, or even per module in the same run. See [Supported languages](#supported-languages).
+- **Ensures the right language for each file.** When two languages claim one extension, the way `.m` is MATLAB and Objective-C and Mercury all at once, every file is identified by its own content: a `#!` line first, then  heuristics on its content. And you always have the last word: set your preferences globally in `language_conflicts.txt`, or per-project through its configuration, or `--force-language` for one run, or even per module in the same run. See [Supported languages](#supported-languages).
 - **Discards non-code files with a matching extension** (no more Make dependency `.d` files counted as the D language!). Alongside the minified and generated files that are skipped by default, they are reported as skipped. See [What is skipped](#what-is-skipped).
 - **Keyword counting.** Occurrences of words you pick per language, classes, structs, traits,
   anything, counted only where they appear as code and never inside a string or a comment.
@@ -75,8 +75,7 @@ Things it does that most counters do not:
   assistant can run mezura itself. See [Taking the result elsewhere](#taking-the-result-elsewhere).
 - **Data driven.** All the files, languages and the settings mezura uses are extracted to your machine, where they can be inspected, changed, or extended very easily. See [The data directory](#the-data-directory).  
   
-Also, it's the fastest line counter. See [How it compares](#how-it-compares).  
-And it's also the most accurate at what it measures. See [Accuracy and limitations](#accuracy-and-limitations).
+It's also the most accurate at what it measures. See [Accuracy and limitations](#accuracy-and-limitations).
 
 
 ## Installation
@@ -143,7 +142,8 @@ WHAT IS COUNTED
   --count-not-code     count the non-code files that are left out by default
   --no-heuristics      never try to automatically resolve the contest when two languages claim the same
                        extension
-  --show-languages     print the languages this installation knows and stop
+  --no-shebang         identify every file by its name alone, leaving the '#!' line inside it unread
+  --show-languages     print the languages this installation knows, with their extensions, and stop
 
 HOW THE REPORT LOOKS
 
@@ -163,7 +163,7 @@ HOW THE REPORT LOOKS
 
 TAKING THE RESULT ELSEWHERE
 
-  --output             text for a person, or one JSON document for another program
+  --output             text for a person, markdown for a page, or one JSON document for another program
   --log                append this run to the log of the loaded configuration
 
 COMPARING WITH EARLIER RUNS
@@ -175,6 +175,7 @@ YOUR DATA DIRECTORY
 
   --save               save the flags of this run as a named configuration
   --load               take the flags of this run from a saved configuration file
+  --no-default-config  ignore the default configuration of this machine
   --save-theme         save the way this run looks as a named theme
   --show-configs       print the configurations this installation holds and stop
   --restore            put the data directory back to what this version ships, and stop
@@ -301,6 +302,24 @@ you, so those are skipped like any other found path.
 
 
 ## Taking the result elsewhere
+
+### Markdown output
+
+`--output markdown` prints the details as a markdown table, for a build step to leave in a pull request or a job summary.
+
+```bash
+mezura ./src --diff origin/main --output markdown >> $GITHUB_STEP_SUMMARY
+```
+
+<img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/markdown.png" width="900">
+
+The modules, the languages under them and the changed files under those are all rows of the one table, at the depth the printed report draws them at.
+
+It is the report and not a document of its own, so `--hide`, `--sort` and `--top` cut and order it exactly as they do the printed one, and `--by-file` hangs the changed files under each language. Markdown has one table shape, so `--layout` has nothing to choose between and is ignored, and the colours, the overview bar and the history section are left out, all three being terminal drawings.
+
+A warning that puts the numbers in doubt, an unreadable language file among them, is written under the table as well as to the error output, since whoever reads the page is the one deciding on those numbers. The ones that only report an ignored setting stay on the error output alone, where the build log keeps them.
+
+Counting a git revision needs the full history, so a workflow doing the above wants `fetch-depth: 0` on its checkout.
 
 ### JSON output
 
@@ -472,7 +491,8 @@ By default, there is a configuration file named "default" already present in the
 your [data directory](#the-data-directory), that gets loaded on every run. There, you can customize your preferences and they will
 apply to all runs, unless overridden by giving a different command on the command line, or by
 loading a specific configuration. For example, if you prefer the counting model of the other
-counters, you can put a "===> counting" block holding "region" there.
+counters, you can put a "===> counting" block holding "region" there. ```--no-default-config``` leaves that file
+out of a single run, so the run answers with mezura's own defaults and counts the same on any machine.
 
 ### The settings of a project
 
@@ -559,9 +579,11 @@ To make authoring one easier, there is an interactive editor: one run of mezura 
 
 Mezura ships with over eighty languages, which realistically will contain any real language you will ever use. Still, this number is considerably smaller than the 200+ languages supported by some other counters, and most of the difference is what gets called a language: their lists carry JSON, XML, SVG, Markdown and plain text, which are not code, and a report that counts those is answering a different question than the one you asked. The rest of the difference is that an extension is only worth claiming when the files carrying it really are that language, which has a separate answer for each extension rather than one answer per language: on GitHub, 91 of every hundred `.pl` files are Perl, and 1 of every hundred `.pro` files is actually Prolog. A language you are missing is easy to add yourself (see below), and if you think an important one is missing for everyone, open an issue or a PR.
 
-All the supported languages can be found in [the data directory](#the-data-directory). Every language is a text file that can be inspected and even modified, and **you can easily expand the collection of languages** with your own definitions, by adding more text in files there.
+All the supported languages can be found in [the data directory](#the-data-directory). Every language is a text file that can be inspected and even modified, and **you can easily expand the collection of languages** with your own definitions, by adding more text in files there. ```--show-languages``` prints them all with the extensions each one claims, and puts a star on an extension that another language holds.
 
-If two or more language files claim the same extension, each file of it is identified by its own content: a `#!` line first, then the evidence the language files declare, so a `.m` opening with `@interface` counts as Objective-C where one opening with `function` counts as MATLAB. A file whose content says nothing falls back to the winner named in the `language_conflicts.txt` file of the data dir, which ships with an answer for every contest between the languages that come with the program. An extension that nobody has named there goes to the language that comes first alphabetically, and the program reports it, since that is a tie-break and not a decision. ```--force-language``` overrides all of it for a single run, or through a configuration file for a single project. It can also answer differently per module in the same run, so ```mezura ios=./ios analysis=./matlab --force-language ios/m=objective-c,analysis/m=matlab``` counts one repository's ```.m``` files as Objective-C in one folder and as MATLAB in the other.
+If two or more language files claim the same extension, each file of it is identified by its own content: a `#!` line first, then the evidence the language files declare, so a `.m` opening with `@interface` counts as Objective-C, one opening with `function` counts as MATLAB, and one opening with `:- module` counts as Mercury. A file whose content says nothing falls back to the winner named in the `language_conflicts.txt` file of the data dir, which ships with an answer for every contest between the languages that come with the program. An extension that nobody has named there goes to the language that comes first alphabetically, and the program reports it, since that is a tie-break and not a decision. ```--force-language``` overrides all of it for a single run, or through a configuration file for a single project. It can also answer differently per module in the same run, so ```mezura ios=./ios analysis=./matlab --force-language ios/m=objective-c,analysis/m=matlab``` counts one repository's ```.m``` files as Objective-C in one folder and as MATLAB in the other.
+
+A file with **no extension at all** is named by the same `#!` line, so a script called `configure` is counted as the language that line names, and a whole file name a language claims, like `Makefile`, is answered before either. ```--no-shebang``` turns that first line off everywhere, which is how a run is made comparable with a counter that only knows extensions: files with no extension go uncounted and are never opened, and a contested extension is settled without it.
 
 **[Language choices](https://github.com/subamanis/mezura/blob/HEAD/LANGUAGE_CHOICES.md)** is the short page behind those answers: which language gets each contested extension, and which files are left out of the count.
 
@@ -607,33 +629,7 @@ With that said, it is important to mention the following limitations:
 
 - ```=*``` in a comment symbol means "any number of ```=```", so a language whose symbol really contained ```=*``` could not be declared. None is known.
 
-- Two languages claiming one extension is settled per file, by a ```#!``` line or by evidence the language files declare, and only the files whose content says nothing follow the standing order of ```language_conflicts.txt```, parsed with that winner's symbols. ```--force-language``` decides outright, and ```--no-heuristics``` turns the content reading off.
-
-
-## How it compares
-
-Against [scc](https://github.com/boyter/scc) and [tokei](https://github.com/XAMPPRocky/tokei), the
-two fastest counters around, on the Linux repository tree, from a native Debian environment,
-measured with hyperfine over 3 warmups and 30 timed runs per command:
-
-| tool | time | vs fastest | lines/s | files | lines |
-|---|---|---|---|---|---|
-| mezura 3.0.0 | 228 ms ± 10 | 1.00x | 158.0M | 63,864 | 36,036,878 |
-| scc 4.0.0 | 472 ms ± 3 | 2.07x | 76.3M | 63,724 | 36,013,098 |
-| tokei 14.0.0 | 474 ms ± 3 | 2.08x | 76.0M | 63,782 | 36,022,156 |
-
-The comparison is equal work on purpose: the same languages over the same tree for all three,
-mezura pinned to the same counting model the other two use, the gitignore obeyed by everyone, and
-each tool's flags turning off whatever it does beyond the counting itself (keyword counting for
-mezura, complexity and cost estimates for scc).  
-The files and lines columns are the proof of the equal work.  
-Measured on Debian 13, a Ryzen 7 9700X with 16 threads and a Lexar NQ790 PCIe gen4 NVMe disk.
-
-mezura comes out first on every platform it was measured on,
-both by using each counter's default settings, and by using the curated flags that guarantee equal work.
-The runs on the other platforms it was tested on, the exact flags, the trust checks every run carries,
-the full methodology and the recorded numbers of each run
-are on [the results page](https://github.com/subamanis/mezura/blob/HEAD/benchmarking/results/README.md).
+- Two languages claiming one extension is settled per file, by a ```#!``` line or by evidence the language files declare, and only the files whose content says nothing follow the standing order of ```language_conflicts.txt```, parsed with that winner's symbols. ```--force-language``` decides outright, ```--no-heuristics``` turns the content reading off, and ```--no-shebang``` takes the ```#!``` line out of the whole business, the naming of files that carry no extension included.
 
 
 ## Performance
@@ -657,13 +653,22 @@ MEZURA_PHASE_TIMING=1 mezura <some_big_directory>
 $env:MEZURA_PHASE_TIMING = "1"; mezura <some_big_directory>
 ```
 
-The report goes to the error output, three lines:
+The report goes to the error output:
 
-1. how long the directory walk ran, how long the counting continued after it, and how many files
-   were still queued when the walk ended
-2. time spent opening, reading and parsing, summed over every consumer thread, so the shares are
-   the point and not the total
-3. how many times the consumers sat with nothing to do while the walk was still running
+- `[startup]`: everything before the counting begins, step by step (the arguments, finding the data
+  directory, keeping it in step with the binary, the language files, the conflict rules, the
+  configuration, which languages this run counts with)
+- `[phase]`: how long the directory walk ran, how long the counting continued after it, and how many
+  files were still queued when the walk ended
+- `[phase]`: the share of the consumers' time spent starved (an empty queue while the walk was still
+  running), opening, reading and parsing, with the milliseconds behind each, summed over every
+  consumer thread, so the shares are the point
+- `[phase]`: how many files and megabytes were read, and at what rate per thread
+- `[finish]`: the counting, the printing, and the whole command
+
+When there are more consumers than the machine has hardware threads, one more `[phase]` line says
+so: the shares are of elapsed time, so a thread waiting for a core is counted in whatever phase it
+was in, and a large "open" share can mean threads queued for a core with the disk idle.
 
 A deep queue and little starvation mean the parsing is the constraint, and more consumers pay. An
 empty queue and heavy starvation mean the walk is the constraint. Measure with a release build on a

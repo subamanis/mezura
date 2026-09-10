@@ -1,3 +1,43 @@
+v3.1.0 - 2026-09-11
+
+  34,913 Total lines  -  22,072 Code lines
+
+Main changes:
+  -> New "--output markdown", a report as a markdown table (maybe for a CI step to put in a pull request?).
+  -> "MEZURA_PHASE_TIMING" now also reports the time before and after the count, the milliseconds
+      behind each share, and when the counting threads outnumber the cores.
+  -> New language: Mercury. It claims ".m" beside MATLAB and Objective-C, and a file saying
+      ":- module" or "ft=mercury" is counted as Mercury.
+  -> New language: C3, which takes ".c3", ".c3i" and ".c3t", bringing the shipped set to 83.
+  -> A language file can now say that a symbol does not count when a given character sits right in
+      front of it, in a "Cancelled symbols" block. C3 needs it: "int[<*>]" is a vector and not a
+      comment opener.
+  -> New "--no-shebang", which names every file by its extension or its whole name and reads no "#!"
+      line, so a run can be lined up with a counter that only knows extensions. A file with no
+      extension is then left uncounted, and the scan never opens it.
+  -> New "--no-default-config", which leaves your saved default configuration out of one run, so it
+      answers with the program's own defaults. Two machines then count a tree the same way.
+  -> "--show-languages" now prints the extensions each language claims, with a star on the ones
+      another language holds and a line naming the holder.
+
+Performance:
+  -> Counting a large tree is about a fifth faster.
+
+Bugfixes:
+  -> A keyword written back to back with nothing in between counts as nothing however long the run
+      is, and a file holding such a run no longer takes minutes to count.
+  -> A shipped theme you never edited now follows the version you run, and one you did edit is
+      still yours. "--restore" brings the shipped one back.
+  -> Colours are no longer flattened to the sixteen terminal ones after "cargo install".
+  -> Files that could not be parsed and directories that could not be read are listed in path order.
+  -> A file that went away while it was being counted keeps its listed size in the faulty files list.
+
+Other:
+  -> A "%" comment no longer identifies a MATLAB file, since every Mercury file opens with one.
+      MATLAB answers to "%%", "function" and "classdef" now.
+
+-----------------------------------------------------------------------------------------------------------
+
 v3.0.0 - 2026-09-02
 
   33,474 Total lines  -  21,133 Code lines

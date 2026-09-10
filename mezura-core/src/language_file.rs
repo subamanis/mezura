@@ -6,10 +6,10 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::{Keyword, Language, LeveledPair, LineContinuation, NestedLanguage, StringRules};
-use crate::engine::identity::IdentifiedBy;
+use crate::engine::identity::ClaimKind;
 
 /// What the language conflicts file decides. It names who wins an extension or a file name that
 /// more than one language claims, and it lists the literals that mark a file of an extension as
@@ -74,8 +74,8 @@ impl ConflictBlock {
     pub fn key_of(self, claimed: &str) -> String {
         match self {
             ConflictBlock::ContestedExtensions | ConflictBlock::NotCodeLineStarts
-                    | ConflictBlock::NotCodeLineContains => IdentifiedBy::Extension.key_of(claimed),
-            ConflictBlock::ContestedFilenames => IdentifiedBy::Filename.key_of(claimed)
+                    | ConflictBlock::NotCodeLineContains => ClaimKind::Extension.key_of(claimed),
+            ConflictBlock::ContestedFilenames => ClaimKind::Filename.key_of(claimed)
         }
     }
 
@@ -114,6 +114,8 @@ const MULTILINE_COMMENT_START  : &str = "Multi line comment start";
 const MULTILINE_COMMENT_END    : &str = "Multi line comment end";
 const SELF_NESTING_COMMENT_START : &str = "Self-nesting comment start";
 const SELF_NESTING_COMMENT_END   : &str = "Self-nesting comment end";
+const CANCELLED_SYMBOLS        : &str = "Cancelled symbols";
+const CANCELLED_AFTER          : &str = "Cancelled after";
 const NESTED_LANGUAGE_START    : &str = "Nested language start";
 const NESTED_LANGUAGE_END      : &str = "Nested language end";
 const NESTED_LANGUAGE_DEFAULT  : &str = "Nested language default";
@@ -133,6 +135,8 @@ const NOT_CODE_LINE_CONTAINS   : &str = "not-code-when-a-line-contains";
 // the errors below are only ever reached after it has already run and not fixed them.
 const REGENERATE_LANGUAGES_HINT : &str =
         "The copies this build ships can be written over them.";
+const MOST_LANGUAGE_FILE_READERS : usize = 8;
+const FEWEST_FILES_PER_READER : usize = 8;
 
 /// Why a whole directory of language files gave nothing usable.
 #[derive(Debug)]
@@ -212,20 +216,20 @@ pub fn parse_languages_in_dir(target_path: impl AsRef<Path>)
         return Err(LanguageDirParseError::PathMissing(target_path.display().to_string()));
     };
 
+    // A listing already says which of its entries are plain files. Only for the rest, a symbolic
+    // link above all, does the filesystem have to be asked again.
+    let files = entries.flatten()
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()) || entry.path().is_file())
+            .map(|entry| (entry.path(), entry.file_name().into_string().unwrap_or_default()))
+            .collect::<Vec<_>>();
+
     let mut languages = Vec::with_capacity(30);
     let mut faulty_files : Vec<FaultyLanguageFile> = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_file() {continue;}
-
-        match parse_language_file(&path) {
+    for parsed in parse_every_file(&files) {
+        match parsed {
             Ok(language) => languages.push(language),
-            // The name as it is spelled on disk: the point of the list is that somebody can go and
-            // open the file it names, and lowercasing it names a file that does not exist wherever
-            // the filesystem has a case.
-            Err(error) => if let Ok(file_name) = entry.file_name().into_string()
-                    && !file_name.is_empty() {
-                faulty_files.push(FaultyLanguageFile { file_name, error });
+            Err(faulty) => if !faulty.file_name.is_empty() {
+                faulty_files.push(faulty);
             }
         }
     }
@@ -467,6 +471,29 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         return None;
     }
 
+    // A symbol the character in front of it takes away, because there the two are one longer form
+    // of the language. A symbol this language never declared, or a cancelling character wider than
+    // one byte, would do nothing at all, so both refuse the file.
+    let mut cancelled_symbols = Vec::new();
+    if header.as_deref() == Some(CANCELLED_SYMBOLS) {
+        let symbols = split_line_on_whitespace(&read_value_line(lines)?);
+        if symbols.is_empty() || read_next_header(lines)?.as_str() != CANCELLED_AFTER {return None;}
+        let cancelling = split_line_on_whitespace(&read_value_line(lines)?);
+        if cancelling.len() != symbols.len() {return None;}
+        if cancelling.iter().any(|text| text.len() != 1) {return None;}
+        let declared = string_symbols.iter().chain(&char_literals).chain(&multiline_strings)
+                .chain(&raw_multiline_strings)
+                .chain(string_pairs.iter().flat_map(|(open, close)| [open, close]))
+                .chain(&comment_symbols)
+                .chain(multiline_comments.iter().flat_map(|(start, end)| [start, end]))
+                .chain(nesting_comments.iter().flat_map(|(start, end)| [start, end]))
+                .collect::<Vec<&String>>();
+        if symbols.iter().any(|symbol| !declared.contains(&symbol)) {return None;}
+        cancelled_symbols = symbols.into_iter()
+                .zip(cancelling.iter().map(|text| text.as_bytes()[0])).collect();
+        header = read_next_header(lines);
+    }
+
     // Sections of another language inside a file, HTML's script and style tags. Three lists paired
     // by position: the opener, its closer, and the language the section falls to when the tag
     // names none, written as an extension so it resolves the way a 'lang' attribute does.
@@ -522,6 +549,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
     Some(language
             .with_nesting_comments(&nesting_comments)
             .with_leveled_comments(&leveled_comments)
+            .with_cancelled_symbols(&cancelled_symbols)
             .with_nested_languages(&nested_languages)
             .with_filenames(&filenames)
             .with_shebangs(&shebangs)
@@ -596,6 +624,37 @@ pub fn find_block_of_marker(line: &str) -> Option<ConflictBlock> {
 /// None for a line it would reject.
 pub fn find_key_of_rule(block: ConflictBlock, line: &str) -> Option<String> {
     split_rule_line(line.trim()).map(|(claimed, _)| block.key_of(claimed))
+}
+
+// The chunks come back in the order the listing gave them and never in the order the threads
+// finished, so two runs over one directory answer in the same order.
+fn parse_every_file(files: &[(PathBuf, String)]) -> Vec<Result<Language, FaultyLanguageFile>> {
+    let per_reader = calculate_files_per_reader(files.len());
+    std::thread::scope(|scope| {
+        let readers = files.chunks(per_reader)
+                .map(|chunk| std::thread::Builder::new()
+                        .spawn_scoped(scope, move || read_chunk(chunk))
+                        .map_err(|_| read_chunk(chunk)))
+                .collect::<Vec<_>>();
+
+        readers.into_iter()
+                .flat_map(|reader| match reader {
+                    Ok(handle) => handle.join().expect("a thread reading the language files stopped"),
+                    Err(read_here) => read_here
+                })
+                .collect()
+    })
+}
+
+fn read_chunk(chunk: &[(PathBuf, String)]) -> Vec<Result<Language, FaultyLanguageFile>> {
+    chunk.iter()
+            .map(|(path, file_name)| parse_language_file(path)
+                    .map_err(|error| FaultyLanguageFile { file_name: file_name.clone(), error }))
+            .collect()
+}
+
+fn calculate_files_per_reader(files: usize) -> usize {
+    files.div_ceil(MOST_LANGUAGE_FILE_READERS).max(FEWEST_FILES_PER_READER)
 }
 
 // A byte order mark is three bytes that mean "this is UTF-8" and carry no text, and 'trim' does not
@@ -687,8 +746,8 @@ mod tests {
         // The one thing no shipped file can show, since a stray blank line in one would be tidied
         // away: an extra blank line between blocks does not derail the parse.
         let padded = "Language\nJava\n\n\nExtensions\njava\n\n\n\nString symbols\n\"\n\n\
-Escape character\n\\\n\n\
-Comment symbols\n//\n\n\nKeyword\n    NAME\n    classes\n    ALIASES\n    class\n";
+                Escape character\n\\\n\n\
+                Comment symbols\n//\n\n\nKeyword\n    NAME\n    classes\n    ALIASES\n    class\n";
         let java = parse_language(padded).expect("an extra blank line broke the parse");
         assert_eq!(vec!["classes"], java.keywords.iter().map(|k| k.descriptive_name.clone()).collect::<Vec<_>>());
     }
@@ -703,12 +762,11 @@ Comment symbols\n//\n\n\nKeyword\n    NAME\n    classes\n    ALIASES\n    class\
         // would otherwise be the one contest nothing here notices
         let by_name = crate::languages::keyed_by_name(languages);
         let mut unsettled = Vec::new();
-        for (identified_by, rules) in [(IdentifiedBy::Extension, &conflicts.by_extension),
-                (IdentifiedBy::Filename, &conflicts.by_filename)] {
+        for (identified_by, rules) in [(ClaimKind::Extension, &conflicts.by_extension),
+                (ClaimKind::Filename, &conflicts.by_filename)] {
             let (_, report) = crate::engine::identity::build_language_map_by(identified_by, &by_name, rules, &HashMap::new());
-            unsettled.extend(report.contested.iter()
-                    .filter(|x| x.resolved_by == crate::engine::identity::ResolvedBy::AlphabeticalFallback)
-                    .map(|x| format!("the {} '{}' between {} and {}", x.identified_by.name(), x.identity, x.winner,
+            unsettled.extend(report.contested.iter().filter(|x| x.is_a_tiebreak())
+                    .map(|x| format!("the {} '{}' between {} and {}", x.kind.name(), x.claimed, x.owner,
                             x.losers.join(", "))));
         }
 
@@ -789,7 +847,7 @@ pl      Perl, Prolog
     #[test]
     fn a_language_that_does_not_parse_comes_back_as_none() {
         let good = "Language\nLua\n\nExtensions\nlua\n\nString symbols\n\" '\n\n\
-Escape character\n\\\n\nComment symbols\n--\n";
+                Escape character\n\\\n\nComment symbols\n--\n";
         assert!(parse_language(good).is_some());
         // and the carriage returns of a windows checkout change nothing about it
         assert_eq!(parse_language(good),
@@ -984,8 +1042,8 @@ Escape character\n\\\n\nComment symbols\n--\n";
     #[test]
     fn multiline_comment_pairs_zip_by_position_and_unequal_counts_refuse_the_file() {
         let two_pairs = "Language\nPascalish\n\nExtensions\npax\n\nString symbols\n'\n\n\
-Escape character\nnone\n\n\
-Comment symbols\n//\n\nMulti line comment start\n{ (*\nMulti line comment end\n} *)\n";
+                Escape character\nnone\n\n\
+                Comment symbols\n//\n\nMulti line comment start\n{ (*\nMulti line comment end\n} *)\n";
         let parsed = parse_language(two_pairs).expect("two pairs must parse");
         assert_eq!(vec![("{".to_owned(), "}".to_owned()), ("(*".to_owned(), "*)".to_owned())],
                 parsed.multiline_comments);
@@ -1007,9 +1065,29 @@ Comment symbols\n//\n\nMulti line comment start\n{ (*\nMulti line comment end\n}
     }
 
     #[test]
+    fn a_cancelled_symbol_names_one_the_language_declares_and_the_character_that_takes_it_away() {
+        let vectorish = "Language\nVectorish\n\nExtensions\nvec\n\nString symbols\n\"\n\n\
+                Escape character\n\\\n\n\
+                Comment symbols\n//\nMulti line comment start\n<*\nMulti line comment end\n*>\n\n\
+                Cancelled symbols\n<* *>\nCancelled after\n[ <\n";
+        let parsed = parse_language(vectorish).expect("the declaration must parse");
+        assert_eq!(vec![("<*".to_owned(), b'['), ("*>".to_owned(), b'<')], parsed.cancelled_symbols);
+
+        let unknown = vectorish.replace("Cancelled symbols\n<*", "Cancelled symbols\n/*");
+        assert!(parse_language(&unknown).is_none(), "a symbol this language never declared was accepted");
+        let uneven = vectorish.replace("[ <", "[");
+        assert!(parse_language(&uneven).is_none(), "two symbols with one cancelling character were accepted");
+        let two_bytes = vectorish.replace("[ <", "[[ <");
+        assert!(parse_language(&two_bytes).is_none(), "a cancelling character of two bytes was accepted");
+
+        let c3 = parse_language_file(LANGUAGES_DIR.to_owned() + "C3.txt").unwrap();
+        assert_eq!(2, c3.cancelled_symbols.len(), "C3.txt no longer declares its vector exception");
+    }
+
+    #[test]
     fn a_string_symbol_is_declared_in_one_list_and_the_crossing_ones_are_numbered_last() {
         let good = "Language\nPylike\n\nExtensions\npyl\n\nString symbols\n\" '\n\n\
-Multi line string symbols\n\"\"\"\n\nEscape character\n\\\n\nComment symbols\n#\n";
+                Multi line string symbols\n\"\"\"\n\nEscape character\n\\\n\nComment symbols\n#\n";
         let parsed = parse_language(good).expect("the declaration must parse");
         assert_eq!(vec!["\"".to_owned(), "'".to_owned()], parsed.strings.get_symbols());
         assert_eq!(vec![MultilineString::escaping("\"\"\"")], parsed.strings.get_multiline_strings());
@@ -1038,7 +1116,7 @@ Multi line string symbols\n\"\"\"\n\nEscape character\n\\\n\nComment symbols\n#\
     #[test]
     fn a_crossing_string_declares_whether_a_backslash_cancels_its_closer() {
         let good = "Language\nGolike\n\nExtensions\ngol\n\nString symbols\n\"\n\n\
-Multi line raw string symbols\n`\n\nEscape character\n\\\n\nComment symbols\n//\n";
+                Multi line raw string symbols\n`\n\nEscape character\n\\\n\nComment symbols\n//\n";
         let parsed = parse_language(good).expect("the declaration must parse");
         assert_eq!(vec![MultilineString::raw("`")], parsed.strings.get_multiline_strings());
 
@@ -1071,8 +1149,8 @@ Multi line raw string symbols\n`\n\nEscape character\n\\\n\nComment symbols\n//\
     #[test]
     fn identification_literals_split_on_commas_so_one_may_hold_a_space() {
         let good = "Language\nPerlish\n\nExtensions\npx\n\n\
-Identifying line starts\nuse strict, my $, =head\n\nIdentifying line contains\n:-, std::\n\n\
-String symbols\n\"\n\nEscape character\n\\\n\nComment symbols\n#\n";
+                Identifying line starts\nuse strict, my $, =head\n\nIdentifying line contains\n:-, std::\n\n\
+                String symbols\n\"\n\nEscape character\n\\\n\nComment symbols\n#\n";
         let parsed = parse_language(good).expect("the declaration must parse");
         assert_eq!(vec!["use strict".to_owned(), "my $".to_owned(), "=head".to_owned()],
                 parsed.identifying_line_starts);
@@ -1092,8 +1170,8 @@ String symbols\n\"\n\nEscape character\n\\\n\nComment symbols\n#\n";
     #[test]
     fn a_nested_language_declares_its_tags_and_where_an_unnamed_section_falls() {
         let good = "Language\nWeblike\n\nExtensions\nwbl\n\nString symbols\n\n\nComment symbols\n\n\
-Multi line comment start\n<!--\nMulti line comment end\n-->\n\n\
-Nested language start\n<script <style\nNested language end\n</script> </style>\nNested language default\njs css\n";
+                Multi line comment start\n<!--\nMulti line comment end\n-->\n\n\
+                Nested language start\n<script <style\nNested language end\n</script> </style>\nNested language default\njs css\n";
         let parsed = parse_language(good).expect("the declaration must parse");
         assert_eq!(vec![NestedLanguage::of("<script", "</script>", "js"),
                 NestedLanguage::of("<style", "</style>", "css")], parsed.nested_languages);
@@ -1116,16 +1194,16 @@ Nested language start\n<script <style\nNested language end\n</script> </style>\n
 
         // out of place it refuses the file whole, like every other block
         let misplaced = "Language\nWeblike\n\nExtensions\nwbl\n\n\
-Nested language start\n<script\nNested language end\n</script>\nNested language default\njs\n\n\
-String symbols\n\n\nComment symbols\n\n";
+                Nested language start\n<script\nNested language end\n</script>\nNested language default\njs\n\n\
+                String symbols\n\n\nComment symbols\n\n";
         assert!(parse_language(misplaced).is_none());
     }
 
     #[test]
     fn a_character_literal_symbol_has_its_own_block_and_shares_no_list() {
         let good = "Language\nRustlike\n\nExtensions\nrsl\n\nString symbols\n\n\n\
-Character literal symbols\n'\n\nMulti line string symbols\n\"\n\n\
-Escape character\n\\\n\nComment symbols\n//\n";
+                Character literal symbols\n'\n\nMulti line string symbols\n\"\n\n\
+                Escape character\n\\\n\nComment symbols\n//\n";
         let parsed = parse_language(good).expect("the declaration must parse");
         assert_eq!(vec!["'".to_owned()], parsed.strings.get_char_literals());
         assert_eq!(vec![MultilineString::escaping("\"")], parsed.strings.get_multiline_strings());
@@ -1148,7 +1226,7 @@ Escape character\n\\\n\nComment symbols\n//\n";
     #[test]
     fn a_language_that_declares_a_string_has_to_say_what_escapes_it() {
         let good = "Language\nEsclike\n\nExtensions\nesc\n\nString symbols\n\"\n\n\
-Escape character\n\\\n\nComment symbols\n//\n";
+                Escape character\n\\\n\nComment symbols\n//\n";
         assert_eq!(Some(b'\\'), parse_language(good).expect("the declaration must parse").strings.get_escape());
 
         let backtick = good.replace("Escape character\n\\", "Escape character\n`");
@@ -1179,8 +1257,8 @@ Escape character\n\\\n\nComment symbols\n//\n";
     #[test]
     fn a_pair_written_with_the_counted_marker_is_leveled() {
         let good = "Language\nLualike\n\nExtensions\nlux\n\nString symbols\n\" '\n\n\
-Escape character\n\\\n\n\
-Comment symbols\n--\nMulti line comment start\n--[=*[\nMulti line comment end\n]=*]\n";
+                Escape character\n\\\n\n\
+                Comment symbols\n--\nMulti line comment start\n--[=*[\nMulti line comment end\n]=*]\n";
         let parsed = parse_language(good).expect("the leveled declaration must parse");
         assert!(parsed.multiline_comments.is_empty());
         assert_eq!(1, parsed.leveled_comments.len());

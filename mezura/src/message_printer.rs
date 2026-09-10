@@ -1,8 +1,8 @@
 use std::fs;
 
 use colored::{ColoredString, Colorize};
-use mezura_core::{CountingModel, Language, RunError};
-use mezura_core::language_file::{FaultyLanguageFile, LanguageDirParseError};
+use mezura_core::{CountingModel, Language, LanguageClaims, RunError};
+use mezura_core::language_file::{ConflictRules, FaultyLanguageFile, LanguageDirParseError};
 
 use super::config_manager::*;
 use crate::paths::PERSISTENT_APP_PATHS;
@@ -18,6 +18,7 @@ const HELP_TEXT : (u8, u8, u8) = (140, 140, 140);
 // enough not to shout over the text it labels
 const HELP_VALUE_NAME : (u8, u8, u8) = (132, 154, 138);
 const LIST_INDENT : usize = 2;
+const LOST_EXTENSION_MARK : char = '*';
 // Where the help indents a list of values, one to a line, with its description beside it
 const VALUE_LIST_INDENT : usize = 6;
 
@@ -290,6 +291,25 @@ pub const NO_HEURISTICS_HELP  :  &str =
 
     It also stops the reading that leaves out files whose head says they are not code, so '.d'
     dependency files and the like are counted again; see '--count-not-code'.
+
+    '--no-shebang' takes the '#!' line out of this contest as well, and out of the naming of files
+    that have no extension at all.
+
+";
+pub const NO_SHEBANG_HELP  :  &str =
+"--no-shebang
+    identify every file by its name alone, leaving the '#!' line inside it unread
+
+    No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
+    or 'no' to disable. Default: no
+
+    A file with no extension is normally opened and its first line read, so that a script called
+    'configure' counts as the language that line names. Under this flag such a file is never
+    opened and appears in no figure, and the '#!' line also stops settling an extension that two
+    languages claim. A whole file name a language declares, like 'Makefile', is unaffected.
+
+    Two uses. It makes a run comparable to a counter that knows extensions alone, and it spares the
+    scan an open and a read for every file that has no extension.
 
 ";
 pub const EXPLAIN_HELP  :  &str =
@@ -580,9 +600,21 @@ pub const RESTORE_HELP  :  &str =
 ";
 pub const OUTPUT_HELP  :  &str =
 "--output
-    text for a person, or one JSON document for another program
+    text for a person, markdown for a page, or one JSON document for another program
 
-    One argument: 'text' or 'json'. Default: text
+    One argument: 'text', 'markdown' or 'json'. Default: text
+
+    'markdown' prints the details as a markdown table, for a build step to put in a pull request
+    or a job summary.
+
+      mezura ./src --diff origin/main --output markdown >> $GITHUB_STEP_SUMMARY
+
+    It is still the report, so '--hide', '--sort', '--top' and '--by-file' all apply. '--layout'
+    does not, there being one table shape, and the colors, the overview and the history section
+    are left out as terminal drawings. '--explain' has no markdown form and says so.
+
+    A warning that puts the numbers in doubt goes under the table as well as to the error output.
+    One about an ignored setting stays on the error output alone.
 
     'json' replaces the whole output, status lines and overview included, with a single document,
     so another program can read the run.
@@ -943,6 +975,21 @@ pub const SAVE_LOCAL_HELP  :  &str =
     project then counts it and nothing else.
 
 ";
+pub const NO_DEFAULT_CONFIG_HELP  :  &str =
+"--no-default-config
+    ignore the default configuration of this machine
+
+    No arguments.
+
+    Whatever the command line and the project being counted leave unset is normally filled from the
+    'default' configuration in your data directory. Under this flag that file is never read, so the
+    run answers with the program's own defaults and counts the same on any machine. A default
+    configuration that cannot be read stops an ordinary run, and under this flag there is nothing
+    to stop.
+
+    The settings of the project being counted are a separate question, answered by '--no-local'.
+
+";
 pub const NO_LOCAL_HELP  :  &str =
 "--no-local
     ignore the settings of the project being counted
@@ -951,6 +998,9 @@ pub const NO_LOCAL_HELP  :  &str =
 
     Counts as though the project had no '.mezura' folder: your own flags, your own default
     configuration, and no entry written to the project's log.
+
+    Give '--no-default-config' beside it and the run has neither, which is how a tree is counted
+    with the program's own defaults and nothing of this machine.
 
 ";
 pub const CHANGELOG_HELP  :  &str =
@@ -965,12 +1015,18 @@ pub const CHANGELOG_HELP  :  &str =
 ";
 pub const SHOW_LANGUAGES_HELP  :  &str =
 "--show-languages
-    print the languages this installation knows and stop
+    print the languages this installation knows, with their extensions, and stop
 
     No arguments.
 
-    Lists by name what is in the 'data/languages/' directory, and counts nothing. Adding a file
-    there teaches mezura another language.
+    Lists what is in the 'data/languages/' directory, each name beside the extensions it claims,
+    and counts nothing. Adding a file there teaches mezura another language.
+
+    A star marks an extension another language holds, and the line under the list says which one.
+    The order in 'language_conflicts.txt' decides the holder, and an extension no line there
+    mentions goes to whichever name comes first alphabetically. Such a file is still counted as the
+    starred language when its own content says which language it is, and '--no-heuristics' turns
+    that reading off.
 
     A name on the list that cannot count anything is reported under it: two files declaring one
     language, and a language whose every extension is held by another one, which a line in
@@ -1031,6 +1087,7 @@ pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 8] = [
         (COUNT_GENERATED, COUNT_GENERATED_HELP),
         (COUNT_NOT_CODE, COUNT_NOT_CODE_HELP),
         (NO_HEURISTICS, NO_HEURISTICS_HELP),
+        (NO_SHEBANG, NO_SHEBANG_HELP),
         (SHOW_LANGUAGES, SHOW_LANGUAGES_HELP),
     ]),
     ("How the report looks", &[
@@ -1059,6 +1116,7 @@ pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 8] = [
     ("Your data directory", &[
         (SAVE, SAVE_HELP),
         (LOAD, LOAD_HELP),
+        (NO_DEFAULT_CONFIG, NO_DEFAULT_CONFIG_HELP),
         (SAVE_THEME, SAVE_THEME_HELP),
         (SHOW_CONFIGS, SHOW_CONFIGS_HELP),
         (RESTORE, RESTORE_HELP),
@@ -1446,8 +1504,8 @@ pub fn print_existing_themes(bar_thickness: BarThickness, layout: Layout, counti
     println!("{msg}");
 }
 
-pub fn print_supported_languages(languages_available: &[Language]) {
-    println!("{}", format_supported_languages_message(languages_available));
+pub fn print_supported_languages(languages_available: &[Language], conflicts: &ConflictRules) {
+    println!("{}", format_supported_languages_message(languages_available, conflicts));
 }
 
 pub fn print_existing_configs() {
@@ -1478,28 +1536,106 @@ pub fn format_faulty_language_files_message(faulty_files: &[FaultyLanguageFile])
 }
 
 // Two files declaring one language is a broken installation, and naming it twice here would read as
-// two languages rather than as the one it is.
-fn format_supported_languages_message(languages_available: &[Language]) -> String {
-    const COLUMNS : usize = 3;
+// two languages rather than as the one it is. Their extensions are merged under the one name, since
+// which of the two files was read is not decided by anything the reader can see.
+fn format_supported_languages_message(languages_available: &[Language], conflicts: &ConflictRules) -> String {
+    const COLUMNS : usize = 2;
 
-    let mut lang_names = languages_available.iter().map(|x| x.name.to_owned()).collect::<Vec<_>>();
-    lang_names.sort();
-    lang_names.dedup();
-    format!("{}Found these languages:\n\n{}\n", get_data_dir_str(),
-            format_in_columns(&lang_names, COLUMNS))
+    let claims = LanguageClaims::of(languages_available, conflicts);
+    let mut entries : Vec<(String, Vec<String>)> = Vec::new();
+    let mut held = Vec::new();
+    for language in languages_available {
+        let claimed = language.extensions.iter().map(|extension| {
+            // An extension nobody owns is nobody's loss. One language declared by two files keeps
+            // the extensions of both, and only one of the two declarations reached the claims.
+            match claims.find_claim_of_extension(extension) {
+                Some(claim) if claim.owner != language.name => {
+                    held.push(format!("'{extension}' by {}", claim.owner));
+                    format!("{extension}{LOST_EXTENSION_MARK}")
+                },
+                _ => extension.to_owned()
+            }
+        }).collect::<Vec<_>>();
+
+        match entries.iter_mut().find(|(name, _)| *name == language.name) {
+            Some((_, listed)) => for claim in claimed {
+                if !listed.contains(&claim) {
+                    listed.push(claim);
+                }
+            },
+            None => entries.push((language.name.to_owned(), claimed))
+        }
+    }
+    entries.sort();
+
+    format!("{}Found these languages, with the extensions each one claims:\n\n{}\n{}", get_data_dir_str(),
+            format_in_columns(&entries, COLUMNS), format_lost_extensions_legend(held))
 }
 
-// Filled downwards and not across, so a sorted list reads in order down each column.
-fn format_in_columns(names: &[String], columns: usize) -> String {
-    const GUTTER : usize = 6;
+// Named once under the list and not beside each star, since an extension is lost by as many
+// languages as claim it and the holder is the same answer for all of them.
+fn format_lost_extensions_legend(mut held: Vec<String>) -> String {
+    held.sort();
+    held.dedup();
+    if held.is_empty() {
+        return String::new();
+    }
 
-    let rows = names.len().div_ceil(columns);
-    let width = names.iter().map(|name| name.chars().count()).max().unwrap_or(0) + GUTTER;
-    (0..rows).map(|row| {
-        let line = (0..columns).filter_map(|column| names.get(column * rows + row))
-                .map(|name| format!("{name:<width$}")).collect::<String>();
-        format!("  {}", line.trim_end())
-    }).collect::<Vec<_>>().join("\n")
+    let past_the_mark = LIST_INDENT + 2;
+    format!("\n{}{}\n", " ".repeat(LIST_INDENT),
+            hang_under(&format!("{LOST_EXTENSION_MARK} held by another language: {}. A file carrying one \
+                    is counted as the holder, unless its own content names its language.", held.join(", ")),
+            MESSAGE_WIDTH - past_the_mark, past_the_mark))
+}
+
+// Filled downwards and not across, so a sorted list reads in order down each column. A list of
+// extensions too long for its column continues under itself, which keeps every column the width of
+// the common case.
+fn format_in_columns(entries: &[(String, Vec<String>)], columns: usize) -> String {
+    const GUTTER : usize = 4;
+    const NAME_GUTTER : usize = 2;
+    const EXTENSIONS_WIDTH : usize = 33;
+
+    let rows = entries.len().div_ceil(columns);
+    let name_width = entries.iter().map(|(name, _)| name.chars().count()).max().unwrap_or(0) + NAME_GUTTER;
+    let cell_width = name_width + EXTENSIONS_WIDTH + GUTTER;
+    let wrapped = entries.iter().map(|(_, extensions)| wrap_at_commas(extensions, EXTENSIONS_WIDTH))
+            .collect::<Vec<_>>();
+
+    let mut lines = Vec::with_capacity(entries.len());
+    for row in 0..rows {
+        let cells = (0..columns).map(|column| column * rows + row)
+                .filter(|index| *index < entries.len()).collect::<Vec<_>>();
+        for line_of_cell in 0..cells.iter().map(|index| wrapped[*index].len()).max().unwrap_or(0) {
+            let mut line = " ".repeat(LIST_INDENT);
+            for index in &cells {
+                let name = if line_of_cell == 0 {entries[*index].0.as_str()} else {""};
+                let extensions = wrapped[*index].get(line_of_cell).map_or("", String::as_str);
+                line += &format!("{:<cell_width$}", format!("{name:<name_width$}{extensions}"));
+            }
+            lines.push(line.trim_end().to_owned());
+        }
+    }
+
+    lines.join("\n")
+}
+
+// Broken after a comma, so a line that continues below says so at its end.
+fn wrap_at_commas(parts: &[String], width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for part in parts {
+        if !line.is_empty() && line.chars().count() + 2 + part.chars().count() > width + 1 {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line += &format!("{part},");
+    }
+
+    lines.push(line.trim_end_matches(',').to_owned());
+    lines
 }
 
 // The empty case gets a sentence of its own: joining no names with the two spaces that indent the
@@ -1546,28 +1682,59 @@ mod tests {
     }
 
     #[test]
-    fn a_language_declared_by_two_files_is_listed_once() {
+    fn a_language_declared_by_two_files_is_listed_once_carrying_the_extensions_of_both() {
         let none = mezura_core::StringRules::escaping_nothing;
         let twice = vec![Language::new("Java", ["java"], none(), ["//"], &[], []),
                 Language::new("Rust", ["rs"], none(), ["//"], &[], []),
                 Language::new("Java", ["jav"], none(), ["//"], &[], [])];
-        let listed = format_supported_languages_message(&twice);
+        let listed = format_supported_languages_message(&twice, &ConflictRules::default());
 
         assert_eq!(1, listed.matches("Java").count(), "'Java' was listed more than once:\n{listed}");
+        assert!(listed.contains("java, jav"), "one of the two declarations went missing:\n{listed}");
         assert!(listed.contains("Rust"));
     }
 
+    #[test]
+    fn an_extension_another_language_holds_is_starred_and_the_holder_is_named_under_the_list() {
+        let none = mezura_core::StringRules::escaping_nothing;
+        let contested = vec![Language::new("Matlab", ["m"], none(), ["%"], &[], []),
+                Language::new("Mercury", ["m", "mer"], none(), ["%"], &[], [])];
+        let conflicts = ConflictRules {
+            by_extension: std::collections::HashMap::from([("m".to_owned(),
+                    vec!["Matlab".to_owned(), "Mercury".to_owned()])]),
+            ..Default::default()
+        };
+
+        let listed = format_supported_languages_message(&contested, &conflicts);
+        assert_eq!(1, listed.matches("m*").count(),
+                "the star belongs to the one language that lost 'm':\n{listed}");
+        assert!(listed.contains("m*, mer"), "the star went to the wrong extension:\n{listed}");
+        assert!(listed.contains("'m' by Matlab"), "the legend must name the holder:\n{listed}");
+
+        let uncontested = format_supported_languages_message(&contested[..1], &ConflictRules::default());
+        assert!(!uncontested.contains(LOST_EXTENSION_MARK),
+                "a legend was printed where nothing was lost:\n{uncontested}");
+    }
+
     // The columns are filled downwards, so the last one is short whenever the count misses a
-    // multiple of three, and that ragged end is where a name goes missing.
+    // multiple of the column count, and that ragged end is where a name goes missing. The first
+    // entry claims no extension and the last claims more than fit on one line, which is the other
+    // pair of ends.
     #[test]
     fn every_name_survives_a_column_count_that_does_not_divide_the_list() {
-        let all = (0..10).map(|i| format!("Lang{i}")).collect::<Vec<_>>();
+        let all = (0..10).map(|i| (format!("Lang{i}"),
+                (0..i).map(|extension| format!("e{i}x{extension}")).collect::<Vec<_>>()))
+                .collect::<Vec<_>>();
         for count in 0..=all.len() {
-            let names = &all[..count];
-            let laid_out = format_in_columns(names, 3);
-            for name in names {
+            let entries = &all[..count];
+            let laid_out = format_in_columns(entries, 3);
+            for (name, extensions) in entries {
                 assert_eq!(1, laid_out.matches(name.as_str()).count(),
-                        "'{name}' is not listed exactly once among {count} names:\n{laid_out}");
+                        "'{name}' is not listed exactly once among {count} entries:\n{laid_out}");
+                for extension in extensions {
+                    assert_eq!(1, laid_out.matches(extension.as_str()).count(),
+                            "'{extension}' is not listed exactly once among {count} entries:\n{laid_out}");
+                }
             }
             assert!(laid_out.lines().all(|line| line.len() == line.trim_end().len()),
                     "a line was left padded to the right:\n{laid_out}");
@@ -1648,9 +1815,9 @@ mod tests {
     fn create_commands_document() -> String {
         let mut document = String::with_capacity(60_000);
         document.push_str("# Commands\n\nThe full help of every command, exactly as \
-`mezura --help <command>` prints it. A test writes this file from the help texts themselves, \
-so do not edit it by hand. Regenerate it with `MEZURA_UPDATE_GOLDEN=1 cargo test -p mezura \
-commands_document`.\n\n");
+                `mezura --help <command>` prints it. A test writes this file from the help texts themselves, \
+                so do not edit it by hand. Regenerate it with `MEZURA_UPDATE_GOLDEN=1 cargo test -p mezura \
+                commands_document`.\n\n");
         for (group, commands) in COMMAND_HELP {
             let anchor = group.to_lowercase().replace(' ', "-");
             document.push_str(&format!("- [{group}](#{anchor})\n"));
