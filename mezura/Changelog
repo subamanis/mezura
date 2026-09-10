@@ -1,4 +1,6 @@
-v3.1.0 - unreleased
+v3.1.0 - 2026-09-11
+
+  34,913 Total lines  -  22,072 Code lines
 
 Main changes:
   -> New "--output markdown", a report as a markdown table (maybe for a CI step to put in a pull request?).
