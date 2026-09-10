@@ -23,18 +23,18 @@ set aside for.
 This is the library. For the command line program, the report it prints and the settings it takes,
 see the [main README](https://github.com/subamanis/mezura).
 
-Counted by itself, on 2026-09-02:
+Counted by itself, on 2026-09-11:
 
 ```
 Details.
 
 Language   Files %      ⌄ Lines %       Code %       Comments %       Extra       Size
 ──────────────────────────────────────────────────────────────────────────────────────
-Rust          22 100%    13,509 100%   8,144 60.3%      2,187 16.2%   3,178   685.4 KB
+Rust          22 100%    14,125 100%   8,531 60.4%      2,274 16.1%   3,320   718.6 KB
 
 Keywords.
 
-Rust   enums: 21, structs: 69
+Rust   enums: 22, structs: 71
 ```
 
 ## Counting a directory

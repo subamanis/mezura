@@ -41,7 +41,6 @@ The whole Linux kernel (some languages were cut for screenshot purposes):
 * [Themes](#themes)
 * [Supported languages](#supported-languages)
 * [Accuracy and limitations](#accuracy-and-limitations)
-* [How it compares](#how-it-compares)
 * [Performance](#performance)
   * [Threads and phase timing](#threads-and-phase-timing)
   * [Windows and antivirus](#windows-and-antivirus)
@@ -76,8 +75,7 @@ Things it does that most counters do not:
   assistant can run mezura itself. See [Taking the result elsewhere](#taking-the-result-elsewhere).
 - **Data driven.** All the files, languages and the settings mezura uses are extracted to your machine, where they can be inspected, changed, or extended very easily. See [The data directory](#the-data-directory).  
   
-Also, it's the fastest line counter. See [How it compares](#how-it-compares).  
-And it's also the most accurate at what it measures. See [Accuracy and limitations](#accuracy-and-limitations).
+It's also the most accurate at what it measures. See [Accuracy and limitations](#accuracy-and-limitations).
 
 
 ## Installation
@@ -313,7 +311,7 @@ you, so those are skipped like any other found path.
 mezura ./src --diff origin/main --output markdown >> $GITHUB_STEP_SUMMARY
 ```
 
-<img src="screenshots/markdown.png" width="900">
+<img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/markdown.png" width="900">
 
 The modules, the languages under them and the changed files under those are all rows of the one table, at the depth the printed report draws them at.
 
@@ -632,32 +630,6 @@ With that said, it is important to mention the following limitations:
 - ```=*``` in a comment symbol means "any number of ```=```", so a language whose symbol really contained ```=*``` could not be declared. None is known.
 
 - Two languages claiming one extension is settled per file, by a ```#!``` line or by evidence the language files declare, and only the files whose content says nothing follow the standing order of ```language_conflicts.txt```, parsed with that winner's symbols. ```--force-language``` decides outright, ```--no-heuristics``` turns the content reading off, and ```--no-shebang``` takes the ```#!``` line out of the whole business, the naming of files that carry no extension included.
-
-
-## How it compares
-
-Against [scc](https://github.com/boyter/scc) and [tokei](https://github.com/XAMPPRocky/tokei), the
-two fastest counters around, on the Linux repository tree, from a native Debian environment,
-measured with hyperfine over 3 warmups and 30 timed runs per command:
-
-| tool | time | vs fastest | lines/s | files | lines |
-|---|---|---|---|---|---|
-| mezura 3.0.0 | 228 ms ± 10 | 1.00x | 158.0M | 63,864 | 36,036,878 |
-| scc 4.0.0 | 472 ms ± 3 | 2.07x | 76.3M | 63,724 | 36,013,098 |
-| tokei 14.0.0 | 474 ms ± 3 | 2.08x | 76.0M | 63,782 | 36,022,156 |
-
-The comparison is equal work on purpose: the same languages over the same tree for all three,
-mezura pinned to the same counting model the other two use, the gitignore obeyed by everyone, and
-each tool's flags turning off whatever it does beyond the counting itself (keyword counting for
-mezura, complexity and cost estimates for scc).  
-The files and lines columns are the proof of the equal work.  
-Measured on Debian 13, a Ryzen 7 9700X with 16 threads and a Lexar NQ790 PCIe gen4 NVMe disk.
-
-mezura comes out first on every platform it was measured on,
-both by using each counter's default settings, and by using the curated flags that guarantee equal work.
-The runs on the other platforms it was tested on, the exact flags, the trust checks every run carries,
-the full methodology and the recorded numbers of each run
-are on [the results page](https://github.com/subamanis/mezura/blob/HEAD/benchmarking/results/README.md).
 
 
 ## Performance
