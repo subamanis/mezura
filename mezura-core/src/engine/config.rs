@@ -339,9 +339,9 @@ pub struct EngineConfig {
     pub collect_files: bool,
     /// Whether a file of a contested extension is identified by its content. On by default.
     pub use_heuristics: bool,
-    /// Whether a file with no extension is identified by the interpreter its `#!` line names. On by
-    /// default. Off, such a file is never opened and never counted, and a `#!` line decides nothing
-    /// anywhere.
+    /// Whether a file with no extension is identified by the interpreter its `#!` line names. True
+    /// by default. Set to false, such a file is never opened and never counted, and no `#!` line
+    /// decides anything, a contested extension included.
     pub detect_shebangs: bool
 }
 

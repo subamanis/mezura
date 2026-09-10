@@ -9,7 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::{Keyword, Language, LeveledPair, LineContinuation, NestedLanguage, StringRules};
-use crate::engine::identity::IdentifiedBy;
+use crate::engine::identity::ClaimKind;
 
 /// What the language conflicts file decides. It names who wins an extension or a file name that
 /// more than one language claims, and it lists the literals that mark a file of an extension as
@@ -74,8 +74,8 @@ impl ConflictBlock {
     pub fn key_of(self, claimed: &str) -> String {
         match self {
             ConflictBlock::ContestedExtensions | ConflictBlock::NotCodeLineStarts
-                    | ConflictBlock::NotCodeLineContains => IdentifiedBy::Extension.key_of(claimed),
-            ConflictBlock::ContestedFilenames => IdentifiedBy::Filename.key_of(claimed)
+                    | ConflictBlock::NotCodeLineContains => ClaimKind::Extension.key_of(claimed),
+            ConflictBlock::ContestedFilenames => ClaimKind::Filename.key_of(claimed)
         }
     }
 
@@ -762,12 +762,11 @@ mod tests {
         // would otherwise be the one contest nothing here notices
         let by_name = crate::languages::keyed_by_name(languages);
         let mut unsettled = Vec::new();
-        for (identified_by, rules) in [(IdentifiedBy::Extension, &conflicts.by_extension),
-                (IdentifiedBy::Filename, &conflicts.by_filename)] {
+        for (identified_by, rules) in [(ClaimKind::Extension, &conflicts.by_extension),
+                (ClaimKind::Filename, &conflicts.by_filename)] {
             let (_, report) = crate::engine::identity::build_language_map_by(identified_by, &by_name, rules, &HashMap::new());
-            unsettled.extend(report.contested.iter()
-                    .filter(|x| x.resolved_by == crate::engine::identity::ResolvedBy::AlphabeticalFallback)
-                    .map(|x| format!("the {} '{}' between {} and {}", x.identified_by.name(), x.identity, x.winner,
+            unsettled.extend(report.contested.iter().filter(|x| x.is_a_tiebreak())
+                    .map(|x| format!("the {} '{}' between {} and {}", x.kind.name(), x.claimed, x.owner,
                             x.losers.join(", "))));
         }
 

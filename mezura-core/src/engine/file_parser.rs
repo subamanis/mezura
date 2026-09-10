@@ -2038,7 +2038,7 @@ mod tests {
     use super::*;
     use crate::{CountingModel, Keyword, LineClasses, Stats, StringRules};
     use crate::test_paths::{FIXTURES_DIR, LANGUAGES_DIR};
-    use crate::engine::identity::{IdentifiedBy, LanguageLookup, build_language_map_by};
+    use crate::engine::identity::{ClaimKind, LanguageLookup, build_language_map_by};
 
     // The sample files carry no telling extension, because the language is the one the test names
     // and not the one a suffix would imply: that is what lets one file count as Java and as C#.
@@ -2175,7 +2175,7 @@ mod tests {
     // With the real extension map, so a fixture or a stress case whose sections name a language
     // resolves it the way a run does; without priority rules, which no fixture contests
     static SHIPPED_EXTENSIONS : LazyLock<HashMap<String, Arc<str>>> = LazyLock::new(||
-            build_language_map_by(IdentifiedBy::Extension, &LANGUAGE_MAP_REF, &HashMap::new(), &HashMap::new()).0);
+            build_language_map_by(ClaimKind::Extension, &LANGUAGE_MAP_REF, &HashMap::new(), &HashMap::new()).0);
 
     fn shipped_lookup() -> NestedLanguageLookup<'static> {
         NestedLanguageLookup { languages: &LANGUAGE_MAP_REF, extension_to_name: &SHIPPED_EXTENSIONS, set_aside: &NO_SET_ASIDE }
@@ -3988,11 +3988,11 @@ mod tests {
     fn fixture_lookup() -> LanguageLookup {
         let conflicts = crate::languages::parse_shipped_conflict_rules();
         LanguageLookup {
-            by_extension: build_language_map_by(IdentifiedBy::Extension, &LANGUAGE_MAP_REF,
+            by_extension: build_language_map_by(ClaimKind::Extension, &LANGUAGE_MAP_REF,
                     &conflicts.by_extension, &HashMap::new()).0,
-            by_filename: build_language_map_by(IdentifiedBy::Filename, &LANGUAGE_MAP_REF,
+            by_filename: build_language_map_by(ClaimKind::Filename, &LANGUAGE_MAP_REF,
                     &conflicts.by_filename, &HashMap::new()).0,
-            by_shebang: build_language_map_by(IdentifiedBy::Shebang, &LANGUAGE_MAP_REF,
+            by_shebang: build_language_map_by(ClaimKind::Shebang, &LANGUAGE_MAP_REF,
                     &HashMap::new(), &HashMap::new()).0,
             extension_rules: HashMap::new()
         }
@@ -4011,11 +4011,11 @@ mod tests {
                     claiming.push(language.name.clone());
                 }
             };
-            language.extensions.iter().for_each(|x| claim(IdentifiedBy::Extension.key_of(x)));
+            language.extensions.iter().for_each(|x| claim(ClaimKind::Extension.key_of(x)));
             // A fixture named after a whole filename is resolved by that name, so what has to be
             // uncontested is the name and not the extension its spelling happens to end in
-            language.filenames.iter().for_each(|x| claim(IdentifiedBy::Filename.key_of(x)));
-            language.shebangs.iter().for_each(|x| claim(IdentifiedBy::Shebang.key_of(x)));
+            language.filenames.iter().for_each(|x| claim(ClaimKind::Filename.key_of(x)));
+            language.shebangs.iter().for_each(|x| claim(ClaimKind::Shebang.key_of(x)));
         }
 
         for path in fixture_paths(&fixtures_dir()) {
@@ -4027,11 +4027,11 @@ mod tests {
             }
 
             let name = path.file_name().and_then(|x| x.to_str()).unwrap_or_default();
-            let as_filename = IdentifiedBy::Filename.key_of(name);
+            let as_filename = ClaimKind::Filename.key_of(name);
             let identity = if claimants_of.contains_key(&as_filename) {
                 as_filename
             } else if let Some(extension) = path.extension().and_then(|x| x.to_str()) {
-                IdentifiedBy::Extension.key_of(extension)
+                ClaimKind::Extension.key_of(extension)
             } else {
                 // An extensionless fixture resolves through its first line, by the same
                 // spellings the walk tries, most specific first

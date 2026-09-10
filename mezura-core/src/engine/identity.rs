@@ -16,14 +16,20 @@ const MAX_IDENTITY_LEN : usize = 32;
 // One read this size answers the probe, so an extensionless binary costs a single small read
 const SHEBANG_READ_LIMIT : usize = 256;
 
-#[derive(Debug,PartialEq,Eq,Clone,Copy)]
-pub(crate) enum IdentifiedBy {
+/// The three ways a file's name says what language it is. A whole name is answered before an
+/// extension, and the `#!` line only for a file that has neither.
+#[derive(Debug,PartialEq,Eq,PartialOrd,Ord,Clone,Copy)]
+#[non_exhaustive]
+pub enum ClaimKind {
+    /// What follows the last dot, `rs` or `py`.
     Extension,
+    /// The whole name, `Makefile` or `.vimrc`, for the files whose extension says nothing.
     Filename,
+    /// The interpreter a `#!` line names, for the files that carry no extension at all.
     Shebang
 }
 
-impl IdentifiedBy {
+impl ClaimKind {
     pub(crate) fn name(&self) -> &'static str {
         match self {
             Self::Extension => "extension",
@@ -49,42 +55,63 @@ impl IdentifiedBy {
     }
 }
 
-// The first two are decisions somebody took; the third is a tiebreak nobody asked for, and the one
-// that can put a language's comments into another's code.
+/// What decided a name that more than one language claimed.
+///
+/// The first two are decisions somebody took. The third is a tiebreak nobody asked for, and the one
+/// that can put a language's comments into another's code.
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
-pub(crate) enum ResolvedBy {
-    ForceLang,
-    PriorityFile,
-    AlphabeticalFallback
+#[non_exhaustive]
+pub enum SettledBy {
+    /// A `--force-language` pair, which decides one run.
+    ForcedPair,
+    /// A line of `language_conflicts.txt`, which decides every run on this machine.
+    ConflictRule,
+    /// Nothing but the alphabet, because neither of the two above named this one.
+    AlphabeticalTiebreak
 }
 
+/// One name a language claims, and which language a file wearing it is counted as.
 #[derive(Debug,PartialEq,Eq,Clone)]
-pub(crate) struct ContestedIdentity {
-    pub identity: String,
-    pub identified_by: IdentifiedBy,
-    pub winner: String,
+#[non_exhaustive]
+pub struct Claim {
+    /// The extension, whole file name or interpreter, lowercased, an extension without its dot.
+    pub claimed: String,
+    /// Which of the three it is.
+    pub kind: ClaimKind,
+    /// The language whose symbols read such a file.
+    pub owner: String,
+    /// The languages that claim it and did not get it, empty where only one language claims it.
     pub losers: Vec<String>,
-    pub resolved_by: ResolvedBy
+    /// What decided it, or `None` where only one language claims it and there was nothing to decide.
+    pub settled_by: Option<SettledBy>
+}
+
+impl Claim {
+    /// Whether the alphabet decided this one, which is the case nobody chose and the files of every
+    /// loser are counted with the wrong comment and string symbols.
+    pub fn is_a_tiebreak(&self) -> bool {
+        self.settled_by == Some(SettledBy::AlphabeticalTiebreak)
+    }
 }
 
 #[derive(Debug,PartialEq,Eq,Clone,Default)]
 pub(crate) struct IdentityReport {
-    pub contested: Vec<ContestedIdentity>
+    pub contested: Vec<Claim>
 }
 
 impl IdentityReport {
-    // Only the alphabetical tiebreak is reported: a rule or a forced pair is somebody's own decision,
+    // Only the alphabetical tiebreak is reported. A rule or a forced pair is somebody's own decision,
     // and saying so every run buries the one line that matters. Each warning says what happened and
-    // stops, since what to do about it depends on who is calling: the command line has a file and a
-    // flag for it and adds its own sentence, a library caller has neither.
+    // stops, because what to do about it depends on who is calling. The command line has a file and
+    // a flag for it and adds its own sentence, where a library caller has neither.
     pub(crate) fn collect_warnings(&self) -> Vec<warnings::Warning> {
         let mut reported = Vec::new();
-        for contested in self.contested.iter().filter(|x| x.resolved_by == ResolvedBy::AlphabeticalFallback) {
-            reported.push(warnings::Warning::new(warnings::Code::LanguageTiebreak, &contested.identity,
+        for contested in self.contested.iter().filter(|x| x.is_a_tiebreak()) {
+            reported.push(warnings::Warning::new(warnings::Code::LanguageTiebreak, &contested.claimed,
                     format!("The {} '{}' is claimed by {} and {}. It was given to {} only because that name comes first \
                             alphabetically, so the files of the rest are counted with the wrong comment and string symbols.",
-                    contested.identified_by.name(), contested.identity, contested.winner, contested.losers.join(", "),
-                    contested.winner)));
+                    contested.kind.name(), contested.claimed, contested.owner, contested.losers.join(", "),
+                    contested.owner)));
         }
 
         reported
@@ -94,7 +121,7 @@ impl IdentityReport {
 // Keys are lowercased here, once, and the lookup lowercases what it is given. Before the claimants
 // are counted, not after: left as written, 'cs' and 'CS' look like two extensions, never collide,
 // and each wins silently in different files.
-pub(crate) fn build_language_map_by(identified_by: IdentifiedBy, languages: &HashMap<String,Language>,
+pub(crate) fn build_language_map_by(identified_by: ClaimKind, languages: &HashMap<String,Language>,
         priority: &HashMap<String,Vec<String>>, forced: &HashMap<String,String>)
         -> (HashMap<String, Arc<str>>, IdentityReport)
 {
@@ -144,19 +171,19 @@ pub(crate) fn build_language_map_by(identified_by: IdentifiedBy, languages: &Has
         // tiebreak decides, and reporting it as settled hides exactly the case this whole mechanism
         // exists to announce. The claimants were pushed in the order the sorted names were walked,
         // so the first of them is the alphabetical winner.
-        let (winner, resolved_by) = match (forced_winner, priority_winner) {
-            (Some(x), _) => (x, ResolvedBy::ForceLang),
-            (_, Some(x)) => (x, ResolvedBy::PriorityFile),
-            _ => (claimants[0], ResolvedBy::AlphabeticalFallback)
+        let (winner, settled_by) = match (forced_winner, priority_winner) {
+            (Some(x), _) => (x, SettledBy::ForcedPair),
+            (_, Some(x)) => (x, SettledBy::ConflictRule),
+            _ => (claimants[0], SettledBy::AlphabeticalTiebreak)
         };
 
         if claimants.len() > 1 {
-            report.contested.push(ContestedIdentity {
-                identity: identity.clone(),
-                identified_by,
-                winner: winner.to_owned(),
+            report.contested.push(Claim {
+                claimed: identity.clone(),
+                kind: identified_by,
+                owner: winner.to_owned(),
                 losers: claimants.iter().filter(|name| **name != winner).map(|name| (*name).to_owned()).collect(),
-                resolved_by
+                settled_by: Some(settled_by)
             });
         }
 
@@ -169,7 +196,7 @@ pub(crate) fn build_language_map_by(identified_by: IdentifiedBy, languages: &Has
     // and the same pair is given to every one of them: 'Languages::resolve' asks that once.
     // The shebang map is the exception: a forced extension is not an interpreter, and one unclaimed
     // entry here would turn the probe on for a run whose languages declare no shebang at all.
-    if identified_by != IdentifiedBy::Shebang {
+    if identified_by != ClaimKind::Shebang {
         for (identity, wanted) in &forced {
             if let Some(name) = language_named(wanted) {
                 map.insert(identity.clone(), shared_names[name].clone());
@@ -177,7 +204,7 @@ pub(crate) fn build_language_map_by(identified_by: IdentifiedBy, languages: &Has
         }
     }
 
-    report.contested.sort_by(|a, b| a.identity.cmp(&b.identity));
+    report.contested.sort_by(|a, b| a.claimed.cmp(&b.claimed));
     (map, report)
 }
 
@@ -449,7 +476,7 @@ pub(crate) fn extension_key(extension: &str) -> String {
 pub(crate) fn build_extension_language_map(languages: &HashMap<String,Language>, priority: &HashMap<String,Vec<String>>,
         forced: &HashMap<String,String>) -> (HashMap<String, Arc<str>>, IdentityReport)
 {
-    build_language_map_by(IdentifiedBy::Extension, languages, priority, forced)
+    build_language_map_by(ClaimKind::Extension, languages, priority, forced)
 }
 
 #[cfg(test)]
@@ -477,7 +504,7 @@ mod tests {
         let (map, report) = build_extension_language_map(&contested, &rules.by_extension, &HashMap::new());
         assert_eq!(Some("MATLAB"), map.get("m").map(AsRef::as_ref));
         assert_eq!(1, report.contested.len(), "one declared with a dot and one without did not meet");
-        assert_eq!(ResolvedBy::PriorityFile, report.contested[0].resolved_by);
+        assert_eq!(Some(SettledBy::ConflictRule), report.contested[0].settled_by);
     }
 
     #[test]
@@ -520,12 +547,12 @@ mod tests {
     
         assert_eq!("MATLAB", winner_of(&map, "m"));
         assert_eq!("Objective-C", winner_of(&map, "mm"));
-        assert_eq!(vec![ContestedIdentity {
-            identity: "m".to_owned(),
-            identified_by: IdentifiedBy::Extension,
-            winner: "MATLAB".to_owned(),
+        assert_eq!(vec![Claim {
+            claimed: "m".to_owned(),
+            kind: ClaimKind::Extension,
+            owner: "MATLAB".to_owned(),
             losers: vec!["Objective-C".to_owned()],
-            resolved_by: ResolvedBy::AlphabeticalFallback
+            settled_by: Some(SettledBy::AlphabeticalTiebreak)
         }], report.contested);
         assert_eq!(vec![(warnings::Code::LanguageTiebreak, "counts")],
                 report.collect_warnings().iter().map(|x| (x.code, x.affects().name())).collect::<Vec<_>>());
@@ -555,13 +582,13 @@ mod tests {
     
         let (map, report) = build_extension_language_map(&languages, &priority(&[("m", &["Objective-C", "MATLAB"])]), &HashMap::new());
         assert_eq!("Objective-C", winner_of(&map, "m"));
-        assert_eq!(ResolvedBy::PriorityFile, report.contested[0].resolved_by);
+        assert_eq!(Some(SettledBy::ConflictRule), report.contested[0].settled_by);
         assert_eq!(vec!["MATLAB".to_owned()], report.contested[0].losers);
     
         let forced = hashmap!("m".to_owned() => "matlab".to_owned());
         let (map, report) = build_extension_language_map(&languages, &priority(&[("m", &["Objective-C", "MATLAB"])]), &forced);
         assert_eq!("MATLAB", winner_of(&map, "m"));
-        assert_eq!(ResolvedBy::ForceLang, report.contested[0].resolved_by);
+        assert_eq!(Some(SettledBy::ForcedPair), report.contested[0].settled_by);
     
         // and neither of them is the tiebreak, so neither is announced
         assert!(report.collect_warnings().is_empty());
@@ -575,7 +602,7 @@ mod tests {
         let (map, report) = build_extension_language_map(&languages, &priority(&[("m", &["ObjC"])]), &HashMap::new());
     
         assert_eq!("MATLAB", winner_of(&map, "m"));
-        assert_eq!(ResolvedBy::AlphabeticalFallback, report.contested[0].resolved_by);
+        assert_eq!(Some(SettledBy::AlphabeticalTiebreak), report.contested[0].settled_by);
         let reported = report.collect_warnings();
         assert_eq!(warnings::Code::LanguageTiebreak, reported[0].code);
         assert_eq!("m", reported[0].subject);
@@ -609,7 +636,7 @@ mod tests {
         let (map, report) = build_extension_language_map(&languages, &HashMap::new(), &forced);
     
         assert_eq!("MATLAB", winner_of(&map, "m"));
-        assert_eq!(ResolvedBy::ForceLang, report.contested[0].resolved_by);
+        assert_eq!(Some(SettledBy::ForcedPair), report.contested[0].settled_by);
         assert!(report.collect_warnings().is_empty());
     }
 
@@ -631,7 +658,7 @@ mod tests {
         let (map, report) = build_extension_language_map(&languages, &HashMap::new(), &HashMap::new());
 
         assert_eq!(1, report.contested.len());
-        assert_eq!("zig", report.contested[0].identity);
+        assert_eq!("zig", report.contested[0].claimed);
         assert_eq!("Zig", winner_of(&map, "zig"));
         assert_eq!("Zig", winner_of(&map, "ZIG"));
         assert_eq!("Zig", winner_of(&map, "Zig"));
@@ -686,7 +713,7 @@ mod tests {
                                 ["#"], &[], []).with_shebangs(*interpreters)))
                 .collect();
         LanguageLookup {
-            by_shebang: build_language_map_by(IdentifiedBy::Shebang, &languages,
+            by_shebang: build_language_map_by(ClaimKind::Shebang, &languages,
                     &HashMap::new(), &HashMap::new()).0,
             ..Default::default()
         }
@@ -753,7 +780,7 @@ mod tests {
     fn a_forced_pair_nothing_claims_stays_out_of_the_shebang_map() {
         let languages = languages_claiming(&[("Rust", &["rs"])]);
         let forced = hashmap!("txt".to_owned() => "rust".to_owned());
-        let (map, _) = build_language_map_by(IdentifiedBy::Shebang, &languages, &HashMap::new(), &forced);
+        let (map, _) = build_language_map_by(ClaimKind::Shebang, &languages, &HashMap::new(), &forced);
         assert!(map.is_empty(), "a forced extension became an interpreter: {map:?}");
 
         // and the same pair still settles a real interpreter contest
@@ -763,9 +790,9 @@ mod tests {
                                 ["#"], &[], []).with_shebangs(interpreters)))
                 .collect();
         let forced = hashmap!("sh".to_owned() => "bsh".to_owned());
-        let (map, report) = build_language_map_by(IdentifiedBy::Shebang, &contested, &HashMap::new(), &forced);
+        let (map, report) = build_language_map_by(ClaimKind::Shebang, &contested, &HashMap::new(), &forced);
         assert_eq!(Some("Bsh"), map.get("sh").map(AsRef::as_ref));
-        assert_eq!(ResolvedBy::ForceLang, report.contested[0].resolved_by);
+        assert_eq!(Some(SettledBy::ForcedPair), report.contested[0].settled_by);
     }
 
     #[test]

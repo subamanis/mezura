@@ -258,7 +258,7 @@ mod tests {
     use crate::engine::targets::build_exclude_matcher;
     use crate::queue_the_targets;
     use crate::test_paths::LANGUAGES_DIR;
-    use crate::engine::identity::{IdentifiedBy, LanguageLookup, ModuleLookups, build_extension_language_map,
+    use crate::engine::identity::{ClaimKind, LanguageLookup, ModuleLookups, build_extension_language_map,
             build_language_map_by};
 
     fn count_files_of(target: &str, extra_args: &str) -> (usize, usize, usize, Vec<String>) {
@@ -296,7 +296,7 @@ mod tests {
         let idle_producers = Arc::new(AtomicUsize::new(0));
         let language_lookups: SharedModuleLookups = Arc::new(ModuleLookups::OfTheWholeRun(LanguageLookup {
                         by_extension: build_extension_language_map(&language_map, &Default::default(), &Default::default()).0,
-                        by_shebang: build_language_map_by(IdentifiedBy::Shebang, &language_map, &Default::default(), &Default::default()).0,
+                        by_shebang: build_language_map_by(ClaimKind::Shebang, &language_map, &Default::default(), &Default::default()).0,
                         ..Default::default() }));
         let modules = Arc::new(Modules::of(&targets));
         let mut files_present = FilesPresent::default();

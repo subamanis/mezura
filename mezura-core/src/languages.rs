@@ -7,8 +7,8 @@ use std::sync::Arc;
 use crate::{Language, warnings};
 use crate::engine::config::{EngineConfig, ForcedLanguages, LanguageNames, format_module_scope,
         split_off_module_scope};
-use crate::engine::identity::{IdentifiedBy, IdentityReport, LanguageLookup, ResolvedBy,
-        ScopedLookups, build_language_map_by, extension_key, find_language_named};
+use crate::engine::identity::{Claim, ClaimKind, IdentityReport, LanguageLookup, ScopedLookups,
+        SettledBy, build_language_map_by, extension_key, find_language_named, interpreter_spellings};
 use crate::language_file::ConflictRules;
 use crate::warnings::Warning;
 
@@ -246,26 +246,26 @@ fn resolve_one_scope(languages: &[Language], everything: &HashMap<String, Langua
     let forced = config.forced_languages.get_rules_of_module(module);
     // Its complaints about contested extensions are dropped. The narrowed build below makes them,
     // and a contest between two languages the run then leaves out is not news.
-    let (all_extensions, _) = build_language_map_by(IdentifiedBy::Extension, everything,
+    let (all_extensions, _) = build_language_map_by(ClaimKind::Extension, everything,
             &conflicts.by_extension, &forced);
     let by_name = keyed_by_name(retain_languages_of_interest(languages.to_vec(), &all_extensions,
             config.languages_of_interest.get_names_of_module(module),
             config.excluded_languages.get_names_of_module(module)));
 
     let mut reported = Vec::new();
-    let (by_extension, report) = build_language_map_by(IdentifiedBy::Extension, &by_name,
+    let (by_extension, report) = build_language_map_by(ClaimKind::Extension, &by_name,
             &conflicts.by_extension, &forced);
     reported.extend(report.collect_warnings());
     // The forced pairs go to both, since '--force-language Makefile=python' and '--force-language
     // txt=python' are the same sentence and the reader has no reason to know which map answers
-    let (by_filename, filename_report) = build_language_map_by(IdentifiedBy::Filename, &by_name,
+    let (by_filename, filename_report) = build_language_map_by(ClaimKind::Filename, &by_name,
             &conflicts.by_filename, &forced);
     reported.extend(filename_report.collect_warnings());
     // The conflicts file has no block for a contested interpreter yet. The forced pairs reach this
     // map like the other two, which is how such a contest would be settled by hand.
     // Leaving it empty is the whole of 'detect_shebangs'. No reader opens a file over an empty map.
     let by_shebang = if config.detect_shebangs {
-        let (map, shebang_report) = build_language_map_by(IdentifiedBy::Shebang, &by_name,
+        let (map, shebang_report) = build_language_map_by(ClaimKind::Shebang, &by_name,
                 &HashMap::new(), &forced);
         reported.extend(shebang_report.collect_warnings());
         map
@@ -308,16 +308,16 @@ fn find_contested_with_evidence(report: &IdentityReport, by_name: &HashMap<Strin
         -> HashMap<String, Arc<[Arc<str>]>>
 {
     report.contested.iter()
-            .filter(|contest| contest.resolved_by != ResolvedBy::ForceLang)
+            .filter(|contest| contest.settled_by != Some(SettledBy::ForcedPair))
             .filter_map(|contest| {
-                let claimants = std::iter::once(&contest.winner).chain(&contest.losers)
+                let claimants = std::iter::once(&contest.owner).chain(&contest.losers)
                         .filter(|name| by_name.contains_key(name.as_str()))
                         .map(|name| Arc::from(name.as_str()))
                         .collect::<Vec<Arc<str>>>();
                 let declares_evidence = |name: &Arc<str>| by_name.get(name.as_ref())
                         .is_some_and(Language::declares_identification);
                 (claimants.len() > 1 && claimants.iter().any(declares_evidence))
-                        .then(|| (contest.identity.clone(), claimants.into()))
+                        .then(|| (contest.claimed.clone(), claimants.into()))
             }).collect()
 }
 
@@ -489,16 +489,65 @@ pub fn find_duplicate_names(languages: &[Language]) -> Vec<Warning> {
     }).collect()
 }
 
+/// Which language owns each extension, whole file name and `#!` name, and which of those more than
+/// one language claimed.
+///
+/// The standing answer, without the `--force-language` pairs and the narrowing that belong to a
+/// single run and are applied when its [`Languages`] are resolved.
+#[derive(Debug, Clone)]
+pub struct LanguageClaims {
+    by_extension: HashMap<String, Claim>,
+    by_filename: HashMap<String, Claim>,
+    by_shebang: HashMap<String, Claim>
+}
+
+impl LanguageClaims {
+    /// Worked out from the language files given and the standing order of the conflict rules.
+    pub fn of(languages: &[Language], conflicts: &ConflictRules) -> Self {
+        let by_name = keyed_by_name(languages.to_vec());
+        LanguageClaims {
+            by_extension: collect_claims_of(ClaimKind::Extension, &by_name, &conflicts.by_extension),
+            by_filename: collect_claims_of(ClaimKind::Filename, &by_name, &conflicts.by_filename),
+            // The conflicts file has no block for interpreters, so every contest here is a tiebreak.
+            by_shebang: collect_claims_of(ClaimKind::Shebang, &by_name, &HashMap::new())
+        }
+    }
+
+    /// Taken with or without its leading dot and without regard to case. `None` where no language
+    /// claims it.
+    pub fn find_claim_of_extension(&self, extension: &str) -> Option<&Claim> {
+        self.by_extension.get(&extension_key(extension))
+    }
+
+    /// The whole name of a file, `Makefile` or `.vimrc`. A name a language claims is answered before
+    /// the extension on it, which is what makes `CMakeLists.txt` CMake.
+    pub fn find_claim_of_filename(&self, name: &str) -> Option<&Claim> {
+        self.by_filename.get(&ClaimKind::Filename.key_of(name))
+    }
+
+    /// The interpreter a `#!` line names. A version is dropped a piece at a time, so `python3.12` is
+    /// answered by whoever claims `python3` and failing that by whoever claims `python`.
+    pub fn find_claim_of_shebang(&self, interpreter: &str) -> Option<&Claim> {
+        interpreter_spellings(interpreter).iter().find_map(|spelling| self.by_shebang.get(spelling))
+    }
+
+    /// Every name more than one language claimed, ordered by kind and then by the name itself.
+    pub fn get_contested_claims(&self) -> Vec<&Claim> {
+        let mut contested = [&self.by_extension, &self.by_filename, &self.by_shebang].into_iter()
+                .flat_map(HashMap::values).filter(|claim| !claim.losers.is_empty())
+                .collect::<Vec<_>>();
+        contested.sort_by(|one, other| (one.kind, &one.claimed).cmp(&(other.kind, &other.claimed)));
+
+        contested
+    }
+}
+
 /// A warning for every language whose every extension, file name and `#!` name went to another one.
 pub fn find_languages_that_lost_every_claim(languages: &[Language], conflicts: &ConflictRules) -> Vec<Warning> {
-    let by_name = keyed_by_name(languages.to_vec());
-    let (nothing_forced, no_rules) = (HashMap::new(), HashMap::new());
-    let winners = [(IdentifiedBy::Extension, &conflicts.by_extension),
-            (IdentifiedBy::Filename, &conflicts.by_filename),
-            (IdentifiedBy::Shebang, &no_rules)].into_iter()
-            .flat_map(|(identified_by, rules)|
-                    build_language_map_by(identified_by, &by_name, rules, &nothing_forced).0.into_values())
-            .collect::<HashSet<Arc<str>>>();
+    let claims = LanguageClaims::of(languages, conflicts);
+    let winners = [&claims.by_extension, &claims.by_filename, &claims.by_shebang].into_iter()
+            .flat_map(HashMap::values).map(|claim| claim.owner.as_str())
+            .collect::<HashSet<&str>>();
 
     let mut lost = languages.iter()
             .filter(|language| !language.extensions.is_empty() || !language.filenames.is_empty()
@@ -514,6 +563,25 @@ pub fn find_languages_that_lost_every_claim(languages: &[Language], conflicts: &
     lost.into_iter().map(|name| Warning::new(warnings::Code::LanguageLostEveryClaim, name,
             format!("'{name}' is installed, and every extension and name it claims belongs to another \
                     language, so no file can be counted as it."))).collect()
+}
+
+fn collect_claims_of(kind: ClaimKind, by_name: &HashMap<String, Language>,
+        rules: &HashMap<String, Vec<String>>) -> HashMap<String, Claim>
+{
+    let (owners, report) = build_language_map_by(kind, by_name, rules, &HashMap::new());
+    let mut contested = report.contested.into_iter()
+            .map(|claim| (claim.claimed.clone(), claim)).collect::<HashMap<_,_>>();
+
+    owners.into_iter().map(|(claimed, owner)| {
+        let claim = contested.remove(&claimed).unwrap_or_else(|| Claim {
+            claimed: claimed.clone(),
+            kind,
+            owner: owner.to_string(),
+            losers: Vec::new(),
+            settled_by: None
+        });
+        (claimed, claim)
+    }).collect()
 }
 
 fn retain_languages_of_interest(languages: Vec<Language>, extensions: &HashMap<String, Arc<str>>,
@@ -567,7 +635,7 @@ mod language_selection_tests {
     fn a_language_is_selected_by_its_name_or_by_an_extension_it_claims() {
         let languages = || languages_claiming(&[("Java", &["java"]), ("C#", &["cs"]), ("Rust", &["rs"])])
                 .into_values().collect::<Vec<_>>();
-        let extensions = || build_language_map_by(IdentifiedBy::Extension, &keyed_by_name(languages()),
+        let extensions = || build_language_map_by(ClaimKind::Extension, &keyed_by_name(languages()),
                 &HashMap::new(), &HashMap::new()).0;
         let names_of = |languages: Vec<Language>| {
             let mut names = languages.into_iter().map(|x| x.name).collect::<Vec<_>>();
@@ -640,11 +708,59 @@ mod language_selection_tests {
     }
 
     #[test]
+    fn a_claimed_extension_names_its_owner_and_its_losers_whatever_spelling_it_is_asked_by() {
+        let languages = languages_claiming(&[("Winner", &["x", "y"]), ("Loser", &[".X"]),
+                ("Alone", &["q"])]).into_values().collect::<Vec<_>>();
+        let conflicts = ConflictRules {
+            by_extension: hashmap!("x".to_owned() => vec!["Winner".to_owned(), "Loser".to_owned()]),
+            ..Default::default()
+        };
+
+        let claims = LanguageClaims::of(&languages, &conflicts);
+        let contested = claims.find_claim_of_extension(".X").expect("the contested extension has no claim");
+        assert_eq!(Some(contested), claims.find_claim_of_extension("x"),
+                "a dot and a capital are the same extension, so they are one claim");
+        assert_eq!(("Winner", &vec!["Loser".to_owned()], Some(SettledBy::ConflictRule)),
+                (contested.owner.as_str(), &contested.losers, contested.settled_by));
+
+        let alone = claims.find_claim_of_extension("q").expect("an uncontested extension has a claim too");
+        assert_eq!(("Alone", true, None), (alone.owner.as_str(), alone.losers.is_empty(), alone.settled_by),
+                "there was nothing to settle where one language claims it alone");
+        assert!(claims.find_claim_of_extension("nobody").is_none());
+        assert_eq!(vec![contested], claims.get_contested_claims());
+    }
+
+    // The three kinds are three maps and three sets of rules, and only the extensions of them are
+    // read by anything that ships, so a wrong pairing would go unnoticed.
+    #[test]
+    fn a_contested_file_name_is_settled_by_its_own_rules_and_an_interpreter_by_the_alphabet() {
+        let claiming = |name: &str, filename: &str, shebang: &str| Language::new(name, [name.to_lowercase()],
+                StringRules::escaping_nothing(), ["//"], &[], [])
+                .with_filenames([filename]).with_shebangs([shebang]);
+        let languages = vec![claiming("Aaa", "Makefile", "runner"), claiming("Bbb", "makefile", "runner")];
+        let conflicts = ConflictRules {
+            by_filename: hashmap!("makefile".to_owned() => vec!["Bbb".to_owned(), "Aaa".to_owned()]),
+            ..Default::default()
+        };
+
+        let claims = LanguageClaims::of(&languages, &conflicts);
+        let by_name = claims.find_claim_of_filename("MAKEFILE").expect("a whole name is matched without its case");
+        assert_eq!(("Bbb", Some(SettledBy::ConflictRule)), (by_name.owner.as_str(), by_name.settled_by),
+                "the rule for a file name settled it, so the filename rules reached the filename map");
+
+        let by_interpreter = claims.find_claim_of_shebang("runner").expect("the interpreter has no claim");
+        assert_eq!(("Aaa", Some(SettledBy::AlphabeticalTiebreak)),
+                (by_interpreter.owner.as_str(), by_interpreter.settled_by),
+                "no rule of that file can name an interpreter, so this one is the alphabet's");
+        assert_eq!("Aaa", claims.find_claim_of_shebang("runner3.12").expect("a version was not dropped").owner);
+    }
+
+    #[test]
     fn an_extension_two_languages_claim_selects_the_one_that_won_it() {
         let languages = || languages_claiming(&[("Objective-C", &["m", "mm"]), ("MATLAB", &["m"])])
                 .into_values().collect::<Vec<_>>();
         let kept = |conflicts, forced| {
-            let extensions = build_language_map_by(IdentifiedBy::Extension, &keyed_by_name(languages()),
+            let extensions = build_language_map_by(ClaimKind::Extension, &keyed_by_name(languages()),
                     conflicts, forced).0;
             retain_languages_of_interest(languages(), &extensions, &["m".to_owned()], &[])
                     .into_iter().map(|x| x.name).collect::<Vec<_>>()

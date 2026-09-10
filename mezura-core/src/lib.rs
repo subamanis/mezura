@@ -54,9 +54,10 @@ pub use domain::{Bucket, CountingModel, Keyword, Language, LeveledPair, LineClas
         LineContinuation, MultilineString, NestedLanguage, Span, SpanKind, Stats, StringRules};
 pub use engine::config::{EngineConfig, ForcedLanguages, LanguageNames, ScopedByModule, Target,
         Threads, format_module_scope, split_off_module_scope};
+pub use engine::identity::{Claim, ClaimKind, SettledBy};
 pub use engine::targets::TargetError;
 pub use explain::{Carried, ExplainError, ExplainedLine, FileExplanation, explain_file};
-pub use languages::Languages;
+pub use languages::{LanguageClaims, Languages};
 pub use progress::ScanProgress;
 pub use result::{FaultyFileDetails, FileEntry, FilesPresent, ModuleResult, Performance, RunError,
         RunResult, ScanSkip, SkippedFiles, SortCriterion, UnreadableDirDetails};
