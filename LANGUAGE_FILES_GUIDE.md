@@ -280,8 +280,13 @@ like `&'a str` from swallowing the line.
 **Two languages wanting the same extension.** Only one can have it, and the loser's files are then
 read with the winner's symbols. Name the winner in `language_conflicts.txt` in the data directory,
 under `contested-extensions` or `contested-filenames`, or use `--force-language` for one run.
+`--show-languages` stars every extension your language lost and names who took it.
 
 ## Checking it
 
 Run mezura over a folder holding one file of your language. If the file could not be read, mezura
 says so at the top of the run and names the line.
+
+`--show-languages` is the other half of the check. Your language belongs on that list with the
+extensions you gave it beside it, and a star on one of them means another language takes those
+files.

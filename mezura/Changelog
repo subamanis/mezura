@@ -15,6 +15,8 @@ Main changes:
       extension is then left uncounted, and the scan never opens it.
   -> New "--no-default-config", which leaves your saved default configuration out of one run, so it
       answers with the program's own defaults. Two machines then count a tree the same way.
+  -> "--show-languages" now prints the extensions each language claims, with a star on the ones
+      another language holds and a line naming the holder.
 
 Performance:
   -> Counting a large tree is about a fifth faster.

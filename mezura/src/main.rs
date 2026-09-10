@@ -499,7 +499,8 @@ fn handle_message_only_command(args_str: &str, languages_available: &[Language])
             },
         },
         SHOW_LANGUAGES => {
-            crate::message_printer::print_supported_languages(languages_available);
+            let conflict_rules = read_conflict_rules();
+            crate::message_printer::print_supported_languages(languages_available, &conflict_rules);
             // The list is one line per language and not one per file, so two files declaring one
             // name collapse into a single entry. Reported here because this command returns before
             // the run that would otherwise say it.
@@ -507,7 +508,7 @@ fn handle_message_only_command(args_str: &str, languages_available: &[Language])
                 crate::warning_collector::emit(warning);
             }
             report_languages_that_lost_every_claim(mezura_core::languages::find_languages_that_lost_every_claim(
-                    languages_available, &read_conflict_rules()));
+                    languages_available, &conflict_rules));
             Some(ExitCode::SUCCESS)
         },
         SHOW_CONFIGS => {

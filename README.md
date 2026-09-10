@@ -145,7 +145,7 @@ WHAT IS COUNTED
   --no-heuristics      never try to automatically resolve the contest when two languages claim the same
                        extension
   --no-shebang         identify every file by its name alone, leaving the '#!' line inside it unread
-  --show-languages     print the languages this installation knows and stop
+  --show-languages     print the languages this installation knows, with their extensions, and stop
 
 HOW THE REPORT LOOKS
 
@@ -581,7 +581,7 @@ To make authoring one easier, there is an interactive editor: one run of mezura 
 
 Mezura ships with over eighty languages, which realistically will contain any real language you will ever use. Still, this number is considerably smaller than the 200+ languages supported by some other counters, and most of the difference is what gets called a language: their lists carry JSON, XML, SVG, Markdown and plain text, which are not code, and a report that counts those is answering a different question than the one you asked. The rest of the difference is that an extension is only worth claiming when the files carrying it really are that language, which has a separate answer for each extension rather than one answer per language: on GitHub, 91 of every hundred `.pl` files are Perl, and 1 of every hundred `.pro` files is actually Prolog. A language you are missing is easy to add yourself (see below), and if you think an important one is missing for everyone, open an issue or a PR.
 
-All the supported languages can be found in [the data directory](#the-data-directory). Every language is a text file that can be inspected and even modified, and **you can easily expand the collection of languages** with your own definitions, by adding more text in files there.
+All the supported languages can be found in [the data directory](#the-data-directory). Every language is a text file that can be inspected and even modified, and **you can easily expand the collection of languages** with your own definitions, by adding more text in files there. ```--show-languages``` prints them all with the extensions each one claims, and puts a star on an extension that another language holds.
 
 If two or more language files claim the same extension, each file of it is identified by its own content: a `#!` line first, then the evidence the language files declare, so a `.m` opening with `@interface` counts as Objective-C, one opening with `function` counts as MATLAB, and one opening with `:- module` counts as Mercury. A file whose content says nothing falls back to the winner named in the `language_conflicts.txt` file of the data dir, which ships with an answer for every contest between the languages that come with the program. An extension that nobody has named there goes to the language that comes first alphabetically, and the program reports it, since that is a tie-break and not a decision. ```--force-language``` overrides all of it for a single run, or through a configuration file for a single project. It can also answer differently per module in the same run, so ```mezura ios=./ios analysis=./matlab --force-language ios/m=objective-c,analysis/m=matlab``` counts one repository's ```.m``` files as Objective-C in one folder and as MATLAB in the other.
 

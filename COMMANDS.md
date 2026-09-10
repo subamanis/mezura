@@ -366,12 +366,18 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
 
 ```
 --show-languages
-    print the languages this installation knows and stop
+    print the languages this installation knows, with their extensions, and stop
 
     No arguments.
 
-    Lists by name what is in the 'data/languages/' directory, and counts nothing. Adding a file
-    there teaches mezura another language.
+    Lists what is in the 'data/languages/' directory, each name beside the extensions it claims,
+    and counts nothing. Adding a file there teaches mezura another language.
+
+    A star marks an extension another language holds, and the line under the list says which one.
+    The order in 'language_conflicts.txt' decides the holder, and an extension no line there
+    mentions goes to whichever name comes first alphabetically. Such a file is still counted as the
+    starred language when its own content says which language it is, and '--no-heuristics' turns
+    that reading off.
 
     A name on the list that cannot count anything is reported under it: two files declaring one
     language, and a language whose every extension is held by another one, which a line in

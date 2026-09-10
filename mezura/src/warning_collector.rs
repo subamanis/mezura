@@ -45,8 +45,8 @@ fn add_advice_to(mut warning: Warning) -> Warning {
     let advice = match warning.code {
         // The conflicts file has no block for interpreters. A contested shebang written into it is
         // skipped without a word, so sending its owner there would be advice that fails silently.
-        Code::LanguageTiebreak => Some(format!("A contested extension or filename is settled for good in '{}'; \
-                '--force-language {}=<language>' decides it for this run.",
+        Code::LanguageTiebreak => Some(format!("A contested extension or filename is settled for good in '{}', \
+                and '--force-language {}=<language>' decides it for this run.",
                 mezura_core::LANGUAGE_CONFLICTS_FILE_NAME, warning.subject)),
         Code::DuplicateLanguage => Some("Delete the copies you do not want from the 'languages' directory of your data directory.".to_owned()),
         Code::LanguageLostEveryClaim => Some(format!("A line in '{}' hands an extension back, to whichever \
