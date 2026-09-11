@@ -1,3 +1,18 @@
+v3.1.1 - 2026-09-11
+
+  35,018 Total lines  -  22,134 Code lines
+
+Bugfixes:
+  -> A file larger than 2 GB is now counted whole on Linux and macOS, where it was being cut short
+      at 2 GB.
+
+Other:
+  -> When the output is piped, the whole report is written at once, so anything on stderr now comes
+      before it in a stream that merges the two.
+  -> The Mezura theme paints its progress bar as a blue to magenta gradient.
+
+-----------------------------------------------------------------------------------------------------------
+
 v3.1.0 - 2026-09-11
 
   34,913 Total lines  -  22,072 Code lines

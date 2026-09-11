@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.1, 2026-09-11
+
+14,126 Total lines  -  8,532 Code lines
+
+Fixes:
+
+- A file larger than 2 GB is counted whole on Linux and macOS, where it was being cut short at 2 GB.
+
+-----------------------------------------------------------------------------------------------------------
+
 ## 1.1.0, 2026-09-11
 
 14,125 Total lines  -  8,531 Code lines

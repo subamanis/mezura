@@ -1,6 +1,6 @@
 [package]
 name = "mezura-core"
-version = "1.1.0"
+version = "1.1.1"
 authors = ["Petros Papatheodorou <petrospapa21@gmail.com>"]
 edition = "2024"
 rust-version = "1.88"
