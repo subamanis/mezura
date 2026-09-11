@@ -1,6 +1,6 @@
 use std::fmt::{Arguments, Write as FmtWrite};
 use std::io::{IsTerminal, Write};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 static HELD: Mutex<Option<String>> = Mutex::new(None);
 
@@ -9,7 +9,7 @@ pub struct HeldOutput;
 
 impl Drop for HeldOutput {
     fn drop(&mut self) {
-        let held = HELD.lock().unwrap().take();
+        let held = lock_the_held_text().take();
         if let Some(text) = held && !text.is_empty() {
             let mut out = std::io::stdout().lock();
             let _ = out.write_all(text.as_bytes());
@@ -22,14 +22,14 @@ impl Drop for HeldOutput {
 // lines are held and written once, and stderr then lands ahead of them.
 pub fn hold_unless_a_terminal() -> HeldOutput {
     if !std::io::stdout().is_terminal() {
-        *HELD.lock().unwrap() = Some(String::new());
+        *lock_the_held_text() = Some(String::new());
     }
 
     HeldOutput
 }
 
 pub fn write_line(args: Arguments) {
-    let mut held = HELD.lock().unwrap();
+    let mut held = lock_the_held_text();
     match held.as_mut() {
         Some(text) => {
             let _ = text.write_fmt(args);
@@ -44,11 +44,16 @@ pub fn write_line(args: Arguments) {
 }
 
 pub fn write(args: Arguments) {
-    let mut held = HELD.lock().unwrap();
+    let mut held = lock_the_held_text();
     match held.as_mut() {
         Some(text) => { let _ = text.write_fmt(args); },
         None => { let _ = std::io::stdout().write_fmt(args); }
     }
+}
+
+// A panic inside a formatter poisons this, and refusing the lock then would lose everything held.
+fn lock_the_held_text() -> MutexGuard<'static, Option<String>> {
+    HELD.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 macro_rules! outln {
