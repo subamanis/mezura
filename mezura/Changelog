@@ -8,8 +8,9 @@ Bugfixes:
 
 Other:
   -> When the output is piped, the whole report is written at once, so anything on stderr now comes
-      before it in a stream that merges the two.
-  -> The Mezura theme paints its progress bar as a blue to magenta gradient.
+      before it in a stream that merges the two. Reduces write syscalls to 1.
+  -> Added progress bar gradient color for the default theme, like all the other themes have,
+      based on their respective colors.
 
 -----------------------------------------------------------------------------------------------------------
 
