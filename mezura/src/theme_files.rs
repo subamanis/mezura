@@ -134,6 +134,45 @@ mod tests {
         }
     }
 
+    // The '--explain' colours say what a line was read as and are meant to be the same wherever
+    // somebody meets them, and the two history ones are left alone beside them.
+    fn is_left_alone_by_every_theme(token: &str) -> bool {
+        token.starts_with("explain-") || token == "history-age" || token == "history-label"
+    }
+
+    // 'Mezura.txt' is the way back to the stock look, since '--theme' takes only the name of a file
+    // and no value of it means "no theme". Nothing generates it, so a default moved in 'theme.rs'
+    // leaves it behind and it quietly becomes a theme that pins the old value.
+    //
+    // What no shipped theme names it does not name either, since there is nothing to put back. A
+    // theme of your own may still name any of them. This holds for the files that come with the
+    // program and for nothing else.
+    #[test]
+    fn the_mezura_theme_carries_every_token_a_theme_may_move() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("data").join("themes").join("Mezura.txt");
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let (styles, errors) = crate::theme::parse_theme_file(&contents);
+        assert!(errors.is_empty(), "Mezura.txt does not parse cleanly: {errors:?}");
+
+        let named = styles.iter().map(|(token, _)| token.as_str()).collect::<std::collections::HashSet<_>>();
+        let missing = crate::theme::Theme::default().find_all_tokens().into_iter()
+                .filter(|(token, _)| !is_left_alone_by_every_theme(token) && !named.contains(token))
+                .map(|(token, value)| format!("{token} = {value}")).collect::<Vec<_>>();
+        assert!(missing.is_empty(), "Mezura.txt names {} of the {} tokens a shipped theme moves. Add \
+                these lines to it, in the group each one belongs to:\n{}",
+                named.len(), named.len() + missing.len(), missing.join("\n"));
+
+        let held = named.iter().filter(|token| is_left_alone_by_every_theme(token)).collect::<Vec<_>>();
+        assert!(held.is_empty(), "these colours are the same under every shipped theme, so the file \
+                that undoes a theme has nothing to put back for them. Take them out of Mezura.txt: {held:?}");
+
+        let moved = crate::theme::resolve(&styles, &[], &[]).find_non_default_tokens().into_iter()
+                .map(|(token, value)| format!("{token} = {value}")).collect::<Vec<_>>();
+        assert!(moved.is_empty(), "Mezura.txt is meant to carry what this build ships and these \
+                lines of it do not:\n{}", moved.join("\n"));
+    }
+
     // The test above compares the two copies of the page to each other, so a marker renamed in both
     // of them keeps it green while the editor opens with no themes to pick from. This one runs the
     // generation instead, over a themes folder of its own so nothing else in this binary can write

@@ -21,6 +21,8 @@ const SUB_ROW_TEAL: Color = Color::TrueColor { r: 93, g: 135, b: 134 };
 const SUB_ROW_TEAL_BRIGHT: Color = Color::TrueColor { r: 112, g: 153, b: 152 };
 const SUB_ROW_TEAL_FAINT: Color = Color::TrueColor { r: 85, g: 102, b: 102 };
 const FILE_ROW_GREY: Color = Color::TrueColor { r: 122, g: 122, b: 122 };
+const BAR_SWEEP_BLUE: (u8, u8, u8) = (34, 64, 181);
+const BAR_SWEEP_MAGENTA: (u8, u8, u8) = (189, 19, 172);
 
 static ACTIVE_THEME: OnceLock<Theme> = OnceLock::new();
 static DEFAULT_THEME: LazyLock<Theme> = LazyLock::new(Theme::default);
@@ -338,7 +340,7 @@ theme_tokens! {
 
     // The live lines, which only a terminal ever sees. The track is a step above a dark terminal's
     // own background and no more, and 'default' turns it off, leaving those cells blank.
-    progress_bar_fill    => "progress-bar-fill",    Style::plain();
+    progress_bar_fill    => "progress-bar-fill",    Style { fill: Fill::Gradient(vec![BAR_SWEEP_BLUE, BAR_SWEEP_MAGENTA]), ..Style::default() };
     progress_bar_empty   => "progress-bar-empty",   Style::of(Color::TrueColor { r: 34, g: 34, b: 34 });
     progress_bar_figures => "progress-bar-figures", Style::plain().dim();
 

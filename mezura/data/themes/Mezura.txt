@@ -4,10 +4,44 @@ language-3 = bright-yellow
 language-4 = 6ad9bd
 language-others = d7c9f0
 
+version = default
+heading = default bold underline
+sort-marker = b5a98a
+arrow = aaaaaa
+bar-frame = default
+separator-header = aaaaaa
+separator-total = aaaaaa
+percent = 969696
+summary = default
+footer = default dim
+note = default italic dim
+success = bright-green
+warning = yellow
+error = red
+
+details-language-header = b5a98a italic
 details-language-name = cyan
+details-module = b5a98a bold
 details-total = bright-magenta
 
+files-number = default
+files-label = b5a98a italic
+lines-number = white bold
+lines-label = b5a98a italic
+code-number = default
+code-label = b5a98a italic
+comments-number = default
+comments-label = b5a98a italic
+extra-number = default
+extra-label = b5a98a italic
+total-size-number = default
+total-size-label = b5a98a italic
+size-unit = 7d7769
+keyword-number = 969696
+keyword-label = default dim
+
 nested-name = 5d8786
+nested-branch = aaaaaa
 nested-percent = 556666
 nested-files = 5d8786
 nested-lines = 709998
@@ -15,5 +49,29 @@ nested-code = 5d8786
 nested-comments = 5d8786
 nested-extra = 5d8786
 nested-size = 5d8786
+nested-size-unit = 7d7769
+
+file-name = 7a7a7a
+file-branch = aaaaaa
+file-percent = 969696
+file-files = default
+file-lines = white bold
+file-code = default
+file-comments = default
+file-extra = default
+file-size = default
+file-size-unit = 7d7769
+
+overview-label = default
+overview-percent = default
+
+change-up = c9ffbd
+change-down = db8181
+change-same = ffffff
+history-entry = default bold
+history-modified = yellow
+history-modified-field = default
 
 progress-bar-fill = 2240b5..bd13ac
+progress-bar-empty = 222222
+progress-bar-figures = default dim
