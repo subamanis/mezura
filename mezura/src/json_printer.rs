@@ -18,7 +18,7 @@ type FilesByLanguage<'a> = HashMap<&'a str, Vec<&'a mezura_core::FileEntry>>;
 // have. It carries every number that was measured, in its raw unit, and nothing the printer computed
 // in order to look right: no sizes in KB, no separators, no percentages, no bar.
 pub fn print_as_json(result: &RunResult, datetime_now: &DateTime<Local>, config: &Configuration) {
-    println!("{}", create_document(result, datetime_now, config));
+    outln!("{}", create_document(result, datetime_now, config));
 }
 
 pub fn create_document(result: &RunResult, datetime_now: &DateTime<Local>, config: &Configuration) -> String {
@@ -72,7 +72,7 @@ pub fn create_document(result: &RunResult, datetime_now: &DateTime<Local>, confi
 
 pub fn print_comparison_as_json(comparison: &super::diff::Comparison,
         datetime_now: &DateTime<Local>, config: &Configuration) {
-    println!("{}", create_comparison_document(comparison, datetime_now, config));
+    outln!("{}", create_comparison_document(comparison, datetime_now, config));
 }
 
 // The comparison as a document: the same vocabulary as a run's, with every count a triad of 'from',

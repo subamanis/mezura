@@ -20,7 +20,7 @@ pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>,
                     else {format!("No relevant files found in the given directory. {activated}")};
             eprintln!("{}", super::theme::get_active().warning.paint(&message));
             if comparison.is_some() {
-                println!();
+                outln!();
             }
         }
         print_comparison_or_empty_document(result, comparison, &datetime_now, config);
@@ -35,7 +35,7 @@ pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>,
         if config.view.prints_text() {
             eprintln!("{}", super::theme::get_active().warning.paint("None of the files could be parsed."));
             if comparison.is_some() {
-                println!();
+                outln!();
             }
         }
         print_comparison_or_empty_document(result, comparison, &datetime_now, config);
@@ -52,7 +52,7 @@ pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>,
         if config.view.prints_text() {
             eprintln!("{}", super::theme::get_active().warning.paint("Nothing was left to count."));
             if comparison.is_some() {
-                println!();
+                outln!();
             }
         }
         print_comparison_or_empty_document(result, comparison, &datetime_now, config);
@@ -80,7 +80,7 @@ pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>,
 pub fn print_faulty_files_or_ok(faulty_files: &[FaultyFileDetails], config: &Configuration) {
     if faulty_files.is_empty() {
         if !config.view.hidden.parsing_info && config.view.prints_text() {
-            println!("{}\n",super::theme::get_active().success.paint("ok"));
+            outln!("{}\n",super::theme::get_active().success.paint("ok"));
         }
     } else {
         let error = &super::theme::get_active().error;

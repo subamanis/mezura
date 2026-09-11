@@ -78,10 +78,10 @@ fn refuse(message: &str) -> ExitCode {
 
 fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel, asked_for: ExplainedLines) {
     let theme = get_active();
-    println!("{}", theme.explain_heading.paint(&format!("{path} as {}, counted by {}",
+    outln!("{}", theme.explain_heading.paint(&format!("{path} as {}, counted by {}",
             explanation.language, model.name())));
     if let Some((literal, line)) = &explanation.identified_by {
-        println!("{}", theme.note.paint(&format!("Its extension is contested, and line {line} \
+        outln!("{}", theme.note.paint(&format!("Its extension is contested, and line {line} \
                 carrying '{literal}' is what identified it.")));
     }
     if let Some(skip) = explanation.left_out_of_a_scan {
@@ -90,21 +90,21 @@ fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel, a
             ScanSkip::Generated => "generated",
             ScanSkip::NotCode => "not code"
         };
-        println!("{}", theme.note.paint(&format!("A directory scan leaves this file out as \
+        outln!("{}", theme.note.paint(&format!("A directory scan leaves this file out as \
                 {reason}. It is counted here because you named it. '--{}' stops leaving it out for that reason.",
                 get_command_that_counts(skip))));
     }
-    println!();
+    outln!();
     if explanation.lines.is_empty() {
-        println!("{}", theme.note.paint("The file has no lines."));
+        outln!("{}", theme.note.paint("The file has no lines."));
         return;
     }
 
     let whole_file = asked_for.is_the_whole_file(explanation.lines.len());
     if !whole_file {
-        println!("{}", theme.note.paint(&format!("Showing lines {} to {} of {}.", asked_for.first,
+        outln!("{}", theme.note.paint(&format!("Showing lines {} to {} of {}.", asked_for.first,
                 asked_for.last.min(explanation.lines.len()), explanation.lines.len())));
-        println!();
+        outln!();
     }
 
     let width = explanation.lines.len().to_string().len();
@@ -114,7 +114,7 @@ fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel, a
             continue;
         }
         if printed > 0 {
-            println!();
+            outln!();
         }
         printed += 1;
         let bucket = model.fold(line.class);
@@ -123,7 +123,7 @@ fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel, a
             Bucket::Comments => &theme.explain_comments,
             Bucket::Third => &theme.explain_extra
         };
-        println!("{:>width$}  {}", at + 1, paint_by_spans(source, &line.spans));
+        outln!("{:>width$}  {}", at + 1, paint_by_spans(source, &line.spans));
         let mut verdict = format!("{}  {}", bucket_style.paint(model.get_bucket_name(bucket)),
                 theme.explain_detail.paint(line.class.name()));
         let mut notes = line.read_as.as_ref().map(|name| format!("read as {name}"))
@@ -132,13 +132,13 @@ fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel, a
         if !notes.is_empty() {
             verdict = format!("{verdict}  {}", theme.note.paint(&format!("({})", notes.join("; "))));
         }
-        println!("{:>width$}  {verdict}", "");
+        outln!("{:>width$}  {verdict}", "");
     }
 
     // Two lines when a range was asked for, and the file's own is the second of them: a range total
     // alone says nothing about the count somebody opened '--explain' to check, and the file's alone
     // does not answer how much of the range is comment.
-    println!();
+    outln!();
     if whole_file {
         print_totals(&explanation.classes, explanation.lines.len(), model, "");
     } else {
@@ -191,14 +191,14 @@ fn print_json(path: &str, explanation: &FileExplanation, model: CountingModel) {
             explanation.classes.to_array().iter().zip(mezura_core::LineClasses::NAMES)
                     .map(|(count, name)| format!("\"{name}\":{count}"))
                     .collect::<Vec<_>>().join(",")));
-    println!("{document}");
+    outln!("{document}");
 }
 
 fn print_totals(classes: &LineClasses, lines: usize, model: CountingModel, of_what: &str) {
     let theme = get_active();
     let (code, comments, third) = fold_totals(classes, lines, model);
     let label = format!("{}{of_what}", if lines == 1 {"line"} else {"lines"});
-    println!("{} {}: {} {}, {} {}, {} {}",
+    outln!("{} {}: {} {}, {} {}, {} {}",
             theme.lines_number.paint(&lines.to_string()), theme.lines_label.paint(&label),
             theme.code_number.paint(&code.to_string()), theme.explain_code.paint("code"),
             theme.comments_number.paint(&comments.to_string()), theme.explain_comments.paint("comments"),

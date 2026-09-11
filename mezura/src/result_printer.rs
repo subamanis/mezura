@@ -133,7 +133,7 @@ pub fn format_and_print_results(result: &RunResult, existing_log_content: &Optio
 
     if of_the_table.is_empty() {
         for note in &notes {
-            println!("\n{}", theme.note.paint(note));
+            outln!("\n{}", theme.note.paint(note));
         }
     }
 
@@ -719,17 +719,17 @@ fn get_third_column_header(model: CountingModel) -> &'static str {
 fn print_as_markdown(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool,
         should_print_keywords: bool, notes: &[String], view: ViewSettings)
 {
-    println!("### Details\n");
+    outln!("### Details\n");
     for line in format_markdown_lines(theme, groups, total, print_total, notes, view) {
-        println!("{line}");
+        outln!("{line}");
     }
 
     if should_print_keywords {
         let lines = format_markdown_keyword_lines(theme, groups);
         if !lines.is_empty() {
-            println!("\n### Keywords\n");
+            outln!("\n### Keywords\n");
             for line in lines {
-                println!("{line}");
+                outln!("{line}");
             }
         }
     }
@@ -745,18 +745,18 @@ fn print_markdown_warnings() {
         return;
     }
 
-    println!("\n### Warnings\n");
+    outln!("\n### Warnings\n");
     for warning in doubted {
-        println!("- {}", escape_markdown_cell(&warning.message));
+        outln!("- {}", escape_markdown_cell(&warning.message));
     }
 }
 
 fn print_as_table(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool,
         should_print_keywords: bool, notes: &[String], view: ViewSettings)
 {
-    println!("{}.\n", theme.heading.paint("Details"));
+    outln!("{}.\n", theme.heading.paint("Details"));
     for line in format_table_lines(theme, groups, total, print_total, notes, view) {
-        println!("{line}");
+        outln!("{line}");
     }
 
     if should_print_keywords {
@@ -764,7 +764,7 @@ fn print_as_table(theme: &Theme, groups: &[Group], total: &Stats, print_total: b
     }
 
     // The 'list' layout closes with a blank line of its own, this one has to say so
-    println!();
+    outln!();
 }
 
 fn build_table_cells<'a>(theme: &'a Theme, groups: &[Group], total: &Stats, print_total: bool,
@@ -933,18 +933,18 @@ pub fn print_comparison(comparison: &super::diff::Comparison, config: &Configura
 
     let markdown_wanted = config.view.output == config_manager::OutputFormat::Markdown;
     if markdown_wanted {
-        println!("### Details\n");
-        println!("{}", format_markdown_comparison_heading(baseline, subject));
+        outln!("### Details\n");
+        outln!("{}", format_markdown_comparison_heading(baseline, subject));
     } else {
-        println!("{}.\n", theme.heading.paint("Details"));
-        println!("{}", format_comparison_heading(theme, baseline, subject));
+        outln!("{}.\n", theme.heading.paint("Details"));
+        outln!("{}", format_comparison_heading(theme, baseline, subject));
     }
     // Between the heading of the table and its rows, because every note is about the figures
     // directly underneath.
     for note in &comparison.notes {
         eprintln!("\n{}", format_note_sentence(theme, note));
     }
-    println!();
+    outln!();
 
     let by_file = comparison.resolve_by_file(config);
     let (rows, files_hidden) = create_compared_rows(pairs.as_deref(), &baseline.result, &subject.result,
@@ -957,18 +957,18 @@ pub fn print_comparison(comparison: &super::diff::Comparison, config: &Configura
         _ => format_comparison_lines(theme, &rows, view)
     };
     for line in lines {
-        println!("{line}");
+        outln!("{line}");
     }
 
     // As in the report: the total under the rows counts every language whatever '--top' shows.
     let hidden = count_languages_hidden_by_top(pairs.as_deref(), &baseline.result, &subject.result, config.view.top_n);
     if hidden > 0 {
         let plural = if hidden == 1 {"language"} else {"languages"};
-        println!("\n{}", theme.note.paint(&format!("(+{hidden} more {plural} hidden by --top {})", config.view.top_n.unwrap())));
+        outln!("\n{}", theme.note.paint(&format!("(+{hidden} more {plural} hidden by --top {})", config.view.top_n.unwrap())));
     }
     if files_hidden > 0 && let Some(ByFile::Capped(cap)) = by_file {
         let plural = if files_hidden == 1 {"file"} else {"files"};
-        println!("\n{}", theme.note.paint(&format!("(+{} more changed {plural} hidden by --{} {cap})",
+        outln!("\n{}", theme.note.paint(&format!("(+{} more changed {plural} hidden by --{} {cap})",
                 format_with_separators(files_hidden), config_manager::BY_FILE)));
     }
 
@@ -982,9 +982,9 @@ pub fn print_comparison(comparison: &super::diff::Comparison, config: &Configura
         if markdown_wanted {
             let lines = format_markdown_keyword_lines(theme, &groups);
             if !lines.is_empty() {
-                println!("\n### Keywords\n");
+                outln!("\n### Keywords\n");
                 for line in lines {
-                    println!("{line}");
+                    outln!("{line}");
                 }
             }
         } else {
@@ -994,7 +994,7 @@ pub fn print_comparison(comparison: &super::diff::Comparison, config: &Configura
     if markdown_wanted {
         print_markdown_warnings();
     }
-    println!();
+    outln!();
 }
 
 // The name cell carries its own indent.
@@ -1542,9 +1542,9 @@ fn draw_aligned_table(theme: &Theme, columns: &[Column], rows: &[Vec<String>], k
 fn print_as_matrix(theme: &Theme, groups: &[Group], languages: &[String], total: &Stats,
         print_total: bool, should_print_keywords: bool, notes: &[String], model: CountingModel)
 {
-    println!("{}.\n", theme.heading.paint("Details"));
+    outln!("{}.\n", theme.heading.paint("Details"));
     for line in format_matrix_lines(theme, groups, languages, total, print_total, notes, model) {
-        println!("{line}");
+        outln!("{line}");
     }
 
     if should_print_keywords {
@@ -1562,7 +1562,7 @@ fn print_as_matrix(theme: &Theme, groups: &[Group], languages: &[String], total:
         }).collect::<Vec<_>>();
         print_keyword_block(theme, &shown);
     }
-    println!();
+    outln!();
 }
 
 fn format_matrix_lines<'a>(theme: &'a Theme, groups: &[Group], languages: &[String], total: &Stats,
@@ -1691,16 +1691,16 @@ fn format_matrix_lines<'a>(theme: &'a Theme, groups: &[Group], languages: &[Stri
 fn print_as_boxed_table(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool,
         should_print_keywords: bool, notes: &[String], view: ViewSettings)
 {
-    println!("{}.
+    outln!("{}.
 ", theme.heading.paint("Details"));
     for line in format_boxed_lines(theme, groups, total, print_total, notes, view) {
-        println!("{line}");
+        outln!("{line}");
     }
 
     if should_print_keywords {
         print_keyword_block(theme, groups);
     }
-    println!();
+    outln!();
 }
 
 fn format_boxed_lines(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool,
@@ -2219,11 +2219,11 @@ fn format_sum_lines(theme: &Theme, per_language: &HashMap<String,Stats>, total: 
 fn print_keyword_block(theme: &Theme, groups: &[Group]) {
     let lines = format_keyword_block_lines(theme, groups);
     if !lines.is_empty() {
-        println!("
+        outln!("
 {}.
 ", theme.heading.paint("Keywords"));
         for line in lines {
-            println!("{line}");
+            outln!("{line}");
         }
     }
 }
@@ -2607,7 +2607,7 @@ fn print_comparison_to_previous_runs(result: &RunResult, groups: &[Group], log_c
         config: &Configuration, datetime_now: &DateTime<Local>)
 {
     let theme = super::theme::get_active();
-    println!("\n{}.\n", theme.heading.paint("History"));
+    outln!("\n{}.\n", theme.heading.paint("History"));
 
     let total = &result.total;
     let log_entries = super::log::read_last_entries(log_content, config.view.compare_level);
@@ -2642,7 +2642,7 @@ fn print_comparison_to_previous_runs(result: &RunResult, groups: &[Group], log_c
         }
         comparison_str.push('\n');
     }
-    print!("{comparison_str}");
+    out!("{comparison_str}");
 }
 
 #[allow(non_snake_case)]
@@ -2663,7 +2663,7 @@ fn format_signed_percentage_difference(older: usize, newer: usize) -> String {
 
 fn print_lines(lines: &[String]) {
     for line in lines {
-        println!("{line}");
+        outln!("{line}");
     }
 }
 

@@ -115,13 +115,13 @@ pub fn start_walk_display(config: &Configuration, progress: Arc<ScanProgress>) -
     }
     let heading = crate::theme::get_active().heading.paint(WALK_HEADING).to_string();
     if !std::io::stdout().is_terminal() || animations_are_hidden() {
-        println!("\n{heading}...");
+        outln!("\n{heading}...");
         return AnimatedDisplay::default();
     }
 
     // The line begins on stdout, dotless and unfinished; the animator redraws it in place from
     // stderr, and 'finish' settles it into exactly the line the static branch above prints
-    print!("\n{heading}");
+    out!("\n{heading}");
     let _ = std::io::stdout().flush();
     let stop = Arc::new(AtomicBool::new(false));
     let animator = {
@@ -130,7 +130,7 @@ pub fn start_walk_display(config: &Configuration, progress: Arc<ScanProgress>) -
                 .spawn(move || animate_walk_line(&progress, &stop, &heading)).ok()
     };
     if animator.is_none() {
-        println!("...");
+        outln!("...");
     }
 
     AnimatedDisplay {

@@ -1237,7 +1237,7 @@ pub fn print_version() {
     let released = changelog.lines().next().unwrap_or_default().split_once(" - ")
             .map_or_else(|| "unreleased".to_owned(), |(_, date)| date.trim().to_owned());
 
-    println!("
+    outln!("
 {} ({released})
 ", super::theme::get_active().version.paint(VERSION_ID));
 }
@@ -1370,7 +1370,7 @@ fn print_the_help(body: &str) {
     msg += "Format of arguments: <path_here> --optional_command1 --optional_commandN\n\n";
     msg += &paint_the_help(body);
 
-    println!("{msg}");
+    outln!("{msg}");
 }
 
 pub fn print_help_message_for_given_args(args_line: &str) {
@@ -1413,7 +1413,7 @@ pub fn print_help_message_for_given_args(args_line: &str) {
     if entries.is_empty() {
         print_the_command_list();
     } else {
-        println!("{}{entries}", get_data_dir_str());
+        outln!("{}{entries}", get_data_dir_str());
     }
 }
 
@@ -1428,10 +1428,10 @@ pub fn print_help_message_for_command(arg: &str) {
 pub fn print_changelog(full: bool) {
     let changelog = String::from_utf8_lossy(CHANGELOG_BYTES);
     if full {
-        println!("\n{changelog}\n");
+        outln!("\n{changelog}\n");
     } else {
         let latest = changelog.split("-----").next().unwrap().trim_end();
-        println!("\n{latest}\n\n(run with '--changelog full' to see the full version history)\n");
+        outln!("\n{latest}\n\n(run with '--changelog full' to see the full version history)\n");
     }
 }
 
@@ -1449,7 +1449,7 @@ pub fn print_existing_themes(bar_thickness: BarThickness, layout: Layout, counti
 
     let mut theme_names = Vec::with_capacity(10);
     let Ok(themes_dir) = fs::read_dir(&PERSISTENT_APP_PATHS.themes_dir) else {
-        println!("{}","Could not read the themes dir".yellow());
+        outln!("{}","Could not read the themes dir".yellow());
         return;
     };
     for path in themes_dir.flatten() {
@@ -1501,16 +1501,16 @@ pub fn print_existing_themes(bar_thickness: BarThickness, layout: Layout, counti
         msg.push_str(&format!("{}\n", theme.bar_frame.paint("]")));
     }
 
-    println!("{msg}");
+    outln!("{msg}");
 }
 
 pub fn print_supported_languages(languages_available: &[Language], conflicts: &ConflictRules) {
-    println!("{}", format_supported_languages_message(languages_available, conflicts));
+    outln!("{}", format_supported_languages_message(languages_available, conflicts));
 }
 
 pub fn print_existing_configs() {
     let Ok(config_dir) = fs::read_dir(&PERSISTENT_APP_PATHS.config_dir) else {
-        println!("{}","Could not read the config dir".yellow());
+        outln!("{}","Could not read the config dir".yellow());
         return;
     };
     let mut config_names = config_dir.flatten()
@@ -1520,7 +1520,7 @@ pub fn print_existing_configs() {
             .filter(|name| name != "default.txt")
             .collect::<Vec<_>>();
     config_names.sort_unstable();
-    println!("{}", format_existing_configs_message(&config_names));
+    outln!("{}", format_existing_configs_message(&config_names));
 }
 
 // The reason travels beside each name: one heading over both reasons a file can fail is true of

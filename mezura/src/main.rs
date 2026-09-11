@@ -9,6 +9,10 @@ macro_rules! hashmap {
     }}
 }
 
+// Declared first, since a macro reaches only the modules below it.
+#[macro_use]
+mod out;
+
 mod animated_display;
 mod args;
 mod config_files;
@@ -54,6 +58,9 @@ fn main() -> ExitCode {
     // Dropped last of all: a '--diff' removes its temporary checkouts on background threads, and
     // exiting before they finish would leave a half-deleted tree in the temp directory
     let _removals = crate::animated_display::RemovalsGuard;
+
+    // Dropped before the removals above, so the text is out before anything waits on a deletion.
+    let _held = crate::out::hold_unless_a_terminal();
 
     let mut timing = Report::of_this_run();
 
@@ -127,7 +134,7 @@ fn main() -> ExitCode {
         // The status block opens with a blank line of its own, so the separation below the
         // version is only missing when that block is not printed
         let separator = if config.view.hidden.directory_info {"\n"} else {""};
-        println!("\n{}{separator}", crate::theme::get_active().version.paint(VERSION_ID));
+        outln!("\n{}{separator}", crate::theme::get_active().version.paint(VERSION_ID));
     }
 
     // Also never silently, and to the error output because it is about this machine and not about
@@ -145,7 +152,7 @@ fn main() -> ExitCode {
     if let Some(local) = &config.view.local_dir
         && local.configuration_applied && !config.view.hidden.directory_info && config.view.prints_text() {
         let opening = if config.view.hidden.version {"\n"} else {""};
-        println!("{opening}{}", crate::theme::get_active().note.paint(
+        outln!("{opening}{}", crate::theme::get_active().note.paint(
                 &format!("Using the settings of this project, from '{}'.", local.get_config_path())));
     }
 
@@ -182,13 +189,13 @@ fn main() -> ExitCode {
             return match both.into_comparison(&config, &conflict_rules) {
                 Ok(comparison) => {
                     if config.view.prints_text() {
-                        println!();
+                        outln!();
                     }
                     crate::present::print_comparison_as_text_or_json(&comparison, &chrono::Local::now(), &config);
                     // The exec time alone, without the parsing figures: those describe one scan, and
                     // a comparison had up to two
                     if config.view.prints_text() && !config.view.hidden.timing {
-                        println!("\n{}", crate::theme::get_active().footer.paint(&format_exec_time(&instant)));
+                        outln!("\n{}", crate::theme::get_active().footer.paint(&format_exec_time(&instant)));
                     }
                     ExitCode::SUCCESS
                 },
@@ -266,7 +273,7 @@ fn main() -> ExitCode {
                 } else {
                     String::new()
                 };
-                println!("\n{}",crate::theme::get_active().footer.paint(&(perf + &metrics)));
+                outln!("\n{}",crate::theme::get_active().footer.paint(&(perf + &metrics)));
             }
             record(Step::Printing, at);
             ExitCode::SUCCESS
@@ -341,12 +348,12 @@ fn announce_traversal(config: &Configuration, scan: FilesPresent) {
     }
     if !config.view.hidden.directory_info && config.view.prints_text() {
         let word = if scan.total_files == 1 {"file"} else {"files"};
-        println!("{}\n",crate::theme::get_active().summary.paint(&format!("{} {word} found. {} of interest. {} excluded.",
+        outln!("{}\n",crate::theme::get_active().summary.paint(&format!("{} {word} found. {} of interest. {} excluded.",
                 crate::number_formatter::format_with_separators(scan.total_files), crate::number_formatter::format_with_separators(scan.relevant_files),
                 crate::number_formatter::format_with_separators(scan.excluded_files))));
     }
     if !config.view.hidden.parsing_info && config.view.prints_text() {
-        println!("{}...",crate::theme::get_active().heading.paint("Parsing files"));
+        outln!("{}...",crate::theme::get_active().heading.paint("Parsing files"));
     }
 }
 
@@ -437,7 +444,7 @@ fn open_in_browser(path: &str) {
     let result = std::process::Command::new("xdg-open").arg(path).spawn();
 
     if result.is_err() {
-        println!("(the page could not be opened in a browser automatically)");
+        outln!("(the page could not be opened in a browser automatically)");
     }
 }
 
@@ -476,7 +483,7 @@ fn handle_message_only_command(args_str: &str, languages_available: &[Language])
         crate::message_printer::print_version();
         return Some(ExitCode::SUCCESS);
     }
-    println!("\n{}", crate::theme::get_active().version.paint(VERSION_ID));
+    outln!("\n{}", crate::theme::get_active().version.paint(VERSION_ID));
 
     match message_command {
         HELP => {
@@ -489,7 +496,7 @@ fn handle_message_only_command(args_str: &str, languages_available: &[Language])
                 Some(ExitCode::SUCCESS)
             },
             Some(arg) if !arg.starts_with("--") => {
-                println!("\n{}", config_manager::ArgParsingError::IncorrectCommandArgs(CHANGELOG.to_owned(), arg.to_owned()).format());
+                outln!("\n{}", config_manager::ArgParsingError::IncorrectCommandArgs(CHANGELOG.to_owned(), arg.to_owned()).format());
                 crate::message_printer::print_help_message_for_command(CHANGELOG);
                 Some(ExitCode::FAILURE)
             },
@@ -522,17 +529,17 @@ fn handle_message_only_command(args_str: &str, languages_available: &[Language])
             let outcome = migrate_data_files(&crate::paths::PERSISTENT_APP_PATHS.data_dir, true);
 
             if outcome.did_nothing() {
-                println!("\nEverything that ships with mezura is in place.");
+                outln!("\nEverything that ships with mezura is in place.");
             }
             for message in [outcome.format_restored(), outcome.format_replaced(), outcome.format_withdrawn(),
                     outcome.format_merged(), outcome.format_failures()].into_iter().flatten() {
-                println!("{message}");
+                outln!("{message}");
             }
             for (heading, files) in [("Written for the first time", &outcome.added),
                     ("Brought up to date for this version", &outcome.updated),
                     ("Themes brought up to date for this version", &outcome.restyled)] {
                 if !files.is_empty() {
-                    println!("\n{}", crate::message_printer::wrap_message(&format!(
+                    outln!("\n{}", crate::message_printer::wrap_message(&format!(
                             "{heading}:\n{}", files.join(", "))));
                 }
             }
@@ -542,12 +549,12 @@ fn handle_message_only_command(args_str: &str, languages_available: &[Language])
         THEME_EDITOR => match crate::theme_files::generate_theme_editor_page(
                 &crate::paths::PERSISTENT_APP_PATHS.themes_dir, &crate::paths::PERSISTENT_APP_PATHS.data_dir) {
             Ok(path) => {
-                println!("\nTheme editor page generated at:\n{path}");
+                outln!("\nTheme editor page generated at:\n{path}");
                 open_in_browser(&path);
                 Some(ExitCode::SUCCESS)
             },
             Err(x) => {
-                println!("\n{}", crate::message_printer::wrap_message(
+                outln!("\n{}", crate::message_printer::wrap_message(
                         &format!("Unable to generate the theme editor page: {x}")).red());
                 Some(ExitCode::FAILURE)
             }
@@ -568,7 +575,7 @@ fn handle_message_only_command(args_str: &str, languages_available: &[Language])
                         Some(ExitCode::SUCCESS)
                     },
                     None => {
-                        println!("\n{}", config_manager::ArgParsingError::IncorrectCommandArgs(SHOW_THEMES.to_owned(), arg.to_owned()).format());
+                        outln!("\n{}", config_manager::ArgParsingError::IncorrectCommandArgs(SHOW_THEMES.to_owned(), arg.to_owned()).format());
                         crate::message_printer::print_help_message_for_command(SHOW_THEMES);
                         Some(ExitCode::FAILURE)
                     }
