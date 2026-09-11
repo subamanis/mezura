@@ -15,3 +15,5 @@ nested-code = 5d8786
 nested-comments = 5d8786
 nested-extra = 5d8786
 nested-size = 5d8786
+
+progress-bar-fill = 2240b5..bd13ac
