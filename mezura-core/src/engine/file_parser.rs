@@ -161,9 +161,9 @@ pub(crate) fn explain_parsed_file(contents: String, lang_name: &str, lookup: &Ne
     (contents, report, log)
 }
 
-// The buffer keeps the length of the largest file so far, so the file's length is the filled length
-// and never the buffer's. The first read asks for one byte past the listed size, so a file of that
-// size comes back short and is done in one read, and one that grew since it was listed is read on.
+// Asking for one byte past the listed size tells a file of that size apart from one that grew.
+// A unix read moves at most 2 GB at a time, so a short read is the end only once the listed size
+// is reached. With no listed size the loop reads until a read returns nothing.
 fn read_file_into(file: &mut File, buf: &mut Vec<u8>, size: u64) -> std::io::Result<usize> {
     const READ_WINDOW_BYTES : usize = 8_192;
 
@@ -176,7 +176,8 @@ fn read_file_into(file: &mut File, buf: &mut Vec<u8>, size: u64) -> std::io::Res
         }
         match file.read(&mut buf[filled..end]) {
             Ok(0) => return Ok(filled),
-            Ok(read) if filled + read < end => return Ok(filled + read),
+            Ok(read) if filled + read < end && expected > 0 && filled + read >= expected
+                    => return Ok(filled + read),
             Ok(read) => filled += read,
             Err(x) if x.kind() == std::io::ErrorKind::Interrupted => (),
             Err(x) => return Err(x)
