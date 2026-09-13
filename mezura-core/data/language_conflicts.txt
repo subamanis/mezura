@@ -10,7 +10,7 @@ Without a line here, the extension goes to whichever language name comes first a
 the program says so on every run so that it is never a silent decision. Write the extension, then the
 languages that claim it separated by commas. The first name takes it and the rest lose their claim:
 
-    m       Objective-C, MATLAB, Mercury
+    m       MATLAB, Objective-C, Mercury
     pl      Perl, Prolog
 
 The names are the ones the language files declare, and neither they nor the extension care about
