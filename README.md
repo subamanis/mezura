@@ -41,6 +41,7 @@ The whole Linux kernel (some languages were cut for screenshot purposes):
 * [Themes](#themes)
 * [Supported languages](#supported-languages)
 * [Accuracy and limitations](#accuracy-and-limitations)
+* [How it compares](#how-it-compares)
 * [Performance](#performance)
   * [Threads and phase timing](#threads-and-phase-timing)
   * [Windows and antivirus](#windows-and-antivirus)
@@ -75,7 +76,8 @@ Things it does that most counters do not:
   assistant can run mezura itself. See [Taking the result elsewhere](#taking-the-result-elsewhere).
 - **Data driven.** All the files, languages and the settings mezura uses are extracted to your machine, where they can be inspected, changed, or extended very easily. See [The data directory](#the-data-directory).  
   
-It's also the most accurate at what it measures. See [Accuracy and limitations](#accuracy-and-limitations).
+Also, it's the fastest line counter. See [How it compares](#how-it-compares).  
+And it's also the most accurate at what it measures. See [Accuracy and limitations](#accuracy-and-limitations).
 
 
 ## Installation
@@ -630,6 +632,41 @@ With that said, it is important to mention the following limitations:
 - ```=*``` in a comment symbol means "any number of ```=```", so a language whose symbol really contained ```=*``` could not be declared. None is known.
 
 - Two languages claiming one extension is settled per file, by a ```#!``` line or by evidence the language files declare, and only the files whose content says nothing follow the standing order of ```language_conflicts.txt```, parsed with that winner's symbols. ```--force-language``` decides outright, ```--no-heuristics``` turns the content reading off, and ```--no-shebang``` takes the ```#!``` line out of the whole business, the naming of files that carry no extension included.
+
+
+## How it compares
+
+Against [scc](https://github.com/boyter/scc) and [tokei](https://github.com/XAMPPRocky/tokei), the
+two fastest counters around, on the Linux repository tree, measured with
+[linebench](https://github.com/loc-conformance/linebench) over 3 warmups and 30 timed runs per
+command, in both command orders.
+
+On native Debian 13:
+
+| tool | time | vs fastest | lines/s | files | lines |
+|---|---|---|---|---|---|
+| mezura 3.1.1 | 166 ms ± 12 | 1.00x | 216.8M | 63,738 | 36,018,801 |
+| scc 4.1.0 | 210 ms ± 3 | 1.26x | 171.4M | 63,738 | 36,018,801 |
+| tokei 15.0.0 | 414 ms ± 2 | 2.50x | 86.9M | 63,793 | 36,027,518 |
+
+On Windows 11, the same machine and the same tree:
+
+| tool | time | vs fastest | lines/s | files | lines |
+|---|---|---|---|---|---|
+| mezura 3.1.1 | 254 ms ± 22 | 1.00x | 141.6M | 63,767 | 36,017,775 |
+| scc 4.1.0 | 539 ms ± 61 | 2.12x | 66.8M | 63,767 | 36,017,775 |
+| tokei 15.0.0 | 632 ms ± 22 | 2.48x | 57.0M | 63,822 | 36,026,522 |
+
+The comparison is doing equal work: the same languages over the same tree for all three,
+mezura pinned to the same counting model the other two use, the gitignore not taken into
+consideration by anyone, and each tool's unique feature apart from counting turned off 
+(keyword counting for mezura, complexity and cost estimates for scc).  
+The files and lines columns are the proof of the equal work.  
+Measured on a Ryzen 7 9700X with 16 threads and a Lexar NQ790 PCIe gen4 NVMe disk.
+
+The exact flags, the trust checks every run carries, the full
+methodology and the recorded numbers of each run for equal work and program defaults are on
+[linebench's example run](https://github.com/loc-conformance/linebench/blob/HEAD/example-run/README.md).
 
 
 ## Performance
