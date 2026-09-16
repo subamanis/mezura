@@ -703,6 +703,8 @@ The report goes to the error output:
   running), opening, reading and parsing, with the milliseconds behind each, summed over every
   consumer thread, so the shares are the point
 - `[phase]`: how many files and megabytes were read, and at what rate per thread
+- `[phase]`: when the first counting thread ran out of work and when the last one finished, and the
+  spread between them, which is the tail of the run that one thread carries alone
 - `[finish]`: the counting, the printing, and the whole command
 
 When there are more consumers than the machine has hardware threads, one more `[phase]` line says

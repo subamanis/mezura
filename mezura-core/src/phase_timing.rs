@@ -20,6 +20,16 @@ static FILES         : AtomicU64 = AtomicU64::new(0);
 static STARVED       : AtomicU64 = AtomicU64::new(0);
 static STARVED_NANOS : AtomicU64 = AtomicU64::new(0);
 
+// How far apart the first consumer to leave its loop and the last were, in microseconds since the
+// counting began: the width of the tail one thread holds while the others have nothing. None when
+// no consumer recorded an exit.
+pub(crate) fn format_consumer_exit_spread(first_micros: u64, last_micros: u64) -> Option<String> {
+    if first_micros == u64::MAX { return None }
+    Some(format!("[phase] consumers' exit: first at {:.1} ms, last at {:.1} ms, spread {:.1} ms",
+            first_micros as f64 / 1000.0, last_micros as f64 / 1000.0,
+            last_micros.saturating_sub(first_micros) as f64 / 1000.0))
+}
+
 // Accumulated by one thread, so the hot path touches no shared memory. The atomics above are
 // written once per thread, at its exit.
 #[derive(Debug, Default)]

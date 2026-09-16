@@ -204,13 +204,15 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
 
     // Written by whichever consumer stops last, read once they have all been joined.
     let counting_ended = Arc::new(AtomicU64::new(0));
+    // The first and the last consumer to stop, in microseconds, for the phase report alone
+    let consumer_exits = Arc::new((AtomicU64::new(u64::MAX), AtomicU64::new(0)));
     // Decided by the counting and not by the walk, so they are read after the joins below
     let skipped_files: Arc<Mutex<SkippedFiles>> = Arc::new(Mutex::new(SkippedFiles::default()));
     for i in 0..config.threads.consumers() {
         match engine::consumer::start_parser_thread(i, files_injector.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
                 stats_per_module.clone(), nested_per_module.clone(), files_per_module.clone(),
                 language_map_ref.clone(), nested_definitions.clone(), language_lookups.clone(), config.clone(),
-                parsing_started_instant, counting_ended.clone(), skipped_files.clone(),
+                parsing_started_instant, counting_ended.clone(), consumer_exits.clone(), skipped_files.clone(),
                 progress.clone()) {
             Ok(handle) => consumer_handles.push(handle),
             Err(x) => last_refusal = Some(x)
@@ -271,6 +273,10 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
         eprintln!("[phase] producers alive: {} ms | drain after producers: {} ms | queue size at producer exit: {}",
             producers_done_millis, parsing_duration_millis - producers_done_millis, queued_at_producer_exit);
         eprintln!("{}", phase_timing::report(threads_used.consumers(), parsing_duration_millis));
+        if let Some(spread) = phase_timing::format_consumer_exit_spread(
+                consumer_exits.0.load(Ordering::Relaxed), consumer_exits.1.load(Ordering::Relaxed)) {
+            eprintln!("{spread}");
+        }
     }
 
     // Ahead of every lock below, so that a dead worker is reported as itself rather than as whichever
