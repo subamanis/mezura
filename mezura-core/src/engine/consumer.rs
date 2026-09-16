@@ -61,7 +61,7 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
     let mut local_nested: Vec<HashMap<String, HashMap<String, Stats>>> =
             vec![HashMap::new(); modules];
     let mut local_files: Vec<HashMap<String, Vec<FileEntry>>> = vec![HashMap::new(); modules];
-    // A batch and not one file at a time. With four of these threads per core they all reach for the
+    // A batch and not one file at a time. With several of these threads per core they all reach for the
     // same queue head between files, and a contended steal comes back as Retry, which the arm below
     // answers by yielding: a whole scheduling round per file. A batch is half of what is left, so
     // the last files still spread out rather than queueing behind one thread.
