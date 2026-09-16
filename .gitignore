@@ -24,3 +24,4 @@ bench_dir
 mezura/test_dir/
 archive
 temp/
+.linebench/
