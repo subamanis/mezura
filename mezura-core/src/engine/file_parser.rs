@@ -7,7 +7,6 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read as IoRead;
-use std::iter::Peekable;
 use std::path::Path;
 use std::str;
 use std::sync::{Arc, LazyLock};
@@ -17,6 +16,8 @@ use memchr::memmem;
 
 use crate::{EngineConfig, Language, LineClass, NestedLanguage, ScanSkip, Span, SpanKind, phase_timing};
 use crate::domain::{CommentPair, FileStats, LineContinuation};
+use crate::engine::masks::MaskFinder;
+use crate::engine::masks::BLOCK_BYTES;
 
 pub(crate) const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
 
@@ -260,6 +261,8 @@ pub(crate) struct ScanPlan {
     // block opener begins with one, as Lua's '--[[' begins with '--', CMake's '#[[' and Julia's '#='
     // with '#': there the same bytes open a block that runs on past this line.
     line_comment_ends_the_line: bool,
+    // Every byte the chunks search, for the pass that splits the file into lines
+    finder: MaskFinder,
 }
 
 impl ScanPlan {
@@ -353,7 +356,10 @@ impl ScanPlan {
             let Some(first) = depths.next() else { continue };
             if depths.any(|depth| depth != first) { *sorted = true }
         }
-        ScanPlan { chunks, first, slots, symbols, sorted_kinds, line_comment_ends_the_line }
+        let searched = chunks.iter().flat_map(|chunk| chunk.bytes[..chunk.len as usize].iter().copied())
+                .collect::<Vec<u8>>();
+        let finder = MaskFinder::of(&searched);
+        ScanPlan { chunks, first, slots, symbols, sorted_kinds, line_comment_ends_the_line, finder }
     }
 }
 
@@ -916,42 +922,70 @@ fn is_generated(contents: &str) -> bool {
     GENERATED_FINDERS.iter().any(|finder| finder.find(&lowercased[..head.len()]).is_some())
 }
 
-// The same lines 'str::lines' hands out, trailing '\r' dropped the same way, found with memchr's
-// SIMD search instead of the standard library's word-at-a-time loop.
-struct LineIter<'a> {
+// The same lines 'str::lines' hands out, trailing '\r' dropped the same way, and beside each one
+// whether it holds a byte the scan plan searches. Both are read off the masks of one 64-byte block
+// at a time, so nothing is searched per line: every symbol a language declares begins at one of the
+// searched bytes, and a line holding none of them holds no symbol and needs no scan.
+struct MaskedLines<'a> {
     contents: &'a str,
-    newlines: memchr::Memchr<'a>,
+    finder: &'a MaskFinder,
     start: usize,
+    // Where the block the two masks describe begins. Bits below 'start' are already cleared, and
+    // bit 0 of 'candidates' also says whether the block before held a candidate of the line still
+    // open, since that byte is inside the same line.
+    block_at: usize,
+    newlines: u64,
+    candidates: u64,
 }
 
-impl<'a> Iterator for LineIter<'a> {
-    type Item = (usize, &'a str);
-
-    fn next(&mut self) -> Option<(usize, &'a str)> {
-        match self.newlines.next() {
-            Some(at) => {
-                let mut end = at;
-                if end > self.start && self.contents.as_bytes()[end - 1] == b'\r' {
-                    end -= 1;
-                }
-                let line = (self.start, &self.contents[self.start..end]);
-                self.start = at + 1;
-                Some(line)
-            },
-            None => {
-                if self.start >= self.contents.len() {
-                    return None;
-                }
-                let line = (self.start, &self.contents[self.start..]);
-                self.start = self.contents.len();
-                Some(line)
-            }
-        }
+impl<'a> MaskedLines<'a> {
+    fn of(contents: &'a str, finder: &'a MaskFinder) -> MaskedLines<'a> {
+        let masks = finder.scan_block(&contents.as_bytes()[..contents.len().min(BLOCK_BYTES)]);
+        MaskedLines { contents, finder, start: 0, block_at: 0, newlines: masks.newlines,
+                candidates: masks.candidates }
     }
 }
 
-fn get_lines_of(contents: &str) -> LineIter<'_> {
-    LineIter { contents, newlines: memchr::memchr_iter(b'\n', contents.as_bytes()), start: 0 }
+impl<'a> Iterator for MaskedLines<'a> {
+    type Item = (usize, &'a str, bool);
+
+    // Called from two places, which is enough for the compiler to keep it out of line and hand
+    // every line back through memory; forced in, since it runs once per line of the corpus
+    #[inline(always)]
+    fn next(&mut self) -> Option<(usize, &'a str, bool)> {
+        let bytes = self.contents.as_bytes();
+        loop {
+            if self.newlines != 0 {
+                let bit = self.newlines.trailing_zeros();
+                let at = self.block_at + bit as usize;
+                let up_to_newline = u64::MAX >> (63 - bit);
+                let has_candidate = self.candidates & up_to_newline != 0;
+                self.newlines &= !up_to_newline;
+                self.candidates &= !up_to_newline;
+                let mut end = at;
+                if end > self.start && bytes[end - 1] == b'\r' {
+                    end -= 1;
+                }
+                let line = (self.start, &self.contents[self.start..end], has_candidate);
+                self.start = at + 1;
+                return Some(line);
+            }
+            let carried = (self.candidates != 0) as u64;
+            self.block_at += BLOCK_BYTES;
+            debug_assert!(self.start <= self.block_at, "a line cannot begin past the block being read");
+            if self.block_at >= bytes.len() {
+                if self.start >= bytes.len() {
+                    return None;
+                }
+                let line = (self.start, &self.contents[self.start..], carried != 0);
+                self.start = bytes.len();
+                return Some(line);
+            }
+            let masks = self.finder.scan_block(&bytes[self.block_at..bytes.len().min(self.block_at + BLOCK_BYTES)]);
+            self.newlines = masks.newlines;
+            self.candidates = masks.candidates | carried;
+        }
+    }
 }
 
 // The carry from one line to the next, one set per language in play: the shell's survives a
@@ -1065,47 +1099,6 @@ struct SectionBucket<'a> {
     bytes: usize,
 }
 
-// Every symbol a language declares begins at one of the bytes its scan plan searches, so a line
-// holding none of them holds no symbol and needs no scan. One pass per chunk over the whole file
-// answers that for every line at once, and the answers are taken lazily: the lines are asked in file
-// order, so each pass only ever moves forward, whether or not the line before it asked.
-struct CandidateProbe<'a> {
-    passes: Vec<CandidatePass<'a>>,
-}
-
-enum CandidatePass<'a> {
-    One(Peekable<memchr::Memchr<'a>>),
-    Two(Peekable<memchr::Memchr2<'a>>),
-    Three(Peekable<memchr::Memchr3<'a>>)
-}
-
-impl<'a> CandidateProbe<'a> {
-    fn of(contents: &'a str, plan: &ScanPlan) -> CandidateProbe<'a> {
-        let bytes = contents.as_bytes();
-        let passes = plan.chunks.iter().map(|chunk| match chunk.len {
-            1 => CandidatePass::One(memchr::memchr_iter(chunk.bytes[0], bytes).peekable()),
-            2 => CandidatePass::Two(memchr::memchr2_iter(chunk.bytes[0], chunk.bytes[1], bytes).peekable()),
-            _ => CandidatePass::Three(memchr::memchr3_iter(chunk.bytes[0], chunk.bytes[1], chunk.bytes[2], bytes).peekable())
-        }).collect();
-        CandidateProbe { passes }
-    }
-
-    // The range is the line as the file spells it, leading and trailing whitespace included, which
-    // covers the trimmed line the scan would actually read
-    fn has_a_candidate_in(&mut self, from: usize, to: usize) -> bool {
-        self.passes.iter_mut().any(|pass| match pass {
-            CandidatePass::One(pass) => reaches_into(pass, from, to),
-            CandidatePass::Two(pass) => reaches_into(pass, from, to),
-            CandidatePass::Three(pass) => reaches_into(pass, from, to)
-        })
-    }
-}
-
-fn reaches_into(pass: &mut Peekable<impl Iterator<Item = usize>>, from: usize, to: usize) -> bool {
-    while pass.next_if(|at| *at < from).is_some() {}
-    pass.peek().is_some_and(|at| *at < to)
-}
-
 fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup: &NestedLanguageLookup,
     matchers: &mut KeywordMatchers, config: &EngineConfig, buffers: &mut ParseBuffers,
     log: &mut ExplainLog) -> FileReport
@@ -1120,11 +1113,16 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
 
     let mut shell = WalkState::default();
     let mut buckets: Vec<SectionBucket> = Vec::new();
-    let mut probe = CandidateProbe::of(contents, get_or_build_plan_of(language));
-    let mut lines = get_lines_of(contents);
+    let mut lines = MaskedLines::of(contents, &get_or_build_plan_of(language).finder);
     let mut handed_back = None;
-    while let Some((line_start, raw_line)) = handed_back.take().or_else(|| lines.next()) {
-        let has_candidates = probe.has_a_candidate_in(line_start, line_start + raw_line.len());
+    loop {
+        let (line_start, raw_line, has_candidates) = match handed_back.take() {
+            Some(line) => line,
+            None => match lines.next() {
+                Some(line) => line,
+                None => break
+            }
+        };
         let had_code = walk_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans,
                 has_candidates, scan, &mut shell, &mut shell_stats, code_spans, log);
 
@@ -1158,16 +1156,16 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
             let bucket = &mut buckets[bucket_at];
             let mut inner_state = WalkState::default();
             let mut section_to = contents.len();
-            for (inner_start, inner_raw) in lines.by_ref() {
+            for (inner_start, inner_raw, inner_candidates) in lines.by_ref() {
                 // Per the HTML reading the closer ends the section wherever it stands, even inside
                 // a string of the section's language: that is why one writes '<\/script>' in
                 // JavaScript. The closer's line belongs to the shell.
                 if inner_start + inner_raw.len() > closer_at {
                     section_to = inner_start;
-                    handed_back = Some((inner_start, inner_raw));
+                    handed_back = Some((inner_start, inner_raw, inner_candidates));
                     break;
                 }
-                // A section is written in another language, whose symbols the probe never searched
+                // A section is written in another language, whose symbols the masks never searched
                 walk_line::<EXPLAIN>(inner_raw, inner_start, inner, bucket.collecting_spans,
                         true, scan, &mut inner_state, &mut bucket.stats, &mut bucket.spans, log);
             }
@@ -3353,8 +3351,37 @@ mod tests {
                      "fn main() {\n    println!(\"hi\");\n}\n", "αβ\nγ"];
         for case in cases {
             let expected = case.lines().collect::<Vec<&str>>();
-            let actual = get_lines_of(case).map(|(_, line)| line).collect::<Vec<&str>>();
+            let finder = MaskFinder::of(b"");
+            let actual = MaskedLines::of(case, &finder).map(|(_, line, _)| line).collect::<Vec<&str>>();
             assert_eq!(expected, actual, "disagreed on {case:?}");
+        }
+    }
+
+    // The candidate flag is what lets a line skip the scan, so it is held against a search of the
+    // line itself, over lines that cross the 64-byte blocks the masks are read from.
+    #[test]
+    fn a_line_is_a_candidate_exactly_when_it_holds_a_searched_byte() {
+        let searched = b"\"/";
+        let finder = MaskFinder::of(searched);
+        let long = "x".repeat(200);
+        let cases = [
+            "a\n/\n\"\nb".to_owned(),
+            format!("{long}\n{long}/\n/{long}\n{long}"),
+            format!("{}\n/{}\"\n", "y".repeat(63), "z".repeat(64)),
+            "no\r\nsymbols\r\nhere\r\n".to_owned(),
+            format!("{}/\n{}\n", "a".repeat(62), "b".repeat(65)),
+            "\n\n/\n\n".to_owned(),
+            "/".to_owned(),
+            "".to_owned(),
+        ];
+        for case in &cases {
+            let expected = case.lines().map(|line| line.bytes().any(|byte| searched.contains(&byte))).collect::<Vec<bool>>();
+            let actual = MaskedLines::of(case, &finder).map(|(_, _, candidate)| candidate).collect::<Vec<bool>>();
+            assert_eq!(expected, actual, "disagreed on {case:?}");
+            let starts = MaskedLines::of(case, &finder).map(|(start, line, _)| (start, line)).collect::<Vec<_>>();
+            for (start, line) in starts {
+                assert_eq!(&case[start..start + line.len()], line);
+            }
         }
     }
 

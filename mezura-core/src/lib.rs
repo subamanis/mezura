@@ -29,7 +29,9 @@
 //! [`explain_file`] reads a single file line by line and says why each line was counted the way it
 //! was.
 
-#![forbid(unsafe_code)]
+// Denied and not forbidden, for the one call in 'engine::masks' that hands a block to code compiled
+// for a feature the machine was checked for
+#![deny(unsafe_code)]
 #![warn(missing_docs)]
 #![warn(unreachable_pub)]
 #![allow(non_snake_case)]
