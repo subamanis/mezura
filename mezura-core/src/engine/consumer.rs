@@ -142,8 +142,13 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                     },
                     Err(x) => {
                         progress.record_file_parsed(0);
-                        local_faulty.push(FaultyFileDetails::new(spell_out(&parsable_file.path), x,
-                                parsable_file.size))
+                        // The listing gives no size on unix, and the json report carries one for
+                        // every faulty file, so it is asked for here, on the failure path alone
+                        let size = match parsable_file.size {
+                            0 => std::fs::metadata(&parsable_file.path).map_or(0, |m| m.len()),
+                            listed => listed
+                        };
+                        local_faulty.push(FaultyFileDetails::new(spell_out(&parsable_file.path), x, size))
                     }
                 }
                 if buf.capacity() > file_parser::MAX_RETAINED_FILE_BUFFER_BYTES {

@@ -408,8 +408,8 @@ pub(crate) struct ParsableFile {
     pub path: PathBuf,
     pub language_name: Arc<str>,
     pub module: ModuleId,
-    // As the directory listing gave it. Zero where it could not, and the read then goes on until
-    // the file ends.
+    // As the directory listing gave it. Zero where it could not, and the read then learns the size
+    // for itself.
     pub size: u64,
     // Named as a target rather than found by the walk, which is what exempts it from every rule
     // that skips a file. The ignore files, the dotted names and the head checks all pass it through.

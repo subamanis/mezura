@@ -633,6 +633,8 @@ With that said, it is important to mention the following limitations:
 
 - Two languages claiming one extension is settled per file, by a ```#!``` line or by evidence the language files declare, and only the files whose content says nothing follow the standing order of ```language_conflicts.txt```, parsed with that winner's symbols. ```--force-language``` decides outright, ```--no-heuristics``` turns the content reading off, and ```--no-shebang``` takes the ```#!``` line out of the whole business, the naming of files that carry no extension included.
 
+- On Linux and macOS a file is read without asking its size first, and the first read that comes back short is taken as its end. A read that fails partway through, on a failing disk or a network mount that answers short, hands back what it managed and reports the error only on the next call, which is never made: such a file is counted with the part that was read and does not appear among the faulty files. Asking would cost one system call per file, and that was decided against; on Windows the size comes with the directory listing and the whole file is read.
+
 
 ## How it compares
 

@@ -163,22 +163,34 @@ pub(crate) fn explain_parsed_file(contents: String, lang_name: &str, lookup: &Ne
 
 // Asking for one byte past the listed size tells a file of that size apart from one that grew.
 // A unix read moves at most 2 GB at a time, so a short read is the end only once the listed size
-// is reached. With no listed size the loop reads until a read returns nothing.
+// is reached. With no listed size the first read asks for a window most files fit inside, so a
+// short read is the end; a file that fills the window is sized with one call on the open handle
+// and finished the same way. A read that fails midway hands back what it managed first and the
+// error only on the next call, so without a size such a file is counted with what was read and
+// is not reported: one call per file is the price of asking, and it was decided not to pay it.
 fn read_file_into(file: &mut File, buf: &mut Vec<u8>, size: u64) -> std::io::Result<usize> {
     const READ_WINDOW_BYTES : usize = 8_192;
+    const UNSIZED_FIRST_WINDOW_BYTES : usize = 64 * 1024;
 
-    let expected = usize::try_from(size).unwrap_or(0);
+    let mut expected = usize::try_from(size).unwrap_or(0);
     let mut filled = 0;
+    let mut end = if expected > 0 { expected + 1 } else { UNSIZED_FIRST_WINDOW_BYTES };
     loop {
-        let end = if filled <= expected {expected + 1} else {filled + READ_WINDOW_BYTES};
         if buf.len() < end {
             buf.resize(end, 0);
         }
         match file.read(&mut buf[filled..end]) {
             Ok(0) => return Ok(filled),
-            Ok(read) if filled + read < end && expected > 0 && filled + read >= expected
-                    => return Ok(filled + read),
-            Ok(read) => filled += read,
+            Ok(read) => {
+                filled += read;
+                if filled < end && (expected == 0 || filled >= expected) {
+                    return Ok(filled);
+                }
+                if expected == 0 {
+                    expected = usize::try_from(file.metadata()?.len()).unwrap_or(0);
+                }
+                end = if filled <= expected { expected + 1 } else { filled + READ_WINDOW_BYTES };
+            },
             Err(x) if x.kind() == std::io::ErrorKind::Interrupted => (),
             Err(x) => return Err(x)
         }
