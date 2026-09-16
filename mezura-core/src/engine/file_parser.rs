@@ -1240,6 +1240,30 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
         return false;
     }
 
+    // A line holding none of the searched bytes, with nothing carried into it, is code from end to
+    // end and leaves nothing open behind it: words in code, or punctuation alone. The general path
+    // below reaches the same verdict for it through the scan buffers, and nine lines in ten of a C
+    // file are this line, so it is answered here without them.
+    if !has_candidates && state.open_comment.is_none() && state.open_str_symbol.is_none() {
+        let words = has_word_byte(line.as_bytes());
+        let class = if words { LineClass::WordsInCode } else { LineClass::PunctuationInCode };
+        file_stats.classes.bump(class);
+        // Only the search for a nested language's opening tag reads the ranges of a line that
+        // came back as code, so they are written only where such a tag can exist
+        if !language.nested_languages.is_empty() {
+            scan.code_ranges.clear();
+            scan.code_ranges.push((0, line.len()));
+        }
+        if EXPLAIN {
+            log.record(class, carried, language,
+                    vec![Span { from: lead, to: lead + line.len(), kind: SpanKind::Code }]);
+        }
+        if words && collecting_spans {
+            code_spans.push((base as u32, (base + line.len()) as u32));
+        }
+        return true;
+    }
+
     let mut line_spans: Vec<Span> = Vec::new();
     let (line_info, opened_here) = get_bounds::<EXPLAIN>(line, language, state.open_comment,
             state.open_str_symbol, has_candidates, scan, &mut line_spans);
@@ -1520,23 +1544,18 @@ fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment
     open_str_symbol: Option<u8>, has_candidates: bool, buffers: &mut ScanBuffers, spans: &mut Vec<Span>)
 -> (LineInfo, OpenedHere)
 {
-    // A line holding none of the searched bytes cannot hold a symbol, so it lands where the scan
-    // below lands when it finds nothing. The code ranges are rewritten rather than left as the line
-    // before them left them, since the keyword search and the search for a nested language's
-    // opening tag both read them off a line that came back as code.
+    // A line holding none of the searched bytes cannot hold a symbol, so it stays inside whatever
+    // was open when it began. One with nothing open never arrives here: 'walk_line' answers it
+    // itself.
     if !has_candidates {
-        buffers.code_ranges.clear();
+        debug_assert!(open_comment.is_some() || open_str_symbol.is_some(),
+                "a line with no candidate and nothing open belongs to walk_line");
         if let Some((symbol, depth)) = open_comment {
             note_span::<EXPLAIN>(spans, 0, line.len(), SpanKind::Comment);
             return (LineInfo::with_open_comment(false, false, symbol, depth), OpenedHere::default());
         }
-        if open_str_symbol.is_some() {
-            note_span::<EXPLAIN>(spans, 0, line.len(), SpanKind::String);
-            return (LineInfo::with_open_string(false, open_str_symbol), OpenedHere::default());
-        }
-        push_code(&mut buffers.code_ranges, line, 0, line.len());
-        note_span::<EXPLAIN>(spans, 0, line.len(), SpanKind::Code);
-        return (LineInfo::of(true, false), OpenedHere::default());
+        note_span::<EXPLAIN>(spans, 0, line.len(), SpanKind::String);
+        return (LineInfo::with_open_string(false, open_str_symbol), OpenedHere::default());
     }
 
     // A line comment runs to the end of its line, so a line that opens with one is comment through
@@ -2353,8 +2372,7 @@ mod tests {
         assert_eq!(15, CountingModel::Region.calculate_comment_lines(&stats.classes));
     }
 
-    // The buffers are seeded from a line that did hold code, because a fresh one is empty already
-    // and would pass whether or not the shortcut clears what the line before it left behind.
+    // A line with no symbol byte inside an open comment or string is answered without the scan
     #[test]
     fn a_line_with_no_symbol_byte_on_it_reads_the_same_with_the_scan_skipped() {
         let line = "let total = width + height";
@@ -2362,17 +2380,44 @@ mod tests {
 
         let read = |has_candidates: bool, open_comment, open_str_symbol| {
             let mut buffers = ScanBuffers::default();
-            get_bounds::<true>("let seeded = 1", &RUST, None, None, true, &mut buffers, &mut Vec::new());
-            assert!(!buffers.code_ranges.is_empty(), "the seeding line left no code range behind");
             let mut spans = Vec::new();
             let answer = get_bounds::<true>(line, &RUST, open_comment, open_str_symbol, has_candidates,
                     &mut buffers, &mut spans);
-            (answer, buffers.code_ranges.clone(), spans)
+            (answer, spans)
         };
 
-        for (open_comment, open_str_symbol) in [(None, None), (Some((0u8, 1u32)), None), (None, Some(0u8))] {
+        for (open_comment, open_str_symbol) in [(Some((0u8, 1u32)), None), (None, Some(0u8))] {
             assert_eq!(read(true, open_comment, open_str_symbol), read(false, open_comment, open_str_symbol),
                     "the shortcut disagreed with the scan for {open_comment:?} and {open_str_symbol:?}");
+        }
+    }
+
+    // The plain line, no symbol byte and nothing open, is answered inside 'walk_line' without the
+    // scan. This holds that answer against the general path: the class, the span the keyword search
+    // gets, what '--explain' records, and the code range left behind where a nested language could
+    // read it.
+    #[test]
+    fn a_plain_line_reads_the_same_with_and_without_the_scan() {
+        let with_sections = Language::new("shell", ["shl"], build_backslashed_quotes(), [""; 0], &[], [])
+                .with_nested_languages(&[NestedLanguage::of("<script", "</script>", "js")]);
+        let read = |language: &Language, has_candidates: bool, raw_line: &str| {
+            let (mut scan, mut state, mut log) = (ScanBuffers::default(), WalkState::default(), ExplainLog::default());
+            let mut stats = FileStats::default();
+            let mut code_spans = Vec::new();
+            let had_code = walk_line::<true>(raw_line, 100, language, true, has_candidates, &mut scan, &mut state,
+                    &mut stats, &mut code_spans, &mut log);
+            let records = log.records().iter().map(|record| (record.class, record.carried, record.spans.clone()))
+                    .collect::<Vec<_>>();
+            let ranges = if language.nested_languages.is_empty() { Vec::new() } else { scan.code_ranges.clone() };
+            (had_code, stats.classes, ranges, code_spans, records)
+        };
+
+        for language in [&*RUST, &with_sections] {
+            for raw_line in ["\tlet total = width + height", "}", "   ", "", "\t{", "αβγ", "  x  \t"] {
+                assert!(!raw_line.contains(['/', '*', '"', '\'']), "the line carries a symbol byte");
+                assert_eq!(read(language, true, raw_line), read(language, false, raw_line),
+                        "the plain path disagreed with the scan on {raw_line:?} in {}", language.name);
+            }
         }
     }
 
