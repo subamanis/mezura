@@ -21,6 +21,11 @@ use crate::engine::masks::BLOCK_BYTES;
 
 pub(crate) const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
 
+#[cfg(unix)]
+const SMALLEST_MAPPED_FILE_BYTES : usize = 262_144;
+#[cfg(unix)]
+const SETTLED_FILE_AGE : std::time::Duration = std::time::Duration::from_secs(5);
+
 // Real source reaches 350 a line, generated bindings padded into columns, and anything lower
 // drops it out of the count. A bundle is in the thousands.
 const MINIFIED_AVERAGE_LINE_BYTES : usize = 1_000;
@@ -117,18 +122,19 @@ pub(crate) fn parse_file(path: &Path, size: u64, lang_name: &str, buf: &mut Vec<
         at = Some(Instant::now());
     }
 
-    let filled = match read_file_into(&mut file, buf, size) {
-        Ok(filled) => filled,
+    let held = match read_file_into(&mut file, buf, size) {
+        Ok(held) => held,
         Err(x) => return Err(x.to_string())
     };
+    let bytes = held.of(buf);
     if let Some(t) = at {
         buffers.timing.read_nanos += phase_timing::nanos_since(t);
-        buffers.timing.bytes += filled as u64;
+        buffers.timing.bytes += bytes.len() as u64;
         buffers.timing.files += 1;
         at = Some(Instant::now());
     }
     // The wording is the one 'read_to_string' uses, so that the list of faulty files reads the same
-    let Ok(contents) = str::from_utf8(&buf[..filled]) else {
+    let Ok(contents) = str::from_utf8(bytes) else {
         return Err("stream did not contain valid UTF-8".to_owned());
     };
 
@@ -162,6 +168,35 @@ pub(crate) fn explain_parsed_file(contents: String, lang_name: &str, lookup: &Ne
     (contents, report, log)
 }
 
+enum HeldFile {
+    InBuffer(usize),
+    #[cfg(unix)]
+    Mapped(memmap2::Mmap)
+}
+
+impl HeldFile {
+    fn of<'a>(&'a self, buf: &'a [u8]) -> &'a [u8] {
+        match self {
+            HeldFile::InBuffer(filled) => &buf[..*filled],
+            #[cfg(unix)]
+            HeldFile::Mapped(mapped) => mapped
+        }
+    }
+}
+
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn map_whole_file(file: &File) -> std::io::Result<memmap2::Mmap> {
+    let options = memmap2::MmapOptions::new();
+    unsafe { options.map(file) }
+}
+
+#[cfg(unix)]
+fn is_settled(metadata: &std::fs::Metadata) -> bool {
+    metadata.modified().ok().and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age >= SETTLED_FILE_AGE)
+}
+
 // Asking for one byte past the listed size tells a file of that size apart from one that grew.
 // A unix read moves at most 2 GB at a time, so a short read is the end only once the listed size
 // is reached. With no listed size the first read asks for a window most files fit inside, so a
@@ -169,7 +204,7 @@ pub(crate) fn explain_parsed_file(contents: String, lang_name: &str, lookup: &Ne
 // and finished the same way. A read that fails midway hands back what it managed first and the
 // error only on the next call, so without a size such a file is counted with what was read and
 // is not reported: one call per file is the price of asking, and it was decided not to pay it.
-fn read_file_into(file: &mut File, buf: &mut Vec<u8>, size: u64) -> std::io::Result<usize> {
+fn read_file_into(file: &mut File, buf: &mut Vec<u8>, size: u64) -> std::io::Result<HeldFile> {
     const READ_WINDOW_BYTES : usize = 8_192;
     const UNSIZED_FIRST_WINDOW_BYTES : usize = 64 * 1024;
 
@@ -181,14 +216,20 @@ fn read_file_into(file: &mut File, buf: &mut Vec<u8>, size: u64) -> std::io::Res
             buf.resize(end, 0);
         }
         match file.read(&mut buf[filled..end]) {
-            Ok(0) => return Ok(filled),
+            Ok(0) => return Ok(HeldFile::InBuffer(filled)),
             Ok(read) => {
                 filled += read;
                 if filled < end && (expected == 0 || filled >= expected) {
-                    return Ok(filled);
+                    return Ok(HeldFile::InBuffer(filled));
                 }
                 if expected == 0 {
-                    expected = usize::try_from(file.metadata()?.len()).unwrap_or(0);
+                    let metadata = file.metadata()?;
+                    expected = usize::try_from(metadata.len()).unwrap_or(0);
+                    #[cfg(unix)]
+                    if expected >= SMALLEST_MAPPED_FILE_BYTES && is_settled(&metadata)
+                            && let Ok(mapped) = map_whole_file(file) {
+                        return Ok(HeldFile::Mapped(mapped));
+                    }
                 }
                 end = if filled <= expected { expected + 1 } else { filled + READ_WINDOW_BYTES };
             },
@@ -3925,12 +3966,61 @@ mod tests {
         std::fs::write(&path, "x".repeat(40)).unwrap();
         let read_with = |size: u64| {
             let mut file = File::open(&path).unwrap();
-            read_file_into(&mut file, &mut Vec::new(), size).unwrap()
+            let mut buf = Vec::new();
+            let held = read_file_into(&mut file, &mut buf, size).unwrap();
+            held.of(&buf).len()
         };
 
         assert_eq!(40, read_with(4), "a file longer than the listing said was cut short");
         assert_eq!(40, read_with(0), "a file the listing could not size was cut short");
         assert_eq!(40, read_with(400), "a file shorter than the listing said was read past its end");
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_mapped_file_counts_the_same_lines_as_a_read_one() {
+        let path = std::env::temp_dir().join("a_mapped_file_counts_the_same_lines_as_a_read_one.rs");
+        let line = "let mapped = 1; // and a comment\n";
+        let lines = SMALLEST_MAPPED_FILE_BYTES.div_ceil(line.len()) + 100;
+        std::fs::write(&path, line.repeat(lines)).unwrap();
+
+        let mut file = File::open(&path).unwrap();
+        file.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(60)).unwrap();
+        let mut probe = Vec::new();
+        let held = read_file_into(&mut file, &mut probe, 0).unwrap();
+        assert!(matches!(held, HeldFile::Mapped(_)),
+                "a file of {} bytes was not mapped", lines * line.len());
+        assert_eq!(lines * line.len(), held.of(&probe).len());
+
+        let config = EngineConfig::default();
+        let parsed = |size: u64| {
+            let mut buf = Vec::new();
+            match parse_file(&path, size, "Rust", &mut buf, &mut ParseBuffers::default(),
+                    &shipped_lookup(), &mut KeywordMatchers::default(),
+                    &mut IdentificationMatchers::default(), &config, false, None, &HashMap::new()) {
+                Ok(FileOutcome::Counted(report, _)) => report.into_whole().lines,
+                _ => panic!("{} was not counted", path.display())
+            }
+        };
+        assert_eq!(parsed(get_size_of(&path)), parsed(0), "the mapped file counted other lines");
+        assert_eq!(lines, parsed(0));
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_large_file_written_just_now_is_read_and_not_mapped() {
+        let path = std::env::temp_dir().join("a_large_file_written_just_now_is_read_and_not_mapped.rs");
+        std::fs::write(&path, "x\n".repeat(SMALLEST_MAPPED_FILE_BYTES)).unwrap();
+
+        let mut file = File::open(&path).unwrap();
+        let mut buf = Vec::new();
+        let held = read_file_into(&mut file, &mut buf, 0).unwrap();
+        assert!(matches!(held, HeldFile::InBuffer(_)), "a file written just now was mapped");
+        assert_eq!(2 * SMALLEST_MAPPED_FILE_BYTES, held.of(&buf).len());
 
         std::fs::remove_file(&path).unwrap();
     }

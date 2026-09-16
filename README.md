@@ -635,6 +635,8 @@ With that said, it is important to mention the following limitations:
 
 - On Linux and macOS a file is read without asking its size first, and the first read that comes back short is taken as its end. A read that fails partway through, on a failing disk or a network mount that answers short, hands back what it managed and reports the error only on the next call, which is never made: such a file is counted with the part that was read and does not appear among the faulty files. Asking would cost one system call per file, and that was decided against; on Windows the size comes with the directory listing and the whole file is read.
 
+- On Linux and macOS a file of 256 KB or more is mapped into memory rather than read, since copying it out of the page cache costs more than mapping it. If another program truncates that file in place during the few milliseconds mezura spends on it, the run dies with a bus error instead of counting what was there. That takes a truncation landing inside that window on a file of that size, and not a save through a new file, which is how editors and git write; a file modified in the last five seconds is read the old way, so one being generated at that moment is never mapped. ripgrep's memory maps carry the same exposure, and its help says so.
+
 
 ## How it compares
 
