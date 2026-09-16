@@ -1043,6 +1043,12 @@ struct WalkState {
     opened_line: usize,
 }
 
+impl WalkState {
+    fn holds_nothing(&self) -> bool {
+        self.open_comment.is_none() && self.open_str_symbol.is_none() && !self.continued_comment
+    }
+}
+
 // What earlier lines left open when a line began, as '--explain' reports it. For a leveled pair the
 // depth carried from line to line is the level, so the spelling of the opener is rebuilt from it
 // later. 'ends' says the carried thing is gone by the line's end: closed, or replaced by a new one
@@ -1164,8 +1170,13 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
                 None => break
             }
         };
-        let had_code = walk_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans,
-                has_candidates, scan, &mut shell, &mut shell_stats, code_spans, log);
+        let had_code = if !has_candidates && shell.holds_nothing() {
+            walk_plain_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans, scan,
+                    &shell, &mut shell_stats, code_spans, log)
+        } else {
+            walk_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans,
+                    has_candidates, scan, &mut shell, &mut shell_stats, code_spans, log)
+        };
 
         // A region opener only counts where the shell left it as code, so one sitting inside a
         // comment or a string of the shell opens nothing
@@ -1233,11 +1244,56 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
     }
 }
 
+// A line holding none of the searched bytes, with nothing carried into it, is code from end to
+// end and leaves nothing open behind it: words in code, or punctuation alone. The general path
+// below reaches the same verdict for it through the scan buffers, and nine lines in ten of a C
+// file are this line, so it is answered here without them.
+#[inline(always)]
+fn walk_plain_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &Language,
+    collecting_spans: bool, scan: &mut ScanBuffers, state: &WalkState, file_stats: &mut FileStats,
+    code_spans: &mut Vec<(u32, u32)>, log: &mut ExplainLog) -> bool
+{
+    file_stats.lines += 1;
+    let carried = if EXPLAIN { CarriedRecord::of(state) } else { CarriedRecord::Nothing };
+
+    let from_start = raw_line.trim_ascii_start();
+    let line = from_start.trim_ascii_end();
+    if line.is_empty() {
+        file_stats.classes.bump(LineClass::Blank);
+        if EXPLAIN { log.record(LineClass::Blank, carried, language, Vec::new()); }
+        return false;
+    }
+    let lead = raw_line.len() - from_start.len();
+    let base = line_start + lead;
+
+    let words = has_word_byte(line.as_bytes());
+    let class = if words { LineClass::WordsInCode } else { LineClass::PunctuationInCode };
+    file_stats.classes.bump(class);
+    // Only the search for a nested language's opening tag reads the ranges of a line that
+    // came back as code, so they are written only where such a tag can exist
+    if !language.nested_languages.is_empty() {
+        scan.code_ranges.clear();
+        scan.code_ranges.push((0, line.len()));
+    }
+    if EXPLAIN {
+        log.record(class, carried, language,
+                vec![Span { from: lead, to: lead + line.len(), kind: SpanKind::Code }]);
+    }
+    if words && collecting_spans {
+        code_spans.push((base as u32, (base + line.len()) as u32));
+    }
+    true
+}
+
 // Returns whether the line left code behind, which is all the section machinery needs from it.
 fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &Language, collecting_spans: bool,
     has_candidates: bool, scan: &mut ScanBuffers, state: &mut WalkState, file_stats: &mut FileStats,
     code_spans: &mut Vec<(u32, u32)>, log: &mut ExplainLog) -> bool
 {
+    if !has_candidates && state.holds_nothing() {
+        return walk_plain_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans, scan,
+                state, file_stats, code_spans, log);
+    }
     file_stats.lines += 1;
     let carried = if EXPLAIN { CarriedRecord::of(state) } else { CarriedRecord::Nothing };
 
@@ -1279,30 +1335,6 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
                     vec![Span { from: lead, to: lead + line.len(), kind: SpanKind::Comment }]);
         }
         return false;
-    }
-
-    // A line holding none of the searched bytes, with nothing carried into it, is code from end to
-    // end and leaves nothing open behind it: words in code, or punctuation alone. The general path
-    // below reaches the same verdict for it through the scan buffers, and nine lines in ten of a C
-    // file are this line, so it is answered here without them.
-    if !has_candidates && state.open_comment.is_none() && state.open_str_symbol.is_none() {
-        let words = has_word_byte(line.as_bytes());
-        let class = if words { LineClass::WordsInCode } else { LineClass::PunctuationInCode };
-        file_stats.classes.bump(class);
-        // Only the search for a nested language's opening tag reads the ranges of a line that
-        // came back as code, so they are written only where such a tag can exist
-        if !language.nested_languages.is_empty() {
-            scan.code_ranges.clear();
-            scan.code_ranges.push((0, line.len()));
-        }
-        if EXPLAIN {
-            log.record(class, carried, language,
-                    vec![Span { from: lead, to: lead + line.len(), kind: SpanKind::Code }]);
-        }
-        if words && collecting_spans {
-            code_spans.push((base as u32, (base + line.len()) as u32));
-        }
-        return true;
     }
 
     let mut line_spans: Vec<Span> = Vec::new();
