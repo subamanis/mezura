@@ -51,6 +51,28 @@ impl MaskFinder {
     }
 }
 
+#[allow(unsafe_code)]
+pub(crate) fn is_ascii(bytes: &[u8]) -> bool {
+    #[cfg(target_arch = "x86_64")]
+    if std::is_x86_feature_detected!("avx2") {
+        // Checked on the line above, which is the whole requirement of calling a function
+        // compiled for the feature
+        return unsafe { is_ascii_avx2(bytes) };
+    }
+    bytes.is_ascii()
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+fn is_ascii_avx2(bytes: &[u8]) -> bool {
+    let mut high_bits = _mm256_set1_epi8(0);
+    let mut blocks = bytes.chunks_exact(32);
+    for block in &mut blocks {
+        high_bits = _mm256_or_si256(high_bits, load_32(block));
+    }
+    _mm256_movemask_epi8(high_bits) == 0 && blocks.remainder().is_ascii()
+}
+
 fn scan_block_scalar(block: &[u8], is_searched: &[bool; 256]) -> Masks {
     let (mut newlines, mut candidates) = (0u64, 0u64);
     for (at, &byte) in block.iter().enumerate() {
@@ -134,6 +156,37 @@ mod tests {
         assert_eq!(masks.newlines, 0b0100);
         assert_eq!(masks.candidates, 0b1000);
         assert_eq!(finder.scan_block(b"").newlines, 0);
+    }
+
+    #[test]
+    fn a_buffer_of_ascii_of_any_length_is_ascii() {
+        assert!(is_ascii(b""));
+        for length in 0..=200usize {
+            let buffer = (0..length).map(|at| (at % 128) as u8).collect::<Vec<u8>>();
+            assert_eq!(buffer.is_ascii(), is_ascii(&buffer), "pure ascii of {length} bytes");
+        }
+    }
+
+    #[test]
+    fn a_byte_above_ascii_is_found_at_every_position_of_a_buffer() {
+        for byte in 0x80..=0xFFu8 {
+            for at in 0..100usize {
+                let mut buffer = vec![b'x'; 100];
+                buffer[at] = byte;
+                assert_eq!(buffer.is_ascii(), is_ascii(&buffer), "{byte:#04x} at {at}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_ascii_test_answers_exactly_as_the_standard_library_on_random_buffers() {
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
+        for _ in 0..500 {
+            let length = (next() % 301) as usize;
+            let buffer = (0..length).map(|_| (next() >> 8) as u8).collect::<Vec<u8>>();
+            assert_eq!(buffer.is_ascii(), is_ascii(&buffer), "{buffer:?}");
+        }
     }
 
     #[test]

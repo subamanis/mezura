@@ -17,6 +17,7 @@ use memchr::memmem;
 use crate::{EngineConfig, Language, LineClass, NestedLanguage, ScanSkip, Span, SpanKind, phase_timing};
 use crate::domain::{CommentPair, FileStats, LineContinuation};
 use crate::engine::masks::MaskFinder;
+use crate::engine::masks::is_ascii;
 use crate::engine::masks::BLOCK_BYTES;
 
 pub(crate) const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
@@ -133,9 +134,14 @@ pub(crate) fn parse_file(path: &Path, size: u64, lang_name: &str, buf: &mut Vec<
         buffers.timing.files += 1;
         at = Some(Instant::now());
     }
-    // The wording is the one 'read_to_string' uses, so that the list of faulty files reads the same
-    let Ok(contents) = str::from_utf8(bytes) else {
-        return Err("stream did not contain valid UTF-8".to_owned());
+    let contents = if is_ascii(bytes) {
+        ascii_as_str(bytes)
+    } else {
+        // The wording is the one 'read_to_string' uses, so that the list of faulty files reads the same
+        let Ok(contents) = str::from_utf8(bytes) else {
+            return Err("stream did not contain valid UTF-8".to_owned());
+        };
+        contents
     };
 
     // Before the parse, which is what the skip saves: a bundle is the most expensive file there is.
@@ -182,6 +188,13 @@ impl HeldFile {
             HeldFile::Mapped(mapped) => mapped
         }
     }
+}
+
+// Every byte was just found to be below 0x80, and such a sequence is UTF-8 as it stands: the
+// check is the validation 'from_utf8' would do again, byte by byte.
+#[allow(unsafe_code)]
+fn ascii_as_str(bytes: &[u8]) -> &str {
+    unsafe { str::from_utf8_unchecked(bytes) }
 }
 
 #[cfg(unix)]
@@ -3990,6 +4003,28 @@ mod tests {
             checked += 1;
         }
         assert!(checked > 30, "only {checked} files were swept");
+    }
+
+    #[test]
+    fn a_file_that_is_not_ascii_counts_the_same_lines_and_a_faulty_one_is_still_refused() {
+        let root = std::env::temp_dir().join("mezura_utf8_test");
+        std::fs::create_dir_all(&root).unwrap();
+        let rust = LANGUAGE_MAP_REF.get("Rust").unwrap();
+        let mut buf = Vec::new();
+
+        let valid = root.join("valid.rs");
+        let contents = "fn main() {\n    // μια γραμμή 🦀\n    let a = 1;\n}\n";
+        std::fs::write(&valid, contents).unwrap();
+        let counted = parse_file_whole(&valid, "Rust", &mut buf, &EngineConfig::default()).unwrap();
+        assert_eq!(4, counted.lines);
+        assert_eq!(parse_lines_whole(contents, rust).classes, counted.classes);
+
+        let faulty = root.join("faulty.rs");
+        std::fs::write(&faulty, b"fn main() {}\n// \xFF\n").unwrap();
+        assert_eq!("stream did not contain valid UTF-8",
+                parse_file_whole(&faulty, "Rust", &mut buf, &EngineConfig::default()).unwrap_err());
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
