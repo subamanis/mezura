@@ -114,14 +114,8 @@ mezura --by-file                         # show results for every file separatel
 mezura src/main.rs --explain             # why each line was counted the way it was
 ```
 
-In Windows PowerShell a comma needs a backtick before it, or the whole list needs quotation marks:
-`mezura "./src, ./tests"`.
-
 Files that a .gitignore ignores are skipped by default, and so are minified and generated files, so
 build artifacts and dependencies do not pollute the stats. See [What is skipped](#what-is-skipped).
-
-A run can be stopped at any time with Ctrl-C: the moving lines never hide the cursor or take over
-the screen, so the terminal is left as it was.
 
 ### Commands
 
