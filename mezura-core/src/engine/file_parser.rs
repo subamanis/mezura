@@ -1658,8 +1658,32 @@ fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment
                 OpenedHere { ended_in_line_comment: true, ..OpenedHere::default() });
     }
 
+    // The strings are resolved before the comment boundaries are known, so an opener written inside
+    // a comment can take a string with it and throw away every symbol after it on that line. When
+    // the walk finds one, the line is read again with that opener left alone and the answer of the
+    // first reading dropped. Measured over 5.8 million lines of Rust, no line needed a second one.
+    let spans_at_entry = spans.len();
+    let mut cancelled : Vec<usize> = Vec::new();
+    loop {
+        let mut opener_inside_a_comment = None;
+        let answer = walk_bounds::<EXPLAIN>(line, language, open_comment, open_str_symbol, buffers,
+                spans, &cancelled, &mut opener_inside_a_comment);
+        let Some(at) = opener_inside_a_comment else { return answer };
+        cancelled.push(at);
+        spans.truncate(spans_at_entry);
+    }
+}
+
+// Reads one line that holds at least one searched byte. When 'opener_inside_a_comment' comes back
+// filled, the resolution the line was read with is known to be wrong. The answer is then the
+// caller's to drop, and it reads the line again.
+fn walk_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
+    open_str_symbol: Option<u8>, buffers: &mut ScanBuffers, spans: &mut Vec<Span>,
+    cancelled: &[usize], opener_inside_a_comment: &mut Option<usize>)
+-> (LineInfo, OpenedHere)
+{
     scan_line(line, language, buffers);
-    resolve_string_delimiters(language, open_str_symbol, buffers);
+    let swallowing_opener = resolve_string_delimiters(language, open_str_symbol, buffers, cancelled);
     let ScanBuffers { strings: str_indices, string_symbols: str_symbols, comments: comment_indices,
             com_starts: com_start_indices, com_ends: com_end_indices, code_ranges, .. } = buffers;
 
@@ -1701,6 +1725,8 @@ fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment
 
     let (mut start_com_counter, mut end_com_counter, mut str_counter, mut comment_counter) = (0,0,0,0);
     let (mut open_com_m, mut is_str_open_m) = (open_comment, open_str_symbol.is_some());
+    // Where the open comment began, zero for one carried in from an earlier line
+    let mut comment_from = 0;
     let mut opened = OpenedHere::default();
     // Where the span being recorded for '--explain' began. Zero serves whichever of the three kinds
     // the line starts inside, and every transition below moves it past the span it just noted.
@@ -1828,6 +1854,11 @@ fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment
             last_symbol_index = closed_at;
             let end_level = if leveled { carried as u8 } else { 0 };
             let index_after = last_symbol_index + language.comment_end_len(open_pair, end_level);
+            // Everything this comment holds is text, so an opener that swallowed the line from
+            // inside it read the rest of the line with a string that was never there
+            if swallowing_opener.is_some_and(|at| at >= comment_from && at < index_after) {
+                *opener_inside_a_comment = swallowing_opener;
+            }
             if index_after >= line.len() {
                 note_span::<EXPLAIN>(spans, region_from, line.len(), SpanKind::Comment);
                 return (LineInfo::of(!code_ranges.is_empty(), has_string_literal), OpenedHere::default());
@@ -1889,6 +1920,7 @@ fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment
 
                 open_com_m = Some((this_symbol,
                         if language.comment_is_leveled(this_symbol) { this_level as u32 } else { 1 }));
+                comment_from = this_index;
                 opened.comment = true;
                 start_com_counter += 1;
                 last_symbol_index = this_index;
@@ -2056,28 +2088,42 @@ fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher
 // Only the symbol that opened a string can close it, so anything of another kind in between is
 // text. A pair whose halves differ splits the rule in two: its opener cannot close and its closer
 // cannot open, so a stray '"#' sitting in code is text and not the start of anything.
-fn resolve_string_delimiters(language: &Language, open_str_symbol: Option<u8>, buffers: &mut ScanBuffers) {
+// Answers with the position of an opener that closes with different text, opened here, dropped at
+// least one later symbol for being unable to close it, and was still open when the line ended.
+// Those drops are the ones that cannot be trusted, since an opener written inside a comment leaves
+// nothing to read the rest of the line with. An opener named in 'cancelled' is passed over.
+fn resolve_string_delimiters(language: &Language, open_str_symbol: Option<u8>,
+    buffers: &mut ScanBuffers, cancelled: &[usize]) -> Option<usize>
+{
     let ScanBuffers { raw_strings, strings, string_symbols, .. } = buffers;
 
     let mut open = open_str_symbol;
     let mut consumed_up_to = 0;
+    let mut opened_at = None;
+    let mut dropped_a_symbol = false;
 
     for &(at, symbol, role) in raw_strings.iter() {
         // What sits inside a symbol that was already taken is part of it, not a symbol of its own
-        if at < consumed_up_to {
+        if at < consumed_up_to || (role == ROLE_OPEN && cancelled.contains(&at)) {
             continue;
         }
         let length = match open {
             Some(open_symbol) => {
-                if open_symbol != symbol || role == ROLE_OPEN { continue; }
+                if open_symbol != symbol || role == ROLE_OPEN {
+                    dropped_a_symbol = true;
+                    continue;
+                }
                 open = None;
+                opened_at = None;
                 language.get_string_pair_of(symbol).1.len()
             }
             None => {
-                // A closer opens nothing, and neither does a raw symbol the language escaped:
-                // outside a string there is nothing for the escape to be an ordinary byte of
+                // A closer opens nothing, and neither does a raw symbol the language escaped.
+                // Outside a string there is nothing for the escape to be an ordinary byte of
                 if role == ROLE_CLOSE || role == ROLE_RAW_ESCAPED { continue; }
                 open = Some(symbol);
+                opened_at = (role == ROLE_OPEN).then_some(at);
+                dropped_a_symbol = false;
                 language.get_string_pair_of(symbol).0.len()
             }
         };
@@ -2085,6 +2131,7 @@ fn resolve_string_delimiters(language: &Language, open_str_symbol: Option<u8>, b
         strings.push(at);
         string_symbols.push(symbol);
     }
+    opened_at.filter(|_| dropped_a_symbol)
 }
 
 // When a comment symbol and a multiline start overlap only one of them is real: whichever begins
@@ -2224,7 +2271,7 @@ mod tests {
     fn str_delimiters(line: &str, language: &Language, open_str_symbol: Option<u8>) -> (Vec<usize>, Vec<u8>) {
         let mut buffers = ScanBuffers::default();
         scan_line(line, language, &mut buffers);
-        resolve_string_delimiters(language, open_str_symbol, &mut buffers);
+        resolve_string_delimiters(language, open_str_symbol, &mut buffers, &[]);
         (buffers.strings, buffers.string_symbols)
     }
 
@@ -3108,10 +3155,32 @@ mod tests {
                 bounds_multi(r#"say "quoted" more"#, &RUST_RAW, None, Some(1)));
         assert_eq!(TextInfo::none_all(true), bounds_multi(r##"done"#"##, &RUST_RAW, None, Some(1)));
 
-        // a closer with nothing open is not a delimiter: the quote of '"#"' opens an ordinary
+        // a closer with nothing open is not a delimiter. The quote of '"#"' opens an ordinary
         // string holding a '#', which is what that line means in Rust
         assert_eq!(TextInfo::from_slice_w_literal("let s = ;"),
                 bounds_multi(r##"let s = "#";"##, &RUST_RAW, None, None));
+    }
+
+    // An opener whose closer is written differently keeps every quote after it, since none of them
+    // can end it. Inside a comment the opener is text, and throwing the rest of the line away
+    // leaves the real string unread, so a comment symbol inside it opens a block that runs on.
+    #[test]
+    fn a_paired_opener_written_inside_a_comment_opens_nothing() {
+        // Where it stands in code it opens as it always did, with a comment earlier on the line.
+        // These two are what a rule that cancelled every opener behind a comment would break.
+        assert_eq!(TextInfo::new(Some(" let a = ".to_owned()), true, None, Some(1)),
+                bounds_multi(r##"/* c */ let a = r#"open "quoted"##, &RUST_RAW, None, None));
+        assert_eq!(TextInfo::from_slice_w_literal(" let a = ; done"),
+                bounds_multi(r##"/* c */ let a = r#"a /* b"#; done"##, &RUST_RAW, None, None));
+
+        assert_eq!(TextInfo::from_slice_w_literal(" let s = ;"),
+                bounds_multi(r##"/* r#" */ let s = "/*";"##, &RUST_RAW, None, None));
+        // the comment may have opened on an earlier line and closed on this one
+        assert_eq!(TextInfo::from_slice_w_literal(" let s = ;"),
+                bounds_multi(r##" r#" still comment */ let s = "/*";"##, &RUST_RAW, Some(0), None));
+        // what the lost string held counts as code, so its words reach the keyword count
+        assert_eq!(TextInfo::from_slice_w_literal(" let s = ;"),
+                bounds_multi(r##"/* r#" */ let s = "aaa struct bbb";"##, &RUST_RAW, None, None));
     }
 
     #[test]

@@ -1,5 +1,11 @@
 v3.2.0 - unreleased
 
+Bugfixes:
+  -> A string opener written inside a comment, such as Rust's 'r#"' or C++'s 'R"(', no longer costs
+      the rest of that line. The strings after it are read as strings again, so a comment symbol
+      written inside one of them opens nothing and the words inside one stay out of the keyword
+      counts.
+
 Other:
   -> Counting is faster. Each file is now split into lines and scanned for its symbols in one pass
       over 64-byte blocks, where it used to take a search per line. On Linux the walk no longer asks
