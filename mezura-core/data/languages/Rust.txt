@@ -12,10 +12,14 @@ Character literal symbols
 Multi line string symbols
 "
 
-Paired string openers
-r" r#"
-Paired string closers
-" "#
+Counted string openers
+r#*" br#*" cr#*"
+Counted string closers
+"#* "#* "#*
+Counted string limits
+255 255 255
+Counted string boundaries
+identifier identifier identifier
 
 Escape character
 \

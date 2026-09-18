@@ -169,24 +169,24 @@ fn spell_out_carried(carried: CarriedRecord, language: Option<&Language>) -> Car
         CarriedRecord::Nothing => Carried::Nothing,
         CarriedRecord::Continuation { since_line } => Carried::CommentContinuation { since_line },
         CarriedRecord::Str { symbol, since_line, ends } => Carried::Str {
-            opener: language.map(|x| x.get_string_pair_of(symbol).0.to_owned()).unwrap_or_default(),
+            opener: language.map(|x| symbol.opener(x)).unwrap_or_default(),
             since_line, ends_on_this_line: ends
         },
         CarriedRecord::Comment { symbol, depth, since_line, ends } => {
             let (opener, depth) = language.map(|x| spell_comment_opener(x, symbol, depth))
-                    .unwrap_or((String::new(), depth));
+                    .unwrap_or((String::new(), u32::try_from(depth).unwrap_or(u32::MAX)));
             Carried::Comment { opener, depth, since_line, ends_on_this_line: ends }
         }
     }
 }
 
-fn spell_comment_opener(language: &Language, symbol: u8, depth: u32) -> (String, u32) {
+fn spell_comment_opener(language: &Language, symbol: u8, depth: usize) -> (String, u32) {
     match language.get_comment_pair_of(symbol) {
-        CommentPair::Plain { start, .. } | CommentPair::Nesting { start, .. } => (start.to_owned(), depth),
+        CommentPair::Plain { start, .. } | CommentPair::Nesting { start, .. } => (start.to_owned(), u32::try_from(depth).unwrap_or(u32::MAX)),
         // The walk carries the level in the depth slot, and the filler is the '=' the scan plan
         // counts, so the opener comes back exactly as written
         CommentPair::Leveled(pair) => (format!("{}{}{}", pair.start_prefix,
-                "=".repeat(depth as usize), pair.start_suffix as char), 1)
+                "=".repeat(depth), pair.start_suffix as char), 1)
     }
 }
 
@@ -252,6 +252,27 @@ mod tests {
         assert_eq!("Lua", explained.language);
         assert_eq!(&Carried::Comment { opener: "--[==[".to_owned(), depth: 1, since_line: 2,
                 ends_on_this_line: false }, &explained.lines[2].carried);
+    }
+
+    #[test]
+    fn counted_strings_explain_the_exact_opener_and_each_reopening() {
+        let explained = explain_in_own_dir("mezura-explain-counted", "a.rs",
+                "let a = br##\"start\n\nend\"##; let b = cr#\"next\nend\"#; // comment\n// comment\n");
+        assert_eq!(Carried::Str { opener: "br##\"".to_owned(), since_line: 1, ends_on_this_line: false }, explained.lines[1].carried);
+        assert_eq!(Carried::Str { opener: "br##\"".to_owned(), since_line: 1, ends_on_this_line: true }, explained.lines[2].carried);
+        assert_eq!(Carried::Str { opener: "cr#\"".to_owned(), since_line: 3, ends_on_this_line: true }, explained.lines[3].carried);
+        assert_eq!(Carried::Nothing, explained.lines[4].carried);
+        assert_eq!(LineClass::BlankInString, explained.lines[1].class);
+        assert_eq!(Span { from: 8, to: 18, kind: crate::SpanKind::String }, explained.lines[0].spans[1]);
+    }
+
+    #[test]
+    fn lua_counted_explanations_keep_levels_above_255() {
+        let equals = "=".repeat(256);
+        let contents = format!("local x = [{equals}[begin\nend]{equals}]\n--[{equals}[comment\nend]{equals}]\n");
+        let explained = explain_in_own_dir("mezura-explain-lua-counted", "a.lua", &contents);
+        assert_eq!(Carried::Str { opener: format!("[{equals}["), since_line: 1, ends_on_this_line: true }, explained.lines[1].carried);
+        assert_eq!(Carried::Comment { opener: format!("--[{equals}["), depth: 1, since_line: 3, ends_on_this_line: true }, explained.lines[3].carried);
     }
 
     #[test]

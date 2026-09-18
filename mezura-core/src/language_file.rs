@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::{Keyword, Language, LeveledPair, LineContinuation, NestedLanguage, StringRules};
+use crate::{CountedString, Keyword, Language, LeveledPair, LineContinuation, NestedLanguage, StringRules};
 use crate::engine::identity::ClaimKind;
 
 /// What the language conflicts file decides. It names who wins an extension or a file name that
@@ -102,6 +102,10 @@ const MULTILINE_STRINGS        : &str = "Multi line string symbols";
 const MULTILINE_RAW_STRINGS    : &str = "Multi line raw string symbols";
 const PAIRED_STRING_OPENERS    : &str = "Paired string openers";
 const PAIRED_STRING_CLOSERS    : &str = "Paired string closers";
+const COUNTED_STRING_OPENERS: &str = "Counted string openers";
+const COUNTED_STRING_CLOSERS: &str = "Counted string closers";
+const COUNTED_STRING_LIMITS: &str = "Counted string limits";
+const COUNTED_STRING_BOUNDARIES: &str = "Counted string boundaries";
 const CHARACTER_LITERALS       : &str = "Character literal symbols";
 const ESCAPE_CHARACTER         : &str = "Escape character";
 const ESCAPES_NOTHING          : &str = "none";
@@ -366,6 +370,31 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         header = read_next_header(lines)?;
     }
 
+    let mut counted_strings = Vec::new();
+    if header == COUNTED_STRING_OPENERS {
+        let openers = split_line_on_whitespace(&read_value_line(lines)?);
+        if openers.is_empty() || read_next_header(lines)? != COUNTED_STRING_CLOSERS { return None; }
+        let closers = split_line_on_whitespace(&read_value_line(lines)?);
+        if read_next_header(lines)? != COUNTED_STRING_LIMITS { return None; }
+        let limits = split_line_on_whitespace(&read_value_line(lines)?);
+        if read_next_header(lines)? != COUNTED_STRING_BOUNDARIES { return None; }
+        let boundaries = split_line_on_whitespace(&read_value_line(lines)?);
+        if [closers.len(), limits.len(), boundaries.len()].iter().any(|n| *n != openers.len()) {
+            return None;
+        }
+        for (((open, close), limit), boundary) in openers.iter().zip(&closers).zip(&limits).zip(&boundaries) {
+            let limit = if limit == "none" { None } else { Some(limit.parse().ok()?) };
+            let mut rule = CountedString::of(open, close, limit)?;
+            match boundary.as_str() {
+                "identifier" => rule = rule.with_identifier_boundary(),
+                "none" => (),
+                _ => return None,
+            }
+            counted_strings.push(rule);
+        }
+        header = read_next_header(lines)?;
+    }
+
     // What cancels a string symbol, which is a fact about the language and not about the symbol.
     // Required of any language declaring a string of any kind, so that a file states it instead of
     // inheriting whatever the parser last happened to do; 'none' is how a language says nothing
@@ -373,7 +402,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
     let mut escape_character = None;
     let declares_a_string = !string_symbols.is_empty() || !char_literals.is_empty()
             || !multiline_strings.is_empty() || !raw_multiline_strings.is_empty()
-            || !string_pairs.is_empty();
+            || !string_pairs.is_empty() || !counted_strings.is_empty();
     if header == ESCAPE_CHARACTER {
         let value = read_value_line(lines)?;
         if value != ESCAPES_NOTHING {
@@ -539,7 +568,8 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
             .with_char_literals(char_literals)
             .with_multiline_strings(multiline_strings)
             .with_raw_multiline_strings(raw_multiline_strings)
-            .with_string_pairs(&string_pairs);
+            .with_string_pairs(&string_pairs)
+            .with_counted_strings(&counted_strings);
 
     let mut language = Language::new(lang_name, extensions, strings, comment_symbols,
             &multiline_comments.iter().map(|(start, end): &(String, String)| (start.as_str(), end.as_str()))
@@ -726,6 +756,18 @@ mod tests {
 
     // The real shipped files and not a hand-written string that copies the format, which would be a
     // second source of truth that rots.
+    #[test]
+    fn counted_string_blocks_validate_all_lists_and_shapes() {
+        let good = "Language\nTest\n\nExtensions\nzz\n\nString symbols\n\n\nCounted string openers\nr#*\"\nCounted string closers\n\"#*\nCounted string limits\n255\nCounted string boundaries\nidentifier\n\nEscape character\nnone\n\nComment symbols\n//\n";
+        let language = parse_language(good).unwrap();
+        assert_eq!(1, language.strings.get_counted_strings().len());
+        for bad in [good.replace("255", "many"), good.replace("255", "255 255"),
+                good.replace("identifier", "word"), good.replace("r#*\"", "r##*\""),
+                good.replace("Counted string closers", "Wrong header")] {
+            assert!(parse_language(&bad).is_none(), "{bad}");
+        }
+    }
+
     #[test]
     fn the_parser_reads_the_shipped_files_and_a_blank_line_never_costs_a_block() {
         let (languages, _) = parse_languages_in_dir(LANGUAGES_DIR).unwrap();

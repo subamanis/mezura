@@ -212,16 +212,16 @@ impl Language {
 
     // The whole width of one occurrence, which for a leveled pair depends on how many '=' it
     // carried; a plain or nesting pair ignores the level
-    pub(crate) fn comment_start_len(&self, symbol: u8, level: u8) -> usize {
+    pub(crate) fn comment_start_len(&self, symbol: u8, level: usize) -> usize {
         match self.get_comment_pair_of(symbol) {
-            CommentPair::Leveled(pair) => pair.start_prefix.len() + level as usize + 1,
+            CommentPair::Leveled(pair) => pair.start_prefix.len() + level + 1,
             CommentPair::Plain { start, .. } | CommentPair::Nesting { start, .. } => start.len()
         }
     }
 
-    pub(crate) fn comment_end_len(&self, symbol: u8, level: u8) -> usize {
+    pub(crate) fn comment_end_len(&self, symbol: u8, level: usize) -> usize {
         match self.get_comment_pair_of(symbol) {
-            CommentPair::Leveled(pair) => pair.end_prefix.len() + level as usize + 1,
+            CommentPair::Leveled(pair) => pair.end_prefix.len() + level + 1,
             CommentPair::Plain { end, .. } | CommentPair::Nesting { end, .. } => end.len()
         }
     }
@@ -267,19 +267,20 @@ pub struct StringRules {
     escape : Option<u8>,
     symbols : Vec<String>,
     char_literals : Vec<String>,
-    multiline : Vec<MultilineString>
+    multiline : Vec<MultilineString>,
+    counted: Vec<CountedString>
 }
 
 impl StringRules {
     /// Rules whose strings are escaped by the given byte, usually a backslash.
     pub fn escaping_with(escape: u8) -> StringRules {
         StringRules { escape: Some(escape), symbols: Vec::new(), char_literals: Vec::new(),
-                multiline: Vec::new() }
+                multiline: Vec::new(), counted: Vec::new() }
     }
 
     /// Rules for the languages that escape a quote by doubling it and have no escape byte at all.
     pub fn escaping_nothing() -> StringRules {
-        StringRules { escape: None, symbols: Vec::new(), char_literals: Vec::new(), multiline: Vec::new() }
+        StringRules { escape: None, symbols: Vec::new(), char_literals: Vec::new(), multiline: Vec::new(), counted: Vec::new() }
     }
 
     /// Adds quotes that open a string ending with its own line.
@@ -314,6 +315,17 @@ impl StringRules {
         self
     }
 
+    /// Adds raw multiline strings whose delimiter contains a counted run of one byte.
+    pub fn with_counted_strings(mut self, rules: &[CountedString]) -> Self {
+        self.counted.extend_from_slice(rules);
+        self
+    }
+
+    /// The dynamically counted raw string rules.
+    pub fn get_counted_strings(&self) -> &[CountedString] {
+        &self.counted
+    }
+
     /// The byte that cancels the symbol after it, if this language has one.
     pub fn get_escape(&self) -> Option<u8> {
         self.escape
@@ -332,6 +344,61 @@ impl StringRules {
     /// The forms whose string may run past the end of its line.
     pub fn get_multiline_strings(&self) -> &[MultilineString] {
         &self.multiline
+    }
+}
+
+/// A raw string with one counted run in each delimiter, such as Rust's `r#*"`
+/// and `"#*`, or Lua's `[=*[` and `]=*]`. The `*` marks repetition of its
+/// preceding ASCII byte, including zero repetitions. A closer with no suffix
+/// consumes the required count and leaves any additional repeated bytes in code.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CountedString {
+    pub(crate) open_prefix: String,
+    pub(crate) open_suffix: u8,
+    pub(crate) close_prefix: u8,
+    pub(crate) close_suffix: Option<u8>,
+    pub(crate) filler: u8,
+    pub(crate) max_count: Option<usize>,
+    pub(crate) identifier_boundary: bool,
+}
+
+impl CountedString {
+    /// Validates a pair with a nonempty opening prefix, one opening suffix byte,
+    /// one closing prefix byte, and zero or one closing suffix byte. Both halves
+    /// must contain exactly one occurrence of the same `byte*` marker.
+    pub fn of(open: &str, close: &str, max_count: Option<usize>) -> Option<Self> {
+        fn split(text: &str) -> Option<(&str, u8, &str)> {
+            let at = text.find('*')?;
+            if at == 0 || text[at + 1..].contains('*') { return None; }
+            let filler = text.as_bytes()[at - 1];
+            if !filler.is_ascii() || filler == b'*' { return None; }
+            Some((&text[..at - 1], filler, &text[at + 1..]))
+        }
+        let (prefix, filler, suffix) = split(open)?;
+        let (end_prefix, end_filler, end_suffix) = split(close)?;
+        if prefix.is_empty() || !prefix.is_ascii() || suffix.len() != 1
+                || !suffix.is_ascii() || end_prefix.len() != 1 || !end_prefix.is_ascii()
+                || end_suffix.len() > 1 || !end_suffix.is_ascii() || filler != end_filler
+                || suffix.as_bytes()[0] == filler || end_prefix.as_bytes()[0] == filler
+                || prefix.as_bytes().last() == Some(&filler)
+                || end_suffix.as_bytes().first() == Some(&filler) {
+            return None;
+        }
+        Some(Self { open_prefix: prefix.to_owned(), open_suffix: suffix.as_bytes()[0],
+            close_prefix: end_prefix.as_bytes()[0], close_suffix: end_suffix.as_bytes().first().copied(),
+            filler, max_count, identifier_boundary: false })
+    }
+
+    /// Requires the opening prefix not to follow a Unicode identifier continuation
+    /// character. This local boundary check is not a complete language lexer.
+    pub fn with_identifier_boundary(mut self) -> Self {
+        self.identifier_boundary = true;
+        self
+    }
+
+    pub(crate) fn opener(&self, count: usize) -> String {
+        format!("{}{}{}", self.open_prefix, (self.filler as char).to_string().repeat(count),
+                self.open_suffix as char)
     }
 }
 
@@ -877,6 +944,17 @@ mod tests {
     }
 
     // The parser cannot produce these; they come off a log file whose head was lost.
+    #[test]
+    fn counted_string_rules_reject_shapes_that_cannot_be_recognized() {
+        for (open, close) in [("r##*\"", "\"#*"), ("[=*[xx", "]=*]"),
+                ("[=*[", "]=*="), ("r#*", "\"#*"), ("r#*\"", "\"=*"),
+                ("r#*\"*", "\"#*"), ("rλ*\"", "\"λ*")] {
+            assert!(CountedString::of(open, close, None).is_none(), "{open}, {close}");
+        }
+        assert!(CountedString::of("r#*\"", "\"#*", Some(255)).is_some());
+        assert!(CountedString::of("[=*[", "]=*]", None).is_some());
+    }
+
     #[test]
     fn counts_that_do_not_add_up_give_no_extra_lines_rather_than_a_panic() {
         assert_eq!(0, stats_of(0, 0, 900).calculate_extra_lines(CountingModel::Content));

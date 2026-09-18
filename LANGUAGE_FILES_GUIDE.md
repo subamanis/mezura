@@ -64,6 +64,10 @@ Three things to know before you start:
 | `Multi line raw string symbols` *(opt)* | Crosses lines, nothing escapes | `` ` `` |
 | `Paired string openers` *(opt)* | Opens with one symbol, closes with another | `r#" @"` |
 | `Paired string closers` | Their closers, in the same order | `"# "` |
+| `Counted string openers` *(opt)* | Raw openers with one repeated-byte marker | `r#*" br#*" cr#*"` |
+| `Counted string closers` | Matching closer shapes | `"#* "#* "#*` |
+| `Counted string limits` | Maximum counts, or `none` | `255 255 255` |
+| `Counted string boundaries` | Prefix boundary: `identifier` or `none` | `identifier identifier identifier` |
 | `Escape character` | Required by any language that declares a string. See below | `\` |
 | `Line continuation` *(opt)* | Joins a line to the next when it ends the line | `\` |
 | `Continues` | What the joining reaches: `strings`, `comments`, or both | `strings comments` |
@@ -106,6 +110,7 @@ a whole string ending in a backslash, because a backtick string escapes nothing.
 | Crosses lines, backslash escapes | `Multi line string symbols` |
 | Crosses lines, nothing escapes | `Multi line raw string symbols` |
 | Different symbol at each end | `Paired string openers` + `closers` |
+| Counted delimiter | `Counted string openers` + `closers` + `limits` + `boundaries` |
 
 **A symbol goes in exactly one of them.** Declaring it twice refuses the file.
 
@@ -114,6 +119,30 @@ Odin and D and does escape in a JavaScript template literal. `"""` is raw in Kot
 escaping in Java, Swift and Python. Look it up rather than guessing, because getting it wrong is
 silent: a `` `C:\` `` in the wrong block leaves the string open to the end of the file and every
 comment under it counts as code.
+
+## Counted raw strings
+
+Counted rules follow the fixed string blocks and precede `Escape character`. Their four
+lists have matching lengths. `byte*` marks zero or more repetitions of one ASCII byte;
+all other characters are literal. Rust declares `r#*"`, `br#*"`, and `cr#*"` with the
+closer `"#*`, limit `255`, and boundary `identifier`. Lua declares `[=*[` with closer
+`]=*]`, limit `none`, and boundary `none`. These forms cross lines and ignore escapes.
+
+The opener has a nonempty fixed prefix and one suffix byte. The closer has one prefix
+byte and at most one suffix byte. Fixed bytes touching the repeated run must differ
+from its repeated byte. A closer with a suffix requires the same count before that
+suffix; without a suffix, it consumes the opening count and leaves extra bytes outside.
+Thus `]===]` cannot close Lua level two, while `"###` closes Rust level two and leaves `#`.
+
+`identifier` rejects a prefix immediately following a Unicode identifier continuation
+character. This is a local boundary check, not a full Rust lexer: raw identifiers,
+lifetimes, and literal suffixes can still require token context. Invalid source is
+counted best-effort, not diagnosed. Counted rules do not implement C++ named raw
+delimiters, C# interpolation/raw-string line rules, or heredocs.
+
+The library exposes the same rules through `CountedString::of` and
+`StringRules::with_counted_strings`; existing fixed-pair builders remain available.
+Definitions must fit fewer than 65,535 scan slots (a counted rule uses two).
 
 ## The escape character
 
@@ -150,8 +179,8 @@ Multi line comment end
 ]=*]
 ```
 
-That is the only place in the format where characters do not stand for themselves, and it works
-only in these two blocks.
+This comment marker applies only in these two blocks. Counted string blocks use the
+separate repeated-byte notation described above.
 
 ## When a symbol is part of something longer
 

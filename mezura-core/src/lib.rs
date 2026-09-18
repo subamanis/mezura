@@ -50,7 +50,7 @@ pub mod languages;
 pub mod render;
 pub mod warnings;
 
-pub use domain::{Bucket, CountingModel, Keyword, Language, LeveledPair, LineClass, LineClasses,
+pub use domain::{CountedString, Bucket, CountingModel, Keyword, Language, LeveledPair, LineClass, LineClasses,
         LineContinuation, MultilineString, NestedLanguage, Span, SpanKind, Stats, StringRules};
 pub use engine::config::{EngineConfig, ForcedLanguages, LanguageNames, ScopedByModule, Target,
         Threads, format_module_scope, split_off_module_scope};

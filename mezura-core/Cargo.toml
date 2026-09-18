@@ -13,6 +13,7 @@ categories = ["development-tools", "text-processing"]
 
 [dependencies]
 memchr = "2.8"
+unicode-ident = "1.0"
 globset = "0.4.19"
 ignore = "0.4.20"
 glob = "0.3.3"

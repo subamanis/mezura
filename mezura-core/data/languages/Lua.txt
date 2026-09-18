@@ -10,10 +10,14 @@ lua
 String symbols
 " '
 
-Paired string openers
-[[
-Paired string closers
-]]
+Counted string openers
+[=*[
+Counted string closers
+]=*]
+Counted string limits
+none
+Counted string boundaries
+none
 
 Escape character
 \

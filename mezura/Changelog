@@ -2,6 +2,10 @@ v3.1.1 - 2026-09-11
 
   35,018 Total lines  -  22,134 Code lines
 
+Pending next release (not included in v3.1.1):
+  -> Keep string delimiters inside comments from changing later counts; support Rust raw strings
+      with 0-255 hashes and Lua long strings and comments above level 255.
+
 Bugfixes:
   -> A file larger than 2 GB is now counted whole on Linux and macOS, where it was being cut short
       at 2 GB.

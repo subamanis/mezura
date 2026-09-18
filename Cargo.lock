@@ -537,6 +537,7 @@ dependencies = [
  "libc",
  "memchr",
  "num_cpus",
+ "unicode-ident",
 ]
 
 [[package]]

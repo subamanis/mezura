@@ -589,12 +589,12 @@ A file with **no extension at all** is named by the same `#!` line, so a script 
 
 **[Language choices](https://github.com/subamanis/mezura/blob/HEAD/LANGUAGE_CHOICES.md)** is the short page behind those answers: which language gets each contested extension, and which files are left out of the count.
 
-**[The language files guide](https://github.com/subamanis/mezura/blob/HEAD/LANGUAGE_FILES_GUIDE.md)** is a page of its own: a whole language file to copy, every block with an example, which of the five string blocks a symbol belongs in, and the two mistakes that cost people the most time.
+**[The language files guide](https://github.com/subamanis/mezura/blob/HEAD/LANGUAGE_FILES_GUIDE.md)** is a page of its own: a whole language file to copy, every block with an example, which of the string blocks a symbol belongs in, and the two mistakes that cost people the most time.
 
 
 ## Accuracy and limitations
 
-The program is able to understand and parse correctly arbitrarily complex code structures with intertwined strings and comments. This way it can identify if a line contains something other than a comment, even if the comment is partitioned in multiple positions and it can identify valid keywords, that are not inside strings or comments.
+The program follows each language definition to separate code, strings and comments, including multiple regions on one line. It counts keywords only in the code regions. This is a line counter, not a complete compiler lexer.
 For example in a line like ```/*class"*/" class" aclass```, it will not count "class" as a keyword since the first is inside a comment, the second inside a string and the third has a prefix.
 Additionally:
 - It checks for escaped characters, for example ```/"``` will not be counted as a string symbol
@@ -605,7 +605,9 @@ Additionally:
 
 - A comment written inside another comment does not end it early. This is how OCaml, Rust, Haskell, F#, Scala, Kotlin, Swift, Julia, Elm, Lisp, Scheme, MATLAB and WebAssembly text read their own code, so commenting out a block that already had comments in it counts as the comment it is. In C and the languages that follow it the first ```*/``` really does end the comment, and that is what the program does there.
 
-- Lua's ```--[==[``` comments are read to their real end, so a ```]]``` written inside one is text.
+- Lua's long strings and comments match their full delimiter level, including levels above 255. A ```]]``` inside ```[==[``` or ```--[==[``` is text.
+
+- Rust's ```r```, ```br``` and ```cr``` raw strings support zero through 255 hashes. Interior quotes and comment markers remain string content until the matching closer.
 
 - A comment that ends and another that begins on the same line (```]]--[[``` in Lua, ```--><!--``` in HTML) are read as two comments.
 
@@ -623,7 +625,9 @@ With that said, it is important to mention the following limitations:
 
 - Hard links count twice. Symbolic links and nested targets are dropped, but a hard link is indistinguishable from an ordinary file.
 
-- A string delimiter invented on the spot cannot be declared: heredocs, Rust's ```r##"..."##``` past one hash, Lua's ```[=[ ]=]``` past the plain form. mezura keeps counting quotes inside them, so one apostrophe looks like a string opening. In languages whose strings may cross lines (Rust, Ruby, the shells, PHP, SQL) that runs on until the next quote.
+- Counted delimiters cover Rust raw strings and Lua long strings. Heredocs, C++ raw strings with nonempty named delimiters, and C# variable-quote/interpolated raw-string grammar remain unsupported. Quotes and comment markers inside those forms can therefore affect the counts.
+
+- Rust raw-string prefixes use a Unicode identifier-continuation boundary check. Cases requiring earlier token context, including raw identifiers, lifetimes and literal suffixes, are not fully lexed; malformed source is counted best-effort.
 
 - A comment opener inside a regex literal, like the ```/*``` in ```/a[/*]b/```, opens a comment. A regex inside a string is fine.
 
