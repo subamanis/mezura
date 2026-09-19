@@ -5,6 +5,9 @@
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::{__m256i, _mm256_cmpeq_epi8, _mm256_movemask_epi8, _mm256_or_si256,
         _mm256_set1_epi8, _mm256_set_epi64x};
+#[cfg(target_arch = "aarch64")]
+use std::arch::aarch64::{uint8x16_t, vandq_u8, vceqq_u8, vcombine_u8, vcreate_u8, vdupq_n_u8, vgetq_lane_u64,
+        vmaxvq_u8, vorrq_u8, vpaddq_u8, vreinterpretq_u64_u8};
 
 pub(crate) const BLOCK_BYTES : usize = 64;
 
@@ -18,10 +21,12 @@ pub(crate) struct Masks {
 #[derive(Debug, Clone)]
 pub(crate) struct MaskFinder {
     is_searched: [bool; 256],
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
     searched: Box<[u8]>,
     #[cfg(target_arch = "x86_64")]
     avx2: bool,
+    #[cfg(target_arch = "aarch64")]
+    neon: bool,
 }
 
 impl MaskFinder {
@@ -30,10 +35,12 @@ impl MaskFinder {
         for &byte in searched { is_searched[byte as usize] = true; }
         MaskFinder {
             is_searched,
-            #[cfg(target_arch = "x86_64")]
+            #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
             searched: searched.into(),
             #[cfg(target_arch = "x86_64")]
             avx2: std::is_x86_feature_detected!("avx2"),
+            #[cfg(target_arch = "aarch64")]
+            neon: std::arch::is_aarch64_feature_detected!("neon"),
         }
     }
 
@@ -47,6 +54,10 @@ impl MaskFinder {
             // requirement of calling a function compiled for it
             return unsafe { scan_block_avx2(block, &self.searched) };
         }
+        #[cfg(target_arch = "aarch64")]
+        if self.neon && block.len() == BLOCK_BYTES {
+            return unsafe { scan_block_neon(block, &self.searched) };
+        }
         scan_block_scalar(block, &self.is_searched)
     }
 }
@@ -58,6 +69,10 @@ pub(crate) fn is_ascii(bytes: &[u8]) -> bool {
         // Checked on the line above, which is the whole requirement of calling a function
         // compiled for the feature
         return unsafe { is_ascii_avx2(bytes) };
+    }
+    #[cfg(target_arch = "aarch64")]
+    if std::arch::is_aarch64_feature_detected!("neon") {
+        return unsafe { is_ascii_neon(bytes) };
     }
     bytes.is_ascii()
 }
@@ -110,6 +125,49 @@ fn load_32(bytes: &[u8]) -> __m256i {
 #[target_feature(enable = "avx2")]
 fn gather_bits(low: __m256i, high: __m256i) -> u64 {
     (_mm256_movemask_epi8(low) as u32 as u64) | ((_mm256_movemask_epi8(high) as u32 as u64) << 32)
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+fn is_ascii_neon(bytes: &[u8]) -> bool {
+    let mut high_bits = vdupq_n_u8(0);
+    let mut blocks = bytes.chunks_exact(16);
+    for block in &mut blocks {
+        high_bits = vorrq_u8(high_bits, load_16(block));
+    }
+    vmaxvq_u8(high_bits) < 0x80 && blocks.remainder().is_ascii()
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+fn scan_block_neon(block: &[u8], searched: &[u8]) -> Masks {
+    let quarters = [load_16(&block[..16]), load_16(&block[16..32]), load_16(&block[32..48]), load_16(&block[48..64])];
+    let newline = vdupq_n_u8(b'\n');
+    let newlines = gather_bits(quarters.map(|quarter| vceqq_u8(quarter, newline)));
+    let mut hits = [vdupq_n_u8(0); 4];
+    for &byte in searched {
+        let wanted = vdupq_n_u8(byte);
+        for (hit, quarter) in hits.iter_mut().zip(quarters) {
+            *hit = vorrq_u8(*hit, vceqq_u8(quarter, wanted));
+        }
+    }
+    Masks { newlines, candidates: gather_bits(hits) }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+fn load_16(bytes: &[u8]) -> uint8x16_t {
+    let word = |at: usize| u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap());
+    vcombine_u8(vcreate_u8(word(0)), vcreate_u8(word(8)))
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+fn gather_bits(lanes: [uint8x16_t; 4]) -> u64 {
+    let bit_of_lane = vcombine_u8(vcreate_u8(0x8040_2010_0804_0201), vcreate_u8(0x8040_2010_0804_0201));
+    let [a, b, c, d] = lanes.map(|lane| vandq_u8(lane, bit_of_lane));
+    let halves = vpaddq_u8(vpaddq_u8(a, b), vpaddq_u8(c, d));
+    vgetq_lane_u64::<0>(vreinterpretq_u64_u8(vpaddq_u8(halves, halves)))
 }
 
 #[cfg(test)]
