@@ -14,6 +14,8 @@ Main changes:
 Bugfixes:
   -> A string opener written inside a comment, such as Rust's 'r#"' or C++'s 'R"(', no longer
       swallows the rest of that line.
+  -> The rows of the details table no longer spread apart because one language somewhere in it
+      has nested rows.
 
 Performance:
   -> Counting is measurably faster. Each file is now split into lines and scanned for its symbols in one pass

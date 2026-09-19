@@ -1529,15 +1529,16 @@ fn draw_aligned_table(theme: &Theme, columns: &[Column], rows: &[Vec<String>], k
     let mut rendered = rendered.into_iter();
     lines.push(rendered.next().unwrap_or_default());
     lines.push(theme.separator_header.paint(&SEPARATOR_LINE.repeat(table_width)).to_string());
-    // A blank line closes each module. Once anything hangs under a language the same blank closes
-    // each language, or one language's tree runs into the name of the next; a module's first
-    // language is not held away from the name it belongs to.
-    let has_sub_rows = kinds.iter().any(|kind| *kind == RowKind::Nested || *kind == RowKind::File);
+    // A blank line closes each module. The same blank sets apart a language carrying rows under it,
+    // above it and below its last one, or a tree runs into the name of the language next to it; a
+    // module's first language is not held away from the name it belongs to.
+    let carries_rows = |position: usize| matches!(kinds.get(position + 1), Some(RowKind::Nested | RowKind::File));
     let mut previous = None;
     for (position, (line, kind)) in rendered.zip(kinds.iter()).enumerate() {
         let gap_above = match kind {
             RowKind::Nested | RowKind::File => false,
-            RowKind::Language => has_sub_rows && previous != Some(RowKind::Module),
+            RowKind::Language => (carries_rows(position) || matches!(previous, Some(RowKind::Nested | RowKind::File)))
+                    && previous != Some(RowKind::Module),
             // Two notes are one paragraph, so only the first opens a gap
             RowKind::Note => previous != Some(RowKind::Note),
             RowKind::Module | RowKind::Total => grouped && previous != Some(RowKind::Note)
