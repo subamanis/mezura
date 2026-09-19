@@ -1,9 +1,10 @@
 // Reading one file and deciding what each of its lines is: code, comment, or neither.
 //
-// A line is scanned once for every symbol the language declares, in as few memchr passes as the
-// symbols allow, and what comes back are the positions of string delimiters, comment openers and the
-// two multiline markers. The rest of the file decides what those positions mean when they overlap,
-// which is where every language-specific trap lives.
+// The file is read once in blocks, and that pass says where every line ends and which bytes could
+// begin a symbol. A line then visits only the positions it found, and a line reached without it is
+// searched with memchr. What comes back are the positions of string delimiters, comment openers and
+// the two multiline markers. The rest of the file decides what those positions mean when they
+// overlap, which is where every language-specific trap lives.
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read as IoRead;
