@@ -124,3 +124,44 @@ jobs:
           files: artifacts/*
           fail_on_unmatched_files: true
           body_path: notes.md
+
+  # Last, because everything above can be run again and this cannot: a version handed to crates.io
+  # is there for good, and only a yank ever takes it back.
+  crates:
+    name: publish to crates.io
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # Each of the three crates names this workflow of this repository in its own crates.io
+      # settings, and this run is handed a token that dies with it. Nothing long lived is kept.
+      - name: Ask crates.io for a token
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      # The three versions move on their own, so the tag names one of them and says nothing about
+      # the other two. Each is asked for under its own version and one already up is passed over,
+      # which is what lets a re-pushed tag carry on from wherever a failed run stopped.
+      - name: Publish whichever of the three is not up yet
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          for crate in mezura-core mezura mezura-mcp; do
+            id=$(cargo pkgid -p "$crate")
+            version=${id##*[#@]}
+            answer=$(curl -sS --max-time 30 -H "User-Agent: mezura release workflow" \
+              "https://crates.io/api/v1/crates/$crate/$version")
+            if echo "$answer" | grep -q "\"num\":\"$version\""; then
+              echo "crates.io already holds $crate $version"
+            else
+              cargo publish -p "$crate"
+            fi
+          done
