@@ -530,9 +530,10 @@ pub(crate) struct ScanBuffers {
     strings: Vec<usize>,
     string_symbols: Vec<u8>,
     comments: Vec<usize>,
-    // Position, pair, and the level a leveled occurrence carried, zero for every other pair
-    com_starts: Vec<(usize, u8, u8)>,
-    com_ends: Vec<(usize, u8, u8)>,
+    // Position, pair, and the level a leveled occurrence carried, zero for every other pair. The
+    // level is as wide as the line allows, since neither Lua nor CMake bounds the run that sets it
+    com_starts: Vec<(usize, u8, u32)>,
+    com_ends: Vec<(usize, u8, u32)>,
     consumed: Vec<usize>,
     // Offsets into the line, where 'ParseBuffers::code_spans' holds offsets into the whole file
     code_ranges: Vec<(usize, usize)>,
@@ -659,11 +660,11 @@ fn take_symbols_at(at: usize, line_bytes: &[u8], plan: &ScanPlan, buffers: &mut 
             continue;
         }
         // The level is carried beside the position, so only an end with the same count answers it
-        let mut level = 0u8;
+        let mut level = 0u32;
         let mut width = slot.len as usize;
         if slot.filler != 0 {
             let mut cursor = start + slot.len as usize;
-            while line_bytes.get(cursor) == Some(&slot.filler) && level < u8::MAX {
+            while line_bytes.get(cursor) == Some(&slot.filler) {
                 cursor += 1;
                 level += 1;
             }
@@ -1660,8 +1661,7 @@ fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment
 
     // The strings are resolved before the comment boundaries are known, so an opener written inside
     // a comment can take a string with it and throw away every symbol after it on that line. When
-    // the walk finds one, the line is read again with that opener left alone and the answer of the
-    // first reading dropped. Measured over 5.8 million lines of Rust, no line needed a second one.
+    // the walk finds one, the line is read again with that opener left alone.
     let spans_at_entry = spans.len();
     let mut cancelled : Vec<usize> = Vec::new();
     loop {
@@ -1698,7 +1698,7 @@ fn walk_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_commen
         Some((open_pair, carried)) => {
             let leveled = language.comment_is_leveled(open_pair);
             let has_end = com_end_indices.iter().any(|(_, symbol, level)|
-                    *symbol == open_pair && (!leveled || *level as u32 == carried));
+                    *symbol == open_pair && (!leveled || *level == carried));
             let deepens = language.comment_nests(open_pair)
                     && com_start_indices.iter().any(|(_, symbol, _)| *symbol == open_pair);
             if !has_end && !deepens {
@@ -1822,7 +1822,7 @@ fn walk_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_commen
             let closing = loop {
                 while end_com_counter < com_end_indices.len()
                         && (com_end_indices[end_com_counter].1 != open_pair
-                            || (leveled && com_end_indices[end_com_counter].2 as u32 != carried)) {
+                            || (leveled && com_end_indices[end_com_counter].2 != carried)) {
                     end_com_counter += 1;
                 }
                 if end_com_counter == com_end_indices.len() { break None; }
@@ -1852,8 +1852,7 @@ fn walk_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_commen
                         has_string_literal, open_pair, carry), opened);
             };
             last_symbol_index = closed_at;
-            let end_level = if leveled { carried as u8 } else { 0 };
-            let index_after = last_symbol_index + language.comment_end_len(open_pair, end_level);
+            let index_after = last_symbol_index + language.comment_end_len(open_pair, carried);
             // Everything this comment holds is text, so an opener that swallowed the line from
             // inside it read the rest of the line with a string that was never there
             if swallowing_opener.is_some_and(|at| at >= comment_from && at < index_after) {
@@ -1919,7 +1918,7 @@ fn walk_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_commen
                 }
 
                 open_com_m = Some((this_symbol,
-                        if language.comment_is_leveled(this_symbol) { this_level as u32 } else { 1 }));
+                        if language.comment_is_leveled(this_symbol) { this_level } else { 1 }));
                 comment_from = this_index;
                 opened.comment = true;
                 start_com_counter += 1;
@@ -1937,10 +1936,10 @@ fn walk_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_commen
 // start's bytes, or a start beginning inside an end's bytes. One shared length for both sides is
 // wrong wherever a pair's halves differ in length, as Lua's and HTML's do: ']]--[[' would read as
 // a collision when the two symbols merely touch, and the reopening start would be discarded.
-fn resolve_double_counting_of_adjacent_start_and_end_symbols(start_indices: &mut Vec<(usize, u8, u8)>,
-    end_indices: &mut Vec<(usize, u8, u8)>, is_comment_open: bool, language: &Language)
+fn resolve_double_counting_of_adjacent_start_and_end_symbols(start_indices: &mut Vec<(usize, u8, u32)>,
+    end_indices: &mut Vec<(usize, u8, u32)>, is_comment_open: bool, language: &Language)
 {
-    fn resolve_collision(start_indices: &mut Vec<(usize, u8, u8)>, end_indices: &mut Vec<(usize, u8, u8)>, start_counter: &mut usize,
+    fn resolve_collision(start_indices: &mut Vec<(usize, u8, u32)>, end_indices: &mut Vec<(usize, u8, u32)>, start_counter: &mut usize,
         end_counter: &mut usize, is_comment_open_m: &mut bool, language: &Language)
     {
         if *is_comment_open_m {
@@ -2088,10 +2087,8 @@ fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher
 // Only the symbol that opened a string can close it, so anything of another kind in between is
 // text. A pair whose halves differ splits the rule in two: its opener cannot close and its closer
 // cannot open, so a stray '"#' sitting in code is text and not the start of anything.
-// Answers with the position of an opener that closes with different text, opened here, dropped at
-// least one later symbol for being unable to close it, and was still open when the line ended.
-// Those drops are the ones that cannot be trusted, since an opener written inside a comment leaves
-// nothing to read the rest of the line with. An opener named in 'cancelled' is passed over.
+// Answers with the position of an opener that dropped symbols no quote after it could close, and
+// was still open when the line ended. An opener named in 'cancelled' is passed over.
 fn resolve_string_delimiters(language: &Language, open_str_symbol: Option<u8>,
     buffers: &mut ScanBuffers, cancelled: &[usize]) -> Option<usize>
 {
@@ -2140,7 +2137,7 @@ fn resolve_string_delimiters(language: &Language, open_str_symbol: Option<u8>,
 // stops the block ever opening, which silently breaks every block comment in the language. Lua's
 // '--[[' begins exactly where its own '--' does, with the same result if the shorter one wins.
 fn resolve_comment_and_multiline_start_overlap(line: &str, language: &Language,
-    comment_indices: &mut Vec<usize>, com_start_indices: &mut Vec<(usize, u8, u8)>)
+    comment_indices: &mut Vec<usize>, com_start_indices: &mut Vec<(usize, u8, u32)>)
 {
     if comment_indices.is_empty() || com_start_indices.is_empty() {
         return;
@@ -2172,7 +2169,7 @@ fn resolve_comment_and_multiline_start_overlap(line: &str, language: &Language,
 // itself, so in '*///' the real '//' was already suppressed by the one lying across the closer,
 // and discarding that one without giving its bytes back leaves the line with no comment at all.
 fn resolve_comment_and_multiline_end_overlap(line: &str, language: &Language,
-    comment_indices: &mut Vec<usize>, com_end_indices: &[(usize, u8, u8)])
+    comment_indices: &mut Vec<usize>, com_end_indices: &[(usize, u8, u32)])
 {
     if comment_indices.is_empty() || com_end_indices.is_empty() {
         return;
@@ -2282,7 +2279,7 @@ mod tests {
     }
 
     fn comment_delimiters_w_multiline(line: &str, language: &Language, com_end_indices: &[usize]) -> Vec<usize> {
-        let ends = com_end_indices.iter().map(|at| (*at, 0u8, 0u8)).collect::<Vec<_>>();
+        let ends = com_end_indices.iter().map(|at| (*at, 0u8, 0u32)).collect::<Vec<_>>();
         let mut buffers = ScanBuffers::default();
         scan_line(line, language, &mut buffers);
         resolve_comment_and_multiline_end_overlap(line, language, &mut buffers.comments, &ends);
@@ -3590,8 +3587,8 @@ mod tests {
     fn resolved_double_counting(start_indices: Vec<usize>, end_indices: Vec<usize>, is_comment_open: bool)
     -> (Vec<usize>, Vec<usize>) {
         let language = Language::new("one-pair", ["x"], build_backslashed_quotes(), ["//"], &[("/*", "*/")], []);
-        let mut starts = start_indices.into_iter().map(|x| (x, 0u8, 0u8)).collect::<Vec<_>>();
-        let mut ends = end_indices.into_iter().map(|x| (x, 0u8, 0u8)).collect::<Vec<_>>();
+        let mut starts = start_indices.into_iter().map(|x| (x, 0u8, 0u32)).collect::<Vec<_>>();
+        let mut ends = end_indices.into_iter().map(|x| (x, 0u8, 0u32)).collect::<Vec<_>>();
         resolve_double_counting_of_adjacent_start_and_end_symbols(&mut starts, &mut ends, is_comment_open, &language);
         (starts.into_iter().map(|(x, _, _)| x).collect(), ends.into_iter().map(|(x, _, _)| x).collect())
     }
@@ -3664,7 +3661,7 @@ mod tests {
     fn a_close_that_touches_a_reopen_is_not_a_collision_when_the_lengths_differ() {
         let lua_like = Language::new("lua-like", ["x"], build_backslashed_quotes(), ["--"], &[("--[[", "]]")], []);
         // ]]--[[ with the block open from the line before: both symbols are real
-        let (mut starts, mut ends) = (vec![(2usize, 0u8, 0u8)], vec![(0usize, 0u8, 0u8)]);
+        let (mut starts, mut ends) = (vec![(2usize, 0u8, 0u32)], vec![(0usize, 0u8, 0u32)]);
         resolve_double_counting_of_adjacent_start_and_end_symbols(&mut starts, &mut ends, true, &lua_like);
         assert_eq!((vec![(2, 0, 0)], vec![(0, 0, 0)]), (starts, ends));
 
