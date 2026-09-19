@@ -30,6 +30,8 @@ jobs:
 
       - name: Install the Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools
 
       - name: Cache the cargo registry and the build dir
         uses: Swatinem/rust-cache@v2
@@ -46,6 +48,13 @@ jobs:
       # builds for another package.
       - name: Test
         run: cargo test --verbose
+
+      - name: Fetch a corpus to take the profile over
+        run: git clone --depth 1 https://github.com/python/cpython.git ../pgo-corpus
+
+      - name: Build again with a profile taken from this repository and that corpus
+        shell: bash
+        run: scripts/pgo-build.sh ../pgo-corpus
 
       # The archives hold the binaries under their plain names, so that they are ready to be used
       # right after extracting, without having to be renamed. Both go in the same folder because

@@ -15,8 +15,12 @@ Performance:
   -> Counting is measurably faster. Each file is now split into lines and scanned for its symbols in one pass
       over 64-byte blocks, where it used to take a search per line. On Linux the walk no longer asks
       the size of every file, and files of 256 KB and up are mapped into memory (mmap).
+  -> Release binaries are built under a profile of a real count. From source,
+      'scripts/pgo-build.sh <a tree to count>' builds the same thing.
 
 Other:
+  -> Linux and macOS now start half as many producers and half as many consumers, since an open
+      costs little there. Windows is unchanged. '--threads' still sets both by hand.
   -> MEZURA_PHASE_TIMING also reports when the first and the last counting thread finished.
 
 -----------------------------------------------------------------------------------------------------------

@@ -25,3 +25,8 @@ mezura/test_dir/
 archive
 temp/
 .linebench/
+
+# The profiled build
+target-pgo/
+pgo-data/
+pgo.profdata
