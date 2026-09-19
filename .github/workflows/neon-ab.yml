@@ -30,10 +30,12 @@ jobs:
           cp target/release/mezura /tmp/mezura-scalar
           git checkout mezura-core/src/engine/masks.rs
 
+      # The footer carries the elapsed time, and the whole point of the two builds is that it
+      # differs, so the comparison drops that line and the version banner above it
       - name: Same output
         run: |
-          /tmp/mezura-neon ../cpython > /tmp/neon.txt
-          /tmp/mezura-scalar ../cpython > /tmp/scalar.txt
+          /tmp/mezura-neon ../cpython | grep -vE "Exec time|^v[0-9]" > /tmp/neon.txt
+          /tmp/mezura-scalar ../cpython | grep -vE "Exec time|^v[0-9]" > /tmp/scalar.txt
           diff /tmp/neon.txt /tmp/scalar.txt
 
       - name: Measure
