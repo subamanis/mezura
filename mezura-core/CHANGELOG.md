@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.2, unreleased
+## 1.1.2, 2026-09-19
 
 14,826 Total lines  -  8,564 Code lines
 
