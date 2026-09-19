@@ -1,6 +1,6 @@
 v3.2.0 - unreleased
 
-  36,493 Total lines  -  22,759 Code lines
+  35,862 Total lines  -  22,276 Code lines
 
 Main changes:
   -> '--hide' takes each percentage by its own name now: 'files-percentages', 'lines-percentages',

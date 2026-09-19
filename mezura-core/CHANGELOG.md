@@ -2,7 +2,7 @@
 
 ## 1.1.2, unreleased
 
-14,662 Total lines  -  8,490 Code lines
+14,826 Total lines  -  8,564 Code lines
 
 Fixes:
 
