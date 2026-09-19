@@ -81,11 +81,11 @@ pub(crate) fn is_ascii(bytes: &[u8]) -> bool {
 #[target_feature(enable = "avx2")]
 fn is_ascii_avx2(bytes: &[u8]) -> bool {
     let mut high_bits = _mm256_set1_epi8(0);
-    let mut blocks = bytes.chunks_exact(32);
-    for block in &mut blocks {
+    let (blocks, remainder) = bytes.as_chunks::<32>();
+    for block in blocks {
         high_bits = _mm256_or_si256(high_bits, load_32(block));
     }
-    _mm256_movemask_epi8(high_bits) == 0 && blocks.remainder().is_ascii()
+    _mm256_movemask_epi8(high_bits) == 0 && remainder.is_ascii()
 }
 
 fn scan_block_scalar(block: &[u8], is_searched: &[bool; 256]) -> Masks {
@@ -131,11 +131,11 @@ fn gather_bits(low: __m256i, high: __m256i) -> u64 {
 #[target_feature(enable = "neon")]
 fn is_ascii_neon(bytes: &[u8]) -> bool {
     let mut high_bits = vdupq_n_u8(0);
-    let mut blocks = bytes.chunks_exact(16);
-    for block in &mut blocks {
+    let (blocks, remainder) = bytes.as_chunks::<16>();
+    for block in blocks {
         high_bits = vorrq_u8(high_bits, load_16(block));
     }
-    vmaxvq_u8(high_bits) < 0x80 && blocks.remainder().is_ascii()
+    vmaxvq_u8(high_bits) < 0x80 && remainder.is_ascii()
 }
 
 #[cfg(target_arch = "aarch64")]
