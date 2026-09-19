@@ -6,6 +6,10 @@ Main changes:
   -> '--hide' takes each percentage by its own name now: 'files-percentages', 'lines-percentages',
       'code-percentages', 'comments-percentages', and 'change-percentages' for a '--diff'.
       'percentages' still takes all of them.
+  -> mezura-core no longer forbids unsafe code: '#![forbid(unsafe_code)]' became '#![deny(unsafe_code)]',
+      with four small unsafe blocks: two calls into the AVX2 routines (NEON on
+      arm64), one reading a file that passed the ASCII check as text without a second validation,
+      and one mapping a large file into memory. The mezura binary still forbids it.
 
 Bugfixes:
   -> A string opener written inside a comment, such as Rust's 'r#"' or C++'s 'R"(', no longer
@@ -13,8 +17,9 @@ Bugfixes:
 
 Performance:
   -> Counting is measurably faster. Each file is now split into lines and scanned for its symbols in one pass
-      over 64-byte blocks, where it used to take a search per line. On Linux the walk no longer asks
-      the size of every file, and files of 256 KB and up are mapped into memory (mmap).
+      over 64-byte blocks, where it used to take a search per line. On arm64, Apple Silicon included,
+      that pass runs with NEON where it ran byte by byte. On Linux the walk no longer asks the size of
+      every file, and files of 256 KB and up are mapped into memory (mmap).
   -> Release binaries are built under a profile of a real count. From source,
       'scripts/pgo-build.sh <a tree to count>' builds the same thing.
 

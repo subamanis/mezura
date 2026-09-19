@@ -11,10 +11,15 @@ Fixes:
 
 Other:
 
+- The crate no longer forbids unsafe code: `#![forbid(unsafe_code)]` became `#![deny(unsafe_code)]`,
+  with four small unsafe blocks: two calls into the AVX2 routines (NEON on arm64), one reading a file
+  that passed the ASCII check as text without a second validation, and one mapping a large file into
+  memory.
 - Counting is measurably faster. Each file is split into lines and scanned for its symbols in one pass over
-  64-byte blocks, where it used to take a search per line. On Linux the walk no longer asks the size
-  of every file, files of 256 KB and up are mapped into memory (mmap), and a file whose bytes are all ASCII
-  skips the UTF-8 validation.
+  64-byte blocks, where it used to take a search per line. On arm64, Apple Silicon included, that pass
+  runs with NEON where it ran byte by byte. On Linux the walk no longer asks the size of every file,
+  files of 256 KB and up are mapped into memory (mmap), and a file whose bytes are all ASCII skips the
+  UTF-8 validation.
 
 -----------------------------------------------------------------------------------------------------------
 
