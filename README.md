@@ -643,17 +643,17 @@ On native Debian 13:
 
 | tool | time | vs fastest | lines/s | files | lines |
 |---|---|---|---|---|---|
-| mezura 3.1.1 | 166 ms ± 12 | 1.00x | 216.8M | 63,738 | 36,018,801 |
-| scc 4.1.0 | 210 ms ± 3 | 1.26x | 171.4M | 63,738 | 36,018,801 |
-| tokei 15.0.0 | 414 ms ± 2 | 2.50x | 86.9M | 63,793 | 36,027,518 |
+| mezura 3.2.0 | 86 ms ± 3 | 1.00x | 417.7M | 63,738 | 36,018,801 |
+| scc 4.1.0 | 208 ms ± 2 | 2.41x | 173.3M | 63,738 | 36,018,801 |
+| tokei 15.0.0 | 414 ms ± 2 | 4.80x | 87.1M | 63,793 | 36,027,518 |
 
 On Windows 11, the same machine and the same tree:
 
 | tool | time | vs fastest | lines/s | files | lines |
 |---|---|---|---|---|---|
-| mezura 3.1.1 | 254 ms ± 22 | 1.00x | 141.6M | 63,767 | 36,017,775 |
-| scc 4.1.0 | 539 ms ± 61 | 2.12x | 66.8M | 63,767 | 36,017,775 |
-| tokei 15.0.0 | 632 ms ± 22 | 2.48x | 57.0M | 63,822 | 36,026,522 |
+| mezura 3.2.0 | 197 ms ± 12 | 1.00x | 182.5M | 63,767 | 36,017,775 |
+| scc 4.1.0 | 526 ms ± 29 | 2.67x | 68.5M | 63,767 | 36,017,775 |
+| tokei 15.0.0 | 617 ms ± 19 | 3.13x | 58.4M | 63,822 | 36,026,522 |
 
 The comparison is doing equal work: the same languages over the same tree for all three,
 mezura pinned to the same counting model the other two use, the gitignore not taken into
@@ -715,7 +715,7 @@ large directory, or the numbers say nothing.
 
 Opening a file is far more expensive on Windows than on Linux: every open walks the object manager, the security descriptor and the whole filter driver stack, which is where antivirus and other minifilters sit. Since mezura opens one file after another, this dominates: **on Windows the program is I/O bound, and most of its time is spent waiting on `File::open` rather than counting anything**. On Linux the same open is nearly free, and the run's cpu goes almost entirely into mezura's own work instead of the operating system's.
 
-The practical consequence is that the same repository on the same machine is measurably faster to analyze from Linux (~1.5x speedup).
+The practical consequence is that the same repository on the same machine is measurably faster to analyze from Linux (~2.3x speedup).
 
 That baseline cost is structural and does not go away. What can be removed is what sits on top of it: because every open traverses the filter stack, real-time antivirus protection ends up inside mezura's hot path, inspecting each file as it is opened, and it multiplies an already expensive operation. Excluding mezura from that scanning makes a very big difference on the performance.
 
