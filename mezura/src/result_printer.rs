@@ -447,24 +447,40 @@ impl<'a> Column<'a> {
     }
 }
 
+fn hides_the_percentage_of(hidden: config_manager::Hidden, figure: ColumnKind) -> bool {
+    hidden.percentages || match figure {
+        ColumnKind::Files => hidden.files_percentages,
+        ColumnKind::Lines => hidden.lines_percentages,
+        ColumnKind::Code => hidden.code_percentages,
+        ColumnKind::Comments => hidden.comments_percentages,
+        ColumnKind::Name | ColumnKind::Extra | ColumnKind::Size | ColumnKind::Percent
+                | ColumnKind::Change | ColumnKind::ChangePercent => false
+    }
+}
+
 // Everything that describes a figure follows that figure out, so hiding 'files' never leaves a bare
-// share or a bare change behind.
+// share or a bare change behind. Which percentage a '%' column is, is the figure it follows.
 fn create_shown_mask(columns: &[Column], hidden: config_manager::Hidden) -> Vec<bool> {
     let survives = |kind: ColumnKind| match kind {
         ColumnKind::Files => !hidden.files,
         ColumnKind::Comments => !hidden.comments,
         ColumnKind::Extra => !hidden.extra,
         ColumnKind::Size => !hidden.size,
-        ColumnKind::Percent | ColumnKind::ChangePercent => !hidden.percentages,
+        ColumnKind::ChangePercent => !hidden.percentages && !hidden.change_percentages,
+        // The loop answers this one, which needs the column before it
+        ColumnKind::Percent => true,
         ColumnKind::Name | ColumnKind::Lines | ColumnKind::Code | ColumnKind::Change => true
     };
     let mut mask = Vec::with_capacity(columns.len());
+    let mut figure = ColumnKind::Name;
     let mut figure_shown = true;
     for column in columns {
         match column.kind {
-            ColumnKind::Percent | ColumnKind::ChangePercent | ColumnKind::Change =>
+            ColumnKind::Percent => mask.push(figure_shown && !hides_the_percentage_of(hidden, figure)),
+            ColumnKind::ChangePercent | ColumnKind::Change =>
                     mask.push(figure_shown && survives(column.kind)),
             _ => {
+                figure = column.kind;
                 figure_shown = survives(column.kind);
                 mask.push(figure_shown);
             }
@@ -1268,7 +1284,8 @@ fn format_boxed_comparison_lines(theme: &Theme, rows: &[ComparedRow], view: View
         let counted = |was: usize, is: usize| BoxedCell {
             number: format_with_separators(is),
             slot: if was == is {paint_change(theme, was, is, NO_CHANGE)}
-                    else if hidden.percentages {paint_change(theme, was, is, &format_signed_difference(was, is))}
+                    else if hidden.percentages || hidden.change_percentages
+                            {paint_change(theme, was, is, &format_signed_difference(was, is))}
                     else {paint_change(theme, was, is, &format!("{}  {}", format_signed_difference(was, is), format_change(was, is)))}
         };
         let (size, unit) = super::number_formatter::get_active().size_with_unit(now.bytes);
@@ -1512,15 +1529,16 @@ fn draw_aligned_table(theme: &Theme, columns: &[Column], rows: &[Vec<String>], k
     let mut rendered = rendered.into_iter();
     lines.push(rendered.next().unwrap_or_default());
     lines.push(theme.separator_header.paint(&SEPARATOR_LINE.repeat(table_width)).to_string());
-    // A blank line closes each module. Once anything hangs under a language the same blank closes
-    // each language, or one language's tree runs into the name of the next; a module's first
-    // language is not held away from the name it belongs to.
-    let has_sub_rows = kinds.iter().any(|kind| *kind == RowKind::Nested || *kind == RowKind::File);
+    // A blank line closes each module. The same blank sets apart a language carrying rows under it,
+    // above it and below its last one, or a tree runs into the name of the language next to it; a
+    // module's first language is not held away from the name it belongs to.
+    let carries_rows = |position: usize| matches!(kinds.get(position + 1), Some(RowKind::Nested | RowKind::File));
     let mut previous = None;
     for (position, (line, kind)) in rendered.zip(kinds.iter()).enumerate() {
         let gap_above = match kind {
             RowKind::Nested | RowKind::File => false,
-            RowKind::Language => has_sub_rows && previous != Some(RowKind::Module),
+            RowKind::Language => (carries_rows(position) || matches!(previous, Some(RowKind::Nested | RowKind::File)))
+                    && previous != Some(RowKind::Module),
             // Two notes are one paragraph, so only the first opens a gap
             RowKind::Note => previous != Some(RowKind::Note),
             RowKind::Module | RowKind::Total => grouped && previous != Some(RowKind::Note)
@@ -1751,11 +1769,14 @@ fn format_boxed_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
 
     let mask = create_shown_mask(&columns, hidden);
     let mut columns = keep_shown(columns, &mask);
+    // Here a figure's percentage is the slot under its number, and the name column has no cell
+    let slot_hidden = columns.iter().skip(1)
+            .map(|column| hides_the_percentage_of(hidden, column.kind)).collect::<Vec<_>>();
     let mut rows = rows.into_iter()
             .map(|(name, cells)| (name, keep_shown(cells, &mask[1..]))).collect::<Vec<_>>();
-    if hidden.percentages {
-        for (_, cells) in &mut rows {
-            for cell in cells {
+    for (_, cells) in &mut rows {
+        for (cell, is_hidden) in cells.iter_mut().zip(&slot_hidden) {
+            if *is_hidden {
                 cell.slot.clear();
             }
         }
@@ -2097,8 +2118,8 @@ impl Columns {
 
     // Padded outside the paint, since a style with a background would otherwise colour the spaces,
     // and measured off the text, since painted bytes are several times what they draw.
-    fn format_percent_cell(&self, value: f64, style: &super::theme::Style) -> String {
-        if self.hidden.percentages {
+    fn format_percent_cell(&self, value: f64, of: ColumnKind, style: &super::theme::Style) -> String {
+        if hides_the_percentage_of(self.hidden, of) {
             return String::new();
         }
         // The width stays, or the rest of the row steps left on the languages that have none
@@ -2116,14 +2137,15 @@ impl Columns {
     fn format_breakdown_row(&self, theme: &Theme, painted_name: &str, name_len: usize, files: usize,
             lines: usize, code_lines: usize, comment_lines: usize) -> String {
         let (code_percentage, comment_percentage) = calculate_code_and_comment_percentages(lines,code_lines, comment_lines);
-        let percent = |value: f64| self.format_percent_cell(value, &theme.percent);
+        let percent = |value: f64, of: ColumnKind| self.format_percent_cell(value, of, &theme.percent);
         let mut terms = vec![format!("{:>code_w$} {}{}",
                 theme.code_number.paint(&format_with_separators(code_lines)), theme.code_label.paint("code"),
-                percent(code_percentage), code_w = self.code)];
+                percent(code_percentage, ColumnKind::Code), code_w = self.code)];
         if !self.hidden.comments {
             terms.push(format!("{:>comments_w$} {}{}",
                     theme.comments_number.paint(&format_with_separators(comment_lines)),
-                    theme.comments_label.paint("comments"), percent(comment_percentage), comments_w = self.comments));
+                    theme.comments_label.paint("comments"), percent(comment_percentage, ColumnKind::Comments),
+                    comments_w = self.comments));
         }
         format!("{}{}{}{}{}{:>lines_w$} {}  {}",
                 painted_name, " ".repeat(self.name - name_len + NAME_GAP),
@@ -2141,14 +2163,15 @@ impl Columns {
             files: Option<usize>, lines: usize, code_lines: usize, comment_lines: usize) -> String
     {
         let (code_percentage, comment_percentage) = calculate_code_and_comment_percentages(lines, code_lines, comment_lines);
-        let percent = |value: f64| self.format_percent_cell(value, styles.percent);
+        let percent = |value: f64, of: ColumnKind| self.format_percent_cell(value, of, styles.percent);
         let mut terms = vec![format!("{:>code_w$} {}{}",
                 styles.code.paint(&format_with_separators(code_lines)), theme.code_label.paint("code"),
-                percent(code_percentage), code_w = self.code)];
+                percent(code_percentage, ColumnKind::Code), code_w = self.code)];
         if !self.hidden.comments {
             terms.push(format!("{:>comments_w$} {}{}",
                     styles.comments.paint(&format_with_separators(comment_lines)),
-                    theme.comments_label.paint("comments"), percent(comment_percentage), comments_w = self.comments));
+                    theme.comments_label.paint("comments"), percent(comment_percentage, ColumnKind::Comments),
+                    comments_w = self.comments));
         }
         format!("{}{}{}{}{}{:>lines_w$} {}  {}",
                 painted_name, " ".repeat(self.name - name_len + NAME_GAP),
@@ -2976,6 +2999,17 @@ mod tests {
         cases.push(("list, columns hidden".to_owned(),
                 format_individual_lines(theme, &with_nested, &trimmed_columns, trimmed_columns.width(theme), false)));
 
+        // Two shares go and two stay, and the 'list' layout draws only the two that stay
+        let some_shares = crate::config_manager::Hidden { files_percentages: true,
+                comments_percentages: true, ..crate::config_manager::Hidden::default() };
+        cases.push(("table, two shares hidden".to_owned(), format_table_lines(theme, &with_nested, &total, true,
+                &[], ViewSettings { hidden: some_shares, ..shown })));
+        cases.push(("boxed, two shares hidden".to_owned(), format_boxed_lines(theme, &with_nested, &total, true,
+                &[], ViewSettings { hidden: some_shares, ..shown })));
+        let some_shares_columns = Columns::of(&with_nested, &total, some_shares, content);
+        cases.push(("list, two shares hidden".to_owned(), format_individual_lines(theme, &with_nested,
+                &some_shares_columns, some_shares_columns.width(theme), false)));
+
         // The files row goes whole when both of its halves are hidden
         let no_files_row = crate::config_manager::Hidden { files: true, size: true,
                 ..crate::config_manager::Hidden::default() };
@@ -3075,6 +3109,16 @@ mod tests {
         cases.push(("comparison, boxed, columns hidden".to_owned(),
                 headed(format_boxed_comparison_lines(theme, &rows,
                         ViewSettings { hidden: trimmed, ..ViewSettings::of(&config) }), &before, &now)));
+
+        // 'change-percentages' is the same cut asked for by name, with every column still drawn
+        let no_change_shares = crate::config_manager::Hidden { change_percentages: true,
+                ..crate::config_manager::Hidden::default() };
+        cases.push(("comparison, change shares hidden".to_owned(),
+                headed(format_comparison_lines(theme, &rows,
+                        ViewSettings { hidden: no_change_shares, ..ViewSettings::of(&config) }), &before, &now)));
+        cases.push(("comparison, boxed, change shares hidden".to_owned(),
+                headed(format_boxed_comparison_lines(theme, &rows,
+                        ViewSettings { hidden: no_change_shares, ..ViewSettings::of(&config) }), &before, &now)));
 
         // The changed files hang under their language: one grown, one gone, one new, and the
         // unchanged ones with no row. Python's cap left a mover out, so its branch hangs open
@@ -3525,6 +3569,45 @@ mod tests {
         assert_eq!(expected.replace("\r\n", "\n"), rendered,
                 "the printed layouts changed. Read the diff, and if every difference is intended, \
                  regenerate with MEZURA_UPDATE_GOLDEN=1 cargo test");
+    }
+
+    // A name wired to the wrong column would take the wrong number's share while every test that
+    // counts still passes. The header says which survived, a '%' standing under what it belongs to.
+    #[test]
+    fn each_percentage_of_the_details_answers_to_its_own_name() {
+        colored::control::set_override(false);
+        let (sorted, content_info, total) = sample_data();
+        let theme = &Theme::default();
+        let groups = vec![Group { name: None, languages: sorted, hidden: 0, per_language: &content_info,
+                nested: &NO_NESTED, files: HashMap::new(), total: &total, baseline: None }];
+        let header_hiding = |names: &str| {
+            let hidden = crate::config_manager::Hidden::parse(names).unwrap();
+            let view = ViewSettings { sort_by: SortCriterion::Lines, hidden, model: CountingModel::Content };
+            format_table_lines(theme, &groups, &total, true, &[], view)[0]
+                    .split_whitespace().map(str::to_owned).collect::<Vec<_>>()
+        };
+
+        assert_eq!(vec!["Language", "Files", "%", "⌄", "Lines", "%", "Code", "%", "Comments", "%", "Extra", "Size"],
+                header_hiding(""));
+        assert_eq!(vec!["Language", "Files", "⌄", "Lines", "%", "Code", "%", "Comments", "%", "Extra", "Size"],
+                header_hiding("files-percentages"));
+        assert_eq!(vec!["Language", "Files", "%", "⌄", "Lines", "Code", "%", "Comments", "%", "Extra", "Size"],
+                header_hiding("lines-percentages"));
+        assert_eq!(vec!["Language", "Files", "%", "⌄", "Lines", "%", "Code", "Comments", "%", "Extra", "Size"],
+                header_hiding("code-percentages"));
+        assert_eq!(vec!["Language", "Files", "%", "⌄", "Lines", "%", "Code", "%", "Comments", "Extra", "Size"],
+                header_hiding("comments-percentages"));
+
+        assert_eq!(vec!["Language", "Files", "⌄", "Lines", "Code", "Comments", "Extra", "Size"],
+                header_hiding("percentages"));
+        assert_eq!(vec!["Language", "Files", "⌄", "Lines", "%", "Code", "%", "Comments", "Extra", "Size"],
+                header_hiding("files-percentages,comments-percentages"));
+
+        // A hidden column takes its own share out with it, and a comparison's name reaches nothing here
+        assert_eq!(vec!["Language", "Files", "%", "⌄", "Lines", "%", "Code", "%", "Extra", "Size"],
+                header_hiding("comments"));
+        assert_eq!(vec!["Language", "Files", "%", "⌄", "Lines", "%", "Code", "%", "Comments", "%", "Extra", "Size"],
+                header_hiding("change-percentages"));
     }
     // The arithmetic is 'render::percentages' and is asserted there; what is left is which field
     // lands in which slot. Each language is given three figures that would rank it differently, so

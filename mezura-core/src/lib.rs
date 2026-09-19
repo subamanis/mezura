@@ -29,7 +29,9 @@
 //! [`explain_file`] reads a single file line by line and says why each line was counted the way it
 //! was.
 
-#![forbid(unsafe_code)]
+// Denied and not forbidden, for the one call in 'engine::masks' that hands a block to code compiled
+// for a feature the machine was checked for
+#![deny(unsafe_code)]
 #![warn(missing_docs)]
 #![warn(unreachable_pub)]
 #![allow(non_snake_case)]
@@ -204,13 +206,15 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
 
     // Written by whichever consumer stops last, read once they have all been joined.
     let counting_ended = Arc::new(AtomicU64::new(0));
+    // The first and the last consumer to stop, in microseconds, for the phase report alone
+    let consumer_exits = Arc::new((AtomicU64::new(u64::MAX), AtomicU64::new(0)));
     // Decided by the counting and not by the walk, so they are read after the joins below
     let skipped_files: Arc<Mutex<SkippedFiles>> = Arc::new(Mutex::new(SkippedFiles::default()));
     for i in 0..config.threads.consumers() {
         match engine::consumer::start_parser_thread(i, files_injector.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
                 stats_per_module.clone(), nested_per_module.clone(), files_per_module.clone(),
                 language_map_ref.clone(), nested_definitions.clone(), language_lookups.clone(), config.clone(),
-                parsing_started_instant, counting_ended.clone(), skipped_files.clone(),
+                parsing_started_instant, counting_ended.clone(), consumer_exits.clone(), skipped_files.clone(),
                 progress.clone()) {
             Ok(handle) => consumer_handles.push(handle),
             Err(x) => last_refusal = Some(x)
@@ -271,6 +275,10 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
         eprintln!("[phase] producers alive: {} ms | drain after producers: {} ms | queue size at producer exit: {}",
             producers_done_millis, parsing_duration_millis - producers_done_millis, queued_at_producer_exit);
         eprintln!("{}", phase_timing::report(threads_used.consumers(), parsing_duration_millis));
+        if let Some(spread) = phase_timing::format_consumer_exit_spread(
+                consumer_exits.0.load(Ordering::Relaxed), consumer_exits.1.load(Ordering::Relaxed)) {
+            eprintln!("{spread}");
+        }
     }
 
     // Ahead of every lock below, so that a dead worker is reported as itself rather than as whichever
@@ -408,8 +416,8 @@ pub(crate) struct ParsableFile {
     pub path: PathBuf,
     pub language_name: Arc<str>,
     pub module: ModuleId,
-    // As the directory listing gave it. Zero where it could not, and the read then goes on until
-    // the file ends.
+    // As the directory listing gave it. Zero where it could not, and the read then learns the size
+    // for itself.
     pub size: u64,
     // Named as a target rather than found by the walk, which is what exempts it from every rule
     // that skips a file. The ignore files, the dotted names and the head checks all pass it through.

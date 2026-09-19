@@ -7,7 +7,6 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read as IoRead;
-use std::iter::Peekable;
 use std::path::Path;
 use std::str;
 use std::sync::{Arc, LazyLock};
@@ -17,8 +16,16 @@ use memchr::memmem;
 
 use crate::{EngineConfig, Language, LineClass, NestedLanguage, ScanSkip, Span, SpanKind, phase_timing};
 use crate::domain::{CommentPair, FileStats, LineContinuation};
+use crate::engine::masks::MaskFinder;
+use crate::engine::masks::is_ascii;
+use crate::engine::masks::BLOCK_BYTES;
 
 pub(crate) const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
+
+#[cfg(unix)]
+const SMALLEST_MAPPED_FILE_BYTES : usize = 262_144;
+#[cfg(unix)]
+const SETTLED_FILE_AGE : std::time::Duration = std::time::Duration::from_secs(5);
 
 // Real source reaches 350 a line, generated bindings padded into columns, and anything lower
 // drops it out of the count. A bundle is in the thousands.
@@ -116,19 +123,25 @@ pub(crate) fn parse_file(path: &Path, size: u64, lang_name: &str, buf: &mut Vec<
         at = Some(Instant::now());
     }
 
-    let filled = match read_file_into(&mut file, buf, size) {
-        Ok(filled) => filled,
+    let held = match read_file_into(&mut file, buf, size) {
+        Ok(held) => held,
         Err(x) => return Err(x.to_string())
     };
+    let bytes = held.of(buf);
     if let Some(t) = at {
         buffers.timing.read_nanos += phase_timing::nanos_since(t);
-        buffers.timing.bytes += filled as u64;
+        buffers.timing.bytes += bytes.len() as u64;
         buffers.timing.files += 1;
         at = Some(Instant::now());
     }
-    // The wording is the one 'read_to_string' uses, so that the list of faulty files reads the same
-    let Ok(contents) = str::from_utf8(&buf[..filled]) else {
-        return Err("stream did not contain valid UTF-8".to_owned());
+    let contents = if is_ascii(bytes) {
+        ascii_as_str(bytes)
+    } else {
+        // The wording is the one 'read_to_string' uses, so that the list of faulty files reads the same
+        let Ok(contents) = str::from_utf8(bytes) else {
+            return Err("stream did not contain valid UTF-8".to_owned());
+        };
+        contents
     };
 
     // Before the parse, which is what the skip saves: a bundle is the most expensive file there is.
@@ -161,24 +174,78 @@ pub(crate) fn explain_parsed_file(contents: String, lang_name: &str, lookup: &Ne
     (contents, report, log)
 }
 
+enum HeldFile {
+    InBuffer(usize),
+    #[cfg(unix)]
+    Mapped(memmap2::Mmap)
+}
+
+impl HeldFile {
+    fn of<'a>(&'a self, buf: &'a [u8]) -> &'a [u8] {
+        match self {
+            HeldFile::InBuffer(filled) => &buf[..*filled],
+            #[cfg(unix)]
+            HeldFile::Mapped(mapped) => mapped
+        }
+    }
+}
+
+// Every byte was just found to be below 0x80, and such a sequence is UTF-8 as it stands: the
+// check is the validation 'from_utf8' would do again, byte by byte.
+#[allow(unsafe_code)]
+fn ascii_as_str(bytes: &[u8]) -> &str {
+    unsafe { str::from_utf8_unchecked(bytes) }
+}
+
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn map_whole_file(file: &File) -> std::io::Result<memmap2::Mmap> {
+    let options = memmap2::MmapOptions::new();
+    unsafe { options.map(file) }
+}
+
+#[cfg(unix)]
+fn is_settled(metadata: &std::fs::Metadata) -> bool {
+    metadata.modified().ok().and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age >= SETTLED_FILE_AGE)
+}
+
 // Asking for one byte past the listed size tells a file of that size apart from one that grew.
 // A unix read moves at most 2 GB at a time, so a short read is the end only once the listed size
-// is reached. With no listed size the loop reads until a read returns nothing.
-fn read_file_into(file: &mut File, buf: &mut Vec<u8>, size: u64) -> std::io::Result<usize> {
+// is reached. With no listed size the first read asks for a window most files fit inside, so a
+// short read is the end; a file that fills the window is sized with one call on the open handle
+// and finished the same way. A read that fails midway hands back what it managed first and the
+// error only on the next call, so without a size such a file is counted with what was read and
+// is not reported: one call per file is the price of asking, and it was decided not to pay it.
+fn read_file_into(file: &mut File, buf: &mut Vec<u8>, size: u64) -> std::io::Result<HeldFile> {
     const READ_WINDOW_BYTES : usize = 8_192;
+    const UNSIZED_FIRST_WINDOW_BYTES : usize = 64 * 1024;
 
-    let expected = usize::try_from(size).unwrap_or(0);
+    let mut expected = usize::try_from(size).unwrap_or(0);
     let mut filled = 0;
+    let mut end = if expected > 0 { expected + 1 } else { UNSIZED_FIRST_WINDOW_BYTES };
     loop {
-        let end = if filled <= expected {expected + 1} else {filled + READ_WINDOW_BYTES};
         if buf.len() < end {
             buf.resize(end, 0);
         }
         match file.read(&mut buf[filled..end]) {
-            Ok(0) => return Ok(filled),
-            Ok(read) if filled + read < end && expected > 0 && filled + read >= expected
-                    => return Ok(filled + read),
-            Ok(read) => filled += read,
+            Ok(0) => return Ok(HeldFile::InBuffer(filled)),
+            Ok(read) => {
+                filled += read;
+                if filled < end && (expected == 0 || filled >= expected) {
+                    return Ok(HeldFile::InBuffer(filled));
+                }
+                if expected == 0 {
+                    let metadata = file.metadata()?;
+                    expected = usize::try_from(metadata.len()).unwrap_or(0);
+                    #[cfg(unix)]
+                    if expected >= SMALLEST_MAPPED_FILE_BYTES && is_settled(&metadata)
+                            && let Ok(mapped) = map_whole_file(file) {
+                        return Ok(HeldFile::Mapped(mapped));
+                    }
+                }
+                end = if filled <= expected { expected + 1 } else { filled + READ_WINDOW_BYTES };
+            },
             Err(x) if x.kind() == std::io::ErrorKind::Interrupted => (),
             Err(x) => return Err(x)
         }
@@ -248,6 +315,8 @@ pub(crate) struct ScanPlan {
     // block opener begins with one, as Lua's '--[[' begins with '--', CMake's '#[[' and Julia's '#='
     // with '#': there the same bytes open a block that runs on past this line.
     line_comment_ends_the_line: bool,
+    // Every byte the chunks search, for the pass that splits the file into lines
+    finder: MaskFinder,
 }
 
 impl ScanPlan {
@@ -341,7 +410,10 @@ impl ScanPlan {
             let Some(first) = depths.next() else { continue };
             if depths.any(|depth| depth != first) { *sorted = true }
         }
-        ScanPlan { chunks, first, slots, symbols, sorted_kinds, line_comment_ends_the_line }
+        let searched = chunks.iter().flat_map(|chunk| chunk.bytes[..chunk.len as usize].iter().copied())
+                .collect::<Vec<u8>>();
+        let finder = MaskFinder::of(&searched);
+        ScanPlan { chunks, first, slots, symbols, sorted_kinds, line_comment_ends_the_line, finder }
     }
 }
 
@@ -458,9 +530,10 @@ pub(crate) struct ScanBuffers {
     strings: Vec<usize>,
     string_symbols: Vec<u8>,
     comments: Vec<usize>,
-    // Position, pair, and the level a leveled occurrence carried, zero for every other pair
-    com_starts: Vec<(usize, u8, u8)>,
-    com_ends: Vec<(usize, u8, u8)>,
+    // Position, pair, and the level a leveled occurrence carried, zero for every other pair. The
+    // level is as wide as the line allows, since neither Lua nor CMake bounds the run that sets it
+    com_starts: Vec<(usize, u8, u32)>,
+    com_ends: Vec<(usize, u8, u32)>,
     consumed: Vec<usize>,
     // Offsets into the line, where 'ParseBuffers::code_spans' holds offsets into the whole file
     code_ranges: Vec<(usize, usize)>,
@@ -517,22 +590,51 @@ fn is_not_escaped(pos: usize, bytes: &[u8], escape: Option<u8>) -> bool {
     escapes % 2 == 0
 }
 
-fn scan_line(line: &str, language: &Language, buffers: &mut ScanBuffers) {
+#[derive(Debug, Clone, Copy)]
+enum Candidates<'a> {
+    At(&'a [u32], usize),
+    Unsearched,
+}
+
+impl Candidates<'_> {
+    fn possible(self) -> bool {
+        match self {
+            Candidates::At(offsets, _) => !offsets.is_empty(),
+            Candidates::Unsearched => true
+        }
+    }
+
+    fn behind(self, lead: usize) -> Self {
+        match self {
+            Candidates::At(offsets, _) => Candidates::At(offsets, lead),
+            Candidates::Unsearched => Candidates::Unsearched
+        }
+    }
+}
+
+fn scan_line(line: &str, candidates: Candidates, language: &Language, buffers: &mut ScanBuffers) {
     let plan = get_or_build_plan_of(language);
     let line_bytes = line.as_bytes();
     let escape = language.strings.get_escape();
     buffers.reset(plan.slots.len());
 
-    for chunk in &plan.chunks {
-        match chunk.len {
-            1 => for at in memchr::memchr_iter(chunk.bytes[0], line_bytes) {
-                take_symbols_at(at, line_bytes, plan, buffers, escape)
-            },
-            2 => for at in memchr::memchr2_iter(chunk.bytes[0], chunk.bytes[1], line_bytes) {
-                take_symbols_at(at, line_bytes, plan, buffers, escape)
-            },
-            _ => for at in memchr::memchr3_iter(chunk.bytes[0], chunk.bytes[1], chunk.bytes[2], line_bytes) {
-                take_symbols_at(at, line_bytes, plan, buffers, escape)
+    match candidates {
+        Candidates::At(offsets, lead) => for &offset in offsets {
+            let Some(at) = (offset as usize).checked_sub(lead) else { continue };
+            if at >= line_bytes.len() { break }
+            take_symbols_at(at, line_bytes, plan, buffers, escape)
+        },
+        Candidates::Unsearched => for chunk in &plan.chunks {
+            match chunk.len {
+                1 => for at in memchr::memchr_iter(chunk.bytes[0], line_bytes) {
+                    take_symbols_at(at, line_bytes, plan, buffers, escape)
+                },
+                2 => for at in memchr::memchr2_iter(chunk.bytes[0], chunk.bytes[1], line_bytes) {
+                    take_symbols_at(at, line_bytes, plan, buffers, escape)
+                },
+                _ => for at in memchr::memchr3_iter(chunk.bytes[0], chunk.bytes[1], chunk.bytes[2], line_bytes) {
+                    take_symbols_at(at, line_bytes, plan, buffers, escape)
+                }
             }
         }
     }
@@ -587,11 +689,11 @@ fn take_symbols_at(at: usize, line_bytes: &[u8], plan: &ScanPlan, buffers: &mut 
             continue;
         }
         // The level is carried beside the position, so only an end with the same count answers it
-        let mut level = 0u8;
+        let mut level = 0u32;
         let mut width = slot.len as usize;
         if slot.filler != 0 {
             let mut cursor = start + slot.len as usize;
-            while line_bytes.get(cursor) == Some(&slot.filler) && level < u8::MAX {
+            while line_bytes.get(cursor) == Some(&slot.filler) {
                 cursor += 1;
                 level += 1;
             }
@@ -904,42 +1006,82 @@ fn is_generated(contents: &str) -> bool {
     GENERATED_FINDERS.iter().any(|finder| finder.find(&lowercased[..head.len()]).is_some())
 }
 
-// The same lines 'str::lines' hands out, trailing '\r' dropped the same way, found with memchr's
-// SIMD search instead of the standard library's word-at-a-time loop.
-struct LineIter<'a> {
+// The same lines 'str::lines' hands out, trailing '\r' dropped the same way, and beside each one
+// whether it holds a byte the scan plan searches. Both are read off the masks of one 64-byte block
+// at a time, so nothing is searched per line: every symbol a language declares begins at one of the
+// searched bytes, and a line holding none of them holds no symbol and needs no scan.
+struct MaskedLines<'a> {
     contents: &'a str,
-    newlines: memchr::Memchr<'a>,
+    finder: &'a MaskFinder,
     start: usize,
+    // Where the block the two masks describe begins. Bits below 'start' are already cleared.
+    block_at: usize,
+    newlines: u64,
+    candidates: u64,
+    positions: Vec<u32>,
 }
 
-impl<'a> Iterator for LineIter<'a> {
-    type Item = (usize, &'a str);
+impl<'a> MaskedLines<'a> {
+    fn of(contents: &'a str, finder: &'a MaskFinder) -> MaskedLines<'a> {
+        let masks = finder.scan_block(&contents.as_bytes()[..contents.len().min(BLOCK_BYTES)]);
+        MaskedLines { contents, finder, start: 0, block_at: 0, newlines: masks.newlines,
+                candidates: masks.candidates, positions: Vec::new() }
+    }
 
-    fn next(&mut self) -> Option<(usize, &'a str)> {
-        match self.newlines.next() {
-            Some(at) => {
-                let mut end = at;
-                if end > self.start && self.contents.as_bytes()[end - 1] == b'\r' {
-                    end -= 1;
-                }
-                let line = (self.start, &self.contents[self.start..end]);
-                self.start = at + 1;
-                Some(line)
-            },
-            None => {
-                if self.start >= self.contents.len() {
-                    return None;
-                }
-                let line = (self.start, &self.contents[self.start..]);
-                self.start = self.contents.len();
-                Some(line)
-            }
+    fn positions(&self) -> &[u32] {
+        &self.positions
+    }
+
+    #[inline(always)]
+    fn note_positions(&mut self, mut bits: u64) {
+        while bits != 0 {
+            self.positions.push((self.block_at + bits.trailing_zeros() as usize - self.start) as u32);
+            bits &= bits - 1;
         }
     }
 }
 
-fn get_lines_of(contents: &str) -> LineIter<'_> {
-    LineIter { contents, newlines: memchr::memchr_iter(b'\n', contents.as_bytes()), start: 0 }
+impl<'a> Iterator for MaskedLines<'a> {
+    type Item = (usize, &'a str, bool);
+
+    // Called from two places, which is enough for the compiler to keep it out of line and hand
+    // every line back through memory; forced in, since it runs once per line of the corpus
+    #[inline(always)]
+    fn next(&mut self) -> Option<(usize, &'a str, bool)> {
+        let bytes = self.contents.as_bytes();
+        self.positions.clear();
+        loop {
+            if self.newlines != 0 {
+                let bit = self.newlines.trailing_zeros();
+                let at = self.block_at + bit as usize;
+                let up_to_newline = u64::MAX >> (63 - bit);
+                self.note_positions(self.candidates & up_to_newline);
+                self.newlines &= !up_to_newline;
+                self.candidates &= !up_to_newline;
+                let mut end = at;
+                if end > self.start && bytes[end - 1] == b'\r' {
+                    end -= 1;
+                }
+                let line = (self.start, &self.contents[self.start..end], !self.positions.is_empty());
+                self.start = at + 1;
+                return Some(line);
+            }
+            self.note_positions(self.candidates);
+            self.block_at += BLOCK_BYTES;
+            debug_assert!(self.start <= self.block_at, "a line cannot begin past the block being read");
+            if self.block_at >= bytes.len() {
+                if self.start >= bytes.len() {
+                    return None;
+                }
+                let line = (self.start, &self.contents[self.start..], !self.positions.is_empty());
+                self.start = bytes.len();
+                return Some(line);
+            }
+            let masks = self.finder.scan_block(&bytes[self.block_at..bytes.len().min(self.block_at + BLOCK_BYTES)]);
+            self.newlines = masks.newlines;
+            self.candidates = masks.candidates;
+        }
+    }
 }
 
 // The carry from one line to the next, one set per language in play: the shell's survives a
@@ -954,6 +1096,12 @@ struct WalkState {
     open_str_symbol: Option<u8>,
     continued_comment: bool,
     opened_line: usize,
+}
+
+impl WalkState {
+    fn holds_nothing(&self) -> bool {
+        self.open_comment.is_none() && self.open_str_symbol.is_none() && !self.continued_comment
+    }
 }
 
 // What earlier lines left open when a line began, as '--explain' reports it. For a leveled pair the
@@ -1053,47 +1201,6 @@ struct SectionBucket<'a> {
     bytes: usize,
 }
 
-// Every symbol a language declares begins at one of the bytes its scan plan searches, so a line
-// holding none of them holds no symbol and needs no scan. One pass per chunk over the whole file
-// answers that for every line at once, and the answers are taken lazily: the lines are asked in file
-// order, so each pass only ever moves forward, whether or not the line before it asked.
-struct CandidateProbe<'a> {
-    passes: Vec<CandidatePass<'a>>,
-}
-
-enum CandidatePass<'a> {
-    One(Peekable<memchr::Memchr<'a>>),
-    Two(Peekable<memchr::Memchr2<'a>>),
-    Three(Peekable<memchr::Memchr3<'a>>)
-}
-
-impl<'a> CandidateProbe<'a> {
-    fn of(contents: &'a str, plan: &ScanPlan) -> CandidateProbe<'a> {
-        let bytes = contents.as_bytes();
-        let passes = plan.chunks.iter().map(|chunk| match chunk.len {
-            1 => CandidatePass::One(memchr::memchr_iter(chunk.bytes[0], bytes).peekable()),
-            2 => CandidatePass::Two(memchr::memchr2_iter(chunk.bytes[0], chunk.bytes[1], bytes).peekable()),
-            _ => CandidatePass::Three(memchr::memchr3_iter(chunk.bytes[0], chunk.bytes[1], chunk.bytes[2], bytes).peekable())
-        }).collect();
-        CandidateProbe { passes }
-    }
-
-    // The range is the line as the file spells it, leading and trailing whitespace included, which
-    // covers the trimmed line the scan would actually read
-    fn has_a_candidate_in(&mut self, from: usize, to: usize) -> bool {
-        self.passes.iter_mut().any(|pass| match pass {
-            CandidatePass::One(pass) => reaches_into(pass, from, to),
-            CandidatePass::Two(pass) => reaches_into(pass, from, to),
-            CandidatePass::Three(pass) => reaches_into(pass, from, to)
-        })
-    }
-}
-
-fn reaches_into(pass: &mut Peekable<impl Iterator<Item = usize>>, from: usize, to: usize) -> bool {
-    while pass.next_if(|at| *at < from).is_some() {}
-    pass.peek().is_some_and(|at| *at < to)
-}
-
 fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup: &NestedLanguageLookup,
     matchers: &mut KeywordMatchers, config: &EngineConfig, buffers: &mut ParseBuffers,
     log: &mut ExplainLog) -> FileReport
@@ -1108,13 +1215,23 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
 
     let mut shell = WalkState::default();
     let mut buckets: Vec<SectionBucket> = Vec::new();
-    let mut probe = CandidateProbe::of(contents, get_or_build_plan_of(language));
-    let mut lines = get_lines_of(contents);
+    let mut lines = MaskedLines::of(contents, &get_or_build_plan_of(language).finder);
     let mut handed_back = None;
-    while let Some((line_start, raw_line)) = handed_back.take().or_else(|| lines.next()) {
-        let has_candidates = probe.has_a_candidate_in(line_start, line_start + raw_line.len());
-        let had_code = walk_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans,
-                has_candidates, scan, &mut shell, &mut shell_stats, code_spans, log);
+    loop {
+        let (line_start, raw_line, has_candidates) = match handed_back.take() {
+            Some(line) => line,
+            None => match lines.next() {
+                Some(line) => line,
+                None => break
+            }
+        };
+        let had_code = if !has_candidates && shell.holds_nothing() {
+            walk_plain_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans, scan,
+                    &shell, &mut shell_stats, code_spans, log)
+        } else {
+            walk_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans,
+                    Candidates::At(lines.positions(), 0), scan, &mut shell, &mut shell_stats, code_spans, log)
+        };
 
         // A region opener only counts where the shell left it as code, so one sitting inside a
         // comment or a string of the shell opens nothing
@@ -1146,18 +1263,18 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
             let bucket = &mut buckets[bucket_at];
             let mut inner_state = WalkState::default();
             let mut section_to = contents.len();
-            for (inner_start, inner_raw) in lines.by_ref() {
+            for (inner_start, inner_raw, inner_candidates) in lines.by_ref() {
                 // Per the HTML reading the closer ends the section wherever it stands, even inside
                 // a string of the section's language: that is why one writes '<\/script>' in
                 // JavaScript. The closer's line belongs to the shell.
                 if inner_start + inner_raw.len() > closer_at {
                     section_to = inner_start;
-                    handed_back = Some((inner_start, inner_raw));
+                    handed_back = Some((inner_start, inner_raw, inner_candidates));
                     break;
                 }
-                // A section is written in another language, whose symbols the probe never searched
+                // A section is written in another language, whose symbols the masks never searched
                 walk_line::<EXPLAIN>(inner_raw, inner_start, inner, bucket.collecting_spans,
-                        true, scan, &mut inner_state, &mut bucket.stats, &mut bucket.spans, log);
+                        Candidates::Unsearched, scan, &mut inner_state, &mut bucket.stats, &mut bucket.spans, log);
             }
             bucket.bytes += section_to - section_from;
         }
@@ -1182,11 +1299,56 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
     }
 }
 
-// Returns whether the line left code behind, which is all the section machinery needs from it.
-fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &Language, collecting_spans: bool,
-    has_candidates: bool, scan: &mut ScanBuffers, state: &mut WalkState, file_stats: &mut FileStats,
+// A line holding none of the searched bytes, with nothing carried into it, is code from end to
+// end and leaves nothing open behind it: words in code, or punctuation alone. The general path
+// below reaches the same verdict for it through the scan buffers, and nine lines in ten of a C
+// file are this line, so it is answered here without them.
+#[inline(always)]
+fn walk_plain_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &Language,
+    collecting_spans: bool, scan: &mut ScanBuffers, state: &WalkState, file_stats: &mut FileStats,
     code_spans: &mut Vec<(u32, u32)>, log: &mut ExplainLog) -> bool
 {
+    file_stats.lines += 1;
+    let carried = if EXPLAIN { CarriedRecord::of(state) } else { CarriedRecord::Nothing };
+
+    let from_start = raw_line.trim_ascii_start();
+    let line = from_start.trim_ascii_end();
+    if line.is_empty() {
+        file_stats.classes.bump(LineClass::Blank);
+        if EXPLAIN { log.record(LineClass::Blank, carried, language, Vec::new()); }
+        return false;
+    }
+    let lead = raw_line.len() - from_start.len();
+    let base = line_start + lead;
+
+    let words = has_word_byte(line.as_bytes());
+    let class = if words { LineClass::WordsInCode } else { LineClass::PunctuationInCode };
+    file_stats.classes.bump(class);
+    // Only the search for a nested language's opening tag reads the ranges of a line that
+    // came back as code, so they are written only where such a tag can exist
+    if !language.nested_languages.is_empty() {
+        scan.code_ranges.clear();
+        scan.code_ranges.push((0, line.len()));
+    }
+    if EXPLAIN {
+        log.record(class, carried, language,
+                vec![Span { from: lead, to: lead + line.len(), kind: SpanKind::Code }]);
+    }
+    if words && collecting_spans {
+        code_spans.push((base as u32, (base + line.len()) as u32));
+    }
+    true
+}
+
+// Returns whether the line left code behind, which is all the section machinery needs from it.
+fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &Language, collecting_spans: bool,
+    candidates: Candidates, scan: &mut ScanBuffers, state: &mut WalkState, file_stats: &mut FileStats,
+    code_spans: &mut Vec<(u32, u32)>, log: &mut ExplainLog) -> bool
+{
+    if !candidates.possible() && state.holds_nothing() {
+        return walk_plain_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans, scan,
+                state, file_stats, code_spans, log);
+    }
     file_stats.lines += 1;
     let carried = if EXPLAIN { CarriedRecord::of(state) } else { CarriedRecord::Nothing };
 
@@ -1232,7 +1394,7 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
 
     let mut line_spans: Vec<Span> = Vec::new();
     let (line_info, opened_here) = get_bounds::<EXPLAIN>(line, language, state.open_comment,
-            state.open_str_symbol, has_candidates, scan, &mut line_spans);
+            state.open_str_symbol, candidates.behind(lead), scan, &mut line_spans);
 
     state.open_comment = line_info.open_comment_after;
     // Only a symbol declared to cross lines carries its string to the next one, so the damage of
@@ -1507,26 +1669,21 @@ fn note_span<const EXPLAIN: bool>(spans: &mut Vec<Span>, from: usize, to: usize,
 }
 
 fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
-    open_str_symbol: Option<u8>, has_candidates: bool, buffers: &mut ScanBuffers, spans: &mut Vec<Span>)
+    open_str_symbol: Option<u8>, candidates: Candidates, buffers: &mut ScanBuffers, spans: &mut Vec<Span>)
 -> (LineInfo, OpenedHere)
 {
-    // A line holding none of the searched bytes cannot hold a symbol, so it lands where the scan
-    // below lands when it finds nothing. The code ranges are rewritten rather than left as the line
-    // before them left them, since the keyword search and the search for a nested language's
-    // opening tag both read them off a line that came back as code.
-    if !has_candidates {
-        buffers.code_ranges.clear();
+    // A line holding none of the searched bytes cannot hold a symbol, so it stays inside whatever
+    // was open when it began. One with nothing open never arrives here: 'walk_line' answers it
+    // itself.
+    if !candidates.possible() {
+        debug_assert!(open_comment.is_some() || open_str_symbol.is_some(),
+                "a line with no candidate and nothing open belongs to walk_line");
         if let Some((symbol, depth)) = open_comment {
             note_span::<EXPLAIN>(spans, 0, line.len(), SpanKind::Comment);
             return (LineInfo::with_open_comment(false, false, symbol, depth), OpenedHere::default());
         }
-        if open_str_symbol.is_some() {
-            note_span::<EXPLAIN>(spans, 0, line.len(), SpanKind::String);
-            return (LineInfo::with_open_string(false, open_str_symbol), OpenedHere::default());
-        }
-        push_code(&mut buffers.code_ranges, line, 0, line.len());
-        note_span::<EXPLAIN>(spans, 0, line.len(), SpanKind::Code);
-        return (LineInfo::of(true, false), OpenedHere::default());
+        note_span::<EXPLAIN>(spans, 0, line.len(), SpanKind::String);
+        return (LineInfo::with_open_string(false, open_str_symbol), OpenedHere::default());
     }
 
     // A line comment runs to the end of its line, so a line that opens with one is comment through
@@ -1543,8 +1700,31 @@ fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment
                 OpenedHere { ended_in_line_comment: true, ..OpenedHere::default() });
     }
 
-    scan_line(line, language, buffers);
-    resolve_string_delimiters(language, open_str_symbol, buffers);
+    // The strings are resolved before the comment boundaries are known, so an opener written inside
+    // a comment can take a string with it and throw away every symbol after it on that line. When
+    // the walk finds one, the line is read again with that opener left alone.
+    let spans_at_entry = spans.len();
+    let mut cancelled : Vec<usize> = Vec::new();
+    loop {
+        let mut opener_inside_a_comment = None;
+        let answer = walk_bounds::<EXPLAIN>(line, candidates, language, open_comment, open_str_symbol, buffers,
+                spans, &cancelled, &mut opener_inside_a_comment);
+        let Some(at) = opener_inside_a_comment else { return answer };
+        cancelled.push(at);
+        spans.truncate(spans_at_entry);
+    }
+}
+
+// Reads one line that holds at least one searched byte. When 'opener_inside_a_comment' comes back
+// filled, the resolution the line was read with is known to be wrong. The answer is then the
+// caller's to drop, and it reads the line again.
+fn walk_bounds<const EXPLAIN: bool>(line: &str, candidates: Candidates, language: &Language,
+    open_comment: Option<(u8, u32)>, open_str_symbol: Option<u8>, buffers: &mut ScanBuffers, spans: &mut Vec<Span>,
+    cancelled: &[usize], opener_inside_a_comment: &mut Option<usize>)
+-> (LineInfo, OpenedHere)
+{
+    scan_line(line, candidates, language, buffers);
+    let swallowing_opener = resolve_string_delimiters(language, open_str_symbol, buffers, cancelled);
     let ScanBuffers { strings: str_indices, string_symbols: str_symbols, comments: comment_indices,
             com_starts: com_start_indices, com_ends: com_end_indices, code_ranges, .. } = buffers;
 
@@ -1559,7 +1739,7 @@ fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment
         Some((open_pair, carried)) => {
             let leveled = language.comment_is_leveled(open_pair);
             let has_end = com_end_indices.iter().any(|(_, symbol, level)|
-                    *symbol == open_pair && (!leveled || *level as u32 == carried));
+                    *symbol == open_pair && (!leveled || *level == carried));
             let deepens = language.comment_nests(open_pair)
                     && com_start_indices.iter().any(|(_, symbol, _)| *symbol == open_pair);
             if !has_end && !deepens {
@@ -1586,6 +1766,8 @@ fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment
 
     let (mut start_com_counter, mut end_com_counter, mut str_counter, mut comment_counter) = (0,0,0,0);
     let (mut open_com_m, mut is_str_open_m) = (open_comment, open_str_symbol.is_some());
+    // Where the open comment began, zero for one carried in from an earlier line
+    let mut comment_from = 0;
     let mut opened = OpenedHere::default();
     // Where the span being recorded for '--explain' began. Zero serves whichever of the three kinds
     // the line starts inside, and every transition below moves it past the span it just noted.
@@ -1681,7 +1863,7 @@ fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment
             let closing = loop {
                 while end_com_counter < com_end_indices.len()
                         && (com_end_indices[end_com_counter].1 != open_pair
-                            || (leveled && com_end_indices[end_com_counter].2 as u32 != carried)) {
+                            || (leveled && com_end_indices[end_com_counter].2 != carried)) {
                     end_com_counter += 1;
                 }
                 if end_com_counter == com_end_indices.len() { break None; }
@@ -1711,8 +1893,12 @@ fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment
                         has_string_literal, open_pair, carry), opened);
             };
             last_symbol_index = closed_at;
-            let end_level = if leveled { carried as u8 } else { 0 };
-            let index_after = last_symbol_index + language.comment_end_len(open_pair, end_level);
+            let index_after = last_symbol_index + language.comment_end_len(open_pair, carried);
+            // Everything this comment holds is text, so an opener that swallowed the line from
+            // inside it read the rest of the line with a string that was never there
+            if swallowing_opener.is_some_and(|at| at >= comment_from && at < index_after) {
+                *opener_inside_a_comment = swallowing_opener;
+            }
             if index_after >= line.len() {
                 note_span::<EXPLAIN>(spans, region_from, line.len(), SpanKind::Comment);
                 return (LineInfo::of(!code_ranges.is_empty(), has_string_literal), OpenedHere::default());
@@ -1773,7 +1959,8 @@ fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment
                 }
 
                 open_com_m = Some((this_symbol,
-                        if language.comment_is_leveled(this_symbol) { this_level as u32 } else { 1 }));
+                        if language.comment_is_leveled(this_symbol) { this_level } else { 1 }));
+                comment_from = this_index;
                 opened.comment = true;
                 start_com_counter += 1;
                 last_symbol_index = this_index;
@@ -1790,10 +1977,10 @@ fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment
 // start's bytes, or a start beginning inside an end's bytes. One shared length for both sides is
 // wrong wherever a pair's halves differ in length, as Lua's and HTML's do: ']]--[[' would read as
 // a collision when the two symbols merely touch, and the reopening start would be discarded.
-fn resolve_double_counting_of_adjacent_start_and_end_symbols(start_indices: &mut Vec<(usize, u8, u8)>,
-    end_indices: &mut Vec<(usize, u8, u8)>, is_comment_open: bool, language: &Language)
+fn resolve_double_counting_of_adjacent_start_and_end_symbols(start_indices: &mut Vec<(usize, u8, u32)>,
+    end_indices: &mut Vec<(usize, u8, u32)>, is_comment_open: bool, language: &Language)
 {
-    fn resolve_collision(start_indices: &mut Vec<(usize, u8, u8)>, end_indices: &mut Vec<(usize, u8, u8)>, start_counter: &mut usize,
+    fn resolve_collision(start_indices: &mut Vec<(usize, u8, u32)>, end_indices: &mut Vec<(usize, u8, u32)>, start_counter: &mut usize,
         end_counter: &mut usize, is_comment_open_m: &mut bool, language: &Language)
     {
         if *is_comment_open_m {
@@ -1941,28 +2128,40 @@ fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher
 // Only the symbol that opened a string can close it, so anything of another kind in between is
 // text. A pair whose halves differ splits the rule in two: its opener cannot close and its closer
 // cannot open, so a stray '"#' sitting in code is text and not the start of anything.
-fn resolve_string_delimiters(language: &Language, open_str_symbol: Option<u8>, buffers: &mut ScanBuffers) {
+// Answers with the position of an opener that dropped symbols no quote after it could close, and
+// was still open when the line ended. An opener named in 'cancelled' is passed over.
+fn resolve_string_delimiters(language: &Language, open_str_symbol: Option<u8>,
+    buffers: &mut ScanBuffers, cancelled: &[usize]) -> Option<usize>
+{
     let ScanBuffers { raw_strings, strings, string_symbols, .. } = buffers;
 
     let mut open = open_str_symbol;
     let mut consumed_up_to = 0;
+    let mut opened_at = None;
+    let mut dropped_a_symbol = false;
 
     for &(at, symbol, role) in raw_strings.iter() {
         // What sits inside a symbol that was already taken is part of it, not a symbol of its own
-        if at < consumed_up_to {
+        if at < consumed_up_to || (role == ROLE_OPEN && cancelled.contains(&at)) {
             continue;
         }
         let length = match open {
             Some(open_symbol) => {
-                if open_symbol != symbol || role == ROLE_OPEN { continue; }
+                if open_symbol != symbol || role == ROLE_OPEN {
+                    dropped_a_symbol = true;
+                    continue;
+                }
                 open = None;
+                opened_at = None;
                 language.get_string_pair_of(symbol).1.len()
             }
             None => {
-                // A closer opens nothing, and neither does a raw symbol the language escaped:
-                // outside a string there is nothing for the escape to be an ordinary byte of
+                // A closer opens nothing, and neither does a raw symbol the language escaped.
+                // Outside a string there is nothing for the escape to be an ordinary byte of
                 if role == ROLE_CLOSE || role == ROLE_RAW_ESCAPED { continue; }
                 open = Some(symbol);
+                opened_at = (role == ROLE_OPEN).then_some(at);
+                dropped_a_symbol = false;
                 language.get_string_pair_of(symbol).0.len()
             }
         };
@@ -1970,6 +2169,7 @@ fn resolve_string_delimiters(language: &Language, open_str_symbol: Option<u8>, b
         strings.push(at);
         string_symbols.push(symbol);
     }
+    opened_at.filter(|_| dropped_a_symbol)
 }
 
 // When a comment symbol and a multiline start overlap only one of them is real: whichever begins
@@ -1978,7 +2178,7 @@ fn resolve_string_delimiters(language: &Language, open_str_symbol: Option<u8>, b
 // stops the block ever opening, which silently breaks every block comment in the language. Lua's
 // '--[[' begins exactly where its own '--' does, with the same result if the shorter one wins.
 fn resolve_comment_and_multiline_start_overlap(line: &str, language: &Language,
-    comment_indices: &mut Vec<usize>, com_start_indices: &mut Vec<(usize, u8, u8)>)
+    comment_indices: &mut Vec<usize>, com_start_indices: &mut Vec<(usize, u8, u32)>)
 {
     if comment_indices.is_empty() || com_start_indices.is_empty() {
         return;
@@ -2010,7 +2210,7 @@ fn resolve_comment_and_multiline_start_overlap(line: &str, language: &Language,
 // itself, so in '*///' the real '//' was already suppressed by the one lying across the closer,
 // and discarding that one without giving its bytes back leaves the line with no comment at all.
 fn resolve_comment_and_multiline_end_overlap(line: &str, language: &Language,
-    comment_indices: &mut Vec<usize>, com_end_indices: &[(usize, u8, u8)])
+    comment_indices: &mut Vec<usize>, com_end_indices: &[(usize, u8, u32)])
 {
     if comment_indices.is_empty() || com_end_indices.is_empty() {
         return;
@@ -2097,7 +2297,7 @@ mod tests {
 
     fn bounds_multi_deep(line: &str, language: &Language, open_comment: Option<(u8, u32)>, open_str_symbol: Option<u8>) -> TextInfo {
         let mut buffers = ScanBuffers::default();
-        let (info, _) = get_bounds::<false>(line, language, open_comment, open_str_symbol, true,
+        let (info, _) = get_bounds::<false>(line, language, open_comment, open_str_symbol, Candidates::Unsearched,
                 &mut buffers, &mut Vec::new());
         text_of(line, info, &buffers)
     }
@@ -2108,21 +2308,21 @@ mod tests {
 
     fn str_delimiters(line: &str, language: &Language, open_str_symbol: Option<u8>) -> (Vec<usize>, Vec<u8>) {
         let mut buffers = ScanBuffers::default();
-        scan_line(line, language, &mut buffers);
-        resolve_string_delimiters(language, open_str_symbol, &mut buffers);
+        scan_line(line, Candidates::Unsearched, language, &mut buffers);
+        resolve_string_delimiters(language, open_str_symbol, &mut buffers, &[]);
         (buffers.strings, buffers.string_symbols)
     }
 
     fn comment_delimiters(line: &str, language: &Language) -> Vec<usize> {
         let mut buffers = ScanBuffers::default();
-        scan_line(line, language, &mut buffers);
+        scan_line(line, Candidates::Unsearched, language, &mut buffers);
         buffers.comments
     }
 
     fn comment_delimiters_w_multiline(line: &str, language: &Language, com_end_indices: &[usize]) -> Vec<usize> {
-        let ends = com_end_indices.iter().map(|at| (*at, 0u8, 0u8)).collect::<Vec<_>>();
+        let ends = com_end_indices.iter().map(|at| (*at, 0u8, 0u32)).collect::<Vec<_>>();
         let mut buffers = ScanBuffers::default();
-        scan_line(line, language, &mut buffers);
+        scan_line(line, Candidates::Unsearched, language, &mut buffers);
         resolve_comment_and_multiline_end_overlap(line, language, &mut buffers.comments, &ends);
         buffers.comments
     }
@@ -2343,26 +2543,54 @@ mod tests {
         assert_eq!(15, CountingModel::Region.calculate_comment_lines(&stats.classes));
     }
 
-    // The buffers are seeded from a line that did hold code, because a fresh one is empty already
-    // and would pass whether or not the shortcut clears what the line before it left behind.
+    // A line with no symbol byte inside an open comment or string is answered without the scan
     #[test]
     fn a_line_with_no_symbol_byte_on_it_reads_the_same_with_the_scan_skipped() {
         let line = "let total = width + height";
         assert!(!line.contains(['/', '*', '"', '\'']), "the line carries a symbol byte");
 
-        let read = |has_candidates: bool, open_comment, open_str_symbol| {
+        let read = |candidates: Candidates, open_comment, open_str_symbol| {
             let mut buffers = ScanBuffers::default();
-            get_bounds::<true>("let seeded = 1", &RUST, None, None, true, &mut buffers, &mut Vec::new());
-            assert!(!buffers.code_ranges.is_empty(), "the seeding line left no code range behind");
             let mut spans = Vec::new();
-            let answer = get_bounds::<true>(line, &RUST, open_comment, open_str_symbol, has_candidates,
+            let answer = get_bounds::<true>(line, &RUST, open_comment, open_str_symbol, candidates,
                     &mut buffers, &mut spans);
-            (answer, buffers.code_ranges.clone(), spans)
+            (answer, spans)
         };
 
-        for (open_comment, open_str_symbol) in [(None, None), (Some((0u8, 1u32)), None), (None, Some(0u8))] {
-            assert_eq!(read(true, open_comment, open_str_symbol), read(false, open_comment, open_str_symbol),
+        for (open_comment, open_str_symbol) in [(Some((0u8, 1u32)), None), (None, Some(0u8))] {
+            assert_eq!(read(Candidates::Unsearched, open_comment, open_str_symbol),
+                    read(Candidates::At(&[], 0), open_comment, open_str_symbol),
                     "the shortcut disagreed with the scan for {open_comment:?} and {open_str_symbol:?}");
+        }
+    }
+
+    // The plain line, no symbol byte and nothing open, is answered inside 'walk_line' without the
+    // scan. This holds that answer against the general path: the class, the span the keyword search
+    // gets, what '--explain' records, and the code range left behind where a nested language could
+    // read it.
+    #[test]
+    fn a_plain_line_reads_the_same_with_and_without_the_scan() {
+        let with_sections = Language::new("shell", ["shl"], build_backslashed_quotes(), [""; 0], &[], [])
+                .with_nested_languages(&[NestedLanguage::of("<script", "</script>", "js")]);
+        let read = |language: &Language, has_candidates: bool, raw_line: &str| {
+            let (mut scan, mut state, mut log) = (ScanBuffers::default(), WalkState::default(), ExplainLog::default());
+            let mut stats = FileStats::default();
+            let mut code_spans = Vec::new();
+            let candidates = if has_candidates { Candidates::Unsearched } else { Candidates::At(&[], 0) };
+            let had_code = walk_line::<true>(raw_line, 100, language, true, candidates, &mut scan, &mut state,
+                    &mut stats, &mut code_spans, &mut log);
+            let records = log.records().iter().map(|record| (record.class, record.carried, record.spans.clone()))
+                    .collect::<Vec<_>>();
+            let ranges = if language.nested_languages.is_empty() { Vec::new() } else { scan.code_ranges.clone() };
+            (had_code, stats.classes, ranges, code_spans, records)
+        };
+
+        for language in [&*RUST, &with_sections] {
+            for raw_line in ["\tlet total = width + height", "}", "   ", "", "\t{", "αβγ", "  x  \t"] {
+                assert!(!raw_line.contains(['/', '*', '"', '\'']), "the line carries a symbol byte");
+                assert_eq!(read(language, true, raw_line), read(language, false, raw_line),
+                        "the plain path disagreed with the scan on {raw_line:?} in {}", language.name);
+            }
         }
     }
 
@@ -2393,7 +2621,7 @@ mod tests {
         let mut file_stats = FileStats::with_keywords(&[STRUCT.clone(),ENUM.clone(),TRAIT.clone()]);
         let matcher = KeywordMatcher::build(&RUST).unwrap();
         let mut buffers = ScanBuffers::default();
-        let (info, _) = get_bounds::<false>(line, &RUST, None, None, true, &mut buffers, &mut Vec::new());
+        let (info, _) = get_bounds::<false>(line, &RUST, None, None, Candidates::Unsearched, &mut buffers, &mut Vec::new());
         let mut spans = Vec::new();
         assert!(info.has_code);
         push_trimmed_spans(&mut spans, &buffers.code_ranges, line, 0);
@@ -2404,7 +2632,7 @@ mod tests {
         let line = "struct a;";
         let mut file_stats = FileStats::with_keywords(&[STRUCT.clone(),ENUM.clone(),TRAIT.clone()]);
         let mut buffers = ScanBuffers::default();
-        let (info, _) = get_bounds::<false>(line, &RUST, None, None, true, &mut buffers, &mut Vec::new());
+        let (info, _) = get_bounds::<false>(line, &RUST, None, None, Candidates::Unsearched, &mut buffers, &mut Vec::new());
         let mut spans = Vec::new();
         assert!(info.has_code);
         push_trimmed_spans(&mut spans, &buffers.code_ranges, line, 0);
@@ -2967,10 +3195,32 @@ mod tests {
                 bounds_multi(r#"say "quoted" more"#, &RUST_RAW, None, Some(1)));
         assert_eq!(TextInfo::none_all(true), bounds_multi(r##"done"#"##, &RUST_RAW, None, Some(1)));
 
-        // a closer with nothing open is not a delimiter: the quote of '"#"' opens an ordinary
+        // a closer with nothing open is not a delimiter. The quote of '"#"' opens an ordinary
         // string holding a '#', which is what that line means in Rust
         assert_eq!(TextInfo::from_slice_w_literal("let s = ;"),
                 bounds_multi(r##"let s = "#";"##, &RUST_RAW, None, None));
+    }
+
+    // An opener whose closer is written differently keeps every quote after it, since none of them
+    // can end it. Inside a comment the opener is text, and throwing the rest of the line away
+    // leaves the real string unread, so a comment symbol inside it opens a block that runs on.
+    #[test]
+    fn a_paired_opener_written_inside_a_comment_opens_nothing() {
+        // Where it stands in code it opens as it always did, with a comment earlier on the line.
+        // These two are what a rule that cancelled every opener behind a comment would break.
+        assert_eq!(TextInfo::new(Some(" let a = ".to_owned()), true, None, Some(1)),
+                bounds_multi(r##"/* c */ let a = r#"open "quoted"##, &RUST_RAW, None, None));
+        assert_eq!(TextInfo::from_slice_w_literal(" let a = ; done"),
+                bounds_multi(r##"/* c */ let a = r#"a /* b"#; done"##, &RUST_RAW, None, None));
+
+        assert_eq!(TextInfo::from_slice_w_literal(" let s = ;"),
+                bounds_multi(r##"/* r#" */ let s = "/*";"##, &RUST_RAW, None, None));
+        // the comment may have opened on an earlier line and closed on this one
+        assert_eq!(TextInfo::from_slice_w_literal(" let s = ;"),
+                bounds_multi(r##" r#" still comment */ let s = "/*";"##, &RUST_RAW, Some(0), None));
+        // what the lost string held counts as code, so its words reach the keyword count
+        assert_eq!(TextInfo::from_slice_w_literal(" let s = ;"),
+                bounds_multi(r##"/* r#" */ let s = "aaa struct bbb";"##, &RUST_RAW, None, None));
     }
 
     #[test]
@@ -3341,9 +3591,101 @@ mod tests {
                      "fn main() {\n    println!(\"hi\");\n}\n", "αβ\nγ"];
         for case in cases {
             let expected = case.lines().collect::<Vec<&str>>();
-            let actual = get_lines_of(case).map(|(_, line)| line).collect::<Vec<&str>>();
+            let finder = MaskFinder::of(b"");
+            let actual = MaskedLines::of(case, &finder).map(|(_, line, _)| line).collect::<Vec<&str>>();
             assert_eq!(expected, actual, "disagreed on {case:?}");
         }
+    }
+
+    // The candidate flag is what lets a line skip the scan, so it is held against a search of the
+    // line itself, over lines that cross the 64-byte blocks the masks are read from.
+    #[test]
+    fn a_line_is_a_candidate_exactly_when_it_holds_a_searched_byte() {
+        let searched = b"\"/";
+        let finder = MaskFinder::of(searched);
+        let long = "x".repeat(200);
+        let cases = [
+            "a\n/\n\"\nb".to_owned(),
+            format!("{long}\n{long}/\n/{long}\n{long}"),
+            format!("{}\n/{}\"\n", "y".repeat(63), "z".repeat(64)),
+            "no\r\nsymbols\r\nhere\r\n".to_owned(),
+            format!("{}/\n{}\n", "a".repeat(62), "b".repeat(65)),
+            "\n\n/\n\n".to_owned(),
+            "/".to_owned(),
+            "".to_owned(),
+        ];
+        for case in &cases {
+            let expected = case.lines().map(|line| line.bytes().any(|byte| searched.contains(&byte))).collect::<Vec<bool>>();
+            let actual = MaskedLines::of(case, &finder).map(|(_, _, candidate)| candidate).collect::<Vec<bool>>();
+            assert_eq!(expected, actual, "disagreed on {case:?}");
+            let starts = MaskedLines::of(case, &finder).map(|(start, line, _)| (start, line)).collect::<Vec<_>>();
+            for (start, line) in starts {
+                assert_eq!(&case[start..start + line.len()], line);
+            }
+        }
+    }
+
+    #[test]
+    fn the_positions_of_a_line_are_where_its_searched_bytes_sit() {
+        let searched = b"\"/";
+        let finder = MaskFinder::of(searched);
+        let long = "x".repeat(200);
+        let cases = [
+            "a\n/\n\"\nb".to_owned(),
+            format!("{long}\n{long}/\n/{long}\n{long}"),
+            format!("{}\n/{}\"\n", "y".repeat(63), "z".repeat(64)),
+            format!("{}/\n{}\n", "a".repeat(62), "b".repeat(65)),
+            format!("  /{long}/{long}\"\r\n\t\"{long}/"),
+            "/\r\n\"\n".to_owned(),
+            "".to_owned(),
+        ];
+        for case in &cases {
+            let mut lines = MaskedLines::of(case, &finder);
+            for expected in case.lines() {
+                let (_, line, has_candidates) = lines.next().unwrap();
+                assert_eq!(expected, line);
+                let positions = expected.bytes().enumerate().filter(|(_, byte)| searched.contains(byte))
+                        .map(|(at, _)| at as u32).collect::<Vec<u32>>();
+                assert_eq!(positions, lines.positions(), "disagreed on {expected:?} of {case:?}");
+                assert_eq!(!positions.is_empty(), has_candidates);
+            }
+            assert!(lines.next().is_none());
+        }
+    }
+
+    #[test]
+    fn the_scan_over_the_masked_positions_answers_as_the_search_of_the_line() {
+        let long = "x".repeat(70);
+        let contents = format!(concat!(
+            "    let a = \"text\"; // trailing\n",
+            "\t\t/* open\n",
+            "  still open */ let b = 'c';\n",
+            "{long}\"{long}\"\n",
+            "   \"{long}\\\"{long}\" /* {long} */\n",
+            "r#\"raw\"# and // more \"\n",
+            "   \n",
+            "\"\"\"\"\"\"\n",
+            "'\\'' '\"' \"'\"\n",
+            "{long}//{long}/*{long}*/\n",
+            "\t\t\t\t\t\t\t\t\t\t\t\t{long}{long}/* {long} */ \"{long}\"   \r\n",
+            "end // {long}"), long = long);
+        let plan = get_or_build_plan_of(&RUST);
+        let mut lines = MaskedLines::of(&contents, &plan.finder);
+        let mut seen = 0;
+        while let Some((_, raw_line, _)) = lines.next() {
+            let from_start = raw_line.trim_ascii_start();
+            let line = from_start.trim_ascii_end();
+            let lead = raw_line.len() - from_start.len();
+            let mut searched = ScanBuffers::default();
+            scan_line(line, Candidates::Unsearched, &RUST, &mut searched);
+            let mut masked = ScanBuffers::default();
+            scan_line(line, Candidates::At(lines.positions(), lead), &RUST, &mut masked);
+            assert_eq!((&searched.raw_strings, &searched.comments, &searched.com_starts, &searched.com_ends),
+                    (&masked.raw_strings, &masked.comments, &masked.com_starts, &masked.com_ends),
+                    "disagreed on {raw_line:?}");
+            seen += 1;
+        }
+        assert_eq!(12, seen);
     }
 
     // The resolution reads a symbol identity beside every position; the cases here are all the one
@@ -3351,8 +3693,8 @@ mod tests {
     fn resolved_double_counting(start_indices: Vec<usize>, end_indices: Vec<usize>, is_comment_open: bool)
     -> (Vec<usize>, Vec<usize>) {
         let language = Language::new("one-pair", ["x"], build_backslashed_quotes(), ["//"], &[("/*", "*/")], []);
-        let mut starts = start_indices.into_iter().map(|x| (x, 0u8, 0u8)).collect::<Vec<_>>();
-        let mut ends = end_indices.into_iter().map(|x| (x, 0u8, 0u8)).collect::<Vec<_>>();
+        let mut starts = start_indices.into_iter().map(|x| (x, 0u8, 0u32)).collect::<Vec<_>>();
+        let mut ends = end_indices.into_iter().map(|x| (x, 0u8, 0u32)).collect::<Vec<_>>();
         resolve_double_counting_of_adjacent_start_and_end_symbols(&mut starts, &mut ends, is_comment_open, &language);
         (starts.into_iter().map(|(x, _, _)| x).collect(), ends.into_iter().map(|(x, _, _)| x).collect())
     }
@@ -3425,7 +3767,7 @@ mod tests {
     fn a_close_that_touches_a_reopen_is_not_a_collision_when_the_lengths_differ() {
         let lua_like = Language::new("lua-like", ["x"], build_backslashed_quotes(), ["--"], &[("--[[", "]]")], []);
         // ]]--[[ with the block open from the line before: both symbols are real
-        let (mut starts, mut ends) = (vec![(2usize, 0u8, 0u8)], vec![(0usize, 0u8, 0u8)]);
+        let (mut starts, mut ends) = (vec![(2usize, 0u8, 0u32)], vec![(0usize, 0u8, 0u32)]);
         resolve_double_counting_of_adjacent_start_and_end_symbols(&mut starts, &mut ends, true, &lua_like);
         assert_eq!((vec![(2, 0, 0)], vec![(0, 0, 0)]), (starts, ends));
 
@@ -3836,17 +4178,88 @@ mod tests {
     }
 
     #[test]
+    fn a_file_that_is_not_ascii_counts_the_same_lines_and_a_faulty_one_is_still_refused() {
+        let root = std::env::temp_dir().join("mezura_utf8_test");
+        std::fs::create_dir_all(&root).unwrap();
+        let rust = LANGUAGE_MAP_REF.get("Rust").unwrap();
+        let mut buf = Vec::new();
+
+        let valid = root.join("valid.rs");
+        let contents = "fn main() {\n    // μια γραμμή 🦀\n    let a = 1;\n}\n";
+        std::fs::write(&valid, contents).unwrap();
+        let counted = parse_file_whole(&valid, "Rust", &mut buf, &EngineConfig::default()).unwrap();
+        assert_eq!(4, counted.lines);
+        assert_eq!(parse_lines_whole(contents, rust).classes, counted.classes);
+
+        let faulty = root.join("faulty.rs");
+        std::fs::write(&faulty, b"fn main() {}\n// \xFF\n").unwrap();
+        assert_eq!("stream did not contain valid UTF-8",
+                parse_file_whole(&faulty, "Rust", &mut buf, &EngineConfig::default()).unwrap_err());
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn a_file_is_read_to_its_end_whatever_length_the_listing_gave() {
         let path = std::env::temp_dir().join("a_file_is_read_to_its_end_whatever_length_the_listing_gave.rs");
         std::fs::write(&path, "x".repeat(40)).unwrap();
         let read_with = |size: u64| {
             let mut file = File::open(&path).unwrap();
-            read_file_into(&mut file, &mut Vec::new(), size).unwrap()
+            let mut buf = Vec::new();
+            let held = read_file_into(&mut file, &mut buf, size).unwrap();
+            held.of(&buf).len()
         };
 
         assert_eq!(40, read_with(4), "a file longer than the listing said was cut short");
         assert_eq!(40, read_with(0), "a file the listing could not size was cut short");
         assert_eq!(40, read_with(400), "a file shorter than the listing said was read past its end");
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_mapped_file_counts_the_same_lines_as_a_read_one() {
+        let path = std::env::temp_dir().join("a_mapped_file_counts_the_same_lines_as_a_read_one.rs");
+        let line = "let mapped = 1; // and a comment\n";
+        let lines = SMALLEST_MAPPED_FILE_BYTES.div_ceil(line.len()) + 100;
+        std::fs::write(&path, line.repeat(lines)).unwrap();
+
+        let mut file = File::open(&path).unwrap();
+        file.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(60)).unwrap();
+        let mut probe = Vec::new();
+        let held = read_file_into(&mut file, &mut probe, 0).unwrap();
+        assert!(matches!(held, HeldFile::Mapped(_)),
+                "a file of {} bytes was not mapped", lines * line.len());
+        assert_eq!(lines * line.len(), held.of(&probe).len());
+
+        let config = EngineConfig::default();
+        let parsed = |size: u64| {
+            let mut buf = Vec::new();
+            match parse_file(&path, size, "Rust", &mut buf, &mut ParseBuffers::default(),
+                    &shipped_lookup(), &mut KeywordMatchers::default(),
+                    &mut IdentificationMatchers::default(), &config, false, None, &HashMap::new()) {
+                Ok(FileOutcome::Counted(report, _)) => report.into_whole().lines,
+                _ => panic!("{} was not counted", path.display())
+            }
+        };
+        assert_eq!(parsed(get_size_of(&path)), parsed(0), "the mapped file counted other lines");
+        assert_eq!(lines, parsed(0));
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_large_file_written_just_now_is_read_and_not_mapped() {
+        let path = std::env::temp_dir().join("a_large_file_written_just_now_is_read_and_not_mapped.rs");
+        std::fs::write(&path, "x\n".repeat(SMALLEST_MAPPED_FILE_BYTES)).unwrap();
+
+        let mut file = File::open(&path).unwrap();
+        let mut buf = Vec::new();
+        let held = read_file_into(&mut file, &mut buf, 0).unwrap();
+        assert!(matches!(held, HeldFile::InBuffer(_)), "a file written just now was mapped");
+        assert_eq!(2 * SMALLEST_MAPPED_FILE_BYTES, held.of(&buf).len());
 
         std::fs::remove_file(&path).unwrap();
     }

@@ -1,6 +1,6 @@
 [package]
 name = "mezura-core"
-version = "1.1.1"
+version = "1.1.2"
 authors = ["Petros Papatheodorou <petrospapa21@gmail.com>"]
 edition = "2024"
 rust-version = "1.88"
@@ -22,3 +22,4 @@ include_dir = "0.6.2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+memmap2 = "0.9"

@@ -212,14 +212,14 @@ impl Language {
 
     // The whole width of one occurrence, which for a leveled pair depends on how many '=' it
     // carried; a plain or nesting pair ignores the level
-    pub(crate) fn comment_start_len(&self, symbol: u8, level: u8) -> usize {
+    pub(crate) fn comment_start_len(&self, symbol: u8, level: u32) -> usize {
         match self.get_comment_pair_of(symbol) {
             CommentPair::Leveled(pair) => pair.start_prefix.len() + level as usize + 1,
             CommentPair::Plain { start, .. } | CommentPair::Nesting { start, .. } => start.len()
         }
     }
 
-    pub(crate) fn comment_end_len(&self, symbol: u8, level: u8) -> usize {
+    pub(crate) fn comment_end_len(&self, symbol: u8, level: u32) -> usize {
         match self.get_comment_pair_of(symbol) {
             CommentPair::Leveled(pair) => pair.end_prefix.len() + level as usize + 1,
             CommentPair::Plain { end, .. } | CommentPair::Nesting { end, .. } => end.len()

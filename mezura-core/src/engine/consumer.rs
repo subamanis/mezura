@@ -20,7 +20,7 @@ pub(crate) fn start_parser_thread(id: usize, files_injector: Arc<Injector<Parsab
         language_map: Arc<HashMap<String,Language>>, nested_definitions: Arc<NestedLanguageDefinitions>,
         language_lookups: crate::SharedModuleLookups,
         config: Arc<EngineConfig>, started: Instant, counting_ended: Arc<AtomicU64>,
-        skipped_files: Arc<Mutex<SkippedFiles>>,
+        consumer_exits: Arc<(AtomicU64, AtomicU64)>, skipped_files: Arc<Mutex<SkippedFiles>>,
         progress: Arc<ScanProgress>) -> std::io::Result<JoinHandle<()>>
 {
     thread::Builder::new().name(format!("consumer-{id}")).spawn(move || {
@@ -30,7 +30,13 @@ pub(crate) fn start_parser_thread(id: usize, files_injector: Arc<Injector<Parsab
         // The last thing this thread does, and the only honest answer to how long the counting took:
         // 'run' joins these threads after calling the caller's callback, so its own clock cannot tell
         // the two apart.
-        counting_ended.fetch_max(started.elapsed().as_millis() as u64, Ordering::Relaxed);
+        let elapsed = started.elapsed();
+        counting_ended.fetch_max(elapsed.as_millis() as u64, Ordering::Relaxed);
+        if *phase_timing::ENABLED {
+            let micros = elapsed.as_micros() as u64;
+            consumer_exits.0.fetch_min(micros, Ordering::Relaxed);
+            consumer_exits.1.fetch_max(micros, Ordering::Relaxed);
+        }
     })
 }
 
@@ -55,7 +61,7 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
     let mut local_nested: Vec<HashMap<String, HashMap<String, Stats>>> =
             vec![HashMap::new(); modules];
     let mut local_files: Vec<HashMap<String, Vec<FileEntry>>> = vec![HashMap::new(); modules];
-    // A batch and not one file at a time. With four of these threads per core they all reach for the
+    // A batch and not one file at a time. With several of these threads per core they all reach for the
     // same queue head between files, and a contended steal comes back as Retry, which the arm below
     // answers by yielding: a whole scheduling round per file. A batch is half of what is left, so
     // the last files still spread out rather than queueing behind one thread.
@@ -142,8 +148,13 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                     },
                     Err(x) => {
                         progress.record_file_parsed(0);
-                        local_faulty.push(FaultyFileDetails::new(spell_out(&parsable_file.path), x,
-                                parsable_file.size))
+                        // The listing gives no size on unix, and the json report carries one for
+                        // every faulty file, so it is asked for here, on the failure path alone
+                        let size = match parsable_file.size {
+                            0 => std::fs::metadata(&parsable_file.path).map_or(0, |m| m.len()),
+                            listed => listed
+                        };
+                        local_faulty.push(FaultyFileDetails::new(spell_out(&parsable_file.path), x, size))
                     }
                 }
                 if buf.capacity() > file_parser::MAX_RETAINED_FILE_BUFFER_BYTES {

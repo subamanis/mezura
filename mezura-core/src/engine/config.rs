@@ -284,11 +284,10 @@ impl From<(usize,usize)> for Threads {
 impl Default for Threads {
     fn default() -> Self {
         let threads = num_cpus::get();
-        // Four counting threads per core. What they wait on is a blocking file open, so what decides
-        // the speed is how many reads are in flight and not how many cores exist.
+        let (threads_per_producer, consumers_per_thread) = if cfg!(windows) {(2, 4)} else {(4, 2)};
         Threads {
-            producers: (threads / 2).clamp(2, MAX_PRODUCERS_VALUE),
-            consumers: (threads * 4).clamp(8, MAX_CONSUMERS_VALUE)
+            producers: (threads / threads_per_producer).clamp(2, MAX_PRODUCERS_VALUE),
+            consumers: (threads * consumers_per_thread).clamp(8, MAX_CONSUMERS_VALUE)
         }
     }
 }

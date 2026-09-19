@@ -212,8 +212,9 @@ fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: Vec<DirEntry>,
                     continue;
                 };
                 local_relevant_files += 1;
-                // Free on Windows, where the directory listing carries it, and one call per file elsewhere.
-                let size = e.metadata().map_or(0, |m| m.len());
+                // Free on Windows, where the directory listing carries it. Elsewhere it would be one
+                // call per file, and the consumer learns the size from the read itself.
+                let size = if cfg!(windows) { e.metadata().map_or(0, |m| m.len()) } else { 0 };
                 files_injector.push(ParsableFile::new(path_buf, lang_name, module, size)
                         .with_extension_rules(language_lookup.find_extension_rules(name)));
                 progress.record_file_found();

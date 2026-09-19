@@ -528,6 +528,14 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
                       so naming the other one's hides nothing and says so
       size            the size column of the details rows, and the size that closes a 'list' row
       percentages     every percentage of the details rows, keeping the numbers they describe
+      files-percentages  one of those four, leaving the other three. This one and the next are
+                      the language's share of the whole scan
+      lines-percentages  its share of every line counted
+      code-percentages  how much of that language's own lines are code. The 'list' layout
+                      prints this percentage and the next one, and no others
+      comments-percentages  how much of them are comments
+      change-percentages  the percentages of a '--diff', leaving the absolute move beside each
+                      figure. A file count moves in whole things and never had one
       overview        the whole percentages section
       bar             only the [|||] bar of the overview, keeping the percentages and the colors
       history         the comparison with previous runs (the same as '--compare 0')
@@ -536,9 +544,8 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     The column names reach every layout except 'matrix', whose three rows stay whole. Hiding the
     column '--sort' orders by falls back to sorting by lines, and says so.
 
-    A '--diff' comparison obeys them too, taking each change away with its figure. Its
-    percentages are percentages of the change, so hiding those leaves the absolute move, and it
-    has no 'extra' column to hide.
+    A '--diff' comparison obeys them too, taking each change away with its figure, and it has no
+    'extra' column to hide.
 
     Errors and warnings are never hidden, and a hidden parsing info still reports the files that
     failed to parse, since the numbers would otherwise be wrong with nothing saying so.

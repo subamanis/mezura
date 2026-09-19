@@ -11,7 +11,7 @@ use super::paths::LocalDir;
 use super::{message_printer, suggestions, theme::Theme};
 
 // Printed at startup and by '--version'. Also in mezura/Cargo.toml, and the two move together.
-pub const VERSION_ID : &str = "v3.1.1";
+pub const VERSION_ID : &str = "v3.2.0";
 
 // command flags
 pub const TARGETS            :&str   = "targets";
@@ -231,6 +231,11 @@ pub struct Hidden {
     pub blanks: bool,
     pub size: bool,
     pub percentages: bool,
+    pub files_percentages: bool,
+    pub lines_percentages: bool,
+    pub code_percentages: bool,
+    pub comments_percentages: bool,
+    pub change_percentages: bool,
     pub overview: bool,
     pub bar: bool,
     pub history: bool,
@@ -238,11 +243,14 @@ pub struct Hidden {
 }
 
 impl Hidden {
-    fn get_pairs(self) -> [(&'static str, bool); 17] {
+    fn get_pairs(self) -> [(&'static str, bool); 22] {
         [("version", self.version), ("directory-info", self.directory_info), ("parsing-info", self.parsing_info),
          ("progress-bar", self.progress_bar), ("animations", self.animations), ("keywords", self.keywords),
          ("nested-languages", self.nested_languages), ("files", self.files), ("comments", self.comments),
          ("extra", self.extra), ("blanks", self.blanks), ("size", self.size), ("percentages", self.percentages),
+         ("files-percentages", self.files_percentages), ("lines-percentages", self.lines_percentages),
+         ("code-percentages", self.code_percentages), ("comments-percentages", self.comments_percentages),
+         ("change-percentages", self.change_percentages),
          ("overview", self.overview), ("bar", self.bar), ("history", self.history), ("timing", self.timing)]
     }
 
@@ -278,6 +286,11 @@ impl Hidden {
                 "blanks" => hidden.blanks = true,
                 "size" => hidden.size = true,
                 "percentages" => hidden.percentages = true,
+                "files-percentages" => hidden.files_percentages = true,
+                "lines-percentages" => hidden.lines_percentages = true,
+                "code-percentages" => hidden.code_percentages = true,
+                "comments-percentages" => hidden.comments_percentages = true,
+                "change-percentages" => hidden.change_percentages = true,
                 "overview" => hidden.overview = true,
                 "bar" => hidden.bar = true,
                 "history" => hidden.history = true,

@@ -6,5 +6,6 @@ pub mod targets;
 pub(crate) mod consumer;
 pub(crate) mod file_parser;
 pub(crate) mod identity;
+pub(crate) mod masks;
 pub(crate) mod modules;
 pub(crate) mod producer;

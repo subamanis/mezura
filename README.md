@@ -11,8 +11,8 @@ It lets you decide what counts as what, and how the report looks.
 The figures can be grouped by language, by module and by file.  
 Windows, Linux and macOS binaries are built and tested on every release.
 
-The whole Linux kernel (some languages were cut for screenshot purposes):
-<img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/hero2.png" width="1000">
+The whole Linux kernel, in five of the bundled themes:
+<img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/hero.gif" width="1187">
 
 
 ## Table of contents
@@ -114,14 +114,8 @@ mezura --by-file                         # show results for every file separatel
 mezura src/main.rs --explain             # why each line was counted the way it was
 ```
 
-In Windows PowerShell a comma needs a backtick before it, or the whole list needs quotation marks:
-`mezura "./src, ./tests"`.
-
 Files that a .gitignore ignores are skipped by default, and so are minified and generated files, so
 build artifacts and dependencies do not pollute the stats. See [What is skipped](#what-is-skipped).
-
-A run can be stopped at any time with Ctrl-C: the moving lines never hide the cursor or take over
-the screen, so the terminal is left as it was.
 
 ### Commands
 
@@ -633,6 +627,10 @@ With that said, it is important to mention the following limitations:
 
 - Two languages claiming one extension is settled per file, by a ```#!``` line or by evidence the language files declare, and only the files whose content says nothing follow the standing order of ```language_conflicts.txt```, parsed with that winner's symbols. ```--force-language``` decides outright, ```--no-heuristics``` turns the content reading off, and ```--no-shebang``` takes the ```#!``` line out of the whole business, the naming of files that carry no extension included.
 
+- On Linux and macOS a file is read without asking its size first, and the first read that comes back short is taken as its end. A read that fails partway through, on a failing disk or a network mount that answers short, hands back what it managed and reports the error only on the next call, which is never made: such a file is counted with the part that was read and does not appear among the faulty files. Asking would cost one system call per file, and that was decided against; on Windows the size comes with the directory listing and the whole file is read.
+
+- On Linux and macOS a file of 256 KB or more is mapped into memory rather than read, since copying it out of the page cache costs more than mapping it. If another program truncates that file in place during the few milliseconds mezura spends on it, the run dies with a bus error instead of counting what was there. That takes a truncation landing inside that window on a file of that size, and not a save through a new file, which is how editors and git write; a file modified in the last five seconds is read the old way, so one being generated at that moment is never mapped. ripgrep's memory maps carry the same exposure, and its help says so.
+
 
 ## How it compares
 
@@ -701,6 +699,8 @@ The report goes to the error output:
   running), opening, reading and parsing, with the milliseconds behind each, summed over every
   consumer thread, so the shares are the point
 - `[phase]`: how many files and megabytes were read, and at what rate per thread
+- `[phase]`: when the first counting thread ran out of work and when the last one finished, and the
+  spread between them, which is the tail of the run that one thread carries alone
 - `[finish]`: the counting, the printing, and the whole command
 
 When there are more consumers than the machine has hardware threads, one more `[phase]` line says

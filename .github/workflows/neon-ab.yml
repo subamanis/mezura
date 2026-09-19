@@ -1,0 +1,43 @@
+name: NEON A/B
+
+on:
+  workflow_dispatch:
+
+jobs:
+  measure:
+    name: NEON against the scalar block scan on arm64
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Fetch a corpus
+        run: git clone --depth 1 https://github.com/python/cpython.git ../cpython
+
+      - name: Build with NEON
+        run: |
+          cargo build --release
+          cp target/release/mezura /tmp/mezura-neon
+
+      - name: Build with the block scan forced scalar
+        run: |
+          sed -i '' 's/neon: std::arch::is_aarch64_feature_detected!("neon"),/neon: false,/; s/if std::arch::is_aarch64_feature_detected!("neon") {/if false {/' mezura-core/src/engine/masks.rs
+          grep -c "neon: false\|if false" mezura-core/src/engine/masks.rs
+          cargo build --release
+          cp target/release/mezura /tmp/mezura-scalar
+          git checkout mezura-core/src/engine/masks.rs
+
+      - name: Same output
+        run: |
+          /tmp/mezura-neon ../cpython > /tmp/neon.txt
+          /tmp/mezura-scalar ../cpython > /tmp/scalar.txt
+          diff /tmp/neon.txt /tmp/scalar.txt
+
+      - name: Measure
+        run: |
+          brew install hyperfine
+          sysctl -n machdep.cpu.brand_string hw.ncpu
+          hyperfine --warmup 3 --runs 30 '/tmp/mezura-scalar ../cpython > /dev/null' '/tmp/mezura-neon ../cpython > /dev/null'
