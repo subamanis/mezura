@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.1.2, unreleased
+
+14,662 Total lines  -  8,490 Code lines
+
+Fixes:
+
+- A string opener written inside a comment, such as Rust's 'r#"' or C++'s 'R"(', no longer
+  swallows the rest of that line.
+
+Other:
+
+- Counting is measurably faster. Each file is split into lines and scanned for its symbols in one pass over
+  64-byte blocks, where it used to take a search per line. On Linux the walk no longer asks the size
+  of every file, files of 256 KB and up are mapped into memory (mmap), and a file whose bytes are all ASCII
+  skips the UTF-8 validation.
+
+-----------------------------------------------------------------------------------------------------------
+
 ## 1.1.1, 2026-09-11
 
 14,126 Total lines  -  8,532 Code lines
