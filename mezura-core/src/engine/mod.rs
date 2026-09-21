@@ -9,3 +9,4 @@ pub(crate) mod identity;
 pub(crate) mod masks;
 pub(crate) mod modules;
 pub(crate) mod producer;
+pub(crate) mod test_detection;

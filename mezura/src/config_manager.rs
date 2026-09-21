@@ -100,6 +100,7 @@ impl Configuration {
     #[cfg(test)]
     pub fn set_hidden(&mut self, hidden: Hidden) -> &mut Self {
         self.engine.count_keywords = !hidden.keywords;
+        self.engine.detect_tests = !hidden.tests;
         self.view.hidden = hidden;
         self
     }
@@ -225,6 +226,7 @@ pub struct Hidden {
     pub animations: bool,
     pub keywords: bool,
     pub nested_languages: bool,
+    pub tests: bool,
     pub files: bool,
     pub comments: bool,
     pub extra: bool,
@@ -243,10 +245,10 @@ pub struct Hidden {
 }
 
 impl Hidden {
-    fn get_pairs(self) -> [(&'static str, bool); 22] {
+    fn get_pairs(self) -> [(&'static str, bool); 23] {
         [("version", self.version), ("directory-info", self.directory_info), ("parsing-info", self.parsing_info),
          ("progress-bar", self.progress_bar), ("animations", self.animations), ("keywords", self.keywords),
-         ("nested-languages", self.nested_languages), ("files", self.files), ("comments", self.comments),
+         ("nested-languages", self.nested_languages), ("tests", self.tests), ("files", self.files), ("comments", self.comments),
          ("extra", self.extra), ("blanks", self.blanks), ("size", self.size), ("percentages", self.percentages),
          ("files-percentages", self.files_percentages), ("lines-percentages", self.lines_percentages),
          ("code-percentages", self.code_percentages), ("comments-percentages", self.comments_percentages),
@@ -280,6 +282,7 @@ impl Hidden {
                 "animations" => hidden.animations = true,
                 "keywords" => hidden.keywords = true,
                 "nested-languages" => hidden.nested_languages = true,
+                "tests" => hidden.tests = true,
                 "files" => hidden.files = true,
                 "comments" => hidden.comments = true,
                 "extra" => hidden.extra = true,
@@ -939,8 +942,9 @@ impl ConfigurationBuilder {
                 no_ignore_files: self.no_ignore_files.unwrap_or(engine_defaults.no_ignore_files),
                 use_heuristics: !self.no_heuristics.unwrap_or(!engine_defaults.use_heuristics),
                 detect_shebangs: !self.no_shebang.unwrap_or(!engine_defaults.detect_shebangs),
-                // The two flags that answer both questions: what is counted and what is shown
+                // The three flags that answer what is counted and what is shown alike
                 count_keywords: !hidden.keywords,
+                detect_tests: !hidden.tests,
                 collect_files: self.by_file.is_some()
             },
             view: ViewConfig {

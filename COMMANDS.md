@@ -516,9 +516,13 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
                       lines of a '--diff'. What they settle into still prints, and a TERM=dumb
                       terminal hides them on its own
       keywords        the keyword counts, keeping the rest of the details rows. This one also
-                      stops them being counted, so it is the only name here that makes a run faster
+                      stops them being counted, so it is one of the two names here that make a
+                      run faster
       nested-languages  the rows that break a container file down, so a '.vue' weighs whole on
                       the Vue row with no sign of the TypeScript and CSS inside it
+      tests           the rows that split a language into its test code and the rest, drawn for
+                      the languages that say how a test is spelled or named. This one also stops
+                      the detection, which is the other name that makes a run faster
       files           the files column of the details rows
       comments        the comments column of the details rows
       extra           the third column of the details rows, which is what '--counting content'

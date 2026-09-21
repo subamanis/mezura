@@ -20,6 +20,7 @@ use crate::domain::{CommentPair, FileStats, LineContinuation};
 use crate::engine::masks::MaskFinder;
 use crate::engine::masks::is_ascii;
 use crate::engine::masks::BLOCK_BYTES;
+use crate::engine::test_detection::TestWalk;
 
 pub(crate) const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
 
@@ -75,10 +76,17 @@ pub(crate) struct FileReport {
     pub shell: FileStats,
     pub sections: Vec<SectionReport>,
     pub bytes: usize,
+    // The lines of the shell that are test code, already inside 'shell'
+    pub tests: Option<Box<TestReport>>,
 }
 
 pub(crate) struct SectionReport {
     pub language: String,
+    pub stats: FileStats,
+    pub bytes: usize,
+}
+
+pub(crate) struct TestReport {
     pub stats: FileStats,
     pub bytes: usize,
 }
@@ -1160,6 +1168,7 @@ pub(crate) struct LineRecord {
     pub spans: Vec<Span>,
     // An index into the interned names that 'into_parts' hands out beside the records
     pub language: u16,
+    pub in_test: bool,
 }
 
 impl ExplainLog {
@@ -1171,12 +1180,16 @@ impl ExplainLog {
                 (self.languages.len() - 1) as u16
             }
         };
-        self.records.push(LineRecord { class, carried, spans, language });
+        self.records.push(LineRecord { class, carried, spans, language, in_test: false });
     }
 
-    // The number of the line being walked right now, 1-based: its record has not been pushed yet
+    // The number of the line being walked right now, 1-based. Its record has not been pushed yet.
     fn get_current_line_number(&self) -> usize {
         self.records.len() + 1
+    }
+
+    fn mark_last_line_as_test(&mut self) {
+        if let Some(record) = self.records.last_mut() { record.in_test = true; }
     }
 
     #[cfg(test)]
@@ -1213,6 +1226,12 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
 
     // Nothing but the keyword search reads the spans, so a language with no keywords builds none
     let collecting_spans = config.count_keywords && matchers.for_language(language).is_some();
+    let mut test_walk = TestWalk::of(language, contents, config.detect_tests);
+    // The plain path writes a line's code range only where the nested language search or the test
+    // extent reads it
+    let ranges_wanted = !language.nested_languages.is_empty() || test_walk.is_some();
+    let mut test_stats = FileStats::default();
+    let mut test_bytes = 0;
 
     let mut shell = WalkState::default();
     let mut buckets: Vec<SectionBucket> = Vec::new();
@@ -1226,13 +1245,20 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
                 None => break
             }
         };
-        let had_code = if !has_candidates && shell.holds_nothing() {
-            walk_plain_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans, scan,
+        let (class, had_code) = if !has_candidates && shell.holds_nothing() {
+            walk_plain_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans, ranges_wanted, scan,
                     &shell, &mut shell_stats, code_spans, log)
         } else {
-            walk_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans,
+            walk_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans, ranges_wanted,
                     Candidates::At(lines.positions(), 0), scan, &mut shell, &mut shell_stats, code_spans, log)
         };
+        if let Some(tests) = &mut test_walk
+                && tests.observe_line(line_start, raw_line, had_code, &scan.code_ranges) {
+            test_stats.lines += 1;
+            test_stats.classes.bump(class);
+            test_bytes += end_of_line(contents, line_start, raw_line) - line_start;
+            if EXPLAIN { log.mark_last_line_as_test(); }
+        }
 
         // A region opener only counts where the shell left it as code, so one sitting inside a
         // comment or a string of the shell opens nothing
@@ -1275,7 +1301,8 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
                 }
                 // A section is written in another language, whose symbols the masks never searched
                 walk_line::<EXPLAIN>(inner_raw, inner_start, inner, bucket.collecting_spans,
-                        Candidates::Unsearched, scan, &mut inner_state, &mut bucket.stats, &mut bucket.spans, log);
+                        !inner.nested_languages.is_empty(), Candidates::Unsearched, scan, &mut inner_state,
+                        &mut bucket.stats, &mut bucket.spans, log);
             }
             bucket.bytes += section_to - section_from;
         }
@@ -1296,7 +1323,8 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
         shell: shell_stats,
         sections: buckets.into_iter().map(|bucket| SectionReport {
             language: bucket.language.name.clone(), stats: bucket.stats, bytes: bucket.bytes }).collect(),
-        bytes: contents.len()
+        bytes: contents.len(),
+        tests: (test_stats.lines > 0).then(|| Box::new(TestReport { stats: test_stats, bytes: test_bytes }))
     }
 }
 
@@ -1306,8 +1334,8 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
 // file are this line, so it is answered here without them.
 #[inline(always)]
 fn walk_plain_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &Language,
-    collecting_spans: bool, scan: &mut ScanBuffers, state: &WalkState, file_stats: &mut FileStats,
-    code_spans: &mut Vec<(u32, u32)>, log: &mut ExplainLog) -> bool
+    collecting_spans: bool, ranges_wanted: bool, scan: &mut ScanBuffers, state: &WalkState,
+    file_stats: &mut FileStats, code_spans: &mut Vec<(u32, u32)>, log: &mut ExplainLog) -> (LineClass, bool)
 {
     file_stats.lines += 1;
     let carried = if EXPLAIN { CarriedRecord::of(state) } else { CarriedRecord::Nothing };
@@ -1317,7 +1345,7 @@ fn walk_plain_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, langu
     if line.is_empty() {
         file_stats.classes.bump(LineClass::Blank);
         if EXPLAIN { log.record(LineClass::Blank, carried, language, Vec::new()); }
-        return false;
+        return (LineClass::Blank, false);
     }
     let lead = raw_line.len() - from_start.len();
     let base = line_start + lead;
@@ -1325,9 +1353,7 @@ fn walk_plain_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, langu
     let words = has_word_byte(line.as_bytes());
     let class = if words { LineClass::WordsInCode } else { LineClass::PunctuationInCode };
     file_stats.classes.bump(class);
-    // Only the search for a nested language's opening tag reads the ranges of a line that
-    // came back as code, so they are written only where such a tag can exist
-    if !language.nested_languages.is_empty() {
+    if ranges_wanted {
         scan.code_ranges.clear();
         scan.code_ranges.push((0, line.len()));
     }
@@ -1338,17 +1364,18 @@ fn walk_plain_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, langu
     if words && collecting_spans {
         code_spans.push((base as u32, (base + line.len()) as u32));
     }
-    true
+    (class, true)
 }
 
-// Returns whether the line left code behind, which is all the section machinery needs from it.
+// Returns the line's class and whether the line left code behind, which is what the section
+// machinery and the test extent need from it.
 fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &Language, collecting_spans: bool,
-    candidates: Candidates, scan: &mut ScanBuffers, state: &mut WalkState, file_stats: &mut FileStats,
-    code_spans: &mut Vec<(u32, u32)>, log: &mut ExplainLog) -> bool
+    ranges_wanted: bool, candidates: Candidates, scan: &mut ScanBuffers, state: &mut WalkState,
+    file_stats: &mut FileStats, code_spans: &mut Vec<(u32, u32)>, log: &mut ExplainLog) -> (LineClass, bool)
 {
     if !candidates.possible() && state.holds_nothing() {
-        return walk_plain_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans, scan,
-                state, file_stats, code_spans, log);
+        return walk_plain_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans, ranges_wanted,
+                scan, state, file_stats, code_spans, log);
     }
     file_stats.lines += 1;
     let carried = if EXPLAIN { CarriedRecord::of(state) } else { CarriedRecord::Nothing };
@@ -1374,7 +1401,7 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
         if state.open_str_symbol.is_some_and(|symbol| !language.string_crosses_lines(symbol)) {
             state.open_str_symbol = None;
         }
-        return false;
+        return (class, false);
     }
     let lead = raw_line.len() - from_start.len();
     let base = line_start + lead;
@@ -1390,7 +1417,7 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
             log.record(class, carried, language,
                     vec![Span { from: lead, to: lead + line.len(), kind: SpanKind::Comment }]);
         }
-        return false;
+        return (class, false);
     }
 
     let mut line_spans: Vec<Span> = Vec::new();
@@ -1448,7 +1475,7 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
     if counts_as_code && collecting_spans && has_code {
         push_trimmed_spans(code_spans, &scan.code_ranges, line, base);
     }
-    has_code
+    (class, has_code)
 }
 
 // Past the line and past its own newline, whichever width the file wrote that newline with
@@ -2578,8 +2605,8 @@ mod tests {
             let mut stats = FileStats::default();
             let mut code_spans = Vec::new();
             let candidates = if has_candidates { Candidates::Unsearched } else { Candidates::At(&[], 0) };
-            let had_code = walk_line::<true>(raw_line, 100, language, true, candidates, &mut scan, &mut state,
-                    &mut stats, &mut code_spans, &mut log);
+            let (_, had_code) = walk_line::<true>(raw_line, 100, language, true, !language.nested_languages.is_empty(),
+                    candidates, &mut scan, &mut state, &mut stats, &mut code_spans, &mut log);
             let records = log.records().iter().map(|record| (record.class, record.carried, record.spans.clone()))
                     .collect::<Vec<_>>();
             let ranges = if language.nested_languages.is_empty() { Vec::new() } else { scan.code_ranges.clone() };
@@ -4460,6 +4487,227 @@ mod tests {
             assert!(claimants.len() == 1, "the fixture identity '{identity}' is claimed by {} languages ({}), so its counts depend on the tie-break rule",
                     claimants.len(), claimants.join(", "));
         }
+    }
+
+    fn find_test_lines(contents: &str, language: &Language, config: &EngineConfig) -> Vec<usize> {
+        let mut log = ExplainLog::default();
+        parse_lines::<true>(contents, language, &NestedLanguageLookup { languages: &NO_SET_ASIDE,
+                extension_to_name: &NO_EXTENSIONS, set_aside: &NO_SET_ASIDE },
+                &mut KeywordMatchers::default(), config, &mut ParseBuffers::default(), &mut log);
+        log.records().iter().enumerate().filter(|(_, record)| record.in_test).map(|(at, _)| at + 1).collect()
+    }
+
+    fn find_rust_test_lines(contents: &str) -> Vec<usize> {
+        find_test_lines(contents, LANGUAGE_MAP_REF.get("Rust").unwrap(), &EngineConfig::default())
+    }
+
+    #[test]
+    fn an_inline_test_module_is_test_code_to_its_closing_brace() {
+        let source = concat!(
+            "fn prod() {}\n",
+            "#[cfg(test)]\n",
+            "mod tests {\n",
+            "    use super::*;\n",
+            "\n",
+            "    #[test]\n",
+            "    fn it_works() {\n",
+            "        assert!(true);\n",
+            "    }\n",
+            "}\n",
+            "fn also_prod() {}\n");
+        assert_eq!(find_rust_test_lines(source), vec![2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    }
+
+    #[test]
+    fn a_test_function_inside_a_test_module_opens_no_second_extent() {
+        let source = concat!(
+            "#[cfg(test)]\n",
+            "mod tests {\n",
+            "    #[test]\n",
+            "    fn a() {}\n",
+            "    #[tokio::test]\n",
+            "    async fn b() {}\n",
+            "}\n",
+            "fn prod() {}\n");
+        let language = LANGUAGE_MAP_REF.get("Rust").unwrap();
+        assert_eq!(find_test_lines(source, language, &EngineConfig::default()), vec![1, 2, 3, 4, 5, 6, 7]);
+
+        let report = parse_lines::<false>(source, language, &NestedLanguageLookup { languages: &NO_SET_ASIDE,
+                extension_to_name: &NO_EXTENSIONS, set_aside: &NO_SET_ASIDE },
+                &mut KeywordMatchers::default(), &EngineConfig::default(), &mut ParseBuffers::default(),
+                &mut ExplainLog::default());
+        let tests = report.tests.unwrap();
+        assert_eq!(tests.stats.lines, 7);
+        assert_eq!(tests.stats.classes.calculate_lines(), 7);
+        assert_eq!(tests.bytes, source.len() - "fn prod() {}\n".len());
+    }
+
+    #[test]
+    fn an_item_ending_in_a_semicolon_ends_the_extent_there() {
+        let source = concat!(
+            "#[cfg(test)]\n",
+            "use std::collections::HashMap;\n",
+            "#[cfg(test)]\n",
+            "mod test_support;\n",
+            "#[cfg(test)]\n",
+            "static SEEN: [u8; 3] = [0; 3];\n",
+            "#[cfg(test)]\n",
+            "const MARKER: &str = \"{\";\n",
+            "pub fn load() {\n",
+            "    let x = 1;\n",
+            "}\n");
+        assert_eq!(find_rust_test_lines(source), vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn a_binding_whose_value_is_a_block_ends_at_its_semicolon() {
+        let source = concat!(
+            "fn f(a: bool) {\n",
+            "    #[cfg(test)]\n",
+            "    let x = if a { 1 } else { 2 };\n",
+            "    #[cfg(test)]\n",
+            "    let y = match x {\n",
+            "        1 => 2,\n",
+            "        _ => 3,\n",
+            "    };\n",
+            "    let z = x + y;\n",
+            "}\n");
+        assert_eq!(find_rust_test_lines(source), vec![2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn an_if_under_the_attribute_carries_on_through_its_else_arms() {
+        let source = concat!(
+            "fn f(a: u8) {\n",
+            "    #[cfg(test)]\n",
+            "    if a == 1 {\n",
+            "        one();\n",
+            "    } else if a == 2 {\n",
+            "        two();\n",
+            "    }\n",
+            "    else {\n",
+            "        other();\n",
+            "    }\n",
+            "    prod();\n",
+            "}\n");
+        assert_eq!(find_rust_test_lines(source), vec![2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    }
+
+    #[test]
+    fn stacked_attributes_are_skipped_without_being_counted() {
+        let source = concat!(
+            "#[cfg(test)]\n",
+            "#[allow(dead_code)]\n",
+            "fn helper(x: [u8; 2]) -> u8 {\n",
+            "    x[0]\n",
+            "}\n",
+            "#[cfg(test)] #[macro_use] mod test_support;\n",
+            "fn prod() {}\n");
+        assert_eq!(find_rust_test_lines(source), vec![1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn an_attribute_spread_over_lines_covers_them_all() {
+        let source = concat!(
+            "#[cfg(\n",
+            "    test\n",
+            ")]\n",
+            "fn helper() {\n",
+            "}\n",
+            "fn prod() {}\n");
+        assert_eq!(find_rust_test_lines(source), vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn the_inner_attribute_makes_the_rest_of_the_file_test_code() {
+        let source = concat!(
+            "//! helpers for the tests\n",
+            "#![cfg(test)]\n",
+            "\n",
+            "pub fn helper() {}\n",
+            "pub fn other() {}\n");
+        assert_eq!(find_rust_test_lines(source), vec![2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn a_marker_inside_a_string_or_a_comment_opens_nothing() {
+        let source = concat!(
+            "const A: &str = \"#[test]\";\n",
+            "// #[cfg(test)]\n",
+            "/* #[test]\n",
+            "   fn x() {} */\n",
+            "const B: &str = r#\"#[cfg(test)]\"#;\n",
+            "fn prod() {}\n");
+        assert_eq!(find_rust_test_lines(source), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn a_brace_inside_a_string_or_a_comment_of_a_test_does_not_close_it() {
+        let source = concat!(
+            "#[test]\n",
+            "fn t() {\n",
+            "    let a = \"}\";\n",
+            "    let b = r#\"}\"#;\n",
+            "    let c = '}';\n",
+            "    // }\n",
+            "    /* } */ let d = 1;\n",
+            "}\n",
+            "fn prod() {}\n");
+        assert_eq!(find_rust_test_lines(source), vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn a_cfg_predicate_under_not_is_production_code() {
+        let source = concat!(
+            "#[cfg(not(test))]\n",
+            "fn prod() {\n",
+            "}\n",
+            "#[cfg(any(test, feature = \"x\"))]\n",
+            "fn helper() {\n",
+            "}\n");
+        assert_eq!(find_rust_test_lines(source), vec![4, 5, 6]);
+    }
+
+    #[test]
+    fn a_const_fn_and_an_extern_block_under_the_attribute_end_at_their_brace() {
+        let source = concat!(
+            "#[cfg(test)]\n",
+            "const fn f() -> u8 {\n",
+            "    let a = 1;\n",
+            "    a\n",
+            "}\n",
+            "#[cfg(test)]\n",
+            "extern \"C\" {\n",
+            "    fn g();\n",
+            "}\n",
+            "#[cfg(test)]\n",
+            "extern crate foo;\n",
+            "fn prod() {}\n");
+        assert_eq!(find_rust_test_lines(source), vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    }
+
+    #[test]
+    fn nothing_is_test_code_when_detection_is_off() {
+        let source = "#[test]\nfn t() {}\n";
+        let language = LANGUAGE_MAP_REF.get("Rust").unwrap();
+        let off = EngineConfig { detect_tests: false, ..EngineConfig::default() };
+        assert_eq!(find_test_lines(source, language, &off), Vec::<usize>::new());
+        assert_eq!(find_test_lines(source, language, &EngineConfig::default()), vec![1, 2]);
+    }
+
+    #[test]
+    fn a_d_unittest_block_is_test_code_to_its_closing_brace() {
+        let source = concat!(
+            "int prod() { return 1; }\n",
+            "unittest {\n",
+            "    assert(prod() == 1);\n",
+            "}\n",
+            "version(unittest) {\n",
+            "    int helper() { return 2; }\n",
+            "}\n",
+            "int unittests = 3;\n");
+        assert_eq!(find_test_lines(source, LANGUAGE_MAP_REF.get("D").unwrap(), &EngineConfig::default()),
+                vec![2, 3, 4, 5, 6, 7]);
     }
 }
 

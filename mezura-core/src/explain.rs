@@ -36,6 +36,9 @@ pub struct ExplainedLine {
     /// The line cut into its stretches of code, string and comment, in order and touching each
     /// other. Whitespace at either end of the line sits outside them, and a blank line has none.
     pub spans: Vec<Span>,
+    /// Whether the line is test code, which only a language that says how a test is spelled can
+    /// answer, and only while [`crate::EngineConfig::detect_tests`] is on.
+    pub in_test: bool,
 }
 
 /// What was open when a line began.
@@ -151,6 +154,7 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
             read_as: (read_by != language).then(|| read_by.to_owned()),
             carried: spell_out_carried(record.carried, nested_lookup.find_by_name(read_by)),
             spans: record.spans,
+            in_test: record.in_test,
         }
     }).collect::<Vec<_>>();
 

@@ -323,8 +323,7 @@ pub struct EngineConfig {
     /// tools are two decisions: a vendored dependency is usually hidden by one and kept by the
     /// other.
     pub no_ignore_files: bool,
-    /// Whether to count the words each language declares. Turning it off stops the counting too,
-    /// since nothing else reads them and the work would be thrown away.
+    /// Whether to count the words each language declares.
     pub count_keywords: bool,
     /// Whether a bundled file goes into the figures. Off by default, which leaves it out of every
     /// one of them and reports it as skipped.
@@ -341,7 +340,10 @@ pub struct EngineConfig {
     /// Whether a file with no extension is identified by the interpreter its `#!` line names. True
     /// by default. Set to false, such a file is never opened and never counted, and no `#!` line
     /// decides anything, a contested extension included.
-    pub detect_shebangs: bool
+    pub detect_shebangs: bool,
+    /// Whether the lines of a file that are test code are told apart from the rest, for the
+    /// languages that say how a test is spelled. True by default.
+    pub detect_tests: bool
 }
 
 // Written out rather than derived, because a derived 'count_keywords' would be false and anyone
@@ -364,7 +366,8 @@ impl Default for EngineConfig {
             count_not_code: false,
             collect_files: false,
             use_heuristics: true,
-            detect_shebangs: true
+            detect_shebangs: true,
+            detect_tests: true
         }
     }
 }

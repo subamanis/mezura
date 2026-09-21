@@ -11,6 +11,7 @@ use crate::{EngineConfig, FaultyFileDetails, FaultyFilesListMut, FileEntry, File
         Language, NestedLanguageMapMut, ParsableFile, ScanProgress, ScanSkip, SkippedFiles, Stats,
         StatsMapMut, phase_timing};
 use crate::engine::file_parser;
+use crate::engine::test_detection;
 use crate::languages::NestedLanguageDefinitions;
 
 const INITIAL_FILE_BUFFER_BYTES : usize = 150;
@@ -98,6 +99,9 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                         &config, parsable_file.written_by_hand, parsable_file.extension_rules.as_deref(),
                         shebang_map) {
                     Ok(file_parser::FileOutcome::Counted(report, resolved)) => {
+                        if *test_detection::PRINT_TEST_LINES && let Some(tests) = &report.tests {
+                            eprintln!("{}\t{}\t{}", tests.stats.lines, tests.bytes, parsable_file.path.display());
+                        }
                         let lang_name = resolved.as_deref().unwrap_or(lang_name);
                         progress.record_file_parsed(report.total_lines());
                         let keywords = &language_map.get(lang_name).unwrap().keywords;
