@@ -77,6 +77,7 @@ Three things to know before you start:
 | `Nested language start` *(opt)* | Openers of sections written in another language | `<script <style` |
 | `Nested language end` | Their closers, in the same order | `</script> </style>` |
 | `Nested language default` | The extension each section falls to when its tag names none | `js css` |
+| `Tests` *(opt)* | What a test starts with, and which file names are test files | see below |
 | `Keyword` *(opt, repeatable)* | What to count beside the lines | see below |
 
 A block marked *(opt)* can be left out entirely. One that has "in the same order" under it comes
@@ -241,6 +242,34 @@ js css
 Note what it does **not** declare: no string symbols, because the quotes of markup delimit
 attributes and its text is full of apostrophes, and no `//`, because the shell has no such comment.
 Everything that needs those lives inside the blocks and carries its own language's rules.
+
+## Test code
+
+Some languages put tests in the same file as the code. Declare what a test starts with, and the
+lines from there to the end of that item go to a `tests` row under the language. Declare which
+file names are test files, and every line of those files goes to the same row.
+
+```
+Tests
+    MARKERS
+    #[ #![
+    FILE NAMES
+    tests.rs test.rs *_test.rs *_tests.rs test_*
+```
+
+Either line can be left out. A block with neither refuses the file.
+
+`MARKERS` is what is searched for. `#[` and `#![` are read as Rust attributes: any attribute with
+`test` in its name starts a test, `#[cfg(...)]` starts one when its predicate has `test` outside a
+`not(...)`, and `#![cfg(test)]` makes the rest of the file tests. Any other marker is a plain word,
+like D's `unittest`. A test runs from the marker to the brace matching the first `{`, or to the
+first `;`, whichever comes first, and an `if` continues through its `else`.
+
+`FILE NAMES` takes three shapes only: `*suffix`, `prefix*` and a whole name, case-sensitive. The
+directory names `test`, `tests` and `__tests__` are built in and the same for every language, so
+file names are only checked outside them, and skipped inside `examples`, `benches` and `bin`.
+
+What each language gets right and what it misses is in `TEST_DETECTION.md`.
 
 ## Keywords
 

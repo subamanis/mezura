@@ -49,6 +49,10 @@ pub struct Language {
     pub identifying_line_starts : Vec<String>,
     /// The same, for a literal found anywhere in a line.
     pub identifying_line_contains : Vec<String>,
+    /// What a test starts with inside a file of this language, `#[` and `#![` for Rust, `unittest` for D.
+    pub test_markers : Vec<String>,
+    /// Which file names are test files, `*_test.go` for Go.
+    pub test_file_names : Vec<TestFileName>,
     // Worked out from the symbols above and reused for every file of this language.
     pub(crate) scan_plan : OnceLock<crate::engine::file_parser::ScanPlan>
 }
@@ -80,6 +84,8 @@ impl Language {
             keywords : keywords.into_iter().collect(),
             identifying_line_starts : Vec::new(),
             identifying_line_contains : Vec::new(),
+            test_markers : Vec::new(),
+            test_file_names : Vec::new(),
             scan_plan : OnceLock::new()
         }
     }
@@ -111,6 +117,15 @@ impl Language {
     /// Adds the interpreter names a `#!` line may carry.
     pub fn with_shebangs(mut self, interpreters: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
         self.shebangs.extend(owned_strings(interpreters));
+        self
+    }
+
+    /// Declares what a test starts with inside a file, and which file names are test files.
+    pub fn with_tests(mut self, markers: impl IntoIterator<Item = impl AsRef<str>>,
+        file_names: &[TestFileName]) -> Self
+    {
+        self.test_markers.extend(owned_strings(markers));
+        self.test_file_names.extend(file_names.iter().cloned());
         self
     }
 
@@ -390,6 +405,43 @@ impl NestedLanguage {
     /// A section between the two tags, falling back to the named extension.
     pub fn of(start: &str, end: &str, default: &str) -> NestedLanguage {
         NestedLanguage { start: start.to_owned(), end: end.to_owned(), default: default.to_owned() }
+    }
+}
+
+/// One shape a test file's name can take, as written under `FILE NAMES`. Case-sensitive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TestFileName {
+    /// Written `*_test.go`.
+    EndsWith(String),
+    /// Written `test_*`.
+    StartsWith(String),
+    /// Written whole, `tests.rs`.
+    Exact(String)
+}
+
+impl TestFileName {
+    /// Reads one written form. `None` for a `*` anywhere but at one end, and for a `*` alone.
+    pub fn of(written: &str) -> Option<TestFileName> {
+        let stars = written.matches('*').count();
+        if let Some(suffix) = written.strip_prefix('*') && stars == 1 && !suffix.is_empty() {
+            return Some(TestFileName::EndsWith(suffix.to_owned()));
+        }
+        if let Some(prefix) = written.strip_suffix('*') && stars == 1 && !prefix.is_empty() {
+            return Some(TestFileName::StartsWith(prefix.to_owned()));
+        }
+        if stars == 0 && !written.is_empty() {
+            return Some(TestFileName::Exact(written.to_owned()));
+        }
+        None
+    }
+
+    /// Whether a file of this name is one.
+    pub fn matches(&self, file_name: &str) -> bool {
+        match self {
+            TestFileName::EndsWith(suffix) => file_name.ends_with(suffix.as_str()),
+            TestFileName::StartsWith(prefix) => file_name.starts_with(prefix.as_str()),
+            TestFileName::Exact(name) => file_name == name
+        }
     }
 }
 
@@ -931,4 +983,21 @@ mod tests {
         assert_eq!(Some("\\".to_owned()), language("\\").line_continuation.map(|x| x.symbol));
     }
 
+    #[test]
+    fn a_test_file_name_takes_one_of_three_shapes_and_matches_the_case_it_is_written_in() {
+        let ends = TestFileName::of("*_test.go").unwrap();
+        let starts = TestFileName::of("test_*").unwrap();
+        let whole = TestFileName::of("tests.rs").unwrap();
+        assert_eq!(TestFileName::EndsWith("_test.go".to_owned()), ends);
+        assert_eq!(TestFileName::StartsWith("test_".to_owned()), starts);
+        assert_eq!(TestFileName::Exact("tests.rs".to_owned()), whole);
+
+        assert!(ends.matches("parser_test.go") && !ends.matches("parser_test.rs") && !ends.matches("_test.go.bak"));
+        assert!(starts.matches("test_parser.rs") && !starts.matches("Test_parser.rs") && !starts.matches("mytest_x.rs"));
+        assert!(whole.matches("tests.rs") && !whole.matches("mytests.rs") && !whole.matches("tests.rs.orig"));
+
+        for wrong in ["", "*", "**", "a*b", "*a*", "test_*.rs*"] {
+            assert_eq!(None, TestFileName::of(wrong), "'{wrong}' was read as a shape");
+        }
+    }
 }

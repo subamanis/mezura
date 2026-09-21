@@ -34,6 +34,10 @@ Self-nesting comment start
 Self-nesting comment end
 +/
 
+Tests
+    MARKERS
+    unittest
+
 Keyword
 NAME
 classes

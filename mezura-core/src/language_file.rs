@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::{Keyword, Language, LeveledPair, LineContinuation, NestedLanguage, StringRules};
+use crate::{Keyword, Language, LeveledPair, LineContinuation, NestedLanguage, StringRules, TestFileName};
 use crate::engine::identity::ClaimKind;
 
 /// What the language conflicts file decides. It names who wins an extension or a file name that
@@ -119,6 +119,9 @@ const CANCELLED_AFTER          : &str = "Cancelled after";
 const NESTED_LANGUAGE_START    : &str = "Nested language start";
 const NESTED_LANGUAGE_END      : &str = "Nested language end";
 const NESTED_LANGUAGE_DEFAULT  : &str = "Nested language default";
+const TESTS                    : &str = "Tests";
+const TEST_MARKERS             : &str = "MARKERS";
+const TEST_FILE_NAMES          : &str = "FILE NAMES";
 const KEYWORD                  : &str = "Keyword";
 const KEYWORD_NAME             : &str = "NAME";
 const KEYWORD_ALIASES          : &str = "ALIASES";
@@ -514,6 +517,25 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         header = read_next_header(lines);
     }
 
+    // Either half may be absent, both may not. A name of any other shape refuses the file.
+    let mut test_markers = Vec::new();
+    let mut test_file_names = Vec::new();
+    if header.as_deref() == Some(TESTS) {
+        header = read_next_header(lines);
+        if header.as_deref() == Some(TEST_MARKERS) {
+            test_markers = split_line_on_whitespace(&read_value_line(lines)?);
+            if test_markers.is_empty() {return None;}
+            header = read_next_header(lines);
+        }
+        if header.as_deref() == Some(TEST_FILE_NAMES) {
+            let written = split_line_on_whitespace(&read_value_line(lines)?);
+            if written.is_empty() {return None;}
+            test_file_names = written.iter().map(|name| TestFileName::of(name)).collect::<Option<Vec<_>>>()?;
+            header = read_next_header(lines);
+        }
+        if test_markers.is_empty() && test_file_names.is_empty() {return None;}
+    }
+
     let mut keywords = Vec::new();
     while header.as_deref() == Some(KEYWORD) {
         if read_next_header(lines)?.as_str() != KEYWORD_NAME {return None;}
@@ -553,7 +575,8 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
             .with_nested_languages(&nested_languages)
             .with_filenames(&filenames)
             .with_shebangs(&shebangs)
-            .with_identification(&identifying_line_starts, &identifying_line_contains))
+            .with_identification(&identifying_line_starts, &identifying_line_contains)
+            .with_tests(&test_markers, &test_file_names))
 }
 
 /// Reads the file that settles contested extensions, and the lines of it that did not parse.
@@ -1197,6 +1220,40 @@ pl      Perl, Prolog
                 Nested language start\n<script\nNested language end\n</script>\nNested language default\njs\n\n\
                 String symbols\n\n\nComment symbols\n\n";
         assert!(parse_language(misplaced).is_none());
+    }
+
+    #[test]
+    fn a_tests_block_declares_the_markers_and_the_file_names_and_needs_one_of_them() {
+        let good = "Language\nRustlike\n\nExtensions\nrsl\n\nString symbols\n\n\nComment symbols\n//\n\n\
+                Tests\n    MARKERS\n    #[ #![\n    FILE NAMES\n    tests.rs *_test.rs test_*\n\n\
+                Keyword\n    NAME\n    structs\n    ALIASES\n    struct\n";
+        let parsed = parse_language(good).expect("the declaration must parse");
+        assert_eq!(vec!["#[".to_owned(), "#![".to_owned()], parsed.test_markers);
+        assert_eq!(vec![TestFileName::Exact("tests.rs".to_owned()), TestFileName::EndsWith("_test.rs".to_owned()),
+                TestFileName::StartsWith("test_".to_owned())], parsed.test_file_names);
+        assert_eq!(1, parsed.keywords.len(), "the keywords after the block were lost");
+
+        let markers_alone = good.replace("    FILE NAMES\n    tests.rs *_test.rs test_*\n", "");
+        assert!(parse_language(&markers_alone).expect("one half alone must parse").test_file_names.is_empty());
+        let names_alone = good.replace("    MARKERS\n    #[ #![\n", "");
+        assert!(parse_language(&names_alone).expect("one half alone must parse").test_markers.is_empty());
+        let neither = good.replace("    MARKERS\n    #[ #![\n    FILE NAMES\n    tests.rs *_test.rs test_*\n", "");
+        assert!(parse_language(&neither).is_none(), "a block holding nothing was accepted");
+        let empty_markers = good.replace("    #[ #![\n", "    \n");
+        assert!(parse_language(&empty_markers).is_none());
+        for wrong in ["a*b", "*", "**test", "test_*.rs*"] {
+            let shape = good.replace("tests.rs *_test.rs test_*", wrong);
+            assert!(parse_language(&shape).is_none(), "'{wrong}' is no shape a file name takes and was accepted");
+        }
+
+        let misplaced = "Language\nRustlike\n\nExtensions\nrsl\n\nTests\n    MARKERS\n    #[\n\n\
+                String symbols\n\n\nComment symbols\n//\n";
+        assert!(parse_language(misplaced).is_none());
+
+        assert_eq!(vec!["#[".to_owned(), "#![".to_owned()],
+                parse_language_file(LANGUAGES_DIR.to_owned() + "Rust.txt").unwrap().test_markers);
+        assert_eq!(vec!["unittest".to_owned()],
+                parse_language_file(LANGUAGES_DIR.to_owned() + "D.txt").unwrap().test_markers);
     }
 
     #[test]

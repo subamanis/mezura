@@ -27,6 +27,10 @@ Self-nesting comment start
 Self-nesting comment end
 */
 
+Tests
+    MARKERS
+    #[ #![
+
 Keyword
     NAME
     structs
