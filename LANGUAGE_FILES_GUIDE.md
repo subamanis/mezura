@@ -257,7 +257,8 @@ Tests
     tests.rs test.rs *_test.rs *_tests.rs test_*
 ```
 
-Either line can be left out. A block with neither refuses the file.
+Either line can be left out, and `MARKERS` comes first when both are there. A block with neither
+refuses the file.
 
 `MARKERS` is what is searched for. `#[` and `#![` are read as Rust attributes: any attribute with
 `test` in its name starts a test, `#[cfg(...)]` starts one when its predicate has `test` outside a

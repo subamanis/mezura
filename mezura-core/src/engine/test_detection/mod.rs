@@ -7,7 +7,7 @@ use std::sync::LazyLock;
 
 use memchr::memmem;
 
-use crate::Language;
+use crate::{Language, LineClass};
 
 const ELSE : &[u8] = b"else";
 
@@ -23,6 +23,7 @@ pub(crate) struct TestWalk<'a> {
     state: State,
     // The offset the scan of the open extent resumes from, which can sit past the current line
     cursor: usize,
+    held: Vec<(LineClass, usize)>,
 }
 
 impl<'a> TestWalk<'a> {
@@ -39,18 +40,29 @@ impl<'a> TestWalk<'a> {
         if candidates.is_empty() { return None; }
         candidates.sort_unstable();
 
-        Some(TestWalk { contents: bytes, markers, candidates, next: 0, state: State::Idle, cursor: 0 })
+        Some(TestWalk { contents: bytes, markers, candidates, next: 0, state: State::Idle, cursor: 0,
+                held: Vec::new() })
     }
 
     // Whether the line just classified is test code. The ranges are offsets into the line with its
-    // whitespace trimmed at both ends, and they are read only where the line held code.
+    // whitespace trimmed at both ends, and they are read only where the line held code. A yes may
+    // also claim the lines held back since a closing brace, which 'take_held' hands out.
     pub(crate) fn observe_line(&mut self, line_start: usize, raw_line: &str, has_code: bool,
-        ranges: &[(usize, usize)]) -> bool
+        ranges: &[(usize, usize)], class: LineClass, bytes: usize) -> bool
     {
+        let line_end = line_start + raw_line.len();
+        if self.state == State::Idle {
+            while self.candidates.get(self.next).is_some_and(|(at, _)| *at < line_start) {
+                self.next += 1;
+            }
+            if self.candidates.get(self.next).is_none_or(|(at, _)| *at >= line_end) {
+                return false;
+            }
+        }
+
         let from_start = raw_line.trim_ascii_start();
         let base = line_start + raw_line.len() - from_start.len();
         let line = from_start.trim_ascii_end().as_bytes();
-        let line_end = line_start + raw_line.len();
         let ranges: &[(usize, usize)] = if has_code { ranges } else { &[] };
 
         let mut is_test = matches!(self.state, State::Seeking { .. } | State::Inside { .. } | State::WholeFile);
@@ -68,9 +80,15 @@ impl<'a> TestWalk<'a> {
                     let Some(found) = self.read_marker(at, &self.markers[marker as usize], base, ranges) else { continue };
                     is_test = true;
                     match found {
-                        Marker::WholeFile => {
-                            self.state = State::WholeFile;
-                            return true;
+                        // An inner attribute at the start of a line covers the file. Indented, it
+                        // covers the block around it.
+                        Marker::WholeFile { after } => {
+                            if at == line_start {
+                                self.state = State::WholeFile;
+                                return true;
+                            }
+                            self.cursor = after;
+                            self.state = State::Inside { depth: 1 };
                         },
                         Marker::Extent { after } => {
                             self.cursor = after;
@@ -81,15 +99,25 @@ impl<'a> TestWalk<'a> {
                 State::Seeking { .. } => if !self.seek_opener(base, line, ranges) { return is_test; },
                 State::Inside { .. } => if !self.seek_closer(base, line, ranges) { return is_test; },
                 State::AfterClose => match self.look_past_closer(base, line, ranges) {
-                    Look::Exhausted => return is_test,
+                    Look::Exhausted => {
+                        if !is_test { self.held.push((class, bytes)); }
+                        return is_test;
+                    },
                     Look::Else => {
                         is_test = true;
                         self.state = State::Seeking { depth: 0, ends: Terminator::BraceOrSemicolon };
                     },
-                    Look::Other => self.state = State::Idle
+                    Look::Other => {
+                        self.held.clear();
+                        self.state = State::Idle;
+                    }
                 }
             }
         }
+    }
+
+    pub(crate) fn take_held(&mut self) -> std::vec::Drain<'_, (LineClass, usize)> {
+        self.held.drain(..)
     }
 
     fn read_marker(&self, at: usize, marker: &str, base: usize, ranges: &[(usize, usize)]) -> Option<Marker> {
@@ -110,7 +138,9 @@ impl<'a> TestWalk<'a> {
     }
 
     // Every bracket moves the depth, and an opener or a terminator counts only at depth zero. The
-    // words met at depth zero decide which of the two ends the item.
+    // words met at depth zero decide which of the two ends the item. A closing brace at depth zero
+    // is the block around the marked thing ending, so a marker on a field, a variant or an arm
+    // stops there.
     fn seek_opener(&mut self, base: usize, line: &[u8], ranges: &[(usize, usize)]) -> bool {
         let State::Seeking { mut depth, mut ends } = self.state else { return false };
         for &(from, to) in ranges {
@@ -119,7 +149,15 @@ impl<'a> TestWalk<'a> {
                 let byte = line[at];
                 match byte {
                     b'(' | b'[' => depth += 1,
-                    b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+                    b')' | b']' => depth = depth.saturating_sub(1),
+                    b'}' => {
+                        if depth == 0 {
+                            self.state = State::Idle;
+                            self.cursor = base + at + 1;
+                            return true;
+                        }
+                        depth -= 1;
+                    },
                     b'{' => {
                         if depth == 0 && ends != Terminator::Semicolon {
                             self.state = State::Inside { depth: 1 };
@@ -135,7 +173,7 @@ impl<'a> TestWalk<'a> {
                     },
                     _ if depth == 0 && ends.is_open() && is_word_start(byte) => {
                         let end = find_word_end(line, at);
-                        ends = ends.after(&line[at..end]);
+                        ends = ends.read_word(&line[at..end]);
                         at = end;
                         continue;
                     },
@@ -187,8 +225,22 @@ impl<'a> TestWalk<'a> {
 }
 
 pub(super) enum Marker {
-    WholeFile,
+    WholeFile { after: usize },
     Extent { after: usize },
+}
+
+pub(super) fn is_word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_' || byte >= 0x80
+}
+
+pub(super) fn is_word_start(byte: u8) -> bool {
+    byte.is_ascii_alphabetic() || byte == b'_' || byte >= 0x80
+}
+
+pub(super) fn find_word_end(bytes: &[u8], from: usize) -> usize {
+    let mut at = from;
+    while at < bytes.len() && is_word_byte(bytes[at]) { at += 1; }
+    at
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -218,7 +270,7 @@ impl Terminator {
         matches!(self, Terminator::Undecided | Terminator::AfterConst | Terminator::AfterExtern)
     }
 
-    fn after(self, word: &[u8]) -> Terminator {
+    fn read_word(self, word: &[u8]) -> Terminator {
         match (self, word) {
             (Terminator::Undecided, b"pub" | b"unsafe" | b"async" | b"default") => Terminator::Undecided,
             (Terminator::Undecided, b"let" | b"use" | b"type" | b"static") => Terminator::Semicolon,
@@ -239,27 +291,13 @@ enum Look {
     Other,
 }
 
-pub(super) fn is_word_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'_' || byte >= 0x80
-}
-
-pub(super) fn is_word_start(byte: u8) -> bool {
-    byte.is_ascii_alphabetic() || byte == b'_' || byte >= 0x80
-}
-
-pub(super) fn find_word_end(bytes: &[u8], from: usize) -> usize {
-    let mut at = from;
-    while at < bytes.len() && is_word_byte(bytes[at]) { at += 1; }
-    at
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn the_words_after_the_attribute_decide_what_ends_the_item() {
-        let decide = |words: &[&[u8]]| words.iter().fold(Terminator::Undecided, |ends, word| ends.after(word));
+        let decide = |words: &[&[u8]]| words.iter().fold(Terminator::Undecided, |ends, word| ends.read_word(word));
         assert_eq!(decide(&[b"fn"]), Terminator::BraceOrSemicolon);
         assert_eq!(decide(&[b"pub", b"fn"]), Terminator::BraceOrSemicolon);
         assert_eq!(decide(&[b"mod"]), Terminator::BraceOrSemicolon);

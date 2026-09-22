@@ -13,6 +13,9 @@ const CFG_ATTR : &[u8] = b"cfg_attr";
 const TEST : &[u8] = b"test";
 const BENCH : &[u8] = b"bench";
 const NOT : &[u8] = b"not";
+const LINE_COMMENT : &[u8] = b"//";
+const BLOCK_COMMENT_START : &[u8] = b"/*";
+const BLOCK_COMMENT_END : &[u8] = b"*/";
 
 pub(super) fn is_opener(marker: &str) -> bool {
     OPENERS.contains(&marker)
@@ -29,7 +32,8 @@ pub(super) fn read(contents: &[u8], at: usize) -> Option<Marker> {
             else if name == CFG_ATTR { find_arguments(rest).is_some_and(applies_a_test_attribute) }
             else { holds_test(name) || name == BENCH };
     if !is_test { return None; }
-    Some(if inner { Marker::WholeFile } else { Marker::Extent { after: close + 1 } })
+    let after = close + 1;
+    Some(if inner { Marker::WholeFile { after } } else { Marker::Extent { after } })
 }
 
 fn find_matching_bracket(bytes: &[u8], open: usize, closer: u8) -> Option<usize> {
@@ -43,6 +47,10 @@ fn find_matching_bracket(bytes: &[u8], open: usize, closer: u8) -> Option<usize>
             at = skip_string(bytes, at, limit)?;
             continue;
         }
+        if let Some(past) = skip_comment(bytes, at, limit) {
+            at = past;
+            continue;
+        }
         if byte == opener {
             depth += 1;
         } else if byte == closer {
@@ -50,6 +58,19 @@ fn find_matching_bracket(bytes: &[u8], open: usize, closer: u8) -> Option<usize>
             if depth == 0 { return Some(at); }
         }
         at += 1;
+    }
+    None
+}
+
+// Rust's own comments, since this is Rust's attribute
+fn skip_comment(bytes: &[u8], at: usize, limit: usize) -> Option<usize> {
+    let rest = &bytes[at..limit];
+    if rest.starts_with(LINE_COMMENT) {
+        return Some(memchr::memchr(b'\n', rest).map_or(limit, |newline| at + newline));
+    }
+    if rest.starts_with(BLOCK_COMMENT_START) {
+        return Some(memmem::find(&rest[BLOCK_COMMENT_START.len()..], BLOCK_COMMENT_END)
+                .map_or(limit, |end| at + BLOCK_COMMENT_START.len() + end + BLOCK_COMMENT_END.len()));
     }
     None
 }
@@ -116,6 +137,8 @@ fn predicate_says_test(predicate: &[u8]) -> bool {
         if byte == b'"' {
             at = skip_string(predicate, at, predicate.len()).unwrap_or(predicate.len());
             last_word = &[];
+        } else if let Some(past) = skip_comment(predicate, at, predicate.len()) {
+            at = past;
         } else if byte == b'(' {
             if last_word == NOT && depth < 64 { not_groups |= 1 << depth; }
             depth += 1;
@@ -159,6 +182,10 @@ fn split_at_top_level_commas(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
     std::iter::from_fn(move || {
         if done { return None; }
         while at < bytes.len() {
+            if let Some(past) = skip_comment(bytes, at, bytes.len()) {
+                at = past;
+                continue;
+            }
             match bytes[at] {
                 b'"' => at = skip_string(bytes, at, bytes.len()).unwrap_or(bytes.len()),
                 b'(' | b'[' => { depth += 1; at += 1; },
@@ -183,7 +210,7 @@ mod tests {
 
     fn read_marker_of(attribute: &str) -> Option<(bool, usize)> {
         read(attribute.as_bytes(), 0).map(|marker| match marker {
-            Marker::WholeFile => (true, 0),
+            Marker::WholeFile { after } => (true, after),
             Marker::Extent { after } => (false, after)
         })
     }
@@ -226,9 +253,22 @@ mod tests {
     }
 
     #[test]
-    fn the_inner_attribute_covers_the_whole_file() {
-        assert_eq!(read_marker_of("#![cfg(test)]"), Some((true, 0)));
+    fn the_inner_attribute_is_told_apart() {
+        assert_eq!(read_marker_of("#![cfg(test)]"), Some((true, 13)));
         assert_eq!(read_marker_of("#![cfg(not(test))]"), None);
+    }
+
+    #[test]
+    fn a_bracket_inside_a_comment_of_the_attribute_does_not_close_it() {
+        let over_lines = "#[cfg(\n    // see [u8]\n    test\n)]";
+        assert_eq!(read_marker_of(over_lines), Some((false, over_lines.len())));
+        let block = "#[cfg(/* ] */ test)]";
+        assert_eq!(read_marker_of(block), Some((false, block.len())));
+        let negated_in_a_comment = "#[cfg(/* not( */ test)]";
+        assert_eq!(read_marker_of(negated_in_a_comment), Some((false, negated_in_a_comment.len())));
+        let applied_in_a_comment = "#[cfg_attr(test, /* test, */ derive(Debug))]";
+        assert_eq!(read_marker_of(applied_in_a_comment), None);
+        assert_eq!(read_marker_of("#[cfg(// ]\n"), None);
     }
 
     #[test]

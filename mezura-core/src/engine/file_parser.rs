@@ -1188,8 +1188,8 @@ impl ExplainLog {
         self.records.len() + 1
     }
 
-    fn mark_last_line_as_test(&mut self) {
-        if let Some(record) = self.records.last_mut() { record.in_test = true; }
+    fn mark_last_lines_as_test(&mut self, count: usize) {
+        for record in self.records.iter_mut().rev().take(count) { record.in_test = true; }
     }
 
     #[cfg(test)]
@@ -1252,12 +1252,21 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
             walk_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans, ranges_wanted,
                     Candidates::At(lines.positions(), 0), scan, &mut shell, &mut shell_stats, code_spans, log)
         };
-        if let Some(tests) = &mut test_walk
-                && tests.observe_line(line_start, raw_line, had_code, &scan.code_ranges) {
-            test_stats.lines += 1;
-            test_stats.classes.bump(class);
-            test_bytes += end_of_line(contents, line_start, raw_line) - line_start;
-            if EXPLAIN { log.mark_last_line_as_test(); }
+        if let Some(tests) = &mut test_walk {
+            let bytes = end_of_line(contents, line_start, raw_line) - line_start;
+            if tests.observe_line(line_start, raw_line, had_code, &scan.code_ranges, class, bytes) {
+                let mut claimed = 1;
+                for (held_class, held_bytes) in tests.take_held() {
+                    test_stats.lines += 1;
+                    test_stats.classes.bump(held_class);
+                    test_bytes += held_bytes;
+                    claimed += 1;
+                }
+                test_stats.lines += 1;
+                test_stats.classes.bump(class);
+                test_bytes += bytes;
+                if EXPLAIN { log.mark_last_lines_as_test(claimed); }
+            }
         }
 
         // A region opener only counts where the shell left it as code, so one sitting inside a
@@ -4684,6 +4693,61 @@ mod tests {
             "extern crate foo;\n",
             "fn prod() {}\n");
         assert_eq!(find_rust_test_lines(source), vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    }
+
+    #[test]
+    fn a_marker_on_a_field_a_variant_or_an_arm_ends_with_the_block_around_it() {
+        let source = concat!(
+            "struct S {\n",
+            "    #[cfg(test)]\n",
+            "    seen: u8,\n",
+            "    kept: u8,\n",
+            "}\n",
+            "enum E {\n",
+            "    #[cfg(test)]\n",
+            "    Seen,\n",
+            "    Kept,\n",
+            "}\n",
+            "fn f(e: E) -> u8 {\n",
+            "    match e {\n",
+            "        #[cfg(test)]\n",
+            "        E::Seen => 1,\n",
+            "        E::Kept => 2,\n",
+            "    }\n",
+            "}\n",
+            "fn prod() {}\n");
+        assert_eq!(find_rust_test_lines(source), vec![2, 3, 4, 5, 7, 8, 9, 10, 13, 14, 15, 16]);
+    }
+
+    #[test]
+    fn an_inner_attribute_inside_a_module_covers_the_module_alone() {
+        let source = concat!(
+            "mod tests {\n",
+            "    #![cfg(test)]\n",
+            "    fn helper() {}\n",
+            "}\n",
+            "fn prod() {}\n");
+        assert_eq!(find_rust_test_lines(source), vec![2, 3, 4]);
+    }
+
+    #[test]
+    fn the_lines_between_a_closing_brace_and_its_else_belong_to_the_extent() {
+        let source = concat!(
+            "fn f(a: u8) {\n",
+            "    #[cfg(test)]\n",
+            "    if a == 1 {\n",
+            "        one();\n",
+            "    }\n",
+            "    // why\n",
+            "\n",
+            "    else {\n",
+            "        other();\n",
+            "    }\n",
+            "\n",
+            "    // done\n",
+            "    prod();\n",
+            "}\n");
+        assert_eq!(find_rust_test_lines(source), vec![2, 3, 4, 5, 6, 7, 8, 9, 10]);
     }
 
     #[test]
