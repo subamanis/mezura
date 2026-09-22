@@ -1,0 +1,6 @@
+[C++]
+parser_test.cpp whole
+parser_test.cc whole
+parser_test.cxx whole
+parser_unittest.cc whole
+parser.cpp none

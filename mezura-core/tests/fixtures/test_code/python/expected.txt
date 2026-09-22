@@ -1,0 +1,7 @@
+[Python]
+test_parser.py whole
+parser_test.py whole
+conftest.py whole
+tests.py whole
+parser.py none
+testing.py none

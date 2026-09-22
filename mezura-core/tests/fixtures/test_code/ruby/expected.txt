@@ -1,0 +1,5 @@
+[Ruby]
+parser_spec.rb whole
+parser_test.rb whole
+test_parser.rb whole
+parser.rb none

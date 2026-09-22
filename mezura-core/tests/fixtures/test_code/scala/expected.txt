@@ -1,0 +1,5 @@
+[Scala]
+ParserSpec.scala whole
+ParserTest.scala whole
+ParserSuite.scala whole
+Parser.scala none

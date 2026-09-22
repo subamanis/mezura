@@ -76,6 +76,40 @@ language name, which is the mistake somebody editing a file by hand makes; the o
 come through it untouched. They are inputs to the definition-file parser and have nothing to do with
 counting, so they deliberately do not live beside the shipped definitions in `data/languages`.
 
+## `test_code/`, one tree per language for the test detection
+
+Each directory is a small project of one language, and its `expected.txt` says which lines of every
+file in it are test code. `tests/test_detection.rs` copies each tree to a temporary directory,
+counts it through `run` with one producer and four consumers and `collect_files` on, and compares
+every file and the language's own figure against that file. The copy is not optional: the fixtures
+sit under a directory named `tests`, and a target under one is test code whole.
+
+The file is a `[Language]` heading and then one line per file, the path and then what is test code
+in it:
+
+```
+[Rust]
+src/inline_module.rs 3-11
+src/attributed_functions.rs 3-6,10-14,16-19
+tests/integration.rs whole
+src/latest.rs none
+src/attribute_on_a_field.rs 3-6 # wrong, the field alone is 3-4
+```
+
+Line ranges are hand verified by opening the file, which is the point of writing them as lines. The
+test turns them into a line count and a byte count by reading the file itself, so a checkout with
+other line endings changes nothing. Every file of the tree needs a line, and a file counted under
+another language fails, so a fixture whose content does not identify its language is caught.
+
+A `# wrong` note marks a known limitation and states what mezura answers today. The fix that
+changes the answer breaks the test and removes the note. What each language finds and what it does
+not is in `TEST_DETECTION.md` at the repository root.
+
+The three languages with markers, Rust, D and Zig, carry every form the extent rule has to follow
+and every trap it is known to fall into, written adversarially: a test module that is the last thing
+in a file proves nothing about the rule. The other trees hold one file per declared test file name
+and one that matches none.
+
 ## The printed output, which is covered elsewhere
 
 `mezura/tests/fixtures/layouts.golden` is the same idea for the presentation, and it lives in the

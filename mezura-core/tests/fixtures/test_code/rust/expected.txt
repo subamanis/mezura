@@ -1,0 +1,36 @@
+[Rust]
+src/inline_module.rs 3-11
+src/attributed_functions.rs 3-6,10-14,16-19
+src/items_ending_in_semicolon.rs 1-2,4-5,7-8,10-11,13-14,16-17,19-20,23-24
+src/else_arms.rs 2-12
+src/attribute_over_lines.rs 1-6,11-12,17-18
+src/whole_file.rs whole
+src/markers_elsewhere.rs none
+src/braces_elsewhere.rs 1-8
+src/item_kinds.rs 1-4,6-9,11-12,14-15,17-20,22-25,27-31,33-36,38-41
+src/refused.rs 8-9,15-17
+src/attribute_on_a_field.rs 3-6 # wrong, the field alone is 3-4
+src/attribute_on_a_variant.rs 3-6 # wrong, the variant alone is 3-4
+src/attribute_on_an_arm.rs 3-7 # wrong, the arm alone is 3-4
+src/indented_inner_attribute.rs 2-5 # wrong, the whole module is 1-5
+src/inner_attribute_at_column_zero.rs 2-6 # wrong, the whole module is 1-4
+src/const_generic.rs 1-2 # wrong, the whole function is 1-4
+tests/integration.rs whole
+tests/common/mod.rs whole
+tests/examples/inside_tests.rs whole
+examples/demo.rs 3-4
+examples/demo_test.rs none
+benches/speed.rs 3-6
+src/bin/tool_test.rs none
+src/foo_test.rs whole
+src/foo_tests.rs whole
+src/test_foo.rs whole
+src/tests.rs whole
+src/test.rs whole
+src/testing.rs none
+src/contest.rs none
+src/latest.rs none
+src/test/helpers.rs whole
+src/__tests__/spec.rs whole
+src/Tests/upper.rs whole
+src/Bar_Test.rs none

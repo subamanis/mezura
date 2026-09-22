@@ -1,0 +1,3 @@
+[Go]
+parser_test.go whole
+parser.go none

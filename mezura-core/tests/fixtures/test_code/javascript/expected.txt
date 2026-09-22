@@ -1,0 +1,8 @@
+[JavaScript]
+a.test.js whole
+a.spec.js whole
+a.test.mjs whole
+a.spec.mjs whole
+a.test.cjs whole
+a.spec.cjs whole
+a.js none

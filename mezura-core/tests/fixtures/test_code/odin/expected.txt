@@ -1,0 +1,3 @@
+[Odin]
+parser_test.odin whole
+parser.odin none

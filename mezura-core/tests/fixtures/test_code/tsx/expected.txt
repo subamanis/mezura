@@ -1,0 +1,4 @@
+[TSX]
+a.test.tsx whole
+a.spec.tsx whole
+a.tsx none

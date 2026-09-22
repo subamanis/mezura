@@ -1,0 +1,4 @@
+[Swift]
+ParserTests.swift whole
+ParserTest.swift whole
+Parser.swift none

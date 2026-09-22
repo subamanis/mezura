@@ -1,0 +1,3 @@
+[Julia]
+runtests.jl whole
+parser.jl none

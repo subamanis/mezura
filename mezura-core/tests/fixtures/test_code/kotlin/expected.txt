@@ -1,0 +1,5 @@
+[Kotlin]
+ParserTest.kt whole
+ParserTests.kt whole
+ParserSpec.kt whole
+Parser.kt none

@@ -1,0 +1,4 @@
+[Erlang]
+parser_tests.erl whole
+parser_SUITE.erl whole
+parser.erl none
