@@ -625,13 +625,16 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
       percent                  the percentages of the details rows
       arrow                    the '->' and the '|' of a 'list' row, in that layout only
 
-    The rows hanging under a language, one token per column, twice over: 'nested-' for the
-    sections inside a container file, 'file-' for the rows of a '--by-file' run. 'name' is the
-    section's language or the file's path, 'branch' the tree characters tying the row to the one
-    above, and 'percent' is of the container for a section and of its language for a file:
+    The rows hanging under a language, one token per column, three times over: 'nested-' for
+    the sections inside a container file, 'tests-' for its test code, 'file-' for the rows of a
+    '--by-file' run. 'name' is the section's language, the word 'tests' or the file's path,
+    'branch' the tree characters tying the row to the one above, and 'percent' is of the language
+    the row hangs under, or of the whole run for the tests under the total:
 
       nested-name  nested-branch  nested-files  nested-lines  nested-code  nested-comments
       nested-extra  nested-size  nested-size-unit  nested-percent
+      tests-name  tests-branch  tests-files  tests-lines  tests-code  tests-comments
+      tests-extra  tests-size  tests-size-unit  tests-percent
       file-name  file-branch  file-files  file-lines  file-code  file-comments
       file-extra  file-size  file-size-unit  file-percent
 

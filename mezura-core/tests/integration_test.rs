@@ -1242,11 +1242,13 @@ fn the_test_code_of_a_language_is_one_share_whichever_way_it_was_found() {
     let result = counted(true, vec![Target::of(&root_str)]);
     let rust = &result.per_language["Rust"];
     assert_eq!((3, 11), (rust.files, rust.lines));
+    let share = |tests: &mezura_core::TestCode| (tests.stats.files, tests.stats.lines, tests.stats.bytes,
+            tests.whole_files);
     let tests = &result.tests["Rust"];
-    assert_eq!((2, 8, 95), (tests.files, tests.lines, tests.bytes));
+    assert_eq!((2, 8, 95, 1), share(tests));
     // The lone brace closing the module is the one extra line
-    assert_eq!((6, 1, 1), (tests.calculate_code_lines(model), tests.calculate_comment_lines(model),
-            tests.calculate_extra_lines(model)));
+    assert_eq!((6, 1, 1), (tests.stats.calculate_code_lines(model), tests.stats.calculate_comment_lines(model),
+            tests.stats.calculate_extra_lines(model)));
     assert_eq!(vec!["Rust"], result.tests.keys().collect::<Vec<_>>());
     assert_eq!(tests, &result.modules[0].tests["Rust"]);
 
@@ -1269,7 +1271,7 @@ fn the_test_code_of_a_language_is_one_share_whichever_way_it_was_found() {
     std::fs::remove_dir_all(&root).unwrap();
     let of_module = |name: &str| split.modules.iter()
             .find(|module| module.name.as_deref() == Some(name)).unwrap();
-    assert_eq!((1, 5, 54), figures(&of_module("code").tests["Rust"]));
-    assert_eq!((1, 3, 41), figures(&of_module("checks").tests["Rust"]));
-    assert_eq!((2, 8, 95), figures(&split.tests["Rust"]));
+    assert_eq!((1, 5, 54, 0), share(&of_module("code").tests["Rust"]));
+    assert_eq!((1, 3, 41, 1), share(&of_module("checks").tests["Rust"]));
+    assert_eq!((2, 8, 95, 1), share(&split.tests["Rust"]));
 }

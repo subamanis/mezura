@@ -63,7 +63,7 @@ pub use explain::{Carried, ExplainError, ExplainedLine, FileExplanation, explain
 pub use languages::{LanguageClaims, Languages};
 pub use progress::ScanProgress;
 pub use result::{FaultyFileDetails, FileEntry, FilesPresent, ModuleResult, Performance, RunError,
-        RunResult, ScanSkip, SkippedFiles, SortCriterion, UnreadableDirDetails};
+        RunResult, ScanSkip, SkippedFiles, SortCriterion, TestCode, UnreadableDirDetails};
 pub use warnings::{Affects, Code, Warning};
 
 #[cfg(test)]
@@ -97,6 +97,7 @@ pub(crate) type SharedModuleLookups = Arc<engine::identity::ModuleLookups>;
 // nothing further down has two shapes to handle.
 pub(crate) type StatsMapMut = Arc<Mutex<Vec<HashMap<String,Stats>>>>;
 pub(crate) type NestedLanguageMapMut = Arc<Mutex<Vec<HashMap<String,HashMap<String,Stats>>>>>;
+pub(crate) type TestCodeMapMut = Arc<Mutex<Vec<HashMap<String, TestCode>>>>;
 pub(crate) type FilesPerModuleMut = Arc<Mutex<Vec<HashMap<String, Vec<FileEntry>>>>>;
 
 /// Counts the directories and files the configuration names, and gives back the figures.
@@ -152,7 +153,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
             Arc::new(Mutex::new(make_language_stats(&language_map_ref, modules.count())));
     let nested_per_module : NestedLanguageMapMut =
             Arc::new(Mutex::new(vec![HashMap::new(); modules.count()]));
-    let tests_per_module : StatsMapMut =
+    let tests_per_module : TestCodeMapMut =
             Arc::new(Mutex::new(vec![HashMap::new(); modules.count()]));
     let files_per_module : FilesPerModuleMut =
             Arc::new(Mutex::new(vec![HashMap::new(); modules.count()]));
@@ -316,7 +317,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     let mut files_guard = files_per_module.lock();
     let files_by_module = files_guard.as_deref_mut().unwrap();
 
-    let mut per_language = merge_over_modules(per_module);
+    let mut per_language = merge_over_modules(per_module, Stats::add);
     // Dropped before the total is summed, or the total's keyword map would name the keywords of
     // every language the run selected, including the ones no file was written in. The figures are
     // the same either way, since an empty language adds nothing.
@@ -324,7 +325,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     let total = Stats::total_of(&per_language);
 
     let nested_languages = merge_nested_over_modules(nested_by_module);
-    let tests = merge_over_modules(tests_by_module);
+    let tests = merge_over_modules(tests_by_module, TestCode::add);
 
     let modules_result = per_module.iter_mut().enumerate().map(|(id, bucket)| {
         let mut of_this_module = std::mem::take(bucket);
@@ -637,11 +638,12 @@ impl GitignoreStack {
     }
 }
 
-fn merge_over_modules(per_module: &[HashMap<String,Stats>]) -> HashMap<String,Stats> {
+fn merge_over_modules<T: Clone + Default>(per_module: &[HashMap<String, T>], add: fn(&mut T, &T))
+-> HashMap<String, T> {
     let mut merged = per_module[0].clone();
     for of_a_module in &per_module[1..] {
-        for (name, stats) in of_a_module {
-            merged.entry(name.clone()).or_default().add(stats);
+        for (name, figures) in of_a_module {
+            add(merged.entry(name.clone()).or_default(), figures);
         }
     }
 

@@ -39,3 +39,5 @@ trait Speak {
 macro_rules! shout {
     () => {};
 }
+
+fn after() {}

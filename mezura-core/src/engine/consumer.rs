@@ -9,14 +9,14 @@ use crossbeam_deque::{Injector, Steal, Worker};
 
 use crate::{EngineConfig, FaultyFileDetails, FaultyFilesListMut, FileEntry, FilesPerModuleMut,
         Language, NestedLanguageMapMut, ParsableFile, ScanProgress, ScanSkip, SkippedFiles, Stats,
-        StatsMapMut, phase_timing};
+        StatsMapMut, TestCode, TestCodeMapMut, phase_timing};
 use crate::engine::file_parser;
 use crate::languages::NestedLanguageDefinitions;
 
 const INITIAL_FILE_BUFFER_BYTES : usize = 150;
 
 pub(crate) fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
-        stats_per_module: StatsMapMut, nested_per_module: NestedLanguageMapMut, tests_per_module: StatsMapMut,
+        stats_per_module: StatsMapMut, nested_per_module: NestedLanguageMapMut, tests_per_module: TestCodeMapMut,
         files_per_module: FilesPerModuleMut,
         language_map: Arc<HashMap<String,Language>>, nested_definitions: Arc<NestedLanguageDefinitions>,
         language_lookups: crate::SharedModuleLookups,
@@ -42,7 +42,7 @@ pub(crate) fn start_parser_thread(id: usize, files_injector: Arc<Injector<Parsab
 }
 
 fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
-    stats_per_module: StatsMapMut, nested_per_module: NestedLanguageMapMut, tests_per_module: StatsMapMut,
+    stats_per_module: StatsMapMut, nested_per_module: NestedLanguageMapMut, tests_per_module: TestCodeMapMut,
     files_per_module: FilesPerModuleMut,
     language_map: Arc<HashMap<String,Language>>, nested_definitions: Arc<NestedLanguageDefinitions>,
     language_lookups: crate::SharedModuleLookups,
@@ -62,7 +62,7 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
             vec![HashMap::new(); modules];
     let mut local_nested: Vec<HashMap<String, HashMap<String, Stats>>> =
             vec![HashMap::new(); modules];
-    let mut local_tests: Vec<HashMap<String, Stats>> = vec![HashMap::new(); modules];
+    let mut local_tests: Vec<HashMap<String, TestCode>> = vec![HashMap::new(); modules];
     let mut local_files: Vec<HashMap<String, Vec<FileEntry>>> = vec![HashMap::new(); modules];
     // A batch and not one file at a time. With several of these threads per core they all reach for the
     // same queue head between files, and a contended steal comes back as Retry, which the arm below
@@ -148,10 +148,11 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                                     .or_default().add_file(&whole, bytes, keywords); }
                         }
                         if let Some(tests) = &tests {
+                            let is_whole = tests.stats.lines == whole.lines;
                             match local_tests[module].get_mut(lang_name) {
-                                Some(stats) => stats.add_file(&tests.stats, tests.bytes, keywords),
+                                Some(share) => share.add_file(&tests.stats, tests.bytes, keywords, is_whole),
                                 None => { local_tests[module].entry(lang_name.to_owned())
-                                        .or_default().add_file(&tests.stats, tests.bytes, keywords); }
+                                        .or_default().add_file(&tests.stats, tests.bytes, keywords, is_whole); }
                             }
                         }
                     },
@@ -235,8 +236,8 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
     if local_tests.iter().any(|bucket| !bucket.is_empty()) {
         let mut global = tests_per_module.lock().unwrap();
         for (module, bucket) in local_tests.into_iter().enumerate() {
-            for (lang_name, stats) in bucket {
-                global[module].entry(lang_name).or_default().add(&stats);
+            for (lang_name, share) in bucket {
+                global[module].entry(lang_name).or_default().add(&share);
             }
         }
     }

@@ -12,7 +12,7 @@ const CONSUMER_THREADS : usize = 4;
 // name is test code whole, and every file in it would come back that way.
 #[test]
 fn every_tree_of_test_code_is_counted_as_its_expected_file_says() {
-    let scratch = std::env::temp_dir().join("mezura-test-code");
+    let scratch = std::env::temp_dir().join("mezura-test-code-trees");
     for component in scratch.components() {
         let name = component.as_os_str().to_string_lossy().to_lowercase();
         assert!(!TEST_DIRECTORY_NAMES.contains(&name.as_str()),
@@ -36,7 +36,8 @@ fn every_tree_of_test_code_is_counted_as_its_expected_file_says() {
 
 struct Expectation {
     lines: usize,
-    bytes: usize
+    bytes: usize,
+    whole: bool
 }
 
 // The bytes come from the file itself, so a checkout with other line endings does not move them
@@ -67,25 +68,25 @@ fn read_expectations(tree: &Path) -> BTreeMap<(String, String), Expectation> {
 
 fn parse_expectation(spec: &str, contents: &[u8], at: &str) -> Expectation {
     let lines_of_file = contents.split_inclusive(|byte| *byte == b'\n').collect::<Vec<_>>();
-    match spec {
-        "none" => Expectation { lines: 0, bytes: 0 },
-        "whole" => Expectation { lines: lines_of_file.len(), bytes: contents.len() },
+    let (lines, bytes) = match spec {
+        "none" => (0, 0),
+        "whole" => (lines_of_file.len(), contents.len()),
         ranges => {
-            let mut expectation = Expectation { lines: 0, bytes: 0 };
-            let mut last_taken = 0;
+            let (mut lines, mut bytes, mut last_taken) = (0, 0, 0);
             for range in ranges.split(',') {
                 let (first, last) = range.split_once('-').unwrap_or((range, range));
                 let parsed = (first.parse::<usize>(), last.parse::<usize>());
                 let (Ok(first), Ok(last)) = parsed else { panic!("{at}: '{range}' is not a range of lines") };
                 assert!(first > last_taken && first <= last && last <= lines_of_file.len(),
                         "{at}: '{range}' is out of order or past the {} lines of the file", lines_of_file.len());
-                expectation.lines += last - first + 1;
-                expectation.bytes += lines_of_file[first - 1..last].iter().map(|line| line.len()).sum::<usize>();
+                lines += last - first + 1;
+                bytes += lines_of_file[first - 1..last].iter().map(|line| line.len()).sum::<usize>();
                 last_taken = last;
             }
-            expectation
+            (lines, bytes)
         }
-    }
+    };
+    Expectation { lines, bytes, whole: lines > 0 && lines == lines_of_file.len() }
 }
 
 fn compare_tree(root: &Path, expected: &BTreeMap<(String, String), Expectation>) -> Vec<String> {
@@ -123,21 +124,23 @@ fn compare_tree(root: &Path, expected: &BTreeMap<(String, String), Expectation>)
         }
     }
 
-    let mut totals: BTreeMap<&str, (usize, usize, usize)> = BTreeMap::new();
+    let mut totals: BTreeMap<&str, (usize, usize, usize, usize)> = BTreeMap::new();
     for ((language, _), expectation) in expected {
         let total = totals.entry(language.as_str()).or_default();
         if expectation.lines > 0 {
-            *total = (total.0 + 1, total.1 + expectation.lines, total.2 + expectation.bytes);
+            *total = (total.0 + 1, total.1 + expectation.lines, total.2 + expectation.bytes,
+                    total.3 + usize::from(expectation.whole));
         }
     }
     for (language, total) in &totals {
-        let found = result.tests.get(*language).map(|stats| (stats.files, stats.lines, stats.bytes));
+        let found = result.tests.get(*language)
+                .map(|tests| (tests.stats.files, tests.stats.lines, tests.stats.bytes, tests.whole_files));
         match (total.0, found) {
             (0, None) => {},
             (0, Some(found)) => failures.push(format!(
                     "{tree}: {language} has a test row of {found:?} and no file of it holds any")),
             (_, found) if found != Some(*total) => failures.push(format!(
-                    "{tree}: {language} expected (files, lines, bytes) of {total:?}, got {found:?}")),
+                    "{tree}: {language} expected (files, lines, bytes, whole files) of {total:?}, got {found:?}")),
             _ => {}
         }
     }

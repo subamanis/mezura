@@ -17,3 +17,5 @@ fn second() {
 fn third(b: &mut Bencher) {
     b.iter(|| helper());
 }
+
+fn after() {}

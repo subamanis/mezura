@@ -1337,13 +1337,14 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
         }
     }
 
+    // The rows under a language add up to it, so a section's line in a test file goes to the tests alone
     if whole_file_is_tests {
+        for bucket in buckets.drain(..) {
+            shell_stats.lines += bucket.stats.lines;
+            shell_stats.classes.add(&bucket.stats.classes);
+        }
         test_stats = FileStats { lines: shell_stats.lines, classes: shell_stats.classes.clone(),
                 keyword_occurences: Vec::new() };
-        for bucket in &buckets {
-            test_stats.lines += bucket.stats.lines;
-            test_stats.classes.add(&bucket.stats.classes);
-        }
         test_bytes = contents.len();
         if EXPLAIN { log.mark_last_lines_as_test(test_stats.lines); }
     }
@@ -4801,6 +4802,26 @@ mod tests {
         assert_eq!(tests_of(&named_as_a_test, TestScope::Tests, &off), None);
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_of_test_code_whole_keeps_its_sections_in_its_own_row() {
+        let (languages, extensions) = section_fixture();
+        let lookup = NestedLanguageLookup { languages: &languages, extension_to_name: &extensions, set_aside: &NO_SET_ASIDE };
+        let contents = "<p>hello</p>\n<script>\nvar s = \"x\";\n</script>\n<style>\n/* css */\n</style>\n";
+        let parse = |whole_file_is_tests| parse_lines::<false>(contents, &web_shell(), &lookup,
+                &mut KeywordMatchers::default(), &EngineConfig::default(), &mut ParseBuffers::default(),
+                whole_file_is_tests, &mut ExplainLog::default());
+
+        let ordinary = parse(false);
+        assert_eq!(2, ordinary.sections.len());
+        let whole = ordinary.into_whole();
+
+        let of_tests = parse(true);
+        assert!(of_tests.sections.is_empty(), "a line of a test file went to the row of its section");
+        assert_eq!((whole.lines, &whole.classes), (of_tests.shell.lines, &of_tests.shell.classes));
+        let tests = of_tests.tests.unwrap();
+        assert_eq!((whole.lines, &whole.classes, contents.len()), (tests.stats.lines, &tests.stats.classes, tests.bytes));
     }
 
     #[test]

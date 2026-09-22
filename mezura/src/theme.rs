@@ -15,11 +15,14 @@ const SIZE_GOLD: Color = Color::TrueColor { r: 125, g: 119, b: 105 };
 // attribute both land far darker than this on most schemes.
 const FAINT: Color = Color::TrueColor { r: 170, g: 170, b: 170 };
 const FAINTER: Color = Color::TrueColor { r: 150, g: 150, b: 150 };
-// The rows hanging under a language, and the same again for a file: a teal band and a grey one, so
-// that the two lists under one language are told apart by color as well as by shape
+// A teal band for the rows hanging under a language, a mauve one for its tests and a grey one for a
+// file, so that the rows under one language are told apart by color as well as by shape
 const SUB_ROW_TEAL: Color = Color::TrueColor { r: 93, g: 135, b: 134 };
 const SUB_ROW_TEAL_BRIGHT: Color = Color::TrueColor { r: 112, g: 153, b: 152 };
 const SUB_ROW_TEAL_FAINT: Color = Color::TrueColor { r: 85, g: 102, b: 102 };
+const TEST_ROW_MAUVE: Color = Color::TrueColor { r: 143, g: 118, b: 156 };
+const TEST_ROW_MAUVE_BRIGHT: Color = Color::TrueColor { r: 160, g: 136, b: 173 };
+const TEST_ROW_MAUVE_FAINT: Color = Color::TrueColor { r: 106, g: 94, b: 112 };
 const FILE_ROW_GREY: Color = Color::TrueColor { r: 122, g: 122, b: 122 };
 const BAR_SWEEP_BLUE: (u8, u8, u8) = (34, 64, 181);
 const BAR_SWEEP_MAGENTA: (u8, u8, u8) = (189, 19, 172);
@@ -305,6 +308,17 @@ theme_tokens! {
     nested_extra      => "nested-extra",      Style::of(SUB_ROW_TEAL);
     nested_size       => "nested-size",       Style::of(SUB_ROW_TEAL);
     nested_size_unit  => "nested-size-unit",  Style::of(SIZE_GOLD);
+
+    tests_name        => "tests-name",        Style::of(TEST_ROW_MAUVE);
+    tests_branch      => "tests-branch",      Style::of(FAINT);
+    tests_percent     => "tests-percent",     Style::of(TEST_ROW_MAUVE_FAINT);
+    tests_files       => "tests-files",       Style::of(TEST_ROW_MAUVE);
+    tests_lines       => "tests-lines",       Style::of(TEST_ROW_MAUVE_BRIGHT);
+    tests_code        => "tests-code",        Style::of(TEST_ROW_MAUVE);
+    tests_comments    => "tests-comments",    Style::of(TEST_ROW_MAUVE);
+    tests_extra       => "tests-extra",       Style::of(TEST_ROW_MAUVE);
+    tests_size        => "tests-size",        Style::of(TEST_ROW_MAUVE);
+    tests_size_unit   => "tests-size-unit",   Style::of(SIZE_GOLD);
 
     // The same set again for the files of a '--by-file' run. They hang under a language beside the
     // sections and are a different question asked of it, so a theme can tell the two apart.

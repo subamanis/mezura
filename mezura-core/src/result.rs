@@ -2,7 +2,8 @@
 // 'Language' exists before anything has been counted, a 'Stats' of it does not.
 use std::collections::HashMap;
 
-use crate::{CountingModel, Stats};
+use crate::{CountingModel, Keyword, Stats};
+use crate::domain::FileStats;
 use crate::engine::config::{Target, Threads};
 use crate::engine::modules::{ModuleId, Modules};
 
@@ -23,9 +24,9 @@ pub struct RunResult {
     pub nested_languages: HashMap<String, HashMap<String, Stats>>,
     /// The test code of each language, found as an extent under a marker inside an ordinary file
     /// or as a whole file the path rules name. Already inside `per_language`, which it breaks down.
-    /// The `files` figure is how many files held any. A language with none has no entry, and the
-    /// map is empty when [`crate::EngineConfig::detect_tests`] is off.
-    pub tests: HashMap<String, Stats>,
+    /// A language with none has no entry, and the map is empty when
+    /// [`crate::EngineConfig::detect_tests`] is off.
+    pub tests: HashMap<String, TestCode>,
     /// The same figures once per module. A run where no target was named has exactly one, holding
     /// everything.
     pub modules: Vec<ModuleResult>,
@@ -118,7 +119,7 @@ pub struct ModuleResult {
     /// The same breakdown [`RunResult::nested_languages`] holds, for this module's files alone.
     pub nested_languages: HashMap<String, HashMap<String, Stats>>,
     /// The same share [`RunResult::tests`] holds, for this module's files alone.
-    pub tests: HashMap<String, Stats>,
+    pub tests: HashMap<String, TestCode>,
     /// One entry per file, keyed by language. Empty unless [`crate::EngineConfig::collect_files`]
     /// asked for it.
     pub files: HashMap<String, Vec<FileEntry>>,
@@ -145,6 +146,28 @@ pub struct FileEntry {
     pub nested_languages: HashMap<String, Stats>,
     /// What its test code weighs, `None` when it holds none or detection is off. Its `files` is 1.
     pub tests: Option<Stats>
+}
+
+/// The test code of one language.
+#[derive(Debug,Clone,Default,PartialEq)]
+pub struct TestCode {
+    /// Its figures. The `files` figure is how many files held any.
+    pub stats: Stats,
+    /// How many of those files are test code from their first line to their last, and so hold
+    /// none of the language's other lines.
+    pub whole_files: usize
+}
+
+impl TestCode {
+    pub(crate) fn add(&mut self, other: &TestCode) {
+        self.stats.add(&other.stats);
+        self.whole_files += other.whole_files;
+    }
+
+    pub(crate) fn add_file(&mut self, tests: &FileStats, bytes: usize, keywords: &[Keyword], is_whole: bool) {
+        self.stats.add_file(tests, bytes, keywords);
+        self.whole_files += usize::from(is_whole);
+    }
 }
 
 /// What the run cost.
