@@ -4,7 +4,6 @@
 mod attribute;
 
 use std::path::{Component, Path};
-use std::sync::LazyLock;
 
 use memchr::memmem;
 
@@ -13,10 +12,6 @@ use crate::{Language, LineClass, TestFileName};
 const ELSE : &[u8] = b"else";
 const TEST_DIRECTORIES : [&str; 3] = ["test", "tests", "__tests__"];
 const OTHER_TARGET_DIRECTORIES : [&str; 3] = ["examples", "benches", "bin"];
-
-// The spike's reader of what the walk found, until the result carries it
-pub(crate) static PRINT_TEST_LINES : LazyLock<bool> =
-        LazyLock::new(|| std::env::var_os("MEZURA_TEST_RANGES").is_some_and(|value| !value.is_empty()));
 
 pub(crate) struct TestWalk<'a> {
     contents: &'a [u8],

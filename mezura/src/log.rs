@@ -242,7 +242,7 @@ mod tests {
     use super::*;
 
     fn result_of(total: Stats, modules: Vec<ModuleResult>) -> RunResult {
-        RunResult { per_language: HashMap::new(), modules, nested_languages: HashMap::new(), total,
+        RunResult { per_language: HashMap::new(), modules, nested_languages: HashMap::new(), tests: HashMap::new(), total,
                 faulty_files: Vec::new(), skipped_files: mezura_core::SkippedFiles::default(),
                 files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(),
                 performance: Performance { duration_millis: 0, threads: Threads::new(1, 1) } }
@@ -258,6 +258,7 @@ mod tests {
 
         let module_of = |name: Option<&str>, lines: usize, code: usize, comments: usize| ModuleResult {
             name: name.map(str::to_owned), per_language: HashMap::new(), nested_languages: HashMap::new(),
+            tests: HashMap::new(),
             files: HashMap::new(), total: crate::test_support::plain_stats_of(1, 10, lines, code, comments, HashMap::new()) };
         let mut result = result_of(crate::test_support::plain_stats_of(10, 5000, 1000, 700, 200, HashMap::new()),
                 vec![module_of(Some("frontend"), 600, 400, 150), module_of(None, 400, 300, 50)]);
@@ -335,6 +336,7 @@ mod tests {
         config.view.set_log_option(LogOption::new(None));
         let module_of = |name: Option<&str>, lines: usize, code: usize, comments: usize| ModuleResult {
             name: name.map(str::to_owned), per_language: HashMap::new(), nested_languages: HashMap::new(),
+            tests: HashMap::new(),
             files: HashMap::new(), total: crate::test_support::plain_stats_of(1, 10, lines, code, comments, HashMap::new()) };
 
         let older = result_of(crate::test_support::plain_stats_of(4, 4000, 400, 300, 0, HashMap::new()), Vec::new());

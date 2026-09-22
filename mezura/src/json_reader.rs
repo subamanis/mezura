@@ -158,6 +158,7 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
         Some(x) => parse_modules(read_array(x, "modules")?)?,
         None => (vec![ModuleResult { name: None, per_language: per_language.clone(), total: total.clone(),
                 nested_languages: nested_languages.clone(),
+                tests: HashMap::new(),
                 files: parse_files(read_list(root, "languages", "")?, "languages")? }],
                 read_optional_number(root, "files_hidden", "")?)
     };
@@ -185,8 +186,9 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
             total,
             modules,
             nested_languages,
-            // An absent list means the paths were not detailed, never that nothing went wrong: how
-            // many there were is in 'scan' and is read either way.
+            tests: HashMap::new(),
+            // An absent list means the paths were not detailed. Something may still have gone wrong.
+            // How many there were is in 'scan' and is read either way.
             faulty_files: match root.get("faulty_files") {
                 Some(x) => parse_faulty_files(read_array(x, "faulty_files")?)?,
                 None => Vec::new()
@@ -316,6 +318,7 @@ fn parse_modules(entries: &[Value]) -> Result<(Vec<ModuleResult>, usize), Docume
             name: read_optional_name(entry, "name", &at)?,
             total: parse_stats(read_nested(entry, "total", &at)?, &join_location(&at, "total"))?,
             per_language: parse_languages(read_list(entry, "languages", &at)?, &join_location(&at, "languages"))?,
+            tests: HashMap::new(),
             nested_languages: parse_nested_languages(read_list(entry, "languages", &at)?,
                     &join_location(&at, "languages"))?,
             files: parse_files(read_list(entry, "languages", &at)?, &join_location(&at, "languages"))?
@@ -344,7 +347,8 @@ fn parse_files(entries: &[Value], at: &str) -> Result<HashMap<String, Vec<FileEn
                 path: read_text(row, "path", &at)?,
                 stats: Stats::new(1, read_number(row, "bytes", &at)?, read_number(row, "lines", &at)?,
                         parse_classes(row, &at)?, HashMap::new()),
-                nested_languages: HashMap::new()
+                nested_languages: HashMap::new(),
+                tests: None
             })
         }).collect::<Result<Vec<_>, DocumentError>>()?;
         found.insert(name, files);
@@ -518,10 +522,11 @@ mod tests {
         let result = RunResult {
             total: Stats::total_of(&per_language),
             modules: vec![
-                ModuleResult { name: Some("backend".to_owned()), per_language: hashmap!["Rust".to_owned() => rust], total: Stats::total_of(&hashmap!["Rust".to_owned() => stats(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 0])]), nested_languages: HashMap::new(), files: HashMap::new() },
-                ModuleResult { name: None, per_language: hashmap!["HTML".to_owned() => html.clone()], total: Stats::total_of(&hashmap!["HTML".to_owned() => html]), nested_languages: HashMap::new(), files: HashMap::new() }],
+                ModuleResult { name: Some("backend".to_owned()), per_language: hashmap!["Rust".to_owned() => rust], total: Stats::total_of(&hashmap!["Rust".to_owned() => stats(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 0])]), nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new() },
+                ModuleResult { name: None, per_language: hashmap!["HTML".to_owned() => html.clone()], total: Stats::total_of(&hashmap!["HTML".to_owned() => html]), nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new() }],
             per_language,
             nested_languages: HashMap::new(),
+            tests: HashMap::new(),
             faulty_files: vec![FaultyFileDetails::new("D:\\dev\\a \"b\".rs".to_owned(), "stream did not contain valid UTF-8".to_owned(), 412)],
             skipped_files: SkippedFiles::default(),
             files_present: FilesPresent { total_files: 9, relevant_files: 3, excluded_files: 4 },
@@ -636,7 +641,7 @@ mod tests {
 
         let (mut plain, config) = populated();
         plain.modules = vec![ModuleResult { name: None, per_language: plain.per_language.clone(), total: plain.total.clone(),
-                nested_languages: HashMap::new(), files: HashMap::new() }];
+                nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new() }];
         let written = create_document(&plain, &Local::now(), &config);
         assert!(!written.contains("\"modules\""));
 
@@ -653,7 +658,7 @@ mod tests {
         config.view.by_file = Some(crate::config_manager::ByFile::All);
         let written = FileEntry { path: "D:/dev/api/main.rs".to_owned(),
                 stats: stats(1, 3000, 60, 40, 10, HashMap::new()),
-                nested_languages: HashMap::new() };
+                nested_languages: HashMap::new(), tests: None };
         result.modules[0].files = hashmap!["Rust".to_owned() => vec![written.clone()]];
 
         let read = parse(&create_document(&result, &Local::now(), &config)).unwrap();
@@ -668,7 +673,7 @@ mod tests {
         result.modules[0].files.get_mut("Rust").unwrap().push(FileEntry {
                 path: "D:/dev/api/lib.rs".to_owned(),
                 stats: stats(1, 500, 10, 8, 1, HashMap::new()),
-                nested_languages: HashMap::new() });
+                nested_languages: HashMap::new(), tests: None });
         let capped = create_document(&result, &Local::now(), &config);
         let read = parse(&capped).unwrap();
         assert!(read.files_recorded);

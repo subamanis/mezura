@@ -21,6 +21,11 @@ pub struct RunResult {
     /// those rows down and is never added to them. The `files` figure inside it is how many
     /// container files the section language appeared in.
     pub nested_languages: HashMap<String, HashMap<String, Stats>>,
+    /// The test code of each language, found as an extent under a marker inside an ordinary file
+    /// or as a whole file the path rules name. Already inside `per_language`, which it breaks down.
+    /// The `files` figure is how many files held any. A language with none has no entry, and the
+    /// map is empty when [`crate::EngineConfig::detect_tests`] is off.
+    pub tests: HashMap<String, Stats>,
     /// The same figures once per module. A run where no target was named has exactly one, holding
     /// everything.
     pub modules: Vec<ModuleResult>,
@@ -82,10 +87,12 @@ impl RunResult {
             per_language: HashMap::new(),
             total: Stats::default(),
             nested_languages: HashMap::new(),
+            tests: HashMap::new(),
             modules: (0..modules.count()).map(|id| ModuleResult {
                 name: modules.name_of(id as ModuleId).map(str::to_owned),
                 per_language: HashMap::new(),
                 nested_languages: HashMap::new(),
+                tests: HashMap::new(),
                 files: HashMap::new(),
                 total: Stats::default()
             }).collect(),
@@ -110,6 +117,8 @@ pub struct ModuleResult {
     pub per_language: HashMap<String, Stats>,
     /// The same breakdown [`RunResult::nested_languages`] holds, for this module's files alone.
     pub nested_languages: HashMap<String, HashMap<String, Stats>>,
+    /// The same share [`RunResult::tests`] holds, for this module's files alone.
+    pub tests: HashMap<String, Stats>,
     /// One entry per file, keyed by language. Empty unless [`crate::EngineConfig::collect_files`]
     /// asked for it.
     pub files: HashMap<String, Vec<FileEntry>>,
@@ -133,7 +142,9 @@ pub struct FileEntry {
     /// language's row holds all of its files' lines.
     pub stats: Stats,
     /// What those sections weigh on their own.
-    pub nested_languages: HashMap<String, Stats>
+    pub nested_languages: HashMap<String, Stats>,
+    /// What its test code weighs, `None` when it holds none or detection is off. Its `files` is 1.
+    pub tests: Option<Stats>
 }
 
 /// What the run cost.

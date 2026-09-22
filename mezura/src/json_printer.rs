@@ -743,7 +743,7 @@ mod tests {
     fn result_of(per_language: HashMap<String, Stats>, total: Stats,
             faulty_files: Vec<FaultyFileDetails>, files_present: FilesPresent) -> RunResult
     {
-        RunResult {per_language, modules: Vec::new(), nested_languages: HashMap::new(), total, faulty_files,
+        RunResult {per_language, modules: Vec::new(), nested_languages: HashMap::new(), tests: HashMap::new(), total, faulty_files,
                 skipped_files: mezura_core::SkippedFiles::default(), files_present, targets: Vec::new(), unreadable_dirs: Vec::new(),
                 performance: mezura_core::Performance { duration_millis: 1180, threads: mezura_core::Threads::new(2, 8) }}
     }
@@ -855,7 +855,7 @@ mod tests {
             let per_language = hashmap![language.to_owned() => stats_of(files, lines * 10, lines, lines, 0, HashMap::new())];
             let total = Stats::total_of(&per_language);
             mezura_core::ModuleResult {name: name.map(str::to_owned), per_language, total,
-                    nested_languages: HashMap::new(), files: HashMap::new()}
+                    nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new()}
         };
         let mut result = result_of(
             hashmap!["Rust".to_owned() => stats_of(2, 1000, 100, 100, 0, HashMap::new()),
@@ -937,7 +937,7 @@ mod tests {
     fn file_entry(path: &str, lines: usize, code: usize, bytes: usize) -> mezura_core::FileEntry {
         mezura_core::FileEntry { path: path.to_owned(),
                 stats: stats_of(1, bytes, lines, code, 0, HashMap::new()),
-                nested_languages: HashMap::new() }
+                nested_languages: HashMap::new(), tests: None }
     }
 
     #[test]
@@ -950,7 +950,7 @@ mod tests {
             let per_language = hashmap![language.to_owned() => stats_of(1, 900, 30, 24, 0, HashMap::new())];
             let total = Stats::total_of(&per_language);
             mezura_core::ModuleResult {name: name.map(str::to_owned), per_language, total,
-                    nested_languages: HashMap::new(),
+                    nested_languages: HashMap::new(), tests: HashMap::new(),
                     files: hashmap![language.to_owned() => vec![file_entry(path, 30, 24, 900)]]}
         };
         let mut result = result_of(
@@ -968,7 +968,7 @@ mod tests {
 
         // and a run that named no module keeps them at the top level
         result.modules = vec![mezura_core::ModuleResult {name: None, per_language: result.per_language.clone(),
-                total: result.total.clone(), nested_languages: HashMap::new(),
+                total: result.total.clone(), nested_languages: HashMap::new(), tests: HashMap::new(),
                 files: hashmap!["Rust".to_owned() => vec![file_entry("D:/x/api/a.rs", 30, 24, 900)]]}];
         let written = create_document(&result, &Local::now(), &config);
         assert!(!written.contains("\"modules\""));
@@ -1031,7 +1031,7 @@ mod tests {
             let per_language = hashmap![language.to_owned() =>
                     stats_of(1, lines * 10, lines, lines, 0, hashmap!["structs".to_owned() => structs])];
             mezura_core::ModuleResult {name: name.map(str::to_owned), total: Stats::total_of(&per_language), per_language,
-                    nested_languages: HashMap::new(), files: HashMap::new()}
+                    nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new()}
         };
         let with_modules = |source, modules: Vec<mezura_core::ModuleResult>| {
             let mut reading = reading_of(source, HashMap::new());
@@ -1077,7 +1077,7 @@ mod tests {
             let mut reading = reading_of(source, per_language.clone());
             reading.result.modules = vec![mezura_core::ModuleResult { name: None,
                     total: Stats::total_of(&per_language), per_language, nested_languages: HashMap::new(),
-                    files: hashmap!["Rust".to_owned() => files] }];
+                    tests: HashMap::new(), files: hashmap!["Rust".to_owned() => files] }];
             reading
         };
         let from = || side_with(crate::diff::Source::Document { path: "D:/old.json".to_owned() },

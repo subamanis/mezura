@@ -11,13 +11,13 @@ use crate::{EngineConfig, FaultyFileDetails, FaultyFilesListMut, FileEntry, File
         Language, NestedLanguageMapMut, ParsableFile, ScanProgress, ScanSkip, SkippedFiles, Stats,
         StatsMapMut, phase_timing};
 use crate::engine::file_parser;
-use crate::engine::test_detection;
 use crate::languages::NestedLanguageDefinitions;
 
 const INITIAL_FILE_BUFFER_BYTES : usize = 150;
 
 pub(crate) fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
-        stats_per_module: StatsMapMut, nested_per_module: NestedLanguageMapMut, files_per_module: FilesPerModuleMut,
+        stats_per_module: StatsMapMut, nested_per_module: NestedLanguageMapMut, tests_per_module: StatsMapMut,
+        files_per_module: FilesPerModuleMut,
         language_map: Arc<HashMap<String,Language>>, nested_definitions: Arc<NestedLanguageDefinitions>,
         language_lookups: crate::SharedModuleLookups,
         config: Arc<EngineConfig>, started: Instant, counting_ended: Arc<AtomicU64>,
@@ -26,8 +26,8 @@ pub(crate) fn start_parser_thread(id: usize, files_injector: Arc<Injector<Parsab
 {
     thread::Builder::new().name(format!("consumer-{id}")).spawn(move || {
         start_parsing_files(files_injector, faulty_files, finish_condition, stats_per_module,
-                nested_per_module, files_per_module, language_map, nested_definitions, language_lookups,
-                config, &skipped_files, &progress);
+                nested_per_module, tests_per_module, files_per_module, language_map, nested_definitions,
+                language_lookups, config, &skipped_files, &progress);
         // The last thing this thread does, and the only honest answer to how long the counting took:
         // 'run' joins these threads after calling the caller's callback, so its own clock cannot tell
         // the two apart.
@@ -42,7 +42,8 @@ pub(crate) fn start_parser_thread(id: usize, files_injector: Arc<Injector<Parsab
 }
 
 fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
-    stats_per_module: StatsMapMut, nested_per_module: NestedLanguageMapMut, files_per_module: FilesPerModuleMut,
+    stats_per_module: StatsMapMut, nested_per_module: NestedLanguageMapMut, tests_per_module: StatsMapMut,
+    files_per_module: FilesPerModuleMut,
     language_map: Arc<HashMap<String,Language>>, nested_definitions: Arc<NestedLanguageDefinitions>,
     language_lookups: crate::SharedModuleLookups,
     config: Arc<EngineConfig>, skipped_files: &Mutex<SkippedFiles>, progress: &ScanProgress)
@@ -61,6 +62,7 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
             vec![HashMap::new(); modules];
     let mut local_nested: Vec<HashMap<String, HashMap<String, Stats>>> =
             vec![HashMap::new(); modules];
+    let mut local_tests: Vec<HashMap<String, Stats>> = vec![HashMap::new(); modules];
     let mut local_files: Vec<HashMap<String, Vec<FileEntry>>> = vec![HashMap::new(); modules];
     // A batch and not one file at a time. With several of these threads per core they all reach for the
     // same queue head between files, and a contended steal comes back as Retry, which the arm below
@@ -98,10 +100,7 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                         &mut parse_buffers, &lookup, &mut keyword_matchers, &mut identification_matchers,
                         &config, parsable_file.written_by_hand, parsable_file.test_scope,
                         parsable_file.extension_rules.as_deref(), shebang_map) {
-                    Ok(file_parser::FileOutcome::Counted(report, resolved)) => {
-                        if *test_detection::PRINT_TEST_LINES && let Some(tests) = &report.tests {
-                            eprintln!("{}\t{}\t{}", tests.stats.lines, tests.bytes, parsable_file.path.display());
-                        }
+                    Ok(file_parser::FileOutcome::Counted(mut report, resolved)) => {
                         let lang_name = resolved.as_deref().unwrap_or(lang_name);
                         progress.record_file_parsed(report.total_lines());
                         let keywords = &language_map.get(lang_name).unwrap().keywords;
@@ -124,6 +123,7 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                                                 section.stats.classes.clone(), HashMap::new()));
                             }
                         }
+                        let tests = report.tests.take();
                         // The whole file weighs on its own language's row, its nested lines included
                         let whole = report.into_whole();
                         // No keywords per file: a map each would cost real memory over a large tree,
@@ -133,7 +133,9 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                                     path: spell_out(&parsable_file.path),
                                     stats: Stats::new(1, bytes, whole.lines, whole.classes.clone(),
                                             HashMap::new()),
-                                    nested_languages };
+                                    nested_languages,
+                                    tests: tests.as_deref().map(|tests| Stats::new(1, tests.bytes,
+                                            tests.stats.lines, tests.stats.classes.clone(), HashMap::new())) };
                             // Not 'entry(lang_name.to_owned())', which allocates the name per file
                             match local_files[module].get_mut(lang_name) {
                                 Some(bucket) => bucket.push(entry),
@@ -144,6 +146,13 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                             Some(stats) => stats.add_file(&whole, bytes, keywords),
                             None => { local_stats[module].entry(lang_name.to_owned())
                                     .or_default().add_file(&whole, bytes, keywords); }
+                        }
+                        if let Some(tests) = &tests {
+                            match local_tests[module].get_mut(lang_name) {
+                                Some(stats) => stats.add_file(&tests.stats, tests.bytes, keywords),
+                                None => { local_tests[module].entry(lang_name.to_owned())
+                                        .or_default().add_file(&tests.stats, tests.bytes, keywords); }
+                            }
                         }
                     },
                     Ok(file_parser::FileOutcome::Skipped(kind)) => {
@@ -220,6 +229,14 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                 for (inner_name, stats) in sections {
                     shell_entry.entry(inner_name).or_default().add(&stats);
                 }
+            }
+        }
+    }
+    if local_tests.iter().any(|bucket| !bucket.is_empty()) {
+        let mut global = tests_per_module.lock().unwrap();
+        for (module, bucket) in local_tests.into_iter().enumerate() {
+            for (lang_name, stats) in bucket {
+                global[module].entry(lang_name).or_default().add(&stats);
             }
         }
     }

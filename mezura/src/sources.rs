@@ -135,7 +135,7 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
     let result = if of_git_revision.targets.is_empty() {
         mezura_core::RunResult {
             per_language: HashMap::new(), total: mezura_core::Stats::default(), modules: Vec::new(),
-            nested_languages: HashMap::new(),
+            nested_languages: HashMap::new(), tests: HashMap::new(),
             faulty_files: Vec::new(), skipped_files: mezura_core::SkippedFiles::default(),
             unreadable_dirs: Vec::new(), targets: Vec::new(),
             files_present: FilesPresent::default(),
@@ -240,10 +240,10 @@ mod tests {
     #[test]
     fn the_file_rows_of_a_revision_get_back_the_declared_form_of_their_targets() {
         let entry = |path: &str| mezura_core::FileEntry { path: path.to_owned(),
-                stats: mezura_core::Stats::default(), nested_languages: HashMap::new() };
+                stats: mezura_core::Stats::default(), nested_languages: HashMap::new(), tests: None };
         let mut result = crate::test_support::plain_result_of(HashMap::new(),
                 vec![mezura_core::ModuleResult { name: None, per_language: HashMap::new(),
-                        nested_languages: HashMap::new(), total: mezura_core::Stats::default(),
+                        nested_languages: HashMap::new(), tests: HashMap::new(), total: mezura_core::Stats::default(),
                         files: hashmap!["Rust".to_owned() => vec![entry("C:/t/chk/api/a.rs"),
                                 entry("C:/t/chk/apix/b.rs"), entry("C:/t/chk/main.rs"),
                                 entry("D:/elsewhere/c.rs")]] }],

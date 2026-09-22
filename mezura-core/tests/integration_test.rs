@@ -1218,3 +1218,58 @@ fn a_slow_traversal_callback_is_not_charged_to_the_counting() {
              to the parser", held_for.as_millis(), prompt.performance.duration_millis,
             slow.performance.duration_millis);
 }
+
+#[test]
+fn the_test_code_of_a_language_is_one_share_whichever_way_it_was_found() {
+    let root = std::env::temp_dir().join("mezura-test-code");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(root.join("tests")).unwrap();
+    std::fs::write(root.join("src").join("lib.rs"),
+            "pub fn a() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn it() {}\n}\n").unwrap();
+    std::fs::write(root.join("src").join("plain.rs"), "pub fn b() {}\n").unwrap();
+    std::fs::write(root.join("tests").join("x.rs"), "// an integration test\n#[test]\nfn x() {}\n").unwrap();
+    let root_str = root.to_string_lossy().replace('\\', "/");
+
+    let counted = |detect_tests: bool, targets: Vec<Target>| {
+        let config = EngineConfig { detect_tests, collect_files: true, threads: Threads::new(1, 4), targets,
+                ..EngineConfig::new([root_str.clone()]) };
+        let (languages, _) = Languages::shipped(&config);
+        run(&config, languages).unwrap()
+    };
+    let model = CountingModel::Content;
+
+    let result = counted(true, vec![Target::of(&root_str)]);
+    let rust = &result.per_language["Rust"];
+    assert_eq!((3, 11), (rust.files, rust.lines));
+    let tests = &result.tests["Rust"];
+    assert_eq!((2, 8, 95), (tests.files, tests.lines, tests.bytes));
+    // The lone brace closing the module is the one extra line
+    assert_eq!((6, 1, 1), (tests.calculate_code_lines(model), tests.calculate_comment_lines(model),
+            tests.calculate_extra_lines(model)));
+    assert_eq!(vec!["Rust"], result.tests.keys().collect::<Vec<_>>());
+    assert_eq!(tests, &result.modules[0].tests["Rust"]);
+
+    let files = &result.modules[0].files["Rust"];
+    let tests_of = |name: &str| files.iter()
+            .find(|file| std::path::Path::new(&file.path).file_name() == Some(name.as_ref()))
+            .unwrap().tests.as_ref();
+    let figures = |stats: &mezura_core::Stats| (stats.files, stats.lines, stats.bytes);
+    assert_eq!((1, 5, 54), figures(tests_of("lib.rs").unwrap()));
+    assert_eq!((1, 3, 41), figures(tests_of("x.rs").unwrap()));
+    assert!(tests_of("plain.rs").is_none());
+
+    let off = counted(false, vec![Target::of(&root_str)]);
+    assert!(off.tests.is_empty() && off.modules[0].tests.is_empty());
+    assert!(off.modules[0].files["Rust"].iter().all(|file| file.tests.is_none()));
+    assert_eq!(rust.lines, off.per_language["Rust"].lines);
+
+    let split = counted(true, vec![Target::named("code", format!("{root_str}/src")),
+            Target::named("checks", format!("{root_str}/tests"))]);
+    std::fs::remove_dir_all(&root).unwrap();
+    let of_module = |name: &str| split.modules.iter()
+            .find(|module| module.name.as_deref() == Some(name)).unwrap();
+    assert_eq!((1, 5, 54), figures(&of_module("code").tests["Rust"]));
+    assert_eq!((1, 3, 41), figures(&of_module("checks").tests["Rust"]));
+    assert_eq!((2, 8, 95), figures(&split.tests["Rust"]));
+}

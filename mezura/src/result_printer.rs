@@ -2776,7 +2776,7 @@ mod tests {
             let per_language = languages.iter().map(|x| ((*x).to_owned(), content_info[*x].clone())).collect::<HashMap<_,_>>();
             let total = Stats::total_of(&per_language);
             ModuleResult {name: name.map(str::to_owned), per_language, total,
-                    nested_languages: HashMap::new(), files: HashMap::new()}
+                    nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new()}
         };
 
         vec![of(Some("frontend"), &["JavaScript", "HTML"]), of(Some("backend"), &["Rust"]),
@@ -2790,7 +2790,7 @@ mod tests {
         let of = |name: Option<&str>, languages: Vec<(&str, Stats)>| {
             let per_language = languages.into_iter().map(|(x, stats)| (x.to_owned(), stats)).collect::<HashMap<_,_>>();
             ModuleResult {name: name.map(str::to_owned), total: Stats::total_of(&per_language), per_language,
-                    nested_languages: HashMap::new(), files: HashMap::new()}
+                    nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new()}
         };
 
         vec![of(Some("backend"), vec![
@@ -2823,7 +2823,7 @@ mod tests {
         let per_language = merged(modules);
 
         vec![ModuleResult {name: None, total: Stats::total_of(&per_language), per_language,
-                nested_languages: HashMap::new(), files: HashMap::new()}]
+                nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new()}]
     }
 
     fn reading_of(name: &str, taken: &str, modules: Vec<ModuleResult>) -> crate::diff::Reading {
@@ -2842,7 +2842,7 @@ mod tests {
             unreadable_dirs_count: 0,
             files_recorded: true,
             files_hidden: 0,
-            result: RunResult {total, per_language, modules, nested_languages: HashMap::new(),
+            result: RunResult {total, per_language, modules, nested_languages: HashMap::new(), tests: HashMap::new(),
                     faulty_files: Vec::new(), skipped_files: mezura_core::SkippedFiles::default(), files_present, targets: Vec::new(),
                     unreadable_dirs: Vec::new(),
                     performance: mezura_core::Performance {duration_millis: 0, threads: mezura_core::Threads::new(1, 1)}}
@@ -2851,7 +2851,7 @@ mod tests {
 
     fn groups_from<'a>(modules: &'a [ModuleResult], config: &crate::config_manager::Configuration) -> Vec<Group<'a>> {
         let result = RunResult {per_language: HashMap::new(),
-                modules: Vec::new(), nested_languages: HashMap::new(), total: Stats::default(), faulty_files: Vec::new(),
+                modules: Vec::new(), nested_languages: HashMap::new(), tests: HashMap::new(), total: Stats::default(), faulty_files: Vec::new(),
                 skipped_files: mezura_core::SkippedFiles::default(), files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(), performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
         let mut result = result;
         result.modules = modules.iter().map(|x| ModuleResult {
@@ -2859,6 +2859,7 @@ mod tests {
             per_language: x.per_language.clone(),
             total: Stats::total_of(&x.per_language),
             nested_languages: HashMap::new(),
+            tests: HashMap::new(),
             files: HashMap::new()
         }).collect();
         // The borrow has to outlive the temporary, so the groups are built against the caller's slice
@@ -2879,7 +2880,7 @@ mod tests {
         let entry = |path: &str, lines, code, comments, bytes| mezura_core::FileEntry {
             path: format!("D:/x/{path}"),
             stats: crate::test_support::plain_stats_of(1, bytes, lines, code, comments, hashmap![]),
-            nested_languages: HashMap::new()
+            nested_languages: HashMap::new(), tests: None
         };
         hashmap![
             "HTML".to_owned() => vec![
@@ -3126,7 +3127,7 @@ mod tests {
         let file_entry = |path: &str, lines, code, bytes| mezura_core::FileEntry {
             path: format!("D:/x/{path}"),
             stats: crate::test_support::plain_stats_of(1, bytes, lines, code, 0, hashmap![]),
-            nested_languages: HashMap::new()
+            nested_languages: HashMap::new(), tests: None
         };
         let with_files = |mut reading: crate::diff::Reading, files: HashMap<String, Vec<mezura_core::FileEntry>>| {
             reading.result.modules[0].files = files;
@@ -3266,7 +3267,7 @@ mod tests {
             let per_language = hashmap!["Rust".to_owned() =>
                     crate::test_support::plain_stats_of(2, 4000, 100, 70, 10, hashmap!["structs".to_owned() => structs])];
             ModuleResult {name: Some(name.to_owned()), total: Stats::total_of(&per_language), per_language,
-                    nested_languages: HashMap::new(), files: HashMap::new()}
+                    nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new()}
         };
         let (before, now) = (reading_of("older.json", "2026-07-30T14:22:07+03:00", vec![of("api", 20), of("web", 12)]),
                 reading_of("newer.json", "2026-08-06T09:41:00+03:00", vec![of("api", 30), of("web", 12)]));
@@ -3289,11 +3290,11 @@ mod tests {
 
         let (_, content_info, _) = sample_data();
         let of_modules = |modules: Vec<ModuleResult>| RunResult {
-            per_language: content_info.clone(), modules, nested_languages: HashMap::new(),
+            per_language: content_info.clone(), modules, nested_languages: HashMap::new(), tests: HashMap::new(),
             total: crate::test_support::plain_stats_of(23, 485500, 10934, 7643, 650, hashmap![]),
             faulty_files: Vec::new(), skipped_files: mezura_core::SkippedFiles::default(), files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(), performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
         let single = || vec![ModuleResult {name: None, per_language: content_info.clone(),
-                total: Stats::total_of(&content_info), nested_languages: HashMap::new(), files: HashMap::new()}];
+                total: Stats::total_of(&content_info), nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new()}];
 
         for layout in [Layout::List, Layout::Table, Layout::Boxed, Layout::Matrix] {
             // One past the five languages of the sample, so the boundary where nothing is hidden is
@@ -3322,12 +3323,12 @@ mod tests {
             let per_language = languages.iter().map(|x| ((*x).to_owned(), content_info[*x].clone()))
                     .collect::<HashMap<_,_>>();
             ModuleResult { name: name.map(str::to_owned), total: Stats::total_of(&per_language),
-                    per_language, nested_languages: HashMap::new(),
+                    per_language, nested_languages: HashMap::new(), tests: HashMap::new(),
                     files: entries.iter().filter(|(language, _)| languages.contains(&language.as_str()))
                             .map(|(language, files)| (language.clone(), files.clone())).collect() }
         };
         let of_modules = |modules: Vec<ModuleResult>| RunResult {
-            per_language: content_info.clone(), modules, nested_languages: HashMap::new(),
+            per_language: content_info.clone(), modules, nested_languages: HashMap::new(), tests: HashMap::new(),
             total: total.clone(), faulty_files: Vec::new(), skipped_files: mezura_core::SkippedFiles::default(), files_present: FilesPresent::default(),
             targets: vec![mezura_core::Target::of("D:/x")], unreadable_dirs: Vec::new(),
             performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
@@ -3473,8 +3474,9 @@ mod tests {
         let a_run = || RunResult {
             per_language: content_info.clone(),
             modules: vec![ModuleResult { name: None, per_language: content_info.clone(),
-                    total: Stats::total_of(&content_info), nested_languages: nested.clone(), files: HashMap::new() }],
-            nested_languages: nested.clone(), total: total.clone(), faulty_files: Vec::new(),
+                    total: Stats::total_of(&content_info), nested_languages: nested.clone(), tests: HashMap::new(),
+                    files: HashMap::new() }],
+            nested_languages: nested.clone(), tests: HashMap::new(), total: total.clone(), faulty_files: Vec::new(),
             skipped_files: mezura_core::SkippedFiles::default(), files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(),
             performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
 

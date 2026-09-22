@@ -152,6 +152,8 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
             Arc::new(Mutex::new(make_language_stats(&language_map_ref, modules.count())));
     let nested_per_module : NestedLanguageMapMut =
             Arc::new(Mutex::new(vec![HashMap::new(); modules.count()]));
+    let tests_per_module : StatsMapMut =
+            Arc::new(Mutex::new(vec![HashMap::new(); modules.count()]));
     let files_per_module : FilesPerModuleMut =
             Arc::new(Mutex::new(vec![HashMap::new(); modules.count()]));
 
@@ -214,7 +216,8 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     let skipped_files: Arc<Mutex<SkippedFiles>> = Arc::new(Mutex::new(SkippedFiles::default()));
     for i in 0..config.threads.consumers() {
         match engine::consumer::start_parser_thread(i, files_injector.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
-                stats_per_module.clone(), nested_per_module.clone(), files_per_module.clone(),
+                stats_per_module.clone(), nested_per_module.clone(), tests_per_module.clone(),
+                files_per_module.clone(),
                 language_map_ref.clone(), nested_definitions.clone(), language_lookups.clone(), config.clone(),
                 parsing_started_instant, counting_ended.clone(), consumer_exits.clone(), skipped_files.clone(),
                 progress.clone()) {
@@ -308,6 +311,8 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     let per_module = stats_guard.as_deref_mut().unwrap();
     let mut nested_guard = nested_per_module.lock();
     let nested_by_module = nested_guard.as_deref_mut().unwrap();
+    let mut tests_guard = tests_per_module.lock();
+    let tests_by_module = tests_guard.as_deref_mut().unwrap();
     let mut files_guard = files_per_module.lock();
     let files_by_module = files_guard.as_deref_mut().unwrap();
 
@@ -319,6 +324,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     let total = Stats::total_of(&per_language);
 
     let nested_languages = merge_nested_over_modules(nested_by_module);
+    let tests = merge_over_modules(tests_by_module);
 
     let modules_result = per_module.iter_mut().enumerate().map(|(id, bucket)| {
         let mut of_this_module = std::mem::take(bucket);
@@ -330,6 +336,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
             total: Stats::total_of(&of_this_module),
             per_language: of_this_module,
             nested_languages: std::mem::take(&mut nested_by_module[id]),
+            tests: std::mem::take(&mut tests_by_module[id]),
             files: std::mem::take(&mut files_by_module[id])
         }
     }).collect::<Vec<_>>();
@@ -338,6 +345,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
         per_language,
         total,
         nested_languages,
+        tests,
         modules: modules_result,
         faulty_files: std::mem::take(&mut faulty_files_ref.lock().unwrap()),
         skipped_files,

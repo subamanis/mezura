@@ -851,7 +851,7 @@ mod tests {
     }
 
     fn entry(path: &str, lines: usize, code: usize) -> FileEntry {
-        FileEntry { path: path.to_owned(), stats: stats(lines, code, 1), nested_languages: HashMap::new() }
+        FileEntry { path: path.to_owned(), stats: stats(lines, code, 1), nested_languages: HashMap::new(), tests: None }
     }
 
     #[test]
@@ -939,7 +939,7 @@ mod tests {
         let module = |name: Option<&str>, lines: usize| {
             let per_language = hashmap!["Rust".to_owned() => stats(lines, lines, 1)];
             ModuleResult {name: name.map(str::to_owned), total: Stats::total_of(&per_language), per_language,
-                    nested_languages: HashMap::new(), files: HashMap::new()}
+                    nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new()}
         };
         let result = |modules: Vec<ModuleResult>| {
             let per_language = hashmap!["Rust".to_owned() => stats(100, 70, 2)];
@@ -994,7 +994,7 @@ mod tests {
         let module = |name: &str| {
             let per_language = hashmap!["Rust".to_owned() => stats(50, 40, 1)];
             ModuleResult { name: Some(name.to_owned()), total: Stats::total_of(&per_language), per_language,
-                    nested_languages: HashMap::new(), files: HashMap::new() }
+                    nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new() }
         };
 
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
@@ -1138,7 +1138,7 @@ mod tests {
 
         config.view.by_file = Some(ByFile::All);
         result.modules = vec![ModuleResult { name: None, per_language: per_language.clone(),
-                total: Stats::total_of(&per_language), nested_languages: HashMap::new(),
+                total: Stats::total_of(&per_language), nested_languages: HashMap::new(), tests: HashMap::new(),
                 files: hashmap!["Rust".to_owned() => vec![entry("D:/p/a.rs", 100, 70)]] }];
         let with_rows = write("with-rows", &result, &config);
 

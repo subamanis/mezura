@@ -281,7 +281,7 @@ mod tests {
         let counted = crate::test_support::plain_stats_of(1, 40, 4, 3, 1, HashMap::new());
         RunResult {
             per_language: HashMap::from([("Rust".to_owned(), counted.clone())]), total: counted,
-            modules: Vec::new(), nested_languages: HashMap::new(), targets: Vec::new(),
+            modules: Vec::new(), nested_languages: HashMap::new(), tests: HashMap::new(), targets: Vec::new(),
             files_present: FilesPresent {total_files: 2 + faulty, relevant_files: 1 + faulty, excluded_files: 0},
             performance: Performance {duration_millis: 0, threads: Threads::new(1, 1)},
             faulty_files: (0..faulty).map(|i| mezura_core::FaultyFileDetails::new(
