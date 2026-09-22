@@ -20,6 +20,10 @@ Self-nesting comment start
 Self-nesting comment end
 */
 
+Tests
+    FILE NAMES
+    *_test.odin
+
 Keyword
 NAME
 structs

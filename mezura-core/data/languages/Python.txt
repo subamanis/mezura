@@ -24,6 +24,10 @@ strings
 Comment symbols
 #
 
+Tests
+    FILE NAMES
+    test_* *_test.py conftest.py tests.py
+
 Keyword
     NAME
     classes

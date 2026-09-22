@@ -21,6 +21,10 @@ Escape character
 Comment symbols
 #
 
+Tests
+    FILE NAMES
+    *.bats
+
 Keyword
 NAME
 functions

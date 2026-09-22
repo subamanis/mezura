@@ -3,13 +3,16 @@
 // brace inside a string or a comment is absent by construction.
 mod attribute;
 
+use std::path::{Component, Path};
 use std::sync::LazyLock;
 
 use memchr::memmem;
 
-use crate::{Language, LineClass};
+use crate::{Language, LineClass, TestFileName};
 
 const ELSE : &[u8] = b"else";
+const TEST_DIRECTORIES : [&str; 3] = ["test", "tests", "__tests__"];
+const OTHER_TARGET_DIRECTORIES : [&str; 3] = ["examples", "benches", "bin"];
 
 // The spike's reader of what the walk found, until the result carries it
 pub(crate) static PRINT_TEST_LINES : LazyLock<bool> =
@@ -24,6 +27,9 @@ pub(crate) struct TestWalk<'a> {
     // The offset the scan of the open extent resumes from, which can sit past the current line
     cursor: usize,
     held: Vec<(LineClass, usize)>,
+    // An 'if' under an attribute owns its 'else' arms. After a word such as D's 'unittest' the
+    // 'else' is the branch built without it.
+    else_continues: bool,
 }
 
 impl<'a> TestWalk<'a> {
@@ -41,7 +47,7 @@ impl<'a> TestWalk<'a> {
         candidates.sort_unstable();
 
         Some(TestWalk { contents: bytes, markers, candidates, next: 0, state: State::Idle, cursor: 0,
-                held: Vec::new() })
+                held: Vec::new(), else_continues: false })
     }
 
     // Whether the line just classified is test code. The ranges are offsets into the line with its
@@ -79,6 +85,7 @@ impl<'a> TestWalk<'a> {
                     self.next += 1;
                     let Some(found) = self.read_marker(at, &self.markers[marker as usize], base, ranges) else { continue };
                     is_test = true;
+                    self.else_continues = attribute::is_opener(&self.markers[marker as usize]);
                     match found {
                         // An inner attribute at the start of a line covers the file. Indented, it
                         // covers the block around it.
@@ -213,7 +220,8 @@ impl<'a> TestWalk<'a> {
             let mut at = self.cursor.saturating_sub(base).max(from);
             while at < to && line[at].is_ascii_whitespace() { at += 1; }
             if at >= to { continue; }
-            if line[at..to].starts_with(ELSE) && !line.get(at + ELSE.len()).is_some_and(|byte| is_word_byte(*byte)) {
+            if self.else_continues && line[at..to].starts_with(ELSE)
+                    && !line.get(at + ELSE.len()).is_some_and(|byte| is_word_byte(*byte)) {
                 self.cursor = base + at + ELSE.len();
                 return Look::Else;
             }
@@ -221,6 +229,47 @@ impl<'a> TestWalk<'a> {
             return Look::Other;
         }
         Look::Exhausted
+    }
+}
+
+// A directory of tests makes every file under it a test file. An example, a bench or a binary
+// switches the file name rules off under it, since a program there is free to be called
+// test_parser.rs, and a directory of tests inside it still counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub(crate) enum TestScope {
+    #[default]
+    Ordinary,
+    Tests,
+    OtherTarget,
+}
+
+impl TestScope {
+    // Without regard to case, since .NET and Swift write the directory as 'Tests'
+    pub(crate) fn of_child(self, dir_name: &str) -> TestScope {
+        let is_named = |names: &[&str]| names.iter().any(|name| name.eq_ignore_ascii_case(dir_name));
+        if is_named(&TEST_DIRECTORIES) {
+            return TestScope::Tests;
+        }
+        if self == TestScope::Ordinary && is_named(&OTHER_TARGET_DIRECTORIES) {
+            return TestScope::OtherTarget;
+        }
+        self
+    }
+
+    // A target's own path is never met on the way down, so its scope is read off the path once
+    pub(crate) fn of_path(path: &Path) -> TestScope {
+        path.components().fold(TestScope::Ordinary, |scope, component| match component {
+            Component::Normal(name) => scope.of_child(&name.to_string_lossy()),
+            _ => scope
+        })
+    }
+
+    pub(crate) fn is_test_file(self, file_name: &str, names: &[TestFileName]) -> bool {
+        match self {
+            TestScope::Tests => true,
+            TestScope::Ordinary => names.iter().any(|name| name.matches(file_name)),
+            TestScope::OtherTarget => false
+        }
     }
 }
 
@@ -326,6 +375,32 @@ mod tests {
         assert!(matches!(walk.read_marker(22, "unittest", 0, &ranges), Some(Marker::Extent { after: 30 })));
         assert!(walk.read_marker(39, "unittest", 0, &ranges).is_none());
         assert!(walk.read_marker(22, "unittest", 0, &[(0, 10)]).is_none());
+    }
+
+    #[test]
+    fn a_directory_of_tests_or_of_another_target_decides_the_scope_below_it() {
+        use TestScope::{Ordinary, OtherTarget, Tests};
+        assert_eq!(Ordinary.of_child("src"), Ordinary);
+        assert_eq!(Ordinary.of_child("tests"), Tests);
+        assert_eq!(Ordinary.of_child("__tests__"), Tests);
+        assert_eq!(Ordinary.of_child("Tests"), Tests);
+        assert_eq!(Ordinary.of_child("TEST"), Tests);
+        assert_eq!(Ordinary.of_child("testing"), Ordinary);
+        assert_eq!(Ordinary.of_child("examples"), OtherTarget);
+        assert_eq!(Ordinary.of_child("Examples"), OtherTarget);
+        assert_eq!(Tests.of_child("examples"), Tests);
+        assert_eq!(OtherTarget.of_child("helpers"), OtherTarget);
+        assert_eq!(OtherTarget.of_child("tests"), Tests);
+        assert_eq!(TestScope::of_path(Path::new("D:/dev/crate/tests/data")), Tests);
+        assert_eq!(TestScope::of_path(Path::new("/home/x/crate/examples")), OtherTarget);
+        assert_eq!(TestScope::of_path(Path::new("crate/src")), Ordinary);
+
+        let names = [TestFileName::of("*_test.go").unwrap()];
+        assert!(Tests.is_test_file("main.go", &names));
+        assert!(Ordinary.is_test_file("parser_test.go", &names));
+        assert!(!Ordinary.is_test_file("parser.go", &names));
+        assert!(!Ordinary.is_test_file("parser_test.go", &[]));
+        assert!(!OtherTarget.is_test_file("parser_test.go", &names));
     }
 
     #[test]

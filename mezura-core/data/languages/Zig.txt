@@ -16,6 +16,10 @@ Escape character
 Comment symbols
 //
 
+Tests
+    MARKERS
+    test
+
 Keyword
 NAME
 structs

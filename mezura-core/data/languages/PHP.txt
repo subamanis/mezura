@@ -22,6 +22,10 @@ Multi line comment start
 Multi line comment end
 */
 
+Tests
+    FILE NAMES
+    *Test.php
+
 Keyword
     NAME
     classes

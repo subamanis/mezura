@@ -26,6 +26,10 @@ Self-nesting comment start
 Self-nesting comment end
 =#
 
+Tests
+    FILE NAMES
+    runtests.jl
+
 Keyword
 NAME
 structs

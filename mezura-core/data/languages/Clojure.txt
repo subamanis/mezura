@@ -15,6 +15,10 @@ Escape character
 Comment symbols
 ;
 
+Tests
+    FILE NAMES
+    *_test.clj *_test.cljs *_test.cljc
+
 Keyword
 NAME
 functions

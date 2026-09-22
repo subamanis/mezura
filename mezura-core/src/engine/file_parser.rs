@@ -20,7 +20,7 @@ use crate::domain::{CommentPair, FileStats, LineContinuation};
 use crate::engine::masks::MaskFinder;
 use crate::engine::masks::is_ascii;
 use crate::engine::masks::BLOCK_BYTES;
-use crate::engine::test_detection::TestWalk;
+use crate::engine::test_detection::{TestScope, TestWalk};
 
 pub(crate) const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
 
@@ -116,7 +116,7 @@ pub(crate) enum FileOutcome {
 pub(crate) fn parse_file(path: &Path, size: u64, lang_name: &str, buf: &mut Vec<u8>, buffers: &mut ParseBuffers,
     lookup: &NestedLanguageLookup, matchers: &mut KeywordMatchers,
     id_matchers: &mut IdentificationMatchers, config: &EngineConfig,
-    written_by_hand: bool, extension_rules: Option<&crate::engine::identity::ExtensionRules>,
+    written_by_hand: bool, test_scope: TestScope, extension_rules: Option<&crate::engine::identity::ExtensionRules>,
     shebang_map: &HashMap<String, Arc<str>>)
 -> Result<FileOutcome,String>
 {
@@ -164,22 +164,30 @@ pub(crate) fn parse_file(path: &Path, size: u64, lang_name: &str, buf: &mut Vec<
             .and_then(|c| identify_language(contents, c, lookup.languages, shebang_map, id_matchers))
             .map(|(name, _)| name);
     let lang_name = resolved.as_deref().unwrap_or(lang_name);
-    let report = parse_lines::<false>(contents, lookup.languages.get(lang_name).unwrap(), lookup, matchers,
-            config, buffers, &mut ExplainLog::default());
+    let language = lookup.languages.get(lang_name).unwrap();
+    // Decided after the language is known, since a contested extension is only identified from here on
+    let whole_file_is_tests = config.detect_tests && is_a_test_file(path, test_scope, language);
+    let report = parse_lines::<false>(contents, language, lookup, matchers, config, buffers,
+            whole_file_is_tests, &mut ExplainLog::default());
     if let Some(t) = at { buffers.timing.parse_nanos += phase_timing::nanos_since(t); }
 
     Ok(FileOutcome::Counted(report, resolved))
 }
 
-// What '--explain' calls: one file, read exactly as a counting run reads it, with the log switched
+pub(crate) fn is_a_test_file(path: &Path, test_scope: TestScope, language: &Language) -> bool {
+    let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    test_scope.is_test_file(file_name, &language.test_file_names)
+}
+
+// What '--explain' calls. One file, read exactly as a counting run reads it, with the log switched
 // on. Keywords are skipped whatever the configuration says, since they cannot move a line's class.
 pub(crate) fn explain_parsed_file(contents: String, lang_name: &str, lookup: &NestedLanguageLookup,
-    config: &EngineConfig) -> (String, FileReport, ExplainLog)
+    config: &EngineConfig, whole_file_is_tests: bool) -> (String, FileReport, ExplainLog)
 {
     let config = EngineConfig { count_keywords: false, ..config.clone() };
     let mut log = ExplainLog::default();
     let report = parse_lines::<true>(&contents, lookup.languages.get(lang_name).unwrap(), lookup,
-            &mut KeywordMatchers::default(), &config, &mut ParseBuffers::default(), &mut log);
+            &mut KeywordMatchers::default(), &config, &mut ParseBuffers::default(), whole_file_is_tests, &mut log);
     (contents, report, log)
 }
 
@@ -1217,7 +1225,7 @@ struct SectionBucket<'a> {
 
 fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup: &NestedLanguageLookup,
     matchers: &mut KeywordMatchers, config: &EngineConfig, buffers: &mut ParseBuffers,
-    log: &mut ExplainLog) -> FileReport
+    whole_file_is_tests: bool, log: &mut ExplainLog) -> FileReport
 {
     let ParseBuffers { scan, alias_indices, code_spans, .. } = buffers;
     let mut shell_stats = if config.count_keywords { FileStats::with_keywords(&language.keywords) }
@@ -1226,7 +1234,8 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
 
     // Nothing but the keyword search reads the spans, so a language with no keywords builds none
     let collecting_spans = config.count_keywords && matchers.for_language(language).is_some();
-    let mut test_walk = TestWalk::of(language, contents, config.detect_tests);
+    // A file that is tests from end to end needs no extent followed, since nothing can be more
+    let mut test_walk = if whole_file_is_tests { None } else { TestWalk::of(language, contents, config.detect_tests) };
     // The plain path writes a line's code range only where the nested language search or the test
     // extent reads it
     let ranges_wanted = !language.nested_languages.is_empty() || test_walk.is_some();
@@ -1326,6 +1335,17 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
                 count_keywords(contents, &bucket.spans, matcher, &mut bucket.stats, alias_indices);
             }
         }
+    }
+
+    if whole_file_is_tests {
+        test_stats = FileStats { lines: shell_stats.lines, classes: shell_stats.classes.clone(),
+                keyword_occurences: Vec::new() };
+        for bucket in &buckets {
+            test_stats.lines += bucket.stats.lines;
+            test_stats.classes.add(&bucket.stats.classes);
+        }
+        test_bytes = contents.len();
+        if EXPLAIN { log.mark_last_lines_as_test(test_stats.lines); }
     }
 
     FileReport {
@@ -2426,7 +2446,7 @@ mod tests {
     fn parse_file_report(path: &Path, lang_name: &str, buf: &mut Vec<u8>, config: &EngineConfig) -> Result<FileReport, String> {
         match parse_file(path, get_size_of(path), lang_name, buf, &mut ParseBuffers::default(), &shipped_lookup(),
                 &mut KeywordMatchers::default(), &mut IdentificationMatchers::default(), config,
-                false, None, &HashMap::new())? {
+                false, TestScope::Ordinary, None, &HashMap::new())? {
             FileOutcome::Counted(report, _) => Ok(report),
             FileOutcome::Skipped(kind) => panic!("{} was skipped as {}", path.display(), kind.name())
         }
@@ -2441,7 +2461,7 @@ mod tests {
         parse_lines::<false>(contents, language, &NestedLanguageLookup { languages: &NO_SET_ASIDE,
                 extension_to_name: &NO_EXTENSIONS, set_aside: &NO_SET_ASIDE },
                 &mut KeywordMatchers::default(), &EngineConfig::default(), &mut ParseBuffers::default(),
-                &mut ExplainLog::default()).into_whole()
+                false, &mut ExplainLog::default()).into_whole()
     }
 
     fn c_like_with_a_splice() -> Language {
@@ -3319,7 +3339,7 @@ mod tests {
     {
         let lookup = NestedLanguageLookup { languages, extension_to_name: extensions, set_aside: &NO_SET_ASIDE };
         parse_lines::<false>(contents, shell, &lookup, &mut KeywordMatchers::default(),
-                &EngineConfig::default(), &mut ParseBuffers::default(), &mut ExplainLog::default())
+                &EngineConfig::default(), &mut ParseBuffers::default(), false, &mut ExplainLog::default())
     }
 
     #[test]
@@ -4160,7 +4180,7 @@ mod tests {
                     .unwrap_or_else(|x| panic!("{name} could not be counted: {x}"));
             let raw = std::fs::read_to_string(&path)
                     .unwrap_or_else(|x| panic!("{name} could not be read: {x}"));
-            let (contents, explained, log) = explain_parsed_file(raw, lang_name.as_ref(), &shipped_lookup(), &config);
+            let (contents, explained, log) = explain_parsed_file(raw, lang_name.as_ref(), &shipped_lookup(), &config, false);
 
             // The spans of every line partition its trimmed text: they start at the first byte of
             // text, touch each other with no gap and no overlap, and stop at the last. A blank
@@ -4275,7 +4295,7 @@ mod tests {
             let mut buf = Vec::new();
             match parse_file(&path, size, "Rust", &mut buf, &mut ParseBuffers::default(),
                     &shipped_lookup(), &mut KeywordMatchers::default(),
-                    &mut IdentificationMatchers::default(), &config, false, None, &HashMap::new()) {
+                    &mut IdentificationMatchers::default(), &config, false, TestScope::Ordinary, None, &HashMap::new()) {
                 Ok(FileOutcome::Counted(report, _)) => report.into_whole().lines,
                 _ => panic!("{} was not counted", path.display())
             }
@@ -4315,7 +4335,7 @@ mod tests {
             let mut buf = Vec::new();
             matches!(parse_file(path, get_size_of(path), "JavaScript", &mut buf, &mut ParseBuffers::default(),
                     &shipped_lookup(), &mut KeywordMatchers::default(),
-                    &mut IdentificationMatchers::default(), config, false, None, &HashMap::new()),
+                    &mut IdentificationMatchers::default(), config, false, TestScope::Ordinary, None, &HashMap::new()),
                     Ok(FileOutcome::Skipped(ScanSkip::Minified)))
         };
 
@@ -4406,7 +4426,7 @@ mod tests {
             let mut buf = Vec::new();
             matches!(parse_file(&path, get_size_of(&path), "JavaScript", &mut buf, &mut ParseBuffers::default(),
                     &shipped_lookup(), &mut KeywordMatchers::default(),
-                    &mut IdentificationMatchers::default(), config, false, None, &HashMap::new()),
+                    &mut IdentificationMatchers::default(), config, false, TestScope::Ordinary, None, &HashMap::new()),
                     Ok(FileOutcome::Skipped(ScanSkip::Generated)))
         };
         let default = EngineConfig::default();
@@ -4502,7 +4522,7 @@ mod tests {
         let mut log = ExplainLog::default();
         parse_lines::<true>(contents, language, &NestedLanguageLookup { languages: &NO_SET_ASIDE,
                 extension_to_name: &NO_EXTENSIONS, set_aside: &NO_SET_ASIDE },
-                &mut KeywordMatchers::default(), config, &mut ParseBuffers::default(), &mut log);
+                &mut KeywordMatchers::default(), config, &mut ParseBuffers::default(), false, &mut log);
         log.records().iter().enumerate().filter(|(_, record)| record.in_test).map(|(at, _)| at + 1).collect()
     }
 
@@ -4544,7 +4564,7 @@ mod tests {
         let report = parse_lines::<false>(source, language, &NestedLanguageLookup { languages: &NO_SET_ASIDE,
                 extension_to_name: &NO_EXTENSIONS, set_aside: &NO_SET_ASIDE },
                 &mut KeywordMatchers::default(), &EngineConfig::default(), &mut ParseBuffers::default(),
-                &mut ExplainLog::default());
+                false, &mut ExplainLog::default());
         let tests = report.tests.unwrap();
         assert_eq!(tests.stats.lines, 7);
         assert_eq!(tests.stats.classes.calculate_lines(), 7);
@@ -4751,6 +4771,39 @@ mod tests {
     }
 
     #[test]
+    fn a_file_in_a_directory_of_tests_or_named_as_a_test_file_is_test_code_whole() {
+        let dir = std::env::temp_dir().join("mezura_whole_test_file");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let go = "package parser\n\n// a comment\nfunc TestParse(t *testing.T) {\n\tparse()\n}\n";
+        let named_as_a_test = dir.join("parser_test.go");
+        let named_plainly = dir.join("parser.go");
+        std::fs::write(&named_as_a_test, go).unwrap();
+        std::fs::write(&named_plainly, go).unwrap();
+
+        let tests_of = |path: &Path, scope: TestScope, config: &EngineConfig| {
+            let mut buf = Vec::new();
+            match parse_file(path, get_size_of(path), "Go", &mut buf, &mut ParseBuffers::default(), &shipped_lookup(),
+                    &mut KeywordMatchers::default(), &mut IdentificationMatchers::default(), config,
+                    false, scope, None, &HashMap::new()).unwrap() {
+                FileOutcome::Counted(report, _) => report.tests.map(|tests| (tests.stats.lines, tests.stats.classes.clone(), tests.bytes)),
+                FileOutcome::Skipped(kind) => panic!("skipped as {}", kind.name())
+            }
+        };
+        let whole = (6, parse_lines_whole(go, LANGUAGE_MAP_REF.get("Go").unwrap()).classes, go.len());
+
+        let on = EngineConfig::default();
+        assert_eq!(tests_of(&named_as_a_test, TestScope::Ordinary, &on), Some(whole.clone()));
+        assert_eq!(tests_of(&named_plainly, TestScope::Ordinary, &on), None);
+        assert_eq!(tests_of(&named_plainly, TestScope::Tests, &on), Some(whole.clone()));
+        assert_eq!(tests_of(&named_as_a_test, TestScope::OtherTarget, &on), None);
+        let off = EngineConfig { detect_tests: false, ..EngineConfig::default() };
+        assert_eq!(tests_of(&named_as_a_test, TestScope::Tests, &off), None);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn nothing_is_test_code_when_detection_is_off() {
         let source = "#[test]\nfn t() {}\n";
         let language = LANGUAGE_MAP_REF.get("Rust").unwrap();
@@ -4769,9 +4822,14 @@ mod tests {
             "version(unittest) {\n",
             "    int helper() { return 2; }\n",
             "}\n",
-            "int unittests = 3;\n");
+            "int unittests = 3;\n",
+            "version(unittest) {\n",
+            "    int a;\n",
+            "} else {\n",
+            "    int b;\n",
+            "}\n");
         assert_eq!(find_test_lines(source, LANGUAGE_MAP_REF.get("D").unwrap(), &EngineConfig::default()),
-                vec![2, 3, 4, 5, 6, 7]);
+                vec![2, 3, 4, 5, 6, 7, 9, 10, 11]);
     }
 }
 

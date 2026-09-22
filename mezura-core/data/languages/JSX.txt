@@ -20,6 +20,10 @@ Multi line comment start
 Multi line comment end
 */
 
+Tests
+    FILE NAMES
+    *.test.jsx *.spec.jsx
+
 Keyword
 NAME
 classes

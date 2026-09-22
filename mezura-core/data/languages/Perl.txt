@@ -2,7 +2,7 @@ Language
 Perl
 
 Extensions
-pl pm
+pl pm t
 
 Shebangs
 perl
@@ -20,6 +20,10 @@ Escape character
 
 Comment symbols
 #
+
+Tests
+    FILE NAMES
+    *.t
 
 Keyword
 NAME

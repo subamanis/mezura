@@ -20,6 +20,10 @@ Self-nesting comment start
 Self-nesting comment end
 */
 
+Tests
+    FILE NAMES
+    *Test.kt *Tests.kt *Spec.kt
+
 Keyword
     NAME
     classes

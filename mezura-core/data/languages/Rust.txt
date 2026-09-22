@@ -30,6 +30,8 @@ Self-nesting comment end
 Tests
     MARKERS
     #[ #![
+    FILE NAMES
+    tests.rs test.rs *_test.rs *_tests.rs test_*
 
 Keyword
     NAME

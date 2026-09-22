@@ -96,8 +96,8 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                 let shebang_map = &language_lookups.get_of_module(parsable_file.module).by_shebang;
                 match file_parser::parse_file(&parsable_file.path, parsable_file.size, lang_name, &mut buf,
                         &mut parse_buffers, &lookup, &mut keyword_matchers, &mut identification_matchers,
-                        &config, parsable_file.written_by_hand, parsable_file.extension_rules.as_deref(),
-                        shebang_map) {
+                        &config, parsable_file.written_by_hand, parsable_file.test_scope,
+                        parsable_file.extension_rules.as_deref(), shebang_map) {
                     Ok(file_parser::FileOutcome::Counted(report, resolved)) => {
                         if *test_detection::PRINT_TEST_LINES && let Some(tests) = &report.tests {
                             eprintln!("{}\t{}\t{}", tests.stats.lines, tests.bytes, parsable_file.path.display());

@@ -18,6 +18,10 @@ Escape character
 Comment symbols
 ;
 
+Tests
+    FILE NAMES
+    *-test.el *-tests.el
+
 Keyword
     NAME
     functions

@@ -13,6 +13,7 @@ use crate::{EngineConfig, FilesPresent, GitignoreStack, ObeyedIgnoreFiles, Parsa
         SharedModuleLookups, TraversedDir, UnreadableDirDetails};
 use crate::engine::identity::ModuleLookups;
 use crate::engine::modules::{ModuleId, Modules};
+use crate::engine::test_detection::TestScope;
 
 // A panic is caught here rather than read back from 'join', because these threads stop by counting
 // how many of them have gone idle against how many started: one that dies without ever going idle
@@ -84,7 +85,7 @@ fn search_for_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs
                     let gitignore_stack = GitignoreStack::extend_with_ignore_files(&dir.path,
                             dir.gitignore_stack.clone(), &present);
                     traverse_dir(&files_injector, entries, &worker, &language_lookups, &exclude_matcher, &gitignore_stack,
-                            &config, &modules, dir.module, &dir.path, &mut files_present, progress)
+                            &config, &modules, dir.module, dir.test_scope, &dir.path, &mut files_present, progress)
                 },
                 // Everything under it goes uncounted and reaches no total, not even the number of
                 // files looked at, and nothing else would say so. The reason travels with the path,
@@ -161,7 +162,7 @@ fn find_ignore_files_among(entries: &[DirEntry], obeyed: ObeyedIgnoreFiles) -> V
 // only happen in a run with a target inside another target.
 fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: Vec<DirEntry>, dirs_worker: &Worker<TraversedDir>,
         language_lookups: &ModuleLookups, exclude_matcher: &globset::GlobSet, gitignore_stack: &Option<Arc<GitignoreStack>>,
-        config: &EngineConfig, modules: &Modules, module: ModuleId, dir_path: &Path,
+        config: &EngineConfig, modules: &Modules, module: ModuleId, test_scope: TestScope, dir_path: &Path,
         files_present: &mut FilesPresent, progress: &ScanProgress)
 {
     let mut local_total_files = 0;
@@ -216,7 +217,8 @@ fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: Vec<DirEntry>,
                 // call per file, and the consumer learns the size from the read itself.
                 let size = if cfg!(windows) { e.metadata().map_or(0, |m| m.len()) } else { 0 };
                 files_injector.push(ParsableFile::new(path_buf, lang_name, module, size)
-                        .with_extension_rules(language_lookup.find_extension_rules(name)));
+                        .with_extension_rules(language_lookup.find_extension_rules(name))
+                        .with_test_scope(test_scope));
                 progress.record_file_found();
             } else {
                 // Read lossily, and only to ask whether it is dotted, which a lossy reading answers
@@ -238,7 +240,8 @@ fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: Vec<DirEntry>,
                     continue;
                 }
                 let module = if dir_boundaries {modules.at_dir(&pathbuf, module)} else {module};
-                dirs_worker.push(TraversedDir::new(pathbuf, gitignore_stack.clone(), module));
+                let child_scope = if config.detect_tests { test_scope.of_child(&dir_name) } else { TestScope::Ordinary };
+                dirs_worker.push(TraversedDir::new(pathbuf, gitignore_stack.clone(), module, child_scope));
             }
         }
     }
@@ -268,7 +271,15 @@ mod tests {
     }
 
     fn walk(target: &str, extra_args: &str) -> (usize, usize, usize, Vec<(String, Option<String>)>) {
-        // The rule the real parser applies: whitespace separates one target from the next only once a
+        let (total, relevant, excluded, found, modules) = scan(target, extra_args);
+        let mut found_files = found.iter().map(|f| (f.path.file_name().unwrap().to_str().unwrap().to_owned(),
+                modules.name_of(f.module).map(str::to_owned))).collect::<Vec<_>>();
+        found_files.sort();
+        (total, relevant, excluded, found_files)
+    }
+
+    fn scan(target: &str, extra_args: &str) -> (usize, usize, usize, Vec<ParsableFile>, Arc<Modules>) {
+        // The rule the real parser applies. Whitespace separates one target from the next only once a
         // module has been named, so a path with a space in it survives while nothing is named.
         let declares_a_module = target.contains('=');
         let pieces = if declares_a_module {target.split_whitespace().collect::<Vec<_>>()}
@@ -284,6 +295,7 @@ mod tests {
             no_gitignore: extra_args.contains("--no-gitignore"),
             no_ignore_files: extra_args.contains("--no-ignore-files"),
             should_search_in_dotted: extra_args.contains("--search-in-dotted"),
+            detect_tests: !extra_args.contains("--hide tests"),
             ..Default::default()
         };
         // The same first step 'run' takes, with the flags the walk is about to obey
@@ -311,12 +323,44 @@ mod tests {
 
         let mut found_files = Vec::new();
         while let Steal::Success(f) = files_injector.steal() {
-            found_files.push((f.path.file_name().unwrap().to_str().unwrap().to_owned(),
-                    modules.name_of(f.module).map(str::to_owned)));
+            found_files.push(f);
         }
-        found_files.sort();
 
-        (found.total_files, found.relevant_files, found.excluded_files, found_files)
+        (found.total_files, found.relevant_files, found.excluded_files, found_files, modules)
+    }
+
+    #[test]
+    fn the_directory_scan_marks_directories_of_tests_and_of_other_targets() {
+        let root = std::env::temp_dir().join("mezura_test_scope_scan");
+        let _ = fs::remove_dir_all(&root);
+        for dir in ["src/tests", "tests/examples", "examples", "src/bin"] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        for file in ["src/a.rs", "src/tests/b.rs", "tests/c.rs", "tests/examples/d.rs", "examples/e.rs", "src/bin/f.rs"] {
+            fs::write(root.join(file), "fn main() {}\n").unwrap();
+        }
+        let root_str = root.to_str().unwrap().replace('\\', "/");
+        let scopes_of = |found: Vec<ParsableFile>| found.into_iter()
+                .map(|f| (f.path.file_name().unwrap().to_str().unwrap().to_owned(), f.test_scope))
+                .collect::<std::collections::BTreeMap<_, _>>();
+
+        let scopes = scopes_of(scan(&root_str, "").3);
+        assert_eq!(scopes["a.rs"], TestScope::Ordinary);
+        assert_eq!(scopes["b.rs"], TestScope::Tests);
+        assert_eq!(scopes["c.rs"], TestScope::Tests);
+        assert_eq!(scopes["d.rs"], TestScope::Tests);
+        assert_eq!(scopes["e.rs"], TestScope::OtherTarget);
+        assert_eq!(scopes["f.rs"], TestScope::OtherTarget);
+
+        let inside = scopes_of(scan(&format!("{root_str}/tests/examples"), "").3);
+        assert_eq!(inside["d.rs"], TestScope::Tests);
+        let named = scopes_of(scan(&format!("{root_str}/examples/e.rs"), "").3);
+        assert_eq!(named["e.rs"], TestScope::OtherTarget);
+
+        let off = scopes_of(scan(&root_str, "--hide tests").3);
+        assert!(off.values().all(|scope| *scope == TestScope::Ordinary), "{off:?}");
+
+        fs::remove_dir_all(&root).unwrap();
     }
 
     // Reproduced with a queued path that does not exist, which fails in 'read_dir' the same way a
@@ -344,7 +388,7 @@ mod tests {
         let mut files_present = FilesPresent::default();
         queue_the_targets(&config, &targets, &dirs_injector, &files_injector,
                 &mut files_present, &language_lookups, &modules, &ScanProgress::default());
-        dirs_injector.push(TraversedDir::new(std::path::PathBuf::from(&vanished), None, 0));
+        dirs_injector.push(TraversedDir::new(std::path::PathBuf::from(&vanished), None, 0, TestScope::Ordinary));
 
         let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs).unwrap());
         let (found, unreadable) = search_for_files(0, files_injector, dirs_injector,
@@ -625,11 +669,11 @@ mod tests {
         let (mine, peer) = (Worker::new_lifo(), Worker::new_lifo());
         let stealers = [mine.stealer(), peer.stealer()];
         let peers_dir = PathBuf::from("mezura-a-peers-directory");
-        peer.push(TraversedDir::new(peers_dir.clone(), None, 0));
+        peer.push(TraversedDir::new(peers_dir.clone(), None, 0, TestScope::Ordinary));
 
         assert_eq!(Some(peers_dir), steal_a_dir(0, &Injector::new(), &stealers, &mine).map(|dir| dir.path));
 
-        mine.push(TraversedDir::new(PathBuf::from("mezura-my-own-directory"), None, 0));
+        mine.push(TraversedDir::new(PathBuf::from("mezura-my-own-directory"), None, 0, TestScope::Ordinary));
         assert!(steal_a_dir(0, &Injector::new(), &stealers, &mine).is_none(),
                 "a producer stole from its own queue");
     }

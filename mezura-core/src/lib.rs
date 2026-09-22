@@ -78,6 +78,7 @@ use std::time::Instant;
 use crossbeam_deque::{Injector, Worker};
 
 use engine::modules::{ModuleId, Modules};
+use engine::test_detection::TestScope;
 
 /// The name of the file that decides which language gets an extension or a file name two of them
 /// claim.
@@ -388,15 +389,22 @@ pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets
                 true => ParsableFile::written_by_hand(dir_path.to_path_buf(), lang_name, module, size),
                 false => ParsableFile::new(dir_path.to_path_buf(), lang_name, module, size)
             };
-            files_injector.push(queued.with_extension_rules(lookup.find_extension_rules(dir_path)));
+            let test_scope = find_test_scope_of_target(config, dir_path.parent().unwrap_or(dir_path));
+            files_injector.push(queued.with_extension_rules(lookup.find_extension_rules(dir_path))
+                    .with_test_scope(test_scope));
             files_present.total_files += 1;
             files_present.relevant_files += 1;
             progress.record_file_found();
         } else if dir_path.is_dir() {
             let gitignore_stack = GitignoreStack::for_root_dir(dir_path, ObeyedIgnoreFiles::of(config));
-            dirs_injector.push(TraversedDir::new(dir_path.to_path_buf(), gitignore_stack, module));
+            dirs_injector.push(TraversedDir::new(dir_path.to_path_buf(), gitignore_stack, module,
+                    find_test_scope_of_target(config, dir_path)));
         }
     }
+}
+
+fn find_test_scope_of_target(config: &EngineConfig, path: &Path) -> TestScope {
+    if config.detect_tests { TestScope::of_path(path) } else { TestScope::Ordinary }
 }
 
 // A language nobody wrote a file in would take a row in every report and add nothing to any figure.
@@ -423,7 +431,8 @@ pub(crate) struct ParsableFile {
     // Named as a target rather than found by the walk, which is what exempts it from every rule
     // that skips a file. The ignore files, the dotted names and the head checks all pass it through.
     pub written_by_hand: bool,
-    pub extension_rules: Option<Arc<engine::identity::ExtensionRules>>
+    pub extension_rules: Option<Arc<engine::identity::ExtensionRules>>,
+    pub test_scope: TestScope
 }
 
 impl ParsableFile {
@@ -434,7 +443,8 @@ impl ParsableFile {
             module,
             size,
             written_by_hand: false,
-            extension_rules: None
+            extension_rules: None,
+            test_scope: TestScope::Ordinary
         }
     }
 
@@ -446,21 +456,30 @@ impl ParsableFile {
         self.extension_rules = extension_rules;
         self
     }
+
+    pub(crate) fn with_test_scope(mut self, test_scope: TestScope) -> Self {
+        self.test_scope = test_scope;
+        self
+    }
 }
 
 #[derive(Debug,Clone)]
 pub(crate) struct TraversedDir {
     pub path: PathBuf,
     pub gitignore_stack: Option<Arc<GitignoreStack>>,
-    pub module: ModuleId
+    pub module: ModuleId,
+    pub test_scope: TestScope
 }
 
 impl TraversedDir {
-    pub(crate) fn new(path: PathBuf, gitignore_stack: Option<Arc<GitignoreStack>>, module: ModuleId) -> Self {
+    pub(crate) fn new(path: PathBuf, gitignore_stack: Option<Arc<GitignoreStack>>, module: ModuleId,
+        test_scope: TestScope) -> Self
+    {
         TraversedDir {
             path,
             gitignore_stack,
-            module
+            module,
+            test_scope
         }
     }
 }

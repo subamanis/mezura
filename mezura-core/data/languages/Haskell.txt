@@ -20,6 +20,10 @@ Self-nesting comment start
 Self-nesting comment end
 -}
 
+Tests
+    FILE NAMES
+    *Spec.hs
+
 Keyword
 NAME
 types

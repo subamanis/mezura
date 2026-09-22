@@ -16,6 +16,10 @@ Escape character
 Comment symbols
 #
 
+Tests
+    FILE NAMES
+    *_test.exs
+
 Keyword
 NAME
 modules

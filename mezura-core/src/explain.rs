@@ -143,7 +143,10 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
         extension_to_name: &nested_definitions.extension_to_name,
         set_aside: &nested_definitions.set_aside,
     };
-    let (contents, report, log) = explain_parsed_file(contents, &lang_name, &nested_lookup, config);
+    let whole_file_is_tests = config.detect_tests && crate::engine::file_parser::is_a_test_file(path,
+            crate::engine::test_detection::TestScope::of_path(path.parent().unwrap_or(path)),
+            by_name.get(lang_name.as_ref()).unwrap());
+    let (contents, report, log) = explain_parsed_file(contents, &lang_name, &nested_lookup, config, whole_file_is_tests);
 
     let language = lang_name.to_string();
     let (records, names) = log.into_parts();
