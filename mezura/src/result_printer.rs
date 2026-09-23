@@ -244,6 +244,16 @@ pub(crate) fn find_shown_language_names(per_language: &HashMap<String, Stats>, c
     (names, hidden)
 }
 
+pub(crate) fn calculate_sum_of_tests(tests: &HashMap<String, TestCode>) -> TestCode {
+    let mut sum = TestCode::default();
+    for share in tests.values() {
+        sum.stats.add(&share.stats);
+        sum.whole_files += share.whole_files;
+    }
+
+    sum
+}
+
 // The languages are in the order '--sort' put them. A run that named no module has exactly one of
 // these, with no name.
 struct Group<'a> {
@@ -593,29 +603,43 @@ fn find_parts_of(group: &Group, language: &str, whole: &Stats) -> Vec<(String, S
         return Vec::new();
     }
 
-    let mut counted = Stats::default();
-    let mut rows = sections.into_iter().flatten().map(|(name, stats)| {
-        counted.add(stats);
-        (name.clone(), stats.clone(), RowKind::Nested)
-    }).collect::<Vec<_>>();
+    let mut rows = sections.into_iter().flatten()
+            .map(|(name, stats)| (name.clone(), stats.clone(), RowKind::Nested)).collect::<Vec<_>>();
     rows.sort_by(|one, other| other.1.lines.cmp(&one.1.lines).then(one.0.cmp(&other.0)));
     if let Some(tests) = tests {
-        counted.add(&tests.stats);
         rows.push((TESTS_NAME.to_owned(), tests.stats.clone(), RowKind::Tests));
     }
 
-    let mut shell = whole.clone();
-    take_out(&mut shell, &counted);
-    shell.files = whole.files.saturating_sub(tests.map_or(0, |tests| tests.whole_files));
-    if shell.lines > 0 {
-        if sections.is_some_and(|sections| !sections.is_empty()) {
-            rows.insert(0, (format!("{language} {SHELL_SUFFIX}"), shell, RowKind::Nested));
-        } else if group.tests_breakdown == TestsBreakdown::Split {
-            rows.insert(0, (PRODUCTION_NAME.to_owned(), shell, RowKind::Production));
-        }
+    let shell = calculate_own_share(whole, sections, tests);
+    let has_sections = sections.is_some_and(|sections| !sections.is_empty());
+    if shell.lines > 0 && let Some((name, kind)) = find_own_share_name(language, has_sections, group.tests_breakdown) {
+        rows.insert(0, (name, shell, kind));
     }
 
     rows
+}
+
+// A file that is tests whole holds none of the language's other lines
+fn calculate_own_share(whole: &Stats, sections: Option<&HashMap<String, Stats>>, tests: Option<&TestCode>) -> Stats {
+    let mut counted = Stats::default();
+    for stats in sections.into_iter().flat_map(HashMap::values).chain(tests.map(|tests| &tests.stats)) {
+        counted.add(stats);
+    }
+    let mut shell = whole.clone();
+    take_out(&mut shell, &counted);
+    shell.files = whole.files.saturating_sub(tests.map_or(0, |tests| tests.whole_files));
+
+    shell
+}
+
+fn find_own_share_name(language: &str, has_sections: bool, breakdown: TestsBreakdown) -> Option<(String, RowKind)> {
+    if has_sections {
+        Some((format!("{language} {SHELL_SUFFIX}"), RowKind::Nested))
+    } else if breakdown == TestsBreakdown::Split {
+        Some((PRODUCTION_NAME.to_owned(), RowKind::Production))
+    } else {
+        None
+    }
 }
 
 // Every language of every module, the hidden ones included, since the total above it counts them too
@@ -1098,8 +1122,17 @@ fn create_compared_rows(pairs: Option<&[super::diff::ModulePair]>, baseline: &Ru
     let languages_of = |baseline_languages: &HashMap<String, Stats>, subject_languages: &HashMap<String, Stats>,
             baseline_nested: &HashMap<String, HashMap<String, Stats>>,
             subject_nested: &HashMap<String, HashMap<String, Stats>>,
+            baseline_tests: &HashMap<String, TestCode>, subject_tests: &HashMap<String, TestCode>,
             baseline_files: &HashMap<&str, Vec<&mezura_core::FileEntry>>,
             subject_files: &HashMap<&str, Vec<&mezura_core::FileEntry>>, indent: &str| {
+        let (baseline_nested, subject_nested) = match config.view.hidden.nested_languages {
+            true => (&*NO_NESTED, &*NO_NESTED),
+            false => (baseline_nested, subject_nested)
+        };
+        let (baseline_tests, subject_tests) = match config.view.hidden.tests {
+            true => (&*NO_TESTS, &*NO_TESTS),
+            false => (baseline_tests, subject_tests)
+        };
         let mut hidden = 0;
         let rows = super::diff::create_comparison_rows(baseline_languages, subject_languages, config.view.sort_by,
                 config.view.top_n, config.view.counting)
@@ -1107,9 +1140,8 @@ fn create_compared_rows(pairs: Option<&[super::diff::ModulePair]>, baseline: &Ru
                 .flat_map(|change| {
                     let mut rows = vec![ComparedRow { name: indent.to_owned() + &change.name,
                             kind: RowKind::Language, baseline: change.baseline.clone(), subject: change.subject.clone() }];
-                    if !config.view.hidden.nested_languages {
-                        rows.extend(create_compared_sections(&change, baseline_nested, subject_nested, indent));
-                    }
+                    rows.extend(create_compared_parts(&change, baseline_nested, subject_nested,
+                            baseline_tests, subject_tests, config.view.tests_breakdown, indent));
                     if let (Some(by_file), Some(bases)) = (by_file, bases.as_ref()) {
                         let (files, cut) = super::diff::create_file_comparison_rows(
                                 baseline_files.get(change.name.as_str()).unwrap_or(&empty),
@@ -1135,7 +1167,7 @@ fn create_compared_rows(pairs: Option<&[super::diff::ModulePair]>, baseline: &Ru
             rows.push(ComparedRow { name: pair.name.unwrap_or(UNNAMED_MODULE_NAME).to_owned(),
                     kind: RowKind::Module, baseline: pair.before.total.clone(), subject: pair.now.total.clone() });
             let (of_module, hidden) = languages_of(&pair.before.per_language, &pair.now.per_language,
-                    &pair.before.nested_languages, &pair.now.nested_languages,
+                    &pair.before.nested_languages, &pair.now.nested_languages, &pair.before.tests, &pair.now.tests,
                     &files_of(std::slice::from_ref(pair.before)),
                     &files_of(std::slice::from_ref(pair.now)), GROUP_INDENT);
             rows.extend(of_module);
@@ -1143,7 +1175,7 @@ fn create_compared_rows(pairs: Option<&[super::diff::ModulePair]>, baseline: &Ru
         },
         None => {
             let (of_run, hidden) = languages_of(&baseline.per_language, &subject.per_language,
-                    &baseline.nested_languages, &subject.nested_languages,
+                    &baseline.nested_languages, &subject.nested_languages, &baseline.tests, &subject.tests,
                     &files_of(&baseline.modules), &files_of(&subject.modules), "");
             rows.extend(of_run);
             files_hidden += hidden;
@@ -1151,6 +1183,11 @@ fn create_compared_rows(pairs: Option<&[super::diff::ModulePair]>, baseline: &Ru
     }
     rows.push(ComparedRow { name: TOTAL_NAME.to_owned(), kind: RowKind::Total,
             baseline: baseline.total.clone(), subject: subject.total.clone() });
+    let (tests_before, tests_now) = (calculate_sum_of_tests(&baseline.tests), calculate_sum_of_tests(&subject.tests));
+    if !config.view.hidden.tests && (tests_before.stats.lines > 0 || tests_now.stats.lines > 0) {
+        rows.push(ComparedRow { name: format!("{BRANCH_INDENT}{}{TESTS_NAME}", find_branch_marker(true)),
+                kind: RowKind::Tests, baseline: tests_before.stats, subject: tests_now.stats });
+    }
 
     (rows, files_hidden)
 }
@@ -1190,44 +1227,48 @@ fn elide_long_path(relative: &str) -> Cow<'_, str> {
     Cow::Borrowed(relative)
 }
 
-// A section only one reading holds still gets a row, so one that was added or taken out is visible
-fn create_compared_sections(change: &super::diff::LanguageStatsChange,
+// A part only one reading holds still gets a row, so a section or tests that came or went are visible
+fn create_compared_parts(change: &super::diff::LanguageStatsChange,
         baseline_nested: &HashMap<String, HashMap<String, Stats>>,
-        subject_nested: &HashMap<String, HashMap<String, Stats>>, indent: &str) -> Vec<ComparedRow>
+        subject_nested: &HashMap<String, HashMap<String, Stats>>,
+        baseline_tests: &HashMap<String, TestCode>, subject_tests: &HashMap<String, TestCode>,
+        breakdown: TestsBreakdown, indent: &str) -> Vec<ComparedRow>
 {
     let (before, now) = (baseline_nested.get(&change.name), subject_nested.get(&change.name));
-    if before.is_none() && now.is_none() {
+    let (tested_before, tested_now) = (baseline_tests.get(&change.name), subject_tests.get(&change.name));
+    if before.is_none() && now.is_none() && tested_before.is_none() && tested_now.is_none() {
         return Vec::new();
     }
 
-    let shell_of = |whole: &Stats, sections: Option<&HashMap<String, Stats>>| {
-        let mut shell = whole.clone();
-        let mut counted = Stats::default();
-        for stats in sections.into_iter().flat_map(HashMap::values) {
-            counted.add(stats);
-        }
-        take_out(&mut shell, &counted);
-        shell
-    };
     let mut names = before.into_iter().chain(now).flat_map(HashMap::keys).cloned()
             .collect::<Vec<_>>();
     names.sort();
     names.dedup();
     names.sort_by_key(|name| std::cmp::Reverse(now.and_then(|x| x.get(name)).map_or(0, |x| x.lines)));
+    let has_sections = !names.is_empty();
 
     let of = |sections: Option<&HashMap<String, Stats>>, name: &str|
             sections.and_then(|x| x.get(name)).cloned().unwrap_or_default();
-    let rows = std::iter::once((format!("{} {SHELL_SUFFIX}", change.name),
-                    shell_of(&change.baseline, before), shell_of(&change.subject, now)))
-            .chain(names.into_iter().map(|name| {
-                let (was, is) = (of(before, &name), of(now, &name));
-                (name, was, is)
-            }))
-            .collect::<Vec<_>>();
+    let mut rows = names.into_iter().map(|name| {
+        let (was, is) = (of(before, &name), of(now, &name));
+        (name, was, is, RowKind::Nested)
+    }).collect::<Vec<_>>();
+    if tested_before.is_some() || tested_now.is_some() {
+        let of = |tests: Option<&TestCode>| tests.map(|tests| tests.stats.clone()).unwrap_or_default();
+        rows.push((TESTS_NAME.to_owned(), of(tested_before), of(tested_now), RowKind::Tests));
+    }
 
-    rows.iter().enumerate().map(|(at, (name, baseline, subject))| ComparedRow {
-            name: format!("{indent}{BRANCH_INDENT}{}{name}", find_branch_marker(at + 1 == rows.len())),
-            kind: RowKind::Nested, baseline: baseline.clone(), subject: subject.clone() })
+    let (own_before, own_now) = (calculate_own_share(&change.baseline, before, tested_before),
+            calculate_own_share(&change.subject, now, tested_now));
+    if (own_before.lines > 0 || own_now.lines > 0)
+            && let Some((name, kind)) = find_own_share_name(&change.name, has_sections, breakdown) {
+        rows.insert(0, (name, own_before, own_now, kind));
+    }
+
+    let count = rows.len();
+    rows.into_iter().enumerate().map(|(at, (name, baseline, subject, kind))| ComparedRow {
+            name: format!("{indent}{BRANCH_INDENT}{}{name}", find_branch_marker(at + 1 == count)),
+            kind, baseline, subject })
             .collect()
 }
 
@@ -1274,9 +1315,17 @@ fn format_note_sentence(theme: &Theme, note: &super::diff::Note) -> String {
         Note::SettingsAdopted { from, settings } => {
             let one = settings.len() == 1;
             let (was, value, it) = if one {("has", "value", "it")} else {("have", "values", "them")};
+            // Nothing can be typed to keep the keywords or the tests switched on
+            let typeable = settings.iter().copied()
+                    .filter(|setting| ![super::diff::HIDE_KEYWORDS, super::diff::HIDE_TESTS].contains(setting))
+                    .collect::<Vec<_>>();
+            let advice = match typeable.len() {
+                0 => String::new(),
+                all if all == settings.len() => format!(" Provide {it} explicitly in the command line to keep your own."),
+                _ => format!(" Provide '{}' explicitly in the command line to keep your own.", typeable.join("', '"))
+            };
             format!("'{}' {was} been overridden by the {value} recorded in '{from}', so both \
-                    readings are counted the same way. Provide {it} explicitly in the command line \
-                    to keep your own.",
+                    readings are counted the same way.{advice}",
                     settings.join("', '"))
         },
         Note::SettingsDiffer { baseline, subject, settings } => format!(
@@ -2633,11 +2682,11 @@ fn find_settings_changed_since(entry: &super::log::LogEntry, config: &Configurat
     if as_recorded(&entry.targets) != as_recorded(targets) {
         changed.push(config_manager::TARGETS);
     }
-    // The log holds no keyword counts, so a run that only stopped counting them changed nothing
-    // the log records
+    // The log holds no keyword counts and no tests, so a run that only stopped counting either
+    // changed nothing the log records
     changed.extend(super::diff::find_settings_that_differ(&entry.scope,
             &super::diff::scope_of(&config.engine, config.view.counting))
-            .into_iter().filter(|setting| *setting != super::diff::HIDE_KEYWORDS));
+            .into_iter().filter(|setting| ![super::diff::HIDE_KEYWORDS, super::diff::HIDE_TESTS].contains(setting)));
 
     changed
 }
@@ -3000,6 +3049,22 @@ mod tests {
             "Java".to_owned() => of(1, 900, 80, 60, 5, 1)]
     }
 
+    // Rust's tests grew since, HTML's are new, Java is tests whole on both sides and Go's went with Go
+    fn earlier_tests() -> HashMap<String, TestCode> {
+        let of = |files, bytes, lines, code, comments, whole_files| TestCode {
+            stats: crate::test_support::plain_stats_of(files, bytes, lines, code, comments, hashmap![]), whole_files };
+        hashmap![
+            "Rust".to_owned() => of(4, 76000, 1800, 1250, 80, 2),
+            "Java".to_owned() => of(1, 900, 80, 60, 5, 1),
+            "Go".to_owned() => of(1, 2000, 60, 48, 3, 1)]
+    }
+
+    fn attach_tests(mut reading: crate::diff::Reading, tests: HashMap<String, TestCode>) -> crate::diff::Reading {
+        reading.result.modules[0].tests = tests.clone();
+        reading.result.tests = tests;
+        reading
+    }
+
     fn render_every_layout() -> String {
         // Not left to the absence of a terminal: CLICOLOR_FORCE overrides that, and the verification
         // protocol tells the reader to export it, so the same shell that ran a manual comparison
@@ -3292,6 +3357,19 @@ mod tests {
                 headed(format_comparison_lines(theme, &rows, ViewSettings::of(&config)), &before, &now)));
         cases.push(("comparison, with files, boxed".to_owned(),
                 headed(format_boxed_comparison_lines(theme, &rows, ViewSettings::of(&config)), &before, &now)));
+
+        let (before, now) = (attach_tests(reading_of("older.json", EARLIER, without_modules(&earlier)), earlier_tests()),
+                attach_tests(reading_of("newer.json", LATER, without_modules(&modules)), sample_tests()));
+        let (rows, _) = create_compared_rows(None, &before.result, &now.result, None, &config);
+        cases.push(("comparison, with tests".to_owned(),
+                headed(format_comparison_lines(theme, &rows, ViewSettings::of(&config)), &before, &now)));
+        cases.push(("comparison, with tests, boxed".to_owned(),
+                headed(format_boxed_comparison_lines(theme, &rows, ViewSettings::of(&config)), &before, &now)));
+        let mut split = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
+        split.view.tests_breakdown = TestsBreakdown::Split;
+        let (rows, _) = create_compared_rows(None, &before.result, &now.result, None, &split);
+        cases.push(("comparison, with tests split".to_owned(),
+                headed(format_comparison_lines(theme, &rows, ViewSettings::of(&split)), &before, &now)));
 
         // The same two readings with a second axis through them, which is shown because they named
         // the same modules
@@ -3730,6 +3808,54 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_adoption_note_asks_for_a_setting_to_be_typed_only_when_one_can_be() {
+        colored::control::set_override(false);
+        let theme = Theme::default();
+        let sentence_of = |settings: Vec<&'static str>| format_note_sentence(&theme,
+                &crate::diff::Note::SettingsAdopted { from: "old.json".to_owned(), settings }).replace('\n', " ");
+
+        assert!(sentence_of(vec!["exclude"]).contains("Provide it explicitly"));
+        let hidden = sentence_of(vec![crate::diff::HIDE_TESTS]);
+        assert!(hidden.contains("'hide tests' has been overridden") && !hidden.contains("Provide"), "{hidden}");
+        assert!(!sentence_of(vec![crate::diff::HIDE_KEYWORDS, crate::diff::HIDE_TESTS]).contains("Provide"));
+        let mixed = sentence_of(vec!["exclude", crate::diff::HIDE_TESTS, "counting"]);
+        assert!(mixed.contains("'exclude', 'hide tests', 'counting' have been overridden"), "{mixed}");
+        assert!(mixed.contains("Provide 'exclude', 'counting' explicitly"), "{mixed}");
+    }
+
+    #[test]
+    fn the_tests_of_a_comparison_hang_under_their_language_and_the_total_and_leave_with_their_flag() {
+        colored::control::set_override(false);
+
+        for breakdown in [TestsBreakdown::Share, TestsBreakdown::Split] {
+            for hidden in [false, true] {
+                let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
+                config.view.tests_breakdown = breakdown;
+                config.view.hidden.tests = hidden;
+                let comparison = crate::diff::Comparison::of(
+                        attach_tests(reading_of("older.json", "2026-07-30T14:22:07+03:00",
+                                without_modules(&earlier_modules())), earlier_tests()),
+                        attach_tests(reading_of("newer.json", "2026-08-06T09:41:00+03:00",
+                                without_modules(&sample_modules())), sample_tests()),
+                        &config, Vec::new());
+                crate::present::present(&comparison.subject.result.clone(), Some(&comparison), &config);
+
+                let (rows, _) = create_compared_rows(None, &comparison.baseline.result, &comparison.subject.result,
+                        None, &config);
+                let of_kind = |kind| rows.iter().filter(|row| row.kind == kind).count();
+                assert_eq!(if hidden {0} else {5}, of_kind(RowKind::Tests), "{breakdown:?}, hidden {hidden}");
+                assert_eq!(if hidden || breakdown == TestsBreakdown::Share {0} else {3}, of_kind(RowKind::Production),
+                        "{breakdown:?}, hidden {hidden}");
+                let last = rows.last().unwrap();
+                assert_eq!(!hidden, last.kind == RowKind::Tests);
+                if !hidden {
+                    assert_eq!((1940, 2260), (last.baseline.lines, last.subject.lines));
+                }
+            }
+        }
+    }
+
     // The presentation golden; the counting has its own in tests/stats_golden.rs. What is locked is
     // alignment, widths, the wrapping of the keyword rows, the folding into "others" and the
     // apportionment of the bar. Color is not, being turned off above.
@@ -3864,7 +3990,7 @@ mod tests {
     }
 
     #[test]
-    fn a_changed_setting_is_tagged_and_a_keyword_setting_never_is() {
+    fn a_changed_setting_is_tagged_and_a_keyword_or_tests_setting_never_is() {
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         let entry_of = |edit: fn(&mut crate::config_manager::Configuration)| {
             let mut then = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
@@ -3900,6 +4026,11 @@ mod tests {
         config.engine.count_keywords = false;
         assert!(find_settings_changed_since(&entry_with_targets, &config,
                 &[mezura_core::Target::of("./a"), mezura_core::Target::of("./b")]).is_empty());
+
+        // nor did one that told tests apart, which every entry older than the detection did not
+        let before_the_tests = entry_of(|then| {then.engine.detect_tests = false;});
+        let config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        assert!(find_settings_changed_since(&before_the_tests, &config, &[]).is_empty());
     }
 
     // The log of a project is shared the way its code is, so an entry from another checkout of it

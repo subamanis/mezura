@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Local, SecondsFormat};
-use mezura_core::{CountingModel, FaultyFileDetails, LineClasses, RunResult, Stats};
+use mezura_core::{CountingModel, FaultyFileDetails, LineClasses, RunResult, Stats, TestCode};
 
 use super::config_manager::Configuration;
 use super::result_printer;
@@ -22,7 +22,8 @@ pub fn print_as_json(result: &RunResult, datetime_now: &DateTime<Local>, config:
 }
 
 pub fn create_document(result: &RunResult, datetime_now: &DateTime<Local>, config: &Configuration) -> String {
-    let RunResult {per_language, total, faulty_files, unreadable_dirs, nested_languages, ..} = result;
+    let RunResult {per_language, total, faulty_files, unreadable_dirs, nested_languages, tests, ..} = result;
+    let tests = find_tests(tests, config);
     let (shown, hidden) = result_printer::find_shown_language_names(per_language, config);
     let file_rows = result_printer::find_files_to_show(result, config);
     // With modules the rows are written once, inside each module's own languages, and so are the
@@ -44,8 +45,9 @@ pub fn create_document(result: &RunResult, datetime_now: &DateTime<Local>, confi
         format!("\"scan\":{}", create_scan_object(&result.files_present, result.faulty_files.len(),
                 &super::json_reader::SkippedCounts::of(&result.skipped_files),
                 result.unreadable_dirs.len())),
-        format!("\"total\":{}", create_total_object(total, !config.view.hidden.keywords, config.view.counting)),
-        format!("\"languages\":{}", create_languages_array(&shown, per_language, nested_languages, &files, config)),
+        format!("\"total\":{}", create_total_object(total, tests.map(result_printer::calculate_sum_of_tests).as_ref(),
+                !config.view.hidden.keywords, config.view.counting)),
+        format!("\"languages\":{}", create_languages_array(&shown, per_language, nested_languages, tests, &files, config)),
         format!("\"languages_hidden\":{hidden}"),
         format!("\"files_hidden\":{files_hidden}"),
         // The paths, which '--show-faulty-files' asks for here as it does on the screen. How many
@@ -113,10 +115,12 @@ fn create_comparison_document(comparison: &super::diff::Comparison, datetime_now
         format!("\"from\":{}", create_side_object(baseline)),
         format!("\"to\":{}", create_side_object(subject)),
         format!("\"total\":{}", create_compared_total_object(&baseline.result.total, &subject.result.total,
+                find_tests(&baseline.result.tests, config), find_tests(&subject.result.tests, config),
                 keywords_counted, config.view.counting)),
         format!("\"languages\":{}", create_compared_languages_array(&rows, keywords_counted,
                 find_nested(&baseline.result.nested_languages, config),
                 find_nested(&subject.result.nested_languages, config),
+                find_tests(&baseline.result.tests, config), find_tests(&subject.result.tests, config),
                 files.as_ref(), config.view.counting)),
         // Counts the cuts of this level's own rows, the way a run document's does: with modules
         // the rows and their cuts live inside each module
@@ -134,6 +138,10 @@ fn find_nested<'a>(nested: &'a HashMap<String, HashMap<String, Stats>>, config: 
 -> Option<&'a HashMap<String, HashMap<String, Stats>>>
 {
     (!config.view.hidden.nested_languages).then_some(nested)
+}
+
+fn find_tests<'a>(tests: &'a HashMap<String, TestCode>, config: &Configuration) -> Option<&'a HashMap<String, TestCode>> {
+    (!config.view.hidden.tests).then_some(tests)
 }
 
 // The same shape as a run document's modules, with every count a triad. '--top' does not cut these,
@@ -156,10 +164,12 @@ fn create_comparison_modules_array(pairs: &[super::diff::ModulePair], config: &C
         let members = [
             format!("\"name\":{name}"),
             format!("\"total\":{}", create_compared_total_object(&pair.before.total, &pair.now.total,
+                    find_tests(&pair.before.tests, config), find_tests(&pair.now.tests, config),
                     keywords_counted, config.view.counting)),
             format!("\"languages\":{}", create_compared_languages_array(&rows, keywords_counted,
                     find_nested(&pair.before.nested_languages, config),
                     find_nested(&pair.now.nested_languages, config),
+                    find_tests(&pair.before.tests, config), find_tests(&pair.now.tests, config),
                     files.as_ref(), config.view.counting)),
             format!("\"files_hidden\":{files_hidden}"),
         ];
@@ -170,18 +180,21 @@ fn create_comparison_modules_array(pairs: &[super::diff::ModulePair], config: &C
 fn create_compared_languages_array(changes: &[super::diff::LanguageStatsChange],
         keywords_counted: bool, baseline_nested: Option<&HashMap<String, HashMap<String, Stats>>>,
         subject_nested: Option<&HashMap<String, HashMap<String, Stats>>>,
+        baseline_tests: Option<&HashMap<String, TestCode>>, subject_tests: Option<&HashMap<String, TestCode>>,
         files: Option<&HashMap<String, Vec<super::diff::FileStatsChange>>>,
         model: CountingModel) -> String
 {
     create_array(changes.iter().map(|change| create_compared_language_object(&change.name,
             &change.baseline, &change.subject, keywords_counted,
             baseline_nested.and_then(|x| x.get(&change.name)), subject_nested.and_then(|x| x.get(&change.name)),
+            baseline_tests.and_then(|x| x.get(&change.name)), subject_tests.and_then(|x| x.get(&change.name)),
             files.and_then(|x| x.get(&change.name)).map(Vec::as_slice), model)))
 }
 
 fn create_compared_language_object(name: &str, baseline: &Stats, subject: &Stats,
         keywords_counted: bool, baseline_nested: Option<&HashMap<String, Stats>>,
         subject_nested: Option<&HashMap<String, Stats>>,
+        baseline_tests: Option<&TestCode>, subject_tests: Option<&TestCode>,
         files: Option<&[super::diff::FileStatsChange]>, model: CountingModel) -> String
 {
     let mut members = vec![format!("\"name\":\"{}\"", escape(name))];
@@ -193,6 +206,10 @@ fn create_compared_language_object(name: &str, baseline: &Stats, subject: &Stats
     if baseline_nested.is_some() || subject_nested.is_some() {
         members.push(format!("\"nested_languages\":{}", create_compared_nested_array(
                 baseline_nested, subject_nested, keywords_counted, model)));
+    }
+    if baseline_tests.is_some() || subject_tests.is_some() {
+        members.push(format!("\"tests\":{}", create_compared_tests_object(
+                &baseline_tests.cloned().unwrap_or_default(), &subject_tests.cloned().unwrap_or_default(), model)));
     }
     if let Some(files) = files.filter(|x| !x.is_empty()) {
         members.push(format!("\"by_file\":{}", create_compared_files_array(files, model)));
@@ -250,15 +267,28 @@ fn create_compared_nested_array(baseline: Option<&HashMap<String, Stats>>,
     let of = |side: Option<&HashMap<String, Stats>>, name: &str|
             side.and_then(|x| x.get(name)).cloned().unwrap_or_default();
     create_array(names.iter().map(|name| create_compared_language_object(name,
-            &of(baseline, name), &of(subject, name), keywords_counted, None, None, None, model)))
+            &of(baseline, name), &of(subject, name), keywords_counted, None, None, None, None, None, model)))
+}
+
+fn create_compared_tests_object(baseline: &TestCode, subject: &TestCode, model: CountingModel) -> String {
+    let mut members = create_triad_members(&baseline.stats, &subject.stats, model);
+    members.push(format!("\"whole_files\":{}", create_triad(baseline.whole_files, subject.whole_files)));
+
+    create_object(members)
 }
 
 fn create_compared_total_object(baseline: &Stats, subject: &Stats,
+        baseline_tests: Option<&HashMap<String, TestCode>>, subject_tests: Option<&HashMap<String, TestCode>>,
         keywords_counted: bool, model: CountingModel) -> String {
     let mut lines = create_triad_members(baseline, subject, model);
     if keywords_counted {
         lines.push(format!("\"keywords\":{}", create_keyword_triads(&baseline.keyword_occurences,
                 &subject.keyword_occurences)));
+    }
+    if let (Some(baseline_tests), Some(subject_tests)) = (baseline_tests, subject_tests) {
+        lines.push(format!("\"tests\":{}", create_compared_tests_object(
+                &result_printer::calculate_sum_of_tests(baseline_tests),
+                &result_printer::calculate_sum_of_tests(subject_tests), model)));
     }
 
     create_object(lines)
@@ -305,6 +335,7 @@ fn create_scope_object_of(scope: &super::json_reader::Scope, targets: &[mezura_c
         format!("\"gitignore\":{}", scope.gitignore),
         format!("\"ignore_files\":{}", scope.ignore_files),
         format!("\"keywords_counted\":{}", scope.keywords_counted),
+        format!("\"tests_detected\":{}", scope.tests_detected),
         format!("\"count_minified\":{}", scope.count_minified),
         format!("\"count_generated\":{}", scope.count_generated),
         format!("\"count_not_code\":{}", scope.count_not_code),
@@ -444,6 +475,7 @@ fn create_scope_object(config: &Configuration, targets: &[mezura_core::Target]) 
         format!("\"gitignore\":{}", !config.engine.no_gitignore),
         format!("\"ignore_files\":{}", !config.engine.no_ignore_files),
         format!("\"keywords_counted\":{}", !config.view.hidden.keywords),
+        format!("\"tests_detected\":{}", config.engine.detect_tests),
         format!("\"count_minified\":{}", config.engine.count_minified),
         format!("\"count_generated\":{}", config.engine.count_generated),
         format!("\"count_not_code\":{}", config.engine.count_not_code),
@@ -475,20 +507,15 @@ fn create_scan_object(files_present: &mezura_core::FilesPresent, faulty_files_co
     create_object(members)
 }
 
-fn create_total_object(total: &Stats, keywords_counted: bool, model: CountingModel) -> String {
-    let mut members = vec![
-        format!("\"files\":{}", total.files),
-        format!("\"lines\":{}", total.lines),
-        format!("\"code\":{}", total.calculate_code_lines(model)),
-        format!("\"comments\":{}", total.calculate_comment_lines(model)),
-        format!("\"{}\":{}", model.get_third_quantity_name(), total.calculate_extra_lines(model)),
-        format!("\"bytes\":{}", total.bytes),
-        format!("\"classes\":{}", create_classes_object(&total.classes)),
-    ];
-    // Every language of the run added up, which is the only place the figure survives '--top': the
-    // languages are cut there and the ones left cannot be added back up to it.
+fn create_total_object(total: &Stats, tests: Option<&TestCode>, keywords_counted: bool, model: CountingModel) -> String {
+    let mut members = create_figure_members(total, model);
+    // The keywords and the tests of every language survive '--top' only here, since the languages are
+    // cut there and the ones left cannot be added back up to them
     if keywords_counted {
         members.push(format!("\"keywords\":{}", create_keywords_object(&total.keyword_occurences)));
+    }
+    if let Some(tests) = tests {
+        members.push(format!("\"tests\":{}", create_tests_object(tests, model)));
     }
 
     create_object(members)
@@ -505,12 +532,14 @@ fn create_modules_array(result: &RunResult, file_rows: &[result_printer::FileRow
         let files_hidden = files.values().map(|rows| rows.hidden).sum::<usize>();
         let files = find_shown_files(files);
         let name = module.name.as_ref().map_or("null".to_owned(), |x| format!("\"{}\"", escape(x)));
+        let tests = find_tests(&module.tests, config);
         let members = [
             format!("\"name\":{name}"),
-            format!("\"total\":{}", create_total_object(&module.total, !config.view.hidden.keywords,
+            format!("\"total\":{}", create_total_object(&module.total,
+                    tests.map(result_printer::calculate_sum_of_tests).as_ref(), !config.view.hidden.keywords,
                     config.view.counting)),
             format!("\"languages\":{}", create_languages_array(&shown, &module.per_language,
-                    &module.nested_languages, &files, config)),
+                    &module.nested_languages, tests, &files, config)),
             format!("\"languages_hidden\":{hidden}"),
             format!("\"files_hidden\":{files_hidden}"),
         ];
@@ -526,32 +555,29 @@ fn find_shown_files<'a>(of_module: &'a result_printer::FileRowsOfModule<'a>) -> 
 // An array and not an object keyed by language name, so that the order '--sort' chose survives and
 // so that no language can collide with a key of the document.
 fn create_languages_array(shown: &[String], per_language: &HashMap<String, Stats>,
-        nested_languages: &HashMap<String, HashMap<String, Stats>>,
+        nested_languages: &HashMap<String, HashMap<String, Stats>>, tests: Option<&HashMap<String, TestCode>>,
         files: &FilesByLanguage, config: &Configuration) -> String
 {
     create_array(shown.iter().filter_map(|name| {
         Some(create_language_object(name, per_language.get(name)?, !config.view.hidden.keywords,
                 !config.view.hidden.nested_languages, nested_languages.get(name),
+                tests.is_some(), tests.and_then(|x| x.get(name)),
                 files.get(name.as_str()).map(Vec::as_slice).unwrap_or_default(), config.view.counting))
     }))
 }
 
-fn create_files_array(files: &[&mezura_core::FileEntry], nested_shown: bool, model: CountingModel) -> String {
+fn create_files_array(files: &[&mezura_core::FileEntry], nested_shown: bool, tests_shown: bool,
+        model: CountingModel) -> String
+{
     create_array(files.iter().map(|file| {
-        let stats = &file.stats;
-        let mut members = vec![
-            format!("\"path\":\"{}\"", escape(&file.path)),
-            format!("\"lines\":{}", stats.lines),
-            format!("\"code\":{}", stats.calculate_code_lines(model)),
-            format!("\"comments\":{}", stats.calculate_comment_lines(model)),
-            format!("\"{}\":{}", model.get_third_quantity_name(),
-                    stats.calculate_extra_lines(model)),
-            format!("\"bytes\":{}", stats.bytes),
-            format!("\"classes\":{}", create_classes_object(&stats.classes)),
-        ];
+        let mut members = vec![format!("\"path\":\"{}\"", escape(&file.path))];
+        members.extend(create_line_members(&file.stats, model));
         if nested_shown && !file.nested_languages.is_empty() {
             members.push(format!("\"nested_languages\":{}",
                     create_nested_languages_array(&file.nested_languages, model)));
+        }
+        if let Some(tests) = file.tests.as_ref().filter(|_| tests_shown) {
+            members.push(format!("\"tests\":{}", create_object(create_line_members(tests, model))));
         }
         create_object(members)
     }))
@@ -561,41 +587,60 @@ fn create_nested_languages_array(sections: &HashMap<String, Stats>, model: Count
     let mut sorted = sections.iter().collect::<Vec<_>>();
     sorted.sort_unstable_by_key(|(name, _)| name.as_str());
 
-    create_array(sorted.into_iter().map(|(name, info)| format!(
-"{{\"name\":\"{}\",\"files\":{},\"lines\":{},\"code\":{},\"comments\":{},\"{}\":{},\
-\"bytes\":{},\"classes\":{}}}",
-            escape(name), info.files, info.lines, info.calculate_code_lines(model),
-            info.calculate_comment_lines(model), model.get_third_quantity_name(),
-            info.calculate_extra_lines(model), info.bytes,
-            create_classes_object(&info.classes))))
+    create_array(sorted.into_iter().map(|(name, info)| {
+        let mut members = vec![format!("\"name\":\"{}\"", escape(name))];
+        members.extend(create_figure_members(info, model));
+        create_object(members)
+    }))
 }
 
-// 'nested_shown' reaches the language's own breakdown and the one inside each of its files alike
+fn create_tests_object(tests: &TestCode, model: CountingModel) -> String {
+    let mut members = create_figure_members(&tests.stats, model);
+    members.push(format!("\"whole_files\":{}", tests.whole_files));
+
+    create_object(members)
+}
+
+fn create_figure_members(stats: &Stats, model: CountingModel) -> Vec<String> {
+    let mut members = vec![format!("\"files\":{}", stats.files)];
+    members.extend(create_line_members(stats, model));
+
+    members
+}
+
+// A file row writes no 'files', being one file
+fn create_line_members(stats: &Stats, model: CountingModel) -> Vec<String> {
+    vec![
+        format!("\"lines\":{}", stats.lines),
+        format!("\"code\":{}", stats.calculate_code_lines(model)),
+        format!("\"comments\":{}", stats.calculate_comment_lines(model)),
+        format!("\"{}\":{}", model.get_third_quantity_name(), stats.calculate_extra_lines(model)),
+        format!("\"bytes\":{}", stats.bytes),
+        format!("\"classes\":{}", create_classes_object(&stats.classes)),
+    ]
+}
+
+// 'nested_shown' and 'tests_shown' reach the language's breakdown and its files' alike
 fn create_language_object(name: &str, info: &Stats, keywords_counted: bool, nested_shown: bool,
-        sections: Option<&HashMap<String, Stats>>, files: &[&mezura_core::FileEntry],
-        model: CountingModel) -> String
+        sections: Option<&HashMap<String, Stats>>, tests_shown: bool, tests: Option<&TestCode>,
+        files: &[&mezura_core::FileEntry], model: CountingModel) -> String
 {
-    let mut members = vec![
-        format!("\"name\":\"{}\"", escape(name)),
-        format!("\"files\":{}", info.files),
-        format!("\"lines\":{}", info.lines),
-        format!("\"code\":{}", info.calculate_code_lines(model)),
-        format!("\"comments\":{}", info.calculate_comment_lines(model)),
-        format!("\"{}\":{}", model.get_third_quantity_name(), info.calculate_extra_lines(model)),
-        format!("\"bytes\":{}", info.bytes),
-        format!("\"classes\":{}", create_classes_object(&info.classes)),
-    ];
+    let mut members = vec![format!("\"name\":\"{}\"", escape(name))];
+    members.extend(create_figure_members(info, model));
     // Absent when they were not counted, since '--hide keywords' also stops the counting. An empty
-    // object means the opposite: they were counted and the language declares none.
+    // object means they were counted and the language declares none.
     if keywords_counted {
         members.push(format!("\"keywords\":{}", create_keywords_object(&info.keyword_occurences)));
     }
     if let Some(sections) = sections.filter(|x| nested_shown && !x.is_empty()) {
         members.push(format!("\"nested_languages\":{}", create_nested_languages_array(sections, model)));
     }
+    if let Some(tests) = tests {
+        members.push(format!("\"tests\":{}", create_tests_object(tests, model)));
+    }
     // Named after the command and not 'files', which this object already uses for how many there are
     if !files.is_empty() {
-        members.push(format!("\"by_file\":{}", create_files_array(files, nested_shown, model)));
+        members.push(format!("\"by_file\":{}", create_files_array(files, nested_shown, tests_shown, model)));
     }
 
     create_object(members)
@@ -1118,6 +1163,89 @@ mod tests {
         assert!(!document.contains("\"by_file\""), "{document}");
         assert!(document.contains("\"code\":\"files-not-recorded\""), "{document}");
         assert!(document.contains("\"files_hidden\":0"), "{document}");
+    }
+
+    fn find_language<'a>(document: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
+        document["languages"].as_array().unwrap().iter().find(|x| x["name"] == name).unwrap()
+    }
+
+    #[test]
+    fn the_tests_sit_under_their_language_and_the_total_adds_up_every_language_whatever_top_cut() {
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        config.view.by_file = Some(crate::config_manager::ByFile::All);
+        let per_language = hashmap!["Rust".to_owned() => stats_of(3, 6000, 120, 90, 10, HashMap::new()),
+                "Go".to_owned() => stats_of(2, 900, 40, 30, 0, HashMap::new())];
+        let tests = hashmap![
+                "Rust".to_owned() => TestCode { stats: stats_of(2, 1500, 50, 40, 5, HashMap::new()), whole_files: 1 },
+                "Go".to_owned() => TestCode { stats: stats_of(1, 300, 12, 10, 0, HashMap::new()), whole_files: 1 }];
+        let mut tested = file_entry("D:/x/src/lib.rs", 80, 60, 4000);
+        tested.tests = Some(stats_of(1, 1000, 35, 28, 3, HashMap::new()));
+        let mut result = result_of(per_language.clone(), Stats::total_of(&per_language), Vec::new(),
+                FilesPresent {total_files: 5, relevant_files: 5, excluded_files: 0});
+        result.tests = tests.clone();
+        result.modules = vec![mezura_core::ModuleResult { name: None, total: result.total.clone(), per_language,
+                nested_languages: HashMap::new(), tests, files: hashmap!["Rust".to_owned() => vec![tested]] }];
+
+        let read = |config: &crate::config_manager::Configuration|
+                serde_json::from_str::<serde_json::Value>(&create_document(&result, &Local::now(), config)).unwrap();
+        let document = read(&config);
+        let rust = find_language(&document, "Rust");
+        assert_eq!(50, rust["tests"]["lines"]);
+        assert_eq!(40, rust["tests"]["code"]);
+        assert_eq!(1, rust["tests"]["whole_files"]);
+        assert_eq!(35, rust["by_file"][0]["tests"]["lines"]);
+        assert!(rust["by_file"][0]["tests"].get("files").is_none());
+        assert_eq!(62, document["total"]["tests"]["lines"]);
+        assert_eq!(2, document["total"]["tests"]["whole_files"]);
+        assert_eq!(true, document["scope"]["tests_detected"]);
+
+        config.view.top_n = Some(1);
+        let cut = read(&config);
+        assert_eq!(1, cut["languages"].as_array().unwrap().len());
+        assert_eq!(62, cut["total"]["tests"]["lines"]);
+
+        config.view.top_n = None;
+        config.view.hidden.tests = true;
+        config.engine.detect_tests = false;
+        let hidden = read(&config).to_string();
+        assert!(!hidden.contains("\"tests\":"), "{hidden}");
+        assert!(hidden.contains("\"tests_detected\":false"), "{hidden}");
+    }
+
+    #[test]
+    fn a_comparison_carries_the_tests_of_each_language_and_of_the_total_as_triads() {
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        let from = || {
+            let mut reading = reading_of(crate::diff::Source::Document { path: "D:/old.json".to_owned() },
+                    hashmap!["Rust".to_owned() => stats_of(2, 3000, 100, 70, 10, HashMap::new())]);
+            reading.result.tests = hashmap!["Rust".to_owned() =>
+                    TestCode { stats: stats_of(1, 800, 30, 25, 1, HashMap::new()), whole_files: 1 }];
+            reading
+        };
+        let to = || {
+            let mut reading = reading_of(crate::diff::Source::Run,
+                    hashmap!["Rust".to_owned() => stats_of(3, 4500, 150, 100, 20, HashMap::new()),
+                             "Go".to_owned() => stats_of(1, 600, 60, 50, 0, HashMap::new())]);
+            reading.result.tests = hashmap![
+                    "Rust".to_owned() => TestCode { stats: stats_of(2, 1400, 55, 45, 2, HashMap::new()), whole_files: 1 },
+                    "Go".to_owned() => TestCode { stats: stats_of(1, 200, 10, 8, 0, HashMap::new()), whole_files: 1 }];
+            reading
+        };
+        let read = |config: &crate::config_manager::Configuration| serde_json::from_str::<serde_json::Value>(
+                &create_comparison_document(&crate::diff::Comparison::of(from(), to(), config, Vec::new()),
+                        &Local::now(), config)).unwrap();
+
+        let document = read(&config);
+        let triad = |from: usize, to: usize| serde_json::json!({"from": from, "to": to, "change": to as i64 - from as i64});
+        assert_eq!(triad(30, 55), find_language(&document, "Rust")["tests"]["lines"]);
+        assert_eq!(triad(1, 1), find_language(&document, "Rust")["tests"]["whole_files"]);
+        assert_eq!(triad(0, 10), find_language(&document, "Go")["tests"]["lines"]);
+        assert_eq!(triad(30, 65), document["total"]["tests"]["lines"]);
+        assert_eq!(triad(1, 2), document["total"]["tests"]["whole_files"]);
+
+        config.view.hidden.tests = true;
+        let hidden = read(&config).to_string();
+        assert!(!hidden.contains("\"tests\":"), "{hidden}");
     }
 
     #[test]

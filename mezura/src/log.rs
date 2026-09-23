@@ -122,8 +122,8 @@ fn format_scope(config: &Configuration, targets: &[Target]) -> String {
     let engine = &config.engine;
     format!("{{\"targets\":{},\"exclude\":{},\"languages\":{},\"excluded_languages\":{},\
             \"forced_languages\":{},\"counting\":\"{}\",\"search_in_dotted\":{},\"gitignore\":{},\"ignore_files\":{},\
-            \"keywords_counted\":{},\"count_minified\":{},\"count_generated\":{},\"count_not_code\":{},\"use_heuristics\":{},\
-            \"shebangs\":{}}}",
+            \"keywords_counted\":{},\"tests_detected\":{},\"count_minified\":{},\"count_generated\":{},\"count_not_code\":{},\
+            \"use_heuristics\":{},\"shebangs\":{}}}",
             format_targets(targets, config),
             format_strings(&engine.exclude_dirs),
             format_strings(&engine.languages_of_interest.to_written_form()),
@@ -134,6 +134,7 @@ fn format_scope(config: &Configuration, targets: &[Target]) -> String {
             !engine.no_gitignore,
             !engine.no_ignore_files,
             engine.count_keywords,
+            engine.detect_tests,
             engine.count_minified,
             engine.count_generated,
             engine.count_not_code,

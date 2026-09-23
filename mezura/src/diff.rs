@@ -16,9 +16,10 @@ use super::sources::RevisionSide;
 // spells it
 const COUNTS_AFFECTED : &str = "counts";
 
-// The one compared setting that is not a config key of its own: it is the 'keywords' value of
-// '--hide', and the log's comparison filters it out because the log holds no keyword counts
+// Values of '--hide' with no config key of their own. The log's comparison filters them out, since the
+// log holds no keyword counts and no tests.
 pub const HIDE_KEYWORDS : &str = "hide keywords";
+pub const HIDE_TESTS : &str = "hide tests";
 
 const THIS_RUN_NAME : &str = "this run";
 
@@ -489,6 +490,7 @@ pub fn scope_of(engine: &mezura_core::EngineConfig, counting: mezura_core::Count
         gitignore: !engine.no_gitignore,
         ignore_files: !engine.no_ignore_files,
         keywords_counted: engine.count_keywords,
+        tests_detected: engine.detect_tests,
         count_minified: engine.count_minified,
         count_generated: engine.count_generated,
         count_not_code: engine.count_not_code,
@@ -511,6 +513,7 @@ pub fn find_settings_that_differ(baseline: &Scope, subject: &Scope) -> Vec<&'sta
     if baseline.gitignore != subject.gitignore {differ.push(NO_GITIGNORE)}
     if baseline.ignore_files != subject.ignore_files {differ.push(NO_IGNORE_FILES)}
     if baseline.keywords_counted != subject.keywords_counted {differ.push(HIDE_KEYWORDS)}
+    if baseline.tests_detected != subject.tests_detected {differ.push(HIDE_TESTS)}
     if baseline.count_minified != subject.count_minified {differ.push(COUNT_MINIFIED)}
     if baseline.count_generated != subject.count_generated {differ.push(COUNT_GENERATED)}
     if baseline.count_not_code != subject.count_not_code {differ.push(COUNT_NOT_CODE)}
@@ -569,6 +572,11 @@ pub fn resolve_settings(document: &Scope, config: &mut super::config_manager::Co
         config.engine.count_keywords = document.keywords_counted;
         config.view.hidden.keywords = !document.keywords_counted;
         adopted.push(HIDE_KEYWORDS);
+    }
+    if !typed.hide_tests && document.tests_detected != config.engine.detect_tests {
+        config.engine.detect_tests = document.tests_detected;
+        config.view.hidden.tests = !document.tests_detected;
+        adopted.push(HIDE_TESTS);
     }
     if !typed.count_minified && document.count_minified != config.engine.count_minified {
         config.engine.count_minified = document.count_minified;
@@ -1189,6 +1197,10 @@ mod tests {
         // not count keywords would read as every keyword having been written since
         config.engine.count_keywords = false;
         assert_eq!(vec!["hide keywords"], find_settings_that_differ(&document.scope, &scope_of(&config.engine, content)));
+
+        config.engine.count_keywords = true;
+        config.engine.detect_tests = false;
+        assert_eq!(vec!["hide tests"], find_settings_that_differ(&document.scope, &scope_of(&config.engine, content)));
     }
 
     #[test]
@@ -1203,6 +1215,7 @@ mod tests {
             gitignore: false,
             ignore_files: true,
             keywords_counted: true,
+            tests_detected: true,
             count_minified: false,
             count_generated: false,
             count_not_code: false,
@@ -1285,5 +1298,17 @@ mod tests {
         config.typed_explicitly.hide_keywords = true;
         assert!(resolve_settings(&with_keywords, &mut config).is_empty());
         assert!(!config.engine.count_keywords && config.view.hidden.keywords);
+
+        let without_tests = Scope { tests_detected: false, ..with_keywords.clone() };
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        assert_eq!(vec!["hide tests"], resolve_settings(&without_tests, &mut config));
+        assert!(!config.engine.detect_tests && config.view.hidden.tests);
+
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        config.engine.detect_tests = false;
+        config.view.hidden.tests = true;
+        config.typed_explicitly.hide_tests = true;
+        assert!(resolve_settings(&with_keywords, &mut config).is_empty());
+        assert!(!config.engine.detect_tests && config.view.hidden.tests);
     }
 }

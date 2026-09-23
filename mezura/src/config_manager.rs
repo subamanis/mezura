@@ -718,7 +718,8 @@ pub struct TypedExplicitlyOnCommandLine {
     pub no_ignore_files: bool,
     pub no_heuristics: bool,
     pub no_shebang: bool,
-    pub hide_keywords: bool
+    pub hide_keywords: bool,
+    pub hide_tests: bool
 }
 
 impl TypedExplicitlyOnCommandLine {
@@ -749,7 +750,8 @@ impl TypedExplicitlyOnCommandLine {
             no_ignore_files: no_ignore_files.is_some(),
             no_heuristics: no_heuristics.is_some(),
             no_shebang: no_shebang.is_some(),
-            hide_keywords: hidden.as_ref().is_some_and(|x| x.keywords)
+            hide_keywords: hidden.as_ref().is_some_and(|x| x.keywords),
+            hide_tests: hidden.as_ref().is_some_and(|x| x.tests)
         }
     }
 }
@@ -1816,6 +1818,8 @@ mod tests {
         assert!(create_config_from_args("./ --hide keywords,timing").unwrap().typed_explicitly.hide_keywords);
         assert!(!create_config_from_args("./ --hide timing").unwrap().typed_explicitly.hide_keywords);
         assert!(!create_config_from_args("./").unwrap().typed_explicitly.hide_keywords);
+        assert!(create_config_from_args("./ --hide tests,timing").unwrap().typed_explicitly.hide_tests);
+        assert!(!create_config_from_args("./ --hide keywords").unwrap().typed_explicitly.hide_tests);
     }
 
     // A JSON document carries every figure whatever is hidden, so there the order stands as asked

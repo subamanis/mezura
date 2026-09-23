@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use mezura_core::{FaultyFileDetails, FileEntry, FilesPresent, LineClasses, ModuleResult, Performance,
-        RunResult, SkippedFiles, Stats, Target, Threads, UnreadableDirDetails};
+        RunResult, SkippedFiles, Stats, Target, TestCode, Threads, UnreadableDirDetails};
 use serde_json::{Map, Value};
 
 use super::json_printer::FORMAT_VERSION;
@@ -50,6 +50,7 @@ pub struct Scope {
     // Whether the keywords were counted at all: '--hide keywords' stops the counting, and a map
     // that is empty because nothing measured it must not read as a count of zero
     pub keywords_counted: bool,
+    pub tests_detected: bool,
     pub count_minified: bool,
     pub count_generated: bool,
     pub count_not_code: bool,
@@ -145,6 +146,7 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
     let total = parse_stats(read_nested(root, "total", "")?, "total")?;
     let per_language = parse_languages(read_list(root, "languages", "")?, "languages")?;
     let nested_languages = parse_nested_languages(read_list(root, "languages", "")?, "languages")?;
+    let tests = parse_tests(read_list(root, "languages", "")?, "languages")?;
 
     let performance = match root.get("performance") {
         Some(x) => parse_performance(read_object(x, "performance")?)?,
@@ -158,7 +160,7 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
         Some(x) => parse_modules(read_array(x, "modules")?)?,
         None => (vec![ModuleResult { name: None, per_language: per_language.clone(), total: total.clone(),
                 nested_languages: nested_languages.clone(),
-                tests: HashMap::new(),
+                tests: tests.clone(),
                 files: parse_files(read_list(root, "languages", "")?, "languages")? }],
                 read_optional_number(root, "files_hidden", "")?)
     };
@@ -186,7 +188,7 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
             total,
             modules,
             nested_languages,
-            tests: HashMap::new(),
+            tests,
             // An absent list means the paths were not detailed. Something may still have gone wrong.
             // How many there were is in 'scan' and is read either way.
             faulty_files: match root.get("faulty_files") {
@@ -233,6 +235,8 @@ pub(crate) fn parse_scope(scope: &Map<String, Value>) -> Result<(Scope, Vec<Targ
         count_minified: read_optional_flag(scope, "count_minified", "scope", true)?,
         count_generated: read_optional_flag(scope, "count_generated", "scope", true)?,
         count_not_code: read_optional_flag(scope, "count_not_code", "scope", true)?,
+        // Absent from a document of the builds that could not tell tests apart
+        tests_detected: read_optional_flag(scope, "tests_detected", "scope", false)?,
         // Absent from a document of the builds that never read a file to identify it
         use_heuristics: read_optional_flag(scope, "use_heuristics", "scope", false)?,
         // Absent from a document of every build that had no way to turn the probe off
@@ -306,6 +310,23 @@ fn parse_nested_languages(entries: &[Value], at: &str)
     Ok(found)
 }
 
+fn parse_tests(entries: &[Value], at: &str) -> Result<HashMap<String, TestCode>, DocumentError> {
+    let mut found = HashMap::new();
+    for (i, entry) in entries.iter().enumerate() {
+        let at = format!("{at}[{i}]");
+        let entry = read_object(entry, &at)?;
+        let Some(tests) = entry.get("tests") else { continue };
+
+        let name = read_text(entry, "name", &at)?;
+        let at = join_location(&at, "tests");
+        let tests = read_object(tests, &at)?;
+        found.insert(name, TestCode { stats: parse_stats(tests, &at)?,
+                whole_files: read_number(tests, "whole_files", &at)? });
+    }
+
+    Ok(found)
+}
+
 // The modules and, beside them, how many file rows a capped '--by-file' left out of all of them
 fn parse_modules(entries: &[Value]) -> Result<(Vec<ModuleResult>, usize), DocumentError> {
     let mut hidden = 0;
@@ -318,7 +339,7 @@ fn parse_modules(entries: &[Value]) -> Result<(Vec<ModuleResult>, usize), Docume
             name: read_optional_name(entry, "name", &at)?,
             total: parse_stats(read_nested(entry, "total", &at)?, &join_location(&at, "total"))?,
             per_language: parse_languages(read_list(entry, "languages", &at)?, &join_location(&at, "languages"))?,
-            tests: HashMap::new(),
+            tests: parse_tests(read_list(entry, "languages", &at)?, &join_location(&at, "languages"))?,
             nested_languages: parse_nested_languages(read_list(entry, "languages", &at)?,
                     &join_location(&at, "languages"))?,
             files: parse_files(read_list(entry, "languages", &at)?, &join_location(&at, "languages"))?
@@ -511,22 +532,24 @@ mod tests {
         crate::test_support::plain_stats_of(files, bytes, lines, code, comments, keywords)
     }
 
-    // Everything the printer can put in a document: two languages, one of them with keywords and
-    // one without, a named module beside the leftovers, and paths carrying the backslashes and
+    // Everything the printer can put in a document. Two languages, one with keywords and tests and one
+    // with neither, a named module beside the leftovers, and paths carrying the backslashes and
     // quotation marks that have to survive the escaping on the way out and the way back in.
     fn populated() -> (RunResult, Configuration) {
         let rust = stats(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 0]);
         let html = stats(1, 900, 40, 30, 0, HashMap::new());
         let per_language = hashmap!["Rust".to_owned() => rust.clone(), "HTML".to_owned() => html.clone()];
+        let tests = hashmap!["Rust".to_owned() => TestCode { stats: stats(2, 1200, 30, 24, 2, HashMap::new()),
+                whole_files: 1 }];
 
         let result = RunResult {
             total: Stats::total_of(&per_language),
             modules: vec![
-                ModuleResult { name: Some("backend".to_owned()), per_language: hashmap!["Rust".to_owned() => rust], total: Stats::total_of(&hashmap!["Rust".to_owned() => stats(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 0])]), nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new() },
+                ModuleResult { name: Some("backend".to_owned()), per_language: hashmap!["Rust".to_owned() => rust], total: Stats::total_of(&hashmap!["Rust".to_owned() => stats(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 0])]), nested_languages: HashMap::new(), tests: tests.clone(), files: HashMap::new() },
                 ModuleResult { name: None, per_language: hashmap!["HTML".to_owned() => html.clone()], total: Stats::total_of(&hashmap!["HTML".to_owned() => html]), nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new() }],
             per_language,
             nested_languages: HashMap::new(),
-            tests: HashMap::new(),
+            tests,
             faulty_files: vec![FaultyFileDetails::new("D:\\dev\\a \"b\".rs".to_owned(), "stream did not contain valid UTF-8".to_owned(), 412)],
             skipped_files: SkippedFiles::default(),
             files_present: FilesPresent { total_files: 9, relevant_files: 3, excluded_files: 4 },
@@ -563,6 +586,7 @@ mod tests {
 
         assert_same_stats(&written.per_language, &read.per_language);
         assert_eq!(written.total, read.total);
+        assert_eq!(written.tests, read.tests);
         assert_eq!(written.files_present, read.files_present);
         assert_eq!(written.targets, read.targets);
         assert_eq!(written.performance.duration_millis, read.performance.duration_millis);
@@ -573,6 +597,7 @@ mod tests {
         for (written, read) in written.modules.iter().zip(&read.modules) {
             assert_eq!(written.name, read.name);
             assert_eq!(written.total, read.total);
+            assert_eq!(written.tests, read.tests);
             assert_same_stats(&written.per_language, &read.per_language);
         }
 
@@ -638,6 +663,18 @@ mod tests {
         let older = create_document(&result, &Local::now(), &config).replace(",\"keywords_counted\":true", "");
         assert!(!older.contains("keywords_counted"));
         assert!(parse(&older).unwrap().scope.keywords_counted);
+
+        // One without this key was written by a build that could not tell tests apart
+        assert!(parse(&create_document(&result, &Local::now(), &config)).unwrap().scope.tests_detected);
+        let older = create_document(&result, &Local::now(), &config).replace(",\"tests_detected\":true", "");
+        assert!(!older.contains("tests_detected"));
+        assert!(!parse(&older).unwrap().scope.tests_detected);
+
+        config.engine.detect_tests = false;
+        config.view.hidden.tests = true;
+        let read = parse(&create_document(&result, &Local::now(), &config)).unwrap();
+        assert!(!read.scope.tests_detected);
+        assert!(read.result.tests.is_empty() && read.result.modules.iter().all(|x| x.tests.is_empty()));
 
         let (mut plain, config) = populated();
         plain.modules = vec![ModuleResult { name: None, per_language: plain.per_language.clone(), total: plain.total.clone(),
