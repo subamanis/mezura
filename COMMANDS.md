@@ -23,6 +23,7 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
   - [--sort](#cmd-sort)
   - [--top](#cmd-top)
   - [--by-file](#cmd-by-file)
+  - [--tests-breakdown](#cmd-tests-breakdown)
   - [--hide](#cmd-hide)
   - [--theme](#cmd-theme)
   - [--style](#cmd-style)
@@ -496,6 +497,27 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     instead of comparing them.
 ```
 
+### <a id="cmd-tests-breakdown" name="cmd-tests-breakdown"></a>--tests-breakdown
+
+```
+--tests-breakdown
+    the tests of each language as one row, or split from the rest of it
+
+    One argument: 'share' or 'split'. Default: share
+
+      share     one row under each language that holds tests, 'tests', whose share of the
+                language is the percentage beside its files and lines
+      split     two rows: 'production', the code of the language outside its tests, and then
+                'tests'
+
+    Under the total a 'tests' row adds up the test code of every language, whichever is chosen.
+    An HTML page, a '.vue' or any other file holding sections of other languages already splits
+    its language into rows, 'HTML itself' beside the sections, so there 'tests' joins them and
+    'split' changes nothing.
+
+    '--hide tests' turns the detection off, and then there is no row to draw either way.
+```
+
 ### <a id="cmd-hide" name="cmd-hide"></a>--hide
 
 ```
@@ -625,14 +647,18 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
       percent                  the percentages of the details rows
       arrow                    the '->' and the '|' of a 'list' row, in that layout only
 
-    The rows hanging under a language, one token per column, three times over: 'nested-' for
-    the sections inside a container file, 'tests-' for its test code, 'file-' for the rows of a
-    '--by-file' run. 'name' is the section's language, the word 'tests' or the file's path,
-    'branch' the tree characters tying the row to the one above, and 'percent' is of the language
-    the row hangs under, or of the whole run for the tests under the total:
+    The rows hanging under a language, one token per column, four times over: 'nested-' for the
+    sections inside a container file and the container's own row beside them, 'production-' for
+    the code of a language that is not its tests, 'tests-' for its test code, 'file-' for the rows
+    of a '--by-file' run. 'name' is the section's language, the word 'production' or 'tests', or
+    the file's path, 'branch' the tree characters tying the row to the one above, and 'percent'
+    is of the language the row hangs under, or of the whole run for the tests under the total:
 
       nested-name  nested-branch  nested-files  nested-lines  nested-code  nested-comments
       nested-extra  nested-size  nested-size-unit  nested-percent
+      production-name  production-branch  production-files  production-lines  production-code
+      production-comments  production-extra  production-size  production-size-unit
+      production-percent
       tests-name  tests-branch  tests-files  tests-lines  tests-code  tests-comments
       tests-extra  tests-size  tests-size-unit  tests-percent
       file-name  file-branch  file-files  file-lines  file-code  file-comments

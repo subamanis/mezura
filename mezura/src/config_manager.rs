@@ -45,6 +45,7 @@ pub const DECIMAL_SEPARATOR  :&str   = "decimal-separator";
 pub const SORT               :&str   = "sort";
 pub const TOP                :&str   = "top";
 pub const BY_FILE            :&str   = "by-file";
+pub const TESTS_BREAKDOWN    :&str   = "tests-breakdown";
 pub const LOG                :&str   = "log";
 pub const COMPARE_LEVEL     :&str   = "compare";
 pub const SAVE               :&str   = "save";
@@ -140,6 +141,7 @@ pub struct ViewConfig {
     pub sort_by: SortCriterion,
     pub top_n: Option<usize>,
     pub by_file: Option<ByFile>,
+    pub tests_breakdown: TestsBreakdown,
     // Which fold of the classes every shown number goes through. In the view and not the engine,
     // because the engine only ever fills the classes and both models are answered by one run.
     pub counting: CountingModel,
@@ -208,6 +210,7 @@ impl Default for ViewConfig {
             sort_by: SortCriterion::default(),
             top_n: None,
             by_file: None,
+            tests_breakdown: TestsBreakdown::default(),
             counting: CountingModel::default(),
             theme: Theme::default()
         }
@@ -421,6 +424,30 @@ impl Layout {
             Self::Table => "table",
             Self::Boxed => "boxed",
             Self::Matrix => "matrix"
+        }
+    }
+}
+
+#[derive(Debug,PartialEq,Eq,Clone,Copy,Default)]
+pub enum TestsBreakdown {
+    #[default]
+    Share,
+    Split
+}
+
+impl TestsBreakdown {
+    pub fn parse(value: &str) -> Option<TestsBreakdown> {
+        match value.trim().to_lowercase().as_str() {
+            "share" => Some(Self::Share),
+            "split" => Some(Self::Split),
+            _ => None
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Share => "share",
+            Self::Split => "split"
         }
     }
 }
@@ -705,8 +732,8 @@ impl TypedExplicitlyOnCommandLine {
             should_show_skipped_files: _, theme_name: _,
             log: _, compare_level: _, config_name_to_save: _, config_name_to_load: _,
             theme_name_to_save: _, local_dir: _, bar_thickness: _, progress_bar: _, number_separator: _, decimal_separator: _,
-            layout: _, output: _, explain: _, diff_against: _, sort_by: _, top_n: _, by_file: _, styles: _,
-            config_styles: _, theme_styles: _, typed_explicitly: _ } = builder;
+            layout: _, output: _, explain: _, diff_against: _, sort_by: _, top_n: _, by_file: _,
+            tests_breakdown: _, styles: _, config_styles: _, theme_styles: _, typed_explicitly: _ } = builder;
 
         TypedExplicitlyOnCommandLine {
             exclude: exclude_dirs.is_some(),
@@ -781,6 +808,7 @@ pub struct ConfigurationBuilder {
     pub sort_by:                  Option<SortCriterion>,
     pub top_n:                    Option<usize>,
     pub by_file:                  Option<ByFile>,
+    pub tests_breakdown:          Option<TestsBreakdown>,
     pub styles:                   Option<Vec<(String,String)>>,
     pub config_styles:            Option<Vec<(String,String)>>,
     pub theme_styles:             Option<Vec<(String,String)>>,
@@ -819,6 +847,7 @@ impl ConfigurationBuilder {
         if self.sort_by.is_none() {self.sort_by = config.sort_by};
         if self.top_n.is_none() {self.top_n = config.top_n};
         if self.by_file.is_none() {self.by_file = config.by_file};
+        if self.tests_breakdown.is_none() {self.tests_breakdown = config.tests_breakdown};
         self
     }
 
@@ -832,7 +861,7 @@ impl ConfigurationBuilder {
             threads: _, should_show_faulty_files: _, should_show_skipped_files: _, hidden: _,
             theme_name: _, compare_level: _,
             bar_thickness: _, progress_bar: _, number_separator: _, decimal_separator: _, layout: _,
-            sort_by: _, top_n: _, by_file: _, config_styles: _,
+            sort_by: _, top_n: _, by_file: _, tests_breakdown: _, config_styles: _,
             // never carried by a configuration file, so never merged out of one either
             targets_source: _, log: _, config_name_to_save: _, config_name_to_load: _,
             theme_name_to_save: _, local_dir: _, output: _, explain: _, diff_against: _,
@@ -870,7 +899,8 @@ impl ConfigurationBuilder {
         self.theme_name.is_none() || self.compare_level.is_none() ||
         self.config_styles.is_none() || self.bar_thickness.is_none() || self.progress_bar.is_none() ||
         self.number_separator.is_none() || self.decimal_separator.is_none() || self.layout.is_none() ||
-        self.sort_by.is_none() || self.top_n.is_none() || self.by_file.is_none()
+        self.sort_by.is_none() || self.top_n.is_none() || self.by_file.is_none() ||
+        self.tests_breakdown.is_none()
     }
 
     // Names the model this run counts with and the word that quantity has there, so that nobody
@@ -970,6 +1000,7 @@ impl ConfigurationBuilder {
                 sort_by,
                 top_n: self.top_n,
                 by_file: self.by_file,
+                tests_breakdown: self.tests_breakdown.unwrap_or_default(),
                 counting: self.counting.unwrap_or_default(),
                 theme: super::theme::resolve(self.theme_styles.as_deref().unwrap_or_default(),
                         self.config_styles.as_deref().unwrap_or_default(), self.styles.as_deref().unwrap_or_default())
@@ -1144,6 +1175,8 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             // '--top' shows every language until a number says otherwise.
             BY_FILE => config_builder.by_file = Some(if arguments.trim().is_empty() {ByFile::All}
                     else {parse_or_refuse(BY_FILE, arguments, ByFile::parse)?}),
+            TESTS_BREAKDOWN => config_builder.tests_breakdown =
+                    Some(parse_or_refuse(TESTS_BREAKDOWN, arguments, TestsBreakdown::parse)?),
             SORT => config_builder.sort_by = Some(parse_or_refuse(SORT, arguments, SortCriterion::parse)?),
             BAR_THICKNESS => config_builder.bar_thickness =
                     Some(parse_or_refuse(BAR_THICKNESS, arguments, BarThickness::parse)?),
@@ -1459,6 +1492,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             should_show_skipped_files, hidden,
             no_gitignore, no_ignore_files, no_heuristics, no_shebang, theme_name, compare_level,
             bar_thickness, progress_bar, number_separator, decimal_separator, layout, sort_by, top_n, by_file,
+            tests_breakdown,
             // these two accept whatever they are given, so a config can hold no invalid value for
             // them and they never reach 'invalid_fields'
             languages_of_interest: _, excluded_languages: _,
@@ -1492,6 +1526,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             SORT => sort_by.is_some(),
             TOP => top_n.is_some(),
             BY_FILE => by_file.is_some(),
+            TESTS_BREAKDOWN => tests_breakdown.is_some(),
             BAR_THICKNESS => bar_thickness.is_some(),
             PROGRESS_BAR => progress_bar.is_some(),
             NUMBER_SEPARATOR => number_separator.is_some(),
@@ -2160,7 +2195,7 @@ mod tests {
                 ===> progress-bar\nnope\n\n===> number-separator\nnope\n\n===> decimal-separator\nnope\n\n===> force-language\nnope\n\n\
                 ===> by-file\nnope\n\n===> counting\nnope\n\n===> count-minified\nnope\n\n\
                 ===> count-generated\nnope\n\n===> count-not-code\nnope\n\n===> no-heuristics\nnope\n\n\
-                ===> no-shebang\nnope\n").unwrap();
+                ===> no-shebang\nnope\n\n===> tests-breakdown\nnope\n").unwrap();
 
         // With no target on the command line to take its place, the run stops instead of counting
         // less than it was asked to
@@ -2171,7 +2206,8 @@ mod tests {
                 create_config_from_args("./ --load test002"));
 
         let rescued = create_config_from_args(
-                "./ --load test002 --sort name --top 3 --bar-thickness fat --progress-bar hash --number-separator dot --decimal-separator comma --force-language m=matlab --by-file 8 --counting region --count-minified --count-generated --count-not-code --no-heuristics --no-shebang").unwrap();
+                "./ --load test002 --sort name --top 3 --bar-thickness fat --progress-bar hash --number-separator dot --decimal-separator comma --force-language m=matlab --by-file 8 --counting region --count-minified --count-generated --count-not-code --no-heuristics --no-shebang --tests-breakdown split").unwrap();
+        assert_eq!(TestsBreakdown::Split, rescued.view.tests_breakdown);
         assert!(rescued.engine.count_minified && rescued.engine.count_generated && rescued.engine.count_not_code);
         assert!(!rescued.engine.use_heuristics);
         assert!(!rescued.engine.detect_shebangs);
@@ -2203,7 +2239,7 @@ mod tests {
                     --count-not-code --show-faulty-files --show-skipped --hide bar --no-gitignore --no-ignore-files --no-heuristics --no-shebang \
                     --compare 3 --bar-thickness fat \
                     --progress-bar hash --number-separator dot --decimal-separator comma --layout table \
-                    --sort name --top 3 --by-file 8").unwrap());
+                    --sort name --top 3 --by-file 8 --tests-breakdown split").unwrap());
             // Neither can come off a command line here: a theme is looked up in the data directory,
             // and a style block only ever arrives from inside a configuration file
             donor.theme_name = Some("Mezura".to_owned());
@@ -2218,7 +2254,8 @@ mod tests {
                 "a field is asked about that no configuration can fill, so the default one is read for nothing");
 
         for (name, clear) in [("excluded_languages", (|x: &mut ConfigurationBuilder| x.excluded_languages = None) as fn(&mut ConfigurationBuilder)),
-                ("targets", |x| x.targets = None), ("top_n", |x| x.top_n = None), ("by_file", |x| x.by_file = None)] {
+                ("targets", |x| x.targets = None), ("top_n", |x| x.top_n = None), ("by_file", |x| x.by_file = None),
+                ("tests_breakdown", |x| x.tests_breakdown = None)] {
             let mut one_short = donor();
             clear(&mut one_short);
             assert!(one_short.has_missing_fields(),
@@ -2236,6 +2273,7 @@ mod tests {
                 kept.no_ignore_files));
         assert_eq!((Some(3), Some(Layout::Table), Some(SortCriterion::Name), Some(ByFile::Capped(8))),
                 (kept.top_n, kept.layout, kept.sort_by, kept.by_file));
+        assert_eq!(Some(TestsBreakdown::Split), kept.tests_breakdown);
         assert_eq!((Some(BarThickness::Fat), Some(ProgressBarStyle::Hash), Some(NumberSeparator::Dot),
                 Some(DecimalSeparator::Comma), Some("Mezura".to_owned())),
                 (kept.bar_thickness, kept.progress_bar, kept.number_separator, kept.decimal_separator, kept.theme_name));

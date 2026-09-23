@@ -5,7 +5,7 @@ use chrono::{DateTime, Local};
 use colored::{Color, ColoredString, Colorize};
 use mezura_core::{CountingModel, RunResult, Stats, TestCode, UNNAMED_MODULE_NAME, render};
 
-use super::config_manager::{self, ByFile, Configuration, Layout, SortCriterion};
+use super::config_manager::{self, ByFile, Configuration, Layout, SortCriterion, TestsBreakdown};
 use super::message_printer::wrap_message;
 use super::number_formatter::format_with_separators;
 use super::theme::{Style, Theme};
@@ -107,6 +107,11 @@ pub fn format_and_print_results(result: &RunResult, existing_log_content: &Optio
                 "'--by-file' prints nothing under the 'matrix' layout, whose rows are languages \
                 crossed with modules. Use any other layout to see the files."));
     }
+    if config.view.tests_breakdown == TestsBreakdown::Split && config.view.hidden.tests {
+        eprintln!("\n{}", super::theme::get_active().warning.paint(&format!(
+                "'--{} split' has no tests to split off, since '--hide tests' turned their detection off.",
+                config_manager::TESTS_BREAKDOWN)));
+    }
     let hidden_files = if files_are_shown {count_hidden_files(&groups)} else {0};
     let is_table = layout != Layout::List;
     // With modules there is a sum of the module rows to be shown even when one language made all of
@@ -181,7 +186,7 @@ pub fn create_theme_sample_rows(theme: &Theme, layout: Layout, model: CountingMo
     let per_language = hashmap!(NAME.to_owned() => Stats::new(FILES, BYTES, lines, classes, keywords.clone()));
     let total = Stats::total_of(&per_language);
     let groups = vec![Group {name: None, languages: vec![NAME.to_owned()], hidden: 0,
-            per_language: &per_language, nested: &NO_NESTED, tests: &NO_TESTS, files: HashMap::new(),
+            per_language: &per_language, nested: &NO_NESTED, tests: &NO_TESTS, tests_breakdown: TestsBreakdown::Share, files: HashMap::new(),
             total: &total, baseline: None}];
 
     // The two tables keep their keywords in a block of their own, so the sample has to ask for it
@@ -248,6 +253,7 @@ struct Group<'a> {
     per_language: &'a HashMap<String, Stats>,
     nested: &'a HashMap<String, HashMap<String, Stats>>,
     tests: &'a HashMap<String, TestCode>,
+    tests_breakdown: TestsBreakdown,
     // Empty unless '--by-file' asked for them
     files: FileRowsOfModule<'a>,
     total: &'a Stats,
@@ -300,6 +306,7 @@ fn create_groups_of<'a>(result: &'a RunResult, config: &Configuration) -> Vec<Gr
             // Emptied here and not at each layout, or the next layout forgets to obey the flag
             nested: if config.view.hidden.nested_languages {&NO_NESTED} else {&module.nested_languages},
             tests: if config.view.hidden.tests {&NO_TESTS} else {&module.tests},
+            tests_breakdown: config.view.tests_breakdown,
             files: HashMap::new(),
             total: &module.total,
             baseline: None
@@ -415,9 +422,16 @@ enum RowKind {
     Language,
     Total,
     Nested,
+    Production,
     Tests,
     File,
     Note
+}
+
+impl RowKind {
+    fn is_sub_row(self) -> bool {
+        matches!(self, RowKind::Nested | RowKind::Production | RowKind::Tests | RowKind::File)
+    }
 }
 
 // A sub-row is painted by role and not by position. 'Change' resolves to no paint at all: those
@@ -526,6 +540,11 @@ impl<'a> SubRowStyles<'a> {
                     percent: &theme.file_percent, files: &theme.file_files, lines: &theme.file_lines,
                     code: &theme.file_code, comments: &theme.file_comments, extra: &theme.file_extra,
                     size: &theme.file_size, size_unit: &theme.file_size_unit },
+            RowKind::Production => SubRowStyles { name: &theme.production_name, branch: &theme.production_branch,
+                    percent: &theme.production_percent, files: &theme.production_files,
+                    lines: &theme.production_lines, code: &theme.production_code,
+                    comments: &theme.production_comments, extra: &theme.production_extra,
+                    size: &theme.production_size, size_unit: &theme.production_size_unit },
             RowKind::Tests => SubRowStyles { name: &theme.tests_name, branch: &theme.tests_branch,
                     percent: &theme.tests_percent, files: &theme.tests_files, lines: &theme.tests_lines,
                     code: &theme.tests_code, comments: &theme.tests_comments, extra: &theme.tests_extra,
@@ -566,7 +585,7 @@ fn take_out(shell: &mut Stats, sections: &Stats) {
 }
 
 // The own share, the sections biggest first, then the tests. They add up to the language, so a line
-// of a section or of the tests is taken out of the own share, which gets no row once it holds nothing.
+// of a section or of the tests is taken out of the own share.
 fn find_parts_of(group: &Group, language: &str, whole: &Stats) -> Vec<(String, Stats, RowKind)> {
     let sections = group.nested.get(language);
     let tests = group.tests.get(language);
@@ -589,9 +608,11 @@ fn find_parts_of(group: &Group, language: &str, whole: &Stats) -> Vec<(String, S
     take_out(&mut shell, &counted);
     shell.files = whole.files.saturating_sub(tests.map_or(0, |tests| tests.whole_files));
     if shell.lines > 0 {
-        let name = if sections.is_some_and(|sections| !sections.is_empty()) {format!("{language} {SHELL_SUFFIX}")}
-                else {PRODUCTION_NAME.to_owned()};
-        rows.insert(0, (name, shell, RowKind::Nested));
+        if sections.is_some_and(|sections| !sections.is_empty()) {
+            rows.insert(0, (format!("{language} {SHELL_SUFFIX}"), shell, RowKind::Nested));
+        } else if group.tests_breakdown == TestsBreakdown::Split {
+            rows.insert(0, (PRODUCTION_NAME.to_owned(), shell, RowKind::Production));
+        }
     }
 
     rows
@@ -707,7 +728,7 @@ fn find_row_figures(row: &NamedRow, total: &Stats, model: CountingModel) -> Opti
         RowKind::Module => Some(shown_against(group.total, total)),
         RowKind::Total => Some(shown_against(total, total)),
         RowKind::Language => Some(shown_against(of_language(row.language.unwrap()), group.total)),
-        RowKind::Nested | RowKind::Tests | RowKind::File => Some(shown_against(row.stats.as_deref().unwrap(),
+        RowKind::Nested | RowKind::Production | RowKind::Tests | RowKind::File => Some(shown_against(row.stats.as_deref().unwrap(),
                 row.language.map_or(total, of_language))),
         RowKind::Note => None
     }
@@ -724,6 +745,11 @@ fn find_file_branch_marker(last: bool) -> &'static str {
 
 fn find_section_name_in(cell: &str) -> &str {
     cell.trim_start_matches([' ', '\u{251c}', '\u{2514}', '\u{2500}', '\u{25ab}', BOXED_MARKER]).trim()
+}
+
+fn split_off_the_branch(cell: &str) -> (&str, &str) {
+    let name = find_section_name_in(cell);
+    cell.split_at(cell.rfind(name).filter(|_| !name.is_empty()).unwrap_or(0))
 }
 
 // '--sort' can come from a configuration file, and then nothing else on the page says it. The cell
@@ -868,7 +894,7 @@ fn build_table_cells<'a>(theme: &'a Theme, groups: &[Group], total: &Stats, prin
             Some(figures) => {
                 let mut cells = format_row_of(theme, &row.cell, &figures);
                 // A branch under a language wears the branch's own size unit
-                if matches!(row.kind, RowKind::Nested | RowKind::Tests | RowKind::File) {
+                if row.kind.is_sub_row() {
                     let (size, unit) = super::number_formatter::get_active().size_with_unit(figures.bytes);
                     cells[10] = size + " " + &SubRowStyles::of(theme, row.kind).size_unit.paint(unit).to_string();
                 }
@@ -957,7 +983,7 @@ fn draw_markdown_table(columns: &[Column], rows: &[Vec<String>], kinds: &[RowKin
             let named = escape_markdown_name(cell);
             // Leaned over before the indent is spelled out, or the marks land on the spaces
             indent_for_markdown(&match kind {
-                RowKind::Nested | RowKind::Tests => emphasise_the_name_in(&named),
+                RowKind::Nested | RowKind::Production | RowKind::Tests => emphasise_the_name_in(&named),
                 _ => named
             })
         }).collect::<Vec<_>>();
@@ -1217,7 +1243,7 @@ fn create_group_with_baseline<'a>(name: Option<&'a str>, baseline: &'a HashMap<S
     let languages = rows.into_iter().map(|row| row.name)
             .filter(|language| subject.contains_key(language)).collect();
 
-    Group { name, languages, hidden, per_language: subject, nested: &NO_NESTED, tests: &NO_TESTS,
+    Group { name, languages, hidden, per_language: subject, nested: &NO_NESTED, tests: &NO_TESTS, tests_breakdown: TestsBreakdown::Share,
             files: HashMap::new(), total, baseline: Some(baseline) }
 }
 
@@ -1520,7 +1546,7 @@ fn draw_aligned_table(theme: &Theme, columns: &[Column], rows: &[Vec<String>], k
 
     // The language name and the percentages are not right aligned: padding a percentage on the left
     // would push it away from its number on exactly the rows where its column is wider.
-    let render = |cells: &[String], styles: &[&Style]| {
+    let render = |cells: &[String], styles: &[&Style], branch: Option<&Style>| {
         let mut line = String::with_capacity(140);
         if cells[1..].iter().all(String::is_empty) {
             return styles[0].paint(&cells[0]).to_string();
@@ -1528,7 +1554,14 @@ fn draw_aligned_table(theme: &Theme, columns: &[Column], rows: &[Vec<String>], k
         for (i, cell) in cells.iter().enumerate() {
             let padding = " ".repeat(widths[i].saturating_sub(calculate_widest_visible_line(cell)));
             if i == 0 {
-                line.push_str(&format!("{}{}", styles[i].paint(cell), padding));
+                let painted = match branch {
+                    Some(branch) => {
+                        let (tree, name) = split_off_the_branch(cell);
+                        format!("{}{}", branch.paint(tree), styles[i].paint(name))
+                    },
+                    None => styles[i].paint(cell).to_string()
+                };
+                line.push_str(&format!("{painted}{padding}"));
             } else if tight_after.contains(&(i - 1)) {
                 line.push_str(&format!("{}{}{}", " ".repeat(TIGHT_GAP), styles[i].paint(cell), padding));
             } else {
@@ -1542,14 +1575,17 @@ fn draw_aligned_table(theme: &Theme, columns: &[Column], rows: &[Vec<String>], k
 
     let headers = columns.iter().map(|column| column.header.clone()).collect::<Vec<_>>();
     let of_a_nested = SubRowStyles::of(theme, RowKind::Nested).take_columns(&column_kinds);
+    let of_the_production = SubRowStyles::of(theme, RowKind::Production).take_columns(&column_kinds);
     let of_the_tests = SubRowStyles::of(theme, RowKind::Tests).take_columns(&column_kinds);
     let of_a_file = SubRowStyles::of(theme, RowKind::File).take_columns(&column_kinds);
-    let rendered = std::iter::once(render(&headers, &header_styles))
+    let branch_of = |kind| Some(SubRowStyles::of(theme, kind).branch);
+    let rendered = std::iter::once(render(&headers, &header_styles, None))
             .chain(rows.iter().zip(kinds.iter()).map(|(row, kind)| match kind {
-                RowKind::Nested => render(row, &of_a_nested),
-                RowKind::Tests => render(row, &of_the_tests),
-                RowKind::File => render(row, &of_a_file),
-                RowKind::Note => render(row, &vec![&theme.note; row.len()]),
+                RowKind::Nested => render(row, &of_a_nested, branch_of(*kind)),
+                RowKind::Production => render(row, &of_the_production, branch_of(*kind)),
+                RowKind::Tests => render(row, &of_the_tests, branch_of(*kind)),
+                RowKind::File => render(row, &of_a_file, branch_of(*kind)),
+                RowKind::Note => render(row, &vec![&theme.note; row.len()], None),
                 RowKind::Module | RowKind::Language | RowKind::Total => {
                     let mut styles = body_styles.to_vec();
                     styles[0] = match kind {
@@ -1557,7 +1593,7 @@ fn draw_aligned_table(theme: &Theme, columns: &[Column], rows: &[Vec<String>], k
                         RowKind::Total => &theme.details_total,
                         _ => &theme.details_language_name
                     };
-                    render(row, &styles)
+                    render(row, &styles, None)
                 }
             })).collect::<Vec<_>>();
 
@@ -1572,13 +1608,12 @@ fn draw_aligned_table(theme: &Theme, columns: &[Column], rows: &[Vec<String>], k
     // A blank line closes each module. The same blank sets apart a language carrying rows under it,
     // above it and below its last one, or a tree runs into the name of the language next to it; a
     // module's first language is not held away from the name it belongs to.
-    let is_sub_row = |kind: Option<&RowKind>| matches!(kind, Some(RowKind::Nested | RowKind::Tests | RowKind::File));
-    let mut previous = None;
+    let mut previous: Option<RowKind> = None;
     for (position, (line, kind)) in rendered.zip(kinds.iter()).enumerate() {
         let gap_above = match kind {
-            RowKind::Nested | RowKind::Tests | RowKind::File => false,
-            RowKind::Language => (is_sub_row(kinds.get(position + 1)) || is_sub_row(previous.as_ref()))
-                    && previous != Some(RowKind::Module),
+            RowKind::Nested | RowKind::Production | RowKind::Tests | RowKind::File => false,
+            RowKind::Language => (kinds.get(position + 1).is_some_and(|next| next.is_sub_row())
+                    || previous.is_some_and(RowKind::is_sub_row)) && previous != Some(RowKind::Module),
             // Two notes are one paragraph, so only the first opens a gap
             RowKind::Note => previous != Some(RowKind::Note),
             RowKind::Module | RowKind::Total => grouped && previous != Some(RowKind::Note)
@@ -1615,6 +1650,7 @@ fn print_as_matrix(theme: &Theme, groups: &[Group], languages: &[String], total:
             per_language: group.per_language,
             nested: group.nested,
             tests: group.tests,
+            tests_breakdown: group.tests_breakdown,
             files: HashMap::new(),
             total: group.total,
             baseline: group.baseline
@@ -1897,7 +1933,7 @@ fn draw_boxed_table(theme: &Theme, columns: &[Column], rows: &[(String, Vec<Boxe
     };
 
     let longest_section = rows.iter().zip(kinds.iter())
-            .filter(|(_, kind)| matches!(kind, RowKind::Nested | RowKind::Tests | RowKind::File))
+            .filter(|(_, kind)| kind.is_sub_row())
             .map(|((name, _), _)| calculate_widest_visible_line(find_section_name_in(name)))
             .max().unwrap_or(0);
     let mut lines = vec![frame("┌", "┬", "┐", "─", BORDER_OUTER, false)];
@@ -1920,10 +1956,7 @@ fn draw_boxed_table(theme: &Theme, columns: &[Column], rows: &[(String, Vec<Boxe
     // read with the rows and not with the total.
     for (position, (name, cells)) in rows.iter().enumerate() {
         let kind = kinds[position];
-        let is_body = match kind {
-            RowKind::Module | RowKind::Total => false,
-            RowKind::Language | RowKind::Nested | RowKind::Tests | RowKind::File | RowKind::Note => true
-        };
+        let is_body = !matches!(kind, RowKind::Module | RowKind::Total);
         // A module's name row is closed on both sides and not only above: without the second rule
         // the vertical changes brightness in the middle of itself and reads as a rendering fault.
         let after_module = position > 0 && kinds[position - 1] == RowKind::Module;
@@ -1947,12 +1980,12 @@ fn draw_boxed_table(theme: &Theme, columns: &[Column], rows: &[(String, Vec<Boxe
             RowKind::Total => &theme.details_total,
             RowKind::Language => &theme.details_language_name,
             RowKind::Note => &theme.note,
-            RowKind::Nested | RowKind::Tests | RowKind::File => of_a_sub_row.name
+            RowKind::Nested | RowKind::Production | RowKind::Tests | RowKind::File => of_a_sub_row.name
         };
         // The block as a whole is pushed right by its longest name. Aligning each name on its own
         // right edge puts a three letter one further in than a ten letter one, which reads as depth.
         // The sections stop halfway, so that the two lists under one language are not one block.
-        let name = if matches!(kind, RowKind::Nested | RowKind::Tests | RowKind::File) {
+        let name = if kind.is_sub_row() {
             let marker = if kind == RowKind::File {BOXED_FILE_MARKER} else {BOXED_MARKER};
             let text = format!("{marker} {}", find_section_name_in(name));
             let indent = inner_widths[0].saturating_sub(2 + longest_section);
@@ -1961,12 +1994,18 @@ fn draw_boxed_table(theme: &Theme, columns: &[Column], rows: &[(String, Vec<Boxe
             name.clone()
         };
         let padding = " ".repeat(inner_widths[0].saturating_sub(calculate_widest_visible_line(&name)));
-        let mut painted = vec![format!("{}{padding}", name_style.paint(&name))];
+        let painted_name = if kind.is_sub_row() {
+            let (tree, section) = split_off_the_branch(&name);
+            format!("{}{}", of_a_sub_row.branch.paint(tree), name_style.paint(section))
+        } else {
+            name_style.paint(&name).to_string()
+        };
+        let mut painted = vec![format!("{painted_name}{padding}")];
         for (i, cell) in cells.iter().enumerate() {
-            let (number_style, slot_style) = match kind {
-                RowKind::Nested | RowKind::Tests | RowKind::File =>
-                        (of_a_sub_row.find_style_of(column_kinds[i + 1]), of_a_sub_row.find_style_of(slot)),
-                _ => (number_styles[i], slot_style)
+            let (number_style, slot_style) = if kind.is_sub_row() {
+                (of_a_sub_row.find_style_of(column_kinds[i + 1]), of_a_sub_row.find_style_of(slot))
+            } else {
+                (number_styles[i], slot_style)
             };
             let number = format!("{}{}", " ".repeat(number_widths[i] - calculate_widest_visible_line(&cell.number)),
                     number_style.paint(&cell.number));
@@ -2922,7 +2961,8 @@ mod tests {
         order.into_iter().map(|(name, languages, hidden)| {
             let module = modules.iter().find(|x| x.name == name).unwrap();
             Group {name: module.name.as_deref(), languages, hidden, per_language: &module.per_language,
-                    nested: &module.nested_languages, tests: &module.tests, files: HashMap::new(),
+                    nested: &module.nested_languages, tests: &module.tests,
+                    tests_breakdown: config.view.tests_breakdown, files: HashMap::new(),
                     total: &module.total, baseline: None}
         }).collect()
     }
@@ -2974,7 +3014,7 @@ mod tests {
         let shown = by_lines(content);
         let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
         let plain = vec![Group {name: None, languages: sorted.clone(), hidden: 0, per_language: &content_info,
-                nested: &NO_NESTED, tests: &NO_TESTS, files: HashMap::new(), total: &total, baseline: None}];
+                nested: &NO_NESTED, tests: &NO_TESTS, tests_breakdown: TestsBreakdown::Share, files: HashMap::new(), total: &total, baseline: None}];
         let columns = Columns::of(&plain, &total, no_hides, content);
         let width = columns.width(theme);
 
@@ -2983,7 +3023,7 @@ mod tests {
         // over them too.
         let sections = sample_sections();
         let with_nested = vec![Group {name: None, languages: sorted.clone(), hidden: 0,
-                per_language: &content_info, nested: &sections, tests: &NO_TESTS, files: HashMap::new(),
+                per_language: &content_info, nested: &sections, tests: &NO_TESTS, tests_breakdown: TestsBreakdown::Share, files: HashMap::new(),
                 total: &total, baseline: None}];
         let nested_columns = Columns::of(&with_nested, &total, no_hides, content);
         let nested_width = nested_columns.width(theme);
@@ -3018,7 +3058,7 @@ mod tests {
             hidden
         };
         let with_files = vec![Group {name: None, languages: sorted.clone(), hidden: 0,
-                per_language: &content_info, nested: &sections, tests: &NO_TESTS,
+                per_language: &content_info, nested: &sections, tests: &NO_TESTS, tests_breakdown: TestsBreakdown::Share,
                 files: hashmap!["HTML" => files_of("HTML", 0), "Python" => files_of("Python", 4)],
                 total: &total, baseline: None}];
         let file_columns = Columns::of(&with_files, &total, no_hides, content);
@@ -3042,9 +3082,10 @@ mod tests {
                 format_markdown_lines(theme, &with_files, &total, true, &a_note, shown)));
 
         let tests = sample_tests();
-        let with_tests = vec![Group {name: None, languages: sorted.clone(), hidden: 0,
-                per_language: &content_info, nested: &sections, tests: &tests, files: HashMap::new(),
-                total: &total, baseline: None}];
+        let group_with_tests = |tests_breakdown| vec![Group {name: None, languages: sorted.clone(), hidden: 0,
+                per_language: &content_info, nested: &sections, tests: &tests, tests_breakdown,
+                files: HashMap::new(), total: &total, baseline: None}];
+        let with_tests = group_with_tests(TestsBreakdown::Share);
         let tests_columns = Columns::of(&with_tests, &total, no_hides, content);
         let tests_width = tests_columns.width(theme);
         let mut list = format_individual_lines(theme, &with_tests, &tests_columns, tests_width, false);
@@ -3058,9 +3099,19 @@ mod tests {
         cases.push(("markdown, with tests".to_owned(),
                 format_markdown_lines(theme, &with_tests, &total, true, &[], shown)));
 
+        let with_tests_split = group_with_tests(TestsBreakdown::Split);
+        let split_columns = Columns::of(&with_tests_split, &total, no_hides, content);
+        let split_width = split_columns.width(theme);
+        cases.push(("list, with tests split".to_owned(),
+                format_individual_lines(theme, &with_tests_split, &split_columns, split_width, false)));
+        cases.push(("table, with tests split".to_owned(),
+                format_table_lines(theme, &with_tests_split, &total, true, &[], shown)));
+        cases.push(("boxed, with tests split".to_owned(),
+                format_boxed_lines(theme, &with_tests_split, &total, true, &[], shown)));
+
         // Two sentences are one paragraph: a blank line above the first, none between them
         let both_cuts = vec![Group {name: None, languages: sorted[..4].to_vec(), hidden: 1,
-                per_language: &content_info, nested: &sections, tests: &NO_TESTS,
+                per_language: &content_info, nested: &sections, tests: &NO_TESTS, tests_breakdown: TestsBreakdown::Share,
                 files: hashmap!["HTML" => files_of("HTML", 0), "Python" => files_of("Python", 4)],
                 total: &total, baseline: None}];
         note_config.view.top_n = Some(4);
@@ -3289,7 +3340,7 @@ mod tests {
         let every_class_total = Stats::total_of(&every_class);
         let both_models = vec![Group { name: None, hidden: 0,
                 languages: get_sorted_language_names(&every_class, SortCriterion::Lines, content),
-                per_language: &every_class, nested: &NO_NESTED, tests: &NO_TESTS, files: HashMap::new(),
+                per_language: &every_class, nested: &NO_NESTED, tests: &NO_TESTS, tests_breakdown: TestsBreakdown::Share, files: HashMap::new(),
                 total: &every_class_total, baseline: None }];
 
         for (label, model) in [("content", content), ("region", CountingModel::Region)] {
@@ -3327,7 +3378,7 @@ mod tests {
         fn group<'a>(name: Option<&'a str>, content_info: &'a HashMap<String, Stats>,
                 total: &'a Stats) -> Group<'a> {
             Group {name, languages: vec!["D".to_owned()], hidden: 0, per_language: content_info,
-                    nested: &NO_NESTED, tests: &NO_TESTS, files: HashMap::new(), total, baseline: None}
+                    nested: &NO_NESTED, tests: &NO_TESTS, tests_breakdown: TestsBreakdown::Share, files: HashMap::new(), total, baseline: None}
         }
         let groups = vec![group(Some("a"), &content_info, &total),
                 group(None, &content_info, &total)];
@@ -3581,7 +3632,7 @@ mod tests {
         }
 
         let group = Group { name: None, languages: vec!["HTML".to_owned()], hidden: 0,
-                per_language: &content_info, nested: &nested, tests: &NO_TESTS, files: HashMap::new(),
+                per_language: &content_info, nested: &nested, tests: &NO_TESTS, tests_breakdown: TestsBreakdown::Share, files: HashMap::new(),
                 total: &total, baseline: None };
         let whole = content_info.get("HTML").unwrap();
         let sections = find_parts_of(&group, "HTML", whole);
@@ -3604,7 +3655,7 @@ mod tests {
                 "JavaScript".to_owned() => Stats::new(9, 99999, 9999, mezura_core::LineClasses::default(),
                         hashmap![])]];
         let group = Group { name: None, languages: vec!["HTML".to_owned()], hidden: 0,
-                per_language: &content_info, nested: &broken, tests: &NO_TESTS, files: HashMap::new(),
+                per_language: &content_info, nested: &broken, tests: &NO_TESTS, tests_breakdown: TestsBreakdown::Share, files: HashMap::new(),
                 total: &total, baseline: None };
         let shell = &find_parts_of(&group, "HTML", whole)[0].1;
         for model in [CountingModel::Content, CountingModel::Region] {
@@ -3626,22 +3677,26 @@ mod tests {
         run.nested_languages = sections;
         run.tests = tests;
 
-        for layout in [Layout::List, Layout::Table, Layout::Boxed, Layout::Matrix] {
-            for output in [config_manager::OutputFormat::Text, config_manager::OutputFormat::Markdown] {
-                for top in [None, Some(1), Some(6)] {
-                    for hidden in [false, true] {
-                        let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
-                        config.view.layout = layout;
-                        config.view.output = output;
-                        config.view.top_n = top;
-                        config.view.hidden.tests = hidden;
-                        format_and_print_results(&run, &None, &Local::now(), &config);
+        let layouts = [Layout::List, Layout::Table, Layout::Boxed, Layout::Matrix];
+        let outputs = [config_manager::OutputFormat::Text, config_manager::OutputFormat::Markdown];
+        let breakdowns = [TestsBreakdown::Share, TestsBreakdown::Split];
+        for (layout, output, breakdown) in layouts.into_iter()
+                .flat_map(|layout| outputs.map(|output| (layout, output)))
+                .flat_map(|(layout, output)| breakdowns.map(|breakdown| (layout, output, breakdown))) {
+            for top in [None, Some(1), Some(6)] {
+                for hidden in [false, true] {
+                    let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
+                    config.view.layout = layout;
+                    config.view.output = output;
+                    config.view.top_n = top;
+                    config.view.hidden.tests = hidden;
+                    config.view.tests_breakdown = breakdown;
+                    format_and_print_results(&run, &None, &Local::now(), &config);
 
-                        let under_the_total = calculate_tests_of_everything(&create_groups_of(&run, &config))
-                                .map(|tests| tests.lines);
-                        assert_eq!(if hidden {None} else {Some(2260)}, under_the_total,
-                                "the tests under the total, with --top {top:?} and the tests hidden: {hidden}");
-                    }
+                    let under_the_total = calculate_tests_of_everything(&create_groups_of(&run, &config))
+                            .map(|tests| tests.lines);
+                    assert_eq!(if hidden {None} else {Some(2260)}, under_the_total,
+                            "the tests under the total, with --top {top:?} and the tests hidden: {hidden}");
                 }
             }
         }
@@ -3702,7 +3757,7 @@ mod tests {
         let (sorted, content_info, total) = sample_data();
         let theme = &Theme::default();
         let groups = vec![Group { name: None, languages: sorted, hidden: 0, per_language: &content_info,
-                nested: &NO_NESTED, tests: &NO_TESTS, files: HashMap::new(), total: &total, baseline: None }];
+                nested: &NO_NESTED, tests: &NO_TESTS, tests_breakdown: TestsBreakdown::Share, files: HashMap::new(), total: &total, baseline: None }];
         let header_hiding = |names: &str| {
             let hidden = crate::config_manager::Hidden::parse(names).unwrap();
             let view = ViewSettings { sort_by: SortCriterion::Lines, hidden, model: CountingModel::Content };

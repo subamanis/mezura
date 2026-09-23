@@ -165,6 +165,8 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                         config_manager::TOP, &mut issues, |x| super::args::parse_usize_value(x, 1, usize::MAX)),
                 config_manager::BY_FILE => read_parsed_value(&mut builder.by_file, &mut reader, &mut buf,
                         config_manager::BY_FILE, &mut issues, config_manager::ByFile::parse),
+                config_manager::TESTS_BREAKDOWN => read_parsed_value(&mut builder.tests_breakdown, &mut reader,
+                        &mut buf, config_manager::TESTS_BREAKDOWN, &mut issues, config_manager::TestsBreakdown::parse),
                 config_manager::BAR_THICKNESS => read_parsed_value(&mut builder.bar_thickness, &mut reader, &mut buf,
                         config_manager::BAR_THICKNESS, &mut issues, config_manager::BarThickness::parse),
                 config_manager::PROGRESS_BAR => read_parsed_value(&mut builder.progress_bar, &mut reader, &mut buf,
@@ -303,6 +305,9 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
     }
     if let Some(by_file) = &config_builder.by_file {
         write_block(&mut writer, config_manager::BY_FILE, &by_file.to_text())?;
+    }
+    if let Some(tests_breakdown) = &config_builder.tests_breakdown {
+        write_block(&mut writer, config_manager::TESTS_BREAKDOWN, tests_breakdown.name())?;
     }
     if let Some(bar_thickness) = &config_builder.bar_thickness {
         write_block(&mut writer, config_manager::BAR_THICKNESS, bar_thickness.name())?;
@@ -476,7 +481,7 @@ mod tests {
         let command = "./ --exclude a,b,c.txt,d.txt, --counting region --threads 1 1 --hide keywords,timing \
                 --force-language m=matlab,.pl=Perl,ios/h=objective-c --languages rust,web/js \
                 --exclude-languages json,web/xml --by-file 12 --count-minified --count-generated \
-                --count-not-code --no-heuristics --no-shebang \
+                --count-not-code --no-heuristics --no-shebang --tests-breakdown split \
                 --style code-number=green,comments-label=magenta bold,arrow=default dim".to_string();
         let config_builder = config_manager::create_config_builder_from_args(&command).unwrap();
 
@@ -499,6 +504,7 @@ mod tests {
         assert_eq!(Some(true), options.no_shebang);
         assert_eq!(config_builder.hidden, options.hidden);
         assert_eq!(config_builder.by_file, options.by_file);
+        assert_eq!(Some(config_manager::TestsBreakdown::Split), options.tests_breakdown);
         assert_eq!(config_builder.forced_languages, options.forced_languages);
         assert_eq!(config_builder.languages_of_interest, options.languages_of_interest);
         assert_eq!(config_builder.excluded_languages, options.excluded_languages);

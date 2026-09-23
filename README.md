@@ -147,6 +147,7 @@ HOW THE REPORT LOOKS
   --sort               which column the languages are ordered by
   --top                show only this many languages, and say how many were left out
   --by-file            give every file its own row, or only the biggest few of each language
+  --tests-breakdown    the tests of each language as one row, or split from the rest of it
   --hide               parts of the output to leave unprinted
   --theme              apply a theme, which is a whole look kept in one file
   --style              override the color and attributes of one kind of printed text
