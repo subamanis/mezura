@@ -790,14 +790,18 @@ pub const STYLE_HELP  :  &str =
       percent                  the percentages of the details rows
       arrow                    the '->' and the '|' of a 'list' row, in that layout only
 
-    The rows hanging under a language, one token per column, three times over: 'nested-' for
-    the sections inside a container file, 'tests-' for its test code, 'file-' for the rows of a
-    '--by-file' run. 'name' is the section's language, the word 'tests' or the file's path,
-    'branch' the tree characters tying the row to the one above, and 'percent' is of the language
-    the row hangs under, or of the whole run for the tests under the total:
+    The rows hanging under a language, one token per column, four times over: 'nested-' for the
+    sections inside a container file and the container's own row beside them, 'production-' for
+    the code of a language that is not its tests, 'tests-' for its test code, 'file-' for the rows
+    of a '--by-file' run. 'name' is the section's language, the word 'production' or 'tests', or
+    the file's path, 'branch' the tree characters tying the row to the one above, and 'percent'
+    is of the language the row hangs under, or of the whole run for the tests under the total:
 
       nested-name  nested-branch  nested-files  nested-lines  nested-code  nested-comments
       nested-extra  nested-size  nested-size-unit  nested-percent
+      production-name  production-branch  production-files  production-lines  production-code
+      production-comments  production-extra  production-size  production-size-unit
+      production-percent
       tests-name  tests-branch  tests-files  tests-lines  tests-code  tests-comments
       tests-extra  tests-size  tests-size-unit  tests-percent
       file-name  file-branch  file-files  file-lines  file-code  file-comments
@@ -940,6 +944,25 @@ pub const BY_FILE_HELP  :  &str =
     A JSON baseline must have been written with a plain '--by-file': one without rows, or one
     whose rows a number capped, is missing files that would all read as new, and mezura says so
     instead of comparing them.
+
+";
+pub const TESTS_BREAKDOWN_HELP  :  &str =
+"--tests-breakdown
+    the tests of each language as one row, or split from the rest of it
+
+    One argument: 'share' or 'split'. Default: share
+
+      share     one row under each language that holds tests, 'tests', whose share of the
+                language is the percentage beside its files and lines
+      split     two rows: 'production', the code of the language outside its tests, and then
+                'tests'
+
+    Under the total a 'tests' row adds up the test code of every language, whichever is chosen.
+    An HTML page, a '.vue' or any other file holding sections of other languages already splits
+    its language into rows, 'HTML itself' beside the sections, so there 'tests' joins them and
+    'split' changes nothing.
+
+    '--hide tests' turns the detection off, and then there is no row to draw either way.
 
 ";
 pub const SAVE_HELP  :  &str =
@@ -1109,6 +1132,7 @@ pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 8] = [
         (SORT, SORT_HELP),
         (TOP, TOP_HELP),
         (BY_FILE, BY_FILE_HELP),
+        (TESTS_BREAKDOWN, TESTS_BREAKDOWN_HELP),
         (HIDE, HIDE_HELP),
         (THEME, THEME_HELP),
         (STYLE, STYLE_HELP),
@@ -1952,6 +1976,7 @@ mod tests {
         check(BAR_THICKNESS, BAR_THICKNESS_HELP, |x| BarThickness::parse(x).is_some());
         check(NUMBER_SEPARATOR, NUMBER_SEPARATOR_HELP, |x| NumberSeparator::parse(x).is_some());
         check(PROGRESS_BAR, PROGRESS_BAR_HELP, |x| ProgressBarStyle::parse(x).is_some());
+        check(TESTS_BREAKDOWN, TESTS_BREAKDOWN_HELP, |x| TestsBreakdown::parse(x).is_some());
     }
 
     // '--version' reads the release date from the first line of the Changelog, so without this the

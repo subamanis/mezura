@@ -51,15 +51,26 @@ nested-extra = 5d8786
 nested-size = 5d8786
 nested-size-unit = 7d7769
 
-tests-name = 8f769c
+production-name = default
+production-branch = aaaaaa
+production-percent = 969696
+production-files = default
+production-lines = white bold
+production-code = default
+production-comments = default
+production-extra = default
+production-size = default
+production-size-unit = 7d7769
+
+tests-name = ae98b8
 tests-branch = aaaaaa
-tests-percent = 6a5e70
-tests-files = 8f769c
+tests-percent = 74697a
+tests-files = ae98b8
 tests-lines = a088ad
-tests-code = 8f769c
-tests-comments = 8f769c
-tests-extra = 8f769c
-tests-size = 8f769c
+tests-code = ae98b8
+tests-comments = ae98b8
+tests-extra = ae98b8
+tests-size = ae98b8
 tests-size-unit = 7d7769
 
 file-name = 7a7a7a
