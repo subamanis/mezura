@@ -120,12 +120,13 @@ fn format_entry_line(config: &Configuration, datetime_now: &DateTime<Local>, res
 // kinds of file cannot drift apart in what they record
 fn format_scope(config: &Configuration, targets: &[Target]) -> String {
     let engine = &config.engine;
-    format!("{{\"targets\":{},\"exclude\":{},\"languages\":{},\"excluded_languages\":{},\
+    format!("{{\"targets\":{},\"exclude\":{},\"tests\":{},\"languages\":{},\"excluded_languages\":{},\
             \"forced_languages\":{},\"counting\":\"{}\",\"search_in_dotted\":{},\"gitignore\":{},\"ignore_files\":{},\
             \"keywords_counted\":{},\"tests_detected\":{},\"count_minified\":{},\"count_generated\":{},\"count_not_code\":{},\
             \"use_heuristics\":{},\"shebangs\":{}}}",
             format_targets(targets, config),
             format_strings(&engine.exclude_dirs),
+            format_strings(&engine.test_patterns.patterns),
             format_strings(&engine.languages_of_interest.to_written_form()),
             format_strings(&engine.excluded_languages.to_written_form()),
             format_forced_languages(&engine.forced_languages.to_written_form()),
@@ -255,6 +256,7 @@ mod tests {
         config.view.set_log_option(LogOption::new(Some("with \"quotes\" in it".to_owned())));
         config.view.counting = mezura_core::CountingModel::Region;
         config.engine.exclude_dirs = vec!["node_modules".to_owned()];
+        config.engine.test_patterns = mezura_core::PathPatterns::of(["spec/", "!spec/fixtures"]);
         config.engine.forced_languages = hashmap!["m".to_owned() => "matlab".to_owned()].into();
 
         let module_of = |name: Option<&str>, lines: usize, code: usize, comments: usize| ModuleResult {
@@ -276,6 +278,7 @@ mod tests {
                 entry.total.calculate_comment_lines(model)));
         assert_eq!(result.targets, entry.targets);
         assert_eq!(vec!["node_modules".to_owned()], entry.scope.exclude);
+        assert_eq!(vec!["spec/".to_owned(), "!spec/fixtures".to_owned()], entry.scope.tests);
         assert_eq!(hashmap!["m".to_owned() => "matlab".to_owned()], entry.scope.forced_languages);
         assert_eq!("region", entry.scope.counting);
         assert!(entry.scope.gitignore && entry.scope.keywords_counted);

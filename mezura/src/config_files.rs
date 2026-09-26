@@ -99,6 +99,14 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                         builder.exclude_dirs = Some(paths);
                     }
                 },
+                config_manager::TESTS => {
+                    let patterns = read_lines_from_file_to_vec(&mut reader, &mut buf, super::args::parse_paths_to_vec);
+                    if mezura_core::engine::path_patterns::validate_test_patterns(&patterns).is_err() {
+                        issues.invalid_fields.push(config_manager::TESTS);
+                    } else if !patterns.is_empty() {
+                        builder.test_patterns = Some(mezura_core::PathPatterns::of(patterns));
+                    }
+                },
                 config_manager::LANGUAGES => {
                     let langs = read_lines_from_file_to_vec(&mut reader, &mut buf, super::args::parse_languages_to_vec);
                     if !langs.is_empty() {
@@ -246,6 +254,12 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
 
     if let Some(exclude_dirs) = &config_builder.exclude_dirs {
         write_block(&mut writer, config_manager::EXCLUDE, &exclude_dirs.join(","))?;
+    }
+    if let Some(test_patterns) = &config_builder.test_patterns {
+        write_block(&mut writer, config_manager::TESTS, &test_patterns.patterns.iter().map(|pattern| match relative_to {
+            Some(project_dir) => config_manager::format_pattern_inside(project_dir, pattern),
+            None => pattern.clone()
+        }).collect::<Vec<_>>().join(","))?;
     }
     if let Some(languages_of_interest) = &config_builder.languages_of_interest {
         write_block(&mut writer, config_manager::LANGUAGES, &languages_of_interest.join(","))?;
@@ -482,6 +496,7 @@ mod tests {
                 --force-language m=matlab,.pl=Perl,ios/h=objective-c --languages rust,web/js \
                 --exclude-languages json,web/xml --by-file 12 --count-minified --count-generated \
                 --count-not-code --no-heuristics --no-shebang --tests-breakdown split \
+                --tests spec, !spec/fixtures, ./gen \
                 --style code-number=green,comments-label=magenta bold,arrow=default dim".to_string();
         let config_builder = config_manager::create_config_builder_from_args(&command).unwrap();
 
@@ -493,6 +508,8 @@ mod tests {
         assert!(issues.invalid_fields.is_empty() && issues.warnings.is_empty());
         assert_eq!(config_builder.targets, options.targets);
         assert_eq!(config_builder.exclude_dirs, options.exclude_dirs);
+        assert_eq!(config_builder.test_patterns, options.test_patterns);
+        assert_eq!(Some(mezura_core::PathPatterns::of(["spec", "!spec/fixtures", "./gen"])), options.test_patterns);
         assert_eq!(config_builder.threads, options.threads);
         assert_eq!(config_builder.counting, options.counting);
         assert_eq!(config_builder.should_show_faulty_files, options.should_show_faulty_files);
@@ -700,6 +717,7 @@ mod tests {
         assert!(issues.invalid_fields.is_empty() && issues.warnings.is_empty());
         assert_eq!(declared_targets, options.targets.unwrap());
         assert_eq!(config.engine.exclude_dirs, options.exclude_dirs.unwrap());
+        assert_eq!(Some(mezura_core::PathPatterns::of(["spec", "!spec/fixtures", "./gen"])), options.test_patterns);
         assert_eq!(config.engine.threads, options.threads.unwrap());
         assert_eq!(config.view.counting, options.counting.unwrap());
         // Against the value the file holds and not against a default-built configuration: both of

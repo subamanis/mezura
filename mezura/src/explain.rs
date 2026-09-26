@@ -3,8 +3,8 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use mezura_core::{Bucket, Carried, CountingModel, ExplainError, FileExplanation, Languages,
-        LineClasses, ScanSkip, Span, SpanKind};
+use mezura_core::{Bucket, Carried, CountingModel, EngineConfig, ExplainError, FileExplanation, Languages,
+        LineClasses, PathPatterns, ScanSkip, Span, SpanKind};
 
 use crate::config_manager::{Configuration, ExplainedLines, get_command_that_counts};
 use crate::json_printer::escape;
@@ -39,7 +39,7 @@ pub fn run_explain(config: &Configuration, languages: Languages) -> ExitCode {
                 the other.");
     }
 
-    match mezura_core::explain_file(path, &config.engine, languages) {
+    match mezura_core::explain_file(path, &read_names_as_a_run_from_here_would(&config.engine), languages) {
         Ok(explanation) => {
             if config.view.prints_text() {
                 print_text(&target.path, &explanation, config.view.counting, asked_for);
@@ -74,6 +74,18 @@ pub fn run_explain(config: &Configuration, languages: Languages) -> ExitCode {
 fn refuse(message: &str) -> ExitCode {
     eprintln!("\n{}\n", get_active().error.paint(&wrap_message(message)));
     ExitCode::FAILURE
+}
+
+// The core applies the directory only to a file inside it, so nothing is checked here.
+fn read_names_as_a_run_from_here_would(engine: &EngineConfig) -> EngineConfig {
+    if engine.test_patterns.read_from.is_some() {
+        return engine.clone();
+    }
+    let working_dir = std::env::current_dir().ok()
+            .map(|dir| crate::paths::normalise_separators(&dir.to_string_lossy()).into_owned());
+
+    EngineConfig { test_patterns: PathPatterns { patterns: engine.test_patterns.patterns.clone(), read_from: working_dir },
+            ..engine.clone() }
 }
 
 fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel, asked_for: ExplainedLines) {
@@ -273,6 +285,29 @@ fn describe_carried(carried: &Carried) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The working directory of a test of this crate is the package root, so 'src/main.rs' is inside it
+    #[test]
+    fn a_name_typed_beside_explain_sees_what_a_run_from_the_working_dir_would_see() {
+        let mut engine = EngineConfig::new(["src/main.rs"]);
+        engine.test_patterns = PathPatterns::of(["mezura/src/"]);
+        let anchored = read_names_as_a_run_from_here_would(&engine);
+        let working_dir = crate::paths::normalise_separators(&std::env::current_dir().unwrap().to_string_lossy()).into_owned();
+        assert_eq!(Some(working_dir), anchored.test_patterns.read_from);
+
+        let of_a_project = EngineConfig { test_patterns: PathPatterns { patterns: vec!["spec/".to_owned()],
+                read_from: Some("D:/proj".to_owned()) }, ..engine.clone() };
+        assert_eq!(of_a_project, read_names_as_a_run_from_here_would(&of_a_project));
+
+        let languages_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../mezura-core/data/languages/");
+        let parsed = mezura_core::language_file::parse_languages_in_dir(languages_dir).unwrap().0;
+        let explain = |engine: &EngineConfig| {
+            let languages = Languages::resolve(engine, parsed.clone(), &Default::default()).0;
+            mezura_core::explain_file(Path::new("src/main.rs"), engine, languages).unwrap()
+        };
+        assert!(explain(&anchored).lines.iter().all(|line| line.in_test), "the pattern did not reach the file");
+        assert!(explain(&engine).lines.iter().any(|line| !line.in_test), "the name saw a folder above the file's own");
+    }
 
     // Color is turned off because the manual comparison protocol exports CLICOLOR_FORCE and a test
     // binary inherits it, which would leave escape codes in the compared text.

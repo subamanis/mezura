@@ -238,6 +238,48 @@ mod tests {
     }
 
     #[test]
+    fn a_pattern_declares_the_same_tests_in_a_revision_as_in_the_tree() {
+        let root = std::env::temp_dir().join("mezura-diff-tests-pattern");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("spec")).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("spec/a.rs"), "fn a() {}\nfn b() {}\n").unwrap();
+        std::fs::write(root.join("src/b.rs"), "fn c() {}\n").unwrap();
+        let git = |arguments: &[&str]| {
+            let outcome = std::process::Command::new("git").arg("-C").arg(&root).args(arguments).output().unwrap();
+            assert!(outcome.status.success(), "git {arguments:?}: {}", String::from_utf8_lossy(&outcome.stderr));
+        };
+        git(&["init", "-q"]);
+        git(&["add", "."]);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x"]);
+
+        let repository = crate::paths::normalise_separators(&root.to_string_lossy()).into_owned();
+        let mut config = Configuration::new(vec![repository.clone()]);
+        config.engine.test_patterns = mezura_core::PathPatterns::of(["spec/"]);
+        let languages_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../mezura-core/data/languages/");
+        let parsed = mezura_core::language_file::parse_languages_in_dir(languages_dir).unwrap().0;
+
+        let resolved = prepare_revisions(&["HEAD"], &config.engine).unwrap();
+        let side = start_acquiring_revisions(resolved).into_iter().next().unwrap();
+        let (revision, notes) = count_git_revision(side, &config, parsed.clone(), &Default::default()).unwrap();
+        assert!(notes.is_empty(), "{notes:?}");
+        let tree = mezura_core::run(&config.engine,
+                mezura_core::Languages::resolve(&config.engine, parsed, &Default::default()).0).unwrap();
+
+        // Lines and files alone, since a checkout may spell its line endings differently
+        let counted = |tests: &HashMap<String, mezura_core::TestCode>| tests.iter()
+                .map(|(language, code)| (language.clone(), code.stats.lines, code.stats.files, code.whole_files))
+                .collect::<Vec<_>>();
+        assert_eq!(vec![("Rust".to_owned(), 2, 1, 1)], counted(&tree.tests));
+        assert_eq!(counted(&tree.tests), counted(&revision.result.tests));
+        assert_eq!(tree.total.lines, revision.result.total.lines);
+        assert_eq!(vec!["spec/".to_owned()], revision.scope.tests);
+
+        crate::git::await_checkout_removals();
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn the_file_rows_of_a_revision_get_back_the_declared_form_of_their_targets() {
         let entry = |path: &str| mezura_core::FileEntry { path: path.to_owned(),
                 stats: mezura_core::Stats::default(), nested_languages: HashMap::new(), tests: None };

@@ -2682,11 +2682,12 @@ fn find_settings_changed_since(entry: &super::log::LogEntry, config: &Configurat
     if as_recorded(&entry.targets) != as_recorded(targets) {
         changed.push(config_manager::TARGETS);
     }
-    // The log holds no keyword counts and no tests, so a run that only stopped counting either
-    // changed nothing the log records
+    // The log holds no keyword counts and no tests, so a run that only stopped counting either, or
+    // declared its tests with other patterns, changed nothing the log records
     changed.extend(super::diff::find_settings_that_differ(&entry.scope,
             &super::diff::scope_of(&config.engine, config.view.counting))
-            .into_iter().filter(|setting| ![super::diff::HIDE_KEYWORDS, super::diff::HIDE_TESTS].contains(setting)));
+            .into_iter().filter(|setting| ![super::diff::HIDE_KEYWORDS, super::diff::HIDE_TESTS,
+                    config_manager::TESTS].contains(setting)));
 
     changed
 }
@@ -4031,6 +4032,10 @@ mod tests {
         let before_the_tests = entry_of(|then| {then.engine.detect_tests = false;});
         let config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         assert!(find_settings_changed_since(&before_the_tests, &config, &[]).is_empty());
+
+        // nor one that declared its tests with other patterns, since the entry holds no test count
+        let declared = entry_of(|then| {then.engine.test_patterns = mezura_core::PathPatterns::of(["spec/"]);});
+        assert!(find_settings_changed_since(&declared, &config, &[]).is_empty());
     }
 
     // The log of a project is shared the way its code is, so an entry from another checkout of it

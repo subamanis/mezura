@@ -2,13 +2,13 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use mezura_core::{EngineConfig, FileEntry, ForcedLanguages, Language, LanguageNames, Languages,
-        ModuleResult, RunResult, Stats, UNNAMED_MODULE_NAME, render};
+        ModuleResult, PathPatterns, RunResult, Stats, UNNAMED_MODULE_NAME, render};
 use mezura_core::language_file::ConflictRules;
 
 use super::config_manager::{ByFile, Configuration, Layout, SortCriterion};
 use super::config_manager::{COUNTING, COUNT_GENERATED, COUNT_MINIFIED, COUNT_NOT_CODE, EXCLUDE,
         EXCLUDE_LANGUAGES, FORCE_LANGUAGE, LANGUAGES, NO_GITIGNORE, NO_HEURISTICS, NO_IGNORE_FILES,
-        NO_SHEBANG, SEARCH_IN_DOTTED};
+        NO_SHEBANG, SEARCH_IN_DOTTED, TESTS};
 use super::json_reader::{DocumentError, DocumentWarning, Scope};
 use super::sources::RevisionSide;
 
@@ -482,6 +482,7 @@ pub fn format_module_names(result: &RunResult) -> Option<String> {
 pub fn scope_of(engine: &mezura_core::EngineConfig, counting: mezura_core::CountingModel) -> Scope {
     Scope {
         exclude: engine.exclude_dirs.clone(),
+        tests: engine.test_patterns.patterns.clone(),
         languages: engine.languages_of_interest.to_written_form(),
         excluded_languages: engine.excluded_languages.to_written_form(),
         forced_languages: engine.forced_languages.to_written_form(),
@@ -506,6 +507,8 @@ pub fn scope_of(engine: &mezura_core::EngineConfig, counting: mezura_core::Count
 pub fn find_settings_that_differ(baseline: &Scope, subject: &Scope) -> Vec<&'static str> {
     let mut differ = Vec::new();
     if !hold_the_same_values(&baseline.exclude, &subject.exclude) {differ.push(EXCLUDE)}
+    // In order, since the last pattern to match is the one that decides
+    if baseline.tests != subject.tests {differ.push(TESTS)}
     if !hold_the_same_values(&baseline.languages, &subject.languages) {differ.push(LANGUAGES)}
     if !hold_the_same_values(&baseline.excluded_languages, &subject.excluded_languages) {differ.push(EXCLUDE_LANGUAGES)}
     if baseline.forced_languages != subject.forced_languages {differ.push(FORCE_LANGUAGE)}
@@ -533,6 +536,10 @@ pub fn resolve_settings(document: &Scope, config: &mut super::config_manager::Co
     if !typed.exclude && different(&document.exclude, &config.engine.exclude_dirs) {
         config.engine.exclude_dirs = document.exclude.clone();
         adopted.push(EXCLUDE);
+    }
+    if !typed.tests && document.tests != config.engine.test_patterns.patterns {
+        config.engine.test_patterns = PathPatterns::of(&document.tests);
+        adopted.push(TESTS);
     }
     if !typed.languages && different(&document.languages, &config.engine.languages_of_interest.to_written_form()) {
         config.engine.languages_of_interest = LanguageNames::of_written_form(&document.languages);
@@ -1177,9 +1184,17 @@ mod tests {
         config.engine.exclude_dirs = vec!["target".to_owned()];
         assert_eq!(vec!["exclude"], find_settings_that_differ(&document.scope, &scope_of(&config.engine, content)));
 
+        config.engine.exclude_dirs = Vec::new();
+        config.engine.test_patterns = PathPatterns::of(["spec/", "!spec/fixtures"]);
+        assert_eq!(vec!["tests"], find_settings_that_differ(&document.scope, &scope_of(&config.engine, content)));
+        let reordered = Scope { tests: vec!["!spec/fixtures".to_owned(), "spec/".to_owned()], ..document.scope.clone() };
+        assert_eq!(vec!["tests"], find_settings_that_differ(&reordered, &scope_of(&config.engine, content)));
+        let same = Scope { tests: vec!["spec/".to_owned(), "!spec/fixtures".to_owned()], ..document.scope.clone() };
+        assert!(find_settings_that_differ(&same, &scope_of(&config.engine, content)).is_empty());
+        config.engine.test_patterns = PathPatterns::default();
+
         // A forced language decides which language a file is counted as, so a run that forced one
         // and a run that did not measured different things
-        config.engine.exclude_dirs = Vec::new();
         config.engine.forced_languages = hashmap!["m".to_owned() => "matlab".to_owned()].into();
         assert_eq!(vec!["force-language"], find_settings_that_differ(&document.scope, &scope_of(&config.engine, content)));
 
@@ -1207,6 +1222,7 @@ mod tests {
     fn a_documents_settings_are_taken_unless_the_command_line_set_its_own() {
         let document = Scope {
             exclude: vec!["target".to_owned()],
+            tests: Vec::new(),
             languages: Vec::new(),
             excluded_languages: Vec::new(),
             forced_languages: HashMap::new(),
@@ -1310,5 +1326,22 @@ mod tests {
         config.typed_explicitly.hide_tests = true;
         assert!(resolve_settings(&with_keywords, &mut config).is_empty());
         assert!(!config.engine.detect_tests && config.view.hidden.tests);
+
+        let before_the_patterns = with_keywords.clone();
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        config.engine.test_patterns = PathPatterns::of(["spec/"]);
+        assert_eq!(vec!["tests"], resolve_settings(&before_the_patterns, &mut config));
+        assert!(config.engine.test_patterns.is_empty());
+
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        config.engine.test_patterns = PathPatterns::of(["spec/"]);
+        config.typed_explicitly.tests = true;
+        assert!(resolve_settings(&before_the_patterns, &mut config).is_empty());
+        assert_eq!(PathPatterns::of(["spec/"]), config.engine.test_patterns);
+
+        let declared = Scope { tests: vec!["spec/".to_owned(), "!spec/fixtures".to_owned()], ..before_the_patterns };
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        assert_eq!(vec!["tests"], resolve_settings(&declared, &mut config));
+        assert_eq!(PathPatterns::of(["spec/", "!spec/fixtures"]), config.engine.test_patterns);
     }
 }

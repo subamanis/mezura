@@ -127,6 +127,7 @@ WHAT IS COUNTED
   --targets            the directories and files to count, and the names to group them under (modules)
   --counting           whether a line counts by where its words are or by where the line sits
   --exclude            paths to leave out, as glob patterns
+  --tests              files and directories to count as test code, as glob patterns
   --languages          count only these languages and leave every other one out of the report
   --exclude-languages  count everything except these languages
   --force-language     count an extension as the language you pick, even if another one claims it

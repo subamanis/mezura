@@ -35,6 +35,8 @@ pub struct Document {
 #[derive(Debug,Clone)]
 pub struct Scope {
     pub exclude: Vec<String>,
+    // The '--tests' patterns in the order they were written, since the last one to match decides
+    pub tests: Vec<String>,
     pub languages: Vec<String>,
     pub excluded_languages: Vec<String>,
     // The extension is the key, as the run is asked about it: 'm' to 'matlab'
@@ -220,6 +222,8 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
 pub(crate) fn parse_scope(scope: &Map<String, Value>) -> Result<(Scope, Vec<Target>), DocumentError> {
     Ok((Scope {
         exclude: read_strings(scope, "exclude", "scope")?,
+        // Absent from a document of the builds that had no patterns to declare tests with
+        tests: read_optional_strings(scope, "tests", "scope")?,
         languages: read_strings(scope, "languages", "scope")?,
         excluded_languages: read_strings(scope, "excluded_languages", "scope")?,
         forced_languages: parse_forced_languages(read_nested(scope, "forced_languages", "scope")?)?,
@@ -493,6 +497,13 @@ fn read_strings(parent: &Map<String, Value>, key: &str, at: &str) -> Result<Vec<
     }).collect()
 }
 
+fn read_optional_strings(parent: &Map<String, Value>, key: &str, at: &str) -> Result<Vec<String>, DocumentError> {
+    match parent.get(key) {
+        Some(_) => read_strings(parent, key, at),
+        None => Ok(Vec::new())
+    }
+}
+
 pub(crate) fn read_nested<'a>(parent: &'a Map<String, Value>, key: &str, at: &str) -> Result<&'a Map<String, Value>, DocumentError> {
     read_object(read_member(parent, key, at)?, &join_location(at, key))
 }
@@ -561,6 +572,7 @@ mod tests {
 
         let mut config = Configuration::new(vec!["./src".to_owned()]);
         config.engine.exclude_dirs = vec!["target".to_owned(), "*.min.js".to_owned()];
+        config.engine.test_patterns = mezura_core::PathPatterns::of(["spec/", "!spec/fixtures"]);
         config.engine.languages_of_interest = vec!["rust".to_owned()].into();
         config.engine.excluded_languages = vec!["json".to_owned()].into();
         config.view.counting = mezura_core::CountingModel::Region;
@@ -617,6 +629,7 @@ mod tests {
 
         assert_eq!(crate::config_manager::VERSION_ID.trim_start_matches('v'), read.mezura_version);
         assert_eq!(vec!["target".to_owned(), "*.min.js".to_owned()], read.scope.exclude);
+        assert_eq!(vec!["spec/".to_owned(), "!spec/fixtures".to_owned()], read.scope.tests);
         assert_eq!(vec!["rust".to_owned()], read.scope.languages);
         assert_eq!(vec!["json".to_owned()], read.scope.excluded_languages);
         assert_eq!("region", read.scope.counting);
@@ -663,6 +676,11 @@ mod tests {
         let older = create_document(&result, &Local::now(), &config).replace(",\"keywords_counted\":true", "");
         assert!(!older.contains("keywords_counted"));
         assert!(parse(&older).unwrap().scope.keywords_counted);
+
+        let written = create_document(&result, &Local::now(), &config);
+        assert!(written.contains(",\"tests\":[\"spec/\",\"!spec/fixtures\"],"), "{written}");
+        let older = written.replace(",\"tests\":[\"spec/\",\"!spec/fixtures\"]", "");
+        assert!(parse(&older).unwrap().scope.tests.is_empty());
 
         // One without this key was written by a build that could not tell tests apart
         assert!(parse(&create_document(&result, &Local::now(), &config)).unwrap().scope.tests_detected);

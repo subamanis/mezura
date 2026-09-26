@@ -6,6 +6,7 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
   - [--targets](#cmd-targets)
   - [--counting](#cmd-counting)
   - [--exclude](#cmd-exclude)
+  - [--tests](#cmd-tests)
   - [--languages](#cmd-languages)
   - [--exclude-languages](#cmd-exclude-languages)
   - [--force-language](#cmd-force-language)
@@ -143,6 +144,39 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     paths work too. Glob syntax is supported in both forms: * ? [..] {..}
     Matching folders are skipped entirely; the files inside them are not traversed and
     are not included in the reported count of excluded files.
+
+    If you are using Windows Powershell, you will need to escape the commas with a backtick: `
+    or surround all the arguments with quotation marks:
+    <arg1>`, <arg2>`, <arg3>   or   "<arg1>, <arg2>, <arg3>"
+```
+
+### <a id="cmd-tests" name="cmd-tests"></a>--tests
+
+```
+--tests
+    files and directories to count as test code, as glob patterns
+
+    1..n glob patterns separated by commas. A '!' in front of one takes back what an earlier
+    pattern or a build tool declared.
+
+    What a pattern names is counted as test code whole, the files of a directory included. A
+    pattern starting with './' or '../', or carrying a root or a drive, names one place and
+    everything under it, read from the directory the command is typed in ('./spec',
+    'D:/work/api/tests'). Any other pattern is a name, matched at any depth under the directory
+    that holds the target, so it sees the target's own name and never a folder above it ('spec',
+    '*_test.py', 'src/test'). Names are matched with their case. A trailing '/' means a folder
+    only, so 'tests/' leaves a script named 'tests' alone; 'x/**' means the folder 'x', and '**'
+    alone a whole target. Glob syntax is supported in both forms: * ? [..] {..}
+
+    The last pattern that matches decides. '--tests spec,!spec/fixtures' declares 'spec' and
+    takes its fixtures back, and '--tests !vendor/' keeps a vendored project's tests out even
+    where its build file names them. The tests a build file or a file name finds on their own
+    stay found beside the patterns, and so do the markers inside a file, which a '!' never
+    reaches.
+
+    In a project's own configuration the patterns are read from the project directory, so they
+    say the same thing from wherever inside the project the command is typed. '--hide tests'
+    turns the detection off, patterns included.
 
     If you are using Windows Powershell, you will need to escape the commas with a backtick: `
     or surround all the arguments with quotation marks:
@@ -544,8 +578,9 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
                       the Vue row with no sign of the TypeScript and CSS inside it
       tests           the rows that split a language into its test code and the rest. Test code
                       is what a language's markers open, the files its toolchain names as tests,
-                      and the files under the test directory of a build tool. This one also
-                      stops the detection, which is the other name that makes a run faster
+                      the files under the test directory of a build tool, and what '--tests'
+                      declares. This one also stops the detection, patterns included, which is
+                      the other name that makes a run faster
       files           the files column of the details rows
       comments        the comments column of the details rows
       extra           the third column of the details rows, which is what '--counting content'

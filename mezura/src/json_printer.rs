@@ -327,6 +327,7 @@ fn create_scope_object_of(scope: &super::json_reader::Scope, targets: &[mezura_c
     let members = [
         format!("\"targets\":{}", create_targets_array(targets)),
         format!("\"exclude\":{}", create_string_array(&scope.exclude)),
+        format!("\"tests\":{}", create_string_array(&scope.tests)),
         format!("\"languages\":{}", create_string_array(&scope.languages)),
         format!("\"excluded_languages\":{}", create_string_array(&scope.excluded_languages)),
         format!("\"forced_languages\":{}", create_forced_languages_object(&scope.forced_languages)),
@@ -464,6 +465,7 @@ fn create_scope_object(config: &Configuration, targets: &[mezura_core::Target]) 
         // './src' over two different trees is two different measurements
         format!("\"targets\":{}", create_targets_array(targets)),
         format!("\"exclude\":{}", create_string_array(&config.engine.exclude_dirs)),
+        format!("\"tests\":{}", create_string_array(&config.engine.test_patterns.patterns)),
         format!("\"languages\":{}", create_string_array(&config.engine.languages_of_interest.to_written_form())),
         format!("\"excluded_languages\":{}", create_string_array(&config.engine.excluded_languages.to_written_form())),
         // '--force-language m=matlab' decides which language a file is counted as, so it moves
@@ -1208,7 +1210,7 @@ mod tests {
         config.view.hidden.tests = true;
         config.engine.detect_tests = false;
         let hidden = read(&config).to_string();
-        assert!(!hidden.contains("\"tests\":"), "{hidden}");
+        assert!(!hidden.contains("\"tests\":{"), "{hidden}");
         assert!(hidden.contains("\"tests_detected\":false"), "{hidden}");
     }
 
@@ -1245,7 +1247,7 @@ mod tests {
 
         config.view.hidden.tests = true;
         let hidden = read(&config).to_string();
-        assert!(!hidden.contains("\"tests\":"), "{hidden}");
+        assert!(!hidden.contains("\"tests\":{"), "{hidden}");
     }
 
     #[test]
