@@ -1,0 +1,7 @@
+[Scala]
+core/src/test/scala/ParserSpec.scala whole
+core/jvm/src/test/scala/JvmSpec.scala whole
+api/src/test/scala/ApiSpec.scala whole
+core/src/main/scala/Parser.scala none
+api/test/Runner.scala none
+build.sbt none

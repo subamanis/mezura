@@ -113,7 +113,8 @@ The three languages with markers, Rust, D and Zig, carry every form the extent r
 and every trap it is known to fall into, written adversarially: a test module that is the last thing
 in a file proves nothing about the rule. Go and Perl hold a file of the name their toolchain defines
 and one that matches none. The other trees hold a build file with the directory it makes test code,
-and `no-build-file` holds those directories with nothing beside them.
+`sbt` and `gradle` a build declared from its root whose subprojects carry no build file of their
+own, and `no-build-file` holds those directories with nothing beside them.
 
 ## The printed output, which is covered elsewhere
 

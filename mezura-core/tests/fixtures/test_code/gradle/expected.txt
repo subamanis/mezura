@@ -1,0 +1,7 @@
+[Java]
+app/src/test/java/AppTest.java whole
+app/src/main/java/App.java none
+[Kotlin]
+lib/src/test/kotlin/LibTest.kt whole
+lib/src/main/kotlin/Lib.kt none
+settings.gradle.kts none

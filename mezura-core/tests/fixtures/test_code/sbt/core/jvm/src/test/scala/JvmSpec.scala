@@ -1,0 +1,1 @@
+class JvmSpec extends AnyFunSuite

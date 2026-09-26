@@ -1,0 +1,1 @@
+class ApiSpec extends AnyFunSuite

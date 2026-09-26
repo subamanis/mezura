@@ -13,11 +13,13 @@ use crate::engine::is_the_same_name;
 const ELSE : &[u8] = b"else";
 // Every file of a row has to be present, since an Octave package carries a DESCRIPTION too.
 // 'src/test' is the one directory two levels down, and the walk holds the 'src' as 'JvmSources'.
-const BUILD_TOOLS : [BuildTool; 17] = [
+const BUILD_TOOLS : [BuildTool; 19] = [
     BuildTool { files: &["Cargo.toml"], test_directories: &["tests"] },
     BuildTool { files: &["pom.xml"], test_directories: &["src/test"] },
     BuildTool { files: &["build.gradle"], test_directories: &["src/test"] },
     BuildTool { files: &["build.gradle.kts"], test_directories: &["src/test"] },
+    BuildTool { files: &["settings.gradle"], test_directories: &["src/test"] },
+    BuildTool { files: &["settings.gradle.kts"], test_directories: &["src/test"] },
     BuildTool { files: &["build.sbt"], test_directories: &["src/test"] },
     BuildTool { files: &["Package.swift"], test_directories: &["Tests"] },
     BuildTool { files: &["mix.exs"], test_directories: &["test"] },
@@ -32,6 +34,8 @@ const BUILD_TOOLS : [BuildTool; 17] = [
     BuildTool { files: &["elm.json"], test_directories: &["tests"] },
     BuildTool { files: &["DESCRIPTION", "NAMESPACE"], test_directories: &["tests"] },
 ];
+// Every 'src/test' below one of these is a subproject's test sources or is never compiled
+const JVM_BUILD_ROOTS : [&str; 3] = ["build.sbt", "settings.gradle", "settings.gradle.kts"];
 
 pub(crate) struct TestWalk<'a> {
     contents: &'a [u8],
@@ -257,21 +261,16 @@ pub(crate) enum TestScope {
 }
 
 impl TestScope {
-    pub(crate) fn of_child(self, dir_name: &str, build_files: BuildFilesSeen) -> TestScope {
+    pub(crate) fn of_child(self, dir_name: &str, build_files: BuildFilesSeen, inside_jvm_build: bool) -> TestScope {
         if self == TestScope::Tests {
             return TestScope::Tests;
         }
         let name = dir_name.as_bytes();
-        if self == TestScope::JvmSources && BUILD_TOOLS.iter().flat_map(|tool| tool.test_directories)
-                .filter_map(|directory| directory.split_once('/'))
-                .any(|(_, test)| is_the_same_name(name, test.as_bytes())) {
+        if self == TestScope::JvmSources && is_the_jvm_test_directory(name) {
             return TestScope::Tests;
         }
-        if build_files.is_empty() {
-            return TestScope::Ordinary;
-        }
         let mut scope = TestScope::Ordinary;
-        for tool in BUILD_TOOLS.iter().filter(|tool| build_files.holds_every_file_of(tool)) {
+        for tool in BUILD_TOOLS.iter().filter(|tool| !build_files.is_empty() && build_files.holds_every_file_of(tool)) {
             for directory in tool.test_directories {
                 match directory.split_once('/') {
                     None if is_the_same_name(name, directory.as_bytes()) => return TestScope::Tests,
@@ -280,28 +279,49 @@ impl TestScope {
                 }
             }
         }
+        if inside_jvm_build && is_the_jvm_sources_directory(name) {
+            return TestScope::JvmSources;
+        }
         scope
     }
 
-    // The components are read by name, and the disk is asked only where one is named like a test
-    // directory, for the build file that would make it one.
-    pub(crate) fn of_target(path: &Path) -> TestScope {
+    // The components are read by name, and the disk is asked only at one named like a test
+    // directory, plus the three root files at every directory above the target.
+    pub(crate) fn of_target(path: &Path) -> TargetScope {
         let mut directories = path.ancestors().collect::<Vec<_>>();
         directories.reverse();
+        let mut inside_jvm_build = false;
         for directory in directories {
-            if let (Some(name), Some(parent)) = (directory.file_name(), directory.parent())
-                    && is_a_test_directory(name.as_encoded_bytes(), parent) {
-                return TestScope::Tests;
+            if let (Some(name), Some(parent)) = (directory.file_name(), directory.parent()) {
+                let name = name.as_encoded_bytes();
+                let under_a_declared_build = inside_jvm_build && is_the_jvm_test_directory(name)
+                        && parent.file_name().is_some_and(|above| is_the_jvm_sources_directory(above.as_encoded_bytes()));
+                if under_a_declared_build || is_a_test_directory(name, parent) {
+                    return TargetScope { scope: TestScope::Tests, inside_jvm_build };
+                }
+            }
+            if directory != path && opens_a_jvm_build(directory) {
+                inside_jvm_build = true;
             }
         }
-        let is_jvm_sources = path.file_name().zip(path.parent())
-                .is_some_and(|(name, parent)| is_jvm_sources(name.as_encoded_bytes(), parent));
-        if is_jvm_sources { TestScope::JvmSources } else { TestScope::Ordinary }
+        let is_jvm_sources = path.file_name().zip(path.parent()).is_some_and(|(name, parent)| {
+            let name = name.as_encoded_bytes();
+            (inside_jvm_build && is_the_jvm_sources_directory(name)) || is_jvm_sources(name, parent)
+        });
+        let scope = if is_jvm_sources { TestScope::JvmSources } else { TestScope::Ordinary };
+        TargetScope { scope, inside_jvm_build }
     }
 
     pub(crate) fn is_test_file(self, file_name: &str, names: &[TestFileName]) -> bool {
         self == TestScope::Tests || names.iter().any(|name| name.matches(file_name))
     }
+}
+
+// The target's own listing is read by the walk, so a build file in it is not asked for here
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TargetScope {
+    pub scope: TestScope,
+    pub inside_jvm_build: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -318,12 +338,20 @@ impl BuildFilesSeen {
         }
     }
 
+    pub(crate) fn opens_a_jvm_build(self) -> bool {
+        !self.is_empty() && JVM_BUILD_ROOTS.iter().any(|name| self.holds(name))
+    }
+
     fn is_empty(self) -> bool {
         self.0 == 0
     }
 
     fn holds_every_file_of(self, tool: &BuildTool) -> bool {
-        tool.files.iter().all(|file| Self::find_index_of(file.as_bytes()).is_some_and(|index| self.0 & (1 << index) != 0))
+        tool.files.iter().all(|file| self.holds(file))
+    }
+
+    fn holds(self, file: &str) -> bool {
+        Self::find_index_of(file.as_bytes()).is_some_and(|index| self.0 & (1 << index) != 0)
     }
 
     fn find_index_of(name: &[u8]) -> Option<usize> {
@@ -429,6 +457,22 @@ fn is_jvm_sources(name: &[u8], parent: &Path) -> bool {
                     && tool.files.iter().all(|file| parent.join(file).is_file())))
 }
 
+fn opens_a_jvm_build(directory: &Path) -> bool {
+    JVM_BUILD_ROOTS.iter().any(|file| directory.join(file).is_file())
+}
+
+fn is_the_jvm_sources_directory(name: &[u8]) -> bool {
+    find_two_level_directories().any(|(sources, _)| is_the_same_name(name, sources.as_bytes()))
+}
+
+fn is_the_jvm_test_directory(name: &[u8]) -> bool {
+    find_two_level_directories().any(|(_, test)| is_the_same_name(name, test.as_bytes()))
+}
+
+fn find_two_level_directories() -> impl Iterator<Item = (&'static str, &'static str)> {
+    BUILD_TOOLS.iter().flat_map(|tool| tool.test_directories).filter_map(|directory| directory.split_once('/'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -479,30 +523,42 @@ mod tests {
             for directory in tool.test_directories {
                 match directory.split_once('/') {
                     None => {
-                        assert_eq!(Ordinary.of_child(directory, beside), Tests, "{directory} beside {:?}", tool.files);
-                        assert_eq!(Ordinary.of_child(directory, nothing), Ordinary, "{directory} beside nothing");
+                        assert_eq!(Ordinary.of_child(directory, beside, false), Tests, "{directory} beside {:?}", tool.files);
+                        assert_eq!(Ordinary.of_child(directory, nothing, false), Ordinary, "{directory} beside nothing");
                     },
                     Some((sources, test)) => {
-                        assert_eq!(Ordinary.of_child(sources, beside), JvmSources, "{sources} beside {:?}", tool.files);
-                        assert_eq!(Ordinary.of_child(sources, nothing), Ordinary);
-                        assert_eq!(Ordinary.of_child(test, beside), Ordinary, "{test} beside {:?} with no {sources} above", tool.files);
-                        assert_eq!(JvmSources.of_child(test, nothing), Tests);
-                        assert_eq!(JvmSources.of_child("main", nothing), Ordinary);
+                        assert_eq!(Ordinary.of_child(sources, beside, false), JvmSources, "{sources} beside {:?}", tool.files);
+                        assert_eq!(Ordinary.of_child(sources, nothing, false), Ordinary);
+                        assert_eq!(Ordinary.of_child(test, beside, false), Ordinary, "{test} beside {:?} with no {sources} above", tool.files);
+                        assert_eq!(JvmSources.of_child(test, nothing, false), Tests);
+                        assert_eq!(JvmSources.of_child("main", nothing, false), Ordinary);
                     }
                 }
             }
         }
-        assert_eq!(Ordinary.of_child("src", seen(&["Cargo.toml"])), Ordinary);
-        assert_eq!(Ordinary.of_child("__tests__", seen(&["Cargo.toml"])), Ordinary);
-        assert_eq!(Ordinary.of_child("tests", seen(&["DESCRIPTION"])), Ordinary, "an Octave package is not an R one");
-        assert_eq!(Ordinary.of_child("tests", seen(&["package.json"])), Ordinary);
-        assert_eq!(Tests.of_child("examples", nothing), Tests);
-        assert_eq!(Tests.of_child("src", seen(&["pom.xml"])), Tests);
-        assert_eq!(JvmSources.of_child("tests", seen(&["Cargo.toml"])), Tests);
+        assert_eq!(Ordinary.of_child("src", seen(&["Cargo.toml"]), false), Ordinary);
+        assert_eq!(Ordinary.of_child("__tests__", seen(&["Cargo.toml"]), false), Ordinary);
+        assert_eq!(Ordinary.of_child("tests", seen(&["DESCRIPTION"]), false), Ordinary, "an Octave package is not an R one");
+        assert_eq!(Ordinary.of_child("tests", seen(&["package.json"]), false), Ordinary);
+        assert_eq!(Tests.of_child("examples", nothing, false), Tests);
+        assert_eq!(Tests.of_child("src", seen(&["pom.xml"]), false), Tests);
+        assert_eq!(JvmSources.of_child("tests", seen(&["Cargo.toml"]), false), Tests);
+
+        assert_eq!(Ordinary.of_child("src", nothing, true), JvmSources, "a 'src' anywhere under a declared build");
+        assert_eq!(Ordinary.of_child("core", nothing, true), Ordinary);
+        assert_eq!(Ordinary.of_child("test", nothing, true), Ordinary, "a 'test' with no 'src' above it");
+        assert_eq!(Ordinary.of_child("tests", seen(&["Cargo.toml"]), true), Tests);
+        assert_eq!(JvmSources.of_child("main", nothing, true), Ordinary);
+        for root in JVM_BUILD_ROOTS {
+            assert!(seen(&[root]).opens_a_jvm_build(), "{root}");
+            assert!(BUILD_TOOLS.iter().any(|tool| tool.files == [root]), "{root} is not a row of the table");
+        }
+        assert!(!seen(&["pom.xml", "build.gradle"]).opens_a_jvm_build());
+        assert!(!nothing.opens_a_jvm_build());
 
         let cased = if cfg!(any(windows, target_os = "macos")) { Tests } else { Ordinary };
-        assert_eq!(Ordinary.of_child("Tests", seen(&["Cargo.toml"])), cased);
-        assert_eq!(Ordinary.of_child("tests", seen(&["cargo.toml"])), cased);
+        assert_eq!(Ordinary.of_child("Tests", seen(&["Cargo.toml"]), false), cased);
+        assert_eq!(Ordinary.of_child("tests", seen(&["cargo.toml"]), false), cased);
         assert!(BuildFilesSeen::is_a_build_file(b"Cargo.toml"));
         assert!(!BuildFilesSeen::is_a_build_file(b"Cargo.lock"));
 
@@ -520,13 +576,16 @@ mod tests {
         let root = std::env::temp_dir().join("mezura_test_scope_of_target");
         let _ = std::fs::remove_dir_all(&root);
         for dir in ["cargo/tests/common", "cargo/src/tests", "bare/tests", "jvm/src/test/java", "jvm/src/main", "jvm/test",
-                "octave/tests", "r/tests", "outer/tests/app", "cased/Tests"] {
+                "octave/tests", "r/tests", "outer/tests/app", "cased/Tests", "sbt/core/src/test/scala", "sbt/core/src/main",
+                "sbt/core/jvm/src/test", "sbt/api/test", "gradle/app/src/test", "gradle/app/src/main"] {
             std::fs::create_dir_all(root.join(dir)).unwrap();
         }
-        for file in ["cargo/Cargo.toml", "jvm/pom.xml", "octave/DESCRIPTION", "r/DESCRIPTION", "r/NAMESPACE", "cased/Cargo.toml"] {
+        for file in ["cargo/Cargo.toml", "jvm/pom.xml", "octave/DESCRIPTION", "r/DESCRIPTION", "r/NAMESPACE", "cased/Cargo.toml",
+                "sbt/build.sbt", "gradle/settings.gradle.kts"] {
             std::fs::write(root.join(file), "").unwrap();
         }
-        let of = |path: &str| TestScope::of_target(&root.join(path));
+        let of = |path: &str| TestScope::of_target(&root.join(path)).scope;
+        let inside = |path: &str| TestScope::of_target(&root.join(path)).inside_jvm_build;
 
         assert_eq!(of("cargo/tests"), Tests);
         assert_eq!(of("cargo/tests/common"), Tests);
@@ -539,11 +598,23 @@ mod tests {
         assert_eq!(of("jvm/src/main"), Ordinary);
         assert_eq!(of("jvm/src"), JvmSources);
         assert_eq!(of("jvm/test"), Ordinary);
+        assert!(!inside("jvm/src"), "a pom.xml declares no build for the folders around it");
         assert_eq!(of("octave/tests"), Ordinary);
         assert_eq!(of("r/tests"), Tests);
         assert_eq!(of("outer/tests/app"), Ordinary, "a folder above the project is never taken on its name");
         let cased = if cfg!(any(windows, target_os = "macos")) { Tests } else { Ordinary };
         assert_eq!(of("cased/Tests"), cased);
+
+        assert_eq!((of("sbt"), inside("sbt")), (Ordinary, false), "the target's own listing is the walk's to read");
+        assert_eq!((of("sbt/core"), inside("sbt/core")), (Ordinary, true));
+        assert_eq!((of("sbt/core/src"), inside("sbt/core/src")), (JvmSources, true));
+        assert_eq!(of("sbt/core/src/test"), Tests);
+        assert_eq!(of("sbt/core/src/test/scala"), Tests);
+        assert_eq!(of("sbt/core/src/main"), Ordinary);
+        assert_eq!(of("sbt/core/jvm/src/test"), Tests);
+        assert_eq!(of("sbt/api/test"), Ordinary, "a 'test' with no 'src' above it");
+        assert_eq!(of("gradle/app/src/test"), Tests);
+        assert_eq!((of("gradle/app/src/main"), inside("gradle/app/src/main")), (Ordinary, true));
 
         std::fs::remove_dir_all(&root).unwrap();
     }

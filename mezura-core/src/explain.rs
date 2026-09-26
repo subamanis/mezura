@@ -144,7 +144,7 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
     };
     let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     let whole_file_is_tests = config.detect_tests && crate::engine::file_parser::is_a_test_file(path,
-            crate::engine::test_detection::TestScope::of_target(absolute.parent().unwrap_or(&absolute)),
+            crate::engine::test_detection::TestScope::of_target(absolute.parent().unwrap_or(&absolute)).scope,
             by_name.get(lang_name.as_ref()).unwrap());
     let (contents, report, log) = explain_parsed_file(contents, &lang_name, &nested_lookup, config, whole_file_is_tests);
 

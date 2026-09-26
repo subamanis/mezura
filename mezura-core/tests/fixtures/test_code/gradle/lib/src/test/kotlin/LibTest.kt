@@ -1,0 +1,3 @@
+class LibTest {
+    fun builds() {}
+}

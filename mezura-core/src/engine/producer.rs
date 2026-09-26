@@ -90,7 +90,8 @@ fn search_for_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs
                     let gitignore_stack = GitignoreStack::extend_with_ignore_files(&dir.path,
                             dir.gitignore_stack.clone(), &present);
                     traverse_dir(&files_injector, entries, &worker, &language_lookups, &exclude_matcher, &gitignore_stack,
-                            &config, &modules, dir.module, dir.test_scope, build_files, &dir.path, &mut files_present, progress)
+                            &config, &modules, dir.module, dir.test_scope, build_files, dir.inside_jvm_build, &dir.path,
+                            &mut files_present, progress)
                 },
                 // Everything under it goes uncounted and reaches no total, not even the number of
                 // files looked at, and nothing else would say so. The reason travels with the path,
@@ -177,7 +178,7 @@ fn find_ignore_and_build_files_among(entries: &[DirEntry], obeyed: ObeyedIgnoreF
 fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: Vec<DirEntry>, dirs_worker: &Worker<TraversedDir>,
         language_lookups: &ModuleLookups, exclude_matcher: &globset::GlobSet, gitignore_stack: &Option<Arc<GitignoreStack>>,
         config: &EngineConfig, modules: &Modules, module: ModuleId, test_scope: TestScope, build_files: BuildFilesSeen,
-        dir_path: &Path, files_present: &mut FilesPresent, progress: &ScanProgress)
+        inside_jvm_build: bool, dir_path: &Path, files_present: &mut FilesPresent, progress: &ScanProgress)
 {
     let mut local_total_files = 0;
     let mut local_relevant_files = 0;
@@ -254,8 +255,12 @@ fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: Vec<DirEntry>,
                     continue;
                 }
                 let module = if dir_boundaries {modules.at_dir(&pathbuf, module)} else {module};
-                let child_scope = if config.detect_tests { test_scope.of_child(&dir_name, build_files) } else { TestScope::Ordinary };
-                dirs_worker.push(TraversedDir::new(pathbuf, gitignore_stack.clone(), module, child_scope));
+                let child_inside_jvm_build = config.detect_tests && (inside_jvm_build || build_files.opens_a_jvm_build());
+                let child_scope = match config.detect_tests {
+                    true => test_scope.of_child(&dir_name, build_files, child_inside_jvm_build),
+                    false => TestScope::Ordinary
+                };
+                dirs_worker.push(TraversedDir::new(pathbuf, gitignore_stack.clone(), module, child_scope, child_inside_jvm_build));
             }
         }
     }
@@ -349,15 +354,17 @@ mod tests {
         let root = std::env::temp_dir().join("mezura_test_scope_scan");
         let _ = fs::remove_dir_all(&root);
         for dir in ["cargo/tests/common", "cargo/src/tests", "cargo/examples", "bare/tests", "jvm/src/test/java",
-                "jvm/src/main/java", "jvm/test", "octave/tests", "cased/Tests"] {
+                "jvm/src/main/java", "jvm/test", "octave/tests", "cased/Tests", "sbt/core/src/test", "sbt/core/src/main",
+                "sbt/core/jvm/src/test", "sbt/api/test"] {
             fs::create_dir_all(root.join(dir)).unwrap();
         }
-        for file in ["cargo/Cargo.toml", "jvm/pom.xml", "octave/DESCRIPTION", "cased/Cargo.toml"] {
+        for file in ["cargo/Cargo.toml", "jvm/pom.xml", "octave/DESCRIPTION", "cased/Cargo.toml", "sbt/build.sbt"] {
             fs::write(root.join(file), "").unwrap();
         }
         for file in ["cargo/src/a.rs", "cargo/src/tests/b.rs", "cargo/tests/c.rs", "cargo/tests/common/d.rs", "cargo/examples/e.rs",
                 "bare/tests/f.rs", "jvm/src/test/java/T.java", "jvm/src/main/java/M.java", "jvm/src/S.java", "jvm/test/N.java",
-                "octave/tests/g.rs", "cased/Tests/h.rs"] {
+                "octave/tests/g.rs", "cased/Tests/h.rs", "sbt/core/src/test/P.scala", "sbt/core/src/main/Q.scala",
+                "sbt/core/jvm/src/test/R.scala", "sbt/api/test/U.scala"] {
             fs::write(root.join(file), "fn main() {}\n").unwrap();
         }
         let root_str = root.to_str().unwrap().replace('\\', "/");
@@ -378,11 +385,17 @@ mod tests {
         assert_eq!(scopes["N.java"], Ordinary, "a 'test' beside pom.xml with no 'src' above it");
         assert_eq!(scopes["g.rs"], Ordinary, "an Octave package is not an R one");
         assert_eq!(scopes["h.rs"], if cfg!(any(windows, target_os = "macos")) { Tests } else { Ordinary });
+        assert_eq!((scopes["P.scala"], scopes["Q.scala"], scopes["R.scala"], scopes["U.scala"]), (Tests, Ordinary, Tests, Ordinary),
+                "the subprojects of a build declared from its root");
 
         let inside = scopes_of(scan(&format!("{root_str}/cargo/tests/common"), "").3);
         assert_eq!(inside["d.rs"], Tests);
         let sources = scopes_of(scan(&format!("{root_str}/jvm/src"), "").3);
         assert_eq!((sources["T.java"], sources["M.java"], sources["S.java"]), (Tests, Ordinary, JvmSources));
+        let subproject = scopes_of(scan(&format!("{root_str}/sbt/core"), "").3);
+        assert_eq!((subproject["P.scala"], subproject["Q.scala"], subproject["R.scala"]), (Tests, Ordinary, Tests));
+        let declared_root = scopes_of(scan(&format!("{root_str}/sbt"), "").3);
+        assert_eq!((declared_root["P.scala"], declared_root["U.scala"]), (Tests, Ordinary));
         let named = scopes_of(scan(&format!("{root_str}/cargo/tests/c.rs"), "").3);
         assert_eq!(named["c.rs"], Tests);
         let under = scopes_of(scan(&format!("{root_str}/cargo/src/tests"), "").3);
@@ -419,7 +432,7 @@ mod tests {
         let mut files_present = FilesPresent::default();
         queue_the_targets(&config, &targets, &dirs_injector, &files_injector,
                 &mut files_present, &language_lookups, &modules, &ScanProgress::default());
-        dirs_injector.push(TraversedDir::new(std::path::PathBuf::from(&vanished), None, 0, TestScope::Ordinary));
+        dirs_injector.push(TraversedDir::new(std::path::PathBuf::from(&vanished), None, 0, TestScope::Ordinary, false));
 
         let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs).unwrap());
         let (found, unreadable) = search_for_files(0, files_injector, dirs_injector,
@@ -700,11 +713,11 @@ mod tests {
         let (mine, peer) = (Worker::new_lifo(), Worker::new_lifo());
         let stealers = [mine.stealer(), peer.stealer()];
         let peers_dir = PathBuf::from("mezura-a-peers-directory");
-        peer.push(TraversedDir::new(peers_dir.clone(), None, 0, TestScope::Ordinary));
+        peer.push(TraversedDir::new(peers_dir.clone(), None, 0, TestScope::Ordinary, false));
 
         assert_eq!(Some(peers_dir), steal_a_dir(0, &Injector::new(), &stealers, &mine).map(|dir| dir.path));
 
-        mine.push(TraversedDir::new(PathBuf::from("mezura-my-own-directory"), None, 0, TestScope::Ordinary));
+        mine.push(TraversedDir::new(PathBuf::from("mezura-my-own-directory"), None, 0, TestScope::Ordinary, false));
         assert!(steal_a_dir(0, &Injector::new(), &stealers, &mine).is_none(),
                 "a producer stole from its own queue");
     }

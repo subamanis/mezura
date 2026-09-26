@@ -78,7 +78,7 @@ use std::time::Instant;
 use crossbeam_deque::{Injector, Worker};
 
 use engine::modules::{ModuleId, Modules};
-use engine::test_detection::TestScope;
+use engine::test_detection::{TargetScope, TestScope};
 
 /// The name of the file that decides which language gets an extension or a file name two of them
 /// claim.
@@ -401,21 +401,22 @@ pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets
             };
             let test_scope = find_test_scope_of_target(config, dir_path.parent().unwrap_or(dir_path), &mut scopes_of_directories);
             files_injector.push(queued.with_extension_rules(lookup.find_extension_rules(dir_path))
-                    .with_test_scope(test_scope));
+                    .with_test_scope(test_scope.scope));
             files_present.total_files += 1;
             files_present.relevant_files += 1;
             progress.record_file_found();
         } else if dir_path.is_dir() {
             let gitignore_stack = GitignoreStack::for_root_dir(dir_path, ObeyedIgnoreFiles::of(config));
-            dirs_injector.push(TraversedDir::new(dir_path.to_path_buf(), gitignore_stack, module,
-                    find_test_scope_of_target(config, dir_path, &mut scopes_of_directories)));
+            let test_scope = find_test_scope_of_target(config, dir_path, &mut scopes_of_directories);
+            dirs_injector.push(TraversedDir::new(dir_path.to_path_buf(), gitignore_stack, module, test_scope.scope,
+                    test_scope.inside_jvm_build));
         }
     }
 }
 
-fn find_test_scope_of_target(config: &EngineConfig, directory: &Path, known: &mut HashMap<PathBuf, TestScope>) -> TestScope {
+fn find_test_scope_of_target(config: &EngineConfig, directory: &Path, known: &mut HashMap<PathBuf, TargetScope>) -> TargetScope {
     if !config.detect_tests {
-        return TestScope::Ordinary;
+        return TargetScope { scope: TestScope::Ordinary, inside_jvm_build: false };
     }
     if let Some(scope) = known.get(directory) {
         return *scope;
@@ -486,18 +487,20 @@ pub(crate) struct TraversedDir {
     pub path: PathBuf,
     pub gitignore_stack: Option<Arc<GitignoreStack>>,
     pub module: ModuleId,
-    pub test_scope: TestScope
+    pub test_scope: TestScope,
+    pub inside_jvm_build: bool
 }
 
 impl TraversedDir {
     pub(crate) fn new(path: PathBuf, gitignore_stack: Option<Arc<GitignoreStack>>, module: ModuleId,
-        test_scope: TestScope) -> Self
+        test_scope: TestScope, inside_jvm_build: bool) -> Self
     {
         TraversedDir {
             path,
             gitignore_stack,
             module,
-            test_scope
+            test_scope,
+            inside_jvm_build
         }
     }
 }
