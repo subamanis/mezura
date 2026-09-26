@@ -2,7 +2,7 @@
 //! ones lying inside other ones taken out.
 
 use std::borrow::Cow;
-use std::path::Path;
+use std::path::{Component, Path};
 
 use crate::GitignoreStack;
 use crate::engine::config::Target;
@@ -173,21 +173,21 @@ fn find_contested_target(targets: &[Target]) -> Result<(), TargetError> {
     Ok(())
 }
 
-/// The spelling every resolved path carries: absolute, forward slashes, no trailing separator, and
-/// without the `\\?\` prefix that `std::fs::canonicalize` puts on Windows.
+/// The spelling every resolved path carries. It is absolute, with forward slashes, no trailing
+/// separator, no `..` component, and without the `\\?\` prefix that `std::fs::canonicalize` puts
+/// on Windows.
 pub fn convert_to_absolute(s: &str) -> String {
     let p = Path::new(s);
-    if p.is_absolute() {
+    if p.is_absolute() && !p.components().any(|component| component == Component::ParentDir) {
         return trim_trailing_slash(&normalise_separators(s)).to_owned();
     }
 
     // The canonical form of a path that was typed as valid UTF-8 need not be valid UTF-8 itself,
     // since canonicalizing resolves links and the target's real name is whatever the file system
     // holds. Falling back to what was typed keeps a string that still names the place, which
-    // 'to_string_lossy' would not: this one is handed to 'is_dir' and 'is_file' further down.
+    // 'to_string_lossy' would not, since this one is handed to 'is_dir' and 'is_file' further down.
     match std::fs::canonicalize(p).ok().and_then(|buf| buf.to_str().map(str::to_owned)) {
-        Some(str_path) => trim_trailing_slash(
-                &normalise_separators(str_path.strip_prefix(r"\\?\").unwrap_or(&str_path))).to_owned(),
+        Some(str_path) => trim_trailing_slash(&normalise_separators(&strip_verbatim_prefix(&str_path))).to_owned(),
         None => trim_trailing_slash(&normalise_separators(s)).to_owned()
     }
 }
@@ -309,6 +309,15 @@ fn is_valid_path(s: &str) -> bool {
 // record the same string or a comparison between them reports a change nobody made. Not taken off a
 // root, where the separator belongs to the name: 'D:/' is the root of the drive while 'D:' is the
 // current directory on it, and '/' is the root of the file system.
+// A share canonicalizes to '\\?\UNC\server\share\x', and dropping the whole prefix would leave a
+// relative path
+fn strip_verbatim_prefix(path: &str) -> Cow<'_, str> {
+    match path.strip_prefix(r"\\?\UNC\") {
+        Some(share) => Cow::Owned(format!(r"\\{share}")),
+        None => Cow::Borrowed(path.strip_prefix(r"\\?\").unwrap_or(path))
+    }
+}
+
 fn trim_trailing_slash(path: &str) -> &str {
     let trimmed = path.trim_end_matches('/');
     if trimmed.is_empty() || trimmed.ends_with(':') {path} else {trimmed}
@@ -565,6 +574,35 @@ mod target_path_tests {
         std::fs::remove_dir_all(&root).unwrap();
 
         assert_eq!(bare, slashed);
+    }
+
+    #[test]
+    fn an_absolute_target_holding_a_parent_step_is_resolved_to_the_place_it_names() {
+        let root = std::env::temp_dir().join("mezura-parent-step");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("tests")).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        let root_str = root.to_str().unwrap().replace('\\', "/");
+
+        let stepped_back = convert_to_absolute(&format!("{root_str}/tests/.."));
+        let stepped_over = convert_to_absolute(&format!("{root_str}/tests/../src"));
+        let typed = convert_to_absolute(&format!("{root_str}/src"));
+        std::fs::remove_dir_all(&root).unwrap();
+
+        assert!(!stepped_back.contains(".."), "{stepped_back}");
+        assert_eq!(Path::new(&stepped_back).file_name(), root.file_name());
+        assert_eq!(Path::new(&stepped_over).file_name(), Some("src".as_ref()));
+        assert_eq!(Path::new(&stepped_over).parent().map(Path::to_path_buf), Some(Path::new(&stepped_back).to_path_buf()));
+        assert_eq!(Path::new(&stepped_over).file_name(), Path::new(&typed).file_name());
+    }
+
+    #[test]
+    fn the_verbatim_prefix_of_a_canonical_path_leaves_with_its_share_kept() {
+        assert_eq!(r"C:\x\y", strip_verbatim_prefix(r"\\?\C:\x\y"));
+        assert_eq!(r"\\server\share\x", strip_verbatim_prefix(r"\\?\UNC\server\share\x"));
+        assert_eq!("//server/share/x", normalise_separators(&strip_verbatim_prefix(r"\\?\UNC\server\share\x")).replace('\\', "/"));
+        assert_eq!("/home/x", strip_verbatim_prefix("/home/x"));
+        assert_eq!(r"C:\x", strip_verbatim_prefix(r"C:\x"));
     }
 
     #[test]
